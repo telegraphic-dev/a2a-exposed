@@ -4,6 +4,8 @@ All notable changes to the `a2a-over-webhook` CLI, Worker template, and skills. 
 
 ## Unreleased
 
+## 0.3.1
+
 - **Stale peer-token variables:** a peer token in the environment (`PEER_<ALIAS>_TOKEN`, a `--token-env` variable, or `A2A_PEER_TOKEN`) still overrides the one saved in `config.env`, but when both are set and differ, `send`, `poll`, `connect` and `peers add|list` now warn on stderr, naming the variable and how to clear it (`unset PEER_<ALIAS>_TOKEN`), never either value. `connect` (and `peers add --token-stdin`) also warns right after saving a new token that a stale variable would still win on the next `send`; `connect --json` adds `env_overrides_token: true`.
 
 ## 0.3.0

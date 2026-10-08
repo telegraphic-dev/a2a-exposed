@@ -3,7 +3,7 @@
 // No network: everything listens on 127.0.0.1.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
@@ -176,17 +176,33 @@ test("pair set-password: refuses argv and non-terminal stdin; in a terminal it u
 	assert.match(r.stderr, /stdin is not a terminal[\s\S]*known only to the human/);
 	assert.equal(got.length, 0);
 
-	// a real pty (util-linux / BSD `script`), typing the password twice
+	// a real pty (util-linux / BSD `script`), typing the password twice. The pty echoes whatever arrives while ECHO is
+	// still on, so seeing the prompt is not enough: before typing, wait (up to 5 s) until the terminal's own settings
+	// say echo is off. If it never goes off, type anyway and let "not echoed" fail.
 	const pw = "a long enough passphrase";
-	const cmd = `${JSON.stringify(process.execPath)} ${JSON.stringify(BIN)} pair set-password`;
+	const ttyFile = path.join(s.dir, "tty");
+	const cmd = `tty > ${JSON.stringify(ttyFile)} && exec ${JSON.stringify(process.execPath)} ${JSON.stringify(BIN)} pair set-password`;
 	const args = process.platform === "darwin" ? ["-q", "/dev/null", "sh", "-c", cmd] : ["-qec", cmd, "/dev/null"];
+	const echoOff = async () => {
+		const deadline = Date.now() + 5000;
+		while (Date.now() < deadline) {
+			const flags = await new Promise((resolve) => {
+				let tty;
+				try { tty = fs.readFileSync(ttyFile, "utf8").trim(); } catch { return resolve(""); }
+				execFile("stty", [process.platform === "darwin" ? "-f" : "-F", tty, "-a"], (err, stdout) => resolve(err ? "" : stdout));
+			});
+			if (/(^|\s)-echo(\s|$)/.test(flags)) return;
+			await new Promise((r) => setTimeout(r, 20));
+		}
+	};
 	const out = await new Promise((resolve) => {
 		const ch = spawn("script", args, { env: s.env, stdio: ["pipe", "pipe", "pipe"] });
 		let o = "";
+		const type = async (flag) => { ch[flag] = true; await echoOff(); ch.stdin.write(pw + "\r"); };
 		ch.stdout.on("data", (d) => {
 			o += d;
-			if (/New approval password/.test(o) && !ch.typed1) { ch.typed1 = true; ch.stdin.write(pw + "\r"); }
-			if (/Repeat it/.test(o) && !ch.typed2) { ch.typed2 = true; ch.stdin.write(pw + "\r"); }
+			if (/New approval password/.test(o) && !ch.typed1) type("typed1");
+			if (/Repeat it/.test(o) && !ch.typed2) type("typed2");
 		});
 		ch.stderr.on("data", (d) => (o += d));
 		ch.on("close", (status) => resolve({ status, o }));
