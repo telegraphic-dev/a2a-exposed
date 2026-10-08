@@ -5,8 +5,9 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import * as C from "./config.mjs";
-import { cardUrlProblem, cfErrorCode, die, fingerprint, httpJson, randomToken, upstreamCardUrlProblem, upstreamUrlProblem } from "./a2a.mjs";
-import { owner } from "./commands.mjs";
+import { cardUrlProblem, cfErrorCode, die, fetchUpstreamCard, fingerprint, httpJson, randomToken, upstreamAuth, upstreamCardUrlProblem, upstreamUrlProblem } from "./a2a.mjs";
+import { owner, ownerTry } from "./commands.mjs";
+import { readHidden } from "./pair.mjs";
 import * as WD from "./workersdev.mjs";
 
 const PKG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -62,6 +63,9 @@ export const NODE_HELP = `How to get Node 22 (any one; no root needed):
   fnm:   fnm install 22 && fnm use 22
   or the official installer / binaries: https://nodejs.org/en/download
 Then check: node --version   (v22.18.0 or newer)`;
+
+/** What to do when the Cloudflare login itself is blocked (printed with "not logged in"; the setup skill says the same). */
+export const LOGIN_403_HELP = `If \`cf auth login\` (or \`wrangler login\`) fails with "OAuth error: HTTP 403 Forbidden" or a "Just a moment..." page BEFORE any code is shown, that is Cloudflare's bot mitigation for datacenter / VPS IPs, not a wrong account: don't retry. Use an API token instead: export CLOUDFLARE_API_TOKEN (and CLOUDFLARE_ACCOUNT_ID) in the environment, never argv (setup skill, Troubleshooting: API token).`;
 
 /** Dies unless `version` (default: this Node) is 22.18+; the message says how to get it. */
 export function checkNode(version = process.versions.node) {
@@ -199,7 +203,11 @@ function applyFlags(o) {
 	if (upd.WAKE_PRESET && !PRESETS.includes(upd.WAKE_PRESET)) die(`unknown preset ${upd.WAKE_PRESET} (${PRESETS.join(" | ")})`);
 	for (const [flag, key] of [["upstream", "A2A_UPSTREAM_URL"], ["upstream-card-url", "A2A_UPSTREAM_CARD_URL"]]) {
 		if (upd[key] === undefined) continue;
-		if (["", "none", "off"].includes(String(upd[key]).trim().toLowerCase())) { upd[key] = null; continue; }
+		if (["", "none", "off"].includes(String(upd[key]).trim().toLowerCase())) {
+			upd[key] = null;
+			if (key === "A2A_UPSTREAM_URL") upd.A2A_UPSTREAM_NO_TOKEN = null; // the opt-out belonged to that upstream
+			continue;
+		}
 		const why = upstreamUrlProblem(String(upd[key]).trim());
 		if (why) die(`--${flag} ${why}`);
 		upd[key] = new URL(String(upd[key]).trim()).href;
@@ -346,7 +354,9 @@ function deployedBase() {
 
 export async function init(o) {
 	checkNode();
+	const prevUpstream = C.fileConfig().A2A_UPSTREAM_URL || "";
 	const switched = applyFlags(o);
+	const upstreamSecrets = await upstreamTokenCheck(o, { upstreamChanged: (C.get("A2A_UPSTREAM_URL") || "") !== prevUpstream });
 	const dir = workerDir(o);
 	C.saveConfig({ A2A_WORKER_DIR: dir, A2A_WORKER_NAME: workerName() });
 	if (workersDevMode()) {
@@ -361,11 +371,15 @@ export async function init(o) {
 	const prof = cfProfile();
 	step(`checking Cloudflare login (cf auth whoami${prof ? ` --profile ${prof}` : ""})`);
 	const who = cfJson(dir, ["auth", "whoami"]);
-	if (!who.authenticated) die(prof
+	if (!who.authenticated) die((process.env.CLOUDFLARE_API_TOKEN
+		? "CLOUDFLARE_API_TOKEN is set but cf does not accept it (expired, revoked, or IP-restricted: an IP filter must allow both this host's IPv4 /32 and IPv6 /128). Check the token (setup skill, Troubleshooting: API token), then re-run init"
+		: prof
 		? `cf profile "${prof}" is not logged in: run \`npx cf auth create ${prof} --no-browser\`, open the printed URL, enter the code, then re-run init`
-		: "not logged in to Cloudflare: run `cf auth login --no-browser`, open the printed URL, enter the code, then re-run init");
+		: "not logged in to Cloudflare: run `cf auth login --no-browser`, open the printed URL, enter the code, then re-run init") + `\n${LOGIN_403_HELP}`);
 	const accts = who.accounts || [];
 	if (!C.get("CLOUDFLARE_ACCOUNT_ID")) {
+		if (!accts.length && process.env.CLOUDFLARE_API_TOKEN)
+			die("the API token can't list accounts: add the permission User -> Memberships -> Read (or pass --account-id <id> / export CLOUDFLARE_ACCOUNT_ID; the id is in the dashboard URL)");
 		if (accts.length !== 1) die(`${accts.length} accounts available; pass --account-id <id>:\n` + accts.map((a) => `  ${a.id}  ${a.name}`).join("\n"));
 		C.saveConfig({ CLOUDFLARE_ACCOUNT_ID: accts[0].id });
 	} else if (accts.length && !accts.some((a) => a.id === C.get("CLOUDFLARE_ACCOUNT_ID"))) {
@@ -391,30 +405,98 @@ export async function init(o) {
 	if (!ownerToken || o["rotate-owner-token"]) ownerToken = randomToken(32);
 	C.saveConfig({ A2A_OWNER_TOKEN: ownerToken, A2A_BASE_URL: publicBase() || undefined });
 
-	const secrets = { OWNER_TOKEN: ownerToken, ...deploySecretsFromEnv() };
+	const secrets = { OWNER_TOKEN: ownerToken, ...deploySecretsFromEnv(), ...upstreamSecrets };
 	step(`deploying (secrets uploaded: ${Object.keys(secrets).join(", ")})`);
 	await deployAndLearn(dir, secrets, o);
 	const base = deployedBase();
 	if (base) await verifyDeployedCard(base);
 	console.log(base);
 	reportSwitch(switched);
-	proxyNote();
+	proxyNote(secrets);
 	console.error(`config saved to ${C.CONFIG_FILE} (chmod 600). Next: a2a-exposed status (shows the next setup step)`);
 }
 
-/** Proxy / expose mode reminder after a deploy (the upstream credentials are secrets: only their presence is shown). */
-function proxyNote() {
+/** Proxy / expose mode reminder after a deploy (the upstream credentials are secrets: only their names are shown). */
+function proxyNote(secrets = {}) {
 	const up = C.get("A2A_UPSTREAM_URL");
 	if (!up) return;
-	const sent = UPSTREAM_SECRETS.filter((k) => process.env[k]);
+	const sent = UPSTREAM_SECRETS.filter((k) => k in secrets);
 	console.error(`proxy mode: authenticated A2A calls are forwarded to ${up}; the public card is the upstream's, rewritten to this deployment's URL.` +
-		` Upstream secrets uploaded now: ${sent.join(", ") || "none (existing ones kept)"}. Check the upstream and the card with: a2a-exposed status`);
+		` Upstream secrets uploaded now: ${sent.join(", ") || "none (existing ones kept)"}. Check the whole path (Access, the agent's bearer check) with: a2a-exposed status`);
+}
+
+/** stdin and stderr are a terminal (a human at the keyboard), and not CI: only then may setup prompt. */
+const interactive = () => !!(process.stdin.isTTY && process.stderr.isTTY && !process.env.CI);
+
+/** Proxy mode setup check: the façade must hold the bearer token the upstream agent checks (UPSTREAM_TOKEN) in addition
+ *  to the Cloudflare Access service token, which only gets the Worker through the tunnel. Returns extra secrets to
+ *  upload ({ UPSTREAM_TOKEN } when read from stdin or a hidden prompt), or dies with what to do. Never reads argv.
+ *  Order: --upstream-token-stdin / exported UPSTREAM_TOKEN (uploaded) > --no-upstream-token (saved opt-out) > the
+ *  Worker already holds one for this upstream, or the card it fetched declares no bearer > the upstream card fetched from
+ *  here (with the exported Access token): no bearer declared -> fine; bearer or unknown -> hidden prompt on a terminal,
+ *  else exit 1. */
+export async function upstreamTokenCheck(o, { upstreamChanged = false } = {}) {
+	const up = C.get("A2A_UPSTREAM_URL");
+	if (!up) return {};
+	if (o["upstream-token-stdin"] && o["no-upstream-token"]) die("--upstream-token-stdin and --no-upstream-token are mutually exclusive");
+	if (o["upstream-token-stdin"]) {
+		const t = (process.stdin.isTTY ? await readHidden("UPSTREAM_TOKEN, the bearer the upstream agent expects (not shown): ") : fs.readFileSync(0, "utf8")).trim();
+		if (!t) die("--upstream-token-stdin: no token on stdin");
+		C.saveConfig({ A2A_UPSTREAM_NO_TOKEN: null });
+		return { UPSTREAM_TOKEN: t };
+	}
+	if (process.env.UPSTREAM_TOKEN) { C.saveConfig({ A2A_UPSTREAM_NO_TOKEN: null }); return {}; } // uploaded with the other exported secrets
+	if (o["no-upstream-token"]) {
+		C.saveConfig({ A2A_UPSTREAM_NO_TOKEN: "1" });
+		console.error("note: --no-upstream-token: deploying without an upstream bearer token (saved; `status` warns if the upstream card asks for one)");
+		return {};
+	}
+	if (C.get("A2A_UPSTREAM_NO_TOKEN") === "1") return {};
+	// an existing façade for this upstream: the Worker's secrets persist across deploys, and it reads the card through Access
+	if (!upstreamChanged && C.get("A2A_BASE_URL") && C.get("A2A_OWNER_TOKEN")) {
+		try {
+			const r = await ownerTry("GET", "/owner/facade");
+			if (r.status === 200 && r.data && r.data.mode === "proxy") {
+				if (r.data.hasUpstreamToken) return {};
+				if (r.data.upstreamAuth && r.data.upstreamAuth.bearer === false) return {};
+			}
+		} catch { /* not deployed yet / unreachable: check the card from here */ }
+	}
+	const cardUrl = C.get("A2A_UPSTREAM_CARD_URL") || new URL("/.well-known/agent-card.json", up).href;
+	step(`checking which credential the upstream's agent card asks for (${cardUrl})`);
+	const { card, error } = await fetchUpstreamCard(cardUrl);
+	const auth = upstreamAuth(card);
+	if (auth.unsupported.length)
+		console.error(`warning: the upstream card requires ${auth.unsupported.join(", ")}; the façade only presents \`Authorization: Bearer <UPSTREAM_TOKEN>\` (plus the Access service token), so the agent may refuse it`);
+	if (auth.bearer === false) {
+		console.error(`upstream card: no bearer auth declared${auth.schemes.length ? ` (schemes: ${auth.schemes.join(", ")})` : ""}, so no UPSTREAM_TOKEN is needed`);
+		return {};
+	}
+	const why = auth.bearer
+		? `the upstream's agent card asks for a bearer token (${auth.schemes.join(", ")})`
+		: `the upstream's agent card could not be read from here (${error}), so whether the agent needs a bearer token is unknown`;
+	const access = "Cloudflare Access (UPSTREAM_ACCESS_CLIENT_ID / _SECRET) only lets the Worker through the tunnel; the agent checks its own token too";
+	if (interactive()) {
+		console.error(`${why}. ${access}.`);
+		const t = (await readHidden("UPSTREAM_TOKEN, the bearer the upstream agent expects (not shown; empty = the agent needs none): ")).trim();
+		if (t) { C.saveConfig({ A2A_UPSTREAM_NO_TOKEN: null }); return { UPSTREAM_TOKEN: t }; }
+		if (auth.bearer) die("no UPSTREAM_TOKEN given, but the upstream card asks for one: peers' calls would fail with HTTP 502. Re-run and enter it, or pass --no-upstream-token if the agent really accepts calls without it");
+		C.saveConfig({ A2A_UPSTREAM_NO_TOKEN: "1" });
+		console.error("note: deploying without an upstream bearer token (saved; check the whole path with `a2a-exposed status`)");
+		return {};
+	}
+	die(`${why}, and no UPSTREAM_TOKEN is set. ${access}, so without it every peer call fails with HTTP 502.\n` +
+		"  Provide it (never as an argument): `read -rs UPSTREAM_TOKEN && export UPSTREAM_TOKEN`, then re-run; or pipe it: <command that prints the token> | a2a-exposed " +
+		`${C.get("A2A_D1_ID") ? "deploy" : "init ..."} --upstream-token-stdin\n` +
+		"  The agent needs no bearer token? Re-run with --no-upstream-token (saved for later deploys).");
 }
 
 export async function deploy(o) {
 	checkNode();
 	if (!C.get("A2A_D1_ID")) die("no saved deployment; run `a2a-exposed init` first");
+	const prevUpstream = C.fileConfig().A2A_UPSTREAM_URL || "";
 	const switched = applyFlags(o);
+	const upstreamSecrets = await upstreamTokenCheck(o, { upstreamChanged: (C.get("A2A_UPSTREAM_URL") || "") !== prevUpstream });
 	const dir = workerDir(o);
 	if (workersDevMode() && !WD.LABEL_RE.test(workerName())) die("on workers.dev the worker name must be a DNS label (lowercase letters, digits, hyphens)");
 	guardTunnelUrl();
@@ -423,14 +505,14 @@ export async function deploy(o) {
 	if (!o["skip-install"]) run("npm", ["install", "--no-audit", "--no-fund", "--loglevel=error"], { cwd: dir });
 	const env = cfEnv();
 	applyMigrations(dir, env);
-	const secrets = deploySecretsFromEnv();
+	const secrets = { ...deploySecretsFromEnv(), ...upstreamSecrets };
 	if (Object.keys(secrets).length && C.get("A2A_OWNER_TOKEN")) secrets.OWNER_TOKEN = C.get("A2A_OWNER_TOKEN");
 	step(Object.keys(secrets).length ? `deploying (secrets uploaded: ${Object.keys(secrets).join(", ")})` : "deploying (existing secrets kept)");
 	await deployAndLearn(dir, secrets, o);
 	const base = deployedBase();
 	if (base) await verifyDeployedCard(base);
 	if (switched) { console.log(base); reportSwitch(switched); }
-	proxyNote();
+	proxyNote(secrets);
 }
 
 /** Fingerprints of the wake secrets in the local environment (what `wake set` would upload). */

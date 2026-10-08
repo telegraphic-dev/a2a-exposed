@@ -252,3 +252,121 @@ export function wantsPush(op: string, p: Json): boolean {
 	if (op !== "send" || !p || typeof p !== "object" || !p.configuration || typeof p.configuration !== "object") return false;
 	return Object.entries(p.configuration).some(([k, v]) => /push/i.test(k) && v !== undefined && v !== null);
 }
+
+// ------------------------------------------------------------------ upstream auth + failure diagnosis (proxy mode)
+
+/** How an upstream security scheme authenticates: "bearer" (HTTP bearer; OAuth 2.0 and OpenID Connect also send
+ *  `Authorization: Bearer`), "basic" / "http" (other HTTP schemes), "apiKey", "mtls", or "unknown". Accepts the A2A 1.0
+ *  shape ({ httpAuthSecurityScheme: { scheme } }, { oauth2SecurityScheme }, ...) and the 0.3 / OpenAPI shape
+ *  ({ type: "http", scheme: "bearer" }, { type: "oauth2" }, ...). */
+export function schemeKind(s: Json): string {
+	if (!s || typeof s !== "object") return "unknown";
+	const http = (scheme: unknown) => { const v = String(scheme || "").toLowerCase(); return v === "bearer" ? "bearer" : v === "basic" ? "basic" : "http"; };
+	if (s.httpAuthSecurityScheme) return http(s.httpAuthSecurityScheme.scheme);
+	if (s.oauth2SecurityScheme || s.openIdConnectSecurityScheme) return "bearer";
+	if (s.apiKeySecurityScheme) return "apiKey";
+	if (s.mtlsSecurityScheme || s.mutualTlsSecurityScheme) return "mtls";
+	switch (String(s.type || "").toLowerCase()) {
+		case "http": return http(s.scheme);
+		case "oauth2": case "openidconnect": return "bearer";
+		case "apikey": return "apiKey";
+		case "mutualtls": return "mtls";
+	}
+	return "unknown";
+}
+
+export type UpstreamAuth = {
+	/** true: the card asks for a bearer token (UPSTREAM_TOKEN); false: it declares no bearer / HTTP auth (no schemes, or
+	 *  anonymous access allowed, or only schemes the façade can't present); null: no card to tell. */
+	bearer: boolean | null;
+	/** Declared schemes as "name: kind" (names and kinds only, never values). */
+	schemes: string[];
+	/** Required schemes the façade can't present (it only sends `Authorization: Bearer <UPSTREAM_TOKEN>`). */
+	unsupported: string[];
+};
+
+/** What the upstream card says about authenticating to it. Security requirements are read from A2A 1.0
+ *  `securityRequirements` ([{ schemes: { name: { list: [] } } }]) or 0.3 `security` ([{ name: [] }]); without
+ *  requirements every declared scheme counts. An empty requirement ({}) means anonymous access is allowed. */
+export function upstreamAuth(card: Json): UpstreamAuth {
+	if (!card || typeof card !== "object" || Array.isArray(card)) return { bearer: null, schemes: [], unsupported: [] };
+	const defs: Record<string, Json> = card.securitySchemes && typeof card.securitySchemes === "object" && !Array.isArray(card.securitySchemes) ? card.securitySchemes : {};
+	const kinds: Record<string, string> = {};
+	for (const [n, s] of Object.entries(defs)) kinds[n] = schemeKind(s);
+	const schemes = Object.entries(kinds).map(([n, k]) => `${n}: ${k}`);
+	const raw = Array.isArray(card.securityRequirements) ? card.securityRequirements : Array.isArray(card.security) ? card.security : [];
+	const alts: string[][] = raw.filter((r: Json) => r && typeof r === "object" && !Array.isArray(r))
+		.map((r: Json) => Object.keys(r.schemes && typeof r.schemes === "object" && !Array.isArray(r.schemes) ? r.schemes : r));
+	const kindOf = (n: string) => kinds[n] || "unknown";
+	if (!alts.length) {
+		const all = Object.keys(kinds);
+		return { bearer: all.some((n) => kinds[n] === "bearer"), schemes, unsupported: all.some((n) => kinds[n] === "bearer") ? [] : all.filter((n) => kinds[n] !== "unknown").map((n) => `${n}: ${kinds[n]}`) };
+	}
+	if (alts.some((a) => a.length === 0)) return { bearer: false, schemes, unsupported: [] }; // anonymous allowed
+	const bearer = alts.some((a) => a.some((n) => kindOf(n) === "bearer"));
+	const unsupported = bearer ? [] : [...new Set(alts.flat())].map((n) => `${n}: ${kindOf(n)}`);
+	return { bearer, schemes, unsupported };
+}
+
+/** Why a call to the upstream did not produce a JSON-RPC answer, as a stable reason code (Worker logs, the owner
+ *  diagnostics, `status`). Never shown to peers: their 502 stays generic. */
+export type UpstreamReason =
+	| "reachable" // a JSON-RPC response came back (any result or error): Access, the tunnel and the bearer all passed
+	| "access_credentials_missing" // Cloudflare Access refused the request and the façade has no Access service token
+	| "access_rejected" // Cloudflare Access refused the façade's service token (wrong token, or not admitted by the app's policy)
+	| "upstream_auth_missing" // the agent answered 401/403 and the façade has no UPSTREAM_TOKEN
+	| "upstream_auth_rejected" // the agent answered 401/403 to the façade's UPSTREAM_TOKEN
+	| "tunnel_down" // Cloudflare could not reach the tunnel / origin (error 1033, 1016, 530, ...)
+	| "upstream_unavailable" // a 5xx without JSON-RPC (cloudflared up, the agent's server not answering)
+	| "network" // the fetch itself failed (DNS, TLS, timeout)
+	| "unexpected_response" // anything else that is not JSON-RPC (a 404 page, HTML, a redirect elsewhere)
+	| "misconfigured"; // UPSTREAM_URL unusable
+
+export type UpstreamVerdict = { reason: UpstreamReason; status: number | null; cloudflareError?: string; rpcErrorCode?: number; detail: string };
+
+/** Classify one upstream HTTP answer (or a fetch failure: status null + error). Pure; `bearerSent` says whether the
+ *  façade sent UPSTREAM_TOKEN, `accessSent` whether it sent an Access service token (false turns an Access refusal into
+ *  access_credentials_missing). Access is recognised by its login redirect (<team>.cloudflareaccess.com,
+ *  /cdn-cgi/access/), its CF-Access-* response headers, or its error page. */
+export function classifyUpstream(i: { status: number | null; headers?: Headers | Record<string, string>; body?: string; error?: string; bearerSent: boolean; accessSent?: boolean }): UpstreamVerdict {
+	if (i.status === null) return { reason: "network", status: null, detail: `request failed: ${String(i.error || "unknown error").slice(0, 200)}` };
+	const status = i.status;
+	const body = String(i.body || "");
+	const get = (k: string): string => {
+		const h: any = i.headers;
+		if (!h) return "";
+		if (typeof h.get === "function") return h.get(k) || "";
+		for (const [n, v] of Object.entries(h)) if (n.toLowerCase() === k) return String(v);
+		return "";
+	};
+	const names: string[] = [];
+	const h: any = i.headers;
+	if (h && typeof h.forEach === "function" && typeof h.get === "function") h.forEach((_v: string, k: string) => names.push(k.toLowerCase()));
+	else if (h) names.push(...Object.keys(h).map((k) => k.toLowerCase()));
+	let rpc: Json = null;
+	try { rpc = JSON.parse(body); } catch { /* not JSON */ }
+	if (rpc && typeof rpc === "object" && !Array.isArray(rpc) && rpc.jsonrpc === "2.0" && status !== 401 && status !== 403) {
+		const code = rpc.error && typeof rpc.error === "object" && typeof rpc.error.code === "number" ? rpc.error.code : undefined;
+		return { reason: "reachable", status, ...(code !== undefined ? { rpcErrorCode: code } : {}),
+			detail: code !== undefined ? `JSON-RPC error ${code} (HTTP ${status})` : `JSON-RPC result (HTTP ${status})` };
+	}
+	const location = get("location");
+	const accessPage = /cloudflareaccess\.com|\/cdn-cgi\/access\//i.test(location) || /cloudflareaccess\.com|\/cdn-cgi\/access\/|Cloudflare Access/i.test(body.slice(0, 8192));
+	const accessHeader = names.some((n) => n.startsWith("cf-access-"));
+	if ((status >= 300 && status < 400 && /cloudflareaccess\.com|\/cdn-cgi\/access\//i.test(location)) || ((status === 401 || status === 403) && (accessPage || accessHeader)))
+		return { reason: i.accessSent === false ? "access_credentials_missing" : "access_rejected", status,
+			detail: `${status >= 300 && status < 400 ? `HTTP ${status} redirect to the Cloudflare Access login` : `HTTP ${status} from Cloudflare Access`}: ${i.accessSent === false
+				? "the façade has no Access service token (UPSTREAM_ACCESS_CLIENT_ID / _SECRET)" : "Access refused the façade's service token (wrong token, or the app's policy doesn't admit it)"}` };
+	if (status === 401 || status === 403)
+		return i.bearerSent
+			? { reason: "upstream_auth_rejected", status, detail: `HTTP ${status} from the agent: it refused the façade's UPSTREAM_TOKEN` }
+			: { reason: "upstream_auth_missing", status, detail: `HTTP ${status} from the agent: it wants a credential and the façade has no UPSTREAM_TOKEN` };
+	const m = /error code:?\s*(\d{4})|\bError\s+(\d{4})\b|errorCode:?\s*(\d{4})|cf-error-code[^>]*>\s*(\d{4})/i.exec(body.slice(0, 8192));
+	const cf = m ? m[1] || m[2] || m[3] || m[4] : "";
+	if (cf === "1033" || cf === "1016" || status === 530)
+		return { reason: "tunnel_down", status, ...(cf ? { cloudflareError: cf } : {}), detail: `HTTP ${status}${cf ? `, Cloudflare error ${cf}` : ""}: Cloudflare can't reach the tunnel (is cloudflared running?)` };
+	if (status >= 500)
+		return { reason: "upstream_unavailable", status, ...(cf ? { cloudflareError: cf } : {}), detail: `HTTP ${status}${cf ? `, Cloudflare error ${cf}` : ""} without a JSON-RPC answer: the agent's server behind the tunnel is not answering` };
+	return { reason: "unexpected_response", status, ...(cf ? { cloudflareError: cf } : {}),
+		detail: `HTTP ${status} without a JSON-RPC answer${status >= 300 && status < 400 && location ? " (a redirect)" : ""}: is UPSTREAM_URL the agent's JSON-RPC endpoint?` };
+}

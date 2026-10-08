@@ -3,8 +3,8 @@
 // itself, so agents need no curl (some agent sandboxes flag *.dev URLs in shell commands).
 import fs from "node:fs";
 import * as C from "./config.mjs";
-import { cardUrlProblem, cfErrorCode, describeHttp, fingerprint, httpJson } from "./a2a.mjs";
-import { baseUrl, owner } from "./commands.mjs";
+import { cardUrlProblem, cfErrorCode, describeHttp, die, fingerprint, httpJson } from "./a2a.mjs";
+import { baseUrl, owner, ownerTry } from "./commands.mjs";
 import * as D from "./deploy.mjs";
 import * as T from "./tunnel.mjs";
 
@@ -35,9 +35,58 @@ export function wakeLine(s) {
 	return `webhook (preset ${w.preset}${s.tunnel ? ", through the tunnel" : ""}); auth: ${auth.join(" + ") || "none"}; URL fingerprint ${w.urlFingerprint || "-"}`;
 }
 
+// ---------------------------------------------------------------- proxy mode: upstream diagnosis
+/** What to do for each reason code of the Worker's upstream check (`POST /owner/facade/verify`, Worker log
+ *  `upstream_error`). `d` is the check's detail line (HTTP status, Cloudflare error; never a secret). */
+export const UPSTREAM_FIX = {
+	access_credentials_missing: (d) => `Cloudflare Access refused the Worker (${d}). Export UPSTREAM_ACCESS_CLIENT_ID / UPSTREAM_ACCESS_CLIENT_SECRET (the service token the upstream's Access app admits) and run \`${CLI} deploy\``,
+	access_rejected: (d) => `Cloudflare Access refused the Worker's service token (${d}): the Access app on the upstream hostname needs a Service Auth policy for that token, and UPSTREAM_ACCESS_CLIENT_ID / _SECRET must be its current pair (export them and run \`${CLI} deploy\`)`,
+	upstream_auth_missing: (d) => `Access let the Worker through, but the agent refused the call (${d}). Export UPSTREAM_TOKEN (the bearer the agent expects; its card advertises it) and run \`${CLI} deploy\` (or pipe it: \`<print token> | ${CLI} deploy --upstream-token-stdin\`)`,
+	upstream_auth_rejected: (d) => `Access let the Worker through, but the agent refused its UPSTREAM_TOKEN (${d}): wrong or rotated. Export the current one and run \`${CLI} deploy\``,
+	tunnel_down: (d) => `Cloudflare can't reach the upstream tunnel (${d}): start the connector on the agent's machine (\`cloudflared tunnel run ...\`)`,
+	upstream_unavailable: (d) => `the tunnel answers but the agent's A2A server behind it does not (${d}): start the agent, and check the tunnel ingress \`service:\` URL`,
+	network: (d) => `the Worker could not connect to the upstream (${d}): check the tunnel hostname (DNS record, certificate)`,
+	unexpected_response: (d) => `the upstream answered without JSON-RPC (${d}): --upstream must be the agent's JSON-RPC endpoint (not its web UI or card URL); fix it with \`${CLI} deploy --upstream <URL>\``,
+	misconfigured: (d) => `the upstream URL is unusable (${d}): fix it with \`${CLI} deploy --upstream <tunnel URL>\``,
+};
+
+/** The upstream check as layer-by-layer rows: façade peer auth (public), Cloudflare Access, the agent's bearer check, the
+ *  A2A app. `v`: the Worker's verify answer; `fa`: the public peer-auth probe ({ status }) or null. Pure; unit-tested. */
+export function verifyLayers(v, fa = null) {
+	const rows = [];
+	if (fa) rows.push(["façade peer auth", fa.status === 401 ? "enforced (an unauthenticated call gets 401 from the façade)"
+		: fa.error ? `not checked (${fa.error})` : `UNEXPECTED: an unauthenticated call got HTTP ${fa.status} (expected 401)`]);
+	if (!v) return rows;
+	const r = v.reason, sent = v.sent || {};
+	const notReached = "not reached";
+	const access = r === "access_credentials_missing" ? "FAILED: refused by Cloudflare Access; the Worker has no Access service token"
+		: r === "access_rejected" ? "FAILED: Cloudflare Access refused the Worker's service token (policy or wrong token)"
+		: ["upstream_auth_missing", "upstream_auth_rejected", "reachable", "upstream_unavailable"].includes(r) ? (sent.accessServiceToken ? "passed" : "no service token sent (the upstream hostname is not behind Access?)")
+		: r === "tunnel_down" || r === "network" ? notReached : "?";
+	const bearer = r === "upstream_auth_missing" ? "FAILED: the agent wants a credential; the Worker has no UPSTREAM_TOKEN"
+		: r === "upstream_auth_rejected" ? "FAILED: the agent refused the Worker's UPSTREAM_TOKEN"
+		: r === "reachable" ? (sent.bearer ? "accepted" : "none sent (the agent accepted the call without one)")
+		: notReached;
+	const app = r === "reachable" ? `reachable (${v.detail}${v.rpcErrorCode === -32601 ? ": method not found, as expected" : ""}; no task created)`
+		: ["tunnel_down", "upstream_unavailable", "network", "unexpected_response", "misconfigured"].includes(r) ? `FAILED: ${v.detail}` : notReached;
+	rows.push(["Access", access], ["upstream bearer", bearer], ["A2A app", app]);
+	return rows;
+}
+
+/** Peer token variables set in the environment that shadow a different token saved in config.env (names only). */
+export function shadowedPeerTokens() {
+	return [...new Set(Object.values(C.loadPeers()).map((p) => p && p.token_env).filter(Boolean))].filter((k) => C.envOverridesFile(k));
+}
+
 /** The single most useful next step for a status snapshot (pure; unit-tested). `also`: optional extra hints, printed
  *  as separate lines (so the next step stays one short instruction). */
 export function nextStep(s) {
+	const n = nextStepCore(s);
+	const sh = (s.peerTokenShadowed || []).map((k) => `${k} is set in the environment and overrides the different peer token saved in ${s.configFile} (e.g. a stale value from before \`connect\` stored a new one): send/poll use the environment value. Unset ${k} where it is set to use the saved token`);
+	return sh.length ? { ...n, also: [...n.also, ...sh] } : n;
+}
+
+function nextStepCore(s) {
 	const fail = (text) => ({ ok: false, text, also: [] });
 	const done = (text, also = []) => ({ ok: true, text, also });
 	if (!s.deployed) return fail(`nothing is deployed from ${s.configFile}: run \`${CLI} init ...\` (setup skill, section 2). Another bot's deployment? Set A2A_CONFIG_DIR.`);
@@ -62,12 +111,28 @@ export function nextStep(s) {
 			return fail(`${s.configFile} has A2A_UPSTREAM_URL, but the Worker is not in proxy mode (an older template or an interrupted deploy): run \`${CLI} deploy\``);
 		if (fc.upstreamProblem) return fail(`the upstream URL is unusable: ${fc.upstreamProblem}. Fix it with \`${CLI} deploy --upstream <tunnel URL>\``);
 		if (fc.upstreamCardProblem) return fail(`the upstream card URL is refused: ${fc.upstreamCardProblem}. Fix it with \`${CLI} deploy --upstream-card-url <URL on the upstream's origin>\` (or \`--upstream-card-url none\` for the default)`);
+		// the live check (owner-authenticated, run by the Worker with its stored secrets) is the precise diagnosis
+		const v = s.upstreamVerify;
+		if (v && v.reason && v.reason !== "reachable" && UPSTREAM_FIX[v.reason]) return fail(UPSTREAM_FIX[v.reason](v.detail || v.reason));
+		// an Access-only configuration must not look complete when the agent's card asks for a bearer
+		const wantsBearer = fc.upstreamAuth && fc.upstreamAuth.bearer === true;
+		if (wantsBearer && !fc.hasUpstreamToken && !(v && v.ok) && !s.upstreamNoToken)
+			return fail(`the upstream's card asks for a bearer token (${(fc.upstreamAuth.schemes || []).join(", ")}) and the Worker has no UPSTREAM_TOKEN: Cloudflare Access only lets the Worker through the tunnel, so peers' calls would fail with HTTP 502. Export UPSTREAM_TOKEN and run \`${CLI} deploy\``);
 		if (fc.upstreamCard !== "ok")
 			return fail(`the Worker can't fetch the upstream's agent card (${fc.upstreamCard}): is the tunnel connector running on the agent's machine, and does the Access app admit the service token you exported as UPSTREAM_ACCESS_CLIENT_ID / UPSTREAM_ACCESS_CLIENT_SECRET (re-run \`${CLI} deploy\` with them exported)?`);
 		if (fc.publicCardLeaks && fc.publicCardLeaks.length)
 			return fail(`the public card still names a private URL (${fc.publicCardLeaks[0]}): report this as a bug; meanwhile override the field with --agent-description / --agent-skills and run \`${CLI} deploy\``);
 		const also = [];
 		if (!fc.hasUpstreamAccessServiceToken) also.push("no Access service token for the upstream: unless the upstream hostname is protected another way, put it behind Cloudflare Access and export UPSTREAM_ACCESS_CLIENT_ID / UPSTREAM_ACCESS_CLIENT_SECRET, then deploy");
+		if (wantsBearer && !fc.hasUpstreamToken)
+			also.push(`the upstream's card asks for a bearer token but the Worker has none${s.upstreamNoToken ? " (--no-upstream-token)" : ""}${v && v.ok ? "; the agent accepts calls without it today" : ""}: if peers get HTTP 502, export UPSTREAM_TOKEN and run \`${CLI} deploy\``);
+		if (fc.upstreamAuth && fc.upstreamAuth.unsupported && fc.upstreamAuth.unsupported.length)
+			also.push(`the upstream's card requires ${fc.upstreamAuth.unsupported.join(", ")}; the façade only presents a bearer token (UPSTREAM_TOKEN) and the Access service token`);
+		if (s.localUpstreamToken && fc.fingerprints && fc.fingerprints.upstreamToken !== s.localUpstreamToken)
+			also.push(`the UPSTREAM_TOKEN exported here (fingerprint ${s.localUpstreamToken}) differs from the Worker's (${fc.fingerprints.upstreamToken || "none"}): run \`${CLI} deploy\` to upload it`);
+		if (!v && s.upstreamVerifyError) also.push(`the live upstream check was not run (${s.upstreamVerifyError || "unavailable"})${/HTTP 404/.test(s.upstreamVerifyError || "") ? `: run \`${CLI} deploy\` for a Worker with \`upstream verify\`` : ""}`);
+		if (fc.lastFailure && fc.lastFailure.reason && v && v.ok)
+			also.push(`last failed peer call: ${fc.lastFailure.reason}${fc.lastFailure.status ? ` (HTTP ${fc.lastFailure.status})` : ""} at ${fc.lastFailure.at}; the live check passes now`);
 		if (s.pairing && s.pairing.mode === "human" && !s.pairing.passwordSet)
 			also.push(`peers can't connect yet: run \`${CLI} pair set-password --web\` and send your human the one-time link (or they run \`${CLI} pair set-password\` in a terminal); never set it yourself`);
 		if (s.pairing && s.pairing.pending) also.push(`${s.pairing.pending} pending pairing request(s): \`${CLI} pair list\`, then tell your human (never approve on your own)`);
@@ -117,7 +182,9 @@ export async function collect() {
 		baseUrl: baseUrl(), urlKind: C.get("A2A_HOSTNAME") ? "custom domain" : "workers.dev", cron: C.get("A2A_ENABLE_CRON") === "1",
 		hasOwnerToken: !!C.get("A2A_OWNER_TOKEN"), baseUrlSaved: (C.fileConfig().A2A_BASE_URL || "").replace(/\/$/, ""), baseUrlEnv: "",
 		card: { ok: false, error: "not checked" }, ownerApi: { ok: false, error: "not checked" }, wake: null, tunnel: null, zones: null, pairing: null,
-		upstream: C.get("A2A_UPSTREAM_URL") || null, facade: null,
+		upstream: C.get("A2A_UPSTREAM_URL") || null, facade: null, upstreamVerify: null, upstreamVerifyError: "", facadePeerAuth: null,
+		upstreamNoToken: C.get("A2A_UPSTREAM_NO_TOKEN") === "1", localUpstreamToken: fingerprint(process.env.UPSTREAM_TOKEN),
+		peerTokenShadowed: shadowedPeerTokens(),
 	};
 	const envBase = (process.env.A2A_BASE_URL || "").replace(/\/$/, "");
 	if (envBase && envBase !== s.baseUrlSaved) s.baseUrlEnv = envBase;
@@ -140,6 +207,7 @@ export async function collect() {
 			if (s.upstream) {
 				try { s.facade = await owner("GET", "/owner/facade"); }
 				catch (e) { s.facade = { mode: "unknown", error: e.message }; }
+				if (s.facade && s.facade.mode === "proxy") Object.assign(s, await upstreamCheck(s.baseUrl));
 			}
 		}
 	}
@@ -163,6 +231,42 @@ export async function collect() {
 	return s;
 }
 
+const VERIFY_METHOD = "a2a-exposed/verify-unknown-method";
+
+/** The two upstream probes, neither creating anything: (1) public: an unauthenticated JSON-RPC call to the façade, which
+ *  must answer 401 before looking at the method; (2) owner-authenticated: the Worker sends a JSON-RPC call with an
+ *  unknown method to the upstream with its stored secrets and classifies the answer (POST /owner/facade/verify). */
+export async function upstreamCheck(base) {
+	const out = { facadePeerAuth: null, upstreamVerify: null, upstreamVerifyError: "" };
+	try {
+		const r = await httpJson(base + "/", { method: "POST", body: { jsonrpc: "2.0", id: "a2a-exposed-verify", method: VERIFY_METHOD, params: {} }, headers: { "a2a-version": "1.0" }, timeout: 15000 });
+		out.facadePeerAuth = { status: r.status };
+	} catch (e) { out.facadePeerAuth = { status: null, error: e.message }; }
+	try {
+		const r = await ownerTry("POST", "/owner/facade/verify", {});
+		if (r.status === 200 && r.data && typeof r.data === "object" && r.data.reason) out.upstreamVerify = r.data;
+		else out.upstreamVerifyError = describeHttp(r.status, r.data);
+	} catch (e) { out.upstreamVerifyError = e.message; }
+	return out;
+}
+
+/** `upstream verify`: the façade's whole path, layer by layer; exit 1 unless the upstream app answered. */
+export async function upstreamVerify(o) {
+	if (!C.get("A2A_UPSTREAM_URL")) die(`not a façade: ${C.CONFIG_FILE} has no A2A_UPSTREAM_URL (proxy mode: \`${CLI} deploy --upstream <tunnel URL>\`). For an inbox, check wakes with \`${CLI} wake test\``);
+	const base = baseUrl();
+	if (!base || !C.get("A2A_OWNER_TOKEN")) die(`A2A_BASE_URL / A2A_OWNER_TOKEN missing (run \`${CLI} init\` or edit ${C.CONFIG_FILE})`);
+	const r = await upstreamCheck(base);
+	const v = r.upstreamVerify;
+	if (o.json) console.log(JSON.stringify({ ...r, ok: !!(v && v.ok) }, null, 2));
+	else {
+		const rows = [["upstream", C.get("A2A_UPSTREAM_URL")], ...verifyLayers(v, r.facadePeerAuth)];
+		if (!v) rows.push(["check", `FAILED: ${r.upstreamVerifyError}${/HTTP 404/.test(r.upstreamVerifyError) ? ` (this Worker predates \`upstream verify\`: run \`${CLI} deploy\`)` : ""}`]);
+		else rows.push(["result", v.ok ? "OK: the façade reaches the agent with its stored credentials" : `${v.reason}: ${UPSTREAM_FIX[v.reason] ? UPSTREAM_FIX[v.reason](v.detail || v.reason) : v.detail}`]);
+		for (const [k, val] of rows) console.log(`${(k + ":").padEnd(18)} ${val}`);
+	}
+	if (!(v && v.ok) || (r.facadePeerAuth && r.facadePeerAuth.status !== null && r.facadePeerAuth.status !== 401)) process.exitCode = 1;
+}
+
 export async function status(o) {
 	const s = await collect();
 	const next = nextStep(s);
@@ -179,7 +283,18 @@ export async function status(o) {
 			rows.push(["owner API", s.ownerApi.ok ? "OK" : `FAILED: ${s.ownerApi.error}`]);
 			if (s.upstream) {
 				const f = s.facade || {};
-				rows.push(["upstream", `${s.upstream} (proxy mode)${f.mode === "proxy" ? `; card ${f.upstreamCard}${f.upstreamVersions && f.upstreamVersions.length ? ` (A2A ${f.upstreamVersions.join(", ")})` : ""}; credential ${f.hasUpstreamToken ? "set" : "none"}; Access service token ${f.hasUpstreamAccessServiceToken ? "set" : "NONE"}; public card ${f.publicCardLeaks && f.publicCardLeaks.length ? "LEAKS a private URL" : "clean"}` : f.error ? `; ${f.error}` : "; the Worker is not in proxy mode"}`]);
+				rows.push(["upstream", `${s.upstream} (proxy mode)${f.mode === "proxy" ? `; card ${f.upstreamCard}${f.upstreamVersions && f.upstreamVersions.length ? ` (A2A ${f.upstreamVersions.join(", ")})` : ""}; public card ${f.publicCardLeaks && f.publicCardLeaks.length ? "LEAKS a private URL" : "clean"}` : f.error ? `; ${f.error}` : "; the Worker is not in proxy mode"}`]);
+				if (f.mode === "proxy") {
+					const ua = f.upstreamAuth || {};
+					rows.push(["upstream Access", f.hasUpstreamAccessServiceToken ? `credential configured (UPSTREAM_ACCESS_CLIENT_ID fingerprint ${f.fingerprints?.upstreamAccessClientId || "?"})` : "NONE (UPSTREAM_ACCESS_CLIENT_ID / _SECRET not on the Worker)"]);
+					rows.push(["upstream bearer", f.hasUpstreamToken ? `bearer configured (UPSTREAM_TOKEN fingerprint ${f.fingerprints?.upstreamToken || "?"})`
+						: ua.bearer === true ? `NONE, but the upstream card asks for one (${(ua.schemes || []).join(", ")})${s.upstreamNoToken ? "; --no-upstream-token" : ""}`
+						: ua.bearer === false ? "none (the upstream card declares no bearer auth)" : `none${s.upstreamNoToken ? " (--no-upstream-token)" : ""}`]);
+					const v = s.upstreamVerify;
+					rows.push(["upstream check", !v ? `not run (${s.upstreamVerifyError || "?"})` : v.ok ? `OK: ${verifyLayers(v).map(([k, x]) => `${k} ${x.replace(/ \(.*$/, "")}`).join("; ")}` : `FAILED (${v.reason}): ${v.detail}`]);
+					if (s.facadePeerAuth) rows.push(["peer auth", verifyLayers(null, s.facadePeerAuth)[0][1]]);
+					if (f.lastFailure && f.lastFailure.reason) rows.push(["last failure", `${f.lastFailure.reason}${f.lastFailure.status ? ` (HTTP ${f.lastFailure.status})` : ""} on ${f.lastFailure.method || "?"} from peer ${f.lastFailure.peer || "?"} at ${f.lastFailure.at}`]);
+				}
 			}
 			rows.push(["wake", wakeLine(s)]);
 			const t = s.tunnel;
@@ -192,7 +307,8 @@ export async function status(o) {
 		}
 		rows.push(["next step", next.text]);
 		for (const a of next.also || []) rows.push(["also", a]);
-		for (const [k, v] of rows) console.log(`${(k + ":").padEnd(12)} ${v}`);
+		const w = Math.max(12, ...rows.map(([k]) => k.length + 2));
+		for (const [k, v] of rows) console.log(`${(k + ":").padEnd(w)} ${v}`);
 	}
 	if (!next.ok) process.exitCode = 1;
 }
