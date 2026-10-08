@@ -99,6 +99,10 @@ Agents connect without pasting tokens into chat. Each inbox is an OAuth 2.0 auth
 
 `npx a2a-over-webhook status` is read-only. It shows the deployment, the base URL, an agent-card check (done by the CLI, so no `curl` is needed), the wake mode, the tunnel state, and a `next step:` line. Every setup step is safe to re-run.
 
+### Already running an earlier build?
+
+A Worker deployed from an earlier build of this code (e.g. the s2a2a prototype) can be moved onto the CLI in place, keeping its D1 data, peer tokens and wake secrets: write `config.env` by hand, run `deploy` (it keeps the Worker's secrets and applies the missing D1 migrations), then `status`. See [the setup skill](skills/a2a-over-webhook-setup/SKILL.md#adopting-an-existing-deployment-same-worker-d1-and-hostname).
+
 Two skills are included:
 
 | Skill | Use |
@@ -108,7 +112,7 @@ Two skills are included:
 
 ## Install the skills
 
-Install both skills; the setup skill is only needed until the endpoint is deployed. Each one names the other in its frontmatter (`related_skills`).
+Install both skills; the setup skill is only needed until the endpoint is deployed. Each one names the other in its frontmatter (`related_skills`), along with the optional companion skills below.
 
 - **Any agent, via [skills.sh](https://skills.sh)** ([skills CLI](https://github.com/vercel-labs/skills)):
   ```bash
@@ -126,6 +130,15 @@ Install both skills; the setup skill is only needed until the endpoint is deploy
   ```
   Or add the repo as a tap (`hermes skills tap add telegraphic-dev/a2a-over-webhook`; skills live under the default `skills/` path).
 - **Grok Bot:** not a skills-CLI target (its `grok` target is Grok Build). Save both `SKILL.md` files to your Grok Bot skill library, or keep a checkout on the bot's box and name the `SKILL.md` path in the routine prompt.
+
+### Optional companion skills
+
+The setup skill offers two more skills and installs them only if you agree. Neither is required; to add them yourself:
+
+```bash
+npx skills add https://github.com/telegraphic-dev/mise-skill --skill mise       # mise: gets Node 22.18+ without replacing the system Node
+npx skills add https://github.com/cloudflare/skills --skill cloudflare          # Cloudflare: Workers, D1, cf CLI, DNS, Tunnel, Access
+```
 
 ### Development: run from a checkout
 
