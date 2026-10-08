@@ -1,6 +1,6 @@
 {
 	"name": "a2a-over-webhook",
-	"version": "0.3.1",
+	"version": "0.4.0",
 	"description": "Deprecated: renamed to a2a-exposed. This alias installs a2a-exposed and keeps the old a2a-over-webhook command working for a couple of minor releases.",
 	"type": "module",
 	"bin": {
@@ -12,7 +12,7 @@
 		"LICENSE"
 	],
 	"dependencies": {
-		"a2a-exposed": "0.3.1"
+		"a2a-exposed": "0.4.0"
 	},
 	"engines": {
 		"node": ">=22.18"

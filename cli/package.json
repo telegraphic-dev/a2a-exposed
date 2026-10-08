@@ -1,6 +1,6 @@
 {
 	"name": "a2a-exposed",
-	"version": "0.3.1",
+	"version": "0.4.0",
 	"description": "Give any AI agent a public A2A (Agent2Agent) endpoint: Cloudflare Worker inbox + wake webhook or scheduled inbox checks",
 	"type": "module",
 	"bin": {

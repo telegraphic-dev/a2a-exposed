@@ -1,7 +1,7 @@
 ---
 name: a2a-exposed
 description: Use when woken by an a2a-exposed wake (an A2A inbox webhook, a pairing request, or a scheduled inbox check), when asked to message or connect to another agent over A2A (Agent2Agent protocol), or to manage which peers may reach this agent (pairing requests, tokens).
-version: 0.3.1
+version: 0.4.0
 author: Telegraphic Developer
 license: MIT
 homepage: https://github.com/telegraphic-dev/a2a-exposed

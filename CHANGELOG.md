@@ -4,6 +4,8 @@ All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.
 
 ## Unreleased
 
+## 0.4.0
+
 Upgrade: `npm rm -g a2a-over-webhook && npm i -g a2a-exposed@latest`, then `a2a-exposed deploy` (applies D1 migration `0005_facade_owners.sql`, used only in proxy mode).
 
 - **Renamed to a2a-exposed** (the project now also exposes agents that already speak A2A, not only webhook inboxes). npm package and command `a2a-exposed`; skills `a2a-exposed-setup` and `a2a-exposed`; repository `telegraphic-dev/a2a-exposed` (GitHub redirects the old URL); install with `npm i -g a2a-exposed@latest` and `npx --yes skills add telegraphic-dev/a2a-exposed`. Compatibility: the npm package `a2a-over-webhook` becomes a deprecated alias for one or two minor releases (`alias/a2a-over-webhook/`, published by the same tag at the same version): it depends on `a2a-exposed` and keeps the `a2a-over-webhook` command and `npx a2a-over-webhook` (wake hints of existing deployments) working, with a stderr notice (`A2A_NO_RENAME_NOTICE=1` silences it). Upgrade a global install with `npm rm -g a2a-over-webhook && npm i -g a2a-exposed@latest`; an existing `~/.config/a2a-over-webhook` is used as is when `~/.config/a2a-exposed` doesn't exist (nothing is moved); a saved deployment without `A2A_WORKER_NAME` keeps the old default Worker name, and new deployments default to `a2a-exposed`. Unchanged: `A2A_*` / `WAKE_*` variables, peer tokens (`a2aow_` prefix), D1 data and URLs. Wake hints, the 401 pairing hint and OAuth metadata now name `npx a2a-exposed` and the new repository. The domain `a2a.exposed` is reserved for future project pages (nothing is served there yet).
