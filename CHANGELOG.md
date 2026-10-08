@@ -2,7 +2,7 @@
 
 All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.3.x), Worker template, and skills. Versions follow [semver](https://semver.org); a `v*` tag publishes the CLI to npm (see the README's **Releases**).
 
-## Unreleased
+## 0.4.1 - 2026-10-08
 
 Upgrade: `a2a-exposed deploy` (new Worker owner endpoint; no D1 migration). Prompted by a façade in front of a Hermes A2A server behind Cloudflare Access: with only the Access service token set, every peer call failed with HTTP 502 / `-32603`, because Hermes also checks its own bearer (`UPSTREAM_TOKEN`), and nothing said so.
 
