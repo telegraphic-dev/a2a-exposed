@@ -9,7 +9,12 @@ const v = (k: string) => (e[k] ?? "").trim();
 
 const name = v("A2A_WORKER_NAME") || "a2a-over-webhook";
 const hostname = v("A2A_HOSTNAME"); // e.g. agent.example.com (on a zone in your account)
-const publicUrl = v("A2A_PUBLIC_URL") || (hostname ? `https://${hostname}` : "https://example.invalid");
+// No hostname: serve on <name>.<account subdomain>.workers.dev instead of a custom domain (and the other way round:
+// with a hostname, the workers.dev route is switched off).
+const workersDev = !hostname;
+const wdSubdomain = v("A2A_WORKERS_DEV_SUBDOMAIN"); // the account's workers.dev subdomain, once known
+// Public base URL for the agent card; if still unknown, the Worker uses the request's origin.
+const publicUrl = v("A2A_PUBLIC_URL") || (hostname ? `https://${hostname}` : wdSubdomain ? `https://${name}.${wdSubdomain}.workers.dev` : "");
 
 // Plain (non-secret) vars exposed to the Worker; empty values are omitted.
 const plain: Record<string, string> = {
@@ -31,6 +36,7 @@ const plain: Record<string, string> = {
 	WAKE_MAX_PER_HOUR: v("WAKE_MAX_PER_HOUR"),
 	MAX_BODY: v("A2A_MAX_BODY"),
 	RATE_PER_MIN: v("A2A_RATE_PER_MIN"),
+	RETIRED_HOSTNAMES: v("A2A_RETIRED_HOSTNAMES"), // custom domains this agent moved away from (see movedResponse)
 };
 const envBindings: Record<string, any> = {
 	DB: bindings.d1(v("A2A_D1_ID") ? { name: v("A2A_D1_NAME") || name, id: v("A2A_D1_ID") } : { name: v("A2A_D1_NAME") || name }),
@@ -49,9 +55,10 @@ export default defineConfig((ctx) => ({
 		compatibilityDate: "2026-10-06",
 		entrypoint,
 		...(hostname ? { domains: [hostname] } : {}),
+		workersDev,
 		env: ctx.mode === "development" ? { ...envBindings, ...Object.fromEntries(SECRETS.map((k) => [k, bindings.secret()])) } : envBindings,
 		// Optional cron flush of debounced wakes (the Worker also flushes opportunistically on every request).
-		// Requires a workers.dev subdomain on the account.
+		// Requires a workers.dev subdomain on the account (always the case for workers.dev deployments).
 		...(v("A2A_ENABLE_CRON") === "1" ? { triggers: [triggers.scheduled({ schedule: "* * * * *" })] } : {}),
 	},
 }));

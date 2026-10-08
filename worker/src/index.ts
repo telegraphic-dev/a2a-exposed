@@ -1,12 +1,13 @@
 // a2a-over-webhook Worker: public A2A endpoint (JSON-RPC; A2A 1.0 primary, 0.3 compatible),
 // D1-backed inbox, wake webhooks (presets), and an owner API for the local CLI.
 import * as A from "./a2a.ts";
-import { renderWake, redact, defaultDebounceSeconds, defaultMaxPerHour, type WakeConfig, type WakeEvent } from "./wake.ts";
+import { renderWake, redact, cloudflareErrorHint, defaultDebounceSeconds, defaultMaxPerHour, type WakeConfig, type WakeEvent } from "./wake.ts";
 type Json = any;
 
 interface Env {
 	DB: D1Database;
-	PUBLIC_URL: string;
+	PUBLIC_URL: string; // may be empty on a first workers.dev deploy (request origin is used then)
+	RETIRED_HOSTNAMES?: string; // old custom domains (comma-separated): 301 for the card, 410 for everything else
 	AGENT_NAME?: string;
 	AGENT_DESCRIPTION?: string;
 	AGENT_VERSION?: string;
@@ -19,6 +20,8 @@ interface Env {
 	WAKE_WEBHOOK_URL?: string;
 	WAKE_WEBHOOK_KEY?: string;
 	WAKE_HMAC_SECRET?: string;
+	WAKE_ACCESS_CLIENT_ID?: string; // Cloudflare Access service token (wake URL behind Access, e.g. `tunnel create`)
+	WAKE_ACCESS_CLIENT_SECRET?: string;
 	// wake config (plain vars)
 	WAKE_PRESET?: string;
 	WAKE_AGENT_ID?: string;
@@ -80,8 +83,7 @@ function histStmt(env: Env, ctx: string, e: Json) {
 
 // ------------------------------------------------------------------ self-aware fetch (a Worker cannot reliably fetch its own custom domain)
 async function doFetch(env: Env, ectx: ExecutionContext, url: string, init: RequestInit): Promise<Response> {
-	const own = new URL(env.PUBLIC_URL).host;
-	if (new URL(url).host === own) return handle(new Request(url, init), env, ectx);
+	if (env.PUBLIC_URL && new URL(url).host === new URL(env.PUBLIC_URL).host) return handle(new Request(url, init), env, ectx);
 	return fetch(url, { ...init, signal: AbortSignal.timeout(15000) });
 }
 
@@ -93,6 +95,7 @@ function wakeConfig(env: Env): WakeConfig {
 		preset: preset(env), url: env.WAKE_WEBHOOK_URL, key: env.WAKE_WEBHOOK_KEY, hmacSecret: env.WAKE_HMAC_SECRET,
 		agentId: env.WAKE_AGENT_ID, keyHeader: env.WAKE_KEY_HEADER, keyPrefix: env.WAKE_KEY_PREFIX,
 		bodyTemplate: env.WAKE_BODY_TEMPLATE, cliCommand: env.WAKE_CLI_COMMAND,
+		accessClientId: env.WAKE_ACCESS_CLIENT_ID, accessClientSecret: env.WAKE_ACCESS_CLIENT_SECRET,
 	};
 }
 
@@ -119,8 +122,10 @@ async function sendWake(env: Env, ectx: ExecutionContext, payload: Json): Promis
 	if (!req) { log("wake_skipped", { contextId: ev.contextId, reason: "WAKE_WEBHOOK_URL unset" }); return { status: null, info: "WAKE_WEBHOOK_URL unset" }; }
 	try {
 		const r = await doFetch(env, ectx, req.url, { method: "POST", headers: req.headers, body: req.body });
-		log("wake_sent", { preset: preset(env), contextId: ev.contextId, taskId: ev.taskId, status: r.status });
-		return { status: r.status, info: `HTTP ${r.status}` };
+		// explain Cloudflare edge errors (tunnel connector down, Access block) without echoing the body
+		const hint = r.ok ? "" : cloudflareErrorHint(r.status, (await r.text().catch(() => "")).slice(0, 4096));
+		log("wake_sent", { preset: preset(env), contextId: ev.contextId, taskId: ev.taskId, status: r.status, ...(hint ? { hint } : {}) });
+		return { status: r.status, info: `HTTP ${r.status}${hint ? ` (${hint})` : ""}` };
 	} catch (e) {
 		log("wake_failed", { preset: preset(env), contextId: ev.contextId, error: String(e).slice(0, 200) });
 		return { status: null, info: String(e).slice(0, 200) };
@@ -443,6 +448,7 @@ async function handlePush(req: Request, env: Env, ectx: ExecutionContext): Promi
 		log("push_rejected", { taskId });
 		return json({ error: "unauthorized" }, 401);
 	}
+	// normalised copy only for state/text; the task is stored exactly as the peer sent it (1.0 or 0.3 shape)
 	const t = "status" in inner ? A.taskFromAny(inner) : null;
 	const updates = JSON.parse(rec.updates_json || "[]");
 	updates.push({ receivedAt: A.nowIso(), payload: body });
@@ -454,7 +460,7 @@ async function handlePush(req: Request, env: Env, ectx: ExecutionContext): Promi
 	}
 	await env.DB.batch([
 		env.DB.prepare("UPDATE outbound SET updates_json = ?, task_json = COALESCE(?, task_json) WHERE task_id = ?")
-			.bind(JSON.stringify(updates.slice(-20)), t && t.id ? JSON.stringify(t) : null, taskId),
+			.bind(JSON.stringify(updates.slice(-20)), t && t.id ? JSON.stringify(inner) : null, taskId),
 		histStmt(env, rec.context_id, { dir: "in", peer: rec.peer, taskId, event: "push", state, text }),
 	]);
 	log("push_received", { peer: rec.peer, taskId, state });
@@ -584,16 +590,22 @@ async function handleOwner(req: Request, env: Env, ectx: ExecutionContext, path:
 		}
 	}
 	if (seg[0] === "wake" && seg[1] === "preview" && m === "GET") {
-		// rendered wake request for a sample event, credentials masked
+		// rendered wake request for a sample event, partially masked, plus short sha256 fingerprints of the
+		// uploaded secrets so the owner can compare them with local values without revealing them
 		const ev: WakeEvent = { contextId: "ctx-preview", taskId: "task-preview", taskIds: ["task-preview"], from: "example-peer",
 			preview: "Example message preview", kind: "test", publicUrl: env.PUBLIC_URL };
 		const req = await renderWake(wakeConfig(env), ev, { requestId: "preview" });
 		return json({ preset: preset(env), configured: !!req, debounceSeconds: debounceMs(env) / 1000, maxPerHour: maxPerHour(env),
-			hasKey: !!env.WAKE_WEBHOOK_KEY, hasHmacSecret: !!env.WAKE_HMAC_SECRET, request: req ? redact(req) : null });
+			hasKey: !!env.WAKE_WEBHOOK_KEY, hasHmacSecret: !!env.WAKE_HMAC_SECRET,
+			hasAccessServiceToken: !!(env.WAKE_ACCESS_CLIENT_ID && env.WAKE_ACCESS_CLIENT_SECRET),
+			fingerprints: { url: await A.fingerprint(env.WAKE_WEBHOOK_URL), key: await A.fingerprint(env.WAKE_WEBHOOK_KEY),
+				hmacSecret: await A.fingerprint(env.WAKE_HMAC_SECRET),
+				accessClientId: await A.fingerprint(env.WAKE_ACCESS_CLIENT_ID), accessClientSecret: await A.fingerprint(env.WAKE_ACCESS_CLIENT_SECRET) },
+			request: req ? redact(req) : null });
 	}
 	if (seg[0] === "wake" && seg[1] === "test" && m === "POST") {
 		const res = await sendWake(env, ectx, { contextId: "a2a-wake-test", taskId: "none", taskIds: [], from: "owner", preview: "", kind: "test" });
-		return json({ preset: preset(env), ...res });
+		return json({ preset: preset(env), configured: !!env.WAKE_WEBHOOK_URL, ...res });
 	}
 	if (seg[0] === "purge" && m === "POST") {
 		// delete conversation data for the given contexts (test cleanup)
@@ -643,6 +655,10 @@ async function handle(req: Request, env: Env, ectx: ExecutionContext): Promise<R
 
 export default {
 	async fetch(req, env: Env, ectx) {
+		// workers.dev deployments may not know their URL at first deploy: fall back to the request's origin
+		if (!env.PUBLIC_URL) env = { ...env, PUBLIC_URL: new URL(req.url).origin };
+		const moved = A.movedResponse(req.url, env.PUBLIC_URL, env.RETIRED_HOSTNAMES);
+		if (moved) return new Response(moved.body || null, { status: moved.status, headers: moved.headers });
 		const res = await handle(req, env, ectx);
 		// opportunistic flush of debounced wakes whose window has passed (no cron needed)
 		ectx.waitUntil(flushDue(env, ectx).catch((e) => log("flush_failed", { error: String(e).slice(0, 200) })));

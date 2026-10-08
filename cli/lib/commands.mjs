@@ -1,7 +1,7 @@
 // Day-to-day commands: inbox / reply / history (owner API) and outbound send / poll.
 import fs from "node:fs";
 import * as C from "./config.mjs";
-import { checkId, die, fetchCard, httpJson, newId, pickEndpoint, randomToken, rpc, taskFromAny, textOf } from "./a2a.mjs";
+import { checkId, die, fetchCard, httpJson, newId, pickEndpoint, plainState, randomToken, rpc, textOf } from "./a2a.mjs";
 
 const q = encodeURIComponent;
 const out = (obj) => console.log(JSON.stringify(obj, null, 2));
@@ -106,20 +106,36 @@ export function peers(sub, args, o) {
 		if (!alias || !url) die("usage: peers add <alias> <url> [--token-env VAR | --token-stdin]");
 		if (!/^https?:\/\//.test(url)) die("URL must be http(s)");
 		const tokenEnv = o["token-env"] || C.peerTokenVar(alias);
-		all[alias] = { url: url.replace(/\/$/, ""), token_env: tokenEnv };
+		// token_stored is always recorded (true/false); entries without it come from an older CLI (see `peers rm`)
+		all[alias] = { url: url.replace(/\/$/, ""), token_env: tokenEnv, token_stored: false };
 		if (o["token-stdin"]) {
 			const t = readStdin().trim();
 			if (!t) die("no token on stdin");
 			C.saveConfig({ [tokenEnv]: t });
+			all[alias].token_stored = true; // written to config.env by us: `peers rm` removes it again
 		} else if (!C.get(tokenEnv)) console.error(`note: no token stored; set ${tokenEnv} in the environment or ${C.CONFIG_FILE} (or re-run with --token-stdin)`);
 		C.savePeers(all);
 		return console.log(`peer ${alias} -> ${all[alias].url}`);
 	}
 	if (sub === "rm") {
 		const [alias] = args;
+		if (!alias) die("usage: peers rm <alias>");
+		const pe = all[alias];
+		// Tokens the CLI stored in config.env go with the peer: the default PEER_<ALIAS>_TOKEN, a variable stored
+		// with --token-stdin (token_stored: true), and, for entries written by an older CLI (no token_stored
+		// field), whatever --token-env variable they reference, since that CLI stored --token-stdin tokens there
+		// too. Never a variable another peer still uses, never the CLI's own settings, and only from config.env
+		// (CLI-owned): a value that lives only in the process environment is the user's and stays.
+		const vars = new Set([C.peerTokenVar(alias)]);
+		if (pe && pe.token_env && (pe.token_stored === true || !("token_stored" in pe))) vars.add(pe.token_env);
 		delete all[alias];
-		C.savePeers(all);
-		return console.log(`removed ${alias}`);
+		const inUse = new Set(Object.values(all).map((x) => x.token_env));
+		const reserved = (k) => /^(A2A_|CLOUDFLARE_|WAKE_|CF_PROFILE$)/.test(k);
+		const drop = [...vars].filter((k) => !inUse.has(k) && !reserved(k) && k in C.fileConfig());
+		if (!pe && !drop.length) die(`unknown peer alias ${JSON.stringify(alias)} (see: a2a-over-webhook peers list)`);
+		if (pe) C.savePeers(all);
+		if (drop.length) C.saveConfig(Object.fromEntries(drop.map((k) => [k, null])));
+		return console.log(`removed ${alias}${drop.length ? ` (and ${drop.join(", ")} from ${C.CONFIG_FILE})` : ""}`);
 	}
 	for (const [k, v] of Object.entries(all)) {
 		const te = v.token_env || "";
@@ -151,8 +167,8 @@ export async function send(o) {
 		conf[v1 ? "taskPushNotificationConfig" : "pushNotificationConfig"] = { url: baseUrl() + "/push", token: pushToken };
 	}
 	const res = await rpc(url, version, tok, "message/send", "SendMessage", { message: msg, configuration: conf });
-	let obj = res && typeof res === "object" && ("task" in res || "message" in res) ? res.task || res.message : res;
-	obj = taskFromAny(obj);
+	// printed and stored exactly as the peer returned it (1.0: TASK_STATE_* / ROLE_*; 0.3: lowercase)
+	const obj = res && typeof res === "object" && ("task" in res || "message" in res) ? res.task || res.message : res;
 	const isTask = obj && typeof obj === "object" && "status" in obj;
 	const ctx = (obj && obj.contextId) || o.context || newId();
 	const tid = isTask ? obj.id : null;
@@ -160,6 +176,7 @@ export async function send(o) {
 	if (tid) await owner("POST", "/owner/outbound", { taskId: tid, contextId: ctx, peer: alias, endpoint: url, protocol: version, pushToken, task: obj });
 	else if (obj && obj.parts) await logHistory(ctx, { dir: "in", peer: alias, role: "agent", event: "direct_message", text: textOf(obj) });
 	out(obj);
+	if (tid) console.error(`# task ${tid}: ${plainState(obj)}  (check: a2a-over-webhook poll --to ${alias} ${tid})`);
 }
 
 export async function poll(taskId, o) {
@@ -169,16 +186,16 @@ export async function poll(taskId, o) {
 	let rec = {};
 	try { rec = await owner("GET", `/owner/outbound/${q(tid)}`); } catch { rec = {}; }
 	const [url, version] = rec.endpoint ? [rec.endpoint, rec.protocol || "0.3"] : pickEndpoint(base, await fetchCard(base), o.proto);
-	const res = taskFromAny(await rpc(url, version, tok, "tasks/get", "GetTask", { id: tid }));
+	const res = await rpc(url, version, tok, "tasks/get", "GetTask", { id: tid });
 	if (rec.endpoint) {
 		await owner("PUT", `/owner/outbound/${q(tid)}`, { task: res });
-		const s = res.status || {};
-		let txt = textOf(s.message || {});
+		let txt = textOf((res.status || {}).message || {});
 		const arts = (res.artifacts || []).map((x) => textOf(x)).join("\n");
 		if (arts && arts !== txt) txt = (txt ? txt + "\n" : "") + arts;
-		await logHistory(rec.contextId, { dir: "in", peer: alias, taskId: tid, event: "poll", state: s.state, text: txt });
+		await logHistory(rec.contextId, { dir: "in", peer: alias, taskId: tid, event: "poll", state: plainState(res), text: txt });
 	}
 	out(res);
+	console.error(`# task ${tid}: ${plainState(res)}`);
 }
 
 export const outbound = async (id) => out(await owner("GET", `/owner/outbound/${q(id)}`));

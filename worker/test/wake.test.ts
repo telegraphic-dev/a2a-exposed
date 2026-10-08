@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
-import { renderWake, renderTemplate, wakeSummary, redact, PRESETS, type WakeEvent } from "../src/wake.ts";
+import { renderWake, renderTemplate, wakeSummary, redact, addAccessHeaders, cloudflareErrorHint, PRESETS, type WakeEvent } from "../src/wake.ts";
 
 const ev: WakeEvent = {
 	contextId: "ctx-1", taskId: "t-2", taskIds: ["t-1", "t-2"], from: "peer-a",
@@ -97,3 +97,45 @@ test("generic custom key header is rendered with prefix and redacted in previews
 	const red = redact(req);
 	assert.ok(!JSON.stringify(red).includes("supersecretvalue"));
 });
+
+// ---------------------------------------------------------------- Cloudflare Access service token (tunnel wakes)
+const ACCESS = { accessClientId: "abc123.access", accessClientSecret: "s3cr3t-value-0123456789" };
+
+test("Access service-token headers are added for every preset, next to the preset's own auth", async () => {
+	for (const preset of PRESETS) {
+		const r = (await renderWake({ preset, url: "https://wake-x.example.com/hooks/wake", key: "k1", hmacSecret: "h1", ...ACCESS }, ev))!;
+		assert.equal(r.headers["CF-Access-Client-Id"], "abc123.access", preset);
+		assert.equal(r.headers["CF-Access-Client-Secret"], "s3cr3t-value-0123456789", preset);
+		if (preset === "hermes") assert.ok(r.headers["X-Webhook-Signature-V2"], "hermes keeps its HMAC");
+		else assert.ok(r.headers["authorization"], `${preset} keeps its bearer`);
+	}
+});
+
+test("Access headers need both halves; none without them", async () => {
+	const none = (await renderWake({ preset: "generic", url: "https://h.example/x" }, ev))!;
+	assert.ok(!("CF-Access-Client-Id" in none.headers) && !("CF-Access-Client-Secret" in none.headers));
+	assert.deepEqual(addAccessHeaders({}, { accessClientId: "only-id" }), {});
+	assert.deepEqual(addAccessHeaders({}, { accessClientSecret: "only-secret" }), {});
+});
+
+test("hermes HMAC is computed over the body only, unaffected by Access headers", async () => {
+	const a = (await renderWake({ preset: "hermes", url: "https://h.example/webhooks/a2a", hmacSecret: "h1" }, ev, { nowMs: 1e12, requestId: "r" }))!;
+	const b = (await renderWake({ preset: "hermes", url: "https://h.example/webhooks/a2a", hmacSecret: "h1", ...ACCESS }, ev, { nowMs: 1e12, requestId: "r" }))!;
+	assert.equal(a.headers["X-Webhook-Signature-V2"], b.headers["X-Webhook-Signature-V2"]);
+});
+
+test("redact masks both Access headers", async () => {
+	const r = redact((await renderWake({ preset: "openclaw-wake", url: "https://wake-x.example.com/hooks/wake", key: "hooks-token", ...ACCESS }, ev))!);
+	assert.equal(r.headers["CF-Access-Client-Id"], "abc1…");
+	assert.equal(r.headers["CF-Access-Client-Secret"], "s3cr…");
+	assert.ok(!JSON.stringify(r).includes("s3cr3t-value"));
+});
+
+test("cloudflareErrorHint explains tunnel / Access failures", () => {
+	assert.match(cloudflareErrorHint(530, "<html>... error code: 1033 ...</html>"), /1033.*no running connector/);
+	assert.match(cloudflareErrorHint(530, "<title>Error 1033</title>"), /1033/);
+	assert.match(cloudflareErrorHint(530, '<script>a={event:"feedback clicked",properties:{errorCode: 1033 }}</script>'), /1033/);
+	assert.match(cloudflareErrorHint(403, "Forbidden. You don't have access. cloudflareaccess.com"), /Cloudflare Access/);
+	assert.equal(cloudflareErrorHint(500, "boom"), "");
+});
+

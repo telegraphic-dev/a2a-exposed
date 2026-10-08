@@ -4,6 +4,7 @@ import { CliError } from "./a2a.mjs";
 import * as C from "./config.mjs";
 import * as cmd from "./commands.mjs";
 import * as dep from "./deploy.mjs";
+import * as tun from "./tunnel.mjs";
 
 const VERSION = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 
@@ -11,18 +12,42 @@ const HELP = `a2a-over-webhook ${VERSION} - public A2A endpoint for any AI agent
 
 Usage: a2a-over-webhook <command> [options]        (or: npx a2a-over-webhook <command>)
 
-Setup (needs the Cloudflare cf CLI login: cf auth login --no-browser)
-  init --hostname <host> [--agent-name N] [--agent-description D] [--agent-skills JSON]
-       [--preset P] [--worker-name W] [--account-id ID] [--cron] [--dir DIR]
+Setup (needs Node 22.18+ and a Cloudflare login: npx cf auth login --no-browser)
+  init [--hostname <host> | --workers-dev [--workers-dev-subdomain NAME]]
+       [--agent-name N] [--agent-description D] [--agent-skills JSON]
+       [--provider-organization O --provider-url U] [--preset P] [--worker-name W] [--d1-name D]
+       [--account-id ID] [--cf-profile NAME] [--cli-command CMD] [--debounce S] [--max-per-hour N]
+       [--cron] [--dir DIR]
                                 deploy the Worker + D1 to your account; wake secrets are read from
-                                env WAKE_WEBHOOK_URL / WAKE_WEBHOOK_KEY / WAKE_HMAC_SECRET
+                                env WAKE_WEBHOOK_URL / WAKE_WEBHOOK_KEY / WAKE_HMAC_SECRET (never argv)
+                                no --hostname: serve on https://<worker>.<account subdomain>.workers.dev
+                                --workers-dev  move an existing custom-domain deployment to workers.dev (and
+                                               --hostname H moves it back); the old URL answers 301/410
+                                --workers-dev-subdomain  create the account's workers.dev subdomain if missing
+                                --cf-profile   cf auth profile for a separate Cloudflare login
+                                               (npx cf auth create NAME --no-browser); saved, used by every cf call
+                                --d1-name      D1 database to create or reuse (default: worker name)
+                                --cli-command  command shown in wake hints (default "npx a2a-over-webhook";
+                                               e.g. "node /path/to/repo/cli/bin/a2a-over-webhook.mjs")
   deploy [same flags]           redeploy with saved settings (secrets persist)
-  wake preview                  show the rendered wake request (credentials masked)
-  wake test                     send a test wake now and print the HTTP status
   wake set [--preset P] [--agent-id A] [--key-header H] [--key-prefix X] [--body-template JSON]
-           [--debounce S] [--max-per-hour N]
-                                change wake settings; secrets from env (see init), then redeploy
+           [--cli-command CMD] [--debounce S] [--max-per-hour N]
+                                save wake settings, upload wake secrets from env, and redeploy (one step)
+  wake preview                  rendered wake request (partially masked) + sha256 fingerprints of the
+                                uploaded URL/key/HMAC secret; compared with local env values if exported
+  wake fingerprint              fingerprints (first 12 hex of sha256) of WAKE_* in the local environment
+  wake test                     send a test wake now and print the HTTP status
   wake unset                    remove wake secrets (fall back to polling)
+
+Tunnel (local-only webhooks: OpenClaw gateway, Hermes, ...; needs a Cloudflare zone and Zero Trust/Access)
+  tunnel create [--tunnel-hostname H] [--tunnel-origin URL] [--tunnel-path /p] [--show-token] [--zero-trust-org TEAM]
+                                named Cloudflare Tunnel + proxied DNS + Access app that admits ONE service token;
+                                the Worker sends that token (CF-Access-Client-Id/Secret) on every wake.
+                                Defaults: openclaw-* -> http://127.0.0.1:18789 /hooks/wake|agent, hermes -> :8644
+                                (pass --tunnel-path /webhooks/<name>). Token -> <config dir>/tunnel-token (chmod 600)
+  tunnel status                 tunnel/Access/Worker state + probes (bare request blocked? connector up?)
+  tunnel rm                     delete Worker wake secrets, DNS record, tunnel, Access app + service token
+  init ... --tunnel             init, then tunnel create
   url                           print the public base URL
   config                        print config (secrets masked) and its location
 
@@ -51,9 +76,13 @@ Presets: grok-bot | claude-code | openclaw-wake | openclaw-agent | hermes | gene
 Config: ${C.CONFIG_FILE}  (override dir with A2A_CONFIG_DIR; env vars override file values)`;
 
 const S = { type: "string" }, B = { type: "boolean" };
-const deployOpts = { ...Object.fromEntries(dep.DEPLOY_FLAGS.map((f) => [f, S])), dir: S, cron: B, "skip-install": B, "rotate-owner-token": B };
+const tunnelOpts = { "tunnel-hostname": S, "tunnel-origin": S, "tunnel-path": S, "show-token": B, "zero-trust-org": S, dir: S };
+const deployOpts = {
+	...Object.fromEntries(dep.DEPLOY_FLAGS.map((f) => [f, S])), dir: S, cron: B, "skip-install": B, "rotate-owner-token": B,
+	"workers-dev": B, "workers-dev-subdomain": S,
+};
 const SPEC = {
-	init: deployOpts, deploy: deployOpts, wake: deployOpts,
+	init: { ...deployOpts, ...tunnelOpts, tunnel: B }, deploy: deployOpts, wake: deployOpts, tunnel: tunnelOpts,
 	inbox: { context: S, all: B, json: B },
 	reply: { text: S, stdin: B, state: { type: "string", default: "completed" }, artifact: B, "artifact-name": { type: "string", default: "response" }, force: B },
 	history: { n: { type: "string", short: "n", default: "50" }, json: B },
@@ -76,7 +105,11 @@ export async function main(argv) {
 	if (rest.includes("--help") || rest.includes("-h")) return console.log(HELP);
 	const { values: o, positionals: p } = parseArgs({ args: rest, options: SPEC[name] || {}, allowPositionals: true, strict: true });
 	switch (name) {
-		case "init": return dep.init(o);
+		case "init":
+			if (o.tunnel) tun.preflight(o); // refuse early (e.g. workers.dev only) before anything is deployed
+			await dep.init(o);
+			return o.tunnel ? tun.create(o) : undefined;
+		case "tunnel": return tun.tunnel(need(p[0], "tunnel create|status|rm"), o);
 		case "deploy": return dep.deploy(o);
 		case "wake": return dep.wake(p[0], o);
 		case "url": return console.log(cmd.baseUrl() || "(not configured: run init)");

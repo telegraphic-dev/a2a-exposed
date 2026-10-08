@@ -8,6 +8,25 @@ export const ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
 
 export class InvalidParams extends Error {}
 
+/** Response for a request on a hostname this agent moved away from (RETIRED_HOSTNAMES, comma-separated), else null.
+ *  Custom domains are not detached by a deploy, so after `--workers-dev` (or a hostname change) the old hostname
+ *  would keep serving: instead it redirects agent-card discovery (301) and answers everything else with 410 Gone. */
+export function movedResponse(reqUrl: string, publicUrl: string, retiredCsv: string | undefined): { status: number; headers: Record<string, string>; body: string } | null {
+	const retired = (retiredCsv || "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
+	if (!retired.length) return null;
+	const u = new URL(reqUrl);
+	if (!retired.includes(u.hostname.toLowerCase())) return null;
+	const base = (publicUrl || "").replace(/\/$/, "");
+	if (base && new URL(base).hostname.toLowerCase() === u.hostname.toLowerCase()) return null; // never retire the live URL
+	const card = base ? `${base}/.well-known/agent-card.json` : "";
+	if (card && (u.pathname === "/.well-known/agent-card.json" || u.pathname === "/.well-known/agent.json"))
+		return { status: 301, headers: { location: card, "cache-control": "no-store" }, body: "" };
+	return {
+		status: 410, headers: { "content-type": "application/json" },
+		body: JSON.stringify({ error: "moved", message: `this agent moved${base ? ` to ${base}` : ""}; update the URL you use for it`, ...(card ? { agentCard: card } : {}) }),
+	};
+}
+
 export const nowIso = () => new Date().toISOString();
 export const newId = () => crypto.randomUUID();
 
@@ -95,7 +114,7 @@ export function publicTask(task: Json, version: string, historyLength?: number |
 	return t;
 }
 
-/** Peer task (0.3 or 1.0) -> internal-ish shape. */
+/** Peer task (0.3 or 1.0) -> internal-ish shape (used only to read state/text; store and show the wire shape). */
 export function taskFromAny(t: Json): Json {
 	if (!t || typeof t !== "object") return t;
 	const out = { ...t };
@@ -127,7 +146,16 @@ export async function sha256(s: string): Promise<string> {
 	return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-export function randomToken(prefix = "s2a_"): string {
+/** First 12 hex chars of sha256(value), or null when unset: lets the owner compare secrets without revealing them. */
+export async function fingerprint(v: string | undefined | null): Promise<string | null> {
+	return v ? (await sha256(v)).slice(0, 12) : null;
+}
+
+/** Peer token: "a2aow_" + 43 base64url chars (32 random bytes). Only the SHA-256 hash is stored and
+ *  lookups are by hash, so tokens issued with the earlier "s2a_" prefix keep working. */
+export const PEER_TOKEN_PREFIX = "a2aow_";
+
+export function randomToken(prefix = PEER_TOKEN_PREFIX): string {
 	const b = new Uint8Array(32);
 	crypto.getRandomValues(b);
 	return prefix + btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");

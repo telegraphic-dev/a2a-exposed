@@ -7,7 +7,7 @@
 	"scripts": {
 		"build": "cf build",
 		"deploy": "cf deploy",
-		"test": "node --test test/wake.test.ts",
+		"test": "node --test test/*.test.ts",
 		"typecheck": "cf workers types && tsc"
 	},
 	"engines": { "node": ">=22.18" },
