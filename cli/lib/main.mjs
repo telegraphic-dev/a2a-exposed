@@ -15,11 +15,14 @@ Setup (needs Node 22.18+ and a Cloudflare login: npx cf auth login --no-browser)
   init [--hostname <host> | --workers-dev [--workers-dev-subdomain NAME]]
        [--agent-name N] [--agent-description D] [--agent-skills JSON]
        [--provider-organization O --provider-url U] [--preset P] [--worker-name W] [--d1-name D]
-       [--account-id ID] [--cli-command CMD] [--debounce S] [--max-per-hour N] [--cron] [--dir DIR]
+       [--account-id ID] [--cf-profile NAME] [--cli-command CMD] [--debounce S] [--max-per-hour N]
+       [--cron] [--dir DIR]
                                 deploy the Worker + D1 to your account; wake secrets are read from
                                 env WAKE_WEBHOOK_URL / WAKE_WEBHOOK_KEY / WAKE_HMAC_SECRET (never argv)
                                 no --hostname: serve on https://<worker>.<account subdomain>.workers.dev
                                 --workers-dev-subdomain  create the account's workers.dev subdomain if missing
+                                --cf-profile   cf auth profile for a separate Cloudflare login
+                                               (npx cf auth create NAME --no-browser); saved, used by every cf call
                                 --d1-name      D1 database to create or reuse (default: worker name)
                                 --cli-command  command shown in wake hints (default "npx a2a-over-webhook";
                                                e.g. "node /path/to/repo/cli/bin/a2a-over-webhook.mjs")

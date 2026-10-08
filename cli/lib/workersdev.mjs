@@ -37,6 +37,18 @@ export function noSubdomainHelp(accountId) {
 	].join("\n");
 }
 
+/** Prompt text with ANSI codes, whitespace and box-drawing glyphs removed, lowercased. Prompt libraries redraw
+ *  with cursor moves and wrap to the terminal width (one character per line on a 0-column pty), so match on this. */
+export const compactPrompt = (s) => stripAnsi(s).replace(/[\s\u2500-\u257f\u25a0-\u25ff]/g, "").toLowerCase();
+
+/** cf's workers.dev registration prompts, in order, with the keys that answer them (matched on compactPrompt). */
+export const REGISTRATION_STEPS = (name) => [
+	[/registeraworkers\.devsubdomainnow\?/, "y"],
+	[/whatwouldyoulikeyourworkers\.devsubdomaintobe\?/, `${name}\r`],
+	[/oktoproceed\?/, "y"],
+];
+export const UNAVAILABLE_RE = /subdomainisunavailable/;
+
 const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 
 /**
@@ -47,19 +59,16 @@ const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
  */
 export function deployWithRegistration(cfBin, args, name, { cwd, env, idleMs = 180000 } = {}) {
 	if (process.platform === "win32") die(`registering a workers.dev subdomain from the CLI needs a Unix 'script' command; use the dashboard instead.\n${noSubdomainHelp(env?.CLOUDFLARE_ACCOUNT_ID)}`);
-	const cmd = [cfBin, ...args].map(shq).join(" ");
+	// give the pty a real size: `script` under a pipe starts with 0 columns, and cf's prompts then wrap per character
+	const cmd = `stty cols 160 rows 50 2>/dev/null; exec ${[cfBin, ...args].map(shq).join(" ")}`;
 	const sargs = process.platform === "darwin" ? ["-q", "/dev/null", "/bin/sh", "-c", cmd] : ["-qec", cmd, "/dev/null"];
-	const penv = { ...env, TERM: env?.TERM || "xterm-256color" };
+	const penv = { ...env, TERM: env?.TERM || "xterm-256color", COLUMNS: "160", LINES: "50" };
 	delete penv.CI; // cf only prompts when interactive
 	return new Promise((resolve, reject) => {
 		const ch = spawn("script", sargs, { cwd, env: penv, stdio: ["pipe", "pipe", "pipe"] });
 		// cf's prompts, in order; each is answered once, and only from output that arrived after the previous
 		// answer (prompt libraries re-render answered questions, which must not be answered twice)
-		const steps = [
-			[/register a workers\.dev subdomain now\?/i, "y"],
-			[/What would you like your workers\.dev subdomain to be\?/i, `${name}\r`],
-			[/Ok to proceed\?/i, "y"],
-		];
+		const steps = REGISTRATION_STEPS(name);
 		let out = "", pending = "", stage = 0, failure = "";
 		const stop = (why) => { failure ||= why; ch.kill("SIGTERM"); };
 		const arm = () => setTimeout(() => stop("cf stopped responding (unexpected prompt?)"), idleMs);
@@ -68,8 +77,8 @@ export function deployWithRegistration(cfBin, args, name, { cwd, env, idleMs = 1
 			process.stderr.write(d);
 			out += d; pending += d;
 			clearTimeout(idle); idle = arm();
-			const p = stripAnsi(pending);
-			if (/subdomain is unavailable/i.test(p)) return stop(`workers.dev subdomain "${name}" is unavailable; pick another name`);
+			const p = compactPrompt(pending);
+			if (UNAVAILABLE_RE.test(p)) return stop(`workers.dev subdomain "${name}" is unavailable; pick another name`);
 			if (stage < steps.length && steps[stage][0].test(p)) {
 				pending = "";
 				ch.stdin.write(steps[stage++][1]);

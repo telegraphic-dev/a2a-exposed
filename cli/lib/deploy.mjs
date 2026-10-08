@@ -24,7 +24,7 @@ const DEPLOY_KEYS = [
 ];
 // init/deploy flag -> config key
 const FLAG_KEYS = {
-	"account-id": "CLOUDFLARE_ACCOUNT_ID", "worker-name": "A2A_WORKER_NAME", hostname: "A2A_HOSTNAME", "d1-name": "A2A_D1_NAME",
+	"account-id": "CLOUDFLARE_ACCOUNT_ID", "cf-profile": "CF_PROFILE", "worker-name": "A2A_WORKER_NAME", hostname: "A2A_HOSTNAME", "d1-name": "A2A_D1_NAME",
 	"agent-name": "A2A_AGENT_NAME", "agent-description": "A2A_AGENT_DESCRIPTION", "agent-skills": "A2A_AGENT_SKILLS",
 	"provider-organization": "A2A_PROVIDER_ORGANIZATION", "provider-url": "A2A_PROVIDER_URL",
 	preset: "WAKE_PRESET", "agent-id": "WAKE_AGENT_ID", "key-header": "WAKE_KEY_HEADER", "key-prefix": "WAKE_KEY_PREFIX",
@@ -71,8 +71,14 @@ function cfBin(dir) {
 	return fs.existsSync(local) ? local : "cf";
 }
 
+/** cf auth profile (--cf-profile / CF_PROFILE): appended as `--profile <name>` to every cf call. Empty = cf's own
+ *  resolution (a profile bound to the directory with `cf auth activate`, else `default`). */
+const cfProfile = () => C.get("CF_PROFILE");
+const cfArgs = (args) => (cfProfile() ? [...args, "--profile", cfProfile()] : args);
+const runCf = (dir, args, opts) => run(cfBin(dir), cfArgs(args), { cwd: dir, ...opts });
+
 function cfJson(dir, args, env) {
-	const r = run(cfBin(dir), args, { cwd: dir, env, capture: true });
+	const r = runCf(dir, args, { env, capture: true });
 	try { return JSON.parse(r.stdout); } catch { die(`unexpected output from cf ${args.join(" ")}`); }
 }
 
@@ -117,6 +123,7 @@ function applyFlags(o) {
 	for (const [flag, key] of Object.entries(FLAG_KEYS)) if (o[flag] !== undefined) upd[key] = o[flag];
 	if (o.cron) upd.A2A_ENABLE_CRON = "1";
 	if (o["workers-dev"]) upd.A2A_WORKERS_DEV = "1";
+	if (upd.CF_PROFILE !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(upd.CF_PROFILE)) die("--cf-profile must be a cf auth profile name");
 	if (o["workers-dev-subdomain"] !== undefined && !WD.LABEL_RE.test(o["workers-dev-subdomain"]))
 		die("--workers-dev-subdomain must be lowercase letters, digits and hyphens (a DNS label)");
 	if (upd.WAKE_PRESET && !PRESETS.includes(upd.WAKE_PRESET)) die(`unknown preset ${upd.WAKE_PRESET} (${PRESETS.join(" | ")})`);
@@ -127,8 +134,12 @@ function applyFlags(o) {
 	if (Object.keys(upd).length) C.saveConfig(upd);
 }
 
+let justRegistered = false; // a workers.dev subdomain registered in this run: its DNS takes a few minutes
+
 async function verifyCard(base) {
-	const tries = Number(process.env.A2A_VERIFY_TRIES ?? 12); // 0 skips the check (tests)
+	// 0 skips the check (tests); a brand-new workers.dev subdomain usually resolves within ~3 minutes
+	const tries = Number(process.env.A2A_VERIFY_TRIES ?? (justRegistered ? 60 : 12));
+	if (justRegistered && tries) step("waiting for the new workers.dev subdomain to resolve (usually 1-5 minutes)");
 	for (let i = 0; i < tries; i++) {
 		try {
 			const { status, data } = await httpJson(base + "/.well-known/agent-card.json", { timeout: 10000 });
@@ -136,13 +147,13 @@ async function verifyCard(base) {
 		} catch { /* DNS / certificate may still be provisioning */ }
 		await new Promise((r) => setTimeout(r, 5000));
 	}
-	console.error(`warning: agent card not reachable yet at ${base}; a new custom domain can take a few minutes`);
+	console.error(`warning: agent card not reachable yet at ${base}; ${C.get("A2A_HOSTNAME") ? "a new custom domain" : "a new workers.dev subdomain"} can take a few minutes. Check again with: curl -s ${base}/health`);
 }
 
 /** Apply D1 migrations quietly: cf prints a bare JSON array (often `[]`) when stdout is not a TTY. */
 function applyMigrations(dir, env) {
 	step("applying D1 migrations");
-	const r = run(cfBin(dir), ["d1", "migrations", "apply", C.get("A2A_D1_ID"), "--dir", "migrations"], { cwd: dir, env, capture: true });
+	const r = runCf(dir, ["d1", "migrations", "apply", C.get("A2A_D1_ID"), "--dir", "migrations"], { env, capture: true });
 	let applied = null;
 	try { applied = JSON.parse(r.stdout); } catch { /* not JSON: show as is */ }
 	if (Array.isArray(applied)) console.error(applied.length ? `    applied: ${applied.map((m) => m.name || m.id || JSON.stringify(m)).join(", ")}` : "    (none pending)");
@@ -167,7 +178,7 @@ function runTee(cmd, args, { cwd, env }) {
 async function cfDeploy(dir, secrets, { register } = {}) {
 	const base = ["deploy", "--message", `a2a-over-webhook ${new Date().toISOString()}`];
 	const go = async (file) => {
-		const args = file ? [...base, "--secrets-file", file] : base;
+		const args = cfArgs(file ? [...base, "--secrets-file", file] : base);
 		let r = await runTee(cfBin(dir), args, { cwd: dir, env: deployEnv() });
 		if (r.status !== 0 && WD.needsSubdomain(r.out)) {
 			if (!register) die(WD.noSubdomainHelp(C.get("CLOUDFLARE_ACCOUNT_ID")));
@@ -176,6 +187,7 @@ async function cfDeploy(dir, secrets, { register } = {}) {
 			r = await WD.deployWithRegistration(cfBin(dir), args, register, { cwd: dir, env: deployEnv() })
 				.catch((e) => { C.saveConfig({ A2A_WORKERS_DEV_SUBDOMAIN: null }); throw e; });
 			if (r.status !== 0) C.saveConfig({ A2A_WORKERS_DEV_SUBDOMAIN: null });
+			else justRegistered = true;
 		}
 		if (r.status !== 0) die(`cf deploy failed (exit ${r.status})`);
 		return r.out;
@@ -217,14 +229,20 @@ export async function init(o) {
 	syncTemplate(dir);
 	if (!o["skip-install"]) run("npm", ["install", "--no-audit", "--no-fund", "--loglevel=error"], { cwd: dir });
 
-	step("checking Cloudflare login (cf auth whoami)");
+	const prof = cfProfile();
+	step(`checking Cloudflare login (cf auth whoami${prof ? ` --profile ${prof}` : ""})`);
 	const who = cfJson(dir, ["auth", "whoami"]);
-	if (!who.authenticated) die("not logged in to Cloudflare: run `cf auth login --no-browser`, open the printed URL, enter the code, then re-run init");
+	if (!who.authenticated) die(prof
+		? `cf profile "${prof}" is not logged in: run \`npx cf auth create ${prof} --no-browser\`, open the printed URL, enter the code, then re-run init`
+		: "not logged in to Cloudflare: run `cf auth login --no-browser`, open the printed URL, enter the code, then re-run init");
+	const accts = who.accounts || [];
 	if (!C.get("CLOUDFLARE_ACCOUNT_ID")) {
-		const accts = who.accounts || [];
 		if (accts.length !== 1) die(`${accts.length} accounts available; pass --account-id <id>:\n` + accts.map((a) => `  ${a.id}  ${a.name}`).join("\n"));
 		C.saveConfig({ CLOUDFLARE_ACCOUNT_ID: accts[0].id });
+	} else if (accts.length && !accts.some((a) => a.id === C.get("CLOUDFLARE_ACCOUNT_ID"))) {
+		die(`account ${C.get("CLOUDFLARE_ACCOUNT_ID")} is not visible to the cf login${prof ? ` (profile "${prof}")` : ""}; pass --cf-profile for the right login or --account-id for one of:\n` + accts.map((a) => `  ${a.id}  ${a.name}`).join("\n"));
 	}
+	step(`Cloudflare account: ${accts.find((a) => a.id === C.get("CLOUDFLARE_ACCOUNT_ID"))?.name || C.get("CLOUDFLARE_ACCOUNT_ID")}${prof ? ` (cf profile ${prof})` : ""}`);
 	const env = cfEnv();
 
 	const dbName = C.get("A2A_D1_NAME") || C.get("A2A_WORKER_NAME");
@@ -232,7 +250,7 @@ export async function init(o) {
 		step(`D1 database "${dbName}"`);
 		let db = (cfJson(dir, ["d1", "list"], env) || []).find((d) => d.name === dbName);
 		if (!db) {
-			run(cfBin(dir), ["d1", "create", "--name", dbName], { cwd: dir, env, capture: true });
+			runCf(dir, ["d1", "create", "--name", dbName], { env, capture: true });
 			db = (cfJson(dir, ["d1", "list"], env) || []).find((d) => d.name === dbName);
 		}
 		if (!db || !db.uuid) die("could not create or find the D1 database");
@@ -258,7 +276,7 @@ export async function deploy(o) {
 	applyFlags(o);
 	const dir = workerDir(o);
 	if (!C.get("A2A_D1_ID")) die("no saved deployment; run `a2a-over-webhook init` first");
-	step(`worker project -> ${dir}`);
+	step(`worker project -> ${dir}${cfProfile() ? ` (cf profile ${cfProfile()})` : ""}`);
 	syncTemplate(dir);
 	if (!o["skip-install"]) run("npm", ["install", "--no-audit", "--no-fund", "--loglevel=error"], { cwd: dir });
 	const env = cfEnv();
@@ -313,7 +331,7 @@ export async function wake(sub, o) {
 	if (sub === "unset") {
 		const dir = workerDir(o), name = C.get("A2A_WORKER_NAME", "a2a-over-webhook");
 		const env = cfEnv();
-		for (const k of WAKE_SECRETS) run(cfBin(dir), ["workers", "secrets", "delete", k, "--worker", name, "--force"], { cwd: dir, env, allowFail: true });
+		for (const k of WAKE_SECRETS) runCf(dir, ["workers", "secrets", "delete", k, "--worker", name, "--force"], { env, allowFail: true });
 		return console.error("wake secrets removed (wake is now a no-op; use polling)");
 	}
 	die("usage: wake set|unset|test|preview|fingerprint");

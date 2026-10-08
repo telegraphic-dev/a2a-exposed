@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseEnv } from "../lib/config.mjs";
-import { baseUrlFor, needsSubdomain, noSubdomainHelp, parseWorkersDevSubdomain, LABEL_RE } from "../lib/workersdev.mjs";
+import { baseUrlFor, compactPrompt, needsSubdomain, noSubdomainHelp, parseWorkersDevSubdomain, LABEL_RE, REGISTRATION_STEPS, UNAVAILABLE_RE } from "../lib/workersdev.mjs";
 
 const BIN = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "bin", "a2a-over-webhook.mjs");
 
@@ -36,13 +36,26 @@ test("needsSubdomain / help text", () => {
 	assert.ok(LABEL_RE.test("my-agent-2") && !LABEL_RE.test("My_Agent") && !LABEL_RE.test("-x"));
 });
 
+test("registration prompts match even when the prompt library wraps one character per line", () => {
+	// as captured from cf on a 0-column pseudo-terminal
+	const q = "Would you like to register a workers.dev subdomain now?";
+	const wrapped = "\x1b[?25l\r\n│\r\n\r\n◆\r\n" + [...q].map((c) => `\r\n│\r\n \r\n \r\n${c}`).join("") + "\r\n○\r\n \r\nYes / ● No\r\n";
+	const [ask, name, ok] = REGISTRATION_STEPS("acme");
+	assert.ok(ask[0].test(compactPrompt(wrapped)));
+	assert.ok(name[0].test(compactPrompt("◆  What would you like your workers.dev subdomain to be? It will be accessible at https://<subdomain>.workers.dev\n│  _")));
+	assert.equal(name[1], "acme\r");
+	assert.ok(ok[0].test(compactPrompt("Creating a workers.dev subdomain for your account at \x1b[34m\x1b[4mhttps://acme.workers.dev\x1b[24m\x1b[39m. Ok to proceed?")));
+	assert.ok(UNAVAILABLE_RE.test(compactPrompt("▲  Subdomain is unavailable, please try a different subdomain")));
+});
+
 // ------------------------------------------------------------------ init against a stub cf
 // The stub emulates the cf commands init uses. `deploy` behaves like cf on an account whose subdomain is
 // $STUB_SUBDOMAIN (empty = none registered): non-interactive -> registration error; interactive (a TTY,
 // no CI) -> cf's prompts, then the target URL.
 const STUB = `#!/bin/bash
 log=$STUB_DIR/calls.log
-echo "$1 $2 sub=\${A2A_WORKERS_DEV_SUBDOMAIN:-} wd=\${A2A_WORKERS_DEV:-} host=\${A2A_HOSTNAME:-}" >> "$log"
+prof=""; for a in "$@"; do [ "$prev" = --profile ] && prof=$a; prev=$a; done
+echo "$1 $2 profile=$prof sub=\${A2A_WORKERS_DEV_SUBDOMAIN:-} wd=\${A2A_WORKERS_DEV:-} host=\${A2A_HOSTNAME:-}" >> "$log"
 case "$1 $2" in
   "auth whoami") echo '{"authenticated":true,"accounts":[{"id":"acc123","name":"Test"}]}';;
   "d1 list") echo '[{"name":"wdtest","uuid":"d1-uuid"}]';;
@@ -51,7 +64,12 @@ case "$1 $2" in
     sub=$(cat "$STUB_DIR/subdomain" 2>/dev/null)
     if [ -z "$sub" ]; then
       if [ -t 0 ] && [ -z "$CI" ]; then
-        printf '? You need to register a workers.dev subdomain before publishing to workers.dev\\n? Would you like to register a workers.dev subdomain now? (Y/n) '
+        q='Would you like to register a workers.dev subdomain now?'
+        cols=$(stty size 2>/dev/null | cut -d' ' -f2)
+        printf '? You need to register a workers.dev subdomain before publishing to workers.dev\\n'
+        # like cf's prompt library on a 0-column pty: one character per line between box glyphs
+        if [ "\${cols:-0}" -lt 20 ]; then for ((i=0; i<\${#q}; i++)); do printf '\\r\\n\\u2502\\r\\n \\r\\n%s' "\${q:i:1}"; done; printf '\\r\\n\\u25cb Yes / \\u25cf No\\r\\n'
+        else printf '\\u25c6  %s \\u25cb Yes / \\u25cf No ' "$q"; fi
         read -r -n1 a; echo; [ "$a" = y ] || exit 1
         printf '? What would you like your workers.dev subdomain to be? It will be accessible at https://<subdomain>.workers.dev\\n> '
         read -r name
@@ -100,7 +118,7 @@ test("init without --hostname: learns the existing subdomain from cf, saves the 
 	assert.equal(c.A2A_WORKERS_DEV_SUBDOMAIN, "acme");
 	assert.ok(!c.A2A_HOSTNAME);
 	const deploys = s.calls().filter((l) => l.startsWith("deploy"));
-	assert.deepEqual(deploys, ["deploy --message sub= wd= host=", "deploy --message sub=acme wd= host="]);
+	assert.deepEqual(deploys, ["deploy --message profile= sub= wd= host=", "deploy --message profile= sub=acme wd= host="]);
 	// a later deploy knows the URL up front: no second round
 	const r2 = await s.cli(["deploy", "--skip-install"]);
 	assert.equal(r2.status, 0, r2.stderr);
@@ -124,7 +142,7 @@ test("--workers-dev-subdomain registers it through cf's prompt (pseudo-terminal)
 	assert.equal(fs.readFileSync(path.join(s.dir, "subdomain"), "utf8").trim(), "newsub");
 	assert.equal(s.config().A2A_BASE_URL, "https://wdtest.newsub.workers.dev");
 	const deploys = s.calls().filter((l) => l.startsWith("deploy"));
-	assert.deepEqual(deploys, ["deploy --message sub= wd= host=", "deploy --message sub=newsub wd= host="], "failed attempt, then the registering deploy");
+	assert.deepEqual(deploys, ["deploy --message profile= sub= wd= host=", "deploy --message profile= sub=newsub wd= host="], "failed attempt, then the registering deploy");
 });
 
 test("--workers-dev-subdomain with a taken name fails cleanly", { skip: process.platform === "win32" }, async (t) => {
@@ -141,7 +159,7 @@ test("custom-domain init is unchanged: no workers.dev, base from the hostname, s
 	assert.equal(r.status, 0, r.stderr);
 	assert.equal(r.stdout.trim(), "https://agent.example.com");
 	assert.equal(s.config().A2A_BASE_URL, "https://agent.example.com");
-	assert.deepEqual(s.calls().filter((l) => l.startsWith("deploy")), ["deploy --message sub= wd= host=agent.example.com"]);
+	assert.deepEqual(s.calls().filter((l) => l.startsWith("deploy")), ["deploy --message profile= sub= wd= host=agent.example.com"]);
 });
 
 test("invalid worker name for workers.dev is rejected before anything is created", async (t) => {
@@ -150,4 +168,21 @@ test("invalid worker name for workers.dev is rejected before anything is created
 	assert.equal(r.status, 1);
 	assert.match(r.stderr, /DNS label/);
 	assert.ok(!fs.existsSync(path.join(s.dir, "calls.log")));
+});
+
+test("--cf-profile is saved and passed as --profile to every cf call", async (t) => {
+	const s = stubEnv(t, { subdomain: "acme" });
+	const r = await s.init("--cf-profile", "bot-acct");
+	assert.equal(r.status, 0, r.stderr);
+	assert.equal(s.config().CF_PROFILE, "bot-acct");
+	assert.match(r.stderr, /cf profile bot-acct/);
+	const lines = s.calls();
+	assert.ok(lines.every((l) => l.includes("profile=bot-acct")), lines.join("\n"));
+	assert.ok(lines.some((l) => l.startsWith("auth whoami")));
+	assert.ok(lines.some((l) => l.startsWith("d1 list")));
+	assert.ok(lines.some((l) => l.startsWith("deploy")));
+	// a later deploy without the flag still uses the saved profile
+	const r2 = await s.cli(["deploy", "--skip-install"]);
+	assert.equal(r2.status, 0, r2.stderr);
+	assert.ok(s.calls().filter((l) => l.startsWith("deploy")).every((l) => l.includes("profile=bot-acct")));
 });

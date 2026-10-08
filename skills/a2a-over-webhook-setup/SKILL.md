@@ -25,7 +25,7 @@ All commands use the CLI as `npx a2a-over-webhook <cmd>`. **The package is not o
   It prints a URL (`https://dash.cloudflare.com/oauth2/device/verify`) and a code. Give both to the user and ask them to approve. The code expires in about 5 minutes. Check with `npx cf auth whoami` (or `cf auth whoami`): it must show `"authenticated": true`. CI can use `CLOUDFLARE_API_TOKEN` instead.
   `init`/`deploy`/`wake set` run `npm install` in the Worker folder (`<config dir>/worker`) and use the `cf` from its `node_modules/.bin`; a global `cf` only saves typing `npx` for the login.
 - **A public URL: workers.dev or your own hostname.**
-  - **No domain? Use workers.dev.** Omit `--hostname` (or pass `--workers-dev`): the Worker is served at `https://<worker-name>.<account-subdomain>.workers.dev` ([workers.dev routing](https://developers.cloudflare.com/workers/configuration/routing/workers-dev/), works on the [free plan](https://developers.cloudflare.com/workers/platform/limits/)). `init` learns the URL from the deploy and saves it as `A2A_BASE_URL`. The worker name becomes a DNS label: lowercase letters, digits, hyphens. An account has one workers.dev subdomain; if it has none, `init` stops with instructions. Ask the user for a name and rerun with `--workers-dev-subdomain <name>` (init registers it; account-level, stays afterwards), or have them open **Workers & Pages** in the dashboard once, or call `PUT /accounts/<account-id>/workers/subdomain` with `{"subdomain":"<name>"}`. No DNS changes are needed.
+  - **No domain? Use workers.dev.** Omit `--hostname` (or pass `--workers-dev`): the Worker is served at `https://<worker-name>.<account-subdomain>.workers.dev` ([workers.dev routing](https://developers.cloudflare.com/workers/configuration/routing/workers-dev/), works on the [free plan](https://developers.cloudflare.com/workers/platform/limits/)). `init` learns the URL from the deploy and saves it as `A2A_BASE_URL`. The worker name becomes a DNS label: lowercase letters, digits, hyphens. An account has one workers.dev subdomain; if it has none, `init` stops with instructions. Ask the user for a name and rerun with `--workers-dev-subdomain <name>` (init answers cf's registration prompt through a pseudo-terminal, which needs the `script` command on Linux/macOS; the subdomain is account-level and stays afterwards; its DNS takes 1–5 minutes, and init waits for it), or have them open **Workers & Pages** in the dashboard once, or call `PUT /accounts/<account-id>/workers/subdomain` with `{"subdomain":"<name>"}`. No DNS changes are needed.
   - **Own hostname:** a hostname on a zone the user owns in that account, e.g. `agent.example.com`. The Worker attaches it as a custom domain, and Cloudflare creates the DNS record and certificate. The hostname must not already have a DNS record. Confirm it before `init` (some sandboxes fake DNS answers):
     ```bash
     getent hosts agent.example.com || true
@@ -34,6 +34,18 @@ All commands use the CLI as `npx a2a-over-webhook <cmd>`. **The package is not o
     ```
     Expect no `Answer` in the JSON (`"Status":3` means NXDOMAIN). If an A/AAAA/CNAME already exists on a zone you care about, stop and ask the user.
 - The free Workers plan is enough. D1 free tier: 5 GB.
+
+### Using a separate Cloudflare account / profile
+
+The default login lives in the `default` cf auth profile (`npx cf auth login --no-browser`). For a second account (e.g. a bot's own Cloudflare account on the same machine), create a named profile and pass it to every `init` / `deploy` / `wake set`:
+
+```bash
+npx cf auth create my-bot --no-browser   # device code; approve as the bot account
+npx a2a-over-webhook init --cf-profile my-bot --agent-name "My Bot" ...
+```
+
+`--cf-profile` is saved as `CF_PROFILE` in `config.env` and passed as `--profile` to every `cf` call for that deployment. Combine it with a separate `A2A_CONFIG_DIR` when several bots share one machine. Re-authenticate with `npx cf auth create my-bot --no-browser` (same name). `npx cf auth list` shows profiles; `npx cf auth activate my-bot <worker-dir>` binds a profile to a directory instead of using `--cf-profile`.
+
 
 ## 2. Deploy
 
@@ -70,6 +82,7 @@ Optional flags:
 | `--cli-command` | Command shown in wake hints (`hint` / summaries). Default `npx a2a-over-webhook`. While the CLI isn't on npm, pass e.g. `node /path/to/repo/cli/bin/a2a-over-webhook.mjs`. Saved as `WAKE_CLI_COMMAND` |
 | `--debounce <s>` | Wake debounce window |
 | `--max-per-hour <n>` | Hourly wake cap |
+| `--cf-profile <name>` | Use a named cf auth profile (separate Cloudflare login). Saved as `CF_PROFILE` |
 | `--workers-dev` | Also serve on workers.dev (implied when there is no `--hostname`) |
 | `--workers-dev-subdomain <name>` | Register the account's workers.dev subdomain if it has none |
 | `--cron` | Adds a one-minute cron flush. Needs a workers.dev subdomain on the account (works with workers.dev deployments); not required, because pending wakes are also flushed on every request |
