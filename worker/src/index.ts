@@ -630,10 +630,19 @@ async function proxyRpc(req: Request, env: Env, c: { raw: string; rid: Json; met
 		if (m.taskId !== undefined) {
 			if (typeof m.taskId !== "string" || (await ownerOf(env, "task", m.taskId)) !== c.label) return err(-32001, "Task not found");
 		}
+		// referenced tasks give the upstream another task's content as context: same rule as taskId
+		if (m.referenceTaskIds !== undefined) {
+			if (!Array.isArray(m.referenceTaskIds) || m.referenceTaskIds.length > 64) return err(-32602, "Invalid params: referenceTaskIds must be an array of task ids");
+			for (const rt of m.referenceTaskIds)
+				if (typeof rt !== "string" || (await ownerOf(env, "task", rt)) !== c.label) return err(-32001, "Task not found");
+		}
 		if (m.contextId !== undefined) {
 			if (typeof m.contextId !== "string" || !A.ID_RE.test(m.contextId)) return err(-32602, "Invalid params: invalid contextId");
-			const o = await ownerOf(env, "context", m.contextId);
-			if (o && o !== c.label) return err(-32602, "Invalid params: unknown contextId");
+			// fail closed: only a context this peer got back from the upstream (recorded in facade_owners). An unrecorded id
+			// may still be a live upstream context (another peer's, or one opened outside the façade), and the façade can't
+			// tell, so client-chosen context ids are refused; omit contextId to start a conversation and reuse the returned one.
+			if ((await ownerOf(env, "context", m.contextId)) !== c.label)
+				return err(-32602, "Invalid params: unknown contextId (omit contextId to start a new conversation, then use the one returned)");
 		}
 	} else {
 		const tid = F.taskIdOf(c.op, c.params);

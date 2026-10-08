@@ -246,16 +246,27 @@ test("proxy mode: peers sharing the upstream identity can't touch each other's t
 	}
 	const cont = await s.rpc(b, "SendMessage", { message: { role: "ROLE_USER", taskId, parts: [{ text: "x" }] } });
 	assert.equal(cont.data.error?.code, -32001);
+	const ref = await s.rpc(b, "SendMessage", { message: { role: "ROLE_USER", referenceTaskIds: [taskId], parts: [{ text: "summarize that" }] } });
+	assert.equal(ref.data.error?.code, -32001, "no reading another peer's task through referenceTaskIds");
 	const ctx = await s.rpc(b, "SendMessage", { message: { role: "ROLE_USER", contextId, parts: [{ text: "x" }] } });
 	assert.equal(ctx.data.error?.code, -32602);
 	assert.equal(s.calls.filter((c) => c.url === UPSTREAM).length, before, "refused before reaching the upstream");
 	// the owner of the task can continue it
 	const own = await s.rpc(a, "SendMessage", { message: { role: "ROLE_USER", taskId, contextId, parts: [{ text: "more" }] } });
 	assert.ok(own.data.result, JSON.stringify(own.data));
-	// a client-chosen new contextId is claimed by its first user
-	const fresh = await s.rpc(b, "SendMessage", { message: { role: "ROLE_USER", contextId: "bob-ctx-1", parts: [{ text: "x" }] } });
-	assert.ok(fresh.data.result);
-	assert.equal((await s.rpc(a, "SendMessage", { message: { role: "ROLE_USER", contextId: "bob-ctx-1", parts: [{ text: "x" }] } })).data.error?.code, -32602);
+	assert.ok((await s.rpc(a, "SendMessage", { message: { role: "ROLE_USER", referenceTaskIds: [taskId], parts: [{ text: "follow-up" }] } })).data.result, "own tasks can be referenced");
+	// fail closed: a contextId the façade has no record of (client-chosen, or an upstream context opened elsewhere) is
+	// refused for everyone, before the upstream; the peer's own returned context works
+	const n0 = s.calls.filter((c) => c.url === UPSTREAM).length;
+	for (const [tok, ctxId] of [[b, "bob-ctx-1"], [a, "bob-ctx-1"], [a, "upstream-ctx-made-elsewhere"]] as const) {
+		const x = await s.rpc(tok, "SendMessage", { message: { role: "ROLE_USER", contextId: ctxId, parts: [{ text: "x" }] } });
+		assert.equal(x.data.error?.code, -32602, JSON.stringify(x.data));
+		assert.match(x.data.error.message, /omit contextId/);
+	}
+	assert.equal(s.calls.filter((c) => c.url === UPSTREAM).length, n0, "unrecorded contexts never reach the upstream");
+	const bobOwn = (await s.rpc(b, "SendMessage", { message: { role: "ROLE_USER", parts: [{ text: "hi" }] } })).data.result.task.contextId;
+	assert.ok((await s.rpc(b, "SendMessage", { message: { role: "ROLE_USER", contextId: bobOwn, parts: [{ text: "again" }] } })).data.result);
+	assert.equal((await s.rpc(a, "SendMessage", { message: { role: "ROLE_USER", contextId: bobOwn, parts: [{ text: "x" }] } })).data.error?.code, -32602);
 	// ListTasks would list every peer's tasks; streaming is not proxied yet
 	assert.equal((await s.rpc(a, "ListTasks", {})).data.error?.code, -32004);
 	assert.equal((await s.rpc(a, "SendStreamingMessage", { message: { role: "ROLE_USER", parts: [{ text: "x" }] } })).data.error?.code, -32004);
