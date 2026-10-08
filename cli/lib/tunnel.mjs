@@ -73,7 +73,10 @@ export function pickTunnelHostname({ tunnelHostname, tunnelZone, inboxHost, zone
 	const usable = usableZones(zones);
 	if (tunnelHostname) {
 		const hostname = tunnelHostname.toLowerCase();
-		const zone = zoneFor(hostname, zones);
+		const zone = zoneFor(hostname, usable);
+		const inactive = zone ? null : zoneFor(hostname, zones);
+		if (inactive) die(`${hostname} is on the zone ${inactive.name}, which is not active yet (${inactive.status}); ` +
+			(usable.length ? `pick a hostname on an active zone:\n${zoneList(usable)}` : "wait until it is active, or use polling meanwhile"));
 		if (!zone) die(usable.length ? `${hostname} is not on a zone in this Cloudflare account; the wake hostname must be on one of:\n${zoneList(usable)}` : noZoneHelp(zones));
 		return { hostname, zone, note: "" };
 	}
@@ -198,12 +201,16 @@ function accessOrg(dir, o) {
 	}
 }
 
-/** Zones of the deployment's account (the login may see other accounts' zones too). */
+/** Zones of the deployment's account (the login may see other accounts' zones too), all pages. */
 export function listZones(dir) {
-	const acct = C.get("CLOUDFLARE_ACCOUNT_ID");
-	const r = cfCall(dir, ["zones", "list", "--per-page", "50", ...(acct ? ["--account-id", acct] : [])]);
-	const zones = Array.isArray(r) ? r : Array.isArray(r?.result) ? r.result : [];
-	return zones.filter((z) => z && z.name && (!acct || !z.account?.id || z.account.id === acct));
+	const acct = C.get("CLOUDFLARE_ACCOUNT_ID"), per = 50, all = [];
+	for (let page = 1; page <= 40; page++) {
+		const r = cfCall(dir, ["zones", "list", "--per-page", String(per), "--page", String(page), ...(acct ? ["--account-id", acct] : [])]);
+		const zones = Array.isArray(r) ? r : Array.isArray(r?.result) ? r.result : [];
+		all.push(...zones);
+		if (zones.length < per) break;
+	}
+	return all.filter((z) => z && z.name && (!acct || !z.account?.id || z.account.id === acct));
 }
 
 // ------------------------------------------------------------------ commands

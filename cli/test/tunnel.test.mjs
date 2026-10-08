@@ -43,8 +43,12 @@ test("pickTunnelHostname: any zone on the account, whether the inbox is on worke
 	assert.throws(() => pickTunnelHostname({ zones: two, tunnelHostname: "wake.other.net", label }), /not on a zone in this Cloudflare account[\s\S]*example\.org/);
 	// no zone: plain words, polling is the option
 	for (const zones of [[], undefined]) assert.throws(() => pickTunnelHostname({ zones, label }), (e) => /has no domain \(zone\)/.test(e.message) && /polling/.test(e.message));
-	// pending zones are not offered
-	assert.throws(() => pickTunnelHostname({ zones: [{ id: "z3", name: "new.example", status: "pending" }], label }), /not active yet: new\.example \[pending\]/);
+	// pending zones are not offered, and not accepted through --tunnel-hostname or --tunnel-zone either
+	const pending = { id: "z3", name: "new.example", status: "pending" };
+	assert.throws(() => pickTunnelHostname({ zones: [pending], label }), /not active yet: new\.example \[pending\]/);
+	assert.throws(() => pickTunnelHostname({ zones: [pending], tunnelHostname: "wake.new.example", label }), /on the zone new\.example, which is not active yet \(pending\); wait until it is active/);
+	assert.throws(() => pickTunnelHostname({ zones: [...one, pending], tunnelHostname: "wake.new.example", label }), /not active yet \(pending\); pick a hostname on an active zone:\n {2}example\.com/);
+	assert.throws(() => pickTunnelHostname({ zones: [...one, pending], tunnelZone: "new.example", label }), /not an active zone/);
 	assert.match(noZoneHelp([]), /workers\.dev or a custom hostname/);
 });
 
@@ -133,6 +137,10 @@ const out = (o) => { process.stdout.write(typeof o === "string" ? o : JSON.strin
 const fail = (m) => { process.stderr.write(m); process.exit(1); };
 const has = (s) => cmd.startsWith(s);
 if (process.env.STUB_FAIL && has(process.env.STUB_FAIL)) fail("[1000] stub failure");
+if (has("zones list") && process.env.STUB_MANY_ZONES) { // 50 zones on page 1, one more on page 2
+	const page = Number(val("--page") || 1);
+	out(page === 1 ? Array.from({ length: 50 }, (_, i) => ({ id: "m" + i, name: "zone" + i + ".example", status: "active" })) : page === 2 ? [{ id: "last", name: "last.example", status: "active" }] : []);
+}
 if (has("zones list")) out(process.env.STUB_ZONES ? JSON.parse(process.env.STUB_ZONES) : [{ id: "z1", name: "example.com", status: "active" }]);
 if (has("tunnels get")) out({ id: "tun1", status: process.env.STUB_CONNS === "0" ? "down" : "healthy", connections: process.env.STUB_CONNS === "0" ? [] : [{ id: "c1" }] });
 // what init needs (init --workers-dev --tunnel)
@@ -287,6 +295,7 @@ test("tunnel create on a workers.dev inbox: the account's only zone is picked an
 	assert.match(r.stdout.trim(), /^https:\/\/wake-[a-z]+-[a-z]+-[0-9a-f]{4}\.example\.com\/hooks\/wake$/);
 	assert.match(r.stderr, /the account has one zone, example\.com: the wake hostname goes there \(the inbox URL is unchanged\)/);
 	assert.match(s.calls().find((c) => c.cmd.startsWith("zones list")).cmd, /--account-id acc1/);
+	assert.equal(s.calls().filter((c) => c.cmd.startsWith("zones list")).length, 1, "one page is enough");
 	assert.ok(s.calls().some((c) => c.cmd.startsWith("dns records create -z z1")));
 	assert.equal(s.config().A2A_TUNNEL_ZONE_ID, "z1");
 });
@@ -312,6 +321,14 @@ test("tunnel create on a workers.dev inbox with several zones stops and lists th
 	assert.equal(again.stdout.trim(), r.stdout.trim());
 	assert.match(again.stderr, /tunnel already set up/);
 	assert.ok(!s.calls().slice(before).some((c) => / create|secrets bulk/.test(c.cmd)), "no new objects, secrets already on the Worker");
+});
+
+test("tunnel create reads every page of zones (accounts with more than 50)", async (t) => {
+	const s = await tunnelEnv(t, { hostname: "", stub: { STUB_MANY_ZONES: "1" } });
+	const r = await s.cli(["tunnel", "create", "--tunnel-zone", "last.example"]);
+	assert.equal(r.status, 0, r.stderr);
+	assert.match(r.stdout.trim(), /\.last\.example\/hooks\/wake$/);
+	assert.deepEqual(s.calls().filter((c) => c.cmd.startsWith("zones list")).map((c) => /--page (\d+)/.exec(c.cmd)[1]), ["1", "2"]);
 });
 
 test("tunnel create with no zone on the account says so plainly and points to polling (nothing created)", async (t) => {
