@@ -24,13 +24,15 @@ All commands use the CLI as `npx a2a-over-webhook <cmd>`. **The package is not o
   ```
   It prints a URL (`https://dash.cloudflare.com/oauth2/device/verify`) and a code. Give both to the user and ask them to approve. The code expires in about 5 minutes. Check with `npx cf auth whoami` (or `cf auth whoami`): it must show `"authenticated": true`. CI can use `CLOUDFLARE_API_TOKEN` instead.
   `init`/`deploy`/`wake set` run `npm install` in the Worker folder (`<config dir>/worker`) and use the `cf` from its `node_modules/.bin`; a global `cf` only saves typing `npx` for the login.
-- **A hostname on a zone the user owns in that account**, e.g. `agent.example.com`. The Worker attaches it as a custom domain, and Cloudflare creates the DNS record and certificate. The hostname must not already have a DNS record. Confirm it before `init` (some sandboxes fake DNS answers):
-  ```bash
-  getent hosts agent.example.com || true
-  # DNS-over-HTTPS fallback, for sandboxes whose resolver fakes answers:
-  curl -s 'https://cloudflare-dns.com/dns-query?name=agent.example.com&type=A' -H 'accept: application/dns-json'
-  ```
-  Expect no `Answer` in the JSON (`"Status":3` means NXDOMAIN). If an A/AAAA/CNAME already exists on a zone you care about, stop and ask the user.
+- **A public URL: workers.dev or your own hostname.**
+  - **No domain? Use workers.dev.** Omit `--hostname` (or pass `--workers-dev`): the Worker is served at `https://<worker-name>.<account-subdomain>.workers.dev` ([workers.dev routing](https://developers.cloudflare.com/workers/configuration/routing/workers-dev/), works on the [free plan](https://developers.cloudflare.com/workers/platform/limits/)). `init` learns the URL from the deploy and saves it as `A2A_BASE_URL`. The worker name becomes a DNS label: lowercase letters, digits, hyphens. An account has one workers.dev subdomain; if it has none, `init` stops with instructions. Ask the user for a name and rerun with `--workers-dev-subdomain <name>` (init registers it; account-level, stays afterwards), or have them open **Workers & Pages** in the dashboard once, or call `PUT /accounts/<account-id>/workers/subdomain` with `{"subdomain":"<name>"}`. No DNS changes are needed.
+  - **Own hostname:** a hostname on a zone the user owns in that account, e.g. `agent.example.com`. The Worker attaches it as a custom domain, and Cloudflare creates the DNS record and certificate. The hostname must not already have a DNS record. Confirm it before `init` (some sandboxes fake DNS answers):
+    ```bash
+    getent hosts agent.example.com || true
+    # DNS-over-HTTPS fallback, for sandboxes whose resolver fakes answers:
+    curl -s 'https://cloudflare-dns.com/dns-query?name=agent.example.com&type=A' -H 'accept: application/dns-json'
+    ```
+    Expect no `Answer` in the JSON (`"Status":3` means NXDOMAIN). If an A/AAAA/CNAME already exists on a zone you care about, stop and ask the user.
 - The free Workers plan is enough. D1 free tier: 5 GB.
 
 ## 2. Deploy
@@ -41,6 +43,7 @@ The wake target can be configured later. If the user already has it, export the 
 export WAKE_WEBHOOK_URL='...'      # optional now
 export WAKE_WEBHOOK_KEY='...'      # optional (bearer/API key)
 export WAKE_HMAC_SECRET='...'      # optional (hermes / signed generic webhooks)
+# omit --hostname to deploy to https://<worker-name>.<account-subdomain>.workers.dev
 npx a2a-over-webhook init \
   --hostname agent.example.com \
   --agent-name "My Agent" \
@@ -54,7 +57,7 @@ npx a2a-over-webhook init \
 2. Copies the Worker template to `<config dir>/worker` and runs `npm install` there (this provides the local `cf`).
 3. Creates the D1 database (`--d1-name`, default: the Worker name `a2a-over-webhook`), or reuses an existing one with that name, and applies migrations.
 4. Generates the **owner token** and uploads it with any wake secrets via a temporary chmod-600 secrets file, which is deleted afterwards.
-5. Deploys with the custom domain, saves `A2A_BASE_URL` and `A2A_OWNER_TOKEN`, and checks the agent card.
+5. Deploys with the custom domain (or to workers.dev, redeploying once so the card advertises the learned URL), saves `A2A_BASE_URL` and `A2A_OWNER_TOKEN`, and checks the agent card.
 
 Optional flags:
 
@@ -67,7 +70,9 @@ Optional flags:
 | `--cli-command` | Command shown in wake hints (`hint` / summaries). Default `npx a2a-over-webhook`. While the CLI isn't on npm, pass e.g. `node /path/to/repo/cli/bin/a2a-over-webhook.mjs`. Saved as `WAKE_CLI_COMMAND` |
 | `--debounce <s>` | Wake debounce window |
 | `--max-per-hour <n>` | Hourly wake cap |
-| `--cron` | Adds a one-minute cron flush. Needs a workers.dev subdomain; not required, because pending wakes are also flushed on every request |
+| `--workers-dev` | Also serve on workers.dev (implied when there is no `--hostname`) |
+| `--workers-dev-subdomain <name>` | Register the account's workers.dev subdomain if it has none |
+| `--cron` | Adds a one-minute cron flush. Needs a workers.dev subdomain on the account (works with workers.dev deployments); not required, because pending wakes are also flushed on every request |
 
 To redeploy later (after an upgrade or settings change), run `npx a2a-over-webhook deploy`. Existing secrets persist.
 
@@ -83,7 +88,7 @@ The card name should match `--agent-name`. `supportedInterfaces` should list 1.0
 ## 3. Owner token
 
 - `init` stores it in `config.env`. Keep that file private.
-- To rotate: `npx a2a-over-webhook init --hostname <same> --rotate-owner-token`.
+- To rotate: `npx a2a-over-webhook init --rotate-owner-token` (hostname and other settings come from `config.env`).
 - Hosted agents (cloud routines and similar) have no access to the local config file. Give them `A2A_BASE_URL` and `A2A_OWNER_TOKEN` as environment secrets in their own settings, never in a prompt.
 
 ## 4. Wake: pick the agent
@@ -210,7 +215,8 @@ npx a2a-over-webhook token revoke self-test && npx a2a-over-webhook peers rm sel
 |---|---|
 | `not logged in to Cloudflare` | Run `cf auth login --no-browser` again; the code expires after about 5 minutes |
 | Several accounts | `--account-id <id>` (listed by `cf auth whoami`) |
-| Card not reachable right after deploy | A new custom domain takes 1–5 minutes for DNS and the certificate. Check that the hostname is on a zone in this account and has no conflicting DNS record |
+| Card not reachable right after deploy | A new custom domain takes 1–5 minutes for DNS and the certificate. Check that the hostname is on a zone in this account and has no conflicting DNS record. A newly registered workers.dev subdomain can also take a few minutes |
+| `You need to register a workers.dev subdomain` | The account has no workers.dev subdomain: rerun `init --workers-dev-subdomain <name>`, or create it in the dashboard (Workers & Pages) |
 | `wake test` says no wake webhook configured | Export `WAKE_WEBHOOK_URL` (and key/HMAC secret) and run `wake set` first, or use polling |
 | `wake test` returns 401/403 | Wrong key or header; compare fingerprints from `wake preview` with `wake fingerprint` |
 | `wake test` returns 404 | Wrong URL or route name |

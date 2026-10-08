@@ -8,7 +8,7 @@ Most AI agents (hosted assistants, coding agents, routines, chat bots) can make 
 
 a2a-over-webhook adds that missing half:
 
-- A small **Cloudflare Worker** (free tier is plenty) on a hostname you own serves your **agent card** and the **A2A JSON-RPC endpoint**.
+- A small **Cloudflare Worker** (free tier is plenty) on a hostname you own, or on a free `*.workers.dev` URL, serves your **agent card** and the **A2A JSON-RPC endpoint**.
 - Inbound messages become **tasks in a D1 inbox**.
 - The Worker **wakes your agent** with a webhook (Grok Bot, Claude Code, OpenClaw, Hermes, n8n/Zapier/anything). Agents without inbound webhooks **poll the inbox on a schedule** instead.
 - Your agent reads the inbox and replies with a **zero-dependency CLI**: `npx a2a-over-webhook`. Peers receive answers via `GetTask` or push notifications.
@@ -53,11 +53,21 @@ npx a2a-over-webhook wake test
 npx a2a-over-webhook token issue first-peer     # hand this to the peer, with your agent-card URL
 ```
 
+### No domain? Use workers.dev
+
+Leave out `--hostname` (or pass `--workers-dev`) and the Worker is served at `https://<worker-name>.<account-subdomain>.workers.dev` ([workers.dev routing](https://developers.cloudflare.com/workers/configuration/routing/workers-dev/)). This works on the [free plan](https://developers.cloudflare.com/workers/platform/limits/), and `init` saves the resulting URL for you.
+
+```bash
+npx a2a-over-webhook init --agent-name "My Agent" --preset grok-bot
+```
+
+Each account has one workers.dev subdomain. If yours has none yet, `init` stops and explains how to create one: pass `--workers-dev-subdomain <name>` so `init` registers it, or open **Workers & Pages** in the dashboard once, or `PUT /accounts/<account-id>/workers/subdomain` with `{"subdomain":"<name>"}`. The `--cron` flush works on workers.dev too.
+
 Two skills are included:
 
 | Skill | Use |
 |---|---|
-| [`a2a-over-webhook-setup`](skills/a2a-over-webhook-setup/SKILL.md) | One-time deploy: Cloudflare login, D1, custom domain, owner token, wake preset per agent, first peer, loopback test |
+| [`a2a-over-webhook-setup`](skills/a2a-over-webhook-setup/SKILL.md) | One-time deploy: Cloudflare login, D1, custom domain or workers.dev, owner token, wake preset per agent, first peer, loopback test |
 | [`a2a-over-webhook`](skills/a2a-over-webhook/SKILL.md) | Day-to-day: handle wakes, read the inbox safely, reply, message other agents, manage peer tokens, troubleshoot |
 
 **Where the skills go.** `npx skills add` (the [skills CLI](https://github.com/vercel-labs/skills)) installs into the current project by default, e.g. `.claude/skills/` or `.agents/skills/`; commit them if the agent runs from that repo (Claude Code routines do). Add `-g` for a user-level install (`~/.claude/skills/`, `~/.codex/skills/`, ...). `--agent claude-code codex` picks the target agents, `--skill a2a-over-webhook` picks one skill, `-y` skips prompts, and `--list` only lists. **Grok Bot is not a skills-CLI target** (its `grok` target is Grok Build): save both `SKILL.md` files to your Grok Bot skill library, or keep a checkout on the bot's box and name the `SKILL.md` path in the routine prompt.
