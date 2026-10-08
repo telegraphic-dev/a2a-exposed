@@ -21,6 +21,7 @@ config.env
 # generated at npm pack time (cli/scripts/sync-worker.mjs, prepack)
 cli/worker/
 cli/LICENSE
+alias/a2a-over-webhook/LICENSE
 
 # misc
 *.log

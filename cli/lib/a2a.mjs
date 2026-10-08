@@ -12,6 +12,53 @@ export function checkId(v, what = "id") {
 }
 
 export const newId = () => crypto.randomUUID();
+
+/** Hosts that only resolve on a private network (Tailnet, LAN, loopback). Same rules as the Worker's isPrivateHost. */
+export function isPrivateHost(host) {
+	const h = String(host || "").toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+	if (!h.includes(".") && !h.includes(":")) return true; // single-label names (localhost, MagicDNS short names)
+	if (/(^|\.)(localhost|local|lan|home|internal|intranet|corp|home\.arpa|ts\.net)$/.test(h)) return true;
+	const m = h.match(/^(\d+)\.(\d+)\.\d+\.\d+$/);
+	if (m) {
+		const [a, b] = [Number(m[1]), Number(m[2])];
+		return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127);
+	}
+	if (!h.includes(":")) return false;
+	if (h === "::" || h === "::1" || /^f[cd]/.test(h) || /^fe[89ab]/.test(h) || /^fec/.test(h)) return true; // unspecified, loopback, ULA, link-/site-local
+	// IPv4 embedded in IPv6 (mapped ::ffff:a.b.c.d, NAT64 64:ff9b::, deprecated compatible ::a.b.c.d): judge the IPv4.
+	// URL parsing normalizes the dotted tail to hex (::ffff:7f00:1), so both spellings are handled.
+	const e = h.match(/^(?:::ffff:|64:ff9b::|::)(?:(\d+\.\d+\.\d+\.\d+)|([0-9a-f]{1,4}):([0-9a-f]{1,4}))$/);
+	if (e) {
+		const v4 = e[1] || [parseInt(e[2], 16) >> 8, parseInt(e[2], 16) & 255, parseInt(e[3], 16) >> 8, parseInt(e[3], 16) & 255].join(".");
+		return isPrivateHost(v4);
+	}
+	return false;
+}
+
+/** Problem with an upstream URL for proxy mode ("" when fine): the Worker calls it from Cloudflare, so it must be https
+ *  on a public hostname (a Cloudflare Tunnel hostname behind Access), never a Tailnet / LAN / localhost address. */
+export function upstreamUrlProblem(v) {
+	let u;
+	try { u = new URL(v); } catch { return "is not a URL"; }
+	if (u.protocol !== "https:") return "must be https";
+	if (u.username || u.password) return "must not contain credentials (export UPSTREAM_TOKEN instead)";
+	if (isPrivateHost(u.hostname))
+		return `is a private-network address (${u.hostname}) that the Worker cannot reach: publish the agent through a Cloudflare Tunnel hostname behind Access and pass that (setup skill: "Already have A2A on a Tailnet or LAN")`;
+	return "";
+}
+/** Problem with an upstream card URL ("" when fine): an upstream URL (see above) on the same origin (scheme, host,
+ *  port) as the upstream endpoint, because the Worker fetches the card with UPSTREAM_TOKEN and the Access service
+ *  token; a card on any other origin would receive those credentials. */
+export function upstreamCardUrlProblem(card, upstream) {
+	const why = upstreamUrlProblem(card);
+	if (why) return why;
+	let up;
+	try { up = new URL(upstream).origin; } catch { return ""; } // the upstream URL's own problem is reported for --upstream
+	const got = new URL(card).origin;
+	if (got !== up)
+		return `must be on the upstream's origin (${up}), not ${got}: the Worker fetches the card with UPSTREAM_TOKEN and the Access service token, which only ever go to the upstream itself`;
+	return "";
+}
 export const randomToken = (bytes = 32) => crypto.randomBytes(bytes).toString("base64url");
 
 export async function httpJson(url, { method, body, headers = {}, timeout = 30000 } = {}) {
@@ -131,8 +178,8 @@ export async function rpc(url, version, token, method03, method1, params, peer =
 		const who = peer && peer.alias ? `peer "${peer.alias}"` : new URL(url).origin;
 		const base = (peer && peer.base) || new URL(url).origin;
 		die(token
-			? `${who} rejected our token (HTTP 401: revoked, rotated, or never valid there). Re-pair: a2a-over-webhook connect ${base}${peer && peer.alias ? ` --alias ${peer.alias}` : ""} (its owner approves), or ask its owner for a new token`
-			: `${who} needs a token (HTTP 401): a2a-over-webhook connect ${base}${peer && peer.alias ? ` --alias ${peer.alias}` : ""} (its owner approves)`);
+			? `${who} rejected our token (HTTP 401: revoked, rotated, or never valid there). Re-pair: a2a-exposed connect ${base}${peer && peer.alias ? ` --alias ${peer.alias}` : ""} (its owner approves), or ask its owner for a new token`
+			: `${who} needs a token (HTTP 401): a2a-exposed connect ${base}${peer && peer.alias ? ` --alias ${peer.alias}` : ""} (its owner approves)`);
 	}
 	if (status !== 200 || !data || typeof data !== "object" || "error" in data)
 		die(`peer returned ${data && typeof data === "object" && data.error ? `JSON-RPC error ${describeHttp(status, data).replace(/^HTTP \d+: /, "")} (HTTP ${status})` : describeHttp(status, data)}`);

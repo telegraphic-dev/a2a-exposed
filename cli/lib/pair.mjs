@@ -5,10 +5,10 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import * as C from "./config.mjs";
-import { describeHttp, die, fetchCard, httpJson, pickEndpoint } from "./a2a.mjs";
+import { describeHttp, die, fetchCard, httpJson, isPrivateHost, pickEndpoint } from "./a2a.mjs";
 import { baseUrl, peerToken, warnPeerTokenEnv } from "./commands.mjs";
 
-const CLI = "a2a-over-webhook";
+const CLI = "a2a-exposed";
 export const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 export const PBKDF2_ITERATIONS = 100000; // default (the Workers runtime's maximum); the Worker advertises its own setting
 export const MIN_PASSWORD_LENGTH = 12;
@@ -172,6 +172,23 @@ function saveState(alias, s) {
 const loadState = (alias) => { try { return JSON.parse(fs.readFileSync(stateFile(alias), "utf8")); } catch { return null; } };
 const dropState = (alias) => fs.rmSync(stateFile(alias), { force: true });
 
+/** agent_card_url for a pairing request: --card-url (e.g. an agent that already speaks A2A on a Tailnet and pairs out
+ *  before it has a public façade), else this deployment's card. Only https is sent (inboxes reject anything else); a
+ *  private-network card (*.ts.net, LAN) is sent as informational, and the peer's approval page flags it as not
+ *  publicly reachable. */
+export function cardUrlToSend(flag, own, quiet = false) {
+	const note = (m) => { if (!quiet) console.error(m); };
+	if (flag) {
+		let u;
+		try { u = new URL(flag); } catch { die(`--card-url must be a URL (your agent card, e.g. https://agent.example.com/.well-known/agent-card.json)`); }
+		if (u.protocol !== "https:" || u.username || u.password) { note(`note: --card-url ${u.origin} is not a plain https URL, so it is left out of the pairing request (inboxes accept only https cards)`); return ""; }
+		if (u.href.length > 300) { note("note: --card-url is longer than 300 characters, so it is left out of the pairing request"); return ""; }
+		if (isPrivateHost(u.hostname)) note(`note: ${u.hostname} is on a private network: the peer's owner sees the card as informational ("not publicly reachable"). Expose your agent through a public façade for others to reach it (setup skill: "Already have A2A on a Tailnet or LAN").`);
+		return u.href;
+	}
+	return /^https:\/\//.test(own || "") ? `${own}/.well-known/agent-card.json` : "";
+}
+
 /** Where to connect: the peer's base URL, card, and device-flow endpoints (card first, then RFC 8414 metadata). */
 async function discover(target) {
 	let u;
@@ -254,8 +271,9 @@ A different agent at the same URL? Pass another --alias.`);
 		`Resuming the pairing request to ${peerName} (code ${st.userCode}, link ${st.verificationUriComplete}).`);
 	else {
 		const own = baseUrl();
-		const params = { client_name: o.name || C.get("A2A_AGENT_NAME") || C.get("A2A_WORKER_NAME") || "a2a-over-webhook agent", client_id: C.get("A2A_WORKER_NAME") || alias };
-		if (/^https:\/\//.test(own)) params.agent_card_url = `${own}/.well-known/agent-card.json`;
+		const params = { client_name: o.name || C.get("A2A_AGENT_NAME") || C.get("A2A_WORKER_NAME") || "a2a-exposed agent", client_id: C.get("A2A_WORKER_NAME") || alias };
+		const card = cardUrlToSend(o["card-url"], own, o.json);
+		if (card) params.agent_card_url = card;
 		// replacing: present the old token, so a peer that supports it swaps the token under the same label (no orphan)
 		const r = await postForm(ep.device, params, replace && oldToken ? oldToken : null);
 		if (r.status !== 200 || !r.data.device_code || !r.data.user_code) {

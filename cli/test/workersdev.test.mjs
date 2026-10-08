@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { parseEnv } from "../lib/config.mjs";
 import { baseUrlFor, compactPrompt, needsSubdomain, noSubdomainHelp, parseWorkersDevSubdomain, LABEL_RE, REGISTRATION_STEPS, UNAVAILABLE_RE } from "../lib/workersdev.mjs";
 
-const BIN = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "bin", "a2a-over-webhook.mjs");
+const BIN = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "bin", "a2a-exposed.mjs");
 
 test("baseUrlFor: custom domain wins, else <worker>.<subdomain>.workers.dev, else unknown", () => {
 	assert.equal(baseUrlFor({ hostname: "agent.example.com", worker: "w", subdomain: "s" }), "https://agent.example.com");

@@ -8,11 +8,11 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 export const CHECK_INTERVAL_MS = 24 * 3600 * 1000;
-export const REGISTRY_URL = "https://registry.npmjs.org/a2a-over-webhook/latest";
+export const REGISTRY_URL = "https://registry.npmjs.org/a2a-exposed/latest";
 const truthy = (v) => v !== undefined && v !== "" && v !== "0" && v !== "false";
 
 export const cacheFile = (env = process.env) =>
-	path.join(env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache"), "a2a-over-webhook", "update-check.json");
+	path.join(env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache"), "a2a-exposed", "update-check.json");
 
 /** Is the notice switched off (by the user, CI, or because this is not an npm install)? */
 export function disabled(env = process.env, here = fileURLToPath(import.meta.url)) {
@@ -31,7 +31,7 @@ export function newer(a, b) {
 /** The notice for `current`, given the cache contents (or "" when up to date / unknown). */
 export function notice(current, cache) {
 	if (!cache || !cache.latest || !newer(cache.latest, current)) return "";
-	return `a2a-over-webhook ${cache.latest} is available (you have ${current}): npm i -g a2a-over-webhook@latest, then a2a-over-webhook deploy (updates the Worker; applies new D1 migrations). Silence: A2A_NO_UPDATE_CHECK=1`;
+	return `a2a-exposed ${cache.latest} is available (you have ${current}): npm i -g a2a-exposed@latest, then a2a-exposed deploy (updates the Worker; applies new D1 migrations). Silence: A2A_NO_UPDATE_CHECK=1`;
 }
 
 export const due = (cache, now = Date.now()) => !cache || !(now - (cache.checkedAt || 0) < CHECK_INTERVAL_MS);

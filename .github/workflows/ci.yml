@@ -54,7 +54,7 @@ jobs:
         run: |
           # strip colors: the skills CLI colors output even without a TTY
           npx --yes skills add ./ --list | sed -E 's/\x1b\[[0-9;?]*[A-Za-z]//g' | tee skills-list.txt
-          for s in a2a-over-webhook a2a-over-webhook-setup; do
+          for s in a2a-exposed a2a-exposed-setup; do
             grep -Eq "(^|[^-[:alnum:]])$s([^-[:alnum:]]|$)" skills-list.txt || { echo "::error::skill $s not discovered"; exit 1; }
           done
 
@@ -63,3 +63,9 @@ jobs:
         run: |
           npm pack --dry-run 2>&1 | tee pack.txt
           grep -q "worker/cloudflare.config.ts" pack.txt || { echo "::error::Worker template missing from the package"; exit 1; }
+
+      - name: Alias package (deprecated a2a-over-webhook) - npm pack (dry run)
+        working-directory: alias/a2a-over-webhook
+        run: |
+          npm pack --dry-run 2>&1 | tee pack.txt
+          grep -q "bin/a2a-over-webhook.mjs" pack.txt || { echo "::error::alias bin missing from the package"; exit 1; }

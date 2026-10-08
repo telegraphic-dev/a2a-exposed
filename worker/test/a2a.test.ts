@@ -94,8 +94,9 @@ test("publicOrigin: the card advertises the deployment's public https URL, never
 });
 
 test("isPrivateHost", () => {
-	for (const h of ["localhost", "hermes", "hermes.tail1234.ts.net", "100.127.255.1", "172.16.0.1", "169.254.1.1", "127.0.0.1", "nas.home.arpa", "fd00::1"])
+	for (const h of ["localhost", "hermes", "hermes.tail1234.ts.net", "100.127.255.1", "172.16.0.1", "169.254.1.1", "127.0.0.1", "nas.home.arpa", "fd00::1",
+		"::1", "[::1]", "::", "fe80::1", "febf::1", "::ffff:127.0.0.1", "::ffff:7f00:1", "[::ffff:c0a8:101]", "64:ff9b::a00:1", "::a00:1"])
 		assert.equal(isPrivateHost(h), true, h);
-	for (const h of ["agent.example.com", "agent-x.acme.workers.dev", "100.128.0.1", "172.32.0.1", "8.8.8.8", "2606:4700::1"])
+	for (const h of ["agent.example.com", "agent-x.acme.workers.dev", "100.128.0.1", "172.32.0.1", "8.8.8.8", "2606:4700::1", "::ffff:808:808", "64:ff9b::808:808", "2001:db8::1"])
 		assert.equal(isPrivateHost(h), false, h);
 });

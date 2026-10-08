@@ -194,7 +194,7 @@ test("human approval: pending, slow_down, page approve with the password, single
 	assert.equal(s.wakes.length, 1);
 	const w = s.wakes[0].body;
 	assert.equal(w.kind, "pairing_request");
-	assert.equal(w.hint, "npx a2a-over-webhook pair list");
+	assert.equal(w.hint, "npx a2a-exposed pair list");
 	assert.deepEqual([w.pairing.userCode, w.pairing.verificationUriComplete, w.pairing.approval, w.pairing.clientId], [d.user_code, d.verification_uri_complete, "human", "barry"]);
 	assert.equal(w.pairing.agentCardUrl, "https://barry.example.org/.well-known/agent-card.json");
 	assert.match(w.pairing.instructions, /never approve on your own[\s\S]*give them this link/);
@@ -228,7 +228,7 @@ test("human approval: pending, slow_down, page approve with the password, single
 	assert.equal(g.headers.get("x-frame-options"), "DENY");
 	assert.match(g.headers.get("set-cookie")!, /^a2a_device_csrf=[A-Za-z0-9_-]{24}; Path=\/device; Secure; HttpOnly; SameSite=Strict/);
 	assert.ok(!/<script|src=|href=/i.test(g.text), "no scripts or external assets");
-	assert.match(g.text, /No approval password is set yet[\s\S]*npx a2a-over-webhook pair set-password/);
+	assert.match(g.text, /No approval password is set yet[\s\S]*npx a2a-exposed pair set-password/);
 	assert.ok(!g.text.includes('name="password"'));
 	assert.equal((await s.decidePage(d.user_code, PASSWORD, "approve")).status, 409);
 
@@ -362,7 +362,7 @@ test("flood control: requests per IP and outstanding requests are capped (no flo
 test("pairing wakes: summary for each preset; requester text only where previews are allowed", async () => {
 	const ev: WakeEvent = { contextId: "pairing", taskId: "none", taskIds: [], from: "Barry", preview: "", kind: "pairing_request", publicUrl: BASE,
 		pairing: { userCode: "WDJB-2345", verificationUriComplete: `${BASE}/device?user_code=WDJB-2345`, approval: "human", clientName: "Barry", clientId: "barry", agentCardUrl: "https://barry.example.org/card", expiresIn: 600 } };
-	const sum = wakeSummary(ev, "npx a2a-over-webhook");
+	const sum = wakeSummary(ev, "npx a2a-exposed");
 	assert.match(sum, /^A2A pairing request: an agent calling itself "Barry" \(claimed card: "https:\/\/barry\.example\.org\/card"\) asks to connect to your inbox \(code WDJB-2345, expires in 10 minutes\)\./);
 	assert.match(sum, /never approve on your own\. Show them the code WDJB-2345 and give them this link: https:\/\/agent\.example\.com\/device\?user_code=WDJB-2345/);
 	const agentSum = wakeSummary({ ...ev, pairing: { ...ev.pairing!, approval: "agent" } }, "a2a");
@@ -602,4 +602,50 @@ test("PBKDF2 iterations: stored per hash, tunable from 50,000 to 100,000; the we
 	assert.equal(stored.iterations, 60000);
 	const a = (await s.start(undefined, "203.0.113.60")).data;
 	assert.equal((await s.decidePage(a.user_code, PASSWORD, "approve")).status, 200, "verification uses the stored count");
+});
+
+test("GET /: a browser gets an HTML landing page (strict CSP, no scripts); curl/agents still get JSON", async (t) => {
+	const s = setup({ AGENT_NAME: "Barry <b>& Co</b>", AGENT_DESCRIPTION: "Answers questions about <bricks>." }); t.after(s.restore);
+	const h = await s.call("GET", "/", { headers: { accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" } });
+	assert.equal(h.status, 200);
+	assert.match(h.headers.get("content-type")!, /^text\/html/);
+	const csp = h.headers.get("content-security-policy")!;
+	assert.match(csp, /default-src 'none'/);
+	assert.match(csp, /form-action 'none'/);
+	assert.match(csp, /frame-ancestors 'none'/);
+	assert.equal(h.headers.get("vary"), "accept");
+	assert.equal(h.headers.get("x-frame-options"), "DENY");
+	assert.ok(!/<script|<link|<img|<iframe|src=/i.test(h.text), "no scripts or external assets");
+	assert.ok(h.text.includes("Barry &lt;b&gt;&amp; Co&lt;/b&gt;") && !h.text.includes("<b>&"), "name escaped");
+	assert.ok(h.text.includes("Answers questions about &lt;bricks&gt;."));
+	assert.match(h.text, /A2A \(Agent2Agent\)<\/a> endpoint/);
+	assert.ok(h.text.includes(`href="/.well-known/agent-card.json"`) && h.text.includes(`${BASE}/.well-known/agent-card.json`));
+	assert.ok(h.text.includes(`href="/device"`), "pairing link");
+	assert.ok(h.text.includes(`npx a2a-exposed connect ${BASE}`));
+	assert.match(h.text, /1\.0, 0\.3/);
+	// the style block carries the CSP nonce
+	const nonce = /style-src 'nonce-([^']+)'/.exec(csp)![1];
+	assert.ok(h.text.includes(`<style nonce="${nonce}">`));
+	// machine-readable: no Accept, Accept: application/json, or ?format=json even from a browser
+	for (const o of [{}, { headers: { accept: "application/json" } }]) {
+		const j = await s.call("GET", "/", o);
+		assert.match(j.headers.get("content-type")!, /^application\/json/);
+		assert.equal(j.data.name, "Barry <b>& Co</b>");
+		assert.equal(j.data.agentCard, `${BASE}/.well-known/agent-card.json`);
+		assert.equal(j.data.a2a, `${BASE}/`);
+		assert.equal(j.data.pairing, `${BASE}/device`);
+	}
+	const f = await s.call("GET", "/?format=json", { headers: { accept: "text/html" } });
+	assert.equal(f.data.agentCard, `${BASE}/.well-known/agent-card.json`);
+	const head = await s.call("HEAD", "/", { headers: { accept: "text/html" } });
+	assert.equal(head.status, 200);
+	assert.equal(head.text, "");
+});
+
+test("GET / with pairing off: no /device link, says to ask the operator", async (t) => {
+	const s = setup({ PAIRING_APPROVAL: "off" }); t.after(s.restore);
+	const h = await s.call("GET", "/", { headers: { accept: "text/html" } });
+	assert.ok(!h.text.includes(`href="/device"`));
+	assert.match(h.text, /ask this agent's operator for a bearer token/);
+	assert.equal((await s.call("GET", "/")).data.pairing, undefined);
 });

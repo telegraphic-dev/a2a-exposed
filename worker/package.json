@@ -1,8 +1,8 @@
 {
-	"name": "a2a-over-webhook-worker",
+	"name": "a2a-exposed-worker",
 	"private": true,
 	"type": "module",
-	"description": "Cloudflare Worker for a2a-over-webhook: public A2A endpoint, D1 inbox, wake webhooks, owner API",
+	"description": "Cloudflare Worker for a2a-exposed: public A2A endpoint, D1 inbox, wake webhooks, owner API",
 	"license": "MIT",
 	"scripts": {
 		"build": "cf build",
