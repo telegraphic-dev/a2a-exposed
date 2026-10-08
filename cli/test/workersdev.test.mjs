@@ -55,7 +55,7 @@ test("registration prompts match even when the prompt library wraps one characte
 const STUB = `#!/bin/bash
 log=$STUB_DIR/calls.log
 prof=""; for a in "$@"; do [ "$prev" = --profile ] && prof=$a; prev=$a; done
-echo "$1 $2 profile=$prof sub=\${A2A_WORKERS_DEV_SUBDOMAIN:-} wd=\${A2A_WORKERS_DEV:-} host=\${A2A_HOSTNAME:-}" >> "$log"
+echo "$1 $2 profile=$prof sub=\${A2A_WORKERS_DEV_SUBDOMAIN:-} host=\${A2A_HOSTNAME:-} retired=\${A2A_RETIRED_HOSTNAMES:-}" >> "$log"
 case "$1 $2" in
   "auth whoami") echo '{"authenticated":true,"accounts":[{"id":"acc123","name":"Test"}]}';;
   "d1 list") echo '[{"name":"wdtest","uuid":"d1-uuid"}]';;
@@ -118,7 +118,7 @@ test("init without --hostname: learns the existing subdomain from cf, saves the 
 	assert.equal(c.A2A_WORKERS_DEV_SUBDOMAIN, "acme");
 	assert.ok(!c.A2A_HOSTNAME);
 	const deploys = s.calls().filter((l) => l.startsWith("deploy"));
-	assert.deepEqual(deploys, ["deploy --message profile= sub= wd= host=", "deploy --message profile= sub=acme wd= host="]);
+	assert.deepEqual(deploys, ["deploy --message profile= sub= host= retired=", "deploy --message profile= sub=acme host= retired="]);
 	// a later deploy knows the URL up front: no second round
 	const r2 = await s.cli(["deploy", "--skip-install"]);
 	assert.equal(r2.status, 0, r2.stderr);
@@ -142,7 +142,7 @@ test("--workers-dev-subdomain registers it through cf's prompt (pseudo-terminal)
 	assert.equal(fs.readFileSync(path.join(s.dir, "subdomain"), "utf8").trim(), "newsub");
 	assert.equal(s.config().A2A_BASE_URL, "https://wdtest.newsub.workers.dev");
 	const deploys = s.calls().filter((l) => l.startsWith("deploy"));
-	assert.deepEqual(deploys, ["deploy --message profile= sub= wd= host=", "deploy --message profile= sub=newsub wd= host="], "failed attempt, then the registering deploy");
+	assert.deepEqual(deploys, ["deploy --message profile= sub= host= retired=", "deploy --message profile= sub=newsub host= retired="], "failed attempt, then the registering deploy");
 });
 
 test("--workers-dev-subdomain with a taken name fails cleanly", { skip: process.platform === "win32" }, async (t) => {
@@ -159,7 +159,7 @@ test("custom-domain init is unchanged: no workers.dev, base from the hostname, s
 	assert.equal(r.status, 0, r.stderr);
 	assert.equal(r.stdout.trim(), "https://agent.example.com");
 	assert.equal(s.config().A2A_BASE_URL, "https://agent.example.com");
-	assert.deepEqual(s.calls().filter((l) => l.startsWith("deploy")), ["deploy --message profile= sub= wd= host=agent.example.com"]);
+	assert.deepEqual(s.calls().filter((l) => l.startsWith("deploy")), ["deploy --message profile= sub= host=agent.example.com retired="]);
 });
 
 test("invalid worker name for workers.dev is rejected before anything is created", async (t) => {
@@ -186,3 +186,58 @@ test("--cf-profile is saved and passed as --profile to every cf call", async (t)
 	assert.equal(r2.status, 0, r2.stderr);
 	assert.ok(s.calls().filter((l) => l.startsWith("deploy")).every((l) => l.includes("profile=bot-acct")));
 });
+
+// ------------------------------------------------------------------ switching between a custom domain and workers.dev
+test("deploy --workers-dev moves a custom-domain deployment to workers.dev; the old hostname is retired", async (t) => {
+	const s = stubEnv(t, { subdomain: "acme" });
+	assert.equal((await s.init("--hostname", "agent.example.com")).status, 0);
+	fs.appendFileSync(path.join(s.dir, "cfg", "config.env"), "A2A_TUNNEL_ID=tun1\nA2A_TUNNEL_HOSTNAME=wake-x.example.com\n");
+	const r = await s.cli(["deploy", "--skip-install", "--workers-dev"]);
+	assert.equal(r.status, 0, r.stderr);
+	const c = s.config();
+	assert.ok(!c.A2A_HOSTNAME, "hostname cleared");
+	assert.equal(c.A2A_BASE_URL, "https://wdtest.acme.workers.dev");
+	assert.equal(c.A2A_RETIRED_HOSTNAMES, "agent.example.com");
+	assert.equal(c.A2A_TUNNEL_ID, "tun1", "tunnel settings untouched");
+	assert.equal(r.stdout.trim(), "https://wdtest.acme.workers.dev");
+	assert.match(r.stderr, /moved from https:\/\/agent\.example\.com to https:\/\/wdtest\.acme\.workers\.dev/);
+	assert.match(r.stderr, /agent\.example\.com no longer serves this agent.*410 Gone/s);
+	assert.match(r.stderr, /Peers must update their URL for this agent: https:\/\/wdtest\.acme\.workers\.dev\/\.well-known\/agent-card\.json/);
+	assert.match(r.stderr, /wake tunnel is unaffected/);
+	// deploys after the switch: workers.dev (no custom domain), retired hostname passed to the Worker; the
+	// subdomain was learned on the first one and baked in by one more deploy
+	const deploys = s.calls().filter((l) => l.startsWith("deploy")).slice(1);
+	assert.deepEqual(deploys, [
+		"deploy --message profile= sub= host= retired=agent.example.com",
+		"deploy --message profile= sub=acme host= retired=agent.example.com",
+	]);
+	assert.equal((await s.cli(["url"])).stdout.trim(), "https://wdtest.acme.workers.dev");
+});
+
+test("deploy --hostname moves a workers.dev deployment back to a custom domain", async (t) => {
+	const s = stubEnv(t, { subdomain: "acme" });
+	assert.equal((await s.init()).status, 0);
+	const r = await s.cli(["deploy", "--skip-install", "--hostname", "https://Agent.Example.com/"]);
+	assert.equal(r.status, 0, r.stderr);
+	const c = s.config();
+	assert.equal(c.A2A_HOSTNAME, "agent.example.com");
+	assert.equal(c.A2A_BASE_URL, "https://agent.example.com");
+	assert.ok(!c.A2A_RETIRED_HOSTNAMES);
+	assert.equal(r.stdout.trim(), "https://agent.example.com");
+	assert.match(r.stderr, /moved from https:\/\/wdtest\.acme\.workers\.dev to https:\/\/agent\.example\.com/);
+	assert.match(r.stderr, /workers\.dev URL is switched off/);
+	assert.equal(s.calls().filter((l) => l.startsWith("deploy")).at(-1), "deploy --message profile= sub=acme host=agent.example.com retired=");
+	// and to workers.dev again, then back to the same hostname: it is un-retired
+	assert.equal((await s.cli(["deploy", "--skip-install", "--workers-dev"])).status, 0);
+	assert.equal(s.config().A2A_RETIRED_HOSTNAMES, "agent.example.com");
+	assert.equal((await s.cli(["deploy", "--skip-install", "--hostname", "agent.example.com"])).status, 0);
+	assert.ok(!s.config().A2A_RETIRED_HOSTNAMES);
+});
+
+test("--workers-dev and --hostname together are rejected", async (t) => {
+	const s = stubEnv(t, { subdomain: "acme" });
+	const r = await s.init("--workers-dev", "--hostname", "agent.example.com");
+	assert.equal(r.status, 1);
+	assert.match(r.stderr, /mutually exclusive/);
+});
+

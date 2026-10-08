@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { publicTask, normMessage, randomToken, sha256, fingerprint, taskFromAny } from "../src/a2a.ts";
+import { publicTask, normMessage, randomToken, sha256, fingerprint, taskFromAny, movedResponse } from "../src/a2a.ts";
 
 // Internal (0.3-shaped) task after a peer message and an owner reply, as stored in D1.
 const reply = { kind: "message", role: "agent", messageId: "m2", contextId: "c1", taskId: "t1", parts: [{ kind: "text", text: "pong" }] };
@@ -66,3 +66,18 @@ test("fingerprint is the first 12 hex chars of sha256, null when unset", async (
 	assert.equal(await fingerprint(undefined), null);
 	assert.equal(await fingerprint(""), null);
 });
+
+test("movedResponse: retired hostnames redirect the card (301) and answer 410; others are served", () => {
+	const pub = "https://my-agent.acme.workers.dev";
+	const card = movedResponse("https://old.example.com/.well-known/agent-card.json", pub, "old.example.com");
+	assert.equal(card!.status, 301);
+	assert.equal(card!.headers.location, "https://my-agent.acme.workers.dev/.well-known/agent-card.json");
+	const rpc = movedResponse("https://OLD.example.com/a2a/v1", pub, " other.example.com , old.example.com ");
+	assert.equal(rpc!.status, 410);
+	assert.equal(JSON.parse(rpc!.body).agentCard, "https://my-agent.acme.workers.dev/.well-known/agent-card.json");
+	assert.equal(movedResponse("https://my-agent.acme.workers.dev/a2a/v1", pub, "old.example.com"), null);
+	assert.equal(movedResponse("https://old.example.com/a2a/v1", pub, ""), null);
+	assert.equal(movedResponse("https://old.example.com/a2a/v1", "https://old.example.com", "old.example.com"), null, "never the live URL");
+	assert.equal(movedResponse("https://old.example.com/", "", "old.example.com")!.status, 410);
+});
+

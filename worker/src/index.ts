@@ -7,6 +7,7 @@ type Json = any;
 interface Env {
 	DB: D1Database;
 	PUBLIC_URL: string; // may be empty on a first workers.dev deploy (request origin is used then)
+	RETIRED_HOSTNAMES?: string; // old custom domains (comma-separated): 301 for the card, 410 for everything else
 	AGENT_NAME?: string;
 	AGENT_DESCRIPTION?: string;
 	AGENT_VERSION?: string;
@@ -656,6 +657,8 @@ export default {
 	async fetch(req, env: Env, ectx) {
 		// workers.dev deployments may not know their URL at first deploy: fall back to the request's origin
 		if (!env.PUBLIC_URL) env = { ...env, PUBLIC_URL: new URL(req.url).origin };
+		const moved = A.movedResponse(req.url, env.PUBLIC_URL, env.RETIRED_HOSTNAMES);
+		if (moved) return new Response(moved.body || null, { status: moved.status, headers: moved.headers });
 		const res = await handle(req, env, ectx);
 		// opportunistic flush of debounced wakes whose window has passed (no cron needed)
 		ectx.waitUntil(flushDue(env, ectx).catch((e) => log("flush_failed", { error: String(e).slice(0, 200) })));

@@ -21,6 +21,8 @@ Setup (needs Node 22.18+ and a Cloudflare login: npx cf auth login --no-browser)
                                 deploy the Worker + D1 to your account; wake secrets are read from
                                 env WAKE_WEBHOOK_URL / WAKE_WEBHOOK_KEY / WAKE_HMAC_SECRET (never argv)
                                 no --hostname: serve on https://<worker>.<account subdomain>.workers.dev
+                                --workers-dev  move an existing custom-domain deployment to workers.dev (and
+                                               --hostname H moves it back); the old URL answers 301/410
                                 --workers-dev-subdomain  create the account's workers.dev subdomain if missing
                                 --cf-profile   cf auth profile for a separate Cloudflare login
                                                (npx cf auth create NAME --no-browser); saved, used by every cf call

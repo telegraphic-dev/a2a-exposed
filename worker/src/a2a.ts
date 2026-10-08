@@ -8,6 +8,25 @@ export const ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
 
 export class InvalidParams extends Error {}
 
+/** Response for a request on a hostname this agent moved away from (RETIRED_HOSTNAMES, comma-separated), else null.
+ *  Custom domains are not detached by a deploy, so after `--workers-dev` (or a hostname change) the old hostname
+ *  would keep serving: instead it redirects agent-card discovery (301) and answers everything else with 410 Gone. */
+export function movedResponse(reqUrl: string, publicUrl: string, retiredCsv: string | undefined): { status: number; headers: Record<string, string>; body: string } | null {
+	const retired = (retiredCsv || "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
+	if (!retired.length) return null;
+	const u = new URL(reqUrl);
+	if (!retired.includes(u.hostname.toLowerCase())) return null;
+	const base = (publicUrl || "").replace(/\/$/, "");
+	if (base && new URL(base).hostname.toLowerCase() === u.hostname.toLowerCase()) return null; // never retire the live URL
+	const card = base ? `${base}/.well-known/agent-card.json` : "";
+	if (card && (u.pathname === "/.well-known/agent-card.json" || u.pathname === "/.well-known/agent.json"))
+		return { status: 301, headers: { location: card, "cache-control": "no-store" }, body: "" };
+	return {
+		status: 410, headers: { "content-type": "application/json" },
+		body: JSON.stringify({ error: "moved", message: `this agent moved${base ? ` to ${base}` : ""}; update the URL you use for it`, ...(card ? { agentCard: card } : {}) }),
+	};
+}
+
 export const nowIso = () => new Date().toISOString();
 export const newId = () => crypto.randomUUID();
 

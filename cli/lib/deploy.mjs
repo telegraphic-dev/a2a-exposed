@@ -22,7 +22,7 @@ const DEPLOY_KEYS = [
 	"A2A_PROVIDER_ORGANIZATION", "A2A_PROVIDER_URL", "A2A_DOCUMENTATION_URL",
 	"WAKE_PRESET", "WAKE_AGENT_ID", "WAKE_KEY_HEADER", "WAKE_KEY_PREFIX", "WAKE_BODY_TEMPLATE", "WAKE_CLI_COMMAND",
 	"WAKE_DEBOUNCE_SECONDS", "WAKE_MAX_PER_HOUR", "A2A_MAX_BODY", "A2A_RATE_PER_MIN", "A2A_ENABLE_CRON",
-	"A2A_WORKERS_DEV", "A2A_WORKERS_DEV_SUBDOMAIN",
+	"A2A_WORKERS_DEV_SUBDOMAIN", "A2A_RETIRED_HOSTNAMES",
 ];
 // init/deploy flag -> config key
 const FLAG_KEYS = {
@@ -36,8 +36,8 @@ export const DEPLOY_FLAGS = Object.keys(FLAG_KEYS);
 
 const step = (s) => console.error(`==> ${s}`);
 export const workerName = () => C.get("A2A_WORKER_NAME", "a2a-over-webhook");
-/** No custom hostname (or --workers-dev): the Worker is served on <worker>.<account subdomain>.workers.dev. */
-const workersDevMode = () => !C.get("A2A_HOSTNAME") || C.get("A2A_WORKERS_DEV") === "1";
+/** No custom hostname: the Worker is served on <worker>.<account subdomain>.workers.dev (and only there). */
+const workersDevMode = () => !C.get("A2A_HOSTNAME");
 export const publicBase = () =>
 	WD.baseUrlFor({ hostname: C.get("A2A_HOSTNAME"), worker: workerName(), subdomain: C.get("A2A_WORKERS_DEV_SUBDOMAIN") });
 export const workerDir = (o) => path.resolve(o.dir || C.get("A2A_WORKER_DIR") || path.join(C.CONFIG_DIR, "worker"));
@@ -120,11 +120,34 @@ export function wakeSecretsFromEnv() {
 	return s;
 }
 
+const csv = (s) => String(s || "").split(",").map((x) => x.trim()).filter(Boolean);
+
+/** Save init/deploy flags. Returns { from, to } when the public URL switches between a custom domain and
+ *  workers.dev (or to another custom domain), so the caller can tell the user what changed. */
 function applyFlags(o) {
 	const upd = {};
 	for (const [flag, key] of Object.entries(FLAG_KEYS)) if (o[flag] !== undefined) upd[key] = o[flag];
 	if (o.cron) upd.A2A_ENABLE_CRON = "1";
-	if (o["workers-dev"]) upd.A2A_WORKERS_DEV = "1";
+	if (o["workers-dev"] && o.hostname) die("--workers-dev and --hostname are mutually exclusive (--workers-dev moves the Worker to workers.dev)");
+	if (upd.A2A_HOSTNAME) upd.A2A_HOSTNAME = upd.A2A_HOSTNAME.replace(/^https?:\/\//, "").replace(/\/.*$/, "").toLowerCase();
+	if (o["workers-dev"]) upd.A2A_HOSTNAME = null;
+	upd.A2A_WORKERS_DEV = null; // pre-release key ("also serve on workers.dev"); --workers-dev now switches
+	// cf deploys never detach a custom domain, so a hostname we move away from is retired in the Worker
+	// (RETIRED_HOSTNAMES: 301 for the agent card, 410 for everything else) instead of silently serving on
+	const oldHost = C.fileConfig().A2A_HOSTNAME || "";
+	const newHost = upd.A2A_HOSTNAME === null ? "" : upd.A2A_HOSTNAME ?? oldHost;
+	let switched = null;
+	if (newHost !== oldHost && C.fileConfig().A2A_D1_ID) {
+		const retired = new Set(csv(C.fileConfig().A2A_RETIRED_HOSTNAMES));
+		if (oldHost) retired.add(oldHost);
+		retired.delete(newHost);
+		upd.A2A_RETIRED_HOSTNAMES = [...retired].join(",") || null;
+		const sub = C.get("A2A_WORKERS_DEV_SUBDOMAIN");
+		upd.A2A_BASE_URL = WD.baseUrlFor({ hostname: newHost, worker: upd.A2A_WORKER_NAME || workerName(), subdomain: sub }) || null;
+		switched = { from: C.fileConfig().A2A_BASE_URL || (oldHost ? `https://${oldHost}` : ""), fromHost: oldHost, toHost: newHost };
+	} else if (newHost && csv(C.fileConfig().A2A_RETIRED_HOSTNAMES).includes(newHost)) {
+		upd.A2A_RETIRED_HOSTNAMES = csv(C.fileConfig().A2A_RETIRED_HOSTNAMES).filter((h) => h !== newHost).join(",") || null;
+	}
 	if (upd.CF_PROFILE !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(upd.CF_PROFILE)) die("--cf-profile must be a cf auth profile name");
 	if (o["workers-dev-subdomain"] !== undefined && !WD.LABEL_RE.test(o["workers-dev-subdomain"]))
 		die("--workers-dev-subdomain must be lowercase letters, digits and hyphens (a DNS label)");
@@ -132,8 +155,22 @@ function applyFlags(o) {
 	if (upd.A2A_AGENT_SKILLS) {
 		try { if (!Array.isArray(JSON.parse(upd.A2A_AGENT_SKILLS))) throw 0; } catch { die("--agent-skills must be a JSON array of A2A AgentSkill objects"); }
 	}
-	if (upd.A2A_HOSTNAME) upd.A2A_HOSTNAME = upd.A2A_HOSTNAME.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
-	if (Object.keys(upd).length) C.saveConfig(upd);
+	C.saveConfig(upd);
+	return switched;
+}
+
+/** After a deploy that moved the public URL: what stops serving and what peers must update. */
+function reportSwitch(sw) {
+	if (!sw) return;
+	const to = C.get("A2A_BASE_URL") || publicBase();
+	const card = to ? `${to}/.well-known/agent-card.json` : "(see `a2a-over-webhook url`)";
+	console.error(`\nnote: the public URL moved${sw.from ? ` from ${sw.from}` : ""} to ${to || "workers.dev"}.`);
+	if (sw.fromHost) {
+		console.error(`  ${sw.fromHost} no longer serves this agent: its agent card redirects (301) to the new one and every other request gets 410 Gone.`);
+		console.error(`  Cloudflare keeps the old custom domain attached to the Worker; to detach it completely, remove ${sw.fromHost} under Workers & Pages -> ${workerName()} -> Settings -> Domains & Routes.`);
+	} else console.error("  The workers.dev URL is switched off by this deploy.");
+	console.error(`  Peers must update their URL for this agent: ${card} (A2A_BASE_URL in ${C.CONFIG_FILE} is updated).`);
+	if (C.get("A2A_TUNNEL_ID")) console.error("  The wake tunnel is unaffected (it has its own hostname and zone).");
 }
 
 let justRegistered = false; // a workers.dev subdomain registered in this run: its DNS takes a few minutes
@@ -209,7 +246,6 @@ async function deployAndLearn(dir, secrets, o) {
 		console.error(`note: the account already has the workers.dev subdomain "${sub}"; using it (--workers-dev-subdomain ignored)`);
 	if (sub && sub !== baked()) C.saveConfig({ A2A_WORKERS_DEV_SUBDOMAIN: sub });
 	if (!baked()) return console.error("warning: could not find the workers.dev URL in cf's output; the Worker uses the request origin meanwhile. Check the URL in the dashboard and re-run `a2a-over-webhook deploy`.");
-	if (C.get("A2A_HOSTNAME")) return; // custom domain stays the public URL; workers.dev is an extra route
 	C.saveConfig({ A2A_BASE_URL: publicBase() });
 	if (baked() !== deployedWith) {
 		step(`redeploying once so the agent card advertises ${publicBase()}`);
@@ -219,7 +255,7 @@ async function deployAndLearn(dir, secrets, o) {
 
 export async function init(o) {
 	checkNode();
-	applyFlags(o);
+	const switched = applyFlags(o);
 	const dir = workerDir(o);
 	C.saveConfig({ A2A_WORKER_DIR: dir, A2A_WORKER_NAME: workerName() });
 	if (workersDevMode()) {
@@ -270,14 +306,16 @@ export async function init(o) {
 	const base = C.get("A2A_BASE_URL");
 	if (base) await verifyCard(base);
 	console.log(base);
+	reportSwitch(switched);
 	console.error(`config saved to ${C.CONFIG_FILE} (chmod 600). Next: a2a-over-webhook wake preview, a2a-over-webhook token issue <peer>`);
 }
 
 export async function deploy(o) {
 	checkNode();
-	applyFlags(o);
-	const dir = workerDir(o);
 	if (!C.get("A2A_D1_ID")) die("no saved deployment; run `a2a-over-webhook init` first");
+	const switched = applyFlags(o);
+	const dir = workerDir(o);
+	if (workersDevMode() && !WD.LABEL_RE.test(workerName())) die("on workers.dev the worker name must be a DNS label (lowercase letters, digits, hyphens)");
 	guardTunnelUrl();
 	step(`worker project -> ${dir}${cfProfile() ? ` (cf profile ${cfProfile()})` : ""}`);
 	syncTemplate(dir);
@@ -290,6 +328,7 @@ export async function deploy(o) {
 	await deployAndLearn(dir, secrets, o);
 	const base = C.get("A2A_BASE_URL") || publicBase();
 	if (base) await verifyCard(base);
+	if (switched) { console.log(base); reportSwitch(switched); }
 }
 
 /** Fingerprints of the wake secrets in the local environment (what `wake set` would upload). */

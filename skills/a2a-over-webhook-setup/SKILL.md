@@ -83,7 +83,7 @@ Optional flags:
 | `--debounce <s>` | Wake debounce window |
 | `--max-per-hour <n>` | Hourly wake cap |
 | `--cf-profile <name>` | Use a named cf auth profile (separate Cloudflare login). Saved as `CF_PROFILE` |
-| `--workers-dev` | Also serve on workers.dev (implied when there is no `--hostname`) |
+| `--workers-dev` | Move to workers.dev: clears the saved hostname, so the base URL, agent card and printed URLs become `https://<worker>.<subdomain>.workers.dev`. The old custom domain then answers 410 (its agent card redirects 301 to the new card) until you detach it in the dashboard; peers must update their URL. `--hostname <host>` on a workers.dev deployment moves it back (the workers.dev route is switched off). A wake tunnel keeps working (its own hostname); a new `tunnel create` then needs `--tunnel-hostname` |
 | `--workers-dev-subdomain <name>` | Register the account's workers.dev subdomain if it has none |
 | `--cron` | Adds a one-minute cron flush. Needs a workers.dev subdomain on the account (works with workers.dev deployments); not required, because pending wakes are also flushed on every request |
 
