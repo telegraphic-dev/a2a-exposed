@@ -2,6 +2,11 @@
 
 All notable changes to the `a2a-over-webhook` CLI, Worker template, and skills. Versions follow [semver](https://semver.org); a `v*` tag publishes the CLI to npm (see the README's **Releases**).
 
+## Unreleased
+
+- **Worker:** migration `0002_wake_budget.sql` creates the `wake_budget` table on D1 databases whose `0001_init.sql` came from an earlier build (D1 tracks migrations by file name, so the current `0001` never ran there). Idempotent on new databases.
+- **Docs:** setup skill section on adopting an existing deployment (same Worker, D1 and hostname) without reissuing tokens or re-uploading secrets.
+
 ## 0.1.0 (unreleased)
 
 First npm release of the CLI (`npm i -g a2a-over-webhook`).
