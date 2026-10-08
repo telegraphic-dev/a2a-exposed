@@ -73,6 +73,23 @@ npx a2a-exposed pair set-password --web    # prints a one-time link; you open it
 npx a2a-exposed connect https://peer.example.com   # connect to another inbox (its owner approves)
 ```
 
+### Cloudflare login blocked on a VPS? Use an API token
+
+On some datacenter/VPS egress IPs (e.g. Hetzner), `cf auth login` and `--device` hit a Cloudflare managed challenge (`Just a moment...` / HTTP 403) on `dash.cloudflare.com` OAuth — see [cloudflare/cf#23](https://github.com/cloudflare/cf/issues/23) and [workers-sdk#11081](https://github.com/cloudflare/workers-sdk/issues/11081). Laptop login is fine; the workaround is an API token (same path Wrangler uses).
+
+Create a [custom API token](https://developers.cloudflare.com/fundamentals/api/get-started/create-token/) with:
+
+- **`--workers-dev`:** Account → Workers Scripts: Edit; Account → D1: Edit; Account → Account Settings: Read
+- **Additionally for `--tunnel` / a custom domain:** Zone → DNS: Edit; Account → Cloudflare Tunnel: Edit; Account → Access: Apps and Policies: Edit; Account → Access: Service Tokens: Edit
+
+Put the token (and account id if needed) in the agent's environment or a chmod-600 secret file — never argv or chat — then run init/deploy as usual:
+
+```bash
+export CLOUDFLARE_API_TOKEN=...
+export CLOUDFLARE_ACCOUNT_ID=...   # if the token can see more than one account
+npx a2a-exposed init ...           # or deploy / wake set / tunnel create
+```
+
 ### No domain? Use workers.dev
 
 Leave out `--hostname` and the Worker is served at `https://<worker-name>.<account-subdomain>.workers.dev` ([workers.dev routing](https://developers.cloudflare.com/workers/configuration/routing/workers-dev/)). This works on the [free plan](https://developers.cloudflare.com/workers/platform/limits/), and `init` saves the resulting URL for you.

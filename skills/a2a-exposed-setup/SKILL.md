@@ -564,6 +564,7 @@ The `cf` CLI is young: check the exact subcommands and confirmation flags with `
 | `status`: `Cloudflare error 1042` right after a deploy | The Worker is still propagating on workers.dev: wait ~30 s and run `status` again |
 | Where are the Worker's logs? | Real-time: the dashboard's live logs. Persisted and searchable: deploy with `--workers-logs on` (Workers Logs; off by default) and open the Worker's **Observability** / **Logs** tab; query strings are redacted |
 | `not logged in to Cloudflare` | Run `cf auth login --no-browser` again; the code expires after about 5 minutes |
+| `cf auth login` (or `--device`) returns "Just a moment..." HTML or 403 | Cloudflare challenges the host's datacenter IP (common on VPS/Hetzner). Set `CLOUDFLARE_API_TOKEN` (and `CLOUDFLARE_ACCOUNT_ID`) in the agent's environment — never argv/chat — then rerun; see [README: API token fallback](../../README.md#cloudflare-login-blocked-on-a-vps-use-an-api-token) for permissions |
 | Several accounts | `--account-id <id>` (listed by `cf auth whoami`) |
 | Card not reachable right after deploy (`status`: `agent card: FAILED`) | A new custom domain takes 1–5 minutes for DNS and the certificate. Check that the hostname is on a zone in this account and has no conflicting DNS record. A newly registered workers.dev subdomain can also take a few minutes |
 | `You need to register a workers.dev subdomain` | The account has no workers.dev subdomain: rerun `init --workers-dev-subdomain <name>`, or create it in the dashboard (Workers & Pages) |
