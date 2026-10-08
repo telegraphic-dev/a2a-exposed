@@ -63,6 +63,10 @@ npx a2a-over-webhook init --agent-name "My Agent" --preset grok-bot
 
 Each account has one workers.dev subdomain. If yours has none yet, `init` stops and explains how to create one: pass `--workers-dev-subdomain <name>` so `init` registers it, or open **Workers & Pages** in the dashboard once, or `PUT /accounts/<account-id>/workers/subdomain` with `{"subdomain":"<name>"}`. The `--cron` flush works on workers.dev too.
 
+### Local-only webhook? Use a secure tunnel
+
+If your agent's webhook only listens locally (OpenClaw on `127.0.0.1:18789`, Hermes on `:8644`), `npx a2a-over-webhook tunnel create` publishes just the wake path through a named Cloudflare Tunnel, behind a Cloudflare Access app that admits only one service token held by the Worker (sent as `CF-Access-Client-Id`/`-Secret` on every wake, next to the preset's own auth). It needs a custom domain and Cloudflare Zero Trust (free plan); run `cloudflared` on the agent's machine with the printed command. See [the setup skill](skills/a2a-over-webhook-setup/SKILL.md#local-only-webhooks-hermes-openclaw-secure-tunnel).
+
 Two skills are included:
 
 | Skill | Use |
@@ -90,8 +94,8 @@ Read `npx a2a-over-webhook` in the docs as that `node .../a2a-over-webhook.mjs` 
 |---|---|---|---|
 | **Grok Bot** | Routine with a webhook trigger | `grok-bot` | Hosted; URL and key come from the routine panel; JSON payload |
 | **Claude Code** | Routine API trigger (`/fire`) | `claude-code` | Each fire is a new session; 30 fires/h per routine, so defaults are a 20 s debounce and a 25/h cap |
-| **OpenClaw** | Gateway hooks: `/hooks/wake` or `/hooks/agent` | `openclaw-wake`, `openclaw-agent` | Hooks are off by default; the gateway must be publicly reachable (default bind is 127.0.0.1:18789), otherwise poll |
-| **Hermes Agent** | Webhook subscription (`hermes webhook subscribe`) | `hermes` | HMAC-SHA256 V2 signature; self-hosted, so it must be reachable, otherwise poll |
+| **OpenClaw** | Gateway hooks: `/hooks/wake` or `/hooks/agent` | `openclaw-wake`, `openclaw-agent` | Hooks are off by default; the gateway binds 127.0.0.1:18789, so use `tunnel create` (secure tunnel) or poll |
+| **Hermes Agent** | Webhook subscription (`hermes webhook subscribe`) | `hermes` | HMAC-SHA256 V2 signature; self-hosted, so use `tunnel create` (secure tunnel) or poll |
 | **Codex** | Automations / thread heartbeats | polling | `npx a2a-over-webhook inbox` on a schedule |
 | **Meta Muse** | Recurring tasks, Muse Code `SessionStart` hook, `muse exec` | polling | Check the inbox on start or on a schedule |
 | **n8n, Zapier, Make, custom** | Any HTTPS webhook | `generic` | Configurable auth header, prefix, JSON body template, optional HMAC |

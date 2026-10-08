@@ -148,7 +148,7 @@ Source: https://docs.openclaw.ai/automation/cron-jobs/webhooks
    ```json5
    { hooks: { enabled: true, token: "<new random token>", path: "/hooks", allowedAgentIds: ["main"] } }
    ```
-2. **Reachability:** the gateway listens on `127.0.0.1:18789` by default, so it must be published over HTTPS (reverse proxy, tunnel, or similar) for the Worker to reach it. If it can't be, skip the webhook and use polling (section 5).
+2. **Reachability:** the gateway listens on `127.0.0.1:18789` by default, so the Worker can't reach it directly. Use the **secure tunnel** below (recommended), another HTTPS reverse proxy, or skip the webhook and use polling.
 3. Pick a preset:
    - **`openclaw-wake`** POSTs `<gateway>/hooks/wake` with `{"text": ..., "mode": "now", "agentId": "main"}`. This wakes the main session. OpenClaw treats wake text as a trusted system event, so this preset sends **no peer text**: only the peer label, ids, and the hint.
    - **`openclaw-agent`** POSTs `<gateway>/hooks/agent` with `{"message": ..., "agentId": "main", "sessionMode": "isolated", "deliver": false}` plus an `Idempotency-Key` header. Each wake is an isolated run.
@@ -157,7 +157,7 @@ Source: https://docs.openclaw.ai/automation/cron-jobs/webhooks
 ### Hermes Agent (`hermes`)
 Source: https://hermes-agent.nousresearch.com/docs/user-guide/messaging/webhooks and `gateway/platforms/webhook.py` in NousResearch/hermes-agent.
 1. Enable the webhook platform with `hermes gateway setup`, or set `WEBHOOK_ENABLED=true` in `~/.hermes/.env`. It listens on port 8644 by default.
-2. **Reachability:** Hermes is usually self-hosted, so `http(s)://<host>:8644/webhooks/<name>` must be reachable from Cloudflare, preferably over HTTPS through a reverse proxy. Otherwise use polling.
+2. **Reachability:** Hermes is usually self-hosted on port 8644, so `/webhooks/<name>` must be reachable from Cloudflare. Use the **secure tunnel** below (`--tunnel-path /webhooks/<name>`), another HTTPS reverse proxy, or polling.
 3. **Toolset caveat.** Webhook-triggered runs default to a restricted toolset (web/vision/clarify, **no terminal**), so a plain prompt subscription cannot run the CLI. The recommended fix is to route the event into a **cron job**, whose own skills and tools apply:
    - Create a Hermes cron job (e.g. `a2a-inbox`) with the prompt *"Use the a2a-over-webhook skill to check and handle the A2A inbox"*, and give it a long fallback schedule.
    - Subscribe the webhook to it:
@@ -174,6 +174,41 @@ Source: https://hermes-agent.nousresearch.com/docs/user-guide/messaging/webhooks
    - `X-Request-ID` for idempotency, since Hermes caches delivery ids for 1 h.
 
    The timestamp must be within ±300 s. The payload's `event_type` is `a2a_wake`, which is what `--events a2a_wake` matches. `hermes webhook test a2a-wake` checks the route locally, and `npx a2a-over-webhook wake test` checks it end to end.
+
+### Local-only webhooks (Hermes, OpenClaw): secure tunnel
+
+For a webhook server that only listens locally (OpenClaw gateway on `127.0.0.1:18789`, Hermes on `:8644`, a local n8n), `tunnel create` publishes **only the wake path** through a named Cloudflare Tunnel and locks it with Cloudflare Access:
+
+- a hostname `wake-<words>-<hex>.<your zone>` (or `--tunnel-hostname`), proxied CNAME to the tunnel; the tunnel routes only the wake path to your origin (other paths: 404);
+- a self-hosted **Access application** on that hostname with exactly **one policy: Service Auth (`non_identity`) for one new service token**, no email/everyone rules, 15-minute sessions; `cloudflared` also verifies the Access token itself;
+- the Worker stores the service token (`WAKE_ACCESS_CLIENT_ID` / `WAKE_ACCESS_CLIENT_SECRET`) and sends `CF-Access-Client-Id` / `CF-Access-Client-Secret` on every wake, **in addition** to the preset's own bearer token or HMAC signature. Keep that agent-side auth enabled.
+
+Requirements: a **custom domain** (Cloudflare zone) on the account, by design: there is no quick-tunnel/`trycloudflare` mode and workers.dev-only setups are refused (use polling there). **Cloudflare Zero Trust** must be enabled (one-time: <https://one.dash.cloudflare.com/>, pick a team name and the Free plan), or pass `--zero-trust-org <team-name>` to create the organization (account-level; ask the user first). Ask the user before running it: it creates DNS, a tunnel, and Access objects.
+
+```bash
+export WAKE_WEBHOOK_KEY='<OpenClaw hooks token>'      # or WAKE_HMAC_SECRET for Hermes; never WAKE_WEBHOOK_URL
+npx a2a-over-webhook tunnel create                    # openclaw-*: origin http://127.0.0.1:18789, path /hooks/wake|agent
+# Hermes:   npx a2a-over-webhook tunnel create --tunnel-path /webhooks/a2a-wake     (origin defaults to :8644)
+# generic:  npx a2a-over-webhook tunnel create --tunnel-origin http://127.0.0.1:5678 --tunnel-path /webhook/a2a
+# or in one go: npx a2a-over-webhook init --hostname agent.example.com ... --preset openclaw-wake --tunnel
+```
+
+It prints the wake URL and the connector command. The tunnel token is written to `<config dir>/tunnel-token` (chmod 600) and is **not printed** unless you pass `--show-token`. On the agent's machine (cloudflared installed; **outbound port 7844** to Cloudflare must be open):
+
+```bash
+cloudflared tunnel run --token-file ~/.config/a2a-over-webhook/tunnel-token     # cloudflared 2025.4+
+sudo cloudflared service install "$(cat ~/.config/a2a-over-webhook/tunnel-token)" # run as a service
+```
+
+Copy the token file to the agent's machine if `init` ran elsewhere; treat it like a password. Then check:
+
+- `npx a2a-over-webhook tunnel status`: tunnel state and connections, the Access app's policy, and two GET probes: **without** the token it must be blocked by Access (401/403); **with** the token, `530 (Cloudflare error 1033)` means the connector isn't running, anything else comes from your origin.
+- `npx a2a-over-webhook wake preview`: `hasAccessServiceToken: true`, masked `CF-Access-*` headers and their fingerprints.
+- `npx a2a-over-webhook wake test`: a real wake through Access and the tunnel.
+
+`tunnel rm` deletes the Worker's Access secrets (and the wake URL if it is the tunnel's), the DNS record, the tunnel, the Access app with its policy, the service token, and the local token file. Stop `cloudflared` (`cloudflared service uninstall`) afterwards. The service token expires after a year: rotate with `tunnel rm` + `tunnel create`. While a tunnel exists, `deploy`/`wake set` refuse a different `WAKE_WEBHOOK_URL`.
+
+Already have your own Access-protected URL? Export `WAKE_ACCESS_CLIENT_ID` / `WAKE_ACCESS_CLIENT_SECRET` with `WAKE_WEBHOOK_URL` and run `wake set`; the Worker sends the same headers.
 
 ### Agents without inbound webhooks: polling
 Use this for **Codex** (automations or thread heartbeats) and **Meta Muse** (recurring tasks, a Muse Code `SessionStart` hook, or `muse exec` from a scheduler), or any agent whose webhook endpoint isn't publicly reachable.
@@ -233,7 +268,11 @@ npx a2a-over-webhook token revoke self-test && npx a2a-over-webhook peers rm sel
 | `wake test` says no wake webhook configured | Export `WAKE_WEBHOOK_URL` (and key/HMAC secret) and run `wake set` first, or use polling |
 | `wake test` returns 401/403 | Wrong key or header; compare fingerprints from `wake preview` with `wake fingerprint` |
 | `wake test` returns 404 | Wrong URL or route name |
-| `wake test` returns a network error | The target isn't publicly reachable |
+| `wake test` returns a network error | The target isn't publicly reachable (local-only webhook? use `tunnel create`) |
+| `wake test` / `tunnel status`: `530 (Cloudflare error 1033)` | The tunnel has no running connector: start `cloudflared tunnel run --token-file ...` on the agent's machine and check that **outbound port 7844** (TCP and UDP) to Cloudflare is allowed |
+| Tunnel hostname answers 401/403, or a 302 to `<team>.cloudflareaccess.com` | Blocked by Access: the service token is missing or wrong (expected for requests without it). For wakes, `wake preview` must show `hasAccessServiceToken: true`; if not, `tunnel rm` + `tunnel create` |
+| `Cloudflare Access (Zero Trust) is not enabled` | Enable Zero Trust once (dashboard, Free plan) or pass `--zero-trust-org <team-name>` |
+| `tunnel create` refuses on workers.dev | A tunnel needs a Cloudflare zone; pass `--tunnel-hostname` on a zone in the account, or use polling |
 | Claude Code 429 | Hourly fire limit; lower `--max-per-hour` or raise `--debounce` |
 | Hermes 401 | `WAKE_HMAC_SECRET` must equal the route secret, and the Worker clock skew must be under 300 s (it normally is) |
 | `cf deploy` lists secrets as `Environment Variable (hidden)` | Expected: `cf` uploads secrets that way; they are still Worker secrets, not plain vars |

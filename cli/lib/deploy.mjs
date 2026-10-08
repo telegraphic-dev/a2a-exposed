@@ -11,7 +11,9 @@ import * as WD from "./workersdev.mjs";
 
 const PKG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PRESETS = ["grok-bot", "claude-code", "openclaw-wake", "openclaw-agent", "hermes", "generic"];
-const WAKE_SECRETS = ["WAKE_WEBHOOK_URL", "WAKE_WEBHOOK_KEY", "WAKE_HMAC_SECRET"];
+// WAKE_ACCESS_*: Cloudflare Access service token for a wake URL behind Access (set by `tunnel create`, or exported
+// by hand for your own Access-protected endpoint)
+export const WAKE_SECRETS = ["WAKE_WEBHOOK_URL", "WAKE_WEBHOOK_KEY", "WAKE_HMAC_SECRET", "WAKE_ACCESS_CLIENT_ID", "WAKE_ACCESS_CLIENT_SECRET"];
 
 // Non-secret deploy settings persisted in config.env and passed to cloudflare.config.ts as env vars.
 const DEPLOY_KEYS = [
@@ -33,14 +35,14 @@ const FLAG_KEYS = {
 export const DEPLOY_FLAGS = Object.keys(FLAG_KEYS);
 
 const step = (s) => console.error(`==> ${s}`);
-const workerName = () => C.get("A2A_WORKER_NAME", "a2a-over-webhook");
+export const workerName = () => C.get("A2A_WORKER_NAME", "a2a-over-webhook");
 /** No custom hostname (or --workers-dev): the Worker is served on <worker>.<account subdomain>.workers.dev. */
 const workersDevMode = () => !C.get("A2A_HOSTNAME") || C.get("A2A_WORKERS_DEV") === "1";
 export const publicBase = () =>
 	WD.baseUrlFor({ hostname: C.get("A2A_HOSTNAME"), worker: workerName(), subdomain: C.get("A2A_WORKERS_DEV_SUBDOMAIN") });
-const workerDir = (o) => path.resolve(o.dir || C.get("A2A_WORKER_DIR") || path.join(C.CONFIG_DIR, "worker"));
+export const workerDir = (o) => path.resolve(o.dir || C.get("A2A_WORKER_DIR") || path.join(C.CONFIG_DIR, "worker"));
 
-function checkNode() {
+export function checkNode() {
 	const [maj, min] = process.versions.node.split(".").map(Number);
 	if (maj < 22 || (maj === 22 && min < 18)) die(`Node ${process.versions.node} found; Node 22.18+ is required (cf CLI requirement)`);
 }
@@ -66,15 +68,15 @@ function run(cmd, args, { cwd, env, capture = false, allowFail = false } = {}) {
 	return r;
 }
 
-function cfBin(dir) {
+export function cfBin(dir) {
 	const local = path.join(dir, "node_modules", ".bin", "cf");
 	return fs.existsSync(local) ? local : "cf";
 }
 
 /** cf auth profile (--cf-profile / CF_PROFILE): appended as `--profile <name>` to every cf call. Empty = cf's own
  *  resolution (a profile bound to the directory with `cf auth activate`, else `default`). */
-const cfProfile = () => C.get("CF_PROFILE");
-const cfArgs = (args) => (cfProfile() ? [...args, "--profile", cfProfile()] : args);
+export const cfProfile = () => C.get("CF_PROFILE");
+export const cfArgs = (args) => (cfProfile() ? [...args, "--profile", cfProfile()] : args);
 const runCf = (dir, args, opts) => run(cfBin(dir), cfArgs(args), { cwd: dir, ...opts });
 
 function cfJson(dir, args, env) {
@@ -95,13 +97,13 @@ function deployEnv() {
 }
 
 /** Environment for cf calls other than deploy: account pinned, wake secrets stripped. */
-function cfEnv() {
+export function cfEnv() {
 	const env = { ...process.env, CLOUDFLARE_ACCOUNT_ID: C.get("CLOUDFLARE_ACCOUNT_ID") };
 	for (const k of WAKE_SECRETS) delete env[k];
 	return env;
 }
 
-async function withSecretsFile(secrets, fn) {
+export async function withSecretsFile(secrets, fn) {
 	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "a2a-secrets-"));
 	const file = path.join(tmp, "secrets.json");
 	try {
@@ -112,7 +114,7 @@ async function withSecretsFile(secrets, fn) {
 	}
 }
 
-function wakeSecretsFromEnv() {
+export function wakeSecretsFromEnv() {
 	const s = {};
 	for (const k of WAKE_SECRETS) if (process.env[k]) s[k] = process.env[k];
 	return s;
@@ -276,6 +278,7 @@ export async function deploy(o) {
 	applyFlags(o);
 	const dir = workerDir(o);
 	if (!C.get("A2A_D1_ID")) die("no saved deployment; run `a2a-over-webhook init` first");
+	guardTunnelUrl();
 	step(`worker project -> ${dir}${cfProfile() ? ` (cf profile ${cfProfile()})` : ""}`);
 	syncTemplate(dir);
 	if (!o["skip-install"]) run("npm", ["install", "--no-audit", "--no-fund", "--loglevel=error"], { cwd: dir });
@@ -292,12 +295,22 @@ export async function deploy(o) {
 /** Fingerprints of the wake secrets in the local environment (what `wake set` would upload). */
 const localFingerprints = () => ({
 	url: fingerprint(process.env.WAKE_WEBHOOK_URL), key: fingerprint(process.env.WAKE_WEBHOOK_KEY), hmacSecret: fingerprint(process.env.WAKE_HMAC_SECRET),
+	accessClientId: fingerprint(process.env.WAKE_ACCESS_CLIENT_ID), accessClientSecret: fingerprint(process.env.WAKE_ACCESS_CLIENT_SECRET),
 });
+
+/** A tunnel created by `tunnel create` owns WAKE_WEBHOOK_URL: refuse to overwrite it with a different host. */
+function guardTunnelUrl() {
+	const th = C.get("A2A_TUNNEL_HOSTNAME"), url = process.env.WAKE_WEBHOOK_URL;
+	if (!th || !url) return;
+	let host = "";
+	try { host = new URL(url).host; } catch { /* invalid URL: reported elsewhere */ }
+	if (host !== th) die(`this deployment wakes through the tunnel https://${th} (tunnel create); unset WAKE_WEBHOOK_URL, or run \`a2a-over-webhook tunnel rm\` first`);
+}
 
 export async function wake(sub, o) {
 	if (sub === "fingerprint") {
 		const fp = localFingerprints();
-		if (!Object.values(fp).some(Boolean)) die("no WAKE_WEBHOOK_URL / WAKE_WEBHOOK_KEY / WAKE_HMAC_SECRET in the environment");
+		if (!Object.values(fp).some(Boolean)) die(`no ${WAKE_SECRETS.join(" / ")} in the environment`);
 		return console.log(JSON.stringify(fp, null, 2));
 	}
 	if (sub === "preview") {
