@@ -1,7 +1,7 @@
 // a2a-over-webhook Worker: public A2A endpoint (JSON-RPC; A2A 1.0 primary, 0.3 compatible),
 // D1-backed inbox, wake webhooks (presets), and an owner API for the local CLI.
 import * as A from "./a2a.ts";
-import { renderWake, redact, defaultDebounceSeconds, defaultMaxPerHour, type WakeConfig, type WakeEvent } from "./wake.ts";
+import { renderWake, redact, cloudflareErrorHint, defaultDebounceSeconds, defaultMaxPerHour, type WakeConfig, type WakeEvent } from "./wake.ts";
 type Json = any;
 
 interface Env {
@@ -19,6 +19,8 @@ interface Env {
 	WAKE_WEBHOOK_URL?: string;
 	WAKE_WEBHOOK_KEY?: string;
 	WAKE_HMAC_SECRET?: string;
+	WAKE_ACCESS_CLIENT_ID?: string; // Cloudflare Access service token (wake URL behind Access, e.g. `tunnel create`)
+	WAKE_ACCESS_CLIENT_SECRET?: string;
 	// wake config (plain vars)
 	WAKE_PRESET?: string;
 	WAKE_AGENT_ID?: string;
@@ -92,6 +94,7 @@ function wakeConfig(env: Env): WakeConfig {
 		preset: preset(env), url: env.WAKE_WEBHOOK_URL, key: env.WAKE_WEBHOOK_KEY, hmacSecret: env.WAKE_HMAC_SECRET,
 		agentId: env.WAKE_AGENT_ID, keyHeader: env.WAKE_KEY_HEADER, keyPrefix: env.WAKE_KEY_PREFIX,
 		bodyTemplate: env.WAKE_BODY_TEMPLATE, cliCommand: env.WAKE_CLI_COMMAND,
+		accessClientId: env.WAKE_ACCESS_CLIENT_ID, accessClientSecret: env.WAKE_ACCESS_CLIENT_SECRET,
 	};
 }
 
@@ -118,8 +121,10 @@ async function sendWake(env: Env, ectx: ExecutionContext, payload: Json): Promis
 	if (!req) { log("wake_skipped", { contextId: ev.contextId, reason: "WAKE_WEBHOOK_URL unset" }); return { status: null, info: "WAKE_WEBHOOK_URL unset" }; }
 	try {
 		const r = await doFetch(env, ectx, req.url, { method: "POST", headers: req.headers, body: req.body });
-		log("wake_sent", { preset: preset(env), contextId: ev.contextId, taskId: ev.taskId, status: r.status });
-		return { status: r.status, info: `HTTP ${r.status}` };
+		// explain Cloudflare edge errors (tunnel connector down, Access block) without echoing the body
+		const hint = r.ok ? "" : cloudflareErrorHint(r.status, (await r.text().catch(() => "")).slice(0, 4096));
+		log("wake_sent", { preset: preset(env), contextId: ev.contextId, taskId: ev.taskId, status: r.status, ...(hint ? { hint } : {}) });
+		return { status: r.status, info: `HTTP ${r.status}${hint ? ` (${hint})` : ""}` };
 	} catch (e) {
 		log("wake_failed", { preset: preset(env), contextId: ev.contextId, error: String(e).slice(0, 200) });
 		return { status: null, info: String(e).slice(0, 200) };
@@ -591,8 +596,10 @@ async function handleOwner(req: Request, env: Env, ectx: ExecutionContext, path:
 		const req = await renderWake(wakeConfig(env), ev, { requestId: "preview" });
 		return json({ preset: preset(env), configured: !!req, debounceSeconds: debounceMs(env) / 1000, maxPerHour: maxPerHour(env),
 			hasKey: !!env.WAKE_WEBHOOK_KEY, hasHmacSecret: !!env.WAKE_HMAC_SECRET,
+			hasAccessServiceToken: !!(env.WAKE_ACCESS_CLIENT_ID && env.WAKE_ACCESS_CLIENT_SECRET),
 			fingerprints: { url: await A.fingerprint(env.WAKE_WEBHOOK_URL), key: await A.fingerprint(env.WAKE_WEBHOOK_KEY),
-				hmacSecret: await A.fingerprint(env.WAKE_HMAC_SECRET) },
+				hmacSecret: await A.fingerprint(env.WAKE_HMAC_SECRET),
+				accessClientId: await A.fingerprint(env.WAKE_ACCESS_CLIENT_ID), accessClientSecret: await A.fingerprint(env.WAKE_ACCESS_CLIENT_SECRET) },
 			request: req ? redact(req) : null });
 	}
 	if (seg[0] === "wake" && seg[1] === "test" && m === "POST") {

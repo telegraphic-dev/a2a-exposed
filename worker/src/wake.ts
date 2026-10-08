@@ -21,6 +21,10 @@ export type WakeConfig = {
 	keyPrefix?: string; // generic (default "Bearer ")
 	bodyTemplate?: string; // generic: JSON template with {{placeholders}}
 	cliCommand?: string; // how the agent invokes the CLI
+	// Cloudflare Access service token for a wake URL behind Access (e.g. a Cloudflare Tunnel to a local-only
+	// webhook): sent as CF-Access-Client-Id / CF-Access-Client-Secret on every wake, next to the preset's own auth
+	accessClientId?: string;
+	accessClientSecret?: string;
 };
 
 export type WakeRequest = { url: string; method: "POST"; headers: Record<string, string>; body: string };
@@ -156,14 +160,44 @@ export async function renderWake(cfg: WakeConfig, ev: WakeEvent, opts: { nowMs?:
 			break;
 		}
 	}
+	addAccessHeaders(headers, cfg);
 	return { url: cfg.url, method: "POST", headers, body };
+}
+
+/** Cloudflare Access service-token headers (only when both halves are configured). */
+export function addAccessHeaders(headers: Record<string, string>, cfg: Pick<WakeConfig, "accessClientId" | "accessClientSecret">) {
+	if (cfg.accessClientId && cfg.accessClientSecret) {
+		headers["CF-Access-Client-Id"] = cfg.accessClientId;
+		headers["CF-Access-Client-Secret"] = cfg.accessClientSecret;
+	}
+	return headers;
+}
+
+/** Cloudflare edge error code from an error page: plain text ("error code: 1033") or HTML ("Error 1033", errorCode: 1033). */
+export function cloudflareErrorCode(body: string): string {
+	const m = /error code:?\s*(\d{4})|\bError\s+(\d{4})\b|errorCode:?\s*(\d{4})|cf-error-code[^>]*>\s*(\d{4})/i.exec(body || "");
+	return m ? m[1] || m[2] || m[3] || m[4] : "";
+}
+
+/** Short explanation of a Cloudflare edge error page (e.g. "error code: 1033"), for wake test output. */
+export function cloudflareErrorHint(status: number, body: string): string {
+	const code = cloudflareErrorCode(body);
+	const known: Record<string, string> = {
+		"1033": "Cloudflare Tunnel has no running connector (start cloudflared on the agent's machine)",
+		"1016": "origin DNS error (the tunnel hostname has no matching DNS record)",
+		"1010": "blocked by a Cloudflare security rule",
+	};
+	if (code) return `Cloudflare error ${code}${known[code] ? ": " + known[code] : ""}`;
+	if ((status === 401 || status === 403) && /cloudflareaccess|access denied|Forbidden/i.test(body || ""))
+		return "blocked by Cloudflare Access (missing or wrong service token)";
+	return "";
 }
 
 /** Copy of a rendered request with credentials masked (for previews/logs). */
 export function redact(req: WakeRequest): WakeRequest {
 	const h: Record<string, string> = {};
 	for (const [k, v] of Object.entries(req.headers))
-		h[k] = /authorization|key|token|secret|signature/i.test(k) && !/^idempotency-key$/i.test(k) ? v.replace(/(Bearer\s+)?(.{0,4}).*/s, "$1$2…") : v;
+		h[k] = /authorization|key|token|secret|signature|access-client-id/i.test(k) && !/^idempotency-key$/i.test(k) ? v.replace(/(Bearer\s+)?(.{0,4}).*/s, "$1$2…") : v;
 	let url = req.url;
 	try { const u = new URL(req.url); url = `${u.protocol}//${u.host}${u.pathname.replace(/\/[^/]{16,}/g, "/…")}`; } catch { /* keep */ }
 	return { ...req, url, headers: h };
