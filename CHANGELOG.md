@@ -2,7 +2,11 @@
 
 All notable changes to the `a2a-over-webhook` CLI, Worker template, and skills. Versions follow [semver](https://semver.org); a `v*` tag publishes the CLI to npm (see the README's **Releases**).
 
-## 0.1.0 (unreleased)
+## Unreleased
+
+- **Skills:** the setup skill suggests two optional companion skills near its prerequisites, with install commands: `mise` ([telegraphic-dev/mise-skill](https://github.com/telegraphic-dev/mise-skill), for Node 22.18+) and `cloudflare` ([cloudflare/skills](https://github.com/cloudflare/skills), for Workers, D1, the `cf` CLI, DNS, Tunnel and Access). The operate skill points to `cloudflare` for Cloudflare-side troubleshooting. `related_skills` lists them; the README's install section names both.
+
+## 0.1.0
 
 First npm release of the CLI (`npm i -g a2a-over-webhook`).
 

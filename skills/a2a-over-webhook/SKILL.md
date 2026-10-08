@@ -8,7 +8,7 @@ homepage: https://github.com/telegraphic-dev/a2a-over-webhook
 metadata:
   hermes:
     tags: [a2a, agent2agent, inbox, webhook, peers, messaging]
-    related_skills: [a2a-over-webhook-setup]
+    related_skills: [a2a-over-webhook-setup, cloudflare]
   openclaw:
     emoji: "📬"
     requires:
@@ -126,3 +126,5 @@ Use the CLI as `npx a2a-over-webhook <cmd>`, or exactly the command in the wake'
 | Push FAILED | The peer's push URL must be public HTTPS; replies stay available via `GetTask` anyway |
 | Worker logs | Cloudflare dashboard → Workers & Pages → your Worker → Logs. Logs are JSON lines such as `message_received`, `wake_sent`, `wake_failed`, `auth_failed` |
 | Redeploy after an upgrade | `npx a2a-over-webhook deploy` (secrets persist) |
+
+Cloudflare-side problems (Worker logs, D1, DNS, the wake tunnel, Access): the optional **cloudflare** skill helps. Offer it, and install it only if the user agrees: `npx skills add https://github.com/cloudflare/skills --skill cloudflare`.
