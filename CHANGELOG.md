@@ -60,3 +60,4 @@ First npm release of the CLI (`npm i -g a2a-over-webhook`).
 - **Inbox and outbound:** `inbox`, `show`, `working`, `reply`, `history`, `contexts`; `peers add|list|rm`, `send`, `poll`, `outbound`; `token issue|list|revoke|rotate`.
 - **Skills:** `a2a-over-webhook-setup` (deploy and wake configuration) and `a2a-over-webhook` (day-to-day), with Hermes and OpenClaw frontmatter metadata.
 - **Release tooling:** CI on pushes and PRs; tag-triggered npm publish with provenance and a GitHub release.
+
