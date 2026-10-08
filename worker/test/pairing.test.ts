@@ -444,6 +444,31 @@ test("re-pairing with the current token replaces it under the same label (no orp
 	assert.equal(third.peer_label, "Barry-Bot-2");
 });
 
+test("re-pairing: a rotate between request and redemption refuses the swap (old token cannot overwrite the new one)", async (t) => {
+	const s = setup({ PAIRING_APPROVAL: "agent" }); t.after(s.restore);
+	const a = (await s.start(undefined, "203.0.113.50")).data;
+	await s.owner("POST", `/owner/pairing/${a.user_code}/approve`);
+	const first = (await s.poll(a.device_code)).data;
+	assert.equal(first.peer_label, "Barry-Bot");
+	// start a replacement with the current (soon-to-be-compromised) token
+	const b = await s.call("POST", "/oauth/device_authorization", { form: { client_name: "Barry Bot", client_id: "barry" }, ip: "203.0.113.51", headers: { authorization: `Bearer ${first.access_token}` } });
+	assert.equal(b.data.replaces_label, "Barry-Bot");
+	// the owner rotates the token before approving: the pending request still names Barry-Bot, but its hash no longer matches
+	const rotated = (await s.owner("POST", "/owner/peers", { label: "Barry-Bot", rotate: true })).data;
+	assert.ok(rotated.token && rotated.token !== first.access_token);
+	const ok = await s.owner("POST", `/owner/pairing/${b.data.user_code}/approve`);
+	assert.deepEqual([ok.data.label, ok.data.replaced], ["Barry-Bot-2", false], "downgrades to a new label");
+	const second = (await s.poll(b.data.device_code)).data;
+	assert.equal(second.peer_label, "Barry-Bot-2");
+	assert.equal(second.replaced, undefined);
+	const rpc = (tok: string) => s.call("POST", "/", { json: { jsonrpc: "2.0", id: 1, method: "GetTask", params: { id: "x" } }, headers: { authorization: `Bearer ${tok}` } });
+	assert.equal((await rpc(rotated.token)).status, 200, "the rotated token still works");
+	assert.equal((await rpc(first.access_token)).status, 401, "the old token stays dead");
+	assert.equal((await rpc(second.access_token)).status, 200, "the pairing got a fresh label");
+	const peers = (await s.owner("GET", "/owner/peers")).data.filter((p: any) => !p.revoked_at);
+	assert.deepEqual(peers.map((p: any) => p.label).sort(), ["Barry-Bot", "Barry-Bot-2"]);
+});
+
 test("owner API: revoking an unknown or revoked label is a 404; rotate needs an existing label; off mode lists no stale requests", async (t) => {
 	const s = setup(); t.after(s.restore);
 	let r = await s.owner("DELETE", "/owner/peers/No-Such-Label");

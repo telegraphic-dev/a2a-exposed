@@ -188,10 +188,16 @@ async function flushDue(env: Env, ectx: ExecutionContext) {
 
 // ------------------------------------------------------------------ auth + rate limit
 async function peerLabel(env: Env, header: string | null): Promise<string | null> {
+	const p = await peerOf(env, header);
+	return p ? p.label : null;
+}
+
+/** Active peer for an Authorization: Bearer header (label + the token's hash), or null. */
+async function peerOf(env: Env, header: string | null): Promise<{ label: string; hash: string } | null> {
 	if (!header || !/^bearer /i.test(header)) return null;
 	const h = await A.sha256(header.slice(7).trim());
-	const r: Json = await env.DB.prepare("SELECT label FROM peers WHERE token_hash = ? AND revoked_at IS NULL").bind(h).first();
-	return r ? r.label : null;
+	const r: Json = await env.DB.prepare("SELECT label, token_hash FROM peers WHERE token_hash = ? AND revoked_at IS NULL").bind(h).first();
+	return r ? { label: r.label, hash: r.token_hash } : null;
 }
 
 async function isOwner(env: Env, header: string | null): Promise<boolean> {
@@ -796,22 +802,24 @@ async function deviceAuthorization(req: Request, env: Env, ectx: ExecutionContex
 	if (!userCode) return oauthError("temporarily_unavailable", "could not allocate a user code; try again", 503);
 	// Re-pairing: a requester that sends its current, still active token for this inbox (Authorization: Bearer) asks to
 	// replace it. Approval then issues the new token under the same label and the old one stops working (no orphan token,
-	// no "-2" label). Anything else in the header is ignored: the request is an ordinary new pairing.
-	const replaces = await peerLabel(env, req.headers.get("authorization"));
-	if (replaces) await env.DB.prepare("UPDATE device_requests SET replaces_label = ? WHERE user_code = ?").bind(replaces, userCode).run();
+	// no "-2" label). The request is bound to the presented token's hash: if that token is rotated or revoked before
+	// redemption, the swap is refused and a fresh label is used (a compromised old token can't overwrite a rotated one).
+	// Anything else in the header is ignored: the request is an ordinary new pairing.
+	const replaces = await peerOf(env, req.headers.get("authorization"));
+	if (replaces) await env.DB.prepare("UPDATE device_requests SET replaces_label = ?, replaces_hash = ? WHERE user_code = ?").bind(replaces.label, replaces.hash, userCode).run();
 	const u = oauthUrls(env);
 	const shown = P.formatUserCode(userCode);
 	const complete = `${u.page}?user_code=${shown}`;
-	log("pairing_requested", { ip, userCode: shown, clientName, clientId, ...(replaces ? { replaces } : {}) });
+	log("pairing_requested", { ip, userCode: shown, clientName, clientId, ...(replaces ? { replaces: replaces.label } : {}) });
 	const mode = pairingMode(env) as "human" | "agent";
 	ectx.waitUntil((async () => {
 		if (!(await wakeBudgetOk(env))) return log("wake_skipped", { reason: "hourly cap", kind: "pairing_request" });
 		await sendWake(env, ectx, { contextId: "pairing", taskId: "none", taskIds: [], from: clientName || clientId || "unknown agent", preview: "",
 			kind: "pairing_request", pairing: { userCode: shown, verificationUriComplete: complete, approval: mode, clientName, clientId, agentCardUrl: cardUrl, expiresIn: P.EXPIRES_S,
-				...(replaces ? { replacesLabel: replaces } : {}) } });
+				...(replaces ? { replacesLabel: replaces.label } : {}) } });
 	})());
 	return json({ device_code: deviceCode, user_code: shown, verification_uri: u.page, verification_uri_complete: complete,
-		expires_in: P.EXPIRES_S, interval: P.INTERVAL_S, ...(replaces ? { replaces_label: replaces } : {}) }, 200, { pragma: "no-cache" });
+		expires_in: P.EXPIRES_S, interval: P.INTERVAL_S, ...(replaces ? { replaces_label: replaces.label } : {}) }, 200, { pragma: "no-cache" });
 }
 
 async function tokenEndpoint(req: Request, env: Env): Promise<Response> {
@@ -843,17 +851,18 @@ async function tokenEndpoint(req: Request, env: Env): Promise<Response> {
 	const claimed = await env.DB.prepare("UPDATE device_requests SET status = 'redeemed' WHERE device_hash = ? AND status = 'approved'").bind(hash).run();
 	if (claimed.meta.changes !== 1) return oauthError("invalid_grant", "unknown, already used, or expired device_code");
 	const token = A.randomToken();
-	// re-pairing (approved as a replacement): the new token takes over the label, if its token is still active
-	if (r.replaces_label && r.label === r.replaces_label) {
-		const u = await env.DB.prepare("UPDATE peers SET token_hash = ?, created_at = ?, source = 'pairing', user_code = ?, client_name = ? WHERE label = ? AND revoked_at IS NULL")
-			.bind(await A.sha256(token), A.nowIso(), r.user_code, r.client_name || r.client_id || null, r.replaces_label).run();
+	// re-pairing (approved as a replacement): the new token takes over the label only if the presented token is still the
+	// one on that label (hash match). A rotate or revoke in between leaves u.meta.changes = 0.
+	if (r.replaces_label && r.replaces_hash && r.label === r.replaces_label) {
+		const u = await env.DB.prepare("UPDATE peers SET token_hash = ?, created_at = ?, source = 'pairing', user_code = ?, client_name = ? WHERE label = ? AND token_hash = ? AND revoked_at IS NULL")
+			.bind(await A.sha256(token), A.nowIso(), r.user_code, r.client_name || r.client_id || null, r.replaces_label, r.replaces_hash).run();
 		if (u.meta.changes === 1) {
 			await env.DB.prepare("DELETE FROM device_requests WHERE device_hash = ?").bind(hash).run();
 			log("pairing_redeemed", { ip, label: r.replaces_label, userCode: P.formatUserCode(r.user_code), replaced: true });
 			return json({ access_token: token, token_type: "Bearer", peer_label: r.replaces_label, replaced: true }, 200, { pragma: "no-cache" });
 		}
 	}
-	// the replaced token was revoked meanwhile: an ordinary new label
+	// the replaced token was rotated or revoked meanwhile: an ordinary new label
 	let label = r.label && r.label !== r.replaces_label ? r.label
 		: r.label ? await freeLabel(env, P.labelBase(r.client_name || "", r.client_id || "")) : P.labelBase(r.client_name || "", r.client_id || "");
 	for (let i = 0; i < 5; i++) {
@@ -886,8 +895,8 @@ async function decide(env: Env, code: string, approve: boolean, by: string): Pro
 	if (!r) return { ok: false, error: "no pairing request with that code" };
 	if (r.status !== "pending") return { ok: false, error: `that request was already ${r.status === "denied" ? "denied" : "approved"}` };
 	if (Date.now() >= r.expires_ms) return { ok: false, error: "that request has expired" };
-	const replacing = approve && r.replaces_label
-		? !!(await env.DB.prepare("SELECT 1 FROM peers WHERE label = ? AND revoked_at IS NULL").bind(r.replaces_label).first()) : false;
+	const replacing = approve && r.replaces_label && r.replaces_hash
+		? !!(await env.DB.prepare("SELECT 1 FROM peers WHERE label = ? AND token_hash = ? AND revoked_at IS NULL").bind(r.replaces_label, r.replaces_hash).first()) : false;
 	const label = !approve ? null : replacing ? r.replaces_label : await freeLabel(env, P.labelBase(r.client_name || "", r.client_id || ""));
 	const u = await env.DB.prepare("UPDATE device_requests SET status = ?, label = ?, decided_ms = ?, decided_by = ? WHERE device_hash = ? AND status = 'pending'")
 		.bind(approve ? "approved" : "denied", label, Date.now(), by, r.device_hash).run();

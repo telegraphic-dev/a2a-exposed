@@ -411,7 +411,7 @@ Never ask the user for the password, and never type it for them. Until it is set
 - **agent** mode: ask your human in chat; only if they say yes, run `npx a2a-over-webhook pair approve <code>`; otherwise `pair deny <code>`.
 - `npx a2a-over-webhook pair list` shows pending requests. `pair deny <code>` works in every mode.
 - The approved agent gets a normal per-peer token (label from its name, e.g. `Barry-Bot`). `token list` shows it with `via pairing: code WDJB-4827`; `token revoke <label>` cuts it off (an unknown or already revoked label exits 1, so a typo is never taken for success).
-- **Re-pairing** (`connect --replace` from a peer that already has a token): the request says which token it replaces (`pair list` shows `replaces the active token "<label>"`). Approval swaps the token under the same label and the old one stops working; no second label (`Barry-Bot-2`) and no orphan. A revoked label is not reused.
+- **Re-pairing** (`connect --replace` from a peer that already has a token): the request says which token it replaces (`pair list` shows `replaces the active token "<label>"`). Approval swaps the token under the same label and the old one stops working; no second label (`Barry-Bot-2`) and no orphan. The request is bound to the exact token that was presented: if you rotate or revoke that label before the request is redeemed (for example because the old token leaked), the swap is refused and the request, if approved, gets a fresh label instead, so a leaked old token can never take over a rotated one. A revoked label is not reused.
 - Peers that don't send the old token, or run an older version, get a new label as before; revoke the old one yourself.
 
 **You connect to someone.** Only when the user asked:

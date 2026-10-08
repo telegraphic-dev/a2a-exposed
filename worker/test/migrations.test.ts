@@ -60,6 +60,7 @@ test("fresh database: every migration applies in order; a second run applies not
 	for (const t of ["peers", "tasks", "wakes", "wake_budget", "device_requests", "pairing_rate", "settings"]) assert.ok(tables(db).includes(t), t);
 	assert.ok(columns(db, "peers").includes("source"));
 	assert.ok(columns(db, "device_requests").includes("replaces_label"));
+	assert.ok(columns(db, "device_requests").includes("replaces_hash"));
 	assert.deepEqual(applyMigrations(db), []);
 });
 
