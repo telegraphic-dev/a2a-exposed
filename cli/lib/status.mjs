@@ -3,7 +3,7 @@
 // itself, so agents need no curl (some agent sandboxes flag *.dev URLs in shell commands).
 import fs from "node:fs";
 import * as C from "./config.mjs";
-import { fingerprint, httpJson } from "./a2a.mjs";
+import { cardUrlProblem, fingerprint, httpJson } from "./a2a.mjs";
 import { baseUrl, owner } from "./commands.mjs";
 import * as D from "./deploy.mjs";
 import * as T from "./tunnel.mjs";
@@ -12,12 +12,14 @@ const CLI = "a2a-over-webhook";
 /** Presets whose webhook usually listens only locally: wakes need the tunnel (or another reverse proxy). */
 export const LOCAL_PRESETS = ["openclaw-wake", "openclaw-agent", "hermes"];
 
-/** Agent card check: { ok, name, versions } or { ok: false, error }. */
+/** Agent card check: { ok, name, versions, urls, urlProblem } or { ok: false, error }. urlProblem is "" when every
+ *  endpoint URL in the card is the base URL (peers send requests there). */
 export async function checkCard(base) {
 	try {
 		const { status, data } = await httpJson(`${base}/.well-known/agent-card.json`, { timeout: 15000 });
 		if (status !== 200 || !data || typeof data !== "object" || !data.name) return { ok: false, error: `HTTP ${status}${data && !data.name ? " (no agent card)" : ""}` };
-		return { ok: true, name: data.name, versions: (data.supportedInterfaces || []).map((i) => i.protocolVersion).filter(Boolean) };
+		return { ok: true, name: data.name, versions: (data.supportedInterfaces || []).map((i) => i.protocolVersion).filter(Boolean),
+			urls: [...new Set((data.supportedInterfaces || []).map((i) => i && i.url).filter(Boolean))], urlProblem: cardUrlProblem(data, base) };
 	} catch (e) { return { ok: false, error: e.message }; }
 }
 
@@ -35,10 +37,14 @@ export function nextStep(s) {
 	const fail = (text) => ({ ok: false, text });
 	const done = (text) => ({ ok: true, text });
 	if (!s.deployed) return fail(`nothing is deployed from ${s.configFile}: run \`${CLI} init ...\` (setup skill, section 2). Another bot's deployment? Set A2A_CONFIG_DIR.`);
+	if (s.baseUrlEnv)
+		return fail(`A2A_BASE_URL is exported as ${s.baseUrlEnv}, but ${s.configFile} has ${s.baseUrlSaved || "(none)"}: CLI commands (and push URLs sent to peers) use the exported value. Unset A2A_BASE_URL (the inbox URL is always the deployment's own)`);
 	if (!s.baseUrl || !s.hasOwnerToken)
 		return fail(`the deployment is incomplete (no ${!s.baseUrl ? "base URL" : "owner token"} saved): re-run \`${CLI} init\` with the same flags (safe: it reuses the D1 database and the owner token)`);
 	if (!s.card.ok)
 		return fail(`the agent card is not reachable (${s.card.error}). A new workers.dev subdomain or custom domain can take a few minutes: run \`${CLI} status\` again. Still failing? Run \`${CLI} deploy\``);
+	if (s.card.urlProblem)
+		return fail(`the agent card does not point peers at this deployment: ${s.card.urlProblem}, so peers would send requests there. Run \`${CLI} deploy\`: the card URL comes from the deployment (custom hostname or workers.dev), never from a local webhook, Tailnet or tunnel URL; don't edit the card by hand`);
 	if (!s.ownerApi.ok)
 		return fail(/HTTP 401/.test(s.ownerApi.error)
 			? `the owner token in ${s.configFile} does not match the Worker: run \`${CLI} init --rotate-owner-token\` from the machine that owns this deployment`
@@ -77,9 +83,11 @@ export async function collect() {
 		deployed: !!(C.get("A2A_D1_ID") && C.get("A2A_WORKER_NAME")),
 		worker: C.get("A2A_WORKER_NAME"), d1: C.get("A2A_D1_NAME"), account: C.get("CLOUDFLARE_ACCOUNT_ID"), cfProfile: C.get("CF_PROFILE"),
 		baseUrl: baseUrl(), urlKind: C.get("A2A_HOSTNAME") ? "custom domain" : "workers.dev", cron: C.get("A2A_ENABLE_CRON") === "1",
-		hasOwnerToken: !!C.get("A2A_OWNER_TOKEN"),
+		hasOwnerToken: !!C.get("A2A_OWNER_TOKEN"), baseUrlSaved: (C.fileConfig().A2A_BASE_URL || "").replace(/\/$/, ""), baseUrlEnv: "",
 		card: { ok: false, error: "not checked" }, ownerApi: { ok: false, error: "not checked" }, wake: null, tunnel: null, zones: null,
 	};
+	const envBase = (process.env.A2A_BASE_URL || "").replace(/\/$/, "");
+	if (envBase && envBase !== s.baseUrlSaved) s.baseUrlEnv = envBase;
 	if (!s.deployed || !s.baseUrl) return s;
 	s.card = await checkCard(s.baseUrl);
 	if (s.hasOwnerToken) {
@@ -118,10 +126,11 @@ export async function status(o) {
 		const rows = [
 			["config", s.configFile],
 			["deployment", s.deployed ? `Worker ${s.worker}, D1 ${s.d1 || s.worker}${s.account ? `, account ${s.account}` : ""}${s.cfProfile ? `, cf profile ${s.cfProfile}` : ""}${s.cron ? ", cron flush on" : ""}` : "none"],
-			["base URL", s.baseUrl ? `${s.baseUrl} (${s.urlKind})` : "(not saved)"],
+			["base URL", s.baseUrl ? `${s.baseUrl} (${s.baseUrlEnv ? `from the exported A2A_BASE_URL; ${s.configFile} has ${s.baseUrlSaved || "none"}` : s.urlKind})` : "(not saved)"],
 		];
 		if (s.deployed && s.baseUrl) {
-			rows.push(["agent card", s.card.ok ? `OK: "${s.card.name}" (A2A ${s.card.versions.join(", ") || "?"})` : `FAILED: ${s.card.error}`]);
+			rows.push(["agent card", !s.card.ok ? `FAILED: ${s.card.error}` : s.card.urlProblem ? `WRONG URL: "${s.card.name}", but ${s.card.urlProblem}`
+				: `OK: "${s.card.name}" (A2A ${s.card.versions.join(", ") || "?"})`]);
 			rows.push(["owner API", s.ownerApi.ok ? "OK" : `FAILED: ${s.ownerApi.error}`]);
 			rows.push(["wake", wakeLine(s)]);
 			const t = s.tunnel;

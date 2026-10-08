@@ -5,7 +5,7 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import * as C from "./config.mjs";
-import { die, fingerprint, httpJson, randomToken } from "./a2a.mjs";
+import { cardUrlProblem, die, fingerprint, httpJson, randomToken } from "./a2a.mjs";
 import { owner } from "./commands.mjs";
 import * as WD from "./workersdev.mjs";
 
@@ -93,6 +93,8 @@ function deployEnv() {
 	}
 	if ("WAKE_KEY_PREFIX" in C.fileConfig()) env.WAKE_KEY_PREFIX = C.fileConfig().WAKE_KEY_PREFIX;
 	for (const k of WAKE_SECRETS) delete env[k]; // secrets only travel via the secrets file
+	// the agent card URL comes from A2A_HOSTNAME / the workers.dev subdomain only (older templates read these)
+	delete env.A2A_PUBLIC_URL; delete env.PUBLIC_URL;
 	return env;
 }
 
@@ -162,7 +164,7 @@ function applyFlags(o) {
 /** After a deploy that moved the public URL: what stops serving and what peers must update. */
 function reportSwitch(sw) {
 	if (!sw) return;
-	const to = C.get("A2A_BASE_URL") || publicBase();
+	const to = C.fileConfig().A2A_BASE_URL || publicBase();
 	const card = to ? `${to}/.well-known/agent-card.json` : "(see `a2a-over-webhook url`)";
 	console.error(`\nnote: the public URL moved${sw.from ? ` from ${sw.from}` : ""} to ${to || "workers.dev"}.`);
 	if (sw.fromHost) {
@@ -182,7 +184,11 @@ async function verifyCard(base) {
 	for (let i = 0; i < tries; i++) {
 		try {
 			const { status, data } = await httpJson(base + "/.well-known/agent-card.json", { timeout: 10000 });
-			if (status === 200 && data && data.name) return console.error(`agent card OK: ${data.name} (${base}/.well-known/agent-card.json)`);
+			if (status === 200 && data && data.name) {
+				const wrong = cardUrlProblem(data, base);
+				if (wrong) return console.error(`warning: the agent card at ${base}/.well-known/agent-card.json does not point peers at this deployment: ${wrong}. Check with: a2a-over-webhook status`);
+				return console.error(`agent card OK: ${data.name} (${base}/.well-known/agent-card.json)`);
+			}
 		} catch { /* DNS / certificate may still be provisioning */ }
 		await new Promise((r) => setTimeout(r, 5000));
 	}
@@ -253,6 +259,15 @@ async function deployAndLearn(dir, secrets, o) {
 	}
 }
 
+/** The deployment's public URL as saved by init/deploy (an exported A2A_BASE_URL does not change it; warned about). */
+function deployedBase() {
+	const base = (C.fileConfig().A2A_BASE_URL || publicBase()).replace(/\/$/, "");
+	const env = (process.env.A2A_BASE_URL || "").replace(/\/$/, "");
+	if (env && base && env !== base)
+		console.error(`warning: A2A_BASE_URL is exported as ${env}, but this deployment is ${base}; CLI commands (and push URLs sent to peers) would use the exported value: unset A2A_BASE_URL`);
+	return base;
+}
+
 export async function init(o) {
 	checkNode();
 	const switched = applyFlags(o);
@@ -303,7 +318,7 @@ export async function init(o) {
 	const secrets = { OWNER_TOKEN: ownerToken, ...wakeSecretsFromEnv() };
 	step(`deploying (secrets uploaded: ${Object.keys(secrets).join(", ")})`);
 	await deployAndLearn(dir, secrets, o);
-	const base = C.get("A2A_BASE_URL");
+	const base = deployedBase();
 	if (base) await verifyCard(base);
 	console.log(base);
 	reportSwitch(switched);
@@ -326,7 +341,7 @@ export async function deploy(o) {
 	if (Object.keys(secrets).length && C.get("A2A_OWNER_TOKEN")) secrets.OWNER_TOKEN = C.get("A2A_OWNER_TOKEN");
 	step(Object.keys(secrets).length ? `deploying (secrets uploaded: ${Object.keys(secrets).join(", ")})` : "deploying (existing secrets kept)");
 	await deployAndLearn(dir, secrets, o);
-	const base = C.get("A2A_BASE_URL") || publicBase();
+	const base = deployedBase();
 	if (base) await verifyCard(base);
 	if (switched) { console.log(base); reportSwitch(switched); }
 }

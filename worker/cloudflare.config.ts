@@ -13,8 +13,9 @@ const hostname = v("A2A_HOSTNAME"); // e.g. agent.example.com (on a zone in your
 // with a hostname, the workers.dev route is switched off).
 const workersDev = !hostname;
 const wdSubdomain = v("A2A_WORKERS_DEV_SUBDOMAIN"); // the account's workers.dev subdomain, once known
-// Public base URL for the agent card; if still unknown, the Worker uses the request's origin.
-const publicUrl = v("A2A_PUBLIC_URL") || (hostname ? `https://${hostname}` : wdSubdomain ? `https://${name}.${wdSubdomain}.workers.dev` : "");
+// Public base URL for the agent card, derived only from where the Worker is served (no override: a local webhook,
+// Tailnet or tunnel URL must never end up in the card). If still unknown, the Worker uses the request's origin.
+const publicUrl = hostname ? `https://${hostname}` : wdSubdomain ? `https://${name}.${wdSubdomain}.workers.dev` : "";
 
 // Plain (non-secret) vars exposed to the Worker; empty values are omitted.
 const plain: Record<string, string> = {

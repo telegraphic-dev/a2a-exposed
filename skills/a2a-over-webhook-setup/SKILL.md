@@ -79,6 +79,8 @@ All commands use the CLI as `npx a2a-over-webhook <cmd>`.
 
 **Interrupted? Resume with `status`.** `npx a2a-over-webhook status` is read-only. It prints the deployment and base URL, fetches the agent card itself, and shows the wake mode (webhook, tunnel, or none, which means polling) and the tunnel state. It ends with a `next step:` line: do that step and run `status` again. Every setup step is safe to re-run. `init`, `deploy` and `wake set` reuse the saved D1 database, owner token and settings. When a tunnel exists, `tunnel create` creates nothing new. It re-uploads any Worker secrets that are missing, so export the webhook's own `WAKE_WEBHOOK_KEY` or `WAKE_HMAC_SECRET` again first, as on the first run. A missing connector token file (`tunnel-token` in the config dir) is downloaded again. If an earlier run stopped halfway, it tells you to run `tunnel rm` first.
 
+**The inbox URL is the deployment's.** The agent card always advertises the inbox's public base URL (the custom hostname or the workers.dev URL). The agent's own webhook URL, whether local, Tailnet or tunnel, goes only in `WAKE_WEBHOOK_URL`. Never put it in `A2A_BASE_URL`, and don't edit the card. `status` flags a card that points anywhere else.
+
 **Don't curl the endpoint.** Check it with `status` (or `url`), not a raw `curl` of the agent card. Some agent sandboxes (Hermes) flag `.dev` URLs in shell commands, such as `*.workers.dev`, and hold the command for user approval. If that approval times out, setup stops halfway.
 
 ## 1. Prerequisites
@@ -385,6 +387,7 @@ npx a2a-over-webhook token revoke self-test && npx a2a-over-webhook peers rm sel
 | `tunnel create`: `account has no domain (zone)` | The tunnel needs a zone somewhere on the account. Use polling, or add a domain and run `tunnel create` later (no redeploy) |
 | `tunnel create`: `a previous tunnel create did not finish` | Run `tunnel rm`, then `tunnel create` |
 | Setup stopped halfway (approval timeout, lost session) | Run `npx a2a-over-webhook status` and continue from its `next step:` line; every step is safe to re-run |
+| Card advertises a local or Tailnet URL (`status`: `agent card: WRONG URL`) | The card URL comes only from the deployment: the custom hostname or the workers.dev URL. Don't edit the card or export `A2A_BASE_URL` / `A2A_PUBLIC_URL` with the agent's own webhook URL; that URL goes in `WAKE_WEBHOOK_URL` only. Unset them and run `npx a2a-over-webhook deploy` |
 | Agent sandbox flags a `.dev` URL (e.g. Hermes: `Lookalike TLD`) | Avoid raw `curl` of `*.workers.dev`: `status` checks the card itself. If an approval is still needed, tell the user to approve it |
 | Claude Code 429 | Hourly fire limit; lower `--max-per-hour` or raise `--debounce` |
 | Hermes 401 | `WAKE_HMAC_SECRET` must equal the route secret, and the Worker clock skew must be under 300 s (it normally is) |

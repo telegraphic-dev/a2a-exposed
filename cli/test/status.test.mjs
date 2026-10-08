@@ -2,6 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { nextStep, wakeLine } from "../lib/status.mjs";
+import { cardUrlProblem } from "../lib/a2a.mjs";
 
 const healthy = (over = {}) => ({
 	configFile: "/cfg/config.env", deployed: true, baseUrl: "https://agent.example.com", hasOwnerToken: true,
@@ -21,6 +22,25 @@ test("nextStep: the first missing piece, in setup order", () => {
 	assert.match(step({ ownerApi: { ok: false, error: "request failed" } }).text, /owner API failed \(request failed\): run `a2a-over-webhook deploy`/);
 	assert.equal(step({}).ok, true);
 	assert.match(step({}).text, /^none: setup is complete/);
+});
+
+test("cardUrlProblem: every endpoint in the card must be the base URL", () => {
+	const card = (...urls) => ({ supportedInterfaces: urls.map((url, i) => ({ url, protocolBinding: "JSONRPC", protocolVersion: i ? "0.3" : "1.0" })) });
+	assert.equal(cardUrlProblem(card("https://agent.example.com/", "https://agent.example.com"), "https://agent.example.com"), "");
+	assert.equal(cardUrlProblem(card("https://agent.example.com/"), "https://agent.example.com/"), "");
+	assert.equal(cardUrlProblem(card("https://agent.example.com/", "http://hermes.example.ts.net:8644/"), "https://agent.example.com"),
+		"it advertises http://hermes.example.ts.net:8644/ instead of https://agent.example.com/");
+	assert.match(cardUrlProblem({ url: "http://127.0.0.1:8644/", ...card("https://agent.example.com/") }, "https://agent.example.com"), /advertises http:\/\/127\.0\.0\.1:8644\//);
+	assert.match(cardUrlProblem({ name: "x" }, "https://agent.example.com"), /no endpoint URL/);
+});
+
+test("nextStep: a card URL other than the base URL, and an exported A2A_BASE_URL, are flagged", () => {
+	const wrong = nextStep(healthy({ card: { ok: true, name: "A", versions: [], urlProblem: "it advertises http://100.101.102.103:8644/ instead of https://agent.example.com/" } }));
+	assert.equal(wrong.ok, false);
+	assert.match(wrong.text, /does not point peers at this deployment: it advertises http:\/\/100\.101\.102\.103:8644\/ .*Run `a2a-over-webhook deploy`/);
+	const env = nextStep(healthy({ baseUrlEnv: "http://hermes.example.ts.net:8644", baseUrlSaved: "https://agent.example.com" }));
+	assert.equal(env.ok, false);
+	assert.match(env.text, /^A2A_BASE_URL is exported as http:\/\/hermes\.example\.ts\.net:8644, but \/cfg\/config\.env has https:\/\/agent\.example\.com/);
 });
 
 test("nextStep: tunnel states", () => {

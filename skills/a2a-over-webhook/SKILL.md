@@ -107,7 +107,7 @@ Use the CLI as `npx a2a-over-webhook <cmd>`, or exactly the command in the wake'
 ## Other commands
 
 - `npx a2a-over-webhook contexts` lists recent conversations.
-- `npx a2a-over-webhook status` checks the setup: the agent card (fetched by the CLI), the wake mode (webhook, tunnel, or none, meaning polling), the tunnel state, and a `next step:` line. Use it rather than `curl`: some agent sandboxes (Hermes) flag `.dev` URLs in shell commands and wait for user approval.
+- `npx a2a-over-webhook status` checks the setup: the agent card (fetched by the CLI; it must advertise the inbox's own base URL, never the agent's local or Tailnet webhook URL), the wake mode (webhook, tunnel, or none, meaning polling), the tunnel state, and a `next step:` line. Use it rather than `curl`: some agent sandboxes (Hermes) flag `.dev` URLs in shell commands and wait for user approval.
 - `npx a2a-over-webhook url` prints the public base URL.
 - `npx a2a-over-webhook config` prints the config with secrets masked.
 - `npx a2a-over-webhook wake preview` shows the rendered wake request (partially masked) and short SHA-256 fingerprints of the uploaded URL/key; `wake fingerprint` prints the fingerprints of `WAKE_*` values in your environment for comparison; `wake test` sends a test wake.

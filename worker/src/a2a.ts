@@ -27,6 +27,30 @@ export function movedResponse(reqUrl: string, publicUrl: string, retiredCsv: str
 	};
 }
 
+/** Hosts that only resolve on a private network (Tailnet, LAN, loopback): never a public agent URL. */
+export function isPrivateHost(host: string): boolean {
+	const h = host.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+	if (!h.includes(".") && !h.includes(":")) return true; // single-label names (localhost, MagicDNS short names)
+	if (/(^|\.)(localhost|local|lan|home|internal|intranet|corp|home\.arpa|ts\.net)$/.test(h)) return true;
+	const m = h.match(/^(\d+)\.(\d+)\.\d+\.\d+$/);
+	if (m) {
+		const [a, b] = [Number(m[1]), Number(m[2])];
+		return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127);
+	}
+	return h.includes(":") && (h === "::1" || /^f[cd]/.test(h) || h.startsWith("fe80"));
+}
+
+/** The base URL the agent card advertises: the deployment's PUBLIC_URL (custom hostname or workers.dev, set at deploy
+ *  time) when it is a public https origin, else the origin the request reached the Worker on. A local, Tailnet or
+ *  plain-http URL is never advertised to peers. */
+export function publicOrigin(configured: string | undefined, reqUrl: string): string {
+	try {
+		const u = new URL((configured || "").trim());
+		if (u.protocol === "https:" && !u.username && !u.password && !isPrivateHost(u.hostname)) return u.origin;
+	} catch { /* empty or not a URL */ }
+	return new URL(reqUrl).origin;
+}
+
 export const nowIso = () => new Date().toISOString();
 export const newId = () => crypto.randomUUID();
 

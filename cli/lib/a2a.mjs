@@ -63,6 +63,16 @@ export async function fetchCard(base) {
 	return null;
 }
 
+/** Does an agent card send peers to `base`? "" when it does, else what it advertises instead. */
+export function cardUrlProblem(card, base) {
+	const norm = (u) => { try { const x = new URL(u); return x.origin + x.pathname.replace(/\/+$/, ""); } catch { return null; } };
+	const want = norm(base);
+	const urls = [...new Set([...((card && card.supportedInterfaces) || []).map((i) => i && i.url), card && card.url].filter(Boolean))];
+	if (!urls.length) return "it advertises no endpoint URL (supportedInterfaces[].url)";
+	const wrong = urls.filter((u) => norm(u) !== want);
+	return wrong.length ? `it advertises ${wrong.join(", ")} instead of ${base.replace(/\/$/, "")}/` : "";
+}
+
 /** Choose the JSON-RPC endpoint + protocol version from an agent card (prefers 1.0). */
 export function pickEndpoint(base, card, force) {
 	const ifaces = ((card && card.supportedInterfaces) || []).filter((i) => String(i.protocolBinding || "").toUpperCase() === "JSONRPC");

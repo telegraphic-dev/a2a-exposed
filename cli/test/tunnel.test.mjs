@@ -166,12 +166,12 @@ async function tunnelEnv(t, { preset = "openclaw-wake", hostname = "agent.exampl
 	fs.mkdirSync(bin, { recursive: true });
 	fs.writeFileSync(path.join(bin, "cf"), STUB, { mode: 0o755 });
 	// Worker stand-in: the agent card, and a wake preview that reports the URL fingerprint the Worker holds
-	let workerUrl = "", preview = {}, cardStatus = 200;
+	let workerUrl = "", preview = {}, cardStatus = 200, cardUrl = "";
 	const srv = http.createServer((req, res) => {
 		res.setHeader("content-type", "application/json");
 		if (req.url.startsWith("/.well-known/agent-card.json")) {
 			res.statusCode = cardStatus;
-			return res.end(JSON.stringify(cardStatus === 200 ? { name: "Tun Test", supportedInterfaces: [{ protocolVersion: "1.0" }, { protocolVersion: "0.3" }] } : { error: "not found" }));
+			return res.end(JSON.stringify(cardStatus === 200 ? { name: "Tun Test", supportedInterfaces: [{ url: cardUrl || `http://${req.headers.host}/`, protocolVersion: "1.0" }, { url: `http://${req.headers.host}/`, protocolVersion: "0.3" }] } : { error: "not found" }));
 		}
 		const fp = workerUrl ? createHash("sha256").update(workerUrl).digest("hex").slice(0, 12) : null;
 		res.end(JSON.stringify({ preset, configured: !!workerUrl, hasKey: true, hasAccessServiceToken: true, fingerprints: { url: fp }, ...preview }));
@@ -196,7 +196,7 @@ async function tunnelEnv(t, { preset = "openclaw-wake", hostname = "agent.exampl
 	const calls = () => { try { return fs.readFileSync(path.join(dir, "calls.jsonl"), "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } };
 	const config = () => parseEnv(fs.readFileSync(path.join(cfg, "config.env"), "utf8"));
 	const setConfig = (upd) => fs.writeFileSync(path.join(cfg, "config.env"), Object.entries({ ...config(), ...upd }).filter(([, v]) => v != null).map(([k, v]) => `${k}=${v}`).join("\n") + "\n", { mode: 0o600 });
-	return { dir, cfg, cli, calls, config, setConfig, setWorkerUrl: (u) => (workerUrl = u), setPreview: (p) => (preview = p), setCardStatus: (c) => (cardStatus = c) };
+	return { dir, cfg, cli, calls, config, setConfig, setWorkerUrl: (u) => (workerUrl = u), setPreview: (p) => (preview = p), setCardStatus: (c) => (cardStatus = c), setCardUrl: (u) => (cardUrl = u) };
 }
 
 test("tunnel create: Access app + token before tunnel/DNS, secrets uploaded, token in a chmod-600 file, not printed", async (t) => {
@@ -440,6 +440,19 @@ test("status on a workers.dev inbox with no wake: card OK, polling expected, tun
 	assert.equal(j.card.name, "Tun Test");
 	assert.equal(j.hasOwnerToken, true);
 	assert.ok(!Object.values(j).includes("owner"), "the owner token itself is never printed");
+
+	// the card must send peers to the base URL (a hand-edited or local URL is flagged)
+	s.setCardUrl("http://hermes.example.ts.net:8644/");
+	r = await s.cli(["status"]);
+	assert.equal(r.status, 1);
+	assert.match(r.stdout, /^agent card: +WRONG URL: "Tun Test", but it advertises http:\/\/hermes\.example\.ts\.net:8644\/ instead of http:\/\/127\.0\.0\.1:\d+\/$/m);
+	assert.match(r.stdout, /^next step: +the agent card does not point peers at this deployment: .*Run `a2a-over-webhook deploy`/m);
+	s.setCardUrl("");
+	// an exported A2A_BASE_URL that differs from the saved one is flagged first
+	r = await s.cli(["status"], { A2A_BASE_URL: "http://100.101.102.103:8644" });
+	assert.equal(r.status, 1);
+	assert.match(r.stdout, /^base URL: +http:\/\/100\.101\.102\.103:8644 \(from the exported A2A_BASE_URL;/m);
+	assert.match(r.stdout, /^next step: +A2A_BASE_URL is exported as http:\/\/100\.101\.102\.103:8644, but .*config\.env has http:\/\/127\.0\.0\.1:\d+.*Unset A2A_BASE_URL/m);
 
 	const none = await tunnelEnv(t, { preset: "hermes", hostname: "", stub: { STUB_ZONES: "[]" } });
 	none.setPreview({ preset: "hermes", configured: false });
