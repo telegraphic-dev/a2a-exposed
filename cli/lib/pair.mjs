@@ -6,7 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import * as C from "./config.mjs";
 import { describeHttp, die, fetchCard, httpJson, pickEndpoint } from "./a2a.mjs";
-import { baseUrl } from "./commands.mjs";
+import { baseUrl, peerToken, warnPeerTokenEnv } from "./commands.mjs";
 
 const CLI = "a2a-over-webhook";
 export const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
@@ -241,7 +241,7 @@ export async function connect(target, o) {
 		die(`the earlier pairing request to ${peerName} (code ${st.userCode}) expired before it was approved; nothing was stored.
 For a new code (a new approval request to its owner), run: ${rerun()}`);
 	}
-	const oldToken = C.get(tokenEnv);
+	const oldToken = peerToken(tokenEnv); // warns when the environment shadows a different saved token
 	if (!st && oldToken) {
 		const works = await tokenWorks(base, card, oldToken);
 		if (works !== false && !replace)
@@ -283,6 +283,8 @@ Show this code and link to your human. They confirm the code with the owner of $
 	const finish = (r) => {
 		if (r.data.token_type && !/^bearer$/i.test(r.data.token_type)) die(`unexpected token_type ${r.data.token_type}`);
 		C.saveConfig({ [tokenEnv]: r.data.access_token });
+		// a stale PEER_<ALIAS>_TOKEN in the environment would keep winning over the token just saved (on stderr, also with --json)
+		const envOverrides = warnPeerTokenEnv(tokenEnv, true);
 		const label = r.data.peer_label || null;
 		peers[alias] = { url: base, token_env: tokenEnv, token_stored: true, paired: { userCode: st.userCode, at: new Date().toISOString(), ...(label ? { label } : {}) } };
 		C.savePeers(peers);
@@ -290,7 +292,7 @@ Show this code and link to your human. They confirm the code with the owner of $
 		const orphan = st.replacing && !r.data.replaced ? (st.replacesLabel || oldLabel || null) : null;
 		const note = r.data.replaced ? ` It replaced our previous token there (label "${label}").`
 			: st.replacing ? ` Our previous token${orphan ? ` ("${orphan}")` : ""} is still active on the peer until its owner revokes it${orphan ? `: \`${CLI} token revoke ${orphan}\`` : ""}.` : "";
-		emit({ status: "connected", alias, url: base, token_env: tokenEnv, ...(label ? { peer_label: label } : {}), ...(st.replacing ? { replaced: !!r.data.replaced } : {}) },
+		emit({ status: "connected", alias, url: base, token_env: tokenEnv, ...(label ? { peer_label: label } : {}), ...(st.replacing ? { replaced: !!r.data.replaced } : {}), ...(envOverrides ? { env_overrides_token: true } : {}) },
 			`connected: peer "${alias}" -> ${base}${label ? ` (we are "${label}" there)` : ""}; token stored in ${C.CONFIG_FILE} as ${tokenEnv} (not printed).${note}
 Send a message: ${CLI} send --to ${alias} --text "..."`);
 	};
