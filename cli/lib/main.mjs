@@ -22,7 +22,7 @@ npx cf auth login --no-browser)
        [--provider-organization O --provider-url U] [--preset P] [--worker-name W] [--d1-name D]
        [--account-id ID] [--cf-profile NAME] [--cli-command CMD] [--debounce S] [--max-per-hour N]
        [--pairing-approval human|agent|off] [--pbkdf2-iterations N] [--workers-logs on|off] [--cron]
-       [--worker-dir DIR]
+       [--upstream URL [--upstream-card-url URL]] [--worker-dir DIR]
                                 deploy the Worker + D1 to your account; wake secrets are read from
                                 env WAKE_WEBHOOK_URL / WAKE_WEBHOOK_KEY / WAKE_HMAC_SECRET (never argv)
                                 no --hostname: serve on https://<worker>.<account subdomain>.workers.dev
@@ -38,6 +38,15 @@ npx cf auth login --no-browser)
                                 --pbkdf2-iterations  approval-password hashing cost, 50000-100000 (default 100000,
                                                the Workers maximum; lower only if /device hits error 1102)
                                 --workers-logs on|off  persisted Cloudflare Workers Logs (query strings redacted)
+                                --upstream URL  proxy / expose mode: a public façade for an agent that already
+                                               speaks A2A (JSON-RPC) on a private network. URL is its endpoint on
+                                               a Cloudflare Tunnel hostname behind Access (never a Tailnet/LAN
+                                               address). The card is the upstream's, rewritten to this public
+                                               URL; paired peers' calls are forwarded with env UPSTREAM_TOKEN and
+                                               UPSTREAM_ACCESS_CLIENT_ID / _SECRET (never argv). --upstream none
+                                               switches back to the inbox
+                                --upstream-card-url  the upstream's card (default <upstream origin>/.well-known/
+                                               agent-card.json)
                                 --cli-command  command shown in wake hints (default "npx a2a-over-webhook";
                                                e.g. "node /path/to/repo/cli/bin/a2a-over-webhook.mjs")
                                 --worker-dir   where the Worker project (template copy) lives (default
@@ -69,7 +78,8 @@ anywhere on the account: the inbox itself can be on workers.dev or a custom host
 
 Status
   status [--json]               deployment, base URL, agent card check (fetched by the CLI: no curl needed), wake
-                                mode (webhook / tunnel / none = polling), tunnel state, and the next step to run.
+                                mode (webhook / tunnel / none = polling), tunnel state, proxy-mode upstream and
+                                card-leak check (--upstream), and the next step to run.
                                 Read-only; run it after an interruption and continue from "next step". Exit 1 = broken
   url                           print the public base URL (exit 1 if none is configured)
   config                        print config (secrets masked) and its location
@@ -85,14 +95,16 @@ Inbox (owner side)
   contexts                                 recent conversations
 
 Pairing (OAuth 2.0 device flow, RFC 8628: agents connect without pasting tokens into chat)
-  connect <base-or-card-url> [--alias A] [--name N] [--replace] [--no-wait] [--json]
+  connect <base-or-card-url> [--alias A] [--name N] [--card-url URL] [--replace] [--no-wait] [--json]
                           ask another inbox for a token: prints a code + link for your human (who confirms the
                           code with that inbox's owner), waits for approval, stores the token as outbound peer A
                           (never printed). --no-wait: print the code and exit; run the same command again to
                           check (same code). An expired code exits 1 (nothing new is requested silently).
                           An alias whose token still works is refused unless --replace (alias --force): the
                           peer then swaps the old token for the new one under the same label (older peers
-                          keep the old token until their owner revokes it)
+                          keep the old token until their owner revokes it). --card-url: the card to name in
+                          the request (default: this deployment's); a *.ts.net / LAN card is sent as
+                          informational (flagged "not publicly reachable"), a non-https one is left out
   pair set-password --web [--ttl MIN] [--json]
                           one-time link (default 15 min, single use) where your human sets or changes the
                           approval password on a web page. Send it to them privately; never open or fill it
@@ -138,7 +150,7 @@ const SPEC = {
 	send: { to: S, text: S, context: S, task: S, push: B, proto: S },
 	poll: { to: S, proto: S },
 	status: { json: B },
-	connect: { alias: S, name: S, json: B, "no-wait": B, replace: B, force: B },
+	connect: { alias: S, name: S, json: B, "no-wait": B, replace: B, force: B, "card-url": S },
 	pair: { json: B, web: B, ttl: S },
 };
 const STATES = ["completed", "input-required", "failed", "rejected", "working"];

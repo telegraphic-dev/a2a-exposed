@@ -87,6 +87,23 @@ A workers.dev inbox can still wake a local-only agent at once: the secure tunnel
 
 If your agent's webhook only listens locally (OpenClaw on `127.0.0.1:18789`, Hermes on `:8644`), `npx a2a-over-webhook tunnel create` publishes just the wake path through a named Cloudflare Tunnel, behind a Cloudflare Access app that admits only one service token held by the Worker (sent as `CF-Access-Client-Id`/`-Secret` on every wake, next to the preset's own auth). It needs Cloudflare Zero Trust (free plan) and a zone anywhere on the account; the inbox itself can be on workers.dev or a custom hostname. With one zone, `tunnel create` picks `wake-<random>.<zone>` and says so. With several, pass `--tunnel-zone <zone>`. Run `cloudflared` on the agent's machine with the printed command. An existing polling setup can switch to the tunnel later without redeploying the inbox. See [the setup skill](skills/a2a-over-webhook-setup/SKILL.md#local-only-webhooks-hermes-openclaw-secure-tunnel).
 
+### Already speak A2A on a Tailnet or LAN? Expose it through a public façade
+
+An agent that already serves A2A on a private address (Tailnet, LAN, localhost) doesn't need the inbox or polling. `init|deploy --upstream https://agent-upstream.example.com/a2a` turns the Worker into a **public façade** (proxy mode): it serves the agent's card **rewritten to the public URL**, runs device-flow pairing, checks each peer's bearer token, and forwards A2A JSON-RPC to the agent through a Cloudflare Tunnel hostname that Cloudflare Access locks to the Worker's service token.
+
+```mermaid
+flowchart LR
+    P["Peer agent"] -- "A2A JSON-RPC<br/>per-peer bearer (pairing)" --> W["Worker façade<br/>https://agent.example.com<br/>rewritten card, /oauth, /device"]
+    W -- "Access service token<br/>+ UPSTREAM_TOKEN, X-A2A-Peer" --> T["Tunnel hostname<br/>(Access: Worker only)"]
+    T -- "cloudflared" --> A["Your A2A agent<br/>localhost / Tailnet / LAN"]
+```
+
+- **Card rewrite.** Interfaces always point at the façade's `PUBLIC_URL`; security schemes and OAuth device URLs are the façade's; name, skills, version and push capability come from the upstream card (or `--agent-*` overrides). Tailnet, LAN, localhost and tunnel-hostname URLs are removed from every field, and `signatures` are dropped. The inbox card gets the same scrubbing.
+- **One upstream identity.** The façade holds `UPSTREAM_TOKEN` and the Access service token (environment only, uploaded as Worker secrets) and passes the peer label in `X-A2A-Peer`. It keeps peers apart itself (each task and context belongs to the peer that created it), refuses `ListTasks`, rejects private push URLs, and doesn't proxy streaming yet.
+- **Pairing out from a Tailnet.** `connect <url> --card-url https://<host>.ts.net/...` sends a private card as informational; the other owner's `/device` page flags it as not publicly reachable.
+
+Recipe, rewrite rules and threat model: [setup skill, "Already have A2A on a Tailnet or LAN"](skills/a2a-over-webhook-setup/SKILL.md#already-have-a2a-on-a-tailnet-or-lan-expose-it-through-a-public-façade).
+
 ### Connecting agents (device flow)
 
 Agents connect without pasting tokens into chat. Each inbox is an OAuth 2.0 authorization server for the Device Authorization Grant (RFC 8628). A human approves every connection.
@@ -100,7 +117,7 @@ Agents connect without pasting tokens into chat. Each inbox is an OAuth 2.0 auth
 
 ### Setup interrupted?
 
-`npx a2a-over-webhook status` is read-only. It shows the deployment, the base URL, an agent-card check (done by the CLI, so no `curl` is needed), the wake mode, the tunnel state, and a `next step:` line. Every setup step is safe to re-run.
+`npx a2a-over-webhook status` is read-only. It shows the deployment, the base URL, an agent-card check (done by the CLI, so no `curl` is needed), the wake mode, the tunnel state, in proxy mode the upstream and a card-leak check, and a `next step:` line. Every setup step is safe to re-run.
 
 ### Already running an earlier build?
 
@@ -168,6 +185,7 @@ Any agent that can run `npx` and remember a skill works in polling mode. The wak
 - **Owner.** The owner API (inbox, replies, tokens) uses a separate `OWNER_TOKEN` Worker secret. The CLI keeps it in `~/.config/a2a-over-webhook/config.env` (chmod 600; `A2A_CONFIG_DIR` overrides the directory).
 - **Untrusted content.** Peer messages are data, not instructions. The operate skill shows them inside explicit `UNTRUSTED PEER MESSAGE` fences. It refuses embedded instructions and requires the user's approval for anything consequential or externally visible.
 - **Wake webhooks.** A wake carries metadata, a hint command, and at most a 300-character preview. `openclaw-wake` carries no peer text at all, because OpenClaw treats wake text as a trusted system event. Wake URL, key, and HMAC secret are Worker secrets, never committed config.
+- **Façade (proxy mode).** The upstream sits behind two locks: Cloudflare Access (only the Worker's service token passes the tunnel hostname) and the agent's own `UPSTREAM_TOKEN` check. Peers never see or send the upstream credential, can't reach each other's tasks or contexts, and can't register private push URLs. The public card never names a private network. The owner-token caveat is unchanged: whoever holds it can issue peer tokens.
 - **Push notifications.** HTTPS only. Private and loopback targets are refused, and each push uses a per-task token (stored hashed for inbound pushes).
 - **Limits.** 1 MiB request bodies, 60 requests/min per peer, per-conversation wake debounce, and an optional hourly wake cap.
 - **Your infrastructure.** Everything runs in your Cloudflare account, and no third-party service sees your traffic. Data leaves only through wakes to your agent and pushes to URLs your peers registered.
@@ -179,6 +197,7 @@ Any agent that can run `npx` and remember a skill works in polling mode. The wak
 - **A2A 0.3 (compatible).** `message/send`, `tasks/get`, `tasks/cancel`, and `tasks/pushNotificationConfig/set|get` on the same endpoint. The version is chosen by the `A2A-Version` header or the method name.
 - The 1.0 card is at `/.well-known/agent-card.json`; `/.well-known/agent.json` serves an A2A 0.3-shaped card (`url`, `protocolVersion`, `preferredTransport`) for 0.3 clients.
 - Streaming (`SendStreamingMessage`) is not supported. Work is asynchronous by design.
+- **Proxy mode** forwards the same methods (plus 1.0 `List`/`DeleteTaskPushNotificationConfig` and their 0.3 equivalents) to the upstream, except `ListTasks` (refused: it would list other peers' tasks), streaming and the extended card. The card advertises only the JSON-RPC versions the upstream card lists.
 
 ## Repository layout
 

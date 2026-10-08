@@ -1,6 +1,9 @@
 // a2a-over-webhook Worker: public A2A endpoint (JSON-RPC; A2A 1.0 primary, 0.3 compatible),
 // D1-backed inbox, wake webhooks (presets), and an owner API for the local CLI.
+// Proxy mode (UPSTREAM_URL set): a public façade for an agent that already speaks A2A on a private network; the
+// Worker serves a rewritten agent card and device-flow pairing, and forwards authenticated JSON-RPC to the upstream.
 import * as A from "./a2a.ts";
+import * as F from "./facade.ts";
 import { renderWake, redact, cloudflareErrorHint, defaultDebounceSeconds, defaultMaxPerHour, type WakeConfig, type WakeEvent } from "./wake.ts";
 import * as P from "./pairing.ts";
 type Json = any;
@@ -38,6 +41,12 @@ interface Env {
 	// device-flow pairing: human (default) | agent | off
 	PAIRING_APPROVAL?: string;
 	PBKDF2_ITERATIONS?: string; // approval password hashing (default 100000, the Workers maximum; at least 50000)
+	// proxy / expose mode: forward A2A JSON-RPC to an existing agent (reached through a Tunnel hostname behind Access)
+	UPSTREAM_URL?: string; // the upstream's JSON-RPC endpoint, https on a public (tunnel) hostname
+	UPSTREAM_CARD_URL?: string; // its agent card (default <upstream origin>/.well-known/agent-card.json)
+	UPSTREAM_TOKEN?: string; // secret: the one credential the façade presents upstream (Authorization: Bearer)
+	UPSTREAM_ACCESS_CLIENT_ID?: string; // secret: Cloudflare Access service token for the upstream's tunnel hostname
+	UPSTREAM_ACCESS_CLIENT_SECRET?: string;
 }
 
 class RpcError extends Error {
@@ -244,6 +253,9 @@ const oauthUrls = (env: Env) => {
 };
 const cliCommand = (env: Env) => env.WAKE_CLI_COMMAND || "npx a2a-over-webhook";
 
+const securityRequirements = (env: Env): Json[] =>
+	[{ schemes: { bearer: { list: [] } } }, ...(pairingOn(env) ? [{ schemes: { pairing: { list: [] } } }] : [])];
+
 /** Bearer (every token, however issued) plus, unless pairing is off, the A2A 1.0 OAuth2 device-code flow that issues one. */
 function securitySchemes(env: Env): Json {
 	const u = oauthUrls(env);
@@ -264,8 +276,11 @@ function securitySchemes(env: Env): Json {
 	return schemes;
 }
 
-function agentCard(env: Env): Json {
+/** Inbox-mode card from the AGENT_* settings. URL fields and free text that name a private network (an operator who
+ *  pasted a Tailnet or localhost link) are scrubbed by the same rules as the façade card (see facade.ts). */
+function inboxCard(env: Env): Json {
 	const base = env.PUBLIC_URL.replace(/\/$/, "");
+	const o: F.RewriteOptions = { publicBase: base };
 	const card: Json = {
 		name: env.AGENT_NAME || "A2A Agent",
 		description: env.AGENT_DESCRIPTION ||
@@ -276,22 +291,104 @@ function agentCard(env: Env): Json {
 			{ url: base + "/", protocolBinding: "JSONRPC", protocolVersion: "0.3" },
 		],
 		securitySchemes: securitySchemes(env),
-		securityRequirements: [{ schemes: { bearer: { list: [] } } }, ...(pairingOn(env) ? [{ schemes: { pairing: { list: [] } } }] : [])],
+		securityRequirements: securityRequirements(env),
 		capabilities: { streaming: false, pushNotifications: true, extendedAgentCard: false },
 		defaultInputModes: ["text/plain", "application/json"],
 		defaultOutputModes: ["text/plain", "application/json"],
-		skills: agentSkills(env),
+		skills: F.scrubDeep(agentSkills(env), o),
 	};
-	if (env.PROVIDER_ORGANIZATION && env.PROVIDER_URL) card.provider = { organization: env.PROVIDER_ORGANIZATION, url: env.PROVIDER_URL };
-	if (env.DOCUMENTATION_URL) card.documentationUrl = env.DOCUMENTATION_URL;
+	card.name = F.scrubText(card.name, o);
+	card.description = F.scrubText(card.description, o);
+	const provUrl = F.publicUrlOrNothing(env.PROVIDER_URL, o);
+	if (env.PROVIDER_ORGANIZATION && provUrl) card.provider = { organization: F.scrubText(env.PROVIDER_ORGANIZATION, o), url: provUrl };
+	const doc = F.publicUrlOrNothing(env.DOCUMENTATION_URL, o);
+	if (doc) card.documentationUrl = doc;
 	return card;
 }
+
+// ------------------------------------------------------------------ proxy / expose mode (façade for a private A2A agent)
+const proxyMode = (env: Env) => !!(env.UPSTREAM_URL || "").trim();
+const DEFAULT_DESCRIPTION = "An AI agent reachable over A2A through a public façade.";
+
+/** Headers for every request to the upstream: the façade's own credential and Access service token, never a peer's. */
+function upstreamHeaders(env: Env, extra: Record<string, string> = {}): Record<string, string> {
+	const h: Record<string, string> = { "user-agent": "a2a-over-webhook-facade", ...extra };
+	if (env.UPSTREAM_TOKEN) h.authorization = `Bearer ${env.UPSTREAM_TOKEN}`;
+	if (env.UPSTREAM_ACCESS_CLIENT_ID && env.UPSTREAM_ACCESS_CLIENT_SECRET) {
+		h["cf-access-client-id"] = env.UPSTREAM_ACCESS_CLIENT_ID;
+		h["cf-access-client-secret"] = env.UPSTREAM_ACCESS_CLIENT_SECRET;
+	}
+	return h;
+}
+
+// upstream card cache (per isolate): 5 minutes, a stale copy is served while the upstream is unreachable
+const CARD_TTL_MS = 300000;
+const cardCache = new Map<string, { at: number; card: Json }>();
+// failed fetches are not retried for 30 s, so anonymous card requests can't hammer a struggling upstream
+const CARD_RETRY_MS = 30000;
+const cardFailures = new Map<string, { at: number; status: number | null; error: string }>();
+
+async function fetchUpstreamCard(env: Env, fresh = false): Promise<{ card: Json | null; status: number | null; error?: string; url: string }> {
+	const [ep] = F.upstreamEndpoint(env.UPSTREAM_URL);
+	if (!ep) return { card: null, status: null, error: "UPSTREAM_URL invalid", url: "" };
+	const url = F.upstreamCardUrl(ep, env.UPSTREAM_CARD_URL);
+	const hit = cardCache.get(url);
+	if (!fresh && hit && Date.now() - hit.at < CARD_TTL_MS) return { card: hit.card, status: 200, url };
+	const failed = cardFailures.get(url);
+	if (!fresh && failed && Date.now() - failed.at < CARD_RETRY_MS) return { card: hit?.card ?? null, status: failed.status, error: failed.error, url };
+	const fail = (status: number | null, error: string) => { cardFailures.set(url, { at: Date.now(), status, error }); return { card: hit?.card ?? null, status, error, url }; };
+	try {
+		const r = await fetch(url, { headers: upstreamHeaders(env, { accept: "application/json" }), redirect: "manual", signal: AbortSignal.timeout(10000) });
+		const text = (await r.text()).slice(0, 262144);
+		let card: Json = null;
+		try { card = JSON.parse(text); } catch { /* not JSON (an Access login page, a tunnel error) */ }
+		if (r.status === 200 && card && typeof card === "object" && !Array.isArray(card)) {
+			cardCache.set(url, { at: Date.now(), card });
+			cardFailures.delete(url);
+			return { card, status: 200, url };
+		}
+		const hint = cloudflareErrorHint(r.status, text.slice(0, 4096));
+		log("upstream_card_failed", { status: r.status, ...(hint ? { hint } : {}) });
+		return fail(r.status, `HTTP ${r.status}${hint ? ` (${hint})` : ""}`);
+	} catch (e) {
+		log("upstream_card_failed", { error: String(e).slice(0, 200) });
+		return fail(null, String(e).slice(0, 200));
+	}
+}
+
+/** Origins that must not appear in the public card: the upstream endpoint, its card URL, and whatever the upstream's
+ *  own card names (typically a Tailnet or localhost URL). Never the façade's own origin. */
+function upstreamOrigins(env: Env, upCard: Json): string[] {
+	const out = new Set<string>(F.upstreamCardOrigins(upCard));
+	const [ep] = F.upstreamEndpoint(env.UPSTREAM_URL);
+	if (ep) { out.add(new URL(ep).origin); out.add(new URL(F.upstreamCardUrl(ep, env.UPSTREAM_CARD_URL)).origin); }
+	const own = new URL(env.PUBLIC_URL).origin.toLowerCase();
+	return [...out].filter((x) => x.toLowerCase() !== own);
+}
+
+async function facadeAgentCard(env: Env): Promise<Json> {
+	const up = await fetchUpstreamCard(env);
+	let skills: Json[] | undefined;
+	if (env.AGENT_SKILLS) try { const v = JSON.parse(env.AGENT_SKILLS); if (Array.isArray(v) && v.length) skills = v; } catch { /* ignore */ }
+	return F.facadeCard({
+		upstream: up.card,
+		config: { name: env.AGENT_NAME, description: env.AGENT_DESCRIPTION, version: env.AGENT_VERSION, skills,
+			providerOrganization: env.PROVIDER_ORGANIZATION, providerUrl: env.PROVIDER_URL, documentationUrl: env.DOCUMENTATION_URL },
+		publicBase: env.PUBLIC_URL.replace(/\/$/, ""),
+		upstreamOrigins: upstreamOrigins(env, up.card),
+		securitySchemes: securitySchemes(env),
+		securityRequirements: securityRequirements(env),
+		defaults: { description: DEFAULT_DESCRIPTION, skills: agentSkills(env) },
+	});
+}
+
+/** The A2A 1.0 card this Worker serves: the inbox card, or the rewritten upstream card in proxy mode. */
+const agentCard = (env: Env): Promise<Json> => (proxyMode(env) ? facadeAgentCard(env) : Promise.resolve(inboxCard(env)));
 
 /** The same agent as an A2A 0.3 AgentCard (served at the legacy /.well-known/agent.json for 0.2/0.3 clients): top-level
  *  url + preferredTransport + protocolVersion, OpenAPI-style securitySchemes and `security`. 0.3 has no device-code
  *  flow, so the pairing scheme only points to the RFC 8414 metadata (oauth2MetadataUrl) and is not a requirement. */
-function agentCard03(env: Env): Json {
-	const c = agentCard(env);
+function agentCard03(env: Env, c: Json): Json {
 	const base = env.PUBLIC_URL.replace(/\/$/, "");
 	const schemes: Json = { bearer: { type: "http", scheme: "bearer", description: c.securitySchemes.bearer.httpAuthSecurityScheme.description } };
 	if (pairingOn(env)) schemes.pairing = { type: "oauth2", description: c.securitySchemes.pairing.oauth2SecurityScheme.description,
@@ -299,13 +396,15 @@ function agentCard03(env: Env): Json {
 	const card: Json = {
 		protocolVersion: "0.3.0", name: c.name, description: c.description, url: base + "/", preferredTransport: "JSONRPC",
 		additionalInterfaces: [{ url: base + "/", transport: "JSONRPC" }], version: c.version,
-		capabilities: { streaming: false, pushNotifications: true, stateTransitionHistory: false },
+		capabilities: { streaming: false, pushNotifications: !!c.capabilities.pushNotifications, stateTransitionHistory: false,
+			...(c.capabilities.extensions ? { extensions: c.capabilities.extensions } : {}) },
 		securitySchemes: schemes, security: [{ bearer: [] }],
 		defaultInputModes: c.defaultInputModes, defaultOutputModes: c.defaultOutputModes,
 		skills: c.skills.map((k: Json) => ({ ...k, tags: Array.isArray(k.tags) ? k.tags : [] })), supportsAuthenticatedExtendedCard: false,
 	};
 	if (c.provider) card.provider = c.provider;
 	if (c.documentationUrl) card.documentationUrl = c.documentationUrl;
+	if (c.iconUrl) card.iconUrl = c.iconUrl;
 	return card;
 }
 
@@ -471,14 +570,18 @@ async function handleRpc(req: Request, env: Env, ectx: ExecutionContext): Promis
 	if (!rq || typeof rq !== "object" || rq.jsonrpc !== "2.0" || typeof rq.method !== "string") return err(-32600, "Invalid Request");
 	const method: string = rq.method;
 	let op: string, version: string;
+	const proxy = proxyMode(env);
 	if (V1[method]) { op = V1[method]; version = "1.0"; }
 	else if (V03[method]) { op = V03[method]; version = "0.3"; }
+	else if (proxy && PROXY_V1[method]) { op = PROXY_V1[method]; version = "1.0"; }
+	else if (proxy && PROXY_V03[method]) { op = PROXY_V03[method]; version = "0.3"; }
 	else return err(-32601, "Method not found");
 	const hv = (req.headers.get("a2a-version") || "").trim();
 	if (hv && !/^(0\.3|1|1\.0)(\.\d+)?$/.test(hv)) return err(-32009, `A2A version ${hv} not supported (supported: 0.3, 1.0)`);
-	if (op === "stream") return err(-32004, "Streaming is not supported");
+	if (op === "stream") return err(-32004, proxy ? "Streaming is not supported through this façade yet" : "Streaming is not supported");
 	const params = rq.params ?? {};
 	if (typeof params !== "object" || Array.isArray(params)) return err(-32602, "Invalid params");
+	if (proxy) return await proxyRpc(req, env, { raw, rid, method, op, version, params, label, ip });
 	try {
 		const result = await HANDLERS[op](params, label, version, env, ectx);
 		log("rpc_ok", { peer: label, method, ip });
@@ -489,6 +592,87 @@ async function handleRpc(req: Request, env: Env, ectx: ExecutionContext): Promis
 		log("rpc_exception", { peer: label, method, error: String(e?.stack || e).slice(0, 500) });
 		return err(-32603, "Internal error");
 	}
+}
+
+// ------------------------------------------------------------------ proxy mode: forward JSON-RPC to the private upstream
+// Methods only the façade forwards (the inbox has one push config per task and no delete).
+const PROXY_V1: Record<string, string> = { ListTaskPushNotificationConfig: "pushlist", DeleteTaskPushNotificationConfig: "pushdel" };
+const PROXY_V03: Record<string, string> = { "tasks/pushNotificationConfig/list": "pushlist", "tasks/pushNotificationConfig/delete": "pushdel" };
+
+async function ownerOf(env: Env, kind: "task" | "context", id: string): Promise<string | null> {
+	const r: Json = await env.DB.prepare("SELECT peer FROM facade_owners WHERE kind = ? AND id = ?").bind(kind, id).first();
+	return r ? r.peer : null;
+}
+
+/** Forward one authenticated, validated JSON-RPC call to UPSTREAM_URL.
+ *  - The upstream sees the façade's credential (UPSTREAM_TOKEN, Access service token), never the peer's token; the
+ *    peer label goes in X-A2A-Peer so the upstream can tell callers apart.
+ *  - Isolation between peers that share that one upstream identity: the façade records which peer created each task
+ *    and context (facade_owners) and refuses calls on another peer's task or context before they reach the upstream.
+ *    ListTasks would list every peer's tasks and is refused.
+ *  - Push notification URLs must be public https (the upstream sits on a private network: no SSRF into it).
+ *  - An upstream 401/403 is reported as a façade problem (502), so a peer never mistakes it for its own bad token. */
+async function proxyRpc(req: Request, env: Env, c: { raw: string; rid: Json; method: string; op: string; version: string; params: Json; label: string; ip: string }): Promise<Response> {
+	const err = (code: number, message: string, status = 200) => json({ jsonrpc: "2.0", id: c.rid, error: { code, message } }, status);
+	const [ep, why] = F.upstreamEndpoint(env.UPSTREAM_URL);
+	if (!ep) { log("upstream_misconfigured", { why }); return err(-32603, "This agent's façade is misconfigured (upstream endpoint); tell its operator", 503); }
+	if (c.op === "list") return err(-32004, "ListTasks is not supported through this façade (it would list other callers' tasks); use GetTask with the ids you received");
+	for (const u of F.pushUrlsOf(c.op, c.params)) {
+		if (typeof u !== "string") return err(-32602, "push notification config url must be a string");
+		const [ok, bad] = A.pushUrlAllowed(u);
+		let priv = false;
+		try { priv = A.isPrivateHost(new URL(u).hostname); } catch { /* pushUrlAllowed already said bad url */ }
+		if (!ok || priv) return err(-32602, `push url rejected: ${!ok ? bad : "private host not allowed"}`);
+	}
+	if (c.op === "send") {
+		const m = c.params.message;
+		if (!m || typeof m !== "object") return err(-32602, "Invalid params: message must be an object");
+		if (m.taskId !== undefined) {
+			if (typeof m.taskId !== "string" || (await ownerOf(env, "task", m.taskId)) !== c.label) return err(-32001, "Task not found");
+		}
+		if (m.contextId !== undefined) {
+			if (typeof m.contextId !== "string" || !A.ID_RE.test(m.contextId)) return err(-32602, "Invalid params: invalid contextId");
+			const o = await ownerOf(env, "context", m.contextId);
+			if (o && o !== c.label) return err(-32602, "Invalid params: unknown contextId");
+		}
+	} else {
+		const tid = F.taskIdOf(c.op, c.params);
+		if (typeof tid !== "string" || (await ownerOf(env, "task", tid)) !== c.label) return err(-32001, "Task not found");
+	}
+	const headers = upstreamHeaders(env, { "content-type": "application/json", accept: "application/json", "x-a2a-peer": c.label });
+	const hv = req.headers.get("a2a-version");
+	if (hv) headers["a2a-version"] = hv;
+	let r: Response;
+	try {
+		r = await fetch(ep, { method: "POST", headers, body: c.raw, redirect: "manual", signal: AbortSignal.timeout(90000) });
+	} catch (e) {
+		log("upstream_failed", { peer: c.label, method: c.method, error: String(e).slice(0, 200) });
+		return err(-32603, "This agent is not reachable right now (upstream unavailable); try again later", 502);
+	}
+	const text = await r.text();
+	if (text.length > 8 * 1048576) { log("upstream_too_large", { peer: c.label, method: c.method, bytes: text.length }); return err(-32603, "Upstream response too large", 502); }
+	let body: Json = null;
+	try { body = JSON.parse(text); } catch { /* not JSON */ }
+	const isRpc = body && typeof body === "object" && !Array.isArray(body) && body.jsonrpc === "2.0";
+	if (r.status === 401 || r.status === 403 || !isRpc) {
+		const hint = cloudflareErrorHint(r.status, text.slice(0, 4096));
+		log("upstream_error", { peer: c.label, method: c.method, status: r.status, ...(hint ? { hint } : {}) });
+		return err(-32603, r.status === 401 || r.status === 403
+			? "This agent's façade was refused by its upstream (credential or Access policy); tell its operator"
+			: `This agent's upstream answered HTTP ${r.status} without a JSON-RPC response; try again later`, 502);
+	}
+	if (c.op === "send" && body.result) {
+		const { taskId, contextId } = F.idsFromResult(body.result);
+		const now = A.nowIso();
+		const stmts = [];
+		if (taskId) stmts.push(env.DB.prepare("INSERT INTO facade_owners (kind, id, peer, created_at) VALUES ('task', ?, ?, ?) ON CONFLICT DO NOTHING").bind(taskId, c.label, now));
+		if (contextId) stmts.push(env.DB.prepare("INSERT INTO facade_owners (kind, id, peer, created_at) VALUES ('context', ?, ?, ?) ON CONFLICT DO NOTHING").bind(contextId, c.label, now));
+		if (stmts.length) await env.DB.batch(stmts);
+		// a task id the upstream reused for another peer's task stays with its first owner (refused on the next call)
+		if (taskId && (await ownerOf(env, "task", taskId)) !== c.label) log("facade_owner_conflict", { peer: c.label, kind: "task" });
+	}
+	log("proxy_ok", { peer: c.label, method: c.method, status: r.status, ip: c.ip, ...(body.error ? { code: body.error.code } : {}) });
+	return new Response(text, { status: r.status >= 200 && r.status < 300 ? r.status : 200, headers: { "content-type": "application/json", "cache-control": "no-store" } });
 }
 
 // ------------------------------------------------------------------ push delivery (to peers) and receipt (from peers)
@@ -687,6 +871,18 @@ async function handleOwner(req: Request, env: Env, ectx: ExecutionContext, path:
 		}
 	}
 	if (seg[0] === "pairing") return await ownerPairing(req, env, m, seg.slice(1), body);
+	if (seg[0] === "facade" && !seg[1] && m === "GET") {
+		// proxy-mode diagnostics: is the upstream card reachable, which versions it speaks, and does the public card leak
+		if (!proxyMode(env)) return json({ mode: "inbox" });
+		const [ep, why] = F.upstreamEndpoint(env.UPSTREAM_URL);
+		const up = await fetchUpstreamCard(env, true);
+		const card = await facadeAgentCard(env);
+		return json({ mode: "proxy", upstreamValid: !!ep, ...(why ? { upstreamProblem: why } : {}), upstreamCardUrl: up.url || null,
+			upstreamCard: up.status === 200 ? "ok" : up.error || "unavailable", upstreamVersions: F.upstreamJsonRpcVersions(up.card),
+			hasUpstreamToken: !!env.UPSTREAM_TOKEN, hasUpstreamAccessServiceToken: !!(env.UPSTREAM_ACCESS_CLIENT_ID && env.UPSTREAM_ACCESS_CLIENT_SECRET),
+			fingerprints: { upstreamToken: await A.fingerprint(env.UPSTREAM_TOKEN), upstreamAccessClientId: await A.fingerprint(env.UPSTREAM_ACCESS_CLIENT_ID) },
+			publicCardLeaks: F.cardLeaks(card, env.PUBLIC_URL, upstreamOrigins(env, up.card)) });
+	}
 	if (seg[0] === "wake" && seg[1] === "preview" && m === "GET") {
 		// rendered wake request for a sample event, partially masked, plus short sha256 fingerprints of the
 		// uploaded secrets so the owner can compare them with local values without revealing them
@@ -815,7 +1011,8 @@ async function deviceAuthorization(req: Request, env: Env, ectx: ExecutionContex
 	ectx.waitUntil((async () => {
 		if (!(await wakeBudgetOk(env))) return log("wake_skipped", { reason: "hourly cap", kind: "pairing_request" });
 		await sendWake(env, ectx, { contextId: "pairing", taskId: "none", taskIds: [], from: clientName || clientId || "unknown agent", preview: "",
-			kind: "pairing_request", pairing: { userCode: shown, verificationUriComplete: complete, approval: mode, clientName, clientId, agentCardUrl: cardUrl, expiresIn: P.EXPIRES_S,
+			kind: "pairing_request", pairing: { userCode: shown, verificationUriComplete: complete, approval: mode, clientName, clientId, agentCardUrl: cardUrl,
+				...(cardUrl && P.cardIsPrivate(cardUrl) ? { agentCardPrivate: true } : {}), expiresIn: P.EXPIRES_S,
 				...(replaces ? { replacesLabel: replaces.label } : {}) } });
 	})());
 	return json({ device_code: deviceCode, user_code: shown, verification_uri: u.page, verification_uri_complete: complete,
@@ -1163,11 +1360,11 @@ async function handle(req: Request, env: Env, ectx: ExecutionContext): Promise<R
 	const path = url.pathname;
 	try {
 		if (req.method === "GET" && path === "/.well-known/agent-card.json")
-			return json(agentCard(env), 200, { "access-control-allow-origin": "*", "cache-control": "public, max-age=300" });
+			return json(await agentCard(env), 200, { "access-control-allow-origin": "*", "cache-control": "public, max-age=300" });
 		// legacy discovery path (A2A 0.2): the 0.3-shaped card that clients of that era parse
 		if (req.method === "GET" && path === "/.well-known/agent.json")
-			return json(agentCard03(env), 200, { "access-control-allow-origin": "*", "cache-control": "public, max-age=300" });
-		if (req.method === "GET" && path === "/health") return json({ ok: true, publicUrl: env.PUBLIC_URL });
+			return json(agentCard03(env, await agentCard(env)), 200, { "access-control-allow-origin": "*", "cache-control": "public, max-age=300" });
+		if (req.method === "GET" && path === "/health") return json({ ok: true, publicUrl: env.PUBLIC_URL, mode: proxyMode(env) ? "proxy" : "inbox" });
 		if (path === "/.well-known/oauth-authorization-server" || path === "/.well-known/oauth-protected-resource" || path.startsWith("/oauth/") || path === "/device" || path === "/device/setup") {
 			if (!pairingOn(env)) return json({ error: "not_found", error_description: "device-flow pairing is disabled on this inbox (PAIRING_APPROVAL=off); ask its operator for a token" }, 404);
 			if (req.method === "GET" && path === "/.well-known/oauth-authorization-server") return json(oauthMetadata(env), 200, { "access-control-allow-origin": "*" });

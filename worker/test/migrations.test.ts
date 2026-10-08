@@ -57,25 +57,25 @@ test("migration files: NNNN_name.sql, unique numbers, no gaps, 0002_wake_budget 
 test("fresh database: every migration applies in order; a second run applies nothing", () => {
 	const db = new DatabaseSync(":memory:");
 	assert.deepEqual(applyMigrations(db), [...FILES].sort(byNumber));
-	for (const t of ["peers", "tasks", "wakes", "wake_budget", "device_requests", "pairing_rate", "settings"]) assert.ok(tables(db).includes(t), t);
+	for (const t of ["peers", "tasks", "wakes", "wake_budget", "device_requests", "pairing_rate", "settings", "facade_owners"]) assert.ok(tables(db).includes(t), t);
 	assert.ok(columns(db, "peers").includes("source"));
 	assert.ok(columns(db, "device_requests").includes("replaces_label"));
 	assert.ok(columns(db, "device_requests").includes("replaces_hash"));
 	assert.deepEqual(applyMigrations(db), []);
 });
 
-test("database from the 0002 fix (0001-0003 recorded): only 0004 applies; pending requests keep working", () => {
+test("database from the 0002 fix (0001-0003 recorded): only 0004 and later apply; pending requests keep working", () => {
 	const db = existingDb([sql("0001_init.sql"), sql("0002_wake_budget.sql"), sql("0003_device_pairing.sql")], ["0001_init.sql", "0002_wake_budget.sql", "0003_device_pairing.sql"]);
 	db.prepare("INSERT INTO device_requests (device_hash, user_code, status, created_ms, expires_ms, interval_s) VALUES ('h', 'WDJB4827', 'pending', 1, 2, 5)").run();
-	assert.deepEqual(applyMigrations(db), ["0004_pairing_replace.sql"]);
+	assert.deepEqual(applyMigrations(db), ["0004_pairing_replace.sql", "0005_facade_owners.sql"]);
 	assert.equal((db.prepare("SELECT replaces_label FROM device_requests WHERE device_hash = 'h'").get() as any).replaces_label, null);
 });
 
 test("database from v0.2.0 (0001 and 0003 recorded): 0002 applies as a no-op and keeps the data", () => {
 	const db = existingDb([sql("0001_init.sql"), sql("0003_device_pairing.sql")], ["0001_init.sql", "0003_device_pairing.sql"]);
 	db.prepare("INSERT INTO wake_budget (hour, count) VALUES (1, 7)").run();
-	assert.deepEqual(applyMigrations(db), ["0002_wake_budget.sql", "0004_pairing_replace.sql"]);
-	assert.deepEqual(recorded(db), ["0001_init.sql", "0003_device_pairing.sql", "0002_wake_budget.sql", "0004_pairing_replace.sql"]);
+	assert.deepEqual(applyMigrations(db), ["0002_wake_budget.sql", "0004_pairing_replace.sql", "0005_facade_owners.sql"]);
+	assert.deepEqual(recorded(db), ["0001_init.sql", "0003_device_pairing.sql", "0002_wake_budget.sql", "0004_pairing_replace.sql", "0005_facade_owners.sql"]);
 	assert.equal((db.prepare("SELECT count FROM wake_budget WHERE hour = 1").get() as any).count, 7);
 });
 
@@ -107,7 +107,7 @@ test("database from an earlier build without wake_budget (0001 and 0003 recorded
 		assert.equal(before.data.error?.code, -32603, JSON.stringify(before.data));
 		assert.equal(wakes.length, 0);
 
-		assert.deepEqual(applyMigrations(db), ["0002_wake_budget.sql", "0004_pairing_replace.sql"]);
+		assert.deepEqual(applyMigrations(db), ["0002_wake_budget.sql", "0004_pairing_replace.sql", "0005_facade_owners.sql"]);
 		assert.deepEqual(columns(db, "wake_budget"), ["hour", "count"]);
 		assert.deepEqual(applyMigrations(db), []);
 

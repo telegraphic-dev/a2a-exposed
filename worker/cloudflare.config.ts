@@ -40,16 +40,21 @@ const plain: Record<string, string> = {
 	RETIRED_HOSTNAMES: v("A2A_RETIRED_HOSTNAMES"), // custom domains this agent moved away from (see movedResponse)
 	PAIRING_APPROVAL: v("PAIRING_APPROVAL") || "human", // device-flow pairing: human (approval password on /device) | agent | off
 	PBKDF2_ITERATIONS: v("A2A_PBKDF2_ITERATIONS"), // approval password hashing; default 100000 (the Workers maximum), at least 50000
+	// proxy / expose mode: forward A2A to an agent that already speaks it, published through a Tunnel hostname behind
+	// Access (never a Tailnet / LAN URL: the Worker can't reach those, and they never appear in the public card)
+	UPSTREAM_URL: v("A2A_UPSTREAM_URL"),
+	UPSTREAM_CARD_URL: v("A2A_UPSTREAM_CARD_URL"), // default <upstream origin>/.well-known/agent-card.json
 };
 const envBindings: Record<string, any> = {
 	DB: bindings.d1(v("A2A_D1_ID") ? { name: v("A2A_D1_NAME") || name, id: v("A2A_D1_ID") } : { name: v("A2A_D1_NAME") || name }),
 };
 for (const [k, val] of Object.entries(plain)) if (val !== "" || (k === "WAKE_KEY_PREFIX" && "WAKE_KEY_PREFIX" in e)) envBindings[k] = bindings.text(val);
 
-// Secrets are uploaded separately (never in this file): OWNER_TOKEN, WAKE_WEBHOOK_URL, WAKE_WEBHOOK_KEY, WAKE_HMAC_SECRET.
+// Secrets are uploaded separately (never in this file): OWNER_TOKEN, WAKE_WEBHOOK_URL, WAKE_WEBHOOK_KEY, WAKE_HMAC_SECRET,
+// and in proxy mode UPSTREAM_TOKEN, UPSTREAM_ACCESS_CLIENT_ID, UPSTREAM_ACCESS_CLIENT_SECRET.
 // They are declared only in development mode (`cf dev`), so local dev reads them from .dev.vars while
 // production deploys never fail because an optional wake secret is unset.
-const SECRETS = ["OWNER_TOKEN", "WAKE_WEBHOOK_URL", "WAKE_WEBHOOK_KEY", "WAKE_HMAC_SECRET"];
+const SECRETS = ["OWNER_TOKEN", "WAKE_WEBHOOK_URL", "WAKE_WEBHOOK_KEY", "WAKE_HMAC_SECRET", "UPSTREAM_TOKEN", "UPSTREAM_ACCESS_CLIENT_ID", "UPSTREAM_ACCESS_CLIENT_SECRET"];
 
 export default defineConfig((ctx) => ({
 	...(v("CLOUDFLARE_ACCOUNT_ID") ? { accountId: v("CLOUDFLARE_ACCOUNT_ID") } : {}),

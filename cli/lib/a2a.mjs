@@ -12,6 +12,31 @@ export function checkId(v, what = "id") {
 }
 
 export const newId = () => crypto.randomUUID();
+
+/** Hosts that only resolve on a private network (Tailnet, LAN, loopback). Same rules as the Worker's isPrivateHost. */
+export function isPrivateHost(host) {
+	const h = String(host || "").toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+	if (!h.includes(".") && !h.includes(":")) return true; // single-label names (localhost, MagicDNS short names)
+	if (/(^|\.)(localhost|local|lan|home|internal|intranet|corp|home\.arpa|ts\.net)$/.test(h)) return true;
+	const m = h.match(/^(\d+)\.(\d+)\.\d+\.\d+$/);
+	if (m) {
+		const [a, b] = [Number(m[1]), Number(m[2])];
+		return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127);
+	}
+	return h.includes(":") && (h === "::1" || /^f[cd]/.test(h) || h.startsWith("fe80"));
+}
+
+/** Problem with an upstream URL for proxy mode ("" when fine): the Worker calls it from Cloudflare, so it must be https
+ *  on a public hostname (a Cloudflare Tunnel hostname behind Access), never a Tailnet / LAN / localhost address. */
+export function upstreamUrlProblem(v) {
+	let u;
+	try { u = new URL(v); } catch { return "is not a URL"; }
+	if (u.protocol !== "https:") return "must be https";
+	if (u.username || u.password) return "must not contain credentials (export UPSTREAM_TOKEN instead)";
+	if (isPrivateHost(u.hostname))
+		return `is a private-network address (${u.hostname}) that the Worker cannot reach: publish the agent through a Cloudflare Tunnel hostname behind Access and pass that (setup skill: "Already have A2A on a Tailnet or LAN")`;
+	return "";
+}
 export const randomToken = (bytes = 32) => crypto.randomBytes(bytes).toString("base64url");
 
 export async function httpJson(url, { method, body, headers = {}, timeout = 30000 } = {}) {

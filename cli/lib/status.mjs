@@ -55,6 +55,23 @@ export function nextStep(s) {
 		return fail(/HTTP 401/.test(s.ownerApi.error)
 			? `the owner token in ${s.configFile} does not match the Worker: run \`${CLI} init --rotate-owner-token\` from the machine that owns this deployment`
 			: `the owner API failed (${s.ownerApi.error}): run \`${CLI} deploy\``);
+	// proxy / expose mode: the upstream answers peers, so wakes are optional (pairing notifications only)
+	const fc = s.facade;
+	if (fc) {
+		if (fc.mode !== "proxy")
+			return fail(`${s.configFile} has A2A_UPSTREAM_URL, but the Worker is not in proxy mode (an older template or an interrupted deploy): run \`${CLI} deploy\``);
+		if (fc.upstreamProblem) return fail(`the upstream URL is unusable: ${fc.upstreamProblem}. Fix it with \`${CLI} deploy --upstream <tunnel URL>\``);
+		if (fc.upstreamCard !== "ok")
+			return fail(`the Worker can't fetch the upstream's agent card (${fc.upstreamCard}): is the tunnel connector running on the agent's machine, and does the Access app admit the service token you exported as UPSTREAM_ACCESS_CLIENT_ID / UPSTREAM_ACCESS_CLIENT_SECRET (re-run \`${CLI} deploy\` with them exported)?`);
+		if (fc.publicCardLeaks && fc.publicCardLeaks.length)
+			return fail(`the public card still names a private URL (${fc.publicCardLeaks[0]}): report this as a bug; meanwhile override the field with --agent-description / --agent-skills and run \`${CLI} deploy\``);
+		const also = [];
+		if (!fc.hasUpstreamAccessServiceToken) also.push("no Access service token for the upstream: unless the upstream hostname is protected another way, put it behind Cloudflare Access and export UPSTREAM_ACCESS_CLIENT_ID / UPSTREAM_ACCESS_CLIENT_SECRET, then deploy");
+		if (s.pairing && s.pairing.mode === "human" && !s.pairing.passwordSet)
+			also.push(`peers can't connect yet: run \`${CLI} pair set-password --web\` and send your human the one-time link (or they run \`${CLI} pair set-password\` in a terminal); never set it yourself`);
+		if (s.pairing && s.pairing.pending) also.push(`${s.pairing.pending} pending pairing request(s): \`${CLI} pair list\`, then tell your human (never approve on your own)`);
+		return done(`none: the façade is up and forwards paired peers' A2A calls to the upstream. Peers connect with \`${CLI} connect ${s.baseUrl}\``, also);
+	}
 	const t = s.tunnel;
 	if (t && !t.complete) return fail(`a previous \`tunnel create\` did not finish: run \`${CLI} tunnel rm\`, then \`${CLI} tunnel create\``);
 	if (t && !t.tokenFileOk)
@@ -99,6 +116,7 @@ export async function collect() {
 		baseUrl: baseUrl(), urlKind: C.get("A2A_HOSTNAME") ? "custom domain" : "workers.dev", cron: C.get("A2A_ENABLE_CRON") === "1",
 		hasOwnerToken: !!C.get("A2A_OWNER_TOKEN"), baseUrlSaved: (C.fileConfig().A2A_BASE_URL || "").replace(/\/$/, ""), baseUrlEnv: "",
 		card: { ok: false, error: "not checked" }, ownerApi: { ok: false, error: "not checked" }, wake: null, tunnel: null, zones: null, pairing: null,
+		upstream: C.get("A2A_UPSTREAM_URL") || null, facade: null,
 	};
 	const envBase = (process.env.A2A_BASE_URL || "").replace(/\/$/, "");
 	if (envBase && envBase !== s.baseUrlSaved) s.baseUrlEnv = envBase;
@@ -118,6 +136,10 @@ export async function collect() {
 					s.pairing = { mode: pr.mode, passwordSet: !!pr.passwordSet, passwordSetAt: pr.passwordSetAt || null, passwordSetVia: pr.passwordSetVia || null,
 						setupLinkExpiresAt: pr.setupLinkExpiresAt || null, pending: (pr.pending || []).length };
 			} catch { /* older Worker (no pairing yet): leave unknown */ }
+			if (s.upstream) {
+				try { s.facade = await owner("GET", "/owner/facade"); }
+				catch (e) { s.facade = { mode: "unknown", error: e.message }; }
+			}
 		}
 	}
 	const dir = D.workerDir({});
@@ -154,6 +176,10 @@ export async function status(o) {
 			rows.push(["agent card", !s.card.ok ? `FAILED: ${s.card.error}` : s.card.urlProblem ? `WRONG URL: "${s.card.name}", but ${s.card.urlProblem}`
 				: `OK: "${s.card.name}" (A2A ${s.card.versions.join(", ") || "?"})`]);
 			rows.push(["owner API", s.ownerApi.ok ? "OK" : `FAILED: ${s.ownerApi.error}`]);
+			if (s.upstream) {
+				const f = s.facade || {};
+				rows.push(["upstream", `${s.upstream} (proxy mode)${f.mode === "proxy" ? `; card ${f.upstreamCard}${f.upstreamVersions && f.upstreamVersions.length ? ` (A2A ${f.upstreamVersions.join(", ")})` : ""}; credential ${f.hasUpstreamToken ? "set" : "none"}; Access service token ${f.hasUpstreamAccessServiceToken ? "set" : "NONE"}; public card ${f.publicCardLeaks && f.publicCardLeaks.length ? "LEAKS a private URL" : "clean"}` : f.error ? `; ${f.error}` : "; the Worker is not in proxy mode"}`]);
+			}
 			rows.push(["wake", wakeLine(s)]);
 			const t = s.tunnel;
 			rows.push(["tunnel", !t ? "none" : `${t.wakeUrl} -> ${t.origin || "?"}; ${!t.complete ? "INCOMPLETE" : t.tokenFileOk ? "set up" : "set up, but the connector token file is MISSING"}` +

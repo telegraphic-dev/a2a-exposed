@@ -1,6 +1,6 @@
 ---
 name: a2a-over-webhook-setup
-description: Use when the user wants to give this agent a public A2A (Agent2Agent) endpoint, deploy or redeploy the a2a-over-webhook Cloudflare Worker, connect a wake webhook (Grok Bot, Claude Code, OpenClaw, Hermes, n8n/Zapier/generic), or set up scheduled inbox polling.
+description: Use when the user wants to give this agent a public A2A (Agent2Agent) endpoint, deploy or redeploy the a2a-over-webhook Cloudflare Worker, connect a wake webhook (Grok Bot, Claude Code, OpenClaw, Hermes, n8n/Zapier/generic), set up scheduled inbox polling, or securely expose an agent that already speaks A2A on a Tailnet, LAN or localhost through a public façade.
 version: 0.3.1
 author: Telegraphic Developer
 license: MIT
@@ -51,6 +51,18 @@ metadata:
         sensitive: true
       WAKE_ACCESS_CLIENT_SECRET:
         description: Cloudflare Access service-token client secret for a wake tunnel (set by tunnel create).
+        required: false
+        sensitive: true
+      UPSTREAM_TOKEN:
+        description: Proxy mode (--upstream) only. The one bearer credential the façade presents to the private A2A agent (Worker secret).
+        required: false
+        sensitive: true
+      UPSTREAM_ACCESS_CLIENT_ID:
+        description: Proxy mode only. Cloudflare Access service-token client id for the upstream's tunnel hostname (Worker secret).
+        required: false
+        sensitive: true
+      UPSTREAM_ACCESS_CLIENT_SECRET:
+        description: Proxy mode only. Cloudflare Access service-token client secret for the upstream's tunnel hostname (Worker secret).
         required: false
         sensitive: true
 ---
@@ -207,12 +219,77 @@ There is no `adopt` command yet. To move a Worker that runs an earlier build of 
 
 1. Back up the D1 database first (for example, export every table with `npx cf d1 query <db-id> --sql ...`, and note the time-travel bookmark from `npx cf d1 time-travel get-bookmark <db-id>`).
 2. Write `config.env` yourself (chmod 600) with `CLOUDFLARE_ACCOUNT_ID`, `A2A_WORKER_NAME`, `A2A_D1_NAME`, `A2A_D1_ID`, `A2A_HOSTNAME` (a workers.dev Worker: leave it out and set `A2A_WORKERS_DEV_SUBDOMAIN`), `A2A_BASE_URL`, the **existing** owner token as `A2A_OWNER_TOKEN`, and the agent-card settings (`A2A_AGENT_NAME`, `A2A_AGENT_DESCRIPTION`, `A2A_AGENT_SKILLS`, ...). With `A2A_D1_ID` already saved, the saved hostname (or workers.dev) is not treated as a move.
-3. Run `npx a2a-over-webhook deploy --preset <preset>` with **no** `WAKE_*` variables exported. `deploy` (unlike `init`) uploads no secrets file when none are exported, so `OWNER_TOKEN` and the wake secrets already on the Worker are kept. It also applies the pending D1 migrations (`0002_wake_budget`, `0003_device_pairing`, `0004_pairing_replace`) and prints `applied: ...`.
+3. Run `npx a2a-over-webhook deploy --preset <preset>` with **no** `WAKE_*` (or `UPSTREAM_*`) variables exported. `deploy` (unlike `init`) uploads no secrets file when none are exported, so `OWNER_TOKEN` and the wake secrets already on the Worker are kept. It also applies the pending D1 migrations (`0002_wake_budget`, `0003_device_pairing`, `0004_pairing_replace`, `0005_facade_owners`) and prints `applied: ...`.
 4. Run `npx a2a-over-webhook status`. The agent card should show the existing name and base URL, and the wake mode should match the wake the Worker already had. Continue from its `next step:` line.
 5. Peer tokens live in D1 as SHA-256 hashes, and lookups are by hash, so existing tokens (including the older `s2a_` prefix) keep working; nothing needs reissuing.
 6. Device-flow pairing (section 5) is on after the deploy, with `human` approval: run `pair set-password --web` and send your human the one-time link (or they run `pair set-password` in a terminal). To keep tokens manual only, deploy with `--pairing-approval off`.
 
 Migrations are tracked by file name, and `deploy` applies every file not yet recorded in `d1_migrations`, in numeric order, including a lower number added later. So an older `0001_init.sql` that is already recorded is not re-run. `0002_wake_budget.sql` adds the one table the earlier schema lacked (on newer databases it does nothing), `0003_device_pairing.sql` adds pairing, and `0004_pairing_replace.sql` adds one column for re-pairing (`connect --replace`). A database that already recorded `0003` under v0.2.0 still gets `0002` (and `0004`) on its next `deploy`.
+
+### Already have A2A on a Tailnet or LAN: expose it through a public façade
+
+Use this when the agent **already serves A2A JSON-RPC** (1.0 or 0.3) on a private address: a Tailnet name (`https://jean.tail1234.ts.net/a2a`), a LAN IP, or `localhost`. Don't fall back to the webhook inbox or polling, and never advertise the private card: its URLs are unreachable for everyone else, and they leak your network layout. Instead the Worker becomes a **public façade** (proxy mode, `--upstream`):
+
+```
+peer ──HTTPS + per-peer bearer──> https://agent.example.com            (Worker: rewritten card, device-flow pairing,
+                                                                          token check, per-peer task isolation)
+      ──Access service token + UPSTREAM_TOKEN──> https://agent-upstream.example.com/a2a   (Cloudflare Tunnel hostname,
+                                                                                         Access admits only the Worker)
+      ──cloudflared on the agent's machine──> http://127.0.0.1:8080/a2a  (or the Tailnet / LAN address)
+```
+
+A Worker can't reach a Tailnet or LAN address, so the upstream is published through a **named Cloudflare Tunnel** whose hostname is locked by a **Cloudflare Access** app that admits only one service token, held by the Worker (the same pattern as the wake tunnel). The CLI refuses a private `--upstream`.
+
+1. **Tunnel + Access for the upstream** (manual for now; a `tunnel create --upstream` helper is planned). Ask the user first: this creates DNS, a tunnel, and Access objects. Needs Zero Trust (free) and a zone on the account. On the agent's machine:
+
+   ```bash
+   cloudflared tunnel login                       # once, picks the zone
+   cloudflared tunnel create agent-upstream
+   cloudflared tunnel route dns agent-upstream agent-upstream.example.com
+   # ~/.cloudflared/config.yml
+   #   tunnel: <tunnel id>
+   #   credentials-file: ~/.cloudflared/<tunnel id>.json
+   #   ingress:
+   #     - hostname: agent-upstream.example.com
+   #       service: http://127.0.0.1:8080          # the agent's A2A server (cloudflared inside the Tailnet can use its ts.net name)
+   #       originRequest:
+   #         access: { required: true, teamName: <team>, audTag: [<Access app AUD>] }
+   #     - service: http_status:404
+   cloudflared tunnel run agent-upstream
+   ```
+
+   In Zero Trust: **Access → Service credentials**, create a service token (copy the client id and secret once); **Access → Applications**, add a self-hosted app on `agent-upstream.example.com` with exactly **one policy: Service Auth** for that token (no email or everyone rules). Check that a bare `GET https://agent-upstream.example.com/.well-known/agent-card.json` is refused (401/403 or a redirect to `<team>.cloudflareaccess.com`).
+
+2. **Deploy the façade** (new or existing deployment). Credentials come from the environment only, never argv:
+
+   ```bash
+   export UPSTREAM_ACCESS_CLIENT_ID='<service token client id>' UPSTREAM_ACCESS_CLIENT_SECRET='<secret>'
+   export UPSTREAM_TOKEN='<bearer the agent expects>'     # only if the agent checks its own bearer (recommended)
+   npx a2a-over-webhook init --hostname agent.example.com --upstream https://agent-upstream.example.com/a2a
+   #   existing deployment: npx a2a-over-webhook deploy --upstream https://agent-upstream.example.com/a2a
+   #   card elsewhere:      --upstream-card-url https://agent-upstream.example.com/.well-known/agent-card.json
+   #   back to the inbox:   deploy --upstream none
+   npx a2a-over-webhook status        # upstream: card ok (A2A 1.0); public card clean; next step
+   ```
+
+3. **Pairing** is unchanged and stays on the façade: set the approval password (section 5), then peers run `connect https://agent.example.com`. A wake webhook is optional (it only announces pairing requests); messages go to the upstream, so the inbox stays empty.
+
+**Agent card rewrite (always on in proxy mode).** The façade fetches the upstream's card (cached 5 minutes, with the Access token and `UPSTREAM_TOKEN`), and serves a rewritten copy at `/.well-known/agent-card.json` (A2A 1.0) and `/.well-known/agent.json` (0.3 shape):
+
+- `supportedInterfaces`: one JSONRPC interface per version the upstream advertises (1.0 and/or 0.3), every one at `https://agent.example.com/`. Upstream interface URLs, gRPC / HTTP+JSON interfaces, `url`, `additionalInterfaces` and `preferredTransport` are never copied.
+- `securitySchemes` / `securityRequirements`: the façade's (per-peer `bearer` + device-flow `pairing` with `/oauth/*` URLs on the façade). The upstream's own schemes describe the credential the façade holds, not what callers need.
+- `capabilities`: `pushNotifications` and `extensions` from the upstream; `streaming` and `extendedAgentCard` are `false` (not proxied yet).
+- name, description, version, skills, default modes, provider, `documentationUrl`, `iconUrl`: `--agent-*` / `--provider-*` / `A2A_DOCUMENTATION_URL` settings win, then the upstream card, then defaults. Every string is scrubbed: a private or upstream URL (localhost, RFC 1918, 100.64/10, `*.ts.net`, `*.local`, single-label hosts, plain `http`, the tunnel hostname) becomes `[private URL removed]`, a bare upstream or `*.ts.net` host name `[private host removed]`. `documentationUrl`, `iconUrl` and `provider.url` are dropped instead when private.
+- `signatures` are dropped (they no longer match), and unknown top-level fields are not copied.
+- If the upstream card can't be fetched, the façade serves a card from the settings (1.0 and 0.3 interfaces, still only public URLs) and `status` says why.
+
+The inbox card (no `--upstream`) uses the same scrubbing for `--agent-description`, `--agent-skills`, `--provider-url` and `A2A_DOCUMENTATION_URL`, so a pasted Tailnet link never reaches peers.
+
+**Upstream credential model.** The façade holds **one** upstream identity (`UPSTREAM_TOKEN` + the Access service token) and calls the agent for every paired peer; the peer's own token never leaves the façade. The peer label goes upstream in `X-A2A-Peer` (trustworthy only because Access admits nothing but the Worker). Because peers share that identity, the façade keeps them apart itself: it records which peer created each task and context (D1 `facade_owners`), and refuses `GetTask` / `CancelTask` / push-config calls on another peer's task, or a message into another peer's context, before they reach the agent. `ListTasks` is refused (it would list everyone's tasks), streaming returns `-32004`, and push-notification URLs must be public https (no SSRF into your private network through the agent). An upstream 401/403 or a non-JSON answer becomes a `502` JSON-RPC error, never a 401 to the peer.
+
+**Threat model (proxy mode).** Two locks guard the upstream: Access (only the Worker's service token gets through the tunnel hostname) and `UPSTREAM_TOKEN` (the agent's own check; keep it on). Public callers need a per-peer token from pairing (human approval) or `token issue`, and `token revoke` cuts one off at the façade immediately. Unchanged caveats: whoever holds the owner token (the agent's `config.env`) can issue tokens and replace the approval password, so a compromised agent with the owner token can let anyone in; and whoever controls the Cloudflare account can read the Worker's secrets and call the agent as the façade. The owner API never returns the upstream secrets (fingerprints only). The façade passes task contents through verbatim: it does not rewrite URLs inside replies or artifacts, so the agent must not put private links in what it sends back.
+
+**Pairing out while you build the façade.** A Tailnet agent can already connect to other inboxes: `connect https://b.example.com --card-url https://jean.tail1234.ts.net/.well-known/agent-card.json`. A private https card is sent as informational, and the other owner's approval page and wake flag it as "not publicly reachable"; a non-https card is left out (as before). Replies reach you by polling (`poll`) until the façade is up.
 
 ## 3. Owner token
 
@@ -499,6 +576,10 @@ The `cf` CLI is young: check the exact subcommands and confirmation flags with `
 | `tunnel create`: `account has no domain (zone)` | The tunnel needs a zone somewhere on the account. Use polling, or add a domain and run `tunnel create` later (no redeploy) |
 | `tunnel create`: `a previous tunnel create did not finish` | Run `tunnel rm`, then `tunnel create` |
 | Setup stopped halfway (approval timeout, lost session) | Run `npx a2a-over-webhook status` and continue from its `next step:` line; every step is safe to re-run |
+| Proxy mode, `status`: `can't fetch the upstream's agent card (HTTP 530 ...)` | The upstream tunnel has no running connector: start `cloudflared tunnel run ...` on the agent's machine |
+| Proxy mode, `status`: `can't fetch the upstream's agent card (HTTP 401/403 or 302)` | Access refused the Worker: export the right `UPSTREAM_ACCESS_CLIENT_ID` / `UPSTREAM_ACCESS_CLIENT_SECRET` and run `deploy`; check the Access app's Service Auth policy names that token |
+| Proxy mode: peers get `-32603 ... refused by its upstream` (HTTP 502) | The agent rejected `UPSTREAM_TOKEN` (or Access did): export the right one and run `deploy` |
+| `--upstream is a private-network address` | By design: publish the agent through a Tunnel hostname behind Access and pass that (section "Already have A2A on a Tailnet or LAN") |
 | Card advertises a local or Tailnet URL (`status`: `agent card: WRONG URL`) | The card URL comes only from the deployment: the custom hostname or the workers.dev URL. Don't edit the card or export `A2A_BASE_URL` / `A2A_PUBLIC_URL` with the agent's own webhook URL; that URL goes in `WAKE_WEBHOOK_URL` only. Unset them and run `npx a2a-over-webhook deploy` |
 | Agent sandbox flags a `.dev` URL (e.g. Hermes: `Lookalike TLD`) | Avoid raw `curl` of `*.workers.dev`: `status` checks the card itself. If an approval is still needed, tell the user to approve it |
 | Claude Code 429 | Hourly fire limit; lower `--max-per-hour` or raise `--debounce` |

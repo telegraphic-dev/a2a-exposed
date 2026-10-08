@@ -1,5 +1,6 @@
 // Device-flow pairing (OAuth 2.0 Device Authorization Grant, RFC 8628): pure helpers (Web Crypto only), so they run
 // in Workers and in Node's test runner. The HTTP handlers live in index.ts.
+import { isPrivateHost } from "./a2a.ts";
 
 export const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 export const EXPIRES_S = 600; // device / user code lifetime
@@ -87,6 +88,13 @@ export function cleanCardUrl(v: unknown): string {
 		const u = new URL(v);
 		return u.protocol === "https:" && !u.username && !u.password ? u.href : "";
 	} catch { return ""; }
+}
+
+/** True when a (cleaned, https) card URL is on a private network: a Tailnet (*.ts.net, 100.64.0.0/10), LAN or
+ *  loopback name. Such a card is accepted as informational (an agent pairing out before it has a public façade) and
+ *  flagged on the approval page and in the wake. */
+export function cardIsPrivate(v: string): boolean {
+	try { return isPrivateHost(new URL(v).hostname); } catch { return false; }
 }
 
 /** Peer label for a paired agent: [A-Za-z0-9_-], from client_name, else client_id, else "paired-agent". */
@@ -179,7 +187,7 @@ export function devicePage(m: PageModel, nonce: string): string {
 		["Code", formatUserCode(r.userCode)],
 		["Agent (as it calls itself)", r.clientName || r.clientId || "(no name given)"],
 		...(r.clientId && r.clientName && r.clientId !== r.clientName ? [["Client id", r.clientId]] : []),
-		["Agent card (claimed)", r.agentCardUrl || "(none given)"],
+		["Agent card (claimed)", r.agentCardUrl ? r.agentCardUrl + (cardIsPrivate(r.agentCardUrl) ? " (private network address, e.g. a Tailnet: not publicly reachable, so this inbox can't check it; informational only)" : "") : "(none given)"],
 		["Requested from", [r.ip || "unknown address", r.country].filter(Boolean).join(", ")],
 		["Expires", `${Math.max(0, Math.round((r.expiresMs - Date.now()) / 60000))} min`],
 		...(r.replacesLabel ? [["Replaces", `the active token "${r.replacesLabel}" (the requester proved it holds it); approving issues a new token under the same label and the old one stops working`]] : []),

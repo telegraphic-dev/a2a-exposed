@@ -5,7 +5,7 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import * as C from "./config.mjs";
-import { cardUrlProblem, cfErrorCode, die, fingerprint, httpJson, randomToken } from "./a2a.mjs";
+import { cardUrlProblem, cfErrorCode, die, fingerprint, httpJson, randomToken, upstreamUrlProblem } from "./a2a.mjs";
 import { owner } from "./commands.mjs";
 import * as WD from "./workersdev.mjs";
 
@@ -14,6 +14,10 @@ const PRESETS = ["grok-bot", "claude-code", "openclaw-wake", "openclaw-agent", "
 // WAKE_ACCESS_*: Cloudflare Access service token for a wake URL behind Access (set by `tunnel create`, or exported
 // by hand for your own Access-protected endpoint)
 export const WAKE_SECRETS = ["WAKE_WEBHOOK_URL", "WAKE_WEBHOOK_KEY", "WAKE_HMAC_SECRET", "WAKE_ACCESS_CLIENT_ID", "WAKE_ACCESS_CLIENT_SECRET"];
+// Proxy / expose mode (--upstream): the one credential the façade presents to the private upstream (Bearer), and the
+// Cloudflare Access service token for the upstream's tunnel hostname. Read from the environment only (never argv).
+export const UPSTREAM_SECRETS = ["UPSTREAM_TOKEN", "UPSTREAM_ACCESS_CLIENT_ID", "UPSTREAM_ACCESS_CLIENT_SECRET"];
+const DEPLOY_SECRETS = [...WAKE_SECRETS, ...UPSTREAM_SECRETS];
 
 // Non-secret deploy settings persisted in config.env and passed to cloudflare.config.ts as env vars.
 const DEPLOY_KEYS = [
@@ -23,6 +27,7 @@ const DEPLOY_KEYS = [
 	"WAKE_PRESET", "WAKE_AGENT_ID", "WAKE_KEY_HEADER", "WAKE_KEY_PREFIX", "WAKE_BODY_TEMPLATE", "WAKE_CLI_COMMAND",
 	"WAKE_DEBOUNCE_SECONDS", "WAKE_MAX_PER_HOUR", "A2A_MAX_BODY", "A2A_RATE_PER_MIN", "A2A_ENABLE_CRON",
 	"A2A_WORKERS_DEV_SUBDOMAIN", "A2A_RETIRED_HOSTNAMES", "PAIRING_APPROVAL", "A2A_PBKDF2_ITERATIONS", "A2A_WORKERS_LOGS",
+	"A2A_UPSTREAM_URL", "A2A_UPSTREAM_CARD_URL",
 ];
 // init/deploy flag -> config key
 const FLAG_KEYS = {
@@ -32,6 +37,7 @@ const FLAG_KEYS = {
 	preset: "WAKE_PRESET", "agent-id": "WAKE_AGENT_ID", "key-header": "WAKE_KEY_HEADER", "key-prefix": "WAKE_KEY_PREFIX",
 	"body-template": "WAKE_BODY_TEMPLATE", "cli-command": "WAKE_CLI_COMMAND", debounce: "WAKE_DEBOUNCE_SECONDS", "max-per-hour": "WAKE_MAX_PER_HOUR",
 	"pairing-approval": "PAIRING_APPROVAL", "pbkdf2-iterations": "A2A_PBKDF2_ITERATIONS", "workers-logs": "A2A_WORKERS_LOGS",
+	upstream: "A2A_UPSTREAM_URL", "upstream-card-url": "A2A_UPSTREAM_CARD_URL",
 };
 export const PAIRING_MODES = ["human", "agent", "off"];
 export const DEPLOY_FLAGS = Object.keys(FLAG_KEYS);
@@ -106,7 +112,7 @@ function deployEnv() {
 		else if (k !== "WAKE_KEY_PREFIX") delete env[k];
 	}
 	if ("WAKE_KEY_PREFIX" in C.fileConfig()) env.WAKE_KEY_PREFIX = C.fileConfig().WAKE_KEY_PREFIX;
-	for (const k of WAKE_SECRETS) delete env[k]; // secrets only travel via the secrets file
+	for (const k of DEPLOY_SECRETS) delete env[k]; // secrets only travel via the secrets file
 	// the agent card URL comes from A2A_HOSTNAME / the workers.dev subdomain only (older templates read these)
 	delete env.A2A_PUBLIC_URL; delete env.PUBLIC_URL;
 	return env;
@@ -115,7 +121,7 @@ function deployEnv() {
 /** Environment for cf calls other than deploy: account pinned, wake secrets stripped. */
 export function cfEnv() {
 	const env = { ...process.env, CLOUDFLARE_ACCOUNT_ID: C.get("CLOUDFLARE_ACCOUNT_ID") };
-	for (const k of WAKE_SECRETS) delete env[k];
+	for (const k of DEPLOY_SECRETS) delete env[k];
 	return env;
 }
 
@@ -133,6 +139,13 @@ export async function withSecretsFile(secrets, fn) {
 export function wakeSecretsFromEnv() {
 	const s = {};
 	for (const k of WAKE_SECRETS) if (process.env[k]) s[k] = process.env[k];
+	return s;
+}
+
+/** Secrets init/deploy upload when exported: the wake secrets plus, for proxy mode, the upstream credentials. */
+export function deploySecretsFromEnv() {
+	const s = wakeSecretsFromEnv();
+	for (const k of UPSTREAM_SECRETS) if (process.env[k]) s[k] = process.env[k];
 	return s;
 }
 
@@ -180,6 +193,13 @@ function applyFlags(o) {
 		upd.A2A_WORKERS_LOGS = upd.A2A_WORKERS_LOGS === "on" ? "1" : null;
 	}
 	if (upd.WAKE_PRESET && !PRESETS.includes(upd.WAKE_PRESET)) die(`unknown preset ${upd.WAKE_PRESET} (${PRESETS.join(" | ")})`);
+	for (const [flag, key] of [["upstream", "A2A_UPSTREAM_URL"], ["upstream-card-url", "A2A_UPSTREAM_CARD_URL"]]) {
+		if (upd[key] === undefined) continue;
+		if (["", "none", "off"].includes(String(upd[key]).trim().toLowerCase())) { upd[key] = null; continue; }
+		const why = upstreamUrlProblem(String(upd[key]).trim());
+		if (why) die(`--${flag} ${why}`);
+		upd[key] = new URL(String(upd[key]).trim()).href;
+	}
 	if (upd.A2A_AGENT_SKILLS) {
 		try { if (!Array.isArray(JSON.parse(upd.A2A_AGENT_SKILLS))) throw 0; } catch { die("--agent-skills must be a JSON array of A2A AgentSkill objects"); }
 	}
@@ -359,14 +379,24 @@ export async function init(o) {
 	if (!ownerToken || o["rotate-owner-token"]) ownerToken = randomToken(32);
 	C.saveConfig({ A2A_OWNER_TOKEN: ownerToken, A2A_BASE_URL: publicBase() || undefined });
 
-	const secrets = { OWNER_TOKEN: ownerToken, ...wakeSecretsFromEnv() };
+	const secrets = { OWNER_TOKEN: ownerToken, ...deploySecretsFromEnv() };
 	step(`deploying (secrets uploaded: ${Object.keys(secrets).join(", ")})`);
 	await deployAndLearn(dir, secrets, o);
 	const base = deployedBase();
 	if (base) await verifyDeployedCard(base);
 	console.log(base);
 	reportSwitch(switched);
+	proxyNote();
 	console.error(`config saved to ${C.CONFIG_FILE} (chmod 600). Next: a2a-over-webhook status (shows the next setup step)`);
+}
+
+/** Proxy / expose mode reminder after a deploy (the upstream credentials are secrets: only their presence is shown). */
+function proxyNote() {
+	const up = C.get("A2A_UPSTREAM_URL");
+	if (!up) return;
+	const sent = UPSTREAM_SECRETS.filter((k) => process.env[k]);
+	console.error(`proxy mode: authenticated A2A calls are forwarded to ${up}; the public card is the upstream's, rewritten to this deployment's URL.` +
+		` Upstream secrets uploaded now: ${sent.join(", ") || "none (existing ones kept)"}. Check the upstream and the card with: a2a-over-webhook status`);
 }
 
 export async function deploy(o) {
@@ -381,13 +411,14 @@ export async function deploy(o) {
 	if (!o["skip-install"]) run("npm", ["install", "--no-audit", "--no-fund", "--loglevel=error"], { cwd: dir });
 	const env = cfEnv();
 	applyMigrations(dir, env);
-	const secrets = wakeSecretsFromEnv();
+	const secrets = deploySecretsFromEnv();
 	if (Object.keys(secrets).length && C.get("A2A_OWNER_TOKEN")) secrets.OWNER_TOKEN = C.get("A2A_OWNER_TOKEN");
 	step(Object.keys(secrets).length ? `deploying (secrets uploaded: ${Object.keys(secrets).join(", ")})` : "deploying (existing secrets kept)");
 	await deployAndLearn(dir, secrets, o);
 	const base = deployedBase();
 	if (base) await verifyDeployedCard(base);
 	if (switched) { console.log(base); reportSwitch(switched); }
+	proxyNote();
 }
 
 /** Fingerprints of the wake secrets in the local environment (what `wake set` would upload). */

@@ -20,6 +20,7 @@ export type PairingInfo = {
 	clientName: string;
 	clientId: string;
 	agentCardUrl: string;
+	agentCardPrivate?: boolean; // the claimed card is on a private network (Tailnet, LAN): informational, not reachable
 	expiresIn: number;
 	replacesLabel?: string; // re-pairing: the requester proved it holds this active token; approval replaces it
 };
@@ -93,7 +94,7 @@ export function wakeSummary(ev: WakeEvent, cli: string, withPreview = true): str
 		const p = ev.pairing;
 		// the name and card URL are requester-chosen: only in the untrusted-preview variants, quoted
 		const who = withPreview
-			? `an agent calling itself ${JSON.stringify(p.clientName || p.clientId || "(no name)")}${p.agentCardUrl ? ` (claimed card: ${JSON.stringify(p.agentCardUrl)})` : ""}`
+			? `an agent calling itself ${JSON.stringify(p.clientName || p.clientId || "(no name)")}${p.agentCardUrl ? ` (claimed card: ${JSON.stringify(p.agentCardUrl)}${p.agentCardPrivate ? ", on a private network: not publicly reachable" : ""})` : ""}`
 			: "an agent";
 		return [
 			`A2A pairing request: ${who} asks to connect to your inbox (code ${p.userCode}, expires in ${Math.round(p.expiresIn / 60)} minutes).`,
