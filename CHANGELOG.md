@@ -6,6 +6,7 @@ All notable changes to the `a2a-over-webhook` CLI, Worker template, and skills. 
 
 - **Worker:** migration `0002_wake_budget.sql` creates the `wake_budget` table on D1 databases whose `0001_init.sql` came from an earlier build (D1 tracks migrations by file name, so the current `0001` never ran there). Idempotent on new databases.
 - **Docs:** setup skill section on adopting an existing deployment (same Worker, D1 and hostname) without reissuing tokens or re-uploading secrets.
+- **Skills:** the setup skill suggests two optional companion skills near its prerequisites, with install commands: `mise` ([telegraphic-dev/mise-skill](https://github.com/telegraphic-dev/mise-skill), for Node 22.18+) and `cloudflare` ([cloudflare/skills](https://github.com/cloudflare/skills), for Workers, D1, the `cf` CLI, DNS, Tunnel and Access). The operate skill points to `cloudflare` for Cloudflare-side troubleshooting. `related_skills` lists them; the README's install section names both.
 
 ## 0.2.0
 
@@ -22,7 +23,7 @@ All notable changes to the `a2a-over-webhook` CLI, Worker template, and skills. 
   - Flood limits apply per IP and globally. D1 migration `0003_device_pairing.sql` (numbered to avoid a `0002` from another branch); run `deploy` to apply it.
 - **Docs:** both skills and the README check the endpoint with `status` instead of `curl`, because some agent sandboxes (Hermes) flag `.dev` URLs in shell commands. The README and the operate skill describe the tunnel as needing any zone on the account.
 
-## 0.1.0 (unreleased)
+## 0.1.0
 
 First npm release of the CLI (`npm i -g a2a-over-webhook`).
 

@@ -108,7 +108,7 @@ Two skills are included:
 
 ## Install the skills
 
-Install both skills; the setup skill is only needed until the endpoint is deployed. Each one names the other in its frontmatter (`related_skills`).
+Install both skills; the setup skill is only needed until the endpoint is deployed. Each one names the other in its frontmatter (`related_skills`), along with the optional companion skills below.
 
 - **Any agent, via [skills.sh](https://skills.sh)** ([skills CLI](https://github.com/vercel-labs/skills)):
   ```bash
@@ -126,6 +126,15 @@ Install both skills; the setup skill is only needed until the endpoint is deploy
   ```
   Or add the repo as a tap (`hermes skills tap add telegraphic-dev/a2a-over-webhook`; skills live under the default `skills/` path).
 - **Grok Bot:** not a skills-CLI target (its `grok` target is Grok Build). Save both `SKILL.md` files to your Grok Bot skill library, or keep a checkout on the bot's box and name the `SKILL.md` path in the routine prompt.
+
+### Optional companion skills
+
+The setup skill offers two more skills and installs them only if you agree. Neither is required; to add them yourself:
+
+```bash
+npx skills add https://github.com/telegraphic-dev/mise-skill --skill mise       # mise: gets Node 22.18+ without replacing the system Node
+npx skills add https://github.com/cloudflare/skills --skill cloudflare          # Cloudflare: Workers, D1, cf CLI, DNS, Tunnel, Access
+```
 
 ### Development: run from a checkout
 

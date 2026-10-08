@@ -8,7 +8,7 @@ homepage: https://github.com/telegraphic-dev/a2a-over-webhook
 metadata:
   hermes:
     tags: [a2a, agent2agent, cloudflare, workers, webhook, deploy, openclaw, hermes]
-    related_skills: [a2a-over-webhook]
+    related_skills: [a2a-over-webhook, mise, cloudflare]
   openclaw:
     emoji: "🛠️"
     requires:
@@ -85,7 +85,7 @@ All commands use the CLI as `npx a2a-over-webhook <cmd>`.
 
 ## 1. Prerequisites
 
-- **Node 22.18+** (`node -v`). Both the skills CLI and Cloudflare's `cf` CLI fail on Node 20.
+- **Node 22.18+** (`node -v`). Both the skills CLI and Cloudflare's `cf` CLI fail on Node 20. Older Node: see the `mise` companion skill below.
 - **Cloudflare login, device-code flow.** No global `cf` is required: `npx cf` works, and the login is stored per user (`~/.config/cloudflare`), so every `cf` binary sees it.
   ```bash
   npx cf auth login --no-browser     # or `cf auth login --no-browser` after `npm i -g cf`
@@ -111,6 +111,17 @@ All commands use the CLI as `npx a2a-over-webhook <cmd>`.
     ```
     Expect no `Answer` in the JSON (`"Status":3` means NXDOMAIN). If an A/AAAA/CNAME already exists on a zone you care about, stop and ask the user.
 - The free Workers plan is enough. D1 free tier: 5 GB.
+
+### Recommended companion skills (optional)
+
+Two separate skills help with this setup. Offer them to the user and install one only if the user agrees or your platform lets you add skills yourself. Setup works without them.
+
+| Skill | Install | Why |
+|---|---|---|
+| `mise` | `npx skills add https://github.com/telegraphic-dev/mise-skill --skill mise` | Guides installing mise and getting a Node 22.18+ runtime (`mise use node@22`, or one-off `mise exec node@22 -- <cmd>`) without replacing the system Node |
+| `cloudflare` | `npx skills add https://github.com/cloudflare/skills --skill cloudflare` | Cloudflare's guide to Workers, D1, DNS, Tunnel and Access; for `cloudflare.config.ts` projects like this Worker it sends the agent to the current `cf` CLI docs |
+
+The `-g` / `--agent` / `-y` flags from **Installing these skills** above apply. Like these skills, they install guidance only; the mise binary is installed separately.
 
 ### Using a separate Cloudflare account / profile
 
