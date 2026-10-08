@@ -40,3 +40,14 @@ test("worker name: a2a-exposed unless A2A_WORKER_NAME is saved (also for a saved
 	assert.equal(name("A2A_D1_ID=abc\n"), "a2a-exposed");
 	assert.equal(name("A2A_D1_ID=abc\nA2A_WORKER_NAME=my-agent\n"), "my-agent");
 });
+
+test("deploy: a saved D1 without A2A_WORKER_NAME is refused (no guessed Worker name), before any Cloudflare call", (t) => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "a2a-wn-"));
+	t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+	fs.writeFileSync(path.join(dir, "config.env"), "A2A_D1_ID=abc\n", { mode: 0o600 });
+	const r = spawnSync(process.execPath, [path.join(HERE, "..", "bin", "a2a-exposed.mjs"), "deploy", "--skip-install"],
+		{ env: { ...clean(), A2A_CONFIG_DIR: dir }, encoding: "utf8" });
+	assert.equal(r.status, 1, r.stdout + r.stderr);
+	assert.match(r.stderr, /no A2A_WORKER_NAME; rerun with --worker-name/);
+	assert.doesNotMatch(r.stderr + r.stdout, /worker project ->/, "stops before touching the Worker project");
+});

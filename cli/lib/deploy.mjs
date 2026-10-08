@@ -492,6 +492,10 @@ export async function upstreamTokenCheck(o, { upstreamChanged = false } = {}) {
 export async function deploy(o) {
 	checkNode();
 	if (!C.get("A2A_D1_ID")) die("no saved deployment; run `a2a-exposed init` first");
+	// init saves A2A_WORKER_NAME before it creates the D1 database, so a saved D1 without a name is a hand-edited config:
+	// refuse rather than guess, so a redeploy never creates a second Worker next to the one this config deployed.
+	if (!C.get("A2A_WORKER_NAME") && o["worker-name"] === undefined)
+		die(`${C.CONFIG_FILE} has a saved deployment (A2A_D1_ID) but no A2A_WORKER_NAME; rerun with --worker-name <the Worker it deployed> (saved for next time)`);
 	const prevUpstream = C.fileConfig().A2A_UPSTREAM_URL || "";
 	const switched = applyFlags(o);
 	const upstreamSecrets = await upstreamTokenCheck(o, { upstreamChanged: (C.get("A2A_UPSTREAM_URL") || "") !== prevUpstream });
