@@ -46,6 +46,19 @@ export function upstreamUrlProblem(v) {
 		return `is a private-network address (${u.hostname}) that the Worker cannot reach: publish the agent through a Cloudflare Tunnel hostname behind Access and pass that (setup skill: "Already have A2A on a Tailnet or LAN")`;
 	return "";
 }
+/** Problem with an upstream card URL ("" when fine): an upstream URL (see above) on the same origin (scheme, host,
+ *  port) as the upstream endpoint, because the Worker fetches the card with UPSTREAM_TOKEN and the Access service
+ *  token; a card on any other origin would receive those credentials. */
+export function upstreamCardUrlProblem(card, upstream) {
+	const why = upstreamUrlProblem(card);
+	if (why) return why;
+	let up;
+	try { up = new URL(upstream).origin; } catch { return ""; } // the upstream URL's own problem is reported for --upstream
+	const got = new URL(card).origin;
+	if (got !== up)
+		return `must be on the upstream's origin (${up}), not ${got}: the Worker fetches the card with UPSTREAM_TOKEN and the Access service token, which only ever go to the upstream itself`;
+	return "";
+}
 export const randomToken = (bytes = 32) => crypto.randomBytes(bytes).toString("base64url");
 
 export async function httpJson(url, { method, body, headers = {}, timeout = 30000 } = {}) {

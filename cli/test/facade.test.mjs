@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseEnv } from "../lib/config.mjs";
-import { isPrivateHost, upstreamUrlProblem } from "../lib/a2a.mjs";
+import { isPrivateHost, upstreamCardUrlProblem, upstreamUrlProblem } from "../lib/a2a.mjs";
 import { cardUrlToSend } from "../lib/pair.mjs";
 import { nextStep } from "../lib/status.mjs";
 
@@ -27,6 +27,15 @@ test("upstream URLs: https on a public (tunnel) hostname only", () => {
 	assert.equal(isPrivateHost("100.128.0.1"), false);
 	for (const h of ["[::1]", "::", "fe80::1", "::ffff:7f00:1", "::ffff:192.168.1.1", "64:ff9b::a00:1"]) assert.equal(isPrivateHost(h), true, h);
 	assert.equal(isPrivateHost("::ffff:808:808"), false);
+});
+
+test("upstream card URL: same origin as the upstream endpoint (credentials ride with the card fetch)", () => {
+	const up = "https://agent-upstream.example.com/a2a";
+	assert.equal(upstreamCardUrlProblem("https://agent-upstream.example.com/.well-known/agent-card.json", up), "");
+	assert.equal(upstreamCardUrlProblem("https://agent-upstream.example.com:443/card.json", up), "");
+	assert.match(upstreamCardUrlProblem("https://evil.example.com/card.json", up), /must be on the upstream's origin/);
+	assert.match(upstreamCardUrlProblem("http://agent-upstream.example.com/card.json", up), /must be https/);
+	assert.match(upstreamCardUrlProblem("https://jean.tail1234.ts.net/card.json", up), /private-network/);
 });
 
 test("connect --card-url: https sent (a Tailnet card as informational), anything else left out", () => {
@@ -62,6 +71,9 @@ test("status next step in proxy mode", () => {
 	assert.match(n.text, /not in proxy mode/);
 	n = nextStep({ ...base, facade: { ...ok, upstreamProblem: "UPSTREAM_URL must be https" } });
 	assert.match(n.text, /upstream URL is unusable/);
+	n = nextStep({ ...base, facade: { ...ok, upstreamCardProblem: "UPSTREAM_CARD_URL must be on the UPSTREAM_URL origin" } });
+	assert.equal(n.ok, false);
+	assert.match(n.text, /upstream card URL is refused/);
 });
 
 // stub cf: records what a deploy sees (plain vars in the environment, secret names in the secrets file)
@@ -119,6 +131,11 @@ test("init/deploy --upstream: saved as a plain var, credentials only via the sec
 	assert.equal(r2.status, 0, r2.stderr);
 	assert.match(s.deploys().at(-1), /card=https:\/\/agent-upstream\.example\.com\/card\.json token_env= secrets=$/);
 	assert.match(r2.stderr, /none \(existing ones kept\)/);
+
+	const cross = await s.cli(["deploy", ...s.w, "--upstream-card-url", "https://evil.example.com/card.json"]);
+	assert.equal(cross.status, 1);
+	assert.match(cross.stderr, /--upstream-card-url https:\/\/evil\.example\.com\/card\.json must be on the upstream's origin/);
+	assert.equal(s.config().A2A_UPSTREAM_CARD_URL, "https://agent-upstream.example.com/card.json", "rejected card URL is not saved");
 
 	const r3 = await s.cli(["deploy", ...s.w, "--upstream", "none", "--upstream-card-url", "none"]);
 	assert.equal(r3.status, 0, r3.stderr);

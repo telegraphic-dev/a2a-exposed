@@ -46,7 +46,8 @@ npx cf auth login --no-browser)
                                                UPSTREAM_ACCESS_CLIENT_ID / _SECRET (never argv). --upstream none
                                                switches back to the inbox
                                 --upstream-card-url  the upstream's card (default <upstream origin>/.well-known/
-                                               agent-card.json)
+                                               agent-card.json); must be on the --upstream origin (it is
+                                               fetched with the upstream credentials)
                                 --cli-command  command shown in wake hints (default "npx a2a-exposed";
                                                e.g. "node /path/to/repo/cli/bin/a2a-exposed.mjs")
                                 --worker-dir   where the Worker project (template copy) lives (default

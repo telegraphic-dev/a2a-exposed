@@ -61,6 +61,7 @@ export function nextStep(s) {
 		if (fc.mode !== "proxy")
 			return fail(`${s.configFile} has A2A_UPSTREAM_URL, but the Worker is not in proxy mode (an older template or an interrupted deploy): run \`${CLI} deploy\``);
 		if (fc.upstreamProblem) return fail(`the upstream URL is unusable: ${fc.upstreamProblem}. Fix it with \`${CLI} deploy --upstream <tunnel URL>\``);
+		if (fc.upstreamCardProblem) return fail(`the upstream card URL is refused: ${fc.upstreamCardProblem}. Fix it with \`${CLI} deploy --upstream-card-url <URL on the upstream's origin>\` (or \`--upstream-card-url none\` for the default)`);
 		if (fc.upstreamCard !== "ok")
 			return fail(`the Worker can't fetch the upstream's agent card (${fc.upstreamCard}): is the tunnel connector running on the agent's machine, and does the Access app admit the service token you exported as UPSTREAM_ACCESS_CLIENT_ID / UPSTREAM_ACCESS_CLIENT_SECRET (re-run \`${CLI} deploy\` with them exported)?`);
 		if (fc.publicCardLeaks && fc.publicCardLeaks.length)

@@ -269,14 +269,14 @@ A Worker can't reach a Tailnet or LAN address, so the upstream is published thro
    export UPSTREAM_TOKEN='<bearer the agent expects>'     # only if the agent checks its own bearer (recommended)
    npx a2a-exposed init --hostname agent.example.com --upstream https://agent-upstream.example.com/a2a
    #   existing deployment: npx a2a-exposed deploy --upstream https://agent-upstream.example.com/a2a
-   #   card elsewhere:      --upstream-card-url https://agent-upstream.example.com/.well-known/agent-card.json
+   #   card elsewhere:      --upstream-card-url https://agent-upstream.example.com/.well-known/agent-card.json  # same origin as --upstream (credentials ride with the fetch)
    #   back to the inbox:   deploy --upstream none
    npx a2a-exposed status        # upstream: card ok (A2A 1.0); public card clean; next step
    ```
 
 3. **Pairing** is unchanged and stays on the façade: set the approval password (section 5), then peers run `connect https://agent.example.com`. A wake webhook is optional (it only announces pairing requests); messages go to the upstream, so the inbox stays empty.
 
-**Agent card rewrite (always on in proxy mode).** The façade fetches the upstream's card (cached 5 minutes, with the Access token and `UPSTREAM_TOKEN`), and serves a rewritten copy at `/.well-known/agent-card.json` (A2A 1.0) and `/.well-known/agent.json` (0.3 shape):
+**Agent card rewrite (always on in proxy mode).** The façade fetches the upstream's card (cached 5 minutes, with the Access token and `UPSTREAM_TOKEN`; so `--upstream-card-url` must be on the `--upstream` origin, anything else is refused by `deploy` and by the Worker), and serves a rewritten copy at `/.well-known/agent-card.json` (A2A 1.0) and `/.well-known/agent.json` (0.3 shape):
 
 - `supportedInterfaces`: one JSONRPC interface per version the upstream advertises (1.0 and/or 0.3), every one at `https://agent.example.com/`. Upstream interface URLs, gRPC / HTTP+JSON interfaces, `url`, `additionalInterfaces` and `preferredTransport` are never copied.
 - `securitySchemes` / `securityRequirements`: the façade's (per-peer `bearer` + device-flow `pairing` with `/oauth/*` URLs on the façade). The upstream's own schemes describe the credential the façade holds, not what callers need.
@@ -579,6 +579,7 @@ The `cf` CLI is young: check the exact subcommands and confirmation flags with `
 | `tunnel create`: `a previous tunnel create did not finish` | Run `tunnel rm`, then `tunnel create` |
 | Setup stopped halfway (approval timeout, lost session) | Run `npx a2a-exposed status` and continue from its `next step:` line; every step is safe to re-run |
 | Proxy mode, `status`: `can't fetch the upstream's agent card (HTTP 530 ...)` | The upstream tunnel has no running connector: start `cloudflared tunnel run ...` on the agent's machine |
+| Proxy mode, `status`: `the upstream card URL is refused: ... must be on the UPSTREAM_URL origin` | The card URL is on another host than `--upstream` (it would receive the upstream credentials): `deploy --upstream-card-url <URL on the upstream's origin>` or `--upstream-card-url none` |
 | Proxy mode, `status`: `can't fetch the upstream's agent card (HTTP 401/403 or 302)` | Access refused the Worker: export the right `UPSTREAM_ACCESS_CLIENT_ID` / `UPSTREAM_ACCESS_CLIENT_SECRET` and run `deploy`; check the Access app's Service Auth policy names that token |
 | Proxy mode: peers get `-32603 ... refused by its upstream` (HTTP 502) | The agent rejected `UPSTREAM_TOKEN` (or Access did): export the right one and run `deploy` |
 | `--upstream is a private-network address` | By design: publish the agent through a Tunnel hostname behind Access and pass that (section "Already have A2A on a Tailnet or LAN") |

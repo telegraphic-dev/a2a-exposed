@@ -67,8 +67,13 @@ test("upstream card parsing: interface origins and the JSON-RPC versions we can 
 	assert.match(F.upstreamEndpoint("https://jean.tail1234.ts.net/a2a")[1], /private-network/);
 	assert.match(F.upstreamEndpoint("https://localhost/a2a")[1], /private-network/);
 	assert.equal(F.upstreamEndpoint(UPSTREAM)[0], UPSTREAM);
-	assert.equal(F.upstreamCardUrl(UPSTREAM, ""), "https://agent-upstream.example.net/.well-known/agent-card.json");
-	assert.equal(F.upstreamCardUrl(UPSTREAM, "http://insecure.example.net/card"), "https://agent-upstream.example.net/.well-known/agent-card.json");
+	assert.deepEqual(F.upstreamCardUrl(UPSTREAM, ""), ["https://agent-upstream.example.net/.well-known/agent-card.json", ""]);
+	assert.deepEqual(F.upstreamCardUrl(UPSTREAM, "https://agent-upstream.example.net/card.json"), ["https://agent-upstream.example.net/card.json", ""]);
+	assert.equal(F.sameOrigin(UPSTREAM, "https://agent-upstream.example.net/other"), true);
+	assert.equal(F.sameOrigin(UPSTREAM, "https://evil.example.com/card"), false);
+	assert.match(F.upstreamCardUrl(UPSTREAM, "https://evil.example.com/card")[1], /must be on the UPSTREAM_URL origin/);
+	assert.match(F.upstreamCardUrl(UPSTREAM, "http://insecure.example.net/card")[1], /must be https/);
+	assert.match(F.upstreamCardUrl(UPSTREAM, "https://jean.tail1234.ts.net/card")[1], /private-network/);
 	assert.deepEqual(F.idsFromResult({ task: { id: "t1", contextId: "c1" } }), { taskId: "t1", contextId: "c1" });
 	assert.deepEqual(F.idsFromResult({ kind: "task", id: "t2", contextId: "c2" }), { taskId: "t2", contextId: "c2" });
 	assert.deepEqual(F.idsFromResult({ message: { messageId: "m", contextId: "c3" } }), { taskId: undefined, contextId: "c3" });
@@ -203,6 +208,23 @@ test("proxy mode: the served cards are the upstream's, rewritten to the public U
 	assert.deepEqual(diag.publicCardLeaks, []);
 	assert.equal(diag.hasUpstreamToken, true);
 	assert.ok(!JSON.stringify(diag).includes("up-secret") && !JSON.stringify(diag).includes("csecret"), "no secret values");
+});
+
+test("proxy mode: a cross-origin UPSTREAM_CARD_URL is refused and never fetched with credentials", async (t) => {
+	const evil = "https://evil.example.com/steal-card.json";
+	const s = setup({ UPSTREAM_URL: UPSTREAM, UPSTREAM_CARD_URL: evil, UPSTREAM_TOKEN: "up-secret",
+		UPSTREAM_ACCESS_CLIENT_ID: "cid.access", UPSTREAM_ACCESS_CLIENT_SECRET: "csecret", AGENT_NAME: "Jean" });
+	t.after(s.restore);
+	const card = (await s.call("GET", "/.well-known/agent-card.json")).data;
+	assert.equal(card.name, "Jean", "config-based card when the upstream card URL is refused");
+	assert.ok(!s.calls.some((c) => c.url === evil || c.url.includes("evil.example.com")), "the cross-origin URL is never fetched");
+	assert.ok(!s.calls.some((c) => (c.headers?.authorization || "").includes("up-secret")
+		|| c.headers?.["cf-access-client-id"] === "cid.access"
+		|| c.headers?.["cf-access-client-secret"] === "csecret"), "credentials never leave for a third-party host");
+	const diag = (await s.call("GET", "/owner/facade", { token: "owner-secret" })).data;
+	assert.match(diag.upstreamCardProblem || "", /must be on the UPSTREAM_URL origin/);
+	assert.match(diag.upstreamCard, /must be on the UPSTREAM_URL origin/);
+	assert.equal(diag.upstreamCardUrl, null);
 });
 
 test("proxy mode: upstream card unavailable -> config-based card, still no private URL", async (t) => {

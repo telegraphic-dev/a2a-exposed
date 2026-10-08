@@ -31,7 +31,8 @@ export function isHiddenUrl(raw: string, o: RewriteOptions): boolean {
 	return (o.upstreamOrigins || []).some((x) => sameOrigin(x, u.origin));
 }
 
-function sameOrigin(a: string, b: string): boolean {
+/** Same origin (scheme, host and port; default ports and host case normalised). False when either is not a URL. */
+export function sameOrigin(a: string, b: string): boolean {
 	try { return new URL(a).origin.toLowerCase() === new URL(b).origin.toLowerCase(); } catch { return false; }
 }
 
@@ -208,11 +209,18 @@ export function upstreamEndpoint(v: string | undefined): [string, string] {
 	return [u.href, ""];
 }
 
-/** Where the upstream's own card is: UPSTREAM_CARD_URL, else <upstream origin>/.well-known/agent-card.json. */
-export function upstreamCardUrl(endpoint: string, configured: string | undefined): string {
+/** Where the upstream's own card is: UPSTREAM_CARD_URL, else <upstream origin>/.well-known/agent-card.json.
+ *  The card fetch carries the façade's upstream credentials (UPSTREAM_TOKEN, the Access service token), so a
+ *  configured card URL must be on the UPSTREAM_URL origin; anything else (another origin, not https, not a URL) is
+ *  refused and never fetched, rather than silently replaced. Returns [url, ""] or ["", why]. */
+export function upstreamCardUrl(endpoint: string, configured: string | undefined): [string, string] {
 	const c = (configured || "").trim();
-	if (c) { const [u] = upstreamEndpoint(c); if (u) return u; }
-	return new URL("/.well-known/agent-card.json", endpoint).href;
+	if (!c) return [new URL("/.well-known/agent-card.json", endpoint).href, ""];
+	const [u, why] = upstreamEndpoint(c);
+	if (!u) return ["", why.replace(/^UPSTREAM_URL/, "UPSTREAM_CARD_URL")];
+	if (!sameOrigin(u, endpoint))
+		return ["", `UPSTREAM_CARD_URL must be on the UPSTREAM_URL origin (${new URL(endpoint).origin}), not ${new URL(u).origin}: the card fetch carries the upstream credentials`];
+	return [u, ""];
 }
 
 /** Task / context ids the upstream returned for a SendMessage (1.0 { task } / { message }, 0.3 Task / Message). */

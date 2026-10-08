@@ -310,9 +310,13 @@ function inboxCard(env: Env): Json {
 const proxyMode = (env: Env) => !!(env.UPSTREAM_URL || "").trim();
 const DEFAULT_DESCRIPTION = "An AI agent reachable over A2A through a public façade.";
 
-/** Headers for every request to the upstream: the façade's own credential and Access service token, never a peer's. */
-function upstreamHeaders(env: Env, extra: Record<string, string> = {}): Record<string, string> {
+/** Headers for a request to the upstream: the façade's own credential and Access service token, never a peer's.
+ *  The credentials are attached only when `target` is on the UPSTREAM_URL origin (defence in depth: callers already
+ *  refuse any other origin), so they can never be sent to a third-party host. */
+function upstreamHeaders(env: Env, target: string, extra: Record<string, string> = {}): Record<string, string> {
 	const h: Record<string, string> = { "user-agent": "a2a-exposed-facade", ...extra };
+	const [ep] = F.upstreamEndpoint(env.UPSTREAM_URL);
+	if (!ep || !F.sameOrigin(target, ep)) return h;
 	if (env.UPSTREAM_TOKEN) h.authorization = `Bearer ${env.UPSTREAM_TOKEN}`;
 	if (env.UPSTREAM_ACCESS_CLIENT_ID && env.UPSTREAM_ACCESS_CLIENT_SECRET) {
 		h["cf-access-client-id"] = env.UPSTREAM_ACCESS_CLIENT_ID;
@@ -331,14 +335,15 @@ const cardFailures = new Map<string, { at: number; status: number | null; error:
 async function fetchUpstreamCard(env: Env, fresh = false): Promise<{ card: Json | null; status: number | null; error?: string; url: string }> {
 	const [ep] = F.upstreamEndpoint(env.UPSTREAM_URL);
 	if (!ep) return { card: null, status: null, error: "UPSTREAM_URL invalid", url: "" };
-	const url = F.upstreamCardUrl(ep, env.UPSTREAM_CARD_URL);
+	const [url, bad] = F.upstreamCardUrl(ep, env.UPSTREAM_CARD_URL);
+	if (!url) { log("upstream_card_refused", { error: bad }); return { card: null, status: null, error: bad, url: "" }; }
 	const hit = cardCache.get(url);
 	if (!fresh && hit && Date.now() - hit.at < CARD_TTL_MS) return { card: hit.card, status: 200, url };
 	const failed = cardFailures.get(url);
 	if (!fresh && failed && Date.now() - failed.at < CARD_RETRY_MS) return { card: hit?.card ?? null, status: failed.status, error: failed.error, url };
 	const fail = (status: number | null, error: string) => { cardFailures.set(url, { at: Date.now(), status, error }); return { card: hit?.card ?? null, status, error, url }; };
 	try {
-		const r = await fetch(url, { headers: upstreamHeaders(env, { accept: "application/json" }), redirect: "manual", signal: AbortSignal.timeout(10000) });
+		const r = await fetch(url, { headers: upstreamHeaders(env, url, { accept: "application/json" }), redirect: "manual", signal: AbortSignal.timeout(10000) });
 		const text = (await r.text()).slice(0, 262144);
 		let card: Json = null;
 		try { card = JSON.parse(text); } catch { /* not JSON (an Access login page, a tunnel error) */ }
@@ -361,7 +366,9 @@ async function fetchUpstreamCard(env: Env, fresh = false): Promise<{ card: Json 
 function upstreamOrigins(env: Env, upCard: Json): string[] {
 	const out = new Set<string>(F.upstreamCardOrigins(upCard));
 	const [ep] = F.upstreamEndpoint(env.UPSTREAM_URL);
-	if (ep) { out.add(new URL(ep).origin); out.add(new URL(F.upstreamCardUrl(ep, env.UPSTREAM_CARD_URL)).origin); }
+	if (ep) out.add(new URL(ep).origin); // the card URL is on the same origin (or refused)
+	const c = (env.UPSTREAM_CARD_URL || "").trim();
+	if (c) try { out.add(new URL(c).origin); } catch { /* not a URL: nothing to scrub */ }
 	const own = new URL(env.PUBLIC_URL).origin.toLowerCase();
 	return [...out].filter((x) => x.toLowerCase() !== own);
 }
@@ -645,7 +652,7 @@ async function proxyRpc(req: Request, env: Env, c: { raw: string; rid: Json; met
 	// fail closed on push (after the ownership checks, so another peer's task is still just "not found"): the upstream would call a peer's URL from inside the private network (DNS there can map a
 	// public-looking name to a private address), so push configs never reach it. Follow-up: a relay through the Worker.
 	if (F.wantsPush(c.op, c.params)) return err(-32003, "Push notifications are not supported through this façade; poll GetTask with the task id instead");
-	const headers = upstreamHeaders(env, { "content-type": "application/json", accept: "application/json", "x-a2a-peer": c.label });
+	const headers = upstreamHeaders(env, ep, { "content-type": "application/json", accept: "application/json", "x-a2a-peer": c.label });
 	const hv = req.headers.get("a2a-version");
 	if (hv) headers["a2a-version"] = hv;
 	let r: Response;
@@ -883,7 +890,8 @@ async function handleOwner(req: Request, env: Env, ectx: ExecutionContext, path:
 		const [ep, why] = F.upstreamEndpoint(env.UPSTREAM_URL);
 		const up = await fetchUpstreamCard(env, true);
 		const card = await facadeAgentCard(env);
-		return json({ mode: "proxy", upstreamValid: !!ep, ...(why ? { upstreamProblem: why } : {}), upstreamCardUrl: up.url || null,
+		const [, cardWhy] = ep ? F.upstreamCardUrl(ep, env.UPSTREAM_CARD_URL) : ["", ""];
+		return json({ mode: "proxy", upstreamValid: !!ep, ...(why ? { upstreamProblem: why } : {}), ...(cardWhy ? { upstreamCardProblem: cardWhy } : {}), upstreamCardUrl: up.url || null,
 			upstreamCard: up.status === 200 ? "ok" : up.error || "unavailable", upstreamVersions: F.upstreamJsonRpcVersions(up.card),
 			hasUpstreamToken: !!env.UPSTREAM_TOKEN, hasUpstreamAccessServiceToken: !!(env.UPSTREAM_ACCESS_CLIENT_ID && env.UPSTREAM_ACCESS_CLIENT_SECRET),
 			fingerprints: { upstreamToken: await A.fingerprint(env.UPSTREAM_TOKEN), upstreamAccessClientId: await A.fingerprint(env.UPSTREAM_ACCESS_CLIENT_ID) },

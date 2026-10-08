@@ -5,7 +5,7 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import * as C from "./config.mjs";
-import { cardUrlProblem, cfErrorCode, die, fingerprint, httpJson, randomToken, upstreamUrlProblem } from "./a2a.mjs";
+import { cardUrlProblem, cfErrorCode, die, fingerprint, httpJson, randomToken, upstreamCardUrlProblem, upstreamUrlProblem } from "./a2a.mjs";
 import { owner } from "./commands.mjs";
 import * as WD from "./workersdev.mjs";
 
@@ -203,6 +203,14 @@ function applyFlags(o) {
 		const why = upstreamUrlProblem(String(upd[key]).trim());
 		if (why) die(`--${flag} ${why}`);
 		upd[key] = new URL(String(upd[key]).trim()).href;
+	}
+	{
+		// the card URL (new or saved) must stay on the upstream's origin (new or saved): the card fetch carries the upstream credentials
+		const eff = (k) => (upd[k] !== undefined ? upd[k] || "" : C.get(k));
+		const up = eff("A2A_UPSTREAM_URL"), card = eff("A2A_UPSTREAM_CARD_URL");
+		const why = up && card ? upstreamCardUrlProblem(card, up) : "";
+		if (why) die(`--upstream-card-url ${card} ${why}` + (upd.A2A_UPSTREAM_CARD_URL === undefined
+			? ` (it is the saved A2A_UPSTREAM_CARD_URL; pass --upstream-card-url <URL on that origin>, or --upstream-card-url none for <upstream origin>/.well-known/agent-card.json)` : ""));
 	}
 	if (upd.A2A_AGENT_SKILLS) {
 		try { if (!Array.isArray(JSON.parse(upd.A2A_AGENT_SKILLS))) throw 0; } catch { die("--agent-skills must be a JSON array of A2A AgentSkill objects"); }
