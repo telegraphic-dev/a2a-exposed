@@ -52,7 +52,8 @@ jobs:
 
       - name: Skills - discovery
         run: |
-          npx --yes skills add ./ --list | tee skills-list.txt
+          # strip colors: the skills CLI colors output even without a TTY
+          npx --yes skills add ./ --list | sed -E 's/\x1b\[[0-9;?]*[A-Za-z]//g' | tee skills-list.txt
           for s in a2a-over-webhook a2a-over-webhook-setup; do
             grep -Eq "(^|[^-[:alnum:]])$s([^-[:alnum:]]|$)" skills-list.txt || { echo "::error::skill $s not discovered"; exit 1; }
           done
