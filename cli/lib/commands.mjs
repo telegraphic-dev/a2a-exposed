@@ -106,7 +106,8 @@ export function peers(sub, args, o) {
 		if (!alias || !url) die("usage: peers add <alias> <url> [--token-env VAR | --token-stdin]");
 		if (!/^https?:\/\//.test(url)) die("URL must be http(s)");
 		const tokenEnv = o["token-env"] || C.peerTokenVar(alias);
-		all[alias] = { url: url.replace(/\/$/, ""), token_env: tokenEnv };
+		// token_stored is always recorded (true/false); entries without it come from an older CLI (see `peers rm`)
+		all[alias] = { url: url.replace(/\/$/, ""), token_env: tokenEnv, token_stored: false };
 		if (o["token-stdin"]) {
 			const t = readStdin().trim();
 			if (!t) die("no token on stdin");
@@ -120,13 +121,17 @@ export function peers(sub, args, o) {
 		const [alias] = args;
 		if (!alias) die("usage: peers rm <alias>");
 		const pe = all[alias];
-		// tokens the CLI stored in config.env (--token-stdin, default PEER_<ALIAS>_TOKEN) go with the peer,
-		// unless another peer still uses the same variable; values from the environment are not ours to touch
+		// Tokens the CLI stored in config.env go with the peer: the default PEER_<ALIAS>_TOKEN, a variable stored
+		// with --token-stdin (token_stored: true), and, for entries written by an older CLI (no token_stored
+		// field), whatever --token-env variable they reference, since that CLI stored --token-stdin tokens there
+		// too. Never a variable another peer still uses, never the CLI's own settings, and only from config.env
+		// (CLI-owned): a value that lives only in the process environment is the user's and stays.
 		const vars = new Set([C.peerTokenVar(alias)]);
-		if (pe && pe.token_env && pe.token_stored) vars.add(pe.token_env);
+		if (pe && pe.token_env && (pe.token_stored === true || !("token_stored" in pe))) vars.add(pe.token_env);
 		delete all[alias];
 		const inUse = new Set(Object.values(all).map((x) => x.token_env));
-		const drop = [...vars].filter((k) => !inUse.has(k) && k in C.fileConfig());
+		const reserved = (k) => /^(A2A_|CLOUDFLARE_|WAKE_|CF_PROFILE$)/.test(k);
+		const drop = [...vars].filter((k) => !inUse.has(k) && !reserved(k) && k in C.fileConfig());
 		if (!pe && !drop.length) die(`unknown peer alias ${JSON.stringify(alias)} (see: a2a-over-webhook peers list)`);
 		if (pe) C.savePeers(all);
 		if (drop.length) C.saveConfig(Object.fromEntries(drop.map((k) => [k, null])));
