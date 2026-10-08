@@ -1,0 +1,112 @@
+name: Publish
+
+# Push a v<semver> tag (e.g. v0.1.0) on main to publish the CLI to npm and create a GitHub release.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write # GitHub release
+  id-token: write # npm provenance / trusted publishing (OIDC)
+
+concurrency:
+  group: publish-${{ github.ref }}
+
+env:
+  DO_NOT_TRACK: "1"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      # npm trusted publishing (OIDC, no token) needs npm 11.5.1+; Node 22 ships npm 10.
+      - name: Upgrade npm
+        run: npm install -g npm@^11.5.1
+
+      - name: Set version from tag
+        id: version
+        working-directory: cli
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::tag $GITHUB_REF_NAME is not v<semver>"; exit 1
+          fi
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Worker - install, test, typecheck, build
+        working-directory: worker
+        run: |
+          npm ci --no-audit --no-fund
+          npm test
+          npx cf workers types
+          npx tsc --noEmit
+          npx cf build
+
+      - name: CLI - tests
+        working-directory: cli
+        run: npm test
+
+      # Auth: npm trusted publishing (OIDC) once it is configured for this package on npmjs.com;
+      # otherwise the NPM_TOKEN secret (needed for the very first publish if it isn't done by hand).
+      # prepack bundles ../worker into the package (scripts/sync-worker.mjs).
+      - name: Publish to npm
+        working-directory: cli
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if npm view "a2a-over-webhook@$VERSION" version >/dev/null 2>&1; then
+            echo "a2a-over-webhook@$VERSION is already on npm; skipping publish"
+            exit 0
+          fi
+          DIST_TAG=latest
+          if [[ "$VERSION" == *-* ]]; then DIST_TAG=next; fi
+          npm publish --provenance --access public --tag "$DIST_TAG"
+
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "release $GITHUB_REF_NAME already exists"; exit 0
+          fi
+          cat > "$RUNNER_TEMP/notes.md" <<'NOTES'
+          **Install the CLI** (Node 22.18+)
+          ```bash
+          npm i -g a2a-over-webhook@@VERSION@      # or one-off: npx -y a2a-over-webhook@@VERSION@ --help
+          ```
+
+          **Install the agent skills**
+          ```bash
+          npx --yes skills add telegraphic-dev/a2a-over-webhook
+          # Hermes Agent:
+          hermes skills install telegraphic-dev/a2a-over-webhook/skills/a2a-over-webhook
+          hermes skills install telegraphic-dev/a2a-over-webhook/skills/a2a-over-webhook-setup
+          ```
+
+          **Upgrade an existing deployment:** `a2a-over-webhook deploy` (re-syncs the Worker template and redeploys; secrets are kept).
+
+          See [CHANGELOG.md](https://github.com/telegraphic-dev/a2a-over-webhook/blob/main/CHANGELOG.md).
+          NOTES
+          sed -i "s/@VERSION@/$VERSION/g" "$RUNNER_TEMP/notes.md"
+          PRERELEASE=()
+          if [[ "$VERSION" == *-* ]]; then PRERELEASE=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "a2a-over-webhook $VERSION" \
+            --generate-notes --notes-file "$RUNNER_TEMP/notes.md" "${PRERELEASE[@]}"
+
+      # ClawHub (OpenClaw skill registry): not enabled yet. ClawHub publishes every skill under MIT-0
+      # and needs an owner handle decision. When decided, add a CLH_TOKEN secret and, per skill folder:
+      #   npm i -g clawhub && clawhub login --token "$CLH_TOKEN" --no-browser
+      #   clawhub skill publish skills/a2a-over-webhook --slug a2a-over-webhook --name "A2A over Webhook" \
+      #     --version "$VERSION" --changelog "Release $GITHUB_REF_NAME"
+      #   clawhub skill publish skills/a2a-over-webhook-setup --slug a2a-over-webhook-setup --name "A2A over Webhook: setup" \
+      #     --version "$VERSION" --changelog "Release $GITHUB_REF_NAME"

@@ -3,16 +3,45 @@
 	"version": "0.1.0",
 	"description": "Give any AI agent a public A2A (Agent2Agent) endpoint: Cloudflare Worker inbox + wake webhook or scheduled inbox checks",
 	"type": "module",
-	"bin": { "a2a-over-webhook": "bin/a2a-over-webhook.mjs" },
-	"files": ["bin/", "lib/", "worker/", "README.md", "LICENSE"],
+	"bin": {
+		"a2a-over-webhook": "bin/a2a-over-webhook.mjs"
+	},
+	"files": [
+		"bin/",
+		"lib/",
+		"worker/",
+		"README.md",
+		"LICENSE"
+	],
 	"scripts": {
 		"prepack": "node scripts/sync-worker.mjs && node -e \"require('fs').copyFileSync('../LICENSE','LICENSE')\"",
 		"test": "node --test test/*.test.mjs"
 	},
-	"engines": { "node": ">=22.18" },
-	"keywords": ["a2a", "agent2agent", "ai-agent", "webhook", "cloudflare-workers", "d1", "claude-code", "openclaw", "hermes"],
+	"engines": {
+		"node": ">=22.18"
+	},
+	"keywords": [
+		"a2a",
+		"agent2agent",
+		"ai-agent",
+		"webhook",
+		"cloudflare-workers",
+		"d1",
+		"claude-code",
+		"openclaw",
+		"hermes",
+		"cli"
+	],
 	"homepage": "https://github.com/telegraphic-dev/a2a-over-webhook#readme",
 	"bugs": "https://github.com/telegraphic-dev/a2a-over-webhook/issues",
-	"repository": { "type": "git", "url": "git+https://github.com/telegraphic-dev/a2a-over-webhook.git", "directory": "cli" },
-	"license": "MIT"
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/telegraphic-dev/a2a-over-webhook.git",
+		"directory": "cli"
+	},
+	"license": "MIT",
+	"author": "Telegraphic Developer",
+	"publishConfig": {
+		"access": "public"
+	}
 }

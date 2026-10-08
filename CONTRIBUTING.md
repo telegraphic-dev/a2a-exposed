@@ -14,3 +14,4 @@ Issues and pull requests are welcome.
 - **Skills** (`skills/*/SKILL.md`): the frontmatter `name` must match the folder name. Check discovery with `npx skills add ./ --list`.
 - **New wake presets:** add the preset to `worker/src/wake.ts` (`PRESETS` and `renderWake`), add a test in `worker/test/wake.test.ts`, list it in the CLI (`cli/lib/deploy.mjs`), and document it in the setup skill and the README table, with a link to the target's docs.
 - Never commit secrets, account ids, or hostnames of real deployments.
+- **Releases:** bump `version` in `cli/package.json` and in both skills' frontmatter, add a `CHANGELOG.md` entry, merge, then push a `v<version>` tag; `.github/workflows/publish.yml` publishes to npm and creates the GitHub release. CI (`.github/workflows/ci.yml`) runs the same checks as above on every PR. See also [AGENTS.md](AGENTS.md).
