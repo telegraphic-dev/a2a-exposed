@@ -19,8 +19,8 @@ const tailnetCard = (over: any = {}) => ({
 	],
 	securitySchemes: { upstreamKey: { apiKeySecurityScheme: { location: "header", name: "x-api-key" } } },
 	securityRequirements: [{ schemes: { upstreamKey: { list: [] } } }],
-	capabilities: { streaming: true, pushNotifications: true, extendedAgentCard: true, extensions: [{ uri: "https://a2a.example.org/ext/v1", description: "see http://100.101.102.103/ext" }] },
-	defaultInputModes: ["text/plain"], defaultOutputModes: ["text/plain"],
+	capabilities: { streaming: true, pushNotifications: true, extendedAgentCard: true, extensions: [{ uri: "https://a2a.example.org/ext/v1", description: "see http://100.101.102.103/ext", params: { [`${TAILNET}/admin`]: { scope: "all" } } }] },
+	defaultInputModes: ["text/plain", "http://10.0.0.9/mode"], defaultOutputModes: ["text/plain", "application/json; charset=utf-8"],
 	skills: [{ id: "chat", name: "Chat", description: "Talks. Runs on jean.tail1234.ts.net", tags: ["chat"], examples: [`Open ${TAILNET}/a2a please`] }],
 	provider: { organization: "Jean Inc", url: "http://192.168.1.10/" },
 	documentationUrl: `${TAILNET}/docs`, iconUrl: "https://cdn.example.org/jean.png",
@@ -38,6 +38,15 @@ test("scrubText: private and upstream URLs and Tailnet names are removed, public
 	assert.equal(F.scrubText("see https://[2606:4700::1]:443/docs.", o), "see https://[2606:4700::1]:443/docs.", "public IPv6 kept");
 	assert.equal(F.scrubText("a list [https://docs.example.org/x] stays", o), "a list [https://docs.example.org/x] stays");
 	assert.deepEqual(F.cardLeaks({ description: "admin at http://[::1]:8080/internal" }, BASE, []), ["description: http://[::1]:8080/internal"]);
+	// property names are scrubbed too (extension params keyed by URL), and a __proto__ key stays a plain property
+	const keyed = JSON.parse(`{"params":{"https://jean.tail1234.ts.net/admin":{"see":"http://10.0.0.5/x"},"https://docs.example.org/k":1,"__proto__":{"polluted":true}}}`);
+	assert.ok(F.cardLeaks(keyed, BASE, []).some((l) => l.includes("jean.tail1234.ts.net/admin")), "cardLeaks sees keys");
+	const clean = F.scrubDeep(keyed, o);
+	assert.deepEqual(Object.keys(clean.params), [F.REMOVED_URL, "https://docs.example.org/k", "__proto__"]);
+	assert.deepEqual(clean.params[F.REMOVED_URL], { see: F.REMOVED_URL });
+	assert.equal(({} as any).polluted, undefined);
+	assert.equal(Object.getPrototypeOf(clean.params), Object.prototype);
+	assert.deepEqual(F.cardLeaks(clean, BASE, []), []);
 	assert.equal(F.scrubText("on https://agent-upstream.example.net/a2a now", o), `on ${F.REMOVED_URL} now`);
 	assert.equal(F.scrubText("host agent-upstream.example.net:443 here", o), `host ${F.REMOVED_HOST} here`);
 	assert.equal(F.scrubText("on jean.tail1234.ts.net.", o), `on ${F.REMOVED_HOST}.`);
@@ -81,10 +90,12 @@ test("facadeCard: public URLs only, façade security, upstream name/skills/capab
 	assert.equal(card.skills[0].description, `Talks. Runs on ${F.REMOVED_HOST}`);
 	assert.equal(card.skills[0].examples[0], `Open ${F.REMOVED_URL} please`);
 	assert.deepEqual(card.capabilities, { streaming: false, pushNotifications: false, extendedAgentCard: false,
-		extensions: [{ uri: "https://a2a.example.org/ext/v1", description: `see ${F.REMOVED_URL}` }] });
+		extensions: [{ uri: "https://a2a.example.org/ext/v1", description: `see ${F.REMOVED_URL}`, params: { [F.REMOVED_URL]: { scope: "all" } } }] });
 	assert.equal(card.documentationUrl, undefined);
 	assert.equal(card.provider, undefined);
 	assert.equal(card.iconUrl, "https://cdn.example.org/jean.png");
+	assert.deepEqual(card.defaultInputModes, ["text/plain"], "non-media-type modes dropped");
+	assert.deepEqual(card.defaultOutputModes, ["text/plain", "application/json; charset=utf-8"]);
 	for (const k of ["url", "signatures", "additionalInterfaces", "security", "preferredTransport"]) assert.ok(!(k in card), k);
 	assert.deepEqual(F.cardLeaks(card, BASE, [TAILNET]), []);
 	assert.ok(F.cardLeaks(tailnetCard(), BASE, [TAILNET]).length > 3, "the raw upstream card does leak");

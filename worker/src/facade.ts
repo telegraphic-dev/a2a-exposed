@@ -23,6 +23,8 @@ export function isHiddenUrl(raw: string, o: RewriteOptions): boolean {
 	// an http(s)/ws(s) URL that doesn't parse (e.g. an IPv6 zone id, http://[fe80::1%eth0]/) is hidden: fail closed
 	try { u = new URL(raw); } catch { return /^(?:https?|wss?):\/\//i.test(raw); }
 	if (!/^(https?|wss?):$/.test(u.protocol)) return false; // urn:, mailto:, ... are not network endpoints
+	// the façade's own origin is what the card is about (always public on Cloudflare; http://127.0.0.1 only in local dev)
+	if (o.publicBase && sameOrigin(o.publicBase, u.origin)) return false;
 	if (u.protocol !== "https:" && u.protocol !== "wss:") return true;
 	if (u.username || u.password) return true;
 	if (isPrivateHost(u.hostname)) return true;
@@ -51,14 +53,16 @@ export function scrubText(s: string, o: RewriteOptions): string {
 	return out.replace(/(^|[^A-Za-z0-9.-])[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.ts\.net(?::\d+)?(?![A-Za-z0-9-])/gi, `$1${REMOVED_HOST}`);
 }
 
-/** Every string inside a JSON value scrubbed with scrubText (objects and arrays copied). */
+/** Every string inside a JSON value scrubbed with scrubText, property names included (objects and arrays copied).
+ *  Keys are defined, not assigned, so a "__proto__" key from upstream JSON stays a plain property. */
 export function scrubDeep(v: Json, o: RewriteOptions, depth = 0): Json {
 	if (depth > 20) return undefined;
 	if (typeof v === "string") return scrubText(v, o);
 	if (Array.isArray(v)) return v.map((x) => scrubDeep(x, o, depth + 1));
 	if (v && typeof v === "object") {
 		const out: Json = {};
-		for (const [k, x] of Object.entries(v)) out[k] = scrubDeep(x, o, depth + 1);
+		for (const [k, x] of Object.entries(v))
+			Object.defineProperty(out, scrubText(k, o), { value: scrubDeep(x, o, depth + 1), enumerable: true, writable: true, configurable: true });
 		return out;
 	}
 	return v;
@@ -137,7 +141,11 @@ export function facadeCard(i: FacadeCardInput): Json {
 	const base = i.publicBase.replace(/\/$/, "");
 	const str = (...vs: unknown[]) => { for (const v of vs) if (typeof v === "string" && v.trim()) return v; return undefined; };
 	const versions = i.upstream ? upstreamJsonRpcVersions(up) : [];
-	const modes = (v: unknown) => (Array.isArray(v) && v.length && v.every((x) => typeof x === "string") ? v : ["text/plain", "application/json"]);
+	// media types only (type/subtype[;params]); anything else in the upstream's mode lists is dropped
+	const modes = (v: unknown) => {
+		const ok = Array.isArray(v) ? v.filter((x) => typeof x === "string" && x.length <= 128 && /^[\w.+-]+\/[\w.+*-]+(?:\s*;[^/]*)?$/.test(x)) : [];
+		return ok.length ? ok.slice(0, 32) : ["text/plain", "application/json"];
+	};
 	const upSkills = Array.isArray(up.skills) && up.skills.length ? up.skills.filter((s: Json) => s && typeof s === "object") : null;
 	const card: Json = {
 		name: scrubText(str(i.config.name, up.name) || "A2A Agent", o),
@@ -163,7 +171,9 @@ export function facadeCard(i: FacadeCardInput): Json {
 	if (doc) card.documentationUrl = doc;
 	const icon = publicUrlOrNothing(up.iconUrl, o);
 	if (icon) card.iconUrl = icon;
-	return card;
+	// catch-all: one more scrub over the finished card (keys included), so a field added above can't leak by mistake;
+	// the façade's own URLs are public https and pass through unchanged
+	return scrubDeep(card, o);
 }
 
 /** Final pass over any card the Worker serves (inbox or façade): the interface URLs must be the public base, and no
@@ -176,7 +186,7 @@ export function cardLeaks(card: Json, publicBase: string, upstreamOrigins: strin
 			for (const m of v.match(URL_IN_TEXT) || []) if (isHiddenUrl(m.replace(/[.,;:!?]+$/, ""), o)) out.push(`${p}: ${m}`);
 			if (/\.ts\.net\b/i.test(v)) out.push(`${p}: ${v}`);
 		} else if (Array.isArray(v)) v.forEach((x, k) => walk(x, `${p}[${k}]`));
-		else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) walk(x, p ? `${p}.${k}` : k);
+		else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) { walk(k, `${p || "."} (key)`); walk(x, p ? `${p}.${k}` : k); }
 	};
 	walk(card, "");
 	return out;

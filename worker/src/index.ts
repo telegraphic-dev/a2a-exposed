@@ -303,7 +303,7 @@ function inboxCard(env: Env): Json {
 	if (env.PROVIDER_ORGANIZATION && provUrl) card.provider = { organization: F.scrubText(env.PROVIDER_ORGANIZATION, o), url: provUrl };
 	const doc = F.publicUrlOrNothing(env.DOCUMENTATION_URL, o);
 	if (doc) card.documentationUrl = doc;
-	return card;
+	return F.scrubDeep(card, o); // catch-all over every field and key (the public base itself passes unchanged)
 }
 
 // ------------------------------------------------------------------ proxy / expose mode (façade for a private A2A agent)
