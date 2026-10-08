@@ -95,6 +95,8 @@ All commands use the CLI as `npx a2a-exposed <cmd>`.
 
 **Interrupted? Resume with `status`.** `npx a2a-exposed status` is read-only. It prints the deployment and base URL, fetches the agent card itself, and shows the wake mode (webhook, tunnel, or none, which means polling) and the tunnel state. It ends with a `next step:` line: do that step and run `status` again. Every setup step is safe to re-run. `init`, `deploy` and `wake set` reuse the saved D1 database, owner token and settings. When a tunnel exists, `tunnel create` creates nothing new. It re-uploads any Worker secrets that are missing, so export the webhook's own `WAKE_WEBHOOK_KEY` or `WAKE_HMAC_SECRET` again first, as on the first run. A missing connector token file (`tunnel-token` in the config dir) is downloaded again. If an earlier run stopped halfway, it tells you to run `tunnel rm` first.
 
+**Agent already speaks A2A, but its card is on a Tailnet, LAN, localhost or plain http?** Peers can't reach that card (pairing requests only carry public https cards), so don't advertise it: go straight to "Already have A2A on a Tailnet or LAN: expose it through a public façade" below.
+
 **The inbox URL is the deployment's.** The agent card always advertises the inbox's public base URL (the custom hostname or the workers.dev URL). The agent's own webhook URL, whether local, Tailnet or tunnel, goes only in `WAKE_WEBHOOK_URL`. Never put it in `A2A_BASE_URL`, and don't edit the card. `status` flags a card that points anywhere else.
 
 **Don't curl the endpoint.** Check it with `status` (or `url`), not a raw `curl` of the agent card. Some agent sandboxes (Hermes) flag `.dev` URLs in shell commands, such as `*.workers.dev`, and hold the command for user approval. If that approval times out, setup stops halfway.
@@ -116,7 +118,7 @@ All commands use the CLI as `npx a2a-exposed <cmd>`.
   ```bash
   npx cf auth login --no-browser     # or `cf auth login --no-browser` after `npm i -g cf`
   ```
-  It prints a URL (`https://dash.cloudflare.com/oauth2/device/verify`) and a code. Give both to the user and ask them to approve. The code expires in about 5 minutes. Check with `npx cf auth whoami` (or `cf auth whoami`): it must show `"authenticated": true`. CI can use `CLOUDFLARE_API_TOKEN` instead.
+  It prints a URL (`https://dash.cloudflare.com/oauth2/device/verify`) and a code. Give both to the user and ask them to approve. The code expires in about 5 minutes. Check with `npx cf auth whoami` (or `cf auth whoami`): it must show `"authenticated": true`. CI can use `CLOUDFLARE_API_TOKEN` instead. If the login fails with `OAuth error: HTTP 403 Forbidden` (or a "Just a moment..." page) **before any code is shown**, that is Cloudflare's bot mitigation for datacenter / VPS IPs: don't retry, use an API token (Troubleshooting: API token).
   `init`/`deploy`/`wake set` run `npm install` in the Worker folder (`<config dir>/worker`) and use the `cf` from its `node_modules/.bin`; a global `cf` only saves typing `npx` for the login.
 - **First decide how wakes will reach the agent.** This shapes the rest of the setup, so settle it before choosing the inbox URL:
 
@@ -568,6 +570,11 @@ The `cf` CLI is young: check the exact subcommands and confirmation flags with `
 | `not logged in to Cloudflare` | Run `cf auth login --no-browser` again; the code expires after about 5 minutes |
 | Several accounts | `--account-id <id>` (listed by `cf auth whoami`) |
 | Card not reachable right after deploy (`status`: `agent card: FAILED`) | A new custom domain takes 1–5 minutes for DNS and the certificate. Check that the hostname is on a zone in this account and has no conflicting DNS record. A newly registered workers.dev subdomain can also take a few minutes |
+| `cf auth login` / `wrangler login`: `OAuth error: HTTP 403 Forbidden` (or "Just a moment...") before any code appears | Cloudflare's managed challenge on datacenter / VPS IPs, not a wrong account: don't retry. Use an API token: `export CLOUDFLARE_API_TOKEN=...` (and `CLOUDFLARE_ACCOUNT_ID`) in the agent's environment or a chmod-600 file, never argv or chat, then run `init`/`deploy` as usual. `init` says the same when it finds no login |
+| API token: which permissions, which resources | Workers Scripts, D1, Cloudflare Tunnel and Access are **account**-scoped: grant them on the account. Only DNS (Zone → DNS: Edit, for a custom hostname or the tunnel) can be limited to one zone. Letting `init` discover the account also needs **User → Memberships → Read**; without it `init` asks for `--account-id` / `CLOUDFLARE_ACCOUNT_ID` |
+| API token: Cloudflare API error `1001` (Memberships) | The Memberships permission was given a wrong resource selector: it needs the full user-scoped selector (the user's own resource, not an account or zone) |
+| API token: `tokens verify` succeeds, but `cf` calls are denied by an IP policy | The token's IP filter must allow **both** the host's IPv4 `/32` and its IPv6 `/128`: calls can leave over IPv6 |
+| `connect`: `--card-url ... is not a plain https URL, so it is left out`, or `pairing request ... failed` with a Tailnet / LAN card | A peer card must be public https; a Tailnet-only or http card is left out or refused. Pairing out still works without it (replies by `poll`), but to be reachable expose the agent through a public façade (section "Already have A2A on a Tailnet or LAN") and pass the façade's card |
 | `You need to register a workers.dev subdomain` | The account has no workers.dev subdomain: rerun `init --workers-dev-subdomain <name>`, or create it in the dashboard (Workers & Pages) |
 | `wake test` says no wake webhook configured | Export `WAKE_WEBHOOK_URL` (and key/HMAC secret) and run `wake set` first, or use polling |
 | `wake test` returns 401/403 | Wrong key or header; compare fingerprints from `wake preview` with `wake fingerprint` |

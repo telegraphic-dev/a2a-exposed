@@ -64,6 +64,9 @@ export const NODE_HELP = `How to get Node 22 (any one; no root needed):
   or the official installer / binaries: https://nodejs.org/en/download
 Then check: node --version   (v22.18.0 or newer)`;
 
+/** What to do when the Cloudflare login itself is blocked (printed with "not logged in"; the setup skill says the same). */
+export const LOGIN_403_HELP = `If \`cf auth login\` (or \`wrangler login\`) fails with "OAuth error: HTTP 403 Forbidden" or a "Just a moment..." page BEFORE any code is shown, that is Cloudflare's bot mitigation for datacenter / VPS IPs, not a wrong account: don't retry. Use an API token instead: export CLOUDFLARE_API_TOKEN (and CLOUDFLARE_ACCOUNT_ID) in the environment, never argv (setup skill, Troubleshooting: API token).`;
+
 /** Dies unless `version` (default: this Node) is 22.18+; the message says how to get it. */
 export function checkNode(version = process.versions.node) {
 	const [maj, min] = String(version).replace(/^v/, "").split(".").map(Number);
@@ -368,11 +371,15 @@ export async function init(o) {
 	const prof = cfProfile();
 	step(`checking Cloudflare login (cf auth whoami${prof ? ` --profile ${prof}` : ""})`);
 	const who = cfJson(dir, ["auth", "whoami"]);
-	if (!who.authenticated) die(prof
+	if (!who.authenticated) die((process.env.CLOUDFLARE_API_TOKEN
+		? "CLOUDFLARE_API_TOKEN is set but cf does not accept it (expired, revoked, or IP-restricted: an IP filter must allow both this host's IPv4 /32 and IPv6 /128). Check the token (setup skill, Troubleshooting: API token), then re-run init"
+		: prof
 		? `cf profile "${prof}" is not logged in: run \`npx cf auth create ${prof} --no-browser\`, open the printed URL, enter the code, then re-run init`
-		: "not logged in to Cloudflare: run `cf auth login --no-browser`, open the printed URL, enter the code, then re-run init");
+		: "not logged in to Cloudflare: run `cf auth login --no-browser`, open the printed URL, enter the code, then re-run init") + `\n${LOGIN_403_HELP}`);
 	const accts = who.accounts || [];
 	if (!C.get("CLOUDFLARE_ACCOUNT_ID")) {
+		if (!accts.length && process.env.CLOUDFLARE_API_TOKEN)
+			die("the API token can't list accounts: add the permission User -> Memberships -> Read (or pass --account-id <id> / export CLOUDFLARE_ACCOUNT_ID; the id is in the dashboard URL)");
 		if (accts.length !== 1) die(`${accts.length} accounts available; pass --account-id <id>:\n` + accts.map((a) => `  ${a.id}  ${a.name}`).join("\n"));
 		C.saveConfig({ CLOUDFLARE_ACCOUNT_ID: accts[0].id });
 	} else if (accts.length && !accts.some((a) => a.id === C.get("CLOUDFLARE_ACCOUNT_ID"))) {

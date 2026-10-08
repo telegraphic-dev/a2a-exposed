@@ -350,3 +350,29 @@ test("status and upstream verify against a façade (stubbed Worker): layers, sep
 	assert.equal(no.status, 1);
 	assert.match(no.stderr, /not a façade/);
 });
+
+test("init: login blocked on a VPS (HTTP 403 before a code) and API tokens that can't list accounts get plain advice", async (t) => {
+	const s = stubEnv(t);
+	const cf = path.join(s.dir, "worker", "node_modules", ".bin", "cf");
+	fs.writeFileSync(cf, `#!/bin/bash\ncase "$1 $2" in "auth whoami") echo "$WHOAMI";; esac\n`, { mode: 0o755 });
+	const r = await s.cli(["init", "--worker-name", "uptest", ...s.w], { WHOAMI: '{"authenticated":false}' });
+	assert.equal(r.status, 1);
+	assert.match(r.stderr, /not logged in to Cloudflare: run `cf auth login --no-browser`/);
+	assert.match(r.stderr, /"OAuth error: HTTP 403 Forbidden"[^\n]*BEFORE any code is shown, that is Cloudflare's bot mitigation for datacenter \/ VPS IPs[^\n]*don't retry[^\n]*CLOUDFLARE_API_TOKEN/);
+	const tok = await s.cli(["init", "--worker-name", "uptest", ...s.w], { WHOAMI: '{"authenticated":false}', CLOUDFLARE_API_TOKEN: "cf-token-value" });
+	assert.equal(tok.status, 1);
+	assert.match(tok.stderr, /CLOUDFLARE_API_TOKEN is set but cf does not accept it[^\n]*IPv4 \/32 and IPv6 \/128/);
+	const noAcc = await s.cli(["init", "--worker-name", "uptest", ...s.w], { WHOAMI: '{"authenticated":true,"accounts":[]}', CLOUDFLARE_API_TOKEN: "cf-token-value" });
+	assert.equal(noAcc.status, 1);
+	assert.match(noAcc.stderr, /the API token can't list accounts: add the permission User -> Memberships -> Read \(or pass --account-id/);
+	assert.ok(!(r.stderr + tok.stderr + noAcc.stderr).includes("cf-token-value"));
+});
+
+test("connect --card-url: a non-public card points at proxy mode", (t) => {
+	const lines = [];
+	const orig = console.error;
+	console.error = (m) => lines.push(String(m));
+	t.after(() => { console.error = orig; });
+	assert.equal(cardUrlToSend("http://100.101.102.103:8080/.well-known/agent-card.json", "https://inbox.example.com"), "");
+	assert.match(lines.join("\n"), /inboxes accept only public https cards\)\. Peers can't call an agent there: to be reachable, expose it through a public façade/);
+});

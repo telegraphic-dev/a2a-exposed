@@ -16,7 +16,8 @@ const HELP = `a2a-exposed ${VERSION} - public A2A endpoint for any AI agent (Clo
 Usage: a2a-exposed <command> [options]        (or: npx a2a-exposed <command>)
 
 Setup (needs Node 22.18+, e.g. \`mise exec node@22 -- npx a2a-exposed ...\`, and a Cloudflare login:
-npx cf auth login --no-browser)
+npx cf auth login --no-browser; on a VPS where it fails with HTTP 403 before showing a code, export
+CLOUDFLARE_API_TOKEN instead: setup skill, Troubleshooting)
   init [--hostname <host> | --workers-dev [--workers-dev-subdomain NAME]]
        [--agent-name N] [--agent-description D] [--agent-skills JSON]
        [--provider-organization O --provider-url U] [--preset P] [--worker-name W] [--d1-name D]
