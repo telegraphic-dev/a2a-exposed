@@ -63,9 +63,3 @@ jobs:
         run: |
           npm pack --dry-run 2>&1 | tee pack.txt
           grep -q "worker/cloudflare.config.ts" pack.txt || { echo "::error::Worker template missing from the package"; exit 1; }
-
-      - name: Alias package (deprecated a2a-over-webhook) - npm pack (dry run)
-        working-directory: alias/a2a-over-webhook
-        run: |
-          npm pack --dry-run 2>&1 | tee pack.txt
-          grep -q "bin/a2a-over-webhook.mjs" pack.txt || { echo "::error::alias bin missing from the package"; exit 1; }
