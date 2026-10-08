@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DO_NOT_TRACK: "1"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22 # latest 22.x; the Worker tests and cf need 22.18+
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+
+      - name: Worker - install
+        working-directory: worker
+        run: npm ci --no-audit --no-fund
+
+      - name: Worker - tests
+        working-directory: worker
+        run: npm test
+
+      - name: Worker - typecheck
+        working-directory: worker
+        run: |
+          npx cf workers types
+          npx tsc --noEmit
+
+      # cf build only bundles locally: no Cloudflare credentials are needed (or available) here.
+      - name: Worker - build
+        working-directory: worker
+        run: npx cf build
+
+      - name: CLI - tests
+        working-directory: cli
+        run: npm test
+
+      - name: Skills - discovery
+        run: |
+          npx --yes skills add ./ --list | tee skills-list.txt
+          for s in a2a-over-webhook a2a-over-webhook-setup; do
+            grep -Eq "(^|[^-[:alnum:]])$s([^-[:alnum:]]|$)" skills-list.txt || { echo "::error::skill $s not discovered"; exit 1; }
+          done
+
+      - name: CLI - npm pack (dry run)
+        working-directory: cli
+        run: |
+          npm pack --dry-run 2>&1 | tee pack.txt
+          grep -q "worker/cloudflare.config.ts" pack.txt || { echo "::error::Worker template missing from the package"; exit 1; }
