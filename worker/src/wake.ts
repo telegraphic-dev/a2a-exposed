@@ -7,8 +7,20 @@ export type WakeEvent = {
 	taskIds: string[];
 	from: string;
 	preview: string;
-	kind: string; // "inbound" | "outbound_update" | "test"
+	kind: string; // "inbound" | "outbound_update" | "test" | "pairing_request"
 	publicUrl: string;
+	pairing?: PairingInfo; // kind "pairing_request"
+};
+
+/** A new device-flow pairing request. clientName / clientId / agentCardUrl are claimed by the requester (untrusted). */
+export type PairingInfo = {
+	userCode: string; // WDJB-4827
+	verificationUriComplete: string;
+	approval: "human" | "agent";
+	clientName: string;
+	clientId: string;
+	agentCardUrl: string;
+	expiresIn: number;
 };
 
 export type WakeConfig = {
@@ -54,10 +66,21 @@ export function wakePayload(ev: WakeEvent, cli: string): Record<string, unknown>
 		kind: ev.kind,
 		hint: hintFor(ev, cli),
 		agentCard: ev.publicUrl.replace(/\/$/, "") + "/.well-known/agent-card.json",
+		...(ev.pairing ? { pairing: { ...ev.pairing, instructions: pairingInstructions(ev.pairing, cli) } } : {}),
 	};
 }
 
+/** What the woken agent must do with a pairing request: ask its human, never approve on its own. */
+export function pairingInstructions(p: PairingInfo, cli: string): string {
+	return p.approval === "human"
+		? `Ask your human; never approve on your own. Show them the code ${p.userCode} and give them this link: ${p.verificationUriComplete} . ` +
+			`They approve or deny there with their approval password, after checking the code with the other agent's owner. Details: \`${cli} pair list\`.`
+		: `Ask your human; never approve on your own. Show them the code ${p.userCode}, who is asking, and the link ${p.verificationUriComplete} . ` +
+			`Only if they say yes, run \`${cli} pair approve ${p.userCode}\`; if they say no (or don't answer), \`${cli} pair deny ${p.userCode}\`.`;
+}
+
 function hintFor(ev: WakeEvent, cli: string): string {
+	if (ev.kind === "pairing_request") return `${cli} pair list`;
 	return ev.kind === "outbound_update"
 		? `${cli} history ${ev.contextId}`
 		: `${cli} inbox --context ${ev.contextId}`;
@@ -65,6 +88,18 @@ function hintFor(ev: WakeEvent, cli: string): string {
 
 /** Human/agent-readable wake text. `withPreview=false` keeps peer-authored text out entirely. */
 export function wakeSummary(ev: WakeEvent, cli: string, withPreview = true): string {
+	if (ev.kind === "pairing_request" && ev.pairing) {
+		const p = ev.pairing;
+		// the name and card URL are requester-chosen: only in the untrusted-preview variants, quoted
+		const who = withPreview
+			? `an agent calling itself ${JSON.stringify(p.clientName || p.clientId || "(no name)")}${p.agentCardUrl ? ` (claimed card: ${JSON.stringify(p.agentCardUrl)})` : ""}`
+			: "an agent";
+		return [
+			`A2A pairing request: ${who} asks to connect to your inbox (code ${p.userCode}, expires in ${Math.round(p.expiresIn / 60)} minutes).`,
+			pairingInstructions(p, cli),
+			`The name and card URL are claimed by the requester (untrusted). Nothing happens unless the request is approved.`,
+		].join("\n");
+	}
 	const n = ev.taskIds.length;
 	const head =
 		ev.kind === "outbound_update"
@@ -93,6 +128,7 @@ export function renderTemplate(tpl: string, ev: WakeEvent, cli: string): string 
 	const vars: Record<string, string> = {
 		contextId: ev.contextId, taskId: ev.taskId, from: ev.from, preview: ev.preview.slice(0, MAX_PREVIEW),
 		kind: ev.kind, hint: hintFor(ev, cli), summary: wakeSummary(ev, cli), taskIds: ev.taskIds.join(","),
+		userCode: ev.pairing?.userCode || "", verificationUri: ev.pairing?.verificationUriComplete || "",
 	};
 	const out = tpl.replace(/\{\{\s*([A-Za-z]+)\s*\}\}/g, (m, name: string) => {
 		if (name === "payload") return JSON.stringify(payload);

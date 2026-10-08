@@ -5,7 +5,7 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import * as C from "./config.mjs";
-import { die, fingerprint, httpJson, randomToken } from "./a2a.mjs";
+import { cardUrlProblem, die, fingerprint, httpJson, randomToken } from "./a2a.mjs";
 import { owner } from "./commands.mjs";
 import * as WD from "./workersdev.mjs";
 
@@ -22,7 +22,7 @@ const DEPLOY_KEYS = [
 	"A2A_PROVIDER_ORGANIZATION", "A2A_PROVIDER_URL", "A2A_DOCUMENTATION_URL",
 	"WAKE_PRESET", "WAKE_AGENT_ID", "WAKE_KEY_HEADER", "WAKE_KEY_PREFIX", "WAKE_BODY_TEMPLATE", "WAKE_CLI_COMMAND",
 	"WAKE_DEBOUNCE_SECONDS", "WAKE_MAX_PER_HOUR", "A2A_MAX_BODY", "A2A_RATE_PER_MIN", "A2A_ENABLE_CRON",
-	"A2A_WORKERS_DEV_SUBDOMAIN", "A2A_RETIRED_HOSTNAMES",
+	"A2A_WORKERS_DEV_SUBDOMAIN", "A2A_RETIRED_HOSTNAMES", "PAIRING_APPROVAL",
 ];
 // init/deploy flag -> config key
 const FLAG_KEYS = {
@@ -31,7 +31,9 @@ const FLAG_KEYS = {
 	"provider-organization": "A2A_PROVIDER_ORGANIZATION", "provider-url": "A2A_PROVIDER_URL",
 	preset: "WAKE_PRESET", "agent-id": "WAKE_AGENT_ID", "key-header": "WAKE_KEY_HEADER", "key-prefix": "WAKE_KEY_PREFIX",
 	"body-template": "WAKE_BODY_TEMPLATE", "cli-command": "WAKE_CLI_COMMAND", debounce: "WAKE_DEBOUNCE_SECONDS", "max-per-hour": "WAKE_MAX_PER_HOUR",
+	"pairing-approval": "PAIRING_APPROVAL",
 };
+export const PAIRING_MODES = ["human", "agent", "off"];
 export const DEPLOY_FLAGS = Object.keys(FLAG_KEYS);
 
 const step = (s) => console.error(`==> ${s}`);
@@ -93,6 +95,8 @@ function deployEnv() {
 	}
 	if ("WAKE_KEY_PREFIX" in C.fileConfig()) env.WAKE_KEY_PREFIX = C.fileConfig().WAKE_KEY_PREFIX;
 	for (const k of WAKE_SECRETS) delete env[k]; // secrets only travel via the secrets file
+	// the agent card URL comes from A2A_HOSTNAME / the workers.dev subdomain only (older templates read these)
+	delete env.A2A_PUBLIC_URL; delete env.PUBLIC_URL;
 	return env;
 }
 
@@ -151,6 +155,8 @@ function applyFlags(o) {
 	if (upd.CF_PROFILE !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(upd.CF_PROFILE)) die("--cf-profile must be a cf auth profile name");
 	if (o["workers-dev-subdomain"] !== undefined && !WD.LABEL_RE.test(o["workers-dev-subdomain"]))
 		die("--workers-dev-subdomain must be lowercase letters, digits and hyphens (a DNS label)");
+	if (upd.PAIRING_APPROVAL !== undefined && !PAIRING_MODES.includes(upd.PAIRING_APPROVAL))
+		die(`--pairing-approval must be one of ${PAIRING_MODES.join(" | ")} (human: approval password on the /device page; agent: also \`pair approve\`; off: no device-flow pairing)`);
 	if (upd.WAKE_PRESET && !PRESETS.includes(upd.WAKE_PRESET)) die(`unknown preset ${upd.WAKE_PRESET} (${PRESETS.join(" | ")})`);
 	if (upd.A2A_AGENT_SKILLS) {
 		try { if (!Array.isArray(JSON.parse(upd.A2A_AGENT_SKILLS))) throw 0; } catch { die("--agent-skills must be a JSON array of A2A AgentSkill objects"); }
@@ -162,7 +168,7 @@ function applyFlags(o) {
 /** After a deploy that moved the public URL: what stops serving and what peers must update. */
 function reportSwitch(sw) {
 	if (!sw) return;
-	const to = C.get("A2A_BASE_URL") || publicBase();
+	const to = C.fileConfig().A2A_BASE_URL || publicBase();
 	const card = to ? `${to}/.well-known/agent-card.json` : "(see `a2a-over-webhook url`)";
 	console.error(`\nnote: the public URL moved${sw.from ? ` from ${sw.from}` : ""} to ${to || "workers.dev"}.`);
 	if (sw.fromHost) {
@@ -182,11 +188,15 @@ async function verifyCard(base) {
 	for (let i = 0; i < tries; i++) {
 		try {
 			const { status, data } = await httpJson(base + "/.well-known/agent-card.json", { timeout: 10000 });
-			if (status === 200 && data && data.name) return console.error(`agent card OK: ${data.name} (${base}/.well-known/agent-card.json)`);
+			if (status === 200 && data && data.name) {
+				const wrong = cardUrlProblem(data, base);
+				if (wrong) return console.error(`warning: the agent card at ${base}/.well-known/agent-card.json does not point peers at this deployment: ${wrong}. Check with: a2a-over-webhook status`);
+				return console.error(`agent card OK: ${data.name} (${base}/.well-known/agent-card.json)`);
+			}
 		} catch { /* DNS / certificate may still be provisioning */ }
 		await new Promise((r) => setTimeout(r, 5000));
 	}
-	console.error(`warning: agent card not reachable yet at ${base}; ${C.get("A2A_HOSTNAME") ? "a new custom domain" : "a new workers.dev subdomain"} can take a few minutes. Check again with: curl -s ${base}/health`);
+	console.error(`warning: agent card not reachable yet at ${base}; ${C.get("A2A_HOSTNAME") ? "a new custom domain" : "a new workers.dev subdomain"} can take a few minutes. Check again with: a2a-over-webhook status`);
 }
 
 /** Apply D1 migrations quietly: cf prints a bare JSON array (often `[]`) when stdout is not a TTY. */
@@ -253,6 +263,15 @@ async function deployAndLearn(dir, secrets, o) {
 	}
 }
 
+/** The deployment's public URL as saved by init/deploy (an exported A2A_BASE_URL does not change it; warned about). */
+function deployedBase() {
+	const base = (C.fileConfig().A2A_BASE_URL || publicBase()).replace(/\/$/, "");
+	const env = (process.env.A2A_BASE_URL || "").replace(/\/$/, "");
+	if (env && base && env !== base)
+		console.error(`warning: A2A_BASE_URL is exported as ${env}, but this deployment is ${base}; CLI commands (and push URLs sent to peers) would use the exported value: unset A2A_BASE_URL`);
+	return base;
+}
+
 export async function init(o) {
 	checkNode();
 	const switched = applyFlags(o);
@@ -303,11 +322,11 @@ export async function init(o) {
 	const secrets = { OWNER_TOKEN: ownerToken, ...wakeSecretsFromEnv() };
 	step(`deploying (secrets uploaded: ${Object.keys(secrets).join(", ")})`);
 	await deployAndLearn(dir, secrets, o);
-	const base = C.get("A2A_BASE_URL");
+	const base = deployedBase();
 	if (base) await verifyCard(base);
 	console.log(base);
 	reportSwitch(switched);
-	console.error(`config saved to ${C.CONFIG_FILE} (chmod 600). Next: a2a-over-webhook wake preview, a2a-over-webhook token issue <peer>`);
+	console.error(`config saved to ${C.CONFIG_FILE} (chmod 600). Next: a2a-over-webhook status (shows the next setup step)`);
 }
 
 export async function deploy(o) {
@@ -326,7 +345,7 @@ export async function deploy(o) {
 	if (Object.keys(secrets).length && C.get("A2A_OWNER_TOKEN")) secrets.OWNER_TOKEN = C.get("A2A_OWNER_TOKEN");
 	step(Object.keys(secrets).length ? `deploying (secrets uploaded: ${Object.keys(secrets).join(", ")})` : "deploying (existing secrets kept)");
 	await deployAndLearn(dir, secrets, o);
-	const base = C.get("A2A_BASE_URL") || publicBase();
+	const base = deployedBase();
 	if (base) await verifyCard(base);
 	if (switched) { console.log(base); reportSwitch(switched); }
 }

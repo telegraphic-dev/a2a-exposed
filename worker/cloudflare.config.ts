@@ -13,8 +13,9 @@ const hostname = v("A2A_HOSTNAME"); // e.g. agent.example.com (on a zone in your
 // with a hostname, the workers.dev route is switched off).
 const workersDev = !hostname;
 const wdSubdomain = v("A2A_WORKERS_DEV_SUBDOMAIN"); // the account's workers.dev subdomain, once known
-// Public base URL for the agent card; if still unknown, the Worker uses the request's origin.
-const publicUrl = v("A2A_PUBLIC_URL") || (hostname ? `https://${hostname}` : wdSubdomain ? `https://${name}.${wdSubdomain}.workers.dev` : "");
+// Public base URL for the agent card, derived only from where the Worker is served (no override: a local webhook,
+// Tailnet or tunnel URL must never end up in the card). If still unknown, the Worker uses the request's origin.
+const publicUrl = hostname ? `https://${hostname}` : wdSubdomain ? `https://${name}.${wdSubdomain}.workers.dev` : "";
 
 // Plain (non-secret) vars exposed to the Worker; empty values are omitted.
 const plain: Record<string, string> = {
@@ -37,6 +38,7 @@ const plain: Record<string, string> = {
 	MAX_BODY: v("A2A_MAX_BODY"),
 	RATE_PER_MIN: v("A2A_RATE_PER_MIN"),
 	RETIRED_HOSTNAMES: v("A2A_RETIRED_HOSTNAMES"), // custom domains this agent moved away from (see movedResponse)
+	PAIRING_APPROVAL: v("PAIRING_APPROVAL") || "human", // device-flow pairing: human (approval password on /device) | agent | off
 };
 const envBindings: Record<string, any> = {
 	DB: bindings.d1(v("A2A_D1_ID") ? { name: v("A2A_D1_NAME") || name, id: v("A2A_D1_ID") } : { name: v("A2A_D1_NAME") || name }),

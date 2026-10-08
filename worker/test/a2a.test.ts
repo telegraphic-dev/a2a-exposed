@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { publicTask, normMessage, randomToken, sha256, fingerprint, taskFromAny, movedResponse } from "../src/a2a.ts";
+import { publicTask, normMessage, randomToken, sha256, fingerprint, taskFromAny, movedResponse, publicOrigin, isPrivateHost } from "../src/a2a.ts";
 
 // Internal (0.3-shaped) task after a peer message and an owner reply, as stored in D1.
 const reply = { kind: "message", role: "agent", messageId: "m2", contextId: "c1", taskId: "t1", parts: [{ kind: "text", text: "pong" }] };
@@ -81,3 +81,21 @@ test("movedResponse: retired hostnames redirect the card (301) and answer 410; o
 	assert.equal(movedResponse("https://old.example.com/", "", "old.example.com")!.status, 410);
 });
 
+
+test("publicOrigin: the card advertises the deployment's public https URL, never a local or Tailnet one", () => {
+	const req = "https://agent-x.acme.workers.dev/.well-known/agent-card.json";
+	assert.equal(publicOrigin("https://agent.example.com", req), "https://agent.example.com");
+	assert.equal(publicOrigin("https://agent.example.com/", req), "https://agent.example.com");
+	assert.equal(publicOrigin("", req), "https://agent-x.acme.workers.dev", "unknown yet: the request origin");
+	assert.equal(publicOrigin(undefined, req), "https://agent-x.acme.workers.dev");
+	for (const local of ["http://agent.example.com", "https://hermes.tail1234.ts.net", "http://100.101.102.103:8644", "https://100.64.0.1",
+		"https://localhost:8644", "https://hermes", "https://192.168.1.10", "https://10.0.0.5", "https://box.local", "https://[::1]:8644", "not a url"])
+		assert.equal(publicOrigin(local, req), "https://agent-x.acme.workers.dev", local);
+});
+
+test("isPrivateHost", () => {
+	for (const h of ["localhost", "hermes", "hermes.tail1234.ts.net", "100.127.255.1", "172.16.0.1", "169.254.1.1", "127.0.0.1", "nas.home.arpa", "fd00::1"])
+		assert.equal(isPrivateHost(h), true, h);
+	for (const h of ["agent.example.com", "agent-x.acme.workers.dev", "100.128.0.1", "172.32.0.1", "8.8.8.8", "2606:4700::1"])
+		assert.equal(isPrivateHost(h), false, h);
+});

@@ -2,11 +2,12 @@
 // D1-backed inbox, wake webhooks (presets), and an owner API for the local CLI.
 import * as A from "./a2a.ts";
 import { renderWake, redact, cloudflareErrorHint, defaultDebounceSeconds, defaultMaxPerHour, type WakeConfig, type WakeEvent } from "./wake.ts";
+import * as P from "./pairing.ts";
 type Json = any;
 
 interface Env {
 	DB: D1Database;
-	PUBLIC_URL: string; // may be empty on a first workers.dev deploy (request origin is used then)
+	PUBLIC_URL: string; // may be empty on a first workers.dev deploy (request origin is used then; see A.publicOrigin)
 	RETIRED_HOSTNAMES?: string; // old custom domains (comma-separated): 301 for the card, 410 for everything else
 	AGENT_NAME?: string;
 	AGENT_DESCRIPTION?: string;
@@ -34,13 +35,17 @@ interface Env {
 	// limits
 	MAX_BODY?: string;
 	RATE_PER_MIN?: string;
+	// device-flow pairing: human (default) | agent | off
+	PAIRING_APPROVAL?: string;
 }
 
 class RpcError extends Error {
-	constructor(public code: number, msg: string) { super(msg); }
+	code: number;
+	constructor(code: number, msg: string) { super(msg); this.code = code; }
 }
 class HttpError extends Error {
-	constructor(public status: number, msg: string) { super(msg); }
+	status: number;
+	constructor(status: number, msg: string) { super(msg); this.status = status; }
 }
 
 const json = (obj: Json, status = 200, headers: Record<string, string> = {}) =>
@@ -222,6 +227,35 @@ function agentSkills(env: Env): Json[] {
 	}];
 }
 
+const pairingMode = (env: Env) => P.pairingMode(env.PAIRING_APPROVAL);
+const pairingOn = (env: Env) => pairingMode(env) !== "off";
+const oauthUrls = (env: Env) => {
+	const base = env.PUBLIC_URL.replace(/\/$/, "");
+	return { issuer: base, device: `${base}/oauth/device_authorization`, token: `${base}/oauth/token`, page: `${base}/device`,
+		metadata: `${base}/.well-known/oauth-authorization-server` };
+};
+const cliCommand = (env: Env) => env.WAKE_CLI_COMMAND || "npx a2a-over-webhook";
+
+/** Bearer (every token, however issued) plus, unless pairing is off, the A2A 1.0 OAuth2 device-code flow that issues one. */
+function securitySchemes(env: Env): Json {
+	const u = oauthUrls(env);
+	const schemes: Json = {
+		bearer: { httpAuthSecurityScheme: { scheme: "Bearer", description: pairingOn(env)
+			? "Per-peer bearer token: from the device-flow pairing below (the access_token), or issued by the agent's operator"
+			: "Per-peer bearer token issued by the agent's operator" } },
+	};
+	if (pairingOn(env)) schemes.pairing = { oauth2SecurityScheme: {
+		description: "Get a bearer token without exchanging secrets in chat: OAuth 2.0 Device Authorization Grant (RFC 8628). " +
+			"POST client_name (your agent's name) and agent_card_url (your card) form-encoded to deviceAuthorizationUrl; show the user_code and " +
+			"verification_uri_complete to your human, who confirms the code with this agent's owner; poll tokenUrl with grant_type=" + P.DEVICE_GRANT +
+			" every `interval` seconds. The owner approves every request" + (pairingMode(env) === "human" ? " on the verification page." : ".") +
+			" The access_token is a per-peer token for Authorization: Bearer (no refresh token; the owner can revoke it).",
+		flows: { deviceCode: { deviceAuthorizationUrl: u.device, tokenUrl: u.token, scopes: { a2a: "Send messages to this agent and read the tasks you created" } } },
+		oauth2MetadataUrl: u.metadata,
+	} };
+	return schemes;
+}
+
 function agentCard(env: Env): Json {
 	const base = env.PUBLIC_URL.replace(/\/$/, "");
 	const card: Json = {
@@ -233,8 +267,8 @@ function agentCard(env: Env): Json {
 			{ url: base + "/", protocolBinding: "JSONRPC", protocolVersion: "1.0" },
 			{ url: base + "/", protocolBinding: "JSONRPC", protocolVersion: "0.3" },
 		],
-		securitySchemes: { bearer: { httpAuthSecurityScheme: { scheme: "Bearer", description: "Per-peer bearer token issued by the agent's operator" } } },
-		securityRequirements: [{ schemes: { bearer: { list: [] } } }],
+		securitySchemes: securitySchemes(env),
+		securityRequirements: [{ schemes: { bearer: { list: [] } } }, ...(pairingOn(env) ? [{ schemes: { pairing: { list: [] } } }] : [])],
 		capabilities: { streaming: false, pushNotifications: true, extendedAgentCard: false },
 		defaultInputModes: ["text/plain", "application/json"],
 		defaultOutputModes: ["text/plain", "application/json"],
@@ -358,12 +392,26 @@ const rpcList: Rpc = async (p, label, version, env) => {
 
 const HANDLERS: Record<string, Rpc> = { send: rpcSend, get: rpcGet, cancel: rpcCancel, pushset: rpcPushSet, pushget: rpcPushGet, list: rpcList };
 
+/** 401 for A2A calls. Unless pairing is off, the error says how to get a token (device flow), so a generic agent can follow it. */
+function unauthorized(env: Env, hadToken: boolean): Response {
+	const www = `Bearer realm="a2a"${hadToken ? ', error="invalid_token"' : ""}`;
+	if (!pairingOn(env))
+		return json({ jsonrpc: "2.0", id: null, error: { code: -32000, message: "Unauthorized: send Authorization: Bearer <token> (ask this agent's operator for one)" } }, 401, { "www-authenticate": www });
+	const u = oauthUrls(env);
+	return json({ jsonrpc: "2.0", id: null, error: {
+		code: -32000,
+		message: `Unauthorized: send Authorization: Bearer <token>. No token? Get one with the OAuth 2.0 device flow (RFC 8628): POST client_name and agent_card_url to ${u.device}, show the user_code and verification_uri_complete to your human, then poll ${u.token} until this agent's owner approves.`,
+		data: { pairing: { grant_type: P.DEVICE_GRANT, device_authorization_endpoint: u.device, token_endpoint: u.token,
+			authorization_server_metadata: u.metadata, approval: pairingMode(env), cli: "npx a2a-over-webhook connect " + u.issuer } },
+	} }, 401, { "www-authenticate": www });
+}
+
 async function handleRpc(req: Request, env: Env, ectx: ExecutionContext): Promise<Response> {
 	const ip = req.headers.get("cf-connecting-ip") || "";
 	const label = await peerLabel(env, req.headers.get("authorization"));
 	if (!label) {
 		log("auth_failed", { ip });
-		return json({ jsonrpc: "2.0", id: null, error: { code: -32000, message: "Unauthorized" } }, 401, { "www-authenticate": 'Bearer realm="a2a"' });
+		return unauthorized(env, !!req.headers.get("authorization"));
 	}
 	if (!(await rateOk(env, label))) {
 		log("rate_limited", { peer: label, ip });
@@ -570,8 +618,8 @@ async function handleOwner(req: Request, env: Env, ectx: ExecutionContext, path:
 	}
 	if (seg[0] === "peers") {
 		if (m === "GET") {
-			const rows = await env.DB.prepare("SELECT label, created_at, revoked_at FROM peers ORDER BY created_at").all();
-			return json(rows.results);
+			const rows = await env.DB.prepare("SELECT label, created_at, revoked_at, source, user_code, client_name FROM peers ORDER BY created_at").all();
+			return json((rows.results as Json[]).map((r) => ({ ...r, user_code: r.user_code ? P.formatUserCode(r.user_code) : null })));
 		}
 		if (m === "POST" && !seg[1]) {
 			const b = await body();
@@ -589,6 +637,7 @@ async function handleOwner(req: Request, env: Env, ectx: ExecutionContext, path:
 			return json({ revoked: r.meta.changes === 1 });
 		}
 	}
+	if (seg[0] === "pairing") return await ownerPairing(req, env, m, seg.slice(1), body);
 	if (seg[0] === "wake" && seg[1] === "preview" && m === "GET") {
 		// rendered wake request for a sample event, partially masked, plus short sha256 fingerprints of the
 		// uploaded secrets so the owner can compare them with local values without revealing them
@@ -632,6 +681,290 @@ async function handleOwner(req: Request, env: Env, ectx: ExecutionContext, path:
 	return json({ error: "not found" }, 404);
 }
 
+// ------------------------------------------------------------------ device-flow pairing (RFC 8628; the inbox is the authorization server)
+const oauthError = (error: string, description: string, status = 400, headers: Record<string, string> = {}) =>
+	json({ error, error_description: description }, status, { pragma: "no-cache", ...headers });
+
+/** RFC 8414 metadata, for generic OAuth clients. */
+function oauthMetadata(env: Env): Json {
+	const u = oauthUrls(env);
+	return {
+		issuer: u.issuer, device_authorization_endpoint: u.device, token_endpoint: u.token,
+		grant_types_supported: [P.DEVICE_GRANT], response_types_supported: [], token_endpoint_auth_methods_supported: ["none"],
+		scopes_supported: ["a2a"], service_documentation: "https://github.com/telegraphic-dev/a2a-over-webhook#connecting-agents-device-flow",
+	};
+}
+
+/** Rows to drop: requests an hour past expiry (until then a poll still gets expired_token) and old rate windows. */
+const pairingCleanup = (env: Env, now: number) => [
+	env.DB.prepare("DELETE FROM device_requests WHERE expires_ms < ?").bind(now - 3600000),
+	env.DB.prepare("DELETE FROM pairing_rate WHERE expires_ms < ?").bind(now),
+];
+
+/** Fixed-window counter: increments and returns the count for `key` in the current window (peek: no increment). */
+async function bump(env: Env, key: string, windowS: number, peek = false): Promise<number> {
+	const now = Date.now(), start = Math.floor(now / (windowS * 1000));
+	if (peek) {
+		const r: Json = await env.DB.prepare("SELECT count FROM pairing_rate WHERE key = ? AND window_start = ?").bind(key, start).first();
+		return r?.count ?? 0;
+	}
+	const r: Json = await env.DB.prepare(
+		"INSERT INTO pairing_rate (key, window_start, count, expires_ms) VALUES (?, ?, 1, ?) ON CONFLICT(key, window_start) DO UPDATE SET count = count + 1 RETURNING count",
+	).bind(key, start, (start + 1) * windowS * 1000).first();
+	return r?.count ?? 0;
+}
+
+const clientIp = (req: Request) => req.headers.get("cf-connecting-ip") || "";
+const clientCountry = (req: Request) => String(((req as Json).cf || {}).country || "");
+
+async function deviceAuthorization(req: Request, env: Env, ectx: ExecutionContext): Promise<Response> {
+	const now = Date.now(), ip = clientIp(req);
+	let p: Record<string, string>;
+	try {
+		const raw = await readBody(req, { ...env, MAX_BODY: "4096" });
+		p = P.parseParams(raw, req.headers.get("content-type"));
+	} catch (e: any) { return oauthError("invalid_request", e instanceof HttpError ? "request too large" : e.message); }
+	const clientName = P.cleanText(p.client_name), clientId = P.cleanText(p.client_id);
+	const cardUrl = P.cleanCardUrl(p.agent_card_url);
+	if (p.agent_card_url && !cardUrl) return oauthError("invalid_request", "agent_card_url must be an https URL (at most 300 characters)");
+	await env.DB.batch(pairingCleanup(env, now));
+	// flood control: approval prompts (wakes, pending requests) must stay few
+	const retry = { "retry-after": "600" };
+	if ((await bump(env, `dev:ip:${ip || "?"}`, P.LIMITS.perIpWindowS)) > P.LIMITS.perIp) {
+		log("pairing_rate_limited", { ip, scope: "ip" });
+		return oauthError("slow_down", "too many pairing requests from this address; try again in 10 minutes", 429, retry);
+	}
+	const pending: Json = await env.DB.prepare("SELECT COUNT(*) AS n FROM device_requests WHERE status = 'pending' AND expires_ms > ?").bind(now).first();
+	if ((pending?.n ?? 0) >= P.LIMITS.maxPending || (await bump(env, "dev:global", 3600)) > P.LIMITS.perHour) {
+		log("pairing_rate_limited", { ip, scope: "global" });
+		return oauthError("slow_down", "this inbox has too many pairing requests waiting; try again later", 429, retry);
+	}
+	const deviceCode = P.newDeviceCode();
+	let userCode = "";
+	for (let i = 0; i < 5 && !userCode; i++) {
+		const c = P.newUserCode();
+		const r = await env.DB.prepare(
+			`INSERT INTO device_requests (device_hash, user_code, client_id, client_name, agent_card_url, ip, country, status, created_ms, expires_ms, interval_s)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?) ON CONFLICT DO NOTHING`,
+		).bind(await A.sha256(deviceCode), c, clientId || null, clientName || null, cardUrl || null, ip || null, clientCountry(req) || null,
+			now, now + P.EXPIRES_S * 1000, P.INTERVAL_S).run();
+		if (r.meta.changes === 1) userCode = c;
+	}
+	if (!userCode) return oauthError("temporarily_unavailable", "could not allocate a user code; try again", 503);
+	const u = oauthUrls(env);
+	const shown = P.formatUserCode(userCode);
+	const complete = `${u.page}?user_code=${shown}`;
+	log("pairing_requested", { ip, userCode: shown, clientName, clientId });
+	const mode = pairingMode(env) as "human" | "agent";
+	ectx.waitUntil((async () => {
+		if (!(await wakeBudgetOk(env))) return log("wake_skipped", { reason: "hourly cap", kind: "pairing_request" });
+		await sendWake(env, ectx, { contextId: "pairing", taskId: "none", taskIds: [], from: clientName || clientId || "unknown agent", preview: "",
+			kind: "pairing_request", pairing: { userCode: shown, verificationUriComplete: complete, approval: mode, clientName, clientId, agentCardUrl: cardUrl, expiresIn: P.EXPIRES_S } });
+	})());
+	return json({ device_code: deviceCode, user_code: shown, verification_uri: u.page, verification_uri_complete: complete,
+		expires_in: P.EXPIRES_S, interval: P.INTERVAL_S }, 200, { pragma: "no-cache" });
+}
+
+async function tokenEndpoint(req: Request, env: Env): Promise<Response> {
+	const now = Date.now(), ip = clientIp(req);
+	let p: Record<string, string>;
+	try { p = P.parseParams(await readBody(req, { ...env, MAX_BODY: "4096" }), req.headers.get("content-type")); }
+	catch (e: any) { return oauthError("invalid_request", e instanceof HttpError ? "request too large" : e.message); }
+	if (p.grant_type !== P.DEVICE_GRANT) return oauthError("unsupported_grant_type", `only grant_type=${P.DEVICE_GRANT} is supported`);
+	if (!p.device_code) return oauthError("invalid_request", "device_code is required");
+	if ((await bump(env, `tok:ip:${ip || "?"}`, 60)) > P.LIMITS.pollsPerMin) return oauthError("slow_down", "too many token requests from this address", 429, { "retry-after": "60" });
+	const hash = await A.sha256(p.device_code);
+	const r: Json = await env.DB.prepare("SELECT * FROM device_requests WHERE device_hash = ?").bind(hash).first();
+	if (!r) return oauthError("invalid_grant", "unknown, already used, or expired device_code");
+	if (now >= r.expires_ms) return oauthError("expired_token", "the device_code expired; start again");
+	if (r.status === "denied") {
+		await env.DB.prepare("DELETE FROM device_requests WHERE device_hash = ?").bind(hash).run();
+		return oauthError("access_denied", "the inbox owner denied this request");
+	}
+	if (r.status === "pending") {
+		// RFC 8628 §3.5: polling faster than the interval -> slow_down, and the interval grows by 5 s for good
+		if (r.last_poll_ms && now - r.last_poll_ms < r.interval_s * 1000) {
+			await env.DB.prepare("UPDATE device_requests SET interval_s = interval_s + 5, last_poll_ms = ? WHERE device_hash = ?").bind(now, hash).run();
+			return oauthError("slow_down", `polling too fast; wait at least ${r.interval_s + 5} seconds between requests`);
+		}
+		await env.DB.prepare("UPDATE device_requests SET last_poll_ms = ? WHERE device_hash = ?").bind(now, hash).run();
+		return oauthError("authorization_pending", "waiting for the inbox owner to approve");
+	}
+	// approved: single use. Only the request that flips the row gets the token; the row is then deleted.
+	const claimed = await env.DB.prepare("UPDATE device_requests SET status = 'redeemed' WHERE device_hash = ? AND status = 'approved'").bind(hash).run();
+	if (claimed.meta.changes !== 1) return oauthError("invalid_grant", "unknown, already used, or expired device_code");
+	const token = A.randomToken();
+	let label = r.label || P.labelBase(r.client_name || "", r.client_id || "");
+	for (let i = 0; i < 5; i++) {
+		try {
+			await env.DB.prepare("INSERT INTO peers (label, token_hash, created_at, source, user_code, client_name) VALUES (?, ?, ?, 'pairing', ?, ?)")
+				.bind(label, await A.sha256(token), A.nowIso(), r.user_code, r.client_name || r.client_id || null).run();
+			break;
+		} catch (e) {
+			if (i === 4) throw e;
+			label = await freeLabel(env, P.labelBase(r.client_name || "", r.client_id || "")); // taken meanwhile
+		}
+	}
+	await env.DB.prepare("DELETE FROM device_requests WHERE device_hash = ?").bind(hash).run();
+	log("pairing_redeemed", { ip, label, userCode: P.formatUserCode(r.user_code) });
+	return json({ access_token: token, token_type: "Bearer" }, 200, { pragma: "no-cache" });
+}
+
+async function freeLabel(env: Env, base: string): Promise<string> {
+	const rows = await env.DB.prepare("SELECT label FROM peers WHERE label = ? OR label LIKE ?").bind(base, `${base}-%`).all();
+	const pend = await env.DB.prepare("SELECT label FROM device_requests WHERE label IS NOT NULL").all();
+	return P.dedupeLabel(base, new Set([...(rows.results as Json[]), ...(pend.results as Json[])].map((x) => x.label)));
+}
+
+const pendingRequest = async (env: Env, code: string): Promise<Json | null> =>
+	env.DB.prepare("SELECT * FROM device_requests WHERE user_code = ?").bind(code).first();
+
+/** Approve or deny a pending request. Returns the label (approve) or an error message. */
+async function decide(env: Env, code: string, approve: boolean, by: string): Promise<{ ok: boolean; label?: string; error?: string; request?: Json }> {
+	const r = await pendingRequest(env, code);
+	if (!r) return { ok: false, error: "no pairing request with that code" };
+	if (r.status !== "pending") return { ok: false, error: `that request was already ${r.status === "denied" ? "denied" : "approved"}` };
+	if (Date.now() >= r.expires_ms) return { ok: false, error: "that request has expired" };
+	const label = approve ? await freeLabel(env, P.labelBase(r.client_name || "", r.client_id || "")) : null;
+	const u = await env.DB.prepare("UPDATE device_requests SET status = ?, label = ?, decided_ms = ?, decided_by = ? WHERE device_hash = ? AND status = 'pending'")
+		.bind(approve ? "approved" : "denied", label, Date.now(), by, r.device_hash).run();
+	if (u.meta.changes !== 1) return { ok: false, error: "that request was decided meanwhile" };
+	log(approve ? "pairing_approved" : "pairing_denied", { userCode: P.formatUserCode(code), by, label });
+	return { ok: true, label: label || undefined, request: r };
+}
+
+const pageRequest = (r: Json): P.PageRequest => ({ userCode: r.user_code, clientName: r.client_name || "", clientId: r.client_id || "",
+	agentCardUrl: r.agent_card_url || "", ip: r.ip || "", country: r.country || "", createdMs: r.created_ms, expiresMs: r.expires_ms });
+
+async function approvalPassword(env: Env): Promise<P.PasswordRecord | null> {
+	const r: Json = await env.DB.prepare("SELECT value FROM settings WHERE key = 'approval_password'").first();
+	try { return r ? JSON.parse(r.value) : null; } catch { return null; }
+}
+
+function cookie(req: Request, name: string): string {
+	for (const part of (req.headers.get("cookie") || "").split(";")) {
+		const [k, ...v] = part.trim().split("=");
+		if (k === name) return v.join("=");
+	}
+	return "";
+}
+
+/** GET/POST /device: the owner approves or denies a request with the approval password (no scripts, strict CSP). */
+async function devicePage(req: Request, env: Env, url: URL): Promise<Response> {
+	const nonce = P.randomB64(), ip = clientIp(req);
+	const csrfName = "a2a_device_csrf";
+	let csrf = cookie(req, csrfName);
+	const fresh = !/^[A-Za-z0-9_-]{24}$/.test(csrf);
+	if (fresh) csrf = P.randomB64();
+	const pw = await approvalPassword(env);
+	const model: P.PageModel = { agentName: env.AGENT_NAME || "this A2A inbox", mode: pairingMode(env), cli: cliCommand(env), csrf, passwordSet: !!pw };
+	const send = (status = 200) => {
+		const h: Record<string, string> = P.pageHeaders(nonce);
+		h["set-cookie"] = `${csrfName}=${csrf}; Path=/device; Secure; HttpOnly; SameSite=Strict; Max-Age=3600`;
+		return new Response(P.devicePage(model, nonce), { status, headers: h });
+	};
+	const show = async (raw: string | null, notice?: P.PageModel["notice"]) => {
+		model.notice = notice;
+		if (raw && (await bump(env, `look:ip:${ip || "?"}`, P.LIMITS.lookupsWindowS)) > P.LIMITS.lookupsPerIp) {
+			model.askCode = true;
+			model.notice = { kind: "error", text: "Too many code lookups from this address. Try again in a few minutes." };
+			return;
+		}
+		const code = P.normUserCode(raw);
+		const r = code ? await pendingRequest(env, code) : null;
+		if (r && r.status === "pending" && Date.now() < r.expires_ms) model.request = pageRequest(r);
+		else {
+			model.askCode = true;
+			model.codeValue = raw || "";
+			if (raw && !notice) model.notice = { kind: "error", text: !code ? "That is not a valid code (it looks like WDJB-4827)." :
+				!r ? "No pairing request with that code (it may have expired or been used)." :
+				r.status !== "pending" ? `That request was already ${r.status === "denied" ? "denied" : "approved"}.` : "That request has expired." };
+		}
+	};
+	if (req.method === "GET") {
+		await show(url.searchParams.get("user_code"));
+		return send();
+	}
+	// POST: same-origin form only (Origin check + double-submit cookie); the approval password is the real gate
+	const origin = req.headers.get("origin");
+	let form: Record<string, string> = {};
+	try { form = P.parseParams(await readBody(req, { ...env, MAX_BODY: "4096" }), "application/x-www-form-urlencoded"); } catch { /* empty */ }
+	if ((origin && origin !== "null" && origin !== new URL(env.PUBLIC_URL).origin && origin !== url.origin) || fresh || !form.csrf || !A.timingSafeEqualStr(form.csrf, csrf)) {
+		await show(form.user_code || null, { kind: "error", text: "This form expired or came from another site. Reload the page and try again." });
+		return send(403);
+	}
+	const code = P.normUserCode(form.user_code);
+	if (!code) { await show(form.user_code || null); return send(400); }
+	if (!pw) { await show(form.user_code); return send(409); }
+	const ipKey = `pw:ip:${ip || "?"}`;
+	if ((await bump(env, ipKey, P.LIMITS.wrongPerIpWindowS, true)) >= P.LIMITS.wrongPerIp || (await bump(env, "pw:global", 3600, true)) >= P.LIMITS.wrongGlobal) {
+		log("pairing_locked_out", { ip });
+		await show(form.user_code, { kind: "error", text: "Too many wrong passwords. Approvals from this address are locked for up to an hour." });
+		return send(429);
+	}
+	const r = await pendingRequest(env, code);
+	if (!r || r.status !== "pending" || Date.now() >= r.expires_ms) { await show(form.user_code); return send(404); }
+	if (!(await P.verifyPassword(form.password || "", pw))) {
+		await bump(env, ipKey, P.LIMITS.wrongPerIpWindowS);
+		await bump(env, "pw:global", 3600);
+		const res: Json = await env.DB.prepare("UPDATE device_requests SET failed_attempts = failed_attempts + 1 WHERE device_hash = ? RETURNING failed_attempts").bind(r.device_hash).first();
+		const left = P.LIMITS.wrongPerCode - (res?.failed_attempts ?? P.LIMITS.wrongPerCode);
+		log("pairing_wrong_password", { ip, userCode: P.formatUserCode(code), left });
+		if (left <= 0) {
+			await decide(env, code, false, "lockout");
+			await show(null, { kind: "error", text: "Wrong password. Too many wrong attempts for this code: the request was denied." });
+			return send(403);
+		}
+		await show(form.user_code, { kind: "error", text: `Wrong password. ${left} attempt${left === 1 ? "" : "s"} left for this code.` });
+		return send(403);
+	}
+	const approve = form.decision === "approve";
+	const d = await decide(env, code, approve, "human");
+	if (!d.ok) { await show(null, { kind: "error", text: d.error! }); return send(409); }
+	const who = r.client_name || r.client_id || "the agent";
+	model.notice = approve
+		? { kind: "ok", text: `Approved. ${who} can now collect its token (label "${d.label}"). Revoke it any time: ${cliCommand(env)} token revoke ${d.label}` }
+		: { kind: "ok", text: `Denied. ${who} gets no token.` };
+	return send();
+}
+
+/** Owner API: /owner/pairing (list, mode), /owner/pairing/password (set), /owner/pairing/<code>/approve|deny. */
+async function ownerPairing(req: Request, env: Env, m: string, seg: string[], body: () => Promise<Json>): Promise<Response> {
+	const mode = pairingMode(env);
+	if (!seg[0] && m === "GET") {
+		const now = Date.now();
+		const rows = await env.DB.prepare("SELECT * FROM device_requests WHERE status = 'pending' AND expires_ms > ? ORDER BY created_ms").bind(now).all();
+		const pw = await approvalPassword(env);
+		return json({ mode, passwordSet: !!pw, passwordSetAt: pw?.setAt || null, verificationUri: oauthUrls(env).page,
+			pending: (rows.results as Json[]).map((r) => ({ userCode: P.formatUserCode(r.user_code), clientName: r.client_name, clientId: r.client_id,
+				agentCardUrl: r.agent_card_url, ip: r.ip, country: r.country, createdAt: new Date(r.created_ms).toISOString(),
+				expiresAt: new Date(r.expires_ms).toISOString(), verificationUriComplete: `${oauthUrls(env).page}?user_code=${P.formatUserCode(r.user_code)}` })) });
+	}
+	if (seg[0] === "password" && m === "PUT") {
+		const b = await body();
+		const rec = { alg: b.alg, iterations: b.iterations, salt: b.salt, hash: b.hash };
+		const err = P.checkPasswordRecord(rec);
+		if (err) return json({ error: err }, 400);
+		await env.DB.prepare("INSERT INTO settings (key, value) VALUES ('approval_password', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+			.bind(JSON.stringify({ ...rec, setAt: A.nowIso() })).run();
+		log("pairing_password_set", {});
+		return json({ ok: true, mode });
+	}
+	if (seg[0] && (seg[1] === "approve" || seg[1] === "deny") && m === "POST" && !seg[2]) {
+		if (mode === "off") return json({ error: "device-flow pairing is disabled (PAIRING_APPROVAL=off)" }, 404);
+		const code = P.normUserCode(decodeURIComponent(seg[0]));
+		if (!code) return json({ error: "not a valid code (it looks like WDJB-4827)" }, 400);
+		const approve = seg[1] === "approve";
+		if (approve && mode !== "agent")
+			return json({ error: `approval mode is human: the owner approves on ${oauthUrls(env).page}?user_code=${P.formatUserCode(code)} with the approval password (\`pair approve\` needs PAIRING_APPROVAL=agent). \`pair deny\` works in every mode.` }, 403);
+		const d = await decide(env, code, approve, approve ? "agent" : "owner");
+		if (!d.ok) return json({ error: d.error }, 409);
+		return json({ ok: true, decision: approve ? "approved" : "denied", userCode: P.formatUserCode(code), label: d.label || null,
+			clientName: d.request.client_name || d.request.client_id || null });
+	}
+	return json({ error: "not found" }, 404);
+}
+
 // ------------------------------------------------------------------ router
 async function handle(req: Request, env: Env, ectx: ExecutionContext): Promise<Response> {
 	const url = new URL(req.url);
@@ -640,6 +973,14 @@ async function handle(req: Request, env: Env, ectx: ExecutionContext): Promise<R
 		if (req.method === "GET" && (path === "/.well-known/agent.json" || path === "/.well-known/agent-card.json"))
 			return json(agentCard(env), 200, { "access-control-allow-origin": "*", "cache-control": "public, max-age=300" });
 		if (req.method === "GET" && path === "/health") return json({ ok: true, publicUrl: env.PUBLIC_URL });
+		if (path === "/.well-known/oauth-authorization-server" || path.startsWith("/oauth/") || path === "/device") {
+			if (!pairingOn(env)) return json({ error: "not_found", error_description: "device-flow pairing is disabled on this inbox (PAIRING_APPROVAL=off); ask its operator for a token" }, 404);
+			if (req.method === "GET" && path === "/.well-known/oauth-authorization-server") return json(oauthMetadata(env), 200, { "access-control-allow-origin": "*" });
+			if (req.method === "POST" && path === "/oauth/device_authorization") return await deviceAuthorization(req, env, ectx);
+			if (req.method === "POST" && path === "/oauth/token") return await tokenEndpoint(req, env);
+			if (path === "/device" && (req.method === "GET" || req.method === "POST")) return await devicePage(req, env, url);
+			return json({ error: "not found" }, 404);
+		}
 		if (req.method === "POST" && (path === "/" || path === "/a2a" || path === "/a2a/v1")) return await handleRpc(req, env, ectx);
 		if (req.method === "POST" && path === "/push") return await handlePush(req, env, ectx);
 		if (path === "/owner" || path.startsWith("/owner/")) return await handleOwner(req, env, ectx, path, url);
@@ -655,8 +996,9 @@ async function handle(req: Request, env: Env, ectx: ExecutionContext): Promise<R
 
 export default {
 	async fetch(req, env: Env, ectx) {
-		// workers.dev deployments may not know their URL at first deploy: fall back to the request's origin
-		if (!env.PUBLIC_URL) env = { ...env, PUBLIC_URL: new URL(req.url).origin };
+		// PUBLIC_URL comes from the deployment (custom hostname or workers.dev). Unknown on a first workers.dev deploy,
+		// or not a public https origin: use the origin the request reached the Worker on (always public).
+		env = { ...env, PUBLIC_URL: A.publicOrigin(env.PUBLIC_URL, req.url) };
 		const moved = A.movedResponse(req.url, env.PUBLIC_URL, env.RETIRED_HOSTNAMES);
 		if (moved) return new Response(moved.body || null, { status: moved.status, headers: moved.headers });
 		const res = await handle(req, env, ectx);
@@ -671,6 +1013,7 @@ export default {
 		await env.DB.batch([
 			env.DB.prepare("DELETE FROM rate WHERE minute < ?").bind(Math.floor(now / 60000) - 5),
 			env.DB.prepare("DELETE FROM wake_budget WHERE hour < ?").bind(Math.floor(now / 3600000) - 24),
+			...pairingCleanup(env, now),
 		]);
 	},
 } satisfies ExportedHandler<Env>;

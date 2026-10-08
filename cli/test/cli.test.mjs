@@ -145,3 +145,14 @@ test("plainState reads 1.0 and 0.3 task states", () => {
 	assert.equal(plainState({ status: { state: "completed" } }), "completed");
 	assert.ok(!plainState(null));
 });
+
+test("status without a deployment names the config file and points at init (exit 1)", (t) => {
+	const s = sandbox(); t.after(s.done);
+	const r = s.cli(["status"]);
+	assert.equal(r.status, 1);
+	assert.match(r.stdout, /^deployment: +none$/m);
+	assert.match(r.stdout, new RegExp(`^next step: +nothing is deployed from ${s.dir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/config\\.env: run \`a2a-over-webhook init \\.\\.\\.\``, "m"));
+	const j = JSON.parse(s.cli(["status", "--json"]).stdout);
+	assert.equal(j.ok, false);
+	assert.equal(j.deployed, false);
+});

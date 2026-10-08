@@ -56,6 +56,7 @@ const STUB = `#!/bin/bash
 log=$STUB_DIR/calls.log
 prof=""; for a in "$@"; do [ "$prev" = --profile ] && prof=$a; prev=$a; done
 echo "$1 $2 profile=$prof sub=\${A2A_WORKERS_DEV_SUBDOMAIN:-} host=\${A2A_HOSTNAME:-} retired=\${A2A_RETIRED_HOSTNAMES:-}" >> "$log"
+[ "$1" = deploy ] && echo "public=\${A2A_PUBLIC_URL:-}\${PUBLIC_URL:-}" >> "$STUB_DIR/deploy-env.log"
 case "$1 $2" in
   "auth whoami") echo '{"authenticated":true,"accounts":[{"id":"acc123","name":"Test"}]}';;
   "d1 list") echo '[{"name":"wdtest","uuid":"d1-uuid"}]';;
@@ -95,8 +96,8 @@ function stubEnv(t, { subdomain = "" } = {}) {
 	if (subdomain) fs.writeFileSync(path.join(dir, "subdomain"), subdomain + "\n");
 	const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(A2A_|PEER_|CLOUDFLARE_)|WAKE_/.test(k)));
 	Object.assign(env, { A2A_CONFIG_DIR: path.join(dir, "cfg"), STUB_DIR: dir, A2A_VERIFY_TRIES: "0" });
-	const cli = (args) => new Promise((resolve) => {
-		const ch = spawn(process.execPath, [BIN, ...args], { env, stdio: ["ignore", "pipe", "pipe"] });
+	const cli = (args, extraEnv = {}) => new Promise((resolve) => {
+		const ch = spawn(process.execPath, [BIN, ...args], { env: { ...env, ...extraEnv }, stdio: ["ignore", "pipe", "pipe"] });
 		let stdout = "", stderr = "";
 		ch.stdout.on("data", (d) => (stdout += d));
 		ch.stderr.on("data", (d) => (stderr += d));
@@ -123,6 +124,18 @@ test("init without --hostname: learns the existing subdomain from cf, saves the 
 	const r2 = await s.cli(["deploy", "--skip-install"]);
 	assert.equal(r2.status, 0, r2.stderr);
 	assert.equal(s.calls().filter((l) => l.startsWith("deploy")).length, 3);
+});
+
+test("init: a local URL in the environment never reaches the agent card; the deployment's URL is printed and saved", async (t) => {
+	const s = stubEnv(t, { subdomain: "acme" });
+	// e.g. an agent that exported its own (Tailnet) webhook URL under these names
+	const local = { A2A_PUBLIC_URL: "http://hermes.example.ts.net:8644", PUBLIC_URL: "http://100.101.102.103:8644", A2A_BASE_URL: "http://hermes.example.ts.net:8644" };
+	const r = await s.cli(["init", "--worker-name", "wdtest", "--skip-install", "--dir", path.join(s.dir, "worker")], local);
+	assert.equal(r.status, 0, r.stderr);
+	assert.equal(r.stdout.trim(), "https://wdtest.acme.workers.dev");
+	assert.equal(s.config().A2A_BASE_URL, "https://wdtest.acme.workers.dev");
+	assert.deepEqual(fs.readFileSync(path.join(s.dir, "deploy-env.log"), "utf8").trim().split("\n"), ["public=", "public="], "not passed to cloudflare.config.ts");
+	assert.match(r.stderr, /warning: A2A_BASE_URL is exported as http:\/\/hermes\.example\.ts\.net:8644, but this deployment is https:\/\/wdtest\.acme\.workers\.dev[^\n]*unset A2A_BASE_URL/);
 });
 
 test("init without a subdomain on the account explains how to create one", async (t) => {
