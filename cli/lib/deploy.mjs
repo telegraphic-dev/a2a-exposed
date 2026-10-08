@@ -44,10 +44,8 @@ export const PAIRING_MODES = ["human", "agent", "off"];
 export const DEPLOY_FLAGS = Object.keys(FLAG_KEYS);
 
 const step = (s) => console.error(`==> ${s}`);
-// Worker (and default D1) name for new deployments. A deployment made before the rename that has no saved
-// A2A_WORKER_NAME (a hand-written config.env) keeps the old default, so `deploy` never creates a second Worker.
-export const LEGACY_WORKER_NAME = "a2a-over-webhook";
-export const workerName = () => C.get("A2A_WORKER_NAME") || (C.get("A2A_D1_ID") ? LEGACY_WORKER_NAME : "a2a-exposed");
+// Worker (and default D1) name: A2A_WORKER_NAME (saved by init), else a2a-exposed.
+export const workerName = () => C.get("A2A_WORKER_NAME") || "a2a-exposed";
 /** No custom hostname: the Worker is served on <worker>.<account subdomain>.workers.dev (and only there). */
 const workersDevMode = () => !C.get("A2A_HOSTNAME");
 export const publicBase = () =>
