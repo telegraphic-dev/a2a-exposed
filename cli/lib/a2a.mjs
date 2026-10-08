@@ -185,3 +185,70 @@ export async function rpc(url, version, token, method03, method1, params, peer =
 		die(`peer returned ${data && typeof data === "object" && data.error ? `JSON-RPC error ${describeHttp(status, data).replace(/^HTTP \d+: /, "")} (HTTP ${status})` : describeHttp(status, data)}`);
 	return data.result;
 }
+
+// ---------------------------------------------------------------- proxy mode: what the upstream card asks for
+// Same rules as the Worker's facade.ts (schemeKind / upstreamAuth); keep the two in step.
+
+/** "bearer" (HTTP bearer; OAuth 2.0 / OpenID Connect also send `Authorization: Bearer`), "basic", "http", "apiKey",
+ *  "mtls" or "unknown", for an A2A 1.0 ({ httpAuthSecurityScheme: ... }) or 0.3 / OpenAPI ({ type: "http", ... }) scheme. */
+export function schemeKind(s) {
+	if (!s || typeof s !== "object") return "unknown";
+	const http = (scheme) => { const v = String(scheme || "").toLowerCase(); return v === "bearer" ? "bearer" : v === "basic" ? "basic" : "http"; };
+	if (s.httpAuthSecurityScheme) return http(s.httpAuthSecurityScheme.scheme);
+	if (s.oauth2SecurityScheme || s.openIdConnectSecurityScheme) return "bearer";
+	if (s.apiKeySecurityScheme) return "apiKey";
+	if (s.mtlsSecurityScheme || s.mutualTlsSecurityScheme) return "mtls";
+	switch (String(s.type || "").toLowerCase()) {
+		case "http": return http(s.scheme);
+		case "oauth2": case "openidconnect": return "bearer";
+		case "apikey": return "apiKey";
+		case "mutualtls": return "mtls";
+	}
+	return "unknown";
+}
+
+/** { bearer: true | false | null, schemes: ["name: kind"], unsupported: [...] } for an upstream card. bearer: true when
+ *  the card asks for a bearer token (UPSTREAM_TOKEN), false when it declares no bearer / HTTP auth (no schemes,
+ *  anonymous allowed, or only schemes the façade can't present), null without a card. Requirements come from 1.0
+ *  `securityRequirements` or 0.3 `security`; without requirements every declared scheme counts. */
+export function upstreamAuth(card) {
+	if (!card || typeof card !== "object" || Array.isArray(card)) return { bearer: null, schemes: [], unsupported: [] };
+	const defs = card.securitySchemes && typeof card.securitySchemes === "object" && !Array.isArray(card.securitySchemes) ? card.securitySchemes : {};
+	const kinds = {};
+	for (const [n, s] of Object.entries(defs)) kinds[n] = schemeKind(s);
+	const schemes = Object.entries(kinds).map(([n, k]) => `${n}: ${k}`);
+	const raw = Array.isArray(card.securityRequirements) ? card.securityRequirements : Array.isArray(card.security) ? card.security : [];
+	const alts = raw.filter((r) => r && typeof r === "object" && !Array.isArray(r))
+		.map((r) => Object.keys(r.schemes && typeof r.schemes === "object" && !Array.isArray(r.schemes) ? r.schemes : r));
+	const kindOf = (n) => kinds[n] || "unknown";
+	if (!alts.length) {
+		const all = Object.keys(kinds);
+		const bearer = all.some((n) => kinds[n] === "bearer");
+		return { bearer, schemes, unsupported: bearer ? [] : all.filter((n) => kinds[n] !== "unknown").map((n) => `${n}: ${kinds[n]}`) };
+	}
+	if (alts.some((a) => a.length === 0)) return { bearer: false, schemes, unsupported: [] };
+	const bearer = alts.some((a) => a.some((n) => kindOf(n) === "bearer"));
+	return { bearer, schemes, unsupported: bearer ? [] : [...new Set(alts.flat())].map((n) => `${n}: ${kindOf(n)}`) };
+}
+
+/** Fetch the upstream's card from this machine (setup check), with the Access service token from the environment
+ *  when exported; only ever to the upstream origin (the caller checked it). Never sends UPSTREAM_TOKEN. Returns
+ *  { card } or { card: null, error }. Redirects are not followed (an Access login redirect is reported as such). */
+export async function fetchUpstreamCard(cardUrl, env = process.env) {
+	const headers = { accept: "application/json", "user-agent": "a2a-exposed-cli" };
+	if (env.UPSTREAM_ACCESS_CLIENT_ID && env.UPSTREAM_ACCESS_CLIENT_SECRET) {
+		headers["cf-access-client-id"] = env.UPSTREAM_ACCESS_CLIENT_ID;
+		headers["cf-access-client-secret"] = env.UPSTREAM_ACCESS_CLIENT_SECRET;
+	}
+	let r;
+	try { r = await fetch(cardUrl, { headers, redirect: "manual", signal: AbortSignal.timeout(15000) }); }
+	catch (e) { return { card: null, error: `request failed: ${e?.cause?.code || e?.cause?.message || e?.message || e}` }; }
+	const text = (await r.text().catch(() => "")).slice(0, 262144);
+	const loc = r.headers.get("location") || "";
+	if (r.status >= 300 && r.status < 400)
+		return { card: null, error: /cloudflareaccess\.com|\/cdn-cgi\/access\//i.test(loc) ? `HTTP ${r.status}: redirected to the Cloudflare Access login (export UPSTREAM_ACCESS_CLIENT_ID / UPSTREAM_ACCESS_CLIENT_SECRET so this check can pass Access)` : `HTTP ${r.status} redirect` };
+	let data = null;
+	try { data = JSON.parse(text); } catch { /* not JSON */ }
+	if (r.status === 200 && data && typeof data === "object" && !Array.isArray(data)) return { card: data };
+	return { card: null, error: describeHttp(r.status, data ?? text) };
+}

@@ -22,7 +22,7 @@ npx cf auth login --no-browser)
        [--provider-organization O --provider-url U] [--preset P] [--worker-name W] [--d1-name D]
        [--account-id ID] [--cf-profile NAME] [--cli-command CMD] [--debounce S] [--max-per-hour N]
        [--pairing-approval human|agent|off] [--pbkdf2-iterations N] [--workers-logs on|off] [--cron]
-       [--upstream URL [--upstream-card-url URL]] [--worker-dir DIR]
+       [--upstream URL [--upstream-card-url URL] [--upstream-token-stdin | --no-upstream-token]] [--worker-dir DIR]
                                 deploy the Worker + D1 to your account; wake secrets are read from
                                 env WAKE_WEBHOOK_URL / WAKE_WEBHOOK_KEY / WAKE_HMAC_SECRET (never argv)
                                 no --hostname: serve on https://<worker>.<account subdomain>.workers.dev
@@ -48,6 +48,12 @@ npx cf auth login --no-browser)
                                 --upstream-card-url  the upstream's card (default <upstream origin>/.well-known/
                                                agent-card.json); must be on the --upstream origin (it is
                                                fetched with the upstream credentials)
+                                               Setup reads that card: unless it declares no bearer auth, the
+                                               façade needs UPSTREAM_TOKEN besides the Access token (Access only
+                                               gets the Worker through the tunnel). Without it: a hidden prompt
+                                               on a terminal, else exit 1 with what to do
+                                --upstream-token-stdin  read UPSTREAM_TOKEN from stdin (hidden prompt on a terminal)
+                                --no-upstream-token  the upstream needs no bearer token: skip that check (saved)
                                 --cli-command  command shown in wake hints (default "npx a2a-exposed";
                                                e.g. "node /path/to/repo/cli/bin/a2a-exposed.mjs")
                                 --worker-dir   where the Worker project (template copy) lives (default
@@ -79,9 +85,16 @@ anywhere on the account: the inbox itself can be on workers.dev or a custom host
 
 Status
   status [--json]               deployment, base URL, agent card check (fetched by the CLI: no curl needed), wake
-                                mode (webhook / tunnel / none = polling), tunnel state, proxy-mode upstream and
-                                card-leak check (--upstream), and the next step to run.
+                                mode (webhook / tunnel / none = polling), tunnel state, proxy mode (--upstream):
+                                upstream card, Access credential and upstream bearer configured (separately), the
+                                live upstream check, the last failed peer call, card-leak check; warnings for peer
+                                token variables shadowing saved tokens; and the next step to run.
                                 Read-only; run it after an interruption and continue from "next step". Exit 1 = broken
+  upstream verify [--json]      proxy mode: check the façade's whole path, layer by layer: façade peer auth
+                                (unauthenticated call -> 401), then the Worker calls the upstream with its stored
+                                secrets (never sent to the CLI) using a JSON-RPC method that doesn't exist (no task
+                                is created): Cloudflare Access, the agent's bearer check, the A2A app. Exit 1 unless
+                                the app answered. \`status\` runs the same check
   url                           print the public base URL (exit 1 if none is configured)
   config                        print config (secrets masked) and its location
 
@@ -126,7 +139,7 @@ Outbound (agents you call)
   peers add <alias> <url> [--token-env VAR | --token-stdin]
   peers list | peers rm <alias>
                           a token variable set in the environment overrides config.env; when a peer token
-                          differs between the two, connect/send/poll/peers warn on stderr (values never shown)
+                          differs between the two, connect/send/poll/peers/status warn (values never shown)
   send --to <alias|url> [--text T | stdin] [--context C] [--task T] [--push] [--proto 0.3|1.0]
   poll --to <alias|url> <taskId> [--proto 0.3|1.0]
   outbound <taskId>       stored state of a task you sent (incl. pushed updates)
@@ -139,7 +152,7 @@ const S = { type: "string" }, B = { type: "boolean" };
 const tunnelOpts = { "tunnel-hostname": S, "tunnel-zone": S, "tunnel-origin": S, "tunnel-path": S, "show-token": B, "zero-trust-org": S, dir: S, "worker-dir": S };
 const deployOpts = {
 	...Object.fromEntries(dep.DEPLOY_FLAGS.map((f) => [f, S])), dir: S, "worker-dir": S, cron: B, "skip-install": B, "rotate-owner-token": B,
-	"workers-dev": B, "workers-dev-subdomain": S,
+	"workers-dev": B, "workers-dev-subdomain": S, "upstream-token-stdin": B, "no-upstream-token": B,
 };
 const SPEC = {
 	init: { ...deployOpts, ...tunnelOpts, tunnel: B }, deploy: deployOpts, wake: deployOpts, tunnel: tunnelOpts,
@@ -151,6 +164,7 @@ const SPEC = {
 	send: { to: S, text: S, context: S, task: S, push: B, proto: S },
 	poll: { to: S, proto: S },
 	status: { json: B },
+	upstream: { json: B },
 	connect: { alias: S, name: S, json: B, "no-wait": B, replace: B, force: B, "card-url": S },
 	pair: { json: B, web: B, ttl: S },
 };
@@ -188,6 +202,11 @@ export async function main(argv) {
 		case "tunnel": return tun.tunnel(need(p[0], "tunnel create|status|rm"), o);
 		case "deploy": return dep.deploy(o);
 		case "status": return st.status(o);
+		case "upstream": {
+			const sub = need(p[0], "upstream verify [--json]");
+			if (sub === "verify" || sub === "check") return st.upstreamVerify(o);
+			throw new CliError(`unknown upstream action ${sub} (verify)`);
+		}
 		case "wake": return dep.wake(p[0], o);
 		case "url": {
 			const u = cmd.baseUrl();

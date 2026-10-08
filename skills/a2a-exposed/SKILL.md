@@ -137,7 +137,7 @@ Polling agents: no wake announces a pairing request; `inbox` and `pair list` sho
 
 - `npx a2a-exposed contexts` lists recent conversations.
 - `npx a2a-exposed status` checks the setup: the agent card (fetched by the CLI; it must advertise the inbox's own base URL, never the agent's local or Tailnet webhook URL), the wake mode (webhook, tunnel, or none, meaning polling), the tunnel state, and a `next step:` line. Use it rather than `curl`: some agent sandboxes (Hermes) flag `.dev` URLs in shell commands and wait for user approval.
-- Proxy mode (`deploy --upstream ...`, see the setup skill): this deployment is a public façade for an agent that already speaks A2A. Peer messages go straight to that agent, so `inbox` stays empty; pairing, `token ...` and `status` (with an `upstream:` row) work as usual.
+- Proxy mode (`deploy --upstream ...`, see the setup skill): this deployment is a public façade for an agent that already speaks A2A. Peer messages go straight to that agent, so `inbox` stays empty; pairing, `token ...` and `status` (with `upstream`, `upstream Access`, `upstream bearer` and `upstream check` rows) work as usual. `npx a2a-exposed upstream verify` checks the whole path to the agent without creating a task. Push notification configs are refused through a façade (`-32003`; peers poll `GetTask`), and peers can't reach each other's tasks or contexts.
 - `npx a2a-exposed url` prints the public base URL.
 - `npx a2a-exposed config` prints the config with secrets masked.
 - `npx a2a-exposed wake preview` shows the rendered wake request (partially masked) and short SHA-256 fingerprints of the uploaded URL/key; `wake fingerprint` prints the fingerprints of `WAKE_*` values in your environment for comparison; `wake test` sends a test wake.
@@ -157,9 +157,11 @@ Polling agents: no wake announces a pairing request; `inbox` and `pair list` sho
 | A newer CLI is announced on stderr | `npm i -g a2a-exposed@latest`, then `npx a2a-exposed deploy` (Worker template and D1 migrations). Silence it with `A2A_NO_UPDATE_CHECK=1` |
 | Peer says 429 | It exceeded 60 requests/min |
 | Peer says -32001 | Unknown task, or a task owned by another peer |
+| Proxy mode: peers get HTTP 502 (`-32603 ... façade is misconfigured` / `not reachable right now`) | The hop from the Worker to your agent failed (peers are told nothing more on purpose). `npx a2a-exposed upstream verify` names the layer: `upstream_auth_missing` / `_rejected` = export the agent's bearer as `UPSTREAM_TOKEN` and `deploy`; `access_*` = the Access service token; `tunnel_down` = start `cloudflared`. Details: setup skill, Troubleshooting. A peer getting 401 instead has a problem with its own token |
+| `status` warns `PEER_<ALIAS>_TOKEN is set in the environment and overrides ...` | A stale variable shadows the token `connect` saved: tell the user to unset it where it is set |
 | `send` fails with `peer returned HTTP 4xx/5xx` | Check the alias URL and token (`peers list`); try `--proto 0.3` for older agents |
 | Push FAILED | The peer's push URL must be public HTTPS; replies stay available via `GetTask` anyway |
-| Worker logs | JSON lines such as `message_received`, `wake_sent`, `wake_failed`, `auth_failed`, `pairing_password_set`. Real-time: the dashboard's live logs for the Worker. Persisted Workers Logs only after `deploy --workers-logs on` (off by default), then the Worker's **Observability** / **Logs** tab |
+| Worker logs | JSON lines such as `message_received`, `wake_sent`, `wake_failed`, `auth_failed`, `pairing_password_set`, and in proxy mode `upstream_error` / `upstream_verify` with a `reason` code. Real-time: the dashboard's live logs for the Worker. Persisted Workers Logs only after `deploy --workers-logs on` (off by default), then the Worker's **Observability** / **Logs** tab |
 | Redeploy after an upgrade | `npx a2a-exposed deploy` (secrets persist) |
 
 Cloudflare-side problems (Worker logs, D1, DNS, the wake tunnel, Access): the optional **cloudflare** skill helps. Offer it, and install it only if the user agrees: `npx skills add https://github.com/cloudflare/skills --skill cloudflare`.

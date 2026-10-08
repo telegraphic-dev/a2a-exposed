@@ -602,6 +602,63 @@ async function handleRpc(req: Request, env: Env, ectx: ExecutionContext): Promis
 }
 
 // ------------------------------------------------------------------ proxy mode: forward JSON-RPC to the private upstream
+/** What a peer sees when the upstream hop fails: generic on purpose (no secret names, no upstream host, no hint which
+ *  lock refused). The operator's diagnosis is the reason code in the Worker log, `status` and `upstream verify`. */
+const PUBLIC_UPSTREAM_ERROR: Record<string, string> = {
+	access_credentials_missing: "This agent is unavailable: its façade is misconfigured; tell its operator",
+	access_rejected: "This agent is unavailable: its façade is misconfigured; tell its operator",
+	upstream_auth_missing: "This agent is unavailable: its façade is misconfigured; tell its operator",
+	upstream_auth_rejected: "This agent is unavailable: its façade is misconfigured; tell its operator",
+	tunnel_down: "This agent is not reachable right now; try again later",
+	upstream_unavailable: "This agent is not reachable right now; try again later",
+	network: "This agent is not reachable right now; try again later",
+	unexpected_response: "This agent gave an invalid answer; try again later or tell its operator",
+};
+
+/** Last failed upstream hop of a peer call (settings row `upstream_last_failure`): reason code, HTTP status, when, which
+ *  method and peer. Shown to the owner by `GET /owner/facade` (and so `status`); never to peers. Best effort. */
+const hasAccess = (env: Env) => !!(env.UPSTREAM_ACCESS_CLIENT_ID && env.UPSTREAM_ACCESS_CLIENT_SECRET);
+
+async function recordUpstreamFailure(env: Env, v: F.UpstreamVerdict, c: { method: string; label: string }) {
+	const rec = { at: A.nowIso(), reason: v.reason, status: v.status, ...(v.cloudflareError ? { cloudflareError: v.cloudflareError } : {}), method: c.method, peer: c.label };
+	try {
+		await env.DB.prepare("INSERT INTO settings (key, value) VALUES ('upstream_last_failure', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+			.bind(JSON.stringify(rec)).run();
+	} catch (e) { log("upstream_failure_not_recorded", { error: String(e).slice(0, 200) }); }
+}
+
+async function lastUpstreamFailure(env: Env): Promise<Json | null> {
+	try {
+		const r: Json = await env.DB.prepare("SELECT value FROM settings WHERE key = 'upstream_last_failure'").first();
+		return r ? JSON.parse(r.value) : null;
+	} catch { return null; }
+}
+
+/** Owner-only upstream check (`POST /owner/facade/verify`): one JSON-RPC call with a method no A2A server implements,
+ *  sent from the Worker with the stored upstream credentials over the same path as peer traffic (Access, tunnel, the
+ *  agent's bearer check), then classified. An unknown method can't create or touch a task, and the secrets never leave
+ *  the Worker: the answer carries reason codes and HTTP status only. */
+const VERIFY_METHOD = "a2a-exposed/verify-unknown-method";
+async function verifyUpstream(env: Env): Promise<Json> {
+	const sent = { bearer: !!env.UPSTREAM_TOKEN, accessServiceToken: hasAccess(env) };
+	const [ep, why] = F.upstreamEndpoint(env.UPSTREAM_URL);
+	if (!ep) return { ok: false, reason: "misconfigured", status: null, detail: why, sent, method: VERIFY_METHOD };
+	const up = await fetchUpstreamCard(env);
+	const versions = F.upstreamJsonRpcVersions(up.card);
+	const v1 = !versions.length || versions.includes("1.0");
+	const headers = upstreamHeaders(env, ep, { "content-type": "application/json", accept: "application/json", "a2a-version": v1 ? "1.0" : "0.3" });
+	const rid = `a2a-exposed-verify-${A.newId()}`;
+	let verdict: F.UpstreamVerdict;
+	try {
+		const r = await fetch(ep, { method: "POST", headers, body: JSON.stringify({ jsonrpc: "2.0", id: rid, method: VERIFY_METHOD, params: {} }), redirect: "manual", signal: AbortSignal.timeout(20000) });
+		verdict = F.classifyUpstream({ status: r.status, headers: r.headers, body: (await r.text()).slice(0, 8192), bearerSent: sent.bearer, accessSent: sent.accessServiceToken });
+	} catch (e) {
+		verdict = F.classifyUpstream({ status: null, error: String(e), bearerSent: sent.bearer, accessSent: sent.accessServiceToken });
+	}
+	log("upstream_verify", { reason: verdict.reason, status: verdict.status, ...(verdict.rpcErrorCode !== undefined ? { code: verdict.rpcErrorCode } : {}) });
+	return { ok: verdict.reason === "reachable", ...verdict, sent, method: VERIFY_METHOD, upstreamWantsBearer: F.upstreamAuth(up.card).bearer };
+}
+
 // Methods only the façade forwards (the inbox has one push config per task and no delete).
 const PROXY_V1: Record<string, string> = { ListTaskPushNotificationConfig: "pushlist", DeleteTaskPushNotificationConfig: "pushdel" };
 const PROXY_V03: Record<string, string> = { "tasks/pushNotificationConfig/list": "pushlist", "tasks/pushNotificationConfig/delete": "pushdel" };
@@ -659,8 +716,10 @@ async function proxyRpc(req: Request, env: Env, c: { raw: string; rid: Json; met
 	try {
 		r = await fetch(ep, { method: "POST", headers, body: c.raw, redirect: "manual", signal: AbortSignal.timeout(90000) });
 	} catch (e) {
-		log("upstream_failed", { peer: c.label, method: c.method, error: String(e).slice(0, 200) });
-		return err(-32603, "This agent is not reachable right now (upstream unavailable); try again later", 502);
+		const v = F.classifyUpstream({ status: null, error: String(e), bearerSent: !!env.UPSTREAM_TOKEN, accessSent: hasAccess(env) });
+		log("upstream_error", { reason: v.reason, peer: c.label, method: c.method, detail: v.detail });
+		await recordUpstreamFailure(env, v, c);
+		return err(-32603, PUBLIC_UPSTREAM_ERROR[v.reason] || PUBLIC_UPSTREAM_ERROR.network, 502);
 	}
 	const text = await r.text();
 	if (text.length > 8 * 1048576) { log("upstream_too_large", { peer: c.label, method: c.method, bytes: text.length }); return err(-32603, "Upstream response too large", 502); }
@@ -668,11 +727,12 @@ async function proxyRpc(req: Request, env: Env, c: { raw: string; rid: Json; met
 	try { body = JSON.parse(text); } catch { /* not JSON */ }
 	const isRpc = body && typeof body === "object" && !Array.isArray(body) && body.jsonrpc === "2.0";
 	if (r.status === 401 || r.status === 403 || !isRpc) {
-		const hint = cloudflareErrorHint(r.status, text.slice(0, 4096));
-		log("upstream_error", { peer: c.label, method: c.method, status: r.status, ...(hint ? { hint } : {}) });
-		return err(-32603, r.status === 401 || r.status === 403
-			? "This agent's façade was refused by its upstream (credential or Access policy); tell its operator"
-			: `This agent's upstream answered HTTP ${r.status} without a JSON-RPC response; try again later`, 502);
+		// the operator gets the precise reason (Worker log line + `status` / `upstream verify`); the peer a generic 502
+		// that names no secret, header or upstream detail
+		const v = F.classifyUpstream({ status: r.status, headers: r.headers, body: text.slice(0, 8192), bearerSent: !!env.UPSTREAM_TOKEN, accessSent: hasAccess(env) });
+		log("upstream_error", { reason: v.reason, peer: c.label, method: c.method, status: r.status, ...(v.cloudflareError ? { cloudflareError: v.cloudflareError } : {}) });
+		await recordUpstreamFailure(env, v, c);
+		return err(-32603, PUBLIC_UPSTREAM_ERROR[v.reason] || PUBLIC_UPSTREAM_ERROR.unexpected_response, 502);
 	}
 	if (c.op === "send" && body.result) {
 		const { taskId, contextId } = F.idsFromResult(body.result);
@@ -893,9 +953,16 @@ async function handleOwner(req: Request, env: Env, ectx: ExecutionContext, path:
 		const [, cardWhy] = ep ? F.upstreamCardUrl(ep, env.UPSTREAM_CARD_URL) : ["", ""];
 		return json({ mode: "proxy", upstreamValid: !!ep, ...(why ? { upstreamProblem: why } : {}), ...(cardWhy ? { upstreamCardProblem: cardWhy } : {}), upstreamCardUrl: up.url || null,
 			upstreamCard: up.status === 200 ? "ok" : up.error || "unavailable", upstreamVersions: F.upstreamJsonRpcVersions(up.card),
+			// what the upstream card asks for (scheme names and kinds only), from the copy the Worker fetched through Access
+			upstreamAuth: F.upstreamAuth(up.status === 200 ? up.card : null),
 			hasUpstreamToken: !!env.UPSTREAM_TOKEN, hasUpstreamAccessServiceToken: !!(env.UPSTREAM_ACCESS_CLIENT_ID && env.UPSTREAM_ACCESS_CLIENT_SECRET),
 			fingerprints: { upstreamToken: await A.fingerprint(env.UPSTREAM_TOKEN), upstreamAccessClientId: await A.fingerprint(env.UPSTREAM_ACCESS_CLIENT_ID) },
+			lastFailure: await lastUpstreamFailure(env),
 			publicCardLeaks: F.cardLeaks(card, env.PUBLIC_URL, upstreamOrigins(env, up.card)) });
+	}
+	if (seg[0] === "facade" && seg[1] === "verify" && !seg[2] && m === "POST") {
+		if (!proxyMode(env)) return json({ mode: "inbox", ok: false, reason: "not_proxy_mode", detail: "this Worker is an inbox (no UPSTREAM_URL): nothing to verify" }, 409);
+		return json({ mode: "proxy", ...(await verifyUpstream(env)) });
 	}
 	if (seg[0] === "wake" && seg[1] === "preview" && m === "GET") {
 		// rendered wake request for a sample event, partially masked, plus short sha256 fingerprints of the
