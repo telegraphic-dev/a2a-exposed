@@ -29,9 +29,14 @@ export async function httpJson(url, { method, body, headers = {}, timeout = 3000
 	return { status: r.status, data };
 }
 
-const fromV1State = (s) =>
-	typeof s === "string" && s.startsWith("TASK_STATE_") ? s.slice(11).toLowerCase().replace(/_/g, "-") : s;
-const fromV1Role = (r) => (r === "ROLE_USER" ? "user" : r === "ROLE_AGENT" ? "agent" : r);
+/** Lowercase A2A task state ("completed", "input-required", ...) from a 0.3 or 1.0 task. */
+export const plainState = (t) => {
+	const s = t && t.status && t.status.state;
+	return typeof s === "string" && s.startsWith("TASK_STATE_") ? s.slice(11).toLowerCase().replace(/_/g, "-") : s;
+};
+
+/** First 12 hex chars of sha256(value), or null when unset (same as the Worker's `wake preview` fingerprints). */
+export const fingerprint = (v) => (v ? crypto.createHash("sha256").update(String(v), "utf8").digest("hex").slice(0, 12) : null);
 
 export function textOf(msgOrParts) {
 	const parts = Array.isArray(msgOrParts) ? msgOrParts : (msgOrParts && msgOrParts.parts) || [];
@@ -46,18 +51,6 @@ export function textOf(msgOrParts) {
 		}
 	}
 	return out.join("\n");
-}
-
-/** Peer task (0.3 or 1.0 shape) -> 0.3-ish shape for display. */
-export function taskFromAny(t) {
-	if (!t || typeof t !== "object") return t;
-	t = { ...t };
-	if (t.status && typeof t.status === "object") {
-		const st = { ...t.status, state: fromV1State(t.status.state) };
-		if (st.message && typeof st.message === "object") st.message = { ...st.message, role: fromV1Role(st.message.role) };
-		t.status = st;
-	}
-	return t;
 }
 
 export async function fetchCard(base) {

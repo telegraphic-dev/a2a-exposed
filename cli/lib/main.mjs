@@ -11,17 +11,23 @@ const HELP = `a2a-over-webhook ${VERSION} - public A2A endpoint for any AI agent
 
 Usage: a2a-over-webhook <command> [options]        (or: npx a2a-over-webhook <command>)
 
-Setup (needs the Cloudflare cf CLI login: cf auth login --no-browser)
+Setup (needs Node 22.18+ and a Cloudflare login: npx cf auth login --no-browser)
   init --hostname <host> [--agent-name N] [--agent-description D] [--agent-skills JSON]
-       [--preset P] [--worker-name W] [--account-id ID] [--cron] [--dir DIR]
+       [--provider-organization O --provider-url U] [--preset P] [--worker-name W] [--d1-name D]
+       [--account-id ID] [--cli-command CMD] [--debounce S] [--max-per-hour N] [--cron] [--dir DIR]
                                 deploy the Worker + D1 to your account; wake secrets are read from
-                                env WAKE_WEBHOOK_URL / WAKE_WEBHOOK_KEY / WAKE_HMAC_SECRET
+                                env WAKE_WEBHOOK_URL / WAKE_WEBHOOK_KEY / WAKE_HMAC_SECRET (never argv)
+                                --d1-name      D1 database to create or reuse (default: worker name)
+                                --cli-command  command shown in wake hints (default "npx a2a-over-webhook";
+                                               e.g. "node /path/to/repo/cli/bin/a2a-over-webhook.mjs")
   deploy [same flags]           redeploy with saved settings (secrets persist)
-  wake preview                  show the rendered wake request (credentials masked)
-  wake test                     send a test wake now and print the HTTP status
   wake set [--preset P] [--agent-id A] [--key-header H] [--key-prefix X] [--body-template JSON]
-           [--debounce S] [--max-per-hour N]
-                                change wake settings; secrets from env (see init), then redeploy
+           [--cli-command CMD] [--debounce S] [--max-per-hour N]
+                                save wake settings, upload wake secrets from env, and redeploy (one step)
+  wake preview                  rendered wake request (partially masked) + sha256 fingerprints of the
+                                uploaded URL/key/HMAC secret; compared with local env values if exported
+  wake fingerprint              fingerprints (first 12 hex of sha256) of WAKE_* in the local environment
+  wake test                     send a test wake now and print the HTTP status
   wake unset                    remove wake secrets (fall back to polling)
   url                           print the public base URL
   config                        print config (secrets masked) and its location

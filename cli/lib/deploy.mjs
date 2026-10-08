@@ -5,7 +5,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import * as C from "./config.mjs";
-import { die, httpJson, randomToken } from "./a2a.mjs";
+import { die, fingerprint, httpJson, randomToken } from "./a2a.mjs";
 import { owner } from "./commands.mjs";
 
 const PKG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -81,6 +81,13 @@ function deployEnv() {
 	return env;
 }
 
+/** Environment for cf calls other than deploy: account pinned, wake secrets stripped. */
+function cfEnv() {
+	const env = { ...process.env, CLOUDFLARE_ACCOUNT_ID: C.get("CLOUDFLARE_ACCOUNT_ID") };
+	for (const k of WAKE_SECRETS) delete env[k];
+	return env;
+}
+
 function withSecretsFile(secrets, fn) {
 	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "a2a-secrets-"));
 	const file = path.join(tmp, "secrets.json");
@@ -121,6 +128,16 @@ async function verifyCard(base) {
 	console.error(`warning: agent card not reachable yet at ${base}; a new custom domain can take a few minutes`);
 }
 
+/** Apply D1 migrations quietly: cf prints a bare JSON array (often `[]`) when stdout is not a TTY. */
+function applyMigrations(dir, env) {
+	step("applying D1 migrations");
+	const r = run(cfBin(dir), ["d1", "migrations", "apply", C.get("A2A_D1_ID"), "--dir", "migrations"], { cwd: dir, env, capture: true });
+	let applied = null;
+	try { applied = JSON.parse(r.stdout); } catch { /* not JSON: show as is */ }
+	if (Array.isArray(applied)) console.error(applied.length ? `    applied: ${applied.map((m) => m.name || m.id || JSON.stringify(m)).join(", ")}` : "    (none pending)");
+	else if (r.stdout.trim()) console.error(r.stdout.trim());
+}
+
 function cfDeploy(dir, secrets) {
 	const args = ["deploy", "--message", `a2a-over-webhook ${new Date().toISOString()}`];
 	if (secrets && Object.keys(secrets).length) withSecretsFile(secrets, (f) => run(cfBin(dir), [...args, "--secrets-file", f], { cwd: dir, env: deployEnv() }));
@@ -146,7 +163,7 @@ export async function init(o) {
 		if (accts.length !== 1) die(`${accts.length} accounts available; pass --account-id <id>:\n` + accts.map((a) => `  ${a.id}  ${a.name}`).join("\n"));
 		C.saveConfig({ CLOUDFLARE_ACCOUNT_ID: accts[0].id });
 	}
-	const env = { ...process.env, CLOUDFLARE_ACCOUNT_ID: C.get("CLOUDFLARE_ACCOUNT_ID") };
+	const env = cfEnv();
 
 	const dbName = C.get("A2A_D1_NAME") || C.get("A2A_WORKER_NAME");
 	if (!C.get("A2A_D1_ID")) {
@@ -159,8 +176,7 @@ export async function init(o) {
 		if (!db || !db.uuid) die("could not create or find the D1 database");
 		C.saveConfig({ A2A_D1_ID: db.uuid, A2A_D1_NAME: dbName });
 	}
-	step("applying D1 migrations");
-	run(cfBin(dir), ["d1", "migrations", "apply", C.get("A2A_D1_ID"), "--dir", "migrations"], { cwd: dir, env });
+	applyMigrations(dir, env);
 
 	let ownerToken = C.fileConfig().A2A_OWNER_TOKEN;
 	if (!ownerToken || o["rotate-owner-token"]) ownerToken = randomToken(32);
@@ -180,10 +196,11 @@ export async function deploy(o) {
 	applyFlags(o);
 	const dir = workerDir(o);
 	if (!C.get("A2A_D1_ID") || !C.get("A2A_HOSTNAME")) die("no saved deployment; run `a2a-over-webhook init` first");
+	step(`worker project -> ${dir}`);
 	syncTemplate(dir);
 	if (!o["skip-install"]) run("npm", ["install", "--no-audit", "--no-fund", "--loglevel=error"], { cwd: dir });
-	const env = { ...process.env, CLOUDFLARE_ACCOUNT_ID: C.get("CLOUDFLARE_ACCOUNT_ID") };
-	run(cfBin(dir), ["d1", "migrations", "apply", C.get("A2A_D1_ID"), "--dir", "migrations"], { cwd: dir, env });
+	const env = cfEnv();
+	applyMigrations(dir, env);
 	const secrets = wakeSecretsFromEnv();
 	if (Object.keys(secrets).length && C.get("A2A_OWNER_TOKEN")) secrets.OWNER_TOKEN = C.get("A2A_OWNER_TOKEN");
 	step(Object.keys(secrets).length ? `deploying (secrets uploaded: ${Object.keys(secrets).join(", ")})` : "deploying (existing secrets kept)");
@@ -191,10 +208,33 @@ export async function deploy(o) {
 	await verifyCard(C.get("A2A_BASE_URL") || `https://${C.get("A2A_HOSTNAME")}`);
 }
 
+/** Fingerprints of the wake secrets in the local environment (what `wake set` would upload). */
+const localFingerprints = () => ({
+	url: fingerprint(process.env.WAKE_WEBHOOK_URL), key: fingerprint(process.env.WAKE_WEBHOOK_KEY), hmacSecret: fingerprint(process.env.WAKE_HMAC_SECRET),
+});
+
 export async function wake(sub, o) {
-	if (sub === "preview") return console.log(JSON.stringify(await owner("GET", "/owner/wake/preview"), null, 2));
+	if (sub === "fingerprint") {
+		const fp = localFingerprints();
+		if (!Object.values(fp).some(Boolean)) die("no WAKE_WEBHOOK_URL / WAKE_WEBHOOK_KEY / WAKE_HMAC_SECRET in the environment");
+		return console.log(JSON.stringify(fp, null, 2));
+	}
+	if (sub === "preview") {
+		const r = await owner("GET", "/owner/wake/preview");
+		console.log(JSON.stringify(r, null, 2));
+		// compare with the local environment, if the secrets are exported here
+		const local = localFingerprints(), remote = r.fingerprints || {};
+		for (const [k, v] of Object.entries(local)) {
+			if (!v) continue;
+			if (!r.fingerprints) { console.error("# this Worker predates fingerprints; redeploy (a2a-over-webhook deploy) to compare"); break; }
+			console.error(`# ${k}: local ${v} vs uploaded ${remote[k] || "(unset)"} -> ${v === remote[k] ? "match" : "DIFFERENT"}`);
+		}
+		return;
+	}
 	if (sub === "test") {
 		const r = await owner("POST", "/owner/wake/test", {});
+		if (r.configured === false || r.info === "WAKE_WEBHOOK_URL unset")
+			die("no wake webhook configured on the Worker: export WAKE_WEBHOOK_URL (and WAKE_WEBHOOK_KEY or WAKE_HMAC_SECRET), then run `a2a-over-webhook wake set` first (or use polling)");
 		console.log(JSON.stringify(r, null, 2));
 		if (!(r.status >= 200 && r.status < 300)) process.exitCode = 1;
 		return;
@@ -204,13 +244,14 @@ export async function wake(sub, o) {
 		const secrets = wakeSecretsFromEnv();
 		if (!Object.keys(secrets).length && !DEPLOY_FLAGS.some((f) => o[f] !== undefined))
 			die("nothing to set: export WAKE_WEBHOOK_URL / WAKE_WEBHOOK_KEY / WAKE_HMAC_SECRET and/or pass --preset etc.");
-		return deploy(o);
+		await deploy(o); // wake set = save settings + upload secrets + redeploy, in one step
+		return console.error("wake settings deployed. Next: a2a-over-webhook wake preview, then a2a-over-webhook wake test");
 	}
 	if (sub === "unset") {
 		const dir = workerDir(o), name = C.get("A2A_WORKER_NAME", "a2a-over-webhook");
-		const env = { ...process.env, CLOUDFLARE_ACCOUNT_ID: C.get("CLOUDFLARE_ACCOUNT_ID") };
+		const env = cfEnv();
 		for (const k of WAKE_SECRETS) run(cfBin(dir), ["workers", "secrets", "delete", k, "--worker", name, "--force"], { cwd: dir, env, allowFail: true });
 		return console.error("wake secrets removed (wake is now a no-op; use polling)");
 	}
-	die("usage: wake set|unset|test|preview");
+	die("usage: wake set|unset|test|preview|fingerprint");
 }
