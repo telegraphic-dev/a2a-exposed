@@ -6,7 +6,7 @@ type Json = any;
 
 interface Env {
 	DB: D1Database;
-	PUBLIC_URL: string;
+	PUBLIC_URL: string; // may be empty on a first workers.dev deploy (request origin is used then)
 	AGENT_NAME?: string;
 	AGENT_DESCRIPTION?: string;
 	AGENT_VERSION?: string;
@@ -80,8 +80,7 @@ function histStmt(env: Env, ctx: string, e: Json) {
 
 // ------------------------------------------------------------------ self-aware fetch (a Worker cannot reliably fetch its own custom domain)
 async function doFetch(env: Env, ectx: ExecutionContext, url: string, init: RequestInit): Promise<Response> {
-	const own = new URL(env.PUBLIC_URL).host;
-	if (new URL(url).host === own) return handle(new Request(url, init), env, ectx);
+	if (env.PUBLIC_URL && new URL(url).host === new URL(env.PUBLIC_URL).host) return handle(new Request(url, init), env, ectx);
 	return fetch(url, { ...init, signal: AbortSignal.timeout(15000) });
 }
 
@@ -648,6 +647,8 @@ async function handle(req: Request, env: Env, ectx: ExecutionContext): Promise<R
 
 export default {
 	async fetch(req, env: Env, ectx) {
+		// workers.dev deployments may not know their URL at first deploy: fall back to the request's origin
+		if (!env.PUBLIC_URL) env = { ...env, PUBLIC_URL: new URL(req.url).origin };
 		const res = await handle(req, env, ectx);
 		// opportunistic flush of debounced wakes whose window has passed (no cron needed)
 		ectx.waitUntil(flushDue(env, ectx).catch((e) => log("flush_failed", { error: String(e).slice(0, 200) })));

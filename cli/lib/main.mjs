@@ -12,11 +12,14 @@ const HELP = `a2a-over-webhook ${VERSION} - public A2A endpoint for any AI agent
 Usage: a2a-over-webhook <command> [options]        (or: npx a2a-over-webhook <command>)
 
 Setup (needs Node 22.18+ and a Cloudflare login: npx cf auth login --no-browser)
-  init --hostname <host> [--agent-name N] [--agent-description D] [--agent-skills JSON]
+  init [--hostname <host> | --workers-dev [--workers-dev-subdomain NAME]]
+       [--agent-name N] [--agent-description D] [--agent-skills JSON]
        [--provider-organization O --provider-url U] [--preset P] [--worker-name W] [--d1-name D]
        [--account-id ID] [--cli-command CMD] [--debounce S] [--max-per-hour N] [--cron] [--dir DIR]
                                 deploy the Worker + D1 to your account; wake secrets are read from
                                 env WAKE_WEBHOOK_URL / WAKE_WEBHOOK_KEY / WAKE_HMAC_SECRET (never argv)
+                                no --hostname: serve on https://<worker>.<account subdomain>.workers.dev
+                                --workers-dev-subdomain  create the account's workers.dev subdomain if missing
                                 --d1-name      D1 database to create or reuse (default: worker name)
                                 --cli-command  command shown in wake hints (default "npx a2a-over-webhook";
                                                e.g. "node /path/to/repo/cli/bin/a2a-over-webhook.mjs")
@@ -57,7 +60,10 @@ Presets: grok-bot | claude-code | openclaw-wake | openclaw-agent | hermes | gene
 Config: ${C.CONFIG_FILE}  (override dir with A2A_CONFIG_DIR; env vars override file values)`;
 
 const S = { type: "string" }, B = { type: "boolean" };
-const deployOpts = { ...Object.fromEntries(dep.DEPLOY_FLAGS.map((f) => [f, S])), dir: S, cron: B, "skip-install": B, "rotate-owner-token": B };
+const deployOpts = {
+	...Object.fromEntries(dep.DEPLOY_FLAGS.map((f) => [f, S])), dir: S, cron: B, "skip-install": B, "rotate-owner-token": B,
+	"workers-dev": B, "workers-dev-subdomain": S,
+};
 const SPEC = {
 	init: deployOpts, deploy: deployOpts, wake: deployOpts,
 	inbox: { context: S, all: B, json: B },

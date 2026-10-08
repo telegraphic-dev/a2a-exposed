@@ -1,12 +1,13 @@
-// Non-interactive deploy helper around the Cloudflare `cf` CLI: init, deploy, wake set|unset|test|preview.
+// Non-interactive deploy helper around the Cloudflare `cf` CLI: init, deploy, wake set|unset|test|preview|fingerprint.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import * as C from "./config.mjs";
 import { die, fingerprint, httpJson, randomToken } from "./a2a.mjs";
 import { owner } from "./commands.mjs";
+import * as WD from "./workersdev.mjs";
 
 const PKG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PRESETS = ["grok-bot", "claude-code", "openclaw-wake", "openclaw-agent", "hermes", "generic"];
@@ -19,6 +20,7 @@ const DEPLOY_KEYS = [
 	"A2A_PROVIDER_ORGANIZATION", "A2A_PROVIDER_URL", "A2A_DOCUMENTATION_URL",
 	"WAKE_PRESET", "WAKE_AGENT_ID", "WAKE_KEY_HEADER", "WAKE_KEY_PREFIX", "WAKE_BODY_TEMPLATE", "WAKE_CLI_COMMAND",
 	"WAKE_DEBOUNCE_SECONDS", "WAKE_MAX_PER_HOUR", "A2A_MAX_BODY", "A2A_RATE_PER_MIN", "A2A_ENABLE_CRON",
+	"A2A_WORKERS_DEV", "A2A_WORKERS_DEV_SUBDOMAIN",
 ];
 // init/deploy flag -> config key
 const FLAG_KEYS = {
@@ -31,6 +33,11 @@ const FLAG_KEYS = {
 export const DEPLOY_FLAGS = Object.keys(FLAG_KEYS);
 
 const step = (s) => console.error(`==> ${s}`);
+const workerName = () => C.get("A2A_WORKER_NAME", "a2a-over-webhook");
+/** No custom hostname (or --workers-dev): the Worker is served on <worker>.<account subdomain>.workers.dev. */
+const workersDevMode = () => !C.get("A2A_HOSTNAME") || C.get("A2A_WORKERS_DEV") === "1";
+export const publicBase = () =>
+	WD.baseUrlFor({ hostname: C.get("A2A_HOSTNAME"), worker: workerName(), subdomain: C.get("A2A_WORKERS_DEV_SUBDOMAIN") });
 const workerDir = (o) => path.resolve(o.dir || C.get("A2A_WORKER_DIR") || path.join(C.CONFIG_DIR, "worker"));
 
 function checkNode() {
@@ -88,12 +95,12 @@ function cfEnv() {
 	return env;
 }
 
-function withSecretsFile(secrets, fn) {
+async function withSecretsFile(secrets, fn) {
 	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "a2a-secrets-"));
 	const file = path.join(tmp, "secrets.json");
 	try {
 		fs.writeFileSync(file, JSON.stringify(secrets), { mode: 0o600 });
-		return fn(file);
+		return await fn(file);
 	} finally {
 		fs.rmSync(tmp, { recursive: true, force: true });
 	}
@@ -109,6 +116,9 @@ function applyFlags(o) {
 	const upd = {};
 	for (const [flag, key] of Object.entries(FLAG_KEYS)) if (o[flag] !== undefined) upd[key] = o[flag];
 	if (o.cron) upd.A2A_ENABLE_CRON = "1";
+	if (o["workers-dev"]) upd.A2A_WORKERS_DEV = "1";
+	if (o["workers-dev-subdomain"] !== undefined && !WD.LABEL_RE.test(o["workers-dev-subdomain"]))
+		die("--workers-dev-subdomain must be lowercase letters, digits and hyphens (a DNS label)");
 	if (upd.WAKE_PRESET && !PRESETS.includes(upd.WAKE_PRESET)) die(`unknown preset ${upd.WAKE_PRESET} (${PRESETS.join(" | ")})`);
 	if (upd.A2A_AGENT_SKILLS) {
 		try { if (!Array.isArray(JSON.parse(upd.A2A_AGENT_SKILLS))) throw 0; } catch { die("--agent-skills must be a JSON array of A2A AgentSkill objects"); }
@@ -118,7 +128,8 @@ function applyFlags(o) {
 }
 
 async function verifyCard(base) {
-	for (let i = 0; i < 12; i++) {
+	const tries = Number(process.env.A2A_VERIFY_TRIES ?? 12); // 0 skips the check (tests)
+	for (let i = 0; i < tries; i++) {
 		try {
 			const { status, data } = await httpJson(base + "/.well-known/agent-card.json", { timeout: 10000 });
 			if (status === 200 && data && data.name) return console.error(`agent card OK: ${data.name} (${base}/.well-known/agent-card.json)`);
@@ -138,18 +149,69 @@ function applyMigrations(dir, env) {
 	else if (r.stdout.trim()) console.error(r.stdout.trim());
 }
 
-function cfDeploy(dir, secrets) {
-	const args = ["deploy", "--message", `a2a-over-webhook ${new Date().toISOString()}`];
-	if (secrets && Object.keys(secrets).length) withSecretsFile(secrets, (f) => run(cfBin(dir), [...args, "--secrets-file", f], { cwd: dir, env: deployEnv() }));
-	else run(cfBin(dir), args, { cwd: dir, env: deployEnv() });
+/** Run a command, streaming its output to stderr while collecting it. */
+function runTee(cmd, args, { cwd, env }) {
+	return new Promise((resolve, reject) => {
+		const ch = spawn(cmd, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+		let out = "";
+		const on = (d) => { process.stderr.write(d); out += d; };
+		ch.stdout.on("data", on);
+		ch.stderr.on("data", on);
+		ch.on("error", reject);
+		ch.on("close", (code) => resolve({ status: code ?? 1, out }));
+	});
+}
+
+/** cf deploy (secrets via a temporary chmod-600 file). If the account has no workers.dev subdomain yet and
+ *  `register` names one, retry through cf's own registration prompt. Returns cf's output. */
+async function cfDeploy(dir, secrets, { register } = {}) {
+	const base = ["deploy", "--message", `a2a-over-webhook ${new Date().toISOString()}`];
+	const go = async (file) => {
+		const args = file ? [...base, "--secrets-file", file] : base;
+		let r = await runTee(cfBin(dir), args, { cwd: dir, env: deployEnv() });
+		if (r.status !== 0 && WD.needsSubdomain(r.out)) {
+			if (!register) die(WD.noSubdomainHelp(C.get("CLOUDFLARE_ACCOUNT_ID")));
+			step(`registering the account's workers.dev subdomain "${register}" (answering cf's prompt)`);
+			C.saveConfig({ A2A_WORKERS_DEV_SUBDOMAIN: register }); // so this deploy already carries the final URL
+			r = await WD.deployWithRegistration(cfBin(dir), args, register, { cwd: dir, env: deployEnv() })
+				.catch((e) => { C.saveConfig({ A2A_WORKERS_DEV_SUBDOMAIN: null }); throw e; });
+			if (r.status !== 0) C.saveConfig({ A2A_WORKERS_DEV_SUBDOMAIN: null });
+		}
+		if (r.status !== 0) die(`cf deploy failed (exit ${r.status})`);
+		return r.out;
+	};
+	return secrets && Object.keys(secrets).length ? withSecretsFile(secrets, go) : go(null);
+}
+
+/** Deploy, then learn the workers.dev URL from cf's output (saved as A2A_BASE_URL). If the agent card
+ *  could not carry that URL yet (first deploy on an account whose subdomain we did not know), redeploy once. */
+async function deployAndLearn(dir, secrets, o) {
+	const baked = () => C.get("A2A_WORKERS_DEV_SUBDOMAIN");
+	const out = await cfDeploy(dir, secrets, { register: o["workers-dev-subdomain"] });
+	const deployedWith = baked();
+	if (!workersDevMode()) return;
+	const sub = WD.parseWorkersDevSubdomain(out, workerName());
+	if (sub && o["workers-dev-subdomain"] && sub !== o["workers-dev-subdomain"])
+		console.error(`note: the account already has the workers.dev subdomain "${sub}"; using it (--workers-dev-subdomain ignored)`);
+	if (sub && sub !== baked()) C.saveConfig({ A2A_WORKERS_DEV_SUBDOMAIN: sub });
+	if (!baked()) return console.error("warning: could not find the workers.dev URL in cf's output; the Worker uses the request origin meanwhile. Check the URL in the dashboard and re-run `a2a-over-webhook deploy`.");
+	if (C.get("A2A_HOSTNAME")) return; // custom domain stays the public URL; workers.dev is an extra route
+	C.saveConfig({ A2A_BASE_URL: publicBase() });
+	if (baked() !== deployedWith) {
+		step(`redeploying once so the agent card advertises ${publicBase()}`);
+		await cfDeploy(dir, null);
+	}
 }
 
 export async function init(o) {
 	checkNode();
 	applyFlags(o);
-	if (!C.get("A2A_HOSTNAME")) die("--hostname is required (a hostname on a Cloudflare zone you own, e.g. agent.example.com)");
 	const dir = workerDir(o);
-	C.saveConfig({ A2A_WORKER_DIR: dir, A2A_WORKER_NAME: C.get("A2A_WORKER_NAME", "a2a-over-webhook") });
+	C.saveConfig({ A2A_WORKER_DIR: dir, A2A_WORKER_NAME: workerName() });
+	if (workersDevMode()) {
+		if (!WD.LABEL_RE.test(workerName())) die("on workers.dev the --worker-name must be a DNS label (lowercase letters, digits, hyphens)");
+		if (!C.get("A2A_HOSTNAME")) console.error(`note: no --hostname, deploying to https://${workerName()}.<account subdomain>.workers.dev (${WD.DOCS})`);
+	}
 
 	step(`worker project -> ${dir}`);
 	syncTemplate(dir);
@@ -180,13 +242,13 @@ export async function init(o) {
 
 	let ownerToken = C.fileConfig().A2A_OWNER_TOKEN;
 	if (!ownerToken || o["rotate-owner-token"]) ownerToken = randomToken(32);
-	const base = `https://${C.get("A2A_HOSTNAME")}`;
-	C.saveConfig({ A2A_OWNER_TOKEN: ownerToken, A2A_BASE_URL: base });
+	C.saveConfig({ A2A_OWNER_TOKEN: ownerToken, A2A_BASE_URL: publicBase() || undefined });
 
 	const secrets = { OWNER_TOKEN: ownerToken, ...wakeSecretsFromEnv() };
 	step(`deploying (secrets uploaded: ${Object.keys(secrets).join(", ")})`);
-	cfDeploy(dir, secrets);
-	await verifyCard(base);
+	await deployAndLearn(dir, secrets, o);
+	const base = C.get("A2A_BASE_URL");
+	if (base) await verifyCard(base);
 	console.log(base);
 	console.error(`config saved to ${C.CONFIG_FILE} (chmod 600). Next: a2a-over-webhook wake preview, a2a-over-webhook token issue <peer>`);
 }
@@ -195,7 +257,7 @@ export async function deploy(o) {
 	checkNode();
 	applyFlags(o);
 	const dir = workerDir(o);
-	if (!C.get("A2A_D1_ID") || !C.get("A2A_HOSTNAME")) die("no saved deployment; run `a2a-over-webhook init` first");
+	if (!C.get("A2A_D1_ID")) die("no saved deployment; run `a2a-over-webhook init` first");
 	step(`worker project -> ${dir}`);
 	syncTemplate(dir);
 	if (!o["skip-install"]) run("npm", ["install", "--no-audit", "--no-fund", "--loglevel=error"], { cwd: dir });
@@ -204,8 +266,9 @@ export async function deploy(o) {
 	const secrets = wakeSecretsFromEnv();
 	if (Object.keys(secrets).length && C.get("A2A_OWNER_TOKEN")) secrets.OWNER_TOKEN = C.get("A2A_OWNER_TOKEN");
 	step(Object.keys(secrets).length ? `deploying (secrets uploaded: ${Object.keys(secrets).join(", ")})` : "deploying (existing secrets kept)");
-	cfDeploy(dir, secrets);
-	await verifyCard(C.get("A2A_BASE_URL") || `https://${C.get("A2A_HOSTNAME")}`);
+	await deployAndLearn(dir, secrets, o);
+	const base = C.get("A2A_BASE_URL") || publicBase();
+	if (base) await verifyCard(base);
 }
 
 /** Fingerprints of the wake secrets in the local environment (what `wake set` would upload). */

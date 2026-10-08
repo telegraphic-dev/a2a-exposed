@@ -9,7 +9,11 @@ const v = (k: string) => (e[k] ?? "").trim();
 
 const name = v("A2A_WORKER_NAME") || "a2a-over-webhook";
 const hostname = v("A2A_HOSTNAME"); // e.g. agent.example.com (on a zone in your account)
-const publicUrl = v("A2A_PUBLIC_URL") || (hostname ? `https://${hostname}` : "https://example.invalid");
+// No hostname (or A2A_WORKERS_DEV=1): serve on <name>.<account subdomain>.workers.dev instead of a custom domain.
+const workersDev = !hostname || v("A2A_WORKERS_DEV") === "1";
+const wdSubdomain = v("A2A_WORKERS_DEV_SUBDOMAIN"); // the account's workers.dev subdomain, once known
+// Public base URL for the agent card; if still unknown, the Worker uses the request's origin.
+const publicUrl = v("A2A_PUBLIC_URL") || (hostname ? `https://${hostname}` : wdSubdomain ? `https://${name}.${wdSubdomain}.workers.dev` : "");
 
 // Plain (non-secret) vars exposed to the Worker; empty values are omitted.
 const plain: Record<string, string> = {
@@ -49,9 +53,11 @@ export default defineConfig((ctx) => ({
 		compatibilityDate: "2026-10-06",
 		entrypoint,
 		...(hostname ? { domains: [hostname] } : {}),
+		// custom-domain deployments keep cf's default (workers.dev off when a domain is set)
+		...(workersDev ? { workersDev: true } : {}),
 		env: ctx.mode === "development" ? { ...envBindings, ...Object.fromEntries(SECRETS.map((k) => [k, bindings.secret()])) } : envBindings,
 		// Optional cron flush of debounced wakes (the Worker also flushes opportunistically on every request).
-		// Requires a workers.dev subdomain on the account.
+		// Requires a workers.dev subdomain on the account (always the case for workers.dev deployments).
 		...(v("A2A_ENABLE_CRON") === "1" ? { triggers: [triggers.scheduled({ schedule: "* * * * *" })] } : {}),
 	},
 }));
