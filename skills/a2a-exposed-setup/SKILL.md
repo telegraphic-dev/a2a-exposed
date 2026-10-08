@@ -1,7 +1,7 @@
 ---
 name: a2a-exposed-setup
 description: Use when the user wants to give this agent a public A2A (Agent2Agent) endpoint, deploy or redeploy the a2a-exposed Cloudflare Worker, connect a wake webhook (Grok Bot, Claude Code, OpenClaw, Hermes, n8n/Zapier/generic), set up scheduled inbox polling, or securely expose an agent that already speaks A2A on a Tailnet, LAN or localhost through a public façade.
-version: 0.4.0
+version: 0.4.1
 author: Telegraphic Developer
 license: MIT
 homepage: https://github.com/telegraphic-dev/a2a-exposed
