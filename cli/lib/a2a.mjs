@@ -23,7 +23,16 @@ export function isPrivateHost(host) {
 		const [a, b] = [Number(m[1]), Number(m[2])];
 		return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127);
 	}
-	return h.includes(":") && (h === "::1" || /^f[cd]/.test(h) || h.startsWith("fe80"));
+	if (!h.includes(":")) return false;
+	if (h === "::" || h === "::1" || /^f[cd]/.test(h) || /^fe[89ab]/.test(h) || /^fec/.test(h)) return true; // unspecified, loopback, ULA, link-/site-local
+	// IPv4 embedded in IPv6 (mapped ::ffff:a.b.c.d, NAT64 64:ff9b::, deprecated compatible ::a.b.c.d): judge the IPv4.
+	// URL parsing normalizes the dotted tail to hex (::ffff:7f00:1), so both spellings are handled.
+	const e = h.match(/^(?:::ffff:|64:ff9b::|::)(?:(\d+\.\d+\.\d+\.\d+)|([0-9a-f]{1,4}):([0-9a-f]{1,4}))$/);
+	if (e) {
+		const v4 = e[1] || [parseInt(e[2], 16) >> 8, parseInt(e[2], 16) & 255, parseInt(e[3], 16) >> 8, parseInt(e[3], 16) & 255].join(".");
+		return isPrivateHost(v4);
+	}
+	return false;
 }
 
 /** Problem with an upstream URL for proxy mode ("" when fine): the Worker calls it from Cloudflare, so it must be https

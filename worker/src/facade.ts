@@ -16,10 +16,12 @@ export const REMOVED_URL = "[private URL removed]";
 export const REMOVED_HOST = "[private host removed]";
 
 /** True when a URL must never appear in a public card: not https, credentials in it, a private-network host
- *  (localhost, RFC 1918, CGNAT/Tailscale 100.64/10, *.ts.net, *.local, single-label names, ...), or the upstream. */
+ *  (localhost, RFC 1918, CGNAT/Tailscale 100.64/10, private IPv6 incl. IPv4-mapped, *.ts.net, *.local, single-label
+ *  names, ...), the upstream, or an http(s)/ws(s) URL that doesn't parse. */
 export function isHiddenUrl(raw: string, o: RewriteOptions): boolean {
 	let u: URL;
-	try { u = new URL(raw); } catch { return false; }
+	// an http(s)/ws(s) URL that doesn't parse (e.g. an IPv6 zone id, http://[fe80::1%eth0]/) is hidden: fail closed
+	try { u = new URL(raw); } catch { return /^(?:https?|wss?):\/\//i.test(raw); }
 	if (!/^(https?|wss?):$/.test(u.protocol)) return false; // urn:, mailto:, ... are not network endpoints
 	if (u.protocol !== "https:" && u.protocol !== "wss:") return true;
 	if (u.username || u.password) return true;
@@ -33,7 +35,8 @@ function sameOrigin(a: string, b: string): boolean {
 
 const escapeRe = (s: string) => s.replace(/[.*+?^$()|[\]\\{}]/g, "\\$&");
 
-const URL_IN_TEXT = /\b(?:https?|wss?):\/\/[^\s"'<>()\[\]{}]+/gi;
+// a bracketed IPv6 literal (http://[::1]:8080/x) counts as part of the URL; other brackets end it
+const URL_IN_TEXT = /\b(?:https?|wss?):\/\/(?:\[[0-9A-Za-z:.%_-]*\]|[^\s"'<>()\[\]{}])+/gi;
 
 /** Free text (descriptions, examples, ...): private / upstream URLs are replaced by a marker, and bare upstream or
  *  *.ts.net host names too. Public URLs stay as they are. */

@@ -32,6 +32,12 @@ test("scrubText: private and upstream URLs and Tailnet names are removed, public
 	const o = { publicBase: BASE, upstreamOrigins: ["https://agent-upstream.example.net"] };
 	assert.equal(F.scrubText("see https://docs.example.org/x.", o), "see https://docs.example.org/x.");
 	assert.equal(F.scrubText("see http://localhost:3000/a, ok", o), `see ${F.REMOVED_URL}, ok`);
+	// bracketed IPv6 literals are part of the URL (loopback, ULA, link-local, IPv4-mapped private)
+	for (const u of ["http://[::1]:8080/internal", "https://[::1]/x", "https://[fd12:3456::7]:8443/a2a", "https://[fe80::1%25eth0]/", "https://[::ffff:192.168.1.10]/admin", "https://user@[2606:4700::1]/"])
+		assert.equal(F.scrubText(`at ${u} now`, o), `at ${F.REMOVED_URL} now`, u);
+	assert.equal(F.scrubText("see https://[2606:4700::1]:443/docs.", o), "see https://[2606:4700::1]:443/docs.", "public IPv6 kept");
+	assert.equal(F.scrubText("a list [https://docs.example.org/x] stays", o), "a list [https://docs.example.org/x] stays");
+	assert.deepEqual(F.cardLeaks({ description: "admin at http://[::1]:8080/internal" }, BASE, []), ["description: http://[::1]:8080/internal"]);
 	assert.equal(F.scrubText("on https://agent-upstream.example.net/a2a now", o), `on ${F.REMOVED_URL} now`);
 	assert.equal(F.scrubText("host agent-upstream.example.net:443 here", o), `host ${F.REMOVED_HOST} here`);
 	assert.equal(F.scrubText("on jean.tail1234.ts.net.", o), `on ${F.REMOVED_HOST}.`);

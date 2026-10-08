@@ -25,6 +25,8 @@ test("upstream URLs: https on a public (tunnel) hostname only", () => {
 	assert.equal(isPrivateHost("agent.example.com"), false);
 	assert.equal(isPrivateHost("100.64.0.1"), true);
 	assert.equal(isPrivateHost("100.128.0.1"), false);
+	for (const h of ["[::1]", "::", "fe80::1", "::ffff:7f00:1", "::ffff:192.168.1.1", "64:ff9b::a00:1"]) assert.equal(isPrivateHost(h), true, h);
+	assert.equal(isPrivateHost("::ffff:808:808"), false);
 });
 
 test("connect --card-url: https sent (a Tailnet card as informational), anything else left out", () => {
