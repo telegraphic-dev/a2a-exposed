@@ -11,11 +11,11 @@ import * as upd from "./update.mjs";
 
 const VERSION = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 
-const HELP = `a2a-over-webhook ${VERSION} - public A2A endpoint for any AI agent (Cloudflare Worker inbox + wake webhook)
+const HELP = `a2a-exposed ${VERSION} - public A2A endpoint for any AI agent (Cloudflare Worker inbox + wake webhook)
 
-Usage: a2a-over-webhook <command> [options]        (or: npx a2a-over-webhook <command>)
+Usage: a2a-exposed <command> [options]        (or: npx a2a-exposed <command>)
 
-Setup (needs Node 22.18+, e.g. \`mise exec node@22 -- npx a2a-over-webhook ...\`, and a Cloudflare login:
+Setup (needs Node 22.18+, e.g. \`mise exec node@22 -- npx a2a-exposed ...\`, and a Cloudflare login:
 npx cf auth login --no-browser)
   init [--hostname <host> | --workers-dev [--workers-dev-subdomain NAME]]
        [--agent-name N] [--agent-description D] [--agent-skills JSON]
@@ -47,8 +47,8 @@ npx cf auth login --no-browser)
                                                switches back to the inbox
                                 --upstream-card-url  the upstream's card (default <upstream origin>/.well-known/
                                                agent-card.json)
-                                --cli-command  command shown in wake hints (default "npx a2a-over-webhook";
-                                               e.g. "node /path/to/repo/cli/bin/a2a-over-webhook.mjs")
+                                --cli-command  command shown in wake hints (default "npx a2a-exposed";
+                                               e.g. "node /path/to/repo/cli/bin/a2a-exposed.mjs")
                                 --worker-dir   where the Worker project (template copy) lives (default
                                                <config dir>/worker; --dir is the old name). Not the config dir:
                                                that is --config-dir / A2A_CONFIG_DIR
@@ -156,7 +156,7 @@ const SPEC = {
 const STATES = ["completed", "input-required", "failed", "rejected", "working"];
 
 function need(v, usage) {
-	if (!v) throw new CliError(`usage: a2a-over-webhook ${usage}`);
+	if (!v) throw new CliError(`usage: a2a-exposed ${usage}`);
 	return v;
 }
 
@@ -181,7 +181,7 @@ export async function main(argv) {
 			await dep.init(o);
 			if (!o.tunnel) return;
 			try { return await tun.create(o); } catch (e) {
-				if (e instanceof CliError) e.message += "\n(the inbox is deployed and works; fix the above, then run `a2a-over-webhook tunnel create`, or check `a2a-over-webhook status`)";
+				if (e instanceof CliError) e.message += "\n(the inbox is deployed and works; fix the above, then run `a2a-exposed tunnel create`, or check `a2a-exposed status`)";
 				throw e;
 			}
 		case "tunnel": return tun.tunnel(need(p[0], "tunnel create|status|rm"), o);
@@ -190,7 +190,7 @@ export async function main(argv) {
 		case "wake": return dep.wake(p[0], o);
 		case "url": {
 			const u = cmd.baseUrl();
-			if (!u) throw new CliError(`no base URL configured in ${C.CONFIG_FILE}: run \`a2a-over-webhook init\` (or pass --config-dir / A2A_CONFIG_DIR for another deployment)`);
+			if (!u) throw new CliError(`no base URL configured in ${C.CONFIG_FILE}: run \`a2a-exposed init\` (or pass --config-dir / A2A_CONFIG_DIR for another deployment)`);
 			return console.log(u);
 		}
 		case "config": {

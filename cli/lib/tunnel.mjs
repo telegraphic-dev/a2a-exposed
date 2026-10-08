@@ -63,7 +63,7 @@ export function noZoneHelp(zones) {
 			: "this Cloudflare account has no domain (zone).",
 		"The wake tunnel needs a zone anywhere on the account for its hostname and Access app (whether the inbox is on workers.dev or a custom hostname).",
 		"Without one, use scheduled polling: the inbox works as it is (setup skill: \"Agents without inbound webhooks: polling\").",
-		"To use the tunnel later, add a domain to the account and run `a2a-over-webhook tunnel create` (no redeploy needed).",
+		"To use the tunnel later, add a domain to the account and run `a2a-exposed tunnel create` (no redeploy needed).",
 	].join("\n");
 }
 
@@ -131,7 +131,7 @@ export function accessAppBody({ name, hostname, serviceTokenId }) {
 		type: "self_hosted", name, domain: hostname, destinations: [{ type: "public", uri: hostname }],
 		session_duration: ACCESS_SESSION, app_launcher_visible: false, auto_redirect_to_identity: false,
 		service_auth_401_redirect: true, // blocked service-auth requests get 401 instead of a login redirect
-		policies: [{ name: "a2a-over-webhook wake: service token only", decision: "non_identity", precedence: 1,
+		policies: [{ name: "a2a-exposed wake: service token only", decision: "non_identity", precedence: 1,
 			include: [{ service_token: { token_id: serviceTokenId } }] }],
 	};
 }
@@ -215,9 +215,9 @@ export function listZones(dir) {
 
 // ------------------------------------------------------------------ commands
 function needDeployment(o) {
-	if (!C.get("A2A_D1_ID") || !C.get("A2A_WORKER_NAME")) die("no saved deployment; run `a2a-over-webhook init` first");
+	if (!C.get("A2A_D1_ID") || !C.get("A2A_WORKER_NAME")) die("no saved deployment; run `a2a-exposed init` first");
 	const dir = D.workerDir(o);
-	if (!fs.existsSync(dir)) die(`worker project not found at ${dir}; run \`a2a-over-webhook deploy\` once`);
+	if (!fs.existsSync(dir)) die(`worker project not found at ${dir}; run \`a2a-exposed deploy\` once`);
 	return dir;
 }
 
@@ -256,7 +256,7 @@ export async function create(o) {
 	const org = accessOrg(dir, o);
 	const teamName = String(org.auth_domain || "").replace(/\.cloudflareaccess\.com$/, "");
 
-	const label = `a2a-over-webhook wake ${worker}`;
+	const label = `a2a-exposed wake ${worker}`;
 	const save = (u) => C.saveConfig(u);
 	save({ A2A_TUNNEL_HOSTNAME: hostname, A2A_TUNNEL_ORIGIN: origin, A2A_TUNNEL_PATH: wpath, A2A_TUNNEL_ZONE_ID: zone.id });
 	try {
@@ -293,12 +293,12 @@ export async function create(o) {
 		console.log(url);
 		console.error(`\ntunnel ready: wakes go to ${url} -> ${origin}${wpath} on the agent's machine`);
 		console.error(connectorInstructions(tokenFile, o["show-token"] ? token : ""));
-		console.error(`\nThen (Worker secrets apply within ~15 s): a2a-over-webhook tunnel status   and   a2a-over-webhook wake test`);
+		console.error(`\nThen (Worker secrets apply within ~15 s): a2a-exposed tunnel status   and   a2a-exposed wake test`);
 		if (!process.env.WAKE_WEBHOOK_KEY && !process.env.WAKE_HMAC_SECRET && preset !== "generic")
 			console.error(`note: no WAKE_WEBHOOK_KEY / WAKE_HMAC_SECRET in the environment; keep the ${preset} webhook's own auth too (export it and run \`wake set\`)`);
 	} catch (e) {
 		console.error(`error: ${e.message}\n==> rolling back what was created`);
-		await remove(o, { quiet: true }).catch((r) => console.error(`rollback incomplete: ${r.message}; re-run \`a2a-over-webhook tunnel rm\``));
+		await remove(o, { quiet: true }).catch((r) => console.error(`rollback incomplete: ${r.message}; re-run \`a2a-exposed tunnel rm\``));
 		throw e;
 	}
 }
@@ -335,10 +335,10 @@ export const tunnelComplete = () =>
  *  tunnel must be removed first. */
 async function resume(dir, o) {
 	if (!tunnelComplete())
-		die("a previous `tunnel create` did not finish (some ids are saved, see `a2a-over-webhook status`); run `a2a-over-webhook tunnel rm`, then `a2a-over-webhook tunnel create` again");
+		die("a previous `tunnel create` did not finish (some ids are saved, see `a2a-exposed status`); run `a2a-exposed tunnel rm`, then `a2a-exposed tunnel create` again");
 	const host = C.get("A2A_TUNNEL_HOSTNAME");
 	if (o["tunnel-hostname"] && o["tunnel-hostname"].toLowerCase() !== host)
-		die(`a tunnel already exists on ${host}; to use another hostname run \`a2a-over-webhook tunnel rm\` first`);
+		die(`a tunnel already exists on ${host}; to use another hostname run \`a2a-exposed tunnel rm\` first`);
 	if (!tokenFileOk()) {
 		step(`the connector token file ${C.get("A2A_TUNNEL_TOKEN_FILE")} is missing or empty: downloading the tunnel token again`);
 		fetchTokenFile(dir, C.get("A2A_TUNNEL_ID"));
@@ -356,11 +356,11 @@ async function resume(dir, o) {
 	}
 	const preset = C.get("WAKE_PRESET", "generic");
 	if (p && !p.hasKey && !p.hasHmacSecret && !Object.keys(agentAuth).length && preset !== "generic")
-		console.error(`warning: the Worker has no WAKE_WEBHOOK_KEY / WAKE_HMAC_SECRET, so the ${preset} webhook will reject wakes; export it and run \`a2a-over-webhook tunnel create\` again`);
+		console.error(`warning: the Worker has no WAKE_WEBHOOK_KEY / WAKE_HMAC_SECRET, so the ${preset} webhook will reject wakes; export it and run \`a2a-exposed tunnel create\` again`);
 	console.log(url);
 	console.error(`tunnel already set up: wakes go to ${url} -> ${C.get("A2A_TUNNEL_ORIGIN")}${C.get("A2A_TUNNEL_PATH")} (nothing new created; to change it: tunnel rm, then tunnel create)`);
 	console.error(connectorInstructions(C.get("A2A_TUNNEL_TOKEN_FILE")));
-	console.error("Then: a2a-over-webhook tunnel status   and   a2a-over-webhook wake test");
+	console.error("Then: a2a-exposed tunnel status   and   a2a-exposed wake test");
 }
 
 function putSecrets(dir, worker, map) {
@@ -370,7 +370,7 @@ function putSecrets(dir, worker, map) {
 export async function status(o) {
 	const dir = needDeployment(o);
 	const host = C.get("A2A_TUNNEL_HOSTNAME");
-	if (!host) return console.log("no tunnel configured (a2a-over-webhook tunnel create)");
+	if (!host) return console.log("no tunnel configured (a2a-exposed tunnel create)");
 	const info = { hostname: host, wakeUrl: wakeUrl(host, C.get("A2A_TUNNEL_PATH") || "/"), origin: C.get("A2A_TUNNEL_ORIGIN") };
 	const tid = C.get("A2A_TUNNEL_ID");
 	if (tid) {

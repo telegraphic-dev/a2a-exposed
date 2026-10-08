@@ -8,7 +8,7 @@ import { baseUrl, owner } from "./commands.mjs";
 import * as D from "./deploy.mjs";
 import * as T from "./tunnel.mjs";
 
-const CLI = "a2a-over-webhook";
+const CLI = "a2a-exposed";
 /** Presets whose webhook usually listens only locally: wakes need the tunnel (or another reverse proxy). */
 export const LOCAL_PRESETS = ["openclaw-wake", "openclaw-agent", "hermes"];
 

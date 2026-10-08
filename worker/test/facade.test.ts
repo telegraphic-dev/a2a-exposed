@@ -334,6 +334,6 @@ test("wake text for a private claimed card says it is not publicly reachable", a
 	const { wakeSummary } = await import("../src/wake.ts");
 	const txt = wakeSummary({ contextId: "pairing", taskId: "none", taskIds: [], from: "Jean", preview: "", kind: "pairing_request", publicUrl: BASE,
 		pairing: { userCode: "WDJB-4827", verificationUriComplete: `${BASE}/device?user_code=WDJB-4827`, approval: "human", clientName: "Jean", clientId: "",
-			agentCardUrl: `${TAILNET}/.well-known/agent-card.json`, agentCardPrivate: true, expiresIn: 600 } }, "npx a2a-over-webhook");
+			agentCardUrl: `${TAILNET}/.well-known/agent-card.json`, agentCardPrivate: true, expiresIn: 600 } }, "npx a2a-exposed");
 	assert.match(txt, /private network: not publicly reachable/);
 });

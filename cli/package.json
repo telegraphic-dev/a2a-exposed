@@ -1,9 +1,10 @@
 {
-	"name": "a2a-over-webhook",
+	"name": "a2a-exposed",
 	"version": "0.3.1",
 	"description": "Give any AI agent a public A2A (Agent2Agent) endpoint: Cloudflare Worker inbox + wake webhook or scheduled inbox checks",
 	"type": "module",
 	"bin": {
+		"a2a-exposed": "bin/a2a-exposed.mjs",
 		"a2a-over-webhook": "bin/a2a-over-webhook.mjs"
 	},
 	"files": [
@@ -32,11 +33,11 @@
 		"hermes",
 		"cli"
 	],
-	"homepage": "https://github.com/telegraphic-dev/a2a-over-webhook#readme",
-	"bugs": "https://github.com/telegraphic-dev/a2a-over-webhook/issues",
+	"homepage": "https://github.com/telegraphic-dev/a2a-exposed#readme",
+	"bugs": "https://github.com/telegraphic-dev/a2a-exposed/issues",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/telegraphic-dev/a2a-over-webhook.git",
+		"url": "git+https://github.com/telegraphic-dev/a2a-exposed.git",
 		"directory": "cli"
 	},
 	"license": "MIT",

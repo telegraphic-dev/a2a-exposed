@@ -8,7 +8,7 @@ import * as C from "./config.mjs";
 import { describeHttp, die, fetchCard, httpJson, isPrivateHost, pickEndpoint } from "./a2a.mjs";
 import { baseUrl, peerToken, warnPeerTokenEnv } from "./commands.mjs";
 
-const CLI = "a2a-over-webhook";
+const CLI = "a2a-exposed";
 export const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 export const PBKDF2_ITERATIONS = 100000; // default (the Workers runtime's maximum); the Worker advertises its own setting
 export const MIN_PASSWORD_LENGTH = 12;
@@ -271,7 +271,7 @@ A different agent at the same URL? Pass another --alias.`);
 		`Resuming the pairing request to ${peerName} (code ${st.userCode}, link ${st.verificationUriComplete}).`);
 	else {
 		const own = baseUrl();
-		const params = { client_name: o.name || C.get("A2A_AGENT_NAME") || C.get("A2A_WORKER_NAME") || "a2a-over-webhook agent", client_id: C.get("A2A_WORKER_NAME") || alias };
+		const params = { client_name: o.name || C.get("A2A_AGENT_NAME") || C.get("A2A_WORKER_NAME") || "a2a-exposed agent", client_id: C.get("A2A_WORKER_NAME") || alias };
 		const card = cardUrlToSend(o["card-url"], own, o.json);
 		if (card) params.agent_card_url = card;
 		// replacing: present the old token, so a peer that supports it swaps the token under the same label (no orphan)

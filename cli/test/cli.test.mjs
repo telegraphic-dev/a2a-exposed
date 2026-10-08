@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { parseEnv } from "../lib/config.mjs";
 import { fingerprint, plainState } from "../lib/a2a.mjs";
 
-const BIN = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "bin", "a2a-over-webhook.mjs");
+const BIN = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "bin", "a2a-exposed.mjs");
 
 function sandbox() {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "a2a-cli-test-"));
@@ -152,7 +152,7 @@ test("status without a deployment names the config file and points at init (exit
 	const r = s.cli(["status"]);
 	assert.equal(r.status, 1);
 	assert.match(r.stdout, /^deployment: +none$/m);
-	assert.match(r.stdout, new RegExp(`^next step: +nothing is deployed from ${s.dir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/config\\.env: run \`a2a-over-webhook init \\.\\.\\.\``, "m"));
+	assert.match(r.stdout, new RegExp(`^next step: +nothing is deployed from ${s.dir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/config\\.env: run \`a2a-exposed init \\.\\.\\.\``, "m"));
 	const j = JSON.parse(s.cli(["status", "--json"]).stdout);
 	assert.equal(j.ok, false);
 	assert.equal(j.deployed, false);

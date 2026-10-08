@@ -13,7 +13,7 @@ import { cardUrlToSend } from "../lib/pair.mjs";
 import { nextStep } from "../lib/status.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const BIN = path.join(HERE, "..", "bin", "a2a-over-webhook.mjs");
+const BIN = path.join(HERE, "..", "bin", "a2a-exposed.mjs");
 
 test("upstream URLs: https on a public (tunnel) hostname only", () => {
 	assert.equal(upstreamUrlProblem("https://agent-upstream.example.com/a2a"), "");

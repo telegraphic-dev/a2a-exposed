@@ -1,5 +1,5 @@
-// a2a-over-webhook Worker configuration. Everything deployment-specific comes from environment
-// variables at deploy time (set by `npx a2a-over-webhook init|deploy`, or export them yourself;
+// a2a-exposed Worker configuration. Everything deployment-specific comes from environment
+// variables at deploy time (set by `npx a2a-exposed init|deploy`, or export them yourself;
 // see deploy.env.example). Nothing account- or owner-specific is committed here.
 import { bindings, defineConfig, triggers } from "cf/config";
 import * as entrypoint from "./src/index.ts" with { type: "cf-worker" };
@@ -7,7 +7,7 @@ import * as entrypoint from "./src/index.ts" with { type: "cf-worker" };
 const e: Record<string, string | undefined> = (globalThis as any).process?.env ?? {};
 const v = (k: string) => (e[k] ?? "").trim();
 
-const name = v("A2A_WORKER_NAME") || "a2a-over-webhook";
+const name = v("A2A_WORKER_NAME") || "a2a-exposed";
 const hostname = v("A2A_HOSTNAME"); // e.g. agent.example.com (on a zone in your account)
 // No hostname: serve on <name>.<account subdomain>.workers.dev instead of a custom domain (and the other way round:
 // with a hostname, the workers.dev route is switched off).
@@ -32,7 +32,7 @@ const plain: Record<string, string> = {
 	WAKE_KEY_HEADER: v("WAKE_KEY_HEADER"), // generic preset (default "authorization")
 	WAKE_KEY_PREFIX: e.WAKE_KEY_PREFIX ?? "", // generic preset; unset = "Bearer "
 	WAKE_BODY_TEMPLATE: v("WAKE_BODY_TEMPLATE"), // generic preset JSON template
-	WAKE_CLI_COMMAND: v("WAKE_CLI_COMMAND"), // how the woken agent runs the CLI (default "npx a2a-over-webhook")
+	WAKE_CLI_COMMAND: v("WAKE_CLI_COMMAND"), // how the woken agent runs the CLI (default "npx a2a-exposed")
 	WAKE_DEBOUNCE_SECONDS: v("WAKE_DEBOUNCE_SECONDS"),
 	WAKE_MAX_PER_HOUR: v("WAKE_MAX_PER_HOUR"),
 	MAX_BODY: v("A2A_MAX_BODY"),

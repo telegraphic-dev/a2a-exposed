@@ -1,4 +1,4 @@
-// a2a-over-webhook Worker: public A2A endpoint (JSON-RPC; A2A 1.0 primary, 0.3 compatible),
+// a2a-exposed Worker: public A2A endpoint (JSON-RPC; A2A 1.0 primary, 0.3 compatible),
 // D1-backed inbox, wake webhooks (presets), and an owner API for the local CLI.
 // Proxy mode (UPSTREAM_URL set): a public façade for an agent that already speaks A2A on a private network; the
 // Worker serves a rewritten agent card and device-flow pairing, and forwards authenticated JSON-RPC to the upstream.
@@ -251,7 +251,7 @@ const oauthUrls = (env: Env) => {
 		setup: `${base}/device/setup`, metadata: `${base}/.well-known/oauth-authorization-server`,
 		resource: `${base}/.well-known/oauth-protected-resource` };
 };
-const cliCommand = (env: Env) => env.WAKE_CLI_COMMAND || "npx a2a-over-webhook";
+const cliCommand = (env: Env) => env.WAKE_CLI_COMMAND || "npx a2a-exposed";
 
 const securityRequirements = (env: Env): Json[] =>
 	[{ schemes: { bearer: { list: [] } } }, ...(pairingOn(env) ? [{ schemes: { pairing: { list: [] } } }] : [])];
@@ -312,7 +312,7 @@ const DEFAULT_DESCRIPTION = "An AI agent reachable over A2A through a public fa�
 
 /** Headers for every request to the upstream: the façade's own credential and Access service token, never a peer's. */
 function upstreamHeaders(env: Env, extra: Record<string, string> = {}): Record<string, string> {
-	const h: Record<string, string> = { "user-agent": "a2a-over-webhook-facade", ...extra };
+	const h: Record<string, string> = { "user-agent": "a2a-exposed-facade", ...extra };
 	if (env.UPSTREAM_TOKEN) h.authorization = `Bearer ${env.UPSTREAM_TOKEN}`;
 	if (env.UPSTREAM_ACCESS_CLIENT_ID && env.UPSTREAM_ACCESS_CLIENT_SECRET) {
 		h["cf-access-client-id"] = env.UPSTREAM_ACCESS_CLIENT_ID;
@@ -412,7 +412,7 @@ function agentCard03(env: Env, c: Json): Json {
 function protectedResourceMetadata(env: Env): Json {
 	const u = oauthUrls(env);
 	return { resource: u.issuer + "/", authorization_servers: [u.issuer], bearer_methods_supported: ["header"], scopes_supported: ["a2a"],
-		resource_name: env.AGENT_NAME || "A2A Agent", resource_documentation: "https://github.com/telegraphic-dev/a2a-over-webhook#connecting-agents-device-flow" };
+		resource_name: env.AGENT_NAME || "A2A Agent", resource_documentation: "https://github.com/telegraphic-dev/a2a-exposed#connecting-agents-device-flow" };
 }
 
 // ------------------------------------------------------------------ JSON-RPC
@@ -540,7 +540,7 @@ function unauthorized(env: Env, hadToken: boolean, rid: Json = null): Response {
 		code: -32000,
 		message: `${what} ${hadToken ? "Get a new one" : "No token? Get one"} with the OAuth 2.0 device flow (RFC 8628): POST client_name and agent_card_url to ${u.device}, show the user_code and verification_uri_complete to your human, then poll ${u.token} until this agent's owner approves.`,
 		data: { pairing: { grant_type: P.DEVICE_GRANT, device_authorization_endpoint: u.device, token_endpoint: u.token,
-			authorization_server_metadata: u.metadata, approval: pairingMode(env), cli: "npx a2a-over-webhook connect " + u.issuer } },
+			authorization_server_metadata: u.metadata, approval: pairingMode(env), cli: "npx a2a-exposed connect " + u.issuer } },
 	} }, 401, { "www-authenticate": www });
 }
 
@@ -680,7 +680,7 @@ async function sendPush(env: Env, ectx: ExecutionContext, task: Json, cfg: Json)
 	const [ok, why] = A.pushUrlAllowed(cfg.url);
 	if (!ok) return [false, why];
 	const v1 = String(cfg._version || "0.3").startsWith("1");
-	const headers: Record<string, string> = { "content-type": v1 ? "application/a2a+json" : "application/json", "user-agent": "a2a-over-webhook" };
+	const headers: Record<string, string> = { "content-type": v1 ? "application/a2a+json" : "application/json", "user-agent": "a2a-exposed" };
 	if (v1) headers["a2a-version"] = "1.0";
 	if (cfg.token) headers["x-a2a-notification-token"] = cfg.token;
 	const auth = cfg.authentication || {};
@@ -936,7 +936,7 @@ function oauthMetadata(env: Env): Json {
 	return {
 		issuer: u.issuer, device_authorization_endpoint: u.device, token_endpoint: u.token,
 		grant_types_supported: [P.DEVICE_GRANT], response_types_supported: [], token_endpoint_auth_methods_supported: ["none"],
-		scopes_supported: ["a2a"], service_documentation: "https://github.com/telegraphic-dev/a2a-over-webhook#connecting-agents-device-flow",
+		scopes_supported: ["a2a"], service_documentation: "https://github.com/telegraphic-dev/a2a-exposed#connecting-agents-device-flow",
 	};
 }
 

@@ -63,8 +63,8 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          if npm view "a2a-over-webhook@$VERSION" version >/dev/null 2>&1; then
-            echo "a2a-over-webhook@$VERSION is already on npm; skipping publish"
+          if npm view "a2a-exposed@$VERSION" version >/dev/null 2>&1; then
+            echo "a2a-exposed@$VERSION is already on npm; skipping publish"
             exit 0
           fi
           DIST_TAG=latest
@@ -82,31 +82,31 @@ jobs:
           cat > "$RUNNER_TEMP/notes.md" <<'NOTES'
           **Install the CLI** (Node 22.18+)
           ```bash
-          npm i -g a2a-over-webhook@@VERSION@      # or one-off: npx -y a2a-over-webhook@@VERSION@ --help
+          npm i -g a2a-exposed@@VERSION@      # or one-off: npx -y a2a-exposed@@VERSION@ --help
           ```
 
           **Install the agent skills**
           ```bash
-          npx --yes skills add telegraphic-dev/a2a-over-webhook
+          npx --yes skills add telegraphic-dev/a2a-exposed
           # Hermes Agent:
-          hermes skills install telegraphic-dev/a2a-over-webhook/skills/a2a-over-webhook
-          hermes skills install telegraphic-dev/a2a-over-webhook/skills/a2a-over-webhook-setup
+          hermes skills install telegraphic-dev/a2a-exposed/skills/a2a-exposed
+          hermes skills install telegraphic-dev/a2a-exposed/skills/a2a-exposed-setup
           ```
 
-          **Upgrade an existing deployment:** `a2a-over-webhook deploy` (re-syncs the Worker template and redeploys; secrets are kept).
+          **Upgrade an existing deployment:** `a2a-exposed deploy` (re-syncs the Worker template and redeploys; secrets are kept).
 
-          See [CHANGELOG.md](https://github.com/telegraphic-dev/a2a-over-webhook/blob/main/CHANGELOG.md).
+          See [CHANGELOG.md](https://github.com/telegraphic-dev/a2a-exposed/blob/main/CHANGELOG.md).
           NOTES
           sed -i "s/@VERSION@/$VERSION/g" "$RUNNER_TEMP/notes.md"
           PRERELEASE=()
           if [[ "$VERSION" == *-* ]]; then PRERELEASE=(--prerelease); fi
-          gh release create "$GITHUB_REF_NAME" --verify-tag --title "a2a-over-webhook $VERSION" \
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "a2a-exposed $VERSION" \
             --generate-notes --notes-file "$RUNNER_TEMP/notes.md" "${PRERELEASE[@]}"
 
       # ClawHub (OpenClaw skill registry): not enabled yet. ClawHub publishes every skill under MIT-0
       # and needs an owner handle decision. When decided, add a CLH_TOKEN secret and, per skill folder:
       #   npm i -g clawhub && clawhub login --token "$CLH_TOKEN" --no-browser
-      #   clawhub skill publish skills/a2a-over-webhook --slug a2a-over-webhook --name "A2A over Webhook" \
+      #   clawhub skill publish skills/a2a-exposed --slug a2a-exposed --name "A2A Exposed" \
       #     --version "$VERSION" --changelog "Release $GITHUB_REF_NAME"
-      #   clawhub skill publish skills/a2a-over-webhook-setup --slug a2a-over-webhook-setup --name "A2A over Webhook: setup" \
+      #   clawhub skill publish skills/a2a-exposed-setup --slug a2a-exposed-setup --name "A2A Exposed: setup" \
       #     --version "$VERSION" --changelog "Release $GITHUB_REF_NAME"

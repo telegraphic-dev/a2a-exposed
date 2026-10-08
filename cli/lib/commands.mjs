@@ -9,7 +9,7 @@ export const baseUrl = () => C.get("A2A_BASE_URL").replace(/\/$/, "");
 
 export async function owner(method, path, body) {
 	const base = baseUrl(), tok = C.get("A2A_OWNER_TOKEN");
-	if (!base || !tok) die(`A2A_BASE_URL / A2A_OWNER_TOKEN missing (run \`a2a-over-webhook init\` or edit ${C.CONFIG_FILE})`);
+	if (!base || !tok) die(`A2A_BASE_URL / A2A_OWNER_TOKEN missing (run \`a2a-exposed init\` or edit ${C.CONFIG_FILE})`);
 	const { status, data } = await httpJson(base + path, { method, body, headers: { authorization: `Bearer ${tok}` } });
 	if (status < 200 || status >= 300) die(`worker ${method} ${path} -> ${describeHttp(status, data)}`);
 	return data;
@@ -18,7 +18,7 @@ export async function owner(method, path, body) {
 /** Owner API call that returns { status, data } instead of dying, so callers can explain errors themselves. */
 export async function ownerTry(method, path, body) {
 	const base = baseUrl(), tok = C.get("A2A_OWNER_TOKEN");
-	if (!base || !tok) die(`A2A_BASE_URL / A2A_OWNER_TOKEN missing (run \`a2a-over-webhook init\` or edit ${C.CONFIG_FILE})`);
+	if (!base || !tok) die(`A2A_BASE_URL / A2A_OWNER_TOKEN missing (run \`a2a-exposed init\` or edit ${C.CONFIG_FILE})`);
 	return httpJson(base + path, { method, body, headers: { authorization: `Bearer ${tok}` } });
 }
 
@@ -62,7 +62,7 @@ export async function inbox(o) {
 	}
 }
 
-const PAIRING_NOTE = "Tell your human who is asking, the code and the link (details: a2a-over-webhook pair list). Never approve on your own: in human mode they approve on the link with their approval password; in agent mode run `pair approve <code>` only after they say yes.";
+const PAIRING_NOTE = "Tell your human who is asking, the code and the link (details: a2a-exposed pair list). Never approve on your own: in human mode they approve on the link with their approval password; in agent mode run `pair approve <code>` only after they say yes.";
 
 export const show = async (id) => out(await owner("GET", `/owner/tasks/${q(id)}`));
 
@@ -119,7 +119,7 @@ export async function token(action, label, o) {
 			return console.log(`revoked ${label}: its token gets HTTP 401 from now on`);
 		}
 		if (r.status === 404 || (r.status === 200 && r.data && r.data.revoked === false))
-			die((r.data && r.data.error) || `no active token with label ${label} (see: a2a-over-webhook token list)`);
+			die((r.data && r.data.error) || `no active token with label ${label} (see: a2a-exposed token list)`);
 		die(`could not revoke ${label}: ${describeHttp(r.status, r.data)}`);
 	}
 	die(`unknown token action ${action} (issue|list|revoke|rotate)`);
@@ -154,7 +154,7 @@ function resolvePeer(to) {
 		for (const [alias, pe] of Object.entries(peers)) if (pe.url.replace(/\/$/, "") === to.replace(/\/$/, "")) return resolvePeer(alias);
 		return [to, to.replace(/\/$/, ""), peerToken("A2A_PEER_TOKEN")];
 	}
-	die(`unknown peer alias ${JSON.stringify(to)} (see: a2a-over-webhook peers list)`);
+	die(`unknown peer alias ${JSON.stringify(to)} (see: a2a-exposed peers list)`);
 }
 
 export function peers(sub, args, o) {
@@ -192,7 +192,7 @@ export function peers(sub, args, o) {
 		const inUse = new Set(Object.values(all).map((x) => x.token_env));
 		const reserved = (k) => /^(A2A_|CLOUDFLARE_|WAKE_|CF_PROFILE$)/.test(k);
 		const drop = [...vars].filter((k) => !inUse.has(k) && !reserved(k) && k in C.fileConfig());
-		if (!pe && !drop.length) die(`unknown peer alias ${JSON.stringify(alias)} (see: a2a-over-webhook peers list)`);
+		if (!pe && !drop.length) die(`unknown peer alias ${JSON.stringify(alias)} (see: a2a-exposed peers list)`);
 		if (pe) C.savePeers(all);
 		if (drop.length) C.saveConfig(Object.fromEntries(drop.map((k) => [k, null])));
 		return console.log(`removed ${alias}${drop.length ? ` (and ${drop.join(", ")} from ${C.CONFIG_FILE})` : ""}`);
@@ -237,7 +237,7 @@ export async function send(o) {
 	if (tid) await owner("POST", "/owner/outbound", { taskId: tid, contextId: ctx, peer: alias, endpoint: url, protocol: version, pushToken, task: obj });
 	else if (obj && obj.parts) await logHistory(ctx, { dir: "in", peer: alias, role: "agent", event: "direct_message", text: textOf(obj) });
 	out(obj);
-	if (tid) console.error(`# task ${tid}: ${plainState(obj)}  (check: a2a-over-webhook poll --to ${alias} ${tid})`);
+	if (tid) console.error(`# task ${tid}: ${plainState(obj)}  (check: a2a-exposed poll --to ${alias} ${tid})`);
 }
 
 export async function poll(taskId, o) {
