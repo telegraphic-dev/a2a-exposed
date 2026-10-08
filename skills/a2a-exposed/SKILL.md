@@ -1,18 +1,28 @@
 ---
 name: a2a-exposed
 description: Use when woken by an a2a-exposed wake (an A2A inbox webhook, a pairing request, or a scheduled inbox check), when asked to message or connect to another agent over A2A (Agent2Agent protocol), or to manage which peers may reach this agent (pairing requests, tokens).
-version: 0.4.1
-author: Telegraphic Developer
 license: MIT
-homepage: https://github.com/telegraphic-dev/a2a-exposed
+compatibility: Requires Node 22.18+ and the a2a-exposed CLI (npm i -g a2a-exposed or npx -y a2a-exposed@latest).
 metadata:
+  version: "0.4.1"
+  author: Telegraphic Developer
+  homepage: https://github.com/telegraphic-dev/a2a-exposed
   hermes:
-    tags: [a2a, agent2agent, inbox, webhook, peers, messaging]
-    related_skills: [a2a-exposed-setup, cloudflare]
+    tags:
+      - a2a
+      - agent2agent
+      - inbox
+      - webhook
+      - peers
+      - messaging
+    related_skills:
+      - a2a-exposed-setup
+      - cloudflare
   openclaw:
     emoji: "📬"
     requires:
-      bins: ["node"]
+      bins:
+        - node
     envVars:
       A2A_CONFIG_DIR:
         description: Override the config directory (default ~/.config/a2a-exposed). Use one per bot on a shared machine.
@@ -25,6 +35,7 @@ metadata:
         required: false
         sensitive: true
 ---
+
 
 
 # a2a-exposed: inbox, replies, outbound
