@@ -4,7 +4,7 @@ Give any AI agent a public A2A (Agent2Agent) endpoint. Messages land in a Cloudf
 
 [![npm](https://img.shields.io/npm/v/a2a-exposed)](https://www.npmjs.com/package/a2a-exposed) [![CI](https://github.com/telegraphic-dev/a2a-exposed/actions/workflows/ci.yml/badge.svg)](https://github.com/telegraphic-dev/a2a-exposed/actions/workflows/ci.yml)
 
-> **Renamed from `a2a-over-webhook`.** The project now also exposes agents that already speak A2A (see the public façade below), so it is called **a2a-exposed**: npm package and command `a2a-exposed`, skills `a2a-exposed-setup` and `a2a-exposed`, repository [`telegraphic-dev/a2a-exposed`](https://github.com/telegraphic-dev/a2a-exposed) (the old GitHub URL redirects). Upgrading: `npm i -g a2a-exposed@latest` (you can `npm rm -g a2a-over-webhook`), then reinstall the skills under their new names (`npx --yes skills add telegraphic-dev/a2a-exposed`) and remove the old `a2a-over-webhook*` ones. Nothing else changes: the `a2a-over-webhook` command remains as a deprecated alias for a couple of minor releases, an existing `~/.config/a2a-over-webhook` keeps being used, deployed Workers keep their names, tokens and URLs, and `a2a-exposed deploy` updates them as before. The domain [a2a.exposed](https://a2a.exposed) is reserved for the project's future hosted/public pages; nothing is served there yet, and self-hosted deployments keep using your own hostname or workers.dev.
+> **Renamed from `a2a-over-webhook`.** The project now also exposes agents that already speak A2A (see the public façade below), so it is called **a2a-exposed**: npm package and command `a2a-exposed`, skills `a2a-exposed-setup` and `a2a-exposed`, repository [`telegraphic-dev/a2a-exposed`](https://github.com/telegraphic-dev/a2a-exposed) (the old GitHub URL redirects). Upgrading: `npm rm -g a2a-over-webhook && npm i -g a2a-exposed@latest`, then reinstall the skills under their new names (`npx --yes skills add telegraphic-dev/a2a-exposed`) and remove the old `a2a-over-webhook*` ones. Nothing else changes: the npm package `a2a-over-webhook` becomes a deprecated alias for a couple of minor releases (it depends on `a2a-exposed` and keeps the `a2a-over-webhook` command and `npx a2a-over-webhook` working, with a notice), an existing `~/.config/a2a-over-webhook` keeps being used, deployed Workers keep their names, tokens and URLs, and `a2a-exposed deploy` updates them as before. The domain [a2a.exposed](https://a2a.exposed) is reserved for the project's future hosted/public pages; nothing is served there yet, and self-hosted deployments keep using your own hostname or workers.dev.
 
 Installing the skills gives your agent the instructions; it does **not** install the CLI. Install it, or upgrade an older one, first (Node 22.18+):
 
@@ -207,7 +207,8 @@ Any agent that can run `npx` and remember a skill works in polling mode. The wak
 skills/a2a-exposed-setup/SKILL.md   deploy + per-agent wake configuration, public façade
 skills/a2a-exposed/SKILL.md         operate: inbox, replies, outbound, tokens
 worker/                             Cloudflare Worker (TypeScript, D1, cf CLI config)
-cli/                                npm package `a2a-exposed` (Node 22, zero deps; `a2a-over-webhook` = deprecated alias)
+cli/                                npm package `a2a-exposed` (Node 22, zero deps)
+alias/a2a-over-webhook/             deprecated npm alias `a2a-over-webhook` (depends on a2a-exposed; old command name)
 .github/workflows/                  ci.yml (PRs, main) and publish.yml (v* tags: npm + GitHub release)
 ```
 
@@ -215,7 +216,7 @@ Worker development: `cd worker && npm install && npm test && npx tsc`. For local
 
 ## Releases
 
-Pushing a `v*` tag runs [`publish.yml`](.github/workflows/publish.yml): it sets the CLI version from the tag, runs the tests, publishes `a2a-exposed` to npm with provenance, and creates a GitHub release. Changes are listed in [CHANGELOG.md](CHANGELOG.md).
+Pushing a `v*` tag runs [`publish.yml`](.github/workflows/publish.yml): it sets the CLI version from the tag, runs the tests, publishes `a2a-exposed` (and the deprecated `a2a-over-webhook` alias at the same version) to npm with provenance, and creates a GitHub release. Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

@@ -40,7 +40,7 @@ a2a-exposed --version
 
 For one-off use without a global install: `npx -y a2a-exposed@latest <command>`. The docs write commands as `npx a2a-exposed <command>`; with a global install, `a2a-exposed <command>` is the same thing without the npm round-trip. Config lives in `~/.config/a2a-exposed/config.env` (chmod 600). Environment variables always override the file. Development from a checkout: `node <checkout>/cli/bin/a2a-exposed.mjs <command>`, and pass the same path as `--cli-command` on `init` if the wake hint should use it (default wake hint is `npx a2a-exposed`).
 
-Use the CLI as `npx a2a-exposed <cmd>`, or exactly the command in the wake's `hint`. It reads `A2A_BASE_URL` and `A2A_OWNER_TOKEN` from the environment or from `~/.config/a2a-exposed/config.env` (a pre-rename `~/.config/a2a-over-webhook/config.env` when only that exists; the old command name `a2a-over-webhook` is a deprecated alias of `a2a-exposed`) (another directory if `A2A_CONFIG_DIR` is set, e.g. one per bot on a shared machine). If neither exists, the endpoint isn't deployed yet: use the **a2a-exposed-setup** skill.
+Use the CLI as `npx a2a-exposed <cmd>`, or exactly the command in the wake's `hint`. It reads `A2A_BASE_URL` and `A2A_OWNER_TOKEN` from the environment or from `~/.config/a2a-exposed/config.env` (a pre-rename `~/.config/a2a-over-webhook/config.env` when only that exists; the old package and command `a2a-over-webhook` are a deprecated alias of `a2a-exposed`) (another directory if `A2A_CONFIG_DIR` is set, e.g. one per bot on a shared machine). If neither exists, the endpoint isn't deployed yet: use the **a2a-exposed-setup** skill.
 
 ## On a wake or a scheduled check
 

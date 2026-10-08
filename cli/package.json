@@ -4,8 +4,7 @@
 	"description": "Give any AI agent a public A2A (Agent2Agent) endpoint: Cloudflare Worker inbox + wake webhook or scheduled inbox checks",
 	"type": "module",
 	"bin": {
-		"a2a-exposed": "bin/a2a-exposed.mjs",
-		"a2a-over-webhook": "bin/a2a-over-webhook.mjs"
+		"a2a-exposed": "bin/a2a-exposed.mjs"
 	},
 	"files": [
 		"bin/",
