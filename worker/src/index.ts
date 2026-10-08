@@ -1354,6 +1354,24 @@ async function ownerPairing(req: Request, env: Env, m: string, seg: string[], bo
 	return json({ error: "not found" }, 404);
 }
 
+// ------------------------------------------------------------------ landing (GET /)
+/** A browser (Accept: text/html) gets a small HTML page; anything else (curl, agents, Accept: application/json, ?format=json) the JSON it always got. Built from the served (rewritten) card, so it shows exactly what the card shows. */
+async function landing(req: Request, env: Env, url: URL): Promise<Response> {
+	const accept = req.headers.get("accept") || "";
+	const html = url.searchParams.get("format") !== "json" && /\btext\/html\b/i.test(accept);
+	const card: any = await agentCard(env);
+	const cardUrl = env.PUBLIC_URL + "/.well-known/agent-card.json";
+	if (!html) return json({ name: card.name, description: card.description, agentCard: cardUrl, a2a: env.PUBLIC_URL + "/",
+		pairing: pairingOn(env) ? env.PUBLIC_URL + "/device" : undefined }, 200, { vary: "accept" });
+	const versions = [...new Set<string>((card.supportedInterfaces || []).map((i: any) => String(i?.protocolVersion || "")).filter(Boolean))];
+	const skills = (Array.isArray(card.skills) ? card.skills : []).filter((k: any) => k && (k.name || k.id))
+		.map((k: any) => ({ name: String(k.name || k.id), description: typeof k.description === "string" ? k.description : undefined }));
+	const nonce = P.randomB64();
+	const page = P.landingPage({ name: String(card.name || env.AGENT_NAME || "A2A agent"), description: typeof card.description === "string" ? card.description : undefined,
+		base: env.PUBLIC_URL, versions, skills, pairing: pairingOn(env), proxy: proxyMode(env) }, nonce);
+	return new Response(req.method === "HEAD" ? null : page, { status: 200, headers: P.landingHeaders(nonce) });
+}
+
 // ------------------------------------------------------------------ router
 async function handle(req: Request, env: Env, ectx: ExecutionContext): Promise<Response> {
 	const url = new URL(req.url);
@@ -1378,7 +1396,7 @@ async function handle(req: Request, env: Env, ectx: ExecutionContext): Promise<R
 		if (req.method === "POST" && (path === "/" || path === "/a2a" || path === "/a2a/v1")) return await handleRpc(req, env, ectx);
 		if (req.method === "POST" && path === "/push") return await handlePush(req, env, ectx);
 		if (path === "/owner" || path.startsWith("/owner/")) return await handleOwner(req, env, ectx, path, url);
-		if (req.method === "GET" && path === "/") return json({ name: env.AGENT_NAME, agentCard: env.PUBLIC_URL + "/.well-known/agent-card.json" });
+		if ((req.method === "GET" || req.method === "HEAD") && path === "/") return await landing(req, env, url);
 		return json({ error: "not found" }, 404);
 	} catch (e: any) {
 		if (e instanceof HttpError) return json({ error: e.message }, e.status);

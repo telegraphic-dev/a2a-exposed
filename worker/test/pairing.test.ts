@@ -603,3 +603,49 @@ test("PBKDF2 iterations: stored per hash, tunable from 50,000 to 100,000; the we
 	const a = (await s.start(undefined, "203.0.113.60")).data;
 	assert.equal((await s.decidePage(a.user_code, PASSWORD, "approve")).status, 200, "verification uses the stored count");
 });
+
+test("GET /: a browser gets an HTML landing page (strict CSP, no scripts); curl/agents still get JSON", async (t) => {
+	const s = setup({ AGENT_NAME: "Barry <b>& Co</b>", AGENT_DESCRIPTION: "Answers questions about <bricks>." }); t.after(s.restore);
+	const h = await s.call("GET", "/", { headers: { accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" } });
+	assert.equal(h.status, 200);
+	assert.match(h.headers.get("content-type")!, /^text\/html/);
+	const csp = h.headers.get("content-security-policy")!;
+	assert.match(csp, /default-src 'none'/);
+	assert.match(csp, /form-action 'none'/);
+	assert.match(csp, /frame-ancestors 'none'/);
+	assert.equal(h.headers.get("vary"), "accept");
+	assert.equal(h.headers.get("x-frame-options"), "DENY");
+	assert.ok(!/<script|<link|<img|<iframe|src=/i.test(h.text), "no scripts or external assets");
+	assert.ok(h.text.includes("Barry &lt;b&gt;&amp; Co&lt;/b&gt;") && !h.text.includes("<b>&"), "name escaped");
+	assert.ok(h.text.includes("Answers questions about &lt;bricks&gt;."));
+	assert.match(h.text, /A2A \(Agent2Agent\)<\/a> endpoint/);
+	assert.ok(h.text.includes(`href="/.well-known/agent-card.json"`) && h.text.includes(`${BASE}/.well-known/agent-card.json`));
+	assert.ok(h.text.includes(`href="/device"`), "pairing link");
+	assert.ok(h.text.includes(`npx a2a-exposed connect ${BASE}`));
+	assert.match(h.text, /1\.0, 0\.3/);
+	// the style block carries the CSP nonce
+	const nonce = /style-src 'nonce-([^']+)'/.exec(csp)![1];
+	assert.ok(h.text.includes(`<style nonce="${nonce}">`));
+	// machine-readable: no Accept, Accept: application/json, or ?format=json even from a browser
+	for (const o of [{}, { headers: { accept: "application/json" } }]) {
+		const j = await s.call("GET", "/", o);
+		assert.match(j.headers.get("content-type")!, /^application\/json/);
+		assert.equal(j.data.name, "Barry <b>& Co</b>");
+		assert.equal(j.data.agentCard, `${BASE}/.well-known/agent-card.json`);
+		assert.equal(j.data.a2a, `${BASE}/`);
+		assert.equal(j.data.pairing, `${BASE}/device`);
+	}
+	const f = await s.call("GET", "/?format=json", { headers: { accept: "text/html" } });
+	assert.equal(f.data.agentCard, `${BASE}/.well-known/agent-card.json`);
+	const head = await s.call("HEAD", "/", { headers: { accept: "text/html" } });
+	assert.equal(head.status, 200);
+	assert.equal(head.text, "");
+});
+
+test("GET / with pairing off: no /device link, says to ask the operator", async (t) => {
+	const s = setup({ PAIRING_APPROVAL: "off" }); t.after(s.restore);
+	const h = await s.call("GET", "/", { headers: { accept: "text/html" } });
+	assert.ok(!h.text.includes(`href="/device"`));
+	assert.match(h.text, /ask this agent's operator for a bearer token/);
+	assert.equal((await s.call("GET", "/")).data.pairing, undefined);
+});

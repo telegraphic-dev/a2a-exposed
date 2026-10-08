@@ -337,3 +337,17 @@ test("wake text for a private claimed card says it is not publicly reachable", a
 			agentCardUrl: `${TAILNET}/.well-known/agent-card.json`, agentCardPrivate: true, expiresIn: 600 } }, "npx a2a-exposed");
 	assert.match(txt, /private network: not publicly reachable/);
 });
+
+test("proxy mode: the landing page shows the rewritten card (upstream name and skills, no private URL)", async (t) => {
+	const s = setup({ UPSTREAM_URL: UPSTREAM, UPSTREAM_TOKEN: "up-secret" });
+	t.after(s.restore);
+	const h = await s.call("GET", "/", { headers: { accept: "text/html" } });
+	assert.equal(h.status, 200);
+	assert.match(h.text, /<title>Jean<\/title>/);
+	assert.match(h.text, /<b>Chat<\/b>/);
+	for (const leak of ["ts.net", "tail1234", "localhost", "agent-upstream", "192.168.", "100.101."]) assert.ok(!h.text.includes(leak), leak);
+	assert.ok(!h.text.includes("inbox"), "a façade isn't an inbox");
+	const j = await s.call("GET", "/");
+	assert.equal(j.data.name, "Jean");
+	assert.ok(!JSON.stringify(j.data).includes("ts.net"));
+});

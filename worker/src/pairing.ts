@@ -214,7 +214,7 @@ const STYLE = `body{font:16px/1.5 system-ui,sans-serif;max-width:34rem;margin:2r
 h1{font-size:1.3rem}table{border-collapse:collapse;width:100%;margin:1rem 0}th,td{text-align:left;padding:.35rem .5rem;border-bottom:1px solid #ddd;vertical-align:top;word-break:break-all}th{width:40%;font-weight:600;word-break:normal}
 label{display:block;font-weight:600;margin:.8rem 0 .3rem}input{font:inherit;width:100%;box-sizing:border-box;padding:.5rem;border:1px solid #888;border-radius:4px}
 .b{display:flex;gap:.6rem;margin-top:1rem}button{font:inherit;padding:.5rem 1.2rem;border:0;border-radius:4px;background:#1a5fb4;color:#fff;cursor:pointer}button.d{background:#a51d2d}
-.n{padding:.6rem .8rem;border-radius:4px}.ok{background:#e6f4ea}.error{background:#fce8e6}.info{background:#e8f0fe}.w{font-size:.9rem;color:#444}code{background:#eee;padding:0 .2rem}`;
+h2{font-size:1.05rem;margin-top:1.5rem}ul{padding-left:1.2rem}a{color:#1a5fb4}.n{padding:.6rem .8rem;border-radius:4px}.ok{background:#e6f4ea}.error{background:#fce8e6}.info{background:#e8f0fe}.w{font-size:.9rem;color:#444}code{background:#eee;padding:0 .2rem}`;
 
 /** The shared page frame: no scripts, no external assets, one nonce'd style block. `title` is escaped here. */
 function pageShell(title: string, nonce: string, body: string): string {
@@ -222,6 +222,45 @@ function pageShell(title: string, nonce: string, body: string): string {
 <title>${esc(title)}</title><style nonce="${nonce}">
 ${STYLE}
 </style></head><body><h1>${esc(title)}</h1>${body}</body></html>`;
+}
+
+export type LandingModel = {
+	name: string;
+	description?: string;
+	base: string; // PUBLIC_URL (no trailing slash)
+	versions: string[]; // A2A protocol versions served over JSON-RPC at base + "/"
+	skills: { name: string; description?: string }[];
+	pairing: boolean; // device-flow pairing is on (/device exists)
+	proxy: boolean; // façade for an existing A2A agent (vs. the webhook inbox)
+};
+
+/** GET / in a browser: what this URL is and how to connect. Same frame and CSP as /device (no scripts, no external assets). Everything comes from the public card, so nothing private leaks here either. */
+export function landingPage(m: LandingModel, nonce: string): string {
+	const card = `${m.base}/.well-known/agent-card.json`;
+	const desc = m.description ? `<p>${esc(m.description)}</p>` : "";
+	const versions = m.versions.length ? m.versions.map((v) => esc(v)).join(", ") : "1.0, 0.3";
+	const skills = m.skills.length
+		? `<h2>Skills</h2><ul>${m.skills.slice(0, 20).map((k) => `<li><b>${esc(k.name)}</b>${k.description ? ` &ndash; ${esc(k.description)}` : ""}</li>`).join("")}</ul>${m.skills.length > 20 ? `<p class="w">&hellip;and ${m.skills.length - 20} more in the agent card.</p>` : ""}`
+		: "";
+	const connect = m.pairing
+		? `<h2>Connect your agent</h2><p>Agents get a bearer token through the OAuth device flow: your agent asks, and this agent's owner approves the request on the <a href="/device">pairing page</a>. No secrets go through chat. With the a2a-exposed CLI, your agent runs:</p><p><code>npx a2a-exposed connect ${esc(m.base)}</code></p>`
+		: `<h2>Connect your agent</h2><p>Pairing is turned off here: ask this agent's operator for a bearer token.</p>`;
+	return pageShell(m.name, nonce, `${desc}
+<p class="n info">This is an <a href="https://a2a-protocol.org/">A2A (Agent2Agent)</a> endpoint, meant for agents rather than people.${m.proxy ? "" : " Messages land in its owner's inbox, which wakes the agent."}</p>
+<table>
+<tr><th>Agent card</th><td><a href="/.well-known/agent-card.json">${esc(card)}</a></td></tr>
+<tr><th>JSON-RPC endpoint</th><td><code>POST ${esc(m.base)}/</code></td></tr>
+<tr><th>A2A versions</th><td>${versions} (legacy card: <a href="/.well-known/agent.json">agent.json</a>)</td></tr>
+<tr><th>Authentication</th><td>Bearer token${m.pairing ? ` (<a href="/device">pairing page</a>)` : ""}</td></tr>
+</table>
+${skills}${connect}
+<p class="w">Served by <a href="https://github.com/telegraphic-dev/a2a-exposed">a2a-exposed</a>.</p>`);
+}
+
+/** Security headers for the landing page: the /device CSP minus forms, cacheable for a few minutes (no per-visitor state). */
+export function landingHeaders(nonce: string): Record<string, string> {
+	return { ...pageHeaders(nonce), "content-security-policy": `default-src 'none'; style-src 'nonce-${nonce}'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'`,
+		"cache-control": "no-cache", vary: "accept" };
 }
 
 export type SetupModel = {
