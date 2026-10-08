@@ -12,7 +12,8 @@ The agent skills (`npx --yes skills add telegraphic-dev/a2a-over-webhook`) docum
 - Node 22.18+ and zero dependencies. `init` installs Cloudflare's `cf` CLI into the Worker folder and uses that; you only need a one-time login (`npx cf auth login --no-browser`). No domain? Omit `--hostname` and `init` deploys to `https://<worker>.<account-subdomain>.workers.dev` (`--workers-dev-subdomain <name>` registers the account subdomain if missing).
 - **Setup:** `init`, `deploy`, `wake set|unset|test|preview|fingerprint`, `tunnel create|status|rm` (secure Cloudflare Tunnel + Access for local-only webhooks; needs any zone on the account, the inbox can be on workers.dev), `status` (read-only setup check with a next step), `url`, `config`. Use `--cli-command` to set the command shown in wake hints (default `npx a2a-over-webhook`; e.g. a `node <checkout>/cli/bin/a2a-over-webhook.mjs` path for development).
 - **Inbox:** `inbox`, `show`, `working`, `reply`, `history`, `contexts`
-- **Peer tokens:** `token issue|list|revoke|rotate`
+- **Pairing (OAuth 2.0 device flow, RFC 8628):** `connect <url>` (ask another inbox for a token; its owner approves), `pair set-password|list|approve|deny` (approve agents that connect to you; human approval by default)
+- **Peer tokens:** `token issue|list|revoke|rotate` (manual fallback; `list` also shows tokens created by pairing)
 - **Outbound:** `peers add|list|rm`, `send`, `poll`, `outbound`
 - **Config:** `~/.config/a2a-over-webhook/config.env` (chmod 600; override the directory with `A2A_CONFIG_DIR`). Environment variables override file values.
 

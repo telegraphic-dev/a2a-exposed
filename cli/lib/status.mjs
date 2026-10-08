@@ -61,19 +61,23 @@ export function nextStep(s) {
 		return fail(`the tunnel has no running connector: on the agent's machine run \`cloudflared tunnel run --token-file ${t.tokenFile}\` (outbound port 7844 must be open), then \`${CLI} wake test\``);
 	if (s.wake.configured && needsAgentSecret)
 		return fail(`the Worker sends no webhook auth, so the ${s.wake.preset} webhook will reject wakes: export ${agentSecret} (${s.wake.preset === "hermes" ? "the route secret" : "the hooks token"}), then run \`${CLI} ${t ? "tunnel create" : "wake set"}\``);
+	// not broken, but peers can't pair until the human sets the approval password
+	const pairNote = s.pairing && s.pairing.mode === "human" && !s.pairing.passwordSet
+		? ` Peers can't connect with \`${CLI} connect\` yet: your human sets the approval password with \`${CLI} pair set-password\` (in a terminal; never the agent).` : "";
+	const done2 = (text) => done(text + pairNote);
 	if (!s.wake.configured) {
 		const poll = "the agent must check the inbox on a schedule (setup skill: polling; Hermes and OpenClaw have copy-paste commands there)";
 		if (s.wake.preset && !LOCAL_PRESETS.includes(s.wake.preset) && s.wake.preset !== "generic")
-			return done(`no wake webhook: export WAKE_WEBHOOK_URL and WAKE_WEBHOOK_KEY, then run \`${CLI} wake set --preset ${s.wake.preset}\`; or ${poll}`);
+			return done2(`no wake webhook: export WAKE_WEBHOOK_URL and WAKE_WEBHOOK_KEY, then run \`${CLI} wake set --preset ${s.wake.preset}\`; or ${poll}`);
 		const z = s.zones;
 		const tunnel = !z ? `a local-only webhook can use \`${CLI} tunnel create\` (needs a zone on the account)`
 			: !z.length ? "the account has no domain (zone), so the secure tunnel is not available"
 			: z.length === 1 ? `for immediate wakes to a local-only webhook, run \`${CLI} tunnel create\` (it uses the account's zone ${z[0]}; no redeploy needed)`
 			: `for immediate wakes to a local-only webhook, run \`${CLI} tunnel create --tunnel-zone <zone>\` with one of: ${z.join(", ")} (no redeploy needed)`;
 		const pub = s.wake.preset === "generic" ? `; a public webhook: export WAKE_WEBHOOK_URL (and a key), then \`${CLI} wake set\`` : "";
-		return done(`no wake webhook, so ${poll}. Optional: ${tunnel}${pub}`);
+		return done2(`no wake webhook, so ${poll}. Optional: ${tunnel}${pub}.`);
 	}
-	return done(`none: setup is complete. Check a real wake with \`${CLI} wake test\`; give a peer access with \`${CLI} token issue <peer>\``);
+	return done2(`none: setup is complete. Check a real wake with \`${CLI} wake test\`. Peers connect with \`${CLI} connect ${s.baseUrl}\` (you approve each one); \`${CLI} token issue <peer>\` is the manual fallback.`);
 }
 
 /** Collect the snapshot. Each probe tolerates failure; nothing is created or changed. */
@@ -84,7 +88,7 @@ export async function collect() {
 		worker: C.get("A2A_WORKER_NAME"), d1: C.get("A2A_D1_NAME"), account: C.get("CLOUDFLARE_ACCOUNT_ID"), cfProfile: C.get("CF_PROFILE"),
 		baseUrl: baseUrl(), urlKind: C.get("A2A_HOSTNAME") ? "custom domain" : "workers.dev", cron: C.get("A2A_ENABLE_CRON") === "1",
 		hasOwnerToken: !!C.get("A2A_OWNER_TOKEN"), baseUrlSaved: (C.fileConfig().A2A_BASE_URL || "").replace(/\/$/, ""), baseUrlEnv: "",
-		card: { ok: false, error: "not checked" }, ownerApi: { ok: false, error: "not checked" }, wake: null, tunnel: null, zones: null,
+		card: { ok: false, error: "not checked" }, ownerApi: { ok: false, error: "not checked" }, wake: null, tunnel: null, zones: null, pairing: null,
 	};
 	const envBase = (process.env.A2A_BASE_URL || "").replace(/\/$/, "");
 	if (envBase && envBase !== s.baseUrlSaved) s.baseUrlEnv = envBase;
@@ -97,6 +101,13 @@ export async function collect() {
 			s.wake = { preset: p.preset, configured: !!p.configured, hasKey: !!p.hasKey, hasHmacSecret: !!p.hasHmacSecret,
 				hasAccessServiceToken: !!p.hasAccessServiceToken, urlFingerprint: p.fingerprints?.url || null };
 		} catch (e) { s.ownerApi = { ok: false, error: e.message }; }
+		if (s.ownerApi.ok) {
+			try {
+				const pr = await owner("GET", "/owner/pairing");
+				if (pr && typeof pr === "object" && ["human", "agent", "off"].includes(pr.mode))
+					s.pairing = { mode: pr.mode, passwordSet: !!pr.passwordSet, pending: (pr.pending || []).length };
+			} catch { /* older Worker (no pairing yet): leave unknown */ }
+		}
 	}
 	const dir = D.workerDir({});
 	const haveCf = fs.existsSync(dir);
@@ -137,6 +148,8 @@ export async function status(o) {
 			rows.push(["tunnel", !t ? "none" : `${t.wakeUrl} -> ${t.origin || "?"}; ${!t.complete ? "INCOMPLETE" : t.tokenFileOk ? "set up" : "set up, but the connector token file is MISSING"}` +
 				(t.connections != null ? `; ${t.state || "?"}, ${t.connections} connector connection(s)` : t.error ? `; state unknown (${t.error})` : "")]);
 			if (s.zones) rows.push(["zones", s.zones.length ? s.zones.join(", ") : "none on this account"]);
+			const pg = s.pairing;
+			if (pg) rows.push(["pairing", pg.mode === "off" ? "off (token issue only)" : `${pg.mode} approval; approval password ${pg.passwordSet ? "set" : "NOT SET"}${pg.pending ? `; ${pg.pending} pending request(s): ${CLI} pair list` : ""}`]);
 		}
 		rows.push(["next step", next.text]);
 		for (const [k, v] of rows) console.log(`${(k + ":").padEnd(12)} ${v}`);

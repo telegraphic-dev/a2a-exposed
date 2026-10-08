@@ -158,6 +158,7 @@ Optional flags:
 | `--d1-name` | D1 database to create or reuse (default: worker name). Useful when several bots share an account |
 | `--cli-command` | Command shown in wake hints (`hint` / summaries). Default `npx a2a-over-webhook`. For a checkout, pass e.g. `node /path/to/repo/cli/bin/a2a-over-webhook.mjs`. Saved as `WAKE_CLI_COMMAND` |
 | `--debounce <s>` | Wake debounce window |
+| `--pairing-approval human\|agent\|off` | Who approves device-flow pairing requests (section 5). `human` (default): your human, on the `/device` page, with an approval password only they know. `agent`: also `pair approve <code>` by the agent after asking its human in chat. `off`: no pairing endpoints; `token issue` only. Change it later with `deploy --pairing-approval ...` |
 | `--max-per-hour <n>` | Hourly wake cap |
 | `--cf-profile <name>` | Use a named cf auth profile (separate Cloudflare login). Saved as `CF_PROFILE` |
 | `--workers-dev` | Move to workers.dev: clears the saved hostname, so the base URL, agent card and printed URLs become `https://<worker>.<subdomain>.workers.dev`. The old custom domain then answers 410 (its agent card redirects 301 to the new card) until you detach it in the dashboard; peers must update their URL. `--hostname <host>` on a workers.dev deployment moves it back (the workers.dev route is switched off). A wake tunnel keeps working (it has its own hostname on a zone) |
@@ -347,13 +348,44 @@ npx a2a-over-webhook wake set --preset generic \
 | Signing | Setting `WAKE_HMAC_SECRET` also adds the Hermes-style V2 signature headers |
 | Idempotency | Every wake carries `X-Request-ID` |
 
-## 5. First peer
+## 5. Connecting peers: device-flow pairing
+
+Agents connect without pasting tokens into chat, using the standard OAuth 2.0 Device Authorization Grant (RFC 8628). Your inbox is the authorization server, and **your human approves each connection**.
+
+**Set the approval password (once, human mode).** The human runs this **themselves, in a terminal**:
 
 ```bash
-npx a2a-over-webhook token issue <peer-label>     # prints the token ONCE on stdout
+npx a2a-over-webhook pair set-password      # typed twice, not echoed; at least 12 characters
 ```
 
-Send the token **and** the card URL (`$(npx a2a-over-webhook url)/.well-known/agent-card.json`) to the peer's operator, but only over a channel the user approves. The peer uses `Authorization: Bearer <token>`. Tokens are `a2aow_` plus 43 base64url characters; the Worker stores only their SHA-256 hash (tokens from older releases keep working). One label per peer. Manage labels with `token list`, `token rotate <label>`, and `token revoke <label>`.
+It refuses arguments and non-terminal stdin, so an agent can't set it. Never ask the user for the password, and never type it for them. The Worker stores only a salted PBKDF2-SHA256 hash (100,000 iterations, the Workers maximum); the password itself never leaves the machine. Until it is set, the `/device` page says how to set it, and nothing can be approved there.
+
+**Someone connects to you.** Their agent runs `connect` with your URL (or any standard OAuth device-flow client; the endpoints are on your agent card and at `/.well-known/oauth-authorization-server`). You get a wake with `kind: "pairing_request"`, the requester's claimed name and card URL, the code (e.g. `WDJB-4827`), and a link (`<base>/device?user_code=WDJB-4827`).
+- **human** mode (default): tell your human who is asking, show the code, and give them the link. They check the code with the other agent's owner, then approve or deny on the page with the approval password. You never approve.
+- **agent** mode: ask your human in chat; only if they say yes, run `npx a2a-over-webhook pair approve <code>`; otherwise `pair deny <code>`.
+- `npx a2a-over-webhook pair list` shows pending requests. `pair deny <code>` works in every mode.
+- The approved agent gets a normal per-peer token (label from its name, e.g. `Barry-Bot`). `token list` shows it with `via pairing: code WDJB-4827`; `token revoke <label>` cuts it off.
+
+**You connect to someone.** Only when the user asked:
+
+```bash
+npx a2a-over-webhook connect https://peer.example.com [--alias peer]      # or the peer's agent-card URL
+```
+
+It prints a code and a link. Show both to your human: they confirm the code with the peer's owner, who approves it. `connect` waits (honouring `interval` and `slow_down`), then stores the token as outbound peer `peer` (never printed); `send --to peer` works right away. A denied or expired request ends with exit code 1 and a clear message. If your harness only shows output when a command finishes, use `connect <url> --no-wait` (prints the code and exits), relay the code, then run `connect <url>` again to wait; it continues the same request. `--json` prints one JSON line per step.
+
+**Manual fallback.** If the peer has no device flow (or pairing is `off`), `npx a2a-over-webhook token issue <peer-label>` prints a token once. Send it with the card URL (`$(npx a2a-over-webhook url)/.well-known/agent-card.json`) only over a channel the user approves; the peer adds it with `peers add <alias> <url> --token-stdin`. Tokens are `a2aow_` plus 43 base64url characters; the Worker stores only their SHA-256 hash. One label per peer; manage labels with `token list`, `token rotate <label>`, and `token revoke <label>`.
+
+### Pairing security (threat model)
+
+- **A device code alone is useless.** It is 256 random bits, stored only as a SHA-256 hash, expires after 10 minutes, and yields a token only after an approval. It is single-use: redeemed once, then deleted.
+- **The approval needs the human.** In `human` mode only the approval password approves, and only your human knows it. A prompt-injected agent, a peer message, or someone with the link can't approve. The owner API refuses `pair approve` in this mode. The user code is short (about 29 bits) because a human reads it; it identifies a request and is not a secret. Your human compares it with the code the other agent's owner sees.
+- **What it does not cover.** The owner token (in the agent's `config.env`) can always issue tokens directly (`token issue`) and replace the approval password. Keep it away from untrusted agents and code. The approval password protects the pairing path: a pairing request, a peer message, or a prompt injection can't get a connection approved without the human.
+- **Brute force and floods are capped.** 30 code lookups per IP per 10 minutes on the page, 5 new requests per IP per 10 minutes, at most 10 pending requests and 30 new requests per hour in total (so nobody can flood your agent with approval prompts), 5 wrong passwords per code (the request is then denied), 10 per IP per hour, and 50 per hour overall (the page then locks for up to an hour). Token polling faster than `interval` gets `slow_down`, and the interval grows by 5 seconds each time.
+- **Requester claims are untrusted.** The name and card URL come from the requester. The page escapes them and shows the requesting IP and country. The wake labels them as claimed, and `openclaw-wake` (a trusted system event) leaves them out.
+- **The page itself** has no scripts or external assets, a strict CSP (`default-src 'none'`, `frame-ancestors 'none'`, `form-action 'self'`), `Cache-Control: no-store`, a same-origin check, and a SameSite=Strict double-submit CSRF token.
+- **Revocation.** Every paired agent has its own label: `token revoke <label>` takes effect immediately. There is no refresh token; a token lasts until revoked.
+- **Optional extra layer:** put a Cloudflare Access application on `<inbox host>/device` only (not `/oauth/*`, which the requesting agent must reach), so the page also needs your Access login. It is not required.
 
 ## 6. Loopback test (end to end)
 
@@ -372,6 +404,11 @@ npx a2a-over-webhook token revoke self-test && npx a2a-over-webhook peers rm sel
 
 | Symptom | Fix |
 |---|---|
+| `pair ...`: `internal error (HTTP 500)` | The inbox was deployed before device-flow pairing existed: run `npx a2a-over-webhook deploy` (it applies D1 migration `0003_device_pairing`) |
+| `connect`: `does not offer device-flow pairing` | The peer runs another A2A server, or pairing is `off` there: ask its owner for a token (`token issue`), then `peers add <alias> <url> --token-stdin` |
+| `connect`: `not accepting more pairing requests` | The peer's flood limits (5 per IP per 10 minutes, 10 pending): wait and try again |
+| `/device` says no approval password is set | Your human runs `npx a2a-over-webhook pair set-password` in a terminal |
+| `pair approve`: `approval mode is human` | By design: your human approves on the `/device` link. Use `deploy --pairing-approval agent` only if the user wants the agent to approve after asking in chat |
 | `not logged in to Cloudflare` | Run `cf auth login --no-browser` again; the code expires after about 5 minutes |
 | Several accounts | `--account-id <id>` (listed by `cf auth whoami`) |
 | Card not reachable right after deploy (`status`: `agent card: FAILED`) | A new custom domain takes 1–5 minutes for DNS and the certificate. Check that the hostname is on a zone in this account and has no conflicting DNS record. A newly registered workers.dev subdomain can also take a few minutes |

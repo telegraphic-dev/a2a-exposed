@@ -70,8 +70,10 @@ export async function contexts() {
 // ---------------------------------------------------------------- inbound peer tokens (one per peer label)
 export async function token(action, label, o) {
 	if (action === "list") {
-		for (const r of await owner("GET", "/owner/peers"))
-			console.log(`${r.label}\tcreated=${r.created_at}\t${r.revoked_at ? "REVOKED " + r.revoked_at : "active"}`);
+		for (const r of await owner("GET", "/owner/peers")) {
+			const via = r.source === "pairing" ? `\tvia pairing: code ${r.user_code || "?"}${r.client_name ? `, ${JSON.stringify(r.client_name)}` : ""}` : "";
+			console.log(`${r.label}\tcreated=${r.created_at}\t${r.revoked_at ? "REVOKED " + r.revoked_at : "active"}${via}`);
+		}
 		return;
 	}
 	if (!label) die("label required");
