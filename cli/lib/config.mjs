@@ -82,4 +82,10 @@ export function savePeers(peers) {
 	writePrivate(PEERS_FILE, JSON.stringify(peers, null, 2) + "\n");
 }
 
+/** Set (non-empty) both in the environment and in config.env, with different values: get() returns the environment's. */
+export function envOverridesFile(key) {
+	const e = process.env[key], f = fileConfig()[key];
+	return !!e && !!f && e !== f;
+}
+
 export const peerTokenVar = (alias) => `PEER_${alias.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_TOKEN`;

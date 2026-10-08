@@ -126,15 +126,33 @@ export async function token(action, label, o) {
 }
 
 // ---------------------------------------------------------------- outbound peers (agents we call)
+/** Peer tokens follow the usual rule (the environment overrides config.env). When a peer token is set in both and the
+ *  two differ, say so on stderr, naming only the variable (never a value). `justSaved`: the CLI has just written a new
+ *  token to config.env (connect, peers add --token-stdin) that the environment value will keep shadowing. */
+export function warnPeerTokenEnv(key, justSaved = false) {
+	if (!key || !C.envOverridesFile(key)) return false;
+	console.error(justSaved
+		? `warning: ${key} is set in the environment and overrides the token just saved in ${C.CONFIG_FILE}; the next send or poll would still use the environment value. To use the new token: unset ${key} (in the shell or service that sets it)`
+		: `warning: ${key} is set in the environment and overrides the different peer token saved in ${C.CONFIG_FILE}; using the environment value. To use the saved token: unset ${key} (in the shell or service that sets it)`);
+	return true;
+}
+
+/** A peer's bearer token from the environment or config.env, warning when the environment shadows a different saved one. */
+export function peerToken(key) {
+	if (!key) return "";
+	warnPeerTokenEnv(key);
+	return C.get(key);
+}
+
 function resolvePeer(to) {
 	const peers = C.loadPeers();
 	if (peers[to]) {
 		const pe = peers[to];
-		return [to, pe.url.replace(/\/$/, ""), pe.token_env ? C.get(pe.token_env) : ""];
+		return [to, pe.url.replace(/\/$/, ""), peerToken(pe.token_env)];
 	}
 	if (/^https?:\/\//.test(to)) {
 		for (const [alias, pe] of Object.entries(peers)) if (pe.url.replace(/\/$/, "") === to.replace(/\/$/, "")) return resolvePeer(alias);
-		return [to, to.replace(/\/$/, ""), C.get("A2A_PEER_TOKEN")];
+		return [to, to.replace(/\/$/, ""), peerToken("A2A_PEER_TOKEN")];
 	}
 	die(`unknown peer alias ${JSON.stringify(to)} (see: a2a-over-webhook peers list)`);
 }
@@ -153,7 +171,9 @@ export function peers(sub, args, o) {
 			if (!t) die("no token on stdin");
 			C.saveConfig({ [tokenEnv]: t });
 			all[alias].token_stored = true; // written to config.env by us: `peers rm` removes it again
-		} else if (!C.get(tokenEnv)) console.error(`note: no token stored; set ${tokenEnv} in the environment or ${C.CONFIG_FILE} (or re-run with --token-stdin)`);
+			warnPeerTokenEnv(tokenEnv, true);
+		} else if (warnPeerTokenEnv(tokenEnv)) { /* both set and different: warned */ }
+		else if (!C.get(tokenEnv)) console.error(`note: no token stored; set ${tokenEnv} in the environment or ${C.CONFIG_FILE} (or re-run with --token-stdin)`);
 		C.savePeers(all);
 		return console.log(`peer ${alias} -> ${all[alias].url}`);
 	}
@@ -179,6 +199,7 @@ export function peers(sub, args, o) {
 	}
 	for (const [k, v] of Object.entries(all)) {
 		const te = v.token_env || "";
+		warnPeerTokenEnv(te);
 		console.log(`${k}\t${v.url}\ttoken_env=${te || "-"}\t${te && C.get(te) ? "(set)" : "(missing)"}`);
 	}
 }

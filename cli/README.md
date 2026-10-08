@@ -15,6 +15,6 @@ The agent skills (`npx --yes skills add telegraphic-dev/a2a-over-webhook`) docum
 - **Pairing (OAuth 2.0 device flow, RFC 8628):** `connect <url>` (ask another inbox for a token; its owner approves), `pair set-password|list|approve|deny` (approve agents that connect to you; human approval by default)
 - **Peer tokens:** `token issue|list|revoke|rotate` (manual fallback; `list` also shows tokens created by pairing)
 - **Outbound:** `peers add|list|rm`, `send`, `poll`, `outbound`
-- **Config:** `~/.config/a2a-over-webhook/config.env` (chmod 600; override the directory with `A2A_CONFIG_DIR`). Environment variables override file values.
+- **Config:** `~/.config/a2a-over-webhook/config.env` (chmod 600; override the directory with `A2A_CONFIG_DIR`). Environment variables override file values; a peer token (`PEER_<ALIAS>_TOKEN`) that differs between the two prints a warning on stderr.
 
 See the repository README and the skills in `skills/` for full documentation. License: MIT.

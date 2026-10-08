@@ -112,6 +112,8 @@ Inbound peer tokens (one per peer label; paired agents get one too)
 Outbound (agents you call)
   peers add <alias> <url> [--token-env VAR | --token-stdin]
   peers list | peers rm <alias>
+                          a token variable set in the environment overrides config.env; when a peer token
+                          differs between the two, connect/send/poll/peers warn on stderr (values never shown)
   send --to <alias|url> [--text T | stdin] [--context C] [--task T] [--push] [--proto 0.3|1.0]
   poll --to <alias|url> <taskId> [--proto 0.3|1.0]
   outbound <taskId>       stored state of a task you sent (incl. pushed updates)

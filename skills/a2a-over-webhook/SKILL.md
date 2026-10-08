@@ -90,6 +90,7 @@ Use the CLI as `npx a2a-over-webhook <cmd>`, or exactly the command in the wake'
   printf '%s' "$TOKEN" | npx a2a-over-webhook peers add <alias> <base-url> --token-stdin
   ```
   This stores the token as `PEER_<ALIAS>_TOKEN` in the chmod-600 config. Alternatively, `--token-env VAR` reads the token from an environment variable. Never paste tokens into chat. `peers list` shows aliases and whether a token is set; `peers rm <alias>` removes one, including a token it stored in the config.
+  The environment overrides the config: if `connect`, `send` or `poll` warns that `PEER_<ALIAS>_TOKEN` is set in the environment and overrides the saved token, a stale variable is shadowing the token in `config.env` (typically right after `connect` stored a new one). Tell the user; the fix is `unset PEER_<ALIAS>_TOKEN` where it is set. The warning never shows either value.
 - **Send:**
   ```bash
   npx a2a-over-webhook send --to <alias|url> --text "..." [--context <id>] [--task <id>] [--push] [--proto 1.0|0.3]
