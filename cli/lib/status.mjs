@@ -45,6 +45,8 @@ export function nextStep(s) {
 			: `the owner API failed (${s.ownerApi.error}): run \`${CLI} deploy\``);
 	const t = s.tunnel;
 	if (t && !t.complete) return fail(`a previous \`tunnel create\` did not finish: run \`${CLI} tunnel rm\`, then \`${CLI} tunnel create\``);
+	if (t && !t.tokenFileOk)
+		return fail(`the tunnel's connector token file (${t.tokenFile}) is missing or empty: run \`${CLI} tunnel create\` again (it downloads the token again; nothing new is created)`);
 	const agentSecret = s.wake.preset === "hermes" ? "WAKE_HMAC_SECRET" : "WAKE_WEBHOOK_KEY";
 	const needsAgentSecret = LOCAL_PRESETS.includes(s.wake.preset) && !s.wake.hasKey && !s.wake.hasHmacSecret;
 	if (t && !(s.wake.hasAccessServiceToken && t.workerUrlMatches))
@@ -93,7 +95,7 @@ export async function collect() {
 	const host = C.get("A2A_TUNNEL_HOSTNAME");
 	if (host || C.get("A2A_TUNNEL_ID")) {
 		const url = T.wakeUrl(host || "?", C.get("A2A_TUNNEL_PATH") || "/");
-		s.tunnel = { hostname: host, wakeUrl: url, origin: C.get("A2A_TUNNEL_ORIGIN"), complete: T.tunnelComplete(),
+		s.tunnel = { hostname: host, wakeUrl: url, origin: C.get("A2A_TUNNEL_ORIGIN"), complete: T.tunnelComplete(), tokenFileOk: T.tokenFileOk(),
 			tokenFile: C.get("A2A_TUNNEL_TOKEN_FILE") || "<config dir>/tunnel-token", workerUrlMatches: s.wake?.urlFingerprint === fingerprint(url), connections: null };
 		if (haveCf && C.get("A2A_TUNNEL_ID")) {
 			try {
@@ -123,7 +125,7 @@ export async function status(o) {
 			rows.push(["owner API", s.ownerApi.ok ? "OK" : `FAILED: ${s.ownerApi.error}`]);
 			rows.push(["wake", wakeLine(s)]);
 			const t = s.tunnel;
-			rows.push(["tunnel", !t ? "none" : `${t.wakeUrl} -> ${t.origin || "?"}; ${t.complete ? "set up" : "INCOMPLETE"}` +
+			rows.push(["tunnel", !t ? "none" : `${t.wakeUrl} -> ${t.origin || "?"}; ${!t.complete ? "INCOMPLETE" : t.tokenFileOk ? "set up" : "set up, but the connector token file is MISSING"}` +
 				(t.connections != null ? `; ${t.state || "?"}, ${t.connections} connector connection(s)` : t.error ? `; state unknown (${t.error})` : "")]);
 			if (s.zones) rows.push(["zones", s.zones.length ? s.zones.join(", ") : "none on this account"]);
 		}

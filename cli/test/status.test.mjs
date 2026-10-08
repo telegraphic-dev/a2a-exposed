@@ -24,10 +24,12 @@ test("nextStep: the first missing piece, in setup order", () => {
 });
 
 test("nextStep: tunnel states", () => {
-	const t = { hostname: "wake-a.example.com", complete: true, workerUrlMatches: true, connections: 1, tokenFile: "/cfg/tunnel-token" };
+	const t = { hostname: "wake-a.example.com", complete: true, tokenFileOk: true, workerUrlMatches: true, connections: 1, tokenFile: "/cfg/tunnel-token" };
 	const wake = { preset: "hermes", configured: true, hasHmacSecret: true, hasAccessServiceToken: true, urlFingerprint: "f" };
 	const step = (tun, w = wake) => nextStep(healthy({ tunnel: { ...t, ...tun }, wake: w }));
 	assert.match(step({ complete: false }).text, /did not finish: run `a2a-over-webhook tunnel rm`, then `a2a-over-webhook tunnel create`/);
+	assert.match(step({ tokenFileOk: false }).text, /connector token file \(\/cfg\/tunnel-token\) is missing or empty: run `a2a-over-webhook tunnel create` again/);
+	assert.equal(step({ tokenFileOk: false }).ok, false);
 	assert.match(step({ workerUrlMatches: false }).text, /re-uploads them/);
 	assert.match(step({ workerUrlMatches: false }, { ...wake, hasHmacSecret: false }).text, /export WAKE_HMAC_SECRET and run `a2a-over-webhook tunnel create` again/);
 	assert.match(step({}, { ...wake, hasAccessServiceToken: false }).text, /re-uploads them/);

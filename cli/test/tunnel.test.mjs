@@ -405,6 +405,18 @@ test("tunnel create after an interruption: partial ids -> tunnel rm first; compl
 	r = await s.cli(["tunnel", "create"]);
 	assert.equal(r.status, 0, r.stderr);
 	assert.ok(!s.calls().slice(k).some((c) => /secrets bulk/.test(c.cmd)), "nothing to upload: no call");
+	// the connector token file was deleted (or its write interrupted): downloaded again, nothing created
+	const tokFile = path.join(s.cfg, "tunnel-token");
+	fs.rmSync(tokFile);
+	const q = s.calls().length;
+	r = await s.cli(["tunnel", "create"]);
+	assert.equal(r.status, 0, r.stderr);
+	assert.match(r.stderr, /connector token file .*tunnel-token is missing or empty: downloading the tunnel token again/);
+	assert.ok(s.calls().slice(q).some((c) => c.cmd.startsWith("tunnels token get tun1")));
+	assert.ok(!s.calls().slice(q).some((c) => / create/.test(c.cmd)));
+	assert.equal(fs.readFileSync(tokFile, "utf8"), "eyJstubtoken\n");
+	assert.equal(fs.statSync(tokFile).mode & 0o777, 0o600);
+	assert.ok(!(r.stdout + r.stderr).includes("eyJstubtoken"));
 	const other = await s.cli(["tunnel", "create", "--tunnel-hostname", "wake-other.example.com"]);
 	assert.equal(other.status, 1);
 	assert.match(other.stderr, /already exists on wake-test\.example\.com/);
@@ -462,6 +474,12 @@ test("status follows a tunnel through: no connector -> start cloudflared; connec
 	assert.match(r.stdout, /^agent card: +FAILED: HTTP 404/m);
 	assert.match(r.stdout, /^next step: +the agent card is not reachable/m);
 	assert.ok(!(r.stdout + r.stderr).includes("csecret") && !(r.stdout + r.stderr).includes("eyJstubtoken"));
+	s.setCardStatus(200);
+	fs.writeFileSync(path.join(s.cfg, "tunnel-token"), "");
+	r = await s.cli(["status"], { STUB_CONNS: "1" });
+	assert.equal(r.status, 1);
+	assert.match(r.stdout, /; set up, but the connector token file is MISSING;/);
+	assert.match(r.stdout, /^next step: +the tunnel's connector token file \(.*tunnel-token\) is missing or empty: run `a2a-over-webhook tunnel create` again \(it downloads the token again; nothing new is created\)/m);
 
 	const partial = await tunnelEnv(t);
 	partial.setConfig({ A2A_TUNNEL_HOSTNAME: "wake-p.example.com", A2A_TUNNEL_ID: "tun1" });

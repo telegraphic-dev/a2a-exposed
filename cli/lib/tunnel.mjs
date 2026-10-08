@@ -281,13 +281,7 @@ export async function create(o) {
 		if (!rec.id) die("unexpected response creating the DNS record");
 		save({ A2A_TUNNEL_DNS_ID: rec.id });
 
-		const tok = cfCall(dir, ["tunnels", "token", "get", tun.id]);
-		const token = typeof tok === "string" ? tok : tok.raw || tok.token || tok.result || "";
-		if (!token) die("could not read the tunnel token");
-		const tokenFile = path.join(C.CONFIG_DIR, "tunnel-token");
-		fs.writeFileSync(tokenFile, token + "\n", { mode: 0o600 });
-		fs.chmodSync(tokenFile, 0o600);
-		save({ A2A_TUNNEL_TOKEN_FILE: tokenFile });
+		const { tokenFile, token } = fetchTokenFile(dir, tun.id);
 
 		const url = wakeUrl(hostname, wpath);
 		step("uploading Worker secrets: WAKE_WEBHOOK_URL, WAKE_ACCESS_CLIENT_ID, WAKE_ACCESS_CLIENT_SECRET" +
@@ -309,22 +303,46 @@ export async function create(o) {
 	}
 }
 
+/** Download the tunnel's connector token into <config dir>/tunnel-token (chmod 600) and save its path. */
+function fetchTokenFile(dir, tunnelId) {
+	const tok = cfCall(dir, ["tunnels", "token", "get", tunnelId]);
+	const token = typeof tok === "string" ? tok.trim() : tok.raw || tok.token || tok.result || "";
+	if (!token) die("could not read the tunnel token");
+	const tokenFile = path.join(C.CONFIG_DIR, "tunnel-token");
+	fs.writeFileSync(tokenFile, token + "\n", { mode: 0o600 });
+	fs.chmodSync(tokenFile, 0o600);
+	C.saveConfig({ A2A_TUNNEL_TOKEN_FILE: tokenFile });
+	return { tokenFile, token };
+}
+
+/** The saved connector token file exists and is not empty (`cloudflared --token-file` needs it). */
+export function tokenFileOk() {
+	const f = C.get("A2A_TUNNEL_TOKEN_FILE");
+	try { return !!f && fs.statSync(f).isFile() && fs.readFileSync(f, "utf8").trim().length > 0; } catch { return false; }
+}
+
 /** Ids a `tunnel create` saves once each Cloudflare object exists. */
 const tunnelStarted = () => ["A2A_TUNNEL_ID", "A2A_TUNNEL_ACCESS_APP_ID", "A2A_TUNNEL_ACCESS_TOKEN_ID", "A2A_TUNNEL_DNS_ID"].some((k) => C.get(k));
-/** Every object and the local token file exist (the Worker secrets are checked separately). */
+/** Every object's id and the token file path are saved (the token file itself: tokenFileOk; the Worker secrets are
+ *  checked separately). */
 export const tunnelComplete = () =>
 	["A2A_TUNNEL_HOSTNAME", "A2A_TUNNEL_ID", "A2A_TUNNEL_DNS_ID", "A2A_TUNNEL_ACCESS_APP_ID", "A2A_TUNNEL_ACCESS_TOKEN_ID",
 		"A2A_TUNNEL_ACCESS_CLIENT_ID", "A2A_TUNNEL_ACCESS_CLIENT_SECRET", "A2A_TUNNEL_TOKEN_FILE"].every((k) => C.get(k));
 
 /** `tunnel create` again on an existing tunnel: safe to re-run. A complete tunnel creates nothing; its Worker secrets
  *  are re-uploaded if the Worker lacks them (e.g. the first run was interrupted), together with WAKE_WEBHOOK_KEY /
- *  WAKE_HMAC_SECRET when exported (as on a first run). A partial tunnel must be removed first. */
+ *  WAKE_HMAC_SECRET when exported (as on a first run); a missing connector token file is downloaded again. A partial
+ *  tunnel must be removed first. */
 async function resume(dir, o) {
 	if (!tunnelComplete())
 		die("a previous `tunnel create` did not finish (some ids are saved, see `a2a-over-webhook status`); run `a2a-over-webhook tunnel rm`, then `a2a-over-webhook tunnel create` again");
 	const host = C.get("A2A_TUNNEL_HOSTNAME");
 	if (o["tunnel-hostname"] && o["tunnel-hostname"].toLowerCase() !== host)
 		die(`a tunnel already exists on ${host}; to use another hostname run \`a2a-over-webhook tunnel rm\` first`);
+	if (!tokenFileOk()) {
+		step(`the connector token file ${C.get("A2A_TUNNEL_TOKEN_FILE")} is missing or empty: downloading the tunnel token again`);
+		fetchTokenFile(dir, C.get("A2A_TUNNEL_ID"));
+	}
 	const url = wakeUrl(host, C.get("A2A_TUNNEL_PATH") || "/");
 	let p = null;
 	try { p = await owner("GET", "/owner/wake/preview"); } catch (e) { console.error(`warning: Worker not reachable (${e.message}); cannot check its wake secrets`); }
