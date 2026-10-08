@@ -175,6 +175,16 @@ npx a2a-over-webhook status     # agent card: OK: "<agent name>" (A2A 1.0, 0.3),
 
 The card name should match `--agent-name`, and the versions should list 1.0 first, then 0.3. `status` fetches the card itself, so no `curl` is needed. A new workers.dev subdomain or custom domain can take a few minutes; if the card check fails, run `status` again.
 
+### Adopting an existing deployment (same Worker, D1 and hostname)
+
+There is no `adopt` command yet. To move a Worker that runs an earlier build of this code (same D1 schema, e.g. the s2a2a prototype) onto the CLI without losing data, peers or wake secrets:
+
+1. Back up the D1 database first (for example, export every table with `npx cf d1 query <db-id> --sql ...`, and note the time-travel bookmark from `npx cf d1 time-travel get-bookmark <db-id>`).
+2. Write `config.env` yourself (chmod 600) with `CLOUDFLARE_ACCOUNT_ID`, `A2A_WORKER_NAME`, `A2A_D1_NAME`, `A2A_D1_ID`, `A2A_HOSTNAME`, `A2A_BASE_URL`, the **existing** owner token as `A2A_OWNER_TOKEN`, and the agent-card settings (`A2A_AGENT_NAME`, `A2A_AGENT_DESCRIPTION`, `A2A_AGENT_SKILLS`, ...). With `A2A_D1_ID` and `A2A_HOSTNAME` already saved, the hostname is not treated as a move.
+3. Run `npx a2a-over-webhook deploy --preset <preset>` with **no** `WAKE_*` variables exported. `deploy` (unlike `init`) uploads no secrets file when none are exported, so `OWNER_TOKEN` and the wake secrets already on the Worker are kept.
+4. Peer tokens live in D1 as SHA-256 hashes, and lookups are by hash, so existing tokens (including the older `s2a_` prefix) keep working; nothing needs reissuing.
+5. Migrations are tracked by file name. An older `0001_init.sql` already recorded in `d1_migrations` is not re-run; `0002_wake_budget.sql` adds the one table the earlier schema lacked.
+
 ## 3. Owner token
 
 - `init` stores it in `config.env`. Keep that file private.

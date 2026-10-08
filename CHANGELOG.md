@@ -4,6 +4,11 @@ All notable changes to the `a2a-over-webhook` CLI, Worker template, and skills. 
 
 ## Unreleased
 
+- **Worker:** migration `0002_wake_budget.sql` creates the `wake_budget` table on D1 databases whose `0001_init.sql` came from an earlier build (D1 tracks migrations by file name, so the current `0001` never ran there). Idempotent on new databases.
+- **Docs:** setup skill section on adopting an existing deployment (same Worker, D1 and hostname) without reissuing tokens or re-uploading secrets.
+
+## 0.2.0
+
 - **Tunnel on a workers.dev inbox:** `tunnel create` (and `init --workers-dev --tunnel`) no longer needs a custom inbox hostname. The wake hostname goes on any zone of the account: the inbox hostname's zone, otherwise the account's only zone (it says which it picked). With several zones it stops and lists them; choose with the new `--tunnel-zone <zone>` (or `--tunnel-hostname`). With no zone it says plainly that polling is the option. Zones are listed for the deployment's account only.
 - **`status` command:** a read-only summary of the deployment and base URL, an agent-card check done by the CLI (no `curl`), the wake mode (webhook, tunnel, or none, which means polling), the tunnel state and connector connections, and a `next step:` line. Exit code 1 when something is broken. `init` and the card warning now point to it.
 - **Safe re-runs:** `tunnel create` on an existing tunnel creates nothing. It re-uploads Worker secrets if they're missing, together with an exported `WAKE_WEBHOOK_KEY` / `WAKE_HMAC_SECRET`, and warns if the Worker would still have no webhook auth. A missing connector token file is downloaded again. When an earlier run stopped halfway, it asks for `tunnel rm`. `status` flags a local preset (Hermes, OpenClaw) whose Worker sends no webhook auth. If `init --tunnel` fails at the tunnel step, it says the inbox is deployed and how to continue.
