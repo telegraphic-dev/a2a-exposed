@@ -80,7 +80,7 @@ test("facadeCard: public URLs only, façade security, upstream name/skills/capab
 	assert.equal(card.skills[0].id, "chat");
 	assert.equal(card.skills[0].description, `Talks. Runs on ${F.REMOVED_HOST}`);
 	assert.equal(card.skills[0].examples[0], `Open ${F.REMOVED_URL} please`);
-	assert.deepEqual(card.capabilities, { streaming: false, pushNotifications: true, extendedAgentCard: false,
+	assert.deepEqual(card.capabilities, { streaming: false, pushNotifications: false, extendedAgentCard: false,
 		extensions: [{ uri: "https://a2a.example.org/ext/v1", description: `see ${F.REMOVED_URL}` }] });
 	assert.equal(card.documentationUrl, undefined);
 	assert.equal(card.provider, undefined);
@@ -279,20 +279,38 @@ test("proxy mode: peers sharing the upstream identity can't touch each other's t
 	assert.equal((await s.rpc(a, "GetExtendedAgentCard", {})).data.error?.code, -32601);
 });
 
-test("proxy mode: push URLs into private networks are refused (no SSRF through the upstream)", async (t) => {
+test("proxy mode: push configs never reach the upstream (it would call them from inside the private network)", async (t) => {
 	const s = setup({ UPSTREAM_URL: UPSTREAM, UPSTREAM_CARD_URL: "https://agent-upstream.example.net/card-d.json" });
 	t.after(s.restore);
 	const a = await s.issue("alice");
-	for (const url of ["http://hooks.example.org/x", "https://100.100.1.1/admin", "https://nas.tail1234.ts.net/", "https://localhost/x", "https://192.168.1.1/"]) {
-		const r = await s.rpc(a, "SendMessage", { message: { role: "ROLE_USER", parts: [{ text: "x" }] }, configuration: { taskPushNotificationConfig: { url } } });
-		assert.equal(r.data.error?.code, -32602, url);
+	const card = (await s.call("GET", "/.well-known/agent-card.json")).data;
+	assert.equal(card.capabilities.pushNotifications, false, "even though the upstream card says true");
+	const msg = { role: "ROLE_USER", parts: [{ text: "x" }] };
+	const n0 = s.calls.filter((c) => c.url === UPSTREAM).length;
+	// public-looking names can resolve to private space on the upstream's network (127.0.0.1.nip.io), so every push URL is refused
+	for (const url of ["https://127.0.0.1.nip.io/x", "https://hooks.example.org/a2a", "http://hooks.example.org/x", "https://192.168.1.1/"]) {
+		for (const configuration of [{ taskPushNotificationConfig: { url } }, { pushNotificationConfig: { url } }, { taskPushNotificationConfig: { pushNotificationConfig: { url } } }]) {
+			const r = await s.rpc(a, "SendMessage", { message: msg, configuration });
+			assert.equal(r.data.error?.code, -32003, `${url} ${JSON.stringify(configuration)}`);
+		}
 	}
-	const ok = await s.rpc(a, "SendMessage", { message: { role: "ROLE_USER", parts: [{ text: "x" }] }, configuration: { taskPushNotificationConfig: { url: "https://hooks.example.org/a2a" } } });
+	const ok = await s.rpc(a, "SendMessage", { message: msg, configuration: { acceptedOutputModes: ["text/plain"] } });
 	const taskId = ok.data.result.task.id;
-	const set = await s.rpc(a, "CreateTaskPushNotificationConfig", { taskId, url: "https://10.1.2.3/x" });
-	assert.equal(set.data.error?.code, -32602);
-	const set2 = await s.rpc(a, "tasks/pushNotificationConfig/set", { taskId, pushNotificationConfig: { url: "https://hooks.example.org/b" } });
-	assert.ok(set2.data.result, JSON.stringify(set2.data));
+	const n1 = s.calls.filter((c) => c.url === UPSTREAM).length;
+	assert.equal(n1, n0 + 1, "only the push-free message went upstream");
+	for (const [method, params] of [
+		["CreateTaskPushNotificationConfig", { taskId, url: "https://hooks.example.org/b" }],
+		["tasks/pushNotificationConfig/set", { taskId, pushNotificationConfig: { url: "https://hooks.example.org/b" } }],
+		["GetTaskPushNotificationConfig", { taskId, id: "x" }], ["ListTaskPushNotificationConfig", { taskId }],
+		["DeleteTaskPushNotificationConfig", { taskId, id: "x" }], ["tasks/pushNotificationConfig/get", { id: taskId }],
+	] as const) {
+		const r = await s.rpc(a, method, params);
+		assert.equal(r.data.error?.code, -32003, method);
+	}
+	assert.equal(s.calls.filter((c) => c.url === UPSTREAM).length, n1, "no push call reached the upstream");
+	assert.equal(F.wantsPush("send", { configuration: { blocking: true } }), false);
+	assert.equal(F.wantsPush("send", { configuration: { pushNotificationConfig: null } }), false);
+	assert.equal(F.wantsPush("pushget", {}), true);
 });
 
 test("proxy mode: upstream failures are the façade's errors, never a 401 to the peer", async (t) => {

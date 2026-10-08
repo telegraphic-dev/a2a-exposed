@@ -124,8 +124,8 @@ export type FacadeCardInput = {
  *    interfaces, `url`, `additionalInterfaces` and `preferredTransport` are never copied.
  *  - securitySchemes / securityRequirements: the façade's (per-peer bearer + device-flow pairing on the façade); the
  *    upstream's schemes describe the credential the façade holds, not what a caller needs.
- *  - capabilities: pushNotifications and extensions from the upstream; streaming and extendedAgentCard are false (the
- *    façade does not proxy SSE or the authenticated extended card yet).
+ *  - capabilities: extensions from the upstream; streaming, pushNotifications and extendedAgentCard are false (the
+ *    façade does not proxy SSE or the extended card yet, and refuses push configs: see wantsPush).
  *  - name, description, version, skills, default modes, provider, documentationUrl, iconUrl: operator config first,
  *    then the upstream card, then defaults. Every string is scrubbed: private / upstream URLs become
  *    "[private URL removed]", bare upstream and *.ts.net host names "[private host removed]"; documentationUrl,
@@ -148,7 +148,7 @@ export function facadeCard(i: FacadeCardInput): Json {
 		securityRequirements: i.securityRequirements,
 		capabilities: {
 			streaming: false,
-			pushNotifications: i.upstream ? !!up.capabilities?.pushNotifications : true,
+			pushNotifications: false,
 			extendedAgentCard: false,
 			...(Array.isArray(up.capabilities?.extensions) && up.capabilities.extensions.length ? { extensions: scrubDeep(up.capabilities.extensions, o) } : {}),
 		},
@@ -225,12 +225,12 @@ export function taskIdOf(op: string, p: Json): unknown {
 	return p.taskId ?? fromName(p.parent) ?? fromName(p.name) ?? p.id;
 }
 
-/** Push notification config URLs in a request (SendMessage configuration or a push-config call); a value that is
- *  present but not a string is returned as-is so the caller rejects it. */
-export function pushUrlsOf(op: string, p: Json): unknown[] {
-	if (!p || typeof p !== "object") return [];
-	const out: unknown[] = [];
-	if (op === "send") { const c = p.configuration || {}; const x = c.taskPushNotificationConfig || c.pushNotificationConfig; if (x) out.push(x.url ?? x.pushNotificationConfig?.url); }
-	if (op === "pushset") out.push(p.pushNotificationConfig?.url, p.config?.url, p.config?.pushNotificationConfig?.url, p.url);
-	return out.filter((u) => u !== undefined && u !== null);
+/** The request asks the upstream for push notifications: a push config call, or SendMessage with a push config in
+ *  its configuration (1.0 taskPushNotificationConfig, 0.3 pushNotificationConfig, any spelling). Proxy mode refuses
+ *  these: the upstream would call the URL from inside the private network, where a public-looking name can resolve to a
+ *  private address (127.0.0.1.nip.io, split-horizon DNS), so no check at the façade can make that safe. */
+export function wantsPush(op: string, p: Json): boolean {
+	if (op.startsWith("push")) return true;
+	if (op !== "send" || !p || typeof p !== "object" || !p.configuration || typeof p.configuration !== "object") return false;
+	return Object.entries(p.configuration).some(([k, v]) => /push/i.test(k) && v !== undefined && v !== null);
 }

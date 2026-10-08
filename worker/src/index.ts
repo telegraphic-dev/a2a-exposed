@@ -610,20 +610,14 @@ async function ownerOf(env: Env, kind: "task" | "context", id: string): Promise<
  *  - Isolation between peers that share that one upstream identity: the façade records which peer created each task
  *    and context (facade_owners) and refuses calls on another peer's task or context before they reach the upstream.
  *    ListTasks would list every peer's tasks and is refused.
- *  - Push notification URLs must be public https (the upstream sits on a private network: no SSRF into it).
+ *  - Push notification configs are refused (-32003): the upstream sits on a private network and would resolve and call
+ *    the peer's URL from there (SSRF), whatever the URL looks like from the façade.
  *  - An upstream 401/403 is reported as a façade problem (502), so a peer never mistakes it for its own bad token. */
 async function proxyRpc(req: Request, env: Env, c: { raw: string; rid: Json; method: string; op: string; version: string; params: Json; label: string; ip: string }): Promise<Response> {
 	const err = (code: number, message: string, status = 200) => json({ jsonrpc: "2.0", id: c.rid, error: { code, message } }, status);
 	const [ep, why] = F.upstreamEndpoint(env.UPSTREAM_URL);
 	if (!ep) { log("upstream_misconfigured", { why }); return err(-32603, "This agent's façade is misconfigured (upstream endpoint); tell its operator", 503); }
 	if (c.op === "list") return err(-32004, "ListTasks is not supported through this façade (it would list other callers' tasks); use GetTask with the ids you received");
-	for (const u of F.pushUrlsOf(c.op, c.params)) {
-		if (typeof u !== "string") return err(-32602, "push notification config url must be a string");
-		const [ok, bad] = A.pushUrlAllowed(u);
-		let priv = false;
-		try { priv = A.isPrivateHost(new URL(u).hostname); } catch { /* pushUrlAllowed already said bad url */ }
-		if (!ok || priv) return err(-32602, `push url rejected: ${!ok ? bad : "private host not allowed"}`);
-	}
 	if (c.op === "send") {
 		const m = c.params.message;
 		if (!m || typeof m !== "object") return err(-32602, "Invalid params: message must be an object");
@@ -648,6 +642,9 @@ async function proxyRpc(req: Request, env: Env, c: { raw: string; rid: Json; met
 		const tid = F.taskIdOf(c.op, c.params);
 		if (typeof tid !== "string" || (await ownerOf(env, "task", tid)) !== c.label) return err(-32001, "Task not found");
 	}
+	// fail closed on push (after the ownership checks, so another peer's task is still just "not found"): the upstream would call a peer's URL from inside the private network (DNS there can map a
+	// public-looking name to a private address), so push configs never reach it. Follow-up: a relay through the Worker.
+	if (F.wantsPush(c.op, c.params)) return err(-32003, "Push notifications are not supported through this façade; poll GetTask with the task id instead");
 	const headers = upstreamHeaders(env, { "content-type": "application/json", accept: "application/json", "x-a2a-peer": c.label });
 	const hv = req.headers.get("a2a-version");
 	if (hv) headers["a2a-version"] = hv;
