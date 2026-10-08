@@ -309,8 +309,9 @@ export const tunnelComplete = () =>
 	["A2A_TUNNEL_HOSTNAME", "A2A_TUNNEL_ID", "A2A_TUNNEL_DNS_ID", "A2A_TUNNEL_ACCESS_APP_ID", "A2A_TUNNEL_ACCESS_TOKEN_ID",
 		"A2A_TUNNEL_ACCESS_CLIENT_ID", "A2A_TUNNEL_ACCESS_CLIENT_SECRET", "A2A_TUNNEL_TOKEN_FILE"].every((k) => C.get(k));
 
-/** `tunnel create` again on an existing tunnel: safe to re-run. A complete tunnel only gets its Worker secrets
- *  re-uploaded if the Worker lacks them (e.g. the first run was interrupted); a partial one must be removed first. */
+/** `tunnel create` again on an existing tunnel: safe to re-run. A complete tunnel creates nothing; its Worker secrets
+ *  are re-uploaded if the Worker lacks them (e.g. the first run was interrupted), together with WAKE_WEBHOOK_KEY /
+ *  WAKE_HMAC_SECRET when exported (as on a first run). A partial tunnel must be removed first. */
 async function resume(dir, o) {
 	if (!tunnelComplete())
 		die("a previous `tunnel create` did not finish (some ids are saved, see `a2a-over-webhook status`); run `a2a-over-webhook tunnel rm`, then `a2a-over-webhook tunnel create` again");
@@ -320,10 +321,17 @@ async function resume(dir, o) {
 	const url = wakeUrl(host, C.get("A2A_TUNNEL_PATH") || "/");
 	let p = null;
 	try { p = await owner("GET", "/owner/wake/preview"); } catch (e) { console.error(`warning: Worker not reachable (${e.message}); cannot check its wake secrets`); }
-	if (p && (!p.hasAccessServiceToken || p.fingerprints?.url !== fingerprint(url))) {
-		step("the Worker lacks the tunnel's wake secrets: uploading WAKE_WEBHOOK_URL, WAKE_ACCESS_CLIENT_ID, WAKE_ACCESS_CLIENT_SECRET");
-		await putSecrets(dir, D.workerName(), { WAKE_WEBHOOK_URL: url, WAKE_ACCESS_CLIENT_ID: C.get("A2A_TUNNEL_ACCESS_CLIENT_ID"), WAKE_ACCESS_CLIENT_SECRET: C.get("A2A_TUNNEL_ACCESS_CLIENT_SECRET") });
+	const agentAuth = {};
+	for (const k of ["WAKE_WEBHOOK_KEY", "WAKE_HMAC_SECRET"]) if (process.env[k]) agentAuth[k] = process.env[k];
+	const lacksTunnel = p && (!p.hasAccessServiceToken || p.fingerprints?.url !== fingerprint(url));
+	if (lacksTunnel || Object.keys(agentAuth).length) {
+		const secrets = { WAKE_WEBHOOK_URL: url, WAKE_ACCESS_CLIENT_ID: C.get("A2A_TUNNEL_ACCESS_CLIENT_ID"), WAKE_ACCESS_CLIENT_SECRET: C.get("A2A_TUNNEL_ACCESS_CLIENT_SECRET"), ...agentAuth };
+		step(`${lacksTunnel ? "the Worker lacks the tunnel's wake secrets: " : ""}uploading Worker secrets: ${Object.keys(secrets).join(", ")}`);
+		await putSecrets(dir, D.workerName(), secrets);
 	}
+	const preset = C.get("WAKE_PRESET", "generic");
+	if (p && !p.hasKey && !p.hasHmacSecret && !Object.keys(agentAuth).length && preset !== "generic")
+		console.error(`warning: the Worker has no WAKE_WEBHOOK_KEY / WAKE_HMAC_SECRET, so the ${preset} webhook will reject wakes; export it and run \`a2a-over-webhook tunnel create\` again`);
 	console.log(url);
 	console.error(`tunnel already set up: wakes go to ${url} -> ${C.get("A2A_TUNNEL_ORIGIN")}${C.get("A2A_TUNNEL_PATH")} (nothing new created; to change it: tunnel rm, then tunnel create)`);
 	console.error(connectorInstructions(C.get("A2A_TUNNEL_TOKEN_FILE")));

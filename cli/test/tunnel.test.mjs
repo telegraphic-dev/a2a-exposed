@@ -357,7 +357,7 @@ test("tunnel create after an interruption: partial ids -> tunnel rm first; compl
 
 	const s = await tunnelEnv(t);
 	assert.equal((await s.cli(["tunnel", "create", "--tunnel-hostname", "wake-test.example.com"])).status, 0);
-	s.setPreview({ hasAccessServiceToken: false }); // e.g. interrupted before the secrets upload
+	s.setPreview({ hasAccessServiceToken: false, hasKey: false }); // e.g. interrupted before the secrets upload
 	const before = s.calls().length;
 	r = await s.cli(["tunnel", "create"]);
 	assert.equal(r.status, 0, r.stderr);
@@ -367,6 +367,27 @@ test("tunnel create after an interruption: partial ids -> tunnel rm first; compl
 	assert.deepEqual(Object.keys(bulk.file.secrets).sort(), ["WAKE_ACCESS_CLIENT_ID", "WAKE_ACCESS_CLIENT_SECRET", "WAKE_WEBHOOK_URL"]);
 	assert.equal(bulk.file.secrets.WAKE_WEBHOOK_URL.text, "https://wake-test.example.com/hooks/wake");
 	assert.ok(!(r.stdout + r.stderr).includes("csecret"));
+	// the agent-side auth travels with it, as on a first run; without it on the Worker, a warning
+	assert.match(r.stderr, /Worker has no WAKE_WEBHOOK_KEY \/ WAKE_HMAC_SECRET, so the openclaw-wake webhook will reject wakes/);
+	s.setPreview({ hasAccessServiceToken: false, hasKey: false });
+	const n = s.calls().length;
+	r = await s.cli(["tunnel", "create"], { WAKE_WEBHOOK_KEY: "hooks-token" });
+	assert.equal(r.status, 0, r.stderr);
+	const bulk2 = s.calls().slice(n).find((c) => c.cmd.startsWith("workers secrets bulk"));
+	assert.equal(bulk2.file.secrets.WAKE_WEBHOOK_KEY.text, "hooks-token");
+	assert.ok(bulk2.file.secrets.WAKE_ACCESS_CLIENT_SECRET && bulk2.file.secrets.WAKE_WEBHOOK_URL);
+	assert.ok(!/will reject wakes/.test(r.stderr) && !r.stderr.includes("hooks-token"));
+	// complete and in place: an exported key alone is uploaded too (rotating it)
+	s.setPreview({});
+	s.setWorkerUrl("https://wake-test.example.com/hooks/wake");
+	const m = s.calls().length;
+	r = await s.cli(["tunnel", "create"], { WAKE_HMAC_SECRET: "new-hmac" });
+	assert.equal(r.status, 0, r.stderr);
+	assert.equal(s.calls().slice(m).find((c) => c.cmd.startsWith("workers secrets bulk")).file.secrets.WAKE_HMAC_SECRET.text, "new-hmac");
+	const k = s.calls().length;
+	r = await s.cli(["tunnel", "create"]);
+	assert.equal(r.status, 0, r.stderr);
+	assert.ok(!s.calls().slice(k).some((c) => /secrets bulk/.test(c.cmd)), "nothing to upload: no call");
 	const other = await s.cli(["tunnel", "create", "--tunnel-hostname", "wake-other.example.com"]);
 	assert.equal(other.status, 1);
 	assert.match(other.stderr, /already exists on wake-test\.example\.com/);

@@ -29,11 +29,17 @@ test("nextStep: tunnel states", () => {
 	const step = (tun, w = wake) => nextStep(healthy({ tunnel: { ...t, ...tun }, wake: w }));
 	assert.match(step({ complete: false }).text, /did not finish: run `a2a-over-webhook tunnel rm`, then `a2a-over-webhook tunnel create`/);
 	assert.match(step({ workerUrlMatches: false }).text, /re-uploads them/);
+	assert.match(step({ workerUrlMatches: false }, { ...wake, hasHmacSecret: false }).text, /export WAKE_HMAC_SECRET and run `a2a-over-webhook tunnel create` again/);
 	assert.match(step({}, { ...wake, hasAccessServiceToken: false }).text, /re-uploads them/);
 	assert.equal(step({ connections: 0 }).ok, false);
 	assert.match(step({ connections: 0 }).text, /cloudflared tunnel run --token-file \/cfg\/tunnel-token.*7844/);
 	assert.match(step({ connections: null }).text, /setup is complete/, "unknown connector state is not an error");
 	assert.match(step({}).text, /setup is complete/);
+	// a local preset needs its own webhook auth next to the Access token
+	assert.match(step({}, { ...wake, hasHmacSecret: false }).text, /sends no webhook auth, so the hermes webhook will reject wakes: export WAKE_HMAC_SECRET.*`a2a-over-webhook tunnel create`/);
+	const oc = nextStep(healthy({ wake: { preset: "openclaw-wake", configured: true, hasKey: false } }));
+	assert.equal(oc.ok, false);
+	assert.match(oc.text, /export WAKE_WEBHOOK_KEY \(the hooks token\), then run `a2a-over-webhook wake set`/);
 });
 
 test("nextStep: no wake webhook means polling, with the tunnel offered when the account has a zone", () => {
