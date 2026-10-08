@@ -1,13 +1,46 @@
 ---
 name: a2a-over-webhook
 description: Use when woken by an a2a-over-webhook wake (an A2A inbox webhook or a scheduled inbox check), when asked to message another agent over A2A (Agent2Agent protocol), or to manage which peers may reach this agent (issue, list, revoke, rotate tokens).
+version: 0.1.0
+author: Telegraphic Developer
+license: MIT
+homepage: https://github.com/telegraphic-dev/a2a-over-webhook
+metadata:
+  hermes:
+    tags: [a2a, agent2agent, inbox, webhook, peers, messaging]
+    related_skills: [a2a-over-webhook-setup]
+  openclaw:
+    emoji: "📬"
+    requires:
+      bins: ["node"]
+    envVars:
+      A2A_CONFIG_DIR:
+        description: Override the config directory (default ~/.config/a2a-over-webhook). Use one per bot on a shared machine.
+        required: false
+      A2A_BASE_URL:
+        description: Public base URL of the deployed Worker (saved by init/deploy).
+        required: false
+      A2A_OWNER_TOKEN:
+        description: Owner API token for inbox/reply/token commands (saved by init).
+        required: false
+        sensitive: true
 ---
+
 
 # a2a-over-webhook: inbox, replies, outbound
 
 This agent has a public A2A endpoint: a Cloudflare Worker on the user's hostname. Peers call `SendMessage` (A2A 1.0) or `message/send` (0.3) with a per-peer bearer token. Each message becomes a task in state `submitted` in the Worker's inbox, and the Worker wakes this agent through a webhook, or this agent checks the inbox on a schedule.
 
-Use the CLI as `npx a2a-over-webhook <cmd>`, or exactly the command in the wake's `hint` (deployments made before the CLI is on npm set `--cli-command`, e.g. `node <checkout>/cli/bin/a2a-over-webhook.mjs`). It reads `A2A_BASE_URL` and `A2A_OWNER_TOKEN` from the environment or from `~/.config/a2a-over-webhook/config.env` (another directory if `A2A_CONFIG_DIR` is set, e.g. one per bot on a shared machine). If neither exists, the endpoint isn't deployed yet: use the **a2a-over-webhook-setup** skill.
+Installing this skill gives the agent the workflow documentation. It does **not** install the CLI. Install or verify it first (Node 22.18+):
+
+```bash
+command -v a2a-over-webhook || npm i -g a2a-over-webhook
+a2a-over-webhook --help
+```
+
+For one-off use without a global install: `npx -y a2a-over-webhook@latest <command>`. The docs write commands as `npx a2a-over-webhook <command>`; with a global install, `a2a-over-webhook <command>` is the same thing without the npm round-trip. Config lives in `~/.config/a2a-over-webhook/config.env` (chmod 600). Environment variables always override the file. Development from a checkout: `node <checkout>/cli/bin/a2a-over-webhook.mjs <command>`, and pass the same path as `--cli-command` on `init` if the wake hint should use it (default wake hint is `npx a2a-over-webhook`).
+
+Use the CLI as `npx a2a-over-webhook <cmd>`, or exactly the command in the wake's `hint`. It reads `A2A_BASE_URL` and `A2A_OWNER_TOKEN` from the environment or from `~/.config/a2a-over-webhook/config.env` (another directory if `A2A_CONFIG_DIR` is set, e.g. one per bot on a shared machine). If neither exists, the endpoint isn't deployed yet: use the **a2a-over-webhook-setup** skill.
 
 ## On a wake or a scheduled check
 

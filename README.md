@@ -2,6 +2,17 @@ Give any AI agent a public A2A (Agent2Agent) endpoint. Messages land in a Cloudf
 
 # a2a-over-webhook
 
+[![npm](https://img.shields.io/npm/v/a2a-over-webhook)](https://www.npmjs.com/package/a2a-over-webhook) [![CI](https://github.com/telegraphic-dev/a2a-over-webhook/actions/workflows/ci.yml/badge.svg)](https://github.com/telegraphic-dev/a2a-over-webhook/actions/workflows/ci.yml)
+
+Installing the skills gives your agent the instructions; it does **not** install the CLI. Install or verify it first (Node 22.18+):
+
+```bash
+command -v a2a-over-webhook || npm i -g a2a-over-webhook
+a2a-over-webhook --help
+```
+
+For one-off use without a global install: `npx -y a2a-over-webhook@latest <command>`. The docs write commands as `npx a2a-over-webhook <command>`; with a global install, `a2a-over-webhook <command>` is the same thing without the npm round-trip.
+
 ## Why
 
 Most AI agents (hosted assistants, coding agents, routines, chat bots) can make outbound HTTP calls but **cannot run a public server**. Without one they can't be reached over [A2A](https://a2a-protocol.org): there is nowhere to host an agent card or receive `SendMessage`.
@@ -39,11 +50,13 @@ flowchart LR
 **Requires Node 22.18+** (`node -v`): both the skills CLI below and Cloudflare's `cf` CLI fail on Node 20.
 
 ```bash
-# 1. Install the skills into your agent (run in the project the agent works in; -g for user-level)
-npx skills add telegraphic-dev/a2a-over-webhook
+# 1. Install the skills into your agent (see "Install the skills" below for other agents)
+npx --yes skills add telegraphic-dev/a2a-over-webhook
 
-# 2. Ask your agent: "set up a2a-over-webhook". The setup skill walks it through
-#    (CLI not on npm yet: see "Running the CLI before it is on npm" below):
+# 2. Install the CLI
+command -v a2a-over-webhook || npm i -g a2a-over-webhook
+
+# 3. Ask your agent: "set up a2a-over-webhook". The setup skill walks it through:
 npx cf auth login --no-browser   # device code: open the URL, enter the code
 # Wake secrets go in the environment, never on the command line, e.g. from a chmod-600 file
 # containing WAKE_WEBHOOK_URL=... and WAKE_WEBHOOK_KEY=...
@@ -74,19 +87,30 @@ Two skills are included:
 | [`a2a-over-webhook-setup`](skills/a2a-over-webhook-setup/SKILL.md) | One-time deploy: Cloudflare login, D1, custom domain or workers.dev, owner token, wake preset per agent, first peer, loopback test |
 | [`a2a-over-webhook`](skills/a2a-over-webhook/SKILL.md) | Day-to-day: handle wakes, read the inbox safely, reply, message other agents, manage peer tokens, troubleshoot |
 
-**Where the skills go.** `npx skills add` (the [skills CLI](https://github.com/vercel-labs/skills)) installs into the current project by default, e.g. `.claude/skills/` or `.agents/skills/`; commit them if the agent runs from that repo (Claude Code routines do). Add `-g` for a user-level install (`~/.claude/skills/`, `~/.codex/skills/`, ...). `--agent claude-code codex` picks the target agents, `--skill a2a-over-webhook` picks one skill, `-y` skips prompts, and `--list` only lists. **Grok Bot is not a skills-CLI target** (its `grok` target is Grok Build): save both `SKILL.md` files to your Grok Bot skill library, or keep a checkout on the bot's box and name the `SKILL.md` path in the routine prompt.
+## Install the skills
 
-### Running the CLI before it is on npm
+Install both skills; the setup skill is only needed until the endpoint is deployed. Each one names the other in its frontmatter (`related_skills`).
 
-The CLI isn't published to npm yet, so `npx a2a-over-webhook` doesn't resolve. Run it from a checkout and give the Worker the same command for its wake hints:
+- **Any agent, via [skills.sh](https://skills.sh)** ([skills CLI](https://github.com/vercel-labs/skills)):
+  ```bash
+  npx --yes skills add telegraphic-dev/a2a-over-webhook                       # into the current project
+  npx --yes skills add telegraphic-dev/a2a-over-webhook --global              # user-level
+  npx --yes skills add telegraphic-dev/a2a-over-webhook --global --agent claude-code --agent codex --skill a2a-over-webhook --skill a2a-over-webhook-setup
+  ```
+  The default target is the current project (`.claude/skills/`, `.agents/skills/`, ...); commit the skills if the agent runs from that repo (Claude Code routines do). `--list` only lists, `-y` skips prompts.
+- **Claude Code:** the skills.sh command with `--agent claude-code` (project `.claude/skills/`, or `--global` for `~/.claude/skills/`).
+- **OpenClaw:** `npx --yes skills add telegraphic-dev/a2a-over-webhook --agent openclaw`, or `openclaw skills install skills-sh:telegraphic-dev/a2a-over-webhook/a2a-over-webhook` and the same for `a2a-over-webhook-setup`. The frontmatter declares `node` as a required binary (`metadata.openclaw.requires.bins`), so OpenClaw hides the skills where Node is missing.
+- **Hermes Agent:** install each skill by its directory path (Hermes needs the full path in repositories with several skills):
+  ```bash
+  hermes skills install telegraphic-dev/a2a-over-webhook/skills/a2a-over-webhook
+  hermes skills install telegraphic-dev/a2a-over-webhook/skills/a2a-over-webhook-setup
+  ```
+  Or add the repo as a tap (`hermes skills tap add telegraphic-dev/a2a-over-webhook`; skills live under the default `skills/` path).
+- **Grok Bot:** not a skills-CLI target (its `grok` target is Grok Build). Save both `SKILL.md` files to your Grok Bot skill library, or keep a checkout on the bot's box and name the `SKILL.md` path in the routine prompt.
 
-```bash
-git clone https://github.com/telegraphic-dev/a2a-over-webhook ~/a2a-over-webhook
-node ~/a2a-over-webhook/cli/bin/a2a-over-webhook.mjs init --hostname agent.example.com ... \
-  --cli-command "node $HOME/a2a-over-webhook/cli/bin/a2a-over-webhook.mjs"
-```
+### Development: run from a checkout
 
-Read `npx a2a-over-webhook` in the docs as that `node .../a2a-over-webhook.mjs` command. Alternatively `npm i -g ~/a2a-over-webhook/cli` links the checkout as `a2a-over-webhook` (then use `--cli-command a2a-over-webhook`). `--cli-command` is saved as `WAKE_CLI_COMMAND` and only changes the command shown in wake hints; the woken agent must be able to run it.
+To try unreleased changes, run the CLI from a checkout (`node <checkout>/cli/bin/a2a-over-webhook.mjs <command>`, or `npm i -g <checkout>/cli` to link it as `a2a-over-webhook`). If the woken agent should use that command too, pass it to `init` as `--cli-command "node <checkout>/cli/bin/a2a-over-webhook.mjs"`: it is saved as `WAKE_CLI_COMMAND` and only changes the command shown in wake hints (default `npx a2a-over-webhook`).
 
 ## Agent compatibility
 
@@ -126,9 +150,14 @@ skills/a2a-over-webhook-setup/SKILL.md   deploy + per-agent wake configuration
 skills/a2a-over-webhook/SKILL.md         operate: inbox, replies, outbound, tokens
 worker/                                  Cloudflare Worker (TypeScript, D1, cf CLI config)
 cli/                                     npm package `a2a-over-webhook` (Node 22, zero deps)
+.github/workflows/                       ci.yml (PRs, main) and publish.yml (v* tags: npm + GitHub release)
 ```
 
-Worker development: `cd worker && npm install && npm test && npx tsc`. For local runs, use `npx cf dev` with a `.dev.vars` file holding the secrets. CLI: `node cli/bin/a2a-over-webhook.mjs --help`, tests with `cd cli && npm test`.
+Worker development: `cd worker && npm install && npm test && npx tsc`. For local runs, use `npx cf dev` with a `.dev.vars` file holding the secrets. CLI: `node cli/bin/a2a-over-webhook.mjs --help`, tests with `cd cli && npm test`. See [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md).
+
+## Releases
+
+Pushing a `v*` tag runs [`publish.yml`](.github/workflows/publish.yml): it sets the CLI version from the tag, runs the tests, publishes `a2a-over-webhook` to npm with provenance, and creates a GitHub release. Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
