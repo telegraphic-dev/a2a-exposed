@@ -1,0 +1,37 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "a2a-exposed",
+  "version": "0.4.1",
+  "description": "Give any AI agent a public A2A (Agent2Agent) endpoint: Cloudflare Worker inbox, wake webhooks, peer pairing, or a public fa\u00e7ade for a private A2A agent.",
+  "author": {
+    "name": "Telegraphic"
+  },
+  "homepage": "https://github.com/telegraphic-dev/a2a-exposed",
+  "repository": "https://github.com/telegraphic-dev/a2a-exposed",
+  "license": "MIT",
+  "keywords": [
+    "a2a",
+    "agent2agent",
+    "cloudflare",
+    "workers",
+    "webhook",
+    "pairing"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "A2A Exposed",
+        "shortDescription": "Public A2A endpoint for any AI agent (Cloudflare Worker inbox, wakes, pairing, fa\u00e7ade).",
+        "developerName": "Telegraphic",
+        "category": "Developer Tools",
+        "websiteURL": "https://github.com/telegraphic-dev/a2a-exposed",
+        "defaultPrompt": [
+          "Deploy an a2a-exposed Worker for this agent.",
+          "Handle an a2a-exposed wake or inbox check.",
+          "Connect this agent to another A2A peer."
+        ]
+      },
+      "onboardingSkill": "./skills/a2a-exposed-setup/SKILL.md"
+    }
+  }
+}
