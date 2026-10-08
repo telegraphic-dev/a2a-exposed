@@ -95,7 +95,7 @@ export function publicTask(task: Json, version: string, historyLength?: number |
 	return t;
 }
 
-/** Peer task (0.3 or 1.0) -> internal-ish shape. */
+/** Peer task (0.3 or 1.0) -> internal-ish shape (used only to read state/text; store and show the wire shape). */
 export function taskFromAny(t: Json): Json {
 	if (!t || typeof t !== "object") return t;
 	const out = { ...t };
@@ -127,7 +127,16 @@ export async function sha256(s: string): Promise<string> {
 	return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-export function randomToken(prefix = "s2a_"): string {
+/** First 12 hex chars of sha256(value), or null when unset: lets the owner compare secrets without revealing them. */
+export async function fingerprint(v: string | undefined | null): Promise<string | null> {
+	return v ? (await sha256(v)).slice(0, 12) : null;
+}
+
+/** Peer token: "a2aow_" + 43 base64url chars (32 random bytes). Only the SHA-256 hash is stored and
+ *  lookups are by hash, so tokens issued with the earlier "s2a_" prefix keep working. */
+export const PEER_TOKEN_PREFIX = "a2aow_";
+
+export function randomToken(prefix = PEER_TOKEN_PREFIX): string {
 	const b = new Uint8Array(32);
 	crypto.getRandomValues(b);
 	return prefix + btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");

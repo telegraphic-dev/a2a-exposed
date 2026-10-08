@@ -443,6 +443,7 @@ async function handlePush(req: Request, env: Env, ectx: ExecutionContext): Promi
 		log("push_rejected", { taskId });
 		return json({ error: "unauthorized" }, 401);
 	}
+	// normalised copy only for state/text; the task is stored exactly as the peer sent it (1.0 or 0.3 shape)
 	const t = "status" in inner ? A.taskFromAny(inner) : null;
 	const updates = JSON.parse(rec.updates_json || "[]");
 	updates.push({ receivedAt: A.nowIso(), payload: body });
@@ -454,7 +455,7 @@ async function handlePush(req: Request, env: Env, ectx: ExecutionContext): Promi
 	}
 	await env.DB.batch([
 		env.DB.prepare("UPDATE outbound SET updates_json = ?, task_json = COALESCE(?, task_json) WHERE task_id = ?")
-			.bind(JSON.stringify(updates.slice(-20)), t && t.id ? JSON.stringify(t) : null, taskId),
+			.bind(JSON.stringify(updates.slice(-20)), t && t.id ? JSON.stringify(inner) : null, taskId),
 		histStmt(env, rec.context_id, { dir: "in", peer: rec.peer, taskId, event: "push", state, text }),
 	]);
 	log("push_received", { peer: rec.peer, taskId, state });
@@ -584,16 +585,20 @@ async function handleOwner(req: Request, env: Env, ectx: ExecutionContext, path:
 		}
 	}
 	if (seg[0] === "wake" && seg[1] === "preview" && m === "GET") {
-		// rendered wake request for a sample event, credentials masked
+		// rendered wake request for a sample event, partially masked, plus short sha256 fingerprints of the
+		// uploaded secrets so the owner can compare them with local values without revealing them
 		const ev: WakeEvent = { contextId: "ctx-preview", taskId: "task-preview", taskIds: ["task-preview"], from: "example-peer",
 			preview: "Example message preview", kind: "test", publicUrl: env.PUBLIC_URL };
 		const req = await renderWake(wakeConfig(env), ev, { requestId: "preview" });
 		return json({ preset: preset(env), configured: !!req, debounceSeconds: debounceMs(env) / 1000, maxPerHour: maxPerHour(env),
-			hasKey: !!env.WAKE_WEBHOOK_KEY, hasHmacSecret: !!env.WAKE_HMAC_SECRET, request: req ? redact(req) : null });
+			hasKey: !!env.WAKE_WEBHOOK_KEY, hasHmacSecret: !!env.WAKE_HMAC_SECRET,
+			fingerprints: { url: await A.fingerprint(env.WAKE_WEBHOOK_URL), key: await A.fingerprint(env.WAKE_WEBHOOK_KEY),
+				hmacSecret: await A.fingerprint(env.WAKE_HMAC_SECRET) },
+			request: req ? redact(req) : null });
 	}
 	if (seg[0] === "wake" && seg[1] === "test" && m === "POST") {
 		const res = await sendWake(env, ectx, { contextId: "a2a-wake-test", taskId: "none", taskIds: [], from: "owner", preview: "", kind: "test" });
-		return json({ preset: preset(env), ...res });
+		return json({ preset: preset(env), configured: !!env.WAKE_WEBHOOK_URL, ...res });
 	}
 	if (seg[0] === "purge" && m === "POST") {
 		// delete conversation data for the given contexts (test cleanup)
