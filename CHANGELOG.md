@@ -4,8 +4,8 @@ All notable changes to the `a2a-over-webhook` CLI, Worker template, and skills. 
 
 ## Unreleased
 
-- **Worker:** migration `0002_wake_budget.sql` creates the `wake_budget` table on D1 databases whose `0001_init.sql` came from an earlier build (D1 tracks migrations by file name, so the current `0001` never ran there). Idempotent on new databases.
-- **Docs:** setup skill section on adopting an existing deployment (same Worker, D1 and hostname) without reissuing tokens or re-uploading secrets.
+- **Worker:** migration `0002_wake_budget.sql` creates the `wake_budget` table on D1 databases whose `0001_init.sql` came from an earlier build (D1 tracks migrations by file name, so the current `0001` never ran there). Without it, messages to such an inbox failed with `-32603 Internal error` and sent no wake. It does nothing on newer databases, and `deploy` applies it even where `0003_device_pairing.sql` is already recorded (cf applies every unrecorded file in numeric order). A new test replays these upgrades.
+- **Docs:** setup skill section on adopting an existing deployment (same Worker, D1 and hostname) without reissuing tokens or re-uploading secrets: `deploy` keeps the Worker's secrets and applies `0002` and `0003`, then `status` checks the result. Device-flow pairing is on after the deploy (`human` approval), or `--pairing-approval off`.
 - **Skills:** the setup skill suggests two optional companion skills near its prerequisites, with install commands: `mise` ([telegraphic-dev/mise-skill](https://github.com/telegraphic-dev/mise-skill), for Node 22.18+) and `cloudflare` ([cloudflare/skills](https://github.com/cloudflare/skills), for Workers, D1, the `cf` CLI, DNS, Tunnel and Access). The operate skill points to `cloudflare` for Cloudflare-side troubleshooting. `related_skills` lists them; the README's install section names both.
 
 ## 0.2.0

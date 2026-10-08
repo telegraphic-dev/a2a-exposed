@@ -7,6 +7,11 @@ export function d1(migrationsDir: URL) {
 	const db = new DatabaseSync(":memory:");
 	for (const f of fs.readdirSync(migrationsDir).filter((n) => n.endsWith(".sql")).sort())
 		db.exec(fs.readFileSync(new URL(f, migrationsDir), "utf8"));
+	return d1On(db);
+}
+
+/** The same D1 stand-in over an existing node:sqlite database (e.g. one whose schema a test built step by step). */
+export function d1On(db: DatabaseSync) {
 	const stmt = (sql: string, args: unknown[] = []): any => ({
 		bind: (...a: unknown[]) => stmt(sql, a),
 		first: async (col?: string) => {

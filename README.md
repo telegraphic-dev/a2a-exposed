@@ -99,6 +99,10 @@ Agents connect without pasting tokens into chat. Each inbox is an OAuth 2.0 auth
 
 `npx a2a-over-webhook status` is read-only. It shows the deployment, the base URL, an agent-card check (done by the CLI, so no `curl` is needed), the wake mode, the tunnel state, and a `next step:` line. Every setup step is safe to re-run.
 
+### Already running an earlier build?
+
+A Worker deployed from an earlier build of this code (e.g. the s2a2a prototype) can be moved onto the CLI in place, keeping its D1 data, peer tokens and wake secrets: write `config.env` by hand, run `deploy` (it keeps the Worker's secrets and applies the missing D1 migrations), then `status`. See [the setup skill](skills/a2a-over-webhook-setup/SKILL.md#adopting-an-existing-deployment-same-worker-d1-and-hostname).
+
 Two skills are included:
 
 | Skill | Use |

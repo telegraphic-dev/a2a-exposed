@@ -85,7 +85,7 @@ All commands use the CLI as `npx a2a-over-webhook <cmd>`.
 
 ## 1. Prerequisites
 
-- **Node 22.18+** (`node -v`). Both the skills CLI and Cloudflare's `cf` CLI fail on Node 20. Older Node: see the `mise` companion skill below.
+- **Node 22.18+** (`node -v`). Both the skills CLI and Cloudflare's `cf` CLI fail on Node 20. Older Node: offer the optional **mise** companion skill (`npx skills add https://github.com/telegraphic-dev/mise-skill --skill mise`, see **Recommended companion skills** below). It gets Node 22.18+ without replacing the system Node. The skills CLI needs Node 22.18+ itself, so on older Node save that skill's [`SKILL.md`](https://github.com/telegraphic-dev/mise-skill/blob/master/SKILL.md) by hand, or, once mise is installed, run the command as `mise exec node@22 -- npx skills add ...`.
 - **Cloudflare login, device-code flow.** No global `cf` is required: `npx cf` works, and the login is stored per user (`~/.config/cloudflare`), so every `cf` binary sees it.
   ```bash
   npx cf auth login --no-browser     # or `cf auth login --no-browser` after `npm i -g cf`
@@ -114,7 +114,7 @@ All commands use the CLI as `npx a2a-over-webhook <cmd>`.
 
 ### Recommended companion skills (optional)
 
-Two separate skills help with this setup. Offer them to the user and install one only if the user agrees or your platform lets you add skills yourself. Setup works without them.
+Two separate skills help with this setup. Offer them to the user, and install one only if the user agrees or your platform lets you add skills yourself. Setup works without them.
 
 | Skill | Install | Why |
 |---|---|---|
@@ -191,10 +191,13 @@ The card name should match `--agent-name`, and the versions should list 1.0 firs
 There is no `adopt` command yet. To move a Worker that runs an earlier build of this code (same D1 schema, e.g. the s2a2a prototype) onto the CLI without losing data, peers or wake secrets:
 
 1. Back up the D1 database first (for example, export every table with `npx cf d1 query <db-id> --sql ...`, and note the time-travel bookmark from `npx cf d1 time-travel get-bookmark <db-id>`).
-2. Write `config.env` yourself (chmod 600) with `CLOUDFLARE_ACCOUNT_ID`, `A2A_WORKER_NAME`, `A2A_D1_NAME`, `A2A_D1_ID`, `A2A_HOSTNAME`, `A2A_BASE_URL`, the **existing** owner token as `A2A_OWNER_TOKEN`, and the agent-card settings (`A2A_AGENT_NAME`, `A2A_AGENT_DESCRIPTION`, `A2A_AGENT_SKILLS`, ...). With `A2A_D1_ID` and `A2A_HOSTNAME` already saved, the hostname is not treated as a move.
-3. Run `npx a2a-over-webhook deploy --preset <preset>` with **no** `WAKE_*` variables exported. `deploy` (unlike `init`) uploads no secrets file when none are exported, so `OWNER_TOKEN` and the wake secrets already on the Worker are kept.
-4. Peer tokens live in D1 as SHA-256 hashes, and lookups are by hash, so existing tokens (including the older `s2a_` prefix) keep working; nothing needs reissuing.
-5. Migrations are tracked by file name. An older `0001_init.sql` already recorded in `d1_migrations` is not re-run; `0002_wake_budget.sql` adds the one table the earlier schema lacked.
+2. Write `config.env` yourself (chmod 600) with `CLOUDFLARE_ACCOUNT_ID`, `A2A_WORKER_NAME`, `A2A_D1_NAME`, `A2A_D1_ID`, `A2A_HOSTNAME` (a workers.dev Worker: leave it out and set `A2A_WORKERS_DEV_SUBDOMAIN`), `A2A_BASE_URL`, the **existing** owner token as `A2A_OWNER_TOKEN`, and the agent-card settings (`A2A_AGENT_NAME`, `A2A_AGENT_DESCRIPTION`, `A2A_AGENT_SKILLS`, ...). With `A2A_D1_ID` already saved, the saved hostname (or workers.dev) is not treated as a move.
+3. Run `npx a2a-over-webhook deploy --preset <preset>` with **no** `WAKE_*` variables exported. `deploy` (unlike `init`) uploads no secrets file when none are exported, so `OWNER_TOKEN` and the wake secrets already on the Worker are kept. It also applies the pending D1 migrations, `0002_wake_budget` and `0003_device_pairing`, and prints `applied: ...`.
+4. Run `npx a2a-over-webhook status`. The agent card should show the existing name and base URL, and the wake mode should match the wake the Worker already had. Continue from its `next step:` line.
+5. Peer tokens live in D1 as SHA-256 hashes, and lookups are by hash, so existing tokens (including the older `s2a_` prefix) keep working; nothing needs reissuing.
+6. Device-flow pairing (section 5) is on after the deploy, with `human` approval: your human sets the approval password with `pair set-password`. To keep tokens manual only, deploy with `--pairing-approval off`.
+
+Migrations are tracked by file name, and `deploy` applies every file not yet recorded in `d1_migrations`, in numeric order, including a lower number added later. So an older `0001_init.sql` that is already recorded is not re-run. `0002_wake_budget.sql` adds the one table the earlier schema lacked (on newer databases it does nothing), and `0003_device_pairing.sql` adds pairing. A database that already recorded `0003` under v0.2.0 still gets `0002` on its next `deploy`.
 
 ## 3. Owner token
 
@@ -426,6 +429,7 @@ npx a2a-over-webhook token revoke self-test && npx a2a-over-webhook peers rm sel
 | Symptom | Fix |
 |---|---|
 | `pair ...`: `internal error (HTTP 500)` | The inbox was deployed before device-flow pairing existed: run `npx a2a-over-webhook deploy` (it applies D1 migration `0003_device_pairing`) |
+| Adopted deployment: peers get `-32603 Internal error` and no wake arrives; Worker logs show `no such table: wake_budget` | The D1 database came from an earlier build: run `npx a2a-over-webhook deploy` (it applies `0002_wake_budget`) |
 | `connect`: `does not offer device-flow pairing` | The peer runs another A2A server, or pairing is `off` there: ask its owner for a token (`token issue`), then `peers add <alias> <url> --token-stdin` |
 | `connect`: `not accepting more pairing requests` | The peer's flood limits (5 per IP per 10 minutes, 10 pending): wait and try again |
 | `/device` says no approval password is set | Your human runs `npx a2a-over-webhook pair set-password` in a terminal |

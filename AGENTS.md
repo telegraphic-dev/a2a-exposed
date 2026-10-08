@@ -4,7 +4,7 @@ Guide for coding agents (and humans) changing this repository. User-facing docs 
 
 ## Layout
 
-- `worker/`: Cloudflare Worker (TypeScript, D1, `cf` CLI config in `cloudflare.config.ts`). Migrations in `worker/migrations/` are append-only: add a new numbered file, never edit an old one.
+- `worker/`: Cloudflare Worker (TypeScript, D1, `cf` CLI config in `cloudflare.config.ts`). Migrations in `worker/migrations/` are append-only: add a new numbered file, never edit an old one. Each number is used once. `cf d1 migrations apply` (run by `init`/`deploy`) applies every file not yet recorded in `d1_migrations`, in numeric order, so a lower number added later still runs on existing databases. `worker/test/migrations.test.ts` checks the numbering and replays upgrades from older databases.
 - `cli/`: the npm package `a2a-over-webhook` (Node 22.18+ ESM, **zero dependencies**: keep it that way). `npm pack` bundles `../worker` as the deploy template via `cli/scripts/sync-worker.mjs` (prepack); `cli/worker/` and `cli/LICENSE` are generated, not committed.
 - `skills/<name>/SKILL.md`: the two agent skills. The frontmatter `name` must match the folder name; keep `version` in step with `cli/package.json`, and keep `related_skills` pointing at each other (plus the optional companion skills by their skill `name`: `mise`, `cloudflare`).
 - `.github/workflows/`: `ci.yml` (pushes to main and PRs) and `publish.yml` (`v*` tags: npm publish + GitHub release).
