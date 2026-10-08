@@ -5,6 +5,7 @@ import * as C from "./config.mjs";
 import * as cmd from "./commands.mjs";
 import * as dep from "./deploy.mjs";
 import * as tun from "./tunnel.mjs";
+import * as st from "./status.mjs";
 
 const VERSION = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 
@@ -39,15 +40,24 @@ Setup (needs Node 22.18+ and a Cloudflare login: npx cf auth login --no-browser)
   wake test                     send a test wake now and print the HTTP status
   wake unset                    remove wake secrets (fall back to polling)
 
-Tunnel (local-only webhooks: OpenClaw gateway, Hermes, ...; needs a Cloudflare zone and Zero Trust/Access)
-  tunnel create [--tunnel-hostname H] [--tunnel-origin URL] [--tunnel-path /p] [--show-token] [--zero-trust-org TEAM]
+Tunnel (local-only webhooks: OpenClaw gateway, Hermes, ...; needs Zero Trust/Access and a Cloudflare zone
+anywhere on the account: the inbox itself can be on workers.dev or a custom hostname)
+  tunnel create [--tunnel-zone Z | --tunnel-hostname H] [--tunnel-origin URL] [--tunnel-path /p] [--show-token]
+                [--zero-trust-org TEAM]
                                 named Cloudflare Tunnel + proxied DNS + Access app that admits ONE service token;
                                 the Worker sends that token (CF-Access-Client-Id/Secret) on every wake.
+                                Wake hostname: wake-<random>.<zone>, on the inbox hostname's zone, else the account's
+                                only zone; with several zones pass --tunnel-zone. Safe to re-run (no duplicates).
                                 Defaults: openclaw-* -> http://127.0.0.1:18789 /hooks/wake|agent, hermes -> :8644
                                 (pass --tunnel-path /webhooks/<name>). Token -> <config dir>/tunnel-token (chmod 600)
   tunnel status                 tunnel/Access/Worker state + probes (bare request blocked? connector up?)
   tunnel rm                     delete Worker wake secrets, DNS record, tunnel, Access app + service token
-  init ... --tunnel             init, then tunnel create
+  init ... --tunnel             init, then tunnel create (also with --workers-dev)
+
+Status
+  status [--json]               deployment, base URL, agent card check (fetched by the CLI: no curl needed), wake
+                                mode (webhook / tunnel / none = polling), tunnel state, and the next step to run.
+                                Read-only; run it after an interruption and continue from "next step". Exit 1 = broken
   url                           print the public base URL
   config                        print config (secrets masked) and its location
 
@@ -76,7 +86,7 @@ Presets: grok-bot | claude-code | openclaw-wake | openclaw-agent | hermes | gene
 Config: ${C.CONFIG_FILE}  (override dir with A2A_CONFIG_DIR; env vars override file values)`;
 
 const S = { type: "string" }, B = { type: "boolean" };
-const tunnelOpts = { "tunnel-hostname": S, "tunnel-origin": S, "tunnel-path": S, "show-token": B, "zero-trust-org": S, dir: S };
+const tunnelOpts = { "tunnel-hostname": S, "tunnel-zone": S, "tunnel-origin": S, "tunnel-path": S, "show-token": B, "zero-trust-org": S, dir: S };
 const deployOpts = {
 	...Object.fromEntries(dep.DEPLOY_FLAGS.map((f) => [f, S])), dir: S, cron: B, "skip-install": B, "rotate-owner-token": B,
 	"workers-dev": B, "workers-dev-subdomain": S,
@@ -90,6 +100,7 @@ const SPEC = {
 	peers: { "token-env": S, "token-stdin": B },
 	send: { to: S, text: S, context: S, task: S, push: B, proto: S },
 	poll: { to: S, proto: S },
+	status: { json: B },
 };
 const STATES = ["completed", "input-required", "failed", "rejected", "working"];
 
@@ -106,11 +117,16 @@ export async function main(argv) {
 	const { values: o, positionals: p } = parseArgs({ args: rest, options: SPEC[name] || {}, allowPositionals: true, strict: true });
 	switch (name) {
 		case "init":
-			if (o.tunnel) tun.preflight(o); // refuse early (e.g. workers.dev only) before anything is deployed
+			if (o.tunnel) tun.preflight(o); // refuse early (hosted preset, missing --tunnel-path) before anything is deployed
 			await dep.init(o);
-			return o.tunnel ? tun.create(o) : undefined;
+			if (!o.tunnel) return;
+			try { return await tun.create(o); } catch (e) {
+				if (e instanceof CliError) e.message += "\n(the inbox is deployed and works; fix the above, then run `a2a-over-webhook tunnel create`, or check `a2a-over-webhook status`)";
+				throw e;
+			}
 		case "tunnel": return tun.tunnel(need(p[0], "tunnel create|status|rm"), o);
 		case "deploy": return dep.deploy(o);
+		case "status": return st.status(o);
 		case "wake": return dep.wake(p[0], o);
 		case "url": return console.log(cmd.baseUrl() || "(not configured: run init)");
 		case "config": {

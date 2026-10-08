@@ -186,7 +186,7 @@ async function verifyCard(base) {
 		} catch { /* DNS / certificate may still be provisioning */ }
 		await new Promise((r) => setTimeout(r, 5000));
 	}
-	console.error(`warning: agent card not reachable yet at ${base}; ${C.get("A2A_HOSTNAME") ? "a new custom domain" : "a new workers.dev subdomain"} can take a few minutes. Check again with: curl -s ${base}/health`);
+	console.error(`warning: agent card not reachable yet at ${base}; ${C.get("A2A_HOSTNAME") ? "a new custom domain" : "a new workers.dev subdomain"} can take a few minutes. Check again with: a2a-over-webhook status`);
 }
 
 /** Apply D1 migrations quietly: cf prints a bare JSON array (often `[]`) when stdout is not a TTY. */
@@ -307,7 +307,7 @@ export async function init(o) {
 	if (base) await verifyCard(base);
 	console.log(base);
 	reportSwitch(switched);
-	console.error(`config saved to ${C.CONFIG_FILE} (chmod 600). Next: a2a-over-webhook wake preview, a2a-over-webhook token issue <peer>`);
+	console.error(`config saved to ${C.CONFIG_FILE} (chmod 600). Next: a2a-over-webhook status (shows the next setup step)`);
 }
 
 export async function deploy(o) {

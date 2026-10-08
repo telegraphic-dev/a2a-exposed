@@ -62,6 +62,7 @@ npx cf auth login --no-browser   # device code: open the URL, enter the code
 # containing WAKE_WEBHOOK_URL=... and WAKE_WEBHOOK_KEY=...
 set -a; . ./wake.secrets.env; set +a
 npx a2a-over-webhook init --hostname agent.example.com --agent-name "My Agent" --preset grok-bot
+npx a2a-over-webhook status                     # card check, wake mode, and the next step
 npx a2a-over-webhook wake test
 npx a2a-over-webhook token issue first-peer     # hand this to the peer, with your agent-card URL
 ```
@@ -76,9 +77,15 @@ npx a2a-over-webhook init --agent-name "My Agent" --preset grok-bot
 
 Each account has one workers.dev subdomain. If yours has none yet, `init` stops and explains how to create one: pass `--workers-dev-subdomain <name>` so `init` registers it, or open **Workers & Pages** in the dashboard once, or `PUT /accounts/<account-id>/workers/subdomain` with `{"subdomain":"<name>"}`. The `--cron` flush works on workers.dev too. To move an existing custom-domain deployment to workers.dev, run `deploy --workers-dev`; `deploy --hostname <host>` moves it back. The old URL then stops serving (its agent card redirects to the new one, everything else gets 410), and peers must update their URL.
 
+A workers.dev inbox can still wake a local-only agent at once: the secure tunnel below only needs a zone somewhere on the account. With no zone at all, the agent polls the inbox.
+
 ### Local-only webhook? Use a secure tunnel
 
-If your agent's webhook only listens locally (OpenClaw on `127.0.0.1:18789`, Hermes on `:8644`), `npx a2a-over-webhook tunnel create` publishes just the wake path through a named Cloudflare Tunnel, behind a Cloudflare Access app that admits only one service token held by the Worker (sent as `CF-Access-Client-Id`/`-Secret` on every wake, next to the preset's own auth). It needs a custom domain and Cloudflare Zero Trust (free plan); run `cloudflared` on the agent's machine with the printed command. See [the setup skill](skills/a2a-over-webhook-setup/SKILL.md#local-only-webhooks-hermes-openclaw-secure-tunnel).
+If your agent's webhook only listens locally (OpenClaw on `127.0.0.1:18789`, Hermes on `:8644`), `npx a2a-over-webhook tunnel create` publishes just the wake path through a named Cloudflare Tunnel, behind a Cloudflare Access app that admits only one service token held by the Worker (sent as `CF-Access-Client-Id`/`-Secret` on every wake, next to the preset's own auth). It needs Cloudflare Zero Trust (free plan) and a zone anywhere on the account; the inbox itself can be on workers.dev or a custom hostname. With one zone, `tunnel create` picks `wake-<random>.<zone>` and says so. With several, pass `--tunnel-zone <zone>`. Run `cloudflared` on the agent's machine with the printed command. An existing polling setup can switch to the tunnel later without redeploying the inbox. See [the setup skill](skills/a2a-over-webhook-setup/SKILL.md#local-only-webhooks-hermes-openclaw-secure-tunnel).
+
+### Setup interrupted?
+
+`npx a2a-over-webhook status` is read-only. It shows the deployment, the base URL, an agent-card check (done by the CLI, so no `curl` is needed), the wake mode, the tunnel state, and a `next step:` line. Every setup step is safe to re-run.
 
 Two skills are included:
 
@@ -118,8 +125,8 @@ To try unreleased changes, run the CLI from a checkout (`node <checkout>/cli/bin
 |---|---|---|---|
 | **Grok Bot** | Routine with a webhook trigger | `grok-bot` | Hosted; URL and key come from the routine panel; JSON payload |
 | **Claude Code** | Routine API trigger (`/fire`) | `claude-code` | Each fire is a new session; 30 fires/h per routine, so defaults are a 20 s debounce and a 25/h cap |
-| **OpenClaw** | Gateway hooks: `/hooks/wake` or `/hooks/agent` | `openclaw-wake`, `openclaw-agent` | Hooks are off by default; the gateway binds 127.0.0.1:18789, so use `tunnel create` (secure tunnel) or poll |
-| **Hermes Agent** | Webhook subscription (`hermes webhook subscribe`) | `hermes` | HMAC-SHA256 V2 signature; self-hosted, so use `tunnel create` (secure tunnel) or poll |
+| **OpenClaw** | Gateway hooks: `/hooks/wake` or `/hooks/agent` | `openclaw-wake`, `openclaw-agent` | Hooks are off by default; the gateway binds 127.0.0.1:18789, so use `tunnel create` (secure tunnel, any zone on the account) or poll (`openclaw cron add`) |
+| **Hermes Agent** | Webhook subscription (`hermes webhook subscribe`) | `hermes` | HMAC-SHA256 V2 signature; self-hosted, so use `tunnel create` (secure tunnel, any zone on the account) or poll (`hermes cron create`) |
 | **Codex** | Automations / thread heartbeats | polling | `npx a2a-over-webhook inbox` on a schedule |
 | **Meta Muse** | Recurring tasks, Muse Code `SessionStart` hook, `muse exec` | polling | Check the inbox on start or on a schedule |
 | **n8n, Zapier, Make, custom** | Any HTTPS webhook | `generic` | Configurable auth header, prefix, JSON body template, optional HMAC |

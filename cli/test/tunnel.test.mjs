@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-	ORIGIN_DEFAULTS, HOSTED_PRESETS, ACCESS_SESSION, HOST_RE, randomLabel, zoneFor, validateOrigin, wakeUrl,
+	ORIGIN_DEFAULTS, HOSTED_PRESETS, ACCESS_SESSION, HOST_RE, randomLabel, zoneFor, pickTunnelHostname, noZoneHelp, validateOrigin, wakeUrl,
 	cloudflareErrorCode, tunnelCreateBody, tunnelConfigBody, dnsCnameBody, serviceTokenBody, accessAppBody, secretsPatch, connectorInstructions,
 } from "../lib/tunnel.mjs";
 
@@ -19,6 +19,33 @@ test("zoneFor: longest matching suffix", () => {
 	assert.equal(zoneFor("wake-a.sub.example.com", zones).id, "2");
 	assert.equal(zoneFor("example.com", zones).id, "1");
 	assert.equal(zoneFor("nope.com", zones), null);
+});
+
+test("pickTunnelHostname: any zone on the account, whether the inbox is on workers.dev or a custom hostname", () => {
+	const label = () => "wake-x";
+	const one = [{ id: "z1", name: "example.com", status: "active" }];
+	const two = [...one, { id: "z2", name: "example.org", status: "active" }];
+	// workers.dev inbox (no inbox hostname), one zone: auto-picked, and said so
+	let r = pickTunnelHostname({ zones: one, label });
+	assert.equal(r.hostname, "wake-x.example.com");
+	assert.equal(r.zone.id, "z1");
+	assert.match(r.note, /one zone, example\.com/);
+	// several zones: the inbox hostname's zone wins; without one, stop and list them
+	r = pickTunnelHostname({ zones: two, inboxHost: "agent.example.org", label });
+	assert.equal(r.hostname, "wake-x.example.org");
+	assert.throws(() => pickTunnelHostname({ zones: two, label }), (e) =>
+		/2 zones/.test(e.message) && /example\.com/.test(e.message) && /example\.org/.test(e.message) && /--tunnel-zone <zone>/.test(e.message) && /--tunnel-hostname wake-<name>\.<zone>/.test(e.message));
+	// explicit choices
+	assert.equal(pickTunnelHostname({ zones: two, tunnelZone: "Example.ORG", label }).hostname, "wake-x.example.org");
+	assert.throws(() => pickTunnelHostname({ zones: two, tunnelZone: "nope.net", label }), /not an active zone[\s\S]*example\.com/);
+	r = pickTunnelHostname({ zones: two, tunnelHostname: "Wake-Me.example.com", label });
+	assert.deepEqual([r.hostname, r.zone.id], ["wake-me.example.com", "z1"]);
+	assert.throws(() => pickTunnelHostname({ zones: two, tunnelHostname: "wake.other.net", label }), /not on a zone in this Cloudflare account[\s\S]*example\.org/);
+	// no zone: plain words, polling is the option
+	for (const zones of [[], undefined]) assert.throws(() => pickTunnelHostname({ zones, label }), (e) => /has no domain \(zone\)/.test(e.message) && /polling/.test(e.message));
+	// pending zones are not offered
+	assert.throws(() => pickTunnelHostname({ zones: [{ id: "z3", name: "new.example", status: "pending" }], label }), /not active yet: new\.example \[pending\]/);
+	assert.match(noZoneHelp([]), /workers\.dev or a custom hostname/);
 });
 
 test("validateOrigin / wakeUrl / HOST_RE", () => {
@@ -106,7 +133,13 @@ const out = (o) => { process.stdout.write(typeof o === "string" ? o : JSON.strin
 const fail = (m) => { process.stderr.write(m); process.exit(1); };
 const has = (s) => cmd.startsWith(s);
 if (process.env.STUB_FAIL && has(process.env.STUB_FAIL)) fail("[1000] stub failure");
-if (has("zones list")) out([{ id: "z1", name: "example.com" }]);
+if (has("zones list")) out(process.env.STUB_ZONES ? JSON.parse(process.env.STUB_ZONES) : [{ id: "z1", name: "example.com", status: "active" }]);
+if (has("tunnels get")) out({ id: "tun1", status: process.env.STUB_CONNS === "0" ? "down" : "healthy", connections: process.env.STUB_CONNS === "0" ? [] : [{ id: "c1" }] });
+// what init needs (init --workers-dev --tunnel)
+if (has("auth whoami")) out({ authenticated: true, accounts: [{ id: "acc1", name: "Test" }] });
+if (has("d1 list")) out([{ name: "tuntest", uuid: "d1" }]);
+if (has("d1 migrations")) out([]);
+if (has("deploy")) out("Deployed tuntest\\n  https://tuntest.acme.workers.dev\\n");
 if (has("dns records list")) out(process.env.STUB_DNS_TAKEN ? [{ id: "x" }] : []);
 if (has("zero-trust organization get")) process.env.STUB_NO_ACCESS ? fail("APIError [9999] access.api.error.not_enabled: Access is not enabled.") : out({ auth_domain: "team.cloudflareaccess.com" });
 if (has("zero-trust organization create")) out({ auth_domain: JSON.parse(val("--body")).auth_domain });
@@ -124,12 +157,16 @@ async function tunnelEnv(t, { preset = "openclaw-wake", hostname = "agent.exampl
 	const bin = path.join(dir, "worker", "node_modules", ".bin");
 	fs.mkdirSync(bin, { recursive: true });
 	fs.writeFileSync(path.join(bin, "cf"), STUB, { mode: 0o755 });
-	// owner API stand-in: wake preview reports the URL fingerprint the Worker holds
-	let workerUrl = "";
+	// Worker stand-in: the agent card, and a wake preview that reports the URL fingerprint the Worker holds
+	let workerUrl = "", preview = {}, cardStatus = 200;
 	const srv = http.createServer((req, res) => {
 		res.setHeader("content-type", "application/json");
+		if (req.url.startsWith("/.well-known/agent-card.json")) {
+			res.statusCode = cardStatus;
+			return res.end(JSON.stringify(cardStatus === 200 ? { name: "Tun Test", supportedInterfaces: [{ protocolVersion: "1.0" }, { protocolVersion: "0.3" }] } : { error: "not found" }));
+		}
 		const fp = workerUrl ? createHash("sha256").update(workerUrl).digest("hex").slice(0, 12) : null;
-		res.end(JSON.stringify({ configured: !!workerUrl, hasAccessServiceToken: true, fingerprints: { url: fp } }));
+		res.end(JSON.stringify({ preset, configured: !!workerUrl, hasKey: true, hasAccessServiceToken: true, fingerprints: { url: fp }, ...preview }));
 	});
 	await new Promise((r) => srv.listen(0, "127.0.0.1", r));
 	t.after(() => srv.close());
@@ -150,7 +187,8 @@ async function tunnelEnv(t, { preset = "openclaw-wake", hostname = "agent.exampl
 	});
 	const calls = () => { try { return fs.readFileSync(path.join(dir, "calls.jsonl"), "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } };
 	const config = () => parseEnv(fs.readFileSync(path.join(cfg, "config.env"), "utf8"));
-	return { dir, cfg, cli, calls, config, setWorkerUrl: (u) => (workerUrl = u) };
+	const setConfig = (upd) => fs.writeFileSync(path.join(cfg, "config.env"), Object.entries({ ...config(), ...upd }).filter(([, v]) => v != null).map(([k, v]) => `${k}=${v}`).join("\n") + "\n", { mode: 0o600 });
+	return { dir, cfg, cli, calls, config, setConfig, setWorkerUrl: (u) => (workerUrl = u), setPreview: (p) => (preview = p), setCardStatus: (c) => (cardStatus = c) };
 }
 
 test("tunnel create: Access app + token before tunnel/DNS, secrets uploaded, token in a chmod-600 file, not printed", async (t) => {
@@ -216,16 +254,9 @@ test("tunnel create rolls back when a step fails", async (t) => {
 	assert.ok(!Object.keys(s.config()).some((k) => k.startsWith("A2A_TUNNEL_")));
 });
 
-test("tunnel create refuses workers.dev-only deployments, hosted presets, and accounts without Access (nothing created)", async (t) => {
-	const wd = await tunnelEnv(t, { hostname: "" });
-	let r = await wd.cli(["tunnel", "create"]);
-	assert.equal(r.status, 1);
-	assert.match(r.stderr, /needs a Cloudflare zone/);
-	assert.match(r.stderr, /polling/);
-	assert.equal(wd.calls().length, 0);
-
+test("tunnel create refuses hosted presets, a missing --tunnel-path, accounts without Access, and taken hostnames (nothing created)", async (t) => {
 	const hosted = await tunnelEnv(t, { preset: "grok-bot" });
-	r = await hosted.cli(["tunnel", "create"]);
+	let r = await hosted.cli(["tunnel", "create"]);
 	assert.equal(r.status, 1);
 	assert.match(r.stderr, /only for local-only webhooks/);
 
@@ -245,6 +276,161 @@ test("tunnel create refuses workers.dev-only deployments, hosted presets, and ac
 	r = await taken.cli(["tunnel", "create", "--tunnel-hostname", "wake-x.example.com"]);
 	assert.equal(r.status, 1);
 	assert.match(r.stderr, /already has a DNS record/);
+});
+
+const TWO_ZONES = JSON.stringify([{ id: "z1", name: "example.com", status: "active" }, { id: "z2", name: "example.org", status: "active" }]);
+
+test("tunnel create on a workers.dev inbox: the account's only zone is picked and named; zones listed for this account only", async (t) => {
+	const s = await tunnelEnv(t, { hostname: "" });
+	const r = await s.cli(["tunnel", "create"], { WAKE_WEBHOOK_KEY: "hooks-token" });
+	assert.equal(r.status, 0, r.stderr);
+	assert.match(r.stdout.trim(), /^https:\/\/wake-[a-z]+-[a-z]+-[0-9a-f]{4}\.example\.com\/hooks\/wake$/);
+	assert.match(r.stderr, /the account has one zone, example\.com: the wake hostname goes there \(the inbox URL is unchanged\)/);
+	assert.match(s.calls().find((c) => c.cmd.startsWith("zones list")).cmd, /--account-id acc1/);
+	assert.ok(s.calls().some((c) => c.cmd.startsWith("dns records create -z z1")));
+	assert.equal(s.config().A2A_TUNNEL_ZONE_ID, "z1");
+});
+
+test("tunnel create on a workers.dev inbox with several zones stops and lists them; --tunnel-zone picks one", async (t) => {
+	const s = await tunnelEnv(t, { hostname: "", stub: { STUB_ZONES: TWO_ZONES } });
+	let r = await s.cli(["tunnel", "create"]);
+	assert.equal(r.status, 1);
+	assert.match(r.stderr, /this Cloudflare account has 2 zones; choose one for the wake hostname/);
+	assert.match(r.stderr, /^ {2}example\.com$/m);
+	assert.match(r.stderr, /^ {2}example\.org$/m);
+	assert.match(r.stderr, /--tunnel-zone <zone>/);
+	assert.ok(!s.calls().some((c) => / create/.test(c.cmd)), "nothing created");
+	r = await s.cli(["tunnel", "create", "--tunnel-zone", "example.org"]);
+	assert.equal(r.status, 0, r.stderr);
+	assert.match(r.stdout.trim(), /^https:\/\/wake-[a-z-]+-[0-9a-f]{4}\.example\.org\/hooks\/wake$/);
+	assert.ok(s.calls().some((c) => c.cmd.startsWith("dns records create -z z2")));
+	// re-running is safe: nothing new is created
+	const before = s.calls().length;
+	s.setWorkerUrl(r.stdout.trim());
+	const again = await s.cli(["tunnel", "create", "--tunnel-zone", "example.org"]);
+	assert.equal(again.status, 0, again.stderr);
+	assert.equal(again.stdout.trim(), r.stdout.trim());
+	assert.match(again.stderr, /tunnel already set up/);
+	assert.ok(!s.calls().slice(before).some((c) => / create|secrets bulk/.test(c.cmd)), "no new objects, secrets already on the Worker");
+});
+
+test("tunnel create with no zone on the account says so plainly and points to polling (nothing created)", async (t) => {
+	const s = await tunnelEnv(t, { hostname: "", stub: { STUB_ZONES: "[]" } });
+	const r = await s.cli(["tunnel", "create"]);
+	assert.equal(r.status, 1);
+	assert.match(r.stderr, /this Cloudflare account has no domain \(zone\)/);
+	assert.match(r.stderr, /polling/);
+	assert.ok(!s.calls().some((c) => / create/.test(c.cmd)));
+	const both = await s.cli(["tunnel", "create", "--tunnel-zone", "example.com", "--tunnel-hostname", "wake.example.com"]);
+	assert.match(both.stderr, /not both/);
+});
+
+test("init --workers-dev --tunnel deploys the inbox on workers.dev, then creates the tunnel on the account's zone", async (t) => {
+	const s = await tunnelEnv(t, { hostname: "" });
+	s.setConfig({ A2A_WORKERS_DEV_SUBDOMAIN: "acme" });
+	const r = await s.cli(["init", "--workers-dev", "--tunnel", "--skip-install"], { A2A_VERIFY_TRIES: "0" });
+	assert.equal(r.status, 0, r.stderr);
+	const cmds = s.calls().map((c) => c.cmd);
+	const di = cmds.findIndex((c) => c.startsWith("deploy")), ti = cmds.findIndex((c) => c.startsWith("tunnels create"));
+	assert.ok(di >= 0 && ti > di, "deploy first, then the tunnel");
+	assert.match(r.stdout, /^https:\/\/tuntest\.acme\.workers\.dev$/m);
+	assert.match(r.stdout, /^https:\/\/wake-[a-z-]+-[0-9a-f]{4}\.example\.com\/hooks\/wake$/m);
+	assert.equal(s.config().A2A_BASE_URL, "https://tuntest.acme.workers.dev");
+
+	// several zones: the inbox stays deployed and the error says how to continue
+	const m = await tunnelEnv(t, { hostname: "", stub: { STUB_ZONES: TWO_ZONES } });
+	m.setConfig({ A2A_WORKERS_DEV_SUBDOMAIN: "acme" });
+	const r2 = await m.cli(["init", "--workers-dev", "--tunnel", "--skip-install"], { A2A_VERIFY_TRIES: "0" });
+	assert.equal(r2.status, 1);
+	assert.match(r2.stderr, /--tunnel-zone <zone>/);
+	assert.match(r2.stderr, /the inbox is deployed and works/);
+	assert.ok(m.calls().some((c) => c.cmd.startsWith("deploy")));
+});
+
+test("tunnel create after an interruption: partial ids -> tunnel rm first; complete but Worker lacks secrets -> re-uploaded", async (t) => {
+	const partial = await tunnelEnv(t);
+	partial.setConfig({ A2A_TUNNEL_HOSTNAME: "wake-p.example.com", A2A_TUNNEL_ACCESS_TOKEN_ID: "st1" });
+	let r = await partial.cli(["tunnel", "create"]);
+	assert.equal(r.status, 1);
+	assert.match(r.stderr, /did not finish[\s\S]*tunnel rm/);
+	assert.equal(partial.calls().length, 0);
+
+	const s = await tunnelEnv(t);
+	assert.equal((await s.cli(["tunnel", "create", "--tunnel-hostname", "wake-test.example.com"])).status, 0);
+	s.setPreview({ hasAccessServiceToken: false }); // e.g. interrupted before the secrets upload
+	const before = s.calls().length;
+	r = await s.cli(["tunnel", "create"]);
+	assert.equal(r.status, 0, r.stderr);
+	const after = s.calls().slice(before);
+	assert.ok(!after.some((c) => / create/.test(c.cmd)));
+	const bulk = after.find((c) => c.cmd.startsWith("workers secrets bulk"));
+	assert.deepEqual(Object.keys(bulk.file.secrets).sort(), ["WAKE_ACCESS_CLIENT_ID", "WAKE_ACCESS_CLIENT_SECRET", "WAKE_WEBHOOK_URL"]);
+	assert.equal(bulk.file.secrets.WAKE_WEBHOOK_URL.text, "https://wake-test.example.com/hooks/wake");
+	assert.ok(!(r.stdout + r.stderr).includes("csecret"));
+	const other = await s.cli(["tunnel", "create", "--tunnel-hostname", "wake-other.example.com"]);
+	assert.equal(other.status, 1);
+	assert.match(other.stderr, /already exists on wake-test\.example\.com/);
+});
+
+// ------------------------------------------------------------------ status (read-only snapshot + next step)
+test("status on a workers.dev inbox with no wake: card OK, polling expected, tunnel suggested on the account's zone", async (t) => {
+	const s = await tunnelEnv(t, { preset: "hermes", hostname: "" });
+	s.setPreview({ preset: "hermes", configured: false });
+	let r = await s.cli(["status"]);
+	assert.equal(r.status, 0, r.stderr);
+	assert.match(r.stdout, /^agent card: +OK: "Tun Test" \(A2A 1\.0, 0\.3\)$/m);
+	assert.match(r.stdout, /^base URL: +http:\/\/127\.0\.0\.1:\d+ \(workers\.dev\)$/m);
+	assert.match(r.stdout, /^wake: +none: no WAKE_WEBHOOK_URL on the Worker, so the agent is expected to poll the inbox/m);
+	assert.match(r.stdout, /^tunnel: +none$/m);
+	assert.match(r.stdout, /^next step: +no wake webhook, so the agent must check the inbox on a schedule.*run `a2a-over-webhook tunnel create` \(it uses the account's zone example\.com; no redeploy needed\)/m);
+	assert.ok(!s.calls().some((c) => !/^(zones list)/.test(c.cmd)), "read-only: only zones list");
+	const j = JSON.parse((await s.cli(["status", "--json"])).stdout);
+	assert.equal(j.ok, true);
+	assert.deepEqual(j.zones, ["example.com"]);
+	assert.equal(j.card.name, "Tun Test");
+	assert.equal(j.hasOwnerToken, true);
+	assert.ok(!Object.values(j).includes("owner"), "the owner token itself is never printed");
+
+	const none = await tunnelEnv(t, { preset: "hermes", hostname: "", stub: { STUB_ZONES: "[]" } });
+	none.setPreview({ preset: "hermes", configured: false });
+	r = await none.cli(["status"]);
+	assert.match(r.stdout, /no domain \(zone\), so the secure tunnel is not available/);
+	const many = await tunnelEnv(t, { preset: "hermes", hostname: "", stub: { STUB_ZONES: TWO_ZONES } });
+	many.setPreview({ preset: "hermes", configured: false });
+	r = await many.cli(["status"]);
+	assert.match(r.stdout, /tunnel create --tunnel-zone <zone>` with one of: example\.com, example\.org/);
+});
+
+test("status follows a tunnel through: no connector -> start cloudflared; connected -> complete; unreachable card -> exit 1", async (t) => {
+	const s = await tunnelEnv(t, { stub: { STUB_CONNS: "0" } });
+	const c = await s.cli(["tunnel", "create", "--tunnel-hostname", "wake-test.example.com"]);
+	assert.equal(c.status, 0, c.stderr);
+	s.setWorkerUrl("https://wake-test.example.com/hooks/wake");
+	let r = await s.cli(["status"]);
+	assert.equal(r.status, 1);
+	assert.match(r.stdout, /^tunnel: +https:\/\/wake-test\.example\.com\/hooks\/wake -> http:\/\/127\.0\.0\.1:18789; set up; down, 0 connector connection\(s\)$/m);
+	assert.match(r.stdout, /^next step: +the tunnel has no running connector: on the agent's machine run `cloudflared tunnel run --token-file .*tunnel-token`/m);
+	r = await s.cli(["status"], { STUB_CONNS: "1" });
+	assert.equal(r.status, 0, r.stdout);
+	assert.match(r.stdout, /^wake: +webhook \(preset openclaw-wake, through the tunnel\); auth: bearer\/API key \+ Access service token/m);
+	assert.match(r.stdout, /^next step: +none: setup is complete/m);
+	s.setPreview({ hasAccessServiceToken: false });
+	r = await s.cli(["status"], { STUB_CONNS: "1" });
+	assert.match(r.stdout, /Worker does not have the tunnel's wake secrets: run `a2a-over-webhook tunnel create` again/);
+	s.setPreview({});
+	s.setCardStatus(404);
+	r = await s.cli(["status"], { STUB_CONNS: "1" });
+	assert.equal(r.status, 1);
+	assert.match(r.stdout, /^agent card: +FAILED: HTTP 404/m);
+	assert.match(r.stdout, /^next step: +the agent card is not reachable/m);
+	assert.ok(!(r.stdout + r.stderr).includes("csecret") && !(r.stdout + r.stderr).includes("eyJstubtoken"));
+
+	const partial = await tunnelEnv(t);
+	partial.setConfig({ A2A_TUNNEL_HOSTNAME: "wake-p.example.com", A2A_TUNNEL_ID: "tun1" });
+	r = await partial.cli(["status"]);
+	assert.equal(r.status, 1);
+	assert.match(r.stdout, /INCOMPLETE/);
+	assert.match(r.stdout, /a previous `tunnel create` did not finish: run `a2a-over-webhook tunnel rm`, then `a2a-over-webhook tunnel create`/);
 });
 
 test("tunnel create --zero-trust-org creates the organization when Access is off", async (t) => {

@@ -107,6 +107,7 @@ Use the CLI as `npx a2a-over-webhook <cmd>`, or exactly the command in the wake'
 ## Other commands
 
 - `npx a2a-over-webhook contexts` lists recent conversations.
+- `npx a2a-over-webhook status` checks the setup: the agent card (fetched by the CLI), the wake mode (webhook, tunnel, or none, meaning polling), the tunnel state, and a `next step:` line. Use it rather than `curl`: some agent sandboxes (Hermes) flag `.dev` URLs in shell commands and wait for user approval.
 - `npx a2a-over-webhook url` prints the public base URL.
 - `npx a2a-over-webhook config` prints the config with secrets masked.
 - `npx a2a-over-webhook wake preview` shows the rendered wake request (partially masked) and short SHA-256 fingerprints of the uploaded URL/key; `wake fingerprint` prints the fingerprints of `WAKE_*` values in your environment for comparison; `wake test` sends a test wake.
@@ -117,8 +118,8 @@ Use the CLI as `npx a2a-over-webhook <cmd>`, or exactly the command in the wake'
 |---|---|
 | `A2A_BASE_URL / A2A_OWNER_TOKEN missing` | Not set up here: run the setup skill, or provide both as environment secrets (hosted routines) |
 | `worker ... HTTP 401` | Owner token mismatch: `config.env` differs from the Worker secret. Re-run `init --rotate-owner-token` from the machine that owns the deployment |
-| `request to ... failed` | DNS, network, or egress problem. `curl -sI <url>/health`. A brand-new custom domain needs a few minutes |
-| No wakes arriving | `wake preview` (configured? preset? fingerprints match `wake fingerprint`?) then `wake test` (status). Agents behind NAT need polling. Wakes are debounced per conversation; Claude Code also has an hourly cap. The inbox always has everything |
+| `request to ... failed` | DNS, network, or egress problem. `npx a2a-over-webhook status` shows whether the agent card answers. A brand-new custom domain needs a few minutes |
+| No wakes arriving | `status` (wake mode, tunnel connector, next step), then `wake preview` (configured? preset? fingerprints match `wake fingerprint`?) then `wake test` (status). Agents behind NAT need the secure tunnel (`tunnel create`, which needs a zone anywhere on the account) or polling. Wakes are debounced per conversation; Claude Code also has an hourly cap. The inbox always has everything |
 | Peer says 401 | Their token is wrong, revoked, or rotated (`token list`). Issue a new one if the user agrees |
 | Peer says 429 | It exceeded 60 requests/min |
 | Peer says -32001 | Unknown task, or a task owned by another peer |

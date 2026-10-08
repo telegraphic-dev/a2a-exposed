@@ -3,7 +3,8 @@
 //
 // Layout:  Worker --(CF-Access-Client-Id/Secret + preset auth)--> https://wake-xxx.<zone><path>
 //            --> Access (service-token-only policy) --> Tunnel --> cloudflared on the agent's machine --> local origin
-// A custom domain (Cloudflare zone) is required on purpose: no quick tunnels, no unprotected hostnames.
+// A Cloudflare zone on the account is required on purpose (no quick tunnels, no unprotected hostnames). Any zone
+// on the account works: the inbox itself can stay on workers.dev or on another hostname.
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -48,6 +49,50 @@ export const HOST_RE = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-
 export function zoneFor(hostname, zones) {
 	const h = hostname.toLowerCase();
 	return (zones || []).filter((z) => h === z.name || h.endsWith("." + z.name)).sort((a, b) => b.name.length - a.name.length)[0] || null;
+}
+
+const usableZones = (zones) => (zones || []).filter((z) => z && z.name && (!z.status || z.status === "active"));
+const zoneList = (zones) => zones.map((z) => `  ${z.name}`).join("\n");
+
+/** Error text when the account has no usable zone: the tunnel is impossible, polling is the option. */
+export function noZoneHelp(zones) {
+	const inactive = (zones || []).filter((z) => z && z.name && z.status && z.status !== "active");
+	return [
+		inactive.length
+			? `no active domain (zone) on this Cloudflare account (not active yet: ${inactive.map((z) => `${z.name} [${z.status}]`).join(", ")}).`
+			: "this Cloudflare account has no domain (zone).",
+		"The wake tunnel needs a zone anywhere on the account for its hostname and Access app (whether the inbox is on workers.dev or a custom hostname).",
+		"Without one, use scheduled polling: the inbox works as it is (setup skill: \"Agents without inbound webhooks: polling\").",
+		"To use the tunnel later, add a domain to the account and run `a2a-over-webhook tunnel create` (no redeploy needed).",
+	].join("\n");
+}
+
+/** The wake hostname and its zone. Order: --tunnel-hostname, --tunnel-zone, the zone of the inbox's custom hostname,
+ *  then the account's only zone. Several zones and no choice: stop and list them. No zone: point to polling. */
+export function pickTunnelHostname({ tunnelHostname, tunnelZone, inboxHost, zones, label = randomLabel }) {
+	const usable = usableZones(zones);
+	if (tunnelHostname) {
+		const hostname = tunnelHostname.toLowerCase();
+		const zone = zoneFor(hostname, zones);
+		if (!zone) die(usable.length ? `${hostname} is not on a zone in this Cloudflare account; the wake hostname must be on one of:\n${zoneList(usable)}` : noZoneHelp(zones));
+		return { hostname, zone, note: "" };
+	}
+	if (tunnelZone) {
+		const want = tunnelZone.toLowerCase().replace(/\.$/, "");
+		const zone = usable.find((z) => z.name.toLowerCase() === want);
+		if (!zone) die(usable.length ? `--tunnel-zone ${want}: not an active zone on this Cloudflare account; pick one of:\n${zoneList(usable)}` : noZoneHelp(zones));
+		return { hostname: `${label()}.${zone.name}`, zone, note: `wake hostname on the zone ${zone.name} (--tunnel-zone)` };
+	}
+	const own = inboxHost ? zoneFor(inboxHost, usable) : null;
+	if (own) return { hostname: `${label()}.${own.name}`, zone: own, note: `wake hostname on ${own.name}, the zone of the inbox hostname` };
+	if (usable.length === 1)
+		return { hostname: `${label()}.${usable[0].name}`, zone: usable[0], note: `the account has one zone, ${usable[0].name}: the wake hostname goes there (the inbox URL is unchanged)` };
+	if (!usable.length) die(noZoneHelp(zones));
+	return die([
+		`this Cloudflare account has ${usable.length} zones; choose one for the wake hostname (the inbox URL is unchanged):`,
+		zoneList(usable),
+		"Re-run with --tunnel-zone <zone>  (or --tunnel-hostname wake-<name>.<zone>).",
+	].join("\n"));
 }
 
 export function validateOrigin(origin) {
@@ -115,7 +160,7 @@ export function cloudflareErrorCode(body) {
 }
 
 // ------------------------------------------------------------------ cf calls (JSON in, JSON out, errors captured)
-function cfCall(dir, args, { body, file, allowNotFound = false } = {}) {
+export function cfCall(dir, args, { body, file, allowNotFound = false } = {}) {
 	const full = [...args];
 	if (body !== undefined) full.push("--body", JSON.stringify(body));
 	if (file) full.push("--file", file);
@@ -153,6 +198,14 @@ function accessOrg(dir, o) {
 	}
 }
 
+/** Zones of the deployment's account (the login may see other accounts' zones too). */
+export function listZones(dir) {
+	const acct = C.get("CLOUDFLARE_ACCOUNT_ID");
+	const r = cfCall(dir, ["zones", "list", "--per-page", "50", ...(acct ? ["--account-id", acct] : [])]);
+	const zones = Array.isArray(r) ? r : Array.isArray(r?.result) ? r.result : [];
+	return zones.filter((z) => z && z.name && (!acct || !z.account?.id || z.account.id === acct));
+}
+
 // ------------------------------------------------------------------ commands
 function needDeployment(o) {
 	if (!C.get("A2A_D1_ID") || !C.get("A2A_WORKER_NAME")) die("no saved deployment; run `a2a-over-webhook init` first");
@@ -165,15 +218,14 @@ function needDeployment(o) {
 export function preflight(o) {
 	const preset = o.preset || C.get("WAKE_PRESET", "generic"); // o.preset: `init --tunnel` checks before saving flags
 	if (HOSTED_PRESETS.includes(preset)) die(`preset ${preset} wakes a hosted service; a tunnel is only for local-only webhooks (openclaw-*, hermes, generic)`);
-	if (!o["tunnel-hostname"] && !o.hostname && !C.get("A2A_HOSTNAME"))
-		die("a tunnel needs a Cloudflare zone (custom domain) on this account, for the wake hostname and its Access policy; " +
-			"this deployment only uses workers.dev. Pass --tunnel-hostname wake-<name>.<your zone>, or use scheduled polling instead (no inbound webhook needed).");
 	const [dOrigin, dPath] = ORIGIN_DEFAULTS[preset] || ["", ""];
 	const origin = o["tunnel-origin"] || C.get("A2A_TUNNEL_ORIGIN") || dOrigin;
 	const wpath = o["tunnel-path"] || C.get("A2A_TUNNEL_PATH") || dPath;
 	if (!origin) die(`--tunnel-origin is required for preset ${preset} (the local webhook, e.g. http://127.0.0.1:8080)`);
 	if (!wpath || !wpath.startsWith("/")) die(`--tunnel-path is required for preset ${preset} and must start with / (e.g. /webhooks/a2a for Hermes)`);
 	if (o["tunnel-hostname"] && !HOST_RE.test(o["tunnel-hostname"])) die("--tunnel-hostname must be a hostname like wake-abc.example.com");
+	if (o["tunnel-zone"] && !HOST_RE.test(o["tunnel-zone"].toLowerCase())) die("--tunnel-zone must be a zone name like example.com");
+	if (o["tunnel-zone"] && o["tunnel-hostname"]) die("pass --tunnel-zone or --tunnel-hostname, not both");
 	if (process.env.WAKE_WEBHOOK_URL) die("unset WAKE_WEBHOOK_URL: `tunnel create` sets the wake URL to the tunnel hostname");
 	return { preset, origin: validateOrigin(origin), wpath };
 }
@@ -181,17 +233,15 @@ export function preflight(o) {
 export async function create(o) {
 	D.checkNode();
 	const dir = needDeployment(o);
-	if (C.get("A2A_TUNNEL_ID") || C.get("A2A_TUNNEL_ACCESS_APP_ID")) die("a tunnel is already configured (see `a2a-over-webhook tunnel status`); run `tunnel rm` first");
+	if (tunnelStarted()) return resume(dir, o);
 	const { preset, origin, wpath } = preflight(o);
 	const worker = D.workerName();
 
-	step("finding the zone");
-	const zones = cfCall(dir, ["zones", "list"]);
-	const base = C.get("A2A_HOSTNAME");
-	const zoneOfBase = base ? zoneFor(base, zones) : null;
-	const hostname = (o["tunnel-hostname"] || (zoneOfBase ? `${randomLabel()}.${zoneOfBase.name}` : "")).toLowerCase();
-	const zone = hostname ? zoneFor(hostname, zones) : null;
-	if (!zone) die(`no Cloudflare zone on this account for ${hostname || base}; the tunnel hostname must be on a zone in this account`);
+	step("finding a zone for the wake hostname");
+	const { hostname, zone, note } = pickTunnelHostname({
+		tunnelHostname: o["tunnel-hostname"], tunnelZone: o["tunnel-zone"], inboxHost: C.get("A2A_HOSTNAME"), zones: listZones(dir),
+	});
+	if (note) step(note);
 	const existing = cfCall(dir, ["dns", "records", "list", "-z", zone.id, "--name", hostname]);
 	if (Array.isArray(existing) && existing.length) die(`${hostname} already has a DNS record; pick another --tunnel-hostname`);
 
@@ -250,6 +300,34 @@ export async function create(o) {
 		await remove(o, { quiet: true }).catch((r) => console.error(`rollback incomplete: ${r.message}; re-run \`a2a-over-webhook tunnel rm\``));
 		throw e;
 	}
+}
+
+/** Ids a `tunnel create` saves once each Cloudflare object exists. */
+const tunnelStarted = () => ["A2A_TUNNEL_ID", "A2A_TUNNEL_ACCESS_APP_ID", "A2A_TUNNEL_ACCESS_TOKEN_ID", "A2A_TUNNEL_DNS_ID"].some((k) => C.get(k));
+/** Every object and the local token file exist (the Worker secrets are checked separately). */
+export const tunnelComplete = () =>
+	["A2A_TUNNEL_HOSTNAME", "A2A_TUNNEL_ID", "A2A_TUNNEL_DNS_ID", "A2A_TUNNEL_ACCESS_APP_ID", "A2A_TUNNEL_ACCESS_TOKEN_ID",
+		"A2A_TUNNEL_ACCESS_CLIENT_ID", "A2A_TUNNEL_ACCESS_CLIENT_SECRET", "A2A_TUNNEL_TOKEN_FILE"].every((k) => C.get(k));
+
+/** `tunnel create` again on an existing tunnel: safe to re-run. A complete tunnel only gets its Worker secrets
+ *  re-uploaded if the Worker lacks them (e.g. the first run was interrupted); a partial one must be removed first. */
+async function resume(dir, o) {
+	if (!tunnelComplete())
+		die("a previous `tunnel create` did not finish (some ids are saved, see `a2a-over-webhook status`); run `a2a-over-webhook tunnel rm`, then `a2a-over-webhook tunnel create` again");
+	const host = C.get("A2A_TUNNEL_HOSTNAME");
+	if (o["tunnel-hostname"] && o["tunnel-hostname"].toLowerCase() !== host)
+		die(`a tunnel already exists on ${host}; to use another hostname run \`a2a-over-webhook tunnel rm\` first`);
+	const url = wakeUrl(host, C.get("A2A_TUNNEL_PATH") || "/");
+	let p = null;
+	try { p = await owner("GET", "/owner/wake/preview"); } catch (e) { console.error(`warning: Worker not reachable (${e.message}); cannot check its wake secrets`); }
+	if (p && (!p.hasAccessServiceToken || p.fingerprints?.url !== fingerprint(url))) {
+		step("the Worker lacks the tunnel's wake secrets: uploading WAKE_WEBHOOK_URL, WAKE_ACCESS_CLIENT_ID, WAKE_ACCESS_CLIENT_SECRET");
+		await putSecrets(dir, D.workerName(), { WAKE_WEBHOOK_URL: url, WAKE_ACCESS_CLIENT_ID: C.get("A2A_TUNNEL_ACCESS_CLIENT_ID"), WAKE_ACCESS_CLIENT_SECRET: C.get("A2A_TUNNEL_ACCESS_CLIENT_SECRET") });
+	}
+	console.log(url);
+	console.error(`tunnel already set up: wakes go to ${url} -> ${C.get("A2A_TUNNEL_ORIGIN")}${C.get("A2A_TUNNEL_PATH")} (nothing new created; to change it: tunnel rm, then tunnel create)`);
+	console.error(connectorInstructions(C.get("A2A_TUNNEL_TOKEN_FILE")));
+	console.error("Then: a2a-over-webhook tunnel status   and   a2a-over-webhook wake test");
 }
 
 function putSecrets(dir, worker, map) {
