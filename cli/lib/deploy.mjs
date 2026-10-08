@@ -1,0 +1,216 @@
+// Non-interactive deploy helper around the Cloudflare `cf` CLI: init, deploy, wake set|unset|test|preview.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import * as C from "./config.mjs";
+import { die, httpJson, randomToken } from "./a2a.mjs";
+import { owner } from "./commands.mjs";
+
+const PKG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const PRESETS = ["grok-bot", "claude-code", "openclaw-wake", "openclaw-agent", "hermes", "generic"];
+const WAKE_SECRETS = ["WAKE_WEBHOOK_URL", "WAKE_WEBHOOK_KEY", "WAKE_HMAC_SECRET"];
+
+// Non-secret deploy settings persisted in config.env and passed to cloudflare.config.ts as env vars.
+const DEPLOY_KEYS = [
+	"CLOUDFLARE_ACCOUNT_ID", "A2A_WORKER_NAME", "A2A_HOSTNAME", "A2A_D1_ID", "A2A_D1_NAME",
+	"A2A_AGENT_NAME", "A2A_AGENT_DESCRIPTION", "A2A_AGENT_VERSION", "A2A_AGENT_SKILLS",
+	"A2A_PROVIDER_ORGANIZATION", "A2A_PROVIDER_URL", "A2A_DOCUMENTATION_URL",
+	"WAKE_PRESET", "WAKE_AGENT_ID", "WAKE_KEY_HEADER", "WAKE_KEY_PREFIX", "WAKE_BODY_TEMPLATE", "WAKE_CLI_COMMAND",
+	"WAKE_DEBOUNCE_SECONDS", "WAKE_MAX_PER_HOUR", "A2A_MAX_BODY", "A2A_RATE_PER_MIN", "A2A_ENABLE_CRON",
+];
+// init/deploy flag -> config key
+const FLAG_KEYS = {
+	"account-id": "CLOUDFLARE_ACCOUNT_ID", "worker-name": "A2A_WORKER_NAME", hostname: "A2A_HOSTNAME", "d1-name": "A2A_D1_NAME",
+	"agent-name": "A2A_AGENT_NAME", "agent-description": "A2A_AGENT_DESCRIPTION", "agent-skills": "A2A_AGENT_SKILLS",
+	"provider-organization": "A2A_PROVIDER_ORGANIZATION", "provider-url": "A2A_PROVIDER_URL",
+	preset: "WAKE_PRESET", "agent-id": "WAKE_AGENT_ID", "key-header": "WAKE_KEY_HEADER", "key-prefix": "WAKE_KEY_PREFIX",
+	"body-template": "WAKE_BODY_TEMPLATE", "cli-command": "WAKE_CLI_COMMAND", debounce: "WAKE_DEBOUNCE_SECONDS", "max-per-hour": "WAKE_MAX_PER_HOUR",
+};
+export const DEPLOY_FLAGS = Object.keys(FLAG_KEYS);
+
+const step = (s) => console.error(`==> ${s}`);
+const workerDir = (o) => path.resolve(o.dir || C.get("A2A_WORKER_DIR") || path.join(C.CONFIG_DIR, "worker"));
+
+function checkNode() {
+	const [maj, min] = process.versions.node.split(".").map(Number);
+	if (maj < 22 || (maj === 22 && min < 18)) die(`Node ${process.versions.node} found; Node 22.18+ is required (cf CLI requirement)`);
+}
+
+function templateDir() {
+	for (const d of [path.join(PKG_ROOT, "worker"), path.join(PKG_ROOT, "..", "worker")])
+		if (fs.existsSync(path.join(d, "cloudflare.config.ts"))) return d;
+	die("worker template not found next to the CLI (reinstall the package or run from a repo checkout)");
+}
+
+function syncTemplate(dir) {
+	const src = templateDir();
+	if (path.resolve(src) === dir) return;
+	const skip = new Set(["node_modules", ".cloudflare", ".wrangler", "deploy.env"]);
+	fs.mkdirSync(dir, { recursive: true });
+	fs.cpSync(src, dir, { recursive: true, force: true, filter: (p) => !skip.has(path.basename(p)) });
+}
+
+function run(cmd, args, { cwd, env, capture = false, allowFail = false } = {}) {
+	const r = spawnSync(cmd, args, { cwd, env: env || process.env, stdio: ["ignore", capture ? "pipe" : "inherit", "inherit"], encoding: "utf8" });
+	if (r.error) die(`${cmd}: ${r.error.message}`);
+	if (r.status !== 0 && !allowFail) die(`${cmd} ${args[0] || ""} ${args[1] || ""} failed (exit ${r.status})`);
+	return r;
+}
+
+function cfBin(dir) {
+	const local = path.join(dir, "node_modules", ".bin", "cf");
+	return fs.existsSync(local) ? local : "cf";
+}
+
+function cfJson(dir, args, env) {
+	const r = run(cfBin(dir), args, { cwd: dir, env, capture: true });
+	try { return JSON.parse(r.stdout); } catch { die(`unexpected output from cf ${args.join(" ")}`); }
+}
+
+function deployEnv() {
+	const env = { ...process.env, CI: "1" };
+	for (const k of DEPLOY_KEYS) {
+		const v = C.get(k);
+		if (v !== "") env[k] = v;
+		else if (k !== "WAKE_KEY_PREFIX") delete env[k];
+	}
+	if ("WAKE_KEY_PREFIX" in C.fileConfig()) env.WAKE_KEY_PREFIX = C.fileConfig().WAKE_KEY_PREFIX;
+	for (const k of WAKE_SECRETS) delete env[k]; // secrets only travel via the secrets file
+	return env;
+}
+
+function withSecretsFile(secrets, fn) {
+	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "a2a-secrets-"));
+	const file = path.join(tmp, "secrets.json");
+	try {
+		fs.writeFileSync(file, JSON.stringify(secrets), { mode: 0o600 });
+		return fn(file);
+	} finally {
+		fs.rmSync(tmp, { recursive: true, force: true });
+	}
+}
+
+function wakeSecretsFromEnv() {
+	const s = {};
+	for (const k of WAKE_SECRETS) if (process.env[k]) s[k] = process.env[k];
+	return s;
+}
+
+function applyFlags(o) {
+	const upd = {};
+	for (const [flag, key] of Object.entries(FLAG_KEYS)) if (o[flag] !== undefined) upd[key] = o[flag];
+	if (o.cron) upd.A2A_ENABLE_CRON = "1";
+	if (upd.WAKE_PRESET && !PRESETS.includes(upd.WAKE_PRESET)) die(`unknown preset ${upd.WAKE_PRESET} (${PRESETS.join(" | ")})`);
+	if (upd.A2A_AGENT_SKILLS) {
+		try { if (!Array.isArray(JSON.parse(upd.A2A_AGENT_SKILLS))) throw 0; } catch { die("--agent-skills must be a JSON array of A2A AgentSkill objects"); }
+	}
+	if (upd.A2A_HOSTNAME) upd.A2A_HOSTNAME = upd.A2A_HOSTNAME.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+	if (Object.keys(upd).length) C.saveConfig(upd);
+}
+
+async function verifyCard(base) {
+	for (let i = 0; i < 12; i++) {
+		try {
+			const { status, data } = await httpJson(base + "/.well-known/agent-card.json", { timeout: 10000 });
+			if (status === 200 && data && data.name) return console.error(`agent card OK: ${data.name} (${base}/.well-known/agent-card.json)`);
+		} catch { /* DNS / certificate may still be provisioning */ }
+		await new Promise((r) => setTimeout(r, 5000));
+	}
+	console.error(`warning: agent card not reachable yet at ${base}; a new custom domain can take a few minutes`);
+}
+
+function cfDeploy(dir, secrets) {
+	const args = ["deploy", "--message", `a2a-over-webhook ${new Date().toISOString()}`];
+	if (secrets && Object.keys(secrets).length) withSecretsFile(secrets, (f) => run(cfBin(dir), [...args, "--secrets-file", f], { cwd: dir, env: deployEnv() }));
+	else run(cfBin(dir), args, { cwd: dir, env: deployEnv() });
+}
+
+export async function init(o) {
+	checkNode();
+	applyFlags(o);
+	if (!C.get("A2A_HOSTNAME")) die("--hostname is required (a hostname on a Cloudflare zone you own, e.g. agent.example.com)");
+	const dir = workerDir(o);
+	C.saveConfig({ A2A_WORKER_DIR: dir, A2A_WORKER_NAME: C.get("A2A_WORKER_NAME", "a2a-over-webhook") });
+
+	step(`worker project -> ${dir}`);
+	syncTemplate(dir);
+	if (!o["skip-install"]) run("npm", ["install", "--no-audit", "--no-fund", "--loglevel=error"], { cwd: dir });
+
+	step("checking Cloudflare login (cf auth whoami)");
+	const who = cfJson(dir, ["auth", "whoami"]);
+	if (!who.authenticated) die("not logged in to Cloudflare: run `cf auth login --no-browser`, open the printed URL, enter the code, then re-run init");
+	if (!C.get("CLOUDFLARE_ACCOUNT_ID")) {
+		const accts = who.accounts || [];
+		if (accts.length !== 1) die(`${accts.length} accounts available; pass --account-id <id>:\n` + accts.map((a) => `  ${a.id}  ${a.name}`).join("\n"));
+		C.saveConfig({ CLOUDFLARE_ACCOUNT_ID: accts[0].id });
+	}
+	const env = { ...process.env, CLOUDFLARE_ACCOUNT_ID: C.get("CLOUDFLARE_ACCOUNT_ID") };
+
+	const dbName = C.get("A2A_D1_NAME") || C.get("A2A_WORKER_NAME");
+	if (!C.get("A2A_D1_ID")) {
+		step(`D1 database "${dbName}"`);
+		let db = (cfJson(dir, ["d1", "list"], env) || []).find((d) => d.name === dbName);
+		if (!db) {
+			run(cfBin(dir), ["d1", "create", "--name", dbName], { cwd: dir, env, capture: true });
+			db = (cfJson(dir, ["d1", "list"], env) || []).find((d) => d.name === dbName);
+		}
+		if (!db || !db.uuid) die("could not create or find the D1 database");
+		C.saveConfig({ A2A_D1_ID: db.uuid, A2A_D1_NAME: dbName });
+	}
+	step("applying D1 migrations");
+	run(cfBin(dir), ["d1", "migrations", "apply", C.get("A2A_D1_ID"), "--dir", "migrations"], { cwd: dir, env });
+
+	let ownerToken = C.fileConfig().A2A_OWNER_TOKEN;
+	if (!ownerToken || o["rotate-owner-token"]) ownerToken = randomToken(32);
+	const base = `https://${C.get("A2A_HOSTNAME")}`;
+	C.saveConfig({ A2A_OWNER_TOKEN: ownerToken, A2A_BASE_URL: base });
+
+	const secrets = { OWNER_TOKEN: ownerToken, ...wakeSecretsFromEnv() };
+	step(`deploying (secrets uploaded: ${Object.keys(secrets).join(", ")})`);
+	cfDeploy(dir, secrets);
+	await verifyCard(base);
+	console.log(base);
+	console.error(`config saved to ${C.CONFIG_FILE} (chmod 600). Next: a2a-over-webhook wake preview, a2a-over-webhook token issue <peer>`);
+}
+
+export async function deploy(o) {
+	checkNode();
+	applyFlags(o);
+	const dir = workerDir(o);
+	if (!C.get("A2A_D1_ID") || !C.get("A2A_HOSTNAME")) die("no saved deployment; run `a2a-over-webhook init` first");
+	syncTemplate(dir);
+	if (!o["skip-install"]) run("npm", ["install", "--no-audit", "--no-fund", "--loglevel=error"], { cwd: dir });
+	const env = { ...process.env, CLOUDFLARE_ACCOUNT_ID: C.get("CLOUDFLARE_ACCOUNT_ID") };
+	run(cfBin(dir), ["d1", "migrations", "apply", C.get("A2A_D1_ID"), "--dir", "migrations"], { cwd: dir, env });
+	const secrets = wakeSecretsFromEnv();
+	if (Object.keys(secrets).length && C.get("A2A_OWNER_TOKEN")) secrets.OWNER_TOKEN = C.get("A2A_OWNER_TOKEN");
+	step(Object.keys(secrets).length ? `deploying (secrets uploaded: ${Object.keys(secrets).join(", ")})` : "deploying (existing secrets kept)");
+	cfDeploy(dir, secrets);
+	await verifyCard(C.get("A2A_BASE_URL") || `https://${C.get("A2A_HOSTNAME")}`);
+}
+
+export async function wake(sub, o) {
+	if (sub === "preview") return console.log(JSON.stringify(await owner("GET", "/owner/wake/preview"), null, 2));
+	if (sub === "test") {
+		const r = await owner("POST", "/owner/wake/test", {});
+		console.log(JSON.stringify(r, null, 2));
+		if (!(r.status >= 200 && r.status < 300)) process.exitCode = 1;
+		return;
+	}
+	if (sub === "set") {
+		// non-secret settings via flags; secrets only from the environment (never argv)
+		const secrets = wakeSecretsFromEnv();
+		if (!Object.keys(secrets).length && !DEPLOY_FLAGS.some((f) => o[f] !== undefined))
+			die("nothing to set: export WAKE_WEBHOOK_URL / WAKE_WEBHOOK_KEY / WAKE_HMAC_SECRET and/or pass --preset etc.");
+		return deploy(o);
+	}
+	if (sub === "unset") {
+		const dir = workerDir(o), name = C.get("A2A_WORKER_NAME", "a2a-over-webhook");
+		const env = { ...process.env, CLOUDFLARE_ACCOUNT_ID: C.get("CLOUDFLARE_ACCOUNT_ID") };
+		for (const k of WAKE_SECRETS) run(cfBin(dir), ["workers", "secrets", "delete", k, "--worker", name, "--force"], { cwd: dir, env, allowFail: true });
+		return console.error("wake secrets removed (wake is now a no-op; use polling)");
+	}
+	die("usage: wake set|unset|test|preview");
+}
