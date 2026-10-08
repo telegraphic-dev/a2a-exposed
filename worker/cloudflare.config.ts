@@ -39,6 +39,7 @@ const plain: Record<string, string> = {
 	RATE_PER_MIN: v("A2A_RATE_PER_MIN"),
 	RETIRED_HOSTNAMES: v("A2A_RETIRED_HOSTNAMES"), // custom domains this agent moved away from (see movedResponse)
 	PAIRING_APPROVAL: v("PAIRING_APPROVAL") || "human", // device-flow pairing: human (approval password on /device) | agent | off
+	PBKDF2_ITERATIONS: v("A2A_PBKDF2_ITERATIONS"), // approval password hashing; default 100000 (the Workers maximum), at least 50000
 };
 const envBindings: Record<string, any> = {
 	DB: bindings.d1(v("A2A_D1_ID") ? { name: v("A2A_D1_NAME") || name, id: v("A2A_D1_ID") } : { name: v("A2A_D1_NAME") || name }),
@@ -58,6 +59,9 @@ export default defineConfig((ctx) => ({
 		entrypoint,
 		...(hostname ? { domains: [hostname] } : {}),
 		workersDev,
+		// Optional persisted Workers Logs (A2A_WORKERS_LOGS=1, `init|deploy --workers-logs`): the JSON event lines plus
+		// invocation logs with CPU time. Query strings are redacted, so one-time setup links never reach the logs.
+		...(v("A2A_WORKERS_LOGS") === "1" ? { observability: { enabled: true, redactQueryString: true, logs: { enabled: true, invocationLogs: true } } } : {}),
 		env: ctx.mode === "development" ? { ...envBindings, ...Object.fromEntries(SECRETS.map((k) => [k, bindings.secret()])) } : envBindings,
 		// Optional cron flush of debounced wakes (the Worker also flushes opportunistically on every request).
 		// Requires a workers.dev subdomain on the account (always the case for workers.dev deployments).

@@ -3,7 +3,7 @@
 // itself, so agents need no curl (some agent sandboxes flag *.dev URLs in shell commands).
 import fs from "node:fs";
 import * as C from "./config.mjs";
-import { cardUrlProblem, fingerprint, httpJson } from "./a2a.mjs";
+import { cardUrlProblem, cfErrorCode, describeHttp, fingerprint, httpJson } from "./a2a.mjs";
 import { baseUrl, owner } from "./commands.mjs";
 import * as D from "./deploy.mjs";
 import * as T from "./tunnel.mjs";
@@ -17,7 +17,10 @@ export const LOCAL_PRESETS = ["openclaw-wake", "openclaw-agent", "hermes"];
 export async function checkCard(base) {
 	try {
 		const { status, data } = await httpJson(`${base}/.well-known/agent-card.json`, { timeout: 15000 });
-		if (status !== 200 || !data || typeof data !== "object" || !data.name) return { ok: false, error: `HTTP ${status}${data && !data.name ? " (no agent card)" : ""}` };
+		if (status !== 200 || !data || typeof data !== "object" || !data.name) {
+			const cf = cfErrorCode(typeof data === "string" ? data : "");
+			return { ok: false, error: status === 200 ? "HTTP 200 (no agent card)" : describeHttp(status, data), ...(cf ? { cfError: cf } : {}) };
+		}
 		return { ok: true, name: data.name, versions: (data.supportedInterfaces || []).map((i) => i.protocolVersion).filter(Boolean),
 			urls: [...new Set((data.supportedInterfaces || []).map((i) => i && i.url).filter(Boolean))], urlProblem: cardUrlProblem(data, base) };
 	} catch (e) { return { ok: false, error: e.message }; }
@@ -27,20 +30,23 @@ export async function checkCard(base) {
 export function wakeLine(s) {
 	if (!s.wake) return "unknown (owner API not reachable)";
 	const w = s.wake;
-	if (!w.configured) return `none: no WAKE_WEBHOOK_URL on the Worker, so the agent is expected to poll the inbox (preset ${w.preset || "-"})`;
+	if (!w.configured) return "none: no WAKE_WEBHOOK_URL on the Worker, so the agent is expected to poll the inbox";
 	const auth = [w.hasKey && "bearer/API key", w.hasHmacSecret && "HMAC signature", w.hasAccessServiceToken && "Access service token"].filter(Boolean);
 	return `webhook (preset ${w.preset}${s.tunnel ? ", through the tunnel" : ""}); auth: ${auth.join(" + ") || "none"}; URL fingerprint ${w.urlFingerprint || "-"}`;
 }
 
-/** The single most useful next step for a status snapshot (pure; unit-tested). */
+/** The single most useful next step for a status snapshot (pure; unit-tested). `also`: optional extra hints, printed
+ *  as separate lines (so the next step stays one short instruction). */
 export function nextStep(s) {
-	const fail = (text) => ({ ok: false, text });
-	const done = (text) => ({ ok: true, text });
+	const fail = (text) => ({ ok: false, text, also: [] });
+	const done = (text, also = []) => ({ ok: true, text, also });
 	if (!s.deployed) return fail(`nothing is deployed from ${s.configFile}: run \`${CLI} init ...\` (setup skill, section 2). Another bot's deployment? Set A2A_CONFIG_DIR.`);
 	if (s.baseUrlEnv)
 		return fail(`A2A_BASE_URL is exported as ${s.baseUrlEnv}, but ${s.configFile} has ${s.baseUrlSaved || "(none)"}: CLI commands (and push URLs sent to peers) use the exported value. Unset A2A_BASE_URL (the inbox URL is always the deployment's own)`);
 	if (!s.baseUrl || !s.hasOwnerToken)
 		return fail(`the deployment is incomplete (no ${!s.baseUrl ? "base URL" : "owner token"} saved): re-run \`${CLI} init\` with the same flags (safe: it reuses the D1 database and the owner token)`);
+	if (!s.card.ok && s.card.cfError === 1042)
+		return fail(`the Worker is still propagating (Cloudflare error 1042, normal for up to ~30 s after a first deploy): run \`${CLI} status\` again in 30 seconds. Still 1042 after a few minutes? Run \`${CLI} deploy\``);
 	if (!s.card.ok)
 		return fail(`the agent card is not reachable (${s.card.error}). A new workers.dev subdomain or custom domain can take a few minutes: run \`${CLI} status\` again. Still failing? Run \`${CLI} deploy\``);
 	if (s.card.urlProblem)
@@ -62,9 +68,12 @@ export function nextStep(s) {
 	if (s.wake.configured && needsAgentSecret)
 		return fail(`the Worker sends no webhook auth, so the ${s.wake.preset} webhook will reject wakes: export ${agentSecret} (${s.wake.preset === "hermes" ? "the route secret" : "the hooks token"}), then run \`${CLI} ${t ? "tunnel create" : "wake set"}\``);
 	// not broken, but peers can't pair until the human sets the approval password
-	const pairNote = s.pairing && s.pairing.mode === "human" && !s.pairing.passwordSet
-		? ` Peers can't connect with \`${CLI} connect\` yet: your human sets the approval password with \`${CLI} pair set-password\` (in a terminal; never the agent).` : "";
-	const done2 = (text) => done(text + pairNote);
+	const also = [];
+	if (s.pairing && s.pairing.mode === "human" && !s.pairing.passwordSet)
+		also.push(`peers can't connect yet: run \`${CLI} pair set-password --web\` and send your human the one-time link (or they run \`${CLI} pair set-password\` in a terminal); never set it yourself`);
+	if (s.pairing && s.pairing.pending)
+		also.push(`${s.pairing.pending} pending pairing request(s): \`${CLI} pair list\`, then tell your human (never approve on your own)`);
+	const done2 = (text, extra = []) => done(text, [...extra, ...also]);
 	if (!s.wake.configured) {
 		const poll = "the agent must check the inbox on a schedule (setup skill: polling; Hermes and OpenClaw have copy-paste commands there)";
 		if (s.wake.preset && !LOCAL_PRESETS.includes(s.wake.preset) && s.wake.preset !== "generic")
@@ -74,10 +83,11 @@ export function nextStep(s) {
 			: !z.length ? "the account has no domain (zone), so the secure tunnel is not available"
 			: z.length === 1 ? `for immediate wakes to a local-only webhook, run \`${CLI} tunnel create\` (it uses the account's zone ${z[0]}; no redeploy needed)`
 			: `for immediate wakes to a local-only webhook, run \`${CLI} tunnel create --tunnel-zone <zone>\` with one of: ${z.join(", ")} (no redeploy needed)`;
-		const pub = s.wake.preset === "generic" ? `; a public webhook: export WAKE_WEBHOOK_URL (and a key), then \`${CLI} wake set\`` : "";
-		return done2(`no wake webhook, so ${poll}. Optional: ${tunnel}${pub}.`);
+		const pub = s.wake.preset === "generic" ? `a public webhook: export WAKE_WEBHOOK_URL (and a key), then \`${CLI} wake set\`` : "";
+		return done2(`no wake webhook, so ${poll}.`, [`optional: ${tunnel}`, ...(pub ? [`optional: ${pub}`] : [])]);
 	}
-	return done2(`none: setup is complete. Check a real wake with \`${CLI} wake test\`. Peers connect with \`${CLI} connect ${s.baseUrl}\` (you approve each one); \`${CLI} token issue <peer>\` is the manual fallback.`);
+	return done2(`none: setup is complete. Check a real wake with \`${CLI} wake test\`.`,
+		[`peers connect with \`${CLI} connect ${s.baseUrl}\` (your human approves each one); \`${CLI} token issue <peer>\` is the manual fallback`]);
 }
 
 /** Collect the snapshot. Each probe tolerates failure; nothing is created or changed. */
@@ -105,7 +115,8 @@ export async function collect() {
 			try {
 				const pr = await owner("GET", "/owner/pairing");
 				if (pr && typeof pr === "object" && ["human", "agent", "off"].includes(pr.mode))
-					s.pairing = { mode: pr.mode, passwordSet: !!pr.passwordSet, pending: (pr.pending || []).length };
+					s.pairing = { mode: pr.mode, passwordSet: !!pr.passwordSet, passwordSetAt: pr.passwordSetAt || null, passwordSetVia: pr.passwordSetVia || null,
+						setupLinkExpiresAt: pr.setupLinkExpiresAt || null, pending: (pr.pending || []).length };
 			} catch { /* older Worker (no pairing yet): leave unknown */ }
 		}
 	}
@@ -132,7 +143,7 @@ export async function collect() {
 export async function status(o) {
 	const s = await collect();
 	const next = nextStep(s);
-	if (o.json) console.log(JSON.stringify({ ...s, nextStep: next.text, ok: next.ok }, null, 2));
+	if (o.json) console.log(JSON.stringify({ ...s, nextStep: next.text, also: next.also, ok: next.ok }, null, 2));
 	else {
 		const rows = [
 			["config", s.configFile],
@@ -149,9 +160,11 @@ export async function status(o) {
 				(t.connections != null ? `; ${t.state || "?"}, ${t.connections} connector connection(s)` : t.error ? `; state unknown (${t.error})` : "")]);
 			if (s.zones) rows.push(["zones", s.zones.length ? s.zones.join(", ") : "none on this account"]);
 			const pg = s.pairing;
-			if (pg) rows.push(["pairing", pg.mode === "off" ? "off (token issue only)" : `${pg.mode} approval; approval password ${pg.passwordSet ? "set" : "NOT SET"}${pg.pending ? `; ${pg.pending} pending request(s): ${CLI} pair list` : ""}`]);
+			if (pg) rows.push(["pairing", pg.mode === "off" ? "off (token issue only)"
+				: `${pg.mode} approval; approval password ${pg.passwordSet ? `set${pg.passwordSetAt ? ` ${pg.passwordSetAt}` : ""}${pg.passwordSetVia ? ` (via ${pg.passwordSetVia})` : ""}` : `NOT SET${pg.setupLinkExpiresAt ? ` (a setup link is open until ${pg.setupLinkExpiresAt})` : ""}`}${pg.pending ? `; ${pg.pending} pending request(s): ${CLI} pair list` : ""}`]);
 		}
 		rows.push(["next step", next.text]);
+		for (const a of next.also || []) rows.push(["also", a]);
 		for (const [k, v] of rows) console.log(`${(k + ":").padEnd(12)} ${v}`);
 	}
 	if (!next.ok) process.exitCode = 1;

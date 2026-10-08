@@ -185,7 +185,7 @@ async function tunnelEnv(t, { preset = "openclaw-wake", hostname = "agent.exampl
 		`A2A_BASE_URL=http://127.0.0.1:${srv.address().port}`, `A2A_WORKER_DIR=${path.join(dir, "worker")}`, ...(hostname ? [`A2A_HOSTNAME=${hostname}`] : []),
 	].join("\n") + "\n", { mode: 0o600 });
 	const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(A2A_|PEER_|CLOUDFLARE_|CF_)|WAKE_/.test(k)));
-	Object.assign(env, { A2A_CONFIG_DIR: cfg, STUB_DIR: dir, ...stub });
+	Object.assign(env, { A2A_CONFIG_DIR: cfg, STUB_DIR: dir, A2A_NO_UPDATE_CHECK: "1", ...stub });
 	const cli = (args, extraEnv = {}) => new Promise((resolve) => {
 		const ch = spawn(process.execPath, [BIN, ...args], { env: { ...env, ...extraEnv }, stdio: ["ignore", "pipe", "pipe"] });
 		let stdout = "", stderr = "";
@@ -432,7 +432,8 @@ test("status on a workers.dev inbox with no wake: card OK, polling expected, tun
 	assert.match(r.stdout, /^base URL: +http:\/\/127\.0\.0\.1:\d+ \(workers\.dev\)$/m);
 	assert.match(r.stdout, /^wake: +none: no WAKE_WEBHOOK_URL on the Worker, so the agent is expected to poll the inbox/m);
 	assert.match(r.stdout, /^tunnel: +none$/m);
-	assert.match(r.stdout, /^next step: +no wake webhook, so the agent must check the inbox on a schedule.*run `a2a-over-webhook tunnel create` \(it uses the account's zone example\.com; no redeploy needed\)/m);
+	assert.match(r.stdout, /^next step: +no wake webhook, so the agent must check the inbox on a schedule/m);
+	assert.match(r.stdout, /^also: +optional: for immediate wakes to a local-only webhook, run `a2a-over-webhook tunnel create` \(it uses the account's zone example\.com; no redeploy needed\)/m);
 	assert.ok(!s.calls().some((c) => !/^(zones list)/.test(c.cmd)), "read-only: only zones list");
 	const j = JSON.parse((await s.cli(["status", "--json"])).stdout);
 	assert.equal(j.ok, true);

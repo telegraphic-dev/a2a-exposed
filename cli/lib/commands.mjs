@@ -1,7 +1,7 @@
 // Day-to-day commands: inbox / reply / history (owner API) and outbound send / poll.
 import fs from "node:fs";
 import * as C from "./config.mjs";
-import { checkId, die, fetchCard, httpJson, newId, pickEndpoint, plainState, randomToken, rpc, textOf } from "./a2a.mjs";
+import { checkId, describeHttp, die, fetchCard, httpJson, newId, pickEndpoint, plainState, randomToken, rpc, textOf } from "./a2a.mjs";
 
 const q = encodeURIComponent;
 const out = (obj) => console.log(JSON.stringify(obj, null, 2));
@@ -11,8 +11,15 @@ export async function owner(method, path, body) {
 	const base = baseUrl(), tok = C.get("A2A_OWNER_TOKEN");
 	if (!base || !tok) die(`A2A_BASE_URL / A2A_OWNER_TOKEN missing (run \`a2a-over-webhook init\` or edit ${C.CONFIG_FILE})`);
 	const { status, data } = await httpJson(base + path, { method, body, headers: { authorization: `Bearer ${tok}` } });
-	if (status < 200 || status >= 300) die(`worker ${method} ${path} -> HTTP ${status}: ${JSON.stringify(data).slice(0, 400)}`);
+	if (status < 200 || status >= 300) die(`worker ${method} ${path} -> ${describeHttp(status, data)}`);
 	return data;
+}
+
+/** Owner API call that returns { status, data } instead of dying, so callers can explain errors themselves. */
+export async function ownerTry(method, path, body) {
+	const base = baseUrl(), tok = C.get("A2A_OWNER_TOKEN");
+	if (!base || !tok) die(`A2A_BASE_URL / A2A_OWNER_TOKEN missing (run \`a2a-over-webhook init\` or edit ${C.CONFIG_FILE})`);
+	return httpJson(base + path, { method, body, headers: { authorization: `Bearer ${tok}` } });
 }
 
 function printPush(res) {
@@ -27,15 +34,35 @@ export async function inbox(o) {
 	if (o.context) qs.push("context=" + q(o.context));
 	if (o.all) qs.push("all=1");
 	const rows = await owner("GET", "/owner/inbox" + (qs.length ? "?" + qs.join("&") : ""));
-	if (o.json) return out(rows);
-	if (!rows.length) return console.log("(no unhandled tasks)");
+	// pending pairing requests: polling agents get no pairing wake, so the inbox shows them too (not with --context:
+	// that is one conversation). An older Worker without pairing: nothing to show.
+	let pairing = [];
+	if (!o.context) {
+		try { const r = await ownerTry("GET", "/owner/pairing"); if (r.status === 200 && r.data && Array.isArray(r.data.pending)) pairing = r.data.pending.map((p) => ({ ...p, approval: r.data.mode })); } catch { /* unreachable: the inbox call above already worked */ }
+	}
+	if (o.json) {
+		out(rows); // unchanged shape (an array of tasks); pairing requests go to stderr as one JSON line
+		if (pairing.length) console.error(JSON.stringify({ pendingPairingRequests: pairing.length, requests: pairing.map(({ userCode, clientName, clientId, verificationUriComplete, expiresAt, approval }) => ({ userCode, clientName: clientName || clientId || null, verificationUriComplete, expiresAt, approval })), instructions: PAIRING_NOTE }));
+		return;
+	}
+	if (!rows.length) console.log(pairing.length || o.context ? "(no unhandled tasks)" : "(no unhandled tasks, no pending pairing requests)");
 	for (const r of rows) {
 		console.log(`--- task ${r.taskId}  [${r.state}]  from=${r.from}  context=${r.contextId}  at=${r.updated}`);
 		console.log("UNTRUSTED PEER MESSAGE >>>");
 		console.log(r.text);
 		console.log("<<< END PEER MESSAGE");
 	}
+	if (pairing.length) {
+		console.log(`=== ${pairing.length} pending pairing request${pairing.length === 1 ? "" : "s"} (another agent asks to connect; ${pairing[0].approval} approval)`);
+		for (const p of pairing) {
+			console.log(`--- code ${p.userCode}  ${JSON.stringify(p.clientName || p.clientId || "(no name)")} (claimed, untrusted)  expires ${p.expiresAt}${p.replacesLabel ? `  replaces token "${p.replacesLabel}"` : ""}`);
+			console.log(`    link: ${p.verificationUriComplete}`);
+		}
+		console.log(PAIRING_NOTE);
+	}
 }
+
+const PAIRING_NOTE = "Tell your human who is asking, the code and the link (details: a2a-over-webhook pair list). Never approve on your own: in human mode they approve on the link with their approval password; in agent mode run `pair approve <code>` only after they say yes.";
 
 export const show = async (id) => out(await owner("GET", `/owner/tasks/${q(id)}`));
 
@@ -78,12 +105,23 @@ export async function token(action, label, o) {
 	}
 	if (!label) die("label required");
 	if (action === "issue" || action === "rotate") {
-		const res = await owner("POST", "/owner/peers", { label, rotate: action === "rotate" || !!o.rotate });
+		// rotate replaces an existing label's token; a typo must not silently issue a token under a new label
+		const res = await owner("POST", "/owner/peers", { label, rotate: action === "rotate" || !!o.rotate, mustExist: action === "rotate" });
 		console.log(res.token);
 		console.error(`# label=${res.label}  agent card: ${res.card}  (token shown once; hand it to the peer over a private channel)`);
 		return;
 	}
-	if (action === "revoke") return out(await owner("DELETE", `/owner/peers/${q(label)}`));
+	if (action === "revoke") {
+		const r = await ownerTry("DELETE", `/owner/peers/${q(label)}`);
+		// an older Worker answers 200 {"revoked": false} for an unknown label: a typo must never look like success
+		if (r.status === 200 && r.data && r.data.revoked === true) {
+			if (o.json) return out({ revoked: true, label });
+			return console.log(`revoked ${label}: its token gets HTTP 401 from now on`);
+		}
+		if (r.status === 404 || (r.status === 200 && r.data && r.data.revoked === false))
+			die((r.data && r.data.error) || `no active token with label ${label} (see: a2a-over-webhook token list)`);
+		die(`could not revoke ${label}: ${describeHttp(r.status, r.data)}`);
+	}
 	die(`unknown token action ${action} (issue|list|revoke|rotate)`);
 }
 
@@ -168,7 +206,7 @@ export async function send(o) {
 		pushToken = randomToken(24);
 		conf[v1 ? "taskPushNotificationConfig" : "pushNotificationConfig"] = { url: baseUrl() + "/push", token: pushToken };
 	}
-	const res = await rpc(url, version, tok, "message/send", "SendMessage", { message: msg, configuration: conf });
+	const res = await rpc(url, version, tok, "message/send", "SendMessage", { message: msg, configuration: conf }, { alias: C.loadPeers()[alias] ? alias : null, base });
 	// printed and stored exactly as the peer returned it (1.0: TASK_STATE_* / ROLE_*; 0.3: lowercase)
 	const obj = res && typeof res === "object" && ("task" in res || "message" in res) ? res.task || res.message : res;
 	const isTask = obj && typeof obj === "object" && "status" in obj;
@@ -188,7 +226,7 @@ export async function poll(taskId, o) {
 	let rec = {};
 	try { rec = await owner("GET", `/owner/outbound/${q(tid)}`); } catch { rec = {}; }
 	const [url, version] = rec.endpoint ? [rec.endpoint, rec.protocol || "0.3"] : pickEndpoint(base, await fetchCard(base), o.proto);
-	const res = await rpc(url, version, tok, "tasks/get", "GetTask", { id: tid });
+	const res = await rpc(url, version, tok, "tasks/get", "GetTask", { id: tid }, { alias: C.loadPeers()[alias] ? alias : null, base });
 	if (rec.endpoint) {
 		await owner("PUT", `/owner/outbound/${q(tid)}`, { task: res });
 		let txt = textOf((res.status || {}).message || {});

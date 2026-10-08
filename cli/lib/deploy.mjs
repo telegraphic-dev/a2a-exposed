@@ -5,7 +5,7 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import * as C from "./config.mjs";
-import { cardUrlProblem, die, fingerprint, httpJson, randomToken } from "./a2a.mjs";
+import { cardUrlProblem, cfErrorCode, die, fingerprint, httpJson, randomToken } from "./a2a.mjs";
 import { owner } from "./commands.mjs";
 import * as WD from "./workersdev.mjs";
 
@@ -22,7 +22,7 @@ const DEPLOY_KEYS = [
 	"A2A_PROVIDER_ORGANIZATION", "A2A_PROVIDER_URL", "A2A_DOCUMENTATION_URL",
 	"WAKE_PRESET", "WAKE_AGENT_ID", "WAKE_KEY_HEADER", "WAKE_KEY_PREFIX", "WAKE_BODY_TEMPLATE", "WAKE_CLI_COMMAND",
 	"WAKE_DEBOUNCE_SECONDS", "WAKE_MAX_PER_HOUR", "A2A_MAX_BODY", "A2A_RATE_PER_MIN", "A2A_ENABLE_CRON",
-	"A2A_WORKERS_DEV_SUBDOMAIN", "A2A_RETIRED_HOSTNAMES", "PAIRING_APPROVAL",
+	"A2A_WORKERS_DEV_SUBDOMAIN", "A2A_RETIRED_HOSTNAMES", "PAIRING_APPROVAL", "A2A_PBKDF2_ITERATIONS", "A2A_WORKERS_LOGS",
 ];
 // init/deploy flag -> config key
 const FLAG_KEYS = {
@@ -31,7 +31,7 @@ const FLAG_KEYS = {
 	"provider-organization": "A2A_PROVIDER_ORGANIZATION", "provider-url": "A2A_PROVIDER_URL",
 	preset: "WAKE_PRESET", "agent-id": "WAKE_AGENT_ID", "key-header": "WAKE_KEY_HEADER", "key-prefix": "WAKE_KEY_PREFIX",
 	"body-template": "WAKE_BODY_TEMPLATE", "cli-command": "WAKE_CLI_COMMAND", debounce: "WAKE_DEBOUNCE_SECONDS", "max-per-hour": "WAKE_MAX_PER_HOUR",
-	"pairing-approval": "PAIRING_APPROVAL",
+	"pairing-approval": "PAIRING_APPROVAL", "pbkdf2-iterations": "A2A_PBKDF2_ITERATIONS", "workers-logs": "A2A_WORKERS_LOGS",
 };
 export const PAIRING_MODES = ["human", "agent", "off"];
 export const DEPLOY_FLAGS = Object.keys(FLAG_KEYS);
@@ -44,9 +44,21 @@ export const publicBase = () =>
 	WD.baseUrlFor({ hostname: C.get("A2A_HOSTNAME"), worker: workerName(), subdomain: C.get("A2A_WORKERS_DEV_SUBDOMAIN") });
 export const workerDir = (o) => path.resolve(o.dir || C.get("A2A_WORKER_DIR") || path.join(C.CONFIG_DIR, "worker"));
 
-export function checkNode() {
-	const [maj, min] = process.versions.node.split(".").map(Number);
-	if (maj < 22 || (maj === 22 && min < 18)) die(`Node ${process.versions.node} found; Node 22.18+ is required (cf CLI requirement)`);
+/** How to get Node 22.18+ (printed by the version check; the setup skill says the same). */
+export const NODE_HELP = `How to get Node 22 (any one; no root needed):
+  mise (recommended; the agent skill: npx skills add telegraphic-dev/mise-skill):
+    one command:   mise exec node@22 -- npx a2a-over-webhook <command>
+    this project:  mise use node@22   (then node/npx are Node 22 in this directory)
+  nvm:   nvm install 22 && nvm use 22
+  fnm:   fnm install 22 && fnm use 22
+  or the official installer / binaries: https://nodejs.org/en/download
+Then check: node --version   (v22.18.0 or newer)`;
+
+/** Dies unless `version` (default: this Node) is 22.18+; the message says how to get it. */
+export function checkNode(version = process.versions.node) {
+	const [maj, min] = String(version).replace(/^v/, "").split(".").map(Number);
+	if (maj < 22 || (maj === 22 && min < 18))
+		die(`Node ${version} found; init/deploy need Node 22.18+ (the Cloudflare cf CLI requires it).\n${NODE_HELP}`);
 }
 
 function templateDir() {
@@ -157,6 +169,16 @@ function applyFlags(o) {
 		die("--workers-dev-subdomain must be lowercase letters, digits and hyphens (a DNS label)");
 	if (upd.PAIRING_APPROVAL !== undefined && !PAIRING_MODES.includes(upd.PAIRING_APPROVAL))
 		die(`--pairing-approval must be one of ${PAIRING_MODES.join(" | ")} (human: approval password on the /device page; agent: also \`pair approve\`; off: no device-flow pairing)`);
+	if (upd.A2A_PBKDF2_ITERATIONS !== undefined) {
+		const n = Number(upd.A2A_PBKDF2_ITERATIONS);
+		if (!Number.isInteger(n) || n < 50000 || n > 100000)
+			die("--pbkdf2-iterations must be an integer from 50000 to 100000 (default 100000, the Workers maximum; lower it only if /device approvals hit Cloudflare error 1102, the CPU limit)");
+		upd.A2A_PBKDF2_ITERATIONS = String(n);
+	}
+	if (upd.A2A_WORKERS_LOGS !== undefined) {
+		if (!["on", "off"].includes(upd.A2A_WORKERS_LOGS)) die("--workers-logs must be on or off (Cloudflare Workers Logs: persisted, searchable Worker logs; query strings redacted)");
+		upd.A2A_WORKERS_LOGS = upd.A2A_WORKERS_LOGS === "on" ? "1" : null;
+	}
 	if (upd.WAKE_PRESET && !PRESETS.includes(upd.WAKE_PRESET)) die(`unknown preset ${upd.WAKE_PRESET} (${PRESETS.join(" | ")})`);
 	if (upd.A2A_AGENT_SKILLS) {
 		try { if (!Array.isArray(JSON.parse(upd.A2A_AGENT_SKILLS))) throw 0; } catch { die("--agent-skills must be a JSON array of A2A AgentSkill objects"); }
@@ -181,22 +203,40 @@ function reportSwitch(sw) {
 
 let justRegistered = false; // a workers.dev subdomain registered in this run: its DNS takes a few minutes
 
-async function verifyCard(base) {
-	// 0 skips the check (tests); a brand-new workers.dev subdomain usually resolves within ~3 minutes
-	const tries = Number(process.env.A2A_VERIFY_TRIES ?? (justRegistered ? 60 : 12));
-	if (justRegistered && tries) step("waiting for the new workers.dev subdomain to resolve (usually 1-5 minutes)");
+/** Wait until the agent card is served, and served consistently: right after a first deploy the workers.dev edge
+ *  can answer 200 once and then Cloudflare error 1042 (or 404) for a few seconds while the Worker propagates, so a
+ *  card counts as up only after `confirm` OKs in a row. Returns { ok, name, problem, lastError }. */
+export async function verifyCard(base, { tries = 12, intervalMs = 5000, confirm = 2, onWait = null } = {}) {
+	let streak = 0, last = null, lastError = "", waited = false;
 	for (let i = 0; i < tries; i++) {
 		try {
 			const { status, data } = await httpJson(base + "/.well-known/agent-card.json", { timeout: 10000 });
-			if (status === 200 && data && data.name) {
-				const wrong = cardUrlProblem(data, base);
-				if (wrong) return console.error(`warning: the agent card at ${base}/.well-known/agent-card.json does not point peers at this deployment: ${wrong}. Check with: a2a-over-webhook status`);
-				return console.error(`agent card OK: ${data.name} (${base}/.well-known/agent-card.json)`);
+			if (status === 200 && data && typeof data === "object" && data.name) {
+				last = data;
+				if (++streak >= confirm) return { ok: true, name: data.name, problem: cardUrlProblem(data, base) };
+			} else {
+				streak = 0;
+				const code = cfErrorCode(typeof data === "string" ? data : "");
+				lastError = code ? `Cloudflare error ${code}${code === 1042 ? " (the new Worker is still propagating)" : ""}` : `HTTP ${status}`;
+				if (!waited && onWait) { onWait(lastError); waited = true; }
 			}
-		} catch { /* DNS / certificate may still be provisioning */ }
-		await new Promise((r) => setTimeout(r, 5000));
+		} catch (e) { streak = 0; lastError = e.message; /* DNS / certificate may still be provisioning */ }
+		if (i < tries - 1) await new Promise((r) => setTimeout(r, intervalMs));
 	}
-	console.error(`warning: agent card not reachable yet at ${base}; ${C.get("A2A_HOSTNAME") ? "a new custom domain" : "a new workers.dev subdomain"} can take a few minutes. Check again with: a2a-over-webhook status`);
+	if (last && streak) return { ok: true, name: last.name, problem: cardUrlProblem(last, base) }; // OK on the last try
+	return { ok: false, lastError };
+}
+
+async function verifyDeployedCard(base) {
+	// 0 skips the check (tests); a brand-new workers.dev subdomain usually resolves within ~3 minutes
+	const tries = Number(process.env.A2A_VERIFY_TRIES ?? (justRegistered ? 60 : 24));
+	if (!tries) return;
+	if (justRegistered) step("waiting for the new workers.dev subdomain to resolve (usually 1-5 minutes)");
+	const r = await verifyCard(base, { tries, intervalMs: Number(process.env.A2A_VERIFY_INTERVAL_MS || 5000),
+		onWait: (why) => step(`agent card not served yet (${why}); a new deployment takes up to ~30 s to propagate, waiting`) });
+	if (r.ok && r.problem) return console.error(`warning: the agent card at ${base}/.well-known/agent-card.json does not point peers at this deployment: ${r.problem}. Check with: a2a-over-webhook status`);
+	if (r.ok) return console.error(`agent card OK: ${r.name} (${base}/.well-known/agent-card.json)`);
+	console.error(`warning: agent card not reachable yet at ${base} (${r.lastError || "no answer"}); ${C.get("A2A_HOSTNAME") ? "a new custom domain" : "a new workers.dev deployment or subdomain"} can take a few minutes. Check again with: a2a-over-webhook status`);
 }
 
 /** Apply D1 migrations quietly: cf prints a bare JSON array (often `[]`) when stdout is not a TTY. */
@@ -323,7 +363,7 @@ export async function init(o) {
 	step(`deploying (secrets uploaded: ${Object.keys(secrets).join(", ")})`);
 	await deployAndLearn(dir, secrets, o);
 	const base = deployedBase();
-	if (base) await verifyCard(base);
+	if (base) await verifyDeployedCard(base);
 	console.log(base);
 	reportSwitch(switched);
 	console.error(`config saved to ${C.CONFIG_FILE} (chmod 600). Next: a2a-over-webhook status (shows the next setup step)`);
@@ -346,7 +386,7 @@ export async function deploy(o) {
 	step(Object.keys(secrets).length ? `deploying (secrets uploaded: ${Object.keys(secrets).join(", ")})` : "deploying (existing secrets kept)");
 	await deployAndLearn(dir, secrets, o);
 	const base = deployedBase();
-	if (base) await verifyCard(base);
+	if (base) await verifyDeployedCard(base);
 	if (switched) { console.log(base); reportSwitch(switched); }
 }
 

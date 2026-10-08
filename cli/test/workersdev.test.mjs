@@ -95,7 +95,7 @@ function stubEnv(t, { subdomain = "" } = {}) {
 	fs.writeFileSync(path.join(bin, "cf"), STUB, { mode: 0o755 });
 	if (subdomain) fs.writeFileSync(path.join(dir, "subdomain"), subdomain + "\n");
 	const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(A2A_|PEER_|CLOUDFLARE_)|WAKE_/.test(k)));
-	Object.assign(env, { A2A_CONFIG_DIR: path.join(dir, "cfg"), STUB_DIR: dir, A2A_VERIFY_TRIES: "0" });
+	Object.assign(env, { A2A_CONFIG_DIR: path.join(dir, "cfg"), STUB_DIR: dir, A2A_VERIFY_TRIES: "0", A2A_NO_UPDATE_CHECK: "1" });
 	const cli = (args, extraEnv = {}) => new Promise((resolve) => {
 		const ch = spawn(process.execPath, [BIN, ...args], { env: { ...env, ...extraEnv }, stdio: ["ignore", "pipe", "pipe"] });
 		let stdout = "", stderr = "";

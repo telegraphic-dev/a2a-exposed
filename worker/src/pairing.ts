@@ -12,11 +12,28 @@ export const LIMITS = {
 	wrongPerIp: 10, wrongPerIpWindowS: 3600, // wrong approval passwords per IP per hour, then locked out
 	wrongGlobal: 50, // wrong approval passwords per hour from all IPs, then the page is locked for the hour
 	pollsPerMin: 60, // token requests per IP per minute
-	lookupsPerIp: 30, lookupsWindowS: 600, // /device code lookups per IP per 10 minutes (no enumerating pending requests)
+	lookupsPerIp: 30, lookupsWindowS: 600, // /device code lookups (and password-less denies) per IP per 10 minutes (no enumerating pending requests)
+	setupPerIp: 20, setupWindowS: 600, // /device/setup page loads and submissions per IP per 10 minutes
+	setupFailures: 5, // invalid submissions (too short, mismatched) before a setup link is burned
 };
+// Approval password hashing (PBKDF2-SHA256). The iteration count is stored with each hash, so it can be tuned without
+// breaking an existing password. 100,000 is the Workers runtime's maximum and the default. On the free plan (10 ms CPU
+// per request) one verification costs roughly 17-23 ms CPU locally and has worked in practice; an operator who sees
+// Cloudflare error 1102 on /device can deploy with a lower count (not below 50,000) and set the password again. Online
+// guessing is bounded by the lockouts (LIMITS.wrong*), not by the iteration count; the count only slows offline cracking
+// of a leaked hash, which needs read access to the D1 database (that is, to the Cloudflare account).
 export const PBKDF2_MAX_ITERATIONS = 100000; // the Workers runtime refuses more
-export const PBKDF2_MIN_ITERATIONS = 100000;
+export const PBKDF2_MIN_ITERATIONS = 50000;
+export const PBKDF2_DEFAULT_ITERATIONS = 100000;
 export const MIN_PASSWORD_LENGTH = 12;
+export const SETUP_LINK_DEFAULT_S = 900; // one-time password setup link (pair set-password --web): 15 minutes
+export const SETUP_LINK_MIN_S = 60, SETUP_LINK_MAX_S = 3600;
+
+/** PBKDF2_ITERATIONS from the deployment, clamped to the accepted range (default 100,000). */
+export function pbkdf2Iterations(v: string | undefined): number {
+	const n = Number(v);
+	return Number.isInteger(n) && n >= PBKDF2_MIN_ITERATIONS && n <= PBKDF2_MAX_ITERATIONS ? n : PBKDF2_DEFAULT_ITERATIONS;
+}
 
 export type Mode = "human" | "agent" | "off";
 /** PAIRING_APPROVAL: human (default; also for unknown values, the safe choice), agent, or off. */
@@ -102,7 +119,7 @@ export function parseParams(raw: string, contentType: string | null): Record<str
 }
 
 // ------------------------------------------------------------------ approval password (PBKDF2-SHA256)
-export type PasswordRecord = { alg: "pbkdf2-sha256"; iterations: number; salt: string; hash: string; setAt?: string };
+export type PasswordRecord = { alg: "pbkdf2-sha256"; iterations: number; salt: string; hash: string; setAt?: string; setVia?: "terminal" | "web" };
 
 export async function pbkdf2(password: string, salt: Uint8Array, iterations: number): Promise<Uint8Array> {
 	const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
@@ -113,12 +130,21 @@ export async function pbkdf2(password: string, salt: Uint8Array, iterations: num
 export function checkPasswordRecord(r: any): string {
 	if (!r || r.alg !== "pbkdf2-sha256") return "alg must be pbkdf2-sha256";
 	if (!Number.isInteger(r.iterations) || r.iterations < PBKDF2_MIN_ITERATIONS || r.iterations > PBKDF2_MAX_ITERATIONS)
-		return `iterations must be ${PBKDF2_MIN_ITERATIONS}`;
+		return `iterations must be between ${PBKDF2_MIN_ITERATIONS} and ${PBKDF2_MAX_ITERATIONS}`;
 	try {
 		if (b64decode(String(r.salt)).length < 16) return "salt must be at least 16 bytes (base64)";
 		if (b64decode(String(r.hash)).length !== 32) return "hash must be 32 bytes (base64)";
 	} catch { return "salt and hash must be base64"; }
 	return "";
+}
+
+/** Hash a password on the Worker (the web setup page): the same record the CLI computes. */
+export async function makePasswordRecord(password: string, iterations: number): Promise<PasswordRecord> {
+	const salt = new Uint8Array(16);
+	crypto.getRandomValues(salt);
+	const hash = await pbkdf2(password, salt, iterations);
+	const b64 = (b: Uint8Array) => btoa(String.fromCharCode(...b));
+	return { alg: "pbkdf2-sha256", iterations, salt: b64(salt), hash: b64(hash) };
 }
 
 export async function verifyPassword(password: string, rec: PasswordRecord): Promise<boolean> {
@@ -134,7 +160,7 @@ export async function verifyPassword(password: string, rec: PasswordRecord): Pro
 // ------------------------------------------------------------------ /device page (no scripts, no external assets)
 export const esc = (s: unknown) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
-export type PageRequest = { userCode: string; clientName: string; clientId: string; agentCardUrl: string; ip: string; country: string; createdMs: number; expiresMs: number };
+export type PageRequest = { userCode: string; clientName: string; clientId: string; agentCardUrl: string; ip: string; country: string; createdMs: number; expiresMs: number; replacesLabel?: string };
 export type PageModel = {
 	agentName: string;
 	mode: Mode;
@@ -156,25 +182,70 @@ export function devicePage(m: PageModel, nonce: string): string {
 		["Agent card (claimed)", r.agentCardUrl || "(none given)"],
 		["Requested from", [r.ip || "unknown address", r.country].filter(Boolean).join(", ")],
 		["Expires", `${Math.max(0, Math.round((r.expiresMs - Date.now()) / 60000))} min`],
+		...(r.replacesLabel ? [["Replaces", `the active token "${r.replacesLabel}" (the requester proved it holds it); approving issues a new token under the same label and the old one stops working`]] : []),
 	] : [];
 	const notice = m.notice ? `<p class="n ${m.notice.kind}">${esc(m.notice.text)}</p>` : "";
 	const details = r ? `<table>${rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join("")}</table>
 <p class="w">Approve only if you expected this request and the code matches the one you were given. The name and card URL are claimed by the requester. Approving gives it a token to send messages to this inbox; revoke it any time with <code>${esc(m.cli)} token revoke &lt;label&gt;</code>.</p>` : "";
-	const noPassword = `<p class="n info">No approval password is set yet. In a terminal on the owner's machine run <code>${esc(m.cli)} pair set-password</code>, then reload this page.</p>`;
+	const noPassword = `<p class="n info">No approval password is set yet. Easiest: ask your agent to run <code>${esc(m.cli)} pair set-password --web</code> and send you the one-time link, then set the password on that page. Or run <code>${esc(m.cli)} pair set-password</code> yourself in a terminal on the owner's machine. Then reload this page. You can deny without a password.</p>`;
+	const denyOnly = `<form method="post" action="/device">
+<input type="hidden" name="csrf" value="${esc(m.csrf)}"><input type="hidden" name="user_code" value="${esc(r ? formatUserCode(r.userCode) : "")}">
+<div class="b"><button name="decision" value="deny" type="submit" class="d">Deny</button></div>
+</form>`;
+	// Deny needs no password (formnovalidate skips the required field): denying grants nothing
 	const form = r && m.passwordSet ? `<form method="post" action="/device">
 <input type="hidden" name="csrf" value="${esc(m.csrf)}"><input type="hidden" name="user_code" value="${esc(formatUserCode(r.userCode))}">
-<label for="pw">Approval password</label><input id="pw" name="password" type="password" autocomplete="current-password" required maxlength="1024" autofocus>
-<div class="b"><button name="decision" value="approve" type="submit">Approve</button><button name="decision" value="deny" type="submit" class="d">Deny</button></div>
-</form>` : r && !m.passwordSet ? noPassword : "";
+<label for="pw">Approval password (needed to approve; deny works without it)</label><input id="pw" name="password" type="password" autocomplete="current-password" required maxlength="1024" autofocus>
+<div class="b"><button name="decision" value="approve" type="submit">Approve</button><button name="decision" value="deny" type="submit" class="d" formnovalidate>Deny</button></div>
+</form>` : r && !m.passwordSet ? noPassword + denyOnly : "";
 	const ask = m.askCode ? `<form method="get" action="/device"><label for="uc">Code</label><input id="uc" name="user_code" value="${esc(m.codeValue || "")}" placeholder="WDJB-4827" autocomplete="off" autocapitalize="characters" required maxlength="16" autofocus><div class="b"><button type="submit">Continue</button></div></form>` : "";
-	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer">
-<title>Connect an agent to ${esc(m.agentName)}</title><style nonce="${nonce}">
-body{font:16px/1.5 system-ui,sans-serif;max-width:34rem;margin:2rem auto;padding:0 1rem;color:#111;background:#fafafa}
+	return pageShell(`Connect an agent to ${m.agentName}`, nonce, `${notice}${details}${form}${ask}`);
+}
+
+const STYLE = `body{font:16px/1.5 system-ui,sans-serif;max-width:34rem;margin:2rem auto;padding:0 1rem;color:#111;background:#fafafa}
 h1{font-size:1.3rem}table{border-collapse:collapse;width:100%;margin:1rem 0}th,td{text-align:left;padding:.35rem .5rem;border-bottom:1px solid #ddd;vertical-align:top;word-break:break-all}th{width:40%;font-weight:600;word-break:normal}
 label{display:block;font-weight:600;margin:.8rem 0 .3rem}input{font:inherit;width:100%;box-sizing:border-box;padding:.5rem;border:1px solid #888;border-radius:4px}
 .b{display:flex;gap:.6rem;margin-top:1rem}button{font:inherit;padding:.5rem 1.2rem;border:0;border-radius:4px;background:#1a5fb4;color:#fff;cursor:pointer}button.d{background:#a51d2d}
-.n{padding:.6rem .8rem;border-radius:4px}.ok{background:#e6f4ea}.error{background:#fce8e6}.info{background:#e8f0fe}.w{font-size:.9rem;color:#444}code{background:#eee;padding:0 .2rem}
-</style></head><body><h1>Connect an agent to ${esc(m.agentName)}</h1>${notice}${details}${form}${ask}</body></html>`;
+.n{padding:.6rem .8rem;border-radius:4px}.ok{background:#e6f4ea}.error{background:#fce8e6}.info{background:#e8f0fe}.w{font-size:.9rem;color:#444}code{background:#eee;padding:0 .2rem}`;
+
+/** The shared page frame: no scripts, no external assets, one nonce'd style block. `title` is escaped here. */
+function pageShell(title: string, nonce: string, body: string): string {
+	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer">
+<title>${esc(title)}</title><style nonce="${nonce}">
+${STYLE}
+</style></head><body><h1>${esc(title)}</h1>${body}</body></html>`;
+}
+
+export type SetupModel = {
+	agentName: string;
+	cli: string;
+	csrf: string;
+	token?: string; // the setup token, when the link is valid (posted back in a hidden field)
+	expiresMs?: number;
+	passwordSetAt?: string; // a password exists: this page changes it
+	notice?: { kind: "ok" | "error" | "info"; text: string };
+	done?: boolean; // the password was just set: link to /device
+};
+
+/** GET/POST /device/setup: set or change the approval password from a one-time link (pair set-password --web). */
+export function setupPage(m: SetupModel, nonce: string): string {
+	const notice = m.notice ? `<p class="n ${m.notice.kind}">${esc(m.notice.text)}</p>` : "";
+	if (m.done) return pageShell(`Approval password for ${m.agentName}`, nonce,
+		`${notice}<p>Pairing requests are approved on the <a href="/device">approval page</a> with this password. Keep it to yourself: never give it to an agent. This link is used up; a later change needs a new one (<code>${esc(m.cli)} pair set-password --web</code>).</p>`);
+	if (!m.token) return pageShell(`Approval password for ${m.agentName}`, nonce,
+		`${notice}<p>Ask your agent for a new link: <code>${esc(m.cli)} pair set-password --web</code>. Or run <code>${esc(m.cli)} pair set-password</code> yourself in a terminal on the owner's machine.</p>`);
+	const mins = m.expiresMs ? Math.max(1, Math.round((m.expiresMs - Date.now()) / 60000)) : 0;
+	const intro = m.passwordSetAt
+		? `<p>An approval password is already set (since ${esc(m.passwordSetAt)}). Saving here replaces it.</p>`
+		: `<p>Choose the password you will use to approve agents that ask to connect to this inbox.</p>`;
+	return pageShell(`Approval password for ${m.agentName}`, nonce, `${notice}${intro}
+<p class="w">Only you should know it: don't share it with your agent or anyone else. At least ${MIN_PASSWORD_LENGTH} characters; a passphrase of a few words works well. This one-time link expires in ${mins} min.</p>
+<form method="post" action="/device/setup">
+<input type="hidden" name="csrf" value="${esc(m.csrf)}"><input type="hidden" name="t" value="${esc(m.token)}">
+<label for="pw1">New approval password</label><input id="pw1" name="password" type="password" autocomplete="new-password" required minlength="${MIN_PASSWORD_LENGTH}" maxlength="1024" autofocus>
+<label for="pw2">Repeat it</label><input id="pw2" name="password2" type="password" autocomplete="new-password" required minlength="${MIN_PASSWORD_LENGTH}" maxlength="1024">
+<div class="b"><button type="submit">Set approval password</button></div>
+</form>`);
 }
 
 /** Security headers for the /device page: strict CSP (no scripts; only this page's own style), no framing, no caching. */

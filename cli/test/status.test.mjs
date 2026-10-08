@@ -66,18 +66,20 @@ test("nextStep: tunnel states", () => {
 
 test("nextStep: no wake webhook means polling, with the tunnel offered when the account has a zone", () => {
 	const noWake = (preset, zones) => nextStep(healthy({ wake: { preset, configured: false }, zones }));
+	const full = (r) => [r.text, ...r.also].join(" | "); // optional hints are separate "also" lines
 	for (const p of ["hermes", "openclaw-wake", "openclaw-agent"]) assert.equal(noWake(p, ["example.com"]).ok, true);
-	assert.match(noWake("hermes", ["example.com"]).text, /check the inbox on a schedule.*`a2a-over-webhook tunnel create` \(it uses the account's zone example\.com; no redeploy needed\)/);
-	assert.match(noWake("hermes", ["a.com", "b.org"]).text, /--tunnel-zone <zone>` with one of: a\.com, b\.org/);
-	assert.match(noWake("hermes", []).text, /no domain \(zone\), so the secure tunnel is not available/);
-	assert.match(noWake("hermes", null).text, /needs a zone on the account/);
-	assert.match(noWake("grok-bot", null).text, /export WAKE_WEBHOOK_URL and WAKE_WEBHOOK_KEY, then run `a2a-over-webhook wake set --preset grok-bot`/);
-	assert.match(noWake("generic", ["a.com"]).text, /tunnel create.*a public webhook: export WAKE_WEBHOOK_URL/);
+	assert.match(full(noWake("hermes", ["example.com"])), /check the inbox on a schedule.*`a2a-over-webhook tunnel create` \(it uses the account's zone example\.com; no redeploy needed\)/);
+	assert.match(full(noWake("hermes", ["a.com", "b.org"])), /--tunnel-zone <zone>` with one of: a\.com, b\.org/);
+	assert.match(full(noWake("hermes", [])), /no domain \(zone\), so the secure tunnel is not available/);
+	assert.match(full(noWake("hermes", null)), /needs a zone on the account/);
+	assert.match(full(noWake("grok-bot", null)), /export WAKE_WEBHOOK_URL and WAKE_WEBHOOK_KEY, then run `a2a-over-webhook wake set --preset grok-bot`/);
+	assert.match(full(noWake("generic", ["a.com"])), /tunnel create.*a public webhook: export WAKE_WEBHOOK_URL/);
 });
 
 test("wakeLine: mode and auth, never secret values", () => {
 	assert.match(wakeLine({ wake: null }), /unknown/);
-	assert.match(wakeLine({ wake: { preset: "hermes", configured: false } }), /^none: .*poll the inbox \(preset hermes\)/);
+	assert.match(wakeLine({ wake: { preset: "hermes", configured: false } }), /^none: .*poll the inbox$/);
+	assert.doesNotMatch(wakeLine({ wake: { preset: "generic", configured: false } }), /preset/, "no wake: no preset to talk about");
 	assert.equal(wakeLine({ wake: { preset: "hermes", configured: true, hasHmacSecret: true, hasAccessServiceToken: true, urlFingerprint: "abc123" }, tunnel: {} }),
 		"webhook (preset hermes, through the tunnel); auth: HMAC signature + Access service token; URL fingerprint abc123");
 });

@@ -22,7 +22,7 @@ function sandbox(t, cfg = {}) {
 	t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 	if (Object.keys(cfg).length) fs.writeFileSync(path.join(dir, "config.env"), Object.entries(cfg).map(([k, v]) => `${k}=${v}`).join("\n") + "\n", { mode: 0o600 });
 	const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(A2A_|PEER_)|WAKE_/.test(k)));
-	Object.assign(env, { A2A_CONFIG_DIR: dir, A2A_POLL_SCALE: "0.05" });
+	Object.assign(env, { A2A_CONFIG_DIR: dir, A2A_POLL_SCALE: "0.05", A2A_NO_UPDATE_CHECK: "1" });
 	const cli = (args, { input = "", extraEnv = {} } = {}) => new Promise((resolve) => {
 		const ch = spawn(process.execPath, [BIN, ...args], { env: { ...env, ...extraEnv }, stdio: ["pipe", "pipe", "pipe"] });
 		let stdout = "", stderr = "";
@@ -80,7 +80,7 @@ test("connect: shows the code and link, honours interval and slow_down, stores t
 	const r = await s.cli(["connect", m.url, "--alias", "peer1"]);
 	assert.equal(r.status, 0, r.stderr);
 	assert.match(r.stderr, /Pairing with Peer Inbox \(http:\/\/127\.0\.0\.1:\d+\):\n  code: WDJB-4827\n  link: http:\/\/127\.0\.0\.1:\d+\/device\?user_code=WDJB-4827\nShow this code and link to your human\. They confirm the code with the owner of Peer Inbox, who approves it on that page \(expires in 10 minutes\)\./);
-	assert.match(r.stderr, /connected: peer "peer1" -> http:\/\/127\.0\.0\.1:\d+ \(token stored in .*config\.env as PEER_PEER1_TOKEN; not printed\)/);
+	assert.match(r.stderr, /connected: peer "peer1" -> http:\/\/127\.0\.0\.1:\d+; token stored in .*config\.env as PEER_PEER1_TOKEN \(not printed\)\./);
 	assert.ok(!(r.stdout + r.stderr).includes("a2aow_paired-secret") && !(r.stdout + r.stderr).includes("dev-code-secret"));
 	assert.equal(s.config().PEER_PEER1_TOKEN, "a2aow_paired-secret");
 	assert.deepEqual({ ...s.peers().peer1, paired: undefined }, { url: m.url, token_env: "PEER_PEER1_TOKEN", token_stored: true, paired: undefined });
@@ -115,7 +115,7 @@ test("connect --json: one JSON line per step, for agents", async (t) => {
 });
 
 test("connect: denied, expired and used codes end cleanly (exit 1, no token, state removed)", async (t) => {
-	for (const [error, re] of [["access_denied", /the owner of Peer Inbox denied the pairing request \(code WDJB-4827\)/], ["expired_token", /expired before it was approved; run `a2a-over-webhook connect .*` again/], ["invalid_grant", /no longer valid/]]) {
+	for (const [error, re] of [["access_denied", /the owner of Peer Inbox denied the pairing request \(code WDJB-4827\)/], ["expired_token", /expired before it was approved; nothing was stored\. For a new code, run: a2a-over-webhook connect http:\/\/127\.0\.0\.1:\d+ --alias p/], ["invalid_grant", /no longer valid.*--alias p/]]) {
 		const m = await mockServer(t, { script: [{ error: "authorization_pending" }, { error }] });
 		const s = sandbox(t);
 		const r = await s.cli(["connect", m.url, "--alias", "p"]);
@@ -131,13 +131,13 @@ test("connect --no-wait prints the code and exits; connect again resumes the sam
 	const s = sandbox(t);
 	let r = await s.cli(["connect", m.url, "--alias", "p", "--no-wait"]);
 	assert.equal(r.status, 0, r.stderr);
-	assert.match(r.stderr, /code: WDJB-4827[\s\S]*Not waiting \(--no-wait\)\. Once approved, run `a2a-over-webhook connect http:\/\/127\.0\.0\.1:\d+ --alias p` again/);
+	assert.match(r.stderr, /code: WDJB-4827[\s\S]*Not waiting \(--no-wait\)\. Run `a2a-over-webhook connect http:\/\/127\.0\.0\.1:\d+ --alias p --no-wait` again to check \(same code\)/);
 	const st = path.join(s.dir, "pairing-p.json");
 	assert.equal(fs.statSync(st).mode & 0o777, 0o600, "the device code is kept private");
 	assert.equal(m.seen.token.length, 0);
 	r = await s.cli(["connect", m.url, "--alias", "p"]);
 	assert.equal(r.status, 0, r.stderr);
-	assert.match(r.stderr, /Resuming the pairing request to Peer Inbox \(code WDJB-4827\)/);
+	assert.match(r.stderr, /Resuming the pairing request to Peer Inbox \(code WDJB-4827, link http:\/\/127\.0\.0\.1:\d+\/device\?user_code=WDJB-4827\)/);
 	assert.equal(m.seen.device.length, 1, "no second request");
 	assert.equal(s.config().PEER_P_TOKEN, "a2aow_y");
 });
@@ -168,7 +168,7 @@ test("pair set-password: refuses argv and non-terminal stdin; in a terminal it u
 	const s = sandbox(t, { A2A_BASE_URL: `http://127.0.0.1:${srv.address().port}`, A2A_OWNER_TOKEN: "owner-tok" });
 	let r = await s.cli(["pair", "set-password", "hunter2hunter2"]);
 	assert.equal(r.status, 1);
-	assert.match(r.stderr, /takes no arguments: it reads the password from the terminal/);
+	assert.match(r.stderr, /takes no password argument: it reads the password from the terminal/);
 	r = await s.cli(["pair", "set-password", "--password", "x"]);
 	assert.equal(r.status, 1);
 	r = await s.cli(["pair", "set-password"], { input: "a long enough password\na long enough password\n" });
@@ -194,9 +194,11 @@ test("pair set-password: refuses argv and non-terminal stdin; in a terminal it u
 	assert.equal(out.status, 0, out.o);
 	assert.ok(!out.o.includes(pw), "not echoed");
 	assert.match(out.o, /approval password set/);
-	assert.equal(got.length, 1);
-	assert.deepEqual([got[0].method, got[0].url, got[0].auth], ["PUT", "/owner/pairing/password", "Bearer owner-tok"]);
-	const rec = got[0].body;
+	assert.equal(got.length, 2, "GET /owner/pairing for the iteration count, then PUT");
+	assert.deepEqual([got[0].method, got[0].url], ["GET", "/owner/pairing"]);
+	assert.deepEqual([got[1].method, got[1].url, got[1].auth], ["PUT", "/owner/pairing/password", "Bearer owner-tok"]);
+	const put = got[1];
+	const rec = put.body;
 	assert.deepEqual(Object.keys(rec).sort(), ["alg", "hash", "iterations", "salt"]);
 	assert.equal(rec.alg, "pbkdf2-sha256");
 	assert.equal(rec.iterations, 100000);
@@ -233,13 +235,16 @@ test("connect against the real Worker (agent approval): pair list, pair approve,
 	const client = sandbox(t, { A2A_AGENT_NAME: "Client Bot", A2A_BASE_URL: "https://client.example.com" });
 	let r = await client.cli(["connect", w.url, "--no-wait", "--json"]);
 	assert.equal(r.status, 0, r.stderr);
-	const code = JSON.parse(r.stdout.split("\n")[0]).user_code;
+	const lines0 = r.stdout.trim().split("\n").map((l) => JSON.parse(l));
+	assert.equal(lines0[0].status, "authorization_pending");
+	assert.equal(lines0[lines0.length - 1].status, "not_waiting");
+	const code = lines0[0].user_code;
 	assert.match(code, /^[BCDFGHJKLMNPQRSTVWXZ]{4}-[2-9]{4}$/);
 
 	r = await ownerSide.cli(["pair", "list"]);
 	assert.equal(r.status, 0, r.stderr);
 	assert.match(r.stdout, /^approval: agent \(`a2a-over-webhook pair approve <code>` after your human says yes/m);
-	assert.match(r.stdout, /^approval password: NOT SET/m);
+	assert.match(r.stdout, /approval password: NOT SET: run `a2a-over-webhook pair set-password --web`/);
 	assert.match(r.stdout, new RegExp(`^--- ${code}  "Client Bot" \\(claimed, untrusted\\)`, "m"));
 	assert.match(r.stdout, /card: https:\/\/client\.example\.com\/\.well-known\/agent-card\.json/);
 	assert.match(r.stdout, /never approve on your own/);
@@ -278,12 +283,16 @@ test("human approval mode: pair approve is refused and points to the /device pag
 	const r = await ownerSide.cli(["pair", "approve", code]);
 	assert.equal(r.status, 1);
 	assert.match(r.stderr, new RegExp(`approval mode is human: the owner approves on http://127\\.0\\.0\\.1:\\d+/device\\?user_code=${code} with the approval password`));
+	assert.match(r.stderr, /`pair approve` works only after `(?:npx )?a2a-over-webhook deploy --pairing-approval agent`/);
 	const st = await ownerSide.cli(["status", "--json"], { extraEnv: { A2A_VERIFY_TRIES: "0" } });
 	const j = JSON.parse(st.stdout);
-	assert.deepEqual(j.pairing, { mode: "human", passwordSet: false, pending: 1 });
-	assert.match(j.nextStep, /Peers can't connect with `a2a-over-webhook connect` yet: your human sets the approval password with `a2a-over-webhook pair set-password`/);
+	assert.equal(j.pairing.mode, "human");
+	assert.equal(j.pairing.passwordSet, false);
+	assert.equal(j.pairing.pending, 1);
+	assert.ok((j.also || []).some((a) => /pair set-password --web/.test(a)));
 	const txt = await ownerSide.cli(["status"]);
 	assert.match(txt.stdout, /^pairing: +human approval; approval password NOT SET; 1 pending request\(s\): a2a-over-webhook pair list$/m);
+	assert.match(txt.stdout, /^also: +peers can't connect yet: run `a2a-over-webhook pair set-password --web`/m);
 });
 
 test("init --pairing-approval only takes human, agent or off", async (t) => {

@@ -4,12 +4,14 @@ Give any AI agent a public A2A (Agent2Agent) endpoint. Messages land in a Cloudf
 
 [![npm](https://img.shields.io/npm/v/a2a-over-webhook)](https://www.npmjs.com/package/a2a-over-webhook) [![CI](https://github.com/telegraphic-dev/a2a-over-webhook/actions/workflows/ci.yml/badge.svg)](https://github.com/telegraphic-dev/a2a-over-webhook/actions/workflows/ci.yml)
 
-Installing the skills gives your agent the instructions; it does **not** install the CLI. Install or verify it first (Node 22.18+):
+Installing the skills gives your agent the instructions; it does **not** install the CLI. Install it, or upgrade an older one, first (Node 22.18+):
 
 ```bash
-command -v a2a-over-webhook || npm i -g a2a-over-webhook
-a2a-over-webhook --help
+npm i -g a2a-over-webhook@latest
+a2a-over-webhook --version
 ```
+
+A bare `command -v ... || npm i -g ...` never upgrades an older copy already on PATH. The CLI prints a one-line notice when a newer version is out (at most once a day; `A2A_NO_UPDATE_CHECK=1` turns it off). After upgrading, run `a2a-over-webhook deploy` so the Worker gets the new template and D1 migrations. No Node 22 yet? See the [setup skill](skills/a2a-over-webhook-setup/SKILL.md#1-prerequisites) (mise / nvm / fnm / the official installer).
 
 For one-off use without a global install: `npx -y a2a-over-webhook@latest <command>`. The docs write commands as `npx a2a-over-webhook <command>`; with a global install, `a2a-over-webhook <command>` is the same thing without the npm round-trip.
 
@@ -47,14 +49,14 @@ flowchart LR
 
 ## Quick start
 
-**Requires Node 22.18+** (`node -v`): both the skills CLI below and Cloudflare's `cf` CLI fail on Node 20.
+**Requires Node 22.18+** (`node -v`). `init`/`deploy` stop on older Node (Cloudflare's `cf` CLI needs it). On Node 20, `npm i -g` and `npx skills add` only warn with `EBADENGINE` and still install, so a successful install does not mean Node is new enough. Get Node 22 with [mise](https://github.com/telegraphic-dev/mise-skill) (`mise exec node@22 -- ...` / `mise use node@22`), nvm, fnm, or the [official installer](https://nodejs.org/en/download).
 
 ```bash
 # 1. Install the skills into your agent (see "Install the skills" below for other agents)
 npx --yes skills add telegraphic-dev/a2a-over-webhook
 
-# 2. Install the CLI
-command -v a2a-over-webhook || npm i -g a2a-over-webhook
+# 2. Install (or upgrade) the CLI
+npm i -g a2a-over-webhook@latest
 
 # 3. Ask your agent: "set up a2a-over-webhook". The setup skill walks it through:
 npx cf auth login --no-browser   # device code: open the URL, enter the code
@@ -64,7 +66,8 @@ set -a; . ./wake.secrets.env; set +a
 npx a2a-over-webhook init --hostname agent.example.com --agent-name "My Agent" --preset grok-bot
 npx a2a-over-webhook status                     # card check, wake mode, and the next step
 npx a2a-over-webhook wake test
-npx a2a-over-webhook pair set-password          # you, in a terminal: approves agents that connect
+npx a2a-over-webhook pair set-password --web    # prints a one-time link; you open it and choose the approval password
+# (or: pair set-password, typed in a terminal by you; never by the agent)
 npx a2a-over-webhook connect https://peer.example.com   # connect to another inbox (its owner approves)
 ```
 
@@ -90,10 +93,10 @@ Agents connect without pasting tokens into chat. Each inbox is an OAuth 2.0 auth
 
 1. Agent A runs `npx a2a-over-webhook connect https://b.example.com`. It prints a code (`WDJB-4827`) and a link to B's `/device` page; A's human relays the code to B's owner.
 2. B's agent is woken with `kind: "pairing_request"` (code, link, claimed name and card URL). It asks its human and never approves on its own.
-3. B's owner opens the link, checks the code, and approves with the **approval password** (set once with `pair set-password`, typed in a terminal; only the human knows it).
+3. B's owner opens the link, checks the code, and approves with the **approval password** (set once with `pair set-password --web` from a one-time link, or typed in a terminal with `pair set-password`; only the human knows it). Deny needs no password. Polling agents (no webhook) see the request in `inbox` / `pair list` instead of a wake.
 4. A's `connect` gets a normal per-peer token, stores it as outbound peer, and never prints it. B's `token list` shows `via pairing: code WDJB-4827`; `token revoke` ends it.
 
-`--pairing-approval agent` also lets the agent approve with `pair approve <code>` after asking its human in chat, and `off` disables pairing (`token issue` only). Any standard OAuth device-flow client works too: the endpoints are on the agent card (A2A 1.0 `oauth2SecurityScheme` with a `deviceCode` flow) and at `/.well-known/oauth-authorization-server` (RFC 8414). An unauthenticated A2A call gets a 401 whose JSON error explains the flow. The threat model is in the setup skill ("Pairing security").
+`--pairing-approval agent` also lets the agent approve with `pair approve <code>` after asking its human in chat, and `off` disables pairing (`token issue` only). Re-pairing with `connect --replace` swaps the token under the same label (no orphan). Any standard OAuth device-flow client works too: the endpoints are on the agent card (A2A 1.0 `oauth2SecurityScheme` with a `deviceCode` flow) and at `/.well-known/oauth-authorization-server` (RFC 8414); a 401 carries `WWW-Authenticate` with `resource_metadata` (RFC 9728) pointing at `/.well-known/oauth-protected-resource`. The threat model is in the setup skill ("Pairing security").
 
 ### Setup interrupted?
 
@@ -161,7 +164,7 @@ Any agent that can run `npx` and remember a skill works in polling mode. The wak
 ## Security model
 
 - **Peers.** Each peer gets its own bearer token per label, from pairing (`connect`, approved by the owner) or `token issue <label>`: `a2aow_` followed by 43 base64url characters (32 random bytes). Only the SHA-256 hash is stored, and the token is shown once. You can revoke or rotate any label, and every task records which peer sent it.
-- **Pairing.** Device codes are 256 random bits, stored hashed, single-use, and valid for 10 minutes. By default only the human's approval password approves; it is stored as a salted PBKDF2 hash and typed only in a terminal. Wrong passwords lock out per code, per IP and globally. New requests are capped per IP and in total, so nobody can flood the agent with approval prompts. The `/device` page has no scripts, a strict CSP, no caching, and CSRF protection.
+- **Pairing.** Device codes are 256 random bits, stored hashed, single-use, and valid for 10 minutes. By default only the human's approval password approves; it is stored as a salted PBKDF2-SHA256 hash (default 100,000 iterations, the Workers maximum; tunable with `--pbkdf2-iterations` if free-plan CPU is tight). Deny on `/device` needs no password. The password is set via a one-time web link (`pair set-password --web`) or in a terminal. Wrong passwords lock out per code, per IP and globally. New requests are capped per IP and in total, so nobody can flood the agent with approval prompts. The `/device` and `/device/setup` pages have no scripts, a strict CSP, no caching, and CSRF protection.
 - **Owner.** The owner API (inbox, replies, tokens) uses a separate `OWNER_TOKEN` Worker secret. The CLI keeps it in `~/.config/a2a-over-webhook/config.env` (chmod 600; `A2A_CONFIG_DIR` overrides the directory).
 - **Untrusted content.** Peer messages are data, not instructions. The operate skill shows them inside explicit `UNTRUSTED PEER MESSAGE` fences. It refuses embedded instructions and requires the user's approval for anything consequential or externally visible.
 - **Wake webhooks.** A wake carries metadata, a hint command, and at most a 300-character preview. `openclaw-wake` carries no peer text at all, because OpenClaw treats wake text as a trusted system event. Wake URL, key, and HMAC secret are Worker secrets, never committed config.
@@ -174,7 +177,7 @@ Any agent that can run `npx` and remember a skill works in polling mode. The wak
 - **A2A 1.0 (primary).** `SendMessage`, `GetTask`, `CancelTask`, `ListTasks`, `CreateTaskPushNotificationConfig`, and `GetTaskPushNotificationConfig`, using ProtoJSON enums (`TASK_STATE_*`, `ROLE_*`). The agent card follows the 1.0 shape: `supportedInterfaces` lists 1.0 first and 0.3 second, and `securitySchemes` has `bearer` (`httpAuthSecurityScheme`) plus `pairing` (`oauth2SecurityScheme` with a `deviceCode` flow: `deviceAuthorizationUrl`, `tokenUrl`, `scopes`, and `oauth2MetadataUrl`), listed as alternative `securityRequirements`.
 - **OAuth 2.0.** Device Authorization Grant (RFC 8628) at `POST /oauth/device_authorization` and `POST /oauth/token` (form-encoded; JSON accepted), the `/device` approval page, and RFC 8414 metadata at `/.well-known/oauth-authorization-server`.
 - **A2A 0.3 (compatible).** `message/send`, `tasks/get`, `tasks/cancel`, and `tasks/pushNotificationConfig/set|get` on the same endpoint. The version is chosen by the `A2A-Version` header or the method name.
-- The card is served at both `/.well-known/agent-card.json` and `/.well-known/agent.json`.
+- The 1.0 card is at `/.well-known/agent-card.json`; `/.well-known/agent.json` serves an A2A 0.3-shaped card (`url`, `protocolVersion`, `preferredTransport`) for 0.3 clients.
 - Streaming (`SendStreamingMessage`) is not supported. Work is asynchronous by design.
 
 ## Repository layout
