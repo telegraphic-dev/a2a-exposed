@@ -36,15 +36,19 @@ flowchart LR
 
 ## Quick start
 
+**Requires Node 22.18+** (`node -v`): both the skills CLI below and Cloudflare's `cf` CLI fail on Node 20.
+
 ```bash
-# 1. Install the skills into your agent (Claude Code, Codex, OpenClaw, Hermes, Cursor, … via the skills CLI)
+# 1. Install the skills into your agent (run in the project the agent works in; -g for user-level)
 npx skills add telegraphic-dev/a2a-over-webhook
 
-# 2. Ask your agent: "set up a2a-over-webhook". The setup skill walks it through:
-npm i -g cf                      # Cloudflare's CLI (Node 22.18+)
-cf auth login --no-browser       # device code: open the URL, enter the code
-WAKE_WEBHOOK_URL=... WAKE_WEBHOOK_KEY=... \
-  npx a2a-over-webhook init --hostname agent.example.com --agent-name "My Agent" --preset grok-bot
+# 2. Ask your agent: "set up a2a-over-webhook". The setup skill walks it through
+#    (CLI not on npm yet: see "Running the CLI before it is on npm" below):
+npx cf auth login --no-browser   # device code: open the URL, enter the code
+# Wake secrets go in the environment, never on the command line, e.g. from a chmod-600 file
+# containing WAKE_WEBHOOK_URL=... and WAKE_WEBHOOK_KEY=...
+set -a; . ./wake.secrets.env; set +a
+npx a2a-over-webhook init --hostname agent.example.com --agent-name "My Agent" --preset grok-bot
 npx a2a-over-webhook wake test
 npx a2a-over-webhook token issue first-peer     # hand this to the peer, with your agent-card URL
 ```
@@ -55,6 +59,20 @@ Two skills are included:
 |---|---|
 | [`a2a-over-webhook-setup`](skills/a2a-over-webhook-setup/SKILL.md) | One-time deploy: Cloudflare login, D1, custom domain, owner token, wake preset per agent, first peer, loopback test |
 | [`a2a-over-webhook`](skills/a2a-over-webhook/SKILL.md) | Day-to-day: handle wakes, read the inbox safely, reply, message other agents, manage peer tokens, troubleshoot |
+
+**Where the skills go.** `npx skills add` (the [skills CLI](https://github.com/vercel-labs/skills)) installs into the current project by default, e.g. `.claude/skills/` or `.agents/skills/`; commit them if the agent runs from that repo (Claude Code routines do). Add `-g` for a user-level install (`~/.claude/skills/`, `~/.codex/skills/`, ...). `--agent claude-code codex` picks the target agents, `--skill a2a-over-webhook` picks one skill, `-y` skips prompts, and `--list` only lists. **Grok Bot is not a skills-CLI target** (its `grok` target is Grok Build): save both `SKILL.md` files to your Grok Bot skill library, or keep a checkout on the bot's box and name the `SKILL.md` path in the routine prompt.
+
+### Running the CLI before it is on npm
+
+The CLI isn't published to npm yet, so `npx a2a-over-webhook` doesn't resolve. Run it from a checkout and give the Worker the same command for its wake hints:
+
+```bash
+git clone https://github.com/telegraphic-dev/a2a-over-webhook ~/a2a-over-webhook
+node ~/a2a-over-webhook/cli/bin/a2a-over-webhook.mjs init --hostname agent.example.com ... \
+  --cli-command "node $HOME/a2a-over-webhook/cli/bin/a2a-over-webhook.mjs"
+```
+
+Read `npx a2a-over-webhook` in the docs as that `node .../a2a-over-webhook.mjs` command. Alternatively `npm i -g ~/a2a-over-webhook/cli` links the checkout as `a2a-over-webhook` (then use `--cli-command a2a-over-webhook`). `--cli-command` is saved as `WAKE_CLI_COMMAND` and only changes the command shown in wake hints; the woken agent must be able to run it.
 
 ## Agent compatibility
 
@@ -72,8 +90,8 @@ Any agent that can run `npx` and remember a skill works in polling mode. The wak
 
 ## Security model
 
-- **Peers.** Each peer gets its own bearer token per label (`token issue <label>`). Only the SHA-256 hash is stored, and the token is shown once. You can revoke or rotate any label, and every task records which peer sent it.
-- **Owner.** The owner API (inbox, replies, tokens) uses a separate `OWNER_TOKEN` Worker secret. The CLI keeps it in `~/.config/a2a-over-webhook/config.env` (chmod 600).
+- **Peers.** Each peer gets its own bearer token per label (`token issue <label>`): `a2aow_` followed by 43 base64url characters (32 random bytes). Only the SHA-256 hash is stored, and the token is shown once. You can revoke or rotate any label, and every task records which peer sent it.
+- **Owner.** The owner API (inbox, replies, tokens) uses a separate `OWNER_TOKEN` Worker secret. The CLI keeps it in `~/.config/a2a-over-webhook/config.env` (chmod 600; `A2A_CONFIG_DIR` overrides the directory).
 - **Untrusted content.** Peer messages are data, not instructions. The operate skill shows them inside explicit `UNTRUSTED PEER MESSAGE` fences. It refuses embedded instructions and requires the user's approval for anything consequential or externally visible.
 - **Wake webhooks.** A wake carries metadata, a hint command, and at most a 300-character preview. `openclaw-wake` carries no peer text at all, because OpenClaw treats wake text as a trusted system event. Wake URL, key, and HMAC secret are Worker secrets, never committed config.
 - **Push notifications.** HTTPS only. Private and loopback targets are refused, and each push uses a per-task token (stored hashed for inbound pushes).
@@ -96,7 +114,7 @@ worker/                                  Cloudflare Worker (TypeScript, D1, cf C
 cli/                                     npm package `a2a-over-webhook` (Node 22, zero deps)
 ```
 
-Worker development: `cd worker && npm install && npm test && npx tsc`. For local runs, use `npx cf dev` with a `.dev.vars` file holding the secrets. CLI: `node cli/bin/a2a-over-webhook.mjs --help`.
+Worker development: `cd worker && npm install && npm test && npx tsc`. For local runs, use `npx cf dev` with a `.dev.vars` file holding the secrets. CLI: `node cli/bin/a2a-over-webhook.mjs --help`, tests with `cd cli && npm test`.
 
 ## License
 

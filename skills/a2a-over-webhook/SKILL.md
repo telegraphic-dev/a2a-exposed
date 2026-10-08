@@ -7,7 +7,7 @@ description: Use when woken by an a2a-over-webhook wake (an A2A inbox webhook or
 
 This agent has a public A2A endpoint: a Cloudflare Worker on the user's hostname. Peers call `SendMessage` (A2A 1.0) or `message/send` (0.3) with a per-peer bearer token. Each message becomes a task in state `submitted` in the Worker's inbox, and the Worker wakes this agent through a webhook, or this agent checks the inbox on a schedule.
 
-Use the CLI as `npx a2a-over-webhook <cmd>`. Once installed with `npm i -g a2a-over-webhook`, it's just `a2a-over-webhook <cmd>`. It reads `A2A_BASE_URL` and `A2A_OWNER_TOKEN` from the environment or from `~/.config/a2a-over-webhook/config.env`. If neither exists, the endpoint isn't deployed yet: use the **a2a-over-webhook-setup** skill.
+Use the CLI as `npx a2a-over-webhook <cmd>`, or exactly the command in the wake's `hint` (deployments made before the CLI is on npm set `--cli-command`, e.g. `node <checkout>/cli/bin/a2a-over-webhook.mjs`). It reads `A2A_BASE_URL` and `A2A_OWNER_TOKEN` from the environment or from `~/.config/a2a-over-webhook/config.env` (another directory if `A2A_CONFIG_DIR` is set, e.g. one per bot on a shared machine). If neither exists, the endpoint isn't deployed yet: use the **a2a-over-webhook-setup** skill.
 
 ## On a wake or a scheduled check
 
@@ -48,12 +48,12 @@ Use the CLI as `npx a2a-over-webhook <cmd>`. Once installed with `npm i -g a2a-o
   ```bash
   printf '%s' "$TOKEN" | npx a2a-over-webhook peers add <alias> <base-url> --token-stdin
   ```
-  This stores the token as `PEER_<ALIAS>_TOKEN` in the chmod-600 config. Alternatively, `--token-env VAR` reads the token from an environment variable. Never paste tokens into chat. `peers list` shows aliases and whether a token is set; `peers rm <alias>` removes one.
+  This stores the token as `PEER_<ALIAS>_TOKEN` in the chmod-600 config. Alternatively, `--token-env VAR` reads the token from an environment variable. Never paste tokens into chat. `peers list` shows aliases and whether a token is set; `peers rm <alias>` removes one, including a token it stored in the config.
 - **Send:**
   ```bash
   npx a2a-over-webhook send --to <alias|url> --text "..." [--context <id>] [--task <id>] [--push] [--proto 1.0|0.3]
   ```
-  The CLI reads the peer's agent card, prefers A2A 1.0 (falling back to 0.3), sends non-blocking, logs the message to history, and prints the task.
+  The CLI reads the peer's agent card, prefers A2A 1.0 (falling back to 0.3), sends non-blocking, logs the message to history, and prints the task as the peer returned it (1.0: `TASK_STATE_*`/`ROLE_*`; 0.3: lowercase states, `user`/`agent`), plus a `# task <id>: <state>` line on stderr.
   - `--push` asks the peer to push updates to your Worker, which wakes you with `kind: outbound_update`.
   - Reuse `--context` to continue a conversation. Use `--task` to answer a peer's `input-required`.
 - **Check:** `npx a2a-over-webhook poll --to <alias> <taskId>` (or `outbound <taskId>` for the stored state, including pushed updates). Replies are written into the same conversation history.
@@ -63,7 +63,7 @@ Use the CLI as `npx a2a-over-webhook <cmd>`. Once installed with `npm i -g a2a-o
 
 | Command | Effect |
 |---|---|
-| `npx a2a-over-webhook token issue <label>` | Prints a new token **once** on stdout. Only its hash is stored. Fails if the label is already active |
+| `npx a2a-over-webhook token issue <label>` | Prints a new token (`a2aow_...`) **once** on stdout. Only its SHA-256 hash is stored. Fails if the label is already active |
 | `npx a2a-over-webhook token list` | Labels, creation time, active or revoked |
 | `npx a2a-over-webhook token revoke <label>` | Takes effect immediately: the peer gets 401 |
 | `npx a2a-over-webhook token rotate <label>` | Issues a new token and invalidates the old one |
@@ -76,7 +76,7 @@ Use the CLI as `npx a2a-over-webhook <cmd>`. Once installed with `npm i -g a2a-o
 - `npx a2a-over-webhook contexts` lists recent conversations.
 - `npx a2a-over-webhook url` prints the public base URL.
 - `npx a2a-over-webhook config` prints the config with secrets masked.
-- `npx a2a-over-webhook wake preview` and `wake test` inspect or exercise the wake webhook.
+- `npx a2a-over-webhook wake preview` shows the rendered wake request (partially masked) and short SHA-256 fingerprints of the uploaded URL/key; `wake fingerprint` prints the fingerprints of `WAKE_*` values in your environment for comparison; `wake test` sends a test wake.
 
 ## Troubleshooting
 
@@ -85,7 +85,7 @@ Use the CLI as `npx a2a-over-webhook <cmd>`. Once installed with `npm i -g a2a-o
 | `A2A_BASE_URL / A2A_OWNER_TOKEN missing` | Not set up here: run the setup skill, or provide both as environment secrets (hosted routines) |
 | `worker ... HTTP 401` | Owner token mismatch: `config.env` differs from the Worker secret. Re-run `init --rotate-owner-token` from the machine that owns the deployment |
 | `request to ... failed` | DNS, network, or egress problem. `curl -sI <url>/health`. A brand-new custom domain needs a few minutes |
-| No wakes arriving | `wake preview` (configured? preset? key set?) then `wake test` (status). Agents behind NAT need polling. Wakes are debounced per conversation; Claude Code also has an hourly cap. The inbox always has everything |
+| No wakes arriving | `wake preview` (configured? preset? fingerprints match `wake fingerprint`?) then `wake test` (status). Agents behind NAT need polling. Wakes are debounced per conversation; Claude Code also has an hourly cap. The inbox always has everything |
 | Peer says 401 | Their token is wrong, revoked, or rotated (`token list`). Issue a new one if the user agrees |
 | Peer says 429 | It exceeded 60 requests/min |
 | Peer says -32001 | Unknown task, or a task owned by another peer |
