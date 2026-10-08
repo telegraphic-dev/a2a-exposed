@@ -29,6 +29,38 @@ export async function httpJson(url, { method, body, headers = {}, timeout = 3000
 	return { status: r.status, data };
 }
 
+// Cloudflare edge errors (HTML or "error code: NNNN" bodies, not the Worker's own JSON): code -> what it means here
+const CF_ERRORS = {
+	1042: "no Worker answers on this workers.dev host yet: a new deployment takes up to ~30 s to propagate; try again shortly",
+	1101: "the Worker threw an exception (see the Worker's logs)",
+	1102: "the Worker exceeded its CPU or memory limit",
+	1015: "rate limited by Cloudflare",
+	1033: "the Cloudflare Tunnel has no running connector",
+	1016: "origin DNS error",
+};
+
+/** Cloudflare edge error code (1042, 1101, ...) in a response body, or null. */
+export function cfErrorCode(data) {
+	if (typeof data !== "string") return null;
+	const m = /error(?:\s+code)?[:\s]+(1\d{3})\b/i.exec(data);
+	return m ? Number(m[1]) : null;
+}
+
+/** One readable line for a failed HTTP response: the Worker's JSON error, a Cloudflare error code and title, or a short
+ *  excerpt (never a raw HTML page). */
+export function describeHttp(status, data) {
+	const code = cfErrorCode(data);
+	if (code) return `HTTP ${status}, Cloudflare error ${code}${CF_ERRORS[code] ? `: ${CF_ERRORS[code]}` : ""}`;
+	if (data && typeof data === "object") {
+		const e = data.error;
+		const msg = typeof e === "string" ? e : e && typeof e === "object" ? `${e.code !== undefined ? `${e.code} ` : ""}${e.message || ""}`.trim() : "";
+		if (msg) return `HTTP ${status}: ${msg}${data.error_description ? ` (${data.error_description})` : ""}`;
+		return `HTTP ${status}: ${JSON.stringify(data).slice(0, 200)}`;
+	}
+	const text = String(data ?? "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+	return `HTTP ${status}${text ? `: ${text.slice(0, 160)}${text.length > 160 ? "..." : ""}` : ""}`;
+}
+
 /** Lowercase A2A task state ("completed", "input-required", ...) from a 0.3 or 1.0 task. */
 export const plainState = (t) => {
 	const s = t && t.status && t.status.state;
@@ -88,13 +120,21 @@ export function pickEndpoint(base, card, force) {
 	return [base + "/", "0.3"];
 }
 
-export async function rpc(url, version, token, method03, method1, params) {
+/** JSON-RPC call to a peer. `peer` ({ alias, base }) makes a 401 say how to re-pair with that peer. */
+export async function rpc(url, version, token, method03, method1, params, peer = null) {
 	const v1 = version.startsWith("1");
 	const headers = { "A2A-Version": v1 ? "1.0" : "0.3" };
 	if (token) headers.authorization = `Bearer ${token}`;
 	const body = { jsonrpc: "2.0", id: newId(), method: v1 ? method1 : method03, params };
 	const { status, data } = await httpJson(url, { body, headers });
+	if (status === 401) {
+		const who = peer && peer.alias ? `peer "${peer.alias}"` : new URL(url).origin;
+		const base = (peer && peer.base) || new URL(url).origin;
+		die(token
+			? `${who} rejected our token (HTTP 401: revoked, rotated, or never valid there). Re-pair: a2a-over-webhook connect ${base}${peer && peer.alias ? ` --alias ${peer.alias}` : ""} (its owner approves), or ask its owner for a new token`
+			: `${who} needs a token (HTTP 401): a2a-over-webhook connect ${base}${peer && peer.alias ? ` --alias ${peer.alias}` : ""} (its owner approves)`);
+	}
 	if (status !== 200 || !data || typeof data !== "object" || "error" in data)
-		die(`peer returned HTTP ${status}: ${JSON.stringify(data).slice(0, 500)}`);
+		die(`peer returned ${data && typeof data === "object" && data.error ? `JSON-RPC error ${describeHttp(status, data).replace(/^HTTP \d+: /, "")} (HTTP ${status})` : describeHttp(status, data)}`);
 	return data.result;
 }

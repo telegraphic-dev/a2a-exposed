@@ -46,10 +46,11 @@ const recorded = (db: DatabaseSync) => db.prepare("SELECT name FROM d1_migration
 // The current 0001 without its wake_budget table: the shape of an older build's 0001_init.sql (e.g. the s2a2a prototype).
 const OLD_0001 = sql("0001_init.sql").replace(/CREATE TABLE IF NOT EXISTS wake_budget \([^;]*\);\n?/, "");
 
-test("migration files: NNNN_name.sql, unique numbers, 0002_wake_budget between 0001 and 0003", () => {
+test("migration files: NNNN_name.sql, unique numbers, no gaps, 0002_wake_budget between 0001 and 0003", () => {
 	for (const f of FILES) assert.match(f, /^\d{4}_[a-z0-9_]+\.sql$/, f);
 	assert.equal(new Set(FILES.map(num)).size, FILES.length, "two migrations share a number");
-	assert.deepEqual([...FILES].sort(byNumber).slice(0, 3), ["0001_init.sql", "0002_wake_budget.sql", "0003_device_pairing.sql"]);
+	assert.deepEqual([...FILES].sort(byNumber).map(num), FILES.map((_, i) => i + 1), "numbered 0001, 0002, ... without gaps");
+	assert.deepEqual([...FILES].sort(byNumber).slice(0, 4), ["0001_init.sql", "0002_wake_budget.sql", "0003_device_pairing.sql", "0004_pairing_replace.sql"]);
 	assert.deepEqual([...FILES].sort(byNumber), [...FILES].sort(), "numeric and lexical order agree (test/d1.ts sorts lexically)");
 });
 
@@ -58,14 +59,22 @@ test("fresh database: every migration applies in order; a second run applies not
 	assert.deepEqual(applyMigrations(db), [...FILES].sort(byNumber));
 	for (const t of ["peers", "tasks", "wakes", "wake_budget", "device_requests", "pairing_rate", "settings"]) assert.ok(tables(db).includes(t), t);
 	assert.ok(columns(db, "peers").includes("source"));
+	assert.ok(columns(db, "device_requests").includes("replaces_label"));
 	assert.deepEqual(applyMigrations(db), []);
+});
+
+test("database from the 0002 fix (0001-0003 recorded): only 0004 applies; pending requests keep working", () => {
+	const db = existingDb([sql("0001_init.sql"), sql("0002_wake_budget.sql"), sql("0003_device_pairing.sql")], ["0001_init.sql", "0002_wake_budget.sql", "0003_device_pairing.sql"]);
+	db.prepare("INSERT INTO device_requests (device_hash, user_code, status, created_ms, expires_ms, interval_s) VALUES ('h', 'WDJB4827', 'pending', 1, 2, 5)").run();
+	assert.deepEqual(applyMigrations(db), ["0004_pairing_replace.sql"]);
+	assert.equal((db.prepare("SELECT replaces_label FROM device_requests WHERE device_hash = 'h'").get() as any).replaces_label, null);
 });
 
 test("database from v0.2.0 (0001 and 0003 recorded): 0002 applies as a no-op and keeps the data", () => {
 	const db = existingDb([sql("0001_init.sql"), sql("0003_device_pairing.sql")], ["0001_init.sql", "0003_device_pairing.sql"]);
 	db.prepare("INSERT INTO wake_budget (hour, count) VALUES (1, 7)").run();
-	assert.deepEqual(applyMigrations(db), ["0002_wake_budget.sql"]);
-	assert.deepEqual(recorded(db), ["0001_init.sql", "0003_device_pairing.sql", "0002_wake_budget.sql"]);
+	assert.deepEqual(applyMigrations(db), ["0002_wake_budget.sql", "0004_pairing_replace.sql"]);
+	assert.deepEqual(recorded(db), ["0001_init.sql", "0003_device_pairing.sql", "0002_wake_budget.sql", "0004_pairing_replace.sql"]);
 	assert.equal((db.prepare("SELECT count FROM wake_budget WHERE hour = 1").get() as any).count, 7);
 });
 
@@ -97,7 +106,7 @@ test("database from an earlier build without wake_budget (0001 and 0003 recorded
 		assert.equal(before.data.error?.code, -32603, JSON.stringify(before.data));
 		assert.equal(wakes.length, 0);
 
-		assert.deepEqual(applyMigrations(db), ["0002_wake_budget.sql"]);
+		assert.deepEqual(applyMigrations(db), ["0002_wake_budget.sql", "0004_pairing_replace.sql"]);
 		assert.deepEqual(columns(db, "wake_budget"), ["hour", "count"]);
 		assert.deepEqual(applyMigrations(db), []);
 

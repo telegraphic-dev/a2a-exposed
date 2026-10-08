@@ -21,6 +21,7 @@ export type PairingInfo = {
 	clientId: string;
 	agentCardUrl: string;
 	expiresIn: number;
+	replacesLabel?: string; // re-pairing: the requester proved it holds this active token; approval replaces it
 };
 
 export type WakeConfig = {

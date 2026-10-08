@@ -17,6 +17,7 @@ function sandbox() {
 	// a clean environment: no real deployment config, no wake secrets from the caller's shell
 	const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(A2A_|PEER_)|WAKE_/.test(k)));
 	env.A2A_CONFIG_DIR = dir;
+	env.A2A_NO_UPDATE_CHECK = "1";
 	const cli = (args, input) => spawnSync(process.execPath, [BIN, ...args], { env, input: input ?? "", encoding: "utf8" });
 	const config = () => { try { return parseEnv(fs.readFileSync(path.join(dir, "config.env"), "utf8")); } catch { return {}; } };
 	const peers = () => { try { return JSON.parse(fs.readFileSync(path.join(dir, "peers.json"), "utf8")); } catch { return {}; } };
