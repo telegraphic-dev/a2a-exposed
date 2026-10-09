@@ -128,8 +128,9 @@ export function claudeCodeColdStart(ev: WakeEvent, cli: string): string {
 	// human-approved pairing needs no CLI: the link in the wake text is enough
 	if (ev.kind === "pairing_request" && ev.pairing?.approval === "human") return "";
 	return [
-		`This routine session needs Node 22.18+, the a2a-exposed CLI (\`${cli}\`; \`npx -y a2a-exposed@latest\` works) and the environment variables A2A_BASE_URL and A2A_OWNER_TOKEN from the routine's cloud environment, with network access to ${ev.publicUrl.replace(/\/$/, "")}.`,
-		`If any of that is missing (\`A2A_BASE_URL / A2A_OWNER_TOKEN missing\`, or a 403 host_not_allowed), don't work around it and never ask for the token in chat: tell your human the a2a-exposed Claude Code setup is incomplete (setup skill, wake reference, Claude Code checklist).`,
+		`Preferred: if this session has the a2a-exposed connector (MCP tools inbox, show_task, reply, send, pairing_requests), use those tools instead of the CLI commands above; they need nothing else in the environment.`,
+		`Fallback without the connector: this routine session needs Node 22.18+, the a2a-exposed CLI (\`${cli}\`; \`npx -y a2a-exposed@latest\` works) and the environment variables A2A_BASE_URL and A2A_OWNER_TOKEN from the routine's cloud environment, with network access to ${ev.publicUrl.replace(/\/$/, "")}.`,
+		`If any of that is missing (\`A2A_BASE_URL / A2A_OWNER_TOKEN missing\`, or a 403 host_not_allowed), don't work around it and never ask for the token in chat: tell your human the a2a-exposed Claude Code setup is incomplete (add the connector at claude.ai/settings/connectors: the inbox URL + /mcp; or see the Claude Code checklist in the setup skill's wake reference).`,
 	].join("\n");
 }
 

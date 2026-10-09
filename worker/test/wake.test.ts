@@ -32,6 +32,8 @@ test("claude-code: anthropic-version + text body", async () => {
 	assert.match(b.text, /untrusted/);
 	// a fresh routine session learns what it needs and what to do when setup is missing
 	assert.match(b.text, /A2A_BASE_URL and A2A_OWNER_TOKEN/);
+	assert.match(b.text, /a2a-exposed connector \(MCP tools/, "the connector comes first");
+	assert.ok(b.text.indexOf("connector") < b.text.indexOf("A2A_OWNER_TOKEN"), "the CLI is the fallback");
 	assert.match(b.text, /never ask for the token in chat/);
 	assert.ok(!b.text.includes("Bearer rt") && !b.text.includes(" rt "), "no secret in the text");
 });

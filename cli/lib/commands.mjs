@@ -101,6 +101,11 @@ export async function token(action, label, o) {
 			const via = r.source === "pairing" ? `\tvia pairing: code ${r.user_code || "?"}${r.client_name ? `, ${JSON.stringify(r.client_name)}` : ""}` : "";
 			console.log(`${r.label}\tcreated=${r.created_at}\t${r.revoked_at ? "REVOKED " + r.revoked_at : "active"}${via}`);
 		}
+		// MCP connectors (Worker 0.5+): their own tokens, listed and revoked by label like peer tokens
+		const m = await ownerTry("GET", "/owner/mcp").catch(() => null);
+		if (m && m.status === 200 && m.data && Array.isArray(m.data.grants))
+			for (const g of m.data.grants)
+				console.log(`${g.label}\tcreated=${g.created_at}\t${g.revoked_at ? "REVOKED " + g.revoked_at : "active"}\tMCP connector: ${JSON.stringify(g.client_name || "?")} -> ${g.redirect_host}${g.last_used_at ? `, last used ${g.last_used_at}` : ""}`);
 		return;
 	}
 	if (!label) die("label required");
@@ -117,6 +122,14 @@ export async function token(action, label, o) {
 		if (r.status === 200 && r.data && r.data.revoked === true) {
 			if (o.json) return out({ revoked: true, label });
 			return console.log(`revoked ${label}: its token gets HTTP 401 from now on`);
+		}
+		if (r.status === 404) {
+			// not a peer token: maybe an MCP connector
+			const m = await ownerTry("DELETE", `/owner/mcp/${q(label)}`).catch(() => null);
+			if (m && m.status === 200 && m.data && m.data.revoked === true) {
+				if (o.json) return out({ revoked: true, label, kind: "mcp" });
+				return console.log(`revoked ${label}: that MCP connector gets HTTP 401 from now on (remove it in the client, or reconnect to approve it again)`);
+			}
 		}
 		if (r.status === 404 || (r.status === 200 && r.data && r.data.revoked === false))
 			die((r.data && r.data.error) || `no active token with label ${label} (see: a2a-exposed token list)`);
@@ -157,7 +170,35 @@ function resolvePeer(to) {
 	die(`unknown peer alias ${JSON.stringify(to)} (see: a2a-exposed peers list)`);
 }
 
+/** peers sync [alias...]: upload outbound peers (URL + token, encrypted on the Worker with a key derived from the owner
+ *  token) so the MCP connector's send / poll_outbound tools can reach them. peers unsync <alias>: remove one. */
+async function peersRemote(sub, args) {
+	if (sub === "unsync") {
+		if (!args.length) die("usage: peers unsync <alias>...");
+		for (const alias of args) {
+			const r = await ownerTry("DELETE", `/owner/outbound-peers/${q(alias)}`);
+			if (r.status !== 200) die((r.data && r.data.error) || `could not unsync ${alias}: ${describeHttp(r.status, r.data)}`);
+			console.log(`unsynced ${alias}: the connector can no longer send to it`);
+		}
+		return;
+	}
+	const all = C.loadPeers();
+	const list = args.length ? args : Object.keys(all);
+	if (!list.length) die("no peers to sync: add one first (a2a-exposed connect <url> or peers add)");
+	for (const alias of list) {
+		const pe = all[alias];
+		if (!pe) die(`unknown peer alias ${JSON.stringify(alias)} (see: a2a-exposed peers list)`);
+		const tok = peerToken(pe.token_env);
+		const r = await ownerTry("PUT", `/owner/outbound-peers/${q(alias)}`, { url: pe.url.replace(/\/$/, ""), ...(tok ? { token: tok } : {}) });
+		if (r.status === 404) die("this Worker has no MCP support yet: redeploy (a2a-exposed deploy) and try again");
+		if (r.status !== 200) die(`could not sync ${alias}: ${(r.data && r.data.error) || describeHttp(r.status, r.data)}`);
+		console.log(`synced ${alias}\t${pe.url}\t${tok ? "token stored encrypted on the Worker" : "no token"}`);
+	}
+	console.error("# the MCP connector's send tool can now reach these peers; re-run after connect / token changes or an owner-token rotation");
+}
+
 export function peers(sub, args, o) {
+	if (sub === "sync" || sub === "unsync") return peersRemote(sub, args);
 	const all = C.loadPeers();
 	if (sub === "add") {
 		const [alias, url] = args;

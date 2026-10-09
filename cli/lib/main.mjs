@@ -22,7 +22,7 @@ CLOUDFLARE_API_TOKEN instead: setup skill, Troubleshooting)
        [--agent-name N] [--agent-description D] [--agent-skills JSON]
        [--provider-organization O --provider-url U] [--preset P] [--worker-name W] [--d1-name D]
        [--account-id ID] [--cf-profile NAME] [--cli-command CMD] [--debounce S] [--max-per-hour N]
-       [--pairing-approval human|agent|off] [--pbkdf2-iterations N] [--workers-logs on|off] [--cron]
+       [--pairing-approval human|agent|off] [--pbkdf2-iterations N] [--workers-logs on|off] [--mcp on|off] [--cron]
        [--upstream URL [--upstream-card-url URL] [--upstream-token-stdin | --no-upstream-token]] [--worker-dir DIR]
                                 deploy the Worker + D1 to your account; wake secrets are read from
                                 env WAKE_WEBHOOK_URL / WAKE_WEBHOOK_KEY / WAKE_HMAC_SECRET (never argv)
@@ -39,6 +39,8 @@ CLOUDFLARE_API_TOKEN instead: setup skill, Troubleshooting)
                                 --pbkdf2-iterations  approval-password hashing cost, 50000-100000 (default 100000,
                                                the Workers maximum; lower only if /device hits error 1102)
                                 --workers-logs on|off  persisted Cloudflare Workers Logs (query strings redacted)
+                                --mcp on|off   remote MCP server at <url>/mcp for Claude and other MCP clients
+                                               (default on; each client needs your approval password once)
                                 --upstream URL  proxy / expose mode: a public façade for an agent that already
                                                speaks A2A (JSON-RPC) on a private network. URL is its endpoint on
                                                a Cloudflare Tunnel hostname behind Access (never a Tailnet/LAN
@@ -133,12 +135,16 @@ Pairing (OAuth 2.0 device flow, RFC 8628: agents connect without pasting tokens 
 Inbound peer tokens (one per peer label; paired agents get one too)
   token issue <label>     print a new token once (fails if the label is active); manual fallback to \`connect\`
   token rotate <label>    replace the label's token
-  token list | token revoke <label>        list shows how each token was created (pairing: code + date);
+  token list | token revoke <label>        list shows how each token was created (pairing: code + date)
+                                           and MCP connectors (label mcp-*); revoke works for both;
                                            revoke of an unknown label exits 1
 
 Outbound (agents you call)
   peers add <alias> <url> [--token-env VAR | --token-stdin]
   peers list | peers rm <alias>
+  peers sync [alias...] | peers unsync <alias>
+                          upload peers (URL + token, encrypted on the Worker) so the MCP connector can send to
+                          them; default: all peers. Re-run after connect, token changes or an owner-token rotation
                           a token variable set in the environment overrides config.env; when a peer token
                           differs between the two, connect/send/poll/peers/status warn (values never shown)
   send --to <alias|url> [--text T | stdin] [--context C] [--task T] [--push] [--proto 0.3|1.0]

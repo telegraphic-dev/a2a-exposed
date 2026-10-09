@@ -13,7 +13,10 @@ import * as WD from "./workersdev.mjs";
 const PKG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 /** Each Claude Code routine fire is a new cloud session: a 2xx only means a session started. */
 export const CLAUDE_CODE_NOTE = [
-	"note (claude-code): each fire starts a NEW cloud session, which sees only what the routine provides. Check that",
+	"note (claude-code): each fire starts a NEW cloud session, which sees only what the routine provides.",
+	"  Simplest: add this inbox as a connector at claude.ai/settings/connectors (URL: <your Worker URL>/mcp, approve with",
+	"  your approval password) and keep it enabled on the routine; the session then uses its tools, no CLI or token needed.",
+	"  Without the connector (CLI fallback), check that",
 	"  - the repo with the committed skills (.claude/skills/) is a routine source and the skills are on its default branch,",
 	"  - A2A_BASE_URL and A2A_OWNER_TOKEN are set on the routine's cloud environment (not only in this session),",
 	"  - the environment's network access allows this Worker's hostname,",
@@ -37,7 +40,7 @@ const DEPLOY_KEYS = [
 	"A2A_PROVIDER_ORGANIZATION", "A2A_PROVIDER_URL", "A2A_DOCUMENTATION_URL",
 	"WAKE_PRESET", "WAKE_AGENT_ID", "WAKE_KEY_HEADER", "WAKE_KEY_PREFIX", "WAKE_BODY_TEMPLATE", "WAKE_CLI_COMMAND",
 	"WAKE_DEBOUNCE_SECONDS", "WAKE_MAX_PER_HOUR", "A2A_MAX_BODY", "A2A_RATE_PER_MIN", "A2A_ENABLE_CRON",
-	"A2A_WORKERS_DEV_SUBDOMAIN", "A2A_RETIRED_HOSTNAMES", "PAIRING_APPROVAL", "A2A_PBKDF2_ITERATIONS", "A2A_WORKERS_LOGS",
+	"A2A_WORKERS_DEV_SUBDOMAIN", "A2A_RETIRED_HOSTNAMES", "PAIRING_APPROVAL", "A2A_PBKDF2_ITERATIONS", "A2A_WORKERS_LOGS", "A2A_MCP",
 	"A2A_UPSTREAM_URL", "A2A_UPSTREAM_CARD_URL",
 ];
 // init/deploy flag -> config key
@@ -47,7 +50,7 @@ const FLAG_KEYS = {
 	"provider-organization": "A2A_PROVIDER_ORGANIZATION", "provider-url": "A2A_PROVIDER_URL",
 	preset: "WAKE_PRESET", "agent-id": "WAKE_AGENT_ID", "key-header": "WAKE_KEY_HEADER", "key-prefix": "WAKE_KEY_PREFIX",
 	"body-template": "WAKE_BODY_TEMPLATE", "cli-command": "WAKE_CLI_COMMAND", debounce: "WAKE_DEBOUNCE_SECONDS", "max-per-hour": "WAKE_MAX_PER_HOUR",
-	"pairing-approval": "PAIRING_APPROVAL", "pbkdf2-iterations": "A2A_PBKDF2_ITERATIONS", "workers-logs": "A2A_WORKERS_LOGS",
+	"pairing-approval": "PAIRING_APPROVAL", "pbkdf2-iterations": "A2A_PBKDF2_ITERATIONS", "workers-logs": "A2A_WORKERS_LOGS", mcp: "A2A_MCP",
 	upstream: "A2A_UPSTREAM_URL", "upstream-card-url": "A2A_UPSTREAM_CARD_URL",
 };
 export const PAIRING_MODES = ["human", "agent", "off"];
@@ -203,6 +206,10 @@ function applyFlags(o) {
 		if (!Number.isInteger(n) || n < 50000 || n > 100000)
 			die("--pbkdf2-iterations must be an integer from 50000 to 100000 (default 100000, the Workers maximum; lower it only if /device approvals hit Cloudflare error 1102, the CPU limit)");
 		upd.A2A_PBKDF2_ITERATIONS = String(n);
+	}
+	if (upd.A2A_MCP !== undefined) {
+		if (!["on", "off"].includes(upd.A2A_MCP)) die("--mcp must be on or off (the remote MCP server at /mcp that Claude and other MCP clients add as a connector; default on)");
+		upd.A2A_MCP = upd.A2A_MCP === "off" ? "off" : null;
 	}
 	if (upd.A2A_WORKERS_LOGS !== undefined) {
 		if (!["on", "off"].includes(upd.A2A_WORKERS_LOGS)) die("--workers-logs must be on or off (Cloudflare Workers Logs: persisted, searchable Worker logs; query strings redacted)");

@@ -217,7 +217,7 @@ label{display:block;font-weight:600;margin:.8rem 0 .3rem}input{font:inherit;widt
 h2{font-size:1.05rem;margin-top:1.5rem}ul{padding-left:1.2rem}a{color:#1a5fb4}.n{padding:.6rem .8rem;border-radius:4px}.ok{background:#e6f4ea}.error{background:#fce8e6}.info{background:#e8f0fe}.w{font-size:.9rem;color:#444}code{background:#eee;padding:0 .2rem}`;
 
 /** The shared page frame: no scripts, no external assets, one nonce'd style block. `title` is escaped here. */
-function pageShell(title: string, nonce: string, body: string): string {
+export function pageShell(title: string, nonce: string, body: string): string {
 	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer">
 <title>${esc(title)}</title><style nonce="${nonce}">
 ${STYLE}
