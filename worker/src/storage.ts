@@ -45,9 +45,7 @@ export interface DoStmt {
 
 /** A D1-shaped database over `SqlStorage`. `batch` is one transaction; DO SQL forbids BEGIN/COMMIT, so the caller passes `transactionSync`. */
 export function doSqlD1(sql: SqlStorageLike, tx: TxRunner): DoSql {
-	const execRaw = (q: string, args: unknown[], raw: boolean) => {
-		const cur = sql.exec(q, ...args.map(norm));
-		const rows = raw ? [...cur.raw()] : cur.toArray();
+	const changesOf = (q: string) => {
 		let changes = 0, last_row_id = 0;
 		if (WRITE.test(q)) {
 			// `rowsWritten` also counts index writes. Ask SQLite for the D1-equivalent `meta.changes`.
@@ -55,26 +53,27 @@ export function doSqlD1(sql: SqlStorageLike, tx: TxRunner): DoSql {
 			changes = Number(m?.c ?? 0);
 			last_row_id = Number(m?.r ?? 0);
 		}
-		return { rows, meta: { changes, last_row_id } };
+		return { changes, last_row_id };
 	};
 	const result = (q: string, args: unknown[]) => {
-		const r = execRaw(q, args, false);
-		return { success: true as const, results: r.rows, meta: r.meta };
+		const rows = sql.exec(q, ...args.map(norm)).toArray();
+		return { success: true as const, results: rows, meta: changesOf(q) };
 	};
 	const stmt = (q: string, args: unknown[] = []): DoStmt => ({
 		__sql: q,
 		__args: args,
 		bind: (...a: unknown[]) => stmt(q, a),
 		first: async (col?: string) => {
-			const r = execRaw(q, args, false).rows[0] as Record<string, unknown> | undefined;
+			const r = result(q, args).results[0];
 			if (!r) return null;
 			if (col === undefined) return r as never;
 			if (!(col in r)) throw new Error(`D1_COLUMN_NOTFOUND: Column not found (${col})`);
 			return r[col] as never;
 		},
-		all: async () => result(q, args),
+		// `T` is the caller's row shape. The cursor only knows records, so the cast is the D1 generic.
+		all: async <T>() => result(q, args) as { results: T[]; meta: { changes: number; last_row_id: number } },
 		run: async () => result(q, args),
-		raw: async (_o?: { columnNames?: boolean }) => execRaw(q, args, true).rows as never,
+		raw: async <T>() => [...sql.exec(q, ...args.map(norm)).raw()] as T[],
 	});
 	return {
 		prepare: (q: string) => stmt(q),

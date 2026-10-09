@@ -38,7 +38,7 @@ export class Store extends DurableObject {
 	constructor(ctx: DurableObjectState, env: Record<string, unknown>) {
 		super(ctx, env);
 		const storage = ctx.storage as unknown as { sql: Parameters<typeof doSqlD1>[0]; transactionSync: Parameters<typeof doSqlD1>[1] };
-		const tx = storage.transactionSync;
+		const tx: Parameters<typeof doSqlD1>[1] = (fn) => storage.transactionSync(fn);
 		this.db = doSqlD1(storage.sql, tx);
 		ctx.blockConcurrencyWhile(async () => { this.applied = migrateDo(storage.sql, tx, MIGRATIONS); });
 	}

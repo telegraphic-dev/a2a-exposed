@@ -134,7 +134,8 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 		super(ctx, env);
 		const storage = ctx.storage as unknown as { sql: SqlStorageLike; transactionSync: TxRunner };
 		this.#sql = storage.sql;
-		this.#tx = storage.transactionSync;
+		// Call through `storage` so `this` stays bound. An extracted method throws Illegal invocation.
+		this.#tx = (fn) => storage.transactionSync(fn);
 		this.#db = doSqlD1(this.#sql, this.#tx);
 		// Read only. Migrations run once a config row exists, so a scan that instantiates an object writes nothing.
 		ctx.blockConcurrencyWhile(async () => {
@@ -231,7 +232,7 @@ function routeStatus(entry: DirectoryEntry): Response | null {
 }
 
 export default {
-	async fetch(req: Request, env: WorkerBindings, ectx: ExecutionContext): Promise<Response> {
+	async fetch(req: Request<unknown, IncomingRequestCfProperties>, env: WorkerBindings, ectx: ExecutionContext): Promise<Response> {
 		if (!hostedOn(env)) return worker.fetch(req, env, ectx);
 		const domain = parseGates(env).gates.tenantDomain;
 		const name = tenantNameFromHost(new URL(req.url).hostname, domain);

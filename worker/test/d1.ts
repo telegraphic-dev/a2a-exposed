@@ -54,10 +54,10 @@ let bridge: { port: import("node:worker_threads").MessagePort; flag: Int32Array 
 let next = 0;
 export const remoteStats = { calls: 0, ms: 0 };
 
-function bundleHarness(): string {
+async function bundleHarness(): Promise<string> {
 	const require = createRequire(new URL("../package.json", import.meta.url));
-	const { buildSync } = require("esbuild") as typeof import("esbuild");
-	const built = buildSync({
+	const { build } = require("esbuild") as typeof import("esbuild");
+	const built = await build({
 		entryPoints: [fileURLToPath(new URL("./harness-worker.ts", import.meta.url))],
 		bundle: true,
 		format: "esm",
@@ -85,22 +85,28 @@ function bundleHarness(): string {
 	return file.text;
 }
 
+let harnessScript: string | null = null;
+if (BACKEND !== "node") harnessScript = await bundleHarness();
+
 function bridgeCall(reqPath: string, body: unknown): any {
 	if (!bridge) {
-		const script = bundleHarness();
+		const script = harnessScript;
+		if (!script) throw new Error("storage harness was not bundled");
 		const { port1, port2 } = new MessageChannel();
 		const flag = new Int32Array(new SharedArrayBuffer(4));
 		const w = new Worker(new URL("./bridge-thread.mjs", import.meta.url), {
 			workerData: { port: port2, flag: flag.buffer, script, pool: POOL },
 			transferList: [port2],
 		});
-		w.unref();
-		port1.unref?.();
 		w.on("message", (m) => { if (m?.error) console.error(m.error); });
 		bridge = { port: port1, flag };
 		if (Atomics.wait(flag, 0, 0, 120_000) === "timed-out") throw new Error("storage bridge did not start");
 		const ready = receiveMessageOnPort(port1)?.message;
 		if (ready && ready.ready === false) throw new Error(ready.error || "storage bridge did not start");
+		// Listening for `message` refs the worker. Drop that ref once Miniflare is up so the test
+		// process can exit; workerd stays up for later calls and dies with the process.
+		w.unref();
+		port1.unref();
 	}
 	const t0 = performance.now();
 	Atomics.store(bridge.flag, 0, 0);
