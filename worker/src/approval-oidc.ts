@@ -135,16 +135,22 @@ export async function startOidc(ctx: TenantContext, o: {
 	return { ok: true, location: u.toString() };
 }
 
-function audMatches(aud: unknown, clientId: string): boolean {
-	const list = typeof aud === "string" ? [aud] : Array.isArray(aud) ? aud : [];
-	return list.some((a) => typeof a === "string" && A.timingSafeEqualStr(a, clientId));
+/** Audience must contain this client. Several audiences require `azp` equal to the client id; a present `azp` must always match. */
+function audienceOk(aud: unknown, azp: unknown, clientId: string): boolean {
+	const raw = typeof aud === "string" ? [aud] : Array.isArray(aud) ? aud : [];
+	const list = raw.filter((a): a is string => typeof a === "string");
+	if (!list.some((a) => A.timingSafeEqualStr(a, clientId))) return false;
+	if (raw.length > 1 || azp !== undefined) return typeof azp === "string" && A.timingSafeEqualStr(azp, clientId);
+	return true;
 }
 
-function allowed(sub: unknown, email: unknown, subjects: string[]): boolean {
-	for (const want of subjects) {
-		if (typeof sub === "string" && A.timingSafeEqualStr(sub, want)) return true;
-		if (typeof email === "string" && A.timingSafeEqualStr(email, want)) return true;
+/** `sub` is checked first. `email` counts only when `email_verified` is boolean true. */
+function allowed(claims: { sub?: unknown; email?: unknown; email_verified?: unknown }, subjects: string[]): boolean {
+	if (typeof claims.sub === "string") {
+		for (const want of subjects) if (A.timingSafeEqualStr(claims.sub, want)) return true;
 	}
+	if (claims.email_verified !== true || typeof claims.email !== "string") return false;
+	for (const want of subjects) if (A.timingSafeEqualStr(claims.email, want)) return true;
 	return false;
 }
 
@@ -173,12 +179,12 @@ async function verifyIdToken(token: string, jwks: { keys?: any[] }, expect: { is
 	try { claims = JSON.parse(new TextDecoder().decode(b64urlDecode(parts[1]))); }
 	catch { return { reason: "token" }; }
 	if (issuerBase(String(claims.iss || "")) !== issuerBase(expect.iss)) return { reason: "iss" };
-	if (!audMatches(claims.aud, expect.aud)) return { reason: "aud" };
+	if (!audienceOk(claims.aud, claims.azp, expect.aud)) return { reason: "aud" };
 	if (typeof claims.nonce !== "string" || !A.timingSafeEqualStr(claims.nonce, expect.nonce)) return { reason: "nonce" };
 	const nowS = Date.now() / 1000;
 	if (typeof claims.exp !== "number" || !Number.isFinite(claims.exp) || claims.exp + SKEW_S < nowS) return { reason: "exp" };
 	if (typeof claims.nbf === "number" && claims.nbf - SKEW_S > nowS) return { reason: "nbf" };
-	if (!allowed(claims.sub, claims.email, expect.subjects)) return { reason: "sub" };
+	if (!allowed(claims, expect.subjects)) return { reason: "sub" };
 	return { subject: typeof claims.sub === "string" ? claims.sub : String(claims.email) };
 }
 

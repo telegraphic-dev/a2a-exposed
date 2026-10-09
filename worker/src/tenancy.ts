@@ -80,7 +80,7 @@ export interface WorkerBindings extends ConfigFields {
 	APPROVAL_OIDC_ISSUER?: string;
 	APPROVAL_OIDC_CLIENT_ID?: string;
 	APPROVAL_OIDC_CLIENT_SECRET?: string;
-	/** Comma-separated `sub` or `email` values allowed to approve. */
+	/** Comma-separated `sub` or `email` values allowed to approve. Email matches only when `email_verified` is true. */
 	APPROVAL_OIDC_ALLOWED_SUBJECTS?: string;
 	/** Comma-separated: password, oidc. Unset keeps the password and also offers OIDC once it is fully configured. */
 	APPROVAL_METHODS?: string;

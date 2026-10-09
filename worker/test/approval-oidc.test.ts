@@ -30,7 +30,7 @@ function signJwt(payload: Record<string, unknown>, header: Record<string, unknow
 
 function claims(over: Record<string, unknown> = {}): Record<string, unknown> {
 	const now = Math.floor(Date.now() / 1000);
-	return { iss: ISSUER, aud: [CLIENT, "other"], sub: "owner-1", exp: now + 300, iat: now, ...over };
+	return { iss: ISSUER, aud: [CLIENT, "other"], azp: CLIENT, sub: "owner-1", exp: now + 300, iat: now, ...over };
 }
 
 function setup(over: Record<string, string> = {}) {
@@ -206,12 +206,64 @@ test("APPROVAL_METHODS=oidc hides the password; APPROVAL_METHODS=password hides 
 	assert.match(g2.text, /No approval password is set yet/);
 });
 
+test("an unverified email does not approve; sub does; multi-audience tokens need azp", async (t) => {
+	const s = setup({ ...oidcEnv, APPROVAL_OIDC_ALLOWED_SUBJECTS: "human@example.com" }); t.after(s.restore);
+	const reject = async (over: Record<string, unknown>, dropAzp = false) => {
+		const d = await s.start();
+		const { post } = await s.postOidc(d.data.user_code);
+		const loc = new URL(post.headers.get("location")!);
+		const nonce = loc.searchParams.get("nonce")!;
+		const body = claims({ nonce, sub: "other", email: "human@example.com", ...over });
+		if (dropAzp) delete body.azp;
+		s.setClaims(() => body);
+		const back = await s.call("GET", `/device/oidc/callback?code=auth-code&state=${loc.searchParams.get("state")}`);
+		assert.equal(back.status, 400, back.text);
+		const tok = await s.call("POST", "/oauth/token", { form: { grant_type: GRANT, device_code: d.data.device_code } });
+		assert.equal(tok.data.error, "authorization_pending");
+	};
+	await reject({});
+	await reject({ email_verified: false });
+	await reject({ email_verified: "true" });
+	await reject({ email_verified: true }, true);
+
+	const asSub = setup({ ...oidcEnv, APPROVAL_OIDC_ALLOWED_SUBJECTS: "human@example.com" }); t.after(asSub.restore);
+	const dSub = await asSub.start();
+	const started = await asSub.postOidc(dSub.data.user_code);
+	const locSub = new URL(started.post.headers.get("location")!);
+	asSub.setClaims(() => claims({ nonce: locSub.searchParams.get("nonce")!, sub: "human@example.com", email: "other@example.com", email_verified: false }));
+	const viaSub = await asSub.call("GET", `/device/oidc/callback?code=auth-code&state=${locSub.searchParams.get("state")}`);
+	assert.equal(viaSub.status, 200, viaSub.text);
+
+	const single = setup(oidcEnv); t.after(single.restore);
+	const d1 = await single.start();
+	const p1 = await single.postOidc(d1.data.user_code);
+	const loc1 = new URL(p1.post.headers.get("location")!);
+	single.setClaims(() => {
+		const body = claims({ nonce: loc1.searchParams.get("nonce")!, aud: CLIENT });
+		delete body.azp;
+		return body;
+	});
+	const okSingle = await single.call("GET", `/device/oidc/callback?code=auth-code&state=${loc1.searchParams.get("state")}`);
+	assert.equal(okSingle.status, 200, okSingle.text);
+
+	const wrong = setup(oidcEnv); t.after(wrong.restore);
+	const d2 = await wrong.start();
+	const p2 = await wrong.postOidc(d2.data.user_code);
+	const loc2 = new URL(p2.post.headers.get("location")!);
+	wrong.setClaims(() => {
+		const body = claims({ nonce: loc2.searchParams.get("nonce")!, aud: CLIENT, azp: "someone-else" });
+		return body;
+	});
+	const badAzp = await wrong.call("GET", `/device/oidc/callback?code=auth-code&state=${loc2.searchParams.get("state")}`);
+	assert.equal(badAzp.status, 400, badAzp.text);
+});
+
 test("email allowlist matches and a hosted tenant uses its own approval, not the Worker secret", async (t) => {
 	const s = setup({ ...oidcEnv, APPROVAL_OIDC_ALLOWED_SUBJECTS: "human@example.com" }); t.after(s.restore);
 	const d = await s.start();
 	const { post } = await s.postOidc(d.data.user_code);
 	const loc = new URL(post.headers.get("location")!);
-	s.setClaims(() => claims({ nonce: loc.searchParams.get("nonce")!, sub: "other", email: "human@example.com" }));
+	s.setClaims(() => claims({ nonce: loc.searchParams.get("nonce")!, sub: "other", email: "human@example.com", email_verified: true }));
 	const back = await s.call("GET", `/device/oidc/callback?code=auth-code&state=${loc.searchParams.get("state")}`);
 	assert.equal(back.status, 200, back.text);
 	assert.match(back.text, /Approved/);
