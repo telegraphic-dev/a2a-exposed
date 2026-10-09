@@ -10,7 +10,7 @@ import { renderWake, redact, cloudflareErrorHint, defaultDebounceSeconds, defaul
 import * as P from "./pairing.ts";
 import * as M from "./mcp.ts";
 import { resolveTenant, type TenantContext, type WorkerBindings } from "./tenancy.ts";
-import { exportRows, importRows, toSql, ExportError } from "./export.ts";
+import { exportRows, toSql } from "./export.ts";
 import { backupDatabase, DAILY_CRON } from "./backup.ts";
 import * as O from "./approval-oidc.ts";
 type Json = any;
@@ -1041,22 +1041,6 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			return new Response(toSql(file), { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } });
 		}
 		return json(file);
-	}
-	if (seg[0] === "import" && !seg[1] && m === "POST") {
-		let raw: string;
-		try { raw = await readBody(req, { ...ctx, MAX_BODY: "8388608" }); }
-		catch (e) { if (e instanceof HttpError) return json({ error: e.message }, e.status); throw e; }
-		let file: unknown;
-		try { file = raw ? JSON.parse(raw) : {}; } catch { return json({ error: "import: invalid json" }, 400); }
-		try {
-			const key = await ctx.peerKey();
-			const resume = file && typeof file === "object" ? (file as { resume?: unknown }).resume : undefined;
-			return json(await importRows(ctx.DB, file, {
-				openOutboundToken: async (alias, enc) => !!key && !!(await M.openPeerTokenWithKey(key, alias, enc)),
-				resume,
-			}));
-		}
-		catch (e) { if (e instanceof ExportError) return json({ error: e.message }, 400); throw e; }
 	}
 	return json({ error: "not found" }, 404);
 }

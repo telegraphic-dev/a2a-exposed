@@ -1,4 +1,4 @@
-// `export` / `import` against a stub owner API. No network beyond 127.0.0.1.
+// `export` against a stub owner API. No network beyond 127.0.0.1.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -28,13 +28,11 @@ function sandbox(t) {
 	return { cli, env };
 }
 
-test("export prints JSON, import --yes posts it, and a missing --yes does not call the Worker", async (t) => {
+test("export prints JSON and SQL, and help lists export", async (t) => {
 	const seen = [];
 	const file = { format: "a2a-exposed-export", version: 1, exportedAt: "2026-10-09T03:00:00.000Z", tables: { peers: [{ label: "ada", token_hash: "abc" }] } };
 	const srv = http.createServer(async (req, res) => {
-		let body = "";
-		for await (const c of req) body += c;
-		seen.push({ method: req.method, url: req.url, auth: req.headers.authorization, body });
+		seen.push({ method: req.method, url: req.url, auth: req.headers.authorization });
 		if (req.url === "/owner/export") {
 			res.writeHead(200, { "content-type": "application/json" });
 			return res.end(JSON.stringify(file));
@@ -42,10 +40,6 @@ test("export prints JSON, import --yes posts it, and a missing --yes does not ca
 		if (req.url === "/owner/export?format=sql") {
 			res.writeHead(200, { "content-type": "text/plain" });
 			return res.end("-- a2a-exposed-export 1\nDELETE FROM \"peers\";\n");
-		}
-		if (req.url === "/owner/import" && req.method === "POST") {
-			res.writeHead(200, { "content-type": "application/json" });
-			return res.end(JSON.stringify({ tables: 1, rows: 1, outboundPeersNeedSync: ["bea"] }));
 		}
 		res.writeHead(404);
 		res.end("{}");
@@ -67,53 +61,10 @@ test("export prints JSON, import --yes posts it, and a missing --yes does not ca
 	assert.equal(sql.status, 0);
 	assert.match(sql.stdout, /DELETE FROM "peers"/);
 
-	const refused = await s.cli(["import"], { input: JSON.stringify(file) });
-	assert.equal(refused.status, 1);
-	assert.match(refused.stderr, /--yes/);
+	const help = await s.cli(["--help"]);
+	assert.match(help.stdout, /export \[--sql\]/);
+	assert.equal(help.stdout.includes("import --yes"), false);
+	const unknown = await s.cli(["import", "--yes"], { input: JSON.stringify(file) });
+	assert.equal(unknown.status, 1);
 	assert.equal(seen.some((r) => r.url === "/owner/import"), false);
-
-	const imported = await s.cli(["import", "--yes"], { input: JSON.stringify(file) });
-	assert.equal(imported.status, 0);
-	const post = seen.find((r) => r.url === "/owner/import");
-	assert.equal(post.method, "POST");
-	assert.deepEqual(JSON.parse(post.body), file);
-	assert.match(imported.stdout, /"rows": 1/);
-	assert.match(imported.stderr, /peers sync/);
-	assert.match(imported.stderr, /bea/);
-	assert.equal(imported.stderr.includes("a2aow_"), false);
-});
-
-test("import follows a staged cursor until the inbox is replaced", async (t) => {
-	const file = { format: "a2a-exposed-export", version: 1, tables: { history: [{ context_id: "c", ts: "t", dir: "in", text: "m" }] } };
-	const posts = [];
-	let n = 0;
-	const srv = http.createServer(async (req, res) => {
-		let body = "";
-		for await (const c of req) body += c;
-		const parsed = body ? JSON.parse(body) : {};
-		posts.push(parsed);
-		res.writeHead(200, { "content-type": "application/json" });
-		if (n++ === 0) return res.end(JSON.stringify({ tables: 1, rows: 0, outboundPeersNeedSync: [], next: { phase: "stage", id: "ab".repeat(16), table: "history", offset: 0 } }));
-		if (n === 2) return res.end(JSON.stringify({ tables: 1, rows: 1, outboundPeersNeedSync: ["bea"], next: { phase: "commit", id: "ab".repeat(16) } }));
-		return res.end(JSON.stringify({ tables: 1, rows: 0, outboundPeersNeedSync: [] }));
-	});
-	await new Promise((r) => srv.listen(0, "127.0.0.1", r));
-	t.after(() => srv.close());
-	const s = sandbox(t);
-	fs.writeFileSync(path.join(s.env.A2A_CONFIG_DIR, "config.env"), `A2A_BASE_URL=http://127.0.0.1:${srv.address().port}\nA2A_OWNER_TOKEN=owner-secret\n`, { mode: 0o600 });
-	const imported = await s.cli(["import", "--yes"], { input: JSON.stringify(file) });
-	assert.equal(imported.status, 0, imported.stderr);
-	assert.equal(posts.length, 3);
-	assert.equal(posts[0].resume, undefined);
-	assert.equal(posts[1].resume.phase, "stage");
-	assert.equal(posts[2].resume.phase, "commit");
-	assert.deepEqual(JSON.parse(imported.stdout), { tables: 1, rows: 1, outboundPeersNeedSync: ["bea"] });
-	assert.match(imported.stderr, /bea/);
-});
-
-test("help lists export and import", async (t) => {
-	const s = sandbox(t);
-	const r = await s.cli(["--help"]);
-	assert.match(r.stdout, /export \[--sql\]/);
-	assert.match(r.stdout, /import --yes/);
 });

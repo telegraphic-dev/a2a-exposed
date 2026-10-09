@@ -1,4 +1,4 @@
-// Inbox export/import and the gated daily R2 snapshot. Run: npm test
+// Inbox export and the gated daily R2 snapshot. Run: npm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -10,11 +10,9 @@ import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import worker from "../src/index.ts";
 import { d1 } from "./d1.ts";
 import { sha256 } from "../src/a2a.ts";
-import { exportRows, importRows, toSql, bookmarkForTime, restoreBookmark, restartAfterResult, ExportError, EXPORT_TABLES, IMPORT_QUERY_BUDGET, RESTORE_RESTART_DELAY_MS, type ImportCursor } from "../src/export.ts";
+import { exportRows, toSql, bookmarkForTime, restoreBookmark, restartAfterResult, ExportError, EXPORT_TABLES, RESTORE_RESTART_DELAY_MS } from "../src/export.ts";
 import { doSqlD1, type SqlStorageLike, type TxRunner } from "../src/storage.ts";
-import { openPeerToken, sealPeerToken } from "../src/mcp.ts";
 import { backupDatabase, backupDirectory, exportTenantSql, hostedDailyBackup, olderThanRetention, pruneSnapshots, snapshotKey, DAILY_CRON, type R2BucketLike } from "../src/backup.ts";
-import { importParts, IMPORT_REQUEST_BYTES } from "../../cli/lib/commands.mjs";
 import { namespaceForRegion, type DoNamespace } from "../src/tenancy.ts";
 import type { DirectoryEntry } from "../src/directory.ts";
 
@@ -52,52 +50,6 @@ test("export SQL round-trips application rows and skips hosted config", async ()
 	assert.equal(peer.token_hash, "hash-1");
 	const text = fresh.prepare("SELECT text FROM history").get() as { text: string };
 	assert.equal(text.text, "a'b\n-- drop");
-});
-
-test("import replaces listed tables, refuses unknown tables, and keeps a rejected file unread", async () => {
-	const DB = db();
-	await DB.prepare("INSERT INTO peers (label, token_hash, created_at) VALUES ('ada', 'h', 't')").run();
-	await DB.prepare("INSERT INTO history (context_id, ts, dir, text) VALUES ('ctx', 't', 'local', 'keep-me')").run();
-	const file = await exportRows(DB);
-	await DB.prepare("INSERT INTO peers (label, token_hash, created_at) VALUES ('bea', 'h2', 't')").run();
-	const replaced = await importRows(DB, file);
-	assert.equal(replaced.tables, EXPORT_TABLES.length);
-	const labels = ((await DB.prepare("SELECT label FROM peers ORDER BY label").all()).results as { label: string }[]).map((r) => r.label);
-	assert.deepEqual(labels, ["ada"]);
-
-	await assert.rejects(() => importRows(DB, { format: "a2a-exposed-export", version: 1, tables: { sqlite_master: [] } }), /unknown table/);
-	await assert.rejects(() => importRows(DB, { format: "a2a-exposed-export", version: 2, tables: {} }), /not supported/);
-	await assert.rejects(() => importRows(DB, { format: "a2a-exposed-export", version: 1, tables: { peers: [{ "label); drop": "x" }] } }), /bad column/);
-	await assert.rejects(() => importRows(DB, { format: "a2a-exposed-export", version: 1, tables: { peers: [{ not_a_real_column: "x" }] } }), /peers has no column not_a_real_column/);
-	const still = ((await DB.prepare("SELECT label FROM peers").all()).results as { label: string }[]).map((r) => r.label);
-	assert.deepEqual(still, ["ada"]);
-	assert.equal(DB.db.prepare("SELECT name FROM sqlite_master WHERE name LIKE '_a2a_import_%'").all().length, 0);
-
-	const partial = await importRows(DB, { format: "a2a-exposed-export", version: 1, tables: { peers: [] } });
-	assert.equal(partial.tables, 1);
-	assert.equal(((await DB.prepare("SELECT label FROM peers").all()).results as unknown[]).length, 0);
-	const hist = await DB.prepare("SELECT text FROM history").first<{ text: string }>();
-	assert.equal(hist?.text, "keep-me");
-});
-
-test("import keeps an outbound token this owner can open and drops one sealed for another", async () => {
-	const DB = db();
-	const ours = await sealPeerToken("owner-secret", "ada", "a2aow_local");
-	const theirs = await sealPeerToken("other-owner", "bea", "a2aow_other");
-	const res = await importRows(DB, {
-		format: "a2a-exposed-export", version: 1,
-		tables: { outbound_peers: [
-			{ alias: "ada", url: "https://ada.example.com", token_enc: ours, created_at: "t", updated_at: "t" },
-			{ alias: "bea", url: "https://bea.example.com", token_enc: theirs, created_at: "t", updated_at: "t" },
-		] },
-	}, { openOutboundToken: (alias, enc) => openPeerToken("owner-secret", alias, enc).then((t) => !!t) });
-	assert.deepEqual(res.outboundPeersNeedSync, ["bea"]);
-	const ada = await DB.prepare("SELECT token_enc FROM outbound_peers WHERE alias = 'ada'").first<{ token_enc: string }>();
-	assert.equal(await openPeerToken("owner-secret", "ada", ada!.token_enc), "a2aow_local");
-	const bea = await DB.prepare("SELECT url, token_enc FROM outbound_peers WHERE alias = 'bea'").first<{ url: string; token_enc: string | null }>();
-	assert.equal(bea?.url, "https://bea.example.com");
-	assert.equal(bea?.token_enc, null);
-	assert.equal(JSON.stringify(res).includes("a2aow_"), false);
 });
 
 test("exportRows reads every application table in one batch", async () => {
@@ -166,206 +118,7 @@ test("exportRows on a Durable Object runs inside one transactionSync", async () 
 	assert.equal(Object.keys(file.tables).length, EXPORT_TABLES.length);
 });
 
-test("a large import stays under the free-plan query budget and swaps only at the end", async () => {
-	const src = db();
-	for (let i = 0; i < 400; i++)
-		await src.prepare("INSERT INTO history (context_id, ts, dir, text) VALUES ('c', 't', 'in', ?)").bind(`m${i}`).run();
-	await src.prepare("INSERT INTO peers (label, token_hash, created_at) VALUES ('ada', 'h', 't')").run();
-	await src.prepare("INSERT INTO device_requests (device_hash, user_code, status, created_ms, expires_ms, interval_s, replaces_label) VALUES ('dh', 'CODE1234', 'pending', 1, 2, 5, 'ada')").run();
-	const foreign = await sealPeerToken("other-owner", "bea", "a2aow_other");
-	await src.prepare("INSERT INTO outbound_peers (alias, url, token_enc, created_at, updated_at) VALUES ('bea', 'https://bea.example.com', ?, 't', 't')").bind(foreign).run();
-	const file = await exportRows(src);
-
-	const dst = db();
-	await dst.prepare("INSERT INTO peers (label, token_hash, created_at) VALUES ('keep', 'hk', 't')").run();
-	await dst.prepare("INSERT INTO history (context_id, ts, dir, text) VALUES ('c', 't', 'local', 'old')").run();
-	const open = (alias: string, enc: string) => openPeerToken("owner-secret", alias, enc).then((t) => !!t);
-	await assert.rejects(() => importRows(dst, { ...file, tables: { ...file.tables, peers: [{ not_a_real_column: "x" }] } }), /no column/);
-	assert.equal((await dst.prepare("SELECT label FROM peers").first<{ label: string }>())?.label, "keep");
-	assert.equal(dst.db.prepare("SELECT name FROM sqlite_master WHERE name LIKE '_a2a_import_%'").all().length, 0);
-
-	const counter = countQueries(dst);
-	let resume: ImportCursor | undefined;
-	let sawStage = false;
-	let swapped = false;
-	let finished = false;
-	const need = new Set<string>();
-	for (let n = 0; n < 30 && !finished; n++) {
-		counter.reset();
-		const res = await importRows(counter.db, file, { resume, openOutboundToken: open });
-		assert.ok(counter.used <= IMPORT_QUERY_BUDGET, `invocation used ${counter.used} queries`);
-		for (const alias of res.outboundPeersNeedSync) need.add(alias);
-		const phase = res.next?.phase;
-		if (phase === "stage" || phase === "commit") {
-			assert.equal(swapped, false);
-			assert.equal((await dst.prepare("SELECT label FROM peers WHERE label = 'keep'").first<{ label: string }>())?.label, "keep");
-			assert.equal((await dst.prepare("SELECT text FROM history WHERE text = 'old'").first<{ text: string }>())?.text, "old");
-			if (phase === "stage") sawStage = true;
-		} else {
-			swapped = true;
-			assert.equal(await dst.prepare("SELECT label FROM peers WHERE label = 'keep'").first(), null);
-		}
-		if (!res.next) finished = true;
-		else resume = res.next;
-	}
-	assert.equal(sawStage, true);
-	assert.equal(swapped, true);
-	assert.equal(finished, true);
-	const labels = ((await dst.prepare("SELECT label FROM peers ORDER BY label").all()).results as { label: string }[]).map((r) => r.label);
-	assert.deepEqual(labels, ["ada"]);
-	assert.equal(((await dst.prepare("SELECT text FROM history").all()).results as unknown[]).length, 400);
-	assert.equal(await dst.prepare("SELECT text FROM history WHERE text = 'old'").first(), null);
-	const replaced = await dst.prepare("SELECT replaces_label FROM device_requests WHERE device_hash = 'dh'").first<{ replaces_label: string }>();
-	assert.equal(replaced?.replaces_label, "ada");
-	const bea = await dst.prepare("SELECT token_enc FROM outbound_peers WHERE alias = 'bea'").first<{ token_enc: string | null }>();
-	assert.equal(bea?.token_enc, null);
-	assert.deepEqual([...need], ["bea"]);
-	assert.equal(dst.db.prepare("SELECT name FROM sqlite_master WHERE name LIKE '_a2a_import_%'").all().length, 0);
-});
-
-test("an export over 8 MiB imports as slices and the whole file is rejected", async () => {
-	const src = db();
-	const text = "x".repeat(2000);
-	for (let i = 0; i < 4500; i++)
-		await src.prepare("INSERT INTO history (context_id, ts, dir, text) VALUES ('c', 't', 'in', ?)").bind(text + i).run();
-	await src.prepare("INSERT INTO oidc_txns (state, nonce, verifier, kind, csrf, payload_json, expires_ms) VALUES ('st', 'n', 'v', 'device', 'c', '{}', 9)").run();
-	const file = await exportRows(src);
-	assert.ok(file.tables.oidc_txns?.length === 1);
-	const whole = JSON.stringify(file);
-	assert.ok(Buffer.byteLength(whole) > 8 * 1024 * 1024, `export is ${Buffer.byteLength(whole)} bytes`);
-	const planned = importParts(file);
-	assert.equal(planned.mode, "slice");
-	assert.ok(planned.parts.length > 1);
-	for (const part of planned.parts) {
-		const n = Buffer.byteLength(JSON.stringify(part.body));
-		assert.ok(n <= IMPORT_REQUEST_BYTES, `slice is ${n} bytes`);
-		assert.ok(n < 8 * 1024 * 1024);
-	}
-
-	const dst = db();
-	await dst.prepare("INSERT INTO history (context_id, ts, dir, text) VALUES ('c', 't', 'local', 'old')").run();
-	await dst.prepare("INSERT INTO oidc_txns (state, nonce, verifier, kind, csrf, payload_json, expires_ms) VALUES ('old', 'n', 'v', 'device', 'c', '{}', 1)").run();
-	const counter = countQueries(dst);
-	let resume: ImportCursor | undefined;
-	let part = 0;
-	let swapped = false;
-	for (let n = 0; n < planned.parts.length + 5 && !swapped; n++) {
-		counter.reset();
-		const phase = resume?.phase;
-		const body = phase === "commit" || phase === "cleanup"
-			? { format: file.format, version: file.version, tables: {}, slice: planned.slice, resume }
-			: { ...planned.parts[part].body, ...(resume ? { resume } : {}) };
-		const res = await importRows(counter.db, body, { resume });
-		assert.ok(counter.used <= IMPORT_QUERY_BUDGET, `${phase || "start"} used ${counter.used} queries`);
-		if (phase === "commit") {
-			assert.equal(counter.used, 1 + planned.slice.tables.length * 2, `commit used ${counter.used}`);
-			assert.equal(res.tables, planned.slice.tables.length);
-			assert.equal(res.next?.phase, "cleanup");
-		}
-		if (res.next?.phase === "stage" || res.next?.phase === "commit") {
-			assert.equal((await dst.prepare("SELECT text FROM history WHERE text = 'old'").first<{ text: string }>())?.text, "old");
-		}
-		if (res.next?.phase === "stage") {
-			const expect = planned.parts[part].after;
-			assert.equal(res.next.table, expect?.table);
-			assert.equal(res.next.offset, expect?.offset);
-			part++;
-			resume = res.next;
-		} else if (res.next) {
-			resume = res.next;
-		} else {
-			swapped = true;
-		}
-	}
-	assert.equal(swapped, true);
-	assert.equal(((await dst.prepare("SELECT text FROM history").all()).results as unknown[]).length, 4500);
-	assert.equal(await dst.prepare("SELECT text FROM history WHERE text = 'old'").first(), null);
-	assert.ok(part > 0, "the commit body was not the first request");
-	assert.equal((await dst.prepare("SELECT state FROM oidc_txns").first<{ state: string }>())?.state, "st");
-	assert.equal(dst.db.prepare("SELECT name FROM sqlite_master WHERE name LIKE '_a2a_import_%'").all().length, 0);
-
-	const env: any = { DB: dst, PUBLIC_URL: BASE, OWNER_TOKEN: "owner-secret" };
-	const rejected = await worker.fetch(new Request(BASE + "/owner/import", {
-		method: "POST",
-		headers: { authorization: "Bearer owner-secret", "content-type": "application/json", "content-length": String(Buffer.byteLength(whole)) },
-		body: whole,
-	}) as any, env, ectx as any);
-	assert.equal(rejected.status, 413);
-	const err = await rejected.json() as { error: string };
-	assert.equal(err.error, "Body too large");
-	assert.equal(((await dst.prepare("SELECT text FROM history").all()).results as unknown[]).length, 4500);
-});
-
-test("CLI slices stage every planned table before its rows arrive, then swap from an empty tables object", async () => {
-	const src = db();
-	const text = "x".repeat(2000);
-	for (let i = 0; i < 3; i++)
-		await src.prepare("INSERT INTO history (context_id, ts, dir, text) VALUES ('c', 't', 'in', ?)").bind(text + i).run();
-	await src.prepare("INSERT INTO peers (label, token_hash, created_at) VALUES ('ada', 'h', 't')").run();
-	await src.prepare("INSERT INTO oidc_txns (state, nonce, verifier, kind, csrf, payload_json, expires_ms) VALUES ('st', 'n', 'v', 'device', 'c', ?, 9)").bind("y".repeat(1800)).run();
-	const file = await exportRows(src);
-	// 5000 bytes fills the first part with peers and history. oidc_txns is a later part. Empty tables are in the plan only.
-	const planned = importParts(file, 5000);
-	assert.equal(planned.mode, "slice");
-	assert.equal(planned.error, undefined);
-	assert.ok(planned.parts.length > 1);
-	const firstNames = Object.keys(planned.parts[0].body.tables);
-	assert.ok(!firstNames.includes("oidc_txns"), `oidc_txns was in the first body: ${firstNames.join(",")}`);
-	assert.ok(planned.parts.some((p: { body: { tables: Record<string, unknown> } }, i: number) => i > 0 && Array.isArray(p.body.tables.oidc_txns)));
-	assert.ok(!firstNames.includes("tasks"));
-	assert.ok(planned.slice.tables.includes("tasks"));
-	assert.equal(planned.slice.tables.length, EXPORT_TABLES.length);
-	const later = "oidc_txns";
-
-	const dst = db();
-	await dst.prepare("INSERT INTO peers (label, token_hash, created_at) VALUES ('keep', 'hk', 't')").run();
-	await dst.prepare("INSERT INTO oidc_txns (state, nonce, verifier, kind, csrf, payload_json, expires_ms) VALUES ('old', 'n', 'v', 'device', 'c', '{}', 1)").run();
-	const counter = countQueries(dst);
-	let resume: ImportCursor | undefined;
-	let part = 0;
-	let sawCommit = false;
-	for (let n = 0; n < planned.parts.length + 5; n++) {
-		counter.reset();
-		const phase = resume?.phase;
-		const body = phase === "commit" || phase === "cleanup"
-			? { format: file.format, version: file.version, tables: {}, slice: planned.slice, resume }
-			: { ...planned.parts[part].body, ...(resume ? { resume } : {}) };
-		const res = await importRows(counter.db, body, { resume });
-		assert.ok(counter.used <= IMPORT_QUERY_BUDGET, `${phase || "start"} used ${counter.used} queries`);
-		if (!resume) {
-			const staged = dst.db.prepare("SELECT name FROM sqlite_master WHERE name LIKE '_a2a_import_%'").all() as { name: string }[];
-			assert.ok(staged.some((row) => row.name === `_a2a_import_${later}`), `${later} was not staged with the first slice`);
-			assert.ok(staged.some((row) => row.name === "_a2a_import_tasks"), "an empty planned table was not staged");
-			assert.equal((await dst.prepare("SELECT label FROM peers WHERE label = 'keep'").first<{ label: string }>())?.label, "keep");
-			assert.equal((await dst.prepare("SELECT state FROM oidc_txns").first<{ state: string }>())?.state, "old");
-		}
-		if (phase === "commit") {
-			sawCommit = true;
-			assert.equal(counter.used, 1 + planned.slice.tables.length * 2);
-			assert.ok(counter.used < 50);
-			assert.equal(res.tables, EXPORT_TABLES.length);
-			assert.equal(res.next?.phase, "cleanup");
-			assert.equal(await dst.prepare("SELECT label FROM peers WHERE label = 'keep'").first(), null);
-			assert.equal((await dst.prepare("SELECT label FROM peers").first<{ label: string }>())?.label, "ada");
-			const stillThere = dst.db.prepare("SELECT name FROM sqlite_master WHERE name = '_a2a_import_meta'").all();
-			assert.equal(stillThere.length, 1);
-		}
-		if (!res.next) break;
-		if (res.next.phase === "stage") {
-			const expect = planned.parts[part].after;
-			assert.equal(res.next.table, expect?.table);
-			assert.equal(res.next.offset, expect?.offset);
-			part++;
-		}
-		resume = res.next;
-	}
-	assert.equal(sawCommit, true);
-	assert.equal((await dst.prepare("SELECT state FROM oidc_txns").first<{ state: string }>())?.state, "st");
-	assert.equal(((await dst.prepare("SELECT text FROM history").all()).results as { text: string }[]).length, 3);
-	assert.equal(dst.db.prepare("SELECT name FROM sqlite_master WHERE name LIKE '_a2a_import_%'").all().length, 0);
-});
-
-test("owner export and import: auth, hashes, and the minute cron left in place", async () => {
+test("owner export: auth, hashes, and the minute cron left in place", async () => {
 	const DB = db();
 	const bucket = fakeBucket();
 	const env: any = { DB, PUBLIC_URL: BASE, OWNER_TOKEN: "owner-secret", BACKUP_BUCKET: bucket };
@@ -392,29 +145,7 @@ test("owner export and import: auth, hashes, and the minute cron left in place",
 	assert.match(sql.text, /DELETE FROM "peers"/);
 	assert.equal(sql.text.includes(issued.data.token), false);
 	assert.equal(sql.text.includes("tenant_config"), false);
-
-	const bad = await call("POST", "/owner/import", { format: "nope", version: 1, tables: {} });
-	assert.equal(bad.status, 400);
-	const badCol = await call("POST", "/owner/import", { format: "a2a-exposed-export", version: 1, tables: { peers: [{ not_a_real_column: "x" }] } });
-	assert.equal(badCol.status, 400);
-	assert.match(badCol.data.error, /no column/);
-	assert.equal(((await call("GET", "/owner/peers")).data as { label: string }[]).length, 1);
-	const wiped = await call("POST", "/owner/import", { format: "a2a-exposed-export", version: 1, tables: { peers: [] } });
-	assert.equal(wiped.status, 200);
-	assert.equal(((await call("GET", "/owner/peers")).data as { label: string }[]).length, 0);
-	const back = await call("POST", "/owner/import", dumped.data);
-	assert.equal(back.data.rows >= 1, true);
-	assert.deepEqual(back.data.outboundPeersNeedSync, []);
-	const foreign = await sealPeerToken("other-owner", "bea", "a2aow_other");
-	const moved = await call("POST", "/owner/import", { format: "a2a-exposed-export", version: 1, tables: { outbound_peers: [
-		{ alias: "bea", url: "https://bea.example.com", token_enc: foreign, created_at: "t", updated_at: "t" },
-	] } });
-	assert.equal(moved.status, 200);
-	assert.deepEqual(moved.data.outboundPeersNeedSync, ["bea"]);
-	assert.equal(JSON.stringify(moved.data).includes("a2aow_other"), false);
-	const stored = await DB.prepare("SELECT token_enc FROM outbound_peers WHERE alias = 'bea'").first<{ token_enc: string | null }>();
-	assert.equal(stored?.token_enc, null);
-	assert.equal(((await call("GET", "/owner/peers")).data as { label: string }[])[0].label, "ada");
+	assert.equal((await call("POST", "/owner/import", dumped.data)).status, 404);
 
 	await DB.prepare("INSERT INTO rate (peer, minute, count) VALUES ('p', 1, 4)").run();
 	await worker.scheduled({ cron: DAILY_CRON } as any, env, ectx as any);
@@ -587,26 +318,6 @@ test("backupDatabase writes the self-host snapshot", async () => {
 	assert.equal(written.key, "tenants/self/2026-10-09.sql");
 	assert.match(bucket.objects.get(written.key) || "", /INSERT INTO "settings"/);
 });
-
-function countQueries(DB: ReturnType<typeof db>) {
-	let used = 0;
-	const wrap = (s: { __sql: string; __args: unknown[]; bind: (...a: unknown[]) => unknown; all: () => Promise<unknown>; first: (c?: string) => Promise<unknown>; run: () => Promise<unknown> }): any => ({
-		__sql: s.__sql,
-		__args: s.__args,
-		bind(...a: unknown[]) { return wrap(s.bind(...a) as typeof s); },
-		all: async () => { used++; return s.all(); },
-		first: async (c?: string) => { used++; return s.first(c); },
-		run: async () => { used++; return s.run(); },
-	});
-	return {
-		get used() { return used; },
-		reset() { used = 0; },
-		db: {
-			prepare: (sql: string) => wrap(DB.prepare(sql)),
-			batch: async (stmts: unknown[]) => { used += stmts.length; return DB.batch(stmts as never); },
-		},
-	};
-}
 
 function fakeBucket(initial: Record<string, string> = {}): R2BucketLike & { objects: Map<string, string>; puts: { key: string; contentType?: string }[] } {
 	const objects = new Map(Object.entries(initial));
