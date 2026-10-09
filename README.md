@@ -257,8 +257,11 @@ The Worker can run as one tenant per deployment, which is what `npx -y a2a-expos
 | `TENANT_DO` | unused | with `TENANCY=host`, each tenant is one SQLite Durable Object. The Worker config adds this binding only when `TENANCY=host`. Config is pushed into the object (`pushConfig`); a push with an older version is ignored. An object with no config answers 404 and writes nothing |
 | `DATA_REGION` | Cloudflare's default placement | `eu` or `fedramp`. The first time a directory entry has no region, that value (or `default`) is written onto the entry. Later requests read the stored region, so changing this setting does not move a tenant |
 | `QUOTAS`, `USAGE_SINK`, `WAKE_TARGET_POLICY`, `SIGNUP_URL`, `BRANDING`, `APPROVAL_OIDC_*`, `APPROVAL_METHODS` | off, which is today's behaviour | reserved: parsed onto the tenant context, not enforced yet |
+| `A2A_BACKUP_BUCKET` | no backup bucket and no daily snapshot cron | `1` adds an R2 binding `BACKUP_BUCKET` and a daily cron (`0 3 * * *`) that writes each inbox as SQL, kept 30 days. Self-host writes `tenants/self/`. Hosted writes one object per active tenant. Optional `A2A_BACKUP_BUCKET_NAME`. `DATA_REGION=eu` or `fedramp` sets the bucket jurisdiction. The minute wake cron (`A2A_ENABLE_CRON`) is a separate trigger |
 
 There is no default hostname. Nothing in the Worker turns itself into a hosted service because a setting was left blank. See `worker/deploy.env.example`.
+
+`npx -y a2a-exposed@latest export` prints the inbox as JSON (`GET /owner/export`). `export --sql` prints the same tables as SQL. `npx -y a2a-exposed@latest import --yes` reads that JSON from stdin and replaces the tables named in the file (`POST /owner/import`). The dump includes peer-token hashes and encrypted outbound peer tokens, so those peers still work after a move. The owner token stays a Worker secret. Point-in-time restore of one hosted tenant is `bookmarkForTime` / `restoreBookmark` on that tenant's Durable Object, when the storage runtime provides bookmarks.
 
 ## Protocol support
 

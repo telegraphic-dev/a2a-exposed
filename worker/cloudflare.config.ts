@@ -63,6 +63,8 @@ const plain: Record<string, string> = {
 	APPROVAL_METHODS: v("APPROVAL_METHODS"),
 };
 const hosted = v("TENANCY") === "host";
+// Daily R2 snapshots. Unset: no binding and no extra cron, so a self-host deploy stays the single-tenant Worker.
+const backups = v("A2A_BACKUP_BUCKET") === "1";
 const envBindings: Record<string, any> = {
 	DB: bindings.d1(v("A2A_D1_ID") ? { name: v("A2A_D1_NAME") || name, id: v("A2A_D1_ID") } : { name: v("A2A_D1_NAME") || name }),
 };
@@ -72,6 +74,18 @@ if (hosted) {
 	envBindings.TENANT_DO = bindings.durableObject({ worker: name, exportName: "TenantStore" });
 	envBindings.TENANT_DIRECTORY = bindings.kv();
 }
+if (backups) {
+	const region = v("DATA_REGION");
+	const bucketName = v("A2A_BACKUP_BUCKET_NAME");
+	envBindings.BACKUP_BUCKET = bindings.r2({
+		...(bucketName ? { name: bucketName } : {}),
+		...(region === "eu" || region === "fedramp" ? { jurisdiction: region } : {}),
+	});
+}
+const crons = [
+	...(v("A2A_ENABLE_CRON") === "1" ? [triggers.scheduled({ schedule: "* * * * *" })] : []),
+	...(backups ? [triggers.scheduled({ schedule: "0 3 * * *" })] : []),
+];
 for (const [k, val] of Object.entries(plain)) if (val !== "" || (k === "WAKE_KEY_PREFIX" && "WAKE_KEY_PREFIX" in e)) envBindings[k] = bindings.text(val);
 
 // Secrets are uploaded separately (never in this file): OWNER_TOKEN, WAKE_WEBHOOK_URL, WAKE_WEBHOOK_KEY, WAKE_HMAC_SECRET,
@@ -97,6 +111,7 @@ export default defineConfig((ctx) => ({
 		env: ctx.mode === "development" ? { ...envBindings, ...Object.fromEntries(SECRETS.map((k) => [k, bindings.secret()])) } : envBindings,
 		// Optional cron flush of debounced wakes (the Worker also flushes opportunistically on every request).
 		// Requires a workers.dev subdomain on the account (always the case for workers.dev deployments).
-		...(v("A2A_ENABLE_CRON") === "1" ? { triggers: [triggers.scheduled({ schedule: "* * * * *" })] } : {}),
+		// A2A_BACKUP_BUCKET=1 adds a second trigger, 03:00 UTC, which writes SQL snapshots and does not flush wakes.
+		...(crons.length ? { triggers: crons } : {}),
 	},
 }));

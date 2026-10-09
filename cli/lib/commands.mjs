@@ -7,10 +7,10 @@ const q = encodeURIComponent;
 const out = (obj) => console.log(JSON.stringify(obj, null, 2));
 export const baseUrl = () => C.get("A2A_BASE_URL").replace(/\/$/, "");
 
-export async function owner(method, path, body) {
+export async function owner(method, path, body, timeout) {
 	const base = baseUrl(), tok = C.get("A2A_OWNER_TOKEN");
 	if (!base || !tok) die(`A2A_BASE_URL / A2A_OWNER_TOKEN missing (run \`${CLI} init\` or edit ${C.CONFIG_FILE})`);
-	const { status, data } = await httpJson(base + path, { method, body, headers: { authorization: `Bearer ${tok}` } });
+	const { status, data } = await httpJson(base + path, { method, body, headers: { authorization: `Bearer ${tok}` }, timeout });
 	if (status < 200 || status >= 300) die(`worker ${method} ${path} -> ${describeHttp(status, data)}`);
 	return data;
 }
@@ -301,3 +301,21 @@ export async function poll(taskId, o) {
 }
 
 export const outbound = async (id) => out(await owner("GET", `/owner/outbound/${q(id)}`));
+
+// ---------------------------------------------------------------- export / import
+/** JSON dump on stdout. `--sql` prints the same tables as SQL text. */
+export async function exportInbox(o) {
+	const path = o.sql ? "/owner/export?format=sql" : "/owner/export";
+	const data = await owner("GET", path, undefined, 120000);
+	if (o.sql) return console.log(typeof data === "string" ? data.replace(/\n$/, "") : JSON.stringify(data));
+	return out(data);
+}
+
+/** Replace the tables listed in a JSON export on stdin. `--yes` is required. */
+export async function importInbox(o) {
+	if (!o.yes) die(`import replaces the listed tables. Re-run \`${CLI} import --yes\` with the JSON export on stdin.`);
+	const raw = readStdin();
+	let file;
+	try { file = JSON.parse(raw); } catch { die("import expects the JSON from `export` on stdin"); }
+	out(await owner("POST", "/owner/import", file, 120000));
+}

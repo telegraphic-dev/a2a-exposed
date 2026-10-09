@@ -10,6 +10,8 @@ import { renderWake, redact, cloudflareErrorHint, defaultDebounceSeconds, defaul
 import * as P from "./pairing.ts";
 import * as M from "./mcp.ts";
 import { resolveTenant, type TenantContext, type WorkerBindings } from "./tenancy.ts";
+import { exportRows, importRows, toSql, ExportError } from "./export.ts";
+import { backupDatabase, DAILY_CRON } from "./backup.ts";
 type Json = any;
 
 class RpcError extends Error {
@@ -1031,6 +1033,22 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 	if (seg[0] === "contexts" && m === "GET") {
 		const rows = await ctx.DB.prepare("SELECT context_id, COUNT(*) AS entries, MAX(ts) AS last FROM history GROUP BY context_id ORDER BY last DESC LIMIT 100").all();
 		return json(rows.results);
+	}
+	if (seg[0] === "export" && !seg[1] && m === "GET") {
+		const file = await exportRows(ctx.DB);
+		if (url.searchParams.get("format") === "sql") {
+			return new Response(toSql(file), { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } });
+		}
+		return json(file);
+	}
+	if (seg[0] === "import" && !seg[1] && m === "POST") {
+		let raw: string;
+		try { raw = await readBody(req, { ...ctx, MAX_BODY: "8388608" }); }
+		catch (e) { if (e instanceof HttpError) return json({ error: e.message }, e.status); throw e; }
+		let file: unknown;
+		try { file = raw ? JSON.parse(raw) : {}; } catch { return json({ error: "import: invalid json" }, 400); }
+		try { return json(await importRows(ctx.DB, file)); }
+		catch (e) { if (e instanceof ExportError) return json({ error: e.message }, 400); throw e; }
 	}
 	return json({ error: "not found" }, 404);
 }
@@ -2191,8 +2209,16 @@ export default {
 		// A hosted deploy does not enter here: its entrypoint resolves the tenant and calls dispatch with that context.
 		return dispatch(req, resolveTenant(env, req), ectx);
 	},
-	// optional: enable with A2A_ENABLE_CRON=1 at deploy time (needs a workers.dev subdomain on the account)
-	async scheduled(_ev, env: WorkerBindings, ectx) {
+	// optional: enable with A2A_ENABLE_CRON=1 at deploy time (needs a workers.dev subdomain on the account).
+	// A2A_BACKUP_BUCKET=1 adds a separate daily trigger. That cron writes one SQL snapshot and returns.
+	// The minute trigger keeps the flush below.
+	async scheduled(ev, env: WorkerBindings, ectx) {
+		if (ev.cron === DAILY_CRON && env.BACKUP_BUCKET) {
+			const ctx = resolveTenant(env);
+			const written = await backupDatabase(env.BACKUP_BUCKET, ctx.DB);
+			log("backup_done", { tenant: written.tenantId, key: written.key, deleted: written.deleted.length });
+			return;
+		}
 		const ctx = resolveTenant(env);
 		await flushDue(ctx, ectx);
 		const now = Date.now();
