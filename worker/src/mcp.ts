@@ -2,6 +2,7 @@
 // dynamic client registration (RFC 7591), authorization code + PKCE S256, refresh-token rotation, RFC 9728 / 8414
 // metadata. Pure helpers live here; the routes (D1, approval password, owner API) are in index.ts.
 import { esc } from "./pairing.ts";
+import { isPrivateHost } from "./a2a.ts";
 
 export const SCOPE = "inbox";
 /** Modern (stateless, per-request _meta) versions: no initialize, server/discover, resultType, Mcp-Method / Mcp-Name headers. */
@@ -75,7 +76,27 @@ export function cimdDocument(id: string, doc: any): { client_name: string; redir
 	const name = typeof doc.client_name === "string" ? doc.client_name : "";
 	return { client_name: name, redirect_uris: uris };
 }
-export const CIMD = { maxBytes: 5120, timeoutMs: 5000, defaultTtlS: 3600, minTtlS: 60, maxTtlS: 86400, fetchesPerIpPerHour: 30 };
+export const CIMD = { maxBytes: 5120, timeoutMs: 5000, defaultTtlS: 3600, minTtlS: 60, maxTtlS: 86400, fetchesPerIpPerHour: 30, dohUrl: "https://cloudflare-dns.com/dns-query" };
+
+/** True for an IP address that is fine to fetch from: not private, loopback, link-local, CGNAT, unspecified, benchmark,
+ *  documentation, multicast or reserved (IPv4 or IPv6, including IPv4-mapped / NAT64 forms). Not an IP: false. */
+export function isPublicIp(ip: string): boolean {
+	const h = ip.toLowerCase().replace(/^\[|\]$/g, "");
+	const v4 = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+	if (v4) {
+		const [a, b, c] = v4.slice(1, 4).map(Number);
+		if (v4.slice(1).some((x) => Number(x) > 255)) return false;
+		if (isPrivateHost(h)) return false;
+		return !(a >= 224 || (a === 192 && b === 0 && (c === 0 || c === 2)) || (a === 198 && (b === 18 || b === 19)) ||
+			(a === 198 && b === 51 && c === 100) || (a === 203 && b === 0 && c === 113) || (a === 192 && b === 88 && c === 99));
+	}
+	if (!h.includes(":") || !/^[0-9a-f:.]+$/.test(h)) return false;
+	if (isPrivateHost(h)) return false;
+	// only global unicast (2000::/3); within it, documentation and 6to4/Teredo (embed arbitrary IPv4) are refused
+	if (!/^[23][0-9a-f]{0,3}:/.test(h)) return false;
+	return !/^(2001:db8:|2001:0?db8:|2002:|2001:0{0,4}:|3fff:)/.test(h);
+}
+
 export const ACCESS_TTL_S = 3600;
 export const REFRESH_TTL_S = 30 * 86400;
 export const CODE_TTL_S = 120;

@@ -1625,8 +1625,29 @@ function cimdTtlS(cc: string | null): number {
 	return Math.min(M.CIMD.maxTtlS, Math.max(M.CIMD.minTtlS, s));
 }
 
+/** DNS-rebinding guard for an outbound fetch: resolve the host over DNS-over-HTTPS (A and AAAA, CNAMEs followed by the
+ *  resolver) and refuse unless it has addresses and every one is public. Fails closed on any DNS error. */
+async function publicAddressProblem(host: string, signal: AbortSignal): Promise<string> {
+	const h = host.replace(/^\[|\]$/g, "");
+	if (/^[\d.]+$/.test(h) || h.includes(":")) return M.isPublicIp(h) ? "" : "resolves to a private or reserved address";
+	const ips: string[] = [];
+	for (const type of ["A", "AAAA"]) {
+		let r: Json;
+		try {
+			const res = await fetch(`${M.CIMD.dohUrl}?name=${encodeURIComponent(h)}&type=${type}`, { headers: { accept: "application/dns-json" }, signal });
+			if (!res.ok) return "its address could not be checked";
+			r = await res.json();
+		} catch { return "its address could not be checked"; }
+		if (r?.Status !== 0 && !(r?.Status === 3 && type === "AAAA")) return r?.Status === 3 ? "the host does not exist" : "its address could not be checked";
+		for (const a of Array.isArray(r.Answer) ? r.Answer : []) if (a?.type === 1 || a?.type === 28) ips.push(String(a.data));
+	}
+	if (!ips.length) return "the host has no address";
+	return ips.every((ip) => M.isPublicIp(ip)) ? "" : "resolves to a private or reserved address";
+}
+
 /** The OAuth client for a client_id: a dynamically registered one (mcpc_...), or, for an https URL, its Client ID Metadata
- *  Document (fetched with SSRF guards: public https host other than this Worker, no redirects, 5 s, 5 KB; cached for its
+ *  Document (fetched with SSRF guards: public https host other than this Worker whose A/AAAA records are all public
+ *  (DNS-over-HTTPS, against DNS rebinding), no redirects, no credentials, 5 s, 5 KB; cached for its
  *  max-age; failures and invalid documents are not cached). `ip` rate-limits fetches (not cached lookups). */
 async function resolveClient(env: Env, id: string, ip?: string): Promise<{ client?: Json; error?: string }> {
 	if (!id) return { error: "client_id is required" };
@@ -1641,12 +1662,15 @@ async function resolveClient(env: Env, id: string, ip?: string): Promise<{ clien
 	if (hit) return { client: { ...hit, cimd: true } };
 	if (ip !== undefined && (await bump(env, `cimd:ip:${ip || "?"}`, 3600)) > M.CIMD.fetchesPerIpPerHour)
 		return { error: "Too many client metadata lookups from this address. Try again later." };
+	const signal = AbortSignal.timeout(M.CIMD.timeoutMs);
+	const dns = await publicAddressProblem(new URL(id).hostname, signal);
+	if (dns) { log("mcp_cimd_failed", { host: new URL(id).host, reason: `dns: ${dns}` }); return { error: `The client's metadata URL is not acceptable: ${dns}.` }; }
 	let res: Response;
-	try { res = await fetch(id, { headers: { accept: "application/json" }, redirect: "manual", signal: AbortSignal.timeout(M.CIMD.timeoutMs) }); }
+	try { res = await fetch(id, { headers: { accept: "application/json" }, redirect: "manual", signal }); }
 	catch { log("mcp_cimd_failed", { host: new URL(id).host, reason: "unreachable" }); return { error: "The client's metadata document could not be fetched." }; }
 	if (res.status !== 200) {
 		log("mcp_cimd_failed", { host: new URL(id).host, reason: `HTTP ${res.status}` });
-		return { error: `The client's metadata document could not be fetched (HTTP ${res.status}${res.status >= 300 && res.status < 400 ? ", redirects are not followed" : ""}).` };
+		return { error: `The client's metadata document could not be fetched${res.status >= 300 && res.status < 400 ? " (redirects are not followed)" : ""}.` };
 	}
 	const text = await readCapped(res, M.CIMD.maxBytes);
 	if (text === null) return { error: `The client's metadata document is larger than ${M.CIMD.maxBytes} bytes.` };

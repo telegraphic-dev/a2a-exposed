@@ -29,11 +29,21 @@ function setup(over: Record<string, string> = {}) {
 	// Client ID Metadata Documents served at https://client.example.org/<path>
 	const cimd: Record<string, { status?: number; body: any; headers?: Record<string, string> }> = {};
 	const cimdFetches: { url: string; redirect: string }[] = [];
+	// DNS-over-HTTPS answers by host (default: one public A record); status 2 = SERVFAIL, 3 = NXDOMAIN
+	const dns: Record<string, { A?: string[]; AAAA?: string[]; status?: number }> = {};
+	const dnsQueries: string[] = [];
 	const origFetch = globalThis.fetch;
 	globalThis.fetch = (async (input: any, init: any = {}) => {
 		const u = new URL(String(input));
 		if (u.host === "hook.example.net") return new Response("ok");
-		if (u.host === "client.example.org") {
+		if (u.host === "cloudflare-dns.com") {
+			const name = u.searchParams.get("name")!, type = u.searchParams.get("type")!;
+			dnsQueries.push(`${name}/${type}`);
+			const d = dns[name] ?? { A: ["93.184.216.34"] };
+			const list = (type === "A" ? d.A : d.AAAA) || [];
+			return Response.json({ Status: d.status ?? 0, Answer: list.map((data) => ({ name, type: type === "A" ? 1 : 28, data })) });
+		}
+		if (u.host === "client.example.org" || u.host === "rebind.example.org") {
 			cimdFetches.push({ url: String(input), redirect: init.redirect });
 			const d = cimd[u.pathname];
 			if (!d) return new Response("not found", { status: 404 });
@@ -118,7 +128,7 @@ function setup(over: Record<string, string> = {}) {
 		for (const [k, v] of Object.entries(h)) { if (v === null) delete headers[k]; else headers[k] = v; }
 		return call("POST", "/mcp", { json: { jsonrpc: "2.0", id: ++rid, method, params: { ...params, _meta: meta } }, headers });
 	};
-	return { env, DB, peerCalls, cimd, cimdFetches, modern, call, owner, register, consent, connect, mcp, tool, inbound, restore: () => { globalThis.fetch = origFetch; } };
+	return { env, DB, peerCalls, cimd, cimdFetches, dns, dnsQueries, modern, call, owner, register, consent, connect, mcp, tool, inbound, restore: () => { globalThis.fetch = origFetch; } };
 }
 
 test("discovery: 401 with resource metadata, RFC 9728 + RFC 8414 metadata for the connector", async (t) => {
@@ -581,7 +591,7 @@ test("Client ID Metadata Documents: unsafe URLs and bad documents are refused (n
 	const cases: [string, any, RegExp][] = [
 		["/mismatch.json", { body: cimdDoc() }, /client_id doesn&#39;t match|client_id doesn't match/],
 		["/redirect.json", { status: 302, body: "", headers: { location: "https://evil.example.net/" } }, /redirects are not followed/],
-		["/error.json", { status: 500, body: "x" }, /HTTP 500/],
+		["/error.json", { status: 500, body: "x" }, /could not be fetched\./],
 		["/notjson.json", { body: "{nope" }, /not valid JSON/],
 		["/big.json", { body: JSON.stringify({ ...cimdDoc({ client_id: "https://client.example.org/big.json" }), pad: "x".repeat(6000) }) }, /larger than 5120 bytes/],
 		["/secret.json", { body: cimdDoc({ client_id: "https://client.example.org/secret.json", token_endpoint_auth_method: "client_secret_basic" }) }, /not supported/],
@@ -600,7 +610,32 @@ test("Client ID Metadata Documents: unsafe URLs and bad documents are refused (n
 	// a fixed document is picked up on the next try (errors aren't cached)
 	s.cimd["/mismatch.json"] = { body: cimdDoc({ client_id: "https://client.example.org/mismatch.json" }) };
 	assert.equal((await page("https://client.example.org/mismatch.json")).status, 200);
+	// DNS rebinding: a public name whose A or AAAA records point inside, or that can't be resolved, is never fetched
+	const before = s.cimdFetches.length;
+	s.cimd["/m.json"] = { body: cimdDoc({ client_id: "https://rebind.example.org/m.json" }) };
+	for (const [d, re] of [
+		[{ A: ["93.184.216.34", "10.0.0.5"] }, /private or reserved address/], [{ A: ["93.184.216.34"], AAAA: ["::ffff:7f00:1"] }, /private or reserved address/],
+		[{ A: ["169.254.169.254"] }, /private or reserved address/], [{ A: ["100.100.1.1"] }, /private or reserved address/], [{ AAAA: ["fd00::1"] }, /private or reserved address/],
+		[{ A: ["0.0.0.0"] }, /private or reserved address/], [{ A: ["224.0.0.1"] }, /private or reserved address/], [{}, /no address/],
+		[{ status: 2 }, /could not be checked/], [{ status: 3 }, /does not exist/],
+	] as [any, RegExp][]) {
+		s.dns["rebind.example.org"] = d;
+		const r = await page("https://rebind.example.org/m.json");
+		assert.equal(r.status, 400, JSON.stringify(d));
+		assert.match(r.text, re, JSON.stringify(d));
+	}
+	assert.equal(s.cimdFetches.length, before, "nothing fetched from a host that resolves inside");
+	s.dns["rebind.example.org"] = { A: ["93.184.216.34"], AAAA: ["2606:2800:220:1::1"] };
+	assert.equal((await page("https://rebind.example.org/m.json")).status, 200);
+	assert.ok(s.dnsQueries.includes("rebind.example.org/AAAA"));
 	for (let i = 0; i < 30; i++) await page(`https://client.example.org/none-${i}.json`, "192.0.2.77");
 	const limited = await page("https://client.example.org/none-x.json", "192.0.2.77");
 	assert.match(limited.text, /Too many client metadata lookups/);
+});
+
+test("isPublicIp: only global unicast addresses pass", () => {
+	for (const ip of ["93.184.216.34", "1.1.1.1", "2606:2800:220:1::1", "[2a00:1450::1]"]) assert.equal(M.isPublicIp(ip), true, ip);
+	for (const ip of ["10.1.2.3", "127.0.0.1", "172.16.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "224.0.0.1", "255.255.255.255",
+		"192.0.2.1", "198.18.0.1", "203.0.113.5", "300.1.1.1", "::1", "::", "fd00::1", "fe80::1", "::ffff:10.0.0.1", "::ffff:7f00:1",
+		"64:ff9b::a00:1", "2001:db8::1", "2002:a00:1::", "2001:0:4136:e378::1", "ff02::1", "example.org"]) assert.equal(M.isPublicIp(ip), false, ip);
 });
