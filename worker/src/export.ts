@@ -473,8 +473,11 @@ export async function bookmarkForTime(storage: BookmarkStorage, timeMs: number):
 	return { bookmark };
 }
 
-/** Delay before `ctx.abort()`. A 0ms wait can still run in this turn and drop the RPC result. */
-export const RESTORE_RESTART_DELAY_MS = 50;
+/**
+ * How long the RPC result is given to leave before `ctx.abort()`.
+ * The reset waits out this turn and a busy caller: aborting sooner drops the result.
+ */
+export const RESTORE_RESTART_DELAY_MS = 1000;
 
 /**
  * Schedule `bookmark` for the next session and return `{ ok: true }`. Does not reset the object: `ctx.abort()` in

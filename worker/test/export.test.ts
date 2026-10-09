@@ -617,13 +617,17 @@ export class Probe extends TenantStore {
 	})).applied, true);
 	const born = await stub.bornAt();
 	const restored = await stub.restoreLive("bm-live");
-	assert.equal(restored.ok, true);
-	assert.equal(restored.undo, "undo-live");
+	assert.equal(await restored.ok, true);
+	assert.equal(await restored.undo, "undo-live");
 	const start = Date.now();
 	let again = born;
-	while (again === born && Date.now() - start < 2000) {
-		await new Promise((r) => setTimeout(r, 20));
-		again = await (ns.get(id) as typeof stub).bornAt();
+	while (again === born && Date.now() - start < 4000) {
+		await new Promise((r) => setTimeout(r, 50));
+		try {
+			again = await (ns.get(id) as typeof stub).bornAt();
+		} catch {
+			// The reset is in progress. The next call is a new session.
+		}
 	}
 	assert.notEqual(again, born, "abort after the result starts a new session");
 });
