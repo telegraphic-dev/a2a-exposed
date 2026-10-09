@@ -135,23 +135,32 @@ export async function startOidc(ctx: TenantContext, o: {
 	return { ok: true, location: u.toString() };
 }
 
-/** Audience must contain this client. Several audiences require `azp` equal to the client id; a present `azp` must always match. */
-function audienceOk(aud: unknown, azp: unknown, clientId: string): boolean {
-	const raw = typeof aud === "string" ? [aud] : Array.isArray(aud) ? aud : [];
-	const list = raw.filter((a): a is string => typeof a === "string");
-	if (!list.some((a) => A.timingSafeEqualStr(a, clientId))) return false;
-	if (raw.length > 1 || azp !== undefined) return typeof azp === "string" && A.timingSafeEqualStr(azp, clientId);
-	return true;
+function onAllowlist(value: unknown, subjects: string[]): boolean {
+	if (typeof value !== "string") return false;
+	for (const want of subjects) if (A.timingSafeEqualStr(value, want)) return true;
+	return false;
 }
 
-/** `sub` is checked first. `email` counts only when `email_verified` is boolean true. */
-function allowed(claims: { sub?: unknown; email?: unknown; email_verified?: unknown }, subjects: string[]): boolean {
-	if (typeof claims.sub === "string") {
-		for (const want of subjects) if (A.timingSafeEqualStr(claims.sub, want)) return true;
-	}
-	if (claims.email_verified !== true || typeof claims.email !== "string") return false;
-	for (const want of subjects) if (A.timingSafeEqualStr(claims.email, want)) return true;
-	return false;
+/**
+ * OIDC ID Token validation: `aud` must contain this client. When `aud` has more than one value, `azp` is required
+ * and must be this client id. A present `azp` must match even when there is only one audience.
+ */
+function audienceOk(aud: unknown, azp: unknown, clientId: string): boolean {
+	const raw = typeof aud === "string" ? [aud] : Array.isArray(aud) ? aud : [];
+	if (!onAllowlist(clientId, raw.filter((a): a is string => typeof a === "string"))) return false;
+	const multi = raw.length > 1;
+	if (!multi && azp === undefined) return true;
+	return typeof azp === "string" && A.timingSafeEqualStr(azp, clientId);
+}
+
+/**
+ * Prefer `sub`. An `email` match is a separate path and is ignored unless `email_verified` is boolean true,
+ * so an unverified address cannot approve.
+ */
+function subjectAllowed(claims: { sub?: unknown; email?: unknown; email_verified?: unknown }, subjects: string[]): boolean {
+	if (onAllowlist(claims.sub, subjects)) return true;
+	if (claims.email_verified !== true) return false;
+	return onAllowlist(claims.email, subjects);
 }
 
 async function verifyIdToken(token: string, jwks: { keys?: any[] }, expect: { iss: string; aud: string; nonce: string; subjects: string[] }): Promise<{ subject: string } | { reason: string }> {
@@ -184,7 +193,7 @@ async function verifyIdToken(token: string, jwks: { keys?: any[] }, expect: { is
 	const nowS = Date.now() / 1000;
 	if (typeof claims.exp !== "number" || !Number.isFinite(claims.exp) || claims.exp + SKEW_S < nowS) return { reason: "exp" };
 	if (typeof claims.nbf === "number" && claims.nbf - SKEW_S > nowS) return { reason: "nbf" };
-	if (!allowed(claims, expect.subjects)) return { reason: "sub" };
+	if (!subjectAllowed(claims, expect.subjects)) return { reason: "sub" };
 	return { subject: typeof claims.sub === "string" ? claims.sub : String(claims.email) };
 }
 
