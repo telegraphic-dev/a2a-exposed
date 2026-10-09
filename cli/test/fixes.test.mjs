@@ -404,3 +404,19 @@ test("peers sync uploads outbound peers (token encrypted); token list and revoke
 	assert.equal(r.status, 1);
 	assert.match(r.stderr, /--mcp must be on or off/);
 });
+
+test("every command the CLI tells people to run uses the one npx form (no bare `a2a-exposed <cmd>`, no global install)", () => {
+	const lib = new URL("../lib/", import.meta.url);
+	const SUB = "init|deploy|status|wake|pair|connect|token|peers|inbox|reply|send|upstream|tunnel|show|history|poll|url|config|mark-working|unsync|sync";
+	const bare = new RegExp(`(?<![\\w/@.-])a2a-exposed (?:${SUB})\\b`);
+	// Cloudflare resource names (tunnel / Access labels), not commands
+	const allowed = [/a2a-exposed wake: service token only/, /`a2a-exposed wake \$\{worker\}`/, /# a2a-exposed config \(contains secrets/];
+	const found = [];
+	for (const f of fs.readdirSync(lib).filter((x) => x.endsWith(".mjs"))) {
+		fs.readFileSync(new URL(f, lib), "utf8").split("\n").forEach((line, i) => {
+			if (/^\s*(\/\/|\*|\/\*)/.test(line) || allowed.some((a) => a.test(line))) return;
+			if (bare.test(line) || /(?<![\w/@.-])a2a-exposed ["'`]\s*\+/.test(line) || (/npm i(nstall)? -g a2a-exposed/.test(line) && !/optional speed-up|With a global install, npm i -g a2a-exposed@latest first/.test(line))) found.push(`${f}:${i + 1}: ${line.trim()}`);
+		});
+	}
+	assert.deepEqual(found, []);
+});

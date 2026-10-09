@@ -246,7 +246,7 @@ function applyFlags(o) {
 function reportSwitch(sw) {
 	if (!sw) return;
 	const to = C.fileConfig().A2A_BASE_URL || publicBase();
-	const card = to ? `${to}/.well-known/agent-card.json` : "(see `a2a-exposed url`)";
+	const card = to ? `${to}/.well-known/agent-card.json` : `(see \`${CLI} url\`)`;
 	console.error(`\nnote: the public URL moved${sw.from ? ` from ${sw.from}` : ""} to ${to || "workers.dev"}.`);
 	if (sw.fromHost) {
 		console.error(`  ${sw.fromHost} no longer serves this agent: its agent card redirects (301) to the new one and every other request gets 410 Gone.`);
@@ -501,7 +501,7 @@ export async function upstreamTokenCheck(o, { upstreamChanged = false } = {}) {
 		return {};
 	}
 	die(`${why}, and no UPSTREAM_TOKEN is set. ${access}, so without it every peer call fails with HTTP 502.\n` +
-		"  Provide it (never as an argument): `read -rs UPSTREAM_TOKEN && export UPSTREAM_TOKEN`, then re-run; or pipe it: <command that prints the token> | a2a-exposed " +
+		`  Provide it (never as an argument): \`read -rs UPSTREAM_TOKEN && export UPSTREAM_TOKEN\`, then re-run; or pipe it: <command that prints the token> | ${CLI} ` +
 		`${C.get("A2A_D1_ID") ? "deploy" : "init ..."} --upstream-token-stdin\n` +
 		"  The agent needs no bearer token? Re-run with --no-upstream-token (saved for later deploys).");
 }
