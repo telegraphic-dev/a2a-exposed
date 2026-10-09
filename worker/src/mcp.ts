@@ -3,6 +3,7 @@
 // metadata. Pure helpers live here; the routes (D1, approval password, owner API) are in index.ts.
 import { esc } from "./pairing.ts";
 import { isPrivateHost } from "./a2a.ts";
+import { derivePeerKey } from "./tenancy.ts";
 
 export const SCOPE = "inbox";
 /** Modern (stateless, per-request _meta) versions: no initialize, server/discover, resultType, Mcp-Method / Mcp-Name headers. */
@@ -194,29 +195,37 @@ export function consentBody(m: ConsentModel): string {
 <p class="w">Approve only if you are adding this connector right now. The name above is claimed by the client. Revoke access any time: <code>${esc(m.cli)} token list</code>, then <code>${esc(m.cli)} token revoke &lt;label&gt;</code>.</p>${form}`;
 }
 
-// ------------------------------------------------------------------ outbound peer token encryption (AES-GCM, key from OWNER_TOKEN via HKDF)
+// ------------------------------------------------------------------ outbound peer token encryption (AES-GCM)
+// Self-host: HKDF(OWNER_TOKEN), salt "a2a-exposed", info "outbound-peer-token v1" (existing ciphertext still decrypts).
+// Hosted: TenantContext.peerKey() uses the same HKDF with info bound to the tenant id and IKM TENANT_SECRETS_KEY.
 async function peerKey(ownerToken: string): Promise<CryptoKey> {
-	const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(ownerToken), "HKDF", false, ["deriveKey"]);
-	return crypto.subtle.deriveKey({ name: "HKDF", hash: "SHA-256", salt: new TextEncoder().encode("a2a-exposed"), info: new TextEncoder().encode("outbound-peer-token v1") },
-		base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+	return derivePeerKey(ownerToken);
 }
 const b64 = (b: Uint8Array) => btoa(String.fromCharCode(...b));
 const unb64 = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 
-export async function sealPeerToken(ownerToken: string, alias: string, token: string): Promise<string> {
+export async function sealPeerTokenWithKey(key: CryptoKey, alias: string, token: string): Promise<string> {
 	const iv = crypto.getRandomValues(new Uint8Array(12));
-	const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: new TextEncoder().encode(alias) }, await peerKey(ownerToken), new TextEncoder().encode(token)));
+	const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: new TextEncoder().encode(alias) }, key, new TextEncoder().encode(token)));
 	return `v1.${b64(iv)}.${b64(ct)}`;
 }
 
+export async function sealPeerToken(ownerToken: string, alias: string, token: string): Promise<string> {
+	return sealPeerTokenWithKey(await peerKey(ownerToken), alias, token);
+}
+
 /** The token, or null when it can't be decrypted (the owner token was rotated since `peers sync`). */
-export async function openPeerToken(ownerToken: string, alias: string, sealed: string): Promise<string | null> {
+export async function openPeerTokenWithKey(key: CryptoKey, alias: string, sealed: string): Promise<string | null> {
 	const [v, iv, ct] = String(sealed || "").split(".");
 	if (v !== "v1" || !iv || !ct) return null;
 	try {
-		const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(iv), additionalData: new TextEncoder().encode(alias) }, await peerKey(ownerToken), unb64(ct));
+		const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(iv), additionalData: new TextEncoder().encode(alias) }, key, unb64(ct));
 		return new TextDecoder().decode(pt);
 	} catch { return null; }
+}
+
+export async function openPeerToken(ownerToken: string, alias: string, sealed: string): Promise<string | null> {
+	return openPeerTokenWithKey(await peerKey(ownerToken), alias, sealed);
 }
 
 // ------------------------------------------------------------------ A2A client (outbound, from the Worker)
