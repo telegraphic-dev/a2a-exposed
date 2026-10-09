@@ -2,9 +2,101 @@
 // dynamic client registration (RFC 7591), authorization code + PKCE S256, refresh-token rotation, RFC 9728 / 8414
 // metadata. Pure helpers live here; the routes (D1, approval password, owner API) are in index.ts.
 import { esc } from "./pairing.ts";
+import { isPrivateHost } from "./a2a.ts";
 
 export const SCOPE = "inbox";
-export const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"];
+/** Modern (stateless, per-request _meta) versions: no initialize, server/discover, resultType, Mcp-Method / Mcp-Name headers. */
+export const MODERN_VERSIONS = ["2026-07-28"];
+/** Legacy versions: an initialize handshake (we stay stateless: no Mcp-Session-Id), negotiated within this list. */
+export const LEGACY_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"];
+/** Every version this server speaks, newest first (UnsupportedProtocolVersionError data.supported, server/discover). */
+export const PROTOCOL_VERSIONS = [...MODERN_VERSIONS, ...LEGACY_VERSIONS];
+export const isModern = (v: string) => MODERN_VERSIONS.includes(v);
+
+// JSON-RPC error codes. -32020..-32022 are the codes the 2026-07-28 revision reserves (its -32001/-32003/-32004 drafts
+// were renumbered); -32601 / -32602 / -32600 / -32700 are plain JSON-RPC.
+export const ERR = { PARSE: -32700, INVALID_REQUEST: -32600, METHOD_NOT_FOUND: -32601, INVALID_PARAMS: -32602,
+	HEADER_MISMATCH: -32020, MISSING_CLIENT_CAPABILITY: -32021, UNSUPPORTED_VERSION: -32022 } as const;
+export const META = { version: "io.modelcontextprotocol/protocolVersion", capabilities: "io.modelcontextprotocol/clientCapabilities",
+	clientInfo: "io.modelcontextprotocol/clientInfo", serverInfo: "io.modelcontextprotocol/serverInfo", subscriptionId: "io.modelcontextprotocol/subscriptionId" } as const;
+/** tools/list and server/discover cache hint: the tool set only changes with a deploy. Private: results are fetched with a
+ *  per-owner token, so shared caches must not reuse them across authorization contexts. */
+export const LIST_TTL_MS = 3_600_000;
+
+/** Decode a header value that may use the `=?base64?...?=` sentinel (Mcp-Name, Mcp-Param-*). null: malformed. */
+export function decodeHeaderValue(v: string): string | null {
+	const m = /^=\?base64\?([A-Za-z0-9+/]*={0,2})\?=$/.exec(v);
+	if (!m) return v.startsWith("=?base64?") ? null : v;
+	try { return new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(Uint8Array.from(atob(m[1]), (c) => c.charCodeAt(0))); } catch { return null; }
+}
+
+/** 2026-07-28 Streamable HTTP request headers vs body: "" when fine, else why (HeaderMismatch, -32020). */
+export function headerProblem(h: Headers, msg: { method: string; params?: any }, version: string): string {
+	const pv = h.get("mcp-protocol-version");
+	if (!pv) return "the MCP-Protocol-Version header is required";
+	if (pv !== version) return `MCP-Protocol-Version header ${pv} does not match the body's ${META.version} ${version}`;
+	const mm = h.get("mcp-method");
+	if (mm === null) return "the Mcp-Method header is required";
+	if (mm !== msg.method) return `Mcp-Method header value '${mm}' does not match body method '${msg.method}'`;
+	const named = msg.method === "tools/call" ? msg.params?.name : msg.method === "resources/read" ? msg.params?.uri : msg.method === "prompts/get" ? msg.params?.name : undefined;
+	if (named !== undefined) {
+		const raw = h.get("mcp-name");
+		if (raw === null) return "the Mcp-Name header is required for " + msg.method;
+		const nv = decodeHeaderValue(raw);
+		if (nv === null) return "the Mcp-Name header is malformed";
+		if (nv !== String(named)) return `Mcp-Name header value '${nv}' does not match body value '${String(named)}'`;
+	}
+	return "";
+}
+
+/** CIMD client_id URL rules (draft-ietf-oauth-client-id-metadata-document §3): "" when acceptable, else why. */
+export function cimdUrlProblem(id: string): string {
+	let u: URL;
+	try { u = new URL(id); } catch { return "not a URL"; }
+	if (u.protocol !== "https:") return "must be https";
+	if (u.username || u.password) return "must not contain a username or password";
+	if (u.hash || id.includes("#")) return "must not contain a fragment";
+	if (!u.pathname || u.pathname === "/") return "must contain a path";
+	if (/(^|\/)\.\.?(\/|$)/.test(id.replace(/^https:\/\/[^/]+/, ""))) return "must not contain . or .. path segments";
+	if (id.length > 512) return "too long";
+	return "";
+}
+
+/** Validate a fetched CIMD document for `id`. Returns the client or why it's refused. */
+export function cimdDocument(id: string, doc: any): { client_name: string; redirect_uris: string[] } | string {
+	if (!doc || typeof doc !== "object" || Array.isArray(doc)) return "the metadata document is not a JSON object";
+	if (doc.client_id !== id) return "the document's client_id doesn't match its URL";
+	const uris = doc.redirect_uris;
+	if (!Array.isArray(uris) || !uris.length || uris.length > 10 || uris.some((x: unknown) => typeof x !== "string")) return "redirect_uris must be 1-10 URLs";
+	for (const x of uris) { const why = redirectUriProblem(x); if (why) return `redirect_uris: ${x}: ${why}`; }
+	const am = doc.token_endpoint_auth_method;
+	if (am !== undefined && am !== "none") return `token_endpoint_auth_method ${am} is not supported (public clients with PKCE only)`;
+	if ("client_secret" in doc || "client_secret_expires_at" in doc) return "a metadata document must not carry a client secret";
+	if (doc.grant_types !== undefined && (!Array.isArray(doc.grant_types) || !doc.grant_types.includes("authorization_code"))) return "grant_types must include authorization_code";
+	const name = typeof doc.client_name === "string" ? doc.client_name : "";
+	return { client_name: name, redirect_uris: uris };
+}
+export const CIMD = { maxBytes: 5120, timeoutMs: 5000, defaultTtlS: 3600, minTtlS: 60, maxTtlS: 86400, fetchesPerIpPerHour: 30, dohUrl: "https://cloudflare-dns.com/dns-query" };
+
+/** True for an IP address that is fine to fetch from: not private, loopback, link-local, CGNAT, unspecified, benchmark,
+ *  documentation, multicast or reserved (IPv4 or IPv6, including IPv4-mapped / NAT64 forms). Not an IP: false. */
+export function isPublicIp(ip: string): boolean {
+	const h = ip.toLowerCase().replace(/^\[|\]$/g, "");
+	const v4 = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+	if (v4) {
+		const [a, b, c] = v4.slice(1, 4).map(Number);
+		if (v4.slice(1).some((x) => Number(x) > 255)) return false;
+		if (isPrivateHost(h)) return false;
+		return !(a >= 224 || (a === 192 && b === 0 && (c === 0 || c === 2)) || (a === 198 && (b === 18 || b === 19)) ||
+			(a === 198 && b === 51 && c === 100) || (a === 203 && b === 0 && c === 113) || (a === 192 && b === 88 && c === 99));
+	}
+	if (!h.includes(":") || !/^[0-9a-f:.]+$/.test(h)) return false;
+	if (isPrivateHost(h)) return false;
+	// only global unicast (2000::/3); within it, documentation and 6to4/Teredo (embed arbitrary IPv4) are refused
+	if (!/^[23][0-9a-f]{0,3}:/.test(h)) return false;
+	return !/^(2001:db8:|2001:0?db8:|2002:|2001:0{0,4}:|3fff:)/.test(h);
+}
+
 export const ACCESS_TTL_S = 3600;
 export const REFRESH_TTL_S = 30 * 86400;
 export const CODE_TTL_S = 120;
@@ -73,6 +165,7 @@ export type ConsentModel = {
 	csrf: string;
 	clientName: string;
 	redirectUri: string;
+	clientIdHost?: string; // CIMD: the host serving the client's metadata document
 	params: Record<string, string>; // the authorization request, posted back in hidden fields
 	passwordSet: boolean;
 	notice?: { kind: "ok" | "error" | "info"; text: string };
@@ -88,7 +181,8 @@ export function consentBody(m: ConsentModel): string {
 	const can = ["Read your inbox: open tasks, task details, conversation history, pending pairing requests (read-only)",
 		"Reply to tasks and mark them working", "Send messages to peers you synced to this inbox (peers sync) and check their tasks", "List your peers"];
 	const cannot = ["Issue, rotate or revoke tokens", "Approve or deny pairing requests", "Change wake or deployment settings"];
-	const table = `<table><tr><th>Client (as it calls itself)</th><td>${esc(m.clientName || "(no name given)")}</td></tr><tr><th>Returns to</th><td>${esc(host)}</td></tr></table>`;
+	const idRow = m.clientIdHost ? `<tr><th>Client identity published at</th><td>${esc(m.clientIdHost)}</td></tr>` : "";
+	const table = `<table><tr><th>Client (as it calls itself)</th><td>${esc(m.clientName || "(no name given)")}</td></tr>${idRow}<tr><th>Returns to</th><td>${esc(host)}</td></tr></table>`;
 	const scope = `<h2>It will be able to</h2><ul>${can.map((x) => `<li>${esc(x)}</li>`).join("")}</ul><h2>It will not be able to</h2><ul>${cannot.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`;
 	const form = m.passwordSet
 		? `<form method="post" action="/oauth/authorize"><input type="hidden" name="csrf" value="${esc(m.csrf)}">${hidden}
@@ -177,4 +271,48 @@ export const TOOLS: { name: string; title: string; description: string; inputSch
 /** Plain-text tool result: a header line, then the data as JSON. Peer-authored fields are marked untrusted. */
 export function toolText(header: string, data: unknown): string {
 	return `${header}\n${JSON.stringify(data, null, 2)}`;
+}
+
+/** Outbound TCP for the pinned CIMD fetch. null = the runtime's `cloudflare:sockets` connect(); tests put a fake here. */
+export type PinnedSocket = { readable: ReadableStream<Uint8Array>; writable: WritableStream<Uint8Array>; close(): Promise<void> };
+export const net: { connect: null | ((addr: { hostname: string; port: number }, opts: { secureTransport: "starttls" }) =>
+	{ startTls(o: { expectedServerHostname: string }): PinnedSocket }) } = { connect: null };
+
+/** Parse a raw HTTP/1.x response (Connection: close): status, lower-case headers, body (de-chunked). A string on error. */
+export function parseHttpResponse(raw: Uint8Array): { status: number; headers: Record<string, string>; body: Uint8Array } | string {
+	let end = -1;
+	for (let i = 0; i + 3 < raw.length; i++) if (raw[i] === 13 && raw[i + 1] === 10 && raw[i + 2] === 13 && raw[i + 3] === 10) { end = i; break; }
+	if (end < 0) return "incomplete response";
+	const lines = new TextDecoder("latin1").decode(raw.subarray(0, end)).split("\r\n");
+	const m = /^HTTP\/1\.[01] (\d{3})(?: .*)?$/.exec(lines[0]);
+	if (!m) return "not an HTTP/1.x response";
+	const headers: Record<string, string> = {};
+	for (const l of lines.slice(1)) {
+		const c = l.indexOf(":");
+		if (c <= 0) return "malformed header";
+		const k = l.slice(0, c).trim().toLowerCase(), v = l.slice(c + 1).trim();
+		headers[k] = k in headers ? `${headers[k]}, ${v}` : v;
+	}
+	let body = raw.subarray(end + 4);
+	if (/\bchunked\b/i.test(headers["transfer-encoding"] || "")) {
+		const out: number[] = [];
+		let i = 0;
+		for (;;) {
+			let j = i;
+			while (j + 1 < body.length && !(body[j] === 13 && body[j + 1] === 10)) j++;
+			if (j + 1 >= body.length) return "truncated chunked body";
+			const size = parseInt(new TextDecoder().decode(body.subarray(i, j)).split(";")[0].trim(), 16);
+			if (!Number.isFinite(size) || size < 0) return "malformed chunked body";
+			if (size === 0) break;
+			if (j + 2 + size > body.length) return "truncated chunked body";
+			for (const b of body.subarray(j + 2, j + 2 + size)) out.push(b);
+			i = j + 2 + size + 2;
+		}
+		body = new Uint8Array(out);
+	} else if (headers["content-length"] !== undefined) {
+		const n = Number(headers["content-length"]);
+		if (!Number.isInteger(n) || n < 0 || n > body.length) return "truncated body";
+		body = body.subarray(0, n);
+	}
+	return { status: Number(m[1]), headers, body };
 }

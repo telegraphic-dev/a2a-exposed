@@ -26,10 +26,54 @@ function setup(over: Record<string, string> = {}) {
 	const env: any = { DB, PUBLIC_URL: BASE, OWNER_TOKEN: "owner-secret", AGENT_NAME: "Test Inbox", WAKE_PRESET: "grok-bot",
 		WAKE_WEBHOOK_URL: "https://hook.example.net/wake", WAKE_WEBHOOK_KEY: "hook-key", ...over };
 	const peerCalls: { host: string; auth: string | null; body: any }[] = [];
+	// Client ID Metadata Documents served at https://client.example.org/<path>
+	const cimd: Record<string, { status?: number; body: any; headers?: Record<string, string> }> = {};
+	const cimdFetches: { url: string; ip: string; port: number; sni: string; request: string }[] = [];
+	// DNS-over-HTTPS answers by host (default: one public A record); status 2 = SERVFAIL, 3 = NXDOMAIN
+	const dns: Record<string, { A?: string[]; AAAA?: string[]; status?: number }> = {};
+	const dnsQueries: string[] = [];
+	// The pinned CIMD fetch: a fake TCP+TLS socket that answers HTTP/1.1 from `cimd` (chunked when asked, "ABORT" = reset mid-body)
+	M.net.connect = (addr, _opts) => ({ startTls: ({ expectedServerHostname: sni }) => {
+		let req = "";
+		let respond!: (b: Uint8Array | null) => void;
+		const ready = new Promise<Uint8Array | null>((r) => { respond = r; });
+		const writable = new WritableStream<Uint8Array>({ write(chunk) {
+			req += new TextDecoder().decode(chunk);
+			if (!req.includes("\r\n\r\n")) return;
+			const path = req.split(" ")[1].split("?")[0];
+			cimdFetches.push({ url: `https://${sni}${req.split(" ")[1]}`, ip: addr.hostname, port: addr.port, sni, request: req });
+			const d = cimd[path];
+			if (d?.body === "ABORT") return respond(null);
+			const status = d ? d.status ?? 200 : 404;
+			const body = new TextEncoder().encode(!d ? "not found" : typeof d.body === "string" ? d.body : JSON.stringify(d.body));
+			const hs = { "content-type": "application/json", ...(d?.headers || {}) };
+			const head = `HTTP/1.1 ${status} X\r\n${Object.entries(hs).map(([k, v]) => `${k}: ${v}\r\n`).join("")}`;
+			const enc = new TextEncoder();
+			if ((d as any)?.chunked) {
+				const half = Math.floor(body.length / 2);
+				const ch = (b: Uint8Array) => [...enc.encode(`${b.length.toString(16)}\r\n`), ...b, 13, 10];
+				respond(new Uint8Array([...enc.encode(`${head}transfer-encoding: chunked\r\n\r\n`), ...ch(body.subarray(0, half)), ...ch(body.subarray(half)), ...enc.encode("0\r\n\r\n")]));
+			} else respond(new Uint8Array([...enc.encode(`${head}content-length: ${body.length}\r\nconnection: close\r\n\r\n`), ...body]));
+		} });
+		const readable = new ReadableStream<Uint8Array>({ async start(c) {
+			const b = await ready;
+			if (b === null) { c.enqueue(new TextEncoder().encode("HTTP/1.1 200 OK\r\ncontent-length: 500\r\n\r\n{\"client_id\":")); c.error(new Error("connection reset")); return; }
+			c.enqueue(b.subarray(0, 7)); c.enqueue(b.subarray(7)); c.close();
+		} });
+		return { readable, writable, close: async () => {} };
+	} });
 	const origFetch = globalThis.fetch;
 	globalThis.fetch = (async (input: any, init: any = {}) => {
 		const u = new URL(String(input));
 		if (u.host === "hook.example.net") return new Response("ok");
+		if (u.host === "client.example.org" || u.host === "rebind.example.org") throw new Error("CIMD must not use fetch (it is IP-pinned)");
+		if (u.host === "cloudflare-dns.com") {
+			const name = u.searchParams.get("name")!, type = u.searchParams.get("type")!;
+			dnsQueries.push(`${name}/${type}`);
+			const d = dns[name] ?? { A: ["93.184.216.34"] };
+			const list = (type === "A" ? d.A : d.AAAA) || [];
+			return Response.json({ Status: d.status ?? 0, Answer: list.map((data) => ({ name, type: type === "A" ? 1 : 28, data })) });
+		}
 		if (u.pathname === "/.well-known/agent-card.json")
 			return Response.json({ name: u.host, supportedInterfaces: [{ url: `https://${u.host}/a2a`, protocolBinding: "JSONRPC", protocolVersion: "1.0" }] });
 		if (u.pathname === "/a2a") {
@@ -99,7 +143,17 @@ function setup(over: Record<string, string> = {}) {
 		assert.equal(r.status, 200, r.text);
 		return { token: tok as string, task: r.data.result };
 	};
-	return { env, DB, peerCalls, call, owner, register, consent, connect, mcp, tool, inbound, restore: () => { globalThis.fetch = origFetch; } };
+	/** A 2026-07-28 request: per-request _meta plus the mirrored headers (override or drop any with `h`, null = omit). */
+	const modern = (token: string, method: string, params: any = {}, h: Record<string, string | null> = {}, metaOver: Record<string, unknown> = {}) => {
+		const meta = { "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {},
+			"io.modelcontextprotocol/clientInfo": { name: "test-client", version: "1" }, ...metaOver };
+		for (const [k, v] of Object.entries(meta)) if (v === undefined) delete (meta as any)[k];
+		const headers: Record<string, string> = { authorization: `Bearer ${token}`, accept: "application/json, text/event-stream",
+			"mcp-protocol-version": "2026-07-28", "mcp-method": method, ...(params.name !== undefined ? { "mcp-name": String(params.name) } : {}) };
+		for (const [k, v] of Object.entries(h)) { if (v === null) delete headers[k]; else headers[k] = v; }
+		return call("POST", "/mcp", { json: { jsonrpc: "2.0", id: ++rid, method, params: { ...params, _meta: meta } }, headers });
+	};
+	return { env, DB, peerCalls, cimd, cimdFetches, dns, dnsQueries, modern, call, owner, register, consent, connect, mcp, tool, inbound, restore: () => { globalThis.fetch = origFetch; M.net.connect = null; } };
 }
 
 test("discovery: 401 with resource metadata, RFC 9728 + RFC 8414 metadata for the connector", async (t) => {
@@ -221,7 +275,7 @@ test("tokens: access + rotating refresh, token list shows the grant, revoke by o
 	const init = await s.mcp(a.access_token, "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "claude", version: "1" } });
 	assert.equal(init.data.result.protocolVersion, "2025-06-18");
 	assert.match(init.data.result.instructions, /untrusted/);
-	assert.equal((await s.mcp(a.access_token, "initialize", { protocolVersion: "1999-01-01" })).data.result.protocolVersion, M.PROTOCOL_VERSIONS[0]);
+	assert.equal((await s.mcp(a.access_token, "initialize", { protocolVersion: "1999-01-01" })).data.result.protocolVersion, M.LEGACY_VERSIONS[0], "initialize negotiates within the legacy (2025) versions");
 	// refresh rotates; the old refresh token is dead
 	const r1 = await s.call("POST", "/oauth/token", { form: { grant_type: "refresh_token", refresh_token: a.refresh_token, client_id: a.client.client_id } });
 	assert.equal(r1.status, 200);
@@ -374,4 +428,270 @@ test("peer token encryption round-trips and is bound to the alias", async () => 
 	assert.ok(M.redirectMatches(["http://127.0.0.1/callback"], "http://127.0.0.1:5555/callback"));
 	assert.ok(!M.redirectMatches(["http://127.0.0.1/callback"], "http://127.0.0.1:5555/other"));
 	assert.ok(!M.redirectMatches([CLAUDE_CB], CLAUDE_CB + "x"));
+});
+
+// ------------------------------------------------------------------ MCP 2026-07-28 (stateless, per-request _meta)
+test("2026-07-28: server/discover, tools/list caching hints, tools/call; resultType and serverInfo on every result; no sessions", async (t) => {
+	const s = setup(); t.after(s.restore);
+	const a = await s.connect();
+	const d = await s.modern(a.access_token, "server/discover");
+	assert.equal(d.status, 200, d.text);
+	assert.equal(d.data.result.resultType, "complete");
+	assert.deepEqual(d.data.result.supportedVersions, ["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26"]);
+	assert.deepEqual(d.data.result.capabilities, { tools: {} });
+	assert.match(d.data.result.instructions, /untrusted/);
+	assert.equal(d.data.result.cacheScope, "private");
+	assert.ok(d.data.result.ttlMs >= 0);
+	assert.equal(d.data.result._meta["io.modelcontextprotocol/serverInfo"].name, "a2a-exposed");
+	const l = await s.modern(a.access_token, "tools/list", {}, { "mcp-session-id": "abc" });
+	assert.equal(l.status, 200);
+	assert.equal(l.headers.get("mcp-session-id"), null, "no session id minted or echoed");
+	assert.equal(l.data.result.resultType, "complete");
+	assert.deepEqual(l.data.result.tools.map((x: any) => x.name), M.TOOLS.map((x) => x.name), "deterministic order");
+	assert.equal(l.data.result.cacheScope, "private");
+	assert.equal(l.data.result.ttlMs, M.LIST_TTL_MS);
+	assert.ok(l.data.result._meta["io.modelcontextprotocol/serverInfo"]);
+	assert.deepEqual((await s.modern(a.access_token, "tools/list")).data.result.tools, l.data.result.tools, "same order every time");
+	await s.inbound("barry", "hello from barry");
+	const c = await s.modern(a.access_token, "tools/call", { name: "inbox", arguments: {} });
+	assert.equal(c.status, 200, c.text);
+	assert.equal(c.data.result.resultType, "complete");
+	assert.equal(c.data.result.isError, false);
+	assert.match(c.data.result.content[0].text, /hello from barry/);
+	assert.ok(c.data.result._meta["io.modelcontextprotocol/serverInfo"]);
+	assert.equal((await s.modern(a.access_token, "tools/call", { name: "show_task", arguments: {} })).data.result.isError, true, "tool errors stay results");
+	const unk = await s.modern(a.access_token, "tools/call", { name: "approve_pairing", arguments: {} });
+	assert.equal(unk.data.error.code, -32602);
+	// the legacy era is untouched: no resultType there
+	assert.equal((await s.mcp(a.access_token, "tools/list")).data.result.resultType, undefined);
+});
+
+test("2026-07-28: Mcp-Method / Mcp-Name / MCP-Protocol-Version must be present and match the body (HeaderMismatch -32020)", async (t) => {
+	const s = setup(); t.after(s.restore);
+	const a = await s.connect();
+	const mismatch = async (r: Promise<any>, re: RegExp) => {
+		const x = await r;
+		assert.equal(x.status, 400, x.text);
+		assert.equal(x.data.error.code, -32020);
+		assert.match(x.data.error.message, re);
+	};
+	await mismatch(s.modern(a.access_token, "tools/list", {}, { "mcp-protocol-version": null }), /MCP-Protocol-Version header is required/);
+	await mismatch(s.modern(a.access_token, "tools/list", {}, { "mcp-protocol-version": "2025-11-25" }), /does not match/);
+	await mismatch(s.modern(a.access_token, "tools/list", {}, { "mcp-method": null }), /Mcp-Method header is required/);
+	await mismatch(s.modern(a.access_token, "tools/list", {}, { "mcp-method": "tools/call" }), /Mcp-Method header value 'tools\/call' does not match body method 'tools\/list'/);
+	await mismatch(s.modern(a.access_token, "tools/call", { name: "inbox", arguments: {} }, { "mcp-name": null }), /Mcp-Name header is required/);
+	await mismatch(s.modern(a.access_token, "tools/call", { name: "inbox", arguments: {} }, { "mcp-name": "reply" }), /Mcp-Name header value 'reply' does not match body value 'inbox'/);
+	await mismatch(s.modern(a.access_token, "tools/call", { name: "inbox", arguments: {} }, { "mcp-name": "=?base64?###?=" }), /malformed/);
+	// the Base64 sentinel form is decoded before comparing
+	const ok = await s.modern(a.access_token, "tools/call", { name: "inbox", arguments: {} }, { "mcp-name": `=?base64?${btoa("inbox")}?=` });
+	assert.equal(ok.status, 200, ok.text);
+	// a modern version header with a body lacking the per-request _meta
+	const bare = await s.call("POST", "/mcp", { json: { jsonrpc: "2.0", id: 1, method: "tools/list" },
+		headers: { authorization: `Bearer ${a.access_token}`, "mcp-protocol-version": "2026-07-28", "mcp-method": "tools/list" } });
+	assert.equal(bare.status, 400);
+	assert.equal(bare.data.error.code, -32020);
+});
+
+test("2026-07-28: version negotiation (-32022 with supported versions), required clientCapabilities, removed methods 404", async (t) => {
+	const s = setup(); t.after(s.restore);
+	const a = await s.connect();
+	const v = await s.modern(a.access_token, "tools/list", {}, { "mcp-protocol-version": "1900-01-01" }, { "io.modelcontextprotocol/protocolVersion": "1900-01-01" });
+	assert.equal(v.status, 400);
+	assert.equal(v.data.error.code, -32022);
+	assert.deepEqual(v.data.error.data, { supported: M.PROTOCOL_VERSIONS, requested: "1900-01-01" });
+	for (const h of [{}, { "mcp-protocol-version": null }, { "mcp-method": null }] as Record<string, string | null>[]) {
+		const x = await s.modern(a.access_token, "tools/list", {}, h, { "io.modelcontextprotocol/protocolVersion": "1900-01-01" });
+		assert.equal(x.data.error.code, -32022, "unknown body version wins over header problems");
+		assert.equal(x.data.error.data.requested, "1900-01-01");
+	}
+	// a legacy version in modern _meta is not served statelessly: the client falls back to initialize
+	const lv = await s.modern(a.access_token, "tools/list", {}, { "mcp-protocol-version": "2025-11-25" }, { "io.modelcontextprotocol/protocolVersion": "2025-11-25" });
+	assert.equal(lv.data.error.code, -32022);
+	// an unknown version header on a legacy-shaped request: the same recognizable modern error
+	const hv = await s.mcp(a.access_token, "tools/list", undefined, { "mcp-protocol-version": "2030-01-01" });
+	assert.equal(hv.status, 400);
+	assert.equal(hv.data.error.code, -32022);
+	const nocaps = await s.modern(a.access_token, "tools/list", {}, {}, { "io.modelcontextprotocol/clientCapabilities": undefined });
+	assert.equal(nocaps.status, 400);
+	assert.equal(nocaps.data.error.code, -32602);
+	for (const m of ["initialize", "ping", "logging/setLevel", "resources/list"]) {
+		const r = await s.modern(a.access_token, m);
+		assert.equal(r.status, 404, m);
+		assert.equal(r.data.error.code, -32601, m);
+	}
+	// legacy clients keep initialize and ping
+	assert.equal((await s.mcp(a.access_token, "ping")).data.result !== undefined, true);
+	assert.equal((await s.mcp(a.access_token, "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "c", version: "1" } })).data.result.protocolVersion, "2025-06-18");
+	// GET (replaced by subscriptions/listen) and DELETE (no sessions)
+	for (const m of ["GET", "DELETE"]) assert.equal((await s.call(m, "/mcp", { headers: { authorization: `Bearer ${a.access_token}`, "mcp-protocol-version": "2026-07-28" } })).status, 405);
+});
+
+test("2026-07-28: subscriptions/listen is acknowledged with no notification types, then closed gracefully", async (t) => {
+	const s = setup(); t.after(s.restore);
+	const a = await s.connect();
+	const r = await s.modern(a.access_token, "subscriptions/listen", { notifications: { toolsListChanged: true, resourceSubscriptions: ["file:///x"] } });
+	assert.equal(r.status, 200);
+	assert.equal(r.headers.get("content-type"), "text/event-stream");
+	assert.equal(r.headers.get("x-accel-buffering"), "no");
+	const events = r.text.split("\n\n").filter(Boolean).map((e: string) => JSON.parse(e.split("\n").find((l: string) => l.startsWith("data: "))!.slice(6)));
+	assert.equal(events.length, 2);
+	assert.equal(events[0].method, "notifications/subscriptions/acknowledged");
+	assert.deepEqual(events[0].params.notifications, {}, "no notification type is honored");
+	const subId = events[0].params._meta["io.modelcontextprotocol/subscriptionId"];
+	assert.equal(events[1].id, subId);
+	assert.equal(events[1].result.resultType, "complete");
+	assert.equal(events[1].result._meta["io.modelcontextprotocol/subscriptionId"], subId);
+});
+
+// ------------------------------------------------------------------ authorization updates (2026-07-28)
+const CIMD_ID = "https://client.example.org/oauth/metadata.json";
+const cimdDoc = (over: any = {}) => ({ client_id: CIMD_ID, client_name: "CIMD Client", redirect_uris: [CLAUDE_CB], token_endpoint_auth_method: "none", ...over });
+
+async function authorizeWith(s: any, clientId: string, extra: Record<string, string> = {}, ip?: string) {
+	if (!(await s.owner("GET", "/owner/pairing")).data.passwordSet) await s.owner("PUT", "/owner/pairing/password", await passwordRecord());
+	const verifier = b64url(crypto.getRandomValues(new Uint8Array(32)));
+	const q = { response_type: "code", client_id: clientId, redirect_uri: CLAUDE_CB, state: "s1", code_challenge: await M.s256(verifier), code_challenge_method: "S256", ...extra };
+	return { verifier, q, ...(await s.consent(q, PASSWORD, "approve", ip)) };
+}
+
+test("metadata advertises CIMD and RFC 9207 iss; DCR accepts application_type; no resource parameter still works", async (t) => {
+	const s = setup(); t.after(s.restore);
+	const as = (await s.call("GET", "/.well-known/oauth-authorization-server")).data;
+	assert.equal(as.client_id_metadata_document_supported, true);
+	assert.equal(as.authorization_response_iss_parameter_supported, true);
+	assert.equal(as.registration_endpoint, `${BASE}/oauth/register`, "DCR stays for older clients");
+	const n = await s.register({ client_name: "Claude Code", redirect_uris: ["http://localhost/callback"], application_type: "native" });
+	assert.equal(n.status, 201);
+	assert.equal(n.data.application_type, "native");
+	assert.equal((await s.register({ client_name: "x", redirect_uris: [CLAUDE_CB], application_type: "web" })).data.application_type, "web");
+	assert.equal((await s.register({ client_name: "x", redirect_uris: [CLAUDE_CB], application_type: "spa" })).status, 400);
+	// authorization request without `resource` (optional in OAuth): the code is bound to this MCP URL
+	const c = (await s.register()).data;
+	const r = await authorizeWith(s, c.client_id);
+	assert.equal(r.post.status, 302, r.post.text);
+	const loc = new URL(r.post.headers.get("location")!);
+	assert.equal(loc.searchParams.get("iss"), BASE);
+	const tok = await s.call("POST", "/oauth/token", { form: { grant_type: "authorization_code", code: loc.searchParams.get("code")!, client_id: c.client_id, redirect_uri: CLAUDE_CB, code_verifier: r.verifier } });
+	assert.equal(tok.status, 200, tok.text);
+});
+
+test("Client ID Metadata Documents: fetched, validated, cached; consent shows the client_id host; tokens and refresh work", async (t) => {
+	const s = setup(); t.after(s.restore);
+	s.cimd["/oauth/metadata.json"] = { body: cimdDoc(), headers: { "cache-control": "max-age=600" } };
+	const r = await authorizeWith(s, CIMD_ID, { resource: `${BASE}/mcp` });
+	assert.equal(r.page.status, 200, r.page.text);
+	assert.match(r.page.text, /CIMD Client/);
+	assert.match(r.page.text, /Client identity published at<\/th><td>client\.example\.org/);
+	assert.equal(s.cimdFetches.length, 1);
+	assert.equal(s.cimdFetches[0].ip, "93.184.216.34", "connected to the DNS-checked address (pinned: no rebinding)");
+	assert.equal(s.cimdFetches[0].sni, "client.example.org", "TLS verified for the client_id host");
+	assert.equal(s.cimdFetches[0].port, 443);
+	assert.match(s.cimdFetches[0].request, /^GET \/oauth\/metadata\.json HTTP\/1\.1\r\nHost: client\.example\.org\r\n/);
+	assert.doesNotMatch(s.cimdFetches[0].request, /authorization|cookie/i, "no credentials sent");
+	assert.equal(r.post.status, 302, r.post.text);
+	assert.equal(s.cimdFetches.length, 1, "the POST used the cached document");
+	const code = new URL(r.post.headers.get("location")!).searchParams.get("code")!;
+	const tok = await s.call("POST", "/oauth/token", { form: { grant_type: "authorization_code", code, client_id: CIMD_ID, redirect_uri: CLAUDE_CB, code_verifier: r.verifier } });
+	assert.equal(tok.status, 200, tok.text);
+	assert.equal((await s.owner("GET", "/owner/mcp")).data.grants[0].label, "mcp-cimd-client");
+	assert.equal((await s.modern(tok.data.access_token, "tools/list")).status, 200);
+	const ref = await s.call("POST", "/oauth/token", { form: { grant_type: "refresh_token", refresh_token: tok.data.refresh_token, client_id: CIMD_ID } });
+	assert.equal(ref.status, 200);
+	assert.equal((await s.call("POST", "/oauth/token", { form: { grant_type: "refresh_token", refresh_token: ref.data.refresh_token, client_id: "https://client.example.org/other.json" } })).data.error, "invalid_grant", "bound to its client_id");
+	// cache expiry: fetched again
+	s.DB.db.prepare("UPDATE oauth_client_metadata SET expires_ms = 0").run();
+	await s.call("GET", `/oauth/authorize?${new URLSearchParams(r.q)}`);
+	assert.equal(s.cimdFetches.length, 2);
+	// no-store documents are refetched every time
+	s.cimd["/oauth/nostore.json"] = { body: cimdDoc({ client_id: "https://client.example.org/oauth/nostore.json" }), headers: { "cache-control": "no-store" } };
+	for (let i = 0; i < 2; i++) assert.equal((await s.call("GET", `/oauth/authorize?${new URLSearchParams({ ...r.q, client_id: "https://client.example.org/oauth/nostore.json" })}`)).status, 200);
+	assert.equal(s.cimdFetches.filter((f) => f.url.endsWith("nostore.json")).length, 2);
+});
+
+test("Client ID Metadata Documents: unsafe URLs and bad documents are refused (never cached); fetches are rate limited", async (t) => {
+	const s = setup(); t.after(s.restore);
+	const page = (id: string, ip?: string) => s.call("GET", `/oauth/authorize?${new URLSearchParams({ response_type: "code", client_id: id, redirect_uri: CLAUDE_CB, code_challenge: "a".repeat(43), code_challenge_method: "S256" })}`, { ip });
+	for (const [id, re] of [
+		["http://client.example.org/m.json", /Unknown client/], ["https://10.0.0.1/m.json", /private/], ["https://localhost/m.json", /private/],
+		["https://client.example.org/", /must contain a path/], ["https://client.example.org/m.json#x", /fragment/],
+		["https://u:p@client.example.org/m.json", /username or password/], ["https://client.example.org/a/../m.json", /path segments/],
+		[`${BASE}/m.json`, /own host/],
+	] as [string, RegExp][]) {
+		const r = await page(id);
+		assert.equal(r.status, 400, id);
+		assert.match(r.text, re, id);
+	}
+	assert.equal(s.cimdFetches.length, 0, "unsafe URLs are never fetched");
+	const cases: [string, any, RegExp][] = [
+		["/mismatch.json", { body: cimdDoc() }, /client_id doesn&#39;t match|client_id doesn't match/],
+		["/redirect.json", { status: 302, body: "", headers: { location: "https://evil.example.net/" } }, /redirects are not followed/],
+		["/error.json", { status: 500, body: "x" }, /could not be fetched\./],
+		["/notjson.json", { body: "{nope" }, /not valid JSON/],
+		["/abort.json", { body: "ABORT" }, /could not be fetched\./],
+		["/big.json", { body: JSON.stringify({ ...cimdDoc({ client_id: "https://client.example.org/big.json" }), pad: "x".repeat(6000) }) }, /larger than 5120 bytes/],
+		["/secret.json", { body: cimdDoc({ client_id: "https://client.example.org/secret.json", token_endpoint_auth_method: "client_secret_basic" }) }, /not supported/],
+		["/secret2.json", { body: cimdDoc({ client_id: "https://client.example.org/secret2.json", client_secret: "x" }) }, /client secret/],
+		["/badredirect.json", { body: cimdDoc({ client_id: "https://client.example.org/badredirect.json", redirect_uris: ["http://evil.example.net/cb"] }) }, /must be https/],
+		["/otherredirect.json", { body: cimdDoc({ client_id: "https://client.example.org/otherredirect.json", redirect_uris: ["https://elsewhere.example.net/cb"] }) }, /redirect address doesn/],
+	];
+	for (const [path, doc, re] of cases) {
+		s.cimd[path] = doc;
+		const r = await page(`https://client.example.org${path}`);
+		assert.equal(r.status, 400, path);
+		assert.match(r.text, re, path);
+	}
+	const cached = s.DB.db.prepare("SELECT client_id FROM oauth_client_metadata").all().map((x: any) => x.client_id);
+	assert.deepEqual(cached, ["https://client.example.org/otherredirect.json"], "only the valid document is cached (its redirect simply didn't match)");
+	// a fixed document is picked up on the next try (errors aren't cached)
+	s.cimd["/mismatch.json"] = { body: cimdDoc({ client_id: "https://client.example.org/mismatch.json" }) };
+	assert.equal((await page("https://client.example.org/mismatch.json")).status, 200);
+	// DNS rebinding: a public name whose A or AAAA records point inside, or that can't be resolved, is never fetched
+	const before = s.cimdFetches.length;
+	s.cimd["/m.json"] = { body: cimdDoc({ client_id: "https://rebind.example.org/m.json" }) };
+	for (const [d, re] of [
+		[{ A: ["93.184.216.34", "10.0.0.5"] }, /private or reserved address/], [{ A: ["93.184.216.34"], AAAA: ["::ffff:7f00:1"] }, /private or reserved address/],
+		[{ A: ["169.254.169.254"] }, /private or reserved address/], [{ A: ["100.100.1.1"] }, /private or reserved address/], [{ AAAA: ["fd00::1"] }, /private or reserved address/],
+		[{ A: ["0.0.0.0"] }, /private or reserved address/], [{ A: ["224.0.0.1"] }, /private or reserved address/], [{}, /no address/],
+		[{ status: 2 }, /could not be checked/], [{ status: 3 }, /does not exist/],
+	] as [any, RegExp][]) {
+		s.dns["rebind.example.org"] = d;
+		const r = await page("https://rebind.example.org/m.json");
+		assert.equal(r.status, 400, JSON.stringify(d));
+		assert.match(r.text, re, JSON.stringify(d));
+	}
+	assert.equal(s.cimdFetches.length, before, "nothing fetched from a host that resolves inside");
+	s.dns["rebind.example.org"] = { A: ["198.51.99.7"], AAAA: ["2606:2800:220:1::1"] };
+	assert.equal((await page("https://rebind.example.org/m.json")).status, 200);
+	assert.equal(s.cimdFetches.at(-1)!.ip, "198.51.99.7", "the checked IP is the one connected to");
+	// chunked responses are decoded
+	s.cimd["/chunked.json"] = { body: cimdDoc({ client_id: "https://client.example.org/chunked.json" }), chunked: true } as any;
+	assert.equal((await page("https://client.example.org/chunked.json")).status, 200);
+	assert.ok(s.dnsQueries.includes("rebind.example.org/AAAA"));
+	for (let i = 0; i < 30; i++) await page(`https://client.example.org/none-${i}.json`, "192.0.2.77");
+	const limited = await page("https://client.example.org/none-x.json", "192.0.2.77");
+	assert.match(limited.text, /Too many client metadata lookups/);
+});
+
+test("isPublicIp: only global unicast addresses pass", () => {
+	for (const ip of ["93.184.216.34", "1.1.1.1", "2606:2800:220:1::1", "[2a00:1450::1]"]) assert.equal(M.isPublicIp(ip), true, ip);
+	for (const ip of ["10.1.2.3", "127.0.0.1", "172.16.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "224.0.0.1", "255.255.255.255",
+		"192.0.2.1", "198.18.0.1", "203.0.113.5", "300.1.1.1", "::1", "::", "fd00::1", "fe80::1", "::ffff:10.0.0.1", "::ffff:7f00:1",
+		"64:ff9b::a00:1", "2001:db8::1", "2002:a00:1::", "2001:0:4136:e378::1", "ff02::1", "example.org"]) assert.equal(M.isPublicIp(ip), false, ip);
+});
+
+test("parseHttpResponse: status, headers, content-length and chunked bodies; malformed input refused", () => {
+	const enc = (x: string) => new TextEncoder().encode(x);
+	const dec = (b: Uint8Array) => new TextDecoder().decode(b);
+	const ok = M.parseHttpResponse(enc("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nCache-Control: max-age=60\r\nContent-Length: 2\r\n\r\n{}extra"));
+	assert.ok(typeof ok !== "string");
+	assert.equal(ok.status, 200);
+	assert.equal(ok.headers["cache-control"], "max-age=60");
+	assert.equal(dec(ok.body), "{}");
+	const ch = M.parseHttpResponse(enc("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3;x=y\r\n{\"a\r\n4\r\n\":1}\r\n0\r\n\r\n"));
+	assert.ok(typeof ch !== "string");
+	assert.equal(dec(ch.body), '{"a":1}');
+	assert.equal(dec((M.parseHttpResponse(enc("HTTP/1.0 302 Found\r\nLocation: https://x.example.net/\r\n\r\n")) as any).body), "");
+	for (const bad of ["HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n{}", "HTTP/1.1 200 OK\r\n", "HTTP/2 200\r\n\r\n", "SSH-2.0-x\r\n\r\n",
+		"HTTP/1.1 200 OK\r\nno colon\r\n\r\n", "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n10\r\nshort", "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\n"])
+		assert.equal(typeof M.parseHttpResponse(enc(bad)), "string", JSON.stringify(bad));
 });
