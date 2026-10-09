@@ -1,6 +1,7 @@
 // Host → tenant name directory. The hosted router reads this before it touches a Durable Object.
 // Control (later) writes `tenant:<name>` = { id, status, region, version }. No secrets live here.
-// The isolate caches each lookup, including "not in the directory", for 60 seconds.
+// The isolate caches each lookup, including "not in the directory", for 60 seconds, capped so a scan of
+// random names cannot grow it without bound.
 
 import type { KvNamespace } from "./tenancy.ts";
 
@@ -8,6 +9,8 @@ import type { KvNamespace } from "./tenancy.ts";
 export const TENANT_NAME = /^[a-z0-9](?:[a-z0-9-]{2,30}[a-z0-9])$/;
 
 export const DIRECTORY_TTL_MS = 60_000;
+/** Isolate cap. A scan of random names must not keep a map entry for every miss. */
+export const DIRECTORY_MAX = 1024;
 
 export interface DirectoryEntry {
 	id: string;
@@ -21,6 +24,19 @@ const cache = new Map<string, { at: number; entry: DirectoryEntry | null }>();
 
 export function clearDirectoryCache(): void {
 	cache.clear();
+}
+
+/** Move `name` to the newest end and drop expired, then oldest, entries past the cap. */
+function remember(name: string, at: number, entry: DirectoryEntry | null, now: number): void {
+	cache.delete(name);
+	cache.set(name, { at, entry });
+	if (cache.size <= DIRECTORY_MAX) return;
+	for (const [k, v] of cache) if (now - v.at >= DIRECTORY_TTL_MS) cache.delete(k);
+	while (cache.size > DIRECTORY_MAX) {
+		const oldest = cache.keys().next().value;
+		if (oldest === undefined) break;
+		cache.delete(oldest);
+	}
 }
 
 export function directoryKey(name: string): string {
@@ -60,13 +76,16 @@ export function parseDirectoryEntry(raw: unknown): DirectoryEntry | null {
  */
 export async function lookupDirectory(kv: Pick<KvNamespace, "get">, name: string, now = Date.now()): Promise<DirectoryEntry | null> {
 	const hit = cache.get(name);
-	if (hit && now - hit.at < DIRECTORY_TTL_MS) return hit.entry;
+	if (hit && now - hit.at < DIRECTORY_TTL_MS) {
+		remember(name, hit.at, hit.entry, now);
+		return hit.entry;
+	}
 	let entry: DirectoryEntry | null = null;
 	try {
 		entry = parseDirectoryEntry(await kv.get(directoryKey(name), "json"));
 	} catch {
 		entry = null;
 	}
-	cache.set(name, { at: now, entry });
+	remember(name, now, entry, now);
 	return entry;
 }

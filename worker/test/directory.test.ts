@@ -1,7 +1,7 @@
 // Name directory: host parsing and the 60s isolate cache. Run: npm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { clearDirectoryCache, directoryKey, lookupDirectory, parseDirectoryEntry, TENANT_NAME, tenantNameFromHost, tenantRegion } from "../src/directory.ts";
+import { clearDirectoryCache, DIRECTORY_MAX, directoryKey, lookupDirectory, parseDirectoryEntry, TENANT_NAME, tenantNameFromHost, tenantRegion } from "../src/directory.ts";
 
 test("tenant names are 4–32 characters and one label under the domain", () => {
 	assert.equal(TENANT_NAME.test("abcd"), true);
@@ -49,5 +49,20 @@ test("lookups are cached for 60s, including unknown names", async () => {
 	store.set(directoryKey("nope"), JSON.stringify({ id: "t9", status: "active", region: "", version: 1 }));
 	assert.equal(await lookupDirectory(kv, "nope", 30_000), null, "a miss stays cached");
 	assert.equal((await lookupDirectory(kv, "nope", 60_000))?.id, "t9");
+	clearDirectoryCache();
+});
+
+test("the directory cache evicts the oldest name once it is full", async () => {
+	clearDirectoryCache();
+	let gets = 0;
+	const kv = { async get() { gets++; return null; } };
+	for (let i = 0; i < DIRECTORY_MAX; i++) await lookupDirectory(kv, "k" + i, 1);
+	assert.equal(gets, DIRECTORY_MAX);
+	await lookupDirectory(kv, "overflow", 1);
+	assert.equal(gets, DIRECTORY_MAX + 1);
+	await lookupDirectory(kv, "k0", 1);
+	assert.equal(gets, DIRECTORY_MAX + 2, "the oldest miss was evicted");
+	await lookupDirectory(kv, "overflow", 1);
+	assert.equal(gets, DIRECTORY_MAX + 2, "a name just stored is still cached");
 	clearDirectoryCache();
 });
