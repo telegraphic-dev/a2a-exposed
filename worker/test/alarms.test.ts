@@ -118,7 +118,7 @@ test("a hosted tenant arms an alarm for a debounced wake and the alarm flushes i
 	const stub = ns.get(ns.idFromName("id-alice")) as unknown as {
 		pushConfig(b: Record<string, unknown>): Promise<{ applied: boolean }>;
 		alarmAt(): Promise<number | null>;
-		alarm(): Promise<void>;
+		runAlarm(): Promise<void>;
 		fetch(r: Request): Promise<Response>;
 	};
 	assert.equal(await stub.alarmAt(), null);
@@ -146,7 +146,7 @@ test("a hosted tenant arms an alarm for a debounced wake and the alarm flushes i
 	await stub.pushConfig({ version: 2, tenantId: "id-alice", name: "alice", status: "active", ownerTokenHash: hash, config: { WAKE_DEBOUNCE_SECONDS: "0", WAKE_MAX_PER_HOUR: "0", AGENT_NAME: "Alice" } });
 	let after = await stub.alarmAt();
 	if (after && after <= Date.now() + 2000) {
-		await stub.alarm();
+		await stub.runAlarm();
 		after = await stub.alarmAt();
 	}
 	assert.ok(after && after > Date.now() + 60_000 && after < Date.now() + 7 * 60_000, "the alarm flushed the wake; the rate row is still waiting");

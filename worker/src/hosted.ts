@@ -212,6 +212,17 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 
 	/** Same flush and deletes as the self-host minute cron, for this tenant only. */
 	async alarm(): Promise<void> {
+		await this.#runAlarm();
+	}
+
+	/**
+	 * Run the alarm body now. `alarm` itself is reserved and cannot be called over RPC, so tests use this.
+	 */
+	async runAlarm(): Promise<void> {
+		await this.#runAlarm();
+	}
+
+	async #runAlarm(): Promise<void> {
 		const tenant = this.#row?.status === "active" ? this.#tenant() : null;
 		if (tenant) {
 			try { await cronFlush(tenant, this.#ectx()); }
