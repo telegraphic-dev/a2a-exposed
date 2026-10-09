@@ -7,7 +7,7 @@ export WAKE_WEBHOOK_URL='...'      # optional now
 export WAKE_WEBHOOK_KEY='...'      # optional (bearer/API key)
 export WAKE_HMAC_SECRET='...'      # optional (hermes / signed generic webhooks)
 # omit --hostname to deploy to https://<worker-name>.<account-subdomain>.workers.dev
-npx a2a-exposed init \
+npx -y a2a-exposed@latest init \
   --hostname agent.example.com \
   --agent-name "My Agent" \
   --agent-description "What this agent does, for other agents" \
@@ -30,7 +30,7 @@ Optional flags:
 | `--provider-organization`, `--provider-url` | Provider shown on the card |
 | `--worker-name` | Worker name (also the default D1 name) |
 | `--d1-name` | D1 database to create or reuse (default: worker name). Useful when several bots share an account |
-| `--cli-command` | Command shown in wake hints (`hint` / summaries). Default `npx a2a-exposed`. For a checkout, pass e.g. `node /path/to/repo/cli/bin/a2a-exposed.mjs`. Saved as `WAKE_CLI_COMMAND` |
+| `--cli-command` | Command shown in wake hints (`hint` / summaries). Default `npx -y a2a-exposed@latest`. For a checkout, pass e.g. `node /path/to/repo/cli/bin/a2a-exposed.mjs`. Saved as `WAKE_CLI_COMMAND` |
 | `--debounce <s>` | Wake debounce window |
 | `--pairing-approval human\|agent\|off` | Who approves device-flow pairing requests ([pairing](pairing.md)). `human` (default): your human, on the `/device` page, with an approval password only they know. `agent`: also `pair approve <code>` by the agent after asking its human in chat. `off`: no pairing endpoints; `token issue` only. Change it later with `deploy --pairing-approval ...` |
 | `--max-per-hour <n>` | Hourly wake cap |
@@ -42,12 +42,12 @@ Optional flags:
 | `--worker-dir <dir>` | Where the Worker project (template copy) lives; default `<config dir>/worker`. `--dir` is the old name. Not the config dir: that is the global `--config-dir <dir>` (same as `A2A_CONFIG_DIR`) |
 | `--cron` | Adds a one-minute cron flush. Needs a workers.dev subdomain on the account (works with workers.dev deployments); not required, because pending wakes are also flushed on every request |
 
-To redeploy later (after an upgrade or settings change), run `npx a2a-exposed deploy`. Existing secrets persist.
+To redeploy later (after an upgrade or settings change), run `npx -y a2a-exposed@latest deploy`. Existing secrets persist.
 
 Verify:
 
 ```bash
-npx a2a-exposed status     # agent card: OK: "<agent name>" (A2A 1.0, 0.3), then the next step
+npx -y a2a-exposed@latest status     # agent card: OK: "<agent name>" (A2A 1.0, 0.3), then the next step
 ```
 
 The card name should match `--agent-name`, and the versions should list 1.0 first, then 0.3. `status` fetches the card itself, so no `curl` is needed. A new workers.dev subdomain or custom domain can take a few minutes; if the card check fails, run `status` again. `status` names Cloudflare errors (1042 right after a deploy means the Worker is still propagating: retry in 30 s). `/.well-known/agent-card.json` is the A2A 1.0 card (with 0.3 interfaces listed); `/.well-known/agent.json` serves the same agent as an A2A 0.3-shaped card (`url`, `protocolVersion`, `preferredTransport`) for 0.3 clients.
@@ -58,8 +58,8 @@ There is no `adopt` command yet. To move a Worker that runs an earlier build of 
 
 1. Back up the D1 database first (for example, export every table with `npx cf d1 query <db-id> --sql ...`, and note the time-travel bookmark from `npx cf d1 time-travel get-bookmark <db-id>`).
 2. Write `config.env` yourself (chmod 600) with `CLOUDFLARE_ACCOUNT_ID`, `A2A_WORKER_NAME`, `A2A_D1_NAME`, `A2A_D1_ID`, `A2A_HOSTNAME` (a workers.dev Worker: leave it out and set `A2A_WORKERS_DEV_SUBDOMAIN`), `A2A_BASE_URL`, the **existing** owner token as `A2A_OWNER_TOKEN`, and the agent-card settings (`A2A_AGENT_NAME`, `A2A_AGENT_DESCRIPTION`, `A2A_AGENT_SKILLS`, ...). With `A2A_D1_ID` already saved, the saved hostname (or workers.dev) is not treated as a move.
-3. Run `npx a2a-exposed deploy --preset <preset>` with **no** `WAKE_*` (or `UPSTREAM_*`) variables exported. `deploy` (unlike `init`) uploads no secrets file when none are exported, so `OWNER_TOKEN` and the wake secrets already on the Worker are kept. It also applies the pending D1 migrations (`0002_wake_budget`, `0003_device_pairing`, `0004_pairing_replace`, `0005_facade_owners`) and prints `applied: ...`.
-4. Run `npx a2a-exposed status`. The agent card should show the existing name and base URL, and the wake mode should match the wake the Worker already had. Continue from its `next step:` line.
+3. Run `npx -y a2a-exposed@latest deploy --preset <preset>` with **no** `WAKE_*` (or `UPSTREAM_*`) variables exported. `deploy` (unlike `init`) uploads no secrets file when none are exported, so `OWNER_TOKEN` and the wake secrets already on the Worker are kept. It also applies the pending D1 migrations (`0002_wake_budget`, `0003_device_pairing`, `0004_pairing_replace`, `0005_facade_owners`) and prints `applied: ...`.
+4. Run `npx -y a2a-exposed@latest status`. The agent card should show the existing name and base URL, and the wake mode should match the wake the Worker already had. Continue from its `next step:` line.
 5. Peer tokens live in D1 as SHA-256 hashes, and lookups are by hash, so existing tokens (including the older `s2a_` prefix) keep working; nothing needs reissuing.
 6. Device-flow pairing ([pairing](pairing.md)) is on after the deploy, with `human` approval: run `pair set-password --web` and send your human the one-time link (or they run `pair set-password` in a terminal). To keep tokens manual only, deploy with `--pairing-approval off`.
 
@@ -104,14 +104,14 @@ A Worker can't reach a Tailnet or LAN address, so the upstream is published thro
    ```bash
    export UPSTREAM_ACCESS_CLIENT_ID='<service token client id>' UPSTREAM_ACCESS_CLIENT_SECRET='<secret>'
    export UPSTREAM_TOKEN='<bearer the agent expects>'     # the agent's own token (Hermes: the bearer its A2A server checks)
-   npx a2a-exposed init --hostname agent.example.com --upstream https://agent-upstream.example.com/a2a
-   #   existing deployment: npx a2a-exposed deploy --upstream https://agent-upstream.example.com/a2a
+   npx -y a2a-exposed@latest init --hostname agent.example.com --upstream https://agent-upstream.example.com/a2a
+   #   existing deployment: npx -y a2a-exposed@latest deploy --upstream https://agent-upstream.example.com/a2a
    #   card elsewhere:      --upstream-card-url https://agent-upstream.example.com/.well-known/agent-card.json  # same origin as --upstream (credentials ride with the fetch)
    #   back to the inbox:   deploy --upstream none
-   npx a2a-exposed status        # upstream card ok; Access credential and upstream bearer configured; upstream check OK; next step
+   npx -y a2a-exposed@latest status        # upstream card ok; Access credential and upstream bearer configured; upstream check OK; next step
    ```
 
-   The two credentials do different jobs: the **Access service token** only gets the Worker through the tunnel; the **`UPSTREAM_TOKEN`** is what the agent itself checks. Setup reads the upstream's agent card and, unless it declares no bearer auth, needs `UPSTREAM_TOKEN`. Not exported? On a terminal it asks (hidden input); otherwise it exits 1 and says what to do. Other ways to pass it (never as an argument): `<command that prints it> | npx a2a-exposed deploy --upstream-token-stdin`. An agent that really takes no bearer: `--no-upstream-token` (saved). Then check the whole path once: `npx a2a-exposed upstream verify` (it creates no task; details in Troubleshooting).
+   The two credentials do different jobs: the **Access service token** only gets the Worker through the tunnel; the **`UPSTREAM_TOKEN`** is what the agent itself checks. Setup reads the upstream's agent card and, unless it declares no bearer auth, needs `UPSTREAM_TOKEN`. Not exported? On a terminal it asks (hidden input); otherwise it exits 1 and says what to do. Other ways to pass it (never as an argument): `<command that prints it> | npx -y a2a-exposed@latest deploy --upstream-token-stdin`. An agent that really takes no bearer: `--no-upstream-token` (saved). Then check the whole path once: `npx -y a2a-exposed@latest upstream verify` (it creates no task; details in Troubleshooting).
 
 3. **Pairing** is unchanged and stays on the façade: set the approval password ([pairing](pairing.md)), then peers run `connect https://agent.example.com`. A wake webhook is optional (it only announces pairing requests); messages go to the upstream, so the inbox stays empty.
 

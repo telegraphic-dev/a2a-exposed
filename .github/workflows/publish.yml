@@ -80,14 +80,14 @@ jobs:
             echo "release $GITHUB_REF_NAME already exists"; exit 0
           fi
           cat > "$RUNNER_TEMP/notes.md" <<'NOTES'
-          **Install the CLI** (Node 22.18+)
+          **Run the CLI** (Node 22.18+; no install needed)
           ```bash
-          npm i -g a2a-exposed@@VERSION@      # or one-off: npx -y a2a-exposed@@VERSION@ --help
+          npx -y a2a-exposed@latest --help    # this release: npx -y a2a-exposed@@VERSION@; optional global install: npm i -g a2a-exposed@latest
           ```
 
           **Install the agent skills**
           ```bash
-          npx --yes skills add telegraphic-dev/a2a-exposed
+          npx -y skills add telegraphic-dev/a2a-exposed    # into the current project
           # Hermes Agent:
           hermes skills install telegraphic-dev/a2a-exposed/skills/a2a-exposed
           hermes skills install telegraphic-dev/a2a-exposed/skills/a2a-exposed-setup

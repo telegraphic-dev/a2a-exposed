@@ -35,6 +35,9 @@ test("claude-code: anthropic-version + text body", async () => {
 	assert.match(b.text, /a2a-exposed connector \(MCP tools/, "the connector comes first");
 	assert.ok(b.text.indexOf("connector") < b.text.indexOf("A2A_OWNER_TOKEN"), "the CLI is the fallback");
 	assert.match(b.text, /never ask for the token in chat/);
+	assert.match(b.text, /npx -y a2a-exposed@latest inbox/, "the default hint runs the CLI through npx");
+	assert.match(b.text, /run as `npx -y a2a-exposed@latest`, no global install/);
+	assert.ok(!/npm i(nstall)? -g/.test(b.text), "never asks for a global install");
 	assert.ok(!b.text.includes("Bearer rt") && !b.text.includes(" rt "), "no secret in the text");
 });
 

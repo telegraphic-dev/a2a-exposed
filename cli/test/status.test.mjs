@@ -14,12 +14,12 @@ const healthy = (over = {}) => ({
 test("nextStep: the first missing piece, in setup order", () => {
 	const step = (over) => nextStep(healthy(over));
 	assert.equal(step({ deployed: false }).ok, false);
-	assert.match(step({ deployed: false }).text, /nothing is deployed from \/cfg\/config\.env: run `a2a-exposed init/);
-	assert.match(step({ baseUrl: "" }).text, /no base URL saved\): re-run `a2a-exposed init` with the same flags \(safe/);
+	assert.match(step({ deployed: false }).text, /nothing is deployed from \/cfg\/config\.env: run `npx -y a2a-exposed@latest init/);
+	assert.match(step({ baseUrl: "" }).text, /no base URL saved\): re-run `npx -y a2a-exposed@latest init` with the same flags \(safe/);
 	assert.match(step({ hasOwnerToken: false }).text, /no owner token saved/);
 	assert.match(step({ card: { ok: false, error: "HTTP 404" } }).text, /agent card is not reachable \(HTTP 404\)/);
 	assert.match(step({ ownerApi: { ok: false, error: "worker GET /owner/wake/preview -> HTTP 401: {}" } }).text, /init --rotate-owner-token/);
-	assert.match(step({ ownerApi: { ok: false, error: "request failed" } }).text, /owner API failed \(request failed\): run `a2a-exposed deploy`/);
+	assert.match(step({ ownerApi: { ok: false, error: "request failed" } }).text, /owner API failed \(request failed\): run `npx -y a2a-exposed@latest deploy`/);
 	assert.equal(step({}).ok, true);
 	assert.match(step({}).text, /^none: setup is complete/);
 });
@@ -37,7 +37,7 @@ test("cardUrlProblem: every endpoint in the card must be the base URL", () => {
 test("nextStep: a card URL other than the base URL, and an exported A2A_BASE_URL, are flagged", () => {
 	const wrong = nextStep(healthy({ card: { ok: true, name: "A", versions: [], urlProblem: "it advertises http://100.101.102.103:8644/ instead of https://agent.example.com/" } }));
 	assert.equal(wrong.ok, false);
-	assert.match(wrong.text, /does not point peers at this deployment: it advertises http:\/\/100\.101\.102\.103:8644\/ .*Run `a2a-exposed deploy`/);
+	assert.match(wrong.text, /does not point peers at this deployment: it advertises http:\/\/100\.101\.102\.103:8644\/ .*Run `npx -y a2a-exposed@latest deploy`/);
 	const env = nextStep(healthy({ baseUrlEnv: "http://hermes.example.ts.net:8644", baseUrlSaved: "https://agent.example.com" }));
 	assert.equal(env.ok, false);
 	assert.match(env.text, /^A2A_BASE_URL is exported as http:\/\/hermes\.example\.ts\.net:8644, but \/cfg\/config\.env has https:\/\/agent\.example\.com/);
@@ -47,32 +47,32 @@ test("nextStep: tunnel states", () => {
 	const t = { hostname: "wake-a.example.com", complete: true, tokenFileOk: true, workerUrlMatches: true, connections: 1, tokenFile: "/cfg/tunnel-token" };
 	const wake = { preset: "hermes", configured: true, hasHmacSecret: true, hasAccessServiceToken: true, urlFingerprint: "f" };
 	const step = (tun, w = wake) => nextStep(healthy({ tunnel: { ...t, ...tun }, wake: w }));
-	assert.match(step({ complete: false }).text, /did not finish: run `a2a-exposed tunnel rm`, then `a2a-exposed tunnel create`/);
-	assert.match(step({ tokenFileOk: false }).text, /connector token file \(\/cfg\/tunnel-token\) is missing or empty: run `a2a-exposed tunnel create` again/);
+	assert.match(step({ complete: false }).text, /did not finish: run `npx -y a2a-exposed@latest tunnel rm`, then `npx -y a2a-exposed@latest tunnel create`/);
+	assert.match(step({ tokenFileOk: false }).text, /connector token file \(\/cfg\/tunnel-token\) is missing or empty: run `npx -y a2a-exposed@latest tunnel create` again/);
 	assert.equal(step({ tokenFileOk: false }).ok, false);
 	assert.match(step({ workerUrlMatches: false }).text, /re-uploads them/);
-	assert.match(step({ workerUrlMatches: false }, { ...wake, hasHmacSecret: false }).text, /export WAKE_HMAC_SECRET and run `a2a-exposed tunnel create` again/);
+	assert.match(step({ workerUrlMatches: false }, { ...wake, hasHmacSecret: false }).text, /export WAKE_HMAC_SECRET and run `npx -y a2a-exposed@latest tunnel create` again/);
 	assert.match(step({}, { ...wake, hasAccessServiceToken: false }).text, /re-uploads them/);
 	assert.equal(step({ connections: 0 }).ok, false);
 	assert.match(step({ connections: 0 }).text, /cloudflared tunnel run --token-file \/cfg\/tunnel-token.*7844/);
 	assert.match(step({ connections: null }).text, /setup is complete/, "unknown connector state is not an error");
 	assert.match(step({}).text, /setup is complete/);
 	// a local preset needs its own webhook auth next to the Access token
-	assert.match(step({}, { ...wake, hasHmacSecret: false }).text, /sends no webhook auth, so the hermes webhook will reject wakes: export WAKE_HMAC_SECRET.*`a2a-exposed tunnel create`/);
+	assert.match(step({}, { ...wake, hasHmacSecret: false }).text, /sends no webhook auth, so the hermes webhook will reject wakes: export WAKE_HMAC_SECRET.*`npx -y a2a-exposed@latest tunnel create`/);
 	const oc = nextStep(healthy({ wake: { preset: "openclaw-wake", configured: true, hasKey: false } }));
 	assert.equal(oc.ok, false);
-	assert.match(oc.text, /export WAKE_WEBHOOK_KEY \(the hooks token\), then run `a2a-exposed wake set`/);
+	assert.match(oc.text, /export WAKE_WEBHOOK_KEY \(the hooks token\), then run `npx -y a2a-exposed@latest wake set`/);
 });
 
 test("nextStep: no wake webhook means polling, with the tunnel offered when the account has a zone", () => {
 	const noWake = (preset, zones) => nextStep(healthy({ wake: { preset, configured: false }, zones }));
 	const full = (r) => [r.text, ...r.also].join(" | "); // optional hints are separate "also" lines
 	for (const p of ["hermes", "openclaw-wake", "openclaw-agent"]) assert.equal(noWake(p, ["example.com"]).ok, true);
-	assert.match(full(noWake("hermes", ["example.com"])), /check the inbox on a schedule.*`a2a-exposed tunnel create` \(it uses the account's zone example\.com; no redeploy needed\)/);
+	assert.match(full(noWake("hermes", ["example.com"])), /check the inbox on a schedule.*`npx -y a2a-exposed@latest tunnel create` \(it uses the account's zone example\.com; no redeploy needed\)/);
 	assert.match(full(noWake("hermes", ["a.com", "b.org"])), /--tunnel-zone <zone>` with one of: a\.com, b\.org/);
 	assert.match(full(noWake("hermes", [])), /no domain \(zone\), so the secure tunnel is not available/);
 	assert.match(full(noWake("hermes", null)), /needs a zone on the account/);
-	assert.match(full(noWake("grok-bot", null)), /export WAKE_WEBHOOK_URL and WAKE_WEBHOOK_KEY, then run `a2a-exposed wake set --preset grok-bot`/);
+	assert.match(full(noWake("grok-bot", null)), /export WAKE_WEBHOOK_URL and WAKE_WEBHOOK_KEY, then run `npx -y a2a-exposed@latest wake set --preset grok-bot`/);
 	assert.match(full(noWake("generic", ["a.com"])), /tunnel create.*a public webhook: export WAKE_WEBHOOK_URL/);
 });
 

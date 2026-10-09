@@ -66,7 +66,7 @@ test("checkNode: an old Node is refused with ways to get Node 22 (mise first, th
 	assert.throws(() => checkNode("20.19.2"), (e) => /Node 20\.19\.2 found; init\/deploy need Node 22\.18\+/.test(e.message) && e.message.includes(NODE_HELP));
 	assert.throws(() => checkNode("v22.17.9"), /22\.18\+/);
 	checkNode("22.18.0"); checkNode("24.1.0");
-	for (const re of [/mise exec node@22 -- npx a2a-exposed/, /mise use node@22/, /telegraphic-dev\/mise-skill/, /nvm install 22/, /fnm install 22/, /nodejs\.org/])
+	for (const re of [/mise exec node@22 -- npx -y a2a-exposed@latest/, /mise use node@22/, /telegraphic-dev\/mise-skill/, /nvm install 22/, /fnm install 22/, /nodejs\.org/])
 		assert.match(NODE_HELP, re);
 });
 
@@ -76,7 +76,7 @@ test("update notice: version compare, 24 h cache, opt-outs, no notice from a che
 	assert.ok(!U.newer("0.2.0", "0.2.0") && !U.newer("0.1.9", "0.2.0"));
 	assert.equal(U.notice("0.2.0", { latest: "0.2.0" }), "");
 	assert.equal(U.notice("0.2.0", null), "");
-	assert.match(U.notice("0.2.0", { latest: "0.3.1" }), /^a2a-exposed 0\.3\.1 is available \(you have 0\.2\.0\): npm i -g a2a-exposed@latest, then a2a-exposed deploy/);
+	assert.match(U.notice("0.2.0", { latest: "0.3.1" }), /^a2a-exposed 0\.3\.1 is available \(you have 0\.2\.0\): run npx -y a2a-exposed@latest deploy \(updates the Worker; applies new D1 migrations\)\. With a global install, npm i -g a2a-exposed@latest first/);
 	const now = Date.now();
 	assert.ok(U.due(null, now) && U.due({ checkedAt: now - U.CHECK_INTERVAL_MS - 1 }, now) && !U.due({ checkedAt: now - 1000 }, now));
 	const installed = path.join("/usr/lib/node_modules/a2a-exposed/lib/update.mjs");
@@ -143,7 +143,7 @@ test("status: Cloudflare 1042 on the card is 'still propagating, retry in 30 s',
 		card: { ok: false, error: "HTTP 404, Cloudflare error 1042: ...", cfError: 1042 }, ownerApi: { ok: true }, wake: { configured: false } };
 	const r = nextStep(s);
 	assert.equal(r.ok, false);
-	assert.match(r.text, /^the Worker is still propagating \(Cloudflare error 1042.*run `a2a-exposed status` again in 30 seconds/);
+	assert.match(r.text, /^the Worker is still propagating \(Cloudflare error 1042.*run `npx -y a2a-exposed@latest status` again in 30 seconds/);
 });
 
 // ------------------------------------------------------------------ F16 / F17: --config-dir, url
@@ -151,7 +151,7 @@ test("url exits 1 when nothing is configured; --config-dir picks the config dir 
 	const empty = sandbox(t);
 	let r = await empty.cli(["url"]);
 	assert.equal(r.status, 1);
-	assert.match(r.stderr, /no base URL configured in .*config\.env: run `a2a-exposed init`/);
+	assert.match(r.stderr, /no base URL configured in .*config\.env: run `npx -y a2a-exposed@latest init`/);
 	const other = sandbox(t, { A2A_BASE_URL: "https://other.example.com" });
 	r = await empty.cli(["url", "--config-dir", other.dir]);
 	assert.equal(r.status, 0, r.stderr);
@@ -234,7 +234,7 @@ test("pair set-password: the terminal path explains the --web alternative; pairi
 	const s = sandbox(t, { A2A_BASE_URL: off.url, A2A_OWNER_TOKEN: "owner-tok" });
 	let r = await s.cli(["pair", "set-password"]);
 	assert.equal(r.status, 1);
-	assert.match(r.stderr, /stdin is not a terminal[\s\S]*`a2a-exposed pair set-password --web` prints a one-time link/);
+	assert.match(r.stderr, /stdin is not a terminal[\s\S]*`npx -y a2a-exposed@latest pair set-password --web` prints a one-time link/);
 	r = await s.cli(["pair", "set-password", "--web"]);
 	assert.equal(r.status, 1);
 	assert.match(r.stderr, /could not create a setup link: device-flow pairing is disabled/);
@@ -336,7 +336,7 @@ test("connect: a working token is kept unless --replace; --replace swaps it unde
 	assert.equal((await ownerSide.cli(["token", "revoke", "Client-Bot"])).status, 0);
 	r = await client.cli(["send", "--to", "srv", "--text", "hi"]);
 	assert.equal(r.status, 1);
-	assert.match(r.stderr, new RegExp(`peer "srv" rejected our token \\(HTTP 401: revoked, rotated, or never valid there\\)\\. Re-pair: a2a-exposed connect ${w.url.replace(/\./g, "\\.")} --alias srv`));
+	assert.match(r.stderr, new RegExp(`peer "srv" rejected our token \\(HTTP 401: revoked, rotated, or never valid there\\)\\. Re-pair: npx -y a2a-exposed@latest connect ${w.url.replace(/\./g, "\\.")} --alias srv`));
 	r = await client.cli(["connect", w.url, "--alias", "srv", "--no-wait"]);
 	assert.equal(r.status, 0, r.stderr);
 	assert.match(r.stderr, /note: peer "srv" rejects the stored token \(HTTP 401: revoked or rotated\); requesting a new one/);
@@ -354,7 +354,7 @@ test("connect: resuming an expired request exits 1 and says so; the rerun hint k
 	r = await client.cli(["connect", w.url, "--alias", "late", "--name", "My Bot"]);
 	assert.equal(r.status, 1);
 	assert.match(r.stderr, new RegExp(`the earlier pairing request to Server Inbox \\(code ${code}\\) expired before it was approved; nothing was stored\\.`));
-	assert.match(r.stderr, /For a new code \(a new approval request to its owner\), run: a2a-exposed connect http:\/\/127\.0\.0\.1:\d+ --alias late --name 'My Bot'$/m);
+	assert.match(r.stderr, /For a new code \(a new approval request to its owner\), run: npx -y a2a-exposed@latest connect http:\/\/127\.0\.0\.1:\d+ --alias late --name 'My Bot'$/m);
 	assert.ok(!fs.existsSync(st), "state dropped");
 	assert.equal(JSON.parse((await ownerSide.cli(["pair", "list", "--json"])).stdout).pending.length, 1, "no second request was made");
 });

@@ -12,7 +12,7 @@ Guide for coding agents (and humans) changing this repository. User-facing docs 
   - `.cursor-plugin/plugin.json` — Cursor / Grok Bot marketplace.
   - `.grok-plugin/plugin.json` — Grok Build / xAI plugin marketplace.
   - `.claude-plugin/plugin.json` (+ optional `.claude-plugin/marketplace.json`) — Claude Code.
-  - Codex has no separate required overlay when `plugin.json` is present; bare repo skill discovery without installing the plugin uses `.agents/skills/` (not used here — install the plugin or `npx skills add`).
+  - Codex has no separate required overlay when `plugin.json` is present; bare repo skill discovery without installing the plugin uses `.agents/skills/` (not used here — install the plugin or `npx -y skills add`).
 - `.github/workflows/`: `ci.yml` (pushes to main and PRs) and `publish.yml` (`v*` tags: npm publish + GitHub release).
 
 ## Checks (what CI runs)
@@ -22,7 +22,7 @@ Run with any real `WAKE_*`, `A2A_*`, `CF_*`, `CLOUDFLARE_*` variables unset: the
 ```bash
 cd worker && npm ci && npm test && npx cf workers types && npx tsc --noEmit && npx cf build
 cd ../cli && npm test && npm pack --dry-run
-cd .. && npx --yes skills add ./ --list
+cd .. && npx -y skills add ./ --list
 # Agent Skills + Agent Plugins (same as CI):
 python3 -m venv .skills-ref-venv && .skills-ref-venv/bin/pip install -q "skills-ref @ git+https://github.com/agentskills/agentskills.git#subdirectory=skills-ref" jsonschema
 .skills-ref-venv/bin/skills-ref validate skills/a2a-exposed

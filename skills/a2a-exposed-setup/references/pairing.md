@@ -5,8 +5,8 @@ Agents connect without pasting tokens into chat, using the standard OAuth 2.0 De
 **Set the approval password (once, human mode).** Your human types it, never the agent. Two ways:
 
 ```bash
-npx a2a-exposed pair set-password --web [--ttl 15]   # easiest: prints a one-time link for your human
-npx a2a-exposed pair set-password                     # the human runs this themselves, in a terminal
+npx -y a2a-exposed@latest pair set-password --web [--ttl 15]   # easiest: prints a one-time link for your human
+npx -y a2a-exposed@latest pair set-password                     # the human runs this themselves, in a terminal
 ```
 
 - **`--web` (agents run this):** it prints a one-time link `<base>/device/setup?t=...` (valid 15 minutes by default, `--ttl <minutes>` up to 60; `--json` for scripts). **Send the link to your human privately and stop.** Never open it, fill in the page, or ask for the password yourself. The human opens the link, types a password (at least 12 characters) twice, and sees a confirmation that links to `/device`. The link works once (and is burned after 5 bad attempts); a newer link replaces the older one. It works for the first password and for changing it. The Worker hashes the password with PBKDF2-SHA256 and stores only the hash.
@@ -17,8 +17,8 @@ Never ask the user for the password, and never type it for them. Until it is set
 **Someone connects to you.** Their agent runs `connect` with your URL (or any standard OAuth device-flow client; the endpoints are on your agent card and at `/.well-known/oauth-authorization-server`). You get a wake with `kind: "pairing_request"`, the requester's claimed name and card URL, the code (e.g. `WDJB-4827`), and a link (`<base>/device?user_code=WDJB-4827`).
 - **Polling agents** (no webhook) see requests in `inbox` and `pair list`, not as a wake: check them each run and tell your human.
 - **human** mode (default): tell your human who is asking, show the code, and give them the link. They check the code with the other agent's owner, then approve or deny on the page with the approval password (deny needs no password). You never approve.
-- **agent** mode: ask your human in chat; only if they say yes, run `npx a2a-exposed pair approve <code>`; otherwise `pair deny <code>`.
-- `npx a2a-exposed pair list` shows pending requests. `pair deny <code>` works in every mode.
+- **agent** mode: ask your human in chat; only if they say yes, run `npx -y a2a-exposed@latest pair approve <code>`; otherwise `pair deny <code>`.
+- `npx -y a2a-exposed@latest pair list` shows pending requests. `pair deny <code>` works in every mode.
 - The approved agent gets a normal per-peer token (label from its name, e.g. `Barry-Bot`). `token list` shows it with `via pairing: code WDJB-4827`; `token revoke <label>` cuts it off (an unknown or already revoked label exits 1, so a typo is never taken for success).
 - **Re-pairing** (`connect --replace` from a peer that already has a token): the request says which token it replaces (`pair list` shows `replaces the active token "<label>"`). Approval swaps the token under the same label and the old one stops working; no second label (`Barry-Bot-2`) and no orphan. The request is bound to the exact token that was presented: if you rotate or revoke that label before the request is redeemed (for example because the old token leaked), the swap is refused and the request, if approved, gets a fresh label instead, so a leaked old token can never take over a rotated one. A revoked label is not reused.
 - Peers that don't send the old token, or run an older version, get a new label as before; revoke the old one yourself.
@@ -26,7 +26,7 @@ Never ask the user for the password, and never type it for them. Until it is set
 **You connect to someone.** Only when the user asked:
 
 ```bash
-npx a2a-exposed connect https://peer.example.com [--alias peer]      # or the peer's agent-card URL
+npx -y a2a-exposed@latest connect https://peer.example.com [--alias peer]      # or the peer's agent-card URL
 ```
 
 It prints a code and a link. Show both to your human: they confirm the code with the peer's owner, who approves it. `connect` waits (honouring `interval` and `slow_down`), then stores the token as outbound peer `peer` (never printed); `send --to peer` works right away. A denied or expired request ends with exit code 1 and a clear message. If your harness only shows output when a command finishes, use `connect <url> --alias peer --no-wait` (prints the code and exits, status `not_waiting` with `--json`), relay the code, then run **the same command** again: it checks once (same code) and stores the token when the owner has approved; without `--no-wait` it waits. `--json` prints one JSON line per step.
@@ -34,7 +34,7 @@ It prints a code and a link. Show both to your human: they confirm the code with
 - **Expired codes are never replaced silently.** Resuming a request that expired exits 1 ("expired before it was approved; nothing was stored") and prints the exact command, with every flag, for a new code. A new code is a new approval request for the peer's owner, so ask your human first.
 - **Already connected?** If the alias holds a token that still works, `connect` refuses and asks for `--replace`. If the stored token was revoked or rotated (HTTP 401), it just requests a new one. With `--replace` the old token is sent along; a peer on this version swaps it under the same label, an older peer keeps the old token active until its owner revokes it (the CLI says so, with the label if known). Don't re-pair just to see if it works: `send` tells you, with the fix (`<alias> rejected our token ... re-pair`).
 
-**Manual fallback.** If the peer has no device flow (or pairing is `off`), `npx a2a-exposed token issue <peer-label>` prints a token once. Send it with the card URL (`$(npx a2a-exposed url)/.well-known/agent-card.json`) only over a channel the user approves; the peer adds it with `peers add <alias> <url> --token-stdin`. Tokens are `a2aow_` plus 43 base64url characters; the Worker stores only their SHA-256 hash. One label per peer; manage labels with `token list`, `token rotate <label>`, and `token revoke <label>`.
+**Manual fallback.** If the peer has no device flow (or pairing is `off`), `npx -y a2a-exposed@latest token issue <peer-label>` prints a token once. Send it with the card URL (`$(npx -y a2a-exposed@latest url)/.well-known/agent-card.json`) only over a channel the user approves; the peer adds it with `peers add <alias> <url> --token-stdin`. Tokens are `a2aow_` plus 43 base64url characters; the Worker stores only their SHA-256 hash. One label per peer; manage labels with `token list`, `token rotate <label>`, and `token revoke <label>`.
 
 ### Pairing security (threat model)
 

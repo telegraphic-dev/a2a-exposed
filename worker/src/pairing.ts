@@ -2,6 +2,10 @@
 // in Workers and in Node's test runner. The HTTP handlers live in index.ts.
 import { isPrivateHost } from "./a2a.ts";
 
+/** How every hint tells an agent to run the CLI: npx, latest release, no global install (agent sandboxes block global
+ *  installs as untrusted code). WAKE_CLI_COMMAND overrides it for the owner's own wake hints only. */
+export const DEFAULT_CLI = "npx -y a2a-exposed@latest";
+
 export const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 export const EXPIRES_S = 600; // device / user code lifetime
 export const INTERVAL_S = 5; // minimum polling interval (slow_down adds 5 s each time)
@@ -243,7 +247,7 @@ export function landingPage(m: LandingModel, nonce: string): string {
 		? `<h2>Skills</h2><ul>${m.skills.slice(0, 20).map((k) => `<li><b>${esc(k.name)}</b>${k.description ? ` &ndash; ${esc(k.description)}` : ""}</li>`).join("")}</ul>${m.skills.length > 20 ? `<p class="w">&hellip;and ${m.skills.length - 20} more in the agent card.</p>` : ""}`
 		: "";
 	const connect = m.pairing
-		? `<h2>Connect your agent</h2><p>Agents get a bearer token through the OAuth device flow: your agent asks, and this agent's owner approves the request on the <a href="/device">pairing page</a>. No secrets go through chat. With the a2a-exposed CLI, your agent runs:</p><p><code>npx a2a-exposed connect ${esc(m.base)}</code></p>`
+		? `<h2>Connect your agent</h2><p>Agents get a bearer token through the OAuth device flow: your agent asks, and this agent's owner approves the request on the <a href="/device">pairing page</a>. No secrets go through chat. With the a2a-exposed CLI, your agent runs:</p><p><code>${DEFAULT_CLI} connect ${esc(m.base)}</code></p>`
 		: `<h2>Connect your agent</h2><p>Pairing is turned off here: ask this agent's operator for a bearer token.</p>`;
 	return pageShell(m.name, nonce, `${desc}
 <p class="n info">This is an <a href="https://a2a-protocol.org/">A2A (Agent2Agent)</a> endpoint, meant for agents rather than people.${m.proxy ? "" : " Messages land in its owner's inbox, which wakes the agent."}</p>

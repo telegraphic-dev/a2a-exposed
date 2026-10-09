@@ -1,6 +1,6 @@
 import { parseArgs } from "node:util";
 import fs from "node:fs";
-import { CliError } from "./a2a.mjs";
+import { CLI, CliError } from "./a2a.mjs";
 import * as C from "./config.mjs";
 import * as cmd from "./commands.mjs";
 import * as dep from "./deploy.mjs";
@@ -13,9 +13,10 @@ const VERSION = JSON.parse(fs.readFileSync(new URL("../package.json", import.met
 
 const HELP = `a2a-exposed ${VERSION} - public A2A endpoint for any AI agent (Cloudflare Worker inbox + wake webhook)
 
-Usage: a2a-exposed <command> [options]        (or: npx a2a-exposed <command>)
+Usage: npx -y a2a-exposed@latest <command> [options]
+       (optional speed-up: npm i -g a2a-exposed, then a2a-exposed <command>)
 
-Setup (needs Node 22.18+, e.g. \`mise exec node@22 -- npx a2a-exposed ...\`, and a Cloudflare login:
+Setup (needs Node 22.18+, e.g. \`mise exec node@22 -- npx -y a2a-exposed@latest ...\`, and a Cloudflare login:
 npx cf auth login --no-browser; on a VPS where it fails with HTTP 403 before showing a code, export
 CLOUDFLARE_API_TOKEN instead: setup skill, Troubleshooting)
   init [--hostname <host> | --workers-dev [--workers-dev-subdomain NAME]]
@@ -57,7 +58,7 @@ CLOUDFLARE_API_TOKEN instead: setup skill, Troubleshooting)
                                                on a terminal, else exit 1 with what to do
                                 --upstream-token-stdin  read UPSTREAM_TOKEN from stdin (hidden prompt on a terminal)
                                 --no-upstream-token  the upstream needs no bearer token: skip that check (saved)
-                                --cli-command  command shown in wake hints (default "npx a2a-exposed";
+                                --cli-command  command shown in wake hints (default "npx -y a2a-exposed@latest";
                                                e.g. "node /path/to/repo/cli/bin/a2a-exposed.mjs")
                                 --worker-dir   where the Worker project (template copy) lives (default
                                                <config dir>/worker; --dir is the old name). Not the config dir:
@@ -203,7 +204,7 @@ export async function main(argv) {
 			await dep.init(o);
 			if (!o.tunnel) return;
 			try { return await tun.create(o); } catch (e) {
-				if (e instanceof CliError) e.message += "\n(the inbox is deployed and works; fix the above, then run `a2a-exposed tunnel create`, or check `a2a-exposed status`)";
+				if (e instanceof CliError) e.message += `\n(the inbox is deployed and works; fix the above, then run \`${CLI} tunnel create\`, or check \`${CLI} status\`)`;
 				throw e;
 			}
 		case "tunnel": return tun.tunnel(need(p[0], "tunnel create|status|rm"), o);
@@ -217,7 +218,7 @@ export async function main(argv) {
 		case "wake": return dep.wake(p[0], o);
 		case "url": {
 			const u = cmd.baseUrl();
-			if (!u) throw new CliError(`no base URL configured in ${C.CONFIG_FILE}: run \`a2a-exposed init\` (or pass --config-dir / A2A_CONFIG_DIR for another deployment)`);
+			if (!u) throw new CliError(`no base URL configured in ${C.CONFIG_FILE}: run \`${CLI} init\` (or pass --config-dir / A2A_CONFIG_DIR for another deployment)`);
 			return console.log(u);
 		}
 		case "config": {

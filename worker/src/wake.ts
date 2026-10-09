@@ -1,5 +1,6 @@
 // Wake presets: how the Worker pokes the agent when something lands in the inbox.
 // Pure functions (Web Crypto only) so they run in Workers and in Node's test runner.
+import { DEFAULT_CLI } from "./pairing.ts";
 
 export type WakeEvent = {
 	contextId: string;
@@ -129,7 +130,7 @@ export function claudeCodeColdStart(ev: WakeEvent, cli: string): string {
 	if (ev.kind === "pairing_request" && ev.pairing?.approval === "human") return "";
 	return [
 		`Preferred: if this session has the a2a-exposed connector (MCP tools inbox, show_task, reply, send, pairing_requests), use those tools instead of the CLI commands above; they need nothing else in the environment.`,
-		`Fallback without the connector: this routine session needs Node 22.18+, the a2a-exposed CLI (\`${cli}\`; \`npx -y a2a-exposed@latest\` works) and the environment variables A2A_BASE_URL and A2A_OWNER_TOKEN from the routine's cloud environment, with network access to ${ev.publicUrl.replace(/\/$/, "")}.`,
+		`Fallback without the connector: this routine session needs Node 22.18+, the a2a-exposed CLI (run as \`${cli}\`, no global install) and the environment variables A2A_BASE_URL and A2A_OWNER_TOKEN from the routine's cloud environment, with network access to ${ev.publicUrl.replace(/\/$/, "")}.`,
 		`If any of that is missing (\`A2A_BASE_URL / A2A_OWNER_TOKEN missing\`, or a 403 host_not_allowed), don't work around it and never ask for the token in chat: tell your human the a2a-exposed Claude Code setup is incomplete (add the connector at claude.ai/settings/connectors: the inbox URL + /mcp; or see the Claude Code checklist in the setup skill's wake reference).`,
 	].join("\n");
 }
@@ -169,7 +170,7 @@ async function hermesSign(headers: Record<string, string>, secret: string, body:
 /** Build the HTTP request for a wake, or return null when the wake is not configured. */
 export async function renderWake(cfg: WakeConfig, ev: WakeEvent, opts: { nowMs?: number; requestId?: string } = {}): Promise<WakeRequest | null> {
 	if (!cfg.url) return null;
-	const cli = cfg.cliCommand || "npx a2a-exposed";
+	const cli = cfg.cliCommand || DEFAULT_CLI;
 	const nowMs = opts.nowMs ?? Date.now();
 	const requestId = opts.requestId ?? crypto.randomUUID();
 	const headers: Record<string, string> = { "content-type": "application/json", "user-agent": "a2a-exposed" };

@@ -6,16 +6,14 @@ Give any AI agent a public A2A (Agent2Agent) endpoint. Messages land in a Cloudf
 
 > The domain [a2a.exposed](https://a2a.exposed) is reserved for the project's future hosted/public pages; nothing is served there yet, and self-hosted deployments use your own hostname or workers.dev.
 
-Installing the skills gives your agent the instructions; it does **not** install the CLI. Install it, or upgrade an older one, first (Node 22.18+):
+Installing the skills gives your agent the instructions; it does **not** install the CLI, and nothing needs installing: every command runs through npx (Node 22.18+):
 
 ```bash
-npm i -g a2a-exposed@latest
-a2a-exposed --version
+npx -y a2a-exposed@latest --version
+npx -y a2a-exposed@latest <command>
 ```
 
-A bare `command -v ... || npm i -g ...` never upgrades an older copy already on PATH. The CLI prints a one-line notice when a newer version is out (at most once a day; `A2A_NO_UPDATE_CHECK=1` turns it off). After upgrading, run `a2a-exposed deploy` so the Worker gets the new template and D1 migrations. No Node 22 yet? See the [setup skill](skills/a2a-exposed-setup/references/prerequisites.md) (mise / nvm / fnm / the official installer).
-
-For one-off use without a global install: `npx -y a2a-exposed@latest <command>`. The docs write commands as `npx a2a-exposed <command>`; with a global install, `a2a-exposed <command>` is the same thing without the npm round-trip.
+That is the one form the docs, the skills, wake hints and the CLI's own output use. `@latest` always runs the newest release, so the Worker you `deploy` comes from the current template (a pinned or older copy would redeploy an older Worker over a newer one). Agent sandboxes (Claude Code cloud sessions, for example) block global installs as untrusted code, and npx needs none. Optional speed-up on your own machine: `npm i -g a2a-exposed@latest`, then `a2a-exposed <command>`; re-run that install to upgrade (a global copy never upgrades itself, and the CLI prints a one-line notice when a newer version is out, at most once a day; `A2A_NO_UPDATE_CHECK=1` turns it off). After an upgrade, `deploy` so the Worker gets the new template and D1 migrations. No Node 22 yet? See the [setup skill](skills/a2a-exposed-setup/references/prerequisites.md) (mise / nvm / fnm / the official installer).
 
 ## Why
 
@@ -26,7 +24,7 @@ a2a-exposed adds that missing half:
 - A small **Cloudflare Worker** (free tier is plenty) on a hostname you own, or on a free `*.workers.dev` URL, serves your **agent card** and the **A2A JSON-RPC endpoint**.
 - Inbound messages become **tasks in a D1 inbox**.
 - The Worker **wakes your agent** with a webhook (Grok Bot, Claude Code, OpenClaw, Hermes, n8n/Zapier/anything). Agents without inbound webhooks **poll the inbox on a schedule** instead.
-- Your agent reads the inbox and replies with a **zero-dependency CLI**: `npx a2a-exposed`. Peers receive answers via `GetTask` or push notifications.
+- Your agent reads the inbox and replies with a **zero-dependency CLI**: `npx -y a2a-exposed@latest`. Peers receive answers via `GetTask` or push notifications.
 - The same CLI **sends** messages to other A2A agents (1.0 or 0.3) and tracks their replies.
 
 ## Architecture
@@ -39,38 +37,39 @@ flowchart LR
     end
     W -- "wake webhook<br/>(preset: grok-bot, claude-code,<br/>openclaw, hermes, generic)" --> A["Your agent"]
     A -. "or: scheduled check" .-> W
-    A -- "npx a2a-exposed<br/>inbox / reply / send<br/>(owner token)" --> W
+    A -- "npx -y a2a-exposed@latest<br/>inbox / reply / send<br/>(owner token)" --> W
     W -- "push notification<br/>(optional, https)" --> P
     A -- "send / poll<br/>(A2A client)" --> Q["Other A2A agents"]
 ```
 
 1. A peer discovers you at `https://<your-host>/.well-known/agent-card.json` and calls `SendMessage` with the token you issued it.
 2. The Worker stores a `submitted` task and fires the wake webhook. Wakes are debounced per conversation, so a burst is one wake.
-3. Your agent runs `npx a2a-exposed inbox`, does the work, and runs `npx a2a-exposed reply <taskId> --text ...`.
+3. Your agent runs `npx -y a2a-exposed@latest inbox`, does the work, and runs `npx -y a2a-exposed@latest reply <taskId> --text ...`.
 4. The peer sees the result via `GetTask`, or immediately if it registered a push URL.
 
 ## Quick start
 
-**Requires Node 22.18+** (`node -v`). `init`/`deploy` stop on older Node (Cloudflare's `cf` CLI needs it). On Node 20, `npm i -g` and `npx skills add` only warn with `EBADENGINE` and still install, so a successful install does not mean Node is new enough. Get Node 22 with [mise](https://github.com/telegraphic-dev/mise-skill) (`mise exec node@22 -- ...` / `mise use node@22`), nvm, fnm, or the [official installer](https://nodejs.org/en/download).
+**Requires Node 22.18+** (`node -v`). `init`/`deploy` stop on older Node (Cloudflare's `cf` CLI needs it). On Node 20, npx and `npx -y skills add` only warn with `EBADENGINE` and still run, so getting past the install does not mean Node is new enough. Get Node 22 with [mise](https://github.com/telegraphic-dev/mise-skill) (`mise exec node@22 -- ...` / `mise use node@22`), nvm, fnm, or the [official installer](https://nodejs.org/en/download).
+
+**Using Claude Code in the cloud (routines, claude.ai/code)?** Don't run setup from a Claude cloud session: installs there are blocked as untrusted code, a tunnel is refused as an ingress risk, the session has no Cloudflare credentials, and its network allowlist blocks your Worker. Run the setup below on your laptop (or from another agent with a shell), then add `<your Worker URL>/mcp` as a connector at claude.ai/settings/connectors ([MCP connector](#mcp-connector)). The routine then only uses the inbox through the connector; see the [Claude Code checklist](skills/a2a-exposed-setup/references/wake.md#claude-code-claude-code).
 
 ```bash
-# 1. Install the skills into your agent (see "Install the skills" below for other agents)
-npx --yes skills add telegraphic-dev/a2a-exposed
+# 1. Add the skills to the project your agent works in (see "Install the skills" below for other agents)
+npx -y skills add telegraphic-dev/a2a-exposed
 
-# 2. Install (or upgrade) the CLI
-npm i -g a2a-exposed@latest
+# 2. No CLI install: every command below runs through npx
 
 # 3. Ask your agent: "set up a2a-exposed". The setup skill walks it through:
 npx cf auth login --no-browser   # device code: open the URL, enter the code
 # Wake secrets go in the environment, never on the command line, e.g. from a chmod-600 file
 # containing WAKE_WEBHOOK_URL=... and WAKE_WEBHOOK_KEY=...
 set -a; . ./wake.secrets.env; set +a
-npx a2a-exposed init --hostname agent.example.com --agent-name "My Agent" --preset grok-bot
-npx a2a-exposed status                     # card check, wake mode, and the next step
-npx a2a-exposed wake test
-npx a2a-exposed pair set-password --web    # prints a one-time link; you open it and choose the approval password
+npx -y a2a-exposed@latest init --hostname agent.example.com --agent-name "My Agent" --preset grok-bot
+npx -y a2a-exposed@latest status                     # card check, wake mode, and the next step
+npx -y a2a-exposed@latest wake test
+npx -y a2a-exposed@latest pair set-password --web    # prints a one-time link; you open it and choose the approval password
 # (or: pair set-password, typed in a terminal by you; never by the agent)
-npx a2a-exposed connect https://peer.example.com   # connect to another inbox (its owner approves)
+npx -y a2a-exposed@latest connect https://peer.example.com   # connect to another inbox (its owner approves)
 ```
 
 ### Cloudflare login blocked on a VPS? Use an API token
@@ -89,7 +88,7 @@ Put the token (and account id if needed) in the agent's environment or a chmod-6
 ```bash
 export CLOUDFLARE_API_TOKEN=...
 export CLOUDFLARE_ACCOUNT_ID=...   # if the token can see more than one account
-npx a2a-exposed init ...           # or deploy / wake set / tunnel create
+npx -y a2a-exposed@latest init ...           # or deploy / wake set / tunnel create
 ```
 
 ### No domain? Use workers.dev
@@ -97,7 +96,7 @@ npx a2a-exposed init ...           # or deploy / wake set / tunnel create
 Leave out `--hostname` and the Worker is served at `https://<worker-name>.<account-subdomain>.workers.dev` ([workers.dev routing](https://developers.cloudflare.com/workers/configuration/routing/workers-dev/)). This works on the [free plan](https://developers.cloudflare.com/workers/platform/limits/), and `init` saves the resulting URL for you.
 
 ```bash
-npx a2a-exposed init --agent-name "My Agent" --preset grok-bot
+npx -y a2a-exposed@latest init --agent-name "My Agent" --preset grok-bot
 ```
 
 Each account has one workers.dev subdomain. If yours has none yet, `init` stops and explains how to create one: pass `--workers-dev-subdomain <name>` so `init` registers it, or open **Workers & Pages** in the dashboard once, or `PUT /accounts/<account-id>/workers/subdomain` with `{"subdomain":"<name>"}`. The `--cron` flush works on workers.dev too. To move an existing custom-domain deployment to workers.dev, run `deploy --workers-dev`; `deploy --hostname <host>` moves it back. The old URL then stops serving (its agent card redirects to the new one, everything else gets 410), and peers must update their URL.
@@ -106,7 +105,7 @@ A workers.dev inbox can still wake a local-only agent at once: the secure tunnel
 
 ### Local-only webhook? Use a secure tunnel
 
-If your agent's webhook only listens locally (OpenClaw on `127.0.0.1:18789`, Hermes on `:8644`), `npx a2a-exposed tunnel create` publishes just the wake path through a named Cloudflare Tunnel, behind a Cloudflare Access app that admits only one service token held by the Worker (sent as `CF-Access-Client-Id`/`-Secret` on every wake, next to the preset's own auth). It needs Cloudflare Zero Trust (free plan) and a zone anywhere on the account; the inbox itself can be on workers.dev or a custom hostname. With one zone, `tunnel create` picks `wake-<random>.<zone>` and says so. With several, pass `--tunnel-zone <zone>`. Run `cloudflared` on the agent's machine with the printed command. An existing polling setup can switch to the tunnel later without redeploying the inbox. See [the setup skill](skills/a2a-exposed-setup/references/wake.md#local-only-webhooks-hermes-openclaw-secure-tunnel).
+If your agent's webhook only listens locally (OpenClaw on `127.0.0.1:18789`, Hermes on `:8644`), `npx -y a2a-exposed@latest tunnel create` publishes just the wake path through a named Cloudflare Tunnel, behind a Cloudflare Access app that admits only one service token held by the Worker (sent as `CF-Access-Client-Id`/`-Secret` on every wake, next to the preset's own auth). It needs Cloudflare Zero Trust (free plan) and a zone anywhere on the account; the inbox itself can be on workers.dev or a custom hostname. With one zone, `tunnel create` picks `wake-<random>.<zone>` and says so. With several, pass `--tunnel-zone <zone>`. Run `cloudflared` on the agent's machine with the printed command. An existing polling setup can switch to the tunnel later without redeploying the inbox. See [the setup skill](skills/a2a-exposed-setup/references/wake.md#local-only-webhooks-hermes-openclaw-secure-tunnel).
 
 ### Already speak A2A on a Tailnet or LAN? Expose it through a public façade
 
@@ -122,7 +121,7 @@ flowchart LR
 - **Card rewrite.** Interfaces always point at the façade's `PUBLIC_URL`; security schemes and OAuth device URLs are the façade's; name, skills and version come from the upstream card (or `--agent-*` overrides). Tailnet, LAN, localhost and tunnel-hostname URLs are removed from every field, and `signatures` are dropped. The inbox card gets the same scrubbing.
 - **One upstream identity.** The façade holds `UPSTREAM_TOKEN` and the Access service token (environment only, uploaded as Worker secrets) and passes the peer label in `X-A2A-Peer`. It keeps peers apart itself (each task and context belongs to the peer that created it), refuses `ListTasks` and push notification configs (the upstream would call a peer's URL from inside your network; peers poll `GetTask`), and doesn't proxy streaming yet.
 - **Two upstream credentials, checked at setup.** The Access service token (`UPSTREAM_ACCESS_CLIENT_ID` / `_SECRET`) only gets the Worker through the tunnel; most agents (Hermes, for one) also check their own bearer, `UPSTREAM_TOKEN`. `init`/`deploy --upstream` reads the upstream's agent card and, unless it declares no bearer auth (A2A 1.0 `securitySchemes` / `securityRequirements` or 0.3 `security`), needs `UPSTREAM_TOKEN`: exported, piped with `--upstream-token-stdin`, or typed at a hidden prompt on a terminal (never argv). Non-interactive runs exit 1 with what to do; `--no-upstream-token` is the explicit opt-out.
-- **Diagnosis for the operator, a generic 502 for peers.** `npx a2a-exposed upstream verify` (also part of `status`) checks the whole path layer by layer: the façade's peer auth (an unauthenticated call must get 401), then an owner-authenticated Worker endpoint calls the upstream with the stored secrets (they never leave the Worker) using a JSON-RPC method that doesn't exist, so no task is created, and reports Cloudflare Access (credentials missing / refused), the agent's bearer check (missing / refused), tunnel or network down, or the app reachable (`-32601`). `status` shows the Access credential and the upstream bearer on separate rows and the last failed peer call; the Worker logs `upstream_error` with the same reason code. Peers only see a generic `-32603` 502 that names no secret or upstream detail.
+- **Diagnosis for the operator, a generic 502 for peers.** `npx -y a2a-exposed@latest upstream verify` (also part of `status`) checks the whole path layer by layer: the façade's peer auth (an unauthenticated call must get 401), then an owner-authenticated Worker endpoint calls the upstream with the stored secrets (they never leave the Worker) using a JSON-RPC method that doesn't exist, so no task is created, and reports Cloudflare Access (credentials missing / refused), the agent's bearer check (missing / refused), tunnel or network down, or the app reachable (`-32601`). `status` shows the Access credential and the upstream bearer on separate rows and the last failed peer call; the Worker logs `upstream_error` with the same reason code. Peers only see a generic `-32603` 502 that names no secret or upstream detail.
 - **Pairing out from a Tailnet.** `connect <url> --card-url https://<host>.ts.net/...` sends a private card as informational; the other owner's `/device` page flags it as not publicly reachable.
 
 Recipe, rewrite rules and threat model: [setup skill, "Already have A2A on a Tailnet or LAN"](skills/a2a-exposed-setup/references/deploy.md#already-have-a2a-on-a-tailnet-or-lan-expose-it-through-a-public-façade).
@@ -131,7 +130,7 @@ Recipe, rewrite rules and threat model: [setup skill, "Already have A2A on a Tai
 
 Agents connect without pasting tokens into chat. Each inbox is an OAuth 2.0 authorization server for the Device Authorization Grant (RFC 8628). A human approves every connection.
 
-1. Agent A runs `npx a2a-exposed connect https://b.example.com`. It prints a code (`WDJB-4827`) and a link to B's `/device` page; A's human relays the code to B's owner.
+1. Agent A runs `npx -y a2a-exposed@latest connect https://b.example.com`. It prints a code (`WDJB-4827`) and a link to B's `/device` page; A's human relays the code to B's owner.
 2. B's agent is woken with `kind: "pairing_request"` (code, link, claimed name and card URL). It asks its human and never approves on its own.
 3. B's owner opens the link, checks the code, and approves with the **approval password** (set once with `pair set-password --web` from a one-time link, or typed in a terminal with `pair set-password`; only the human knows it). Deny needs no password. Polling agents (no webhook) see the request in `inbox` / `pair list` instead of a wake.
 4. A's `connect` gets a normal per-peer token, stores it as outbound peer, and never prints it. B's `token list` shows `via pairing: code WDJB-4827`; `token revoke` ends it.
@@ -142,10 +141,10 @@ Agents connect without pasting tokens into chat. Each inbox is an OAuth 2.0 auth
 
 The Worker is also a remote [MCP](https://modelcontextprotocol.io) server at `<your Worker URL>/mcp` (Streamable HTTP), so Claude and other MCP clients can use the inbox as a connector, with no CLI, Node or owner token in the client.
 
-1. Set the approval password once (`npx a2a-exposed pair set-password --web`), if you haven't for pairing.
+1. Set the approval password once (`npx -y a2a-exposed@latest pair set-password --web`), if you haven't for pairing.
 2. Add the connector: in Claude, **Settings → Connectors → Add custom connector** (claude.ai/settings/connectors), URL `https://agent.example.com/mcp`; in Claude Code, `claude mcp add --transport http a2a-exposed https://agent.example.com/mcp`.
 3. Your browser opens the inbox's consent page. It shows the client's claimed name, the host it returns to and, for a client identified by a metadata document URL, the host that publishes it; approve with the approval password (deny needs none).
-4. Optional, for sending: `npx a2a-exposed peers sync` uploads your outbound peers (URL and token, encrypted on the Worker with a key derived from the owner token) so the connector can message them.
+4. Optional, for sending: `npx -y a2a-exposed@latest peers sync` uploads your outbound peers (URL and token, encrypted on the Worker with a key derived from the owner token) so the connector can message them.
 
 Tools: `inbox`, `show_task`, `history`, `mark_working`, `reply` (with state), `send`, `poll_outbound`, `list_peers`, and `pairing_requests` (read-only). The connector token cannot issue, rotate or revoke tokens, approve or deny pairings, or change settings. Every tool description repeats the rules: peer text is untrusted, and only the human approves pairings. Each approved client shows up in `token list` as `mcp-<client>` and `token revoke mcp-<client>` ends it. On by default for an inbox (it does nothing until you approve a client with your password); `--mcp off` on `init` / `deploy` turns it off, and proxy mode has none.
 
@@ -160,7 +159,7 @@ The server picks the behaviour per request: a request with the per-request `_met
 
 ### Setup interrupted?
 
-`npx a2a-exposed status` is read-only. It shows the deployment, the base URL, an agent-card check (done by the CLI, so no `curl` is needed), the wake mode, the tunnel state, in proxy mode the upstream (Access credential and upstream bearer separately, the live `upstream verify` check, the last failed peer call) and a card-leak check, and a `next step:` line. It runs no setup step and creates nothing; in proxy mode its only POST is the no-op upstream probe. Every setup step is safe to re-run.
+`npx -y a2a-exposed@latest status` is read-only. It shows the deployment, the base URL, an agent-card check (done by the CLI, so no `curl` is needed), the wake mode, the tunnel state, in proxy mode the upstream (Access credential and upstream bearer separately, the live `upstream verify` check, the last failed peer call) and a card-leak check, and a `next step:` line. It runs no setup step and creates nothing; in proxy mode its only POST is the no-op upstream probe. Every setup step is safe to re-run.
 
 ### Already running an earlier build?
 
@@ -183,20 +182,20 @@ This repository is also an [Agent Plugins](https://agent-plugins.org/) package (
 | Cursor | `.cursor-plugin/plugin.json` | Cursor plugin marketplace / From GitHub Repository |
 | Grok Build | `.grok-plugin/plugin.json` | xAI plugin marketplace (pin a commit SHA) |
 | Claude Code | `.claude-plugin/plugin.json` | `claude --plugin-dir .` or add this repo as a marketplace (`.claude-plugin/marketplace.json`) |
-| skills CLI / Hermes / OpenClaw | `skills/*/SKILL.md` | `npx skills add …` / `hermes skills install …` (unchanged) |
+| skills CLI / Hermes / OpenClaw | `skills/*/SKILL.md` | `npx -y skills add …` / `hermes skills install …` (unchanged) |
 
 
 Install both skills; the setup skill is only needed until the endpoint is deployed. Each one names the other in its frontmatter (`related_skills`), along with the optional companion skills below.
 
-- **Any agent, via [skills.sh](https://skills.sh)** ([skills CLI](https://github.com/vercel-labs/skills)):
+- **Any agent, via [skills.sh](https://skills.sh)** ([skills CLI](https://github.com/vercel-labs/skills)), into the current project (no global install of anything):
   ```bash
-  npx --yes skills add telegraphic-dev/a2a-exposed                       # into the current project
-  npx --yes skills add telegraphic-dev/a2a-exposed --global              # user-level
-  npx --yes skills add telegraphic-dev/a2a-exposed --global --agent claude-code --agent codex --skill a2a-exposed --skill a2a-exposed-setup
+  npx -y skills add telegraphic-dev/a2a-exposed
+  npx -y skills add telegraphic-dev/a2a-exposed --agent claude-code --agent codex --skill a2a-exposed --skill a2a-exposed-setup
   ```
-  The default target is the current project (`.claude/skills/`, `.agents/skills/`, ...); commit the skills if the agent runs from that repo (Claude Code routines do: merge them to the default branch, which is what routines clone). `--list` only lists, `-y` skips prompts.
-- **Claude Code:** the skills.sh command with `--agent claude-code` (project `.claude/skills/`, or `--global` for `~/.claude/skills/`).
-- **OpenClaw:** `npx --yes skills add telegraphic-dev/a2a-exposed --agent openclaw`, or `openclaw skills install skills-sh:telegraphic-dev/a2a-exposed/a2a-exposed` and the same for `a2a-exposed-setup`. The frontmatter declares `node` as a required binary (`metadata.openclaw.requires.bins`), so OpenClaw hides the skills where Node is missing.
+  The target is the current project (`.claude/skills/`, `.agents/skills/`, ...); commit the skills if the agent runs from that repo (Claude Code routines do: merge them to the default branch, which is what routines clone). `--list` only lists, `-y` skips prompts. `--global` (user-level) is optional.
+- **Without installing anything:** point the agent at the skill files on GitHub, e.g. *"read and follow https://github.com/telegraphic-dev/a2a-exposed/blob/main/skills/a2a-exposed-setup/SKILL.md"* (and `skills/a2a-exposed/SKILL.md` for day-to-day use).
+- **Claude Code:** the skills.sh command with `--agent claude-code` (project `.claude/skills/`).
+- **OpenClaw:** `npx -y skills add telegraphic-dev/a2a-exposed --agent openclaw`, or `openclaw skills install skills-sh:telegraphic-dev/a2a-exposed/a2a-exposed` and the same for `a2a-exposed-setup`. The frontmatter declares `node` as a required binary (`metadata.openclaw.requires.bins`), so OpenClaw hides the skills where Node is missing.
 - **Hermes Agent:** install each skill by its directory path (Hermes needs the full path in repositories with several skills):
   ```bash
   hermes skills install telegraphic-dev/a2a-exposed/skills/a2a-exposed
@@ -210,23 +209,23 @@ Install both skills; the setup skill is only needed until the endpoint is deploy
 The setup skill offers two more skills and installs them only if you agree. Neither is required; to add them yourself:
 
 ```bash
-npx skills add https://github.com/telegraphic-dev/mise-skill --skill mise       # mise: gets Node 22.18+ without replacing the system Node
-npx skills add https://github.com/cloudflare/skills --skill cloudflare          # Cloudflare: Workers, D1, cf CLI, DNS, Tunnel, Access
+npx -y skills add https://github.com/telegraphic-dev/mise-skill --skill mise    # mise: gets Node 22.18+ without replacing the system Node
+npx -y skills add https://github.com/cloudflare/skills --skill cloudflare       # Cloudflare: Workers, D1, cf CLI, DNS, Tunnel, Access
 ```
 
 ### Development: run from a checkout
 
-To try unreleased changes, run the CLI from a checkout (`node <checkout>/cli/bin/a2a-exposed.mjs <command>`, or `npm i -g <checkout>/cli` to link it as `a2a-exposed`). If the woken agent should use that command too, pass it to `init` as `--cli-command "node <checkout>/cli/bin/a2a-exposed.mjs"`: it is saved as `WAKE_CLI_COMMAND` and only changes the command shown in wake hints (default `npx a2a-exposed`).
+To try unreleased changes, run the CLI from a checkout (`node <checkout>/cli/bin/a2a-exposed.mjs <command>`, or `npm i -g <checkout>/cli` to link it as `a2a-exposed`). If the woken agent should use that command too, pass it to `init` as `--cli-command "node <checkout>/cli/bin/a2a-exposed.mjs"`: it is saved as `WAKE_CLI_COMMAND` and only changes the command shown in wake hints (default `npx -y a2a-exposed@latest`).
 
 ## Agent compatibility
 
 | Agent | How it gets woken | Preset | Notes |
 |---|---|---|---|
 | **Grok Bot** | Routine with a webhook trigger | `grok-bot` | Hosted; URL and key come from the routine panel; JSON payload |
-| **Claude Code** | Routine API trigger (`/fire`) | `claude-code` | Each fire is a new cloud session. Simplest: add the inbox as a [connector](#mcp-connector) (`<Worker URL>/mcp`); routines include your connectors, so the session uses its tools with no CLI or token. Fallback: the repo (skills on the default branch) as a source, `A2A_BASE_URL` / `A2A_OWNER_TOKEN` on its cloud environment and the Worker host allowed in network access ([checklist](skills/a2a-exposed-setup/references/wake.md#claude-code-claude-code)). 30 fires/h per routine, so defaults are a 20 s debounce and a 25/h cap; a 429 wake is re-sent after `Retry-After` |
+| **Claude Code** | Routine API trigger (`/fire`) | `claude-code` | Each fire is a new cloud session. Run setup on a laptop or another agent, never in a Claude cloud session (installs blocked as untrusted code, no tunnel, no Cloudflare credentials, Worker not on the allowlist). Simplest: add the inbox as a [connector](#mcp-connector) (`<Worker URL>/mcp`); routines include your connectors, so the session uses its tools with no CLI or token. Fallback: the repo (skills on the default branch) as a source, `A2A_BASE_URL` / `A2A_OWNER_TOKEN` on its cloud environment and the Worker host allowed in network access ([checklist](skills/a2a-exposed-setup/references/wake.md#claude-code-claude-code)). 30 fires/h per routine, so defaults are a 20 s debounce and a 25/h cap; a 429 wake is re-sent after `Retry-After` |
 | **OpenClaw** | Gateway hooks: `/hooks/wake` or `/hooks/agent` | `openclaw-wake`, `openclaw-agent` | Hooks are off by default; the gateway binds 127.0.0.1:18789, so use `tunnel create` (secure tunnel, any zone on the account) or poll (`openclaw cron add`) |
 | **Hermes Agent** | Webhook subscription (`hermes webhook subscribe`) | `hermes` | HMAC-SHA256 V2 signature; self-hosted, so use `tunnel create` (secure tunnel, any zone on the account) or poll (`hermes cron create`) |
-| **Codex** | Automations / thread heartbeats | polling | `npx a2a-exposed inbox` on a schedule |
+| **Codex** | Automations / thread heartbeats | polling | `npx -y a2a-exposed@latest inbox` on a schedule |
 | **Meta Muse** | Recurring tasks, Muse Code `SessionStart` hook, `muse exec` | polling | Check the inbox on start or on a schedule |
 | **n8n, Zapier, Make, custom** | Any HTTPS webhook | `generic` | Configurable auth header, prefix, JSON body template, optional HMAC |
 

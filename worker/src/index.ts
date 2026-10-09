@@ -280,7 +280,7 @@ const oauthUrls = (env: Env) => {
 		resource: `${base}/.well-known/oauth-protected-resource`, authorize: `${base}/oauth/authorize`, register: `${base}/oauth/register`,
 		revoke: `${base}/oauth/revoke`, mcp: `${base}/mcp`, mcpResource: `${base}/.well-known/oauth-protected-resource/mcp` };
 };
-const cliCommand = (env: Env) => env.WAKE_CLI_COMMAND || "npx a2a-exposed";
+const cliCommand = (env: Env) => env.WAKE_CLI_COMMAND || P.DEFAULT_CLI;
 
 const securityRequirements = (env: Env): Json[] =>
 	[{ schemes: { bearer: { list: [] } } }, ...(pairingOn(env) ? [{ schemes: { pairing: { list: [] } } }] : [])];
@@ -577,7 +577,7 @@ function unauthorized(env: Env, hadToken: boolean, rid: Json = null): Response {
 		code: -32000,
 		message: `${what} ${hadToken ? "Get a new one" : "No token? Get one"} with the OAuth 2.0 device flow (RFC 8628): POST client_name and agent_card_url to ${u.device}, show the user_code and verification_uri_complete to your human, then poll ${u.token} until this agent's owner approves.`,
 		data: { pairing: { grant_type: P.DEVICE_GRANT, device_authorization_endpoint: u.device, token_endpoint: u.token,
-			authorization_server_metadata: u.metadata, approval: pairingMode(env), cli: "npx a2a-exposed connect " + u.issuer } },
+			authorization_server_metadata: u.metadata, approval: pairingMode(env), cli: `${P.DEFAULT_CLI} connect ${u.issuer}` } },
 	} }, 401, { "www-authenticate": www });
 }
 
