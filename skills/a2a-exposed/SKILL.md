@@ -157,7 +157,7 @@ Polling agents: no wake announces a pairing request; `inbox` and `pair list` sho
 
 | Symptom | Check / fix |
 |---|---|
-| `A2A_BASE_URL / A2A_OWNER_TOKEN missing` | Not set up here: run the setup skill, or provide both as environment secrets (hosted routines) |
+| `A2A_BASE_URL / A2A_OWNER_TOKEN missing` | Not set up here: run the setup skill, or provide both as environment secrets (hosted routines). In a Claude Code routine run, don't improvise or ask for the token in chat: tell your human both must be set on the routine's cloud environment |
 | `worker ... HTTP 401` | Owner token mismatch: `config.env` differs from the Worker secret. Re-run `init --rotate-owner-token` from the machine that owns the deployment |
 | `request to ... failed` | DNS, network, or egress problem. `npx a2a-exposed status` shows whether the agent card answers. A brand-new custom domain needs a few minutes |
 | No wakes arriving | `status` (wake mode, tunnel connector, next step), then `wake preview` (configured? preset? fingerprints match `wake fingerprint`?) then `wake test` (status). Agents behind NAT need the secure tunnel (`tunnel create`, which needs a zone anywhere on the account) or polling. Wakes are debounced per conversation; Claude Code also has an hourly cap. The inbox always has everything |

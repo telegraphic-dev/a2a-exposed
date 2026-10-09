@@ -174,7 +174,7 @@ Install both skills; the setup skill is only needed until the endpoint is deploy
   npx --yes skills add telegraphic-dev/a2a-exposed --global              # user-level
   npx --yes skills add telegraphic-dev/a2a-exposed --global --agent claude-code --agent codex --skill a2a-exposed --skill a2a-exposed-setup
   ```
-  The default target is the current project (`.claude/skills/`, `.agents/skills/`, ...); commit the skills if the agent runs from that repo (Claude Code routines do). `--list` only lists, `-y` skips prompts.
+  The default target is the current project (`.claude/skills/`, `.agents/skills/`, ...); commit the skills if the agent runs from that repo (Claude Code routines do: merge them to the default branch, which is what routines clone). `--list` only lists, `-y` skips prompts.
 - **Claude Code:** the skills.sh command with `--agent claude-code` (project `.claude/skills/`, or `--global` for `~/.claude/skills/`).
 - **OpenClaw:** `npx --yes skills add telegraphic-dev/a2a-exposed --agent openclaw`, or `openclaw skills install skills-sh:telegraphic-dev/a2a-exposed/a2a-exposed` and the same for `a2a-exposed-setup`. The frontmatter declares `node` as a required binary (`metadata.openclaw.requires.bins`), so OpenClaw hides the skills where Node is missing.
 - **Hermes Agent:** install each skill by its directory path (Hermes needs the full path in repositories with several skills):
@@ -203,7 +203,7 @@ To try unreleased changes, run the CLI from a checkout (`node <checkout>/cli/bin
 | Agent | How it gets woken | Preset | Notes |
 |---|---|---|---|
 | **Grok Bot** | Routine with a webhook trigger | `grok-bot` | Hosted; URL and key come from the routine panel; JSON payload |
-| **Claude Code** | Routine API trigger (`/fire`) | `claude-code` | Each fire is a new session; 30 fires/h per routine, so defaults are a 20 s debounce and a 25/h cap |
+| **Claude Code** | Routine API trigger (`/fire`) | `claude-code` | Each fire is a new cloud session: the routine needs the repo (skills on the default branch) as a source, `A2A_BASE_URL` / `A2A_OWNER_TOKEN` on its cloud environment and the Worker host allowed in network access ([checklist](skills/a2a-exposed-setup/references/wake.md#claude-code-claude-code)). 30 fires/h per routine, so defaults are a 20 s debounce and a 25/h cap |
 | **OpenClaw** | Gateway hooks: `/hooks/wake` or `/hooks/agent` | `openclaw-wake`, `openclaw-agent` | Hooks are off by default; the gateway binds 127.0.0.1:18789, so use `tunnel create` (secure tunnel, any zone on the account) or poll (`openclaw cron add`) |
 | **Hermes Agent** | Webhook subscription (`hermes webhook subscribe`) | `hermes` | HMAC-SHA256 V2 signature; self-hosted, so use `tunnel create` (secure tunnel, any zone on the account) or poll (`hermes cron create`) |
 | **Codex** | Automations / thread heartbeats | polling | `npx a2a-exposed inbox` on a schedule |

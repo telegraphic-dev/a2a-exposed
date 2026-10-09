@@ -11,6 +11,16 @@ import { readHidden } from "./pair.mjs";
 import * as WD from "./workersdev.mjs";
 
 const PKG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+/** Each Claude Code routine fire is a new cloud session: a 2xx only means a session started. */
+export const CLAUDE_CODE_NOTE = [
+	"note (claude-code): each fire starts a NEW cloud session, which sees only what the routine provides. Check that",
+	"  - the repo with the committed skills (.claude/skills/) is a routine source and the skills are on its default branch,",
+	"  - A2A_BASE_URL and A2A_OWNER_TOKEN are set on the routine's cloud environment (not only in this session),",
+	"  - the environment's network access allows this Worker's hostname,",
+	"  - the routine prompt tells Claude to act on the routine-fire-payload block.",
+	"  Then open the new session from the routine's runs and confirm it ran the inbox command without errors.",
+].join("\n");
+
 const PRESETS = ["grok-bot", "claude-code", "openclaw-wake", "openclaw-agent", "hermes", "generic"];
 // WAKE_ACCESS_*: Cloudflare Access service token for a wake URL behind Access (set by `tunnel create`, or exported
 // by hand for your own Access-protected endpoint)
@@ -556,6 +566,7 @@ export async function wake(sub, o) {
 			die("no wake webhook configured on the Worker: export WAKE_WEBHOOK_URL (and WAKE_WEBHOOK_KEY or WAKE_HMAC_SECRET), then run `a2a-exposed wake set` first (or use polling)");
 		console.log(JSON.stringify(r, null, 2));
 		if (!(r.status >= 200 && r.status < 300)) process.exitCode = 1;
+		else if (C.get("WAKE_PRESET") === "claude-code") console.error(CLAUDE_CODE_NOTE);
 		return;
 	}
 	if (sub === "set") {
@@ -564,7 +575,9 @@ export async function wake(sub, o) {
 		if (!Object.keys(secrets).length && !DEPLOY_FLAGS.some((f) => o[f] !== undefined))
 			die("nothing to set: export WAKE_WEBHOOK_URL / WAKE_WEBHOOK_KEY / WAKE_HMAC_SECRET and/or pass --preset etc.");
 		await deploy(o); // wake set = save settings + upload secrets + redeploy, in one step
-		return console.error("wake settings deployed. Next: a2a-exposed wake preview, then a2a-exposed wake test");
+		console.error("wake settings deployed. Next: a2a-exposed wake preview, then a2a-exposed wake test");
+		if (C.get("WAKE_PRESET") === "claude-code") console.error(CLAUDE_CODE_NOTE);
+		return;
 	}
 	if (sub === "unset") {
 		const dir = workerDir(o), name = workerName();

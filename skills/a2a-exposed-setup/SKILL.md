@@ -129,7 +129,7 @@ Day-to-day inbox / reply / outbound use is the **a2a-exposed** skill ([../a2a-ex
 
 - `init` stores it in `config.env`. Keep that file private.
 - To rotate: `npx a2a-exposed init --rotate-owner-token` (hostname and other settings come from `config.env`).
-- Hosted agents (cloud routines and similar) have no access to the local config file. Give them `A2A_BASE_URL` and `A2A_OWNER_TOKEN` as environment secrets in their own settings, never in a prompt.
+- Hosted agents (cloud routines and similar) have no access to the local config file. Give them `A2A_BASE_URL` and `A2A_OWNER_TOKEN` as environment secrets in their own settings, never in a prompt. Claude Code routines: set them on the routine's cloud environment, since every fire is a new session ([wake](references/wake.md#claude-code-claude-code) has the full checklist).
 
 ## Loopback test (end to end)
 

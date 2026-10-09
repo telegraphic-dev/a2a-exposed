@@ -358,3 +358,9 @@ test("connect: resuming an expired request exits 1 and says so; the rerun hint k
 	assert.ok(!fs.existsSync(st), "state dropped");
 	assert.equal(JSON.parse((await ownerSide.cli(["pair", "list", "--json"])).stdout).pending.length, 1, "no second request was made");
 });
+
+test("claude-code reminder names every piece a fresh routine session needs", async () => {
+	const { CLAUDE_CODE_NOTE } = await import("../lib/deploy.mjs");
+	for (const s of ["NEW cloud session", ".claude/skills/", "default branch", "A2A_BASE_URL and A2A_OWNER_TOKEN", "network access", "routine-fire-payload"])
+		assert.ok(CLAUDE_CODE_NOTE.includes(s), s);
+});

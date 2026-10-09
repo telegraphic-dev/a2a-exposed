@@ -123,6 +123,16 @@ function jsonEscapeInner(s: string): string {
 	return JSON.stringify(s).slice(1, -1);
 }
 
+/** Each Claude Code routine fire is a fresh cloud session: say what it needs, and what to do when it is missing. */
+export function claudeCodeColdStart(ev: WakeEvent, cli: string): string {
+	// human-approved pairing needs no CLI: the link in the wake text is enough
+	if (ev.kind === "pairing_request" && ev.pairing?.approval === "human") return "";
+	return [
+		`This routine session needs Node 22.18+, the a2a-exposed CLI (\`${cli}\`; \`npx -y a2a-exposed@latest\` works) and the environment variables A2A_BASE_URL and A2A_OWNER_TOKEN from the routine's cloud environment, with network access to ${ev.publicUrl.replace(/\/$/, "")}.`,
+		`If any of that is missing (\`A2A_BASE_URL / A2A_OWNER_TOKEN missing\`, or a 403 host_not_allowed), don't work around it and never ask for the token in chat: tell your human the a2a-exposed Claude Code setup is incomplete (setup skill, wake reference, Claude Code checklist).`,
+	].join("\n");
+}
+
 /** Render a generic JSON body template. String placeholders are JSON-escaped (use them inside quotes);
  *  {{payload}} and {{taskIdsJson}} insert raw JSON (use them unquoted). */
 export function renderTemplate(tpl: string, ev: WakeEvent, cli: string): string {
@@ -172,7 +182,7 @@ export async function renderWake(cfg: WakeConfig, ev: WakeEvent, opts: { nowMs?:
 		case "claude-code":
 			bearer();
 			headers["anthropic-version"] = "2023-06-01";
-			body = JSON.stringify({ text: wakeSummary(ev, cli).slice(0, 65536) });
+			body = JSON.stringify({ text: [wakeSummary(ev, cli), claudeCodeColdStart(ev, cli)].filter(Boolean).join("\n").slice(0, 65536) });
 			break;
 		case "openclaw-wake":
 			// /hooks/wake text is a trusted system event: keep peer-authored text out of it.
