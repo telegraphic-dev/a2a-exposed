@@ -4,7 +4,7 @@ Give any AI agent a public A2A (Agent2Agent) endpoint. Messages land in a Cloudf
 
 [![npm](https://img.shields.io/npm/v/a2a-exposed)](https://www.npmjs.com/package/a2a-exposed) [![CI](https://github.com/telegraphic-dev/a2a-exposed/actions/workflows/ci.yml/badge.svg)](https://github.com/telegraphic-dev/a2a-exposed/actions/workflows/ci.yml)
 
-> **Renamed from `a2a-over-webhook`.** The project now also exposes agents that already speak A2A (see the public façade below), so it is called **a2a-exposed**: npm package and command `a2a-exposed`, skills `a2a-exposed-setup` and `a2a-exposed`, repository [`telegraphic-dev/a2a-exposed`](https://github.com/telegraphic-dev/a2a-exposed) (the old GitHub URL redirects). Upgrading: `npm rm -g a2a-over-webhook && npm i -g a2a-exposed@latest`, then reinstall the skills under their new names (`npx --yes skills add telegraphic-dev/a2a-exposed`) and remove the old `a2a-over-webhook*` ones. Nothing else changes: the npm package `a2a-over-webhook` becomes a deprecated alias for a couple of minor releases (it depends on `a2a-exposed` and keeps the `a2a-over-webhook` command and `npx a2a-over-webhook` working, with a notice), an existing `~/.config/a2a-over-webhook` keeps being used, deployed Workers keep their names, tokens and URLs, and `a2a-exposed deploy` updates them as before. The domain [a2a.exposed](https://a2a.exposed) is reserved for the project's future hosted/public pages; nothing is served there yet, and self-hosted deployments keep using your own hostname or workers.dev.
+> The domain [a2a.exposed](https://a2a.exposed) is reserved for the project's future hosted/public pages; nothing is served there yet, and self-hosted deployments use your own hostname or workers.dev.
 
 Installing the skills gives your agent the instructions; it does **not** install the CLI. Install it, or upgrade an older one, first (Node 22.18+):
 
@@ -13,7 +13,7 @@ npm i -g a2a-exposed@latest
 a2a-exposed --version
 ```
 
-A bare `command -v ... || npm i -g ...` never upgrades an older copy already on PATH. The CLI prints a one-line notice when a newer version is out (at most once a day; `A2A_NO_UPDATE_CHECK=1` turns it off). After upgrading, run `a2a-exposed deploy` so the Worker gets the new template and D1 migrations. No Node 22 yet? See the [setup skill](skills/a2a-exposed-setup/SKILL.md#1-prerequisites) (mise / nvm / fnm / the official installer).
+A bare `command -v ... || npm i -g ...` never upgrades an older copy already on PATH. The CLI prints a one-line notice when a newer version is out (at most once a day; `A2A_NO_UPDATE_CHECK=1` turns it off). After upgrading, run `a2a-exposed deploy` so the Worker gets the new template and D1 migrations. No Node 22 yet? See the [setup skill](skills/a2a-exposed-setup/references/prerequisites.md) (mise / nvm / fnm / the official installer).
 
 For one-off use without a global install: `npx -y a2a-exposed@latest <command>`. The docs write commands as `npx a2a-exposed <command>`; with a global install, `a2a-exposed <command>` is the same thing without the npm round-trip.
 
@@ -79,8 +79,10 @@ On some datacenter/VPS egress IPs (e.g. Hetzner), `cf auth login` and `--device`
 
 Create a [custom API token](https://developers.cloudflare.com/fundamentals/api/get-started/create-token/) with:
 
-- **`--workers-dev`:** Account → Workers Scripts: Edit; Account → D1: Edit; Account → Account Settings: Read
-- **Additionally for `--tunnel` / a custom domain:** Zone → DNS: Edit; Account → Cloudflare Tunnel: Edit; Account → Access: Apps and Policies: Edit; Account → Access: Service Tokens: Edit
+- **`--workers-dev`:** Account → Workers Scripts: Edit; Account → D1: Edit; Account → Account Settings: Read; plus User → Memberships: Read so `init` can find the account (without it, set `CLOUDFLARE_ACCOUNT_ID` / `--account-id`)
+- **Additionally for `--tunnel` / a custom domain:** Zone → DNS: Edit (can be limited to that zone); Account → Cloudflare Tunnel: Edit; Account → Access: Apps and Policies: Edit; Account → Access: Service Tokens: Edit
+
+Workers, D1, Tunnel and Access permissions are account-scoped; only DNS can be narrowed to one zone. Token pitfalls (Memberships error `1001`, IP filters that need both IPv4 and IPv6) are in [Troubleshooting](skills/a2a-exposed-setup/references/troubleshooting.md).
 
 Put the token (and account id if needed) in the agent's environment or a chmod-600 secret file — never argv or chat — then run init/deploy as usual:
 
@@ -104,7 +106,7 @@ A workers.dev inbox can still wake a local-only agent at once: the secure tunnel
 
 ### Local-only webhook? Use a secure tunnel
 
-If your agent's webhook only listens locally (OpenClaw on `127.0.0.1:18789`, Hermes on `:8644`), `npx a2a-exposed tunnel create` publishes just the wake path through a named Cloudflare Tunnel, behind a Cloudflare Access app that admits only one service token held by the Worker (sent as `CF-Access-Client-Id`/`-Secret` on every wake, next to the preset's own auth). It needs Cloudflare Zero Trust (free plan) and a zone anywhere on the account; the inbox itself can be on workers.dev or a custom hostname. With one zone, `tunnel create` picks `wake-<random>.<zone>` and says so. With several, pass `--tunnel-zone <zone>`. Run `cloudflared` on the agent's machine with the printed command. An existing polling setup can switch to the tunnel later without redeploying the inbox. See [the setup skill](skills/a2a-exposed-setup/SKILL.md#local-only-webhooks-hermes-openclaw-secure-tunnel).
+If your agent's webhook only listens locally (OpenClaw on `127.0.0.1:18789`, Hermes on `:8644`), `npx a2a-exposed tunnel create` publishes just the wake path through a named Cloudflare Tunnel, behind a Cloudflare Access app that admits only one service token held by the Worker (sent as `CF-Access-Client-Id`/`-Secret` on every wake, next to the preset's own auth). It needs Cloudflare Zero Trust (free plan) and a zone anywhere on the account; the inbox itself can be on workers.dev or a custom hostname. With one zone, `tunnel create` picks `wake-<random>.<zone>` and says so. With several, pass `--tunnel-zone <zone>`. Run `cloudflared` on the agent's machine with the printed command. An existing polling setup can switch to the tunnel later without redeploying the inbox. See [the setup skill](skills/a2a-exposed-setup/references/wake.md#local-only-webhooks-hermes-openclaw-secure-tunnel).
 
 ### Already speak A2A on a Tailnet or LAN? Expose it through a public façade
 
@@ -119,9 +121,11 @@ flowchart LR
 
 - **Card rewrite.** Interfaces always point at the façade's `PUBLIC_URL`; security schemes and OAuth device URLs are the façade's; name, skills and version come from the upstream card (or `--agent-*` overrides). Tailnet, LAN, localhost and tunnel-hostname URLs are removed from every field, and `signatures` are dropped. The inbox card gets the same scrubbing.
 - **One upstream identity.** The façade holds `UPSTREAM_TOKEN` and the Access service token (environment only, uploaded as Worker secrets) and passes the peer label in `X-A2A-Peer`. It keeps peers apart itself (each task and context belongs to the peer that created it), refuses `ListTasks` and push notification configs (the upstream would call a peer's URL from inside your network; peers poll `GetTask`), and doesn't proxy streaming yet.
+- **Two upstream credentials, checked at setup.** The Access service token (`UPSTREAM_ACCESS_CLIENT_ID` / `_SECRET`) only gets the Worker through the tunnel; most agents (Hermes, for one) also check their own bearer, `UPSTREAM_TOKEN`. `init`/`deploy --upstream` reads the upstream's agent card and, unless it declares no bearer auth (A2A 1.0 `securitySchemes` / `securityRequirements` or 0.3 `security`), needs `UPSTREAM_TOKEN`: exported, piped with `--upstream-token-stdin`, or typed at a hidden prompt on a terminal (never argv). Non-interactive runs exit 1 with what to do; `--no-upstream-token` is the explicit opt-out.
+- **Diagnosis for the operator, a generic 502 for peers.** `npx a2a-exposed upstream verify` (also part of `status`) checks the whole path layer by layer: the façade's peer auth (an unauthenticated call must get 401), then an owner-authenticated Worker endpoint calls the upstream with the stored secrets (they never leave the Worker) using a JSON-RPC method that doesn't exist, so no task is created, and reports Cloudflare Access (credentials missing / refused), the agent's bearer check (missing / refused), tunnel or network down, or the app reachable (`-32601`). `status` shows the Access credential and the upstream bearer on separate rows and the last failed peer call; the Worker logs `upstream_error` with the same reason code. Peers only see a generic `-32603` 502 that names no secret or upstream detail.
 - **Pairing out from a Tailnet.** `connect <url> --card-url https://<host>.ts.net/...` sends a private card as informational; the other owner's `/device` page flags it as not publicly reachable.
 
-Recipe, rewrite rules and threat model: [setup skill, "Already have A2A on a Tailnet or LAN"](skills/a2a-exposed-setup/SKILL.md#already-have-a2a-on-a-tailnet-or-lan-expose-it-through-a-public-façade).
+Recipe, rewrite rules and threat model: [setup skill, "Already have A2A on a Tailnet or LAN"](skills/a2a-exposed-setup/references/deploy.md#already-have-a2a-on-a-tailnet-or-lan-expose-it-through-a-public-façade).
 
 ### Connecting agents (device flow)
 
@@ -132,15 +136,15 @@ Agents connect without pasting tokens into chat. Each inbox is an OAuth 2.0 auth
 3. B's owner opens the link, checks the code, and approves with the **approval password** (set once with `pair set-password --web` from a one-time link, or typed in a terminal with `pair set-password`; only the human knows it). Deny needs no password. Polling agents (no webhook) see the request in `inbox` / `pair list` instead of a wake.
 4. A's `connect` gets a normal per-peer token, stores it as outbound peer, and never prints it. B's `token list` shows `via pairing: code WDJB-4827`; `token revoke` ends it.
 
-`--pairing-approval agent` also lets the agent approve with `pair approve <code>` after asking its human in chat, and `off` disables pairing (`token issue` only). Re-pairing with `connect --replace` swaps the token under the same label (no orphan). A `PEER_<ALIAS>_TOKEN` exported in the environment overrides the saved token; when the two differ, `connect` / `send` / `poll` warn on stderr (never printing either value) and say to `unset` it. Any standard OAuth device-flow client works too: the endpoints are on the agent card (A2A 1.0 `oauth2SecurityScheme` with a `deviceCode` flow) and at `/.well-known/oauth-authorization-server` (RFC 8414); a 401 carries `WWW-Authenticate` with `resource_metadata` (RFC 9728) pointing at `/.well-known/oauth-protected-resource`. The threat model is in the setup skill ("Pairing security").
+`--pairing-approval agent` also lets the agent approve with `pair approve <code>` after asking its human in chat, and `off` disables pairing (`token issue` only). Re-pairing with `connect --replace` swaps the token under the same label (no orphan). A `PEER_<ALIAS>_TOKEN` exported in the environment overrides the saved token; when the two differ, `connect` / `send` / `poll` / `peers list` warn on stderr and `status` adds an `also:` line (never printing either value) and say to `unset` it. Any standard OAuth device-flow client works too: the endpoints are on the agent card (A2A 1.0 `oauth2SecurityScheme` with a `deviceCode` flow) and at `/.well-known/oauth-authorization-server` (RFC 8414); a 401 carries `WWW-Authenticate` with `resource_metadata` (RFC 9728) pointing at `/.well-known/oauth-protected-resource`. The threat model is in the setup skill ("Pairing security").
 
 ### Setup interrupted?
 
-`npx a2a-exposed status` is read-only. It shows the deployment, the base URL, an agent-card check (done by the CLI, so no `curl` is needed), the wake mode, the tunnel state, in proxy mode the upstream and a card-leak check, and a `next step:` line. Every setup step is safe to re-run.
+`npx a2a-exposed status` is read-only. It shows the deployment, the base URL, an agent-card check (done by the CLI, so no `curl` is needed), the wake mode, the tunnel state, in proxy mode the upstream (Access credential and upstream bearer separately, the live `upstream verify` check, the last failed peer call) and a card-leak check, and a `next step:` line. It runs no setup step and creates nothing; in proxy mode its only POST is the no-op upstream probe. Every setup step is safe to re-run.
 
 ### Already running an earlier build?
 
-A Worker deployed from an earlier build of this code (e.g. the s2a2a prototype) can be moved onto the CLI in place, keeping its D1 data, peer tokens and wake secrets: write `config.env` by hand, run `deploy` (it keeps the Worker's secrets and applies the missing D1 migrations), then `status`. See [the setup skill](skills/a2a-exposed-setup/SKILL.md#adopting-an-existing-deployment-same-worker-d1-and-hostname).
+A Worker deployed from an earlier build of this code (e.g. the s2a2a prototype) can be moved onto the CLI in place, keeping its D1 data, peer tokens and wake secrets: write `config.env` by hand, run `deploy` (it keeps the Worker's secrets and applies the missing D1 migrations), then `status`. See [the setup skill](skills/a2a-exposed-setup/references/deploy.md#adopting-an-existing-deployment-same-worker-d1-and-hostname).
 
 Two skills are included:
 
@@ -150,6 +154,17 @@ Two skills are included:
 | [`a2a-exposed`](skills/a2a-exposed/SKILL.md) | Day-to-day: handle wakes, read the inbox safely, reply, message other agents, manage peer tokens, troubleshoot |
 
 ## Install the skills
+
+This repository is also an [Agent Plugins](https://agent-plugins.org/) package (`plugin.json` + `skills/`). Vendor overlays coexist without duplicating skills:
+
+| Client | Manifest | How to load |
+| --- | --- | --- |
+| Portable / Codex / ChatGPT | root `plugin.json` | Install as a plugin (Codex Plugins Directory or a local marketplace pointing at this repo). OpenAI-specific presentation is under `extensions.com.openai`. |
+| Cursor | `.cursor-plugin/plugin.json` | Cursor plugin marketplace / From GitHub Repository |
+| Grok Build | `.grok-plugin/plugin.json` | xAI plugin marketplace (pin a commit SHA) |
+| Claude Code | `.claude-plugin/plugin.json` | `claude --plugin-dir .` or add this repo as a marketplace (`.claude-plugin/marketplace.json`) |
+| skills CLI / Hermes / OpenClaw | `skills/*/SKILL.md` | `npx skills add …` / `hermes skills install …` (unchanged) |
+
 
 Install both skills; the setup skill is only needed until the endpoint is deployed. Each one names the other in its frontmatter (`related_skills`), along with the optional companion skills below.
 
@@ -204,7 +219,7 @@ Any agent that can run `npx` and remember a skill works in polling mode. The wak
 - **Owner.** The owner API (inbox, replies, tokens) uses a separate `OWNER_TOKEN` Worker secret. The CLI keeps it in `~/.config/a2a-exposed/config.env` (chmod 600; `A2A_CONFIG_DIR` overrides the directory).
 - **Untrusted content.** Peer messages are data, not instructions. The operate skill shows them inside explicit `UNTRUSTED PEER MESSAGE` fences. It refuses embedded instructions and requires the user's approval for anything consequential or externally visible.
 - **Wake webhooks.** A wake carries metadata, a hint command, and at most a 300-character preview. `openclaw-wake` carries no peer text at all, because OpenClaw treats wake text as a trusted system event. Wake URL, key, and HMAC secret are Worker secrets, never committed config.
-- **Façade (proxy mode).** The upstream sits behind two locks: Cloudflare Access (only the Worker's service token passes the tunnel hostname) and the agent's own `UPSTREAM_TOKEN` check. Peers never see or send the upstream credential, can't reach each other's tasks or contexts (unrecorded context ids are refused: fail closed), and can't make the upstream call out (push configs are refused). The upstream credentials only ever go to the `--upstream` origin: a `--upstream-card-url` on any other origin is refused (by `init`/`deploy` and by the Worker). The public card never names a private network. The owner-token caveat is unchanged: whoever holds it can issue peer tokens.
+- **Façade (proxy mode).** The upstream sits behind two locks: Cloudflare Access (only the Worker's service token passes the tunnel hostname) and the agent's own `UPSTREAM_TOKEN` check. Peers never see or send the upstream credential, can't reach each other's tasks or contexts (unrecorded context ids are refused: fail closed), and can't make the upstream call out (push configs are refused). The upstream credentials only ever go to the `--upstream` origin: a `--upstream-card-url` on any other origin is refused (by `init`/`deploy` and by the Worker). The public card never names a private network. The upstream check (`upstream verify`, `status`) runs only through the owner API (`POST /owner/facade/verify`, owner token): the Worker sends a JSON-RPC method that doesn't exist, with its stored secrets, and returns reason codes and HTTP status only, never a secret value; there is no public probe endpoint. Upstream failures reach peers as a generic `-32603` 502 that names no secret, header or upstream host; the reason goes to the Worker log (`upstream_error`) and `status`. The owner-token caveat is unchanged: whoever holds it can issue peer tokens.
 - **Push notifications.** HTTPS only. Private and loopback targets are refused, and each push uses a per-task token (stored hashed for inbound pushes).
 - **Limits.** 1 MiB request bodies, 60 requests/min per peer, per-conversation wake debounce, and an optional hourly wake cap.
 - **Your infrastructure.** Everything runs in your Cloudflare account, and no third-party service sees your traffic. Data leaves only through wakes to your agent and pushes to URLs your peers registered.
@@ -217,16 +232,19 @@ Any agent that can run `npx` and remember a skill works in polling mode. The wak
 - The 1.0 card is at `/.well-known/agent-card.json`; `/.well-known/agent.json` serves an A2A 0.3-shaped card (`url`, `protocolVersion`, `preferredTransport`) for 0.3 clients.
 - **Landing page.** `GET /` in a browser (`Accept: text/html`) shows a small HTML page with the agent name, description and skills (taken from the served, rewritten card), the note that this is an A2A endpoint, and links to the agent card and the `/device` pairing page. It has the same frame as `/device`: no scripts, no external assets, a strict CSP. Anything else (curl, agents, `Accept: application/json`, `?format=json`) still gets JSON: `name`, `description`, `agentCard`, `a2a` (the JSON-RPC endpoint) and `pairing`.
 - Streaming (`SendStreamingMessage`) is not supported. Work is asynchronous by design.
-- **Proxy mode** forwards `SendMessage`, `GetTask` and `CancelTask` (1.0 and 0.3) to the upstream. It refuses `ListTasks` (it would list other peers' tasks) and every push notification config call (`-32003`: the upstream would call the URL from inside the private network), and it doesn't proxy streaming or the extended card. The card advertises only the JSON-RPC versions the upstream card lists.
+- **Proxy mode** forwards `SendMessage`, `GetTask` and `CancelTask` (1.0 and 0.3) to the upstream. Calls on another peer's task or context get `-32001` / `-32602` before reaching the upstream. It refuses `ListTasks` (it would list other peers' tasks) and every push notification config call (`-32003`: the upstream would call the URL from inside the private network; peers poll `GetTask` instead), and it doesn't proxy streaming or the extended card. The card advertises only the JSON-RPC versions the upstream card lists.
 
 ## Repository layout
 
 ```
-skills/a2a-exposed-setup/SKILL.md   deploy + per-agent wake configuration, public façade
-skills/a2a-exposed/SKILL.md         operate: inbox, replies, outbound, tokens
+plugin.json                          Agent Plugins 1.0.0 portable manifest (Codex/ChatGPT too)
+.cursor-plugin/plugin.json          Cursor / Grok Bot marketplace
+.grok-plugin/plugin.json            Grok Build / xAI marketplace
+.claude-plugin/plugin.json          Claude Code plugin (+ marketplace.json)
+skills/a2a-exposed-setup/           setup skill + references/ (deploy, wake, façade, …)
+skills/a2a-exposed/                 operate skill: inbox, replies, outbound, tokens
 worker/                             Cloudflare Worker (TypeScript, D1, cf CLI config)
 cli/                                npm package `a2a-exposed` (Node 22, zero deps)
-alias/a2a-over-webhook/             deprecated npm alias `a2a-over-webhook` (depends on a2a-exposed; old command name)
 .github/workflows/                  ci.yml (PRs, main) and publish.yml (v* tags: npm + GitHub release)
 ```
 
@@ -234,7 +252,7 @@ Worker development: `cd worker && npm install && npm test && npx tsc`. For local
 
 ## Releases
 
-Pushing a `v*` tag runs [`publish.yml`](.github/workflows/publish.yml): it sets the CLI version from the tag, runs the tests, publishes `a2a-exposed` (and the deprecated `a2a-over-webhook` alias at the same version) to npm with provenance, and creates a GitHub release. Changes are listed in [CHANGELOG.md](CHANGELOG.md).
+Pushing a `v*` tag runs [`publish.yml`](.github/workflows/publish.yml): it sets the CLI version from the tag, runs the tests, publishes `a2a-exposed` to npm with provenance, and creates a GitHub release. Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

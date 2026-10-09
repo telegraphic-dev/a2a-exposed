@@ -26,3 +26,4 @@ alias/a2a-over-webhook/LICENSE
 # misc
 *.log
 .DS_Store
+.skills-ref-venv/

@@ -1,18 +1,28 @@
 ---
 name: a2a-exposed
 description: Use when woken by an a2a-exposed wake (an A2A inbox webhook, a pairing request, or a scheduled inbox check), when asked to message or connect to another agent over A2A (Agent2Agent protocol), or to manage which peers may reach this agent (pairing requests, tokens).
-version: 0.4.0
-author: Telegraphic Developer
 license: MIT
-homepage: https://github.com/telegraphic-dev/a2a-exposed
+compatibility: Requires Node 22.18+ and the a2a-exposed CLI (npm i -g a2a-exposed or npx -y a2a-exposed@latest).
 metadata:
+  version: "0.4.1"
+  author: Telegraphic Developer
+  homepage: https://github.com/telegraphic-dev/a2a-exposed
   hermes:
-    tags: [a2a, agent2agent, inbox, webhook, peers, messaging]
-    related_skills: [a2a-exposed-setup, cloudflare]
+    tags:
+      - a2a
+      - agent2agent
+      - inbox
+      - webhook
+      - peers
+      - messaging
+    related_skills:
+      - a2a-exposed-setup
+      - cloudflare
   openclaw:
     emoji: "📬"
     requires:
-      bins: ["node"]
+      bins:
+        - node
     envVars:
       A2A_CONFIG_DIR:
         description: Override the config directory (default ~/.config/a2a-exposed). Use one per bot on a shared machine.
@@ -25,6 +35,7 @@ metadata:
         required: false
         sensitive: true
 ---
+
 
 
 # a2a-exposed: inbox, replies, outbound
@@ -40,7 +51,7 @@ a2a-exposed --version
 
 For one-off use without a global install: `npx -y a2a-exposed@latest <command>`. The docs write commands as `npx a2a-exposed <command>`; with a global install, `a2a-exposed <command>` is the same thing without the npm round-trip. Config lives in `~/.config/a2a-exposed/config.env` (chmod 600). Environment variables always override the file. Development from a checkout: `node <checkout>/cli/bin/a2a-exposed.mjs <command>`, and pass the same path as `--cli-command` on `init` if the wake hint should use it (default wake hint is `npx a2a-exposed`).
 
-Use the CLI as `npx a2a-exposed <cmd>`, or exactly the command in the wake's `hint`. It reads `A2A_BASE_URL` and `A2A_OWNER_TOKEN` from the environment or from `~/.config/a2a-exposed/config.env` (a pre-rename `~/.config/a2a-over-webhook/config.env` when only that exists; the old package and command `a2a-over-webhook` are a deprecated alias of `a2a-exposed`) (another directory if `A2A_CONFIG_DIR` is set, e.g. one per bot on a shared machine). If neither exists, the endpoint isn't deployed yet: use the **a2a-exposed-setup** skill.
+Use the CLI as `npx a2a-exposed <cmd>`, or exactly the command in the wake's `hint`. It reads `A2A_BASE_URL` and `A2A_OWNER_TOKEN` from the environment or from `~/.config/a2a-exposed/config.env` (another directory if `A2A_CONFIG_DIR` is set, e.g. one per bot on a shared machine). If neither exists, the endpoint isn't deployed yet: use the **a2a-exposed-setup** skill.
 
 ## On a wake or a scheduled check
 
@@ -137,7 +148,7 @@ Polling agents: no wake announces a pairing request; `inbox` and `pair list` sho
 
 - `npx a2a-exposed contexts` lists recent conversations.
 - `npx a2a-exposed status` checks the setup: the agent card (fetched by the CLI; it must advertise the inbox's own base URL, never the agent's local or Tailnet webhook URL), the wake mode (webhook, tunnel, or none, meaning polling), the tunnel state, and a `next step:` line. Use it rather than `curl`: some agent sandboxes (Hermes) flag `.dev` URLs in shell commands and wait for user approval.
-- Proxy mode (`deploy --upstream ...`, see the setup skill): this deployment is a public façade for an agent that already speaks A2A. Peer messages go straight to that agent, so `inbox` stays empty; pairing, `token ...` and `status` (with an `upstream:` row) work as usual.
+- Proxy mode (`deploy --upstream ...`, see the setup skill): this deployment is a public façade for an agent that already speaks A2A. Peer messages go straight to that agent, so `inbox` stays empty; pairing, `token ...` and `status` (with `upstream`, `upstream Access`, `upstream bearer` and `upstream check` rows) work as usual. `npx a2a-exposed upstream verify` checks the whole path to the agent without creating a task. Push notification configs are refused through a façade (`-32003`; peers poll `GetTask`), and peers can't reach each other's tasks or contexts.
 - `npx a2a-exposed url` prints the public base URL.
 - `npx a2a-exposed config` prints the config with secrets masked.
 - `npx a2a-exposed wake preview` shows the rendered wake request (partially masked) and short SHA-256 fingerprints of the uploaded URL/key; `wake fingerprint` prints the fingerprints of `WAKE_*` values in your environment for comparison; `wake test` sends a test wake.
@@ -157,9 +168,11 @@ Polling agents: no wake announces a pairing request; `inbox` and `pair list` sho
 | A newer CLI is announced on stderr | `npm i -g a2a-exposed@latest`, then `npx a2a-exposed deploy` (Worker template and D1 migrations). Silence it with `A2A_NO_UPDATE_CHECK=1` |
 | Peer says 429 | It exceeded 60 requests/min |
 | Peer says -32001 | Unknown task, or a task owned by another peer |
+| Proxy mode: peers get HTTP 502 (`-32603 ... façade is misconfigured` / `not reachable right now`) | The hop from the Worker to your agent failed (peers are told nothing more on purpose). `npx a2a-exposed upstream verify` names the layer: `upstream_auth_missing` / `_rejected` = export the agent's bearer as `UPSTREAM_TOKEN` and `deploy`; `access_*` = the Access service token; `tunnel_down` = start `cloudflared`. Details: setup skill, Troubleshooting. A peer getting 401 instead has a problem with its own token |
+| `status` warns `PEER_<ALIAS>_TOKEN is set in the environment and overrides ...` | A stale variable shadows the token `connect` saved: tell the user to unset it where it is set |
 | `send` fails with `peer returned HTTP 4xx/5xx` | Check the alias URL and token (`peers list`); try `--proto 0.3` for older agents |
 | Push FAILED | The peer's push URL must be public HTTPS; replies stay available via `GetTask` anyway |
-| Worker logs | JSON lines such as `message_received`, `wake_sent`, `wake_failed`, `auth_failed`, `pairing_password_set`. Real-time: the dashboard's live logs for the Worker. Persisted Workers Logs only after `deploy --workers-logs on` (off by default), then the Worker's **Observability** / **Logs** tab |
+| Worker logs | JSON lines such as `message_received`, `wake_sent`, `wake_failed`, `auth_failed`, `pairing_password_set`, and in proxy mode `upstream_error` / `upstream_verify` with a `reason` code. Real-time: the dashboard's live logs for the Worker. Persisted Workers Logs only after `deploy --workers-logs on` (off by default), then the Worker's **Observability** / **Logs** tab |
 | Redeploy after an upgrade | `npx a2a-exposed deploy` (secrets persist) |
 
 Cloudflare-side problems (Worker logs, D1, DNS, the wake tunnel, Access): the optional **cloudflare** skill helps. Offer it, and install it only if the user agrees: `npx skills add https://github.com/cloudflare/skills --skill cloudflare`.

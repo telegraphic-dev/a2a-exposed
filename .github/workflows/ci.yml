@@ -58,14 +58,26 @@ jobs:
             grep -Eq "(^|[^-[:alnum:]])$s([^-[:alnum:]]|$)" skills-list.txt || { echo "::error::skill $s not discovered"; exit 1; }
           done
 
+
+      - name: Skills - agentskills validate
+        run: |
+          python3 -m venv .skills-ref-venv
+          .skills-ref-venv/bin/pip install -q "skills-ref @ git+https://github.com/agentskills/agentskills.git#subdirectory=skills-ref"
+          .skills-ref-venv/bin/skills-ref validate skills/a2a-exposed
+          .skills-ref-venv/bin/skills-ref validate skills/a2a-exposed-setup
+
+      - name: Plugin - agent-plugins schema
+        run: |
+          .skills-ref-venv/bin/pip install -q jsonschema
+          .skills-ref-venv/bin/python - <<'PY'
+          import json, urllib.request, jsonschema
+          from pathlib import Path
+          schema = json.loads(urllib.request.urlopen("https://agent-plugins.org/schemas/1.0.0/plugin.schema.json").read())
+          jsonschema.Draft202012Validator(schema).validate(json.loads(Path("plugin.json").read_text()))
+          print("plugin.json: valid")
+          PY
       - name: CLI - npm pack (dry run)
         working-directory: cli
         run: |
           npm pack --dry-run 2>&1 | tee pack.txt
           grep -q "worker/cloudflare.config.ts" pack.txt || { echo "::error::Worker template missing from the package"; exit 1; }
-
-      - name: Alias package (deprecated a2a-over-webhook) - npm pack (dry run)
-        working-directory: alias/a2a-over-webhook
-        run: |
-          npm pack --dry-run 2>&1 | tee pack.txt
-          grep -q "bin/a2a-over-webhook.mjs" pack.txt || { echo "::error::alias bin missing from the package"; exit 1; }

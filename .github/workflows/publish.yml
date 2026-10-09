@@ -71,25 +71,6 @@ jobs:
           if [[ "$VERSION" == *-* ]]; then DIST_TAG=next; fi
           npm publish --provenance --access public --tag "$DIST_TAG"
 
-      # Deprecated alias package (pre-rename name): depends on a2a-exposed at the same version and keeps the old
-      # `a2a-over-webhook` command and `npx a2a-over-webhook` wake hints working. Remove after a couple of minors.
-      - name: Publish the a2a-over-webhook alias to npm
-        working-directory: alias/a2a-over-webhook
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          if npm view "a2a-over-webhook@$VERSION" version >/dev/null 2>&1; then
-            echo "a2a-over-webhook@$VERSION is already on npm; skipping publish"
-            exit 0
-          fi
-          npm version "$VERSION" --no-git-tag-version --allow-same-version
-          npm pkg set "dependencies.a2a-exposed=$VERSION"
-          cp ../../LICENSE LICENSE
-          DIST_TAG=latest
-          if [[ "$VERSION" == *-* ]]; then DIST_TAG=next; fi
-          npm publish --provenance --access public --tag "$DIST_TAG"
-
       - name: GitHub release
         env:
           GH_TOKEN: ${{ github.token }}

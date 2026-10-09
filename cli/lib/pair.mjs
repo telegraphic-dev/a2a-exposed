@@ -181,7 +181,7 @@ export function cardUrlToSend(flag, own, quiet = false) {
 	if (flag) {
 		let u;
 		try { u = new URL(flag); } catch { die(`--card-url must be a URL (your agent card, e.g. https://agent.example.com/.well-known/agent-card.json)`); }
-		if (u.protocol !== "https:" || u.username || u.password) { note(`note: --card-url ${u.origin} is not a plain https URL, so it is left out of the pairing request (inboxes accept only https cards)`); return ""; }
+		if (u.protocol !== "https:" || u.username || u.password) { note(`note: --card-url ${u.origin} is not a plain https URL, so it is left out of the pairing request (inboxes accept only public https cards). Peers can't call an agent there: to be reachable, expose it through a public façade (setup skill: "Already have A2A on a Tailnet or LAN") and pass the façade's card`); return ""; }
 		if (u.href.length > 300) { note("note: --card-url is longer than 300 characters, so it is left out of the pairing request"); return ""; }
 		if (isPrivateHost(u.hostname)) note(`note: ${u.hostname} is on a private network: the peer's owner sees the card as informational ("not publicly reachable"). Expose your agent through a public façade for others to reach it (setup skill: "Already have A2A on a Tailnet or LAN").`);
 		return u.href;
@@ -278,7 +278,9 @@ A different agent at the same URL? Pass another --alias.`);
 		const r = await postForm(ep.device, params, replace && oldToken ? oldToken : null);
 		if (r.status !== 200 || !r.data.device_code || !r.data.user_code) {
 			const why = r.data.error_description || r.data.error || `HTTP ${r.status}`;
-			die(r.status === 429 ? `${peerName} is not accepting more pairing requests right now: ${why}` : r.status === 404 ? `${peerName} has device-flow pairing disabled (${why}); ask its owner for a token` : `pairing request to ${peerName} failed: ${why}`);
+			const privateCard = !!card && (() => { try { return isPrivateHost(new URL(card).hostname); } catch { return false; } })();
+			die(r.status === 429 ? `${peerName} is not accepting more pairing requests right now: ${why}` : r.status === 404 ? `${peerName} has device-flow pairing disabled (${why}); ask its owner for a token`
+				: `pairing request to ${peerName} failed: ${why}${privateCard && r.status === 400 ? `. The card URL sent (${new URL(card).host}) is not publicly reachable, and inboxes may accept only public https cards: retry with --card-url set to a public card, or expose your agent through a public façade first (setup skill: "Already have A2A on a Tailnet or LAN")` : ""}`);
 		}
 		st = { base, alias, device: ep.device, token: ep.token, deviceCode: r.data.device_code, userCode: r.data.user_code,
 			verificationUri: r.data.verification_uri || "", verificationUriComplete: r.data.verification_uri_complete || r.data.verification_uri || "",

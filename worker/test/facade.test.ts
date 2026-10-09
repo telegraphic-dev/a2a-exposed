@@ -360,7 +360,8 @@ test("proxy mode: upstream failures are the façade's errors, never a 401 to the
 	const send = () => s.rpc(a, "SendMessage", { message: { role: "ROLE_USER", parts: [{ text: "x" }] } });
 	let r = await send();
 	assert.equal(r.status, 502);
-	assert.match(r.data.error.message, /refused by its upstream/);
+	assert.match(r.data.error.message, /façade is misconfigured; tell its operator/);
+	assert.doesNotMatch(r.text, /UPSTREAM|Access|token|bearer|agent-upstream|401/i, "the public 502 names no secret, lock or upstream detail");
 	mode = "html";
 	r = await send();
 	assert.equal(r.status, 502);
@@ -418,4 +419,164 @@ test("proxy mode: the landing page shows the rewritten card (upstream name and s
 	const j = await s.call("GET", "/");
 	assert.equal(j.data.name, "Jean");
 	assert.ok(!JSON.stringify(j.data).includes("ts.net"));
+});
+
+// ------------------------------------------------------------------ upstream auth, failure reasons, owner verify
+
+test("upstreamAuth: bearer wanted or not, from A2A 1.0 and 0.3 card shapes", () => {
+	assert.deepEqual(F.upstreamAuth(null), { bearer: null, schemes: [], unsupported: [] });
+	assert.equal(F.upstreamAuth({ name: "x" }).bearer, false, "no schemes: no auth declared");
+	// 1.0 (ProtoJSON oneof wrappers + securityRequirements)
+	const v1 = { securitySchemes: { bearer: { httpAuthSecurityScheme: { scheme: "Bearer" } } }, securityRequirements: [{ schemes: { bearer: { list: [] } } }] };
+	assert.deepEqual(F.upstreamAuth(v1), { bearer: true, schemes: ["bearer: bearer"], unsupported: [] });
+	assert.equal(F.upstreamAuth({ securitySchemes: { o: { oauth2SecurityScheme: { flows: {} } } }, securityRequirements: [{ schemes: { o: { list: ["a2a"] } } }] }).bearer, true, "OAuth 2.0 sends a bearer");
+	assert.equal(F.upstreamAuth({ securitySchemes: { o: { openIdConnectSecurityScheme: { openIdConnectUrl: "https://id.example.com" } } } }).bearer, true);
+	// 0.3 (OpenAPI style + security)
+	const v03 = { securitySchemes: { bearerAuth: { type: "http", scheme: "bearer" } }, security: [{ bearerAuth: [] }] };
+	assert.deepEqual(F.upstreamAuth(v03), { bearer: true, schemes: ["bearerAuth: bearer"], unsupported: [] });
+	assert.equal(F.upstreamAuth({ securitySchemes: { bearerAuth: { type: "http", scheme: "bearer" } } }).bearer, true, "declared without requirements still counts");
+	// anonymous allowed as an alternative
+	assert.equal(F.upstreamAuth({ ...v03, security: [{ bearerAuth: [] }, {}] }).bearer, false);
+	// only schemes the façade can't present
+	const key = F.upstreamAuth({ securitySchemes: { k: { apiKeySecurityScheme: { location: "header", name: "x-api-key" } } }, securityRequirements: [{ schemes: { k: { list: [] } } }] });
+	assert.deepEqual(key, { bearer: false, schemes: ["k: apiKey"], unsupported: ["k: apiKey"] });
+	assert.deepEqual(F.upstreamAuth({ securitySchemes: { b: { type: "http", scheme: "basic" } }, security: [{ b: [] }] }).unsupported, ["b: basic"]);
+	assert.equal(F.upstreamAuth(tailnetCard()).bearer, false, "the test card wants an API key header");
+});
+
+test("classifyUpstream: Access, the agent's bearer check, tunnel, network and a reachable app are told apart", () => {
+	const c = (status: number | null, body = "", headers: Record<string, string> = {}, bearerSent = false, error = "") => F.classifyUpstream({ status, body, headers, bearerSent, error });
+	const rpc = JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32601, message: "Method not found" } });
+	assert.deepEqual(c(200, rpc), { reason: "reachable", status: 200, rpcErrorCode: -32601, detail: "JSON-RPC error -32601 (HTTP 200)" });
+	assert.equal(c(404, rpc).reason, "reachable", "any JSON-RPC answer means the app was reached");
+	assert.equal(c(200, JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} })).reason, "reachable");
+	assert.equal(c(302, "", { Location: "https://team.cloudflareaccess.com/cdn-cgi/access/login/up.example.com?kid=x" }).reason, "access_rejected");
+	assert.equal(c(403, "<html>Forbidden. You don't have permission ... Cloudflare Access</html>").reason, "access_rejected");
+	assert.equal(c(401, "", { "cf-access-domain": "up.example.com" }, true).reason, "access_rejected");
+	assert.equal(F.classifyUpstream({ status: 302, headers: { location: "https://team.cloudflareaccess.com/cdn-cgi/access/login/x" }, bearerSent: true, accessSent: false }).reason, "access_credentials_missing");
+	assert.equal(F.classifyUpstream({ status: 403, body: "Forbidden (Cloudflare Access)", bearerSent: true, accessSent: true }).reason, "access_rejected", "a configured token Access refuses: policy / wrong token");
+	assert.equal(c(401, "unauthorized", {}, false).reason, "upstream_auth_missing");
+	// Hermes, verbatim from Jean's probe: Access headers only -> 401 + JSON-RPC -32050; Access + Hermes bearer -> 200 + -32601
+	const hermes401 = JSON.stringify({ jsonrpc: "2.0", id: "probe", error: { code: -32050, message: "unauthorized" } });
+	assert.equal(c(401, hermes401, { "content-type": "application/json" }, false).reason, "upstream_auth_missing");
+	assert.equal(c(401, hermes401, { "content-type": "application/json" }, true).reason, "upstream_auth_rejected");
+	const hermes200 = JSON.stringify({ jsonrpc: "2.0", id: "probe", error: { code: -32601, message: "Method not found" } });
+	assert.deepEqual(c(200, hermes200, { "content-type": "application/json" }, true), { reason: "reachable", status: 200, rpcErrorCode: -32601, detail: "JSON-RPC error -32601 (HTTP 200)" });
+	assert.equal(c(403, JSON.stringify({ error: "bad token" }), {}, true).reason, "upstream_auth_rejected");
+	assert.equal(c(401, JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: "unauthorized" } }), {}, true).reason, "upstream_auth_rejected", "a JSON-RPC body on 401 is still an auth failure");
+	assert.deepEqual(c(530, "error code: 1033"), { reason: "tunnel_down", status: 530, cloudflareError: "1033", detail: "HTTP 530, Cloudflare error 1033: Cloudflare can't reach the tunnel (is cloudflared running?)" });
+	assert.equal(c(502, "<html>Bad gateway</html>").reason, "upstream_unavailable");
+	assert.equal(c(null, "", {}, false, "TypeError: fetch failed").reason, "network");
+	assert.equal(c(404, "<html>Not found</html>").reason, "unexpected_response");
+	assert.equal(c(301, "", { location: "https://elsewhere.example.com/" }).reason, "unexpected_response");
+	const h = new Headers({ location: "https://team.cloudflareaccess.com/cdn-cgi/access/login/x" });
+	assert.equal(F.classifyUpstream({ status: 302, headers: h, body: "", bearerSent: false }).reason, "access_rejected", "Headers objects work too");
+});
+
+/** Jean's façade: Access admits the Worker's service token, but the agent (Hermes) also checks its own bearer. */
+function bearerCheckingUpstream(want = "hermes-bearer") {
+	const seen: any[] = [];
+	const card = { ...tailnetCard(), securitySchemes: { bearer: { type: "http", scheme: "bearer" } }, securityRequirements: undefined, security: [{ bearer: [] }] }; // 0.3-style auth, as Hermes advertises
+	const fn = async (url: string, init: any): Promise<Response> => {
+		const h = init.headers || {};
+		if (h["cf-access-client-id"] !== "cid.access" || h["cf-access-client-secret"] !== "csecret")
+			return new Response(null, { status: 302, headers: { location: "https://team.cloudflareaccess.com/cdn-cgi/access/login/agent-upstream.example.net" } });
+		if (url.endsWith(".json")) return Response.json(card); // the card itself is public behind Access
+		const rq = JSON.parse(init.body);
+		seen.push(rq);
+		if (h.authorization !== `Bearer ${want}`) return Response.json({ jsonrpc: "2.0", id: rq.id, error: { code: -32050, message: "unauthorized" } }, { status: 401 }); // Hermes, as Jean probed it
+		if (rq.method !== "SendMessage" && rq.method !== "GetTask") return Response.json({ jsonrpc: "2.0", id: rq.id, error: { code: -32601, message: "Method not found" } });
+		return Response.json({ jsonrpc: "2.0", id: rq.id, result: { task: { id: "t-1", contextId: "c-1", status: { state: "TASK_STATE_SUBMITTED" } } } });
+	};
+	return { fn, seen };
+}
+
+test("proxy mode: missing UPSTREAM_TOKEN (Jean's case): peers get a generic 502, the owner gets the precise reason", async (t) => {
+	const up = bearerCheckingUpstream();
+	const s = setup({ UPSTREAM_URL: UPSTREAM, UPSTREAM_CARD_URL: "https://agent-upstream.example.net/card-jean.json", UPSTREAM_ACCESS_CLIENT_ID: "cid.access", UPSTREAM_ACCESS_CLIENT_SECRET: "csecret" }, up.fn);
+	t.after(s.restore);
+	const a = await s.issue("alice");
+	const r = await s.rpc(a, "SendMessage", { message: { role: "ROLE_USER", parts: [{ text: "hi" }] } });
+	assert.equal(r.status, 502);
+	assert.equal(r.data.error.code, -32603);
+	assert.doesNotMatch(r.text, /UPSTREAM|Access|bearer|token|agent-upstream|401/i);
+	const diag = (await s.call("GET", "/owner/facade", { token: "owner-secret" })).data;
+	assert.equal(diag.upstreamCard, "ok", "the card passes (Access only), the calls don't");
+	assert.deepEqual(diag.upstreamAuth, { bearer: true, schemes: ["bearer: bearer"], unsupported: [] });
+	assert.equal(diag.hasUpstreamToken, false);
+	assert.equal(diag.hasUpstreamAccessServiceToken, true);
+	assert.equal(diag.lastFailure.reason, "upstream_auth_missing");
+	assert.equal(diag.lastFailure.status, 401);
+	assert.equal(diag.lastFailure.method, "SendMessage");
+	assert.equal(diag.lastFailure.peer, "alice");
+	assert.match(diag.lastFailure.at, /^\d{4}-/);
+
+	const v = await s.call("POST", "/owner/facade/verify", { token: "owner-secret" });
+	assert.equal(v.status, 200);
+	assert.equal(v.data.ok, false);
+	assert.equal(v.data.reason, "upstream_auth_missing");
+	assert.equal(v.data.status, 401);
+	assert.deepEqual(v.data.sent, { bearer: false, accessServiceToken: true });
+	assert.equal(v.data.upstreamWantsBearer, true);
+	assert.equal(up.seen.at(-1).method, "a2a-exposed/verify-unknown-method");
+});
+
+test("owner verify: classifies Access, bearer, tunnel and network failures; a reachable app answers -32601; never creates a task", async (t) => {
+	const up = bearerCheckingUpstream();
+	const env = { UPSTREAM_URL: UPSTREAM, UPSTREAM_CARD_URL: "https://agent-upstream.example.net/card-v.json", UPSTREAM_ACCESS_CLIENT_ID: "cid.access", UPSTREAM_ACCESS_CLIENT_SECRET: "csecret", UPSTREAM_TOKEN: "hermes-bearer" };
+	const s = setup(env, up.fn);
+	t.after(s.restore);
+	const verify = async (st = s) => (await st.call("POST", "/owner/facade/verify", { token: "owner-secret" })).data;
+	let v = await verify();
+	assert.equal(v.ok, true, JSON.stringify(v));
+	assert.equal(v.reason, "reachable");
+	assert.equal(v.rpcErrorCode, -32601);
+	assert.deepEqual(v.sent, { bearer: true, accessServiceToken: true });
+	assert.ok(!JSON.stringify(v).includes("hermes-bearer") && !JSON.stringify(v).includes("csecret"), "no secret values in the answer");
+	const probe = s.calls.filter((c) => c.url === UPSTREAM).at(-1);
+	assert.equal(probe.headers.authorization, "Bearer hermes-bearer");
+	assert.equal(probe.headers["cf-access-client-id"], "cid.access");
+	assert.equal(JSON.parse(probe.body).method, "a2a-exposed/verify-unknown-method");
+	assert.equal((s.DB.db.prepare("SELECT COUNT(*) AS n FROM facade_owners").get() as any).n, 0, "nothing recorded");
+	assert.equal((s.DB.db.prepare("SELECT COUNT(*) AS n FROM tasks").get() as any).n, 0, "no task");
+
+	const wrong = setup({ ...env, UPSTREAM_TOKEN: "stale" }, up.fn);
+	t.after(wrong.restore);
+	assert.equal((await verify(wrong)).reason, "upstream_auth_rejected");
+	const wrongAccess = setup({ ...env, UPSTREAM_ACCESS_CLIENT_SECRET: "wrong" }, up.fn);
+	t.after(wrongAccess.restore);
+	v = await verify(wrongAccess);
+	assert.equal(v.reason, "access_rejected");
+	assert.equal(v.status, 302);
+	const { UPSTREAM_ACCESS_CLIENT_ID: _i, UPSTREAM_ACCESS_CLIENT_SECRET: _s, ...noAccessEnv } = env;
+	const noAccess = setup(noAccessEnv, up.fn);
+	t.after(noAccess.restore);
+	assert.equal((await verify(noAccess)).reason, "access_credentials_missing");
+	const down = setup(env, async () => new Response("error code: 1033", { status: 530 }));
+	t.after(down.restore);
+	assert.equal((await verify(down)).reason, "tunnel_down");
+	const net = setup(env, async () => { throw new TypeError("fetch failed"); });
+	t.after(net.restore);
+	assert.equal((await verify(net)).reason, "network");
+	const bad = setup({ UPSTREAM_URL: "https://jean.tail1234.ts.net/a2a" });
+	t.after(bad.restore);
+	v = await verify(bad);
+	assert.equal(v.reason, "misconfigured");
+	assert.equal(bad.calls.length, 0);
+});
+
+test("owner verify is owner-only and proxy-only (no public or peer-reachable probe)", async (t) => {
+	const up = bearerCheckingUpstream();
+	const s = setup({ UPSTREAM_URL: UPSTREAM, UPSTREAM_CARD_URL: "https://agent-upstream.example.net/card-o.json", UPSTREAM_ACCESS_CLIENT_ID: "cid.access", UPSTREAM_ACCESS_CLIENT_SECRET: "csecret", UPSTREAM_TOKEN: "hermes-bearer" }, up.fn);
+	t.after(s.restore);
+	const peer = await s.issue("mallory");
+	const n0 = s.calls.filter((c) => c.url === UPSTREAM).length;
+	assert.equal((await s.call("POST", "/owner/facade/verify")).status, 401);
+	assert.equal((await s.call("POST", "/owner/facade/verify", { token: peer })).status, 401, "a peer token is not the owner token");
+	assert.equal(s.calls.filter((c) => c.url === UPSTREAM).length, n0, "unauthenticated calls never reach the upstream");
+	const inbox = setup();
+	t.after(inbox.restore);
+	const r = await inbox.call("POST", "/owner/facade/verify", { token: "owner-secret" });
+	assert.equal(r.status, 409);
+	assert.equal(r.data.reason, "not_proxy_mode");
 });

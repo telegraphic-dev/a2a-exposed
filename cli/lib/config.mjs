@@ -1,14 +1,12 @@
-// Config storage: ~/.config/a2a-exposed/config.env (chmod 600) + peers.json. Before the rename the directory was
-// ~/.config/a2a-over-webhook: when only that one exists it is used as is (nothing is moved or copied).
+// Config storage: ~/.config/a2a-exposed/config.env (chmod 600) + peers.json.
 // Environment variables always override values from config.env.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-/** <base>/a2a-exposed, or the pre-rename <base>/a2a-over-webhook when only that exists (an existing deployment). */
-export function defaultConfigDir(base = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), exists = fs.existsSync) {
-	const dir = path.join(base, "a2a-exposed"), legacy = path.join(base, "a2a-over-webhook");
-	return !exists(dir) && exists(legacy) ? legacy : dir;
+/** <base>/a2a-exposed (base: $XDG_CONFIG_HOME or ~/.config). */
+export function defaultConfigDir(base = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config")) {
+	return path.join(base, "a2a-exposed");
 }
 
 export const CONFIG_DIR = process.env.A2A_CONFIG_DIR || defaultConfigDir();
