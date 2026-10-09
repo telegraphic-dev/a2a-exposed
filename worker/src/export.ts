@@ -474,15 +474,25 @@ export async function bookmarkForTime(storage: BookmarkStorage, timeMs: number):
 }
 
 /**
- * Schedule `bookmark` for the next session, then call `restart`. On a Durable Object that restart is `ctx.abort()`:
- * the runtime applies the bookmark only after the object resets. A storage error is thrown before `restart`, so a
- * rejected bookmark leaves the current database running.
+ * Schedule `bookmark` for the next session and return `{ ok: true }`. Does not reset the object: `ctx.abort()` in
+ * this turn would drop the RPC. The Durable Object calls `restartAfterResult` after this returns. A storage error
+ * is thrown and the current database keeps running.
  */
-export async function restoreBookmark(storage: BookmarkStorage, bookmark: string, restart?: (undo?: string) => void): Promise<{ ok: true; undo?: string }> {
+export async function restoreBookmark(storage: BookmarkStorage, bookmark: string): Promise<{ ok: true; undo?: string }> {
 	if (typeof bookmark !== "string" || bookmark.length < 1 || bookmark.length > 4096) throw new ExportError("restoreBookmark: bookmark is invalid");
 	if (typeof storage.onNextSessionRestoreBookmark !== "function") throw new ExportError("restoreBookmark: point-in-time restore is not available on this storage");
-	const raw = await storage.onNextSessionRestoreBookmark(bookmark);
+	let raw: unknown;
+	try {
+		raw = await storage.onNextSessionRestoreBookmark(bookmark);
+	} catch (e) {
+		if (e instanceof ExportError) throw e;
+		throw new ExportError(`restoreBookmark: ${e instanceof Error ? e.message : String(e)}`);
+	}
 	const undo = typeof raw === "string" && raw.length > 0 ? raw : undefined;
-	restart?.(undo);
 	return undo ? { ok: true, undo } : { ok: true };
+}
+
+/** Queue `restart` so the caller can return `result` first. `ctx.abort()` in the same turn drops the RPC. */
+export function restartAfterResult(waitUntil: (p: Promise<unknown>) => void, restart: () => void, wait: (ms: number) => Promise<void>): void {
+	waitUntil(wait(0).then(() => { restart(); }));
 }

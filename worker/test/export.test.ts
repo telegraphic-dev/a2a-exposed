@@ -10,7 +10,7 @@ import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import worker from "../src/index.ts";
 import { d1 } from "./d1.ts";
 import { sha256 } from "../src/a2a.ts";
-import { exportRows, importRows, toSql, bookmarkForTime, restoreBookmark, ExportError, EXPORT_TABLES, IMPORT_QUERY_BUDGET, type ImportCursor } from "../src/export.ts";
+import { exportRows, importRows, toSql, bookmarkForTime, restoreBookmark, restartAfterResult, ExportError, EXPORT_TABLES, IMPORT_QUERY_BUDGET, type ImportCursor } from "../src/export.ts";
 import { doSqlD1, type SqlStorageLike, type TxRunner } from "../src/storage.ts";
 import { openPeerToken, sealPeerToken } from "../src/mcp.ts";
 import { backupDatabase, exportTenantSql, hostedDailyBackup, olderThanRetention, snapshotKey, DAILY_CRON, type R2BucketLike } from "../src/backup.ts";
@@ -370,7 +370,7 @@ test("point-in-time helpers require the storage methods", async () => {
 	await assert.rejects(() => restoreBookmark(storage, ""), /invalid/);
 });
 
-test("restoreBookmark restarts only after the runtime accepts the bookmark", async () => {
+test("restoreBookmark returns before the object restarts", async () => {
 	const order: string[] = [];
 	const storage = {
 		async onNextSessionRestoreBookmark(b: string) {
@@ -378,17 +378,21 @@ test("restoreBookmark restarts only after the runtime accepts the bookmark", asy
 			return `undo-${b}`;
 		},
 	};
-	const out = await restoreBookmark(storage, "bm-1", (undo) => { order.push(`restart:${undo}`); });
-	assert.deepEqual(order, ["schedule:bm-1", "restart:undo-bm-1"]);
+	const out = await restoreBookmark(storage, "bm-1");
+	order.push("returned");
+	let released!: () => void;
+	const gate = new Promise<void>((resolve) => { released = resolve; });
+	restartAfterResult((p) => { void p.then(() => order.push("restarted")); }, () => {}, () => gate);
 	assert.deepEqual(out, { ok: true, undo: "undo-bm-1" });
+	assert.deepEqual(order, ["schedule:bm-1", "returned"]);
+	released();
+	await gate;
+	await Promise.resolve();
+	assert.deepEqual(order, ["schedule:bm-1", "returned", "restarted"]);
 
-	let restarted = false;
-	const failing = {
-		async onNextSessionRestoreBookmark() { throw new Error("rejected bookmark"); },
-	};
-	await assert.rejects(() => restoreBookmark(failing, "bm-2", () => { restarted = true; }), /rejected bookmark/);
-	await assert.rejects(() => restoreBookmark(storage, "", () => { restarted = true; }), /invalid/);
-	assert.equal(restarted, false);
+	const failing = { async onNextSessionRestoreBookmark() { throw new Error("rejected bookmark"); } };
+	await assert.rejects(() => restoreBookmark(failing, "bm-2"), (e: unknown) => e instanceof ExportError && /rejected bookmark/.test((e as Error).message));
+	await assert.rejects(() => restoreBookmark(storage, ""), /invalid/);
 });
 
 test("backupDatabase writes the self-host snapshot", async () => {
@@ -530,4 +534,51 @@ test("TenantStore exportSql dumps a configured tenant", async (t) => {
 	assert.equal(dumped.sql.includes(issued.token || "a2aow_"), false);
 	assert.equal(dumped.sql.includes("tenant_config"), false);
 	assert.equal(dumped.sql.includes("platform-secret"), false);
+
+	const restored = stub as unknown as { restoreBookmark(b: string): Promise<{ ok: true; undo?: string }> };
+	await assert.rejects(() => restored.restoreBookmark("bm-local"));
+	assert.equal((await stub.storageStatus()).configured, true, "a storage error does not reset the object");
+	assert.match((await stub.exportSql()).sql, /ada/);
+});
+
+test("a restore RPC returns ok and the next session is a new object", async (t) => {
+	const script = `
+import { DurableObject } from "cloudflare:workers";
+export class T extends DurableObject {
+  constructor(ctx, env) { super(ctx, env); this.born = Date.now(); }
+  async bornAt() { return this.born; }
+  async restoreBookmark() {
+    const out = { ok: true, undo: "undo-live" };
+    this.ctx.waitUntil(scheduler.wait(0).then(() => this.ctx.abort("restore bookmark", { retryAlarm: false })));
+    return out;
+  }
+}
+export default { fetch() { return new Response("ok"); } }
+`;
+	const mf = new Miniflare(convertV4MiniflareOptions({
+		name: "restore",
+		modules: true,
+		script,
+		compatibilityDate: "2026-10-06",
+		durableObjects: { T: { className: "T", useSQLite: true } },
+	} as never));
+	t.after(() => mf.dispose());
+	await mf.ready;
+	const ns = await mf.getDurableObjectNamespace("T");
+	const id = ns.idFromName("tenant");
+	const stub = ns.get(id) as unknown as {
+		bornAt(): Promise<number>;
+		restoreBookmark(): Promise<{ ok: boolean; undo: string }>;
+	};
+	const born = await stub.bornAt();
+	const restored = await stub.restoreBookmark();
+	assert.equal(restored.ok, true);
+	assert.equal(restored.undo, "undo-live");
+	const start = Date.now();
+	let again = born;
+	while (again === born && Date.now() - start < 2000) {
+		await new Promise((r) => setTimeout(r, 20));
+		again = await (ns.get(id) as typeof stub).bornAt();
+	}
+	assert.notEqual(again, born, "abort after the result starts a new session");
 });

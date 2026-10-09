@@ -14,7 +14,7 @@ import { DurableObject } from "cloudflare:workers";
 import worker, { dispatch } from "./index.ts";
 import { doSqlD1, migrateDo, type SqlStorageLike, type TxRunner } from "./storage.ts";
 import { MIGRATIONS } from "./migrations.ts";
-import { bookmarkForTime as readBookmark, exportRows, restoreBookmark as applyBookmark, toSql, ExportError, type BookmarkStorage } from "./export.ts";
+import { bookmarkForTime as readBookmark, exportRows, restoreBookmark as applyBookmark, restartAfterResult, toSql, ExportError, type BookmarkStorage } from "./export.ts";
 import { hostedDailyBackup } from "./backup.ts";
 import { lookupDirectory, pinDirectoryRegion, tenantNameFromHost, tenantRegion, TENANT_NAME, type DirectoryEntry } from "./directory.ts";
 import { hostedTenantContext, namespaceForRegion, parseGates, type WorkerBindings } from "./tenancy.ts";
@@ -222,17 +222,20 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 	}
 
 	/**
-	 * Schedule `bookmark` and reset this object so the next session applies it.
-	 * `ctx.abort()` ends the call (the runtime logs that reset). The undo bookmark is logged first.
-	 * An alarm in flight was for the pre-restore database, so it is not retried; the new session arms from the restored rows.
+	 * Schedule `bookmark`, return `{ ok: true }`, then reset this object so the next session applies it.
+	 * `ctx.abort()` in this turn would fail the RPC. An in-flight alarm was for the pre-restore database, so it is not retried.
 	 */
 	async restoreBookmark(bookmark: string): Promise<{ ok: true; undo?: string }> {
 		if (!this.#row) throw new ExportError("restoreBookmark: tenant is not configured");
 		const tenantId = this.#row.tenantId;
-		return applyBookmark(this.ctx.storage as BookmarkStorage, bookmark, (undo) => {
-			console.log(JSON.stringify({ ts: new Date().toISOString(), event: "bookmark_restore", tenant: tenantId, undo: undo ?? null }));
-			this.ctx.abort("restore bookmark", { retryAlarm: false });
-		});
+		const out = await applyBookmark(this.ctx.storage as BookmarkStorage, bookmark);
+		console.log(JSON.stringify({ ts: new Date().toISOString(), event: "bookmark_restore", tenant: tenantId, undo: out.undo ?? null }));
+		restartAfterResult(
+			(p) => this.ctx.waitUntil(p),
+			() => this.ctx.abort("restore bookmark", { retryAlarm: false }),
+			(ms) => scheduler.wait(ms),
+		);
+		return out;
 	}
 
 	async fetch(req: Request): Promise<Response> {
