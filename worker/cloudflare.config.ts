@@ -45,6 +45,21 @@ const plain: Record<string, string> = {
 	// Access (never a Tailnet / LAN URL: the Worker can't reach those, and they never appear in the public card)
 	UPSTREAM_URL: v("A2A_UPSTREAM_URL"),
 	UPSTREAM_CARD_URL: v("A2A_UPSTREAM_CARD_URL"), // default <upstream origin>/.well-known/agent-card.json
+	// Hosted multi-tenant gates. All empty by default, and empty is omitted, so a self-host deploy is unchanged.
+	// TENANCY=host does nothing on its own: per-tenant storage also needs the TENANT_DO binding (see hosted entry).
+	// QUOTAS, USAGE_SINK, WAKE_TARGET_POLICY, SIGNUP_URL, BRANDING and APPROVAL_OIDC_* are parsed and reserved.
+	TENANCY: v("TENANCY"),
+	TENANT_DOMAIN: v("TENANT_DOMAIN"),
+	DATA_REGION: v("DATA_REGION"), // eu | fedramp; unset = Cloudflare's default placement
+	QUOTAS: v("QUOTAS"),
+	USAGE_SINK: v("USAGE_SINK"),
+	WAKE_TARGET_POLICY: v("WAKE_TARGET_POLICY"),
+	SIGNUP_URL: v("SIGNUP_URL"),
+	BRANDING: v("BRANDING"),
+	APPROVAL_OIDC_ISSUER: v("APPROVAL_OIDC_ISSUER"),
+	APPROVAL_OIDC_CLIENT_ID: v("APPROVAL_OIDC_CLIENT_ID"),
+	APPROVAL_OIDC_ALLOWED_SUBJECTS: v("APPROVAL_OIDC_ALLOWED_SUBJECTS"),
+	APPROVAL_METHODS: v("APPROVAL_METHODS"),
 };
 const envBindings: Record<string, any> = {
 	DB: bindings.d1(v("A2A_D1_ID") ? { name: v("A2A_D1_NAME") || name, id: v("A2A_D1_ID") } : { name: v("A2A_D1_NAME") || name }),
@@ -55,7 +70,9 @@ for (const [k, val] of Object.entries(plain)) if (val !== "" || (k === "WAKE_KEY
 // and in proxy mode UPSTREAM_TOKEN, UPSTREAM_ACCESS_CLIENT_ID, UPSTREAM_ACCESS_CLIENT_SECRET.
 // They are declared only in development mode (`cf dev`), so local dev reads them from .dev.vars while
 // production deploys never fail because an optional wake secret is unset.
-const SECRETS = ["OWNER_TOKEN", "WAKE_WEBHOOK_URL", "WAKE_WEBHOOK_KEY", "WAKE_HMAC_SECRET", "UPSTREAM_TOKEN", "UPSTREAM_ACCESS_CLIENT_ID", "UPSTREAM_ACCESS_CLIENT_SECRET"];
+const SECRETS = ["OWNER_TOKEN", "WAKE_WEBHOOK_URL", "WAKE_WEBHOOK_KEY", "WAKE_HMAC_SECRET", "UPSTREAM_TOKEN", "UPSTREAM_ACCESS_CLIENT_ID", "UPSTREAM_ACCESS_CLIENT_SECRET",
+	// Declared for `cf dev` only when a hosted deploy asks for them, so a self-host .dev.vars without these still starts.
+	...(v("TENANCY") === "host" ? ["TENANT_SECRETS_KEY", "APPROVAL_OIDC_CLIENT_SECRET"] : [])];
 
 export default defineConfig((ctx) => ({
 	...(v("CLOUDFLARE_ACCOUNT_ID") ? { accountId: v("CLOUDFLARE_ACCOUNT_ID") } : {}),
