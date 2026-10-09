@@ -473,6 +473,9 @@ export async function bookmarkForTime(storage: BookmarkStorage, timeMs: number):
 	return { bookmark };
 }
 
+/** Delay before `ctx.abort()`. A 0ms wait can still run in this turn and drop the RPC result. */
+export const RESTORE_RESTART_DELAY_MS = 50;
+
 /**
  * Schedule `bookmark` for the next session and return `{ ok: true }`. Does not reset the object: `ctx.abort()` in
  * this turn would drop the RPC. The Durable Object calls `restartAfterResult` after this returns. A storage error
@@ -492,7 +495,7 @@ export async function restoreBookmark(storage: BookmarkStorage, bookmark: string
 	return undo ? { ok: true, undo } : { ok: true };
 }
 
-/** Queue `restart` so the caller can return `result` first. `ctx.abort()` in the same turn drops the RPC. */
+/** Queue `restart` so the caller can return first. The timer is longer than this turn, so the RPC result is delivered. */
 export function restartAfterResult(waitUntil: (p: Promise<unknown>) => void, restart: () => void, wait: (ms: number) => Promise<void>): void {
-	waitUntil(wait(0).then(() => { restart(); }));
+	waitUntil(wait(RESTORE_RESTART_DELAY_MS).then(() => { restart(); }));
 }

@@ -10,7 +10,7 @@ import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import worker from "../src/index.ts";
 import { d1 } from "./d1.ts";
 import { sha256 } from "../src/a2a.ts";
-import { exportRows, importRows, toSql, bookmarkForTime, restoreBookmark, restartAfterResult, ExportError, EXPORT_TABLES, IMPORT_QUERY_BUDGET, type ImportCursor } from "../src/export.ts";
+import { exportRows, importRows, toSql, bookmarkForTime, restoreBookmark, restartAfterResult, ExportError, EXPORT_TABLES, IMPORT_QUERY_BUDGET, RESTORE_RESTART_DELAY_MS, type ImportCursor } from "../src/export.ts";
 import { doSqlD1, type SqlStorageLike, type TxRunner } from "../src/storage.ts";
 import { openPeerToken, sealPeerToken } from "../src/mcp.ts";
 import { backupDatabase, backupDirectory, exportTenantSql, hostedDailyBackup, olderThanRetention, pruneSnapshots, snapshotKey, DAILY_CRON, type R2BucketLike } from "../src/backup.ts";
@@ -421,7 +421,9 @@ test("restoreBookmark returns before the object restarts", async () => {
 	order.push("returned");
 	let released!: () => void;
 	const gate = new Promise<void>((resolve) => { released = resolve; });
-	restartAfterResult((p) => { void p.then(() => order.push("restarted")); }, () => {}, () => gate);
+	let waited = -1;
+	restartAfterResult((p) => { void p.then(() => order.push("restarted")); }, () => {}, (ms) => { waited = ms; return gate; });
+	assert.equal(waited, RESTORE_RESTART_DELAY_MS);
 	assert.deepEqual(out, { ok: true, undo: "undo-bm-1" });
 	assert.deepEqual(order, ["schedule:bm-1", "returned"]);
 	released();
@@ -580,37 +582,41 @@ test("TenantStore exportSql dumps a configured tenant", async (t) => {
 	assert.match((await stub.exportSql()).sql, /ada/);
 });
 
-test("a restore RPC returns ok and the next session is a new object", async (t) => {
-	const script = `
-import { DurableObject } from "cloudflare:workers";
-export class T extends DurableObject {
+test("TenantStore.restoreBookmark returns ok and the next session is a new object", async (t) => {
+	// Local workerd's onNextSessionRestoreBookmark throws. The probe replaces that method, then calls the production RPC.
+	const script = `${await bundleHosted()}
+export class Probe extends TenantStore {
   constructor(ctx, env) { super(ctx, env); this.born = Date.now(); }
   async bornAt() { return this.born; }
-  async restoreBookmark() {
-    const out = { ok: true, undo: "undo-live" };
-    this.ctx.waitUntil(scheduler.wait(0).then(() => this.ctx.abort("restore bookmark", { retryAlarm: false })));
-    return out;
+  async restoreLive(bookmark) {
+    this.ctx.storage.onNextSessionRestoreBookmark = async () => "undo-live";
+    return await this.restoreBookmark(bookmark);
   }
 }
-export default { fetch() { return new Response("ok"); } }
 `;
 	const mf = new Miniflare(convertV4MiniflareOptions({
 		name: "restore",
 		modules: true,
 		script,
 		compatibilityDate: "2026-10-06",
-		durableObjects: { T: { className: "T", useSQLite: true } },
+		durableObjects: { TENANT_DO: { className: "Probe", useSQLite: true } },
+		bindings: { TENANCY: "host", TENANT_DOMAIN: "example.com", TENANT_SECRETS_KEY: "platform-secret" },
 	} as never));
 	t.after(() => mf.dispose());
 	await mf.ready;
-	const ns = await mf.getDurableObjectNamespace("T");
-	const id = ns.idFromName("tenant");
+	const ns = await mf.getDurableObjectNamespace("TENANT_DO");
+	const id = ns.idFromName("id-alice");
 	const stub = ns.get(id) as unknown as {
 		bornAt(): Promise<number>;
-		restoreBookmark(): Promise<{ ok: boolean; undo: string }>;
+		pushConfig(b: Record<string, unknown>): Promise<{ applied: boolean }>;
+		restoreLive(bookmark: string): Promise<{ ok: boolean; undo: string }>;
 	};
+	const hash = await sha256("owner-alice");
+	assert.equal((await stub.pushConfig({
+		version: 1, tenantId: "id-alice", name: "alice", status: "active", ownerTokenHash: hash, config: { AGENT_NAME: "Alice" },
+	})).applied, true);
 	const born = await stub.bornAt();
-	const restored = await stub.restoreBookmark();
+	const restored = await stub.restoreLive("bm-live");
 	assert.equal(restored.ok, true);
 	assert.equal(restored.undo, "undo-live");
 	const start = Date.now();

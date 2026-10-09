@@ -222,8 +222,8 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 	}
 
 	/**
-	 * Schedule `bookmark`, return `{ ok: true }`, then reset this object so the next session applies it.
-	 * `ctx.abort()` in this turn would fail the RPC. An in-flight alarm was for the pre-restore database, so it is not retried.
+	 * Schedule `bookmark` and return `{ ok: true }`. The reset is queued for a later turn: `ctx.abort()` here would
+	 * fail the RPC before the caller saw that result. An in-flight alarm was for the pre-restore database, so it is not retried.
 	 */
 	async restoreBookmark(bookmark: string): Promise<{ ok: true; undo?: string }> {
 		if (!this.#row) throw new ExportError("restoreBookmark: tenant is not configured");
