@@ -28,28 +28,51 @@ function setup(over: Record<string, string> = {}) {
 	const peerCalls: { host: string; auth: string | null; body: any }[] = [];
 	// Client ID Metadata Documents served at https://client.example.org/<path>
 	const cimd: Record<string, { status?: number; body: any; headers?: Record<string, string> }> = {};
-	const cimdFetches: { url: string; redirect: string }[] = [];
+	const cimdFetches: { url: string; ip: string; port: number; sni: string; request: string }[] = [];
 	// DNS-over-HTTPS answers by host (default: one public A record); status 2 = SERVFAIL, 3 = NXDOMAIN
 	const dns: Record<string, { A?: string[]; AAAA?: string[]; status?: number }> = {};
 	const dnsQueries: string[] = [];
+	// The pinned CIMD fetch: a fake TCP+TLS socket that answers HTTP/1.1 from `cimd` (chunked when asked, "ABORT" = reset mid-body)
+	M.net.connect = (addr, _opts) => ({ startTls: ({ expectedServerHostname: sni }) => {
+		let req = "";
+		let respond!: (b: Uint8Array | null) => void;
+		const ready = new Promise<Uint8Array | null>((r) => { respond = r; });
+		const writable = new WritableStream<Uint8Array>({ write(chunk) {
+			req += new TextDecoder().decode(chunk);
+			if (!req.includes("\r\n\r\n")) return;
+			const path = req.split(" ")[1].split("?")[0];
+			cimdFetches.push({ url: `https://${sni}${req.split(" ")[1]}`, ip: addr.hostname, port: addr.port, sni, request: req });
+			const d = cimd[path];
+			if (d?.body === "ABORT") return respond(null);
+			const status = d ? d.status ?? 200 : 404;
+			const body = new TextEncoder().encode(!d ? "not found" : typeof d.body === "string" ? d.body : JSON.stringify(d.body));
+			const hs = { "content-type": "application/json", ...(d?.headers || {}) };
+			const head = `HTTP/1.1 ${status} X\r\n${Object.entries(hs).map(([k, v]) => `${k}: ${v}\r\n`).join("")}`;
+			const enc = new TextEncoder();
+			if ((d as any)?.chunked) {
+				const half = Math.floor(body.length / 2);
+				const ch = (b: Uint8Array) => [...enc.encode(`${b.length.toString(16)}\r\n`), ...b, 13, 10];
+				respond(new Uint8Array([...enc.encode(`${head}transfer-encoding: chunked\r\n\r\n`), ...ch(body.subarray(0, half)), ...ch(body.subarray(half)), ...enc.encode("0\r\n\r\n")]));
+			} else respond(new Uint8Array([...enc.encode(`${head}content-length: ${body.length}\r\nconnection: close\r\n\r\n`), ...body]));
+		} });
+		const readable = new ReadableStream<Uint8Array>({ async start(c) {
+			const b = await ready;
+			if (b === null) { c.enqueue(new TextEncoder().encode("HTTP/1.1 200 OK\r\ncontent-length: 500\r\n\r\n{\"client_id\":")); c.error(new Error("connection reset")); return; }
+			c.enqueue(b.subarray(0, 7)); c.enqueue(b.subarray(7)); c.close();
+		} });
+		return { readable, writable, close: async () => {} };
+	} });
 	const origFetch = globalThis.fetch;
 	globalThis.fetch = (async (input: any, init: any = {}) => {
 		const u = new URL(String(input));
 		if (u.host === "hook.example.net") return new Response("ok");
+		if (u.host === "client.example.org" || u.host === "rebind.example.org") throw new Error("CIMD must not use fetch (it is IP-pinned)");
 		if (u.host === "cloudflare-dns.com") {
 			const name = u.searchParams.get("name")!, type = u.searchParams.get("type")!;
 			dnsQueries.push(`${name}/${type}`);
 			const d = dns[name] ?? { A: ["93.184.216.34"] };
 			const list = (type === "A" ? d.A : d.AAAA) || [];
 			return Response.json({ Status: d.status ?? 0, Answer: list.map((data) => ({ name, type: type === "A" ? 1 : 28, data })) });
-		}
-		if (u.host === "client.example.org" || u.host === "rebind.example.org") {
-			cimdFetches.push({ url: String(input), redirect: init.redirect });
-			const d = cimd[u.pathname];
-			if (!d) return new Response("not found", { status: 404 });
-			if (d.body === "ABORT") // headers arrive, then the body stream fails mid-way
-				return new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('{"client_id":')); c.error(new Error("connection reset")); } }), { status: 200 });
-			return new Response(typeof d.body === "string" ? d.body : JSON.stringify(d.body), { status: d.status ?? 200, headers: { "content-type": "application/json", ...(d.headers || {}) } });
 		}
 		if (u.pathname === "/.well-known/agent-card.json")
 			return Response.json({ name: u.host, supportedInterfaces: [{ url: `https://${u.host}/a2a`, protocolBinding: "JSONRPC", protocolVersion: "1.0" }] });
@@ -130,7 +153,7 @@ function setup(over: Record<string, string> = {}) {
 		for (const [k, v] of Object.entries(h)) { if (v === null) delete headers[k]; else headers[k] = v; }
 		return call("POST", "/mcp", { json: { jsonrpc: "2.0", id: ++rid, method, params: { ...params, _meta: meta } }, headers });
 	};
-	return { env, DB, peerCalls, cimd, cimdFetches, dns, dnsQueries, modern, call, owner, register, consent, connect, mcp, tool, inbound, restore: () => { globalThis.fetch = origFetch; } };
+	return { env, DB, peerCalls, cimd, cimdFetches, dns, dnsQueries, modern, call, owner, register, consent, connect, mcp, tool, inbound, restore: () => { globalThis.fetch = origFetch; M.net.connect = null; } };
 }
 
 test("discovery: 401 with resource metadata, RFC 9728 + RFC 8414 metadata for the connector", async (t) => {
@@ -560,7 +583,11 @@ test("Client ID Metadata Documents: fetched, validated, cached; consent shows th
 	assert.match(r.page.text, /CIMD Client/);
 	assert.match(r.page.text, /Client identity published at<\/th><td>client\.example\.org/);
 	assert.equal(s.cimdFetches.length, 1);
-	assert.equal(s.cimdFetches[0].redirect, "manual", "redirects are never followed");
+	assert.equal(s.cimdFetches[0].ip, "93.184.216.34", "connected to the DNS-checked address (pinned: no rebinding)");
+	assert.equal(s.cimdFetches[0].sni, "client.example.org", "TLS verified for the client_id host");
+	assert.equal(s.cimdFetches[0].port, 443);
+	assert.match(s.cimdFetches[0].request, /^GET \/oauth\/metadata\.json HTTP\/1\.1\r\nHost: client\.example\.org\r\n/);
+	assert.doesNotMatch(s.cimdFetches[0].request, /authorization|cookie/i, "no credentials sent");
 	assert.equal(r.post.status, 302, r.post.text);
 	assert.equal(s.cimdFetches.length, 1, "the POST used the cached document");
 	const code = new URL(r.post.headers.get("location")!).searchParams.get("code")!;
@@ -633,8 +660,12 @@ test("Client ID Metadata Documents: unsafe URLs and bad documents are refused (n
 		assert.match(r.text, re, JSON.stringify(d));
 	}
 	assert.equal(s.cimdFetches.length, before, "nothing fetched from a host that resolves inside");
-	s.dns["rebind.example.org"] = { A: ["93.184.216.34"], AAAA: ["2606:2800:220:1::1"] };
+	s.dns["rebind.example.org"] = { A: ["198.51.99.7"], AAAA: ["2606:2800:220:1::1"] };
 	assert.equal((await page("https://rebind.example.org/m.json")).status, 200);
+	assert.equal(s.cimdFetches.at(-1)!.ip, "198.51.99.7", "the checked IP is the one connected to");
+	// chunked responses are decoded
+	s.cimd["/chunked.json"] = { body: cimdDoc({ client_id: "https://client.example.org/chunked.json" }), chunked: true } as any;
+	assert.equal((await page("https://client.example.org/chunked.json")).status, 200);
 	assert.ok(s.dnsQueries.includes("rebind.example.org/AAAA"));
 	for (let i = 0; i < 30; i++) await page(`https://client.example.org/none-${i}.json`, "192.0.2.77");
 	const limited = await page("https://client.example.org/none-x.json", "192.0.2.77");
@@ -646,4 +677,21 @@ test("isPublicIp: only global unicast addresses pass", () => {
 	for (const ip of ["10.1.2.3", "127.0.0.1", "172.16.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "224.0.0.1", "255.255.255.255",
 		"192.0.2.1", "198.18.0.1", "203.0.113.5", "300.1.1.1", "::1", "::", "fd00::1", "fe80::1", "::ffff:10.0.0.1", "::ffff:7f00:1",
 		"64:ff9b::a00:1", "2001:db8::1", "2002:a00:1::", "2001:0:4136:e378::1", "ff02::1", "example.org"]) assert.equal(M.isPublicIp(ip), false, ip);
+});
+
+test("parseHttpResponse: status, headers, content-length and chunked bodies; malformed input refused", () => {
+	const enc = (x: string) => new TextEncoder().encode(x);
+	const dec = (b: Uint8Array) => new TextDecoder().decode(b);
+	const ok = M.parseHttpResponse(enc("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nCache-Control: max-age=60\r\nContent-Length: 2\r\n\r\n{}extra"));
+	assert.ok(typeof ok !== "string");
+	assert.equal(ok.status, 200);
+	assert.equal(ok.headers["cache-control"], "max-age=60");
+	assert.equal(dec(ok.body), "{}");
+	const ch = M.parseHttpResponse(enc("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3;x=y\r\n{\"a\r\n4\r\n\":1}\r\n0\r\n\r\n"));
+	assert.ok(typeof ch !== "string");
+	assert.equal(dec(ch.body), '{"a":1}');
+	assert.equal(dec((M.parseHttpResponse(enc("HTTP/1.0 302 Found\r\nLocation: https://x.example.net/\r\n\r\n")) as any).body), "");
+	for (const bad of ["HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n{}", "HTTP/1.1 200 OK\r\n", "HTTP/2 200\r\n\r\n", "SSH-2.0-x\r\n\r\n",
+		"HTTP/1.1 200 OK\r\nno colon\r\n\r\n", "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n10\r\nshort", "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\n"])
+		assert.equal(typeof M.parseHttpResponse(enc(bad)), "string", JSON.stringify(bad));
 });

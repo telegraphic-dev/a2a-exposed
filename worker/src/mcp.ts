@@ -272,3 +272,47 @@ export const TOOLS: { name: string; title: string; description: string; inputSch
 export function toolText(header: string, data: unknown): string {
 	return `${header}\n${JSON.stringify(data, null, 2)}`;
 }
+
+/** Outbound TCP for the pinned CIMD fetch. null = the runtime's `cloudflare:sockets` connect(); tests put a fake here. */
+export type PinnedSocket = { readable: ReadableStream<Uint8Array>; writable: WritableStream<Uint8Array>; close(): Promise<void> };
+export const net: { connect: null | ((addr: { hostname: string; port: number }, opts: { secureTransport: "starttls" }) =>
+	{ startTls(o: { expectedServerHostname: string }): PinnedSocket }) } = { connect: null };
+
+/** Parse a raw HTTP/1.x response (Connection: close): status, lower-case headers, body (de-chunked). A string on error. */
+export function parseHttpResponse(raw: Uint8Array): { status: number; headers: Record<string, string>; body: Uint8Array } | string {
+	let end = -1;
+	for (let i = 0; i + 3 < raw.length; i++) if (raw[i] === 13 && raw[i + 1] === 10 && raw[i + 2] === 13 && raw[i + 3] === 10) { end = i; break; }
+	if (end < 0) return "incomplete response";
+	const lines = new TextDecoder("latin1").decode(raw.subarray(0, end)).split("\r\n");
+	const m = /^HTTP\/1\.[01] (\d{3})(?: .*)?$/.exec(lines[0]);
+	if (!m) return "not an HTTP/1.x response";
+	const headers: Record<string, string> = {};
+	for (const l of lines.slice(1)) {
+		const c = l.indexOf(":");
+		if (c <= 0) return "malformed header";
+		const k = l.slice(0, c).trim().toLowerCase(), v = l.slice(c + 1).trim();
+		headers[k] = k in headers ? `${headers[k]}, ${v}` : v;
+	}
+	let body = raw.subarray(end + 4);
+	if (/\bchunked\b/i.test(headers["transfer-encoding"] || "")) {
+		const out: number[] = [];
+		let i = 0;
+		for (;;) {
+			let j = i;
+			while (j + 1 < body.length && !(body[j] === 13 && body[j + 1] === 10)) j++;
+			if (j + 1 >= body.length) return "truncated chunked body";
+			const size = parseInt(new TextDecoder().decode(body.subarray(i, j)).split(";")[0].trim(), 16);
+			if (!Number.isFinite(size) || size < 0) return "malformed chunked body";
+			if (size === 0) break;
+			if (j + 2 + size > body.length) return "truncated chunked body";
+			for (const b of body.subarray(j + 2, j + 2 + size)) out.push(b);
+			i = j + 2 + size + 2;
+		}
+		body = new Uint8Array(out);
+	} else if (headers["content-length"] !== undefined) {
+		const n = Number(headers["content-length"]);
+		if (!Number.isInteger(n) || n < 0 || n > body.length) return "truncated body";
+		body = body.subarray(0, n);
+	}
+	return { status: Number(m[1]), headers, body };
+}

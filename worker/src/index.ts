@@ -1625,29 +1625,74 @@ function cimdTtlS(cc: string | null): number {
 	return Math.min(M.CIMD.maxTtlS, Math.max(M.CIMD.minTtlS, s));
 }
 
-/** DNS-rebinding guard for an outbound fetch: resolve the host over DNS-over-HTTPS (A and AAAA, CNAMEs followed by the
- *  resolver) and refuse unless it has addresses and every one is public. Fails closed on any DNS error. */
-async function publicAddressProblem(host: string, signal: AbortSignal): Promise<string> {
+/** DNS-rebinding guard, step 1: resolve the host over DNS-over-HTTPS (A and AAAA, CNAMEs followed by the resolver) and
+ *  refuse unless it has addresses and every one is public. Fails closed on any DNS error. The checked address is then the
+ *  one connected to (pinnedGet), so a later DNS answer can't redirect the request. */
+async function resolvePublic(host: string, signal: AbortSignal): Promise<{ ip?: string; problem?: string }> {
 	const h = host.replace(/^\[|\]$/g, "");
-	if (/^[\d.]+$/.test(h) || h.includes(":")) return M.isPublicIp(h) ? "" : "resolves to a private or reserved address";
+	if (/^[\d.]+$/.test(h) || h.includes(":")) return M.isPublicIp(h) ? { ip: h } : { problem: "resolves to a private or reserved address" };
 	const ips: string[] = [];
 	for (const type of ["A", "AAAA"]) {
 		let r: Json;
 		try {
 			const res = await fetch(`${M.CIMD.dohUrl}?name=${encodeURIComponent(h)}&type=${type}`, { headers: { accept: "application/dns-json" }, signal });
-			if (!res.ok) return "its address could not be checked";
+			if (!res.ok) return { problem: "its address could not be checked" };
 			r = await res.json();
-		} catch { return "its address could not be checked"; }
-		if (r?.Status !== 0 && !(r?.Status === 3 && type === "AAAA")) return r?.Status === 3 ? "the host does not exist" : "its address could not be checked";
+		} catch { return { problem: "its address could not be checked" }; }
+		if (r?.Status !== 0 && !(r?.Status === 3 && type === "AAAA")) return { problem: r?.Status === 3 ? "the host does not exist" : "its address could not be checked" };
 		for (const a of Array.isArray(r.Answer) ? r.Answer : []) if (a?.type === 1 || a?.type === 28) ips.push(String(a.data));
 	}
-	if (!ips.length) return "the host has no address";
-	return ips.every((ip) => M.isPublicIp(ip)) ? "" : "resolves to a private or reserved address";
+	if (!ips.length) return { problem: "the host has no address" };
+	return ips.every((ip) => M.isPublicIp(ip)) ? { ip: ips[0] } : { problem: "resolves to a private or reserved address" };
+}
+
+class TooLarge extends Error {}
+
+/** DNS-rebinding guard, step 2: GET an https URL over a TCP connection to the already-checked IP (TLS with SNI and
+ *  certificate verification for the URL's host), HTTP/1.1, Connection: close, no redirects, no credentials. Reads at most
+ *  `max` body bytes (+ 16 KB of headers); throws TooLarge beyond that and Error on anything else (incl. the timeout). */
+async function pinnedGet(ip: string, url: string, max: number, signal: AbortSignal): Promise<Response> {
+	const u = new URL(url);
+	const connect = M.net.connect ?? ((await import("cloudflare:sockets")).connect as unknown as NonNullable<typeof M.net.connect>);
+	const sock = connect({ hostname: ip, port: Number(u.port || 443) }, { secureTransport: "starttls" }).startTls({ expectedServerHostname: u.hostname });
+	const aborted = new Promise<never>((_, rej) => {
+		if (signal.aborted) rej(new Error("timeout"));
+		signal.addEventListener("abort", () => rej(new Error("timeout")), { once: true });
+	});
+	aborted.catch(() => {});
+	try {
+		const w = sock.writable.getWriter();
+		await Promise.race([w.write(new TextEncoder().encode(`GET ${u.pathname}${u.search} HTTP/1.1\r\nHost: ${u.host}\r\nAccept: application/json\r\n` +
+			`Accept-Encoding: identity\r\nUser-Agent: a2a-exposed (client metadata)\r\nConnection: close\r\n\r\n`)), aborted]);
+		w.releaseLock();
+		const r = sock.readable.getReader();
+		const chunks: Uint8Array[] = [];
+		let n = 0;
+		for (;;) {
+			const { done, value } = await Promise.race([r.read(), aborted]);
+			if (done) break;
+			n += value.byteLength;
+			if (n > max + 16384) throw new TooLarge();
+			chunks.push(value);
+		}
+		const raw = new Uint8Array(n);
+		let o = 0;
+		for (const c of chunks) { raw.set(c, o); o += c.byteLength; }
+		const p = M.parseHttpResponse(raw);
+		if (typeof p === "string") throw new Error(p);
+		if (p.body.byteLength > max) throw new TooLarge();
+		if (p.status < 200 || p.status > 599) throw new Error(`HTTP ${p.status}`);
+		const h = new Headers();
+		for (const [k, v] of Object.entries(p.headers)) if (!/^(content-length|transfer-encoding|connection)$/.test(k)) h.set(k, v);
+		return new Response(p.status === 204 || p.status === 304 ? null : p.body, { status: p.status, headers: h });
+	} finally {
+		sock.close().catch(() => {});
+	}
 }
 
 /** The OAuth client for a client_id: a dynamically registered one (mcpc_...), or, for an https URL, its Client ID Metadata
  *  Document (fetched with SSRF guards: public https host other than this Worker whose A/AAAA records are all public
- *  (DNS-over-HTTPS, against DNS rebinding), no redirects, no credentials, 5 s, 5 KB; cached for its
+ *  (DNS-over-HTTPS), connected to at that checked IP (no DNS rebinding), no redirects, no credentials, 5 s, 5 KB; cached for its
  *  max-age; failures and invalid documents are not cached). `ip` rate-limits fetches (not cached lookups). */
 async function resolveClient(env: Env, id: string, ip?: string): Promise<{ client?: Json; error?: string }> {
 	if (!id) return { error: "client_id is required" };
@@ -1663,11 +1708,15 @@ async function resolveClient(env: Env, id: string, ip?: string): Promise<{ clien
 	if (ip !== undefined && (await bump(env, `cimd:ip:${ip || "?"}`, 3600)) > M.CIMD.fetchesPerIpPerHour)
 		return { error: "Too many client metadata lookups from this address. Try again later." };
 	const signal = AbortSignal.timeout(M.CIMD.timeoutMs);
-	const dns = await publicAddressProblem(new URL(id).hostname, signal);
-	if (dns) { log("mcp_cimd_failed", { host: new URL(id).host, reason: `dns: ${dns}` }); return { error: `The client's metadata URL is not acceptable: ${dns}.` }; }
+	const dns = await resolvePublic(new URL(id).hostname, signal);
+	if (!dns.ip) { log("mcp_cimd_failed", { host: new URL(id).host, reason: `dns: ${dns.problem}` }); return { error: `The client's metadata URL is not acceptable: ${dns.problem}.` }; }
 	let res: Response;
-	try { res = await fetch(id, { headers: { accept: "application/json" }, redirect: "manual", signal }); }
-	catch { log("mcp_cimd_failed", { host: new URL(id).host, reason: "unreachable" }); return { error: "The client's metadata document could not be fetched." }; }
+	try { res = await pinnedGet(dns.ip, id, M.CIMD.maxBytes, signal); }
+	catch (e) {
+		if (e instanceof TooLarge) return { error: `The client's metadata document is larger than ${M.CIMD.maxBytes} bytes.` };
+		log("mcp_cimd_failed", { host: new URL(id).host, reason: "unreachable" });
+		return { error: "The client's metadata document could not be fetched." };
+	}
 	if (res.status !== 200) {
 		log("mcp_cimd_failed", { host: new URL(id).host, reason: `HTTP ${res.status}` });
 		return { error: `The client's metadata document could not be fetched${res.status >= 300 && res.status < 400 ? " (redirects are not followed)" : ""}.` };
