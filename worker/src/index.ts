@@ -10,6 +10,7 @@ import { renderWake, redact, cloudflareErrorHint, defaultDebounceSeconds, defaul
 import * as P from "./pairing.ts";
 import * as M from "./mcp.ts";
 import { resolveTenant, type TenantContext, type WorkerBindings } from "./tenancy.ts";
+import * as O from "./approval-oidc.ts";
 type Json = any;
 
 class RpcError extends Error {
@@ -1061,6 +1062,7 @@ function oauthMetadata(ctx: TenantContext): Json {
 const pairingCleanup = (ctx: TenantContext, now: number) => [
 	ctx.DB.prepare("DELETE FROM device_requests WHERE expires_ms < ?").bind(now - 86400000),
 	ctx.DB.prepare("DELETE FROM pairing_rate WHERE expires_ms < ?").bind(now),
+	ctx.DB.prepare("DELETE FROM oidc_txns WHERE expires_ms < ?").bind(now),
 ];
 
 /** Fixed-window counter: increments and returns the count for `key` in the current window (peek: no increment). */
@@ -1224,6 +1226,17 @@ const pageRequest = (r: Json): P.PageRequest => ({ userCode: r.user_code, client
 	agentCardUrl: r.agent_card_url || "", ip: r.ip || "", country: r.country || "", createdMs: r.created_ms, expiresMs: r.expires_ms,
 	replacesLabel: r.replaces_label || undefined });
 
+/** Optional page fields. Omitted when they would not change today's HTML. */
+function approvalPageBits(ctx: TenantContext): { oidc?: { label: string }; passwordEnabled?: boolean } {
+	const p = O.approvalPolicy(ctx.gates.approvalOidc);
+	const bits: { oidc?: { label: string }; passwordEnabled?: boolean } = {};
+	if (p.oidc) bits.oidc = { label: p.label };
+	if (!p.password) bits.passwordEnabled = false;
+	return bits;
+}
+
+const redirect302 = (location: string) => new Response(null, { status: 302, headers: { location, "cache-control": "no-store", pragma: "no-cache", "referrer-policy": "no-referrer" } });
+
 async function approvalPassword(ctx: TenantContext): Promise<P.PasswordRecord | null> {
 	const r: Json = await ctx.DB.prepare("SELECT value FROM settings WHERE key = 'approval_password'").first();
 	try { return r ? JSON.parse(r.value) : null; } catch { return null; }
@@ -1245,7 +1258,7 @@ async function devicePage(req: Request, ctx: TenantContext, url: URL): Promise<R
 	const fresh = !/^[A-Za-z0-9_-]{24}$/.test(csrf);
 	if (fresh) csrf = P.randomB64();
 	const pw = await approvalPassword(ctx);
-	const model: P.PageModel = { agentName: ctx.AGENT_NAME || "this A2A inbox", mode: pairingMode(ctx), cli: cliCommand(ctx), csrf, passwordSet: !!pw };
+	const model: P.PageModel = { agentName: ctx.AGENT_NAME || "this A2A inbox", mode: pairingMode(ctx), cli: cliCommand(ctx), csrf, passwordSet: !!pw, ...approvalPageBits(ctx) };
 	const send = (status = 200) => {
 		const h: Record<string, string> = P.pageHeaders(nonce);
 		h["set-cookie"] = `${csrfName}=${csrf}; Path=/device; Secure; HttpOnly; SameSite=Strict; Max-Age=3600`;
@@ -1298,6 +1311,22 @@ async function devicePage(req: Request, ctx: TenantContext, url: URL): Promise<R
 		model.notice = { kind: "ok", text: `Denied. ${r0.client_name || r0.client_id || "the agent"} gets no token.` };
 		return send();
 	}
+	if (form.decision === "oidc") {
+		const pending = await pendingRequest(ctx, code);
+		if (!pending || pending.status !== "pending" || Date.now() >= pending.expires_ms) { await show(form.user_code); return send(404); }
+		const started = await O.startOidc(ctx, { kind: "device", redirectUri: `${oauthUrls(ctx).page}/oidc/callback`, csrf, userCode: code, payload: {} });
+		if (!started.ok) {
+			log("oidc_rejected", { kind: "device", reason: started.reason });
+			await show(form.user_code, { kind: "error", text: started.error });
+			return send(started.reason === "config" ? 400 : 502);
+		}
+		log("oidc_start", { kind: "device", issuer: O.issuerHost(ctx.gates.approvalOidc.issuer) });
+		return redirect302(started.location);
+	}
+	if (!O.approvalPolicy(ctx.gates.approvalOidc).password) {
+		await show(form.user_code, { kind: "error", text: "Password approval is turned off. Use the identity provider, or deny." });
+		return send(400);
+	}
 	if (!pw) { await show(form.user_code); return send(409); }
 	// an empty password is a slip, not a guess: no PBKDF2, no attempt counted
 	if (!form.password) { await show(form.user_code, { kind: "error", text: "Enter the approval password to approve (deny works without it)." }); return send(400); }
@@ -1327,6 +1356,37 @@ async function devicePage(req: Request, ctx: TenantContext, url: URL): Promise<R
 	if (!d.ok) { await show(null, { kind: "error", text: d.error! }); return send(409); }
 	const who = r.client_name || r.client_id || "the agent";
 	model.notice = { kind: "ok", text: `Approved. ${who} can now collect its token (label "${d.label}"${d.replaced ? ", replacing its old token" : ""}). Revoke it any time: ${cliCommand(ctx)} token revoke ${d.label}` };
+	return send();
+}
+
+/** GET /device/oidc/callback: the identity provider returns here. State is the CSRF; the cookie is not re-checked. */
+async function deviceOidcCallback(req: Request, ctx: TenantContext, url: URL): Promise<Response> {
+	const nonce = P.randomB64();
+	const pw = await approvalPassword(ctx);
+	const model: P.PageModel = { agentName: ctx.AGENT_NAME || "this A2A inbox", mode: pairingMode(ctx), cli: cliCommand(ctx), csrf: P.randomB64(), passwordSet: !!pw, ...approvalPageBits(ctx) };
+	const send = (status = 200) => {
+		const h: Record<string, string> = P.pageHeaders(nonce);
+		h["set-cookie"] = `a2a_device_csrf=${model.csrf}; Path=/device; Secure; HttpOnly; SameSite=Strict; Max-Age=3600`;
+		return new Response(P.devicePage(model, nonce), { status, headers: h });
+	};
+	const done = await O.finishOidc(ctx, {
+		kind: "device", redirectUri: `${oauthUrls(ctx).page}/oidc/callback`,
+		state: url.searchParams.get("state") || "", code: url.searchParams.get("code"), error: url.searchParams.get("error"),
+	});
+	if (!done.ok) {
+		log("oidc_rejected", { kind: "device", reason: done.reason });
+		if (done.userCode) {
+			const pending = await pendingRequest(ctx, done.userCode);
+			if (pending && pending.status === "pending" && Date.now() < pending.expires_ms) model.request = pageRequest(pending);
+		}
+		model.notice = { kind: "error", text: done.error };
+		return send(400);
+	}
+	const d = await decide(ctx, done.userCode || "", true, "oidc");
+	if (!d.ok) { model.notice = { kind: "error", text: d.error! }; return send(409); }
+	const who = d.request.client_name || d.request.client_id || "the agent";
+	model.notice = { kind: "ok", text: `Approved. ${who} can now collect its token (label "${d.label}"${d.replaced ? ", replacing its old token" : ""}). Revoke it any time: ${cliCommand(ctx)} token revoke ${d.label}` };
+	log("oidc_approved", { kind: "device" });
 	return send();
 }
 
@@ -1424,8 +1484,11 @@ async function ownerPairing(req: Request, ctx: TenantContext, m: string, seg: st
 		const linkLive = setup && now < setup.rec.expiresMs && setup.rec.failures < P.LIMITS.setupFailures;
 		// with pairing off, leftover requests can't be approved or redeemed (every pairing endpoint is 404): don't list them
 		const pending = mode === "off" ? [] : (rows.results as Json[]);
+		const policy = O.approvalPolicy(ctx.gates.approvalOidc);
 		return json({ mode, passwordSet: !!pw, passwordSetAt: pw?.setAt || null, passwordSetVia: pw ? pw.setVia || "terminal" : null,
 			passwordIterations: pw?.iterations || null, pbkdf2Iterations: P.pbkdf2Iterations(ctx.PBKDF2_ITERATIONS),
+			approvalMethods: [...(policy.password ? ["password"] : []), ...(policy.oidc ? ["oidc"] : [])],
+			oidcIssuer: policy.oidc ? O.issuerHost(ctx.gates.approvalOidc.issuer) : null,
 			setupLinkExpiresAt: linkLive ? new Date(setup!.rec.expiresMs).toISOString() : null, verificationUri: oauthUrls(ctx).page,
 			pending: pending.map((r) => ({ userCode: P.formatUserCode(r.user_code), clientName: r.client_name, clientId: r.client_id,
 				agentCardUrl: r.agent_card_url, ip: r.ip, country: r.country, createdAt: new Date(r.created_ms).toISOString(),
@@ -1756,7 +1819,7 @@ async function authorizePage(req: Request, ctx: TenantContext, url: URL): Promis
 	const origin = new URL(c.redirect!).origin;
 	const show = (status: number, notice?: M.ConsentModel["notice"]) => page(status, M.consentBody({ agentName: ctx.AGENT_NAME || "this A2A inbox", cli: cliCommand(ctx),
 		csrf, clientName: c.client!.client_name || "", clientIdHost: c.client!.cimd ? new URL(c.client!.client_id).host : undefined,
-		redirectUri: c.redirect!, params: c.params, passwordSet: !!pw, notice }), origin);
+		redirectUri: c.redirect!, params: c.params, passwordSet: !!pw, ...approvalPageBits(ctx), notice }), origin);
 	if (req.method === "GET") return show(200);
 	const reqOrigin = req.headers.get("origin");
 	if ((reqOrigin && reqOrigin !== "null" && reqOrigin !== new URL(ctx.PUBLIC_URL).origin && reqOrigin !== url.origin) || fresh || !form.csrf || !A.timingSafeEqualStr(form.csrf, csrf))
@@ -1765,7 +1828,21 @@ async function authorizePage(req: Request, ctx: TenantContext, url: URL): Promis
 		log("mcp_authorization_denied", { ip, clientName: c.client!.client_name });
 		return redirectWith(ctx, c.redirect!, { error: "access_denied", error_description: "the inbox owner denied access", state: c.params.state });
 	}
+	if (form.decision === "oidc") {
+		const started = await O.startOidc(ctx, {
+			kind: "mcp", redirectUri: `${oauthUrls(ctx).authorize}/oidc/callback`, csrf, userCode: null,
+			payload: { params: c.params, redirect: c.redirect, clientName: c.client!.client_name || "" },
+		});
+		if (!started.ok) {
+			log("oidc_rejected", { kind: "mcp", reason: started.reason });
+			return show(started.reason === "config" ? 400 : 502, { kind: "error", text: started.error });
+		}
+		log("oidc_start", { kind: "mcp", issuer: O.issuerHost(ctx.gates.approvalOidc.issuer) });
+		return redirect302(started.location);
+	}
 	if (form.decision !== "approve") return show(400);
+	if (!O.approvalPolicy(ctx.gates.approvalOidc).password)
+		return show(400, { kind: "error", text: "Password approval is turned off. Use the identity provider, or deny." });
 	if (!pw) return show(409);
 	if (!form.password) return show(400, { kind: "error", text: "Enter the approval password to approve (deny works without it)." });
 	const ipKey = `pw:ip:${ip || "?"}`;
@@ -1779,14 +1856,43 @@ async function authorizePage(req: Request, ctx: TenantContext, url: URL): Promis
 		log("mcp_wrong_password", { ip });
 		return show(403, { kind: "error", text: "Wrong password." });
 	}
+	const issued = await issueMcpCode(ctx, c.client!.client_name || "", c.redirect!, c.params, ip);
+	if (!issued.ok) return show(409, { kind: "error", text: issued.error });
+	return issued.response;
+}
+
+/** Issue the MCP authorization code after the owner has approved (password or OpenID Connect). */
+async function issueMcpCode(ctx: TenantContext, clientName: string, redirect: string, params: Record<string, string>, ip: string, via = ""): Promise<{ ok: true; response: Response } | { ok: false; error: string }> {
 	const active: Json = await ctx.DB.prepare("SELECT COUNT(*) AS n FROM mcp_grants WHERE revoked_at IS NULL").first();
 	if ((active?.n ?? 0) >= M.LIMITS.maxGrants)
-		return show(409, { kind: "error", text: `This inbox already has ${M.LIMITS.maxGrants} MCP connectors. Revoke one first: ${cliCommand(ctx)} token list, then token revoke <label>.` });
+		return { ok: false, error: `This inbox already has ${M.LIMITS.maxGrants} MCP connectors. Revoke one first: ${cliCommand(ctx)} token list, then token revoke <label>.` };
 	const code = A.randomToken("a2amcpc_"), now = Date.now();
 	await ctx.DB.prepare("INSERT INTO oauth_codes (code_hash, client_id, redirect_uri, code_challenge, scope, resource, created_ms, expires_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-		.bind(await A.sha256(code), c.params.client_id, c.redirect, c.params.code_challenge, c.params.scope, c.params.resource || oauthUrls(ctx).mcp, now, now + M.CODE_TTL_S * 1000).run();
-	log("mcp_authorization_approved", { ip, clientName: c.client!.client_name, redirectHost: new URL(c.redirect!).host });
-	return redirectWith(ctx, c.redirect!, { code, state: c.params.state });
+		.bind(await A.sha256(code), params.client_id, redirect, params.code_challenge, params.scope, params.resource || oauthUrls(ctx).mcp, now, now + M.CODE_TTL_S * 1000).run();
+	log("mcp_authorization_approved", { ip, clientName, redirectHost: new URL(redirect).host, ...(via === "oidc" ? { via } : {}) });
+	return { ok: true, response: redirectWith(ctx, redirect, { code, state: params.state }) };
+}
+
+/** GET /oauth/authorize/oidc/callback. Same state binding as the pairing callback; then the existing code redirect. */
+async function mcpOidcCallback(req: Request, ctx: TenantContext, url: URL): Promise<Response> {
+	const nonce = P.randomB64();
+	const fail = (status: number, text: string) => new Response(P.pageShell("Connect an MCP client", nonce, `<p class="n error">${P.esc(text)}</p>`), { status, headers: P.pageHeaders(nonce) });
+	const done = await O.finishOidc(ctx, {
+		kind: "mcp", redirectUri: `${oauthUrls(ctx).authorize}/oidc/callback`,
+		state: url.searchParams.get("state") || "", code: url.searchParams.get("code"), error: url.searchParams.get("error"),
+	});
+	if (!done.ok) {
+		log("oidc_rejected", { kind: "mcp", reason: done.reason });
+		return fail(400, done.error);
+	}
+	const params = done.payload.params;
+	const stored = params && typeof params === "object" && !Array.isArray(params) ? params as Record<string, string> : {};
+	const c = await checkAuthorize(ctx, stored, clientIp(req));
+	if (c.fatal || c.error || !c.redirect || !c.client) return fail(400, "This connection can no longer be approved. Start again from the MCP client.");
+	const issued = await issueMcpCode(ctx, String(done.payload.clientName || c.client.client_name || ""), c.redirect, c.params, clientIp(req), "oidc");
+	if (!issued.ok) return fail(409, issued.error);
+	log("oidc_approved", { kind: "mcp" });
+	return issued.response;
 }
 
 async function newGrantTokens() {
@@ -2147,18 +2253,20 @@ async function handle(req: Request, ctx: TenantContext, ectx: ExecutionContext):
 			if (req.method === "GET" && path === "/.well-known/oauth-protected-resource/mcp") return json(mcpResourceMetadata(ctx), 200, { "access-control-allow-origin": "*" });
 			if (req.method === "GET" && path === "/.well-known/oauth-authorization-server") return json(oauthMetadata(ctx), 200, { "access-control-allow-origin": "*" });
 			if (req.method === "POST" && path === "/oauth/register") return await registerClient(req, ctx);
+			if (req.method === "GET" && path === "/oauth/authorize/oidc/callback") return await mcpOidcCallback(req, ctx, url);
 			if ((req.method === "GET" || req.method === "POST") && path === "/oauth/authorize") return await authorizePage(req, ctx, url);
 			if (req.method === "POST" && path === "/oauth/revoke") return await revokeEndpoint(req, ctx);
 			if (req.method === "POST" && path === "/oauth/token") return await tokenEndpoint(req, ctx);
 			if (path === "/device/setup" && (req.method === "GET" || req.method === "POST")) return await setupPage(req, ctx, url);
 		}
-		if (path === "/.well-known/oauth-authorization-server" || path === "/.well-known/oauth-protected-resource" || path.startsWith("/oauth/") || path === "/device" || path === "/device/setup") {
+		if (path === "/.well-known/oauth-authorization-server" || path === "/.well-known/oauth-protected-resource" || path.startsWith("/oauth/") || path === "/device" || path === "/device/setup" || path === "/device/oidc/callback") {
 			if (!pairingOn(ctx)) return json({ error: "not_found", error_description: "device-flow pairing is disabled on this inbox (PAIRING_APPROVAL=off); ask its operator for a token" }, 404);
 			if (req.method === "GET" && path === "/.well-known/oauth-authorization-server") return json(oauthMetadata(ctx), 200, { "access-control-allow-origin": "*" });
 			if (req.method === "GET" && path === "/.well-known/oauth-protected-resource") return json(protectedResourceMetadata(ctx), 200, { "access-control-allow-origin": "*" });
 			if (req.method === "POST" && path === "/oauth/device_authorization") return await deviceAuthorization(req, ctx, ectx);
 			if (req.method === "POST" && path === "/oauth/token") return await tokenEndpoint(req, ctx);
 			if (path === "/device" && (req.method === "GET" || req.method === "POST")) return await devicePage(req, ctx, url);
+			if (req.method === "GET" && path === "/device/oidc/callback") return await deviceOidcCallback(req, ctx, url);
 			if (path === "/device/setup" && (req.method === "GET" || req.method === "POST")) return await setupPage(req, ctx, url);
 			return json({ error: "not found" }, 404);
 		}

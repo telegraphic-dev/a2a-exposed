@@ -11,6 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseEnv } from "../lib/config.mjs";
+import { deploySecretsFromEnv } from "../lib/deploy.mjs";
 import { deviceEndpointsFromCard, passwordRecord } from "../lib/pair.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -316,4 +317,46 @@ test("init --pairing-approval only takes human, agent or off", async (t) => {
 	const r = await s.cli(["init", "--pairing-approval", "auto", "--skip-install"]);
 	assert.equal(r.status, 1);
 	assert.match(r.stderr, /--pairing-approval must be one of human \| agent \| off/);
+});
+
+test("pair set-oidc writes non-secrets and refuses a secret argument", async (t) => {
+	const s = sandbox(t);
+	let r = await s.cli(["pair", "set-oidc", "--issuer", "https://idp.example", "--client-id", "cid", "--subjects", "a@example.com", "--client-secret", "nope"]);
+	assert.equal(r.status, 1);
+	assert.match(r.stderr, /client secret is not a flag/);
+	assert.equal(s.config().APPROVAL_OIDC_ISSUER, undefined);
+	assert.equal(JSON.stringify(s.config()).includes("nope"), false);
+
+	r = await s.cli(["pair", "set-oidc", "--issuer", "http://idp.example", "--client-id", "cid", "--subjects", "a@example.com"], { extraEnv: { APPROVAL_OIDC_CLIENT_SECRET: "super-secret" } });
+	assert.equal(r.status, 1);
+	assert.match(r.stderr, /https/);
+
+	r = await s.cli(["pair", "set-oidc", "--issuer", "https://idp.example", "--client-id", "cid", "--subjects", "a@example.com", "--methods", "oidc,password"], { extraEnv: { APPROVAL_OIDC_CLIENT_SECRET: "super-secret" } });
+	assert.equal(r.status, 0, r.stderr);
+	assert.equal(s.config().APPROVAL_OIDC_ISSUER, "https://idp.example");
+	assert.equal(s.config().APPROVAL_OIDC_CLIENT_ID, "cid");
+	assert.equal(s.config().APPROVAL_OIDC_ALLOWED_SUBJECTS, "a@example.com");
+	assert.equal(s.config().APPROVAL_METHODS, "oidc,password");
+	assert.equal(s.config().APPROVAL_OIDC_CLIENT_SECRET, undefined);
+	assert.equal(r.stdout.includes("super-secret") || r.stderr.includes("super-secret"), false);
+	assert.match(r.stderr, /not written/);
+	assert.match(r.stderr, /npx -y a2a-exposed@latest deploy/);
+
+	r = await s.cli(["pair", "set-oidc", "--issuer", "https://idp.example", "--client-id", "cid", "--subjects", "b@example.com", "--secret-stdin"], { input: "stdin-secret\n", extraEnv: { APPROVAL_OIDC_CLIENT_SECRET: "" } });
+	assert.equal(r.status, 0, r.stderr);
+	assert.equal(s.config().APPROVAL_OIDC_ALLOWED_SUBJECTS, "b@example.com");
+	assert.equal(s.config().APPROVAL_OIDC_CLIENT_SECRET, undefined);
+	assert.equal(r.stdout.includes("stdin-secret") || r.stderr.includes("stdin-secret"), false);
+	assert.match(r.stderr, /Export APPROVAL_OIDC_CLIENT_SECRET/);
+});
+
+test("deploy uploads APPROVAL_OIDC_CLIENT_SECRET from the environment", () => {
+	const prev = process.env.APPROVAL_OIDC_CLIENT_SECRET;
+	process.env.APPROVAL_OIDC_CLIENT_SECRET = "uploaded-secret";
+	try {
+		assert.equal(deploySecretsFromEnv().APPROVAL_OIDC_CLIENT_SECRET, "uploaded-secret");
+	} finally {
+		if (prev === undefined) delete process.env.APPROVAL_OIDC_CLIENT_SECRET;
+		else process.env.APPROVAL_OIDC_CLIENT_SECRET = prev;
+	}
 });

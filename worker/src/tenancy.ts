@@ -8,7 +8,8 @@
 // owner_token_hash, and the peer-token key is derived from TENANT_SECRETS_KEY and the tenant id. The Worker
 // fetch path does not build that overlay; the hosted router does, and only when TENANCY=host and TENANT_DO are
 // both set. Settings below are parsed either way. Nothing here turns on quotas, metering, wake policy, branding
-// or approval OIDC — those stay reserved until a later change reads ctx.gates.
+// those stay reserved until a later change reads ctx.gates. Approval OIDC is enforced by the approval pages when
+// the issuer, client id, client secret and an allowlist are all set (approval-oidc.ts).
 
 import * as A from "./a2a.ts";
 
@@ -79,9 +80,9 @@ export interface WorkerBindings extends ConfigFields {
 	APPROVAL_OIDC_ISSUER?: string;
 	APPROVAL_OIDC_CLIENT_ID?: string;
 	APPROVAL_OIDC_CLIENT_SECRET?: string;
-	/** Comma-separated `sub` values. Parsed, not applied to /device or /oauth/authorize yet. */
+	/** Comma-separated `sub` or `email` values allowed to approve. Email matches only when `email_verified` is true. */
 	APPROVAL_OIDC_ALLOWED_SUBJECTS?: string;
-	/** Comma-separated: password, oidc. Unset = password only, which is today's approval. */
+	/** Comma-separated: password, oidc. Unset keeps the password and also offers OIDC once it is fully configured. */
 	APPROVAL_METHODS?: string;
 }
 
@@ -105,11 +106,15 @@ export interface ApprovalOidcGate {
 	/** Issuer URL, or "" when unset / not https. */
 	issuer: string;
 	clientId: string;
-	/** True when a client secret binding is present. The secret itself stays off the context. */
+	/** True when a client secret is present. The secret itself stays off the gate. */
 	hasClientSecret: boolean;
 	allowedSubjects: string[];
-	/** Unset → ["password"] (today). Not consulted by the approval pages yet. */
+	/** Unset → ["password"]. See `methodsSpecified` for whether that default was explicit. */
 	methods: string[];
+	/** True only when the setting listed at least one of password or oidc. Unset is false. */
+	methodsSpecified: boolean;
+	/** Short button label from hosted approval config, or "". */
+	label: string;
 }
 
 export interface FeatureGates {
@@ -182,12 +187,51 @@ function httpsUrl(v: string | undefined): string {
 	} catch { return ""; }
 }
 
+const LABEL_MAX = 40;
+
+function recognizedMethods(raw: string[]): { methods: string[]; specified: boolean } {
+	const methods = raw.map((s) => s.trim().toLowerCase()).filter((s) => s === "password" || s === "oidc");
+	return { methods: methods.length ? methods : ["password"], specified: methods.length > 0 };
+}
+
+function shortLabel(v: unknown): string {
+	if (typeof v !== "string") return "";
+	const s = v.trim();
+	if (!s || s.length > LABEL_MAX || /[\u0000-\u001f<>]/.test(s)) return "";
+	return s;
+}
+
+function subjectsOf(v: unknown): string[] {
+	const list = Array.isArray(v) ? v.filter((s): s is string => typeof s === "string") : typeof v === "string" ? csv(v) : [];
+	return list.map((s) => s.trim()).filter(Boolean).slice(0, 100);
+}
+
+/** Approval gate from a hosted tenant's pushed `approval` object (camelCase). The client secret is returned beside the gate. */
+export function approvalFromRecord(raw: Record<string, unknown> | undefined): { gate: ApprovalOidcGate; clientSecret: string; publicRecord: Record<string, unknown> } {
+	const { methods, specified } = recognizedMethods(Array.isArray(raw?.methods) ? raw!.methods.map((s) => String(s)) : typeof raw?.methods === "string" ? csv(raw.methods) : []);
+	const clientSecret = typeof raw?.clientSecret === "string" ? raw.clientSecret.trim() : "";
+	const publicRecord: Record<string, unknown> = raw ? { ...raw } : {};
+	delete publicRecord.clientSecret;
+	delete publicRecord.client_secret;
+	return {
+		clientSecret,
+		publicRecord,
+		gate: {
+			issuer: httpsUrl(typeof raw?.issuer === "string" ? raw.issuer : ""),
+			clientId: typeof raw?.clientId === "string" ? raw.clientId.trim() : "",
+			hasClientSecret: !!clientSecret,
+			allowedSubjects: subjectsOf(raw?.allowedSubjects),
+			methods, methodsSpecified: specified, label: shortLabel(raw?.label),
+		},
+	};
+}
+
 /** Exact tokens only. Anything else is the unset behaviour, so a typo cannot turn a gate on. */
 export function parseGates(env: WorkerBindings): ParsedGates {
 	const tenancy: TenancyMode = env.TENANCY === "host" ? "host" : "single";
 	const regionRaw = (env.DATA_REGION || "").trim().toLowerCase();
 	const dataRegion: DataRegion = regionRaw === "eu" || regionRaw === "fedramp" ? regionRaw : "";
-	const methods = csv(env.APPROVAL_METHODS).map((s) => s.toLowerCase()).filter((s) => s === "password" || s === "oidc");
+	const parsedMethods = recognizedMethods(csv(env.APPROVAL_METHODS));
 	return {
 		secretsKey: (env.TENANT_SECRETS_KEY || "").trim() || undefined,
 		gates: {
@@ -205,7 +249,9 @@ export function parseGates(env: WorkerBindings): ParsedGates {
 				clientId: (env.APPROVAL_OIDC_CLIENT_ID || "").trim(),
 				hasClientSecret: !!(env.APPROVAL_OIDC_CLIENT_SECRET || "").trim(),
 				allowedSubjects: csv(env.APPROVAL_OIDC_ALLOWED_SUBJECTS),
-				methods: methods.length ? methods : ["password"],
+				methods: parsedMethods.methods,
+				methodsSpecified: parsedMethods.specified,
+				label: "",
 			},
 		},
 	};
@@ -281,12 +327,15 @@ export class TenantContext implements ConfigFields {
 	/** Hosted only: lowercase hex SHA-256 of the owner token (the same hash peer tokens use, not PBKDF2). */
 	readonly #ownerTokenHash?: string;
 	readonly #secretsKey?: string;
+	/** OpenID Connect client secret. Never logged and never copied onto `gates`. */
+	readonly #approvalClientSecret?: string;
 	#peerKey: Promise<CryptoKey | null> | null = null;
 
 	constructor(init: {
 		id: string; mode: TenancyMode; status: string; db: SqlDb; publicUrl: string;
 		gates: FeatureGates; limits: Record<string, unknown>; approval: Record<string, unknown>;
 		config: ConfigFields; ownerToken?: string; ownerTokenHash?: string; secretsKey?: string;
+		approvalClientSecret?: string;
 	}) {
 		this.id = init.id;
 		this.mode = init.mode;
@@ -299,7 +348,13 @@ export class TenantContext implements ConfigFields {
 		this.#ownerToken = init.ownerToken;
 		this.#ownerTokenHash = init.ownerTokenHash;
 		this.#secretsKey = init.secretsKey;
+		this.#approvalClientSecret = init.approvalClientSecret;
 		Object.assign(this, init.config);
+	}
+
+	/** OpenID Connect client secret, or "" when unset. Callers must not log the return value. */
+	approvalClientSecret(): string {
+		return this.#approvalClientSecret || "";
 	}
 
 	/**
@@ -347,6 +402,7 @@ export function resolveTenant(env: WorkerBindings, req?: Request): TenantContext
 		id: "", mode: "single", status: "active", db: env.DB, publicUrl, gates,
 		limits: {}, approval: {}, config: pickConfig(env, CONFIG_KEYS),
 		ownerToken: env.OWNER_TOKEN, secretsKey: undefined,
+		approvalClientSecret: (env.APPROVAL_OIDC_CLIENT_SECRET || "").trim(),
 	});
 }
 
@@ -363,9 +419,13 @@ export function hostedTenantContext(env: WorkerBindings, overlay: HostedOverlay)
 		if (typeof v === "string") config[k] = v;
 	}
 	const hash = (overlay.ownerTokenHash || "").trim().toLowerCase();
+	// Hosted approval is the pushed tenant object only. Worker APPROVAL_OIDC_* does not approve a tenant.
+	const approval = approvalFromRecord(overlay.approval);
 	return new TenantContext({
 		id: overlay.id, mode: "host", status: overlay.status || "active", db: overlay.db,
-		publicUrl: overlay.publicUrl, gates: parsed.gates, limits: overlay.limits || {}, approval: overlay.approval || {},
+		publicUrl: overlay.publicUrl, gates: { ...parsed.gates, approvalOidc: approval.gate },
+		limits: overlay.limits || {}, approval: approval.publicRecord,
 		config, ownerTokenHash: hash || undefined, secretsKey: parsed.secretsKey,
+		approvalClientSecret: approval.clientSecret,
 	});
 }

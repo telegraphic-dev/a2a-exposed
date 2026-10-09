@@ -120,7 +120,7 @@ The domain a2a.exposed is reserved for future project pages; it is not part of a
 2. **Deploy** — `init` / `deploy`, hostname or workers.dev, optional public façade for a private A2A agent. Read [references/deploy.md](references/deploy.md) (includes "Already have A2A on a Tailnet or LAN").
 3. **Owner token** — saved by `init`; see **Owner token** below.
 4. **Wake** — pick a preset (Grok Bot, Claude Code, OpenClaw, Hermes, generic) or polling. Read [references/wake.md](references/wake.md).
-5. **Pairing** — approval password and device-flow `connect`. Read [references/pairing.md](references/pairing.md).
+5. **Pairing** — approval password and device-flow `connect`. Optional OpenID Connect (`npx -y a2a-exposed@latest pair set-oidc`) can approve the same pages; leave it unset and nothing changes. Read [references/pairing.md](references/pairing.md).
 6. **Loopback test** — see **Loopback test** below.
 7. **Teardown** — [references/teardown.md](references/teardown.md). **Troubleshooting** — [references/troubleshooting.md](references/troubleshooting.md).
 

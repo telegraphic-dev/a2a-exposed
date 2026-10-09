@@ -201,7 +201,8 @@ export async function collect() {
 				const pr = await owner("GET", "/owner/pairing");
 				if (pr && typeof pr === "object" && ["human", "agent", "off"].includes(pr.mode))
 					s.pairing = { mode: pr.mode, passwordSet: !!pr.passwordSet, passwordSetAt: pr.passwordSetAt || null, passwordSetVia: pr.passwordSetVia || null,
-						setupLinkExpiresAt: pr.setupLinkExpiresAt || null, pending: (pr.pending || []).length };
+						setupLinkExpiresAt: pr.setupLinkExpiresAt || null, pending: (pr.pending || []).length,
+						...(typeof pr.oidcIssuer === "string" && pr.oidcIssuer ? { oidcIssuer: pr.oidcIssuer } : {}) };
 			} catch { /* older Worker (no pairing yet): leave unknown */ }
 			if (s.upstream) {
 				try { s.facade = await owner("GET", "/owner/facade"); }
@@ -302,7 +303,7 @@ export async function status(o) {
 			if (s.zones) rows.push(["zones", s.zones.length ? s.zones.join(", ") : "none on this account"]);
 			const pg = s.pairing;
 			if (pg) rows.push(["pairing", pg.mode === "off" ? "off (token issue only)"
-				: `${pg.mode} approval; approval password ${pg.passwordSet ? `set${pg.passwordSetAt ? ` ${pg.passwordSetAt}` : ""}${pg.passwordSetVia ? ` (via ${pg.passwordSetVia})` : ""}` : `NOT SET${pg.setupLinkExpiresAt ? ` (a setup link is open until ${pg.setupLinkExpiresAt})` : ""}`}${pg.pending ? `; ${pg.pending} pending request(s): ${CLI} pair list` : ""}`]);
+				: `${pg.mode} approval; approval password ${pg.passwordSet ? `set${pg.passwordSetAt ? ` ${pg.passwordSetAt}` : ""}${pg.passwordSetVia ? ` (via ${pg.passwordSetVia})` : ""}` : `NOT SET${pg.setupLinkExpiresAt ? ` (a setup link is open until ${pg.setupLinkExpiresAt})` : ""}`}${pg.oidcIssuer ? `; OpenID Connect (${pg.oidcIssuer})` : ""}${pg.pending ? `; ${pg.pending} pending request(s): ${CLI} pair list` : ""}`]);
 		}
 		rows.push(["next step", next.text]);
 		for (const a of next.also || []) rows.push(["also", a]);
