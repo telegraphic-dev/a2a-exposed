@@ -31,7 +31,9 @@ export const WAKE_SECRETS = ["WAKE_WEBHOOK_URL", "WAKE_WEBHOOK_KEY", "WAKE_HMAC_
 // Proxy / expose mode (--upstream): the one credential the façade presents to the private upstream (Bearer), and the
 // Cloudflare Access service token for the upstream's tunnel hostname. Read from the environment only (never argv).
 export const UPSTREAM_SECRETS = ["UPSTREAM_TOKEN", "UPSTREAM_ACCESS_CLIENT_ID", "UPSTREAM_ACCESS_CLIENT_SECRET"];
-const DEPLOY_SECRETS = [...WAKE_SECRETS, ...UPSTREAM_SECRETS];
+/** OpenID Connect client secret for approval. Environment only; never config.env. */
+export const OIDC_SECRETS = ["APPROVAL_OIDC_CLIENT_SECRET"];
+const DEPLOY_SECRETS = [...WAKE_SECRETS, ...UPSTREAM_SECRETS, ...OIDC_SECRETS];
 
 // Non-secret deploy settings persisted in config.env and passed to cloudflare.config.ts as env vars.
 const DEPLOY_KEYS = [
@@ -42,6 +44,7 @@ const DEPLOY_KEYS = [
 	"WAKE_DEBOUNCE_SECONDS", "WAKE_MAX_PER_HOUR", "A2A_MAX_BODY", "A2A_RATE_PER_MIN", "A2A_ENABLE_CRON",
 	"A2A_WORKERS_DEV_SUBDOMAIN", "A2A_RETIRED_HOSTNAMES", "PAIRING_APPROVAL", "A2A_PBKDF2_ITERATIONS", "A2A_WORKERS_LOGS", "A2A_MCP",
 	"A2A_UPSTREAM_URL", "A2A_UPSTREAM_CARD_URL",
+	"APPROVAL_OIDC_ISSUER", "APPROVAL_OIDC_CLIENT_ID", "APPROVAL_OIDC_ALLOWED_SUBJECTS", "APPROVAL_METHODS",
 ];
 // init/deploy flag -> config key
 const FLAG_KEYS = {
@@ -164,7 +167,7 @@ export function wakeSecretsFromEnv() {
 /** Secrets init/deploy upload when exported: the wake secrets plus, for proxy mode, the upstream credentials. */
 export function deploySecretsFromEnv() {
 	const s = wakeSecretsFromEnv();
-	for (const k of UPSTREAM_SECRETS) if (process.env[k]) s[k] = process.env[k];
+	for (const k of [...UPSTREAM_SECRETS, ...OIDC_SECRETS]) if (process.env[k]) s[k] = process.env[k];
 	return s;
 }
 

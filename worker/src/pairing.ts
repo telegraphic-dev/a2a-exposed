@@ -183,6 +183,10 @@ export type PageModel = {
 	askCode?: boolean; // show the code entry form
 	passwordSet: boolean;
 	codeValue?: string;
+	/** Set only when OpenID Connect approval is offered. Absent keeps the page HTML unchanged. */
+	oidc?: { label: string };
+	/** False hides the password field. Absent means the password field is shown as before. */
+	passwordEnabled?: boolean;
 };
 
 export function devicePage(m: PageModel, nonce: string): string {
@@ -205,13 +209,18 @@ export function devicePage(m: PageModel, nonce: string): string {
 <div class="b"><button name="decision" value="deny" type="submit" class="d">Deny</button></div>
 </form>`;
 	// Deny needs no password (formnovalidate skips the required field): denying grants nothing
-	const form = r && m.passwordSet ? `<form method="post" action="/device">
+	const passwordOn = m.passwordEnabled !== false;
+	const form = r && passwordOn && m.passwordSet ? `<form method="post" action="/device">
 <input type="hidden" name="csrf" value="${esc(m.csrf)}"><input type="hidden" name="user_code" value="${esc(formatUserCode(r.userCode))}">
 <label for="pw">Approval password (needed to approve; deny works without it)</label><input id="pw" name="password" type="password" autocomplete="current-password" required maxlength="1024" autofocus>
 <div class="b"><button name="decision" value="approve" type="submit">Approve</button><button name="decision" value="deny" type="submit" class="d" formnovalidate>Deny</button></div>
-</form>` : r && !m.passwordSet ? noPassword + denyOnly : "";
+</form>` : r && passwordOn && !m.passwordSet ? noPassword + denyOnly : r ? denyOnly : "";
+	const oidcForm = m.oidc && r ? `<form method="post" action="/device">
+<input type="hidden" name="csrf" value="${esc(m.csrf)}"><input type="hidden" name="user_code" value="${esc(formatUserCode(r.userCode))}">
+<div class="b"><button name="decision" value="oidc" type="submit">Approve with ${esc(m.oidc.label)}</button></div>
+</form>` : "";
 	const ask = m.askCode ? `<form method="get" action="/device"><label for="uc">Code</label><input id="uc" name="user_code" value="${esc(m.codeValue || "")}" placeholder="WDJB-4827" autocomplete="off" autocapitalize="characters" required maxlength="16" autofocus><div class="b"><button type="submit">Continue</button></div></form>` : "";
-	return pageShell(`Connect an agent to ${m.agentName}`, nonce, `${notice}${details}${form}${ask}`);
+	return pageShell(`Connect an agent to ${m.agentName}`, nonce, `${notice}${details}${form}${oidcForm}${ask}`);
 }
 
 const STYLE = `body{font:16px/1.5 system-ui,sans-serif;max-width:34rem;margin:2rem auto;padding:0 1rem;color:#111;background:#fafafa}

@@ -16,10 +16,10 @@ export async function owner(method, path, body, timeout) {
 }
 
 /** Owner API call that returns { status, data } instead of dying, so callers can explain errors themselves. */
-export async function ownerTry(method, path, body) {
+export async function ownerTry(method, path, body, timeout) {
 	const base = baseUrl(), tok = C.get("A2A_OWNER_TOKEN");
 	if (!base || !tok) die(`A2A_BASE_URL / A2A_OWNER_TOKEN missing (run \`${CLI} init\` or edit ${C.CONFIG_FILE})`);
-	return httpJson(base + path, { method, body, headers: { authorization: `Bearer ${tok}` } });
+	return httpJson(base + path, { method, body, headers: { authorization: `Bearer ${tok}` }, ...(timeout ? { timeout } : {}) });
 }
 
 function printPush(res) {
@@ -311,14 +311,38 @@ export async function exportInbox(o) {
 	return out(data);
 }
 
-/** Replace the tables listed in a JSON export on stdin. `--yes` is required. */
+/** Replace the tables listed in a JSON export on stdin. `--yes` is required. A large file is several requests; the inbox changes on the last one. */
 export async function importInbox(o) {
 	if (!o.yes) die(`import replaces the listed tables. Re-run \`${CLI} import --yes\` with the JSON export on stdin.`);
 	const raw = readStdin();
 	let file;
 	try { file = JSON.parse(raw); } catch { die("import expects the JSON from `export` on stdin"); }
-	const res = await owner("POST", "/owner/import", file, 120000);
-	const need = Array.isArray(res?.outboundPeersNeedSync) ? res.outboundPeersNeedSync.filter((s) => typeof s === "string" && s) : [];
+	let resume;
+	let rows = 0;
+	let tables = 0;
+	const need = [];
+	let guard = 0;
+	for (;;) {
+		const { status, data } = await ownerTry("POST", "/owner/import", resume ? { ...file, resume } : file, 120000);
+		if (status < 200 || status >= 300) {
+			const msg = `worker POST /owner/import -> ${describeHttp(status, data)}`;
+			if (!resume) die(msg);
+			if (resume.phase === "cleanup") die(`${msg}\nThe inbox was replaced, but temporary import tables may still be present. Re-run \`${CLI} import --yes\` with the same file.`);
+			die(`${msg}\nThe inbox was not changed. Re-run \`${CLI} import --yes\` with the same file.`);
+		}
+		rows += Number(data?.rows) || 0;
+		if (typeof data?.tables === "number") tables = data.tables;
+		for (const s of Array.isArray(data?.outboundPeersNeedSync) ? data.outboundPeersNeedSync : []) {
+			if (typeof s === "string" && s && !need.includes(s)) need.push(s);
+		}
+		const next = data?.next;
+		if (!next) break;
+		if (!next.phase || (resume && JSON.stringify(resume) === JSON.stringify(next))) {
+			die(`import stopped early. The inbox was not changed. Re-run \`${CLI} import --yes\` with the same file.`);
+		}
+		resume = next;
+		if (++guard > 10000) die(`import stopped early. The inbox was not changed. Re-run \`${CLI} import --yes\` with the same file.`);
+	}
 	if (need.length) console.error(`These outbound peers were imported without a token. The ciphertext does not open with this deployment's sealing key. Run \`${CLI} peers sync\` for: ${need.join(", ")}`);
-	out(res);
+	out({ tables, rows, outboundPeersNeedSync: need });
 }

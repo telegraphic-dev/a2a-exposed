@@ -83,6 +83,34 @@ test("export prints JSON, import --yes posts it, and a missing --yes does not ca
 	assert.equal(imported.stderr.includes("a2aow_"), false);
 });
 
+test("import follows a staged cursor until the inbox is replaced", async (t) => {
+	const file = { format: "a2a-exposed-export", version: 1, tables: { history: [{ context_id: "c", ts: "t", dir: "in", text: "m" }] } };
+	const posts = [];
+	let n = 0;
+	const srv = http.createServer(async (req, res) => {
+		let body = "";
+		for await (const c of req) body += c;
+		const parsed = body ? JSON.parse(body) : {};
+		posts.push(parsed);
+		res.writeHead(200, { "content-type": "application/json" });
+		if (n++ === 0) return res.end(JSON.stringify({ tables: 1, rows: 0, outboundPeersNeedSync: [], next: { phase: "stage", id: "ab".repeat(16), table: "history", offset: 0 } }));
+		if (n === 2) return res.end(JSON.stringify({ tables: 1, rows: 1, outboundPeersNeedSync: ["bea"], next: { phase: "commit", id: "ab".repeat(16) } }));
+		return res.end(JSON.stringify({ tables: 1, rows: 0, outboundPeersNeedSync: [] }));
+	});
+	await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+	t.after(() => srv.close());
+	const s = sandbox(t);
+	fs.writeFileSync(path.join(s.env.A2A_CONFIG_DIR, "config.env"), `A2A_BASE_URL=http://127.0.0.1:${srv.address().port}\nA2A_OWNER_TOKEN=owner-secret\n`, { mode: 0o600 });
+	const imported = await s.cli(["import", "--yes"], { input: JSON.stringify(file) });
+	assert.equal(imported.status, 0, imported.stderr);
+	assert.equal(posts.length, 3);
+	assert.equal(posts[0].resume, undefined);
+	assert.equal(posts[1].resume.phase, "stage");
+	assert.equal(posts[2].resume.phase, "commit");
+	assert.deepEqual(JSON.parse(imported.stdout), { tables: 1, rows: 1, outboundPeersNeedSync: ["bea"] });
+	assert.match(imported.stderr, /bea/);
+});
+
 test("help lists export and import", async (t) => {
 	const s = sandbox(t);
 	const r = await s.cli(["--help"]);

@@ -115,7 +115,8 @@ Inbox (owner side)
                                        encrypted peer tokens are in the dump; the owner token stays
                                        a Worker secret). --sql prints the same tables as SQL
   import --yes                         read a JSON export from stdin and replace the tables it lists.
-                                       --yes is required. An outbound peer token is kept only when it
+                                       A large file is several requests; the inbox changes when the
+                                       import finishes. --yes is required. An outbound peer token is kept only when it
                                        opens with this deployment's sealing key; other aliases are
                                        named on stderr and need peers sync
 
@@ -135,6 +136,12 @@ Pairing (OAuth 2.0 device flow, RFC 8628: agents connect without pasting tokens 
                           approval password on a web page. Send it to them privately; never open or fill it
                           yourself. A new link invalidates the previous one
   pair set-password       the same in a terminal, no echo (the human runs it; never via argv/stdin)
+  pair set-oidc --issuer URL --client-id ID --subjects SUB[,SUB...] [--methods password,oidc] [--secret-stdin]
+                          optional OpenID Connect approval on /device and the MCP consent page. The client
+                          secret is APPROVAL_OIDC_CLIENT_SECRET in the environment, or one line on stdin with
+                          --secret-stdin. It is not a flag and it is not saved in config.env. The next
+                          \`npx -y a2a-exposed@latest deploy\` uploads that environment variable as a Worker
+                          secret. Leave the issuer unset and approval stays the password page
   pair list [--json]      pending pairing requests (code, claimed name/card, address), the approval mode and
                           when the approval password was set
   pair approve <code>     approve (only with --pairing-approval agent, after your human said yes)
@@ -183,7 +190,7 @@ const SPEC = {
 	import: { yes: B },
 	upstream: { json: B },
 	connect: { alias: S, name: S, json: B, "no-wait": B, replace: B, force: B, "card-url": S },
-	pair: { json: B, web: B, ttl: S },
+	pair: { json: B, web: B, ttl: S, issuer: S, "client-id": S, subjects: S, methods: S, "secret-stdin": B },
 };
 const STATES = ["completed", "input-required", "failed", "rejected", "working"];
 
@@ -197,6 +204,8 @@ export async function main(argv) {
 	if (!name || name === "help" || name === "--help" || name === "-h") return console.log(HELP);
 	if (name === "--version" || name === "-v") return console.log(VERSION);
 	if (rest.includes("--help") || rest.includes("-h")) return console.log(HELP);
+	if (name === "pair" && rest[0] === "set-oidc" && rest.some((a) => /^--(secret|client-secret)(=|$)/.test(a)))
+		throw new CliError("the OpenID Connect client secret is not a flag: export APPROVAL_OIDC_CLIENT_SECRET or pass --secret-stdin (it is not saved in config.env)");
 	if (name === "pair" && rest[0] === "set-password") {
 		// only --web [--ttl M] [--json]: the password itself never comes from argv, stdin or the environment
 		const extra = rest.slice(1);
@@ -250,11 +259,12 @@ export async function main(argv) {
 		case "peers": return cmd.peers(p[0] || "list", p.slice(1), o);
 		case "connect": return pair.connect(need(p[0], "connect <base-or-card-url> [--alias A] [--no-wait] [--json]"), o);
 		case "pair": {
-			const sub = need(p[0], "pair set-password|list|approve <code>|deny <code>");
+			const sub = need(p[0], "pair set-password|set-oidc|list|approve <code>|deny <code>");
 			if (sub === "set-password") return pair.setPassword(o);
+			if (sub === "set-oidc") return pair.setOidc(o, p.slice(1));
 			if (sub === "list") return pair.list(o);
 			if (sub === "approve" || sub === "deny") return pair.decide(sub, need(p[1], `pair ${sub} <code>`));
-			throw new CliError(`unknown pair action ${sub} (set-password|list|approve|deny)`);
+			throw new CliError(`unknown pair action ${sub} (set-password|set-oidc|list|approve|deny)`);
 		}
 		case "send": return cmd.send(o);
 		case "poll": return cmd.poll(need(p[0], "poll --to <peer> <taskId>"), o);

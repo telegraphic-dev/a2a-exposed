@@ -7,8 +7,9 @@
 // Tenant config is a versioned row pushed into the object (`pushConfig`). It does not travel on the request.
 // An object with no row answers 404 and does not create application tables.
 //
-// Not in this change: per-tenant alarms (the cron flush), approval OIDC, and usage push.
+// Not in this change: per-tenant alarms (the cron flush) and usage push.
 // The hosted minute cron stays a no-op until alarms land. The daily backup cron runs only when BACKUP_BUCKET is bound.
+// Approval OIDC, when configured (self-host settings, or the pushed tenant `approval` object), uses the same pages as self-host.
 import { DurableObject } from "cloudflare:workers";
 import worker, { dispatch } from "./index.ts";
 import { doSqlD1, migrateDo, type SqlStorageLike, type TxRunner } from "./storage.ts";

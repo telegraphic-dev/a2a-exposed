@@ -10,7 +10,8 @@ import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import worker from "../src/index.ts";
 import { d1 } from "./d1.ts";
 import { sha256 } from "../src/a2a.ts";
-import { exportRows, importRows, toSql, bookmarkForTime, restoreBookmark, ExportError, EXPORT_TABLES } from "../src/export.ts";
+import { exportRows, importRows, toSql, bookmarkForTime, restoreBookmark, ExportError, EXPORT_TABLES, IMPORT_QUERY_BUDGET, type ImportCursor } from "../src/export.ts";
+import { doSqlD1, type SqlStorageLike, type TxRunner } from "../src/storage.ts";
 import { openPeerToken, sealPeerToken } from "../src/mcp.ts";
 import { backupDatabase, exportTenantSql, hostedDailyBackup, olderThanRetention, snapshotKey, DAILY_CRON, type R2BucketLike } from "../src/backup.ts";
 import { namespaceForRegion, type DoNamespace } from "../src/tenancy.ts";
@@ -69,6 +70,7 @@ test("import replaces listed tables, refuses unknown tables, and keeps a rejecte
 	await assert.rejects(() => importRows(DB, { format: "a2a-exposed-export", version: 1, tables: { peers: [{ not_a_real_column: "x" }] } }), /peers has no column not_a_real_column/);
 	const still = ((await DB.prepare("SELECT label FROM peers").all()).results as { label: string }[]).map((r) => r.label);
 	assert.deepEqual(still, ["ada"]);
+	assert.equal(DB.db.prepare("SELECT name FROM sqlite_master WHERE name LIKE '_a2a_import_%'").all().length, 0);
 
 	const partial = await importRows(DB, { format: "a2a-exposed-export", version: 1, tables: { peers: [] } });
 	assert.equal(partial.tables, 1);
@@ -95,6 +97,129 @@ test("import keeps an outbound token this owner can open and drops one sealed fo
 	assert.equal(bea?.url, "https://bea.example.com");
 	assert.equal(bea?.token_enc, null);
 	assert.equal(JSON.stringify(res).includes("a2aow_"), false);
+});
+
+test("exportRows reads every application table in one batch", async () => {
+	const DB = db();
+	await DB.prepare("INSERT INTO peers (label, token_hash, created_at) VALUES ('ada', 'h', 't')").run();
+	await DB.prepare("INSERT INTO history (context_id, ts, dir, text) VALUES ('c', 't', 'in', 'hi')").run();
+	let batches = 0;
+	const wrapped = {
+		prepare(sql: string) {
+			const s = DB.prepare(sql);
+			const view = (stmt: { __sql: string; __args: unknown[]; bind: (...a: unknown[]) => unknown }) => ({
+				__sql: stmt.__sql,
+				__args: stmt.__args,
+				bind(...a: unknown[]) { return view(stmt.bind(...a) as typeof stmt); },
+				all: async () => { throw new Error("per-table read"); },
+				first: () => { throw new Error("per-table read"); },
+				run: () => { throw new Error("per-table read"); },
+			});
+			return view(s);
+		},
+		async batch(stmts: { __sql: string }[]) {
+			batches++;
+			assert.deepEqual(stmts.map((s) => s.__sql), EXPORT_TABLES.map((n) => `SELECT * FROM "${n}"`));
+			return DB.batch(stmts);
+		},
+	};
+	const file = await exportRows(wrapped as never);
+	assert.equal(batches, 1);
+	assert.equal(file.tables.peers?.[0]?.label, "ada");
+	assert.equal(file.tables.history?.[0]?.text, "hi");
+});
+
+test("exportRows on a Durable Object runs inside one transactionSync", async () => {
+	const raw = new DatabaseSync(":memory:");
+	for (const name of fs.readdirSync(MIGRATIONS).filter((n) => n.endsWith(".sql")).sort())
+		raw.exec(fs.readFileSync(new URL(name, MIGRATIONS), "utf8"));
+	raw.prepare("INSERT INTO peers (label, token_hash, created_at) VALUES ('ada', 'h', 't')").run();
+	raw.prepare("INSERT INTO history (context_id, ts, dir, text) VALUES ('c', 't', 'in', 'hi')").run();
+	let depth = 0;
+	let txCalls = 0;
+	let outside = 0;
+	const sql: SqlStorageLike = {
+		exec(query: string, ...bindings: unknown[]) {
+			if (/^\s*select\b/i.test(query) && depth === 0) outside++;
+			const stmt = raw.prepare(query);
+			if (/^\s*select\b/i.test(query)) {
+				const rows = stmt.all(...(bindings as [])) as Record<string, unknown>[];
+				return { toArray: () => rows, raw: () => rows.map((r) => Object.values(r)), rowsRead: rows.length, rowsWritten: 0 };
+			}
+			const info = stmt.run(...(bindings as []));
+			return { toArray: () => [], raw: () => [], rowsRead: 0, rowsWritten: Number(info.changes) };
+		},
+	};
+	const tx: TxRunner = (fn) => {
+		txCalls++;
+		depth++;
+		raw.exec("BEGIN");
+		try { const v = fn(); raw.exec("COMMIT"); return v; }
+		finally { depth--; }
+	};
+	const file = await exportRows(doSqlD1(sql, tx));
+	assert.equal(txCalls, 1);
+	assert.equal(outside, 0);
+	assert.equal(file.tables.peers?.[0]?.label, "ada");
+	assert.equal(file.tables.history?.[0]?.text, "hi");
+	assert.equal(Object.keys(file.tables).length, EXPORT_TABLES.length);
+});
+
+test("a large import stays under the free-plan query budget and swaps only at the end", async () => {
+	const src = db();
+	for (let i = 0; i < 400; i++)
+		await src.prepare("INSERT INTO history (context_id, ts, dir, text) VALUES ('c', 't', 'in', ?)").bind(`m${i}`).run();
+	await src.prepare("INSERT INTO peers (label, token_hash, created_at) VALUES ('ada', 'h', 't')").run();
+	await src.prepare("INSERT INTO device_requests (device_hash, user_code, status, created_ms, expires_ms, interval_s, replaces_label) VALUES ('dh', 'CODE1234', 'pending', 1, 2, 5, 'ada')").run();
+	const foreign = await sealPeerToken("other-owner", "bea", "a2aow_other");
+	await src.prepare("INSERT INTO outbound_peers (alias, url, token_enc, created_at, updated_at) VALUES ('bea', 'https://bea.example.com', ?, 't', 't')").bind(foreign).run();
+	const file = await exportRows(src);
+
+	const dst = db();
+	await dst.prepare("INSERT INTO peers (label, token_hash, created_at) VALUES ('keep', 'hk', 't')").run();
+	await dst.prepare("INSERT INTO history (context_id, ts, dir, text) VALUES ('c', 't', 'local', 'old')").run();
+	const open = (alias: string, enc: string) => openPeerToken("owner-secret", alias, enc).then((t) => !!t);
+	await assert.rejects(() => importRows(dst, { ...file, tables: { ...file.tables, peers: [{ not_a_real_column: "x" }] } }), /no column/);
+	assert.equal((await dst.prepare("SELECT label FROM peers").first<{ label: string }>())?.label, "keep");
+	assert.equal(dst.db.prepare("SELECT name FROM sqlite_master WHERE name LIKE '_a2a_import_%'").all().length, 0);
+
+	const counter = countQueries(dst);
+	let resume: ImportCursor | undefined;
+	let sawStage = false;
+	let swapped = false;
+	let finished = false;
+	const need = new Set<string>();
+	for (let n = 0; n < 30 && !finished; n++) {
+		counter.reset();
+		const res = await importRows(counter.db, file, { resume, openOutboundToken: open });
+		assert.ok(counter.used <= IMPORT_QUERY_BUDGET, `invocation used ${counter.used} queries`);
+		for (const alias of res.outboundPeersNeedSync) need.add(alias);
+		const phase = res.next?.phase;
+		if (phase === "stage" || phase === "commit") {
+			assert.equal(swapped, false);
+			assert.equal((await dst.prepare("SELECT label FROM peers WHERE label = 'keep'").first<{ label: string }>())?.label, "keep");
+			assert.equal((await dst.prepare("SELECT text FROM history WHERE text = 'old'").first<{ text: string }>())?.text, "old");
+			if (phase === "stage") sawStage = true;
+		} else {
+			swapped = true;
+			assert.equal(await dst.prepare("SELECT label FROM peers WHERE label = 'keep'").first(), null);
+		}
+		if (!res.next) finished = true;
+		else resume = res.next;
+	}
+	assert.equal(sawStage, true);
+	assert.equal(swapped, true);
+	assert.equal(finished, true);
+	const labels = ((await dst.prepare("SELECT label FROM peers ORDER BY label").all()).results as { label: string }[]).map((r) => r.label);
+	assert.deepEqual(labels, ["ada"]);
+	assert.equal(((await dst.prepare("SELECT text FROM history").all()).results as unknown[]).length, 400);
+	assert.equal(await dst.prepare("SELECT text FROM history WHERE text = 'old'").first(), null);
+	const replaced = await dst.prepare("SELECT replaces_label FROM device_requests WHERE device_hash = 'dh'").first<{ replaces_label: string }>();
+	assert.equal(replaced?.replaces_label, "ada");
+	const bea = await dst.prepare("SELECT token_enc FROM outbound_peers WHERE alias = 'bea'").first<{ token_enc: string | null }>();
+	assert.equal(bea?.token_enc, null);
+	assert.deepEqual([...need], ["bea"]);
+	assert.equal(dst.db.prepare("SELECT name FROM sqlite_master WHERE name LIKE '_a2a_import_%'").all().length, 0);
 });
 
 test("owner export and import: auth, hashes, and the minute cron left in place", async () => {
@@ -253,6 +378,26 @@ test("backupDatabase writes the self-host snapshot", async () => {
 	assert.equal(written.key, "tenants/self/2026-10-09.sql");
 	assert.match(bucket.objects.get(written.key) || "", /INSERT INTO "settings"/);
 });
+
+function countQueries(DB: ReturnType<typeof db>) {
+	let used = 0;
+	const wrap = (s: { __sql: string; __args: unknown[]; bind: (...a: unknown[]) => unknown; all: () => Promise<unknown>; first: (c?: string) => Promise<unknown>; run: () => Promise<unknown> }): any => ({
+		__sql: s.__sql,
+		__args: s.__args,
+		bind(...a: unknown[]) { return wrap(s.bind(...a) as typeof s); },
+		all: async () => { used++; return s.all(); },
+		first: async (c?: string) => { used++; return s.first(c); },
+		run: async () => { used++; return s.run(); },
+	});
+	return {
+		get used() { return used; },
+		reset() { used = 0; },
+		db: {
+			prepare: (sql: string) => wrap(DB.prepare(sql)),
+			batch: async (stmts: unknown[]) => { used += stmts.length; return DB.batch(stmts as never); },
+		},
+	};
+}
 
 function fakeBucket(initial: Record<string, string> = {}): R2BucketLike & { objects: Map<string, string>; puts: { key: string; contentType?: string }[] } {
 	const objects = new Map(Object.entries(initial));

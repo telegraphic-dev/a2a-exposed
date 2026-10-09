@@ -26,7 +26,7 @@ test("gates: unset is single-tenant and every reserved gate is off", () => {
 	assert.equal(g.branding, "");
 	assert.equal(g.dataRegion, "");
 	assert.equal(g.tenantDomain, "");
-	assert.deepEqual(g.approvalOidc, { issuer: "", clientId: "", hasClientSecret: false, allowedSubjects: [], methods: ["password"] });
+	assert.deepEqual(g.approvalOidc, { issuer: "", clientId: "", hasClientSecret: false, allowedSubjects: [], methods: ["password"], methodsSpecified: false, label: "" });
 });
 
 test("gates: only exact values turn on; typos and non-https URLs stay off", () => {
@@ -44,6 +44,7 @@ test("gates: only exact values turn on; typos and non-https URLs stay off", () =
 	assert.equal(g.signupUrl, "");
 	assert.equal(g.approvalOidc.issuer, "");
 	assert.deepEqual(g.approvalOidc.methods, ["password"]);
+	assert.equal(g.approvalOidc.methodsSpecified, false);
 	assert.equal(g.tenantDomain, "example.com");
 
 	const on = parseGates({
@@ -66,6 +67,8 @@ test("gates: only exact values turn on; typos and non-https URLs stay off", () =
 	assert.equal(on.approvalOidc.hasClientSecret, true);
 	assert.deepEqual(on.approvalOidc.allowedSubjects, ["acct_1", "acct_2"]);
 	assert.deepEqual(on.approvalOidc.methods, ["oidc", "password"]);
+	assert.equal(on.approvalOidc.methodsSpecified, true);
+	assert.equal(on.approvalOidc.label, "");
 });
 
 test("TENANCY=host without TENANT_DO does not flip hostedStorage", () => {
@@ -161,6 +164,30 @@ test("DATA_REGION selects a DO jurisdiction only for eu and fedramp", () => {
 	assert.equal(namespaceForRegion(ns, "us").id, "default");
 	assert.deepEqual(calls, ["eu", "fedramp"]);
 	assert.equal(namespaceForRegion({ id: "plain" }, "eu").id, "plain");
+});
+
+test("hosted approval comes from the tenant overlay and ignores Worker APPROVAL_OIDC_*", () => {
+	const platform = selfEnv({
+		APPROVAL_OIDC_ISSUER: "https://platform.example", APPROVAL_OIDC_CLIENT_ID: "platform",
+		APPROVAL_OIDC_CLIENT_SECRET: "platform-secret", APPROVAL_OIDC_ALLOWED_SUBJECTS: "platform-user",
+		APPROVAL_METHODS: "oidc",
+	});
+	const ctx = hostedTenantContext(platform, {
+		id: "ten_a", db: dummy, publicUrl: "https://a.example.com",
+		approval: { issuer: "https://idp.example", clientId: "tenant-client", clientSecret: "tenant-secret", allowedSubjects: ["owner-1"], label: "Example IdP" },
+	});
+	assert.equal(ctx.gates.approvalOidc.issuer, "https://idp.example");
+	assert.equal(ctx.gates.approvalOidc.clientId, "tenant-client");
+	assert.deepEqual(ctx.gates.approvalOidc.allowedSubjects, ["owner-1"]);
+	assert.equal(ctx.gates.approvalOidc.label, "Example IdP");
+	assert.equal(ctx.gates.approvalOidc.hasClientSecret, true);
+	assert.equal(ctx.approvalClientSecret(), "tenant-secret");
+	assert.equal(JSON.stringify(ctx.approval).includes("tenant-secret"), false);
+	assert.equal(ctx.gates.approvalOidc.methodsSpecified, false, "omitted methods stay unspecified so both password and OIDC are offered");
+	const empty = hostedTenantContext(platform, { id: "ten_a", db: dummy, publicUrl: "https://a.example.com" });
+	assert.equal(empty.gates.approvalOidc.issuer, "");
+	assert.equal(empty.approvalClientSecret(), "");
+	assert.equal(empty.gates.approvalOidc.hasClientSecret, false);
 });
 
 test("fetch path: gates set or unset, the self-host Worker still answers from OWNER_TOKEN and env.DB", async () => {

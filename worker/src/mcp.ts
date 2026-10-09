@@ -170,6 +170,10 @@ export type ConsentModel = {
 	params: Record<string, string>; // the authorization request, posted back in hidden fields
 	passwordSet: boolean;
 	notice?: { kind: "ok" | "error" | "info"; text: string };
+	/** Set only when OpenID Connect approval is offered. Absent keeps the consent HTML unchanged. */
+	oidc?: { label: string };
+	/** False hides the password field. Absent means the password field is shown as before. */
+	passwordEnabled?: boolean;
 };
 
 export function consentBody(m: ConsentModel): string {
@@ -185,14 +189,19 @@ export function consentBody(m: ConsentModel): string {
 	const idRow = m.clientIdHost ? `<tr><th>Client identity published at</th><td>${esc(m.clientIdHost)}</td></tr>` : "";
 	const table = `<table><tr><th>Client (as it calls itself)</th><td>${esc(m.clientName || "(no name given)")}</td></tr>${idRow}<tr><th>Returns to</th><td>${esc(host)}</td></tr></table>`;
 	const scope = `<h2>It will be able to</h2><ul>${can.map((x) => `<li>${esc(x)}</li>`).join("")}</ul><h2>It will not be able to</h2><ul>${cannot.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`;
-	const form = m.passwordSet
+	const passwordOn = m.passwordEnabled !== false;
+	const form = passwordOn && m.passwordSet
 		? `<form method="post" action="/oauth/authorize"><input type="hidden" name="csrf" value="${esc(m.csrf)}">${hidden}
 <label for="pw">Approval password (needed to approve; deny works without it)</label><input id="pw" name="password" type="password" autocomplete="current-password" required maxlength="1024" autofocus>
 <div class="b"><button name="decision" value="approve" type="submit">Approve</button><button name="decision" value="deny" type="submit" class="d" formnovalidate>Deny</button></div></form>`
-		: `<p class="n info">No approval password is set yet: ask your agent to run <code>${esc(m.cli)} pair set-password --web</code> and open the one-time link it sends you, then start connecting again.</p>
-<form method="post" action="/oauth/authorize"><input type="hidden" name="csrf" value="${esc(m.csrf)}">${hidden}<div class="b"><button name="decision" value="deny" type="submit" class="d">Deny</button></div></form>`;
+		: passwordOn
+		? `<p class="n info">No approval password is set yet: ask your agent to run <code>${esc(m.cli)} pair set-password --web</code> and open the one-time link it sends you, then start connecting again.</p>
+<form method="post" action="/oauth/authorize"><input type="hidden" name="csrf" value="${esc(m.csrf)}">${hidden}<div class="b"><button name="decision" value="deny" type="submit" class="d">Deny</button></div></form>`
+		: `<form method="post" action="/oauth/authorize"><input type="hidden" name="csrf" value="${esc(m.csrf)}">${hidden}<div class="b"><button name="decision" value="deny" type="submit" class="d">Deny</button></div></form>`;
+	const oidcForm = m.oidc ? `<form method="post" action="/oauth/authorize"><input type="hidden" name="csrf" value="${esc(m.csrf)}">${hidden}
+<div class="b"><button name="decision" value="oidc" type="submit">Continue with ${esc(m.oidc.label)}</button></div></form>` : "";
 	return `${notice}<p>An MCP client asks to use the inbox of <b>${esc(m.agentName)}</b> as a connector.</p>${table}${loop}${scope}
-<p class="w">Approve only if you are adding this connector right now. The name above is claimed by the client. Revoke access any time: <code>${esc(m.cli)} token list</code>, then <code>${esc(m.cli)} token revoke &lt;label&gt;</code>.</p>${form}`;
+<p class="w">Approve only if you are adding this connector right now. The name above is claimed by the client. Revoke access any time: <code>${esc(m.cli)} token list</code>, then <code>${esc(m.cli)} token revoke &lt;label&gt;</code>.</p>${form}${oidcForm}`;
 }
 
 // ------------------------------------------------------------------ outbound peer token encryption (AES-GCM)
