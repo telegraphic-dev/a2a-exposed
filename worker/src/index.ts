@@ -1672,7 +1672,9 @@ async function resolveClient(env: Env, id: string, ip?: string): Promise<{ clien
 		log("mcp_cimd_failed", { host: new URL(id).host, reason: `HTTP ${res.status}` });
 		return { error: `The client's metadata document could not be fetched${res.status >= 300 && res.status < 400 ? " (redirects are not followed)" : ""}.` };
 	}
-	const text = await readCapped(res, M.CIMD.maxBytes);
+	let text: string | null;
+	try { text = await readCapped(res, M.CIMD.maxBytes); }
+	catch { log("mcp_cimd_failed", { host: new URL(id).host, reason: "body read failed" }); return { error: "The client's metadata document could not be fetched." }; }
 	if (text === null) return { error: `The client's metadata document is larger than ${M.CIMD.maxBytes} bytes.` };
 	let doc: Json;
 	try { doc = JSON.parse(text); } catch { return { error: "The client's metadata document is not valid JSON." }; }
@@ -2070,9 +2072,10 @@ async function handleMcp(req: Request, env: Env, ectx: ExecutionContext, url: UR
 	// ---- 2026-07-28 and later: per-request _meta (or a modern version header without it: a header/body mismatch)
 	if (bodyVersion !== null || (pv && M.isModern(pv))) {
 		if (bodyVersion === null) return rpcError(id, M.ERR.HEADER_MISMATCH, `MCP-Protocol-Version ${pv} needs params._meta["${M.META.version}"] in the body`, 400);
+		// an unsupported version is reported as such first (the client can then pick another), header checks after
+		if (!M.isModern(bodyVersion)) return unsupportedVersion(id, bodyVersion);
 		const hp = M.headerProblem(req.headers, msg, bodyVersion);
 		if (hp) return rpcError(id, M.ERR.HEADER_MISMATCH, `Header mismatch: ${hp}`, 400);
-		if (!M.isModern(bodyVersion)) return unsupportedVersion(id, bodyVersion);
 		const caps = meta[M.META.capabilities];
 		if (!caps || typeof caps !== "object" || Array.isArray(caps))
 			return rpcError(id, M.ERR.INVALID_PARAMS, `params._meta["${M.META.capabilities}"] (an object) is required`, 400);

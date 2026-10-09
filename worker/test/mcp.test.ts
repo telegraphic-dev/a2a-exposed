@@ -47,6 +47,8 @@ function setup(over: Record<string, string> = {}) {
 			cimdFetches.push({ url: String(input), redirect: init.redirect });
 			const d = cimd[u.pathname];
 			if (!d) return new Response("not found", { status: 404 });
+			if (d.body === "ABORT") // headers arrive, then the body stream fails mid-way
+				return new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('{"client_id":')); c.error(new Error("connection reset")); } }), { status: 200 });
 			return new Response(typeof d.body === "string" ? d.body : JSON.stringify(d.body), { status: d.status ?? 200, headers: { "content-type": "application/json", ...(d.headers || {}) } });
 		}
 		if (u.pathname === "/.well-known/agent-card.json")
@@ -474,6 +476,11 @@ test("2026-07-28: version negotiation (-32022 with supported versions), required
 	assert.equal(v.status, 400);
 	assert.equal(v.data.error.code, -32022);
 	assert.deepEqual(v.data.error.data, { supported: M.PROTOCOL_VERSIONS, requested: "1900-01-01" });
+	for (const h of [{}, { "mcp-protocol-version": null }, { "mcp-method": null }] as Record<string, string | null>[]) {
+		const x = await s.modern(a.access_token, "tools/list", {}, h, { "io.modelcontextprotocol/protocolVersion": "1900-01-01" });
+		assert.equal(x.data.error.code, -32022, "unknown body version wins over header problems");
+		assert.equal(x.data.error.data.requested, "1900-01-01");
+	}
 	// a legacy version in modern _meta is not served statelessly: the client falls back to initialize
 	const lv = await s.modern(a.access_token, "tools/list", {}, { "mcp-protocol-version": "2025-11-25" }, { "io.modelcontextprotocol/protocolVersion": "2025-11-25" });
 	assert.equal(lv.data.error.code, -32022);
@@ -593,6 +600,7 @@ test("Client ID Metadata Documents: unsafe URLs and bad documents are refused (n
 		["/redirect.json", { status: 302, body: "", headers: { location: "https://evil.example.net/" } }, /redirects are not followed/],
 		["/error.json", { status: 500, body: "x" }, /could not be fetched\./],
 		["/notjson.json", { body: "{nope" }, /not valid JSON/],
+		["/abort.json", { body: "ABORT" }, /could not be fetched\./],
 		["/big.json", { body: JSON.stringify({ ...cimdDoc({ client_id: "https://client.example.org/big.json" }), pad: "x".repeat(6000) }) }, /larger than 5120 bytes/],
 		["/secret.json", { body: cimdDoc({ client_id: "https://client.example.org/secret.json", token_endpoint_auth_method: "client_secret_basic" }) }, /not supported/],
 		["/secret2.json", { body: cimdDoc({ client_id: "https://client.example.org/secret2.json", client_secret: "x" }) }, /client secret/],
