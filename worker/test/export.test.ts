@@ -65,6 +65,7 @@ test("import replaces listed tables, refuses unknown tables, and keeps a rejecte
 	await assert.rejects(() => importRows(DB, { format: "a2a-exposed-export", version: 1, tables: { sqlite_master: [] } }), /unknown table/);
 	await assert.rejects(() => importRows(DB, { format: "a2a-exposed-export", version: 2, tables: {} }), /not supported/);
 	await assert.rejects(() => importRows(DB, { format: "a2a-exposed-export", version: 1, tables: { peers: [{ "label); drop": "x" }] } }), /bad column/);
+	await assert.rejects(() => importRows(DB, { format: "a2a-exposed-export", version: 1, tables: { peers: [{ not_a_real_column: "x" }] } }), /peers has no column not_a_real_column/);
 	const still = ((await DB.prepare("SELECT label FROM peers").all()).results as { label: string }[]).map((r) => r.label);
 	assert.deepEqual(still, ["ada"]);
 
@@ -105,6 +106,10 @@ test("owner export and import: auth, hashes, and the minute cron left in place",
 
 	const bad = await call("POST", "/owner/import", { format: "nope", version: 1, tables: {} });
 	assert.equal(bad.status, 400);
+	const badCol = await call("POST", "/owner/import", { format: "a2a-exposed-export", version: 1, tables: { peers: [{ not_a_real_column: "x" }] } });
+	assert.equal(badCol.status, 400);
+	assert.match(badCol.data.error, /no column/);
+	assert.equal(((await call("GET", "/owner/peers")).data as { label: string }[]).length, 1);
 	const wiped = await call("POST", "/owner/import", { format: "a2a-exposed-export", version: 1, tables: { peers: [] } });
 	assert.equal(wiped.status, 200);
 	assert.equal(((await call("GET", "/owner/peers")).data as { label: string }[]).length, 0);

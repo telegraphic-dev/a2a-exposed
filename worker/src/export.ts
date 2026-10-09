@@ -111,6 +111,14 @@ function plain(v: unknown, what: string): Record<string, unknown> {
 	return v as Record<string, unknown>;
 }
 
+/** Columns that exist on `name`. An empty result means the table is not there. */
+async function columnSet(db: SqlDb, name: string): Promise<Set<string>> {
+	const info = await db.prepare(`PRAGMA table_info(${quoteIdent(name)})`).all<{ name: string }>();
+	const cols = new Set<string>();
+	for (const row of info.results ?? []) if (row && typeof row.name === "string" && row.name) cols.add(row.name);
+	return cols;
+}
+
 /** Replace rows in the tables the file lists. A table key that is absent is left as it is. */
 export async function importRows(db: SqlDb, input: unknown): Promise<{ tables: number; rows: number }> {
 	const file = plain(input, "body");
@@ -120,6 +128,13 @@ export async function importRows(db: SqlDb, input: unknown): Promise<{ tables: n
 		if (!TABLE_SET.has(name)) throw new ExportError(`import: unknown table ${name.slice(0, 64)}`);
 		if (!Array.isArray(tables[name])) throw new ExportError(`import: ${name} must be an array`);
 	}
+	const known = new Map<string, Set<string>>();
+	for (const name of EXPORT_TABLES) {
+		if (!Array.isArray(tables[name])) continue;
+		const cols = await columnSet(db, name);
+		if (!cols.size) throw new ExportError(`import: unknown table ${name}`);
+		known.set(name, cols);
+	}
 	const stmts = [];
 	let rows = 0;
 	let listed = 0;
@@ -127,17 +142,27 @@ export async function importRows(db: SqlDb, input: unknown): Promise<{ tables: n
 		const list = tables[name];
 		if (!Array.isArray(list)) continue;
 		listed++;
+		const allowed = known.get(name)!;
 		stmts.push(db.prepare(`DELETE FROM ${quoteIdent(name)}`));
 		for (const item of list) {
 			const row = plain(item, "each row");
 			const cols = Object.keys(row);
-			for (const c of cols) if (!IDENT.test(c)) throw new ExportError("import: bad column");
+			for (const c of cols) {
+				if (!IDENT.test(c)) throw new ExportError("import: bad column");
+				if (!allowed.has(c)) throw new ExportError(`import: ${name} has no column ${c.slice(0, 64)}`);
+			}
 			if (!cols.length) continue;
 			stmts.push(db.prepare(`INSERT INTO ${quoteIdent(name)} (${cols.map(quoteIdent).join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`).bind(...cols.map((c) => bindable(row[c]))));
 			rows++;
 		}
 	}
-	if (stmts.length) await db.batch(stmts);
+	try {
+		if (stmts.length) await db.batch(stmts);
+	} catch (e) {
+		if (e instanceof ExportError) throw e;
+		const msg = e instanceof Error ? e.message : String(e);
+		throw new ExportError(`import: rows do not match the schema: ${msg.replace(/\s+/g, " ").slice(0, 180)}`);
+	}
 	return { tables: listed, rows };
 }
 
