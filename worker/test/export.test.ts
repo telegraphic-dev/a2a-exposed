@@ -13,7 +13,7 @@ import { sha256 } from "../src/a2a.ts";
 import { exportRows, importRows, toSql, bookmarkForTime, restoreBookmark, restartAfterResult, ExportError, EXPORT_TABLES, IMPORT_QUERY_BUDGET, type ImportCursor } from "../src/export.ts";
 import { doSqlD1, type SqlStorageLike, type TxRunner } from "../src/storage.ts";
 import { openPeerToken, sealPeerToken } from "../src/mcp.ts";
-import { backupDatabase, exportTenantSql, hostedDailyBackup, olderThanRetention, snapshotKey, DAILY_CRON, type R2BucketLike } from "../src/backup.ts";
+import { backupDatabase, backupDirectory, exportTenantSql, hostedDailyBackup, olderThanRetention, pruneSnapshots, snapshotKey, DAILY_CRON, type R2BucketLike } from "../src/backup.ts";
 import { namespaceForRegion, type DoNamespace } from "../src/tenancy.ts";
 import type { DirectoryEntry } from "../src/directory.ts";
 
@@ -338,6 +338,45 @@ test("hosted backup lists the directory, pins region, skips inactive tenants, an
 	assert.equal(report.failed.length, 1);
 	assert.match(report.failed[0]?.error || "", /boom/);
 	assert.equal(JSON.parse(kv.store.get("tenant:alice") || "{}").region, "default");
+});
+
+test("hosted backup follows every directory page and refuses a stuck cursor", async () => {
+	const entries: Record<string, DirectoryEntry> = {};
+	for (let i = 0; i < 101; i++) {
+		const name = `t${String(i).padStart(4, "0")}`;
+		entries[name] = { id: `id-${name}`, status: "active", region: "default", version: 1 };
+	}
+	const kv = fakeKv(entries);
+	const seen: string[] = [];
+	const ns = {
+		idFromName: (id: string) => id,
+		get: (id: string) => ({
+			async exportSql() {
+				seen.push(id);
+				return { sql: `-- ${id}\n`, exportedAt: "2026-10-09T03:00:00.000Z" };
+			},
+		}),
+		jurisdiction() { throw new Error("jurisdiction"); },
+	};
+	const report = await backupDirectory(kv, fakeBucket(), ns as never, "default", new Date("2026-10-09T03:00:00.000Z"));
+	assert.equal(seen.length, 101);
+	assert.equal(report.written.length, 101);
+	assert.equal(report.failed.length, 0);
+	const stuck = {
+		async get() { return null; },
+		async put() {},
+		async list() { return { keys: [{ name: "tenant:alice" }], list_complete: false }; },
+	};
+	await assert.rejects(() => backupDirectory(stuck, fakeBucket(), ns as never, "default"), /directory listing did not finish/);
+});
+
+test("snapshot prune follows every object page", async () => {
+	const objects: Record<string, string> = {};
+	for (let i = 0; i < 101; i++) objects[`tenants/id-alice/${new Date(Date.UTC(2020, 0, 1 + i)).toISOString().slice(0, 10)}.sql`] = "old";
+	const bucket = fakeBucket(objects);
+	const deleted = await pruneSnapshots(bucket, "id-alice", "2026-10-09");
+	assert.equal(deleted.length, 101);
+	assert.equal(bucket.objects.size, 0);
 });
 
 test("a pinned eu tenant is exported through that jurisdiction", async () => {

@@ -69,13 +69,13 @@ export function objectDay(key: string, tenantId: string): string | null {
 async function listAll(bucket: R2BucketLike, prefix: string): Promise<string[]> {
 	const keys: string[] = [];
 	let cursor: string | undefined;
-	for (let page = 0; page < 100; page++) {
+	for (;;) {
 		const res = await bucket.list({ prefix, cursor, limit: 1000 });
 		for (const obj of res.objects ?? []) keys.push(obj.key);
-		if (!res.truncated || !res.cursor || res.cursor === cursor) break;
+		if (!res.truncated) return keys;
+		if (!res.cursor || res.cursor === cursor) throw new ExportError("backup: snapshot listing did not finish");
 		cursor = res.cursor;
 	}
-	return keys;
 }
 
 /** Delete dated objects for this tenant that are past retention. The object written today stays. */
@@ -115,16 +115,16 @@ async function directoryNames(kv: KvLister): Promise<string[]> {
 	if (typeof kv.list !== "function") throw new ExportError("backup: directory cannot be listed");
 	const names: string[] = [];
 	let cursor: string | undefined;
-	for (let page = 0; page < 100; page++) {
+	for (;;) {
 		const res = await kv.list({ prefix: "tenant:", cursor, limit: 1000 });
 		for (const k of res.keys ?? []) {
 			const name = k.name.startsWith("tenant:") ? k.name.slice("tenant:".length) : "";
 			if (TENANT_NAME.test(name)) names.push(name);
 		}
-		if (res.list_complete !== false || !res.cursor || res.cursor === cursor) break;
+		if (res.list_complete !== false) return names;
+		if (!res.cursor || res.cursor === cursor) throw new ExportError("backup: directory listing did not finish");
 		cursor = res.cursor;
 	}
-	return names;
 }
 
 function clip(e: unknown): string {
