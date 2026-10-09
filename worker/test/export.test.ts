@@ -245,15 +245,23 @@ test("an export over 8 MiB imports as slices and the whole file is rejected", as
 	const dst = db();
 	await dst.prepare("INSERT INTO history (context_id, ts, dir, text) VALUES ('c', 't', 'local', 'old')").run();
 	await dst.prepare("INSERT INTO oidc_txns (state, nonce, verifier, kind, csrf, payload_json, expires_ms) VALUES ('old', 'n', 'v', 'device', 'c', '{}', 1)").run();
+	const counter = countQueries(dst);
 	let resume: ImportCursor | undefined;
 	let part = 0;
 	let swapped = false;
 	for (let n = 0; n < planned.parts.length + 5 && !swapped; n++) {
+		counter.reset();
 		const phase = resume?.phase;
 		const body = phase === "commit" || phase === "cleanup"
 			? { format: file.format, version: file.version, tables: {}, slice: planned.slice, resume }
 			: { ...planned.parts[part].body, ...(resume ? { resume } : {}) };
-		const res = await importRows(dst, body, { resume });
+		const res = await importRows(counter.db, body, { resume });
+		assert.ok(counter.used <= IMPORT_QUERY_BUDGET, `${phase || "start"} used ${counter.used} queries`);
+		if (phase === "commit") {
+			assert.equal(counter.used, 1 + planned.slice.tables.length * 2, `commit used ${counter.used}`);
+			assert.equal(res.tables, planned.slice.tables.length);
+			assert.equal(res.next?.phase, "cleanup");
+		}
 		if (res.next?.phase === "stage" || res.next?.phase === "commit") {
 			assert.equal((await dst.prepare("SELECT text FROM history WHERE text = 'old'").first<{ text: string }>())?.text, "old");
 		}
@@ -272,6 +280,7 @@ test("an export over 8 MiB imports as slices and the whole file is rejected", as
 	assert.equal(swapped, true);
 	assert.equal(((await dst.prepare("SELECT text FROM history").all()).results as unknown[]).length, 4500);
 	assert.equal(await dst.prepare("SELECT text FROM history WHERE text = 'old'").first(), null);
+	assert.ok(part > 0, "the commit body was not the first request");
 	assert.equal((await dst.prepare("SELECT state FROM oidc_txns").first<{ state: string }>())?.state, "st");
 	assert.equal(dst.db.prepare("SELECT name FROM sqlite_master WHERE name LIKE '_a2a_import_%'").all().length, 0);
 
@@ -285,6 +294,75 @@ test("an export over 8 MiB imports as slices and the whole file is rejected", as
 	const err = await rejected.json() as { error: string };
 	assert.equal(err.error, "Body too large");
 	assert.equal(((await dst.prepare("SELECT text FROM history").all()).results as unknown[]).length, 4500);
+});
+
+test("CLI slices stage every planned table before its rows arrive, then swap from an empty tables object", async () => {
+	const src = db();
+	const text = "x".repeat(2000);
+	for (let i = 0; i < 3; i++)
+		await src.prepare("INSERT INTO history (context_id, ts, dir, text) VALUES ('c', 't', 'in', ?)").bind(text + i).run();
+	await src.prepare("INSERT INTO peers (label, token_hash, created_at) VALUES ('ada', 'h', 't')").run();
+	await src.prepare("INSERT INTO oidc_txns (state, nonce, verifier, kind, csrf, payload_json, expires_ms) VALUES ('st', 'n', 'v', 'device', 'c', ?, 9)").bind("y".repeat(1800)).run();
+	const file = await exportRows(src);
+	// 5000 bytes fills the first part with peers and history. oidc_txns is a later part. Empty tables are in the plan only.
+	const planned = importParts(file, 5000);
+	assert.equal(planned.mode, "slice");
+	assert.equal(planned.error, undefined);
+	assert.ok(planned.parts.length > 1);
+	const firstNames = Object.keys(planned.parts[0].body.tables);
+	assert.ok(!firstNames.includes("oidc_txns"), `oidc_txns was in the first body: ${firstNames.join(",")}`);
+	assert.ok(planned.parts.some((p: { body: { tables: Record<string, unknown> } }, i: number) => i > 0 && Array.isArray(p.body.tables.oidc_txns)));
+	assert.ok(!firstNames.includes("tasks"));
+	assert.ok(planned.slice.tables.includes("tasks"));
+	assert.equal(planned.slice.tables.length, EXPORT_TABLES.length);
+	const later = "oidc_txns";
+
+	const dst = db();
+	await dst.prepare("INSERT INTO peers (label, token_hash, created_at) VALUES ('keep', 'hk', 't')").run();
+	await dst.prepare("INSERT INTO oidc_txns (state, nonce, verifier, kind, csrf, payload_json, expires_ms) VALUES ('old', 'n', 'v', 'device', 'c', '{}', 1)").run();
+	const counter = countQueries(dst);
+	let resume: ImportCursor | undefined;
+	let part = 0;
+	let sawCommit = false;
+	for (let n = 0; n < planned.parts.length + 5; n++) {
+		counter.reset();
+		const phase = resume?.phase;
+		const body = phase === "commit" || phase === "cleanup"
+			? { format: file.format, version: file.version, tables: {}, slice: planned.slice, resume }
+			: { ...planned.parts[part].body, ...(resume ? { resume } : {}) };
+		const res = await importRows(counter.db, body, { resume });
+		assert.ok(counter.used <= IMPORT_QUERY_BUDGET, `${phase || "start"} used ${counter.used} queries`);
+		if (!resume) {
+			const staged = dst.db.prepare("SELECT name FROM sqlite_master WHERE name LIKE '_a2a_import_%'").all() as { name: string }[];
+			assert.ok(staged.some((row) => row.name === `_a2a_import_${later}`), `${later} was not staged with the first slice`);
+			assert.ok(staged.some((row) => row.name === "_a2a_import_tasks"), "an empty planned table was not staged");
+			assert.equal((await dst.prepare("SELECT label FROM peers WHERE label = 'keep'").first<{ label: string }>())?.label, "keep");
+			assert.equal((await dst.prepare("SELECT state FROM oidc_txns").first<{ state: string }>())?.state, "old");
+		}
+		if (phase === "commit") {
+			sawCommit = true;
+			assert.equal(counter.used, 1 + planned.slice.tables.length * 2);
+			assert.ok(counter.used < 50);
+			assert.equal(res.tables, EXPORT_TABLES.length);
+			assert.equal(res.next?.phase, "cleanup");
+			assert.equal(await dst.prepare("SELECT label FROM peers WHERE label = 'keep'").first(), null);
+			assert.equal((await dst.prepare("SELECT label FROM peers").first<{ label: string }>())?.label, "ada");
+			const stillThere = dst.db.prepare("SELECT name FROM sqlite_master WHERE name = '_a2a_import_meta'").all();
+			assert.equal(stillThere.length, 1);
+		}
+		if (!res.next) break;
+		if (res.next.phase === "stage") {
+			const expect = planned.parts[part].after;
+			assert.equal(res.next.table, expect?.table);
+			assert.equal(res.next.offset, expect?.offset);
+			part++;
+		}
+		resume = res.next;
+	}
+	assert.equal(sawCommit, true);
+	assert.equal((await dst.prepare("SELECT state FROM oidc_txns").first<{ state: string }>())?.state, "st");
+	assert.equal(((await dst.prepare("SELECT text FROM history").all()).results as { text: string }[]).length, 3);
+	assert.equal(dst.db.prepare("SELECT name FROM sqlite_master WHERE name LIKE '_a2a_import_%'").all().length, 0);
 });
 
 test("owner export and import: auth, hashes, and the minute cron left in place", async () => {

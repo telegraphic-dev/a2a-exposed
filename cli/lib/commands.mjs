@@ -347,27 +347,31 @@ export function importParts(file, maxBytes = IMPORT_REQUEST_BYTES) {
 		let stmts = 0;
 		let bytes = shellBytes;
 		let tooBig = false;
+		let partFull = false;
 		for (const n of names) {
 			if (pos[n] >= counts[n]) continue;
 			const rows = [];
 			while (pos[n] + rows.length < counts[n]) {
 				const row = file.tables[n][pos[n] + rows.length];
 				const trial = rows.concat([row]);
-				if (stmts + stmtsFor(trial) > stmtCap && rows.length) break;
 				const extra = Buffer.byteLength(JSON.stringify(row)) + 1;
-				if (bytes + extra > maxBytes) {
-					if (!rows.length) tooBig = true;
+				// A row that does not fit in this part goes in the next one. It is too large only when it
+				// cannot fit in a part by itself (no rows accepted yet).
+				if (stmts + stmtsFor(trial) > stmtCap || bytes + extra > maxBytes) {
+					if (!rows.length && !Object.keys(tables).length && bytes + extra > maxBytes) tooBig = true;
+					partFull = true;
 					break;
 				}
 				rows.push(row);
 				bytes += extra;
 			}
+			if (tooBig) break;
 			if (rows.length) {
 				tables[n] = rows;
 				pos[n] += rows.length;
 				stmts += stmtsFor(rows);
 			}
-			if (tooBig || stmts >= stmtCap) break;
+			if (partFull) break;
 		}
 		if (tooBig) return { mode: "slice", error: "a row is larger than the request limit" };
 		if (!Object.keys(tables).length) break;

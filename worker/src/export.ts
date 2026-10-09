@@ -330,13 +330,17 @@ export interface ImportResult {
  *
  * A file that fits in {@link IMPORT_QUERY_BUDGET} is one batch: DELETE the listed tables, then INSERT. That batch
  * is one transaction. A larger file is inserted into side tables (`_a2a_import_*`) across invocations and swapped
- * into the live tables in one batch. Until that swap, the inbox is unchanged. `next` is the cursor for the next call.
- * A file bigger than the request body sends `slice` and only the rows for that request. Each request is applied
- * whole or not at all.
+ * into the live tables in one batch: one DELETE and one INSERT...SELECT per table, and no drops. Dropping the side
+ * tables is the next request, so a full export stays inside the Free-plan cap. Until that swap, the inbox is unchanged.
+ * `next` is the cursor for the next call.
+ * A file bigger than the request body sends `slice`. That plan names every table; `tables` on the request is only
+ * this slice's rows (a commit sends none). {@link importSlice} handles it, including the empty commit body.
+ * Each request is applied whole or not at all.
  */
 export async function importRows(db: SqlDb, input: unknown, opts: ImportOptions = {}): Promise<ImportResult> {
 	const file = plain(input, "body");
 	if (file.format !== "a2a-exposed-export" || file.version !== 1) throw new ExportError("import: format or version is not supported");
+	// Slice commits post `tables: {}`. They must not fall through to the empty-object success return below.
 	const slice = parseSlice(file);
 	if (slice) return importSlice(db, file, slice, opts);
 	const tables = plain(file.tables, "tables");
@@ -375,17 +379,8 @@ export async function importRows(db: SqlDb, input: unknown, opts: ImportOptions 
 		const meta = await readMeta(db);
 		used++;
 		if (!meta || meta.id !== resume.id || meta.ready !== resume.id) throw new ExportError("import: staging is incomplete; re-run import");
-		const swap = [];
-		for (const name of listed) {
-			swap.push(db.prepare(`DELETE FROM ${quoteIdent(name)}`));
-			swap.push(db.prepare(`INSERT INTO ${quoteIdent(name)} SELECT * FROM ${quoteIdent(stagingTable(name))}`));
-		}
-		await runBatch(db, swap);
-		used += swap.length;
-		const drop = dropStaging(db, listed, IMPORT_QUERY_BUDGET - used);
-		await runBatch(db, drop.stmts);
-		if (drop.rest.length || !drop.meta) return done(0, { phase: "cleanup", id: resume.id });
-		return done(0);
+		await runBatch(db, swapStatements(db, listed, used));
+		return done(0, { phase: "cleanup", id: resume.id });
 	}
 
 	const insertCount = listed.reduce((n, name) => n + insertStatementCount(prepared.get(name)!), 0);
@@ -447,6 +442,21 @@ function stageRows(db: SqlDb, listed: readonly string[], prepared: Map<string, R
 	}
 	if (from && !armed) throw new ExportError("import: resume table is not in this file");
 	return { stmts, inserted, cursor: null };
+}
+
+/**
+ * One DELETE and one INSERT...SELECT per table. `used` is the queries already spent in this invocation (the meta read).
+ * Drops are not included: a full export is 18 tables, and DELETE + INSERT + DROP for each of them, plus the meta read,
+ * is 55 statements. That is over {@link IMPORT_QUERY_BUDGET}. The swap batch is 36 statements. Cleanup drops the side tables.
+ */
+function swapStatements(db: SqlDb, names: readonly string[], used: number): ReturnType<SqlDb["prepare"]>[] {
+	const stmts: ReturnType<SqlDb["prepare"]>[] = [];
+	for (const name of names) {
+		stmts.push(db.prepare(`DELETE FROM ${quoteIdent(name)}`));
+		stmts.push(db.prepare(`INSERT INTO ${quoteIdent(name)} SELECT * FROM ${quoteIdent(stagingTable(name))}`));
+	}
+	if (used + stmts.length > IMPORT_QUERY_BUDGET) throw new ExportError("import: swap does not fit the query budget");
+	return stmts;
 }
 
 /** DROP staging tables, then the meta table, up to `budget` statements. */
@@ -547,6 +557,8 @@ function takeSlice(plan: SlicePlan, staged: Record<string, number>, prepared: Ma
 
 async function importSlice(db: SqlDb, file: Record<string, unknown>, plan: SlicePlan, opts: ImportOptions): Promise<ImportResult> {
 	const resume = parseResume(opts.resume);
+	// The plan, not this request's rows. The first request creates every one of these side tables, and the
+	// commit swaps every one of them, even when `tables` is `{}`.
 	const listed = plan.tables;
 	const done = (rows: number, next?: ImportCursor, need: string[] = []): ImportResult => ({
 		tables: listed.length, rows, outboundPeersNeedSync: need, ...(next ? { next } : {}),
@@ -565,17 +577,8 @@ async function importSlice(db: SqlDb, file: Record<string, unknown>, plan: Slice
 			return done(0);
 		}
 		if (meta.ready !== resume.id) throw new ExportError("import: staging is incomplete; re-run import");
-		const swap = [];
-		for (const name of listed) {
-			swap.push(db.prepare(`DELETE FROM ${quoteIdent(name)}`));
-			swap.push(db.prepare(`INSERT INTO ${quoteIdent(name)} SELECT * FROM ${quoteIdent(stagingTable(name))}`));
-		}
-		await runBatch(db, swap);
-		used += swap.length;
-		const drop = dropStaging(db, listed, IMPORT_QUERY_BUDGET - used);
-		await runBatch(db, drop.stmts);
-		if (drop.rest.length || !drop.meta) return done(0, { phase: "cleanup", id: resume.id });
-		return done(0);
+		await runBatch(db, swapStatements(db, listed, used));
+		return done(0, { phase: "cleanup", id: resume.id });
 	}
 
 	const bodyTables = plain(file.tables, "tables");
