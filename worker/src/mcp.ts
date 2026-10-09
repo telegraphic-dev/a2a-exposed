@@ -4,7 +4,78 @@
 import { esc } from "./pairing.ts";
 
 export const SCOPE = "inbox";
-export const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"];
+/** Modern (stateless, per-request _meta) versions: no initialize, server/discover, resultType, Mcp-Method / Mcp-Name headers. */
+export const MODERN_VERSIONS = ["2026-07-28"];
+/** Legacy versions: an initialize handshake (we stay stateless: no Mcp-Session-Id), negotiated within this list. */
+export const LEGACY_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"];
+/** Every version this server speaks, newest first (UnsupportedProtocolVersionError data.supported, server/discover). */
+export const PROTOCOL_VERSIONS = [...MODERN_VERSIONS, ...LEGACY_VERSIONS];
+export const isModern = (v: string) => MODERN_VERSIONS.includes(v);
+
+// JSON-RPC error codes. -32020..-32022 are the codes the 2026-07-28 revision reserves (its -32001/-32003/-32004 drafts
+// were renumbered); -32601 / -32602 / -32600 / -32700 are plain JSON-RPC.
+export const ERR = { PARSE: -32700, INVALID_REQUEST: -32600, METHOD_NOT_FOUND: -32601, INVALID_PARAMS: -32602,
+	HEADER_MISMATCH: -32020, MISSING_CLIENT_CAPABILITY: -32021, UNSUPPORTED_VERSION: -32022 } as const;
+export const META = { version: "io.modelcontextprotocol/protocolVersion", capabilities: "io.modelcontextprotocol/clientCapabilities",
+	clientInfo: "io.modelcontextprotocol/clientInfo", serverInfo: "io.modelcontextprotocol/serverInfo", subscriptionId: "io.modelcontextprotocol/subscriptionId" } as const;
+/** tools/list and server/discover cache hint: the tool set only changes with a deploy. Private: results are fetched with a
+ *  per-owner token, so shared caches must not reuse them across authorization contexts. */
+export const LIST_TTL_MS = 3_600_000;
+
+/** Decode a header value that may use the `=?base64?...?=` sentinel (Mcp-Name, Mcp-Param-*). null: malformed. */
+export function decodeHeaderValue(v: string): string | null {
+	const m = /^=\?base64\?([A-Za-z0-9+/]*={0,2})\?=$/.exec(v);
+	if (!m) return v.startsWith("=?base64?") ? null : v;
+	try { return new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(Uint8Array.from(atob(m[1]), (c) => c.charCodeAt(0))); } catch { return null; }
+}
+
+/** 2026-07-28 Streamable HTTP request headers vs body: "" when fine, else why (HeaderMismatch, -32020). */
+export function headerProblem(h: Headers, msg: { method: string; params?: any }, version: string): string {
+	const pv = h.get("mcp-protocol-version");
+	if (!pv) return "the MCP-Protocol-Version header is required";
+	if (pv !== version) return `MCP-Protocol-Version header ${pv} does not match the body's ${META.version} ${version}`;
+	const mm = h.get("mcp-method");
+	if (mm === null) return "the Mcp-Method header is required";
+	if (mm !== msg.method) return `Mcp-Method header value '${mm}' does not match body method '${msg.method}'`;
+	const named = msg.method === "tools/call" ? msg.params?.name : msg.method === "resources/read" ? msg.params?.uri : msg.method === "prompts/get" ? msg.params?.name : undefined;
+	if (named !== undefined) {
+		const raw = h.get("mcp-name");
+		if (raw === null) return "the Mcp-Name header is required for " + msg.method;
+		const nv = decodeHeaderValue(raw);
+		if (nv === null) return "the Mcp-Name header is malformed";
+		if (nv !== String(named)) return `Mcp-Name header value '${nv}' does not match body value '${String(named)}'`;
+	}
+	return "";
+}
+
+/** CIMD client_id URL rules (draft-ietf-oauth-client-id-metadata-document §3): "" when acceptable, else why. */
+export function cimdUrlProblem(id: string): string {
+	let u: URL;
+	try { u = new URL(id); } catch { return "not a URL"; }
+	if (u.protocol !== "https:") return "must be https";
+	if (u.username || u.password) return "must not contain a username or password";
+	if (u.hash || id.includes("#")) return "must not contain a fragment";
+	if (!u.pathname || u.pathname === "/") return "must contain a path";
+	if (/(^|\/)\.\.?(\/|$)/.test(id.replace(/^https:\/\/[^/]+/, ""))) return "must not contain . or .. path segments";
+	if (id.length > 512) return "too long";
+	return "";
+}
+
+/** Validate a fetched CIMD document for `id`. Returns the client or why it's refused. */
+export function cimdDocument(id: string, doc: any): { client_name: string; redirect_uris: string[] } | string {
+	if (!doc || typeof doc !== "object" || Array.isArray(doc)) return "the metadata document is not a JSON object";
+	if (doc.client_id !== id) return "the document's client_id doesn't match its URL";
+	const uris = doc.redirect_uris;
+	if (!Array.isArray(uris) || !uris.length || uris.length > 10 || uris.some((x: unknown) => typeof x !== "string")) return "redirect_uris must be 1-10 URLs";
+	for (const x of uris) { const why = redirectUriProblem(x); if (why) return `redirect_uris: ${x}: ${why}`; }
+	const am = doc.token_endpoint_auth_method;
+	if (am !== undefined && am !== "none") return `token_endpoint_auth_method ${am} is not supported (public clients with PKCE only)`;
+	if ("client_secret" in doc || "client_secret_expires_at" in doc) return "a metadata document must not carry a client secret";
+	if (doc.grant_types !== undefined && (!Array.isArray(doc.grant_types) || !doc.grant_types.includes("authorization_code"))) return "grant_types must include authorization_code";
+	const name = typeof doc.client_name === "string" ? doc.client_name : "";
+	return { client_name: name, redirect_uris: uris };
+}
+export const CIMD = { maxBytes: 5120, timeoutMs: 5000, defaultTtlS: 3600, minTtlS: 60, maxTtlS: 86400, fetchesPerIpPerHour: 30 };
 export const ACCESS_TTL_S = 3600;
 export const REFRESH_TTL_S = 30 * 86400;
 export const CODE_TTL_S = 120;
@@ -73,6 +144,7 @@ export type ConsentModel = {
 	csrf: string;
 	clientName: string;
 	redirectUri: string;
+	clientIdHost?: string; // CIMD: the host serving the client's metadata document
 	params: Record<string, string>; // the authorization request, posted back in hidden fields
 	passwordSet: boolean;
 	notice?: { kind: "ok" | "error" | "info"; text: string };
@@ -88,7 +160,8 @@ export function consentBody(m: ConsentModel): string {
 	const can = ["Read your inbox: open tasks, task details, conversation history, pending pairing requests (read-only)",
 		"Reply to tasks and mark them working", "Send messages to peers you synced to this inbox (peers sync) and check their tasks", "List your peers"];
 	const cannot = ["Issue, rotate or revoke tokens", "Approve or deny pairing requests", "Change wake or deployment settings"];
-	const table = `<table><tr><th>Client (as it calls itself)</th><td>${esc(m.clientName || "(no name given)")}</td></tr><tr><th>Returns to</th><td>${esc(host)}</td></tr></table>`;
+	const idRow = m.clientIdHost ? `<tr><th>Client identity published at</th><td>${esc(m.clientIdHost)}</td></tr>` : "";
+	const table = `<table><tr><th>Client (as it calls itself)</th><td>${esc(m.clientName || "(no name given)")}</td></tr>${idRow}<tr><th>Returns to</th><td>${esc(host)}</td></tr></table>`;
 	const scope = `<h2>It will be able to</h2><ul>${can.map((x) => `<li>${esc(x)}</li>`).join("")}</ul><h2>It will not be able to</h2><ul>${cannot.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`;
 	const form = m.passwordSet
 		? `<form method="post" action="/oauth/authorize"><input type="hidden" name="csrf" value="${esc(m.csrf)}">${hidden}

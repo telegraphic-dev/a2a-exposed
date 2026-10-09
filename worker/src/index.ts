@@ -1087,7 +1087,9 @@ function oauthMetadata(env: Env): Json {
 		issuer: u.issuer, token_endpoint: u.token,
 		...(pairing ? { device_authorization_endpoint: u.device } : {}),
 		...(mcp ? { authorization_endpoint: u.authorize, registration_endpoint: u.register, revocation_endpoint: u.revoke,
-			code_challenge_methods_supported: ["S256"], revocation_endpoint_auth_methods_supported: ["none"] } : {}),
+			code_challenge_methods_supported: ["S256"], revocation_endpoint_auth_methods_supported: ["none"],
+			// MCP 2026-07-28: Client ID Metadata Documents (preferred; DCR stays for older clients) and RFC 9207 iss
+			client_id_metadata_document_supported: true, authorization_response_iss_parameter_supported: true } : {}),
 		grant_types_supported: [...(pairing ? [P.DEVICE_GRANT] : []), ...(mcp ? ["authorization_code", "refresh_token"] : [])],
 		response_types_supported: mcp ? ["code"] : [], token_endpoint_auth_methods_supported: ["none"],
 		scopes_supported: [...(pairing ? ["a2a"] : []), ...(mcp ? [M.SCOPE, "offline_access"] : [])],
@@ -1570,6 +1572,9 @@ async function registerClient(req: Request, env: Env): Promise<Response> {
 		return oauthError("invalid_client_metadata", "grant_types: authorization_code and refresh_token only");
 	if (b.response_types && (!Array.isArray(b.response_types) || b.response_types.some((r: unknown) => r !== "code")))
 		return oauthError("invalid_client_metadata", "response_types: code only");
+	// OIDC application_type (MCP 2026-07-28 clients send it). Not an OIDC server: accepted and echoed, no extra redirect rules.
+	if (b.application_type !== undefined && b.application_type !== "native" && b.application_type !== "web")
+		return oauthError("invalid_client_metadata", "application_type must be native or web");
 	if ((await bump(env, `reg:ip:${ip || "?"}`, 3600)) > M.LIMITS.registrationsPerIpPerHour) {
 		log("mcp_registration_rate_limited", { ip });
 		return oauthError("slow_down", "too many client registrations from this address; try again later", 429, { "retry-after": "3600" });
@@ -1587,18 +1592,89 @@ async function registerClient(req: Request, env: Env): Promise<Response> {
 		.bind(clientId, name || null, JSON.stringify(uris), now, ip || null).run();
 	log("mcp_client_registered", { ip, clientName: name });
 	return json({ client_id: clientId, client_id_issued_at: Math.floor(now / 1000), client_name: name || undefined, redirect_uris: uris,
-		grant_types: ["authorization_code", "refresh_token"], response_types: ["code"], token_endpoint_auth_method: "none" }, 201, noStore);
+		grant_types: ["authorization_code", "refresh_token"], response_types: ["code"], token_endpoint_auth_method: "none",
+		...(b.application_type ? { application_type: b.application_type } : {}) }, 201, noStore);
+}
+
+/** Read at most `max` bytes of a response body; null when it is larger. */
+async function readCapped(res: Response, max: number): Promise<string | null> {
+	if (Number(res.headers.get("content-length") || "0") > max) return null;
+	if (!res.body) return "";
+	const reader = res.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let n = 0;
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		n += value.byteLength;
+		if (n > max) { await reader.cancel().catch(() => {}); return null; }
+		chunks.push(value);
+	}
+	const all = new Uint8Array(n);
+	let o = 0;
+	for (const c of chunks) { all.set(c, o); o += c.byteLength; }
+	return new TextDecoder().decode(all);
+}
+
+/** max-age from Cache-Control, clamped; 0 for no-store / no-cache. */
+function cimdTtlS(cc: string | null): number {
+	const v = (cc || "").toLowerCase();
+	if (/\bno-store\b|\bno-cache\b/.test(v)) return 0;
+	const m = /\bmax-age=(\d+)/.exec(v);
+	const s = m ? Number(m[1]) : M.CIMD.defaultTtlS;
+	return Math.min(M.CIMD.maxTtlS, Math.max(M.CIMD.minTtlS, s));
+}
+
+/** The OAuth client for a client_id: a dynamically registered one (mcpc_...), or, for an https URL, its Client ID Metadata
+ *  Document (fetched with SSRF guards: public https host other than this Worker, no redirects, 5 s, 5 KB; cached for its
+ *  max-age; failures and invalid documents are not cached). `ip` rate-limits fetches (not cached lookups). */
+async function resolveClient(env: Env, id: string, ip?: string): Promise<{ client?: Json; error?: string }> {
+	if (!id) return { error: "client_id is required" };
+	if (!/^https:\/\//i.test(id)) {
+		const c: Json = await env.DB.prepare("SELECT * FROM oauth_clients WHERE client_id = ?").bind(id).first();
+		return c ? { client: c } : { error: "Unknown client. Remove the connector and add it again (the client registers itself)." };
+	}
+	const bad = M.cimdUrlProblem(id) || peerUrlProblem(id) || (new URL(id).host === new URL(env.PUBLIC_URL).host ? "must not be on this inbox's own host" : "");
+	if (bad) return { error: `The client's metadata URL is not acceptable: ${bad}.` };
+	const now = Date.now();
+	const hit: Json = await env.DB.prepare("SELECT * FROM oauth_client_metadata WHERE client_id = ? AND expires_ms > ?").bind(id, now).first();
+	if (hit) return { client: { ...hit, cimd: true } };
+	if (ip !== undefined && (await bump(env, `cimd:ip:${ip || "?"}`, 3600)) > M.CIMD.fetchesPerIpPerHour)
+		return { error: "Too many client metadata lookups from this address. Try again later." };
+	let res: Response;
+	try { res = await fetch(id, { headers: { accept: "application/json" }, redirect: "manual", signal: AbortSignal.timeout(M.CIMD.timeoutMs) }); }
+	catch { log("mcp_cimd_failed", { host: new URL(id).host, reason: "unreachable" }); return { error: "The client's metadata document could not be fetched." }; }
+	if (res.status !== 200) {
+		log("mcp_cimd_failed", { host: new URL(id).host, reason: `HTTP ${res.status}` });
+		return { error: `The client's metadata document could not be fetched (HTTP ${res.status}${res.status >= 300 && res.status < 400 ? ", redirects are not followed" : ""}).` };
+	}
+	const text = await readCapped(res, M.CIMD.maxBytes);
+	if (text === null) return { error: `The client's metadata document is larger than ${M.CIMD.maxBytes} bytes.` };
+	let doc: Json;
+	try { doc = JSON.parse(text); } catch { return { error: "The client's metadata document is not valid JSON." }; }
+	const v = M.cimdDocument(id, doc);
+	if (typeof v === "string") { log("mcp_cimd_failed", { host: new URL(id).host, reason: v }); return { error: `The client's metadata document was refused: ${v}.` }; }
+	const name = P.cleanText(v.client_name) || "";
+	const row = { client_id: id, client_name: name || null, redirect_uris_json: JSON.stringify(v.redirect_uris), fetched_ms: now };
+	const ttl = cimdTtlS(res.headers.get("cache-control"));
+	// keep a record even for no-store documents (expires now) so the token step can name the grant; it is never served from cache
+	await env.DB.prepare(`INSERT INTO oauth_client_metadata (client_id, client_name, redirect_uris_json, fetched_ms, expires_ms) VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(client_id) DO UPDATE SET client_name = excluded.client_name, redirect_uris_json = excluded.redirect_uris_json, fetched_ms = excluded.fetched_ms, expires_ms = excluded.expires_ms`)
+		.bind(id, row.client_name, row.redirect_uris_json, now, now + ttl * 1000).run();
+	log("mcp_cimd_fetched", { host: new URL(id).host, clientName: name, ttlS: ttl });
+	return { client: { ...row, cimd: true } };
 }
 
 type AuthzCheck = { fatal?: string; error?: string; description?: string; client?: Json; redirect?: string; params: Record<string, string> };
 
 /** Validate an authorization request. fatal: show an error page (no trustworthy redirect); error: redirect back with it. */
-async function checkAuthorize(env: Env, q: Record<string, string>): Promise<AuthzCheck> {
+async function checkAuthorize(env: Env, q: Record<string, string>, ip: string): Promise<AuthzCheck> {
 	const params: Record<string, string> = {};
 	for (const k of ["response_type", "client_id", "redirect_uri", "state", "code_challenge", "code_challenge_method", "scope", "resource"])
 		if (typeof q[k] === "string" && q[k] !== "") params[k] = q[k].slice(0, 2048);
-	const client: Json = params.client_id ? await env.DB.prepare("SELECT * FROM oauth_clients WHERE client_id = ?").bind(params.client_id).first() : null;
-	if (!client) return { fatal: "Unknown client. Remove the connector and add it again (the client registers itself).", params };
+	const rc = await resolveClient(env, params.client_id || "", ip);
+	if (!rc.client) return { fatal: rc.error!, params };
+	const client = rc.client;
 	const uris: string[] = JSON.parse(client.redirect_uris_json || "[]");
 	const redirect = params.redirect_uri || (uris.length === 1 ? uris[0] : "");
 	if (!redirect || !M.redirectMatches(uris, redirect)) return { fatal: "The redirect address doesn't match what this client registered.", params };
@@ -1631,7 +1707,7 @@ async function authorizePage(req: Request, env: Env, url: URL): Promise<Response
 		try { form = P.parseParams(await readBody(req, { ...env, MAX_BODY: "16384" }), "application/x-www-form-urlencoded"); } catch { /* empty */ }
 	}
 	const q = req.method === "GET" ? Object.fromEntries(url.searchParams) : form;
-	const c = await checkAuthorize(env, q);
+	const c = await checkAuthorize(env, q, ip);
 	const pw = await approvalPassword(env);
 	const page = (status: number, body: string, formOrigin?: string) => {
 		const h: Record<string, string> = P.pageHeaders(nonce);
@@ -1644,7 +1720,8 @@ async function authorizePage(req: Request, env: Env, url: URL): Promise<Response
 	if (c.error) return redirectWith(env, c.redirect!, { error: c.error, error_description: c.description!, state: c.params.state });
 	const origin = new URL(c.redirect!).origin;
 	const show = (status: number, notice?: M.ConsentModel["notice"]) => page(status, M.consentBody({ agentName: env.AGENT_NAME || "this A2A inbox", cli: cliCommand(env),
-		csrf, clientName: c.client!.client_name || "", redirectUri: c.redirect!, params: c.params, passwordSet: !!pw, notice }), origin);
+		csrf, clientName: c.client!.client_name || "", clientIdHost: c.client!.cimd ? new URL(c.client!.client_id).host : undefined,
+		redirectUri: c.redirect!, params: c.params, passwordSet: !!pw, notice }), origin);
 	if (req.method === "GET") return show(200);
 	const reqOrigin = req.headers.get("origin");
 	if ((reqOrigin && reqOrigin !== "null" && reqOrigin !== new URL(env.PUBLIC_URL).origin && reqOrigin !== url.origin) || fresh || !form.csrf || !A.timingSafeEqualStr(form.csrf, csrf))
@@ -1672,7 +1749,7 @@ async function authorizePage(req: Request, env: Env, url: URL): Promise<Response
 		return show(409, { kind: "error", text: `This inbox already has ${M.LIMITS.maxGrants} MCP connectors. Revoke one first: ${cliCommand(env)} token list, then token revoke <label>.` });
 	const code = A.randomToken("a2amcpc_"), now = Date.now();
 	await env.DB.prepare("INSERT INTO oauth_codes (code_hash, client_id, redirect_uri, code_challenge, scope, resource, created_ms, expires_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-		.bind(await A.sha256(code), c.params.client_id, c.redirect, c.params.code_challenge, c.params.scope, c.params.resource || null, now, now + M.CODE_TTL_S * 1000).run();
+		.bind(await A.sha256(code), c.params.client_id, c.redirect, c.params.code_challenge, c.params.scope, c.params.resource || oauthUrls(env).mcp, now, now + M.CODE_TTL_S * 1000).run();
 	log("mcp_authorization_approved", { ip, clientName: c.client!.client_name, redirectHost: new URL(c.redirect!).host });
 	return redirectWith(env, c.redirect!, { code, state: c.params.state });
 }
@@ -1699,7 +1776,10 @@ async function mcpToken(req: Request, env: Env, p: Record<string, string>): Prom
 		if ((p.redirect_uri || r.redirect_uri) !== r.redirect_uri) return oauthError("invalid_grant", "redirect_uri doesn't match the authorization request");
 		if (!M.validVerifier(p.code_verifier) || !A.timingSafeEqualStr(await M.s256(p.code_verifier), r.code_challenge)) return oauthError("invalid_grant", "PKCE verification failed");
 		if (p.resource && p.resource.replace(/\/$/, "") !== oauthUrls(env).mcp) return oauthError("invalid_target", `resource must be ${oauthUrls(env).mcp}`);
-		const client: Json = await env.DB.prepare("SELECT * FROM oauth_clients WHERE client_id = ?").bind(r.client_id).first();
+		// CIMD clients were validated (and recorded) at the authorization step moments ago: use that record, expired or not
+		const client: Json = /^https:\/\//i.test(r.client_id)
+			? await env.DB.prepare("SELECT * FROM oauth_client_metadata WHERE client_id = ?").bind(r.client_id).first()
+			: await env.DB.prepare("SELECT * FROM oauth_clients WHERE client_id = ?").bind(r.client_id).first();
 		if (!client) return oauthError("invalid_client", "the client registration is gone; connect again");
 		const base = M.grantLabelBase(client.client_name || "");
 		const taken = await env.DB.prepare("SELECT label FROM mcp_grants WHERE label = ? OR label LIKE ?").bind(base, `${base}-%`).all();
@@ -1900,15 +1980,40 @@ async function runTool(env: Env, ectx: ExecutionContext, name: string, a: Json):
 }
 
 const rpcResult = (id: Json, result: Json) => json({ jsonrpc: "2.0", id, result });
-const rpcError = (id: Json, code: number, message: string, status = 200) => json({ jsonrpc: "2.0", id: id ?? null, error: { code, message } }, status);
+const rpcError = (id: Json, code: number, message: string, status = 200, data?: Json) =>
+	json({ jsonrpc: "2.0", id: id ?? null, error: { code, message, ...(data !== undefined ? { data } : {}) } }, status);
+const serverInfo = (env: Env) => ({ name: "a2a-exposed", title: `${env.AGENT_NAME || "A2A inbox"}`, version: "1" });
+const mcpInstructions = `This is your A2A inbox: other agents send you tasks here. Check inbox, read each task, answer with reply. ${M.RULES}`;
+const unsupportedVersion = (id: Json, requested: string) =>
+	rpcError(id, M.ERR.UNSUPPORTED_VERSION, "Unsupported protocol version", 400, { supported: M.PROTOCOL_VERSIONS, requested });
 
-/** POST /mcp: MCP Streamable HTTP, stateless (JSON responses, no sessions, no server-initiated stream). */
+/** One tools/call, shared by both eras. */
+async function callTool(env: Env, ectx: ExecutionContext, grant: Json, params: Json): Promise<{ error?: [number, string]; result?: Json }> {
+	const name = String(params.name || "");
+	if (!M.TOOLS.some((t) => t.name === name)) return { error: [M.ERR.INVALID_PARAMS, `unknown tool: ${name}`] };
+	const args = params.arguments ?? {};
+	if (typeof args !== "object" || Array.isArray(args)) return { error: [M.ERR.INVALID_PARAMS, "arguments must be an object"] };
+	try {
+		const text = await runTool(env, ectx, name, args);
+		log("mcp_tool", { label: grant.label, tool: name });
+		return { result: { content: [{ type: "text", text }], isError: false } };
+	} catch (e: any) {
+		log("mcp_tool_failed", { label: grant.label, tool: name, error: String(e.message).slice(0, 200) });
+		return { result: { content: [{ type: "text", text: `Error: ${e.message}` }], isError: true } };
+	}
+}
+
+/** POST /mcp: MCP Streamable HTTP, stateless, dual-era. A request whose params._meta carries
+ *  io.modelcontextprotocol/protocolVersion is served per 2026-07-28 (no initialize, server/discover, resultType, required
+ *  Mcp-Method / Mcp-Name headers); anything else follows the initialize-based 2025 revisions. No sessions in either era
+ *  (Mcp-Session-Id is never minted and is ignored), no GET stream, no SSE resumability. */
 async function handleMcp(req: Request, env: Env, ectx: ExecutionContext, url: URL): Promise<Response> {
 	const u = oauthUrls(env);
 	// DNS-rebinding / cross-site guard (spec: servers MUST validate Origin). Browsers send it; MCP clients usually don't.
 	const origin = req.headers.get("origin");
 	if (origin && origin !== new URL(env.PUBLIC_URL).origin) return json({ error: "forbidden origin" }, 403);
-	if (req.method !== "POST") return json({ error: "method not allowed: this MCP server is stateless (POST only, no SSE stream)" }, 405, { allow: "POST" });
+	// GET (2025: standalone SSE stream; 2026-07-28: removed, replaced by subscriptions/listen) and DELETE (sessions): 405
+	if (req.method !== "POST") return json({ error: "method not allowed: POST only (no GET stream, no sessions)" }, 405, { allow: "POST" });
 	if ([...url.searchParams.keys()].some((k) => /token|auth/i.test(k)))
 		return json({ error: "invalid_request", error_description: "send the token in the Authorization header, never in the URL" }, 400);
 	const hdr = req.headers.get("authorization");
@@ -1919,43 +2024,75 @@ async function handleMcp(req: Request, env: Env, ectx: ExecutionContext, url: UR
 			"www-authenticate": `Bearer resource_metadata="${u.mcpResource}", scope="${M.SCOPE}"${invalid ? ', error="invalid_token"' : ""}` });
 	}
 	if (!(await rateOk(env, `mcp:${grant.label}`))) return json({ error: "rate limited" }, 429, { "retry-after": "60" });
-	const pv = req.headers.get("mcp-protocol-version");
-	if (pv && !M.PROTOCOL_VERSIONS.includes(pv)) return rpcError(null, -32600, `unsupported MCP-Protocol-Version ${pv}; supported: ${M.PROTOCOL_VERSIONS.join(", ")}`, 400);
 	let msg: Json;
 	try { msg = JSON.parse(await readBody(req, env)); }
-	catch (e: any) { return e instanceof HttpError ? rpcError(null, -32600, "request too large", 413) : rpcError(null, -32700, "parse error", 400); }
-	if (Array.isArray(msg)) return rpcError(null, -32600, "JSON-RPC batches are not supported", 400);
-	if (!msg || typeof msg !== "object" || msg.jsonrpc !== "2.0") return rpcError(null, -32600, "invalid JSON-RPC request", 400);
-	if (typeof msg.method !== "string" || msg.id === undefined || msg.id === null) return new Response(null, { status: 202 }); // notification or response
+	catch (e: any) { return e instanceof HttpError ? rpcError(null, M.ERR.INVALID_REQUEST, "request too large", 413) : rpcError(null, M.ERR.PARSE, "parse error", 400); }
+	if (Array.isArray(msg)) return rpcError(null, M.ERR.INVALID_REQUEST, "JSON-RPC batches are not supported", 400);
+	if (!msg || typeof msg !== "object" || msg.jsonrpc !== "2.0") return rpcError(null, M.ERR.INVALID_REQUEST, "invalid JSON-RPC request", 400);
+	const params = msg.params && typeof msg.params === "object" && !Array.isArray(msg.params) ? msg.params : {};
+	const meta = params._meta && typeof params._meta === "object" ? params._meta : {};
+	const bodyVersion = typeof meta[M.META.version] === "string" ? meta[M.META.version] : null;
+	const pv = req.headers.get("mcp-protocol-version");
+	const isRequest = typeof msg.method === "string" && msg.id !== undefined && msg.id !== null;
+	if (!isRequest) {
+		// notifications (and stray responses): accepted, nothing to do, in both eras
+		if (pv && !M.PROTOCOL_VERSIONS.includes(pv)) return unsupportedVersion(null, pv);
+		return new Response(null, { status: 202 });
+	}
+	const id = msg.id;
 	if (Date.now() - Date.parse(grant.last_used_at || "1970-01-01") > 60000)
 		ectx.waitUntil(env.DB.prepare("UPDATE mcp_grants SET last_used_at = ? WHERE label = ?").bind(A.nowIso(), grant.label).run().then(() => {}, () => {}));
-	const id = msg.id, params = msg.params || {};
+
+	// ---- 2026-07-28 and later: per-request _meta (or a modern version header without it: a header/body mismatch)
+	if (bodyVersion !== null || (pv && M.isModern(pv))) {
+		if (bodyVersion === null) return rpcError(id, M.ERR.HEADER_MISMATCH, `MCP-Protocol-Version ${pv} needs params._meta["${M.META.version}"] in the body`, 400);
+		const hp = M.headerProblem(req.headers, msg, bodyVersion);
+		if (hp) return rpcError(id, M.ERR.HEADER_MISMATCH, `Header mismatch: ${hp}`, 400);
+		if (!M.isModern(bodyVersion)) return unsupportedVersion(id, bodyVersion);
+		const caps = meta[M.META.capabilities];
+		if (!caps || typeof caps !== "object" || Array.isArray(caps))
+			return rpcError(id, M.ERR.INVALID_PARAMS, `params._meta["${M.META.capabilities}"] (an object) is required`, 400);
+		const done = (result: Json) => rpcResult(id, { ...result, resultType: "complete", _meta: { ...(result._meta || {}), [M.META.serverInfo]: serverInfo(env) } });
+		switch (msg.method) {
+			case "server/discover":
+				return done({ supportedVersions: M.PROTOCOL_VERSIONS, capabilities: { tools: {} }, instructions: mcpInstructions, ttlMs: M.LIST_TTL_MS, cacheScope: "private" });
+			case "tools/list":
+				return done({ tools: M.TOOLS, ttlMs: M.LIST_TTL_MS, cacheScope: "private" });
+			case "tools/call": {
+				const r = await callTool(env, ectx, grant, params);
+				return r.error ? rpcError(id, r.error[0], r.error[1]) : done(r.result);
+			}
+			case "subscriptions/listen": {
+				// No list-change or resource notifications exist here (the tool set only changes with a deploy), so the
+				// acknowledgment honors none of the requested types and the server closes the subscription gracefully:
+				// ack, then the listen result, on one short SSE response.
+				const sub = { [M.META.subscriptionId]: id };
+				const ack = { jsonrpc: "2.0", method: "notifications/subscriptions/acknowledged", params: { _meta: sub, notifications: {} } };
+				const end = { jsonrpc: "2.0", id, result: { resultType: "complete", _meta: { ...sub, [M.META.serverInfo]: serverInfo(env) } } };
+				return new Response(`event: message\ndata: ${JSON.stringify(ack)}\n\nevent: message\ndata: ${JSON.stringify(end)}\n\n`,
+					{ status: 200, headers: { "content-type": "text/event-stream", "cache-control": "no-store", "x-accel-buffering": "no" } });
+			}
+		}
+		// initialize, ping, logging/setLevel, resources/*, prompts/*: not part of this revision for this server
+		return rpcError(id, M.ERR.METHOD_NOT_FOUND, `method not found: ${msg.method}`, 404);
+	}
+
+	// ---- 2025-11-25 / 2025-06-18 / 2025-03-26: initialize handshake (no header = 2025-03-26)
+	if (pv && !M.LEGACY_VERSIONS.includes(pv)) return unsupportedVersion(id, pv);
 	switch (msg.method) {
 		case "initialize": {
 			const want = String(params.protocolVersion || "");
-			return rpcResult(id, { protocolVersion: M.PROTOCOL_VERSIONS.includes(want) ? want : M.PROTOCOL_VERSIONS[0],
-				capabilities: { tools: { listChanged: false } },
-				serverInfo: { name: "a2a-exposed", title: `${env.AGENT_NAME || "A2A inbox"}`, version: "1" },
-				instructions: `This is your A2A inbox: other agents send you tasks here. Check inbox, read each task, answer with reply. ${M.RULES}` });
+			return rpcResult(id, { protocolVersion: M.LEGACY_VERSIONS.includes(want) ? want : M.LEGACY_VERSIONS[0],
+				capabilities: { tools: { listChanged: false } }, serverInfo: serverInfo(env), instructions: mcpInstructions });
 		}
 		case "ping": return rpcResult(id, {});
 		case "tools/list": return rpcResult(id, { tools: M.TOOLS });
 		case "tools/call": {
-			const name = String(params.name || "");
-			if (!M.TOOLS.some((t) => t.name === name)) return rpcError(id, -32602, `unknown tool: ${name}`);
-			const args = params.arguments ?? {};
-			if (typeof args !== "object" || Array.isArray(args)) return rpcError(id, -32602, "arguments must be an object");
-			try {
-				const text = await runTool(env, ectx, name, args);
-				log("mcp_tool", { label: grant.label, tool: name });
-				return rpcResult(id, { content: [{ type: "text", text }], isError: false });
-			} catch (e: any) {
-				log("mcp_tool_failed", { label: grant.label, tool: name, error: String(e.message).slice(0, 200) });
-				return rpcResult(id, { content: [{ type: "text", text: `Error: ${e.message}` }], isError: true });
-			}
+			const r = await callTool(env, ectx, grant, params);
+			return r.error ? rpcError(id, r.error[0], r.error[1]) : rpcResult(id, r.result);
 		}
 	}
-	return rpcError(id, -32601, `method not found: ${msg.method}`);
+	return rpcError(id, M.ERR.METHOD_NOT_FOUND, `method not found: ${msg.method}`);
 }
 
 async function handle(req: Request, env: Env, ectx: ExecutionContext): Promise<Response> {
