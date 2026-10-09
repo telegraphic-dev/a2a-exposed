@@ -1,8 +1,9 @@
 // a2a-exposed Worker configuration. Everything deployment-specific comes from environment
 // variables at deploy time (set by `npx -y a2a-exposed@latest init|deploy`, or export them yourself;
 // see deploy.env.example). Nothing account- or owner-specific is committed here.
-import { bindings, defineConfig, triggers } from "cf/config";
-import * as entrypoint from "./src/index.ts" with { type: "cf-worker" };
+import { bindings, defineConfig, exports, triggers } from "cf/config";
+import * as selfHost from "./src/index.ts" with { type: "cf-worker" };
+import * as hostedEntry from "./src/hosted.ts" with { type: "cf-worker" };
 
 const e: Record<string, string | undefined> = (globalThis as any).process?.env ?? {};
 const v = (k: string) => (e[k] ?? "").trim();
@@ -46,7 +47,7 @@ const plain: Record<string, string> = {
 	UPSTREAM_URL: v("A2A_UPSTREAM_URL"),
 	UPSTREAM_CARD_URL: v("A2A_UPSTREAM_CARD_URL"), // default <upstream origin>/.well-known/agent-card.json
 	// Hosted multi-tenant gates. All empty by default, and empty is omitted, so a self-host deploy is unchanged.
-	// TENANCY=host does nothing on its own: per-tenant storage also needs the TENANT_DO binding (see hosted entry).
+	// TENANCY=host switches the entrypoint to src/hosted.ts and adds TENANT_DO + TENANT_DIRECTORY below.
 	// QUOTAS, USAGE_SINK, WAKE_TARGET_POLICY, SIGNUP_URL, BRANDING and APPROVAL_OIDC_* are parsed and reserved.
 	TENANCY: v("TENANCY"),
 	TENANT_DOMAIN: v("TENANT_DOMAIN"),
@@ -61,9 +62,16 @@ const plain: Record<string, string> = {
 	APPROVAL_OIDC_ALLOWED_SUBJECTS: v("APPROVAL_OIDC_ALLOWED_SUBJECTS"),
 	APPROVAL_METHODS: v("APPROVAL_METHODS"),
 };
+const hosted = v("TENANCY") === "host";
 const envBindings: Record<string, any> = {
 	DB: bindings.d1(v("A2A_D1_ID") ? { name: v("A2A_D1_NAME") || name, id: v("A2A_D1_ID") } : { name: v("A2A_D1_NAME") || name }),
 };
+// Per-tenant SQLite and the name directory exist only on a hosted deploy. A self-host build does not export the
+// Durable Object class and does not declare these bindings, so `cf deploy` stays the single-tenant Worker on D1.
+if (hosted) {
+	envBindings.TENANT_DO = bindings.durableObject({ worker: name, exportName: "TenantStore" });
+	envBindings.TENANT_DIRECTORY = bindings.kv();
+}
 for (const [k, val] of Object.entries(plain)) if (val !== "" || (k === "WAKE_KEY_PREFIX" && "WAKE_KEY_PREFIX" in e)) envBindings[k] = bindings.text(val);
 
 // Secrets are uploaded separately (never in this file): OWNER_TOKEN, WAKE_WEBHOOK_URL, WAKE_WEBHOOK_KEY, WAKE_HMAC_SECRET,
@@ -79,7 +87,8 @@ export default defineConfig((ctx) => ({
 	worker: {
 		name,
 		compatibilityDate: "2026-10-06",
-		entrypoint,
+		entrypoint: hosted ? hostedEntry : selfHost,
+		...(hosted ? { exports: { TenantStore: exports.durableObject({ storage: "sqlite" }) } } : {}),
 		...(hostname ? { domains: [hostname] } : {}),
 		workersDev,
 		// Optional persisted Workers Logs (A2A_WORKERS_LOGS=1, `init|deploy --workers-logs`): the JSON event lines plus

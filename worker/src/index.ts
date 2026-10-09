@@ -2175,17 +2175,21 @@ async function handle(req: Request, ctx: TenantContext, ectx: ExecutionContext):
 	}
 }
 
+/** Inbox for one already-resolved tenant: retired-host redirect, the handler, then an opportunistic wake flush. */
+export async function dispatch(req: Request, ctx: TenantContext, ectx: ExecutionContext): Promise<Response> {
+	const moved = A.movedResponse(req.url, ctx.PUBLIC_URL, ctx.RETIRED_HOSTNAMES);
+	if (moved) return new Response(moved.body || null, { status: moved.status, headers: moved.headers });
+	const res = await handle(req, ctx, ectx);
+	ectx.waitUntil(flushDue(ctx, ectx).catch((e) => log("flush_failed", { error: String(e).slice(0, 200) })));
+	return res;
+}
+
 export default {
 	async fetch(req, env: WorkerBindings, ectx) {
 		// One tenant from the Worker bindings. PUBLIC_URL comes from the deployment (custom hostname or workers.dev).
 		// Unknown on a first workers.dev deploy, or not a public https origin: use the origin the request reached.
-		const ctx = resolveTenant(env, req);
-		const moved = A.movedResponse(req.url, ctx.PUBLIC_URL, ctx.RETIRED_HOSTNAMES);
-		if (moved) return new Response(moved.body || null, { status: moved.status, headers: moved.headers });
-		const res = await handle(req, ctx, ectx);
-		// opportunistic flush of debounced wakes whose window has passed (no cron needed)
-		ectx.waitUntil(flushDue(ctx, ectx).catch((e) => log("flush_failed", { error: String(e).slice(0, 200) })));
-		return res;
+		// A hosted deploy does not enter here: its entrypoint resolves the tenant and calls dispatch with that context.
+		return dispatch(req, resolveTenant(env, req), ectx);
 	},
 	// optional: enable with A2A_ENABLE_CRON=1 at deploy time (needs a workers.dev subdomain on the account)
 	async scheduled(_ev, env: WorkerBindings, ectx) {

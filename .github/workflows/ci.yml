@@ -81,3 +81,30 @@ jobs:
         run: |
           npm pack --dry-run 2>&1 | tee pack.txt
           grep -q "worker/cloudflare.config.ts" pack.txt || { echo "::error::Worker template missing from the package"; exit 1; }
+
+  # The existing Worker suite against real D1 and a SQLite Durable Object (workerd via Miniflare).
+  # The node:sqlite run stays in the job above. migrations.test.ts uses d1On and does not follow STORAGE_BACKEND.
+  worker-storage:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [d1, do]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+
+      - name: Worker - install
+        working-directory: worker
+        run: npm ci --no-audit --no-fund
+
+      - name: Worker - tests (${{ matrix.backend }})
+        working-directory: worker
+        env:
+          STORAGE_BACKEND: ${{ matrix.backend }}
+        run: npm test
