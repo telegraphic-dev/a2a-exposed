@@ -127,7 +127,8 @@ export async function startOidc(ctx: TenantContext, o: {
 	u.searchParams.set("response_type", "code");
 	u.searchParams.set("client_id", gate.clientId);
 	u.searchParams.set("redirect_uri", o.redirectUri);
-	u.searchParams.set("scope", "openid");
+	// `email` is required for an email allowlist: providers omit `email` and `email_verified` unless this scope is requested.
+	u.searchParams.set("scope", "openid email");
 	u.searchParams.set("state", state);
 	u.searchParams.set("nonce", nonce);
 	u.searchParams.set("code_challenge", challenge);

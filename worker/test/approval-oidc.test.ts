@@ -126,6 +126,7 @@ test("configured /device redirects to the issuer with PKCE and approves on a val
 	const loc = new URL(post.headers.get("location")!);
 	assert.equal(loc.origin + loc.pathname, `${ISSUER}/authorize`);
 	assert.equal(loc.searchParams.get("code_challenge_method"), "S256");
+	assert.equal(loc.searchParams.get("scope"), "openid email");
 	assert.equal(loc.searchParams.get("redirect_uri"), `${BASE}/device/oidc/callback`);
 	assert.ok(loc.searchParams.get("state"));
 	assert.ok(loc.searchParams.get("nonce"));
