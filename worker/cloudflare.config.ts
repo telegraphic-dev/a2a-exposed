@@ -39,6 +39,7 @@ const plain: Record<string, string> = {
 	RATE_PER_MIN: v("A2A_RATE_PER_MIN"),
 	RETIRED_HOSTNAMES: v("A2A_RETIRED_HOSTNAMES"), // custom domains this agent moved away from (see movedResponse)
 	PAIRING_APPROVAL: v("PAIRING_APPROVAL") || "human", // device-flow pairing: human (approval password on /device) | agent | off
+	MCP: v("A2A_MCP"), // remote MCP server at /mcp (connector for Claude etc.): on unless "off"; never in proxy mode
 	PBKDF2_ITERATIONS: v("A2A_PBKDF2_ITERATIONS"), // approval password hashing; default 100000 (the Workers maximum), at least 50000
 	// proxy / expose mode: forward A2A to an agent that already speaks it, published through a Tunnel hostname behind
 	// Access (never a Tailnet / LAN URL: the Worker can't reach those, and they never appear in the public card)

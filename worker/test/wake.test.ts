@@ -30,6 +30,21 @@ test("claude-code: anthropic-version + text body", async () => {
 	assert.deepEqual(Object.keys(b), ["text"]);
 	assert.match(b.text, /2 new messages from peer "peer-a"/);
 	assert.match(b.text, /untrusted/);
+	// a fresh routine session learns what it needs and what to do when setup is missing
+	assert.match(b.text, /A2A_BASE_URL and A2A_OWNER_TOKEN/);
+	assert.match(b.text, /a2a-exposed connector \(MCP tools/, "the connector comes first");
+	assert.ok(b.text.indexOf("connector") < b.text.indexOf("A2A_OWNER_TOKEN"), "the CLI is the fallback");
+	assert.match(b.text, /never ask for the token in chat/);
+	assert.ok(!b.text.includes("Bearer rt") && !b.text.includes(" rt "), "no secret in the text");
+});
+
+test("claude-code: a human-approved pairing wake stays CLI-free (no cold-start note)", async () => {
+	const pe = { ...ev, kind: "pairing_request" as const, taskIds: [], pairing: { userCode: "WDJB-4827", verificationUriComplete: "https://agent.example.com/device?user_code=WDJB-4827",
+		approval: "human" as const, clientName: "Peer", clientId: "", agentCardUrl: "", expiresIn: 600 } };
+	const r = (await renderWake({ preset: "claude-code", url: "https://api.anthropic.com/v1/claude_code/routines/trig_x/fire", key: "rt" }, pe))!;
+	const b = JSON.parse(r.body);
+	assert.match(b.text, /WDJB-4827/);
+	assert.ok(!b.text.includes("A2A_OWNER_TOKEN"), "human pairing needs no CLI or owner token");
 });
 
 test("openclaw-wake: no peer text, mode now, agentId", async () => {

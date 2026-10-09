@@ -108,7 +108,7 @@ test("agent card, RFC 8414 metadata and the 401 hint advertise the device flow; 
 	const meta = await s.call("GET", "/.well-known/oauth-authorization-server");
 	assert.equal(meta.status, 200);
 	assert.deepEqual([meta.data.issuer, meta.data.device_authorization_endpoint, meta.data.token_endpoint], [BASE, `${BASE}/oauth/device_authorization`, `${BASE}/oauth/token`]);
-	assert.deepEqual(meta.data.grant_types_supported, [GRANT]);
+	assert.deepEqual(meta.data.grant_types_supported, [GRANT, "authorization_code", "refresh_token"], "device flow + the MCP connector's grants");
 	assert.deepEqual(meta.data.token_endpoint_auth_methods_supported, ["none"]);
 
 	for (const [method, v] of [["message/send", "0.3"], ["SendMessage", "1.0"]]) {
@@ -157,7 +157,16 @@ test("/.well-known/agent.json serves an A2A 0.3 card (url, preferredTransport, p
 });
 
 test("PAIRING_APPROVAL=off: no pairing scheme, endpoints 404, plain 401", async (t) => {
-	const s = setup({ PAIRING_APPROVAL: "off" }); t.after(s.restore);
+	// with MCP on (the default) the authorization server stays up for the connector, without the device flow
+	const m = setup({ PAIRING_APPROVAL: "off" }); t.after(m.restore);
+	const meta = await m.call("GET", "/.well-known/oauth-authorization-server");
+	assert.equal(meta.status, 200);
+	assert.equal(meta.data.device_authorization_endpoint, undefined);
+	assert.deepEqual(meta.data.grant_types_supported, ["authorization_code", "refresh_token"]);
+	for (const [mm, p] of [["POST", "/oauth/device_authorization"], ["GET", "/device"]]) assert.equal((await m.call(mm, p, mm === "POST" ? { form: {} } : {})).status, 404, p);
+	assert.equal((await m.call("POST", "/oauth/token", { form: { grant_type: GRANT, device_code: "x" } })).data.error, "unsupported_grant_type");
+	m.restore();
+	const s = setup({ PAIRING_APPROVAL: "off", MCP: "off" }); t.after(s.restore);
 	const card = (await s.call("GET", "/.well-known/agent-card.json")).data;
 	assert.deepEqual(Object.keys(card.securitySchemes), ["bearer"]);
 	assert.deepEqual(card.securityRequirements, [{ schemes: { bearer: { list: [] } } }]);
@@ -581,8 +590,11 @@ test("password setup link: expiry, mismatch, too short, CSRF, a new link invalid
 	for (let i = 0; i < 20; i++) await s.call("GET", "/device/setup?t=nope", { ip: "192.0.2.200" });
 	const limited = await s.call("GET", new URL(l.url).pathname + new URL(l.url).search, { ip: "192.0.2.200" });
 	assert.equal(limited.status, 429);
-	// off mode: no link
+	// pairing off: the link still works while MCP is on (the connector consent needs the password), not with both off
 	s.env.PAIRING_APPROVAL = "off";
+	assert.equal((await s.owner("POST", "/owner/pairing/password-link", {})).status, 200);
+	assert.equal((await s.call("GET", "/device/setup?t=x", { ip: "192.0.2.201" })).status, 404, "reachable (unknown setup token)");
+	s.env.MCP = "off";
 	assert.equal((await s.owner("POST", "/owner/pairing/password-link", {})).status, 409);
 	assert.equal((await s.call("GET", "/device/setup?t=x")).status, 404);
 });

@@ -230,7 +230,7 @@ test("pair set-password --web: a one-time link; the human sets the password on t
 });
 
 test("pair set-password: the terminal path explains the --web alternative; pairing off refuses links", async (t) => {
-	const off = await realWorker(t, { PAIRING_APPROVAL: "off" });
+	const off = await realWorker(t, { PAIRING_APPROVAL: "off", MCP: "off" });
 	const s = sandbox(t, { A2A_BASE_URL: off.url, A2A_OWNER_TOKEN: "owner-tok" });
 	let r = await s.cli(["pair", "set-password"]);
 	assert.equal(r.status, 1);
@@ -357,4 +357,50 @@ test("connect: resuming an expired request exits 1 and says so; the rerun hint k
 	assert.match(r.stderr, /For a new code \(a new approval request to its owner\), run: a2a-exposed connect http:\/\/127\.0\.0\.1:\d+ --alias late --name 'My Bot'$/m);
 	assert.ok(!fs.existsSync(st), "state dropped");
 	assert.equal(JSON.parse((await ownerSide.cli(["pair", "list", "--json"])).stdout).pending.length, 1, "no second request was made");
+});
+
+test("claude-code reminder names every piece a fresh routine session needs", async () => {
+	const { CLAUDE_CODE_NOTE } = await import("../lib/deploy.mjs");
+	for (const s of ["NEW cloud session", ".claude/skills/", "default branch", "A2A_BASE_URL and A2A_OWNER_TOKEN", "network access", "routine-fire-payload"])
+		assert.ok(CLAUDE_CODE_NOTE.includes(s), s);
+});
+
+// ------------------------------------------------------------------ MCP connector: peers sync, token list / revoke
+test("peers sync uploads outbound peers (token encrypted); token list and revoke cover MCP connectors; --mcp is validated", async (t) => {
+	const w = await realWorker(t);
+	const s = sandbox(t, { A2A_BASE_URL: w.url, A2A_OWNER_TOKEN: "owner-tok", PEER_TOKEN_ALPHA: "alpha-secret-token" });
+	let r = await s.cli(["peers", "sync"]);
+	assert.equal(r.status, 1);
+	assert.match(r.stderr, /no peers to sync/);
+	r = await s.cli(["peers", "add", "alpha", "https://alpha.example.org", "--token-env", "PEER_TOKEN_ALPHA"]);
+	assert.equal(r.status, 0, r.stderr);
+	r = await s.cli(["peers", "add", "beta", "https://beta.example.org"]);
+	r = await s.cli(["peers", "sync"]);
+	assert.equal(r.status, 0, r.stderr);
+	assert.match(r.stdout, /^synced alpha\thttps:\/\/alpha\.example\.org\ttoken stored encrypted on the Worker$/m);
+	assert.match(r.stdout, /^synced beta\t.*\tno token$/m);
+	assert.ok(!(r.stdout + r.stderr).includes("alpha-secret-token"), "token never printed");
+	const rows = w.env.DB.db.prepare("SELECT alias, token_enc FROM outbound_peers ORDER BY alias").all();
+	assert.deepEqual(rows.map((x) => x.alias), ["alpha", "beta"]);
+	assert.ok(!JSON.stringify(rows).includes("alpha-secret-token"));
+	r = await s.cli(["peers", "sync", "nobody"]);
+	assert.equal(r.status, 1);
+	r = await s.cli(["peers", "unsync", "beta"]);
+	assert.equal(r.status, 0, r.stderr);
+	assert.equal(w.env.DB.db.prepare("SELECT COUNT(*) AS n FROM outbound_peers").get().n, 1);
+	// an MCP grant (as /oauth/token would create it) shows in token list and is revoked by label
+	w.env.DB.db.prepare(`INSERT INTO mcp_grants (label, client_id, client_name, redirect_host, scope, access_hash, access_expires_ms, refresh_hash, refresh_expires_ms, created_at)
+		VALUES ('mcp-claude', 'mcpc_x', 'Claude', 'claude.ai', 'inbox', 'h1', 0, 'h2', 0, '2026-10-09T00:00:00.000Z')`).run();
+	r = await s.cli(["token", "list"]);
+	assert.equal(r.status, 0, r.stderr);
+	assert.match(r.stdout, /^mcp-claude\tcreated=2026-10-09T00:00:00\.000Z\tactive\tMCP connector: "Claude" -> claude\.ai$/m);
+	r = await s.cli(["token", "revoke", "mcp-claude"]);
+	assert.equal(r.status, 0, r.stderr);
+	assert.match(r.stdout, /revoked mcp-claude: that MCP connector gets HTTP 401/);
+	assert.ok(w.env.DB.db.prepare("SELECT revoked_at FROM mcp_grants").get().revoked_at);
+	r = await s.cli(["token", "revoke", "mcp-claude"]);
+	assert.equal(r.status, 1);
+	r = await sandbox(t).cli(["init", "--mcp", "maybe", "--skip-install"]);
+	assert.equal(r.status, 1);
+	assert.match(r.stderr, /--mcp must be on or off/);
 });

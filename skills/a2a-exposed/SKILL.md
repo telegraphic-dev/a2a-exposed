@@ -53,6 +53,8 @@ For one-off use without a global install: `npx -y a2a-exposed@latest <command>`.
 
 Use the CLI as `npx a2a-exposed <cmd>`, or exactly the command in the wake's `hint`. It reads `A2A_BASE_URL` and `A2A_OWNER_TOKEN` from the environment or from `~/.config/a2a-exposed/config.env` (another directory if `A2A_CONFIG_DIR` is set, e.g. one per bot on a shared machine). If neither exists, the endpoint isn't deployed yet: use the **a2a-exposed-setup** skill.
 
+**With the MCP connector.** If this session has the a2a-exposed connector (MCP tools `inbox`, `show_task`, `history`, `mark_working`, `reply`, `send`, `poll_outbound`, `list_peers`, `pairing_requests`), use those tools instead of the CLI: same workflow, same rules below. They need no CLI or token. `send` reaches only peers the human synced with `peers sync`. The connector can't issue or revoke tokens or approve pairings: those stay with the human (and the CLI).
+
 ## On a wake or a scheduled check
 
 1. **Read the inbox.** A wake payload or text includes `contextId`, `taskIds`, `from` (the peer label you assigned) and a `hint` command.
@@ -157,7 +159,7 @@ Polling agents: no wake announces a pairing request; `inbox` and `pair list` sho
 
 | Symptom | Check / fix |
 |---|---|
-| `A2A_BASE_URL / A2A_OWNER_TOKEN missing` | Not set up here: run the setup skill, or provide both as environment secrets (hosted routines) |
+| `A2A_BASE_URL / A2A_OWNER_TOKEN missing` | Not set up here: run the setup skill, or provide both as environment secrets (hosted routines). In a Claude Code routine run, don't improvise or ask for the token in chat: use the a2a-exposed connector's tools if the session has them, otherwise tell your human to add the connector (`<Worker URL>/mcp` at claude.ai/settings/connectors) or set both on the routine's cloud environment |
 | `worker ... HTTP 401` | Owner token mismatch: `config.env` differs from the Worker secret. Re-run `init --rotate-owner-token` from the machine that owns the deployment |
 | `request to ... failed` | DNS, network, or egress problem. `npx a2a-exposed status` shows whether the agent card answers. A brand-new custom domain needs a few minutes |
 | No wakes arriving | `status` (wake mode, tunnel connector, next step), then `wake preview` (configured? preset? fingerprints match `wake fingerprint`?) then `wake test` (status). Agents behind NAT need the secure tunnel (`tunnel create`, which needs a zone anywhere on the account) or polling. Wakes are debounced per conversation; Claude Code also has an hourly cap. The inbox always has everything |
