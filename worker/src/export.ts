@@ -119,8 +119,17 @@ async function columnSet(db: SqlDb, name: string): Promise<Set<string>> {
 	return cols;
 }
 
-/** Replace rows in the tables the file lists. A table key that is absent is left as it is. */
-export async function importRows(db: SqlDb, input: unknown): Promise<{ tables: number; rows: number }> {
+export interface ImportOptions {
+	/** True when `tokenEnc` opens with this deployment's sealing key. Omitted: ciphertext is kept as stored. */
+	openOutboundToken?(alias: string, tokenEnc: string): Promise<boolean>;
+}
+
+/**
+ * Replace rows in the tables the file lists. A table key that is absent is left as it is.
+ * When `openOutboundToken` is set, an `outbound_peers.token_enc` that does not open is stored as NULL and the
+ * alias is returned in `outboundPeersNeedSync`. The ciphertext is not copied into a deployment that cannot read it.
+ */
+export async function importRows(db: SqlDb, input: unknown, opts: ImportOptions = {}): Promise<{ tables: number; rows: number; outboundPeersNeedSync: string[] }> {
 	const file = plain(input, "body");
 	if (file.format !== "a2a-exposed-export" || file.version !== 1) throw new ExportError("import: format or version is not supported");
 	const tables = plain(file.tables, "tables");
@@ -138,6 +147,7 @@ export async function importRows(db: SqlDb, input: unknown): Promise<{ tables: n
 	const stmts = [];
 	let rows = 0;
 	let listed = 0;
+	const outboundPeersNeedSync: string[] = [];
 	for (const name of EXPORT_TABLES) {
 		const list = tables[name];
 		if (!Array.isArray(list)) continue;
@@ -145,14 +155,25 @@ export async function importRows(db: SqlDb, input: unknown): Promise<{ tables: n
 		const allowed = known.get(name)!;
 		stmts.push(db.prepare(`DELETE FROM ${quoteIdent(name)}`));
 		for (const item of list) {
-			const row = plain(item, "each row");
+			let row = plain(item, "each row");
 			const cols = Object.keys(row);
 			for (const c of cols) {
 				if (!IDENT.test(c)) throw new ExportError("import: bad column");
 				if (!allowed.has(c)) throw new ExportError(`import: ${name} has no column ${c.slice(0, 64)}`);
 			}
-			if (!cols.length) continue;
-			stmts.push(db.prepare(`INSERT INTO ${quoteIdent(name)} (${cols.map(quoteIdent).join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`).bind(...cols.map((c) => bindable(row[c]))));
+			if (name === "outbound_peers" && opts.openOutboundToken && typeof row.token_enc === "string" && row.token_enc) {
+				const alias = typeof row.alias === "string" ? row.alias.slice(0, 128) : "";
+				let opens = false;
+				try { opens = await opts.openOutboundToken(alias, row.token_enc); }
+				catch { opens = false; }
+				if (!opens) {
+					row = { ...row, token_enc: null };
+					if (alias && !outboundPeersNeedSync.includes(alias)) outboundPeersNeedSync.push(alias);
+				}
+			}
+			const keys = Object.keys(row);
+			if (!keys.length) continue;
+			stmts.push(db.prepare(`INSERT INTO ${quoteIdent(name)} (${keys.map(quoteIdent).join(", ")}) VALUES (${keys.map(() => "?").join(", ")})`).bind(...keys.map((c) => bindable(row[c]))));
 			rows++;
 		}
 	}
@@ -163,7 +184,7 @@ export async function importRows(db: SqlDb, input: unknown): Promise<{ tables: n
 		const msg = e instanceof Error ? e.message : String(e);
 		throw new ExportError(`import: rows do not match the schema: ${msg.replace(/\s+/g, " ").slice(0, 180)}`);
 	}
-	return { tables: listed, rows };
+	return { tables: listed, rows, outboundPeersNeedSync };
 }
 
 export interface BookmarkStorage {

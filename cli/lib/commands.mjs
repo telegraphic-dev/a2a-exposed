@@ -317,5 +317,8 @@ export async function importInbox(o) {
 	const raw = readStdin();
 	let file;
 	try { file = JSON.parse(raw); } catch { die("import expects the JSON from `export` on stdin"); }
-	out(await owner("POST", "/owner/import", file, 120000));
+	const res = await owner("POST", "/owner/import", file, 120000);
+	const need = Array.isArray(res?.outboundPeersNeedSync) ? res.outboundPeersNeedSync.filter((s) => typeof s === "string" && s) : [];
+	if (need.length) console.error(`These outbound peers were imported without a token. The ciphertext does not open with this deployment's sealing key. Run \`${CLI} peers sync\` for: ${need.join(", ")}`);
+	out(res);
 }

@@ -45,7 +45,7 @@ test("export prints JSON, import --yes posts it, and a missing --yes does not ca
 		}
 		if (req.url === "/owner/import" && req.method === "POST") {
 			res.writeHead(200, { "content-type": "application/json" });
-			return res.end(JSON.stringify({ tables: 1, rows: 1 }));
+			return res.end(JSON.stringify({ tables: 1, rows: 1, outboundPeersNeedSync: ["bea"] }));
 		}
 		res.writeHead(404);
 		res.end("{}");
@@ -78,6 +78,9 @@ test("export prints JSON, import --yes posts it, and a missing --yes does not ca
 	assert.equal(post.method, "POST");
 	assert.deepEqual(JSON.parse(post.body), file);
 	assert.match(imported.stdout, /"rows": 1/);
+	assert.match(imported.stderr, /peers sync/);
+	assert.match(imported.stderr, /bea/);
+	assert.equal(imported.stderr.includes("a2aow_"), false);
 });
 
 test("help lists export and import", async (t) => {

@@ -1047,7 +1047,12 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 		catch (e) { if (e instanceof HttpError) return json({ error: e.message }, e.status); throw e; }
 		let file: unknown;
 		try { file = raw ? JSON.parse(raw) : {}; } catch { return json({ error: "import: invalid json" }, 400); }
-		try { return json(await importRows(ctx.DB, file)); }
+		try {
+			const key = await ctx.peerKey();
+			return json(await importRows(ctx.DB, file, {
+				openOutboundToken: async (alias, enc) => !!key && !!(await M.openPeerTokenWithKey(key, alias, enc)),
+			}));
+		}
 		catch (e) { if (e instanceof ExportError) return json({ error: e.message }, 400); throw e; }
 	}
 	return json({ error: "not found" }, 404);

@@ -11,6 +11,7 @@ import worker from "../src/index.ts";
 import { d1 } from "./d1.ts";
 import { sha256 } from "../src/a2a.ts";
 import { exportRows, importRows, toSql, bookmarkForTime, restoreBookmark, ExportError, EXPORT_TABLES } from "../src/export.ts";
+import { openPeerToken, sealPeerToken } from "../src/mcp.ts";
 import { backupDatabase, exportTenantSql, hostedDailyBackup, olderThanRetention, snapshotKey, DAILY_CRON, type R2BucketLike } from "../src/backup.ts";
 import { namespaceForRegion, type DoNamespace } from "../src/tenancy.ts";
 import type { DirectoryEntry } from "../src/directory.ts";
@@ -76,6 +77,26 @@ test("import replaces listed tables, refuses unknown tables, and keeps a rejecte
 	assert.equal(hist?.text, "keep-me");
 });
 
+test("import keeps an outbound token this owner can open and drops one sealed for another", async () => {
+	const DB = db();
+	const ours = await sealPeerToken("owner-secret", "ada", "a2aow_local");
+	const theirs = await sealPeerToken("other-owner", "bea", "a2aow_other");
+	const res = await importRows(DB, {
+		format: "a2a-exposed-export", version: 1,
+		tables: { outbound_peers: [
+			{ alias: "ada", url: "https://ada.example.com", token_enc: ours, created_at: "t", updated_at: "t" },
+			{ alias: "bea", url: "https://bea.example.com", token_enc: theirs, created_at: "t", updated_at: "t" },
+		] },
+	}, { openOutboundToken: (alias, enc) => openPeerToken("owner-secret", alias, enc).then((t) => !!t) });
+	assert.deepEqual(res.outboundPeersNeedSync, ["bea"]);
+	const ada = await DB.prepare("SELECT token_enc FROM outbound_peers WHERE alias = 'ada'").first<{ token_enc: string }>();
+	assert.equal(await openPeerToken("owner-secret", "ada", ada!.token_enc), "a2aow_local");
+	const bea = await DB.prepare("SELECT url, token_enc FROM outbound_peers WHERE alias = 'bea'").first<{ url: string; token_enc: string | null }>();
+	assert.equal(bea?.url, "https://bea.example.com");
+	assert.equal(bea?.token_enc, null);
+	assert.equal(JSON.stringify(res).includes("a2aow_"), false);
+});
+
 test("owner export and import: auth, hashes, and the minute cron left in place", async () => {
 	const DB = db();
 	const bucket = fakeBucket();
@@ -115,6 +136,16 @@ test("owner export and import: auth, hashes, and the minute cron left in place",
 	assert.equal(((await call("GET", "/owner/peers")).data as { label: string }[]).length, 0);
 	const back = await call("POST", "/owner/import", dumped.data);
 	assert.equal(back.data.rows >= 1, true);
+	assert.deepEqual(back.data.outboundPeersNeedSync, []);
+	const foreign = await sealPeerToken("other-owner", "bea", "a2aow_other");
+	const moved = await call("POST", "/owner/import", { format: "a2a-exposed-export", version: 1, tables: { outbound_peers: [
+		{ alias: "bea", url: "https://bea.example.com", token_enc: foreign, created_at: "t", updated_at: "t" },
+	] } });
+	assert.equal(moved.status, 200);
+	assert.deepEqual(moved.data.outboundPeersNeedSync, ["bea"]);
+	assert.equal(JSON.stringify(moved.data).includes("a2aow_other"), false);
+	const stored = await DB.prepare("SELECT token_enc FROM outbound_peers WHERE alias = 'bea'").first<{ token_enc: string | null }>();
+	assert.equal(stored?.token_enc, null);
 	assert.equal(((await call("GET", "/owner/peers")).data as { label: string }[])[0].label, "ada");
 
 	await DB.prepare("INSERT INTO rate (peer, minute, count) VALUES ('p', 1, 4)").run();

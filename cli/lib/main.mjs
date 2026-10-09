@@ -115,7 +115,9 @@ Inbox (owner side)
                                        encrypted peer tokens are in the dump; the owner token stays
                                        a Worker secret). --sql prints the same tables as SQL
   import --yes                         read a JSON export from stdin and replace the tables it lists.
-                                       --yes is required
+                                       --yes is required. An outbound peer token is kept only when it
+                                       opens with this deployment's sealing key; other aliases are
+                                       named on stderr and need peers sync
 
 Pairing (OAuth 2.0 device flow, RFC 8628: agents connect without pasting tokens into chat)
   connect <base-or-card-url> [--alias A] [--name N] [--card-url URL] [--replace] [--no-wait] [--json]
