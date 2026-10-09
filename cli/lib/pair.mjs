@@ -1,5 +1,5 @@
 // Device-flow pairing (OAuth 2.0 Device Authorization Grant, RFC 8628).
-//   Owner side (this inbox is the authorization server): pair set-password | list | approve | deny
+//   Owner side (this inbox is the authorization server): pair set-password | set-oidc | list | approve | deny
 //   Client side (connect to another inbox): connect <base-or-card-url>
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -101,6 +101,50 @@ No terminal? \`${CLI} pair set-password --web\` prints a one-time link where you
 	console.error(`Approve pairing requests at ${baseUrl()}/device: a webhook wake carries each request's direct link; polling agents see requests in \`${CLI} inbox\` and \`${CLI} pair list\`.${r.data.mode === "human" ? "" : ` Note: approval mode is ${r.data.mode}.`}`);
 }
 
+/** `pair set-oidc`: non-secret settings in config.env. The client secret stays in the environment (or was read from stdin and discarded). */
+export async function setOidc(o, extra = []) {
+	if (extra.length) die("pair set-oidc takes no extra arguments. The client secret is not an argument: export APPROVAL_OIDC_CLIENT_SECRET or pass --secret-stdin");
+	if (!o.issuer || !o["client-id"] || !o.subjects) die("usage: pair set-oidc --issuer https://idp.example --client-id ID --subjects sub@example.com[,other] [--methods password,oidc] [--secret-stdin]");
+	let issuer;
+	try { issuer = new URL(String(o.issuer).trim()); } catch { die("--issuer must be an https URL"); }
+	if (issuer.protocol !== "https:" || issuer.username || issuer.password) die("--issuer must be an https URL with no user name or password");
+	const clientId = String(o["client-id"]).trim();
+	if (!clientId || clientId.length > 200 || /\s/.test(clientId)) die("--client-id must be a single token, at most 200 characters");
+	const subjects = String(o.subjects).split(",").map((s) => s.trim()).filter(Boolean);
+	if (!subjects.length || subjects.some((s) => s.length > 320 || /[\r\n]/.test(s))) die("--subjects is a comma-separated list of allowed sub or email values");
+	let methods;
+	if (o.methods !== undefined) {
+		const parts = String(o.methods).split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+		if (!parts.length || parts.some((p) => p !== "password" && p !== "oidc")) die("--methods is a comma-separated list of password and oidc");
+		methods = [...new Set(parts)].join(",");
+	}
+	let sawStdin = false;
+	if (o["secret-stdin"]) {
+		if (process.stdin.isTTY) die("--secret-stdin reads the client secret from a pipe. Or export APPROVAL_OIDC_CLIENT_SECRET. It is not saved in config.env");
+		const chunks = [];
+		for await (const c of process.stdin) chunks.push(c);
+		const secret = Buffer.concat(chunks).toString("utf8").replace(/\r?\n$/, "");
+		if (!secret || /[\r\n]/.test(secret)) die("the client secret must be a single non-empty line on stdin");
+		sawStdin = true;
+		const fromEnv = process.env.APPROVAL_OIDC_CLIENT_SECRET || "";
+		if (fromEnv && fromEnv !== secret) console.error("The secret on stdin differs from APPROVAL_OIDC_CLIENT_SECRET. Deploy uploads the environment variable. Neither value was printed or saved.");
+	} else if (!(process.env.APPROVAL_OIDC_CLIENT_SECRET || "").trim()) {
+		die("export APPROVAL_OIDC_CLIENT_SECRET or pass --secret-stdin. The client secret is not a flag and is not saved in config.env");
+	}
+	C.saveConfig({
+		APPROVAL_OIDC_ISSUER: String(o.issuer).trim(),
+		APPROVAL_OIDC_CLIENT_ID: clientId,
+		APPROVAL_OIDC_ALLOWED_SUBJECTS: subjects.join(","),
+		...(methods !== undefined ? { APPROVAL_METHODS: methods } : {}),
+	});
+	console.error(`OpenID Connect approval saved in ${C.CONFIG_FILE} (issuer, client id, allowed subjects${methods !== undefined ? ", methods" : ""}).`);
+	console.error("The client secret was not written there and was not printed.");
+	if (sawStdin && !(process.env.APPROVAL_OIDC_CLIENT_SECRET || "").trim())
+		console.error(`Export APPROVAL_OIDC_CLIENT_SECRET in the environment you use for deploy. This command did not store it.`);
+	console.error(`The next \`npx -y a2a-exposed@latest deploy\` uploads APPROVAL_OIDC_CLIENT_SECRET from the environment as a Worker secret.`);
+	console.error("Password approval stays available unless --methods oidc (and only once the issuer, client id, secret and allowlist are all set).");
+}
+
 // ---------------------------------------------------------------- owner: list / approve / deny
 export async function list(o) {
 	const r = await ownerCall("GET", "/owner/pairing");
@@ -114,6 +158,7 @@ export async function list(o) {
 	if (d.mode !== "off") {
 		console.log(`approval password: ${d.passwordSet ? `set${d.passwordSetAt ? ` ${d.passwordSetAt}` : ""}${d.passwordSetVia ? ` (via ${d.passwordSetVia})` : ""}`
 			: `NOT SET: run \`${CLI} pair set-password --web\` and send your human the one-time link (or they run \`${CLI} pair set-password\` in a terminal)`}`);
+		if (d.oidcIssuer) console.log(`OpenID Connect: ${(d.approvalMethods || []).join(" and ")} (${d.oidcIssuer})`);
 		if (d.setupLinkExpiresAt) console.log(`setup link: one is open until ${d.setupLinkExpiresAt} (a new \`pair set-password --web\` replaces it)`);
 	}
 	if (!d.pending.length) return console.log("(no pending pairing requests)");

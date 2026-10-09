@@ -8,7 +8,8 @@
 // An object with no row answers 404 and does not create application tables.
 //
 // Not in this change: per-tenant alarms (the cron flush), export / point-in-time restore, R2 backups,
-// approval OIDC, and usage push. The hosted scheduled handler is a no-op until alarms land.
+// and usage push. The hosted scheduled handler is a no-op until alarms land. Approval OIDC, when the
+// pushed tenant `approval` object is complete, is enforced by the same pages as self-host.
 import { DurableObject } from "cloudflare:workers";
 import worker, { dispatch } from "./index.ts";
 import { doSqlD1, migrateDo, type SqlStorageLike, type TxRunner } from "./storage.ts";

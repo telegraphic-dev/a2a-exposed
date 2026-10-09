@@ -48,7 +48,8 @@ const plain: Record<string, string> = {
 	UPSTREAM_CARD_URL: v("A2A_UPSTREAM_CARD_URL"), // default <upstream origin>/.well-known/agent-card.json
 	// Hosted multi-tenant gates. All empty by default, and empty is omitted, so a self-host deploy is unchanged.
 	// TENANCY=host switches the entrypoint to src/hosted.ts and adds TENANT_DO + TENANT_DIRECTORY below.
-	// QUOTAS, USAGE_SINK, WAKE_TARGET_POLICY, SIGNUP_URL, BRANDING and APPROVAL_OIDC_* are parsed and reserved.
+	// QUOTAS, USAGE_SINK, WAKE_TARGET_POLICY, SIGNUP_URL and BRANDING are parsed and reserved.
+	// APPROVAL_OIDC_* turn on OpenID Connect approval when issuer, client id, secret and allowlist are all set.
 	TENANCY: v("TENANCY"),
 	TENANT_DOMAIN: v("TENANT_DOMAIN"),
 	DATA_REGION: v("DATA_REGION"), // eu | fedramp; unset = Cloudflare's default placement
@@ -79,8 +80,9 @@ for (const [k, val] of Object.entries(plain)) if (val !== "" || (k === "WAKE_KEY
 // They are declared only in development mode (`cf dev`), so local dev reads them from .dev.vars while
 // production deploys never fail because an optional wake secret is unset.
 const SECRETS = ["OWNER_TOKEN", "WAKE_WEBHOOK_URL", "WAKE_WEBHOOK_KEY", "WAKE_HMAC_SECRET", "UPSTREAM_TOKEN", "UPSTREAM_ACCESS_CLIENT_ID", "UPSTREAM_ACCESS_CLIENT_SECRET",
-	// Declared for `cf dev` only when a hosted deploy asks for them, so a self-host .dev.vars without these still starts.
-	...(v("TENANCY") === "host" ? ["TENANT_SECRETS_KEY", "APPROVAL_OIDC_CLIENT_SECRET"] : [])];
+	// Declared for `cf dev` only when a deploy asks for them, so a self-host .dev.vars without these still starts.
+	...(v("TENANCY") === "host" ? ["TENANT_SECRETS_KEY"] : []),
+	...(v("TENANCY") === "host" || v("APPROVAL_OIDC_ISSUER") ? ["APPROVAL_OIDC_CLIENT_SECRET"] : [])];
 
 export default defineConfig((ctx) => ({
 	...(v("CLOUDFLARE_ACCOUNT_ID") ? { accountId: v("CLOUDFLARE_ACCOUNT_ID") } : {}),
