@@ -2,7 +2,7 @@
 
 All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.3.x), Worker template, and skills. Versions follow [semver](https://semver.org); a `v*` tag publishes the CLI to npm (see the README's **Releases**).
 
-## Unreleased
+## 0.5.0 - 2026-10-09
 
 Upgrade: `a2a-exposed deploy` (applies D1 migrations `0006_mcp`: OAuth clients and codes, MCP grants, synced outbound peers; and `0007_cimd`: cached client metadata documents). Nothing changes for peers.
 

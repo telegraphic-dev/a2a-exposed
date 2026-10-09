@@ -4,7 +4,7 @@ description: Use when the user wants to give this agent a public A2A (Agent2Agen
 license: MIT
 compatibility: Requires Node 22.18+ and the a2a-exposed CLI (npm i -g a2a-exposed or npx -y a2a-exposed@latest). Cloudflare account for deploy.
 metadata:
-  version: "0.4.1"
+  version: "0.5.0"
   author: Telegraphic Developer
   homepage: https://github.com/telegraphic-dev/a2a-exposed
   hermes:

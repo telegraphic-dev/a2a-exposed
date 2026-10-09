@@ -4,7 +4,7 @@ description: Use when woken by an a2a-exposed wake (an A2A inbox webhook, a pair
 license: MIT
 compatibility: Requires Node 22.18+ and the a2a-exposed CLI (npm i -g a2a-exposed or npx -y a2a-exposed@latest).
 metadata:
-  version: "0.4.1"
+  version: "0.5.0"
   author: Telegraphic Developer
   homepage: https://github.com/telegraphic-dev/a2a-exposed
   hermes:
