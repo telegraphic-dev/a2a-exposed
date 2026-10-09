@@ -115,8 +115,9 @@ Inbox (owner side)
                                        encrypted peer tokens are in the dump; the owner token stays
                                        a Worker secret). --sql prints the same tables as SQL
   import --yes                         read a JSON export from stdin and replace the tables it lists.
-                                       A large file is several requests; the inbox changes when the
-                                       import finishes. --yes is required. An outbound peer token is kept only when it
+                                       A large file is several requests, each under the Worker's body
+                                       limit; the inbox changes when the import finishes. --yes is
+                                       required. An outbound peer token is kept only when it
                                        opens with this deployment's sealing key; other aliases are
                                        named on stderr and need peers sync
 

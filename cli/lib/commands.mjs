@@ -311,19 +311,99 @@ export async function exportInbox(o) {
 	return out(data);
 }
 
+/** Stay under the Worker's 8 MiB import body cap, including the resume cursor on a later request. */
+export const IMPORT_REQUEST_BYTES = 6 * 1024 * 1024;
+
+/**
+ * Split an export into POST bodies. A file that fits in `maxBytes` is one body (the whole file).
+ * A larger file is one body per slice: only that slice's rows, plus the plan for every listed table.
+ * Each JSON body is at most `maxBytes`. The resume cursor is added by {@link importInbox}.
+ */
+export function importParts(file, maxBytes = IMPORT_REQUEST_BYTES) {
+	const raw = JSON.stringify(file);
+	if (Buffer.byteLength(raw) <= maxBytes) return { mode: "whole", parts: [{ body: file }] };
+	if (!file || typeof file !== "object" || !file.tables || typeof file.tables !== "object" || Array.isArray(file.tables)) {
+		return { mode: "whole", parts: [{ body: file }] };
+	}
+	const names = Object.keys(file.tables).filter((n) => Array.isArray(file.tables[n]));
+	const counts = {};
+	for (const n of names) counts[n] = file.tables[n].length;
+	const slice = { tables: names, counts };
+	const parts = [];
+	const pos = Object.fromEntries(names.map((n) => [n, 0]));
+	let first = true;
+	const shellBytes = Buffer.byteLength(JSON.stringify({
+		format: file.format, version: file.version, tables: {}, slice,
+		resume: { phase: "stage", id: "0".repeat(32), table: names[0] || "peers", offset: 0 },
+	}));
+	const stmtsFor = (rows) => {
+		if (!rows.length) return 0;
+		const cols = Math.max(1, Object.keys(rows[0] && typeof rows[0] === "object" ? rows[0] : {}).length);
+		return Math.ceil(rows.length / Math.max(1, Math.floor(100 / cols)));
+	};
+	for (;;) {
+		const stmtCap = first ? 4 : 30;
+		const tables = {};
+		let stmts = 0;
+		let bytes = shellBytes;
+		let tooBig = false;
+		for (const n of names) {
+			if (pos[n] >= counts[n]) continue;
+			const rows = [];
+			while (pos[n] + rows.length < counts[n]) {
+				const row = file.tables[n][pos[n] + rows.length];
+				const trial = rows.concat([row]);
+				if (stmts + stmtsFor(trial) > stmtCap && rows.length) break;
+				const extra = Buffer.byteLength(JSON.stringify(row)) + 1;
+				if (bytes + extra > maxBytes) {
+					if (!rows.length) tooBig = true;
+					break;
+				}
+				rows.push(row);
+				bytes += extra;
+			}
+			if (rows.length) {
+				tables[n] = rows;
+				pos[n] += rows.length;
+				stmts += stmtsFor(rows);
+			}
+			if (tooBig || stmts >= stmtCap) break;
+		}
+		if (tooBig) return { mode: "slice", error: "a row is larger than the request limit" };
+		if (!Object.keys(tables).length) break;
+		const open = names.find((n) => pos[n] < counts[n]);
+		parts.push({ body: { format: file.format, version: file.version, tables, slice }, after: open ? { table: open, offset: pos[open] } : null });
+		first = false;
+	}
+	if (!parts.length) parts.push({ body: { format: file.format, version: file.version, tables: {}, slice }, after: null });
+	return { mode: "slice", slice, parts };
+}
+
 /** Replace the tables listed in a JSON export on stdin. `--yes` is required. A large file is several requests; the inbox changes on the last one. */
 export async function importInbox(o) {
 	if (!o.yes) die(`import replaces the listed tables. Re-run \`${CLI} import --yes\` with the JSON export on stdin.`);
 	const raw = readStdin();
 	let file;
 	try { file = JSON.parse(raw); } catch { die("import expects the JSON from `export` on stdin"); }
+	const planned = importParts(file);
+	if (planned.error) die(`import: ${planned.error}. The inbox was not changed.`);
 	let resume;
 	let rows = 0;
 	let tables = 0;
 	const need = [];
 	let guard = 0;
+	let part = 0;
 	for (;;) {
-		const { status, data } = await ownerTry("POST", "/owner/import", resume ? { ...file, resume } : file, 120000);
+		const phase = resume?.phase;
+		if (planned.mode === "slice" && phase !== "commit" && phase !== "cleanup" && !planned.parts[part]) {
+			die(`import stopped early. The inbox was not changed. Re-run \`${CLI} import --yes\` with the same file.`);
+		}
+		const body = planned.mode === "whole"
+			? (resume ? { ...file, resume } : file)
+			: (phase === "commit" || phase === "cleanup"
+				? { format: file.format, version: file.version, tables: {}, slice: planned.slice, resume }
+				: { ...planned.parts[part].body, ...(resume ? { resume } : {}) });
+		const { status, data } = await ownerTry("POST", "/owner/import", body, 120000);
 		if (status < 200 || status >= 300) {
 			const msg = `worker POST /owner/import -> ${describeHttp(status, data)}`;
 			if (!resume) die(msg);
@@ -339,6 +419,13 @@ export async function importInbox(o) {
 		if (!next) break;
 		if (!next.phase || (resume && JSON.stringify(resume) === JSON.stringify(next))) {
 			die(`import stopped early. The inbox was not changed. Re-run \`${CLI} import --yes\` with the same file.`);
+		}
+		if (planned.mode === "slice" && next.phase === "stage") {
+			const expect = planned.parts[part]?.after;
+			if (!expect || next.table !== expect.table || next.offset !== expect.offset) {
+				die(`import stopped early. The inbox was not changed. Re-run \`${CLI} import --yes\` with the same file.`);
+			}
+			part++;
 		}
 		resume = next;
 		if (++guard > 10000) die(`import stopped early. The inbox was not changed. Re-run \`${CLI} import --yes\` with the same file.`);

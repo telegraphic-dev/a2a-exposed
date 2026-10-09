@@ -14,6 +14,7 @@ import { exportRows, importRows, toSql, bookmarkForTime, restoreBookmark, restar
 import { doSqlD1, type SqlStorageLike, type TxRunner } from "../src/storage.ts";
 import { openPeerToken, sealPeerToken } from "../src/mcp.ts";
 import { backupDatabase, backupDirectory, exportTenantSql, hostedDailyBackup, olderThanRetention, pruneSnapshots, snapshotKey, DAILY_CRON, type R2BucketLike } from "../src/backup.ts";
+import { importParts, IMPORT_REQUEST_BYTES } from "../../cli/lib/commands.mjs";
 import { namespaceForRegion, type DoNamespace } from "../src/tenancy.ts";
 import type { DirectoryEntry } from "../src/directory.ts";
 
@@ -220,6 +221,70 @@ test("a large import stays under the free-plan query budget and swaps only at th
 	assert.equal(bea?.token_enc, null);
 	assert.deepEqual([...need], ["bea"]);
 	assert.equal(dst.db.prepare("SELECT name FROM sqlite_master WHERE name LIKE '_a2a_import_%'").all().length, 0);
+});
+
+test("an export over 8 MiB imports as slices and the whole file is rejected", async () => {
+	const src = db();
+	const text = "x".repeat(2000);
+	for (let i = 0; i < 4500; i++)
+		await src.prepare("INSERT INTO history (context_id, ts, dir, text) VALUES ('c', 't', 'in', ?)").bind(text + i).run();
+	await src.prepare("INSERT INTO oidc_txns (state, nonce, verifier, kind, csrf, payload_json, expires_ms) VALUES ('st', 'n', 'v', 'device', 'c', '{}', 9)").run();
+	const file = await exportRows(src);
+	assert.ok(file.tables.oidc_txns?.length === 1);
+	const whole = JSON.stringify(file);
+	assert.ok(Buffer.byteLength(whole) > 8 * 1024 * 1024, `export is ${Buffer.byteLength(whole)} bytes`);
+	const planned = importParts(file);
+	assert.equal(planned.mode, "slice");
+	assert.ok(planned.parts.length > 1);
+	for (const part of planned.parts) {
+		const n = Buffer.byteLength(JSON.stringify(part.body));
+		assert.ok(n <= IMPORT_REQUEST_BYTES, `slice is ${n} bytes`);
+		assert.ok(n < 8 * 1024 * 1024);
+	}
+
+	const dst = db();
+	await dst.prepare("INSERT INTO history (context_id, ts, dir, text) VALUES ('c', 't', 'local', 'old')").run();
+	await dst.prepare("INSERT INTO oidc_txns (state, nonce, verifier, kind, csrf, payload_json, expires_ms) VALUES ('old', 'n', 'v', 'device', 'c', '{}', 1)").run();
+	let resume: ImportCursor | undefined;
+	let part = 0;
+	let swapped = false;
+	for (let n = 0; n < planned.parts.length + 5 && !swapped; n++) {
+		const phase = resume?.phase;
+		const body = phase === "commit" || phase === "cleanup"
+			? { format: file.format, version: file.version, tables: {}, slice: planned.slice, resume }
+			: { ...planned.parts[part].body, ...(resume ? { resume } : {}) };
+		const res = await importRows(dst, body, { resume });
+		if (res.next?.phase === "stage" || res.next?.phase === "commit") {
+			assert.equal((await dst.prepare("SELECT text FROM history WHERE text = 'old'").first<{ text: string }>())?.text, "old");
+		}
+		if (res.next?.phase === "stage") {
+			const expect = planned.parts[part].after;
+			assert.equal(res.next.table, expect?.table);
+			assert.equal(res.next.offset, expect?.offset);
+			part++;
+			resume = res.next;
+		} else if (res.next) {
+			resume = res.next;
+		} else {
+			swapped = true;
+		}
+	}
+	assert.equal(swapped, true);
+	assert.equal(((await dst.prepare("SELECT text FROM history").all()).results as unknown[]).length, 4500);
+	assert.equal(await dst.prepare("SELECT text FROM history WHERE text = 'old'").first(), null);
+	assert.equal((await dst.prepare("SELECT state FROM oidc_txns").first<{ state: string }>())?.state, "st");
+	assert.equal(dst.db.prepare("SELECT name FROM sqlite_master WHERE name LIKE '_a2a_import_%'").all().length, 0);
+
+	const env: any = { DB: dst, PUBLIC_URL: BASE, OWNER_TOKEN: "owner-secret" };
+	const rejected = await worker.fetch(new Request(BASE + "/owner/import", {
+		method: "POST",
+		headers: { authorization: "Bearer owner-secret", "content-type": "application/json", "content-length": String(Buffer.byteLength(whole)) },
+		body: whole,
+	}) as any, env, ectx as any);
+	assert.equal(rejected.status, 413);
+	const err = await rejected.json() as { error: string };
+	assert.equal(err.error, "Body too large");
+	assert.equal(((await dst.prepare("SELECT text FROM history").all()).results as unknown[]).length, 4500);
 });
 
 test("owner export and import: auth, hashes, and the minute cron left in place", async () => {

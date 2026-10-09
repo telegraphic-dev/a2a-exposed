@@ -17,7 +17,7 @@ export const EXPORT_TABLES = [
 	"peers", "tasks", "messages", "history", "outbound", "wakes",
 	"rate", "wake_budget", "device_requests", "pairing_rate", "settings",
 	"facade_owners", "oauth_clients", "oauth_codes", "mcp_grants",
-	"outbound_peers", "oauth_client_metadata",
+	"outbound_peers", "oauth_client_metadata", "oidc_txns",
 ] as const;
 
 export type ExportTable = (typeof EXPORT_TABLES)[number];
@@ -256,13 +256,15 @@ async function runBatch(db: SqlDb, stmts: ReturnType<SqlDb["prepare"]>[]): Promi
 	}
 }
 
-async function readMeta(db: SqlDb): Promise<{ id?: string; ready?: string } | null> {
+async function readMeta(db: SqlDb): Promise<{ id?: string; ready?: string; plan?: string; prog?: string } | null> {
 	try {
-		const info = await db.prepare(`SELECT k, v FROM ${quoteIdent(META_TABLE)} WHERE k IN ('id', 'ready')`).all<{ k: string; v: string }>();
-		const out: { id?: string; ready?: string } = {};
+		const info = await db.prepare(`SELECT k, v FROM ${quoteIdent(META_TABLE)}`).all<{ k: string; v: string }>();
+		const out: { id?: string; ready?: string; plan?: string; prog?: string } = {};
 		for (const row of info.results ?? []) {
 			if (row?.k === "id" && typeof row.v === "string") out.id = row.v;
 			if (row?.k === "ready" && typeof row.v === "string") out.ready = row.v;
+			if (row?.k === "plan" && typeof row.v === "string") out.plan = row.v;
+			if (row?.k === "prog" && typeof row.v === "string") out.prog = row.v;
 		}
 		return out;
 	} catch (e) {
@@ -329,10 +331,14 @@ export interface ImportResult {
  * A file that fits in {@link IMPORT_QUERY_BUDGET} is one batch: DELETE the listed tables, then INSERT. That batch
  * is one transaction. A larger file is inserted into side tables (`_a2a_import_*`) across invocations and swapped
  * into the live tables in one batch. Until that swap, the inbox is unchanged. `next` is the cursor for the next call.
+ * A file bigger than the request body sends `slice` and only the rows for that request. Each request is applied
+ * whole or not at all.
  */
 export async function importRows(db: SqlDb, input: unknown, opts: ImportOptions = {}): Promise<ImportResult> {
 	const file = plain(input, "body");
 	if (file.format !== "a2a-exposed-export" || file.version !== 1) throw new ExportError("import: format or version is not supported");
+	const slice = parseSlice(file);
+	if (slice) return importSlice(db, file, slice, opts);
 	const tables = plain(file.tables, "tables");
 	for (const name of Object.keys(tables)) {
 		if (!TABLE_SET.has(name)) throw new ExportError(`import: unknown table ${name.slice(0, 64)}`);
@@ -457,6 +463,172 @@ function dropStaging(db: SqlDb, names: readonly string[], budget: number): { stm
 		meta = true;
 	}
 	return { stmts, rest, meta };
+}
+
+interface SlicePlan { tables: string[]; counts: Record<string, number> }
+
+/** `slice` is set when the body holds only this request's rows, not the whole export. */
+function parseSlice(file: Record<string, unknown>): SlicePlan | undefined {
+	if (file.slice == null) return undefined;
+	const s = plain(file.slice, "slice");
+	if (!Array.isArray(s.tables) || s.tables.length < 1) throw new ExportError("import: slice tables are invalid");
+	const tables: string[] = [];
+	for (const name of s.tables) {
+		if (typeof name !== "string" || !TABLE_SET.has(name)) throw new ExportError("import: slice table is invalid");
+		if (tables.includes(name)) throw new ExportError("import: slice table is repeated");
+		tables.push(name);
+	}
+	const countsRaw = plain(s.counts, "slice counts");
+	const counts: Record<string, number> = {};
+	for (const name of tables) {
+		const n = countsRaw[name];
+		if (typeof n !== "number" || !Number.isInteger(n) || n < 0 || n > 1_000_000_000) throw new ExportError("import: slice count is invalid");
+		counts[name] = n;
+	}
+	for (const name of Object.keys(countsRaw)) {
+		if (!tables.includes(name)) throw new ExportError("import: slice count is invalid");
+	}
+	return { tables, counts };
+}
+
+function planJson(plan: SlicePlan): string {
+	return JSON.stringify({ tables: plan.tables, counts: plan.counts });
+}
+
+function samePlan(stored: string | undefined, plan: SlicePlan): boolean {
+	return stored === planJson(plan);
+}
+
+function stagedFrom(prog: string | undefined): Record<string, number> {
+	if (!prog) return {};
+	let raw: unknown;
+	try { raw = JSON.parse(prog); } catch { throw new ExportError("import: staged progress is unreadable"); }
+	const o = plain(raw, "staged progress");
+	const out: Record<string, number> = {};
+	for (const [name, n] of Object.entries(o)) {
+		if (!TABLE_SET.has(name) || typeof n !== "number" || !Number.isInteger(n) || n < 0) throw new ExportError("import: staged progress is invalid");
+		out[name] = n;
+	}
+	return out;
+}
+
+function openTable(plan: SlicePlan, staged: Record<string, number>): { table: string; offset: number } | null {
+	for (const name of plan.tables) {
+		const have = staged[name] ?? 0;
+		if (have < plan.counts[name]) return { table: name, offset: have };
+	}
+	return null;
+}
+
+/**
+ * Accept this request's rows in plan order. Every row is taken, or the call throws before any write.
+ * Tables already filled are omitted. The open table comes first, then later tables from offset 0.
+ */
+function takeSlice(plan: SlicePlan, staged: Record<string, number>, prepared: Map<string, Row[]>): { staged: Record<string, number>; inserted: number } {
+	const next = { ...staged };
+	let inserted = 0;
+	let started = false;
+	for (const name of plan.tables) {
+		const rows = prepared.get(name);
+		const have = next[name] ?? 0;
+		const room = plan.counts[name] - have;
+		if (!rows?.length) continue;
+		if (room <= 0) throw new ExportError("import: slice repeats a finished table");
+		const open = openTable(plan, next);
+		if (!open || open.table !== name) throw new ExportError("import: slice is not at the staged offset");
+		if (rows.length > room) throw new ExportError("import: slice is past the planned row count");
+		next[name] = have + rows.length;
+		inserted += rows.length;
+		started = true;
+	}
+	if (!started && openTable(plan, staged)) throw new ExportError("import: slice is empty");
+	return { staged: next, inserted };
+}
+
+async function importSlice(db: SqlDb, file: Record<string, unknown>, plan: SlicePlan, opts: ImportOptions): Promise<ImportResult> {
+	const resume = parseResume(opts.resume);
+	const listed = plan.tables;
+	const done = (rows: number, next?: ImportCursor, need: string[] = []): ImportResult => ({
+		tables: listed.length, rows, outboundPeersNeedSync: need, ...(next ? { next } : {}),
+	});
+
+	if (resume?.phase === "cleanup" || resume?.phase === "commit") {
+		let used = 0;
+		const meta = await readMeta(db);
+		used++;
+		if (!meta || meta.id !== resume.id || !samePlan(meta.plan, plan)) throw new ExportError("import: resume does not match the staged import");
+		if (resume.phase === "cleanup") {
+			if (!meta.ready) return done(0);
+			const drop = dropStaging(db, listed, IMPORT_QUERY_BUDGET - used);
+			await runBatch(db, drop.stmts);
+			if (drop.rest.length || !drop.meta) return done(0, { phase: "cleanup", id: resume.id });
+			return done(0);
+		}
+		if (meta.ready !== resume.id) throw new ExportError("import: staging is incomplete; re-run import");
+		const swap = [];
+		for (const name of listed) {
+			swap.push(db.prepare(`DELETE FROM ${quoteIdent(name)}`));
+			swap.push(db.prepare(`INSERT INTO ${quoteIdent(name)} SELECT * FROM ${quoteIdent(stagingTable(name))}`));
+		}
+		await runBatch(db, swap);
+		used += swap.length;
+		const drop = dropStaging(db, listed, IMPORT_QUERY_BUDGET - used);
+		await runBatch(db, drop.stmts);
+		if (drop.rest.length || !drop.meta) return done(0, { phase: "cleanup", id: resume.id });
+		return done(0);
+	}
+
+	const bodyTables = plain(file.tables, "tables");
+	for (const name of Object.keys(bodyTables)) {
+		if (!listed.includes(name)) throw new ExportError(`import: ${name.slice(0, 64)} is not in this slice`);
+		if (!Array.isArray(bodyTables[name])) throw new ExportError(`import: ${name} must be an array`);
+	}
+
+	let used = 0;
+	const known = await schemas(db, [...listed]);
+	used++;
+	const prepared = new Map<string, Row[]>();
+	const outboundPeersNeedSync: string[] = [];
+	for (const name of Object.keys(bodyTables)) {
+		const { rows, needSync } = await prepareTableRows(name, bodyTables[name] as unknown[], known.get(name)!.columns, opts);
+		prepared.set(name, rows);
+		for (const alias of needSync) if (!outboundPeersNeedSync.includes(alias)) outboundPeersNeedSync.push(alias);
+	}
+
+	const id = resume?.id ?? newImportId();
+	let staged: Record<string, number> = {};
+	const staging: ReturnType<SqlDb["prepare"]>[] = [];
+	if (!resume) {
+		staging.push(db.prepare(`DROP TABLE IF EXISTS ${quoteIdent(META_TABLE)}`));
+		for (const name of listed) staging.push(db.prepare(`DROP TABLE IF EXISTS ${quoteIdent(stagingTable(name))}`));
+		staging.push(db.prepare(`CREATE TABLE ${quoteIdent(META_TABLE)} (k TEXT PRIMARY KEY, v TEXT NOT NULL)`));
+		for (const name of listed) staging.push(db.prepare(createStaging(known.get(name)!.createSql, name, stagingTable(name))));
+		staging.push(db.prepare(`INSERT INTO ${quoteIdent(META_TABLE)} (k, v) VALUES ('id', ?)`).bind(id));
+		staging.push(db.prepare(`INSERT INTO ${quoteIdent(META_TABLE)} (k, v) VALUES ('plan', ?)`).bind(planJson(plan)));
+	} else {
+		const meta = await readMeta(db);
+		used++;
+		if (!meta || meta.id !== id || !samePlan(meta.plan, plan)) throw new ExportError("import: resume does not match the staged import");
+		staged = stagedFrom(meta.prog);
+		const open = openTable(plan, staged);
+		if (!open || open.table !== resume.table || open.offset !== resume.offset) throw new ExportError("import: resume does not match the staged import");
+	}
+
+	const taken = takeSlice(plan, staged, prepared);
+	const insertCount = [...prepared.values()].reduce((n, rows) => n + insertStatementCount(rows), 0);
+	const progSql = `INSERT INTO ${quoteIdent(META_TABLE)} (k, v) VALUES ('prog', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v`;
+	staging.push(db.prepare(progSql).bind(JSON.stringify(taken.staged)));
+	for (const name of listed) {
+		const rows = prepared.get(name);
+		if (!rows?.length) continue;
+		staging.push(...packInserts(db, stagingTable(name), rows, 0, insertCount).stmts);
+	}
+	const openAfter = openTable(plan, taken.staged);
+	if (!openAfter) staging.push(db.prepare(`INSERT INTO ${quoteIdent(META_TABLE)} (k, v) VALUES ('ready', ?)`).bind(id));
+	if (used + staging.length > IMPORT_QUERY_BUDGET) throw new ExportError("import: slice does not fit the query budget");
+	await runBatch(db, staging);
+	if (openAfter) return done(taken.inserted, { phase: "stage", id, table: openAfter.table, offset: openAfter.offset }, outboundPeersNeedSync);
+	return done(taken.inserted, { phase: "commit", id }, outboundPeersNeedSync);
 }
 
 export interface BookmarkStorage {
