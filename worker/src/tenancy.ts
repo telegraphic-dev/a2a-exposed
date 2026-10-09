@@ -212,9 +212,9 @@ export function parseGates(env: WorkerBindings): ParsedGates {
 }
 
 /**
- * DO namespace for a tenant. `eu` and `fedramp` select that jurisdiction; anything else (including unset) uses the
- * namespace's default placement. The same name in another jurisdiction is a different object, so the region is fixed
- * when the tenant is created and then read back from the directory.
+ * DO namespace for a tenant. `eu` and `fedramp` select that jurisdiction; anything else uses the namespace's
+ * default placement. The same name in another jurisdiction is a different object. Callers pass the region stored
+ * on the directory entry (`pinDirectoryRegion` writes it once).
  */
 export function namespaceForRegion<T extends { jurisdiction?(loc: string): T }>(ns: T, region: string): T {
 	if ((region === "eu" || region === "fedramp") && typeof ns.jurisdiction === "function") return ns.jurisdiction(region);

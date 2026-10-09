@@ -1,7 +1,7 @@
 // Name directory: host parsing and the 60s isolate cache. Run: npm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { clearDirectoryCache, DIRECTORY_MAX, directoryKey, lookupDirectory, parseDirectoryEntry, TENANT_NAME, tenantNameFromHost, tenantRegion } from "../src/directory.ts";
+import { clearDirectoryCache, DIRECTORY_MAX, directoryKey, lookupDirectory, parseDirectoryEntry, pinDirectoryRegion, TENANT_NAME, tenantNameFromHost, tenantRegion } from "../src/directory.ts";
 
 test("tenant names are 4–32 characters and one label under the domain", () => {
 	assert.equal(TENANT_NAME.test("abcd"), true);
@@ -19,15 +19,37 @@ test("tenant names are 4–32 characters and one label under the domain", () => 
 	assert.equal(tenantNameFromHost("abcd.example.com", ""), null);
 });
 
-test("directory entries need an id and a status; the region falls back to DATA_REGION", () => {
+test("directory entries need an id and a status; only a stored eu or fedramp selects a jurisdiction", () => {
 	assert.equal(parseDirectoryEntry(null), null);
 	assert.equal(parseDirectoryEntry({ id: "../x", status: "active" }), null);
 	assert.equal(parseDirectoryEntry({ id: "t1", status: "Active" }), null);
 	const ok = parseDirectoryEntry({ id: "t1", status: "active", region: "eu", version: 3 });
 	assert.deepEqual(ok, { id: "t1", status: "active", region: "eu", version: 3 });
-	assert.equal(tenantRegion(ok!, ""), "eu");
-	assert.equal(tenantRegion({ id: "t1", status: "active", region: "", version: 1 }, "fedramp"), "fedramp");
-	assert.equal(tenantRegion({ id: "t1", status: "active", region: "", version: 1 }, ""), "");
+	assert.equal(tenantRegion(ok!), "eu");
+	assert.equal(tenantRegion({ id: "t1", status: "active", region: "default", version: 1 }), "");
+	assert.equal(tenantRegion({ id: "t1", status: "active", region: "", version: 1 }), "");
+});
+
+test("an empty region is pinned once; a later DATA_REGION does not move the tenant", async () => {
+	clearDirectoryCache();
+	const store = new Map<string, string>();
+	const kv = {
+		async put(key: string, value: string) { store.set(key, value); },
+	};
+	const entry = { id: "t1", status: "active", region: "", version: 1 };
+	const pinned = await pinDirectoryRegion(kv, "abcd", entry, "fedramp", 1_000);
+	assert.equal(pinned?.region, "fedramp");
+	assert.equal(JSON.parse(store.get(directoryKey("abcd"))!).region, "fedramp");
+	const again = await pinDirectoryRegion(kv, "abcd", pinned!, "eu", 2_000);
+	assert.equal(again?.region, "fedramp");
+	assert.equal(tenantRegion(again!), "fedramp");
+	const fresh = { id: "t2", status: "active", region: "", version: 1 };
+	const fallback = await pinDirectoryRegion(kv, "efgh", fresh, "", 3_000);
+	assert.equal(fallback?.region, "default");
+	assert.equal(tenantRegion(fallback!), "");
+	const failed = await pinDirectoryRegion({ async put() { throw new Error("kv down"); } }, "ijkl", fresh, "eu", 4_000);
+	assert.equal(failed, null);
+	clearDirectoryCache();
 });
 
 test("lookups are cached for 60s, including unknown names", async () => {

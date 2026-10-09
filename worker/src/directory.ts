@@ -1,5 +1,6 @@
 // Host → tenant name directory. The hosted router reads this before it touches a Durable Object.
 // Control (later) writes `tenant:<name>` = { id, status, region, version }. No secrets live here.
+// An entry with an empty region is pinned on first sight (`eu`, `fedramp`, or `default`) and then only read.
 // The isolate caches each lookup, including "not in the directory", for 60 seconds, capped so a scan of
 // random names cannot grow it without bound.
 
@@ -15,7 +16,10 @@ export const DIRECTORY_MAX = 1024;
 export interface DirectoryEntry {
 	id: string;
 	status: string;
-	/** "" until control records one. `eu` and `fedramp` select a Durable Object jurisdiction. */
+	/**
+	 * Placement, pinned once. `eu` and `fedramp` select that jurisdiction. `default` is the namespace's
+	 * default placement. `""` means not pinned yet.
+	 */
 	region: string;
 	version: number;
 }
@@ -55,9 +59,34 @@ export function tenantNameFromHost(host: string, domain: string): string | null 
 	return TENANT_NAME.test(name) ? name : null;
 }
 
-/** Directory region when set, otherwise the Worker's `DATA_REGION`. The region is fixed when the tenant is created. */
-export function tenantRegion(entry: DirectoryEntry, dataRegion: string): string {
-	return entry.region || dataRegion || "";
+/** `eu` or `fedramp` when the directory entry says so. `default` and anything else use the default namespace. */
+export function tenantRegion(entry: DirectoryEntry): string {
+	return entry.region === "eu" || entry.region === "fedramp" ? entry.region : "";
+}
+
+/**
+ * Write a placement into an entry that does not have one yet, then return that entry.
+ * `DATA_REGION` is read only here. A later change to it does not move a tenant whose row already
+ * has `eu`, `fedramp`, or `default`. Returns null when the write fails; the caller must not address
+ * an object until the placement is stored.
+ */
+export async function pinDirectoryRegion(
+	kv: Pick<KvNamespace, "put">,
+	name: string,
+	entry: DirectoryEntry,
+	dataRegion: string,
+	now = Date.now(),
+): Promise<DirectoryEntry | null> {
+	if (entry.region !== "") return entry;
+	const region = dataRegion === "eu" || dataRegion === "fedramp" ? dataRegion : "default";
+	const pinned: DirectoryEntry = { ...entry, region };
+	try {
+		await kv.put(directoryKey(name), JSON.stringify(pinned));
+	} catch {
+		return null;
+	}
+	remember(name, now, pinned, now);
+	return pinned;
 }
 
 export function parseDirectoryEntry(raw: unknown): DirectoryEntry | null {

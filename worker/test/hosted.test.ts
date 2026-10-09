@@ -156,6 +156,7 @@ test("per-tenant SQLite: directory, config push, and isolation", async (t) => {
 
 	await kv.put("tenant:dave", JSON.stringify({ id: "id-dave", status: "active", region: "", version: 1 }));
 	assert.equal((await mf.dispatchFetch("https://dave.example.com/health")).status, 404);
+	assert.equal((await kv.get("tenant:dave", "json") as { region: string }).region, "default", "an empty region is pinned before the object is addressed");
 	const dave = ns.get(ns.idFromName("id-dave")) as unknown as { storageStatus(): Promise<{ configured: boolean; tables: string[] }> };
 	const daveStatus = await dave.storageStatus();
 	assert.equal(daveStatus.configured, false);

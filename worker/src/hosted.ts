@@ -13,14 +13,15 @@ import { DurableObject } from "cloudflare:workers";
 import worker, { dispatch } from "./index.ts";
 import { doSqlD1, migrateDo, type SqlStorageLike, type TxRunner } from "./storage.ts";
 import { MIGRATIONS } from "./migrations.ts";
-import { lookupDirectory, tenantNameFromHost, tenantRegion, TENANT_NAME, type DirectoryEntry } from "./directory.ts";
+import { lookupDirectory, pinDirectoryRegion, tenantNameFromHost, tenantRegion, TENANT_NAME, type DirectoryEntry } from "./directory.ts";
 import { hostedTenantContext, namespaceForRegion, parseGates, type WorkerBindings } from "./tenancy.ts";
 
-export { clearDirectoryCache, directoryKey, lookupDirectory, parseDirectoryEntry, tenantNameFromHost, tenantRegion, TENANT_NAME } from "./directory.ts";
+export { clearDirectoryCache, directoryKey, lookupDirectory, parseDirectoryEntry, pinDirectoryRegion, tenantNameFromHost, tenantRegion, TENANT_NAME } from "./directory.ts";
 export type { DirectoryEntry };
 
 const JSON_HDR = { "content-type": "application/json", "cache-control": "no-store" };
 const notFound = () => Response.json({ error: "no such agent" }, { status: 404, headers: JSON_HDR });
+const unavailable = () => Response.json({ error: "directory unavailable" }, { status: 503, headers: JSON_HDR });
 const suspended = () => Response.json({ error: "this agent is suspended" }, { status: 403, headers: JSON_HDR });
 const gone = () => Response.json({ error: "this agent is gone" }, { status: 410, headers: JSON_HDR });
 
@@ -239,9 +240,12 @@ export default {
 		if (!name || !env.TENANT_DIRECTORY) return notFound();
 		const entry = await lookupDirectory(env.TENANT_DIRECTORY, name);
 		if (!entry) return notFound();
-		const early = routeStatus(entry);
+		// Pin once, including for a suspended or deleted row, so a later DATA_REGION change cannot move the object.
+		const pinned = await pinDirectoryRegion(env.TENANT_DIRECTORY, name, entry, parseGates(env).gates.dataRegion);
+		if (!pinned) return unavailable();
+		const early = routeStatus(pinned);
 		if (early) return early;
-		const region = tenantRegion(entry, parseGates(env).gates.dataRegion);
+		const region = tenantRegion(pinned);
 		const ns = namespaceForRegion(env.TENANT_DO, region);
 		// The spike carried the tenant row on this header. Drop it so a client cannot supply config.
 		const headers = new Headers(req.headers);

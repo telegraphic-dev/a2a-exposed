@@ -255,7 +255,7 @@ The Worker can run as one tenant per deployment, which is what `npx -y a2a-expos
 | `TENANT_DOMAIN` | unused | parent domain: a tenant is `https://<name>.<domain>` (one label, 4–32 characters). The apex is not a tenant |
 | `TENANT_DIRECTORY` | unused | KV map of tenant name → id, status, region, version. Unknown names are 404 before a Durable Object is created. Cached 60 seconds in the isolate |
 | `TENANT_DO` | unused | with `TENANCY=host`, each tenant is one SQLite Durable Object. The Worker config adds this binding only when `TENANCY=host`. Config is pushed into the object (`pushConfig`); a push with an older version is ignored. An object with no config answers 404 and writes nothing |
-| `DATA_REGION` | Cloudflare's default placement | `eu` or `fedramp` selects that jurisdiction when the directory entry has no region. The region is fixed when the tenant is created and then read from the directory |
+| `DATA_REGION` | Cloudflare's default placement | `eu` or `fedramp`. The first time a directory entry has no region, that value (or `default`) is written onto the entry. Later requests read the stored region, so changing this setting does not move a tenant |
 | `QUOTAS`, `USAGE_SINK`, `WAKE_TARGET_POLICY`, `SIGNUP_URL`, `BRANDING`, `APPROVAL_OIDC_*`, `APPROVAL_METHODS` | off, which is today's behaviour | reserved: parsed onto the tenant context, not enforced yet |
 
 There is no default hostname. Nothing in the Worker turns itself into a hosted service because a setting was left blank. See `worker/deploy.env.example`.
