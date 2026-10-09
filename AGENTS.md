@@ -32,6 +32,8 @@ python3 -m venv .skills-ref-venv && .skills-ref-venv/bin/pip install -q "skills-
 
 None of these need Cloudflare credentials. Never deploy to a real account from tests.
 
+The same Worker tests also run in CI against workerd storage (`STORAGE_BACKEND=d1` and `STORAGE_BACKEND=do` in `worker/`). `migrations.test.ts` stays on node:sqlite via `d1On`. Do not set `STORAGE_BACKEND` for the CLI tests: they import `worker/test/d1.ts`.
+
 ## Rules
 
 - Never commit secrets, account ids, zone names, or hostnames of real deployments; examples use `example.com`.

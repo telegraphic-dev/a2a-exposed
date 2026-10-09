@@ -7,13 +7,17 @@
 	"scripts": {
 		"build": "cf build",
 		"deploy": "cf deploy",
-		"test": "node --test test/*.test.ts",
+		"test": "node --import ./test/register-hooks.mjs --test test/*.test.ts",
 		"typecheck": "cf workers types && tsc"
 	},
-	"engines": { "node": ">=22.18" },
+	"engines": {
+		"node": ">=22.18"
+	},
 	"devDependencies": {
 		"@cloudflare/vite-plugin": "beta",
 		"cf": "^1.0.0-beta.13",
+		"esbuild": "^0.28.1",
+		"miniflare": "^5.20261006.0-alpha",
 		"typescript": "^7.0.2",
 		"vite": "^8.3.0"
 	}

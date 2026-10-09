@@ -98,7 +98,7 @@ Config lives in `~/.config/a2a-exposed/config.env` (chmod 600). Environment vari
 
 All commands use the CLI as `npx -y a2a-exposed@latest <cmd>`.
 
-The domain a2a.exposed is reserved for future project pages; it is not part of any deployment.
+The domain a2a.exposed is reserved for future project pages; it is not part of any deployment. Self-host `init` and `deploy` leave the multi-tenant settings unset (see [references/deploy.md](references/deploy.md)); setting `TENANCY=host` is for a hosted service, not this setup.
 
 **Config location and several bots on one machine.** The config directory is `~/.config/a2a-exposed` (or `$XDG_CONFIG_HOME/a2a-exposed`). It holds one deployment: `config.env` (base URL, owner token, deploy settings, stored peer tokens), `peers.json`, and `worker/` (the deployable Worker project). For a second bot on the same machine, set a different `A2A_CONFIG_DIR` for **every** command of that bot (e.g. `export A2A_CONFIG_DIR=~/.config/a2a-exposed-bot2`) and give it its own `--hostname`, `--worker-name`, and optionally `--d1-name`. `npx -y a2a-exposed@latest config` prints which file is in use.
 
