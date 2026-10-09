@@ -2,6 +2,14 @@
 
 All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.3.x), Worker template, and skills. Versions follow [semver](https://semver.org); a `v*` tag publishes the CLI to npm (see the README's **Releases**).
 
+## Unreleased
+
+Upgrade: `npx -y a2a-exposed@latest deploy` (Worker wake/pairing hint texts only; no D1 migration). A deployment that set `--cli-command` / `WAKE_CLI_COMMAND` keeps its own command.
+
+- **npx is the one way to run the CLI:** `npx -y a2a-exposed@latest <command>` everywhere: README, both skills and their references, the Worker's default wake hint (`WAKE_CLI_COMMAND` default), the Claude Code wake text, the 401 pairing hint (`data.pairing.cli`), the landing page and consent/pairing pages, and the CLI's help and every "run ..." / "next step" line it prints. Agent sandboxes (e.g. Claude Code cloud sessions) block a forced `npm i -g a2a-exposed` as untrusted code; npx needs no install. `@latest` rather than a pinned `@0.5`: `deploy` copies the Worker template from the CLI it runs, so an older or pinned copy would redeploy an older Worker over a newer one, and wake hints run long after setup should match the current release. A global install stays an optional speed-up on your own machine (`npm i -g a2a-exposed@latest`, then `a2a-exposed <command>`). The outdated-version notice now says `run npx -y a2a-exposed@latest deploy` (with a global install, `npm i -g a2a-exposed@latest` first); under npx `@latest` it doesn't appear, because the running copy is the newest.
+- **Skills without a global install:** `npx -y skills add telegraphic-dev/a2a-exposed` into the current project is the documented path (`--global` optional), or the agent reads the `SKILL.md` files straight from GitHub.
+- **Claude Code: don't set up from a cloud session.** The README quick start, the setup skill (first thing) and the Claude Code wake reference now say so up front: installs are blocked as untrusted code, tunnels as an ingress risk, there are no Cloudflare credentials and the network allowlist blocks the Worker. Run setup on a laptop or from another agent, add `<Worker URL>/mcp` as a connector, and the routine only consumes through the connector. The CLI fallback in a routine uses npx instead of a global install in the setup script.
+
 ## 0.5.0 - 2026-10-09
 
 Upgrade: `a2a-exposed deploy` (applies D1 migrations `0006_mcp`: OAuth clients and codes, MCP grants, synced outbound peers; and `0007_cimd`: cached client metadata documents). Nothing changes for peers.

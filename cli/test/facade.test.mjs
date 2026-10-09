@@ -178,7 +178,7 @@ test("init --upstream: an Access-only setup is refused when the upstream card as
 	assert.equal(r.status, 1, r.stderr);
 	assert.match(r.stderr, /the upstream's agent card asks for a bearer token \(bearer: bearer\), and no UPSTREAM_TOKEN is set/);
 	assert.match(r.stderr, /Cloudflare Access \(UPSTREAM_ACCESS_CLIENT_ID \/ _SECRET\) only lets the Worker through the tunnel/);
-	assert.match(r.stderr, /--upstream-token-stdin/);
+	assert.match(r.stderr, /\| npx -y a2a-exposed@latest init \.\.\. --upstream-token-stdin/, "the recovery command runs through npx");
 	assert.match(r.stderr, /--no-upstream-token/);
 	assert.equal(s.hasDeploys(), false, "nothing deployed");
 	const cardFetch = s.fetches().find((f) => f.url === UP_CARD);

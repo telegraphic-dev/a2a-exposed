@@ -3,12 +3,11 @@
 // itself, so agents need no curl (some agent sandboxes flag *.dev URLs in shell commands).
 import fs from "node:fs";
 import * as C from "./config.mjs";
-import { cardUrlProblem, cfErrorCode, describeHttp, die, fingerprint, httpJson } from "./a2a.mjs";
+import { CLI, cardUrlProblem, cfErrorCode, describeHttp, die, fingerprint, httpJson } from "./a2a.mjs";
 import { baseUrl, owner, ownerTry } from "./commands.mjs";
 import * as D from "./deploy.mjs";
 import * as T from "./tunnel.mjs";
 
-const CLI = "a2a-exposed";
 /** Presets whose webhook usually listens only locally: wakes need the tunnel (or another reverse proxy). */
 export const LOCAL_PRESETS = ["openclaw-wake", "openclaw-agent", "hermes"];
 

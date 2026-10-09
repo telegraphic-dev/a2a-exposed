@@ -433,7 +433,7 @@ test("status on a workers.dev inbox with no wake: card OK, polling expected, tun
 	assert.match(r.stdout, /^wake: +none: no WAKE_WEBHOOK_URL on the Worker, so the agent is expected to poll the inbox/m);
 	assert.match(r.stdout, /^tunnel: +none$/m);
 	assert.match(r.stdout, /^next step: +no wake webhook, so the agent must check the inbox on a schedule/m);
-	assert.match(r.stdout, /^also: +optional: for immediate wakes to a local-only webhook, run `a2a-exposed tunnel create` \(it uses the account's zone example\.com; no redeploy needed\)/m);
+	assert.match(r.stdout, /^also: +optional: for immediate wakes to a local-only webhook, run `npx -y a2a-exposed@latest tunnel create` \(it uses the account's zone example\.com; no redeploy needed\)/m);
 	assert.ok(!s.calls().some((c) => !/^(zones list)/.test(c.cmd)), "read-only: only zones list");
 	const j = JSON.parse((await s.cli(["status", "--json"])).stdout);
 	assert.equal(j.ok, true);
@@ -447,7 +447,7 @@ test("status on a workers.dev inbox with no wake: card OK, polling expected, tun
 	r = await s.cli(["status"]);
 	assert.equal(r.status, 1);
 	assert.match(r.stdout, /^agent card: +WRONG URL: "Tun Test", but it advertises http:\/\/hermes\.example\.ts\.net:8644\/ instead of http:\/\/127\.0\.0\.1:\d+\/$/m);
-	assert.match(r.stdout, /^next step: +the agent card does not point peers at this deployment: .*Run `a2a-exposed deploy`/m);
+	assert.match(r.stdout, /^next step: +the agent card does not point peers at this deployment: .*Run `npx -y a2a-exposed@latest deploy`/m);
 	s.setCardUrl("");
 	// an exported A2A_BASE_URL that differs from the saved one is flagged first
 	r = await s.cli(["status"], { A2A_BASE_URL: "http://100.101.102.103:8644" });
@@ -480,7 +480,7 @@ test("status follows a tunnel through: no connector -> start cloudflared; connec
 	assert.match(r.stdout, /^next step: +none: setup is complete/m);
 	s.setPreview({ hasAccessServiceToken: false });
 	r = await s.cli(["status"], { STUB_CONNS: "1" });
-	assert.match(r.stdout, /Worker does not have the tunnel's wake secrets: run `a2a-exposed tunnel create` again/);
+	assert.match(r.stdout, /Worker does not have the tunnel's wake secrets: run `npx -y a2a-exposed@latest tunnel create` again/);
 	s.setPreview({});
 	s.setCardStatus(404);
 	r = await s.cli(["status"], { STUB_CONNS: "1" });
@@ -493,14 +493,14 @@ test("status follows a tunnel through: no connector -> start cloudflared; connec
 	r = await s.cli(["status"], { STUB_CONNS: "1" });
 	assert.equal(r.status, 1);
 	assert.match(r.stdout, /; set up, but the connector token file is MISSING;/);
-	assert.match(r.stdout, /^next step: +the tunnel's connector token file \(.*tunnel-token\) is missing or empty: run `a2a-exposed tunnel create` again \(it downloads the token again; nothing new is created\)/m);
+	assert.match(r.stdout, /^next step: +the tunnel's connector token file \(.*tunnel-token\) is missing or empty: run `npx -y a2a-exposed@latest tunnel create` again \(it downloads the token again; nothing new is created\)/m);
 
 	const partial = await tunnelEnv(t);
 	partial.setConfig({ A2A_TUNNEL_HOSTNAME: "wake-p.example.com", A2A_TUNNEL_ID: "tun1" });
 	r = await partial.cli(["status"]);
 	assert.equal(r.status, 1);
 	assert.match(r.stdout, /INCOMPLETE/);
-	assert.match(r.stdout, /a previous `tunnel create` did not finish: run `a2a-exposed tunnel rm`, then `a2a-exposed tunnel create`/);
+	assert.match(r.stdout, /a previous `tunnel create` did not finish: run `npx -y a2a-exposed@latest tunnel rm`, then `npx -y a2a-exposed@latest tunnel create`/);
 });
 
 test("tunnel create --zero-trust-org creates the organization when Access is off", async (t) => {

@@ -3,6 +3,10 @@ import crypto from "node:crypto";
 
 export const ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
 
+/** The one way docs, hints and CLI output tell people (and agents) to run the CLI: npx, always the latest release, no
+ *  global install (agent sandboxes block global installs as untrusted code). A global install is an optional speed-up. */
+export const CLI = "npx -y a2a-exposed@latest";
+
 export class CliError extends Error {}
 export const die = (msg) => { throw new CliError(msg); };
 
@@ -178,8 +182,8 @@ export async function rpc(url, version, token, method03, method1, params, peer =
 		const who = peer && peer.alias ? `peer "${peer.alias}"` : new URL(url).origin;
 		const base = (peer && peer.base) || new URL(url).origin;
 		die(token
-			? `${who} rejected our token (HTTP 401: revoked, rotated, or never valid there). Re-pair: a2a-exposed connect ${base}${peer && peer.alias ? ` --alias ${peer.alias}` : ""} (its owner approves), or ask its owner for a new token`
-			: `${who} needs a token (HTTP 401): a2a-exposed connect ${base}${peer && peer.alias ? ` --alias ${peer.alias}` : ""} (its owner approves)`);
+			? `${who} rejected our token (HTTP 401: revoked, rotated, or never valid there). Re-pair: ${CLI} connect ${base}${peer && peer.alias ? ` --alias ${peer.alias}` : ""} (its owner approves), or ask its owner for a new token`
+			: `${who} needs a token (HTTP 401): ${CLI} connect ${base}${peer && peer.alias ? ` --alias ${peer.alias}` : ""} (its owner approves)`);
 	}
 	if (status !== 200 || !data || typeof data !== "object" || "error" in data)
 		die(`peer returned ${data && typeof data === "object" && data.error ? `JSON-RPC error ${describeHttp(status, data).replace(/^HTTP \d+: /, "")} (HTTP ${status})` : describeHttp(status, data)}`);

@@ -1,19 +1,19 @@
 # Prerequisites
 
-- **Node 22.18+** (`node -v`). `init`, `deploy` and `wake set` stop on older Node, because Cloudflare's `cf` CLI needs 22.18+. On Node 20, `npm i -g a2a-exposed` and `npx skills add` only print an `EBADENGINE` warning and still install (the skills CLI asks for >=22.20), so a working install does not mean the Node is new enough. To get Node 22 without root and without replacing the system Node, pick one:
+- **Node 22.18+** (`node -v`). `init`, `deploy` and `wake set` stop on older Node, because Cloudflare's `cf` CLI needs 22.18+. On Node 20, `npx -y a2a-exposed@latest` and `npx -y skills add` only print an `EBADENGINE` warning and still run (the skills CLI asks for >=22.20), so getting past the install does not mean the Node is new enough. To get Node 22 without root and without replacing the system Node, pick one:
   - **mise** (recommended; the optional **mise** companion skill walks through it, see **Recommended companion skills** in this file):
     ```bash
-    mise exec node@22 -- npx a2a-exposed init ...   # one command on Node 22
+    mise exec node@22 -- npx -y a2a-exposed@latest init ...   # one command on Node 22
     mise use node@22                                      # or: node/npx are Node 22 in this directory from now on
     ```
-    To install that skill on old Node, use `mise exec node@22 -- npx skills add https://github.com/telegraphic-dev/mise-skill --skill mise` once mise is installed, or save its [`SKILL.md`](https://github.com/telegraphic-dev/mise-skill/blob/master/SKILL.md) by hand.
+    To install that skill on old Node, use `mise exec node@22 -- npx -y skills add https://github.com/telegraphic-dev/mise-skill --skill mise` once mise is installed, or save its [`SKILL.md`](https://github.com/telegraphic-dev/mise-skill/blob/master/SKILL.md) by hand.
   - **nvm:** `nvm install 22 && nvm use 22`. **fnm:** `fnm install 22 && fnm use 22`.
   - **Official installer or binaries:** [nodejs.org/en/download](https://nodejs.org/en/download) (a tarball unpacked under `~/.local/opt`, with its `bin/` put first on `PATH`, needs no root).
 
   Then `node --version` must print v22.18.0 or newer. The CLI's version error prints the same list.
 - **Cloudflare login, device-code flow.** No global `cf` is required: `npx cf` works, and the login is stored per user (`~/.config/cloudflare`), so every `cf` binary sees it.
   ```bash
-  npx cf auth login --no-browser     # or `cf auth login --no-browser` after `npm i -g cf`
+  npx cf auth login --no-browser     # npx fetches Cloudflare's cf CLI; no global install
   ```
   It prints a URL (`https://dash.cloudflare.com/oauth2/device/verify`) and a code. Give both to the user and ask them to approve. The code expires in about 5 minutes. Check with `npx cf auth whoami` (or `cf auth whoami`): it must show `"authenticated": true`. CI can use `CLOUDFLARE_API_TOKEN` instead. If the login fails with `OAuth error: HTTP 403 Forbidden` (or a "Just a moment..." page) **before any code is shown**, that is Cloudflare's bot mitigation for datacenter / VPS IPs: don't retry, use an API token (Troubleshooting: API token).
   `init`/`deploy`/`wake set` run `npm install` in the Worker folder (`<config dir>/worker`) and use the `cf` from its `node_modules/.bin`; a global `cf` only saves typing `npx` for the login.
@@ -43,8 +43,8 @@ Two separate skills help with this setup. Offer them to the user, and install on
 
 | Skill | Install | Why |
 |---|---|---|
-| `mise` | `npx skills add https://github.com/telegraphic-dev/mise-skill --skill mise` | Guides installing mise and getting a Node 22.18+ runtime (`mise use node@22`, or one-off `mise exec node@22 -- <cmd>`) without replacing the system Node |
-| `cloudflare` | `npx skills add https://github.com/cloudflare/skills --skill cloudflare` | Cloudflare's guide to Workers, D1, DNS, Tunnel and Access; for `cloudflare.config.ts` projects like this Worker it sends the agent to the current `cf` CLI docs |
+| `mise` | `npx -y skills add https://github.com/telegraphic-dev/mise-skill --skill mise` | Guides installing mise and getting a Node 22.18+ runtime (`mise use node@22`, or one-off `mise exec node@22 -- <cmd>`) without replacing the system Node |
+| `cloudflare` | `npx -y skills add https://github.com/cloudflare/skills --skill cloudflare` | Cloudflare's guide to Workers, D1, DNS, Tunnel and Access; for `cloudflare.config.ts` projects like this Worker it sends the agent to the current `cf` CLI docs |
 
 The `-g` / `--agent` / `-y` flags from **Installing these skills** above apply. Like these skills, they install guidance only; the mise binary is installed separately.
 
@@ -54,7 +54,7 @@ The default login lives in the `default` cf auth profile (`npx cf auth login --n
 
 ```bash
 npx cf auth create my-bot --no-browser   # device code; approve as the bot account
-npx a2a-exposed init --cf-profile my-bot --agent-name "My Bot" ...
+npx -y a2a-exposed@latest init --cf-profile my-bot --agent-name "My Bot" ...
 ```
 
 `--cf-profile` is saved as `CF_PROFILE` in `config.env` and passed as `--profile` to every `cf` call for that deployment. Combine it with a separate `A2A_CONFIG_DIR` when several bots share one machine. Re-authenticate with `npx cf auth create my-bot --no-browser` (same name). `npx cf auth list` shows profiles; `npx cf auth activate my-bot <worker-dir>` binds a profile to a directory instead of using `--cf-profile`.

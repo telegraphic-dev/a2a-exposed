@@ -121,6 +121,7 @@ test("agent card, RFC 8414 metadata and the 401 hint advertise the device flow; 
 		assert.equal(r.data.error.data.pairing.device_authorization_endpoint, `${BASE}/oauth/device_authorization`);
 		assert.equal(r.data.error.data.pairing.token_endpoint, `${BASE}/oauth/token`);
 		assert.equal(r.data.error.data.pairing.grant_type, GRANT);
+		assert.equal(r.data.error.data.pairing.cli, `npx -y a2a-exposed@latest connect ${BASE}`, "npx, latest, no global install");
 	}
 	const bad = await s.call("POST", "/", { json: { jsonrpc: "2.0", id: "req-7", method: "SendMessage", params: {} }, headers: { authorization: "Bearer nope" } });
 	assert.equal(bad.headers.get("www-authenticate"), `Bearer realm="a2a", resource_metadata="${BASE}/.well-known/oauth-protected-resource", error="invalid_token", error_description="the bearer token is not valid (revoked, rotated or mistyped)"`);
@@ -203,7 +204,7 @@ test("human approval: pending, slow_down, page approve with the password, single
 	assert.equal(s.wakes.length, 1);
 	const w = s.wakes[0].body;
 	assert.equal(w.kind, "pairing_request");
-	assert.equal(w.hint, "npx a2a-exposed pair list");
+	assert.equal(w.hint, "npx -y a2a-exposed@latest pair list");
 	assert.deepEqual([w.pairing.userCode, w.pairing.verificationUriComplete, w.pairing.approval, w.pairing.clientId], [d.user_code, d.verification_uri_complete, "human", "barry"]);
 	assert.equal(w.pairing.agentCardUrl, "https://barry.example.org/.well-known/agent-card.json");
 	assert.match(w.pairing.instructions, /never approve on your own[\s\S]*give them this link/);
@@ -237,7 +238,7 @@ test("human approval: pending, slow_down, page approve with the password, single
 	assert.equal(g.headers.get("x-frame-options"), "DENY");
 	assert.match(g.headers.get("set-cookie")!, /^a2a_device_csrf=[A-Za-z0-9_-]{24}; Path=\/device; Secure; HttpOnly; SameSite=Strict/);
 	assert.ok(!/<script|src=|href=/i.test(g.text), "no scripts or external assets");
-	assert.match(g.text, /No approval password is set yet[\s\S]*npx a2a-exposed pair set-password/);
+	assert.match(g.text, /No approval password is set yet[\s\S]*npx -y a2a-exposed@latest pair set-password/);
 	assert.ok(!g.text.includes('name="password"'));
 	assert.equal((await s.decidePage(d.user_code, PASSWORD, "approve")).status, 409);
 
@@ -371,7 +372,7 @@ test("flood control: requests per IP and outstanding requests are capped (no flo
 test("pairing wakes: summary for each preset; requester text only where previews are allowed", async () => {
 	const ev: WakeEvent = { contextId: "pairing", taskId: "none", taskIds: [], from: "Barry", preview: "", kind: "pairing_request", publicUrl: BASE,
 		pairing: { userCode: "WDJB-2345", verificationUriComplete: `${BASE}/device?user_code=WDJB-2345`, approval: "human", clientName: "Barry", clientId: "barry", agentCardUrl: "https://barry.example.org/card", expiresIn: 600 } };
-	const sum = wakeSummary(ev, "npx a2a-exposed");
+	const sum = wakeSummary(ev, "npx -y a2a-exposed@latest");
 	assert.match(sum, /^A2A pairing request: an agent calling itself "Barry" \(claimed card: "https:\/\/barry\.example\.org\/card"\) asks to connect to your inbox \(code WDJB-2345, expires in 10 minutes\)\./);
 	assert.match(sum, /never approve on your own\. Show them the code WDJB-2345 and give them this link: https:\/\/agent\.example\.com\/device\?user_code=WDJB-2345/);
 	const agentSum = wakeSummary({ ...ev, pairing: { ...ev.pairing!, approval: "agent" } }, "a2a");
@@ -633,7 +634,7 @@ test("GET /: a browser gets an HTML landing page (strict CSP, no scripts); curl/
 	assert.match(h.text, /A2A \(Agent2Agent\)<\/a> endpoint/);
 	assert.ok(h.text.includes(`href="/.well-known/agent-card.json"`) && h.text.includes(`${BASE}/.well-known/agent-card.json`));
 	assert.ok(h.text.includes(`href="/device"`), "pairing link");
-	assert.ok(h.text.includes(`npx a2a-exposed connect ${BASE}`));
+	assert.ok(h.text.includes(`npx -y a2a-exposed@latest connect ${BASE}`));
 	assert.match(h.text, /1\.0, 0\.3/);
 	// the style block carries the CSP nonce
 	const nonce = /style-src 'nonce-([^']+)'/.exec(csp)![1];

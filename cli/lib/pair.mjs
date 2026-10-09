@@ -5,10 +5,9 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import * as C from "./config.mjs";
-import { describeHttp, die, fetchCard, httpJson, isPrivateHost, pickEndpoint } from "./a2a.mjs";
+import { CLI, describeHttp, die, fetchCard, httpJson, isPrivateHost, pickEndpoint } from "./a2a.mjs";
 import { baseUrl, peerToken, warnPeerTokenEnv } from "./commands.mjs";
 
-const CLI = "a2a-exposed";
 export const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 export const PBKDF2_ITERATIONS = 100000; // default (the Workers runtime's maximum); the Worker advertises its own setting
 export const MIN_PASSWORD_LENGTH = 12;

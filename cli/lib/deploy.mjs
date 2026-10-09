@@ -5,7 +5,7 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import * as C from "./config.mjs";
-import { cardUrlProblem, cfErrorCode, die, fetchUpstreamCard, fingerprint, httpJson, randomToken, upstreamAuth, upstreamCardUrlProblem, upstreamUrlProblem } from "./a2a.mjs";
+import { CLI, cardUrlProblem, cfErrorCode, die, fetchUpstreamCard, fingerprint, httpJson, randomToken, upstreamAuth, upstreamCardUrlProblem, upstreamUrlProblem } from "./a2a.mjs";
 import { owner, ownerTry } from "./commands.mjs";
 import { readHidden } from "./pair.mjs";
 import * as WD from "./workersdev.mjs";
@@ -68,7 +68,7 @@ export const workerDir = (o) => path.resolve(o.dir || C.get("A2A_WORKER_DIR") ||
 /** How to get Node 22.18+ (printed by the version check; the setup skill says the same). */
 export const NODE_HELP = `How to get Node 22 (any one; no root needed):
   mise (recommended; the agent skill: npx skills add telegraphic-dev/mise-skill):
-    one command:   mise exec node@22 -- npx a2a-exposed <command>
+    one command:   mise exec node@22 -- npx -y a2a-exposed@latest <command>
     this project:  mise use node@22   (then node/npx are Node 22 in this directory)
   nvm:   nvm install 22 && nvm use 22
   fnm:   fnm install 22 && fnm use 22
@@ -246,7 +246,7 @@ function applyFlags(o) {
 function reportSwitch(sw) {
 	if (!sw) return;
 	const to = C.fileConfig().A2A_BASE_URL || publicBase();
-	const card = to ? `${to}/.well-known/agent-card.json` : "(see `a2a-exposed url`)";
+	const card = to ? `${to}/.well-known/agent-card.json` : `(see \`${CLI} url\`)`;
 	console.error(`\nnote: the public URL moved${sw.from ? ` from ${sw.from}` : ""} to ${to || "workers.dev"}.`);
 	if (sw.fromHost) {
 		console.error(`  ${sw.fromHost} no longer serves this agent: its agent card redirects (301) to the new one and every other request gets 410 Gone.`);
@@ -289,9 +289,9 @@ async function verifyDeployedCard(base) {
 	if (justRegistered) step("waiting for the new workers.dev subdomain to resolve (usually 1-5 minutes)");
 	const r = await verifyCard(base, { tries, intervalMs: Number(process.env.A2A_VERIFY_INTERVAL_MS || 5000),
 		onWait: (why) => step(`agent card not served yet (${why}); a new deployment takes up to ~30 s to propagate, waiting`) });
-	if (r.ok && r.problem) return console.error(`warning: the agent card at ${base}/.well-known/agent-card.json does not point peers at this deployment: ${r.problem}. Check with: a2a-exposed status`);
+	if (r.ok && r.problem) return console.error(`warning: the agent card at ${base}/.well-known/agent-card.json does not point peers at this deployment: ${r.problem}. Check with: ${CLI} status`);
 	if (r.ok) return console.error(`agent card OK: ${r.name} (${base}/.well-known/agent-card.json)`);
-	console.error(`warning: agent card not reachable yet at ${base} (${r.lastError || "no answer"}); ${C.get("A2A_HOSTNAME") ? "a new custom domain" : "a new workers.dev deployment or subdomain"} can take a few minutes. Check again with: a2a-exposed status`);
+	console.error(`warning: agent card not reachable yet at ${base} (${r.lastError || "no answer"}); ${C.get("A2A_HOSTNAME") ? "a new custom domain" : "a new workers.dev deployment or subdomain"} can take a few minutes. Check again with: ${CLI} status`);
 }
 
 /** Apply D1 migrations quietly: cf prints a bare JSON array (often `[]`) when stdout is not a TTY. */
@@ -350,7 +350,7 @@ async function deployAndLearn(dir, secrets, o) {
 	if (sub && o["workers-dev-subdomain"] && sub !== o["workers-dev-subdomain"])
 		console.error(`note: the account already has the workers.dev subdomain "${sub}"; using it (--workers-dev-subdomain ignored)`);
 	if (sub && sub !== baked()) C.saveConfig({ A2A_WORKERS_DEV_SUBDOMAIN: sub });
-	if (!baked()) return console.error("warning: could not find the workers.dev URL in cf's output; the Worker uses the request origin meanwhile. Check the URL in the dashboard and re-run `a2a-exposed deploy`.");
+	if (!baked()) return console.error(`warning: could not find the workers.dev URL in cf's output; the Worker uses the request origin meanwhile. Check the URL in the dashboard and re-run \`${CLI} deploy\`.`);
 	C.saveConfig({ A2A_BASE_URL: publicBase() });
 	if (baked() !== deployedWith) {
 		step(`redeploying once so the agent card advertises ${publicBase()}`);
@@ -428,7 +428,7 @@ export async function init(o) {
 	console.log(base);
 	reportSwitch(switched);
 	proxyNote(secrets);
-	console.error(`config saved to ${C.CONFIG_FILE} (chmod 600). Next: a2a-exposed status (shows the next setup step)`);
+	console.error(`config saved to ${C.CONFIG_FILE} (chmod 600). Next: ${CLI} status (shows the next setup step)`);
 }
 
 /** Proxy / expose mode reminder after a deploy (the upstream credentials are secrets: only their names are shown). */
@@ -437,7 +437,7 @@ function proxyNote(secrets = {}) {
 	if (!up) return;
 	const sent = UPSTREAM_SECRETS.filter((k) => k in secrets);
 	console.error(`proxy mode: authenticated A2A calls are forwarded to ${up}; the public card is the upstream's, rewritten to this deployment's URL.` +
-		` Upstream secrets uploaded now: ${sent.join(", ") || "none (existing ones kept)"}. Check the whole path (Access, the agent's bearer check) with: a2a-exposed status`);
+		` Upstream secrets uploaded now: ${sent.join(", ") || "none (existing ones kept)"}. Check the whole path (Access, the agent's bearer check) with: ${CLI} status`);
 }
 
 /** stdin and stderr are a terminal (a human at the keyboard), and not CI: only then may setup prompt. */
@@ -497,18 +497,18 @@ export async function upstreamTokenCheck(o, { upstreamChanged = false } = {}) {
 		if (t) { C.saveConfig({ A2A_UPSTREAM_NO_TOKEN: null }); return { UPSTREAM_TOKEN: t }; }
 		if (auth.bearer) die("no UPSTREAM_TOKEN given, but the upstream card asks for one: peers' calls would fail with HTTP 502. Re-run and enter it, or pass --no-upstream-token if the agent really accepts calls without it");
 		C.saveConfig({ A2A_UPSTREAM_NO_TOKEN: "1" });
-		console.error("note: deploying without an upstream bearer token (saved; check the whole path with `a2a-exposed status`)");
+		console.error(`note: deploying without an upstream bearer token (saved; check the whole path with \`${CLI} status\`)`);
 		return {};
 	}
 	die(`${why}, and no UPSTREAM_TOKEN is set. ${access}, so without it every peer call fails with HTTP 502.\n` +
-		"  Provide it (never as an argument): `read -rs UPSTREAM_TOKEN && export UPSTREAM_TOKEN`, then re-run; or pipe it: <command that prints the token> | a2a-exposed " +
+		`  Provide it (never as an argument): \`read -rs UPSTREAM_TOKEN && export UPSTREAM_TOKEN\`, then re-run; or pipe it: <command that prints the token> | ${CLI} ` +
 		`${C.get("A2A_D1_ID") ? "deploy" : "init ..."} --upstream-token-stdin\n` +
 		"  The agent needs no bearer token? Re-run with --no-upstream-token (saved for later deploys).");
 }
 
 export async function deploy(o) {
 	checkNode();
-	if (!C.get("A2A_D1_ID")) die("no saved deployment; run `a2a-exposed init` first");
+	if (!C.get("A2A_D1_ID")) die(`no saved deployment; run \`${CLI} init\` first`);
 	// init saves A2A_WORKER_NAME before it creates the D1 database, so a saved D1 without a name is a hand-edited config:
 	// refuse rather than guess, so a redeploy never creates a second Worker next to the one this config deployed.
 	if (!C.get("A2A_WORKER_NAME") && o["worker-name"] === undefined)
@@ -546,7 +546,7 @@ function guardTunnelUrl() {
 	if (!th || !url) return;
 	let host = "";
 	try { host = new URL(url).host; } catch { /* invalid URL: reported elsewhere */ }
-	if (host !== th) die(`this deployment wakes through the tunnel https://${th} (tunnel create); unset WAKE_WEBHOOK_URL, or run \`a2a-exposed tunnel rm\` first`);
+	if (host !== th) die(`this deployment wakes through the tunnel https://${th} (tunnel create); unset WAKE_WEBHOOK_URL, or run \`${CLI} tunnel rm\` first`);
 }
 
 export async function wake(sub, o) {
@@ -562,7 +562,7 @@ export async function wake(sub, o) {
 		const local = localFingerprints(), remote = r.fingerprints || {};
 		for (const [k, v] of Object.entries(local)) {
 			if (!v) continue;
-			if (!r.fingerprints) { console.error("# this Worker predates fingerprints; redeploy (a2a-exposed deploy) to compare"); break; }
+			if (!r.fingerprints) { console.error(`# this Worker predates fingerprints; redeploy (${CLI} deploy) to compare`); break; }
 			console.error(`# ${k}: local ${v} vs uploaded ${remote[k] || "(unset)"} -> ${v === remote[k] ? "match" : "DIFFERENT"}`);
 		}
 		return;
@@ -570,7 +570,7 @@ export async function wake(sub, o) {
 	if (sub === "test") {
 		const r = await owner("POST", "/owner/wake/test", {});
 		if (r.configured === false || r.info === "WAKE_WEBHOOK_URL unset")
-			die("no wake webhook configured on the Worker: export WAKE_WEBHOOK_URL (and WAKE_WEBHOOK_KEY or WAKE_HMAC_SECRET), then run `a2a-exposed wake set` first (or use polling)");
+			die(`no wake webhook configured on the Worker: export WAKE_WEBHOOK_URL (and WAKE_WEBHOOK_KEY or WAKE_HMAC_SECRET), then run \`${CLI} wake set\` first (or use polling)`);
 		console.log(JSON.stringify(r, null, 2));
 		if (!(r.status >= 200 && r.status < 300)) process.exitCode = 1;
 		else if (C.get("WAKE_PRESET") === "claude-code") console.error(CLAUDE_CODE_NOTE);
@@ -582,7 +582,7 @@ export async function wake(sub, o) {
 		if (!Object.keys(secrets).length && !DEPLOY_FLAGS.some((f) => o[f] !== undefined))
 			die("nothing to set: export WAKE_WEBHOOK_URL / WAKE_WEBHOOK_KEY / WAKE_HMAC_SECRET and/or pass --preset etc.");
 		await deploy(o); // wake set = save settings + upload secrets + redeploy, in one step
-		console.error("wake settings deployed. Next: a2a-exposed wake preview, then a2a-exposed wake test");
+		console.error(`wake settings deployed. Next: ${CLI} wake preview, then ${CLI} wake test`);
 		if (C.get("WAKE_PRESET") === "claude-code") console.error(CLAUDE_CODE_NOTE);
 		return;
 	}
