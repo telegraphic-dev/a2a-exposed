@@ -474,12 +474,15 @@ export async function bookmarkForTime(storage: BookmarkStorage, timeMs: number):
 }
 
 /**
- * Ask the runtime to restore `bookmark` on the next session. The isolate is left running so this RPC can answer;
- * the runtime applies the bookmark when the next session starts.
+ * Schedule `bookmark` for the next session, then call `restart`. On a Durable Object that restart is `ctx.abort()`:
+ * the runtime applies the bookmark only after the object resets. A storage error is thrown before `restart`, so a
+ * rejected bookmark leaves the current database running.
  */
-export async function restoreBookmark(storage: BookmarkStorage, bookmark: string): Promise<{ ok: true }> {
+export async function restoreBookmark(storage: BookmarkStorage, bookmark: string, restart?: (undo?: string) => void): Promise<{ ok: true; undo?: string }> {
 	if (typeof bookmark !== "string" || bookmark.length < 1 || bookmark.length > 4096) throw new ExportError("restoreBookmark: bookmark is invalid");
 	if (typeof storage.onNextSessionRestoreBookmark !== "function") throw new ExportError("restoreBookmark: point-in-time restore is not available on this storage");
-	await storage.onNextSessionRestoreBookmark(bookmark);
-	return { ok: true };
+	const raw = await storage.onNextSessionRestoreBookmark(bookmark);
+	const undo = typeof raw === "string" && raw.length > 0 ? raw : undefined;
+	restart?.(undo);
+	return undo ? { ok: true, undo } : { ok: true };
 }

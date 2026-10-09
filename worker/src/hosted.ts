@@ -221,10 +221,18 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 		return readBookmark(this.ctx.storage as BookmarkStorage, timeMs);
 	}
 
-	/** Restore `bookmark` on the next session of this object. */
-	async restoreBookmark(bookmark: string): Promise<{ ok: true }> {
+	/**
+	 * Schedule `bookmark` and reset this object so the next session applies it.
+	 * `ctx.abort()` ends the call (the runtime logs that reset). The undo bookmark is logged first.
+	 * An alarm in flight was for the pre-restore database, so it is not retried; the new session arms from the restored rows.
+	 */
+	async restoreBookmark(bookmark: string): Promise<{ ok: true; undo?: string }> {
 		if (!this.#row) throw new ExportError("restoreBookmark: tenant is not configured");
-		return applyBookmark(this.ctx.storage as BookmarkStorage, bookmark);
+		const tenantId = this.#row.tenantId;
+		return applyBookmark(this.ctx.storage as BookmarkStorage, bookmark, (undo) => {
+			console.log(JSON.stringify({ ts: new Date().toISOString(), event: "bookmark_restore", tenant: tenantId, undo: undo ?? null }));
+			this.ctx.abort("restore bookmark", { retryAlarm: false });
+		});
 	}
 
 	async fetch(req: Request): Promise<Response> {

@@ -366,8 +366,29 @@ test("point-in-time helpers require the storage methods", async () => {
 		async onNextSessionRestoreBookmark(b: string) { return `undo-${b}`; },
 	};
 	assert.equal((await bookmarkForTime(storage, 10)).bookmark, "bm-10");
-	assert.deepEqual(await restoreBookmark(storage, "bm-10"), { ok: true });
+	assert.deepEqual(await restoreBookmark(storage, "bm-10"), { ok: true, undo: "undo-bm-10" });
 	await assert.rejects(() => restoreBookmark(storage, ""), /invalid/);
+});
+
+test("restoreBookmark restarts only after the runtime accepts the bookmark", async () => {
+	const order: string[] = [];
+	const storage = {
+		async onNextSessionRestoreBookmark(b: string) {
+			order.push(`schedule:${b}`);
+			return `undo-${b}`;
+		},
+	};
+	const out = await restoreBookmark(storage, "bm-1", (undo) => { order.push(`restart:${undo}`); });
+	assert.deepEqual(order, ["schedule:bm-1", "restart:undo-bm-1"]);
+	assert.deepEqual(out, { ok: true, undo: "undo-bm-1" });
+
+	let restarted = false;
+	const failing = {
+		async onNextSessionRestoreBookmark() { throw new Error("rejected bookmark"); },
+	};
+	await assert.rejects(() => restoreBookmark(failing, "bm-2", () => { restarted = true; }), /rejected bookmark/);
+	await assert.rejects(() => restoreBookmark(storage, "", () => { restarted = true; }), /invalid/);
+	assert.equal(restarted, false);
 });
 
 test("backupDatabase writes the self-host snapshot", async () => {
