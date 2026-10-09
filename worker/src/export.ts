@@ -57,11 +57,23 @@ function normalizeRow(row: Record<string, unknown>): Record<string, unknown> {
 	return out;
 }
 
+/** A SQL string literal. SQLite rejects a script that contains a NUL byte, so U+0000 is `char(0)` instead of a raw byte. */
+function sqlString(v: string): string {
+	const parts = v.split("\u0000");
+	if (parts.length === 1) return `'${v.replaceAll("'", "''")}'`;
+	const bits: string[] = [];
+	for (let i = 0; i < parts.length; i++) {
+		if (parts[i]) bits.push(`'${parts[i].replaceAll("'", "''")}'`);
+		if (i < parts.length - 1) bits.push("char(0)");
+	}
+	return bits.length === 1 ? bits[0] : `(${bits.join(" || ")})`;
+}
+
 function sqlLit(v: unknown): string {
 	if (v === null) return "NULL";
 	if (typeof v === "boolean") return v ? "1" : "0";
 	if (typeof v === "number") return Number.isInteger(v) ? String(v) : JSON.stringify(v);
-	if (typeof v === "string") return `'${v.replaceAll("'", "''")}'`;
+	if (typeof v === "string") return sqlString(v);
 	throw new ExportError("export: unsupported value");
 }
 

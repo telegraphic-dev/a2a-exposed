@@ -52,6 +52,24 @@ test("export SQL round-trips application rows and skips hosted config", async ()
 	assert.equal(text.text, "a'b\n-- drop");
 });
 
+test("export SQL writes a NUL byte as char(0) so the script stays valid", () => {
+	const raw = "a'\0b\0";
+	const sql = toSql({
+		format: "a2a-exposed-export",
+		version: 1,
+		exportedAt: "2026-10-09T03:00:00.000Z",
+		tables: { history: [{ context_id: "ctx-nul", ts: "2026-10-09T03:00:00.000Z", dir: "in", text: raw }] },
+	});
+	assert.equal(sql.includes("\u0000"), false);
+	assert.match(sql, /\('a''' \|\| char\(0\) \|\| 'b' \|\| char\(0\)\)/);
+	const fresh = new DatabaseSync(":memory:");
+	for (const name of fs.readdirSync(MIGRATIONS).filter((n) => n.endsWith(".sql")).sort())
+		fresh.exec(fs.readFileSync(new URL(name, MIGRATIONS), "utf8"));
+	fresh.exec(sql);
+	const hex = fresh.prepare("SELECT hex(text) AS h FROM history").get() as { h: string };
+	assert.equal(hex.h, Buffer.from(raw, "utf8").toString("hex").toUpperCase());
+});
+
 test("exportRows reads every application table in one batch", async () => {
 	const DB = db();
 	await DB.prepare("INSERT INTO peers (label, token_hash, created_at) VALUES ('ada', 'h', 't')").run();
