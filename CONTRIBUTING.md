@@ -10,7 +10,8 @@ Issues and pull requests are welcome.
   npx cf build
   ```
   To run it locally, use `npx cf dev` with a `.dev.vars` file containing `OWNER_TOKEN=...`. D1 migrations live in `worker/migrations/`; add new numbered files instead of editing old ones.
-- **CLI** (`cli/`): plain Node ESM with zero dependencies. Check it with `node cli/bin/a2a-exposed.mjs --help` and `cd cli && npm test` (uses a throwaway `A2A_CONFIG_DIR`; unset any real `WAKE_*` secrets first). `npm pack` bundles `worker/` through the prepack script.
+- **CLI** (`cli/`): plain Node ESM with zero dependencies. Check it with `node cli/bin/a2a-exposed.mjs --help` and `cd cli && npm test` (uses a throwaway `A2A_CONFIG_DIR`; unset any real `WAKE_*` secrets first). `npm pack` bundles `worker/` through the prepack script. It does not bundle `control/`.
+- **Control plane** (`control/`): Hono on Workers plus static assets, deployed with `cf` the same way as `worker/`. `cd control && npm test && npx cf workers types && npx tsc --noEmit && npm run build`. Leave `BRAND_NAME` and the other `CONTROL_*` variables unset to see the neutral shell. Overlay rules are in `control/OVERLAY.md`.
 - **Skills** (`skills/*/SKILL.md`): the frontmatter `name` must match the folder name. Check discovery with `npx -y skills add ./ --list`.
 - **New wake presets:** add the preset to `worker/src/wake.ts` (`PRESETS` and `renderWake`), add a test in `worker/test/wake.test.ts`, list it in the CLI (`cli/lib/deploy.mjs`), and document it in the setup skill and the README table, with a link to the target's docs.
 - Never commit secrets, account ids, or hostnames of real deployments.

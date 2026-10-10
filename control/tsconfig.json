@@ -1,0 +1,21 @@
+{
+	"compilerOptions": {
+		"target": "es2024",
+		"lib": ["es2024"],
+		"module": "preserve",
+		"moduleResolution": "bundler",
+		"types": [],
+		"strict": true,
+		"noEmit": true,
+		"allowImportingTsExtensions": true,
+		"isolatedModules": true,
+		"verbatimModuleSyntax": true,
+		"skipLibCheck": true,
+		"jsx": "react-jsx",
+		"jsxImportSource": "hono/jsx",
+		"paths": {
+			"@brand/*": ["./brand/*"]
+		}
+	},
+	"include": ["src", "brand", "cloudflare.config.ts", ".cloudflare/types"]
+}
