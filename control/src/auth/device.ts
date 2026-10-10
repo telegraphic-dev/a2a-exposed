@@ -1,6 +1,7 @@
 import type { Auth } from "./create-auth.ts";
 import { hostCookie, readCookie } from "./cookies.ts";
 import type { AuthOptions } from "./options.ts";
+import { sameOrigin } from "./origin.ts";
 import { renderApp } from "../views/document.tsx";
 import { renderDevice } from "../views/device.tsx";
 import { renderSignIn } from "../views/sign-in.tsx";
@@ -28,11 +29,6 @@ export interface DeviceResult {
 	location?: string;
 	cookie?: string;
 	turnstile?: boolean;
-}
-
-function sameOrigin(request: Request): boolean {
-	const origin = request.headers.get("origin");
-	return Boolean(origin) && origin === new URL(request.url).origin;
 }
 
 function page(request: Request, query: Record<string, string>): string {

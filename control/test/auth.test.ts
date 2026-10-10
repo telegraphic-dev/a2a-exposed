@@ -133,6 +133,56 @@ test("sign-in rejects a cross-origin post", async () => {
 	assert.match(response.headers.get("location") ?? "", /error=origin$/);
 });
 
+test("a same-origin form with Origin null still reaches the provider", async () => {
+	const db = openDb();
+	const env = githubEnv(db);
+	const options = resolveAuth(env, new Request(`${origin}/app`));
+	assert.ok(options);
+	let innerOrigin = "";
+	const posted = await handleSignIn(new Request(`${origin}/app/sign-in`, {
+		method: "POST",
+		headers: {
+			origin: "null",
+			"sec-fetch-site": "same-origin",
+			"content-type": "application/x-www-form-urlencoded",
+		},
+		body: "provider=github",
+	}), {
+		handler: async (request) => {
+			innerOrigin = request.headers.get("origin") ?? "";
+			return Response.json({ url: "https://github.com/login/oauth/authorize?client_id=gh-id", redirect: true });
+		},
+	}, options);
+	assert.equal(posted.status, 303);
+	assert.equal(new URL(posted.headers.get("location") ?? "").origin, "https://github.com");
+	assert.equal(innerOrigin, origin);
+
+	const app = createApp(env, { database: db });
+	const browser = await app.request(`${origin}/app/sign-in`, {
+		method: "POST",
+		headers: {
+			origin: "null",
+			"sec-fetch-site": "same-origin",
+			"content-type": "application/x-www-form-urlencoded",
+		},
+		body: "provider=github",
+	});
+	assert.equal(browser.status, 303);
+	assert.equal(new URL(browser.headers.get("location") ?? "").origin, "https://github.com");
+
+	const cross = await app.request(`${origin}/app/sign-in`, {
+		method: "POST",
+		headers: {
+			origin: "null",
+			"sec-fetch-site": "cross-site",
+			"content-type": "application/x-www-form-urlencoded",
+		},
+		body: "provider=github",
+	});
+	assert.equal(cross.status, 303);
+	assert.match(cross.headers.get("location") ?? "", /error=origin$/);
+});
+
 const origin = "https://control.example.com";
 
 function githubEnv(db = openDb()) {

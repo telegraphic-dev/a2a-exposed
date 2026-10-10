@@ -34,3 +34,18 @@ export function authBaseURL(env: { ISSUER?: string; SITE_URL?: string }, request
 	}
 	return requestOrigin;
 }
+
+/**
+ * True when this POST came from a page on this host.
+ * `Referrer-Policy: no-referrer` makes a browser send `Origin: null` on a same-origin form.
+ * `Sec-Fetch-Site` is set by the browser. `cross-site` is rejected even when Origin matches.
+ * A client that sends neither header must send this origin.
+ */
+export function sameOrigin(request: Request): boolean {
+	const site = (request.headers.get("sec-fetch-site") ?? "").trim().toLowerCase();
+	if (site === "cross-site") return false;
+	const origin = (request.headers.get("origin") ?? "").trim();
+	if (origin === new URL(request.url).origin) return true;
+	if (origin && origin !== "null") return false;
+	return site === "same-origin";
+}

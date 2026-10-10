@@ -19,7 +19,8 @@ export function securityHeaders(options: { turnstile?: boolean } = {}): Record<s
 	].join("; ");
 	return {
 		"content-security-policy": csp,
-		"referrer-policy": "no-referrer",
+		// `no-referrer` makes a browser send `Origin: null` on a same-origin form POST.
+		"referrer-policy": "same-origin",
 		"x-content-type-options": "nosniff",
 	};
 }
