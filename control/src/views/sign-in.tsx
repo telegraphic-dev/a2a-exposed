@@ -21,12 +21,12 @@ export function renderSignIn(input: {
 	error?: string;
 	sent?: boolean;
 }): string {
-	const error = input.error ? ERRORS[input.error] ?? "" : "";
+	const error = input.error ? ERRORS[input.error] ?? ERRORS.auth : "";
 	const buttons = PROVIDERS.filter(([id]) => input.providers.includes(id));
 	return (
 		<div>
 			{input.notice ? <p>{input.notice}</p> : ""}
-			{error ? <p>{error}</p> : ""}
+			{error ? <p class="alert" role="alert">{error}</p> : ""}
 			{input.sent ? <p>Check your email for a sign-in link.</p> : ""}
 			<form method="post" action="/app/sign-in">
 				{input.invitesRequired ? (

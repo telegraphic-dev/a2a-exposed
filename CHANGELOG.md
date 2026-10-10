@@ -2,6 +2,10 @@
 
 All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.3.x), Worker template, and skills. Versions follow [semver](https://semver.org); a `v*` tag publishes the CLI to npm (see the README's **Releases**).
 
+## Unreleased
+
+- **Control plane sign-in.** GitHub, Google, and Cloudflare sign-in follow the provider URL in the sign-in response, including when that response is JSON and has no Location header. A Turnstile rejection on that sign-in returns to `/app?error=turnstile`. `/app` shows a message for `auth`, `turnstile`, `unavailable`, `invite`, and `email`. An OAuth callback that cannot be completed redirects to `/app?error=auth`. A provider token request that does not return cannot hold that callback open.
+
 ## 0.7.0 - 2026-10-10
 
 Upgrade: `npx -y a2a-exposed@latest deploy` (no new D1 migration). Leave `WAKE_TARGET_POLICY` unset and a self-hosted inbox still posts to the configured webhook. The control plane in `control/` is not in the npm package. Deploy that directory with `cf` and apply its D1 migrations (`0001_auth`, `0002_tenants`, `0003_oidc`) with `cf d1 migrations apply`. With login unset it serves a neutral page.
