@@ -73,3 +73,20 @@ test("neutral prerender keeps the shell and does not invent a sitemap without SI
 	assert.equal(fs.existsSync(path.join(out, "hello/index.html")), false);
 	fs.rmSync(out, { recursive: true, force: true });
 });
+
+test("a prerender without SITE_URL deletes a sitemap left by an earlier build", async () => {
+	const out = fs.mkdtempSync(path.join(os.tmpdir(), "control-sitemap-"));
+	const options = {
+		contentDir: path.join(fixture, "content"),
+		brandDir: path.join(fixture, "brand"),
+		publicDir: path.join(root, "public"),
+		overlayPublic: path.join(fixture, "public"),
+		outDir: out,
+		brandName: "",
+	};
+	await renderSite({ ...options, site: "https://control.example.com" });
+	assert.equal(fs.existsSync(path.join(out, "sitemap.xml")), true);
+	await renderSite({ ...options, site: "" });
+	assert.equal(fs.existsSync(path.join(out, "sitemap.xml")), false);
+	fs.rmSync(out, { recursive: true, force: true });
+});

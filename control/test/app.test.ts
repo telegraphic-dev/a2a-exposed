@@ -67,11 +67,14 @@ test("Accept text/markdown serves the static twin and skips the dashboard", asyn
 	const appPage = await app.request("https://control.example.com/app", { headers: { accept: "text/markdown" } });
 	assert.match(appPage.headers.get("content-type") ?? "", /text\/html/);
 	assert.match(await appPage.text(), /No login provider is configured/);
+
+	const html = await app.request("https://control.example.com/guide");
+	assert.equal(html.status, 404);
+	assert.equal(await html.text(), "missing");
 });
 
-test("worker-first paths cover the dynamic routes and not the site", () => {
-	assert.deepEqual(RUN_WORKER_FIRST, ["/health", "/app", "/app/*", "/api", "/api/*", "/.well-known", "/.well-known/*"]);
-	assert.equal(RUN_WORKER_FIRST.some((path) => path === "/" || path === "/*"), false);
+test("content requests run the worker first so Accept can select markdown", () => {
+	assert.equal(RUN_WORKER_FIRST, true);
 });
 
 test("neutral robots.txt disallows only the app and the api", () => {

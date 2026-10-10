@@ -71,5 +71,10 @@ export function createApp(env: ControlEnv = {}) {
 	app.all("/.well-known", (c) => c.json({ error: "not_found" }, 404));
 	app.all("/.well-known/*", (c) => c.json({ error: "not_found" }, 404));
 
+	app.all("*", async (c) => {
+		if (!env.ASSETS) return c.notFound();
+		return env.ASSETS.fetch(c.req.raw);
+	});
+
 	return app;
 }

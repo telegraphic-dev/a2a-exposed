@@ -231,6 +231,9 @@ export async function renderSite(options) {
 			"",
 		].join("\n");
 		fs.writeFileSync(path.join(outDir, "sitemap.xml"), body);
+	} else {
+		const stale = path.join(outDir, "sitemap.xml");
+		if (fs.existsSync(stale)) fs.rmSync(stale);
 	}
 
 	const rules = [MARKER_BEGIN];

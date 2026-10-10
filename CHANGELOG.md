@@ -4,6 +4,7 @@ All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.
 
 ## Unreleased
 
+- **Control plane assets.** Every request runs the Worker (`runWorkerFirst`), so `Accept: text/markdown` can return the Markdown twin instead of the HTML asset. A prerender with `SITE_URL` unset deletes `sitemap.xml` left in the output directory by an earlier build.
 - **Control plane skeleton.** `control/` is a Hono Worker plus Workers static assets, built and deployed with `cf`. With no configuration it serves a neutral page ("Inbox: sign in / create an agent") and tells the operator that no login provider is configured. `/app` and `/api` are `noindex`; `robots.txt` disallows only those two paths. Brand components, Markdown pages, and `public/` files are an overlay (`control/OVERLAY.md`). The npm package does not include `control/`. No login, billing, or tenant API in this change.
 
 ## 0.6.0 - 2026-10-10
