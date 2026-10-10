@@ -66,9 +66,28 @@ function markdownPath(pathname: string): string | null {
 	return `${pathname}.md`;
 }
 
+function logCallbackFailure(request: Request, error: string): void {
+	const path = new URL(request.url).pathname;
+	const safe = /^[A-Za-z0-9_-]{1,64}$/.test(error) ? error : "unrecognized";
+	console.error(JSON.stringify({ event: "oauth_callback_failed", error: safe, path }));
+}
+
+function callbackError(request: Request, response: Response): string {
+	const location = response.headers.get("location");
+	if (!location) return response.status >= 500 ? "http" : "";
+	try {
+		const url = new URL(location, request.url);
+		if (url.origin !== new URL(request.url).origin || url.pathname !== "/app") return "";
+		return url.searchParams.get("error") ?? "";
+	} catch {
+		return "";
+	}
+}
+
 function callbackGaveUp(request: Request): Response {
+	logCallbackFailure(request, "deadline");
 	const url = new URL("/app", request.url);
-	url.searchParams.set("error", "auth");
+	url.searchParams.set("error", "deadline");
 	return new Response(null, { status: 302, headers: { location: url.href, "cache-control": "no-store" } });
 }
 
@@ -167,10 +186,14 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 		if (!loaded) return c.json({ error: "not_found" }, 404);
 		const handle = () => loaded.auth.handler(request);
 		// A missing OAuth state redirects immediately. This bound is for the token
-		// exchange, which does not time out on its own.
+		// exchange, which does not time out on its own. A redirect does not call
+		// onAPIError.onError, so the code on that Location is logged here.
 		if (!new URL(request.url).pathname.startsWith("/api/auth/callback/")) return handle();
 		const deadline = deps.callbackDeadlineMs ?? CALLBACK_DEADLINE_MS;
-		return within(deadline, handle, () => callbackGaveUp(request));
+		const response = await within(deadline, handle, () => callbackGaveUp(request));
+		const code = callbackError(request, response);
+		if (code && code !== "deadline") logCallbackFailure(request, code);
+		return response;
 	});
 
 	app.get("/api/v1/tenants", (c) => tenants(c, "GET"));

@@ -116,11 +116,11 @@ export async function handleSignIn(request: Request, auth: AuthHandler, options:
 		? {
 			email,
 			callbackURL: "/app",
-			errorCallbackURL: "/app?error=auth",
+			errorCallbackURL: "/app",
 			newUserCallbackURL: "/app",
 			...(options.invitesRequired && invite && !returning ? { metadata: { invite } } : {}),
 		}
-		: { provider, callbackURL: "/app", errorCallbackURL: "/app?error=auth" };
+		: { provider, callbackURL: "/app", errorCallbackURL: "/app" };
 	const response = await auth.handler(new Request(new URL(path, origin), { method: "POST", headers, body: JSON.stringify(body) }));
 	const cookies = cookiesFrom(response);
 	if (options.invitesRequired && invite && !returning) cookies.push(hostCookie(INVITE_COOKIE, invite, 60 * 15));

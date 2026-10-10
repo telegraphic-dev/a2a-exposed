@@ -95,7 +95,9 @@ export async function createAuth(options: AuthOptions) {
 		secret: options.secret,
 		// Callback failures land on the sign-in page. Without this, production sends
 		// `/api/auth/error` to `/?error=`, which does not show the sign-in message.
-		onAPIError: { errorURL: `${options.baseURL}/app?error=auth` },
+		// Better Auth appends `?error=<code>`. A query that already sets `error`
+		// hides that code, because the page reads the first value.
+		onAPIError: { errorURL: `${options.baseURL}/app` },
 		database: options.database,
 		emailAndPassword: { enabled: false },
 		socialProviders: {
