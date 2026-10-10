@@ -1,6 +1,8 @@
 // Bindings the control plane reads. Every one is optional. With none of them set, the Worker
 // serves the neutral shell and static assets and does not call an identity provider.
-export interface ControlEnv {
+import type { PlaneEnv } from "./tenants/push.ts";
+
+export interface ControlEnv extends PlaneEnv {
 	ASSETS?: { fetch(input: Request | URL | string, init?: RequestInit): Promise<Response> };
 	BRAND_NAME?: string;
 	/** Public origin of this control plane, https, no path. Unset: sitemap is omitted. */
