@@ -19,8 +19,9 @@ function walk(dir, acc = []) {
 
 function expectedPaths() {
 	const src = fs.readFileSync(path.join(root, "src/routing.ts"), "utf8");
-	const match = src.match(/export const RUN_WORKER_FIRST = (\[[\s\S]*?\]);/);
+	const match = src.match(/export const RUN_WORKER_FIRST = (true|\[[\s\S]*?\]);/);
 	if (!match) throw new Error("RUN_WORKER_FIRST is missing from src/routing.ts");
+	if (match[1] === "true") return true;
 	return JSON.parse(match[1].replace(/,(\s*])/g, "$1"));
 }
 
@@ -79,7 +80,7 @@ for (const { file, json } of configs) {
 	}
 }
 if (!assetsOk) {
-	console.error("check-build: runWorkerFirst was not an array on the worker assets config");
+	console.error("check-build: runWorkerFirst was not set on the worker assets config");
 	process.exit(1);
 }
 
@@ -104,4 +105,4 @@ if (expectFlag >= 0) {
 		process.exit(1);
 	}
 }
-console.log(`check-build: ok (${largest.size} byte bundle, runWorkerFirst ${want.length} paths)`);
+console.log(`check-build: ok (${largest.size} byte bundle, runWorkerFirst ${JSON.stringify(want)})`);
