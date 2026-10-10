@@ -52,7 +52,10 @@ test("Accept text/markdown serves the static twin and skips the dashboard", asyn
 		ASSETS: {
 			async fetch(input: Request | URL | string) {
 				const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-				if (new URL(url).pathname === "/guide.md") return new Response("hello guide\n");
+				const pathname = new URL(url).pathname;
+				if (pathname === "/guide.md") return new Response("hello guide\n", { headers: { vary: "Accept-Encoding" } });
+				if (pathname === "/notes.md") return new Response("notes\n", { headers: { vary: "Accept" } });
+				if (pathname === "/guide") return new Response("<p>Guide</p>\n", { headers: { "content-type": "text/html; charset=utf-8", vary: "Accept-Encoding" } });
 				return new Response("missing", { status: 404 });
 			},
 		},
@@ -61,17 +64,37 @@ test("Accept text/markdown serves the static twin and skips the dashboard", asyn
 	const md = await app.request("https://control.example.com/guide", { headers: { accept: "text/markdown, text/html" } });
 	assert.equal(md.status, 200);
 	assert.match(md.headers.get("content-type") ?? "", /text\/markdown/);
+	assert.deepEqual((md.headers.get("vary") ?? "").split(",").map((part) => part.trim()), ["Accept-Encoding", "Accept"]);
 	assert.match(md.headers.get("link") ?? "", /<\/guide>; rel="canonical"/);
 	assert.equal(await md.text(), "hello guide\n");
+
+	const rejected = await app.request("https://control.example.com/guide", { headers: { accept: "text/markdown;q=0, text/html" } });
+	assert.equal(rejected.status, 200);
+	assert.match(rejected.headers.get("content-type") ?? "", /text\/html/);
+	assert.deepEqual((rejected.headers.get("vary") ?? "").split(",").map((part) => part.trim()), ["Accept-Encoding", "Accept"]);
+	assert.equal(await rejected.text(), "<p>Guide</p>\n");
+
+	const notes = await app.request("https://control.example.com/notes", { headers: { accept: "text/markdown" } });
+	assert.equal(notes.headers.get("vary"), "Accept");
 
 	const appPage = await app.request("https://control.example.com/app", { headers: { accept: "text/markdown" } });
 	assert.match(appPage.headers.get("content-type") ?? "", /text\/html/);
 	assert.match(await appPage.text(), /No login provider is configured/);
+
+	const html = await app.request("https://control.example.com/guide");
+	assert.equal(html.status, 200);
+	assert.match(html.headers.get("content-type") ?? "", /text\/html/);
+	assert.deepEqual((html.headers.get("vary") ?? "").split(",").map((part) => part.trim()), ["Accept-Encoding", "Accept"]);
+	assert.equal(await html.text(), "<p>Guide</p>\n");
+
+	const missing = await app.request("https://control.example.com/missing");
+	assert.equal(missing.status, 404);
+	assert.equal(await missing.text(), "missing");
+	assert.deepEqual((missing.headers.get("vary") ?? "").split(",").map((part) => part.trim()), ["Accept"]);
 });
 
-test("worker-first paths cover the dynamic routes and not the site", () => {
-	assert.deepEqual(RUN_WORKER_FIRST, ["/health", "/app", "/app/*", "/api", "/api/*", "/.well-known", "/.well-known/*"]);
-	assert.equal(RUN_WORKER_FIRST.some((path) => path === "/" || path === "/*"), false);
+test("content requests run the worker first so Accept can select markdown", () => {
+	assert.equal(RUN_WORKER_FIRST, true);
 });
 
 test("neutral robots.txt disallows only the app and the api", () => {
