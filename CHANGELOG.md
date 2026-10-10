@@ -2,6 +2,10 @@
 
 All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.3.x), Worker template, and skills. Versions follow [semver](https://semver.org); a `v*` tag publishes the CLI to npm (see the README's **Releases**).
 
+## Unreleased
+
+- **Control plane sign-in from the CLI.** `npx -y a2a-exposed@latest login --control-url https://control.example` (and `signup`, the same flow for a first account) starts a device-code sign-in. The page is `/app/device`. The session is saved as `CONTROL_TOKEN` and is not printed. Login has to be on; otherwise the command stops. Apply D1 migration `0004_device`.
+
 ## 0.7.0 - 2026-10-10
 
 Upgrade: `npx -y a2a-exposed@latest deploy` (no new D1 migration). Leave `WAKE_TARGET_POLICY` unset and a self-hosted inbox still posts to the configured webhook. The control plane in `control/` is not in the npm package. Deploy that directory with `cf` and apply its D1 migrations (`0001_auth`, `0002_tenants`, `0003_oidc`) with `cf d1 migrations apply`. With login unset it serves a neutral page.
