@@ -57,7 +57,7 @@ Do not commit account ids, zone names, or hostnames of real deployments. Example
 - Custom domains are `worker.domains`. `cf build` records them as a string array on the worker config.
 - Extra routes are `triggers.fetch({ pattern, zone? })`. `cf build` records `{ type: "fetch", pattern, zone }` when a zone is set.
 
-`Accept: text/markdown` is handled in Hono: it fetches the `.md` twin through `env.ASSETS`, sets `Vary: Accept`, and sets `Link: rel="canonical"` to the HTML path. A quality of zero (`text/markdown;q=0`) is ignored. A request that does not accept Markdown falls through to the asset. `/app` and `/api` responses send `X-Robots-Tag: noindex`.
+`Accept: text/markdown` is handled in Hono: it fetches the `.md` twin through `env.ASSETS`, sets `Vary: Accept`, and sets `Link: rel="canonical"` to the HTML path. A quality of zero (`text/markdown;q=0`) is ignored. A request that does not accept Markdown falls through to the asset, and that response also sends `Vary: Accept`, so a cache cannot reuse the HTML body for a Markdown request. `/app` and `/api` responses send `X-Robots-Tag: noindex`.
 
 ## Migrations
 

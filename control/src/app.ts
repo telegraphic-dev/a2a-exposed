@@ -101,7 +101,12 @@ export function createApp(env: ControlEnv = {}) {
 
 	app.all("*", async (c) => {
 		if (!env.ASSETS) return c.notFound();
-		return env.ASSETS.fetch(c.req.raw);
+		const asset = await env.ASSETS.fetch(c.req.raw);
+		// The same URL can be Markdown. A cache that stored this HTML response must not reuse it for that Accept.
+		if (!markdownPath(c.req.path)) return asset;
+		const headers = new Headers(asset.headers);
+		addVary(headers, "Accept");
+		return new Response(asset.body, { status: asset.status, statusText: asset.statusText, headers });
 	});
 
 	return app;
