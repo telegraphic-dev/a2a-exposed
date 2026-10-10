@@ -83,6 +83,7 @@ test("login help names the callback error", async () => {
 	assert.equal(status, 0);
 	assert.match(stdout, /\/app\?error=<code>/);
 	assert.match(stdout, /oauth_callback_failed/);
+	assert.match(stdout, /social_sign_in_failed/);
 });
 
 test("login refuses a control URL that is not https", async () => {

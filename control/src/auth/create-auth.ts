@@ -1,6 +1,6 @@
 import { betterAuth } from "better-auth";
 import { APIError } from "better-auth/api";
-import { captcha, genericOAuth, magicLink } from "better-auth/plugins";
+import { genericOAuth, magicLink } from "better-auth/plugins";
 import { bearer } from "better-auth/plugins/bearer";
 import { deviceAuthorization } from "better-auth/plugins/device-authorization";
 import { CLI_CLIENT_ID } from "./device.ts";
@@ -68,13 +68,6 @@ export async function createAuth(options: AuthOptions) {
 			},
 		}));
 	}
-	if (options.turnstile) {
-		plugins.push(captcha({
-			provider: "cloudflare-turnstile",
-			secretKey: options.turnstile.secret,
-			endpoints: ["/sign-in/magic-link", "/sign-in/social"],
-		}));
-	}
 	plugins.push(deviceAuthorization({
 		verificationUri: "/app/device",
 		expiresIn: "10m",
@@ -116,6 +109,10 @@ export async function createAuth(options: AuthOptions) {
 			defaultCookieAttributes: { secure: true, httpOnly: true, sameSite: "lax", path: "/" },
 			cookies: { session_token: { name: SESSION_COOKIE } },
 			database: { validateSchema: false },
+			// Cloudflare sets this. Sign-in copies it onto the Better Auth request.
+			// Without a client address, production limits every visitor together:
+			// three sign-ins per ten seconds, then 429.
+			ipAddress: { ipAddressHeaders: ["cf-connecting-ip"] },
 		},
 		databaseHooks: {
 			user: {
