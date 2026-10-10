@@ -1,4 +1,5 @@
 import { Hono, type Context } from "hono";
+import { CALLBACK_DEADLINE_MS, within } from "./auth/deadline.ts";
 import { handleSignIn } from "./auth/sign-in.ts";
 import { loadAuth } from "./auth/instance.ts";
 import { authBlockers, type AuthDeps } from "./auth/options.ts";
@@ -64,6 +65,12 @@ function markdownPath(pathname: string): string | null {
 	return `${pathname}.md`;
 }
 
+function callbackGaveUp(request: Request): Response {
+	const url = new URL("/app", request.url);
+	url.searchParams.set("error", "auth");
+	return new Response(null, { status: 302, headers: { location: url.href, "cache-control": "no-store" } });
+}
+
 function htmlPathFor(pathname: string): string {
 	if (pathname.endsWith(".md")) {
 		const bare = pathname.slice(0, -3);
@@ -72,7 +79,7 @@ function htmlPathFor(pathname: string): string {
 	return pathname;
 }
 
-export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: DataPlane } = {}) {
+export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: DataPlane; callbackDeadlineMs?: number } = {}) {
 	const app = new Hono<{ Bindings: ControlEnv }>();
 
 	app.use("*", async (c, next) => {
@@ -137,9 +144,15 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 		return handleSignIn(c.req.raw, loaded.auth, loaded.options);
 	});
 	app.all("/api/auth/*", async (c) => {
-		const loaded = await loadAuth(env, c.req.raw, deps);
+		const request = c.req.raw;
+		const loaded = await loadAuth(env, request, deps);
 		if (!loaded) return c.json({ error: "not_found" }, 404);
-		return loaded.auth.handler(c.req.raw);
+		const handle = () => loaded.auth.handler(request);
+		// A missing OAuth state redirects immediately. This bound is for the token
+		// exchange, which does not time out on its own.
+		if (!new URL(request.url).pathname.startsWith("/api/auth/callback/")) return handle();
+		const deadline = deps.callbackDeadlineMs ?? CALLBACK_DEADLINE_MS;
+		return within(deadline, handle, () => callbackGaveUp(request));
 	});
 
 	app.get("/api/v1/tenants", (c) => tenants(c, "GET"));

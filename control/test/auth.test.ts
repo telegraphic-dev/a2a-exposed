@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mapCloudflareUser } from "../src/auth/cloudflare-user.ts";
 import { TRUSTED_PROVIDERS } from "../src/auth/create-auth.ts";
 import { SESSION_COOKIE, hostCookie, readCookie } from "../src/auth/cookies.ts";
+import { handleSignIn } from "../src/auth/sign-in.ts";
 import { consumeInvite, insertInvite, newInviteCode } from "../src/auth/invites.ts";
 import { authBlockers, resolveAuth } from "../src/auth/options.ts";
 import { createApp } from "../src/app.ts";
@@ -127,4 +128,182 @@ test("sign-in rejects a cross-origin post", async () => {
 	});
 	assert.equal(response.status, 303);
 	assert.match(response.headers.get("location") ?? "", /error=auth/);
+});
+
+const origin = "https://control.example.com";
+
+function githubEnv(db = openDb()) {
+	return {
+		AUTH_SECRET: secret,
+		DB: db,
+		GITHUB_CLIENT_ID: "gh-id",
+		GITHUB_CLIENT_SECRET: "gh-secret",
+	};
+}
+
+function formRequest(body: string): Request {
+	return new Request(`${origin}/app/sign-in`, {
+		method: "POST",
+		headers: { origin, "content-type": "application/x-www-form-urlencoded" },
+		body,
+	});
+}
+
+test("github sign-in redirects to GitHub and keeps the state cookie", async () => {
+	const db = openDb();
+	const app = createApp(githubEnv(db), { database: db });
+	const posted = await app.request(formRequest("provider=github"));
+	assert.equal(posted.status, 303);
+	const location = new URL(posted.headers.get("location") ?? "");
+	assert.equal(location.origin, "https://github.com");
+	assert.equal(location.pathname, "/login/oauth/authorize");
+	const cookies = posted.headers.getSetCookie();
+	assert.ok(cookies.some((value) => value.includes("state=")));
+	assert.equal(cookies.some((value) => /domain=/i.test(value)), false);
+});
+
+test("social sign-in reads Better Auth's JSON url when Location is absent", async () => {
+	const db = openDb();
+	const env = githubEnv(db);
+	const app = createApp(env, { database: db });
+	const direct = await app.request(`${origin}/api/auth/sign-in/social`, {
+		method: "POST",
+		headers: { origin, "content-type": "application/json" },
+		body: JSON.stringify({ provider: "github", callbackURL: "/app", errorCallbackURL: "/app?error=auth" }),
+	});
+	assert.equal(direct.status, 200);
+	const body = await direct.text();
+	const payload = JSON.parse(body) as { url?: string; redirect?: boolean };
+	assert.equal(payload.redirect, true);
+	assert.equal(new URL(payload.url ?? "").origin, "https://github.com");
+	const headers = new Headers({ "content-type": "application/json" });
+	for (const cookie of direct.headers.getSetCookie()) headers.append("set-cookie", cookie);
+	assert.equal(headers.get("location"), null);
+	const options = resolveAuth(env, new Request(`${origin}/app`));
+	assert.ok(options);
+	const posted = await handleSignIn(formRequest("provider=github"), {
+		handler: async () => new Response(body, { status: 200, headers }),
+	}, options);
+	assert.equal(posted.status, 303);
+	assert.equal(new URL(posted.headers.get("location") ?? "").origin, "https://github.com");
+	assert.ok(posted.headers.getSetCookie().some((value) => value.includes("state=")));
+});
+
+test("a social url outside the provider list is not followed", async () => {
+	const db = openDb();
+	const env = githubEnv(db);
+	const options = resolveAuth(env, new Request(`${origin}/app`));
+	assert.ok(options);
+	const cases = [
+		"https://evil.example/oauth",
+		"https://github.com.evil.example/login/oauth/authorize",
+		"https://user:pass@github.com/login/oauth/authorize",
+	];
+	for (const url of cases) {
+		const posted = await handleSignIn(formRequest("provider=github"), {
+			handler: async () => Response.json({ url, redirect: true }),
+		}, options);
+		assert.equal(posted.status, 303);
+		assert.match(posted.headers.get("location") ?? "", /error=auth$/);
+		assert.equal(posted.headers.get("location")?.includes("evil.example"), false);
+	}
+	const google = await handleSignIn(formRequest("provider=google"), {
+		handler: async () => Response.json({ url: "https://accounts.google.com/o/oauth2/v2/auth", redirect: true }),
+	}, resolveAuth({ ...env, GOOGLE_CLIENT_ID: "g-id", GOOGLE_CLIENT_SECRET: "g-secret" }, new Request(`${origin}/app`))!);
+	assert.equal(new URL(google.headers.get("location") ?? "").origin, "https://accounts.google.com");
+	const cloudflare = await handleSignIn(formRequest("provider=cloudflare"), {
+		handler: async () => Response.json({ url: "https://dash.cloudflare.com/oauth2/auth", redirect: true }),
+	}, resolveAuth({
+		AUTH_SECRET: secret,
+		DB: db,
+		CLOUDFLARE_OAUTH_CLIENT_ID: "cf-id",
+		CLOUDFLARE_OAUTH_CLIENT_SECRET: "cf-secret",
+	}, new Request(`${origin}/app`))!);
+	assert.equal(new URL(cloudflare.headers.get("location") ?? "").origin, "https://dash.cloudflare.com");
+});
+
+test("social Turnstile failures redirect to error=turnstile", async () => {
+	const db = openDb();
+	const env = {
+		...githubEnv(db),
+		TURNSTILE_SITE_KEY: "site-key",
+		TURNSTILE_SECRET_KEY: "secret-key",
+	};
+	const options = resolveAuth(env, new Request(`${origin}/app`));
+	assert.ok(options);
+	const missing = await handleSignIn(formRequest("provider=github"), { handler: async () => { throw new Error("not called"); } }, options);
+	assert.match(missing.headers.get("location") ?? "", /error=turnstile/);
+	for (const code of ["MISSING_RESPONSE", "VERIFICATION_FAILED"]) {
+		const posted = await handleSignIn(formRequest("provider=github&cf-turnstile-response=token"), {
+			handler: async () => Response.json({ code, message: "nope" }, { status: code === "MISSING_RESPONSE" ? 400 : 403 }),
+		}, options);
+		assert.match(posted.headers.get("location") ?? "", /error=turnstile/);
+	}
+});
+
+test("/app shows a message for each sign-in error", async () => {
+	const db = openDb();
+	const app = createApp(githubEnv(db), { database: db });
+	const messages: Record<string, string> = {
+		auth: "Sign-in did not complete.",
+		turnstile: "The check failed. Try again.",
+		unavailable: "Login is not available.",
+		invite: "That invite code is not valid.",
+		email: "Enter an email address.",
+	};
+	for (const [code, message] of Object.entries(messages)) {
+		const html = await (await app.request(`${origin}/app?error=${code}`)).text();
+		assert.match(html, new RegExp(`role="alert"[^>]*>${message}`));
+	}
+	const unknown = await (await app.request(`${origin}/app?error=state_mismatch`)).text();
+	assert.match(unknown, /role="alert"[^>]*>Sign-in did not complete\./);
+	const quiet = await (await app.request(`${origin}/app`)).text();
+	assert.equal(quiet.includes("role=\"alert\""), false);
+});
+
+test("an unknown OAuth callback redirects to the sign-in error", async () => {
+	const db = openDb();
+	const app = createApp(githubEnv(db), { database: db });
+	const started = Date.now();
+	const callback = await app.request(`${origin}/api/auth/callback/github?code=x&state=y`);
+	assert.ok(Date.now() - started < 1000);
+	assert.equal(callback.status, 302);
+	const location = callback.headers.get("location") ?? "";
+	assert.match(location, /\/app\?/);
+	assert.match(location, /error=auth/);
+	const page = await app.request(location);
+	assert.match(await page.text(), /role="alert"[^>]*>Sign-in did not complete\./);
+
+	const errorPage = await app.request(`${origin}/api/auth/error?error=state_mismatch`);
+	assert.equal(errorPage.status, 302);
+	assert.match(errorPage.headers.get("location") ?? "", /\/app\?error=auth/);
+});
+
+test("an OAuth callback that does not return still redirects", async () => {
+	const db = openDb();
+	const stall = {
+		prepare(sql: string) {
+			const statement = db.prepare(sql);
+			const wrap = (bound: { bind: (...args: unknown[]) => typeof bound; first: () => Promise<unknown>; run: () => Promise<unknown> }) => ({
+				bind: (...args: unknown[]) => wrap(bound.bind(...args)),
+				first: () => bound.first(),
+				run: () => bound.run(),
+				all: () => new Promise(() => {}),
+			});
+			return wrap(statement);
+		},
+		batch: db.batch.bind(db),
+		exec: db.exec.bind(db),
+	};
+	const app = createApp({
+		AUTH_SECRET: secret,
+		GITHUB_CLIENT_ID: "gh-id",
+		GITHUB_CLIENT_SECRET: "gh-secret",
+	}, { database: stall, callbackDeadlineMs: 40 });
+	const started = Date.now();
+	const callback = await app.request(`${origin}/api/auth/callback/github?code=x&state=y`);
+	const elapsed = Date.now() - started;
+	assert.ok(elapsed < 1000, `callback took ${elapsed}ms`);
+	assert.equal(callback.status, 302);
+	assert.match(callback.headers.get("location") ?? "", /\/app\?error=auth$/);
 });

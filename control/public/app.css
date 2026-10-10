@@ -31,5 +31,11 @@ aside {
 	border: 1px solid var(--line);
 	background: #fff;
 }
+.alert {
+	margin: 0 0 1rem;
+	padding: 0.75rem 1rem;
+	border: 1px solid var(--accent);
+	background: #fff;
+}
 pre, code { font-family: ui-monospace, monospace; }
 pre { overflow: auto; padding: 0.75rem 1rem; background: #fff; border: 1px solid var(--line); }

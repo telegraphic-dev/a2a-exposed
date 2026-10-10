@@ -1,7 +1,14 @@
-import type { Auth } from "./create-auth.ts";
 import { INVITE_COOKIE, hostCookie } from "./cookies.ts";
 import { hasAccount, invitePending, validInviteCode } from "./invites.ts";
 import type { AuthOptions } from "./options.ts";
+
+type AuthHandler = { handler(request: Request): Promise<Response> };
+
+interface SignInPayload {
+	url?: unknown;
+	redirect?: unknown;
+	code?: unknown;
+}
 
 const PROVIDER_ORIGINS = new Set([
 	"https://github.com",
@@ -14,17 +21,48 @@ function sameOrigin(request: Request): boolean {
 	return Boolean(origin) && origin === new URL(request.url).origin;
 }
 
-function providerLocation(response: Response): string | null {
-	const location = response.headers.get("location");
-	if (!location) return null;
+function allowedProviderUrl(value: string): string | null {
 	try {
-		const url = new URL(location);
+		const url = new URL(value);
 		if (url.username || url.password) return null;
 		if (!PROVIDER_ORIGINS.has(url.origin)) return null;
 		return url.href;
 	} catch {
 		return null;
 	}
+}
+
+async function readPayload(response: Response): Promise<SignInPayload | null> {
+	const type = response.headers.get("content-type") ?? "";
+	if (!type.includes("json")) return null;
+	try {
+		const payload = await response.json() as SignInPayload;
+		if (!payload || typeof payload !== "object") return null;
+		return payload;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Better Auth 1.7 answers `/sign-in/social` with 200 JSON `{ url, redirect: true }`.
+ * A Workers response of that shape has no Location header. The provider URL is the
+ * JSON `url` when it is present, and a Location header only when the body has none.
+ */
+function providerTarget(response: Response, payload: SignInPayload | null): string | null {
+	if (payload && typeof payload.url === "string") {
+		if (payload.redirect === false) return null;
+		return allowedProviderUrl(payload.url);
+	}
+	const location = response.headers.get("location");
+	if (!location) return null;
+	return allowedProviderUrl(location);
+}
+
+function signInError(payload: SignInPayload | null): string {
+	const code = typeof payload?.code === "string" ? payload.code : "";
+	if (code === "VERIFICATION_FAILED" || code === "MISSING_RESPONSE") return "turnstile";
+	return "auth";
 }
 
 function cookiesFrom(response: Response): string[] {
@@ -43,7 +81,7 @@ function appUrl(request: Request, error?: string): string {
 	return url.href;
 }
 
-export async function handleSignIn(request: Request, auth: Auth, options: AuthOptions): Promise<Response> {
+export async function handleSignIn(request: Request, auth: AuthHandler, options: AuthOptions): Promise<Response> {
 	if (!sameOrigin(request)) return redirect(appUrl(request, "auth"));
 	const form = await request.formData();
 	const provider = String(form.get("provider") ?? "");
@@ -86,20 +124,12 @@ export async function handleSignIn(request: Request, auth: Auth, options: AuthOp
 	const response = await auth.handler(new Request(new URL(path, origin), { method: "POST", headers, body: JSON.stringify(body) }));
 	const cookies = cookiesFrom(response);
 	if (options.invitesRequired && invite && !returning) cookies.push(hostCookie(INVITE_COOKIE, invite, 60 * 15));
+	const payload = await readPayload(response);
+	if (!response.ok) return redirect(appUrl(request, signInError(payload)));
 	if (provider !== "email") {
-		const location = providerLocation(response);
+		const location = providerTarget(response, payload);
 		if (!location) return redirect(appUrl(request, "auth"));
 		return redirect(location, cookies);
-	}
-	if (!response.ok) {
-		let error = "auth";
-		try {
-			const payload = await response.json() as { code?: string };
-			if (payload.code === "VERIFICATION_FAILED" || payload.code === "MISSING_RESPONSE") error = "turnstile";
-		} catch {
-			// A non-JSON failure still uses the generic sign-in error.
-		}
-		return redirect(appUrl(request, error));
 	}
 	return redirect(new URL("/app?sent=1", request.url).href, cookies);
 }
