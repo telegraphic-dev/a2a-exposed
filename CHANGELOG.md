@@ -2,7 +2,9 @@
 
 All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.3.x), Worker template, and skills. Versions follow [semver](https://semver.org); a `v*` tag publishes the CLI to npm (see the README's **Releases**).
 
-## Unreleased
+## 0.7.0 - 2026-10-10
+
+Upgrade: `npx -y a2a-exposed@latest deploy` (no new D1 migration). Leave `WAKE_TARGET_POLICY` unset and a self-hosted inbox still posts to the configured webhook. The control plane in `control/` is not in the npm package. Deploy that directory with `cf` and apply its D1 migrations (`0001_auth`, `0002_tenants`, `0003_oidc`) with `cf d1 migrations apply`. With login unset it serves a neutral page.
 
 - **Wake targets.** `WAKE_TARGET_POLICY=public-https` refuses a wake that is not https, that carries credentials, or whose host is private, loopback, link-local, CGNAT, or a metadata address. A hostname is checked over DNS-over-HTTPS; if that check cannot be completed, the wake is not sent. The connection is made to an address from that check, with TLS for the original hostname, so a later DNS answer cannot point the request at a private address. A redirect is followed only when it stays on the same origin and passes the same check. A cross-origin redirect is not followed, so wake credentials are not sent to another host. A forbidden target is never requested. Leave the setting unset and a self-hosted inbox still posts to whatever `WAKE_WEBHOOK_URL` the operator configured.
 - **Control plane assets.** Every request runs the Worker (`runWorkerFirst`), so `Accept: text/markdown` can return the Markdown twin instead of the HTML asset. That response, and the HTML asset for the same URL, send `Vary: Accept`. `text/markdown;q=0` is not a request for Markdown. A prerender with `SITE_URL` unset deletes a sitemap this script wrote earlier, and leaves a sitemap supplied by the overlay.
