@@ -4,7 +4,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import worker from "../src/index.ts";
 import { d1 } from "./d1.ts";
-import { fetchCheckedWake, publicWakeProblem, type AddressLookup } from "../src/wake-target.ts";
+import * as M from "../src/mcp.ts";
+import { fetchCheckedWake, publicWakeProblem, type AddressLookup, type WakeDeps } from "../src/wake-target.ts";
 
 const publicLookup: AddressLookup = async (host) => {
 	if (host === "hook.example" || host === "also.example") return ["1.2.3.4"];
@@ -45,31 +46,65 @@ test("public-https refuses private, metadata, and non-https URLs before any requ
 	assert.equal(await publicWakeProblem("https://unknown.example/wake", publicLookup), "its address could not be checked");
 });
 
-test("a redirect to a private or metadata address is not requested", async () => {
-	const requested: string[] = [];
-	const fetchImpl = async (url: string) => {
-		requested.push(url);
-		if (url === "https://hook.example/wake") {
-			return new Response(null, { status: 302, headers: { location: "http://169.254.169.254/latest/meta-data" } });
-		}
-		return new Response("should not be fetched", { status: 200 });
-	};
-	const result = await fetchCheckedWake("https://hook.example/wake", { method: "POST", body: "{}" }, fetchImpl, publicLookup);
-	assert.deepEqual(requested, ["https://hook.example/wake"]);
+function pinned(answer: (request: string) => { status: number; location?: string }) {
+	const calls: { ip: string; sni: string; request: string }[] = [];
+	const connect: NonNullable<WakeDeps["connect"]> = (addr) => ({
+		startTls: ({ expectedServerHostname: sni }) => {
+			let req = "";
+			let respond!: (bytes: Uint8Array) => void;
+			const ready = new Promise<Uint8Array>((resolve) => { respond = resolve; });
+			const writable = new WritableStream<Uint8Array>({
+				write(chunk) {
+					req += new TextDecoder().decode(chunk);
+					if (!req.includes("\r\n\r\n")) return;
+					calls.push({ ip: addr.hostname, sni, request: req });
+					const made = answer(req);
+					const headers = [`HTTP/1.1 ${made.status} X`, "content-length: 0"];
+					if (made.location) headers.push(`location: ${made.location}`);
+					headers.push("connection: close", "", "");
+					respond(new TextEncoder().encode(headers.join("\r\n")));
+				},
+			});
+			const readable = new ReadableStream<Uint8Array>({
+				async start(controller) {
+					controller.enqueue(await ready);
+					controller.close();
+				},
+			});
+			return { readable, writable, close: async () => {} };
+		},
+	});
+	return { connect, calls };
+}
+
+test("a redirect to a private address is not connected, and the first hop uses the checked IP", async () => {
+	const socket = pinned(() => ({ status: 302, location: "http://169.254.169.254/latest/meta-data" }));
+	const result = await fetchCheckedWake("https://hook.example/wake", { method: "POST", headers: { authorization: "Bearer secret" }, body: "{}" }, { lookup: publicLookup, connect: socket.connect });
+	assert.equal(socket.calls.length, 1);
+	assert.equal(socket.calls[0].ip, "1.2.3.4");
+	assert.equal(socket.calls[0].sni, "hook.example");
+	assert.match(socket.calls[0].request, /^POST \/wake HTTP\/1\.1/);
+	assert.match(socket.calls[0].request, /authorization: Bearer secret/i);
 	assert.equal("refused" in result && result.refused, "must be https");
 });
 
-test("a redirect to another public https URL is requested", async () => {
-	const requested: string[] = [];
-	const fetchImpl = async (url: string, init: RequestInit) => {
-		requested.push(`${init.method} ${url}`);
-		if (url === "https://hook.example/wake") {
-			return new Response(null, { status: 307, headers: { location: "https://also.example/wake" } });
-		}
-		return new Response("ok", { status: 200 });
-	};
-	const result = await fetchCheckedWake("https://hook.example/wake", { method: "POST", body: "{}" }, fetchImpl, publicLookup);
-	assert.deepEqual(requested, ["POST https://hook.example/wake", "POST https://also.example/wake"]);
+test("a cross-origin redirect is not followed, so credentials stay on the first host", async () => {
+	const socket = pinned(() => ({ status: 307, location: "https://also.example/wake" }));
+	const result = await fetchCheckedWake("https://hook.example/wake", { method: "POST", headers: { authorization: "Bearer secret" }, body: "{}" }, { lookup: publicLookup, connect: socket.connect });
+	assert.equal(socket.calls.length, 1);
+	assert.equal(socket.calls[0].ip, "1.2.3.4");
+	assert.equal("refused" in result && result.refused, "cross-origin redirect");
+});
+
+test("a same-origin redirect is pinned again and keeps the wake headers", async () => {
+	const socket = pinned((request) => request.startsWith("POST /wake ")
+		? { status: 307, location: "https://hook.example/next" }
+		: { status: 200 });
+	const result = await fetchCheckedWake("https://hook.example/wake", { method: "POST", headers: { authorization: "Bearer secret" }, body: "{}" }, { lookup: publicLookup, connect: socket.connect });
+	assert.equal(socket.calls.length, 2);
+	assert.deepEqual(socket.calls.map((call) => call.ip), ["1.2.3.4", "1.2.3.4"]);
+	assert.match(socket.calls[1].request, /^POST \/next HTTP\/1\.1/);
+	assert.match(socket.calls[1].request, /authorization: Bearer secret/i);
 	assert.equal("response" in result && result.response.status, 200);
 });
 
@@ -133,10 +168,20 @@ test("public-https does not request a metadata address, and does post to a check
 	assert.equal(requested.some((url) => url.includes("169.254.169.254")), false);
 
 	requested.length = 0;
-	const allowed = await wakeTest({
-		DB: db(), PUBLIC_URL: BASE, OWNER_TOKEN: "owner-secret", WAKE_PRESET: "generic",
-		WAKE_WEBHOOK_URL: "https://hook.example/wake", WAKE_TARGET_POLICY: "public-https",
-	}, fetchImpl);
-	assert.equal(allowed.status, 200);
-	assert.equal(requested.some((url) => url.startsWith("https://hook.example/wake")), true);
+	const socket = pinned(() => ({ status: 200 }));
+	M.net.connect = socket.connect;
+	try {
+		const allowed = await wakeTest({
+			DB: db(), PUBLIC_URL: BASE, OWNER_TOKEN: "owner-secret", WAKE_PRESET: "generic",
+			WAKE_WEBHOOK_URL: "https://hook.example/wake", WAKE_WEBHOOK_KEY: "hook-key", WAKE_TARGET_POLICY: "public-https",
+		}, fetchImpl);
+		assert.equal(allowed.status, 200);
+		assert.equal(requested.every((url) => url.startsWith("https://cloudflare-dns.com/")), true);
+		assert.equal(socket.calls.length, 1);
+		assert.equal(socket.calls[0].ip, "1.2.3.4");
+		assert.equal(socket.calls[0].sni, "hook.example");
+		assert.match(socket.calls[0].request, /authorization: Bearer hook-key/i);
+	} finally {
+		M.net.connect = null;
+	}
 });
