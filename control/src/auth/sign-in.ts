@@ -1,6 +1,7 @@
 import { INVITE_COOKIE, hostCookie } from "./cookies.ts";
 import { hasAccount, invitePending, validInviteCode } from "./invites.ts";
 import type { AuthOptions } from "./options.ts";
+import { connectingIp, verifyTurnstile } from "./turnstile.ts";
 
 type AuthHandler = { handler(request: Request): Promise<Response> };
 
@@ -8,7 +9,31 @@ interface SignInPayload {
 	url?: unknown;
 	redirect?: unknown;
 	code?: unknown;
+	message?: unknown;
 }
+
+const PAGE_CODES = new Set([
+	"auth",
+	"origin",
+	"provider_url",
+	"rate_limit",
+	"turnstile",
+	"turnstile_unavailable",
+	"invalid-input-secret",
+	"missing-input-secret",
+	"invalid-input-response",
+	"missing-input-response",
+	"timeout-or-duplicate",
+	"bad-request",
+	"UNKNOWN_ERROR",
+	"VERIFICATION_FAILED",
+	"MISSING_RESPONSE",
+	"INVALID_ORIGIN",
+	"MISSING_OR_NULL_ORIGIN",
+	"PROVIDER_NOT_FOUND",
+	"INVALID_CALLBACK_URL",
+	"INVALID_ERROR_CALLBACK_URL",
+]);
 
 const PROVIDER_ORIGINS = new Set([
 	"https://github.com",
@@ -49,20 +74,38 @@ async function readPayload(response: Response): Promise<SignInPayload | null> {
  * A Workers response of that shape has no Location header. The provider URL is the
  * JSON `url` when it is present, and a Location header only when the body has none.
  */
-function providerTarget(response: Response, payload: SignInPayload | null): string | null {
-	if (payload && typeof payload.url === "string") {
-		if (payload.redirect === false) return null;
-		return allowedProviderUrl(payload.url);
+function providerTarget(response: Response, payload: SignInPayload | null): { location: string } | { origin: string | null } {
+	const raw = payload && typeof payload.url === "string"
+		? payload.redirect === false ? "" : payload.url
+		: response.headers.get("location") ?? "";
+	if (!raw) return { origin: null };
+	const allowed = allowedProviderUrl(raw);
+	if (allowed) return { location: allowed };
+	try {
+		return { origin: new URL(raw).origin };
+	} catch {
+		return { origin: null };
 	}
-	const location = response.headers.get("location");
-	if (!location) return null;
-	return allowedProviderUrl(location);
 }
 
-function signInError(payload: SignInPayload | null): string {
-	const code = typeof payload?.code === "string" ? payload.code : "";
+function safeCode(value: unknown): string {
+	return typeof value === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(value) ? value : "";
+}
+
+function safeMessage(value: unknown): string {
+	if (typeof value !== "string") return "";
+	const message = value.replace(/[\r\n]/g, " ").slice(0, 200);
+	return /^[\x20-\x7e]*$/.test(message) ? message : "";
+}
+
+function pageCode(status: number, code: string): string {
+	if (status === 429) return "rate_limit";
 	if (code === "VERIFICATION_FAILED" || code === "MISSING_RESPONSE") return "turnstile";
-	return "auth";
+	return PAGE_CODES.has(code) ? code : "auth";
+}
+
+function logSignInFailure(status: number, code: string, message: string): void {
+	console.error(JSON.stringify({ event: "social_sign_in_failed", status, code, message }));
 }
 
 function cookiesFrom(response: Response): string[] {
@@ -82,7 +125,10 @@ function appUrl(request: Request, error?: string): string {
 }
 
 export async function handleSignIn(request: Request, auth: AuthHandler, options: AuthOptions): Promise<Response> {
-	if (!sameOrigin(request)) return redirect(appUrl(request, "auth"));
+	if (!sameOrigin(request)) {
+		logSignInFailure(403, "origin", "The sign-in request came from another site.");
+		return redirect(appUrl(request, "origin"));
+	}
 	const form = await request.formData();
 	const provider = String(form.get("provider") ?? "");
 	const email = String(form.get("email") ?? "").trim();
@@ -105,11 +151,20 @@ export async function handleSignIn(request: Request, auth: AuthHandler, options:
 	}
 	const token = String(form.get("cf-turnstile-response") ?? "");
 	if (options.turnstile && !token) return redirect(appUrl(request, "turnstile"));
+	const ip = connectingIp(request);
+	if (options.turnstile) {
+		const failure = await verifyTurnstile(options.turnstile.secret, token, ip);
+		if (failure) {
+			logSignInFailure(failure.status, failure.code, failure.message);
+			return redirect(appUrl(request, pageCode(failure.status, failure.code)));
+		}
+	}
 
 	const origin = new URL(request.url).origin;
 	const headers = new Headers({ "content-type": "application/json", origin });
 	const cookie = request.headers.get("cookie");
 	if (cookie) headers.set("cookie", cookie);
+	if (ip) headers.set("cf-connecting-ip", ip);
 	if (token) headers.set("x-captcha-response", token);
 	const path = provider === "email" ? "/api/auth/sign-in/magic-link" : "/api/auth/sign-in/social";
 	const body = provider === "email"
@@ -125,11 +180,19 @@ export async function handleSignIn(request: Request, auth: AuthHandler, options:
 	const cookies = cookiesFrom(response);
 	if (options.invitesRequired && invite && !returning) cookies.push(hostCookie(INVITE_COOKIE, invite, 60 * 15));
 	const payload = await readPayload(response);
-	if (!response.ok) return redirect(appUrl(request, signInError(payload)));
+	if (!response.ok) {
+		const code = safeCode(payload?.code);
+		const page = pageCode(response.status, code);
+		logSignInFailure(response.status, code || page, safeMessage(payload?.message));
+		return redirect(appUrl(request, page));
+	}
 	if (provider !== "email") {
-		const location = providerTarget(response, payload);
-		if (!location) return redirect(appUrl(request, "auth"));
-		return redirect(location, cookies);
+		const target = providerTarget(response, payload);
+		if (!("location" in target)) {
+			logSignInFailure(response.status, "provider_url", target.origin ?? "");
+			return redirect(appUrl(request, "provider_url"));
+		}
+		return redirect(target.location, cookies);
 	}
 	return redirect(new URL("/app?sent=1", request.url).href, cookies);
 }

@@ -1,5 +1,6 @@
 import { Hono, type Context } from "hono";
 import { CALLBACK_DEADLINE_MS, within } from "./auth/deadline.ts";
+import { connectingIp, verifyTurnstile } from "./auth/turnstile.ts";
 import { handleSignIn } from "./auth/sign-in.ts";
 import { loadAuth } from "./auth/instance.ts";
 import { authBlockers, type AuthDeps } from "./auth/options.ts";
@@ -82,6 +83,12 @@ function callbackError(request: Request, response: Response): string {
 	} catch {
 		return "";
 	}
+}
+
+function turnstileEndpoint(request: Request): boolean {
+	if (request.method !== "POST") return false;
+	const path = new URL(request.url).pathname;
+	return path === "/api/auth/sign-in/social" || path === "/api/auth/sign-in/magic-link";
 }
 
 function callbackGaveUp(request: Request): Response {
@@ -184,6 +191,16 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 		const request = c.req.raw;
 		const loaded = await loadAuth(env, request, deps);
 		if (!loaded) return c.json({ error: "not_found" }, 404);
+		if (loaded.options.turnstile && turnstileEndpoint(request)) {
+			const token = request.headers.get("x-captcha-response") ?? "";
+			if (!token) return c.json({ code: "MISSING_RESPONSE", message: "Missing CAPTCHA response" }, 400);
+			const failure = await verifyTurnstile(loaded.options.turnstile.secret, token, connectingIp(request));
+			if (failure) {
+				console.error(JSON.stringify({ event: "social_sign_in_failed", status: failure.status, code: failure.code, message: failure.message }));
+				const status = failure.status >= 400 && failure.status <= 599 ? failure.status : 403;
+				return c.json({ code: failure.code, message: failure.message }, status as 400);
+			}
+		}
 		const handle = () => loaded.auth.handler(request);
 		// A missing OAuth state redirects immediately. This bound is for the token
 		// exchange, which does not time out on its own. A redirect does not call

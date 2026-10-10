@@ -1,5 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { mapCloudflareUser } from "../src/auth/cloudflare-user.ts";
 import { TRUSTED_PROVIDERS } from "../src/auth/create-auth.ts";
 import { SESSION_COOKIE, hostCookie, readCookie } from "../src/auth/cookies.ts";
@@ -127,7 +130,7 @@ test("sign-in rejects a cross-origin post", async () => {
 		body: "provider=email&email=person@example.com",
 	});
 	assert.equal(response.status, 303);
-	assert.match(response.headers.get("location") ?? "", /error=auth/);
+	assert.match(response.headers.get("location") ?? "", /error=origin$/);
 });
 
 const origin = "https://control.example.com";
@@ -213,7 +216,7 @@ test("a social url outside the provider list is not followed", async () => {
 			handler: async () => Response.json({ url, redirect: true }),
 		}, options);
 		assert.equal(posted.status, 303);
-		assert.match(posted.headers.get("location") ?? "", /error=auth$/);
+		assert.match(posted.headers.get("location") ?? "", /error=provider_url$/);
 		assert.equal(posted.headers.get("location")?.includes("evil.example"), false);
 	}
 	const google = await handleSignIn(formRequest("provider=google"), {
@@ -242,11 +245,36 @@ test("social Turnstile failures redirect to error=turnstile", async () => {
 	assert.ok(options);
 	const missing = await handleSignIn(formRequest("provider=github"), { handler: async () => { throw new Error("not called"); } }, options);
 	assert.match(missing.headers.get("location") ?? "", /error=turnstile/);
-	for (const code of ["MISSING_RESPONSE", "VERIFICATION_FAILED"]) {
-		const posted = await handleSignIn(formRequest("provider=github&cf-turnstile-response=token"), {
-			handler: async () => Response.json({ code, message: "nope" }, { status: code === "MISSING_RESPONSE" ? 400 : 403 }),
+	const originalFetch = globalThis.fetch;
+	const originalError = console.error;
+	const logged: string[] = [];
+	let calls = 0;
+	console.error = (...args: unknown[]) => { logged.push(args.map(String).join(" ")); };
+	globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+		const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+		if (!url.startsWith("https://challenges.cloudflare.com/turnstile/v0/siteverify")) return originalFetch(input, init);
+		calls += 1;
+		const body = typeof init?.body === "string" ? init.body : "";
+		assert.equal(body.includes("secret-key"), true);
+		assert.equal(body.includes("widget-token"), true);
+		if (calls === 1) return Response.json({ success: false, "error-codes": ["invalid-input-secret"] }, { status: 400 });
+		return Response.json({ success: false, "error-codes": ["invalid-input-response"] });
+	};
+	try {
+		const secret = await handleSignIn(formRequest("provider=github&cf-turnstile-response=widget-token"), {
+			handler: async () => { throw new Error("not called"); },
 		}, options);
-		assert.match(posted.headers.get("location") ?? "", /error=turnstile/);
+		assert.match(secret.headers.get("location") ?? "", /error=invalid-input-secret$/);
+		const token = await handleSignIn(formRequest("provider=github&cf-turnstile-response=widget-token"), {
+			handler: async () => { throw new Error("not called"); },
+		}, options);
+		assert.match(token.headers.get("location") ?? "", /error=invalid-input-response$/);
+		const lines = logged.filter((line) => line.includes("social_sign_in_failed"));
+		assert.ok(lines.some((line) => line.includes("\"code\":\"invalid-input-secret\"")));
+		assert.equal(lines.some((line) => line.includes("widget-token") || line.includes("secret-key")), false);
+	} finally {
+		globalThis.fetch = originalFetch;
+		console.error = originalError;
 	}
 });
 
@@ -260,6 +288,9 @@ test("/app shows a message for each sign-in error", async () => {
 		invite: "That invite code is not valid.",
 		email: "Enter an email address.",
 		deadline: "Sign-in took too long. Try again.",
+		"invalid-input-secret": "The sign-in check is not configured.",
+		rate_limit: "Too many sign-in attempts. Try again in a moment.",
+		provider_url: "The provider address was rejected.",
 		state_mismatch: "Sign-in expired. Try again.",
 		invalid_code: "The provider rejected the sign-in. Try again.",
 		email_not_found: "That account has no email address.",
@@ -376,4 +407,17 @@ test("an OAuth callback that does not return still redirects", async () => {
 	assert.ok(elapsed < 1000, `callback took ${elapsed}ms`);
 	assert.equal(callback.status, 302);
 	assert.match(callback.headers.get("location") ?? "", /\/app\?error=deadline$/);
+});
+
+test("production sign-in keeps a Turnstile failure and a per-address limit", async () => {
+	const env = { ...process.env, NODE_ENV: "production" };
+	delete env.TEST;
+	const child = spawn(process.execPath, ["--import", "./test/register-hooks.mjs", "./test/sign-in-prod.ts"], {
+		cwd: path.join(path.dirname(fileURLToPath(import.meta.url)), ".."),
+		env,
+	});
+	let stderr = "";
+	child.stderr.on("data", (chunk) => { stderr += chunk; });
+	const status = await new Promise((resolve) => child.on("close", resolve));
+	assert.equal(status, 0, stderr);
 });
