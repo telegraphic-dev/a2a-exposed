@@ -129,8 +129,11 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 		}
 		let name = "";
 		try {
-			const body = await request.json() as { name?: unknown };
-			name = typeof body.name === "string" ? body.name : "";
+			const body = await request.json() as unknown;
+			if (body && typeof body === "object" && !Array.isArray(body)) {
+				const value = (body as { name?: unknown }).name;
+				if (typeof value === "string") name = value;
+			}
 		} catch {
 			return c.json({ error: "invalid_name" }, 400);
 		}

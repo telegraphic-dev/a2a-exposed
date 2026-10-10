@@ -82,6 +82,15 @@ test("create writes the directory and the object, and the token is shown once", 
 	assert.equal(target.directory.size, 0);
 	assert.equal(target.pushes.length, 0);
 
+	const nulled = await app.request("https://control.example.com/api/v1/tenants", {
+		method: "POST",
+		headers: { cookie: cookie.split(";")[0], "content-type": "application/json" },
+		body: "null",
+	});
+	assert.equal(nulled.status, 400);
+	assert.deepEqual(await nulled.json(), { error: "invalid_name" });
+	assert.equal(target.directory.size, 0);
+
 	const reserved = await app.request("https://control.example.com/api/v1/tenants", {
 		method: "POST",
 		headers: { cookie: cookie.split(";")[0], "content-type": "application/json" },
