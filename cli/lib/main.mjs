@@ -165,7 +165,8 @@ Outbound (agents you call)
 Control plane account (only when that deployment's login is on)
   signup --control-url https://control.example
   login  --control-url https://control.example
-                                device-flow sign-in. Prints a code and a page. The session is saved
+                                device-flow sign-in. Prints a code and a page. Type that code
+                                on the page; the link alone does not approve. The session is saved
                                 as CONTROL_TOKEN in config.env and is not printed. signup and login
                                 are the same flow; signup is how the first account is created.
                                 --json prints the control origin and email, not the token

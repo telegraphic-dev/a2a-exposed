@@ -80,10 +80,29 @@ test("a signed-in owner can approve a CLI device code and the session is the acc
 	assert.equal(returned.status, 302);
 	assert.equal(new URL(returned.headers.get("location") ?? "").pathname, "/app/device");
 
+	for (let view = 0; view < 6; view++) {
+		const shown = await app.request(`${origin}/app/device?user_code=${codes.user_code}`, { headers: { cookie: session } });
+		assert.equal(shown.status, 200);
+		const body = await shown.text();
+		assert.match(body, /Do not approve a code from a message/);
+		assert.match(body, /name="confirm"/);
+		assert.match(body, new RegExp(codes.user_code));
+	}
+	const mismatched = await app.request(`${origin}/app/device`, {
+		method: "POST",
+		headers: { origin, "content-type": "application/x-www-form-urlencoded", cookie: session },
+		body: `action=approve&user_code=${codes.user_code}&confirm=ZZZZZZZZ`,
+	});
+	assert.equal(mismatched.status, 303);
+	assert.match(mismatched.headers.get("location") ?? "", /error=match/);
+	const still = await db.prepare('select status, userId from "deviceCode"').first<{ status: string; userId: string | null }>();
+	assert.equal(still?.status, "pending");
+	assert.equal(still?.userId ?? null, null);
+
 	const approved = await app.request(`${origin}/app/device`, {
 		method: "POST",
 		headers: { origin, "content-type": "application/x-www-form-urlencoded", cookie: session },
-		body: `action=approve&user_code=${codes.user_code}`,
+		body: `action=approve&user_code=${codes.user_code}&confirm=${codes.user_code}`,
 	});
 	assert.equal(approved.status, 303);
 	assert.match(approved.headers.get("location") ?? "", /done=approved/);

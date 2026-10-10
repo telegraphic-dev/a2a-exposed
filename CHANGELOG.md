@@ -4,7 +4,7 @@ All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.
 
 ## Unreleased
 
-- **Control plane sign-in from the CLI.** `npx -y a2a-exposed@latest login --control-url https://control.example` (and `signup`, the same flow for a first account) starts a device-code sign-in. The page is `/app/device`. The session is saved as `CONTROL_TOKEN` and is not printed. Login has to be on; otherwise the command stops. Apply D1 migration `0004_device`.
+- **Control plane sign-in from the CLI.** `npx -y a2a-exposed@latest login --control-url https://control.example` (and `signup`, the same flow for a first account) starts a device-code sign-in. The page is `/app/device`. Approval requires typing the code from that terminal; opening the link is not enough. The session is saved as `CONTROL_TOKEN` and is not printed. Login has to be on; otherwise the command stops. Apply D1 migration `0004_device`.
 
 ## 0.7.0 - 2026-10-10
 

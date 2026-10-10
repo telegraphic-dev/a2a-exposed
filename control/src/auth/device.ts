@@ -41,7 +41,11 @@ function page(request: Request, query: Record<string, string>): string {
 	return url.href;
 }
 
-/** The plugin approves only a code this session has already loaded. */
+/**
+ * The plugin approves only a code this session has already loaded.
+ * GET /api/auth/device allows 5 calls for the life of the code, so the page
+ * does not call it. Approve and deny claim once, on submit.
+ */
 async function claimDevice(auth: Auth, request: Request, code: string): Promise<boolean> {
 	const origin = new URL(request.url).origin;
 	const headers = new Headers({ accept: "application/json", origin });
@@ -64,7 +68,6 @@ export async function handleDevice(request: Request, auth: Auth, options: AuthOp
 		const done = url.searchParams.get("done") ?? "";
 		const error = url.searchParams.get("error") ?? "";
 		const cookie = code ? hostCookie(DEVICE_COOKIE, code, 60 * 10) : undefined;
-		if (signedIn && code) await claimDevice(auth, request, code);
 		const signIn = signedIn ? "" : renderSignIn({
 			providers: [
 				options.github ? "github" : "",
@@ -96,6 +99,10 @@ export async function handleDevice(request: Request, auth: Auth, options: AuthOp
 	}
 	if (!signedIn) {
 		return { kind: "redirect", location: page(request, { user_code: code, error: "auth" }), cookie: hostCookie(DEVICE_COOKIE, code, 60 * 10) };
+	}
+	const typed = userCode(String(form.get("confirm") ?? ""));
+	if (action === "approve" && typed !== code) {
+		return { kind: "redirect", location: page(request, { user_code: code, error: "match" }), cookie: hostCookie(DEVICE_COOKIE, code, 60 * 10) };
 	}
 	const origin = new URL(request.url).origin;
 	if (!(await claimDevice(auth, request, code))) {

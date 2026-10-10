@@ -141,7 +141,7 @@ Polling agents: no wake announces a pairing request; `inbox` and `pair list` sho
 
 ## Other commands
 
-- `npx -y a2a-exposed@latest login --control-url https://control.example` signs this CLI in to a control plane whose login is on (`signup` is the same flow for a first account). It prints a code and a page. The session is saved and is not printed.
+- `npx -y a2a-exposed@latest login --control-url https://control.example` signs this CLI in to a control plane whose login is on (`signup` is the same flow for a first account). It prints a code and a page. Type that code on the page; the link alone does not approve. The session is saved and is not printed.
 - `npx -y a2a-exposed@latest contexts` lists recent conversations.
 - `npx -y a2a-exposed@latest export` prints a JSON dump of the inbox (peer-token hashes are in the dump; outbound peer tokens are ciphertext under this deployment's sealing key; the owner token stays a Worker secret). `export --sql` prints SQL. Loading that dump back into an inbox is not part of this command.
 - `npx -y a2a-exposed@latest status` checks the setup: the agent card (fetched by the CLI; it must advertise the inbox's own base URL, never the agent's local or Tailnet webhook URL), the wake mode (webhook, tunnel, or none, meaning polling), the tunnel state, and a `next step:` line. Use it rather than `curl`: some agent sandboxes (Hermes) flag `.dev` URLs in shell commands and wait for user approval.
