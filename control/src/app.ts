@@ -5,6 +5,7 @@ import { loadAuth } from "./auth/instance.ts";
 import { authBlockers, type AuthDeps } from "./auth/options.ts";
 import { OIDC_COOKIE, authorize, discoveryDocument, exchangeCode, issuerOrigin, readTokenForm, resumeQuery } from "./oidc/issuer.ts";
 import { hostCookie } from "./auth/cookies.ts";
+import { deviceCodeFromCookie, handleDevice } from "./auth/device.ts";
 import { createTenant, listTenants } from "./tenants/create.ts";
 import { dataPlaneFromEnv, type DataPlane } from "./tenants/push.ts";
 import type { ControlEnv } from "./env.ts";
@@ -131,13 +132,30 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 				return c.redirect(new URL(`/api/oidc/authorize${query}`, c.req.url).href, 302);
 			}
 		}
+		const pendingDevice = deviceCodeFromCookie(c.req.header("cookie") ?? null);
+		if (pendingDevice) {
+			const loaded = await loadAuth(env, c.req.raw, deps);
+			const session = loaded ? await loaded.auth.api.getSession({ headers: c.req.raw.headers }) : null;
+			if (session?.user?.id) return c.redirect(new URL(`/app/device?user_code=${pendingDevice}`, c.req.url).href, 302);
+		}
 		const shell = await renderShell(c.req.raw);
 		return c.html(shell.html, 200, securityHeaders({ turnstile: shell.turnstile }));
 	});
+	app.get("/app/device", (c) => devicePage(c));
+	app.post("/app/device", (c) => devicePage(c));
 	app.get("/app/*", async (c) => {
 		const shell = await renderShell(c.req.raw);
 		return c.html(shell.html, 200, securityHeaders({ turnstile: shell.turnstile }));
 	});
+	async function devicePage(c: Context<{ Bindings: ControlEnv }>) {
+		const loaded = await loadAuth(env, c.req.raw, deps);
+		if (!loaded) return c.json({ error: "not_found" }, 404);
+		const result = await handleDevice(c.req.raw, loaded.auth, loaded.options, env);
+		if (result.kind === "closed") return c.json({ error: "not_found" }, 404);
+		if (result.cookie) c.header("set-cookie", result.cookie);
+		if (result.kind === "redirect") return c.redirect(result.location ?? "/app/device", 303);
+		return c.html(result.html ?? "", 200, securityHeaders({ turnstile: result.turnstile }));
+	}
 	app.post("/app/sign-in", async (c) => {
 		const loaded = await loadAuth(env, c.req.raw, deps);
 		if (!loaded) return c.json({ error: "not_found" }, 404);

@@ -1,6 +1,9 @@
 import { betterAuth } from "better-auth";
 import { APIError } from "better-auth/api";
 import { captcha, genericOAuth, magicLink } from "better-auth/plugins";
+import { bearer } from "better-auth/plugins/bearer";
+import { deviceAuthorization } from "better-auth/plugins/device-authorization";
+import { CLI_CLIENT_ID } from "./device.ts";
 import { jwt } from "better-auth/plugins/jwt";
 import { mapCloudflareUser } from "./cloudflare-user.ts";
 import { INVITE_COOKIE, SESSION_COOKIE, readCookie } from "./cookies.ts";
@@ -72,6 +75,14 @@ export async function createAuth(options: AuthOptions) {
 			endpoints: ["/sign-in/magic-link", "/sign-in/social"],
 		}));
 	}
+	plugins.push(deviceAuthorization({
+		verificationUri: "/app/device",
+		expiresIn: "10m",
+		validateClient: (clientId) => clientId === CLI_CLIENT_ID,
+	}));
+	// The device token is the raw session token. Bearer signs it for this request
+	// so the CLI can call /api/auth/get-session without the auth secret.
+	plugins.push(bearer());
 	// RS256 is what the data plane's approval client accepts. Session responses do not carry a JWT.
 	plugins.push(jwt({
 		disableSettingJwtHeader: true,

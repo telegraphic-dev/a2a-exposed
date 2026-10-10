@@ -7,6 +7,7 @@ import * as dep from "./deploy.mjs";
 import * as tun from "./tunnel.mjs";
 import * as st from "./status.mjs";
 import * as pair from "./pair.mjs";
+import * as account from "./account.mjs";
 import * as upd from "./update.mjs";
 
 const VERSION = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
@@ -161,6 +162,15 @@ Outbound (agents you call)
   poll --to <alias|url> <taskId> [--proto 0.3|1.0]
   outbound <taskId>       stored state of a task you sent (incl. pushed updates)
 
+Control plane account (only when that deployment's login is on)
+  signup --control-url https://control.example
+  login  --control-url https://control.example
+                                device-flow sign-in. Prints a code and a page. Type that code
+                                on the page; the link alone does not approve. The session is saved
+                                as CONTROL_TOKEN in config.env and is not printed. signup and login
+                                are the same flow; signup is how the first account is created.
+                                --json prints the control origin and email, not the token
+
 Presets: grok-bot | claude-code | openclaw-wake | openclaw-agent | hermes | generic
 Config: ${C.CONFIG_FILE}  (override dir with --config-dir DIR or A2A_CONFIG_DIR; env vars override file values)
 Update notice: at most a daily background check of the npm registry; off with A2A_NO_UPDATE_CHECK=1 (or DO_NOT_TRACK=1)`;
@@ -184,6 +194,8 @@ const SPEC = {
 	export: { sql: B },
 	upstream: { json: B },
 	connect: { alias: S, name: S, json: B, "no-wait": B, replace: B, force: B, "card-url": S },
+	signup: { "control-url": S, json: B },
+	login: { "control-url": S, json: B },
 	pair: { json: B, web: B, ttl: S, issuer: S, "client-id": S, subjects: S, methods: S, "secret-stdin": B },
 };
 const STATES = ["completed", "input-required", "failed", "rejected", "working"];
@@ -250,6 +262,12 @@ export async function main(argv) {
 		case "export": return cmd.exportInbox(o);
 		case "token": return cmd.token(need(p[0], "token issue|list|revoke|rotate [label]"), p[1], o);
 		case "peers": return cmd.peers(p[0] || "list", p.slice(1), o);
+		case "signup":
+		case "login": {
+			const result = await account.deviceLogin({ controlUrl: o["control-url"] || C.get("CONTROL_URL"), intent: name });
+			if (o.json) console.log(JSON.stringify({ control_url: result.controlUrl, email: result.email }));
+			return;
+		}
 		case "connect": return pair.connect(need(p[0], "connect <base-or-card-url> [--alias A] [--no-wait] [--json]"), o);
 		case "pair": {
 			const sub = need(p[0], "pair set-password|set-oidc|list|approve <code>|deny <code>");
