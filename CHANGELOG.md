@@ -2,7 +2,7 @@
 
 All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.3.x), Worker template, and skills. Versions follow [semver](https://semver.org); a `v*` tag publishes the CLI to npm (see the README's **Releases**).
 
-## Unreleased
+## 0.6.0 - 2026-10-10
 
 Upgrade: `npx -y a2a-exposed@latest deploy` (applies D1 migration `0008_oidc_txns`: short-lived OpenID Connect sign-in state). A deployment that set `--cli-command` / `WAKE_CLI_COMMAND` keeps its own command. Leave the new approval settings unset and `/device` stays the password page.
 
