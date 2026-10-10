@@ -5,6 +5,7 @@ All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.
 ## Unreleased
 
 - **Control plane sign-in from the CLI.** `npx -y a2a-exposed@latest login --control-url https://control.example` (and `signup`, the same flow for a first account) starts a device-code sign-in. The page is `/app/device`. Approval requires typing the code from that terminal; opening the link is not enough. The session is saved as `CONTROL_TOKEN` and is not printed. Login has to be on; otherwise the command stops. Apply D1 migration `0004_device`.
+- **Control plane sign-in.** GitHub, Google, and Cloudflare sign-in follow the provider URL in the sign-in response, including when that response is JSON and has no Location header. A Turnstile rejection on that sign-in returns to `/app?error=turnstile`. `/app` shows a message for `auth`, `turnstile`, `unavailable`, `invite`, and `email`. An OAuth callback that cannot be completed redirects to `/app?error=auth`. A provider token request that does not return cannot hold that callback open.
 
 ## 0.7.0 - 2026-10-10
 

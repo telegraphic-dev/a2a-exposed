@@ -93,6 +93,9 @@ export async function createAuth(options: AuthOptions) {
 		baseURL: options.baseURL,
 		basePath: "/api/auth",
 		secret: options.secret,
+		// Callback failures land on the sign-in page. Without this, production sends
+		// `/api/auth/error` to `/?error=`, which does not show the sign-in message.
+		onAPIError: { errorURL: `${options.baseURL}/app?error=auth` },
 		database: options.database,
 		emailAndPassword: { enabled: false },
 		socialProviders: {
