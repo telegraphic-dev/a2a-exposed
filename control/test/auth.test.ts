@@ -158,8 +158,17 @@ test("github sign-in redirects to GitHub and keeps the state cookie", async () =
 	assert.equal(location.origin, "https://github.com");
 	assert.equal(location.pathname, "/login/oauth/authorize");
 	const cookies = posted.headers.getSetCookie();
-	assert.ok(cookies.some((value) => value.includes("state=")));
-	assert.equal(cookies.some((value) => /domain=/i.test(value)), false);
+	assert.ok(cookies.some((value) => value.includes("better-auth.state=")));
+	const stateCookie = cookies.find((value) => value.includes("better-auth.state=")) ?? "";
+	assert.match(stateCookie, /HttpOnly/);
+	assert.match(stateCookie, /Secure/);
+	assert.match(stateCookie, /SameSite=Lax/);
+	assert.equal(/SameSite=Strict/i.test(stateCookie), false);
+	assert.equal(/domain=/i.test(stateCookie), false);
+	assert.equal(stateCookie.startsWith("__Host-"), false);
+	assert.equal(stateCookie.startsWith("__Secure-"), false);
+	assert.equal(location.searchParams.get("redirect_uri"), `${origin}/api/auth/callback/github`);
+	assert.match(location.searchParams.get("scope") ?? "", /user:email/);
 });
 
 test("social sign-in reads Better Auth's JSON url when Location is absent", async () => {
@@ -169,7 +178,7 @@ test("social sign-in reads Better Auth's JSON url when Location is absent", asyn
 	const direct = await app.request(`${origin}/api/auth/sign-in/social`, {
 		method: "POST",
 		headers: { origin, "content-type": "application/json" },
-		body: JSON.stringify({ provider: "github", callbackURL: "/app", errorCallbackURL: "/app?error=auth" }),
+		body: JSON.stringify({ provider: "github", callbackURL: "/app", errorCallbackURL: "/app" }),
 	});
 	assert.equal(direct.status, 200);
 	const body = await direct.text();
@@ -250,13 +259,20 @@ test("/app shows a message for each sign-in error", async () => {
 		unavailable: "Login is not available.",
 		invite: "That invite code is not valid.",
 		email: "Enter an email address.",
+		deadline: "Sign-in took too long. Try again.",
+		state_mismatch: "Sign-in expired. Try again.",
+		invalid_code: "The provider rejected the sign-in. Try again.",
+		email_not_found: "That account has no email address.",
+		unable_to_create_user: "The account could not be created.",
+		access_denied: "Sign-in was cancelled.",
 	};
 	for (const [code, message] of Object.entries(messages)) {
 		const html = await (await app.request(`${origin}/app?error=${code}`)).text();
 		assert.match(html, new RegExp(`role="alert"[^>]*>${message}`));
 	}
-	const unknown = await (await app.request(`${origin}/app?error=state_mismatch`)).text();
+	const unknown = await (await app.request(`${origin}/app?error=not_a_code`)).text();
 	assert.match(unknown, /role="alert"[^>]*>Sign-in did not complete\./);
+	assert.equal(unknown.includes("not_a_code"), false);
 	const quiet = await (await app.request(`${origin}/app`)).text();
 	assert.equal(quiet.includes("role=\"alert\""), false);
 });
@@ -264,19 +280,73 @@ test("/app shows a message for each sign-in error", async () => {
 test("an unknown OAuth callback redirects to the sign-in error", async () => {
 	const db = openDb();
 	const app = createApp(githubEnv(db), { database: db });
-	const started = Date.now();
-	const callback = await app.request(`${origin}/api/auth/callback/github?code=x&state=y`);
-	assert.ok(Date.now() - started < 1000);
-	assert.equal(callback.status, 302);
-	const location = callback.headers.get("location") ?? "";
-	assert.match(location, /\/app\?/);
-	assert.match(location, /error=auth/);
-	const page = await app.request(location);
-	assert.match(await page.text(), /role="alert"[^>]*>Sign-in did not complete\./);
+	const logged: string[] = [];
+	const original = console.error;
+	console.error = (...args: unknown[]) => {
+		logged.push(args.map(String).join(" "));
+	};
+	try {
+		const started = Date.now();
+		const callback = await app.request(`${origin}/api/auth/callback/github?code=x&state=y`);
+		assert.ok(Date.now() - started < 1000);
+		assert.equal(callback.status, 302);
+		const location = new URL(callback.headers.get("location") ?? "", origin);
+		assert.equal(location.pathname, "/app");
+		assert.deepEqual(location.searchParams.getAll("error"), ["state_mismatch"]);
+		const page = await app.request(location);
+		assert.match(await page.text(), /role="alert"[^>]*>Sign-in expired\. Try again\./);
+		assert.ok(logged.some((line) => line.includes("\"error\":\"state_mismatch\"") && line.includes("oauth_callback_failed")));
+		assert.equal(logged.some((line) => line.includes("oauth_callback_failed") && line.includes("state=y")), false);
 
-	const errorPage = await app.request(`${origin}/api/auth/error?error=state_mismatch`);
-	assert.equal(errorPage.status, 302);
-	assert.match(errorPage.headers.get("location") ?? "", /\/app\?error=auth/);
+		const errorPage = await app.request(`${origin}/api/auth/error?error=invalid_code`);
+		assert.equal(errorPage.status, 302);
+		const errorLocation = new URL(errorPage.headers.get("location") ?? "", origin);
+		assert.equal(errorLocation.pathname, "/app");
+		assert.deepEqual(errorLocation.searchParams.getAll("error"), ["invalid_code"]);
+	} finally {
+		console.error = original;
+	}
+});
+
+test("a github callback that presents the state cookie reports invalid_code", async () => {
+	const db = openDb();
+	const app = createApp(githubEnv(db), { database: db });
+	const posted = await app.request(formRequest("provider=github"));
+	const stateCookie = posted.headers.getSetCookie().find((value) => value.includes("better-auth.state="));
+	assert.ok(stateCookie);
+	const authorize = new URL(posted.headers.get("location") ?? "");
+	const state = authorize.searchParams.get("state");
+	assert.ok(state);
+	const originalFetch = globalThis.fetch;
+	const logged: string[] = [];
+	const originalError = console.error;
+	console.error = (...args: unknown[]) => {
+		logged.push(args.map(String).join(" "));
+	};
+	globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+		const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+		if (url.startsWith("https://github.com/login/oauth/access_token")) {
+			return Response.json({ error: "bad_verification_code", error_description: "rejected" });
+		}
+		return originalFetch(input, init);
+	};
+	try {
+		const callback = await app.request(`${origin}/api/auth/callback/github?code=not-a-code&state=${encodeURIComponent(state)}`, {
+			headers: { cookie: stateCookie.split(";")[0] },
+		});
+		assert.equal(callback.status, 302);
+		const location = new URL(callback.headers.get("location") ?? "", origin);
+		assert.equal(location.pathname, "/app");
+		assert.deepEqual(location.searchParams.getAll("error"), ["invalid_code"]);
+		const page = await app.request(location);
+		assert.match(await page.text(), /role="alert"[^>]*>The provider rejected the sign-in\. Try again\./);
+		const ours = logged.filter((line) => line.includes("oauth_callback_failed"));
+		assert.ok(ours.some((line) => line.includes("\"error\":\"invalid_code\"")));
+		assert.equal(ours.some((line) => line.includes("not-a-code") || line.includes(state)), false);
+	} finally {
+		globalThis.fetch = originalFetch;
+		console.error = originalError;
+	}
 });
 
 test("an OAuth callback that does not return still redirects", async () => {
@@ -305,5 +375,5 @@ test("an OAuth callback that does not return still redirects", async () => {
 	const elapsed = Date.now() - started;
 	assert.ok(elapsed < 1000, `callback took ${elapsed}ms`);
 	assert.equal(callback.status, 302);
-	assert.match(callback.headers.get("location") ?? "", /\/app\?error=auth$/);
+	assert.match(callback.headers.get("location") ?? "", /\/app\?error=deadline$/);
 });
