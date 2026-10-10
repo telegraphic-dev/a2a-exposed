@@ -188,7 +188,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 		return handleSignIn(c.req.raw, loaded.auth, loaded.options);
 	});
 	app.all("/api/auth/*", async (c) => {
-		const request = c.req.raw;
+		let request = c.req.raw;
 		const loaded = await loadAuth(env, request, deps);
 		if (!loaded) return c.json({ error: "not_found" }, 404);
 		if (loaded.options.turnstile && turnstileEndpoint(request)) {
@@ -200,6 +200,11 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 				const status = failure.status >= 400 && failure.status <= 599 ? failure.status : 403;
 				return c.json({ code: failure.code, message: failure.message }, status as 400);
 			}
+			// The token is single-use. The browser form never reaches this route;
+			// a direct client must not have Better Auth submit the same token again.
+			const headers = new Headers(request.headers);
+			headers.delete("x-captcha-response");
+			request = new Request(request, { headers });
 		}
 		const handle = () => loaded.auth.handler(request);
 		// A missing OAuth state redirects immediately. This bound is for the token

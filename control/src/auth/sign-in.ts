@@ -165,7 +165,7 @@ export async function handleSignIn(request: Request, auth: AuthHandler, options:
 	const cookie = request.headers.get("cookie");
 	if (cookie) headers.set("cookie", cookie);
 	if (ip) headers.set("cf-connecting-ip", ip);
-	if (token) headers.set("x-captcha-response", token);
+	// The Turnstile token was consumed above. It is single-use, so it is not sent on.
 	const path = provider === "email" ? "/api/auth/sign-in/magic-link" : "/api/auth/sign-in/social";
 	const body = provider === "email"
 		? {
