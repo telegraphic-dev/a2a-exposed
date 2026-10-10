@@ -48,7 +48,8 @@ const plain: Record<string, string> = {
 	UPSTREAM_CARD_URL: v("A2A_UPSTREAM_CARD_URL"), // default <upstream origin>/.well-known/agent-card.json
 	// Hosted multi-tenant gates. All empty by default, and empty is omitted, so a self-host deploy is unchanged.
 	// TENANCY=host switches the entrypoint to src/hosted.ts and adds TENANT_DO + TENANT_DIRECTORY below.
-	// QUOTAS, USAGE_SINK, WAKE_TARGET_POLICY, SIGNUP_URL and BRANDING are parsed and reserved.
+	// QUOTAS, USAGE_SINK, SIGNUP_URL and BRANDING are parsed and reserved.
+	// WAKE_TARGET_POLICY=public-https refuses a wake that is not public https (see wake-target.ts).
 	// APPROVAL_OIDC_* turn on OpenID Connect approval when issuer, client id, secret and allowlist are all set.
 	TENANCY: v("TENANCY"),
 	TENANT_DOMAIN: v("TENANT_DOMAIN"),
