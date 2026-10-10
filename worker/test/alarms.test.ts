@@ -197,7 +197,7 @@ test("a 429 that arrives after the response re-arms for Retry-After", async (t) 
 	};
 	await stub.pushConfig({
 		version: 1, tenantId: "id-alice", name: "alice", status: "active", ownerTokenHash: hash,
-		config: { WAKE_DEBOUNCE_SECONDS: "10", WAKE_MAX_PER_HOUR: "0", WAKE_WEBHOOK_URL: `http://127.0.0.1:${port}/hook`, AGENT_NAME: "Alice" },
+		config: { WAKE_DEBOUNCE_SECONDS: "45", WAKE_MAX_PER_HOUR: "0", WAKE_WEBHOOK_URL: `http://127.0.0.1:${port}/hook`, AGENT_NAME: "Alice" },
 	});
 	await kv.put("tenant:alice", JSON.stringify({ id: "id-alice", status: "active", region: "default", version: 1 }));
 	const issued = await (await mf.dispatchFetch("https://alice.example.com/owner/peers", {
@@ -227,5 +227,5 @@ test("a 429 that arrives after the response re-arms for Retry-After", async (t) 
 		if (armed && armed < Date.now() + 60_000) break;
 		await new Promise((r) => setTimeout(r, 40));
 	}
-	assert.ok(armed && armed > Date.now() + 15_000 && armed < Date.now() + 50_000, "the alarm follows Retry-After, not the rate row");
+	assert.ok(armed && armed > Date.now() + 20_000 && armed < Date.now() + 40_000, "the alarm is Retry-After (30s), not that delay plus the 45s debounce");
 });

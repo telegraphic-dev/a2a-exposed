@@ -142,10 +142,12 @@ async function requeueWake(ctx: TenantContext, ectx: ExecutionContext, payload: 
 	const cur: Json = await ctx.DB.prepare("SELECT * FROM wakes WHERE context_id = ?").bind(contextId).first();
 	const prev = cur?.pending_json ? JSON.parse(cur.pending_json) : null;
 	const merged = { ...payload, attempts, taskIds: [...new Set([...(prev?.taskIds || []), ...(payload.taskIds || [])])] };
-	// flushWake sends once now - last_sent_ms >= debounce: place last_sent_ms so that happens after the wait
+	// flushWake and nextCronAt wait until last_sent_ms + debounce. Store Retry-After minus that debounce so the
+	// deadline is Retry-After itself, including when the debounce is longer than Retry-After. Do not keep the
+	// previous last_sent_ms: that clock is the send we just made, and keeping it would wait out the debounce.
 	const due = now + waitMs - debounceMs(ctx);
 	await ctx.DB.prepare(`INSERT INTO wakes (context_id, last_sent_ms, pending_json, pending_since_ms) VALUES (?, ?, ?, ?)
-		ON CONFLICT(context_id) DO UPDATE SET pending_json = excluded.pending_json, last_sent_ms = MAX(wakes.last_sent_ms, excluded.last_sent_ms),
+		ON CONFLICT(context_id) DO UPDATE SET pending_json = excluded.pending_json, last_sent_ms = excluded.last_sent_ms,
 		pending_since_ms = COALESCE(wakes.pending_since_ms, excluded.pending_since_ms)`).bind(contextId, due, JSON.stringify(merged), now).run();
 	log("wake_requeued", { contextId, retryInS: Math.round(waitMs / 1000), attempt: attempts });
 	// The row exists now. A hosted alarm has to be set from this turn: the request that started sendWake may already have returned.
