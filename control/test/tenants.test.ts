@@ -62,6 +62,26 @@ test("create writes the directory and the object, and the token is shown once", 
 	});
 	assert.equal(unauth.status, 401);
 
+	const plain = await app.request("https://control.example.com/api/v1/tenants", {
+		method: "POST",
+		headers: { cookie: cookie.split(";")[0], "content-type": "text/plain" },
+		body: JSON.stringify({ name: "northwind" }),
+	});
+	assert.equal(plain.status, 403);
+	const sibling = await app.request("https://control.example.com/api/v1/tenants", {
+		method: "POST",
+		headers: {
+			cookie: cookie.split(";")[0],
+			"content-type": "application/json",
+			origin: "https://northwind.example.com",
+			"sec-fetch-site": "same-site",
+		},
+		body: JSON.stringify({ name: "northwind" }),
+	});
+	assert.equal(sibling.status, 403);
+	assert.equal(target.directory.size, 0);
+	assert.equal(target.pushes.length, 0);
+
 	const reserved = await app.request("https://control.example.com/api/v1/tenants", {
 		method: "POST",
 		headers: { cookie: cookie.split(";")[0], "content-type": "application/json" },
@@ -71,7 +91,12 @@ test("create writes the directory and the object, and the token is shown once", 
 
 	const created = await app.request("https://control.example.com/api/v1/tenants", {
 		method: "POST",
-		headers: { cookie: cookie.split(";")[0], "content-type": "application/json" },
+		headers: {
+			cookie: cookie.split(";")[0],
+			"content-type": "application/json; charset=utf-8",
+			origin: "https://control.example.com",
+			"sec-fetch-site": "same-origin",
+		},
 		body: JSON.stringify({ name: "Northwind" }),
 	});
 	assert.equal(created.status, 201);

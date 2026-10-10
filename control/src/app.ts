@@ -8,6 +8,21 @@ import type { ControlEnv } from "./env.ts";
 import { renderApp, securityHeaders } from "./views/document.tsx";
 import { renderSignIn } from "./views/sign-in.tsx";
 
+/**
+ * A state-changing tenant call must be JSON. `text/plain` is a CORS-safelisted type, so a page on a
+ * sibling host could post it with the SameSite=Lax session cookie and no preflight. A browser Origin
+ * or Sec-Fetch-Site from anywhere but this host is rejected. A non-browser client sends neither header.
+ */
+function allowsTenantWrite(request: Request): boolean {
+	const media = (request.headers.get("content-type") ?? "").split(";")[0]?.trim().toLowerCase();
+	if (media !== "application/json") return false;
+	const origin = request.headers.get("origin");
+	if (origin && origin !== new URL(request.url).origin) return false;
+	const site = (request.headers.get("sec-fetch-site") ?? "").trim().toLowerCase();
+	if (site && site !== "same-origin" && site !== "none") return false;
+	return true;
+}
+
 function wantsMarkdown(accept: string | undefined): boolean {
 	if (!accept) return false;
 	return accept.split(",").some((part) => part.split(";")[0]?.trim().toLowerCase() === "text/markdown");
@@ -96,6 +111,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 		const plane = deps.dataPlane ?? dataPlaneFromEnv(env);
 		const loaded = await loadAuth(env, request, deps);
 		if (!loaded || !plane) return c.json({ error: "not_found" }, 404);
+		if (method === "POST" && !allowsTenantWrite(request)) return c.json({ error: "forbidden" }, 403);
 		const session = await loaded.auth.api.getSession({ headers: request.headers });
 		const accountId = session?.user?.id;
 		if (!accountId) return c.json({ error: "unauthorized" }, 401);
