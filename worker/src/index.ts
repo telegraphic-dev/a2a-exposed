@@ -10,6 +10,8 @@ import { renderWake, redact, cloudflareErrorHint, defaultDebounceSeconds, defaul
 import * as P from "./pairing.ts";
 import * as M from "./mcp.ts";
 import { resolveTenant, type TenantContext, type WorkerBindings } from "./tenancy.ts";
+import { exportRows, toSql } from "./export.ts";
+import { backupDatabase, DAILY_CRON } from "./backup.ts";
 import * as O from "./approval-oidc.ts";
 type Json = any;
 
@@ -1100,6 +1102,13 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 	if (seg[0] === "contexts" && m === "GET") {
 		const rows = await ctx.DB.prepare("SELECT context_id, COUNT(*) AS entries, MAX(ts) AS last FROM history GROUP BY context_id ORDER BY last DESC LIMIT 100").all();
 		return json(rows.results);
+	}
+	if (seg[0] === "export" && !seg[1] && m === "GET") {
+		const file = await exportRows(ctx.DB);
+		if (url.searchParams.get("format") === "sql") {
+			return new Response(toSql(file), { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } });
+		}
+		return json(file);
 	}
 	return json({ error: "not found" }, 404);
 }
@@ -2367,9 +2376,16 @@ export default {
 		// A hosted deploy does not enter here: its entrypoint resolves the tenant and calls dispatch with that context.
 		return dispatch(req, resolveTenant(env, req), ectx);
 	},
-		// optional: enable with A2A_ENABLE_CRON=1 at deploy time (needs a workers.dev subdomain on the account).
-		// The minute trigger flushes. Hosted tenants do not use it: each Durable Object runs cronFlush from its own alarm.
-		async scheduled(_ev, env: WorkerBindings, ectx) {
-			await cronFlush(resolveTenant(env), ectx);
-		},
+	// optional: enable with A2A_ENABLE_CRON=1 at deploy time (needs a workers.dev subdomain on the account).
+	// A2A_BACKUP_BUCKET=1 adds a separate daily trigger. That cron writes one SQL snapshot and returns.
+	// The minute trigger flushes. Hosted tenants do not use it: each Durable Object runs cronFlush from its own alarm.
+	async scheduled(ev, env: WorkerBindings, ectx) {
+		if (ev.cron === DAILY_CRON && env.BACKUP_BUCKET) {
+			const ctx = resolveTenant(env);
+			const written = await backupDatabase(env.BACKUP_BUCKET, ctx.DB);
+			log("backup_done", { tenant: written.tenantId, key: written.key, deleted: written.deleted.length });
+			return;
+		}
+		await cronFlush(resolveTenant(env), ectx);
+	},
 } satisfies ExportedHandler<WorkerBindings>;

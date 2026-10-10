@@ -9,12 +9,15 @@
 //
 // Hosted wake debounce and the cron's housekeeping run from this object's alarm. The Worker minute cron stays a no-op
 // while TENANCY=host, so there is no shared database to flush. Self-host still uses its minute cron.
-// Not in this change: export, point-in-time restore, R2 backups, and usage push. Approval OIDC, when the
-// pushed tenant `approval` object is complete, is enforced by the same pages as self-host.
+// The daily backup cron runs only when BACKUP_BUCKET is bound, and it returns before any flush.
+// Usage push is not in this change. Approval OIDC, when configured (self-host settings, or the pushed tenant
+// `approval` object), uses the same pages as self-host.
 import { DurableObject } from "cloudflare:workers";
 import worker, { cronFlush, dispatch, nextCronAt, onWakeWrite } from "./index.ts";
 import { doSqlD1, migrateDo, type SqlStorageLike, type TxRunner } from "./storage.ts";
 import { MIGRATIONS } from "./migrations.ts";
+import { bookmarkForTime as readBookmark, exportRows, restoreBookmark as applyBookmark, restartAfterResult, toSql, ExportError, type BookmarkStorage } from "./export.ts";
+import { hostedDailyBackup } from "./backup.ts";
 import { lookupDirectory, pinDirectoryRegion, tenantNameFromHost, tenantRegion, TENANT_NAME, type DirectoryEntry } from "./directory.ts";
 import { hostedTenantContext, namespaceForRegion, parseGates, type WorkerBindings } from "./tenancy.ts";
 
@@ -302,6 +305,38 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 		return { configured: this.#row !== null, version: this.#row?.version ?? 0, tables: appTables(this.#sql) };
 	}
 
+	/** SQL dump of the application tables. Refuses an object that has no config row. */
+	async exportSql(): Promise<{ sql: string; exportedAt: string }> {
+		return await this.ctx.blockConcurrencyWhile(async () => {
+			if (!this.#row) throw new ExportError("exportSql: tenant is not configured");
+			const file = await exportRows(this.#db);
+			return { sql: toSql(file), exportedAt: file.exportedAt };
+		});
+	}
+
+	/** Point-in-time bookmark for this object only. The storage method is required; otherwise this throws. */
+	async bookmarkForTime(timeMs: number): Promise<{ bookmark: string }> {
+		if (!this.#row) throw new ExportError("bookmarkForTime: tenant is not configured");
+		return readBookmark(this.ctx.storage as BookmarkStorage, timeMs);
+	}
+
+	/**
+	 * Schedule `bookmark` and return `{ ok: true }`. The reset is queued for a later turn: `ctx.abort()` here would
+	 * fail the RPC before the caller saw that result. An in-flight alarm was for the pre-restore database, so it is not retried.
+	 */
+	async restoreBookmark(bookmark: string): Promise<{ ok: true; undo?: string }> {
+		if (!this.#row) throw new ExportError("restoreBookmark: tenant is not configured");
+		const tenantId = this.#row.tenantId;
+		const out = await applyBookmark(this.ctx.storage as BookmarkStorage, bookmark);
+		console.log(JSON.stringify({ ts: new Date().toISOString(), event: "bookmark_restore", tenant: tenantId, undo: out.undo ?? null }));
+		restartAfterResult(
+			(p) => this.ctx.waitUntil(p),
+			() => this.ctx.abort("restore bookmark", { retryAlarm: false }),
+			(ms) => scheduler.wait(ms),
+		);
+		return out;
+	}
+
 	async fetch(req: Request): Promise<Response> {
 		const row = this.#row;
 		if (!row) return notFound();
@@ -355,7 +390,14 @@ export default {
 		return ns.get(ns.idFromName(entry.id)).fetch(new Request(req, { headers }));
 	},
 	// Self-host cron flushes env.DB. Hosted has no single database; each tenant's alarm runs that flush.
+	// The daily backup cron (only present when BACKUP_BUCKET is bound) exports each active tenant and returns.
 	async scheduled(controller: ScheduledController, env: WorkerBindings, ectx: ExecutionContext): Promise<void> {
+		const backup = await hostedDailyBackup(controller, env);
+		if (backup) {
+			for (const f of backup.failed) console.log(JSON.stringify({ ts: new Date().toISOString(), event: "backup_failed", tenant: f.tenantId, error: f.error }));
+			console.log(JSON.stringify({ ts: new Date().toISOString(), event: "backup_done", written: backup.written.length, skipped: backup.skipped.length, failed: backup.failed.length }));
+			return;
+		}
 		if (!hostedOn(env)) await worker.scheduled(controller, env, ectx);
 	},
 };

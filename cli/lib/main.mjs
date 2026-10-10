@@ -111,6 +111,9 @@ Inbox (owner side)
         [--artifact] [--artifact-name N] [--force]
   history <contextId> [-n 50] [--json]     conversation log
   contexts                                 recent conversations
+  export [--sql]                       JSON dump of this inbox on stdout (peer-token hashes and
+                                       encrypted peer tokens are in the dump; the owner token stays
+                                       a Worker secret). --sql prints the same tables as SQL
 
 Pairing (OAuth 2.0 device flow, RFC 8628: agents connect without pasting tokens into chat)
   connect <base-or-card-url> [--alias A] [--name N] [--card-url URL] [--replace] [--no-wait] [--json]
@@ -178,6 +181,7 @@ const SPEC = {
 	send: { to: S, text: S, context: S, task: S, push: B, proto: S },
 	poll: { to: S, proto: S },
 	status: { json: B },
+	export: { sql: B },
 	upstream: { json: B },
 	connect: { alias: S, name: S, json: B, "no-wait": B, replace: B, force: B, "card-url": S },
 	pair: { json: B, web: B, ttl: S, issuer: S, "client-id": S, subjects: S, methods: S, "secret-stdin": B },
@@ -243,6 +247,7 @@ export async function main(argv) {
 			return cmd.reply(need(p[0], "reply <taskId> --text ..."), o);
 		case "history": return cmd.history(need(p[0], "history <contextId>"), o);
 		case "contexts": return cmd.contexts();
+		case "export": return cmd.exportInbox(o);
 		case "token": return cmd.token(need(p[0], "token issue|list|revoke|rotate [label]"), p[1], o);
 		case "peers": return cmd.peers(p[0] || "list", p.slice(1), o);
 		case "connect": return pair.connect(need(p[0], "connect <base-or-card-url> [--alias A] [--no-wait] [--json]"), o);
