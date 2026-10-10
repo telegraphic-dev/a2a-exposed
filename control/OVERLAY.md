@@ -18,7 +18,7 @@ Apply the overlay before `node scripts/prerender.mjs` (or `npm run build`):
 2. **Content.** Copy Markdown onto `control/content/`, or set `CONTROL_CONTENT_DIR`. Each `*.md` file has frontmatter `title` and optional `description`. `index.md` becomes `/`. `docs/install.md` becomes `/docs/install` plus a `/docs/install.md` twin. Pages without a title fail the build. An empty `content/` leaves the neutral home page.
 3. **Public.** Copy the overlay's `public/` onto `control/public/`. Files in the overlay win. This is how a branded `robots.txt` replaces the neutral one (the neutral file disallows only `/app` and `/api`).
 
-`scripts/prerender.mjs` reads those directories and writes HTML, Markdown twins, `_headers` alternate links, and, when `SITE_URL` is an https origin, `sitemap.xml`. It does not delete pages removed from `content/` when writing into an existing directory. A production build should pass `--out` pointing at an empty directory, then point Vite at it with `CONTROL_PUBLIC_DIR`.
+`scripts/prerender.mjs` reads those directories and writes HTML, Markdown twins, `_headers` alternate links, and, when `SITE_URL` is an https origin, `sitemap.xml`. A build with `SITE_URL` unset deletes a sitemap this script wrote earlier (it carries an `a2a-exposed-sitemap` comment), including one left in the same output directory. A sitemap copied from `public/` or the overlay, with no such comment, stays. It does not delete other pages removed from `content/` when writing into an existing directory. A production build should pass `--out` pointing at an empty directory, then point Vite at it with `CONTROL_PUBLIC_DIR`.
 
 ```bash
 node scripts/prerender.mjs \
@@ -62,13 +62,13 @@ Account linking follows the provider's verified-email flag. Better Auth treats a
 
 `cf` (the same CLI as `worker/`) builds this package. There is no `assets.directory` field: Vite's `publicDir` (`public`, or `CONTROL_PUBLIC_DIR`) is the asset source. On `cf` 1.0.0-beta.13 the runtime shape is:
 
-- `worker.assets.runWorkerFirst`: `string[] | boolean`. Path patterns only. This package lists `/health`, `/app`, `/app/*`, `/api`, `/api/*`, `/.well-known`, and `/.well-known/*` (`src/routing.ts`). A header such as `Accept` cannot be matched.
+- `worker.assets.runWorkerFirst`: `true` (`src/routing.ts`). Path patterns cannot match `Accept`, so every request runs the Worker. `Accept: text/markdown` is answered from the `.md` twin; anything else the Worker does not handle is `env.ASSETS.fetch`.
 - `worker.assets.htmlHandling`: `auto-trailing-slash`, so `/docs/install` serves `docs/install/index.html`.
 - `bindings.assets()` exposes `env.ASSETS`.
 - Custom domains are `worker.domains`. `cf build` records them as a string array on the worker config.
 - Extra routes are `triggers.fetch({ pattern, zone? })`. `cf build` records `{ type: "fetch", pattern, zone }` when a zone is set.
 
-`Accept: text/markdown` is handled in Hono when the request already reached the Worker: it fetches the `.md` twin through `env.ASSETS` and sets `Link: rel="canonical"` to the HTML path. Requesting the `.md` URL directly is a static hit and does not invoke the Worker. `/app` and `/api` responses send `X-Robots-Tag: noindex`.
+`Accept: text/markdown` is handled in Hono: it fetches the `.md` twin through `env.ASSETS`, sets `Vary: Accept`, and sets `Link: rel="canonical"` to the HTML path. A quality of zero (`text/markdown;q=0`) is ignored. A request that does not accept Markdown falls through to the asset, and that response also sends `Vary: Accept`, so a cache cannot reuse the HTML body for a Markdown request. `/app` and `/api` responses send `X-Robots-Tag: noindex`.
 
 ## Migrations
 

@@ -46,6 +46,7 @@ test("overlay fixture replaces the neutral page, brand, and public file", async 
 	assert.match(fs.readFileSync(path.join(out, "robots.txt"), "utf8"), /Disallow: \/app/);
 	assert.match(fs.readFileSync(path.join(out, "index.html"), "utf8"), /Fixture: sign in \/ create an agent/);
 	assert.match(fs.readFileSync(path.join(out, "sitemap.xml"), "utf8"), /https:\/\/control\.example\.com\/hello/);
+	assert.match(fs.readFileSync(path.join(out, "sitemap.xml"), "utf8"), /a2a-exposed-sitemap/);
 	assert.match(fs.readFileSync(path.join(out, "_headers"), "utf8"), /Link: <\/hello\.md>; rel="alternate"; type="text\/markdown"/);
 	fs.rmSync(out, { recursive: true, force: true });
 });
@@ -71,5 +72,47 @@ test("neutral prerender keeps the shell and does not invent a sitemap without SI
 	assert.equal(fs.readFileSync(path.join(root, "public/logo.svg"), "utf8"), fs.readFileSync(path.join(root, "brand/logo.svg"), "utf8"));
 	assert.equal(fs.existsSync(path.join(out, "sitemap.xml")), false);
 	assert.equal(fs.existsSync(path.join(out, "hello/index.html")), false);
+	fs.rmSync(out, { recursive: true, force: true });
+});
+
+test("a prerender without SITE_URL deletes a sitemap left by an earlier build", async () => {
+	const out = fs.mkdtempSync(path.join(os.tmpdir(), "control-sitemap-"));
+	const options = {
+		contentDir: path.join(fixture, "content"),
+		brandDir: path.join(fixture, "brand"),
+		publicDir: path.join(root, "public"),
+		overlayPublic: path.join(fixture, "public"),
+		outDir: out,
+		brandName: "",
+	};
+	await renderSite({ ...options, site: "https://control.example.com" });
+	assert.equal(fs.existsSync(path.join(out, "sitemap.xml")), true);
+	await renderSite({ ...options, site: "" });
+	assert.equal(fs.existsSync(path.join(out, "sitemap.xml")), false);
+	fs.rmSync(out, { recursive: true, force: true });
+});
+
+test("a hand-written sitemap stays when SITE_URL is unset", async () => {
+	const manual = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<urlset>manual</urlset>\n";
+	const pub = fs.mkdtempSync(path.join(os.tmpdir(), "control-sitemap-src-"));
+	const overlay = fs.mkdtempSync(path.join(os.tmpdir(), "control-sitemap-overlay-"));
+	const out = fs.mkdtempSync(path.join(os.tmpdir(), "control-sitemap-out-"));
+	fs.writeFileSync(path.join(pub, "sitemap.xml"), manual);
+	fs.writeFileSync(path.join(overlay, "sitemap.xml"), manual);
+	const options = {
+		contentDir: path.join(fixture, "content"),
+		brandDir: path.join(fixture, "brand"),
+		publicDir: pub,
+		overlayPublic: overlay,
+		brandName: "",
+		site: "",
+	};
+	await renderSite({ ...options, outDir: out });
+	assert.equal(fs.readFileSync(path.join(out, "sitemap.xml"), "utf8"), manual);
+	assert.equal(fs.readFileSync(path.join(overlay, "sitemap.xml"), "utf8"), manual);
+	await renderSite({ ...options, overlayPublic: "", outDir: pub });
+	assert.equal(fs.readFileSync(path.join(pub, "sitemap.xml"), "utf8"), manual);
+	fs.rmSync(pub, { recursive: true, force: true });
+	fs.rmSync(overlay, { recursive: true, force: true });
 	fs.rmSync(out, { recursive: true, force: true });
 });

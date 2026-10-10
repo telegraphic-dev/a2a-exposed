@@ -10,6 +10,8 @@ import { pathToFileURL } from "node:url";
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const MARKER_BEGIN = "# BEGIN prerender";
 const MARKER_END = "# END prerender";
+/** Marks a sitemap this script wrote, so a later build can drop that file and leave a hand-written one. */
+const SITEMAP_MARK = "a2a-exposed-sitemap";
 
 export function escapeHtml(value) {
 	return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -225,12 +227,16 @@ export async function renderSite(options) {
 		const urls = [origin + "/", ...pages.filter((p) => p.canonical !== "/").map((p) => origin + p.canonical)];
 		const body = [
 			'<?xml version="1.0" encoding="UTF-8"?>',
+			`<!-- ${SITEMAP_MARK} -->`,
 			'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
 			...urls.map((loc) => `  <url><loc>${escapeHtml(loc)}</loc></url>`),
 			"</urlset>",
 			"",
 		].join("\n");
 		fs.writeFileSync(path.join(outDir, "sitemap.xml"), body);
+	} else {
+		const stale = path.join(outDir, "sitemap.xml");
+		if (fs.existsSync(stale) && fs.readFileSync(stale, "utf8").includes(SITEMAP_MARK)) fs.rmSync(stale);
 	}
 
 	const rules = [MARKER_BEGIN];
