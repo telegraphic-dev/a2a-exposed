@@ -1,5 +1,6 @@
 import type { Sql } from "./invites.ts";
 import type { Mailer } from "../mail/types.ts";
+import { authBaseURL } from "./origin.ts";
 
 export interface ProviderCredentials {
 	clientId: string;
@@ -46,6 +47,7 @@ export interface AuthEnv {
 	TURNSTILE_SECRET_KEY?: string;
 	INVITES_REQUIRED?: string;
 	SITE_URL?: string;
+	ISSUER?: string;
 }
 
 const SECRET_MIN = 32;
@@ -95,8 +97,8 @@ export function resolveAuth(env: AuthEnv, request: Request, deps: AuthDeps = {})
 	const database = deps.database ?? env.DB;
 	const secret = env.AUTH_SECRET?.trim() ?? "";
 	if (!database || secret.length < SECRET_MIN) return null;
-	const configured = (env.SITE_URL ?? "").trim();
-	const baseURL = configured ? new URL(configured).origin : new URL(request.url).origin;
+	const baseURL = authBaseURL(env, request);
+	if (!baseURL) return null;
 	const mailFrom = env.MAIL_FROM?.trim() || undefined;
 	const turnstileSite = env.TURNSTILE_SITE_KEY?.trim() ?? "";
 	const turnstileSecret = env.TURNSTILE_SECRET_KEY?.trim() ?? "";

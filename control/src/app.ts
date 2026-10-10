@@ -2,7 +2,7 @@ import { Hono, type Context } from "hono";
 import { handleSignIn } from "./auth/sign-in.ts";
 import { loadAuth } from "./auth/instance.ts";
 import { authBlockers, type AuthDeps } from "./auth/options.ts";
-import { OIDC_COOKIE, authorize, discoveryDocument, exchangeCode, issuerOrigin, resumeQuery } from "./oidc/issuer.ts";
+import { OIDC_COOKIE, authorize, discoveryDocument, exchangeCode, issuerOrigin, readTokenForm, resumeQuery } from "./oidc/issuer.ts";
 import { hostCookie } from "./auth/cookies.ts";
 import { createTenant, listTenants } from "./tenants/create.ts";
 import { dataPlaneFromEnv, type DataPlane } from "./tenants/push.ts";
@@ -220,12 +220,8 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 		const issuer = issuerOrigin(env, request);
 		const loaded = issuer ? await loadAuth(env, request, deps) : null;
 		if (!loaded) return c.json({ error: "not_found" }, 404);
-		let form: URLSearchParams;
-		try {
-			form = new URLSearchParams(await request.text());
-		} catch {
-			return c.json({ error: "invalid_request" }, 400);
-		}
+		const form = await readTokenForm(request);
+		if (form === "too_large") return c.json({ error: "invalid_request" }, 413);
 		const result = await exchangeCode(loaded.options.database, loaded.auth, issuer, form);
 		return c.json(result.body, result.status as 200);
 	}

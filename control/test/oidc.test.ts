@@ -150,3 +150,98 @@ test("a signed-in owner can approve through the issuer and the client secret is 
 	});
 	assert.equal(replay.status, 400);
 });
+
+test("ISSUER is the login origin when SITE_URL is a different host", async () => {
+	const db = openDb();
+	const sent: { text: string }[] = [];
+	const pushes: TenantPush[] = [];
+	const app = createApp(
+		{
+			AUTH_SECRET: secret,
+			DB: db,
+			ISSUER: "https://issuer.example",
+			SITE_URL: "https://site.example",
+			TENANT_DOMAIN: "example.com",
+		},
+		{
+			database: db,
+			mailer: { async send(message) { sent.push({ text: message.text }); } },
+			dataPlane: {
+				async putDirectory() {},
+				async pushConfig(body) { pushes.push(body); return { version: body.version, applied: true }; },
+			},
+		},
+	);
+
+	const discovery = await app.request("https://issuer.example/.well-known/openid-configuration");
+	assert.equal(discovery.status, 200);
+	assert.equal((await discovery.json() as { issuer: string }).issuer, "https://issuer.example");
+	const other = await app.request("https://site.example/.well-known/openid-configuration");
+	assert.equal(other.status, 404);
+
+	const posted = await app.request("https://issuer.example/app/sign-in", {
+		method: "POST",
+		headers: { origin: "https://issuer.example", "content-type": "application/x-www-form-urlencoded" },
+		body: "provider=email&email=person@example.com",
+	});
+	assert.equal(posted.status, 303);
+	assert.match(posted.headers.get("location") ?? "", /sent=1/);
+	assert.match(sent[0].text, /https:\/\/issuer\.example\/api\/auth\/magic-link\/verify/);
+	const wrong = await app.request("https://site.example/app/sign-in", {
+		method: "POST",
+		headers: { origin: "https://site.example", "content-type": "application/x-www-form-urlencoded" },
+		body: "provider=email&email=person@example.com",
+	});
+	assert.equal(wrong.status, 404);
+
+	const link = sent[0].text.match(/https:\/\/issuer\.example\/api\/auth\/magic-link\/verify\?[^\s]+/);
+	assert.ok(link);
+	const verified = await app.request(link[0]);
+	const cookie = verified.headers.getSetCookie().find((value) => value.startsWith("__Host-a2a_session="))!.split(";")[0];
+	const created = await app.request("https://issuer.example/api/v1/tenants", {
+		method: "POST",
+		headers: { cookie, "content-type": "application/json", origin: "https://issuer.example" },
+		body: JSON.stringify({ name: "northwind" }),
+	});
+	assert.equal(created.status, 201);
+	assert.equal((pushes[0].approval as { issuer: string }).issuer, "https://issuer.example");
+	const onSite = await app.request("https://site.example/api/v1/tenants", {
+		method: "POST",
+		headers: { cookie, "content-type": "application/json", origin: "https://site.example" },
+		body: JSON.stringify({ name: "other" }),
+	});
+	assert.equal(onSite.status, 404);
+});
+
+test("the token endpoint refuses a form larger than 4 KiB", async () => {
+	const db = openDb();
+	const app = createApp(
+		{ AUTH_SECRET: secret, DB: db },
+		{ database: db, mailer: { async send() {} } },
+	);
+	const oversized = await app.request("https://control.example.com/api/oidc/token", {
+		method: "POST",
+		headers: { "content-type": "application/x-www-form-urlencoded" },
+		body: "x".repeat(4097),
+	});
+	assert.equal(oversized.status, 413);
+	const stream = new ReadableStream({
+		start(controller) {
+			controller.enqueue(new TextEncoder().encode("y".repeat(4097)));
+			controller.close();
+		},
+	});
+	const chunked = new Request("https://control.example.com/api/oidc/token", {
+		method: "POST",
+		headers: { "content-type": "application/x-www-form-urlencoded" },
+		body: stream,
+		duplex: "half",
+	});
+	assert.equal((await app.request(chunked)).status, 413);
+	const small = await app.request("https://control.example.com/api/oidc/token", {
+		method: "POST",
+		headers: { "content-type": "application/x-www-form-urlencoded" },
+		body: "grant_type=client_credentials",
+	});
+	assert.equal(small.status, 400);
+});

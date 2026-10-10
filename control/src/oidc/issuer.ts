@@ -1,6 +1,7 @@
 import type { Auth } from "../auth/create-auth.ts";
 import { hostCookie, readCookie } from "../auth/cookies.ts";
 import type { Sql } from "../auth/invites.ts";
+import { authBaseURL, httpsOrigin } from "../auth/origin.ts";
 
 export const OIDC_COOKIE = "__Host-a2a_oidc";
 const CODE_TTL_MS = 10 * 60 * 1000;
@@ -21,28 +22,45 @@ export interface ApprovalClient {
 	approval: Record<string, unknown>;
 }
 
-function httpsOrigin(value: string | undefined): string {
-	const raw = (value || "").trim();
-	if (!raw) return "";
-	try {
-		const url = new URL(raw);
-		if (url.protocol !== "https:" || url.username || url.password) return "";
-		return url.origin;
-	} catch {
-		return "";
-	}
-}
-
 /**
- * Issuer origin for this request. A configured `ISSUER` or `SITE_URL` wins when it is https.
- * A request to a different origin does not publish that issuer: the data plane checks the
- * document's issuer against the URL it fetched.
+ * Issuer origin for this request. It is the same https origin Better Auth uses as `baseURL`.
+ * A configured `ISSUER` wins. `SITE_URL` is used only when `ISSUER` is unset and the request is
+ * already on that origin. A request to a different origin does not publish the document: the
+ * data plane checks the document's issuer against the URL it fetched.
  */
 export function issuerOrigin(env: { ISSUER?: string; SITE_URL?: string }, request: Request): string {
+	const base = authBaseURL(env, request);
 	const requestOrigin = httpsOrigin(new URL(request.url).origin);
-	const configured = httpsOrigin(env.ISSUER) || httpsOrigin(env.SITE_URL);
-	if (configured) return configured === requestOrigin ? configured : "";
-	return requestOrigin;
+	return base === requestOrigin ? base : "";
+}
+
+/** Token forms are a short code exchange. Larger bodies are refused before they are parsed. */
+export const TOKEN_FORM_MAX = 4096;
+
+export async function readTokenForm(request: Request): Promise<URLSearchParams | "too_large"> {
+	const declared = Number(request.headers.get("content-length") || "0");
+	if (Number.isFinite(declared) && declared > TOKEN_FORM_MAX) return "too_large";
+	const reader = request.body?.getReader();
+	if (!reader) return new URLSearchParams();
+	const chunks: Uint8Array[] = [];
+	let total = 0;
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		total += value.byteLength;
+		if (total > TOKEN_FORM_MAX) {
+			await reader.cancel();
+			return "too_large";
+		}
+		chunks.push(value);
+	}
+	const bytes = new Uint8Array(total);
+	let offset = 0;
+	for (const chunk of chunks) {
+		bytes.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	return new URLSearchParams(new TextDecoder().decode(bytes));
 }
 
 export function discoveryDocument(issuer: string): Record<string, unknown> {
