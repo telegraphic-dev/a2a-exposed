@@ -1,6 +1,7 @@
 import { betterAuth } from "better-auth";
 import { APIError } from "better-auth/api";
 import { captcha, genericOAuth, magicLink } from "better-auth/plugins";
+import { jwt } from "better-auth/plugins/jwt";
 import { mapCloudflareUser } from "./cloudflare-user.ts";
 import { INVITE_COOKIE, SESSION_COOKIE, readCookie } from "./cookies.ts";
 import { consumeInvite, rememberMagicInvite, takeMagicInvite, validInviteCode } from "./invites.ts";
@@ -71,6 +72,12 @@ export async function createAuth(options: AuthOptions) {
 			endpoints: ["/sign-in/magic-link", "/sign-in/social"],
 		}));
 	}
+	// RS256 is what the data plane's approval client accepts. Session responses do not carry a JWT.
+	plugins.push(jwt({
+		disableSettingJwtHeader: true,
+		jwks: { keyPairConfig: { alg: "RS256" } },
+		jwt: { issuer: options.baseURL, audience: options.baseURL, expirationTime: "10m" },
+	}));
 	return betterAuth({
 		baseURL: options.baseURL,
 		basePath: "/api/auth",

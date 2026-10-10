@@ -41,7 +41,7 @@ Every binding is optional and read from the environment in `cloudflare.config.ts
 | `CONTROL_TENANT_DIRECTORY_ID` | KV namespace id of the data plane's name directory. The same namespace the inbox reads. |
 | `BRAND_NAME` | Name in the shell. Default `Inbox`. |
 | `SITE_URL` | https origin used for the sitemap. Omitted when unset. |
-| `ISSUER` | OIDC issuer origin. Unused until login is configured. |
+| `ISSUER` | https origin of this control plane as an OpenID Connect issuer, and the origin Better Auth uses for login on that host. Unset: discovery uses the request origin when it is https and matches `SITE_URL` (or when `SITE_URL` is also unset). A request to a different origin does not publish the document. When `ISSUER` is set, that other origin does not sign in either. |
 | `TENANT_DOMAIN` | Parent domain for tenant hosts. Unused until tenants exist. |
 | `DATA_REGION` | `eu` or `fedramp`. Unset: the platform default. |
 | `AUTH_SECRET` | Session secret, at least 32 characters. A secret, not a var. Login stays off without it. |

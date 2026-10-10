@@ -2,6 +2,8 @@ import { Hono, type Context } from "hono";
 import { handleSignIn } from "./auth/sign-in.ts";
 import { loadAuth } from "./auth/instance.ts";
 import { authBlockers, type AuthDeps } from "./auth/options.ts";
+import { OIDC_COOKIE, authorize, discoveryDocument, exchangeCode, issuerOrigin, readTokenForm, resumeQuery } from "./oidc/issuer.ts";
+import { hostCookie } from "./auth/cookies.ts";
 import { createTenant, listTenants } from "./tenants/create.ts";
 import { dataPlaneFromEnv, type DataPlane } from "./tenants/push.ts";
 import type { ControlEnv } from "./env.ts";
@@ -113,6 +115,15 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 	app.get("/health", (c) => c.json({ ok: true }, 200, { "cache-control": "no-store" }));
 
 	app.get("/app", async (c) => {
+		const query = resumeQuery(c.req.header("cookie") ?? null);
+		if (query) {
+			const loaded = await loadAuth(env, c.req.raw, deps);
+			const session = loaded ? await loaded.auth.api.getSession({ headers: c.req.raw.headers }) : null;
+			if (session?.user?.id) {
+				c.header("set-cookie", hostCookie(OIDC_COOKIE, "", 0));
+				return c.redirect(new URL(`/api/oidc/authorize${query}`, c.req.url).href, 302);
+			}
+		}
 		const shell = await renderShell(c.req.raw);
 		return c.html(shell.html, 200, securityHeaders({ turnstile: shell.turnstile }));
 	});
@@ -167,6 +178,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 		}
 		const created = await createTenant(loaded.options.database, plane, {
 			accountId, name, domain: env.TENANT_DOMAIN, dataRegion: env.DATA_REGION,
+			issuer: issuerOrigin(env, request), label: env.BRAND_NAME,
 		});
 		if (!created.ok) {
 			const status = created.error === "taken" ? 409 : 400;
@@ -208,6 +220,38 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 			if (blockers.length) body = renderSignIn({ providers: [], magicLink: false, invitesRequired: false, notice: blockers[0] });
 		}
 		return { html: renderApp(env, body || undefined), turnstile };
+	}
+
+	app.get("/.well-known/openid-configuration", async (c) => {
+		const issuer = issuerOrigin(env, c.req.raw);
+		const loaded = issuer ? await loadAuth(env, c.req.raw, deps) : null;
+		if (!loaded) return c.json({ error: "not_found" }, 404);
+		return c.json(discoveryDocument(issuer), 200, { "cache-control": "no-store" });
+	});
+	app.get("/api/oidc/authorize", (c) => oidcAuthorize(c));
+	app.post("/api/oidc/token", (c) => oidcToken(c));
+
+	async function oidcAuthorize(c: Context<{ Bindings: ControlEnv }>) {
+		const request = c.req.raw;
+		const issuer = issuerOrigin(env, request);
+		const loaded = issuer ? await loadAuth(env, request, deps) : null;
+		if (!loaded) return c.json({ error: "not_found" }, 404);
+		const session = await loaded.auth.api.getSession({ headers: request.headers });
+		const result = await authorize(loaded.options.database, request, session?.user?.id ? { id: session.user.id } : null);
+		if (result.cookie) c.header("set-cookie", result.cookie);
+		if (result.location) return c.redirect(result.location, 302);
+		return c.json(result.body ?? { error: "invalid_request" }, result.status as 400);
+	}
+
+	async function oidcToken(c: Context<{ Bindings: ControlEnv }>) {
+		const request = c.req.raw;
+		const issuer = issuerOrigin(env, request);
+		const loaded = issuer ? await loadAuth(env, request, deps) : null;
+		if (!loaded) return c.json({ error: "not_found" }, 404);
+		const form = await readTokenForm(request);
+		if (form === "too_large") return c.json({ error: "invalid_request" }, 413);
+		const result = await exchangeCode(loaded.options.database, loaded.auth, issuer, form);
+		return c.json(result.body, result.status as 200);
 	}
 
 	app.all("/api", (c) => c.json({ error: "not_found" }, 404));

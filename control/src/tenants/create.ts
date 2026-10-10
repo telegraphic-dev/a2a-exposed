@@ -1,4 +1,5 @@
 import type { Sql } from "../auth/invites.ts";
+import { newApprovalClient } from "../oidc/issuer.ts";
 import { deliverOutbox, type DataPlane, type OutboxRow } from "./push.ts";
 import { tenantNameProblem } from "./reserved.ts";
 
@@ -38,7 +39,7 @@ function ownerToken(): string {
 export async function createTenant(
 	db: Sql,
 	plane: DataPlane,
-	input: { accountId: string; name: string; domain?: string; dataRegion?: string },
+	input: { accountId: string; name: string; domain?: string; dataRegion?: string; issuer?: string; label?: string },
 ): Promise<CreateResult> {
 	const name = input.name.trim().toLowerCase();
 	const problem = tenantNameProblem(name);
@@ -53,14 +54,21 @@ export async function createTenant(
 	const region = regionOf(input.dataRegion);
 	const config = { AGENT_NAME: name };
 	const version = 1;
+	const domain = (input.domain || "").trim().toLowerCase().replace(/^\.+|\.+$/g, "");
+	const publicUrl = domain ? `https://${name}.${domain}` : null;
+	const client = await newApprovalClient({ accountId: input.accountId, issuer: input.issuer || "", publicUrl, label: input.label });
+	const approval = client?.approval ?? {};
 	try {
 		await db.batch([
 			db.prepare(
 				`INSERT INTO tenants (
 				   id, name, owner_account_id, status, region, config_json, limits_json, approval_json,
 				   owner_token_hash, secrets_enc, config_version, created_at, updated_at
-				 ) VALUES (?, ?, ?, 'active', ?, ?, '{}', '{}', ?, NULL, ?, ?, ?)`,
-			).bind(id, name, input.accountId, region, JSON.stringify(config), hash, version, now, now),
+				 ) VALUES (?, ?, ?, 'active', ?, ?, '{}', ?, ?, NULL, ?, ?, ?)`,
+			).bind(id, name, input.accountId, region, JSON.stringify(config), JSON.stringify(approval), hash, version, now, now),
+			...(client ? [db.prepare(
+				"INSERT INTO oauth_client (id, secret_hash, owner_account_id, redirect_uris, created_at) VALUES (?, ?, ?, ?, ?)",
+			).bind(client.clientId, client.secretHash, input.accountId, JSON.stringify(client.redirectUris), now)] : []),
 			db.prepare("INSERT INTO config_outbox (tenant_id, version, created_at) VALUES (?, ?, ?)").bind(id, version, now),
 		]);
 	} catch (error) {
@@ -70,7 +78,7 @@ export async function createTenant(
 	}
 	const row: OutboxRow = {
 		id, name, status: "active", region,
-		config_json: JSON.stringify(config), limits_json: "{}", approval_json: "{}",
+		config_json: JSON.stringify(config), limits_json: "{}", approval_json: JSON.stringify(approval),
 		owner_token_hash: hash, secrets_enc: null, version, created_at: now,
 	};
 	let pushed = false;
@@ -78,12 +86,11 @@ export async function createTenant(
 	catch (error) {
 		console.log(JSON.stringify({ ts: now, event: "outbox_push_failed", tenant: id, error: String(error).slice(0, 200) }));
 	}
-	const domain = (input.domain || "").trim().toLowerCase().replace(/^\.+|\.+$/g, "");
 	return {
 		ok: true,
 		tenant: {
 			id, name, status: "active", region, version, pushed, ownerToken: token,
-			publicUrl: domain ? `https://${name}.${domain}` : null,
+			publicUrl,
 		},
 	};
 }
