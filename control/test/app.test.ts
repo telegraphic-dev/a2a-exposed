@@ -52,7 +52,9 @@ test("Accept text/markdown serves the static twin and skips the dashboard", asyn
 		ASSETS: {
 			async fetch(input: Request | URL | string) {
 				const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-				if (new URL(url).pathname === "/guide.md") return new Response("hello guide\n");
+				const pathname = new URL(url).pathname;
+				if (pathname === "/guide.md") return new Response("hello guide\n", { headers: { vary: "Accept-Encoding" } });
+				if (pathname === "/notes.md") return new Response("notes\n", { headers: { vary: "Accept" } });
 				return new Response("missing", { status: 404 });
 			},
 		},
@@ -61,8 +63,16 @@ test("Accept text/markdown serves the static twin and skips the dashboard", asyn
 	const md = await app.request("https://control.example.com/guide", { headers: { accept: "text/markdown, text/html" } });
 	assert.equal(md.status, 200);
 	assert.match(md.headers.get("content-type") ?? "", /text\/markdown/);
+	assert.deepEqual((md.headers.get("vary") ?? "").split(",").map((part) => part.trim()), ["Accept-Encoding", "Accept"]);
 	assert.match(md.headers.get("link") ?? "", /<\/guide>; rel="canonical"/);
 	assert.equal(await md.text(), "hello guide\n");
+
+	const rejected = await app.request("https://control.example.com/guide", { headers: { accept: "text/markdown;q=0, text/html" } });
+	assert.equal(rejected.status, 404);
+	assert.equal(await rejected.text(), "missing");
+
+	const notes = await app.request("https://control.example.com/notes", { headers: { accept: "text/markdown" } });
+	assert.equal(notes.headers.get("vary"), "Accept");
 
 	const appPage = await app.request("https://control.example.com/app", { headers: { accept: "text/markdown" } });
 	assert.match(appPage.headers.get("content-type") ?? "", /text\/html/);
