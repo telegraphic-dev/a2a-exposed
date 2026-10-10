@@ -21,7 +21,29 @@ const plain: Record<string, string> = {
 	ISSUER: v("ISSUER"),
 	TENANT_DOMAIN: v("TENANT_DOMAIN"),
 	DATA_REGION: v("DATA_REGION"),
+	GITHUB_CLIENT_ID: v("GITHUB_CLIENT_ID"),
+	GOOGLE_CLIENT_ID: v("GOOGLE_CLIENT_ID"),
+	CLOUDFLARE_OAUTH_CLIENT_ID: v("CLOUDFLARE_OAUTH_CLIENT_ID"),
+	MAIL_FROM: v("MAIL_FROM"),
+	TURNSTILE_SITE_KEY: v("TURNSTILE_SITE_KEY"),
+	INVITES_REQUIRED: v("INVITES_REQUIRED") === "1" ? "1" : "",
 };
+
+// Secrets stay out of the production config so a deploy does not require them.
+// `cf dev` reads the same names from .dev.vars.
+const DEV_SECRETS = [
+	"AUTH_SECRET",
+	"GITHUB_CLIENT_ID",
+	"GITHUB_CLIENT_SECRET",
+	"GOOGLE_CLIENT_ID",
+	"GOOGLE_CLIENT_SECRET",
+	"CLOUDFLARE_OAUTH_CLIENT_ID",
+	"CLOUDFLARE_OAUTH_CLIENT_SECRET",
+	"TURNSTILE_SITE_KEY",
+	"TURNSTILE_SECRET_KEY",
+	"MAIL_FROM",
+	"INVITES_REQUIRED",
+];
 
 const envBindings: Record<string, any> = {
 	ASSETS: bindings.assets(),
@@ -29,13 +51,14 @@ const envBindings: Record<string, any> = {
 if (d1Id || d1Name) {
 	envBindings.DB = bindings.d1(d1Id ? { name: d1Name || name, id: d1Id } : { name: d1Name || name });
 }
+if (v("MAIL_FROM")) envBindings.EMAIL = bindings.sendEmail();
 for (const [key, value] of Object.entries(plain)) if (value) envBindings[key] = bindings.text(value);
 
 const fetchTriggers = route
 	? [triggers.fetch(routeZone ? { pattern: route, zone: routeZone } : { pattern: route })]
 	: [];
 
-export default defineConfig(() => ({
+export default defineConfig((ctx) => ({
 	...(v("CLOUDFLARE_ACCOUNT_ID") ? { accountId: v("CLOUDFLARE_ACCOUNT_ID") } : {}),
 	worker: {
 		name,
@@ -52,7 +75,13 @@ export default defineConfig(() => ({
 		...(v("CONTROL_WORKERS_LOGS") === "1"
 			? { observability: { enabled: true, redactQueryString: true, logs: { enabled: true, invocationLogs: true } } }
 			: {}),
-		env: envBindings,
+		env: ctx.mode === "development"
+			? {
+				...envBindings,
+				...(envBindings.EMAIL ? {} : { EMAIL: bindings.sendEmail() }),
+				...Object.fromEntries(DEV_SECRETS.map((key) => [key, bindings.secret()])),
+			}
+			: envBindings,
 		...(fetchTriggers.length ? { triggers: fetchTriggers } : {}),
 	},
 }));

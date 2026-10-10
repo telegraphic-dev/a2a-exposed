@@ -36,16 +36,25 @@ Every binding is optional and read from the environment in `cloudflare.config.ts
 | `CONTROL_WORKER_NAME` | Worker name. Default `a2a-exposed-control`. |
 | `CONTROL_HOSTNAME` | Custom domain. Unset: `workers.dev`. |
 | `CONTROL_ROUTE` / `CONTROL_ROUTE_ZONE` | Extra fetch route (`triggers.fetch`). |
-| `CONTROL_D1_NAME` / `CONTROL_D1_ID` | Control D1 binding `DB`. Omitted when both are unset. |
+| `CONTROL_D1_NAME` / `CONTROL_D1_ID` | Control D1 binding `DB`. Omitted when both are unset. Login needs it. Apply `control/migrations/` with `cf d1 migrations apply`. |
 | `BRAND_NAME` | Name in the shell. Default `Inbox`. |
 | `SITE_URL` | https origin used for the sitemap. Omitted when unset. |
 | `ISSUER` | OIDC issuer origin. Unused until login is configured. |
 | `TENANT_DOMAIN` | Parent domain for tenant hosts. Unused until tenants exist. |
 | `DATA_REGION` | `eu` or `fedramp`. Unset: the platform default. |
+| `AUTH_SECRET` | Session secret, at least 32 characters. A secret, not a var. Login stays off without it. |
+| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | GitHub OAuth. Both are required. The secret is not a var. |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google OAuth. Both are required. |
+| `CLOUDFLARE_OAUTH_CLIENT_ID` / `CLOUDFLARE_OAUTH_CLIENT_SECRET` | Cloudflare OAuth. Scope is `user-details.read` only. The profile has no verification flag, so this provider does not auto-link. |
+| `MAIL_FROM` | Sender address. With the `EMAIL` send binding, turns on email sign-in. |
+| `TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY` | Optional. Both are required before the widget is shown. |
+| `INVITES_REQUIRED` | `1` requires an `invite_` code in `invites` before the first account for an email is created. Unset: anyone who can use a configured provider can sign in. |
 | `CONTROL_WORKERS_LOGS` | `1` enables Workers Logs with query strings redacted. |
 | `CLOUDFLARE_ACCOUNT_ID` | Account, when the token can see more than one. |
 
 Do not commit account ids, zone names, or hostnames of real deployments. Examples use `example.com`.
+
+Account linking follows the provider's verified-email flag. Better Auth treats a trusted provider as sufficient even when that flag is false, so the trusted-provider list is empty: GitHub links when the matching address is `verified`, Google when `email_verified` is true, and a magic link because it proves the address. Cloudflare's user payload has no verification field, so that provider does not auto-link. The session cookie is `__Host-a2a_session` (`Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, no `Domain`).
 
 ## Static assets and the Worker
 

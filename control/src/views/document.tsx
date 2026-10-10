@@ -4,14 +4,23 @@ import { Footer } from "@brand/Footer.tsx";
 import { Header } from "@brand/Header.tsx";
 import { SignInAside } from "@brand/SignInAside.tsx";
 
-const csp = "default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
-
-export function securityHeaders(extra: Record<string, string> = {}): Record<string, string> {
+export function securityHeaders(options: { turnstile?: boolean } = {}): Record<string, string> {
+	const host = options.turnstile ? "https://challenges.cloudflare.com" : "'none'";
+	const csp = [
+		"default-src 'none'",
+		"style-src 'self'",
+		"img-src 'self'",
+		`script-src ${host}`,
+		`frame-src ${host}`,
+		`connect-src ${host}`,
+		"base-uri 'none'",
+		"form-action 'self'",
+		"frame-ancestors 'none'",
+	].join("; ");
 	return {
 		"content-security-policy": csp,
 		"referrer-policy": "no-referrer",
 		"x-content-type-options": "nosniff",
-		...extra,
 	};
 }
 
@@ -62,10 +71,11 @@ export function renderHome(env?: { BRAND_NAME?: string }): string {
 	});
 }
 
-export function renderApp(env?: { BRAND_NAME?: string }): string {
+export function renderApp(env?: { BRAND_NAME?: string }, bodyHtml?: string): string {
 	return renderDocument({
 		env,
 		robots: "noindex",
-		aside: true,
+		aside: !bodyHtml,
+		bodyHtml,
 	});
 }

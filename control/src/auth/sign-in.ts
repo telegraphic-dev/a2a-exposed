@@ -1,0 +1,99 @@
+import type { Auth } from "./create-auth.ts";
+import { INVITE_COOKIE, hostCookie } from "./cookies.ts";
+import { hasAccount, invitePending, validInviteCode } from "./invites.ts";
+import type { AuthOptions } from "./options.ts";
+
+const PROVIDER_ORIGINS = new Set([
+	"https://github.com",
+	"https://accounts.google.com",
+	"https://dash.cloudflare.com",
+]);
+
+function sameOrigin(request: Request): boolean {
+	const origin = request.headers.get("origin");
+	return Boolean(origin) && origin === new URL(request.url).origin;
+}
+
+function providerLocation(response: Response): string | null {
+	const location = response.headers.get("location");
+	if (!location) return null;
+	try {
+		const url = new URL(location);
+		if (url.username || url.password) return null;
+		if (!PROVIDER_ORIGINS.has(url.origin)) return null;
+		return url.href;
+	} catch {
+		return null;
+	}
+}
+
+function cookiesFrom(response: Response): string[] {
+	return typeof response.headers.getSetCookie === "function" ? response.headers.getSetCookie() : [];
+}
+
+function redirect(location: string, cookies: string[] = []): Response {
+	const headers = new Headers({ location, "cache-control": "no-store" });
+	for (const cookie of cookies) headers.append("set-cookie", cookie);
+	return new Response(null, { status: 303, headers });
+}
+
+function appUrl(request: Request, error?: string): string {
+	const url = new URL("/app", request.url);
+	if (error) url.searchParams.set("error", error);
+	return url.href;
+}
+
+export async function handleSignIn(request: Request, auth: Auth, options: AuthOptions): Promise<Response> {
+	if (!sameOrigin(request)) return redirect(appUrl(request, "auth"));
+	const form = await request.formData();
+	const provider = String(form.get("provider") ?? "");
+	const email = String(form.get("email") ?? "").trim();
+	const invite = String(form.get("invite") ?? "").trim();
+	const allowed = new Set([
+		...(options.github ? ["github"] : []),
+		...(options.google ? ["google"] : []),
+		...(options.cloudflare ? ["cloudflare"] : []),
+		...(options.mailer || options.emailBinding ? ["email"] : []),
+	]);
+	if (!allowed.has(provider)) return redirect(appUrl(request, "unavailable"));
+	if (provider === "email" && !email) return redirect(appUrl(request, "email"));
+	const returning = provider === "email" && email ? await hasAccount(options.database, email) : false;
+	const needsInvite = options.invitesRequired && provider === "email" && !returning;
+	if (needsInvite || (options.invitesRequired && invite)) {
+		const address = provider === "email" ? email : undefined;
+		if (!validInviteCode(invite) || !await invitePending(options.database, invite, address)) {
+			return redirect(appUrl(request, "invite"));
+		}
+	}
+	const token = String(form.get("cf-turnstile-response") ?? "");
+	if (options.turnstile && !token) return redirect(appUrl(request, "turnstile"));
+
+	const origin = new URL(request.url).origin;
+	const headers = new Headers({ "content-type": "application/json", origin });
+	const cookie = request.headers.get("cookie");
+	if (cookie) headers.set("cookie", cookie);
+	if (token) headers.set("x-captcha-response", token);
+	const path = provider === "email" ? "/api/auth/sign-in/magic-link" : "/api/auth/sign-in/social";
+	const body = provider === "email"
+		? { email, callbackURL: "/app", errorCallbackURL: "/app?error=auth", newUserCallbackURL: "/app" }
+		: { provider, callbackURL: "/app", errorCallbackURL: "/app?error=auth" };
+	const response = await auth.handler(new Request(new URL(path, origin), { method: "POST", headers, body: JSON.stringify(body) }));
+	const cookies = cookiesFrom(response);
+	if (options.invitesRequired && invite && !returning) cookies.push(hostCookie(INVITE_COOKIE, invite, 60 * 15));
+	if (provider !== "email") {
+		const location = providerLocation(response);
+		if (!location) return redirect(appUrl(request, "auth"));
+		return redirect(location, cookies);
+	}
+	if (!response.ok) {
+		let error = "auth";
+		try {
+			const payload = await response.json() as { code?: string };
+			if (payload.code === "VERIFICATION_FAILED" || payload.code === "MISSING_RESPONSE") error = "turnstile";
+		} catch {
+			// A non-JSON failure still uses the generic sign-in error.
+		}
+		return redirect(appUrl(request, error));
+	}
+	return redirect(new URL("/app?sent=1", request.url).href, cookies);
+}
