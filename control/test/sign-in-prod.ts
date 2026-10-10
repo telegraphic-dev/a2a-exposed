@@ -72,6 +72,36 @@ assert.equal(limited.searchParams.get("error"), "rate_limit");
 const other = await post("203.0.113.11");
 assert.equal(new URL(other.headers.get("location") ?? "").origin, "https://github.com");
 
+const nullOriginCalls = siteverifyCalls;
+siteverifyBudget = 1;
+const nullOrigin = await app.request(`${origin}/app/sign-in`, {
+	method: "POST",
+	headers: {
+		origin: "null",
+		"sec-fetch-site": "same-origin",
+		"content-type": "application/x-www-form-urlencoded",
+		cookie: "__cf_bm=abc",
+		"cf-connecting-ip": "203.0.113.15",
+	},
+	body: "provider=github&cf-turnstile-response=widget-token",
+});
+assert.equal(siteverifyCalls - nullOriginCalls, 1);
+assert.equal(new URL(nullOrigin.headers.get("location") ?? "").origin, "https://github.com");
+const crossCalls = siteverifyCalls;
+const crossSite = await app.request(`${origin}/app/sign-in`, {
+	method: "POST",
+	headers: {
+		origin: "null",
+		"sec-fetch-site": "cross-site",
+		"content-type": "application/x-www-form-urlencoded",
+		cookie: "__cf_bm=abc",
+		"cf-connecting-ip": "203.0.113.16",
+	},
+	body: "provider=github&cf-turnstile-response=widget-token",
+});
+assert.equal(siteverifyCalls, crossCalls);
+assert.equal(new URL(crossSite.headers.get("location") ?? "", origin).searchParams.get("error"), "origin");
+
 const apiCalls = siteverifyCalls;
 siteverifyBudget = 1;
 const api = await app.request(`${origin}/api/auth/sign-in/social`, {

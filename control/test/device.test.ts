@@ -18,6 +18,37 @@ test("device sign-in stays closed until login is configured", async () => {
 	assert.equal(code.status, 404);
 });
 
+test("device approval accepts Origin null from this page and rejects a cross-site post", async () => {
+	const origin = "https://control.example.com";
+	const db = openDb();
+	const app = createApp({
+		AUTH_SECRET: secret,
+		DB: db,
+		GITHUB_CLIENT_ID: "gh-id",
+		GITHUB_CLIENT_SECRET: "gh-secret",
+	}, { database: db });
+	const page = await app.request(`${origin}/app/device`);
+	assert.equal(page.status, 200);
+	assert.equal(page.headers.get("referrer-policy"), "same-origin");
+	const body = "action=approve&user_code=ABCD2345&confirm=ABCD2345";
+	const cross = await app.request(`${origin}/app/device`, {
+		method: "POST",
+		headers: { origin: "null", "sec-fetch-site": "cross-site", "content-type": "application/x-www-form-urlencoded" },
+		body,
+	});
+	const crossUrl = new URL(cross.headers.get("location") ?? "");
+	assert.equal(crossUrl.searchParams.get("error"), "auth");
+	assert.equal(crossUrl.searchParams.get("user_code"), null);
+	const same = await app.request(`${origin}/app/device`, {
+		method: "POST",
+		headers: { origin: "null", "sec-fetch-site": "same-origin", "content-type": "application/x-www-form-urlencoded" },
+		body,
+	});
+	const sameUrl = new URL(same.headers.get("location") ?? "");
+	assert.equal(sameUrl.searchParams.get("user_code"), "ABCD2345");
+	assert.equal(sameUrl.searchParams.get("error"), "auth");
+});
+
 test("a signed-in owner can approve a CLI device code and the session is the access token", async () => {
 	const db = openDb();
 	const sent: { text: string }[] = [];

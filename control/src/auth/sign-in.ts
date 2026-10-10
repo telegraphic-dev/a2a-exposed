@@ -1,6 +1,7 @@
 import { INVITE_COOKIE, hostCookie } from "./cookies.ts";
 import { hasAccount, invitePending, validInviteCode } from "./invites.ts";
 import type { AuthOptions } from "./options.ts";
+import { sameOrigin } from "./origin.ts";
 import { connectingIp, verifyTurnstile } from "./turnstile.ts";
 
 type AuthHandler = { handler(request: Request): Promise<Response> };
@@ -40,11 +41,6 @@ const PROVIDER_ORIGINS = new Set([
 	"https://accounts.google.com",
 	"https://dash.cloudflare.com",
 ]);
-
-function sameOrigin(request: Request): boolean {
-	const origin = request.headers.get("origin");
-	return Boolean(origin) && origin === new URL(request.url).origin;
-}
 
 function allowedProviderUrl(value: string): string | null {
 	try {
@@ -160,6 +156,7 @@ export async function handleSignIn(request: Request, auth: AuthHandler, options:
 		}
 	}
 
+	// The browser may have sent `Origin: null`. Better Auth checks the origin on this request.
 	const origin = new URL(request.url).origin;
 	const headers = new Headers({ "content-type": "application/json", origin });
 	const cookie = request.headers.get("cookie");
