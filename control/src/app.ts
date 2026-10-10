@@ -1,10 +1,27 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { handleSignIn } from "./auth/sign-in.ts";
 import { loadAuth } from "./auth/instance.ts";
 import { authBlockers, type AuthDeps } from "./auth/options.ts";
+import { createTenant, listTenants } from "./tenants/create.ts";
+import { dataPlaneFromEnv, type DataPlane } from "./tenants/push.ts";
 import type { ControlEnv } from "./env.ts";
 import { renderApp, securityHeaders } from "./views/document.tsx";
 import { renderSignIn } from "./views/sign-in.tsx";
+
+/**
+ * A state-changing tenant call must be JSON. `text/plain` is a CORS-safelisted type, so a page on a
+ * sibling host could post it with the SameSite=Lax session cookie and no preflight. A browser Origin
+ * or Sec-Fetch-Site from anywhere but this host is rejected. A non-browser client sends neither header.
+ */
+function allowsTenantWrite(request: Request): boolean {
+	const media = (request.headers.get("content-type") ?? "").split(";")[0]?.trim().toLowerCase();
+	if (media !== "application/json") return false;
+	const origin = request.headers.get("origin");
+	if (origin && origin !== new URL(request.url).origin) return false;
+	const site = (request.headers.get("sec-fetch-site") ?? "").trim().toLowerCase();
+	if (site && site !== "same-origin" && site !== "none") return false;
+	return true;
+}
 
 function acceptQuality(params: string[]): number {
 	for (const param of params) {
@@ -53,7 +70,7 @@ function htmlPathFor(pathname: string): string {
 	return pathname;
 }
 
-export function createApp(env: ControlEnv = {}, deps: AuthDeps = {}) {
+export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: DataPlane } = {}) {
 	const app = new Hono<{ Bindings: ControlEnv }>();
 
 	app.use("*", async (c, next) => {
@@ -113,6 +130,60 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps = {}) {
 		if (!loaded) return c.json({ error: "not_found" }, 404);
 		return loaded.auth.handler(c.req.raw);
 	});
+
+	app.get("/api/v1/tenants", (c) => tenants(c, "GET"));
+	app.post("/api/v1/tenants", (c) => tenants(c, "POST"));
+
+	async function tenants(c: Context<{ Bindings: ControlEnv }>, method: "GET" | "POST") {
+		const request = c.req.raw;
+		const plane = deps.dataPlane ?? dataPlaneFromEnv(env);
+		const loaded = await loadAuth(env, request, deps);
+		if (!loaded || !plane) return c.json({ error: "not_found" }, 404);
+		if (method === "POST" && !allowsTenantWrite(request)) return c.json({ error: "forbidden" }, 403);
+		const session = await loaded.auth.api.getSession({ headers: request.headers });
+		const accountId = session?.user?.id;
+		if (!accountId) return c.json({ error: "unauthorized" }, 401);
+		if (method === "GET") {
+			const rows = await listTenants(loaded.options.database, accountId, env.TENANT_DOMAIN);
+			return c.json({
+				tenants: rows.map((row) => ({
+					id: row.id,
+					name: row.name,
+					status: row.status,
+					public_url: row.publicUrl,
+					version: row.version,
+				})),
+			});
+		}
+		let name = "";
+		try {
+			const body = await request.json() as unknown;
+			if (body && typeof body === "object" && !Array.isArray(body)) {
+				const value = (body as { name?: unknown }).name;
+				if (typeof value === "string") name = value;
+			}
+		} catch {
+			return c.json({ error: "invalid_name" }, 400);
+		}
+		const created = await createTenant(loaded.options.database, plane, {
+			accountId, name, domain: env.TENANT_DOMAIN, dataRegion: env.DATA_REGION,
+		});
+		if (!created.ok) {
+			const status = created.error === "taken" ? 409 : 400;
+			return c.json({ error: created.error }, status);
+		}
+		const tenant = created.tenant;
+		return c.json({
+			tenant: tenant.name,
+			id: tenant.id,
+			status: tenant.status,
+			region: tenant.region,
+			public_url: tenant.publicUrl,
+			owner_token: tenant.ownerToken,
+			version: tenant.version,
+			pushed: tenant.pushed,
+		}, 201);
+	}
 
 	async function renderShell(request: Request): Promise<{ html: string; turnstile: boolean }> {
 		const loaded = await loadAuth(env, request, deps);

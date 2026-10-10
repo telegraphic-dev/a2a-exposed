@@ -52,11 +52,16 @@ if (d1Id || d1Name) {
 	envBindings.DB = bindings.d1(d1Id ? { name: d1Name || name, id: d1Id } : { name: d1Name || name });
 }
 if (v("MAIL_FROM")) envBindings.EMAIL = bindings.sendEmail();
+const dataPlane = v("CONTROL_DATA_PLANE");
+const directoryId = v("CONTROL_TENANT_DIRECTORY_ID");
+if (dataPlane) envBindings.TENANT_DO = bindings.durableObject({ worker: dataPlane, exportName: "TenantStore" });
+if (directoryId) envBindings.TENANT_DIRECTORY = bindings.kv({ id: directoryId });
 for (const [key, value] of Object.entries(plain)) if (value) envBindings[key] = bindings.text(value);
 
-const fetchTriggers = route
-	? [triggers.fetch(routeZone ? { pattern: route, zone: routeZone } : { pattern: route })]
-	: [];
+const fetchTriggers = [
+	...(route ? [triggers.fetch(routeZone ? { pattern: route, zone: routeZone } : { pattern: route })] : []),
+	...(dataPlane && directoryId ? [triggers.scheduled({ schedule: "*/5 * * * *" })] : []),
+];
 
 export default defineConfig((ctx) => ({
 	...(v("CLOUDFLARE_ACCOUNT_ID") ? { accountId: v("CLOUDFLARE_ACCOUNT_ID") } : {}),

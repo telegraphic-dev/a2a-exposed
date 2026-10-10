@@ -37,6 +37,8 @@ Every binding is optional and read from the environment in `cloudflare.config.ts
 | `CONTROL_HOSTNAME` | Custom domain. Unset: `workers.dev`. |
 | `CONTROL_ROUTE` / `CONTROL_ROUTE_ZONE` | Extra fetch route (`triggers.fetch`). |
 | `CONTROL_D1_NAME` / `CONTROL_D1_ID` | Control D1 binding `DB`. Omitted when both are unset. Login needs it. Apply `control/migrations/` with `cf d1 migrations apply`. |
+| `CONTROL_DATA_PLANE` | Worker name that exports `TenantStore`. With the directory id, turns on `POST /api/v1/tenants` and a five-minute outbox retry. |
+| `CONTROL_TENANT_DIRECTORY_ID` | KV namespace id of the data plane's name directory. The same namespace the inbox reads. |
 | `BRAND_NAME` | Name in the shell. Default `Inbox`. |
 | `SITE_URL` | https origin used for the sitemap. Omitted when unset. |
 | `ISSUER` | OIDC issuer origin. Unused until login is configured. |
