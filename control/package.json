@@ -1,0 +1,28 @@
+{
+	"name": "a2a-exposed-control",
+	"private": true,
+	"type": "module",
+	"description": "Neutral control plane for a2a-exposed: Hono on Workers and static assets. Empty by default.",
+	"license": "MIT",
+	"scripts": {
+		"build": "node scripts/prerender.mjs && cf build",
+		"deploy": "node scripts/prerender.mjs && cf deploy",
+		"prerender": "node scripts/prerender.mjs",
+		"test": "node --import ./test/register-hooks.mjs --test test/*.test.ts",
+		"typecheck": "cf workers types && tsc --noEmit",
+		"check-build": "node scripts/check-build.mjs"
+	},
+	"engines": {
+		"node": ">=22.18"
+	},
+	"dependencies": {
+		"hono": "4.13.13"
+	},
+	"devDependencies": {
+		"@cloudflare/vite-plugin": "beta",
+		"cf": "^1.0.0-beta.13",
+		"esbuild": "^0.28.1",
+		"typescript": "^7.0.2",
+		"vite": "^8.3.0"
+	}
+}

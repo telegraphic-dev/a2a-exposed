@@ -5,6 +5,7 @@ Guide for coding agents (and humans) changing this repository. User-facing docs 
 ## Layout
 
 - `worker/`: Cloudflare Worker (TypeScript, D1, `cf` CLI config in `cloudflare.config.ts`). Migrations in `worker/migrations/` are append-only: add a new numbered file, never edit an old one. Each number is used once. `cf d1 migrations apply` (run by `init`/`deploy`) applies every file not yet recorded in `d1_migrations`, in numeric order, so a lower number added later still runs on existing databases. `worker/test/migrations.test.ts` checks the numbering and replays upgrades from older databases.
+- `control/`: control plane Worker (Hono, Workers static assets, `cf` CLI). Neutral and empty by default: no login provider, no billing, no hosted hostname in source. Brand and content are an overlay (`control/OVERLAY.md`). `control/` is not part of the npm package. Migrations in `control/migrations/` follow the same append-only rule as `worker/migrations/` (none yet).
 - `cli/`: the npm package `a2a-exposed` (Node 22.18+ ESM, **zero dependencies**: keep it that way). `npm pack` bundles `../worker` as the deploy template via `cli/scripts/sync-worker.mjs` (prepack); `cli/worker/` and `cli/LICENSE` are generated, not committed.
 - `skills/<name>/SKILL.md`: the two agent skills ([Agent Skills](https://agentskills.io/specification)). Frontmatter may only use `name`, `description`, `license`, `compatibility`, `metadata`, `allowed-tools`. `name` must match the folder name. Keep `metadata.version` in step with `cli/package.json`, and keep `metadata.hermes.related_skills` pointing at each other (plus optional companions `mise`, `cloudflare`). Long setup detail lives under `skills/a2a-exposed-setup/references/`.
 - Plugin manifests (same `skills/` tree; do not duplicate skills):
@@ -22,6 +23,7 @@ Run with any real `WAKE_*`, `A2A_*`, `CF_*`, `CLOUDFLARE_*` variables unset: the
 ```bash
 cd worker && npm ci && npm test && npx cf workers types && npx tsc --noEmit && npx cf build
 cd ../cli && npm test && npm pack --dry-run
+cd ../control && npm ci && npm test && npx cf workers types && npx tsc --noEmit && npm run build && node scripts/check-build.mjs
 cd .. && npx -y skills add ./ --list
 # Agent Skills + Agent Plugins (same as CI):
 python3 -m venv .skills-ref-venv && .skills-ref-venv/bin/pip install -q "skills-ref @ git+https://github.com/agentskills/agentskills.git#subdirectory=skills-ref" jsonschema

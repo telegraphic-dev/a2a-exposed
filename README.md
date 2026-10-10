@@ -287,11 +287,16 @@ plugin.json                          Agent Plugins 1.0.0 portable manifest (Code
 skills/a2a-exposed-setup/           setup skill + references/ (deploy, wake, façade, …)
 skills/a2a-exposed/                 operate skill: inbox, replies, outbound, tokens
 worker/                             Cloudflare Worker (TypeScript, D1, cf CLI config)
-cli/                                npm package `a2a-exposed` (Node 22, zero deps)
+control/                            Control plane (Hono on Workers, static assets, neutral and empty by default)
+cli/                                npm package `a2a-exposed` (Node 22, zero deps). Does not include control/
 .github/workflows/                  ci.yml (PRs, main) and publish.yml (v* tags: npm + GitHub release)
 ```
 
 Worker development: `cd worker && npm install && npm test && npx tsc`. For local runs, use `npx cf dev` with a `.dev.vars` file holding the secrets. CLI: `node cli/bin/a2a-exposed.mjs --help`, tests with `cd cli && npm test`. See [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md).
+
+## Control plane
+
+`control/` is a second Worker: Hono for `/app`, `/api`, `/health` and `/.well-known`, and Workers static assets for everything else. It is deployed with `cf`, the same CLI as the inbox Worker. With no environment variables it is a neutral shell (the name defaults to Inbox) and does not enable login, mail, or billing. Brand, marketing pages, and legal copy are layered on at build time; see [control/OVERLAY.md](control/OVERLAY.md). The npm package does not include `control/`. Self-hosting an inbox does not require deploying it.
 
 ## Releases
 
@@ -299,4 +304,4 @@ Pushing a `v*` tag runs [`publish.yml`](.github/workflows/publish.yml): it sets 
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE). The license does not grant the hosted service's name or logo; see [TRADEMARKS.md](TRADEMARKS.md).

@@ -1,0 +1,4 @@
+# overlay-robots
+User-agent: *
+Disallow: /app
+Disallow: /api

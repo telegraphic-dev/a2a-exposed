@@ -2,6 +2,10 @@
 
 All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.3.x), Worker template, and skills. Versions follow [semver](https://semver.org); a `v*` tag publishes the CLI to npm (see the README's **Releases**).
 
+## Unreleased
+
+- **Control plane skeleton.** `control/` is a Hono Worker plus Workers static assets, built and deployed with `cf`. With no configuration it serves a neutral page ("Inbox: sign in / create an agent") and tells the operator that no login provider is configured. `/app` and `/api` are `noindex`; `robots.txt` disallows only those two paths. Brand components, Markdown pages, and `public/` files are an overlay (`control/OVERLAY.md`). The npm package does not include `control/`. No login, billing, or tenant API in this change.
+
 ## 0.6.0 - 2026-10-10
 
 Upgrade: `npx -y a2a-exposed@latest deploy` (applies D1 migration `0008_oidc_txns`: short-lived OpenID Connect sign-in state). A deployment that set `--cli-command` / `WAKE_CLI_COMMAND` keeps its own command. Leave the new approval settings unset and `/device` stays the password page.
