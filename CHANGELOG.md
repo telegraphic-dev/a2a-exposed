@@ -4,6 +4,7 @@ All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.
 
 ## Unreleased
 
+- **Wake targets.** `WAKE_TARGET_POLICY=public-https` refuses a wake that is not https, that carries credentials, or whose host is private, loopback, link-local, CGNAT, or a metadata address. A hostname is checked over DNS-over-HTTPS; if that check cannot be completed, the wake is not sent. The connection is made to an address from that check, with TLS for the original hostname, so a later DNS answer cannot point the request at a private address. A redirect is followed only when it stays on the same origin and passes the same check. A cross-origin redirect is not followed, so wake credentials are not sent to another host. A forbidden target is never requested. Leave the setting unset and a self-hosted inbox still posts to whatever `WAKE_WEBHOOK_URL` the operator configured.
 - **Control plane skeleton.** `control/` is a Hono Worker plus Workers static assets, built and deployed with `cf`. With no configuration it serves a neutral page ("Inbox: sign in / create an agent") and tells the operator that no login provider is configured. `/app` and `/api` are `noindex`; `robots.txt` disallows only those two paths. Brand components, Markdown pages, and `public/` files are an overlay (`control/OVERLAY.md`). The npm package does not include `control/`. No login, billing, or tenant API in this change.
 
 ## 0.6.0 - 2026-10-10

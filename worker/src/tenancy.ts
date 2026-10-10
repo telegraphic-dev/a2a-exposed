@@ -84,7 +84,7 @@ export interface WorkerBindings extends ConfigFields {
 	QUOTAS?: string;
 	/** "d1" reserves usage metering (not applied yet). */
 	USAGE_SINK?: string;
-	/** "public-https" reserves the wake-target policy (not applied yet). */
+	/** "public-https" refuses non-https, private, and metadata wake targets. Anything else is unset. */
 	WAKE_TARGET_POLICY?: string;
 	/** https URL shown later on the landing page and over-quota errors. Parsed, not rendered yet. */
 	SIGNUP_URL?: string;

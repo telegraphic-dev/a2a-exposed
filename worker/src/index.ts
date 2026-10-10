@@ -7,6 +7,7 @@
 import * as A from "./a2a.ts";
 import * as F from "./facade.ts";
 import { renderWake, redact, cloudflareErrorHint, defaultDebounceSeconds, defaultMaxPerHour, type WakeConfig, type WakeEvent } from "./wake.ts";
+import { fetchCheckedWake } from "./wake-target.ts";
 import * as P from "./pairing.ts";
 import * as M from "./mcp.ts";
 import { resolveTenant, type TenantContext, type WorkerBindings } from "./tenancy.ts";
@@ -114,7 +115,17 @@ async function sendWake(ctx: TenantContext, ectx: ExecutionContext, payload: Jso
 	}
 	if (!req) { log("wake_skipped", { contextId: ev.contextId, reason: "WAKE_WEBHOOK_URL unset" }); return { status: null, info: "WAKE_WEBHOOK_URL unset" }; }
 	try {
-		const r = await doFetch(ctx, ectx, req.url, { method: "POST", headers: req.headers, body: req.body });
+		let r: Response;
+		if (ctx.gates.wakeTargetPolicy === "public-https") {
+			const checked = await fetchCheckedWake(req.url, { method: "POST", headers: req.headers, body: req.body });
+			if ("refused" in checked) {
+				log("wake_refused", { preset: preset(ctx), contextId: ev.contextId, reason: checked.refused });
+				return { status: null, info: `refused: ${checked.refused}` };
+			}
+			r = checked.response;
+		} else {
+			r = await doFetch(ctx, ectx, req.url, { method: "POST", headers: req.headers, body: req.body });
+		}
 		// explain Cloudflare edge errors (tunnel connector down, Access block) without echoing the body
 		const hint = r.ok ? "" : cloudflareErrorHint(r.status, (await r.text().catch(() => "")).slice(0, 4096));
 		log("wake_sent", { preset: preset(ctx), contextId: ev.contextId, taskId: ev.taskId, status: r.status, ...(hint ? { hint } : {}) });
