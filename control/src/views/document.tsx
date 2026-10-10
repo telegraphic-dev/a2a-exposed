@@ -6,11 +6,12 @@ import { SignInAside } from "@brand/SignInAside.tsx";
 
 export function securityHeaders(options: { turnstile?: boolean } = {}): Record<string, string> {
 	const host = options.turnstile ? "https://challenges.cloudflare.com" : "'none'";
+	const script = options.turnstile ? "'self' https://challenges.cloudflare.com" : "'none'";
 	const csp = [
 		"default-src 'none'",
 		"style-src 'self'",
 		"img-src 'self'",
-		`script-src ${host}`,
+		`script-src ${script}`,
 		`frame-src ${host}`,
 		`connect-src ${host}`,
 		"base-uri 'none'",

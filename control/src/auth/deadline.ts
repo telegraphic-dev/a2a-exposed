@@ -1,6 +1,9 @@
 /** Bound for an OAuth callback. The provider token request has no timeout of its own. */
 export const CALLBACK_DEADLINE_MS = 12_000;
 
+/** Bound for the sign-in handler. A stuck database call must not leave the browser spinning. */
+export const SIGN_IN_DEADLINE_MS = 10_000;
+
 /**
  * Resolve with `run` or, once `ms` has passed, with `onTimeout`.
  * A late failure from `run` is ignored after the deadline has already won.

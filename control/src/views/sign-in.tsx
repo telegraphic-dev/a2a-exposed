@@ -7,7 +7,7 @@ const PROVIDERS = [
 const ERRORS: Record<string, string> = {
 	invite: "That invite code is not valid.",
 	INVITE_REQUIRED: "That invite code is not valid.",
-	turnstile: "The check failed. Try again.",
+	turnstile: "Wait for the check to finish, then try again.",
 	"invalid-input-response": "The check failed. Try again.",
 	"missing-input-response": "The check failed. Try again.",
 	"bad-request": "The check failed. Try again.",
@@ -92,13 +92,30 @@ export function renderSignIn(input: {
 						</label>
 					</p>
 				) : ""}
-				{input.turnstileSiteKey ? <div class="cf-turnstile" data-sitekey={input.turnstileSiteKey}></div> : ""}
+				{input.turnstileSiteKey ? (
+					<div
+						class="cf-turnstile"
+						data-sitekey={input.turnstileSiteKey}
+						data-callback="a2aTurnstileReady"
+						data-expired-callback="a2aTurnstileWait"
+						data-error-callback="a2aTurnstileWait"
+					/>
+				) : ""}
 				<p>
-					{buttons.map(([id, label]) => <button name="provider" value={id} type="submit">{label}</button>)}
-					{input.magicLink ? <button name="provider" value="email" type="submit">Email</button> : ""}
+					{buttons.map(([id, label]) => input.turnstileSiteKey
+						? <button name="provider" value={id} type="submit" disabled>{label}</button>
+						: <button name="provider" value={id} type="submit">{label}</button>)}
+					{input.magicLink ? input.turnstileSiteKey
+						? <button name="provider" value="email" type="submit" disabled>Email</button>
+						: <button name="provider" value="email" type="submit">Email</button> : ""}
 				</p>
 			</form>
-			{input.turnstileSiteKey ? <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script> : ""}
+			{input.turnstileSiteKey ? (
+				<>
+					<script src="/turnstile.js"></script>
+					<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+				</>
+			) : ""}
 		</div>
 	).toString();
 }

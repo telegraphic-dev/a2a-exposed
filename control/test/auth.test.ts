@@ -333,7 +333,7 @@ test("/app shows a message for each sign-in error", async () => {
 	const app = createApp(githubEnv(db), { database: db });
 	const messages: Record<string, string> = {
 		auth: "Sign-in did not complete.",
-		turnstile: "The check failed. Try again.",
+		turnstile: "Wait for the check to finish, then try again.",
 		unavailable: "Login is not available.",
 		invite: "That invite code is not valid.",
 		email: "Enter an email address.",
@@ -356,6 +356,46 @@ test("/app shows a message for each sign-in error", async () => {
 	assert.equal(unknown.includes("not_a_code"), false);
 	const quiet = await (await app.request(`${origin}/app`)).text();
 	assert.equal(quiet.includes("role=\"alert\""), false);
+});
+
+test("provider buttons stay off until Turnstile finishes", async () => {
+	const db = openDb();
+	const app = createApp({
+		...githubEnv(db),
+		TURNSTILE_SITE_KEY: "site-key",
+		TURNSTILE_SECRET_KEY: "secret-key",
+	}, { database: db });
+	const page = await app.request(`${origin}/app`);
+	const html = await page.text();
+	const csp = page.headers.get("content-security-policy") ?? "";
+	assert.match(csp, /script-src 'self' https:\/\/challenges\.cloudflare\.com/);
+	assert.match(html, /<button[^>]*disabled[^>]*>GitHub<\/button>/);
+	assert.match(html, /data-callback="a2aTurnstileReady"/);
+	assert.match(html, /data-expired-callback="a2aTurnstileWait"/);
+	assert.match(html, /data-error-callback="a2aTurnstileWait"/);
+	assert.match(html, /src="\/turnstile\.js"/);
+	assert.match(html, /src="https:\/\/challenges\.cloudflare\.com\/turnstile\/v0\/api\.js"/);
+	assert.equal(/<script(?![^>]*\bsrc=)/.test(html), false);
+});
+
+test("a sign-in that does not return redirects to deadline", async () => {
+	const db = openDb();
+	const options = resolveAuth(githubEnv(db), new Request(`${origin}/app`));
+	assert.ok(options);
+	const logged: string[] = [];
+	const previous = console.error;
+	console.error = (...args: unknown[]) => { logged.push(args.map(String).join(" ")); };
+	try {
+		const started = Date.now();
+		const response = await handleSignIn(formRequest("provider=github"), {
+			handler: () => new Promise(() => {}),
+		}, options, 40);
+		assert.ok(Date.now() - started < 1000);
+		assert.match(response.headers.get("location") ?? "", /error=deadline$/);
+		assert.ok(logged.some((line) => line.includes("\"event\":\"social_sign_in_timeout\"")));
+	} finally {
+		console.error = previous;
+	}
 });
 
 test("an unknown OAuth callback redirects to the sign-in error", async () => {

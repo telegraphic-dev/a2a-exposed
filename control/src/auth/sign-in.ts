@@ -1,6 +1,7 @@
 import { INVITE_COOKIE, hostCookie } from "./cookies.ts";
 import { hasAccount, invitePending, validInviteCode } from "./invites.ts";
 import type { AuthOptions } from "./options.ts";
+import { SIGN_IN_DEADLINE_MS, within } from "./deadline.ts";
 import { sameOrigin } from "./origin.ts";
 import { connectingIp, verifyTurnstile } from "./turnstile.ts";
 
@@ -120,7 +121,7 @@ function appUrl(request: Request, error?: string): string {
 	return url.href;
 }
 
-export async function handleSignIn(request: Request, auth: AuthHandler, options: AuthOptions): Promise<Response> {
+export async function handleSignIn(request: Request, auth: AuthHandler, options: AuthOptions, deadlineMs = SIGN_IN_DEADLINE_MS): Promise<Response> {
 	if (!sameOrigin(request)) {
 		logSignInFailure(403, "origin", "The sign-in request came from another site.");
 		return redirect(appUrl(request, "origin"));
@@ -173,7 +174,13 @@ export async function handleSignIn(request: Request, auth: AuthHandler, options:
 			...(options.invitesRequired && invite && !returning ? { metadata: { invite } } : {}),
 		}
 		: { provider, callbackURL: "/app", errorCallbackURL: "/app" };
-	const response = await auth.handler(new Request(new URL(path, origin), { method: "POST", headers, body: JSON.stringify(body) }));
+	let timedOut = false;
+	const response = await within(deadlineMs, () => auth.handler(new Request(new URL(path, origin), { method: "POST", headers, body: JSON.stringify(body) })), () => {
+		timedOut = true;
+		console.error(JSON.stringify({ event: "social_sign_in_timeout" }));
+		return new Response(null, { status: 504 });
+	});
+	if (timedOut) return redirect(appUrl(request, "deadline"));
 	const cookies = cookiesFrom(response);
 	if (options.invitesRequired && invite && !returning) cookies.push(hostCookie(INVITE_COOKIE, invite, 60 * 15));
 	const payload = await readPayload(response);

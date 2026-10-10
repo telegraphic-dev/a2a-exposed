@@ -106,7 +106,7 @@ function htmlPathFor(pathname: string): string {
 	return pathname;
 }
 
-export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: DataPlane; callbackDeadlineMs?: number } = {}) {
+export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: DataPlane; callbackDeadlineMs?: number; signInDeadlineMs?: number } = {}) {
 	const app = new Hono<{ Bindings: ControlEnv }>();
 
 	app.use("*", async (c, next) => {
@@ -185,7 +185,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 	app.post("/app/sign-in", async (c) => {
 		const loaded = await loadAuth(env, c.req.raw, deps);
 		if (!loaded) return c.json({ error: "not_found" }, 404);
-		return handleSignIn(c.req.raw, loaded.auth, loaded.options);
+		return handleSignIn(c.req.raw, loaded.auth, loaded.options, deps.signInDeadlineMs);
 	});
 	app.all("/api/auth/*", async (c) => {
 		let request = c.req.raw;
