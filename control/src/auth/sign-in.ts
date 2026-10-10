@@ -75,7 +75,13 @@ export async function handleSignIn(request: Request, auth: Auth, options: AuthOp
 	if (token) headers.set("x-captcha-response", token);
 	const path = provider === "email" ? "/api/auth/sign-in/magic-link" : "/api/auth/sign-in/social";
 	const body = provider === "email"
-		? { email, callbackURL: "/app", errorCallbackURL: "/app?error=auth", newUserCallbackURL: "/app" }
+		? {
+			email,
+			callbackURL: "/app",
+			errorCallbackURL: "/app?error=auth",
+			newUserCallbackURL: "/app",
+			...(options.invitesRequired && invite && !returning ? { metadata: { invite } } : {}),
+		}
 		: { provider, callbackURL: "/app", errorCallbackURL: "/app?error=auth" };
 	const response = await auth.handler(new Request(new URL(path, origin), { method: "POST", headers, body: JSON.stringify(body) }));
 	const cookies = cookiesFrom(response);

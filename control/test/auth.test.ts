@@ -87,7 +87,8 @@ test("magic link sets the host session cookie and an invite is required only the
 	const link = sent[0].url.match(/https:\/\/control\.example\.com\/api\/auth\/magic-link\/verify\?[^\s]+/);
 	assert.ok(link);
 
-	const verified = await app.request(link[0], { headers: { cookie: inviteCookie.split(";")[0] } });
+	assert.equal(link[0].includes("invite_"), false);
+	const verified = await app.request(link[0]);
 	assert.equal(verified.status, 302);
 	const session = verified.headers.getSetCookie().find((value) => value.startsWith(`${SESSION_COOKIE}=`));
 	assert.ok(session);

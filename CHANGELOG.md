@@ -5,7 +5,7 @@ All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.
 ## Unreleased
 
 - **Control plane skeleton.** `control/` is a Hono Worker plus Workers static assets, built and deployed with `cf`. With no configuration it serves a neutral page ("Inbox: sign in / create an agent") and tells the operator that no login provider is configured. `/app` and `/api` are `noindex`; `robots.txt` disallows only those two paths. Brand components, Markdown pages, and `public/` files are an overlay (`control/OVERLAY.md`). The npm package does not include `control/`. No login, billing, or tenant API in this change.
-- **Control plane login.** Better Auth on D1 at `/api/auth/*`, off until `AUTH_SECRET`, D1, and a provider are set. Providers are GitHub, Google, Cloudflare (`user-details.read` only), and email via the send_email binding. Accounts link only when the provider marks the email verified, so Cloudflare does not auto-link. The session cookie is host-only `__Host-a2a_session`. `INVITES_REQUIRED=1` requires an invite code for the first account. Turnstile is optional.
+- **Control plane login.** Better Auth on D1 at `/api/auth/*`, off until `AUTH_SECRET`, D1, and a provider are set. Providers are GitHub, Google, Cloudflare (`user-details.read` only), and email via the send_email binding. Accounts link only when the provider marks the email verified, so Cloudflare does not auto-link. The session cookie is host-only `__Host-a2a_session`. `INVITES_REQUIRED=1` requires an invite code for the first account. An email invite is stored against the magic-link token hash, so the link works in another browser. Turnstile is optional.
 
 ## 0.6.0 - 2026-10-10
 

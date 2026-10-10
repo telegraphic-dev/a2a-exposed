@@ -54,7 +54,7 @@ Every binding is optional and read from the environment in `cloudflare.config.ts
 
 Do not commit account ids, zone names, or hostnames of real deployments. Examples use `example.com`.
 
-Account linking follows the provider's verified-email flag. Better Auth treats a trusted provider as sufficient even when that flag is false, so the trusted-provider list is empty: GitHub links when the matching address is `verified`, Google when `email_verified` is true, and a magic link because it proves the address. Cloudflare's user payload has no verification field, so that provider does not auto-link. The session cookie is `__Host-a2a_session` (`Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, no `Domain`).
+Account linking follows the provider's verified-email flag. Better Auth treats a trusted provider as sufficient even when that flag is false, so the trusted-provider list is empty: GitHub links when the matching address is `verified`, Google when `email_verified` is true, and a magic link because it proves the address. Cloudflare's user payload has no verification field, so that provider does not auto-link. The session cookie is `__Host-a2a_session` (`Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, no `Domain`). An invite for an email sign-in is stored against the hash of that magic-link token, so the link works in another browser. OAuth still carries the invite in `__Host-a2a_invite` for the same browser, because the provider redirect does not include it.
 
 ## Static assets and the Worker
 

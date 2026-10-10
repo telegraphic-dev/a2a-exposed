@@ -52,6 +52,53 @@ export async function invitePending(db: Sql, code: string, email?: string): Prom
 	return true;
 }
 
+/** SHA-256 of a magic-link token, base64url without padding. The plaintext token is not stored. */
+export async function tokenHash(token: string): Promise<string> {
+	const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
+	const bytes = new Uint8Array(digest);
+	let raw = "";
+	for (const byte of bytes) raw += String.fromCharCode(byte);
+	return btoa(raw).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+}
+
+/**
+ * Binds an invite to a magic-link token so the emailed link works in another browser.
+ * The row lives in `verification` under `a2a-invite:<hash>` and is not the Better Auth record
+ * (that record's schema rejects extra fields).
+ */
+export async function rememberMagicInvite(db: Sql, token: string, code: string, email: string, ttlSeconds: number): Promise<void> {
+	if (!validInviteCode(code) || !token) return;
+	const now = new Date();
+	const hash = await tokenHash(token);
+	await db.prepare(
+		`INSERT INTO verification (id, identifier, value, expiresAt, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?)`,
+	).bind(
+		crypto.randomUUID(),
+		`a2a-invite:${hash}`,
+		JSON.stringify({ code, email: email.trim().toLowerCase() }),
+		new Date(now.getTime() + ttlSeconds * 1000).toISOString(),
+		now.toISOString(),
+		now.toISOString(),
+	).run();
+}
+
+/** Reads and deletes the invite bound to this magic-link token. Empty when missing, expired, or for another email. */
+export async function takeMagicInvite(db: Sql, token: string, email: string): Promise<string> {
+	if (!token) return "";
+	const hash = await tokenHash(token);
+	const identifier = `a2a-invite:${hash}`;
+	const row = await db.prepare(`SELECT value, expiresAt FROM verification WHERE identifier = ?`).bind(identifier).first<{ value: string; expiresAt: string }>();
+	await db.prepare(`DELETE FROM verification WHERE identifier = ?`).bind(identifier).run();
+	if (!row?.value || !row.expiresAt || new Date(row.expiresAt).getTime() <= Date.now()) return "";
+	try {
+		const parsed = JSON.parse(row.value) as { code?: unknown; email?: unknown };
+		if (parsed.email !== email.trim().toLowerCase() || typeof parsed.code !== "string") return "";
+		return parsed.code;
+	} catch {
+		return "";
+	}
+}
+
 /** Marks one unused code as used. A second caller gets false. */
 export async function consumeInvite(db: Sql, code: string, email: string): Promise<boolean> {
 	if (!validInviteCode(code)) return false;

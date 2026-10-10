@@ -3,7 +3,7 @@ import { APIError } from "better-auth/api";
 import { captcha, genericOAuth, magicLink } from "better-auth/plugins";
 import { mapCloudflareUser } from "./cloudflare-user.ts";
 import { INVITE_COOKIE, SESSION_COOKIE, readCookie } from "./cookies.ts";
-import { consumeInvite } from "./invites.ts";
+import { consumeInvite, rememberMagicInvite, takeMagicInvite, validInviteCode } from "./invites.ts";
 import type { AuthOptions } from "./options.ts";
 import { cloudflareMailer } from "../mail/cloudflare.ts";
 import type { Mailer } from "../mail/types.ts";
@@ -53,7 +53,9 @@ export async function createAuth(options: AuthOptions) {
 		plugins.push(magicLink({
 			expiresIn: 60 * 5,
 			storeToken: "hashed",
-			async sendMagicLink({ email, url }) {
+			async sendMagicLink({ email, url, token, metadata }) {
+				const code = typeof metadata?.invite === "string" ? metadata.invite : "";
+				if (token && validInviteCode(code)) await rememberMagicInvite(options.database, token, code, email, 60 * 5);
 				await mailer.send({
 					to: email,
 					subject: "Sign in",
@@ -97,8 +99,11 @@ export async function createAuth(options: AuthOptions) {
 				create: {
 					before: async (user, context) => {
 						if (!options.invitesRequired) return;
-						const code = readCookie(context?.request?.headers.get("cookie") ?? null, INVITE_COOKIE);
 						const email = typeof user.email === "string" ? user.email : "";
+						const request = context?.request ?? null;
+						const token = request ? new URL(request.url).searchParams.get("token") ?? "" : "";
+						const fromLink = email && token ? await takeMagicInvite(options.database, token, email) : "";
+						const code = fromLink || readCookie(request?.headers.get("cookie") ?? null, INVITE_COOKIE);
 						const accepted = email ? await consumeInvite(options.database, code, email) : false;
 						if (!accepted) throw new APIError("FORBIDDEN", { message: "Invite required", code: "INVITE_REQUIRED" });
 					},
