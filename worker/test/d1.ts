@@ -25,6 +25,8 @@ export function d1(migrationsDir: URL) {
 /** The same D1 stand-in over an existing node:sqlite database (e.g. one whose schema a test built step by step). */
 export function d1On(db: DatabaseSync) {
 	const stmt = (sql: string, args: unknown[] = []): any => ({
+		__sql: sql,
+		__args: args,
 		bind: (...a: unknown[]) => stmt(sql, a),
 		first: async (col?: string) => {
 			const r: any = db.prepare(sql).get(...(args as any[]));
@@ -41,10 +43,33 @@ export function d1On(db: DatabaseSync) {
 	return {
 		db,
 		prepare: (sql: string) => stmt(sql),
+		// One transaction, matching D1: a batch rolls back together, and SELECT results are returned.
+		// Statements are run from their SQL so a caller that only implements batch (no per-table all()) still works.
 		batch: async (stmts: any[]) => {
 			db.exec("BEGIN");
-			try { const out = []; for (const s of stmts) out.push(await s.run()); db.exec("COMMIT"); return out; }
-			catch (e) { db.exec("ROLLBACK"); throw e; }
+			try {
+				const out = [];
+				for (const s of stmts) {
+					const sql = s.__sql as string | undefined;
+					const args = (s.__args ?? []) as any[];
+					if (!sql) { out.push(await s.run()); continue; }
+					if (/^\s*(select|pragma|with)\b/i.test(sql)) {
+						const rows = db.prepare(sql).all(...args).map((r: any) => ({ ...r }));
+						out.push({ results: rows, meta: { changes: 0 } });
+					} else if (/\breturning\b/i.test(sql)) {
+						const rows = db.prepare(sql).all(...args).map((r: any) => ({ ...r }));
+						out.push({ results: rows, meta: { changes: rows.length } });
+					} else {
+						const r = db.prepare(sql).run(...args);
+						out.push({ results: [], meta: { changes: Number(r.changes) } });
+					}
+				}
+				db.exec("COMMIT");
+				return out;
+			} catch (e) {
+				try { db.exec("ROLLBACK"); } catch { /* the statement failed before BEGIN committed */ }
+				throw e;
+			}
 		},
 	};
 }

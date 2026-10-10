@@ -16,7 +16,7 @@ import * as A from "./a2a.ts";
 /** Subset of D1 used by the handlers. A Durable Object adapter satisfies the same shape. */
 export interface SqlDb {
 	prepare(query: string): SqlStmt;
-	batch(statements: SqlStmt[]): Promise<{ meta: { changes?: number; last_row_id?: number } }[]>;
+	batch(statements: SqlStmt[]): Promise<{ results?: unknown[]; meta: { changes?: number; last_row_id?: number } }[]>;
 	exec?(query: string): Promise<{ count: number; duration: number }>;
 }
 
@@ -63,6 +63,19 @@ export interface WorkerBindings extends ConfigFields {
 	TENANT_DOMAIN?: string;
 	/** KV name directory: tenant name → {id,status,region,version}. Read by the hosted router. */
 	TENANT_DIRECTORY?: KvNamespace;
+	/**
+	 * Daily SQL snapshots. Present only when the deploy sets A2A_BACKUP_BUCKET=1.
+	 * Unset: no backup cron and no bucket.
+	 */
+	BACKUP_BUCKET?: {
+		put(key: string, value: string, options?: { httpMetadata?: { contentType?: string } }): Promise<unknown>;
+		list(options?: { prefix?: string; cursor?: string; limit?: number }): Promise<{
+			objects?: { key: string }[];
+			truncated?: boolean;
+			cursor?: string;
+		}>;
+		delete(keys: string[]): Promise<void>;
+	};
 	/** SQLite Durable Object namespace, one object per tenant. Storage stays env.DB until this is bound. */
 	TENANT_DO?: DoNamespace;
 	/** unset | eu | fedramp. Applied as a DO jurisdiction when the hosted router addresses a tenant. */
@@ -90,6 +103,12 @@ export interface KvNamespace {
 	get(key: string, type: "json"): Promise<unknown>;
 	get(key: string): Promise<string | null>;
 	put(key: string, value: string): Promise<void>;
+	/** Present on Cloudflare KV. Optional so test doubles that only get and put still typecheck. */
+	list?(options?: { prefix?: string; cursor?: string; limit?: number }): Promise<{
+		keys: { name: string }[];
+		list_complete: boolean;
+		cursor?: string;
+	}>;
 }
 
 /** Enough of a Durable Object namespace to address a tenant. `jurisdiction` is optional on older typings. */

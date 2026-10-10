@@ -7,19 +7,19 @@ const q = encodeURIComponent;
 const out = (obj) => console.log(JSON.stringify(obj, null, 2));
 export const baseUrl = () => C.get("A2A_BASE_URL").replace(/\/$/, "");
 
-export async function owner(method, path, body) {
+export async function owner(method, path, body, timeout) {
 	const base = baseUrl(), tok = C.get("A2A_OWNER_TOKEN");
 	if (!base || !tok) die(`A2A_BASE_URL / A2A_OWNER_TOKEN missing (run \`${CLI} init\` or edit ${C.CONFIG_FILE})`);
-	const { status, data } = await httpJson(base + path, { method, body, headers: { authorization: `Bearer ${tok}` } });
+	const { status, data } = await httpJson(base + path, { method, body, headers: { authorization: `Bearer ${tok}` }, timeout });
 	if (status < 200 || status >= 300) die(`worker ${method} ${path} -> ${describeHttp(status, data)}`);
 	return data;
 }
 
 /** Owner API call that returns { status, data } instead of dying, so callers can explain errors themselves. */
-export async function ownerTry(method, path, body) {
+export async function ownerTry(method, path, body, timeout) {
 	const base = baseUrl(), tok = C.get("A2A_OWNER_TOKEN");
 	if (!base || !tok) die(`A2A_BASE_URL / A2A_OWNER_TOKEN missing (run \`${CLI} init\` or edit ${C.CONFIG_FILE})`);
-	return httpJson(base + path, { method, body, headers: { authorization: `Bearer ${tok}` } });
+	return httpJson(base + path, { method, body, headers: { authorization: `Bearer ${tok}` }, ...(timeout ? { timeout } : {}) });
 }
 
 function printPush(res) {
@@ -301,3 +301,12 @@ export async function poll(taskId, o) {
 }
 
 export const outbound = async (id) => out(await owner("GET", `/owner/outbound/${q(id)}`));
+
+// ---------------------------------------------------------------- export
+/** JSON dump on stdout. `--sql` prints the same tables as SQL text. */
+export async function exportInbox(o) {
+	const path = o.sql ? "/owner/export?format=sql" : "/owner/export";
+	const data = await owner("GET", path, undefined, 120000);
+	if (o.sql) return console.log(typeof data === "string" ? data.replace(/\n$/, "") : JSON.stringify(data));
+	return out(data);
+}

@@ -142,6 +142,7 @@ Polling agents: no wake announces a pairing request; `inbox` and `pair list` sho
 ## Other commands
 
 - `npx -y a2a-exposed@latest contexts` lists recent conversations.
+- `npx -y a2a-exposed@latest export` prints a JSON dump of the inbox (peer-token hashes are in the dump; outbound peer tokens are ciphertext under this deployment's sealing key; the owner token stays a Worker secret). `export --sql` prints SQL. Loading that dump back into an inbox is not part of this command.
 - `npx -y a2a-exposed@latest status` checks the setup: the agent card (fetched by the CLI; it must advertise the inbox's own base URL, never the agent's local or Tailnet webhook URL), the wake mode (webhook, tunnel, or none, meaning polling), the tunnel state, and a `next step:` line. Use it rather than `curl`: some agent sandboxes (Hermes) flag `.dev` URLs in shell commands and wait for user approval.
 - Proxy mode (`deploy --upstream ...`, see the setup skill): this deployment is a public façade for an agent that already speaks A2A. Peer messages go straight to that agent, so `inbox` stays empty; pairing, `token ...` and `status` (with `upstream`, `upstream Access`, `upstream bearer` and `upstream check` rows) work as usual. `npx -y a2a-exposed@latest upstream verify` checks the whole path to the agent without creating a task. Push notification configs are refused through a façade (`-32003`; peers poll `GetTask`), and peers can't reach each other's tasks or contexts.
 - `npx -y a2a-exposed@latest url` prints the public base URL.
