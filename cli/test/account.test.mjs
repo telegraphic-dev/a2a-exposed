@@ -73,6 +73,18 @@ test("login stores the session and does not print it", async () => {
 	}
 });
 
+test("login help names the callback error", async () => {
+	const child = spawn(process.execPath, [BIN, "--help"], {
+		env: { ...process.env, A2A_NO_UPDATE_CHECK: "1" },
+	});
+	let stdout = "";
+	child.stdout.on("data", (chunk) => { stdout += chunk; });
+	const status = await new Promise((resolve) => child.on("close", resolve));
+	assert.equal(status, 0);
+	assert.match(stdout, /\/app\?error=<code>/);
+	assert.match(stdout, /oauth_callback_failed/);
+});
+
 test("login refuses a control URL that is not https", async () => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "a2a-account-"));
 	const env = { ...process.env, A2A_CONFIG_DIR: dir, A2A_NO_UPDATE_CHECK: "1" };

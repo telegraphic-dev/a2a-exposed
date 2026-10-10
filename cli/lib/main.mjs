@@ -169,7 +169,9 @@ Control plane account (only when that deployment's login is on)
                                 on the page; the link alone does not approve. The session is saved
                                 as CONTROL_TOKEN in config.env and is not printed. signup and login
                                 are the same flow; signup is how the first account is created.
-                                --json prints the control origin and email, not the token
+                                --json prints the control origin and email, not the token.
+                                A browser sign-in that does not complete returns to /app?error=<code>
+                                and the control Worker logs oauth_callback_failed with that code
 
 Presets: grok-bot | claude-code | openclaw-wake | openclaw-agent | hermes | generic
 Config: ${C.CONFIG_FILE}  (override dir with --config-dir DIR or A2A_CONFIG_DIR; env vars override file values)
