@@ -93,6 +93,18 @@ async function wakeBudgetOk(ctx: TenantContext): Promise<boolean> {
 	return (r?.count ?? 0) <= cap;
 }
 
+const wakeWriteHooks = new WeakMap<object, () => Promise<void>>();
+
+/** A hosted tenant registers this so a wake row updates that tenant's alarm in the same turn as the write. */
+export function onWakeWrite(ectx: object, fn: () => Promise<void>): void {
+	wakeWriteHooks.set(ectx, fn);
+}
+
+async function noteWakeWrite(ectx: object): Promise<void> {
+	const fn = wakeWriteHooks.get(ectx);
+	if (fn) await fn();
+}
+
 async function sendWake(ctx: TenantContext, ectx: ExecutionContext, payload: Json): Promise<{ status: number | null; info: string }> {
 	const ev: WakeEvent = { ...payload, publicUrl: ctx.PUBLIC_URL };
 	let req;
@@ -106,7 +118,7 @@ async function sendWake(ctx: TenantContext, ectx: ExecutionContext, payload: Jso
 		// explain Cloudflare edge errors (tunnel connector down, Access block) without echoing the body
 		const hint = r.ok ? "" : cloudflareErrorHint(r.status, (await r.text().catch(() => "")).slice(0, 4096));
 		log("wake_sent", { preset: preset(ctx), contextId: ev.contextId, taskId: ev.taskId, status: r.status, ...(hint ? { hint } : {}) });
-		if (r.status === 429 || r.status === 503) await requeueWake(ctx, payload, r.headers.get("retry-after"));
+		if (r.status === 429 || r.status === 503) await requeueWake(ctx, ectx, payload, r.headers.get("retry-after"));
 		return { status: r.status, info: `HTTP ${r.status}${hint ? ` (${hint})` : ""}` };
 	} catch (e) {
 		log("wake_failed", { preset: preset(ctx), contextId: ev.contextId, error: String(e).slice(0, 200) });
@@ -120,7 +132,7 @@ const WAKE_RETRIES = 3;
  *  flush it once Retry-After (30 s - 1 h) has passed, on the next request to the Worker or the optional cron. At most
  *  WAKE_RETRIES times per wake; a newer message for the conversation merges in and starts over. Pairing and test wakes
  *  are not retried (a pairing code expires in minutes). */
-async function requeueWake(ctx: TenantContext, payload: Json, retryAfter: string | null) {
+async function requeueWake(ctx: TenantContext, ectx: ExecutionContext, payload: Json, retryAfter: string | null) {
 	if (payload.kind !== "inbound") return;
 	const attempts = (Number(payload.attempts) || 0) + 1;
 	if (attempts > WAKE_RETRIES) return log("wake_dropped", { contextId: payload.contextId, reason: "still rate limited", attempts: attempts - 1 });
@@ -130,12 +142,16 @@ async function requeueWake(ctx: TenantContext, payload: Json, retryAfter: string
 	const cur: Json = await ctx.DB.prepare("SELECT * FROM wakes WHERE context_id = ?").bind(contextId).first();
 	const prev = cur?.pending_json ? JSON.parse(cur.pending_json) : null;
 	const merged = { ...payload, attempts, taskIds: [...new Set([...(prev?.taskIds || []), ...(payload.taskIds || [])])] };
-	// flushWake sends once now - last_sent_ms >= debounce: place last_sent_ms so that happens after the wait
+	// flushWake and nextCronAt wait until last_sent_ms + debounce. Store Retry-After minus that debounce so the
+	// deadline is Retry-After itself, including when the debounce is longer than Retry-After. Do not keep the
+	// previous last_sent_ms: that clock is the send we just made, and keeping it would wait out the debounce.
 	const due = now + waitMs - debounceMs(ctx);
 	await ctx.DB.prepare(`INSERT INTO wakes (context_id, last_sent_ms, pending_json, pending_since_ms) VALUES (?, ?, ?, ?)
-		ON CONFLICT(context_id) DO UPDATE SET pending_json = excluded.pending_json, last_sent_ms = MAX(wakes.last_sent_ms, excluded.last_sent_ms),
+		ON CONFLICT(context_id) DO UPDATE SET pending_json = excluded.pending_json, last_sent_ms = excluded.last_sent_ms,
 		pending_since_ms = COALESCE(wakes.pending_since_ms, excluded.pending_since_ms)`).bind(contextId, due, JSON.stringify(merged), now).run();
 	log("wake_requeued", { contextId, retryInS: Math.round(waitMs / 1000), attempt: attempts });
+	// The row exists now. A hosted alarm has to be set from this turn: the request that started sendWake may already have returned.
+	await noteWakeWrite(ectx);
 }
 
 async function wake(ctx: TenantContext, ectx: ExecutionContext, contextId: string, taskId: string, from: string, preview: string, kind = "inbound") {
@@ -158,8 +174,11 @@ async function wake(ctx: TenantContext, ectx: ExecutionContext, contextId: strin
 	payload.taskIds = [...new Set([...(prev?.taskIds || []), taskId])];
 	await ctx.DB.prepare("UPDATE wakes SET pending_json = ?, pending_since_ms = COALESCE(pending_since_ms, ?) WHERE context_id = ?")
 		.bind(JSON.stringify(payload), now, contextId).run();
+	// The pending row exists now. A hosted alarm is set in this turn, including when the delay is too long for waitUntil.
+	await noteWakeWrite(ectx);
 	const delay = Math.max(0, (cur?.last_sent_ms || now) + deb - now) + 100;
-	// waitUntil can outlive the response by ~30s; longer windows are flushed by later requests or the optional cron
+	// waitUntil can outlive the response by ~30s. Longer windows are flushed by a later request, the optional
+	// self-host cron, or the hosted tenant's alarm (set above).
 	if (delay <= 25000) ectx.waitUntil(new Promise((res) => setTimeout(res, delay)).then(() => flushWake(ctx, ectx, contextId)));
 }
 
@@ -184,6 +203,57 @@ async function flushDue(ctx: TenantContext, ectx: ExecutionContext) {
 	const rows = await ctx.DB.prepare("SELECT context_id FROM wakes WHERE pending_json IS NOT NULL AND last_sent_ms <= ? LIMIT 20")
 		.bind(Date.now() - debounceMs(ctx)).all();
 	for (const r of rows.results as Json[]) await flushWake(ctx, ectx, r.context_id);
+}
+
+/**
+ * The self-host minute cron. Hosted calls the same function from a per-tenant alarm.
+ * Order and statements match the cron that used to inline this body.
+ */
+export async function cronFlush(ctx: TenantContext, ectx: ExecutionContext): Promise<void> {
+	await flushDue(ctx, ectx);
+	const now = Date.now();
+	await ctx.DB.batch([
+		ctx.DB.prepare("DELETE FROM rate WHERE minute < ?").bind(Math.floor(now / 60000) - 5),
+		ctx.DB.prepare("DELETE FROM wake_budget WHERE hour < ?").bind(Math.floor(now / 3600000) - 24),
+		...pairingCleanup(ctx, now),
+		ctx.DB.prepare("DELETE FROM oauth_codes WHERE expires_ms < ?").bind(now),
+	]);
+}
+
+async function minMs(ctx: TenantContext, sql: string, shift: (t: number) => number): Promise<number | null> {
+	const row = await ctx.DB.prepare(sql).first<{ t: number | null }>();
+	if (!row || row.t == null) return null;
+	const t = Number(row.t);
+	return Number.isFinite(t) ? shift(t) : null;
+}
+
+/**
+ * When the next flush or housekeeping delete becomes due, or null when nothing is waiting.
+ * A hosted tenant sets its alarm to this time. Self-host keeps the minute cron and does not call this.
+ */
+export async function nextCronAt(ctx: TenantContext, now = Date.now()): Promise<number | null> {
+	const times: number[] = [];
+	const deb = debounceMs(ctx);
+	const wake = await minMs(ctx, "SELECT MIN(last_sent_ms) AS t FROM wakes WHERE pending_json IS NOT NULL", (t) => t + deb);
+	if (wake != null) {
+		const cap = maxPerHour(ctx);
+		if (cap && wake <= now) {
+			const hour = Math.floor(now / 3600000);
+			const b = await ctx.DB.prepare("SELECT count FROM wake_budget WHERE hour = ?").bind(hour).first<{ count: number }>();
+			times.push((Number(b?.count) || 0) >= cap ? (hour + 1) * 3600000 : wake);
+		} else times.push(wake);
+	}
+	const rate = await minMs(ctx, "SELECT MIN(minute) AS t FROM rate", (t) => (t + 6) * 60000);
+	const budget = await minMs(ctx, "SELECT MIN(hour) AS t FROM wake_budget", (t) => (t + 25) * 3600000);
+	// Deletes use a strict `<`, so the alarm is 1 ms after the row becomes eligible.
+	// Device rows stay for a day after expiry so a poll still gets expired_token; pairingCleanup uses that same lag.
+	const devices = await minMs(ctx, "SELECT MIN(expires_ms) AS t FROM device_requests", (t) => t + 86400000 + 1);
+	const pairing = await minMs(ctx, "SELECT MIN(expires_ms) AS t FROM pairing_rate", (t) => t + 1);
+	const codes = await minMs(ctx, "SELECT MIN(expires_ms) AS t FROM oauth_codes", (t) => t + 1);
+	const oidc = await minMs(ctx, "SELECT MIN(expires_ms) AS t FROM oidc_txns", (t) => t + 1);
+	for (const t of [rate, budget, devices, pairing, codes, oidc]) if (t != null) times.push(t);
+	if (!times.length) return null;
+	return Math.min(...times);
 }
 
 // ------------------------------------------------------------------ auth + rate limit
@@ -2310,7 +2380,7 @@ export default {
 	},
 	// optional: enable with A2A_ENABLE_CRON=1 at deploy time (needs a workers.dev subdomain on the account).
 	// A2A_BACKUP_BUCKET=1 adds a separate daily trigger. That cron writes one SQL snapshot and returns.
-	// The minute trigger keeps the flush below.
+	// The minute trigger flushes. Hosted tenants do not use it: each Durable Object runs cronFlush from its own alarm.
 	async scheduled(ev, env: WorkerBindings, ectx) {
 		if (ev.cron === DAILY_CRON && env.BACKUP_BUCKET) {
 			const ctx = resolveTenant(env);
@@ -2318,14 +2388,6 @@ export default {
 			log("backup_done", { tenant: written.tenantId, key: written.key, deleted: written.deleted.length });
 			return;
 		}
-		const ctx = resolveTenant(env);
-		await flushDue(ctx, ectx);
-		const now = Date.now();
-		await ctx.DB.batch([
-			ctx.DB.prepare("DELETE FROM rate WHERE minute < ?").bind(Math.floor(now / 60000) - 5),
-			ctx.DB.prepare("DELETE FROM wake_budget WHERE hour < ?").bind(Math.floor(now / 3600000) - 24),
-			...pairingCleanup(ctx, now),
-			ctx.DB.prepare("DELETE FROM oauth_codes WHERE expires_ms < ?").bind(now),
-		]);
+		await cronFlush(resolveTenant(env), ectx);
 	},
 } satisfies ExportedHandler<WorkerBindings>;

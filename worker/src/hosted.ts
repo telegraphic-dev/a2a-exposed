@@ -7,11 +7,13 @@
 // Tenant config is a versioned row pushed into the object (`pushConfig`). It does not travel on the request.
 // An object with no row answers 404 and does not create application tables.
 //
-// Not in this change: per-tenant alarms (the cron flush) and usage push.
-// The hosted minute cron stays a no-op until alarms land. The daily backup cron runs only when BACKUP_BUCKET is bound.
-// Approval OIDC, when configured (self-host settings, or the pushed tenant `approval` object), uses the same pages as self-host.
+// Hosted wake debounce and the cron's housekeeping run from this object's alarm. The Worker minute cron stays a no-op
+// while TENANCY=host, so there is no shared database to flush. Self-host still uses its minute cron.
+// The daily backup cron runs only when BACKUP_BUCKET is bound, and it returns before any flush.
+// Usage push is not in this change. Approval OIDC, when configured (self-host settings, or the pushed tenant
+// `approval` object), uses the same pages as self-host.
 import { DurableObject } from "cloudflare:workers";
-import worker, { dispatch } from "./index.ts";
+import worker, { cronFlush, dispatch, nextCronAt, onWakeWrite } from "./index.ts";
 import { doSqlD1, migrateDo, type SqlStorageLike, type TxRunner } from "./storage.ts";
 import { MIGRATIONS } from "./migrations.ts";
 import { bookmarkForTime as readBookmark, exportRows, restoreBookmark as applyBookmark, restartAfterResult, toSql, ExportError, type BookmarkStorage } from "./export.ts";
@@ -145,7 +147,102 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 		ctx.blockConcurrencyWhile(async () => {
 			this.#row = readRow(this.#sql);
 			if (this.#row) migrateDo(this.#sql, this.#tx, MIGRATIONS);
+			if (this.#row?.status === "active") await this.#enqueueArm(false);
 		});
+	}
+
+	#tenant(fallbackOrigin = "") {
+		const row = this.#row;
+		if (!row) return null;
+		const domain = parseGates(this.env).gates.tenantDomain;
+		const publicUrl = domain ? `https://${row.name}.${domain}` : (fallbackOrigin || this.env.PUBLIC_URL || "");
+		return hostedTenantContext(this.env, {
+			id: row.tenantId, db: this.#db, publicUrl, ownerTokenHash: row.ownerTokenHash,
+			config: row.config, limits: row.limits, approval: row.approval, status: row.status,
+		});
+	}
+
+	#arming: Promise<void> = Promise.resolve();
+
+	/** Run alarm updates one at a time, so an earlier read cannot setAlarm over a retry row written later. */
+	#enqueueArm(afterRun: boolean): Promise<void> {
+		const run = this.#arming.then(() => this.#arm(afterRun), () => this.#arm(afterRun));
+		this.#arming = run.then(() => undefined, () => undefined);
+		return run;
+	}
+
+	#ectx(background?: Promise<unknown>[]): ExecutionContext {
+		const ectx = {
+			waitUntil: (p: Promise<unknown>) => {
+				const settled = Promise.resolve(p).then(() => undefined, () => undefined);
+				if (background) background.push(settled);
+				// Arm when the task finishes, not when it was scheduled. sendWake inserts the retry before it resolves.
+				this.ctx.waitUntil(settled.then(() => this.#enqueueArm(false)));
+			},
+			passThroughOnException() {},
+		} as ExecutionContext;
+		// requeueWake calls this in the same turn as the insert, including after the inbox response has returned.
+		onWakeWrite(ectx, () => this.#enqueueArm(false));
+		return ectx;
+	}
+
+	/** One alarm per object. `afterRun` waits a second when work is still due, so a full batch cannot spin. */
+	async #arm(afterRun: boolean): Promise<void> {
+		const storage = this.ctx.storage as unknown as {
+			setAlarm(scheduledTime: number): Promise<void>;
+			deleteAlarm(): Promise<void>;
+		};
+		const row = this.#row;
+		try {
+			if (!row || row.status !== "active") {
+				await storage.deleteAlarm();
+				return;
+			}
+			const tenant = this.#tenant();
+			if (!tenant) return;
+			const at = await nextCronAt(tenant);
+			if (at == null || !Number.isFinite(at)) {
+				await storage.deleteAlarm();
+				return;
+			}
+			const now = Date.now();
+			const when = afterRun && at <= now ? now + 1000 : Math.max(at, now);
+			await storage.setAlarm(when);
+		} catch (e) {
+			console.log(JSON.stringify({ ts: new Date().toISOString(), event: "alarm_arm_failed", error: String(e).slice(0, 200) }));
+		}
+	}
+
+	/** Same flush and deletes as the self-host minute cron, for this tenant only. */
+	async alarm(): Promise<void> {
+		await this.#runAlarm();
+	}
+
+	/**
+	 * Run the alarm body now. `alarm` itself is reserved and cannot be called over RPC, so tests use this.
+	 */
+	async runAlarm(): Promise<void> {
+		await this.#runAlarm();
+	}
+
+	async #runAlarm(): Promise<void> {
+		const tenant = this.#row?.status === "active" ? this.#tenant() : null;
+		if (tenant) {
+			try { await cronFlush(tenant, this.#ectx()); }
+			catch (e) { console.log(JSON.stringify({ ts: new Date().toISOString(), event: "alarm_failed", error: String(e).slice(0, 200) })); }
+		}
+		await this.#enqueueArm(true);
+	}
+
+	/** When the alarm is set to run, or null. No secrets. */
+	async alarmAt(): Promise<number | null> {
+		const storage = this.ctx.storage as unknown as { getAlarm(): Promise<number | null> };
+		try {
+			const at = await storage.getAlarm();
+			return typeof at === "number" && Number.isFinite(at) ? at : null;
+		} catch {
+			return null;
+		}
 	}
 
 	/**
@@ -160,6 +257,7 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 				// A previous push may have stored this version and then failed while migrating. Catch up; don't rewrite the row.
 				migrateDo(this.#sql, this.#tx, MIGRATIONS);
 				this.#row = current;
+				await this.#enqueueArm(false);
 				return { version: current.version, applied: false };
 			}
 			const config = requireObject(body.config, "config");
@@ -197,6 +295,7 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 				// Remember the row even if a migration throws, so a later request is not stuck on the empty-object 404.
 				this.#row = readRow(this.#sql) ?? next;
 			}
+			await this.#enqueueArm(false);
 			return { version: this.#row.version, applied: true };
 		});
 	}
@@ -241,21 +340,24 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 	async fetch(req: Request): Promise<Response> {
 		const row = this.#row;
 		if (!row) return notFound();
-		if (row.status === "suspended") return suspended();
-		if (row.status === "deleted") return notFound();
-		if (row.status === "deleting") return gone();
-		if (row.status !== "active") return notFound();
-		const domain = parseGates(this.env).gates.tenantDomain;
-		const publicUrl = domain ? `https://${row.name}.${domain}` : new URL(req.url).origin;
-		const tenant = hostedTenantContext(this.env, {
-			id: row.tenantId, db: this.#db, publicUrl, ownerTokenHash: row.ownerTokenHash,
-			config: row.config, limits: row.limits, approval: row.approval, status: row.status,
-		});
-		const ectx = {
-			waitUntil: (p: Promise<unknown>) => this.ctx.waitUntil(p),
-			passThroughOnException() {},
-		} as ExecutionContext;
-		return dispatch(req, tenant, ectx);
+		if (row.status !== "active") {
+			await this.#enqueueArm(false);
+			if (row.status === "suspended") return suspended();
+			if (row.status === "deleting") return gone();
+			return notFound();
+		}
+		const tenant = this.#tenant(new URL(req.url).origin);
+		if (!tenant) return notFound();
+		// Do not arm from the rows visible here. sendWake runs in waitUntil and, on 429/503, inserts the retry
+		// after this response returns. requeueWake arms in that insert. Arm again when those tasks finish so a
+		// quiet tenant is on Retry-After, not the rate-row timer from an earlier read.
+		const background: Promise<unknown>[] = [];
+		const res = await dispatch(req, tenant, this.#ectx(background));
+		if (background.length) {
+			const pending = background.slice();
+			this.ctx.waitUntil(Promise.allSettled(pending).then(() => this.#enqueueArm(false)));
+		}
+		return res;
 	}
 }
 
@@ -287,7 +389,7 @@ export default {
 		headers.delete("x-a2a-tenant");
 		return ns.get(ns.idFromName(entry.id)).fetch(new Request(req, { headers }));
 	},
-	// Self-host cron flushes env.DB. Hosted has no single database; a per-tenant alarm replaces the minute flush later.
+	// Self-host cron flushes env.DB. Hosted has no single database; each tenant's alarm runs that flush.
 	// The daily backup cron (only present when BACKUP_BUCKET is bound) exports each active tenant and returns.
 	async scheduled(controller: ScheduledController, env: WorkerBindings, ectx: ExecutionContext): Promise<void> {
 		const backup = await hostedDailyBackup(controller, env);

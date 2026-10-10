@@ -503,3 +503,42 @@ export class Probe extends TenantStore {
 	}
 	assert.notEqual(again, born, "abort after the result starts a new session");
 });
+
+test("hosted daily cron writes the snapshot and leaves the self-host database alone", async (t) => {
+	const mf = new Miniflare({
+		...convertV4MiniflareOptions({
+			name: "a2a",
+			modules: true,
+			script: await bundleHosted(),
+			compatibilityDate: "2026-10-06",
+			d1Databases: { DB: "self" },
+			kvNamespaces: { TENANT_DIRECTORY: "tenants" },
+			r2Buckets: { BACKUP_BUCKET: "backups" },
+			durableObjects: { TENANT_DO: { className: "TenantStore", useSQLite: true } },
+			bindings: { TENANCY: "host", TENANT_DOMAIN: "example.com", TENANT_SECRETS_KEY: "platform-secret", OWNER_TOKEN: "platform-owner" },
+		} as never),
+		unsafeTriggerHandlers: true,
+	});
+	t.after(() => mf.dispose());
+	await mf.ready;
+	const kv = await mf.getKVNamespace("TENANT_DIRECTORY");
+	const ns = await mf.getDurableObjectNamespace("TENANT_DO");
+	const hash = await sha256("owner-alice");
+	const stub = ns.get(ns.idFromName("id-alice")) as unknown as {
+		pushConfig(b: Record<string, unknown>): Promise<{ applied: boolean }>;
+	};
+	assert.equal((await stub.pushConfig({
+		version: 1, tenantId: "id-alice", name: "alice", status: "active", ownerTokenHash: hash, config: { AGENT_NAME: "Alice" },
+	})).applied, true);
+	await kv.put("tenant:alice", JSON.stringify({ id: "id-alice", status: "active", region: "default", version: 1 }));
+	const fire = (cron: string) => mf.dispatchFetch(`https://example.com/cdn-cgi/local/scheduled?cron=${encodeURIComponent(cron)}&format=json`);
+	const daily = await fire(DAILY_CRON);
+	assert.equal(daily.status, 200, await daily.text());
+	const bucket = await mf.getR2Bucket("BACKUP_BUCKET");
+	const listed = await bucket.list({ prefix: "tenants/id-alice/" });
+	assert.equal(listed.objects.length, 1);
+	assert.match(listed.objects[0]?.key || "", /^tenants\/id-alice\/\d{4}-\d{2}-\d{2}\.sql$/);
+	// The minute trigger must not run the self-host flush. That database has no tables, so a flush would fail this call.
+	const minute = await fire("* * * * *");
+	assert.equal(minute.status, 200, await minute.text());
+});

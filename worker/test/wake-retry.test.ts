@@ -2,8 +2,9 @@
 // re-sent after Retry-After, at most 3 times. Run: npm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import worker from "../src/index.ts";
+import worker, { nextCronAt } from "../src/index.ts";
 import { d1 } from "./d1.ts";
+import { resolveTenant } from "../src/tenancy.ts";
 
 const BASE = "https://agent.example.com";
 const realNow = Date.now;
@@ -48,4 +49,26 @@ test("429 with Retry-After: the wake is re-sent after the wait, merged with newe
 	await msg("two");
 	assert.equal(sent.length, 5);
 	assert.equal(row().pending_json, null);
+});
+
+test("a 429 is due at Retry-After when the debounce is longer", async (t) => {
+	const env: any = { DB: d1(new URL("../migrations/", import.meta.url)), PUBLIC_URL: BASE, OWNER_TOKEN: "owner-secret", WAKE_PRESET: "generic",
+		WAKE_WEBHOOK_URL: "https://example.com/hook", WAKE_WEBHOOK_KEY: "k", WAKE_DEBOUNCE_SECONDS: "120" };
+	const sent: any[] = [];
+	const orig = globalThis.fetch;
+	globalThis.fetch = (async () => { sent.push(1); return new Response("{}", { status: 429, headers: { "retry-after": "30" } }); }) as any;
+	t.after(() => { globalThis.fetch = orig; });
+	const pending: Promise<unknown>[] = [];
+	const ectx = { waitUntil: (p: Promise<unknown>) => pending.push(p), passThroughOnException() {} };
+	const call = async (method: string, path: string, json?: any, auth = "Bearer owner-secret") => {
+		const res = await worker.fetch(new Request(BASE + path, { method, headers: { "content-type": "application/json", authorization: auth }, body: json ? JSON.stringify(json) : undefined }) as any, env, ectx as any);
+		await Promise.race([Promise.allSettled(pending), new Promise((r) => setTimeout(r, 200))]);
+		return res.json().catch(() => null);
+	};
+	const tok = (await call("POST", "/owner/peers", { label: "barry" })).token;
+	const before = Date.now();
+	await call("POST", "/", { jsonrpc: "2.0", id: 1, method: "message/send", params: { message: { kind: "message", role: "user", messageId: "m1", contextId: "ctx-long", parts: [{ kind: "text", text: "one" }] } } }, `Bearer ${tok}`);
+	assert.equal(sent.length, 1);
+	const at = await nextCronAt(resolveTenant(env), Date.now());
+	assert.ok(at != null && at >= before + 25_000 && at <= before + 35_000, `alarm ${at} is Retry-After, not the 120s debounce`);
 });

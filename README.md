@@ -262,6 +262,8 @@ The Worker can run as one tenant per deployment, which is what `npx -y a2a-expos
 
 There is no default hostname. Nothing in the Worker turns itself into a hosted service because a setting was left blank. See `worker/deploy.env.example`.
 
+With `TENANCY=host`, debounced wakes (including a window longer than the in-request wait) and the housekeeping the minute cron does run from a Durable Object alarm on that tenant. `A2A_ENABLE_CRON` still flushes the self-host `env.DB` and is unchanged. The daily snapshot cron, when `A2A_BACKUP_BUCKET` is set, runs first and does not flush.
+
 `npx -y a2a-exposed@latest export` prints the inbox as JSON (`GET /owner/export`). `export --sql` prints the same tables as SQL. The read is one transaction, so a snapshot cannot mix newer history with an older task. The dump includes OpenID Connect sign-in rows and peer-token hashes. Outbound peer tokens are ciphertext under this deployment's sealing key (the owner token, or the hosted tenant secrets key) and are not the owner token itself. Putting a saved dump back into an inbox is a follow-up and is not in this change. Point-in-time restore of one hosted tenant is `bookmarkForTime` / `restoreBookmark` on that tenant's Durable Object, when the storage runtime provides bookmarks. `restoreBookmark` schedules the bookmark and returns `{ ok: true }`. The object resets on a later turn, after that result is delivered, so the next request serves the restored database.
 
 ## Protocol support
