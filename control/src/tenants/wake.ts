@@ -103,7 +103,12 @@ export async function saveWakeSettings(
 	if (key.length > 4096 || /[\u0000-\u001f]/.test(key)) return { ok: false, error: "key" };
 
 	const config = configFields(row.config_json);
-	for (const secret of WAKE_SECRET_KEYS) delete config[secret];
+	const plaintext: WakeSecrets = {};
+	for (const secret of WAKE_SECRET_KEYS) {
+		const value = config[secret];
+		if (value) plaintext[secret] = value;
+		delete config[secret];
+	}
 	if (url) config.WAKE_WEBHOOK_URL = url;
 	else delete config.WAKE_WEBHOOK_URL;
 	config.WAKE_PRESET = preset;
@@ -111,12 +116,15 @@ export async function saveWakeSettings(
 	else delete config.WAKE_KEY_HEADER;
 
 	let secretsEnc = row.secrets_enc;
-	if (key) {
+	// A blank key keeps the saved secret. Credentials that are still plaintext in config_json are
+	// sealed on this save, including when the key field is left blank. Ciphertext, once present, wins.
+	const migrate = !secretsEnc && Object.keys(plaintext).length > 0;
+	if (key || migrate) {
 		const ikm = secretsKey.trim();
 		if (!ikm) return { ok: false, error: "unavailable" };
-		const current: WakeSecrets | null = secretsEnc ? await openWakeSecrets(ikm, row.id, secretsEnc) : {};
+		const current: WakeSecrets | null = secretsEnc ? await openWakeSecrets(ikm, row.id, secretsEnc) : { ...plaintext };
 		if (!current) return { ok: false, error: "unreadable" };
-		current.WAKE_WEBHOOK_KEY = key;
+		if (key) current.WAKE_WEBHOOK_KEY = key;
 		const sealed = await sealWakeSecrets(ikm, row.id, current);
 		if (!sealed) return { ok: false, error: "unavailable" };
 		secretsEnc = sealed;

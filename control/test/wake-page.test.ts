@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApp } from "../src/app.ts";
+import { createTenant } from "../src/tenants/create.ts";
+import { saveWakeSettings } from "../src/tenants/wake.ts";
 import { openWakeSecrets, sealWakeSecrets } from "../src/tenants/wake-secrets.ts";
 import type { DataPlane, OwnerCall, TenantPush } from "../src/tenants/push.ts";
 import { openDb } from "./sql.ts";
@@ -12,6 +14,7 @@ const wakeKey = "z9Qx-secret-value-0199";
 function plane() {
 	const pushes: TenantPush[] = [];
 	const calls: { tenantId: string; region: string; input: OwnerCall }[] = [];
+	let failTests = false;
 	const data: DataPlane = {
 		async putDirectory() {},
 		async pushConfig(body) {
@@ -20,7 +23,10 @@ function plane() {
 		},
 		async owner(tenantId, region, input) {
 			calls.push({ tenantId, region, input });
-			if (input.path === "/owner/wake/test") return { status: 200, body: { configured: true, status: 204, info: "HTTP 204" } };
+			if (input.path === "/owner/wake/test") {
+				if (failTests) throw new Error("binding down");
+				return { status: 200, body: { configured: true, status: 204, info: "HTTP 204" } };
+			}
 			return {
 				status: 200,
 				body: {
@@ -35,7 +41,7 @@ function plane() {
 			};
 		},
 	};
-	return { data, pushes, calls };
+	return { data, pushes, calls, failNextTest() { failTests = true; } };
 }
 
 test("the agent list links to a wake page that edits through the owner and does not echo the key", async () => {
@@ -171,10 +177,94 @@ test("the agent list links to a wake page that edits through the owner and does 
 	assert.match(result, /The test wake returned HTTP 204/);
 	assert.equal(result.includes(wakeKey), false);
 
+	target.failNextTest();
+	const failed = await app.request(`${origin}/app/agents/northwind`, {
+		method: "POST",
+		headers: { cookie, origin, "sec-fetch-site": "same-origin", "content-type": "application/x-www-form-urlencoded" },
+		body: "action=test",
+	});
+	assert.match(failed.headers.get("location") ?? "", /test=failed$/);
+	assert.equal(failed.headers.get("location")!.includes("binding down"), false);
+	const failedPage = await (await app.request(failed.headers.get("location") ?? "", { headers: { cookie } })).text();
+	assert.match(failedPage, /The test wake was not sent/);
+	assert.equal(failedPage.includes("binding down"), false);
+
 	const before = target.calls.length;
 	await db.prepare("UPDATE tenants SET owner_account_id = ? WHERE name = ?").bind("someone-else", "northwind").run();
 	const foreign = await app.request(`${origin}/app/agents/northwind`, { headers: { cookie } });
 	assert.equal(foreign.status, 404);
 	assert.equal((await foreign.text()).includes("Wake"), false);
 	assert.equal(target.calls.length, before);
+});
+
+test("a blank key seals plaintext wake secrets instead of dropping them", async () => {
+	const db = openDb();
+	const target = plane();
+	const created = await createTenant(db, target.data, { accountId: "acct_owner", name: "northwind" });
+	assert.equal(created.ok, true);
+	if (!created.ok) return;
+	const plain = {
+		AGENT_NAME: "northwind",
+		WAKE_WEBHOOK_URL: "https://old.example/wake",
+		WAKE_WEBHOOK_KEY: "plain-key-value-0199",
+		WAKE_HMAC_SECRET: "plain-hmac-value-0199",
+		WAKE_ACCESS_CLIENT_SECRET: "plain-access-value-0199",
+	};
+	await db.prepare("UPDATE tenants SET config_json = ? WHERE id = ?").bind(JSON.stringify(plain), created.tenant.id).run();
+	const blocked = await saveWakeSettings(db, target.data, "", {
+		accountId: "acct_owner", name: "northwind", url: "https://hooks.example/wake", preset: "generic", keyHeader: "", key: "",
+	});
+	assert.deepEqual(blocked, { ok: false, error: "unavailable" });
+	const kept = await db.prepare("SELECT config_json, secrets_enc FROM tenants WHERE id = ?").bind(created.tenant.id).first<{ config_json: string; secrets_enc: string | null }>();
+	assert.equal(kept?.secrets_enc, null);
+	assert.match(kept?.config_json ?? "", /plain-key-value-0199/);
+
+	const saved = await saveWakeSettings(db, target.data, "platform-secret", {
+		accountId: "acct_owner", name: "northwind", url: "https://hooks.example/wake", preset: "generic", keyHeader: "", key: "",
+	});
+	assert.deepEqual(saved, { ok: true });
+	const row = await db.prepare("SELECT config_json, secrets_enc FROM tenants WHERE id = ?").bind(created.tenant.id).first<{ config_json: string; secrets_enc: string }>();
+	assert.ok(row);
+	assert.equal(row!.config_json.includes("plain-key-value-0199"), false);
+	assert.equal(row!.config_json.includes("plain-hmac-value-0199"), false);
+	assert.equal(row!.config_json.includes("plain-access-value-0199"), false);
+	assert.equal(JSON.parse(row!.config_json).WAKE_WEBHOOK_URL, "https://hooks.example/wake");
+	assert.deepEqual(await openWakeSecrets("platform-secret", created.tenant.id, row!.secrets_enc), {
+		WAKE_WEBHOOK_KEY: "plain-key-value-0199",
+		WAKE_HMAC_SECRET: "plain-hmac-value-0199",
+		WAKE_ACCESS_CLIENT_SECRET: "plain-access-value-0199",
+	});
+
+	const replaced = await saveWakeSettings(db, target.data, "platform-secret", {
+		accountId: "acct_owner", name: "northwind", url: "https://hooks.example/wake", preset: "claude-code", keyHeader: "X-Credential", key: wakeKey,
+	});
+	assert.deepEqual(replaced, { ok: true });
+	const next = await db.prepare("SELECT secrets_enc, config_json FROM tenants WHERE id = ?").bind(created.tenant.id).first<{ secrets_enc: string; config_json: string }>();
+	assert.deepEqual(await openWakeSecrets("platform-secret", created.tenant.id, next!.secrets_enc), {
+		WAKE_WEBHOOK_KEY: wakeKey,
+		WAKE_HMAC_SECRET: "plain-hmac-value-0199",
+		WAKE_ACCESS_CLIENT_SECRET: "plain-access-value-0199",
+	});
+	assert.equal(next!.config_json.includes(wakeKey), false);
+	assert.equal(JSON.stringify(target.pushes.at(-1)).includes(wakeKey), false);
+	assert.equal(JSON.stringify(target.pushes.at(-1)).includes("plain-hmac-value-0199"), false);
+
+	const other = await createTenant(db, target.data, { accountId: "acct_owner", name: "contoso" });
+	assert.equal(other.ok, true);
+	if (!other.ok) return;
+	await db.prepare("UPDATE tenants SET config_json = ? WHERE id = ?").bind(JSON.stringify({
+		WAKE_HMAC_SECRET: "plain-hmac-value-0199",
+		WAKE_ACCESS_CLIENT_ID: "plain-access-id-0199",
+	}), other.tenant.id).run();
+	const withKey = await saveWakeSettings(db, target.data, "platform-secret", {
+		accountId: "acct_owner", name: "contoso", url: "https://hooks.example/wake", preset: "generic", keyHeader: "", key: wakeKey,
+	});
+	assert.deepEqual(withKey, { ok: true });
+	const contoso = await db.prepare("SELECT config_json, secrets_enc FROM tenants WHERE id = ?").bind(other.tenant.id).first<{ config_json: string; secrets_enc: string }>();
+	assert.equal(contoso!.config_json.includes("plain-hmac-value-0199"), false);
+	assert.deepEqual(await openWakeSecrets("platform-secret", other.tenant.id, contoso!.secrets_enc), {
+		WAKE_WEBHOOK_KEY: wakeKey,
+		WAKE_HMAC_SECRET: "plain-hmac-value-0199",
+		WAKE_ACCESS_CLIENT_ID: "plain-access-id-0199",
+	});
 });

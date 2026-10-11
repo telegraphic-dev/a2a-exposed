@@ -73,8 +73,13 @@ export async function handleAgent(
 		const action = String(form.get("action") ?? "");
 		if (action === "test") {
 			if (!plane.owner) return back("?test=failed");
-			const result = await plane.owner(row.id, row.region, { accountId, method: "POST", path: "/owner/wake/test" });
-			return back(`?test=${testCode(result)}`);
+			try {
+				const result = await plane.owner(row.id, row.region, { accountId, method: "POST", path: "/owner/wake/test" });
+				return back(`?test=${testCode(result)}`);
+			} catch {
+				console.log(JSON.stringify({ ts: new Date().toISOString(), event: "wake_test_failed", tenant: row.id }));
+				return back("?test=failed");
+			}
 		}
 		if (action !== "save") return back("?error=conflict");
 		const saved = await saveWakeSettings(loaded.options.database, plane, env.TENANT_SECRETS_KEY ?? "", {
