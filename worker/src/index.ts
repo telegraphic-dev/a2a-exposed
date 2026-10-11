@@ -1325,6 +1325,16 @@ function approvalPageBits(ctx: TenantContext): { oidc?: { label: string }; passw
 	return bits;
 }
 
+/**
+ * The OpenID Connect issuer origin, when that approval method is on.
+ * A form on this host that 302s to the issuer is checked against this origin by Chrome's `form-action`.
+ */
+function oidcFormOrigins(ctx: TenantContext): string[] {
+	if (!O.approvalPolicy(ctx.gates.approvalOidc).oidc) return [];
+	const origin = O.formActionOrigin(ctx.gates.approvalOidc.issuer);
+	return origin ? [origin] : [];
+}
+
 const redirect302 = (location: string) => new Response(null, { status: 302, headers: { location, "cache-control": "no-store", pragma: "no-cache", "referrer-policy": "no-referrer" } });
 
 async function approvalPassword(ctx: TenantContext): Promise<P.PasswordRecord | null> {
@@ -1350,7 +1360,7 @@ async function devicePage(req: Request, ctx: TenantContext, url: URL): Promise<R
 	const pw = await approvalPassword(ctx);
 	const model: P.PageModel = { agentName: ctx.AGENT_NAME || "this A2A inbox", mode: pairingMode(ctx), cli: cliCommand(ctx), csrf, passwordSet: !!pw, ...approvalPageBits(ctx) };
 	const send = (status = 200) => {
-		const h: Record<string, string> = P.pageHeaders(nonce);
+		const h: Record<string, string> = P.pageHeaders(nonce, oidcFormOrigins(ctx));
 		h["set-cookie"] = `${csrfName}=${csrf}; Path=/device; Secure; HttpOnly; SameSite=Strict; Max-Age=3600`;
 		return new Response(P.devicePage(model, nonce), { status, headers: h });
 	};
@@ -1455,7 +1465,7 @@ async function deviceOidcCallback(req: Request, ctx: TenantContext, url: URL): P
 	const pw = await approvalPassword(ctx);
 	const model: P.PageModel = { agentName: ctx.AGENT_NAME || "this A2A inbox", mode: pairingMode(ctx), cli: cliCommand(ctx), csrf: P.randomB64(), passwordSet: !!pw, ...approvalPageBits(ctx) };
 	const send = (status = 200) => {
-		const h: Record<string, string> = P.pageHeaders(nonce);
+		const h: Record<string, string> = P.pageHeaders(nonce, oidcFormOrigins(ctx));
 		h["set-cookie"] = `a2a_device_csrf=${model.csrf}; Path=/device; Secure; HttpOnly; SameSite=Strict; Max-Age=3600`;
 		return new Response(P.devicePage(model, nonce), { status, headers: h });
 	};
@@ -1497,7 +1507,7 @@ async function liveSetup(ctx: TenantContext, token: string): Promise<{ rec: Setu
 	return A.timingSafeEqualStr(await A.sha256(token), s.rec.hash) ? s : null;
 }
 
-/** GET/POST /device/setup: set or change the approval password from a one-time link. Same frame, CSP and CSRF as /device. */
+/** GET/POST /device/setup: set or change the approval password from a one-time link. Same frame and CSRF as /device. The form posts only to this host, so form-action stays 'self'. */
 async function setupPage(req: Request, ctx: TenantContext, url: URL): Promise<Response> {
 	const nonce = P.randomB64(), ip = clientIp(req);
 	const csrfName = "a2a_device_csrf";
@@ -1897,10 +1907,9 @@ async function authorizePage(req: Request, ctx: TenantContext, url: URL): Promis
 	const q = req.method === "GET" ? Object.fromEntries(url.searchParams) : form;
 	const c = await checkAuthorize(ctx, q, ip);
 	const pw = await approvalPassword(ctx);
-	const page = (status: number, body: string, formOrigin?: string) => {
-		const h: Record<string, string> = P.pageHeaders(nonce);
-		// the approve/deny POST answers with a redirect to the client: form-action must allow that origin too
-		if (formOrigin) h["content-security-policy"] = h["content-security-policy"].replace("form-action 'self'", `form-action 'self' ${formOrigin}`);
+	const page = (status: number, body: string, formOrigins: string[] = []) => {
+		// Approve and deny 302 to the client. OpenID Connect 302s to the issuer. Chrome checks both against form-action.
+		const h: Record<string, string> = P.pageHeaders(nonce, formOrigins);
 		h["set-cookie"] = `${csrfName}=${csrf}; Path=/oauth/authorize; Secure; HttpOnly; SameSite=Strict; Max-Age=3600`;
 		return new Response(P.pageShell("Connect an MCP client", nonce, body), { status, headers: h });
 	};
@@ -1909,7 +1918,7 @@ async function authorizePage(req: Request, ctx: TenantContext, url: URL): Promis
 	const origin = new URL(c.redirect!).origin;
 	const show = (status: number, notice?: M.ConsentModel["notice"]) => page(status, M.consentBody({ agentName: ctx.AGENT_NAME || "this A2A inbox", cli: cliCommand(ctx),
 		csrf, clientName: c.client!.client_name || "", clientIdHost: c.client!.cimd ? new URL(c.client!.client_id).host : undefined,
-		redirectUri: c.redirect!, params: c.params, passwordSet: !!pw, ...approvalPageBits(ctx), notice }), origin);
+		redirectUri: c.redirect!, params: c.params, passwordSet: !!pw, ...approvalPageBits(ctx), notice }), [origin, ...oidcFormOrigins(ctx)]);
 	if (req.method === "GET") return show(200);
 	const reqOrigin = req.headers.get("origin");
 	if ((reqOrigin && reqOrigin !== "null" && reqOrigin !== new URL(ctx.PUBLIC_URL).origin && reqOrigin !== url.origin) || fresh || !form.csrf || !A.timingSafeEqualStr(form.csrf, csrf))
@@ -1963,7 +1972,10 @@ async function issueMcpCode(ctx: TenantContext, clientName: string, redirect: st
 	return { ok: true, response: redirectWith(ctx, redirect, { code, state: params.state }) };
 }
 
-/** GET /oauth/authorize/oidc/callback. Same state binding as the pairing callback; then the existing code redirect. */
+/** GET /oauth/authorize/oidc/callback. Same state binding as the pairing callback; then the existing code redirect.
+ * The identity provider navigates here with a GET. The code redirect is that navigation's 302, not a form post, so form-action does not apply to the client origin.
+ * The error page has no form.
+ */
 async function mcpOidcCallback(req: Request, ctx: TenantContext, url: URL): Promise<Response> {
 	const nonce = P.randomB64();
 	const fail = (status: number, text: string) => new Response(P.pageShell("Connect an MCP client", nonce, `<p class="n error">${P.esc(text)}</p>`), { status, headers: P.pageHeaders(nonce) });

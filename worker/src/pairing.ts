@@ -308,11 +308,31 @@ export function setupPage(m: SetupModel, nonce: string): string {
 </form>`);
 }
 
-/** Security headers for the /device page: strict CSP (no scripts; only this page's own style), no framing, no caching. */
-export function pageHeaders(nonce: string): Record<string, string> {
+/** An http(s) origin (scheme, host, and port) with no userinfo. Anything else, including a path, is dropped. */
+export function cspFormOrigin(raw: string): string {
+	try {
+		const u = new URL(raw);
+		if ((u.protocol !== "https:" && u.protocol !== "http:") || u.username || u.password) return "";
+		if (u.origin !== raw) return "";
+		return u.origin;
+	} catch { return ""; }
+}
+
+/**
+ * Security headers for the /device page: strict CSP (no scripts; only this page's own style), no framing, no caching.
+ * `formOrigins` are extra `form-action` origins. Chrome applies `form-action` to a form POST's redirect target,
+ * so a page whose POST answers 302 to another origin must list that origin here. With none, the directive stays `form-action 'self'`.
+ */
+export function pageHeaders(nonce: string, formOrigins: readonly string[] = []): Record<string, string> {
+	const extra: string[] = [];
+	for (const raw of formOrigins) {
+		const origin = cspFormOrigin(raw);
+		if (origin && !extra.includes(origin)) extra.push(origin);
+	}
+	const form = ["'self'", ...extra].join(" ");
 	return {
 		"content-type": "text/html; charset=utf-8",
-		"content-security-policy": `default-src 'none'; style-src 'nonce-${nonce}'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`,
+		"content-security-policy": `default-src 'none'; style-src 'nonce-${nonce}'; form-action ${form}; frame-ancestors 'none'; base-uri 'none'`,
 		"x-frame-options": "DENY", "x-content-type-options": "nosniff", "referrer-policy": "no-referrer",
 		"cache-control": "no-store", "cross-origin-opener-policy": "same-origin",
 	};

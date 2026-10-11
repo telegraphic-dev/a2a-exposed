@@ -23,6 +23,18 @@ export function issuerHost(issuer: string): string {
 	try { return new URL(issuer).host; } catch { return ""; }
 }
 
+/**
+ * Origin to list in `form-action` when OpenID Connect approval is on.
+ * Scheme, host, and port only. A path, userinfo, or a non-https issuer is not included.
+ */
+export function formActionOrigin(issuer: string): string {
+	try {
+		const u = new URL(issuer);
+		if (u.protocol !== "https:" || u.username || u.password) return "";
+		return u.origin;
+	} catch { return ""; }
+}
+
 export function issuerBase(issuer: string): string {
 	return issuer.replace(/\/+$/, "");
 }
