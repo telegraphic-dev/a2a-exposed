@@ -129,7 +129,8 @@ async function sendWake(ctx: TenantContext, ectx: ExecutionContext, payload: Jso
 		let r: Response;
 		if (ctx.gates.wakeTargetPolicy === "public-https") {
 			const checked = await fetchCheckedWake(req.url, { method: "POST", headers: req.headers, body: req.body }, {
-				fetch: (url, init) => doFetch(ctx, ectx, url, init),
+				localHost: (() => { try { return new URL(ctx.PUBLIC_URL).host; } catch { return ""; } })(),
+				local: (url, init) => doFetch(ctx, ectx, url, init),
 			});
 			if ("refused" in checked) {
 				log("wake_refused", { preset: preset(ctx), contextId: ev.contextId, reason: checked.refused });
