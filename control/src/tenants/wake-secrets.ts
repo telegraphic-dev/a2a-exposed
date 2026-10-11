@@ -16,7 +16,30 @@ export const WAKE_SECRET_KEYS = [
 export type WakeSecretKey = (typeof WAKE_SECRET_KEYS)[number];
 export type WakeSecrets = Partial<Record<WakeSecretKey, string>>;
 
-const b64 = (b: Uint8Array) => btoa(String.fromCharCode(...b));
+/** One secret. The form uses the same cap. */
+export const MAX_WAKE_VALUE = 4096;
+
+/**
+ * Largest JSON payload `sealWakeSecrets` will write. A character can become `\u0000` (six characters),
+ * and every known field may be present. `openWakeSecrets` accepts this and nothing larger.
+ */
+export const MAX_WAKE_PLAIN = (() => {
+	let n = 2;
+	for (let i = 0; i < WAKE_SECRET_KEYS.length; i++) {
+		if (i) n += 1;
+		n += WAKE_SECRET_KEYS[i].length + 5 + MAX_WAKE_VALUE * 6;
+	}
+	return n;
+})();
+
+/** `v1.` + base64(12-byte iv) + `.` + base64(utf-8 plaintext + 16-byte tag). */
+export const MAX_WAKE_SEALED = 3 + 16 + 1 + Math.ceil((MAX_WAKE_PLAIN * 3 + 16) * 4 / 3);
+
+function b64(bytes: Uint8Array): string {
+	let raw = "";
+	for (let i = 0; i < bytes.length; i += 0x8000) raw += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+	return btoa(raw);
+}
 const unb64 = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 
 async function derive(ikm: string, tenantId: string): Promise<CryptoKey | null> {
@@ -33,7 +56,7 @@ function payloadOf(secrets: WakeSecrets): Record<string, string> | null {
 	for (const key of WAKE_SECRET_KEYS) {
 		const value = secrets[key];
 		if (value == null || value === "") continue;
-		if (typeof value !== "string" || value.length > 4096) return null;
+		if (typeof value !== "string" || value.length > MAX_WAKE_VALUE) return null;
 		payload[key] = value;
 	}
 	return payload;
@@ -44,13 +67,17 @@ export async function sealWakeSecrets(ikm: string, tenantId: string, secrets: Wa
 	const key = await derive(ikm, tenantId);
 	const payload = payloadOf(secrets);
 	if (!key || !payload) return null;
+	const json = JSON.stringify(payload);
+	const encoded = new TextEncoder().encode(json);
+	if (json.length > MAX_WAKE_PLAIN || encoded.length > MAX_WAKE_PLAIN * 3) return null;
 	const iv = crypto.getRandomValues(new Uint8Array(12));
 	const ct = new Uint8Array(await crypto.subtle.encrypt(
 		{ name: "AES-GCM", iv, additionalData: new TextEncoder().encode(tenantId) },
 		key,
-		new TextEncoder().encode(JSON.stringify(payload)),
+		encoded,
 	));
-	return `v1.${b64(iv)}.${b64(ct)}`;
+	const sealed = `v1.${b64(iv)}.${b64(ct)}`;
+	return sealed.length <= MAX_WAKE_SEALED ? sealed : null;
 }
 
 /**
@@ -59,7 +86,7 @@ export async function sealWakeSecrets(ikm: string, tenantId: string, secrets: Wa
  */
 export async function openWakeSecrets(ikm: string, tenantId: string, sealed: string | null | undefined): Promise<WakeSecrets | null> {
 	if (sealed == null || sealed === "") return {};
-	if (sealed.length > 16384) return null;
+	if (sealed.length > MAX_WAKE_SEALED) return null;
 	const key = await derive(ikm, tenantId);
 	if (!key) return null;
 	const [version, iv, ct, extra] = sealed.split(".");
@@ -70,13 +97,13 @@ export async function openWakeSecrets(ikm: string, tenantId: string, sealed: str
 			key,
 			unb64(ct),
 		));
-		if (plain.length > 16384) return null;
+		if (plain.length > MAX_WAKE_PLAIN) return null;
 		const parsed = JSON.parse(plain) as unknown;
 		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
 		const out: WakeSecrets = {};
 		for (const name of WAKE_SECRET_KEYS) {
 			const value = (parsed as Record<string, unknown>)[name];
-			if (typeof value !== "string" || !value || value.length > 4096) continue;
+			if (typeof value !== "string" || !value || value.length > MAX_WAKE_VALUE) continue;
 			out[name] = value;
 		}
 		return out;
