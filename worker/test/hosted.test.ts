@@ -221,7 +221,14 @@ test("per-tenant SQLite: directory, config push, and isolation", async (t) => {
 
 	// workerd's local runtime throws "Jurisdiction restrictions are not implemented" on namespace.jurisdiction().
 	// namespaceForRegion() is covered in tenancy.test.ts; production Durable Objects do honour eu / fedramp.
-	await alice.stub.pushConfig({ version: 4, tenantId: "id-alice", name: "alice", status: "suspended", ownerTokenHash: hashA, config: { AGENT_NAME: "Alice 3" } });
+	const tokenA2 = "owner-alice-2";
+	const hashA2 = await sha256(tokenA2);
+	const rotated = await alice.stub.pushConfig({ version: 4, tenantId: "id-alice", name: "alice", status: "active", ownerTokenHash: hashA2, config: { AGENT_NAME: "Alice 3" } });
+	assert.equal(rotated.applied, true);
+	assert.equal((await call("https://alice.example.com/owner/summary", "GET", `Bearer ${tokenA}`)).status, 401, "the previous owner token stops working");
+	assert.equal((await call("https://alice.example.com/owner/summary", "GET", `Bearer ${tokenA2}`)).status, 200);
+	assert.equal((await call("https://alice.example.com/owner/summary", "GET", "Bearer platform-owner")).status, 401, "self-host OWNER_TOKEN still does not unlock a tenant");
+	await alice.stub.pushConfig({ version: 5, tenantId: "id-alice", name: "alice", status: "suspended", ownerTokenHash: hashA2, config: { AGENT_NAME: "Alice 3" } });
 	assert.equal((await mf.dispatchFetch("https://alice.example.com/health")).status, 403, "the object enforces a newer status than the directory cache");
 });
 

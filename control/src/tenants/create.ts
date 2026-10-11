@@ -44,7 +44,8 @@ async function sha256(value: string): Promise<string> {
 	return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-function ownerToken(): string {
+/** `a2aot_` plus 32 random bytes, base64url. Shown once. Only the SHA-256 hash is stored. */
+export function newOwnerToken(): string {
 	const bytes = new Uint8Array(32);
 	crypto.getRandomValues(bytes);
 	let raw = "";
@@ -64,7 +65,7 @@ export async function createTenant(
 	if (existing) return { ok: false, error: "taken" };
 
 	const id = crypto.randomUUID();
-	const token = ownerToken();
+	const token = newOwnerToken();
 	const hash = await sha256(token);
 	const now = new Date().toISOString();
 	const region = regionOf(input.dataRegion);

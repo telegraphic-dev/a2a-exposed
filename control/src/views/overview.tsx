@@ -63,7 +63,20 @@ function httpsUrl(value: string): string {
 	}
 }
 
-export function renderOverview(input: { status: string; publicUrl: string; counts: InboxCounts | null }): string {
+const TOKEN_NOTICES: Record<string, string> = {
+	failed: "The owner token was not rotated. The previous token still works.",
+	gone: "This agent is gone.",
+};
+
+export function renderOverview(input: {
+	status: string;
+	publicUrl: string;
+	counts: InboxCounts | null;
+	name: string;
+	ownerToken?: string;
+	confirmRotate?: boolean;
+	tokenNotice?: string;
+}): string {
 	const url = httpsUrl(input.publicUrl);
 	const card = url ? httpsUrl(new URL("/.well-known/agent-card.json", url).href) : "";
 	const counts = input.counts;
@@ -101,6 +114,33 @@ export function renderOverview(input: { status: string; publicUrl: string; count
 					<dd>{counts.pairingPending}</dd>
 				</dl>
 			) : <p>Inbox counts are not available.</p>}
+			<h3>Owner token</h3>
+			<p>Rotating issues a new token. The previous one stops working immediately.</p>
+			{input.ownerToken ? (
+				<div class="token" role="status">
+					<p>Copy this owner token now. It will not be shown again. The previous token no longer works.</p>
+					<pre><code>{input.ownerToken}</code></pre>
+					<script src="/owner-token.js"></script>
+				</div>
+			) : ""}
+			{TOKEN_NOTICES[input.tokenNotice ?? ""] ? <p class="alert" role="alert">{TOKEN_NOTICES[input.tokenNotice ?? ""]}</p> : ""}
+			{input.status === "deleting" || input.status === "deleted" ? "" : (
+				input.confirmRotate ? (
+					<div class="confirm">
+						<p>Rotate the owner token? Anything still using the current token, including a CLI, will stop.</p>
+						<form method="post" action={`/app/agents/${input.name}`}>
+							<input type="hidden" name="action" value="rotate-token" />
+							<input type="hidden" name="confirm" value="1" />
+							<button class="action" type="submit">Rotate owner token</button>
+						</form>
+					</div>
+				) : (
+					<form method="post" action={`/app/agents/${input.name}`}>
+						<input type="hidden" name="action" value="rotate-token" />
+						<button class="action" type="submit">Rotate owner token</button>
+					</form>
+				)
+			)}
 		</section>
 	).toString();
 }

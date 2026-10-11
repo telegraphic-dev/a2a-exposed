@@ -97,6 +97,8 @@ test("login help names the callback error", async () => {
 	assert.match(stdout, /token shows its code/);
 	assert.match(stdout, /added locally are not shown/);
 	assert.match(stdout, /owner token once/);
+	assert.match(stdout, /rotates/);
+	assert.match(stdout, /previous one stops working immediately/);
 	assert.match(stdout, /not stored/);
 	assert.match(stdout, /FREE_AGENT_LIMIT=2/);
 	assert.match(stdout, /2 agents/);
