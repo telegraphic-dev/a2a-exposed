@@ -132,6 +132,14 @@ test("a signed-in account sees itself, can sign out, and creates two agents", as
 	});
 	assert.equal(third.status, 403);
 	assert.deepEqual(await third.json(), { error: "limit" });
+	const formLimited = await app.request(`${origin}/api/v1/tenants`, {
+		method: "POST",
+		headers: { cookie, origin, "content-type": "application/x-www-form-urlencoded" },
+		body: "name=adventure",
+	});
+	assert.equal(formLimited.status, 303);
+	assert.match(formLimited.headers.get("location") ?? "", /error=limit$/);
+	assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM tenants").first<{ n: number }>())?.n, 2);
 	const limited = await (await app.request(`${origin}/app?error=limit`, { headers: { cookie } })).text();
 	assert.match(limited, /This account can have 2 agents/);
 	assert.equal(limited.includes("Create agent"), false);
