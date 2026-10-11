@@ -48,10 +48,10 @@ test("deploy applies migrations before it can upload the Worker", () => {
 	const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")) as { scripts: { deploy: string } };
 	const deploy = pkg.scripts.deploy;
 	const applyAt = deploy.indexOf("node scripts/apply-migrations.mjs");
-	const uploadAt = deploy.lastIndexOf("cf deploy");
+	const uploadAt = deploy.lastIndexOf("node scripts/deploy.mjs");
 	assert.ok(applyAt > deploy.indexOf("prerender"));
 	assert.ok(uploadAt > applyAt);
-	assert.match(deploy, /apply-migrations\.mjs && cf deploy$/);
+	assert.match(deploy, /apply-migrations\.mjs && node scripts\/deploy\.mjs$/);
 
 	const skipped = runScript({});
 	assert.equal(skipped.status, 0);

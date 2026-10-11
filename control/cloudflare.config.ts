@@ -34,8 +34,9 @@ const plain: Record<string, string> = {
 // Secrets stay out of the production config so a deploy does not require them.
 // `cf dev` reads the same names from .dev.vars.
 // The Cloudflare client secret is the exception once its client id is set: the
-// id is a plain var, and the secret is required from `cf deploy --secrets-file`
-// (secrets.env), the same path as GITHUB_CLIENT_SECRET. The value is not written here.
+// id is a plain var, and `npm run deploy` passes the secret from secrets.env
+// via `cf deploy --secrets-file`. The value is not written here. With the id
+// unset, that file is not required.
 const DEV_SECRETS = [
 	"AUTH_SECRET",
 	"GITHUB_CLIENT_ID",

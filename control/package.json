@@ -6,7 +6,7 @@
 	"license": "MIT",
 	"scripts": {
 		"build": "node scripts/prerender.mjs && cf build",
-		"deploy": "node scripts/prerender.mjs && node scripts/apply-migrations.mjs && cf deploy",
+		"deploy": "node scripts/prerender.mjs && node scripts/apply-migrations.mjs && node scripts/deploy.mjs",
 		"prerender": "node scripts/prerender.mjs",
 		"test": "node --import ./test/register-hooks.mjs --test test/*.test.ts",
 		"typecheck": "cf workers types && tsc --noEmit",
