@@ -481,3 +481,93 @@ test("an apex issuer is fetched with that Host, and a control worker that does n
 	assert.equal(stalledPost.status, 502);
 	assert.match(await stalledPost.text(), /The identity provider could not be reached/);
 });
+
+test("TenantStore.owner runs an allowlisted owner call and does not return a peer token", async (t) => {
+	const mf = await start({
+		bindings: {
+			TENANCY: "host",
+			TENANT_DOMAIN: "example.com",
+			TENANT_SECRETS_KEY: "platform-secret",
+			OWNER_TOKEN: "platform-owner",
+		},
+		kvNamespaces: { TENANT_DIRECTORY: "tenants-owner-rpc" },
+		durableObjects: { TENANT_DO: { className: "TenantStore", useSQLite: true } },
+	});
+	t.after(() => mf.dispose());
+	await mf.ready;
+	const kv = await mf.getKVNamespace("TENANT_DIRECTORY");
+	const ns = await mf.getDurableObjectNamespace("TENANT_DO");
+	const hash = await sha256("owner-carol");
+	type OwnerStub = {
+		owner(input: { accountId: string; method: string; path: string; query?: Record<string, string>; body?: unknown }): Promise<{ status: number; body: unknown }>;
+		storageStatus(): Promise<{ configured: boolean; tables: string[] }>;
+		pushConfig(body: Record<string, unknown>): Promise<{ applied: boolean }>;
+	};
+	const lines: string[] = [];
+	const orig = console.log;
+	console.log = (...args: unknown[]) => {
+		lines.push(args.map((a) => String(a)).join(" "));
+		orig(...args);
+	};
+	t.after(() => { console.log = orig; });
+	const empty = ns.get(ns.idFromName("id-empty")) as unknown as OwnerStub;
+	const missing = await empty.owner({ accountId: "acct_carol", method: "GET", path: "/owner/peers" });
+	assert.equal(missing.status, 404);
+	const emptyStatus = await empty.storageStatus();
+	assert.equal(emptyStatus.configured, false);
+	assert.deepEqual(emptyStatus.tables, []);
+	assert.ok(lines.some((l) => l.includes('"reason":"absent"') && l.includes('"accountId":"acct_carol"')));
+
+	const stub = ns.get(ns.idFromName("id-carol")) as unknown as OwnerStub;
+	await stub.pushConfig({
+		version: 1, tenantId: "id-carol", name: "carol", status: "active", ownerTokenHash: hash,
+		approval: { issuer: "https://idp.example", clientId: "client-1", clientSecret: "tenant-secret-value", allowedSubjects: ["acct_carol"] },
+		config: { AGENT_NAME: "Carol" },
+	});
+	await kv.put("tenant:carol", JSON.stringify({ id: "id-carol", status: "active", region: "", version: 1 }));
+	const http = (method: string, path: string, auth: string, json?: unknown) => mf.dispatchFetch(`https://carol.example.com${path}`, {
+		method, headers: { authorization: auth, "content-type": "application/json" }, body: json === undefined ? undefined : JSON.stringify(json),
+	});
+	assert.equal((await http("POST", "/owner/peers", "Bearer platform-owner", { label: "nope" })).status, 401, "self-host owner token still does not unlock a tenant");
+	const issued = await (await http("POST", "/owner/peers", "Bearer owner-carol", { label: "ada" })).json() as { token?: string };
+	assert.match(issued.token ?? "", /^a2aow_/, "the owner HTTP API still returns the new token");
+
+	const listed = await stub.owner({ accountId: "acct_carol", method: "GET", path: "/owner/peers" });
+	assert.equal(listed.status, 200);
+	const peers = listed.body as { label: string; token?: string }[];
+	assert.deepEqual(peers.map((p) => p.label), ["ada"]);
+	assert.equal(JSON.stringify(listed.body).includes("a2aow_"), false);
+	assert.ok(lines.some((l) => l.includes('"event":"owner_rpc"') && l.includes('"accountId":"acct_carol"') && l.includes('"route":"GET /owner/peers"')));
+
+	const minted = await stub.owner({ accountId: "acct_carol", method: "POST", path: "/owner/peers", body: { label: "bob" } });
+	assert.equal(minted.status, 404);
+	assert.equal(JSON.stringify(minted.body).includes("a2aow_"), false);
+	const withBody = await stub.owner({ accountId: "acct_carol", method: "GET", path: "/owner/peers", body: { label: "bob" } });
+	assert.equal(withBody.status, 400);
+	const again = await stub.owner({ accountId: "acct_carol", method: "POST", path: "/owner/peers" });
+	assert.equal(again.status, 404);
+	const still = await stub.owner({ accountId: "acct_carol", method: "GET", path: "/owner/peers" });
+	assert.deepEqual((still.body as { label: string }[]).map((p) => p.label), ["ada"], "a refused call does not mint a token");
+
+	const setup = await stub.owner({ accountId: "acct_carol", method: "POST", path: "/owner/pairing/password-link" });
+	assert.equal(setup.status, 404);
+	const dumped = await stub.owner({ accountId: "acct_carol", method: "GET", path: "/owner/export" });
+	assert.equal(dumped.status, 404);
+	const oddQuery = await stub.owner({ accountId: "acct_carol", method: "GET", path: "/owner/inbox", query: { format: "sql" } });
+	assert.equal(oddQuery.status, 400);
+	const pairing = await stub.owner({ accountId: "acct_carol", method: "GET", path: "/owner/pairing" });
+	assert.equal(pairing.status, 200);
+	assert.equal(JSON.stringify(pairing.body).includes("tenant-secret-value"), false);
+	const preview = await stub.owner({ accountId: "acct_carol", method: "GET", path: "/owner/wake/preview" });
+	assert.equal(preview.status, 200);
+	assert.equal(JSON.stringify(preview.body).includes("platform-secret"), false);
+	assert.equal(JSON.stringify(preview.body).includes("tenant-secret-value"), false);
+
+	await stub.pushConfig({ version: 2, tenantId: "id-carol", name: "carol", status: "suspended", ownerTokenHash: hash, config: { AGENT_NAME: "Carol" } });
+	const suspended = await stub.owner({ accountId: "acct_carol", method: "GET", path: "/owner/peers" });
+	assert.equal(suspended.status, 403);
+	assert.ok(lines.some((l) => l.includes('"reason":"status"') && l.includes('"accountId":"acct_carol"')));
+	const badAccount = await stub.owner({ accountId: "../acct", method: "GET", path: "/owner/peers" });
+	assert.equal(badAccount.status, 400);
+	assert.ok(lines.some((l) => l.includes('"reason":"account"') && !l.includes("../acct")));
+});

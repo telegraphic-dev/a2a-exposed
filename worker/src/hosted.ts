@@ -13,7 +13,8 @@
 // Usage push is not in this change. Approval OIDC, when configured (self-host settings, or the pushed tenant
 // `approval` object), uses the same pages as self-host.
 import { DurableObject } from "cloudflare:workers";
-import worker, { cronFlush, dispatch, nextCronAt, onWakeWrite } from "./index.ts";
+import worker, { cronFlush, dispatch, nextCronAt, onWakeWrite, runOwnerRpc } from "./index.ts";
+import { accountIdOf, type OwnerRpcRequest, type OwnerRpcResult } from "./owner-rpc.ts";
 import { doSqlD1, migrateDo, type SqlStorageLike, type TxRunner } from "./storage.ts";
 import { MIGRATIONS } from "./migrations.ts";
 import { bookmarkForTime as readBookmark, exportRows, restoreBookmark as applyBookmark, restartAfterResult, toSql, ExportError, type BookmarkStorage } from "./export.ts";
@@ -335,6 +336,27 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 			(ms) => scheduler.wait(ms),
 		);
 		return out;
+	}
+
+	/**
+	 * Control-plane owner call. The caller has already checked that `accountId` owns this tenant.
+	 * The path is an allowlist, the account id is logged, and a response that contains a peer token
+	 * or a decrypted secret is withheld. The network owner API is unchanged and still needs the owner token.
+	 * An object with no config row answers 404 and writes nothing.
+	 */
+	async owner(input: OwnerRpcRequest): Promise<OwnerRpcResult> {
+		if (!this.#row) {
+			const accountId = accountIdOf(input && typeof input === "object" ? (input as { accountId?: unknown }).accountId : undefined);
+			if (!accountId) {
+				console.log(JSON.stringify({ ts: new Date().toISOString(), event: "owner_rpc_refused", tenant: null, reason: "account" }));
+				return { status: 400, body: { error: "accountId is invalid" } };
+			}
+			console.log(JSON.stringify({ ts: new Date().toISOString(), event: "owner_rpc_refused", tenant: null, accountId, reason: "absent" }));
+			return { status: 404, body: { error: "no such agent" } };
+		}
+		const tenant = this.#tenant();
+		if (!tenant) return { status: 404, body: { error: "no such agent" } };
+		return runOwnerRpc(tenant, this.#ectx(), input);
 	}
 
 	async fetch(req: Request): Promise<Response> {
