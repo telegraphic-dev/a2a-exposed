@@ -205,7 +205,7 @@ export async function handleCloudflareAccount(request: Request, auth: SessionAut
  * account id and is not stored. The email is not stored and is not checked
  * against the allowlist.
  */
-export async function finishCloudflareLink(request: Request, auth: SessionAuth, options: AuthOptions, fetchMs = CLOUDFLARE_FETCH_MS): Promise<Response> {
+export async function finishCloudflareLink(request: Request, auth: SessionAuth, options: AuthOptions, fetchMs = CLOUDFLARE_FETCH_MS, outer?: AbortSignal): Promise<Response> {
 	if (request.method !== "GET" || !options.cloudflare || !cloudflareLinkState(request)) {
 		return redirect(appRedirect(request, "cloudflare_unlinked"), [], 302);
 	}
@@ -245,18 +245,19 @@ export async function finishCloudflareLink(request: Request, auth: SessionAuth, 
 		method: "POST",
 		headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
 		body,
-	}, fetchMs);
-	if (token.kind === "deadline") return redirect(appRedirect(request, "deadline"), [], 302);
+	}, fetchMs, outer);
+	if (token.kind === "deadline" || outer?.aborted) return redirect(appRedirect(request, "deadline"), [], 302);
 	const tokenBody = token.kind === "ok" && token.body && typeof token.body === "object" ? token.body as { access_token?: unknown } : null;
 	const accessToken = typeof tokenBody?.access_token === "string" ? tokenBody.access_token : "";
 	if (!accessToken) return redirect(appRedirect(request, "invalid_code"), [], 302);
-	const profile = await readCloudflare(USER, { headers: { authorization: `Bearer ${accessToken}`, accept: "application/json" } }, fetchMs);
-	if (profile.kind === "deadline") return redirect(appRedirect(request, "deadline"), [], 302);
+	const profile = await readCloudflare(USER, { headers: { authorization: `Bearer ${accessToken}`, accept: "application/json" } }, fetchMs, outer);
+	if (profile.kind === "deadline" || outer?.aborted) return redirect(appRedirect(request, "deadline"), [], 302);
 	const profileBody = profile.kind === "ok" && profile.body && typeof profile.body === "object"
 		? profile.body as { result?: Parameters<typeof mapCloudflareUser>[0] }
 		: null;
 	const user = mapCloudflareUser(profileBody?.result);
 	if (!user) return redirect(appRedirect(request, "unable_to_get_user_info"), [], 302);
+	if (outer?.aborted) return redirect(appRedirect(request, "deadline"), [], 302);
 	const now = new Date().toISOString();
 	// account_provider_account_idx makes this insert lose when another callback already
 	// claimed the same Cloudflare account. The following read is the winner, so two

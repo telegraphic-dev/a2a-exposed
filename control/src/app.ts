@@ -321,8 +321,16 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 			request = new Request(request, { headers });
 		}
 		// Cloudflare is a connect, not a sign-in. This path never reaches Better Auth.
+		// The same callback deadline aborts a token or profile call that is still running.
 		if (callbackPath === "/api/auth/callback/cloudflare") {
-			return finishCloudflareLink(request, loaded.auth, loaded.options, deps.cloudflareFetchMs);
+			const providerAbort = new AbortController();
+			const deadline = deps.callbackDeadlineMs ?? CALLBACK_DEADLINE_MS;
+			return within(
+				deadline,
+				() => finishCloudflareLink(request, loaded.auth, loaded.options, deps.cloudflareFetchMs, providerAbort.signal),
+				() => callbackGaveUp(request),
+				providerAbort,
+			);
 		}
 		const handle = () => loaded.auth.handler(request);
 		const list = loaded.options.signupAllowlist;

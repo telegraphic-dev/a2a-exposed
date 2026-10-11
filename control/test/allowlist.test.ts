@@ -637,6 +637,28 @@ test("a Cloudflare connect token exchange stops after its bound", async (t) => {
 	assert.equal(limited.headers.getSetCookie().some((value) => value.startsWith(`${SESSION_COOKIE}=`) && !value.includes("Max-Age=0")), false);
 	assert.equal((await fastDb.prepare(`SELECT COUNT(*) AS n FROM "account" WHERE "providerId" = 'cloudflare'`).first<{ n: number }>())?.n, 0);
 	assert.equal((await fastDb.prepare('SELECT COUNT(*) AS n FROM "user"').first<{ n: number }>())?.n, 1);
+
+	const slowDb = openDb();
+	const setup = createApp({ ...env, DB: slowDb }, { database: slowDb });
+	const slowGithub = await providerCallback(setup, "github");
+	const slow = createApp({ ...env, DB: slowDb }, { database: slowDb, cloudflareFetchMs: 30_000, callbackDeadlineMs: 40 });
+	const slowSession = slowGithub.headers.getSetCookie().find((value) => value.startsWith(`${SESSION_COOKIE}=`))!.split(";")[0];
+	const slowPosted = await slow.request(`${origin}/app/account/cloudflare`, {
+		method: "POST",
+		headers: { origin, cookie: slowSession, "content-type": "application/x-www-form-urlencoded" },
+		body: "action=connect",
+	});
+	const slowState = new URL(slowPosted.headers.get("location") ?? "").searchParams.get("state") ?? "";
+	aborted = false;
+	const outer = Date.now();
+	const gaveUp = await slow.request(`${origin}/api/auth/callback/cloudflare?code=abc&state=${encodeURIComponent(slowState)}`, { headers: { cookie: slowSession } });
+	assert.ok(Date.now() - outer < 1000, `callback took ${Date.now() - outer}ms`);
+	assert.equal(gaveUp.status, 302, await gaveUp.clone().text());
+	assert.equal(new URL(gaveUp.headers.get("location") ?? "", origin).searchParams.get("error"), "deadline");
+	assert.equal(aborted, true);
+	assert.equal(gaveUp.headers.getSetCookie().some((value) => value.startsWith(`${SESSION_COOKIE}=`) && !value.includes("Max-Age=0")), false);
+	assert.equal((await slowDb.prepare(`SELECT COUNT(*) AS n FROM "account" WHERE "providerId" = 'cloudflare'`).first<{ n: number }>())?.n, 0);
+	assert.equal((await slowDb.prepare('SELECT COUNT(*) AS n FROM "session"').first<{ n: number }>())?.n, 1);
 });
 
 test("a mistyped invite code is not shown as an allowlist refusal", async () => {
