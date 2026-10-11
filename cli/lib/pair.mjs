@@ -204,8 +204,9 @@ export function hostAlias(ownUrl) {
 }
 
 /**
- * client_name for a pairing request. An explicit `--name` wins, then this deployment's card name,
- * then the configured agent name, then the local alias (worker name, else the public host's first label).
+ * client_name for a pairing request. An explicit `--name` wins, then the card named in the request
+ * (`--card-url`, otherwise this deployment's card), then the configured agent name, then the local
+ * alias (worker name, else the public host's first label).
  */
 export function pairingClientName({ explicit = "", cardName = "", agentName = "", workerName = "", ownUrl = "" } = {}) {
 	const text = (v) => String(v || "").replace(/\s+/g, " ").trim().slice(0, 64);
@@ -216,12 +217,11 @@ export function pairingClientName({ explicit = "", cardName = "", agentName = ""
 	return "a2a-exposed agent";
 }
 
-/** Name on this deployment's agent card, or "" when there is no base URL or the card can't be read. */
-async function ownCardName() {
-	const own = baseUrl();
-	if (!/^https?:\/\//.test(own || "")) return "";
+/** Name on a card URL, or "" when the card can't be read. */
+async function readCardName(url) {
+	if (!url) return "";
 	try {
-		const { status, data } = await httpJson(`${own.replace(/\/$/, "")}/.well-known/agent-card.json`, { timeout: 3000 });
+		const { status, data } = await httpJson(url, { timeout: 3000 });
 		return status === 200 && data && typeof data.name === "string" ? data.name : "";
 	} catch { return ""; }
 }
@@ -348,16 +348,19 @@ A different agent at the same URL? Pass another --alias.`);
 		`Resuming the pairing request to ${peerName} (code ${st.userCode}, link ${st.verificationUriComplete}).`);
 	else {
 		const own = baseUrl();
-		const params = { client_name: pairingClientName({ explicit: o.name, cardName: await ownCardName(), agentName: C.get("A2A_AGENT_NAME"), workerName: C.get("A2A_WORKER_NAME"), ownUrl: own }), client_id: C.get("A2A_WORKER_NAME") || alias };
-		const card = cardUrlToSend(o["card-url"], own, o.json);
-		if (card) params.agent_card_url = card;
+		const sentCard = cardUrlToSend(o["card-url"], own, o.json);
+		// The name is the card this request actually names. --card-url (a Tailnet card, before a public
+		// deployment exists) wins. With no override, read this deployment's card, including an http one.
+		const nameUrl = sentCard || (!o["card-url"] && /^https?:\/\//.test(own || "") ? `${own.replace(/\/$/, "")}/.well-known/agent-card.json` : "");
+		const params = { client_name: pairingClientName({ explicit: o.name, cardName: await readCardName(nameUrl), agentName: C.get("A2A_AGENT_NAME"), workerName: C.get("A2A_WORKER_NAME"), ownUrl: own }), client_id: C.get("A2A_WORKER_NAME") || alias };
+		if (sentCard) params.agent_card_url = sentCard;
 		// replacing: present the old token, so a peer that supports it swaps the token under the same label (no orphan)
 		const r = await postForm(ep.device, params, replace && oldToken ? oldToken : null);
 		if (r.status !== 200 || !r.data.device_code || !r.data.user_code) {
 			const why = r.data.error_description || r.data.error || `HTTP ${r.status}`;
-			const privateCard = !!card && (() => { try { return isPrivateHost(new URL(card).hostname); } catch { return false; } })();
+			const privateCard = !!sentCard && (() => { try { return isPrivateHost(new URL(sentCard).hostname); } catch { return false; } })();
 			die(r.status === 429 ? `${peerName} is not accepting more pairing requests right now: ${why}` : r.status === 404 ? `${peerName} has device-flow pairing disabled (${why}); ask its owner for a token`
-				: `pairing request to ${peerName} failed: ${why}${privateCard && r.status === 400 ? `. The card URL sent (${new URL(card).host}) is not publicly reachable, and inboxes may accept only public https cards: retry with --card-url set to a public card, or expose your agent through a public façade first (setup skill: "Already have A2A on a Tailnet or LAN")` : ""}`);
+				: `pairing request to ${peerName} failed: ${why}${privateCard && r.status === 400 ? `. The card URL sent (${new URL(sentCard).host}) is not publicly reachable, and inboxes may accept only public https cards: retry with --card-url set to a public card, or expose your agent through a public façade first (setup skill: "Already have A2A on a Tailnet or LAN")` : ""}`);
 		}
 		st = { base, alias, device: ep.device, token: ep.token, deviceCode: r.data.device_code, userCode: r.data.user_code,
 			verificationUri: r.data.verification_uri || "", verificationUriComplete: r.data.verification_uri_complete || r.data.verification_uri || "",
