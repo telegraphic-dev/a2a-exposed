@@ -1,6 +1,7 @@
 // Device-flow pairing (OAuth 2.0 Device Authorization Grant, RFC 8628): pure helpers (Web Crypto only), so they run
 // in Workers and in Node's test runner. The HTTP handlers live in index.ts.
 import { isPrivateHost } from "./a2a.ts";
+import { pageStyle } from "./theme.ts";
 
 /** How every hint tells an agent to run the CLI: npx, latest release, no global install (agent sandboxes block global
  *  installs as untrusted code). WAKE_CLI_COMMAND overrides it for the owner's own wake hints only. */
@@ -223,17 +224,11 @@ export function devicePage(m: PageModel, nonce: string): string {
 	return pageShell(`Connect an agent to ${m.agentName}`, nonce, `${notice}${details}${form}${oidcForm}${ask}`);
 }
 
-const STYLE = `body{font:16px/1.5 system-ui,sans-serif;max-width:34rem;margin:2rem auto;padding:0 1rem;color:#111;background:#fafafa}
-h1{font-size:1.3rem}table{border-collapse:collapse;width:100%;margin:1rem 0}th,td{text-align:left;padding:.35rem .5rem;border-bottom:1px solid #ddd;vertical-align:top;word-break:break-all}th{width:40%;font-weight:600;word-break:normal}
-label{display:block;font-weight:600;margin:.8rem 0 .3rem}input{font:inherit;width:100%;box-sizing:border-box;padding:.5rem;border:1px solid #888;border-radius:4px}
-.b{display:flex;gap:.6rem;margin-top:1rem}button{font:inherit;padding:.5rem 1.2rem;border:0;border-radius:4px;background:#1a5fb4;color:#fff;cursor:pointer}button.d{background:#a51d2d}
-h2{font-size:1.05rem;margin-top:1.5rem}ul{padding-left:1.2rem}a{color:#1a5fb4}.n{padding:.6rem .8rem;border-radius:4px}.ok{background:#e6f4ea}.error{background:#fce8e6}.info{background:#e8f0fe}.w{font-size:.9rem;color:#444}code{background:#eee;padding:0 .2rem}`;
-
 /** The shared page frame: no scripts, no external assets, one nonce'd style block. `title` is escaped here. */
 export function pageShell(title: string, nonce: string, body: string): string {
 	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer">
 <title>${esc(title)}</title><style nonce="${nonce}">
-${STYLE}
+${pageStyle()}
 </style></head><body><h1>${esc(title)}</h1>${body}</body></html>`;
 }
 
