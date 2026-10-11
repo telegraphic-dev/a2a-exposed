@@ -243,11 +243,20 @@ export function cloudflareErrorHint(status: number, body: string): string {
 	return "";
 }
 
+/** Headers a wake preview may show in full. Every other header carries a credential, whatever its name. */
+export const PREVIEW_PLAIN_HEADERS = new Set([
+	"content-type", "user-agent", "x-request-id", "idempotency-key", "anthropic-version", "x-webhook-timestamp",
+]);
+
+export function previewHeaderPlain(name: string): boolean {
+	return PREVIEW_PLAIN_HEADERS.has(name.toLowerCase());
+}
+
 /** Copy of a rendered request with credentials masked (for previews/logs). */
 export function redact(req: WakeRequest): WakeRequest {
 	const h: Record<string, string> = {};
 	for (const [k, v] of Object.entries(req.headers))
-		h[k] = /authorization|key|token|secret|signature|access-client-id/i.test(k) && !/^idempotency-key$/i.test(k) ? v.replace(/(Bearer\s+)?(.{0,4}).*/s, "$1$2…") : v;
+		h[k] = previewHeaderPlain(k) ? v : v.replace(/(Bearer\s+)?(.{0,4}).*/s, "$1$2…");
 	let url = req.url;
 	try { const u = new URL(req.url); url = `${u.protocol}//${u.host}${u.pathname.replace(/\/[^/]{16,}/g, "/…")}`; } catch { /* keep */ }
 	return { ...req, url, headers: h };

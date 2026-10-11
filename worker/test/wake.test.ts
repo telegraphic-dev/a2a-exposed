@@ -116,6 +116,15 @@ test("generic custom key header is rendered with prefix and redacted in previews
 	assert.ok(!JSON.stringify(red).includes("supersecretvalue"));
 });
 
+test("generic key header is redacted even when its name is not a secret word", async () => {
+	const req = (await renderWake({ preset: "generic", url: "https://hooks.example.com/abc", key: "supersecretvalue", keyHeader: "X-Credential", keyPrefix: "" }, ev))!;
+	assert.equal(req.headers["x-credential"], "supersecretvalue");
+	const red = redact(req);
+	assert.equal(red.headers["x-credential"], "supe…");
+	assert.equal(red.headers["content-type"], "application/json");
+	assert.ok(!JSON.stringify(red).includes("supersecretvalue"));
+});
+
 // ---------------------------------------------------------------- Cloudflare Access service token (tunnel wakes)
 const ACCESS = { accessClientId: "abc123.access", accessClientSecret: "s3cr3t-value-0123456789" };
 

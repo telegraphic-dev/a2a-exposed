@@ -10,6 +10,7 @@ import { renderWake, redact, cloudflareErrorHint, defaultDebounceSeconds, defaul
 import { fetchCheckedWake } from "./wake-target.ts";
 import * as P from "./pairing.ts";
 import * as M from "./mcp.ts";
+import { accountIdOf, matchOwnerRpc, ownerResponseLeaks, type OwnerRpcRequest, type OwnerRpcResult } from "./owner-rpc.ts";
 import { resolveTenant, type TenantContext, type WorkerBindings } from "./tenancy.ts";
 import { exportRows, toSql } from "./export.ts";
 import { backupDatabase, DAILY_CRON } from "./backup.ts";
@@ -898,7 +899,8 @@ function ownerTaskView(t: Json): Json {
 }
 
 async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionContext, path: string, url: URL, trusted = false): Promise<Response> {
-	// trusted: an in-process call from an MCP tool (fixed, allowlisted paths; see ownerCall), never from the network
+	// trusted: an in-process call. MCP tools use ownerCall (paths fixed in the tool code). The hosted
+	// owner() RPC uses runOwnerRpc, which has its own allowlist. A request from the network is never trusted.
 	if (!trusted && !(await isOwner(ctx, req.headers.get("authorization")))) return json({ error: "unauthorized" }, 401);
 	const m = req.method;
 	const seg = path.split("/").filter(Boolean).slice(1); // after "owner"
@@ -2071,6 +2073,51 @@ async function mcpGrantOf(ctx: TenantContext, header: string | null): Promise<Js
 	const m = /^Bearer\s+(\S+)$/i.exec(header || "");
 	if (!m || !m[1].startsWith(M.ACCESS_PREFIX)) return null;
 	return await ctx.DB.prepare("SELECT * FROM mcp_grants WHERE access_hash = ? AND revoked_at IS NULL AND access_expires_ms > ?").bind(await A.sha256(m[1]), Date.now()).first();
+}
+
+/**
+ * Hosted owner RPC. The control plane has already checked that `accountId` owns this tenant.
+ * Only an allowlisted path runs, and the response is withheld when it contains a peer token or a secret.
+ * Self-host (`mode` single) is refused here; its owner API stays the bearer check in `handleOwner`.
+ */
+export async function runOwnerRpc(ctx: TenantContext, ectx: ExecutionContext, input: OwnerRpcRequest): Promise<OwnerRpcResult> {
+	const raw = input && typeof input === "object" ? input as OwnerRpcRequest & { body?: unknown } : null;
+	const accountId = accountIdOf(raw?.accountId);
+	const tenant = ctx.id || null;
+	const refuse = (status: number, error: string, reason: string): OwnerRpcResult => {
+		log("owner_rpc_refused", { tenant, ...(accountId ? { accountId } : {}), reason });
+		return { status, body: { error } };
+	};
+	if (!accountId) return refuse(400, "accountId is invalid", "account");
+	if (ctx.mode !== "host") return refuse(404, "not found", "tenancy");
+	if (ctx.status !== "active") {
+		const status = ctx.status === "suspended" ? 403 : ctx.status === "deleting" ? 410 : 404;
+		const error = ctx.status === "suspended" ? "this agent is suspended" : ctx.status === "deleting" ? "this agent is gone" : "no such agent";
+		return refuse(status, error, "status");
+	}
+	const matched = matchOwnerRpc(raw?.method, raw?.path, raw?.query);
+	if (!matched.ok) return refuse(matched.reason === "query" ? 400 : 404, matched.reason === "query" ? "query is not allowed" : "not found", matched.reason);
+	if (raw?.body !== undefined && raw.body !== null) return refuse(400, "this call takes no body", "body");
+	let origin = "https://tenant.invalid";
+	try {
+		const u = new URL(ctx.PUBLIC_URL);
+		if (u.protocol === "https:" || u.protocol === "http:") origin = u.origin;
+	} catch { /* the handler reads the path, not this origin */ }
+	const url = new URL(origin + matched.route.path + matched.route.search);
+	const req = new Request(url, { method: matched.route.method, headers: { "content-type": "application/json" } });
+	let res: Response;
+	try { res = await handleOwner(req, ctx, ectx, url.pathname, url, true); }
+	catch (e: any) {
+		const status = e instanceof HttpError ? e.status : 400;
+		const error = String(e?.message || "bad request").slice(0, 200);
+		if (ownerResponseLeaks(error)) return refuse(500, "response withheld", "secret");
+		log("owner_rpc", { tenant, accountId, method: matched.route.method, route: matched.route.name, status });
+		return { status, body: { error } };
+	}
+	const data = await res.json().catch(() => null);
+	if (data === null || ownerResponseLeaks(data)) return refuse(500, "response withheld", "secret");
+	log("owner_rpc", { tenant, accountId, method: matched.route.method, route: matched.route.name, status: res.status });
+	return { status: res.status, body: data };
 }
 
 /** Call an owner API route in-process (MCP tools only; the paths are fixed in the tool code). */
