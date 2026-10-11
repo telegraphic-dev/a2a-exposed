@@ -1,3 +1,5 @@
+import { hasToken, scrubTokenText } from "./tokens.ts";
+
 const MCP_NOTICES: Record<string, string> = {
 	revoked: "Revoked. That connector no longer works.",
 };
@@ -13,7 +15,6 @@ const EXPORT_ERRORS: Record<string, string> = {
 };
 
 const LABEL = /^[A-Za-z0-9_-]{1,64}$/;
-const TOKEN_RE = /(?:a2aow_|s2a_|a2amcp_|a2amcpr_|a2aot_)[A-Za-z0-9_-]{20,}/;
 const SETUP_RE = /(?:\?|&)t=[A-Za-z0-9_-]{16,}/;
 
 export interface McpConnector {
@@ -35,8 +36,8 @@ export interface LogEntry {
 
 function plain(value: unknown, max: number): string {
 	if (typeof value !== "string") return "";
-	const text = value.replace(/[\u0000-\u001f]/g, "").trim();
-	if (!text || text.length > max || TOKEN_RE.test(text) || SETUP_RE.test(text)) return "";
+	const text = scrubTokenText(value.replace(/[\u0000-\u001f]/g, "")).trim();
+	if (!text || text.length > max || hasToken(text) || SETUP_RE.test(text)) return "";
 	return text;
 }
 

@@ -7,6 +7,7 @@ import { openDb } from "./sql.ts";
 const secret = "test-secret-test-secret-test-secret";
 const origin = "https://control.example.com";
 const token = "a2aow_" + "a".repeat(30);
+const owner = "a2aot_" + "Q".repeat(43);
 const sql = "-- a2a-exposed-export 1\nINSERT INTO history (text) VALUES ('see https://[redacted]@hooks.example/hook?t=[redacted]');\n";
 
 function plane() {
@@ -55,7 +56,7 @@ function plane() {
 					body: {
 						entries: [
 							{ seq: 2, contextId: "ctx-1", ts: "2026-10-11T12:00:00.000Z", dir: "in", peer: "ada", text: "hello <script>alert(1)</script>", event: "message", state: "submitted", data_json: JSON.stringify({ token }) },
-							{ seq: 1, contextId: "ctx-1", ts: "2026-10-11T11:00:00.000Z", dir: "out", peer: "ada", text: `note ${token} end` },
+							{ seq: 1, contextId: "ctx-1", ts: "2026-10-11T11:00:00.000Z", dir: "out", peer: "ada", text: `note ${token} and ${owner} end` },
 						],
 					},
 				};
@@ -116,7 +117,9 @@ test("the agent page lists MCP connectors, a read-only log, and downloads a reda
 		assert.match(html, /<h2>Message log<\/h2>/);
 		assert.match(html, /does not mark a task as seen/);
 		assert.match(html, /hello &lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+		assert.match(html, /note \[redacted\] and \[redacted\] end/);
 		assert.equal(html.includes(token), false);
+		assert.equal(html.includes(owner), false);
 		assert.equal(html.includes("data_json"), false);
 		assert.match(html, /<h2>Export<\/h2>/);
 		assert.match(html, /name="action" value="export"/);
@@ -164,13 +167,20 @@ test("the agent page lists MCP connectors, a read-only log, and downloads a reda
 		assert.deepEqual(exportCall.input.query, { format: "sql" });
 		assert.equal(exportCall.input.actor, undefined);
 
-		target.setExport({ exportedAt: "2026-10-11T00:00:00.000Z", sql: `${sql}${token}\n` });
+		target.setExport({ exportedAt: "2026-10-11T00:00:00.000Z", sql: `${sql}${token}\n${owner}\n` });
+		const scrubbed = await app.request(`${origin}/app/agents/northwind`, { method: "POST", headers, body: "action=export" });
+		assert.equal(scrubbed.status, 200);
+		const scrubbedSql = await scrubbed.text();
+		assert.equal(scrubbedSql.includes(token), false);
+		assert.equal(scrubbedSql.includes(owner), false);
+		assert.match(scrubbedSql, /\[redacted\]/);
+		target.setExport({ exportedAt: "2026-10-11T00:00:00.000Z", sql: `${sql}https://user:secret@hooks.example/hook\n` });
 		const leaked = await app.request(`${origin}/app/agents/northwind`, { method: "POST", headers, body: "action=export" });
 		assert.match(leaked.headers.get("location") ?? "", /export=failed$/);
-		assert.equal(leaked.headers.get("location")!.includes(token), false);
+		assert.equal(leaked.headers.get("location")!.includes("user:secret"), false);
 		const failedPage = await (await app.request(leaked.headers.get("location") ?? "", { headers: { cookie } })).text();
 		assert.match(failedPage, /The export was not downloaded\./);
-		assert.equal(failedPage.includes(token), false);
+		assert.equal(failedPage.includes("user:secret"), false);
 
 		const session = await db.prepare('SELECT id, createdAt FROM session').first<{ id: string; createdAt: string | number }>();
 		assert.ok(session);

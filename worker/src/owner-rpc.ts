@@ -15,7 +15,9 @@ const ALIAS = /^[A-Za-z0-9_.-]{1,64}$/;
 /** Display form WDJB-4827 or the stored form WDJB4827. Vowels and 0/1 are not in a real code. */
 const USER_CODE = /^[BCDFGHJKLMNPQRSTVWXZ]{4}-?[2-9]{4}$/i;
 
-const TOKEN_RE = /^(?:a2aow_|s2a_|a2amcp_|a2amcpr_|a2aot_)[A-Za-z0-9_-]{20,}$/;
+/** Peer tokens, MCP tokens, and the hosted owner token (`a2aot_`). */
+export const TOKEN_PREFIXES = ["a2aow_", "s2a_", "a2amcp_", "a2amcpr_", "a2aot_"] as const;
+const TOKEN_RE = new RegExp(`^(?:${TOKEN_PREFIXES.join("|")})[A-Za-z0-9_-]{20,}$`);
 const SETUP_RE = /(?:\?|&)t=[A-Za-z0-9_-]{16,}/;
 const USERINFO_RE = /^[a-z][a-z0-9+.-]*:\/\/[^/?\s]*@/i;
 /** A non-empty string under one of these keys is a secret, even when it is not a token shape. */

@@ -185,7 +185,7 @@ Control plane account (only when that deployment's login is on)
                                 After sign-in, /app shows the account and its agents. Each name opens
                                 that agent's page: MCP connectors (revoke needs a recent sign-in), a
                                 message log that does not mark tasks seen, and a SQL download that
-                                leaves credential material out. Peer times are labeled UTC. A pairing
+                                replaces a pasted owner token and leaves other credential material out. Peer times are labeled UTC. A pairing
                                 token shows its code. An empty outbound list notes that peers the CLI
                                 added locally are not shown. Sign out is on that
                                 page. Creating an agent shows the owner token once. That page is not stored.

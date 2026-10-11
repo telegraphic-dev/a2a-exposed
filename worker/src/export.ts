@@ -3,6 +3,7 @@
 // `secrets_enc`) are left out. The SQL text is a dump the operator already owns.
 
 import type { SqlDb } from "./tenancy.ts";
+import { TOKEN_PREFIXES } from "./owner-rpc.ts";
 
 export class ExportError extends Error {
 	constructor(message: string) {
@@ -103,14 +104,13 @@ const OMIT_COLUMNS: Record<string, readonly string[]> = {
 	device_requests: ["replaces_hash"],
 };
 
-/** Whole-string and embedded shapes `ownerResponseLeaks` treats as secrets, plus the same tokens inside a sentence. `a2aot_` is a hosted owner token. */
-const TOKEN_SUB = /(?:a2aow_|s2a_|a2amcp_|a2amcpr_|a2aot_)[A-Za-z0-9_-]{20,}/g;
 const SETUP_SUB = /([?&])t=[A-Za-z0-9_-]{16,}/g;
 const USERINFO_SUB = /([a-z][a-z0-9+.-]*:\/\/)[^/?\s]*@/gi;
 
-/** Replace a peer token, a setup secret, or URL userinfo. The rest of the text stays. */
+/** Replace a peer token, a hosted owner token (`a2aot_`), a setup secret, or URL userinfo. The rest of the text stays. */
 export function scrubSecretText(value: string): string {
-	return value.replace(TOKEN_SUB, "[redacted]").replace(SETUP_SUB, "$1t=[redacted]").replace(USERINFO_SUB, "$1[redacted]@");
+	const tokens = new RegExp(`(?:${TOKEN_PREFIXES.join("|")})[A-Za-z0-9_-]{20,}`, "g");
+	return value.replace(tokens, "[redacted]").replace(SETUP_SUB, "$1t=[redacted]").replace(USERINFO_SUB, "$1[redacted]@");
 }
 
 function placeholder(table: string, row: Record<string, unknown>, index: number): string {

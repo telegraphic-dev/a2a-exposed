@@ -10,12 +10,12 @@ import { renderApp, securityHeaders } from "../views/document.tsx";
 import { inboxCountsOf, renderOverview } from "../views/overview.tsx";
 import { inboundPeersOf, outboundPeersOf, pendingPairingsOf, renderPeers } from "../views/peers.tsx";
 import { logEntriesOf, mcpConnectorsOf, renderRecords } from "../views/records.tsx";
+import { hasToken, scrubTokenText } from "../views/tokens.ts";
 import { renderWakeSection, wakePreviewOf } from "../views/wake.tsx";
 
 const CODE = /^[BCDFGHJKLMNPQRSTVWXZ]{4}-?[2-9]{4}$/i;
 const LABEL = /^[A-Za-z0-9_-]{1,32}$/;
 const MCP_LABEL = /^[A-Za-z0-9_-]{1,64}$/;
-const TOKEN_RE = /(?:a2aow_|s2a_|a2amcp_|a2amcpr_|a2aot_)[A-Za-z0-9_-]{20,}/;
 const SETUP_RE = /(?:\?|&)t=[A-Za-z0-9_-]{16,}/;
 
 function redirect(location: string, cookies: string[] = []): Response {
@@ -114,7 +114,7 @@ function peerQuery(action: "approve" | "deny" | "revoke", status: number): strin
 }
 
 function exportLeaks(sql: string): boolean {
-	if (TOKEN_RE.test(sql) || SETUP_RE.test(sql)) return true;
+	if (hasToken(sql) || SETUP_RE.test(sql)) return true;
 	// A scrubbed userinfo is `https://[redacted]@host`. Any other userinfo is still a secret.
 	return /:\/\/(?!\[redacted\]@)[^/?\s]*@/.test(sql);
 }
@@ -210,10 +210,11 @@ export async function handleAgent(
 			if (!plane.owner || row.status !== "active") return back("?export=failed");
 			try {
 				const result = await plane.owner(row.id, row.region, { accountId, method: "GET", path: "/owner/export", query: { format: "sql" } });
-				const sql = result.status === 200 && result.body && typeof result.body === "object"
+				const raw = result.status === 200 && result.body && typeof result.body === "object"
 					? (result.body as { sql?: unknown }).sql
 					: "";
-				if (typeof sql !== "string" || !sql || exportLeaks(sql)) {
+				const sql = typeof raw === "string" ? scrubTokenText(raw) : "";
+				if (!sql || exportLeaks(sql)) {
 					console.log(JSON.stringify({ ts: new Date().toISOString(), event: "export_failed", tenant: row.id }));
 					return back("?export=failed");
 				}

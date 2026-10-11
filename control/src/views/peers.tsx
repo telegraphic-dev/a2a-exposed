@@ -1,3 +1,5 @@
+import { hasToken } from "./tokens.ts";
+
 const NOTICES: Record<string, string> = {
 	approved: "Approved. That agent can collect its token.",
 	denied: "Denied. That agent gets no token.",
@@ -15,7 +17,6 @@ const ERRORS: Record<string, string> = {
 const CODE = /^[BCDFGHJKLMNPQRSTVWXZ]{4}[2-9]{4}$/;
 const LABEL = /^[A-Za-z0-9_-]{1,32}$/;
 const ALIAS = /^[A-Za-z0-9_.-]{1,64}$/;
-const TOKEN_RE = /(?:a2aow_|s2a_|a2amcp_|a2amcpr_|a2aot_)[A-Za-z0-9_-]{20,}/;
 const SETUP_RE = /(?:\?|&)t=[A-Za-z0-9_-]{16,}/;
 
 export interface UtcStamp {
@@ -51,7 +52,7 @@ export interface OutboundPeer {
 function plain(value: unknown, max: number): string {
 	if (typeof value !== "string") return "";
 	const text = value.replace(/[\u0000-\u001f]/g, "").trim();
-	if (!text || text.length > max || TOKEN_RE.test(text) || SETUP_RE.test(text)) return "";
+	if (!text || text.length > max || hasToken(text) || SETUP_RE.test(text)) return "";
 	return text;
 }
 
