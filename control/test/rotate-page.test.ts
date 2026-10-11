@@ -8,7 +8,7 @@ import { openDb } from "./sql.ts";
 const secret = "test-secret-test-secret-test-secret";
 const origin = "https://control.example.com";
 
-function plane(mode: "apply" | "refuse" | "raced" | "retry" | "throw" | "down" = "apply") {
+function plane(mode: "apply" | "refuse" | "raced" | "retry" | "throw" | "down" | "landed" = "apply") {
 	const pushes: TenantPush[] = [];
 	const directory: { name: string; version: number }[] = [];
 	let retried = false;
@@ -24,7 +24,9 @@ function plane(mode: "apply" | "refuse" | "raced" | "retry" | "throw" | "down" =
 			}
 			if (mode === "throw" && body.version === 2) throw new Error("push down");
 			if (mode === "down" && body.version > 1) throw new Error("push down");
-			if (mode === "refuse" && body.version > 1) return { version: 1, applied: false };
+			if (mode === "refuse" && body.version === 2) return { version: 1, applied: false };
+			if (mode === "landed" && body.version === 2 && pushes.filter((push) => push.version === 2).length === 1) return { version: 1, applied: false };
+			if (mode === "landed" && body.version === 2) return { version: body.version, applied: false };
 			if (mode === "raced" && body.version > 1) return { version: body.version, applied: false };
 			return { version: body.version, applied: true };
 		},
@@ -167,13 +169,49 @@ test("a push that does not apply keeps the previous owner token", async () => {
 	assert.equal(rotated.headers.getSetCookie().some((value) => value.startsWith(`${OWNER_COOKIE}=`) && !value.includes("Max-Age=0")), false);
 	const after = await db.prepare("SELECT owner_token_hash, config_version FROM tenants WHERE name = ?").bind("northwind").first<{ owner_token_hash: string; config_version: number }>();
 	assert.equal(after?.owner_token_hash, before?.owner_token_hash);
-	assert.equal(after?.config_version, before?.config_version);
+	assert.equal(after?.config_version, 3);
+	assert.equal(target.pushes.at(-1)?.version, 3);
+	assert.equal(target.pushes.at(-1)?.ownerTokenHash, before?.owner_token_hash);
+	assert.equal(target.pushes.filter((body) => body.version === 2).every((body) => body.ownerTokenHash !== before?.owner_token_hash), true);
 	const html = await (await app.request(rotated.headers.get("location") ?? "", { headers: { cookie } })).text();
 	assert.match(html, /The owner token was not rotated/);
 	assert.equal(html.includes("a2aot_"), false);
 	const pending = await db.prepare("SELECT COUNT(*) AS n FROM config_outbox").first<{ n: number }>();
 	assert.equal(Number(pending?.n), 0);
-	assert.deepEqual(target.directory, [{ name: "northwind", version: 1 }]);
+	assert.deepEqual(target.directory, [{ name: "northwind", version: 1 }, { name: "northwind", version: 3 }]);
+});
+
+test("a flush that stores the new hash after a low version is shown, not rolled back", async () => {
+	const db = openDb();
+	const sent: { text: string }[] = [];
+	const target = plane("landed");
+	let exposed = 0;
+	const push = target.data.pushConfig.bind(target.data);
+	target.data.pushConfig = async (body, region) => {
+		if (body.version === 2) {
+			const pending = await db.prepare("SELECT COUNT(*) AS n FROM config_outbox WHERE version = ?").bind(2).first<{ n: number }>();
+			exposed += Number(pending?.n ?? 0);
+		}
+		return push(body, region);
+	};
+	const app = createApp(
+		{ AUTH_SECRET: secret, DB: db, TENANT_DOMAIN: "example.com" },
+		{ database: db, mailer: { async send(message) { sent.push({ text: message.text }); } }, dataPlane: target.data },
+	);
+	const cookie = await signIn(app, sent);
+	const headers = { cookie, origin, "sec-fetch-site": "same-origin", "content-type": "application/x-www-form-urlencoded" };
+	assert.equal((await app.request(`${origin}/api/v1/tenants`, { method: "POST", headers, body: "name=Northwind" })).status, 303);
+	const before = await db.prepare("SELECT owner_token_hash FROM tenants WHERE name = ?").bind("northwind").first<{ owner_token_hash: string }>();
+	const rotated = await app.request(`${origin}/app/agents/northwind`, { method: "POST", headers, body: "action=rotate-token&confirm=1" });
+	assert.equal(rotated.status, 303);
+	assert.match(cookieValue(rotated.headers.getSetCookie().find((value) => value.startsWith(`${OWNER_COOKIE}=`)) ?? ""), /^northwind\.a2aot_/);
+	const after = await db.prepare("SELECT owner_token_hash, config_version FROM tenants WHERE name = ?").bind("northwind").first<{ owner_token_hash: string; config_version: number }>();
+	assert.equal(after?.config_version, 2);
+	assert.notEqual(after?.owner_token_hash, before?.owner_token_hash);
+	assert.equal(target.pushes.some((body) => body.version === 3), false);
+	assert.equal(exposed, 0);
+	const pending = await db.prepare("SELECT COUNT(*) AS n FROM config_outbox").first<{ n: number }>();
+	assert.equal(Number(pending?.n), 0);
 });
 
 test("a push that throws keeps the previous owner token", async () => {
