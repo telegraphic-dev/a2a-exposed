@@ -14,6 +14,7 @@ const wakeKey = "z9Qx-secret-value-0199";
 function plane() {
 	const pushes: TenantPush[] = [];
 	const calls: { tenantId: string; region: string; input: OwnerCall }[] = [];
+	let testBody: unknown = { configured: true, status: 204, info: "HTTP 204" };
 	let failTests = false;
 	let failSummary = false;
 	const data: DataPlane = {
@@ -36,8 +37,11 @@ function plane() {
 				};
 			}
 			if (input.path === "/owner/wake/test") {
-				if (failTests) throw new Error("binding down");
-				return { status: 200, body: { configured: true, status: 204, info: "HTTP 204" } };
+				if (failTests) {
+					failTests = false;
+					throw new Error("binding down");
+				}
+				return { status: 200, body: testBody };
 			}
 			return {
 				status: 200,
@@ -53,7 +57,7 @@ function plane() {
 			};
 		},
 	};
-	return { data, pushes, calls, failNextTest() { failTests = true; }, failNextSummary() { failSummary = true; } };
+	return { data, pushes, calls, failNextTest() { failTests = true; }, setTestBody(body: unknown) { testBody = body; }, failNextSummary() { failSummary = true; } };
 }
 
 test("the agent list links to a wake page that edits through the owner and does not echo the key", async () => {
@@ -105,7 +109,8 @@ test("the agent list links to a wake page that edits through the owner and does 
 	assert.match(html, /method="post" action="\/app\/agents\/northwind"/);
 	assert.match(page.headers.get("content-security-policy") ?? "", /form-action 'self'/);
 	assert.equal(html.includes(wakeKey), false);
-	assert.match(html, /x-credential: …/);
+	assert.match(html, /x-credential: •••• \(set\)/);
+	assert.equal(html.includes("Claude Code starts a new cloud session on each wake."), false);
 	assert.equal(target.calls.length, 2);
 	assert.equal(target.calls[0].input.method, "GET");
 	assert.equal(target.calls[0].input.path, "/owner/summary");
@@ -176,6 +181,7 @@ test("the agent list links to a wake page that edits through the owner and does 
 	assert.equal(again.includes("hmac-value-0199"), false);
 	assert.match(again, /name="key"/);
 	assert.match(again, /type="password"/);
+	assert.match(again, /Claude Code starts a new cloud session on each wake./);
 
 	const kept = await app.request(`${origin}/app/agents/northwind`, {
 		method: "POST",
@@ -210,6 +216,40 @@ test("the agent list links to a wake page that edits through the owner and does 
 	const failedPage = await (await app.request(failed.headers.get("location") ?? "", { headers: { cookie } })).text();
 	assert.match(failedPage, /The test wake was not sent/);
 	assert.equal(failedPage.includes("binding down"), false);
+
+	target.setTestBody({ configured: true, status: null, info: "Error: TLS Handshake Failed." });
+	const tls = await app.request(`${origin}/app/agents/northwind`, {
+		method: "POST",
+		headers: { cookie, origin, "sec-fetch-site": "same-origin", "content-type": "application/x-www-form-urlencoded" },
+		body: "action=test",
+	});
+	assert.match(tls.headers.get("location") ?? "", /test=tls$/);
+	assert.equal(tls.headers.get("location")!.includes("Handshake"), false);
+	const tlsPage = await (await app.request(tls.headers.get("location") ?? "", { headers: { cookie } })).text();
+	assert.match(tlsPage, /TLS handshake failed/);
+	assert.equal(tlsPage.includes(wakeKey), false);
+
+	target.setTestBody({ configured: true, status: null, info: `Error: ${wakeKey}` });
+	const secretInfo = await app.request(`${origin}/app/agents/northwind`, {
+		method: "POST",
+		headers: { cookie, origin, "sec-fetch-site": "same-origin", "content-type": "application/x-www-form-urlencoded" },
+		body: "action=test",
+	});
+	assert.match(secretInfo.headers.get("location") ?? "", /test=failed$/);
+	assert.equal(secretInfo.headers.get("location")!.includes(wakeKey), false);
+	const secretPage = await (await app.request(secretInfo.headers.get("location") ?? "", { headers: { cookie } })).text();
+	assert.match(secretPage, /The test wake was not sent/);
+	assert.equal(secretPage.includes(wakeKey), false);
+
+	target.setTestBody({ configured: true, status: null, info: "refused: private or internal host" });
+	const refused = await app.request(`${origin}/app/agents/northwind`, {
+		method: "POST",
+		headers: { cookie, origin, "sec-fetch-site": "same-origin", "content-type": "application/x-www-form-urlencoded" },
+		body: "action=test",
+	});
+	assert.match(refused.headers.get("location") ?? "", /test=private$/);
+	const refusedPage = await (await app.request(refused.headers.get("location") ?? "", { headers: { cookie } })).text();
+	assert.match(refusedPage, /The wake URL is not a public address/);
 
 	target.failNextSummary();
 	const broken = await app.request(`${origin}/app/agents/northwind`, { headers: { cookie } });

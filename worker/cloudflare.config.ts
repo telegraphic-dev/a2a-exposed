@@ -49,7 +49,7 @@ const plain: Record<string, string> = {
 	// Hosted multi-tenant gates. All empty by default, and empty is omitted, so a self-host deploy is unchanged.
 	// TENANCY=host switches the entrypoint to src/hosted.ts and adds TENANT_DO + TENANT_DIRECTORY below.
 	// QUOTAS, USAGE_SINK, SIGNUP_URL and BRANDING are parsed and reserved.
-	// WAKE_TARGET_POLICY=public-https refuses a wake that is not public https (see wake-target.ts).
+	// WAKE_TARGET_POLICY=public-https refuses a wake that is not public https, then fetch()es the hostname (see wake-target.ts).
 	// APPROVAL_OIDC_* turn on OpenID Connect approval when issuer, client id, secret and allowlist are all set.
 	TENANCY: v("TENANCY"),
 	TENANT_DOMAIN: v("TENANT_DOMAIN"),

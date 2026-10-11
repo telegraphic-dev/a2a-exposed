@@ -83,7 +83,17 @@ function wakeConfig(ctx: TenantContext): WakeConfig {
 }
 
 const debounceMs = (ctx: TenantContext) => Number(ctx.WAKE_DEBOUNCE_SECONDS || defaultDebounceSeconds(preset(ctx))) * 1000;
-const maxPerHour = (ctx: TenantContext) => Number(ctx.WAKE_MAX_PER_HOUR || defaultMaxPerHour(preset(ctx)));
+
+/**
+ * Hourly wake cap. 0 means unlimited, including an explicit "0".
+ * An empty or unset value uses the preset default (unlimited, or 25 for Claude Code).
+ */
+function maxPerHour(ctx: TenantContext): number {
+	const raw = (ctx.WAKE_MAX_PER_HOUR ?? "").trim();
+	const n = raw === "" ? defaultMaxPerHour(preset(ctx)) : Number(raw);
+	if (!Number.isFinite(n) || n <= 0) return 0;
+	return Math.floor(n);
+}
 
 async function wakeBudgetOk(ctx: TenantContext): Promise<boolean> {
 	const cap = maxPerHour(ctx);
@@ -118,7 +128,9 @@ async function sendWake(ctx: TenantContext, ectx: ExecutionContext, payload: Jso
 	try {
 		let r: Response;
 		if (ctx.gates.wakeTargetPolicy === "public-https") {
-			const checked = await fetchCheckedWake(req.url, { method: "POST", headers: req.headers, body: req.body });
+			const checked = await fetchCheckedWake(req.url, { method: "POST", headers: req.headers, body: req.body }, {
+				fetch: (url, init) => doFetch(ctx, ectx, url, init),
+			});
 			if ("refused" in checked) {
 				log("wake_refused", { preset: preset(ctx), contextId: ev.contextId, reason: checked.refused });
 				return { status: null, info: `refused: ${checked.refused}` };
@@ -1094,7 +1106,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 		return json({ mode: "proxy", ...(await verifyUpstream(ctx)) });
 	}
 	if (seg[0] === "wake" && seg[1] === "preview" && m === "GET") {
-		// rendered wake request for a sample event, partially masked, plus short sha256 fingerprints of the
+		// rendered wake request for a sample event, credentials shown as Bearer •••• or ••••, plus short sha256 fingerprints of the
 		// uploaded secrets so the owner can compare them with local values without revealing them
 		const ev: WakeEvent = { contextId: "ctx-preview", taskId: "task-preview", taskIds: ["task-preview"], from: "example-peer",
 			preview: "Example message preview", kind: "test", publicUrl: ctx.PUBLIC_URL };

@@ -51,7 +51,10 @@ export function defaultDebounceSeconds(preset: string): number {
 	return preset === "claude-code" ? 20 : 10;
 }
 
-/** Default hourly wake cap per preset (0 = unlimited). Claude Code routines allow 30 fires/hour. */
+/**
+ * Default hourly wake cap per preset. 0 means unlimited. Claude Code routines allow 30 fires/hour,
+ * so that preset defaults to 25 only when WAKE_MAX_PER_HOUR is unset. An explicit 0 stays unlimited.
+ */
 export function defaultMaxPerHour(preset: string): number {
 	return preset === "claude-code" ? 25 : 0;
 }
@@ -256,11 +259,21 @@ export function previewHeaderPlain(name: string): boolean {
 	return PREVIEW_PLAIN_HEADERS.has(name.toLowerCase());
 }
 
+/** A credential header safe to show. No character of the secret is kept. */
+export function maskedCredential(value: string): string {
+	return /^bearer\s/i.test(value) ? "Bearer ••••" : "••••";
+}
+
+/** True only for the exact value `maskedCredential` returns. A prefix plus an ellipsis is still a secret. */
+export function credentialIsMasked(value: string): boolean {
+	return value === "••••" || value === "Bearer ••••";
+}
+
 /** Copy of a rendered request with credentials masked (for previews/logs). */
 export function redact(req: WakeRequest): WakeRequest {
 	const h: Record<string, string> = {};
 	for (const [k, v] of Object.entries(req.headers))
-		h[k] = previewHeaderPlain(k) ? v : v.replace(/(Bearer\s+)?(.{0,4}).*/s, "$1$2…");
+		h[k] = previewHeaderPlain(k) ? v : maskedCredential(v);
 	let url = req.url;
 	try { const u = new URL(req.url); url = `${u.protocol}//${u.host}${u.pathname.replace(/\/[^/]{16,}/g, "/…")}`; } catch { /* keep */ }
 	return { ...req, url, headers: h };

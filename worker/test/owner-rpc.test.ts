@@ -62,12 +62,14 @@ test("owner RPC withholds peer tokens and decrypted secrets", () => {
 	assert.equal(ownerResponseLeaks({ clientSecret: "tenant-secret-value" }), true);
 	assert.equal(ownerResponseLeaks({ secretsEnc: "v1.ciphertext-value" }), true);
 	assert.equal(ownerResponseLeaks("https://user:pass@hooks.example/wake"), true);
-	assert.equal(ownerResponseLeaks({ authorization: "Bearer abcd…" }), false);
+	assert.equal(ownerResponseLeaks({ method: "POST", headers: { authorization: "Bearer abcd…" } }), true);
+	assert.equal(ownerResponseLeaks({ method: "POST", headers: { authorization: "Bearer ••••" } }), false);
+	assert.equal(ownerResponseLeaks({ method: "POST", headers: { "x-credential": "••••" } }), false);
 	assert.equal(ownerResponseLeaks({
 		request: { method: "POST", url: "https://hooks.example/wake", headers: { "x-credential": "supersecretvalue", "content-type": "application/json" }, body: "{}" },
 	}), true);
 	assert.equal(ownerResponseLeaks({
-		request: { method: "POST", url: "https://hooks.example/wake", headers: { "x-credential": "supe…", "content-type": "application/json", "x-request-id": "req-1" }, body: "{}" },
+		request: { method: "POST", url: "https://hooks.example/wake", headers: { "x-credential": "Bearer ••••", "content-type": "application/json", "x-request-id": "req-1" }, body: "{}" },
 	}), false);
 	assert.equal(ownerResponseLeaks({ fingerprints: { url: "0123456789ab", key: null } }), false);
 	assert.equal(ownerResponseLeaks({ token_hash: "ab".repeat(32) }), false);

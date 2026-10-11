@@ -8,11 +8,13 @@ export WAKE_WEBHOOK_KEY=...          # never put either on the command line
 # optional, when the agent runs the CLI another way than `npx -y a2a-exposed@latest`:
 #   --cli-command "node /path/to/repo/cli/bin/a2a-exposed.mjs"   (or "a2a-exposed" for an optional global install)
 npx -y a2a-exposed@latest wake set --preset <preset>
-npx -y a2a-exposed@latest wake preview    # partially masked request + sha256 fingerprints
+npx -y a2a-exposed@latest wake preview    # credential shown as Bearer •••• or ••••, plus sha256 fingerprints
 npx -y a2a-exposed@latest wake test       # sends a test wake; expect a 2xx status
 ```
 
-**Confirming the uploaded URL/key without revealing them.** `wake preview` is only partially masked (URL path truncated, auth header shows a few characters). It also returns `fingerprints.url` / `fingerprints.key` / `fingerprints.hmacSecret`: the first 12 hex characters of each secret's SHA-256. With the same values exported locally, `wake preview` prints a match/DIFFERENT line; `wake fingerprint` prints only the local fingerprints for comparison.
+**Confirming the uploaded URL/key without revealing them.** `wake preview` shows a credential as `Bearer ••••` or `••••` and does not keep any character of the secret (the URL path is still truncated). `hasKey` is true when a key is saved. It also returns `fingerprints.url` / `fingerprints.key` / `fingerprints.hmacSecret`: the first 12 hex characters of each secret's SHA-256. With the same values exported locally, `wake preview` prints a match/DIFFERENT line; `wake fingerprint` prints only the local fingerprints for comparison.
+
+**Hourly cap.** `--max-per-hour` / `WAKE_MAX_PER_HOUR` of `0`, or leaving it unset, does not limit wakes. Claude Code is the exception: when the cap is unset it defaults to 25 an hour. A positive number is a cap; wakes over it stay pending until the next hour.
 
 **What a wake contains.** Wakes are debounced per conversation (`contextId`); a burst becomes one wake listing all `taskIds`. A wake carries only metadata, a hint command (using `--cli-command` / `WAKE_CLI_COMMAND` when set), and a short preview of peer text (at most 300 characters, untrusted). The full message is always read from the inbox.
 

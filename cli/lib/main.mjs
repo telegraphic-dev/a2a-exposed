@@ -68,8 +68,11 @@ CLOUDFLARE_API_TOKEN instead: setup skill, Troubleshooting)
   wake set [--preset P] [--agent-id A] [--key-header H] [--key-prefix X] [--body-template JSON]
            [--cli-command CMD] [--debounce S] [--max-per-hour N]
                                 save wake settings, upload wake secrets from env, and redeploy (one step)
-  wake preview                  rendered wake request (partially masked) + sha256 fingerprints of the
-                                uploaded URL/key/HMAC secret; compared with local env values if exported
+                                --max-per-hour  hourly cap; 0 or unset is unlimited, except Claude Code,
+                                               which defaults to 25 when this is unset
+  wake preview                  rendered wake request (a credential is Bearer •••• or ••••, none of the secret)
+                                + sha256 fingerprints of the uploaded URL/key/HMAC secret; compared with
+                                local env values if exported
   wake fingerprint              fingerprints (first 12 hex of sha256) of WAKE_* in the local environment
   wake test                     send a test wake now and print the HTTP status
   wake unset                    remove wake secrets (fall back to polling)

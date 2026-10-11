@@ -613,7 +613,8 @@ test("TenantStore.owner runs an allowlisted owner call and does not return a pee
 	assert.equal(wokenText.includes("platform-secret"), false);
 	const wokenBody = woken.body as { hasKey?: boolean; request?: { headers?: Record<string, string> } };
 	assert.equal(wokenBody.hasKey, true);
-	assert.equal(wokenBody.request?.headers?.["x-credential"], "Bearer z9Qx…");
+	assert.equal(wokenBody.request?.headers?.["x-credential"], "Bearer ••••");
+	assert.equal(wokenText.includes("z9Qx"), false);
 	const httpPreview = await (await http("GET", "/owner/wake/preview", "Bearer owner-carol")).json() as { hasKey?: boolean };
 	assert.equal(httpPreview.hasKey, true);
 	assert.equal(JSON.stringify(httpPreview).includes(wakeKey), false);

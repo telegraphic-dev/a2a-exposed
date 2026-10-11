@@ -46,65 +46,50 @@ test("public-https refuses private, metadata, and non-https URLs before any requ
 	assert.equal(await publicWakeProblem("https://unknown.example/wake", publicLookup), "its address could not be checked");
 });
 
-function pinned(answer: (request: string) => { status: number; location?: string }) {
-	const calls: { ip: string; sni: string; request: string }[] = [];
-	const connect: NonNullable<WakeDeps["connect"]> = (addr) => ({
-		startTls: ({ expectedServerHostname: sni }) => {
-			let req = "";
-			let respond!: (bytes: Uint8Array) => void;
-			const ready = new Promise<Uint8Array>((resolve) => { respond = resolve; });
-			const writable = new WritableStream<Uint8Array>({
-				write(chunk) {
-					req += new TextDecoder().decode(chunk);
-					if (!req.includes("\r\n\r\n")) return;
-					calls.push({ ip: addr.hostname, sni, request: req });
-					const made = answer(req);
-					const headers = [`HTTP/1.1 ${made.status} X`, "content-length: 0"];
-					if (made.location) headers.push(`location: ${made.location}`);
-					headers.push("connection: close", "", "");
-					respond(new TextEncoder().encode(headers.join("\r\n")));
-				},
-			});
-			const readable = new ReadableStream<Uint8Array>({
-				async start(controller) {
-					controller.enqueue(await ready);
-					controller.close();
-				},
-			});
-			return { readable, writable, close: async () => {} };
-		},
-	});
-	return { connect, calls };
+function recorded(answer: (call: { url: string; method: string }) => { status: number; location?: string }) {
+	const calls: { url: string; method: string; authorization: string; redirect: string; body: string }[] = [];
+	const fetch: NonNullable<WakeDeps["fetch"]> = async (url, init) => {
+		const headers = new Headers(init.headers);
+		const call = {
+			url,
+			method: String(init.method || "GET"),
+			authorization: headers.get("authorization") ?? "",
+			redirect: init.redirect ?? "",
+			body: typeof init.body === "string" ? init.body : init.body instanceof Uint8Array ? new TextDecoder().decode(init.body) : "",
+		};
+		calls.push(call);
+		const made = answer(call);
+		return new Response(null, { status: made.status, headers: made.location ? { location: made.location } : {} });
+	};
+	return { fetch, calls };
 }
 
-test("a redirect to a private address is not connected, and the first hop uses the checked IP", async () => {
-	const socket = pinned(() => ({ status: 302, location: "http://169.254.169.254/latest/meta-data" }));
-	const result = await fetchCheckedWake("https://hook.example/wake", { method: "POST", headers: { authorization: "Bearer secret" }, body: "{}" }, { lookup: publicLookup, connect: socket.connect });
-	assert.equal(socket.calls.length, 1);
-	assert.equal(socket.calls[0].ip, "1.2.3.4");
-	assert.equal(socket.calls[0].sni, "hook.example");
-	assert.match(socket.calls[0].request, /^POST \/wake HTTP\/1\.1/);
-	assert.match(socket.calls[0].request, /authorization: Bearer secret/i);
+test("a redirect to a private address is not requested, and the first hop uses the hostname", async () => {
+	const hop = recorded(() => ({ status: 302, location: "http://169.254.169.254/latest/meta-data" }));
+	const result = await fetchCheckedWake("https://hook.example/wake", { method: "POST", headers: { authorization: "Bearer secret" }, body: "{}" }, { lookup: publicLookup, fetch: hop.fetch });
+	assert.deepEqual(hop.calls.map((call) => call.url), ["https://hook.example/wake"]);
+	assert.equal(hop.calls[0].redirect, "manual");
+	assert.equal(hop.calls[0].authorization, "Bearer secret");
+	assert.equal(hop.calls.some((call) => call.url.includes("169.254.169.254") || call.url.includes("1.2.3.4")), false);
 	assert.equal("refused" in result && result.refused, "must be https");
 });
 
 test("a cross-origin redirect is not followed, so credentials stay on the first host", async () => {
-	const socket = pinned(() => ({ status: 307, location: "https://also.example/wake" }));
-	const result = await fetchCheckedWake("https://hook.example/wake", { method: "POST", headers: { authorization: "Bearer secret" }, body: "{}" }, { lookup: publicLookup, connect: socket.connect });
-	assert.equal(socket.calls.length, 1);
-	assert.equal(socket.calls[0].ip, "1.2.3.4");
+	const hop = recorded(() => ({ status: 307, location: "https://also.example/wake" }));
+	const result = await fetchCheckedWake("https://hook.example/wake", { method: "POST", headers: { authorization: "Bearer secret" }, body: "{}" }, { lookup: publicLookup, fetch: hop.fetch });
+	assert.deepEqual(hop.calls.map((call) => call.url), ["https://hook.example/wake"]);
 	assert.equal("refused" in result && result.refused, "cross-origin redirect");
 });
 
-test("a same-origin redirect is pinned again and keeps the wake headers", async () => {
-	const socket = pinned((request) => request.startsWith("POST /wake ")
+test("a same-origin redirect is checked again and keeps the wake headers", async () => {
+	const hop = recorded((call) => call.url.endsWith("/wake")
 		? { status: 307, location: "https://hook.example/next" }
 		: { status: 200 });
-	const result = await fetchCheckedWake("https://hook.example/wake", { method: "POST", headers: { authorization: "Bearer secret" }, body: "{}" }, { lookup: publicLookup, connect: socket.connect });
-	assert.equal(socket.calls.length, 2);
-	assert.deepEqual(socket.calls.map((call) => call.ip), ["1.2.3.4", "1.2.3.4"]);
-	assert.match(socket.calls[1].request, /^POST \/next HTTP\/1\.1/);
-	assert.match(socket.calls[1].request, /authorization: Bearer secret/i);
+	const result = await fetchCheckedWake("https://hook.example/wake", { method: "POST", headers: { authorization: "Bearer secret" }, body: "{}" }, { lookup: publicLookup, fetch: hop.fetch });
+	assert.deepEqual(hop.calls.map((call) => call.url), ["https://hook.example/wake", "https://hook.example/next"]);
+	assert.equal(hop.calls[1].method, "POST");
+	assert.equal(hop.calls[1].authorization, "Bearer secret");
+	assert.equal(hop.calls[1].body, "{}");
 	assert.equal("response" in result && result.response.status, 200);
 });
 
@@ -168,20 +153,38 @@ test("public-https does not request a metadata address, and does post to a check
 	assert.equal(requested.some((url) => url.includes("169.254.169.254")), false);
 
 	requested.length = 0;
-	const socket = pinned(() => ({ status: 200 }));
-	M.net.connect = socket.connect;
+	const posted: { url: string; authorization: string; redirect: string }[] = [];
+	const postImpl = (async (url: string | URL, init?: RequestInit) => {
+		const href = String(url);
+		requested.push(href);
+		if (href.startsWith("https://cloudflare-dns.com/dns-query")) return fetchImpl(url, init);
+		const headers = new Headers(init?.headers);
+		posted.push({ url: href, authorization: headers.get("authorization") ?? "", redirect: init?.redirect ?? "" });
+		return new Response("ok", { status: 200 });
+	}) as typeof fetch;
+	// A socket to the resolved IP is what fails TLS on the edge (no SNI). Delivery must not open one.
+	M.net.connect = () => { throw new Error("wake delivery must not pin TLS to the resolved IP"); };
 	try {
 		const allowed = await wakeTest({
 			DB: db(), PUBLIC_URL: BASE, OWNER_TOKEN: "owner-secret", WAKE_PRESET: "generic",
 			WAKE_WEBHOOK_URL: "https://hook.example/wake", WAKE_WEBHOOK_KEY: "hook-key", WAKE_TARGET_POLICY: "public-https",
-		}, fetchImpl);
+		}, postImpl);
 		assert.equal(allowed.status, 200);
-		assert.equal(requested.every((url) => url.startsWith("https://cloudflare-dns.com/")), true);
-		assert.equal(socket.calls.length, 1);
-		assert.equal(socket.calls[0].ip, "1.2.3.4");
-		assert.equal(socket.calls[0].sni, "hook.example");
-		assert.match(socket.calls[0].request, /authorization: Bearer hook-key/i);
+		assert.deepEqual(posted, [{ url: "https://hook.example/wake", authorization: "Bearer hook-key", redirect: "manual" }]);
+		assert.equal(requested.some((url) => url.includes("1.2.3.4")), false);
+		assert.equal(requested.some((url) => url.startsWith("https://cloudflare-dns.com/dns-query")), true);
 	} finally {
 		M.net.connect = null;
 	}
+
+	const tls = await wakeTest({
+		DB: db(), PUBLIC_URL: BASE, OWNER_TOKEN: "owner-secret", WAKE_PRESET: "generic",
+		WAKE_WEBHOOK_URL: "https://hook.example/wake", WAKE_WEBHOOK_KEY: "hook-key", WAKE_TARGET_POLICY: "public-https",
+	}, (async (url: string | URL) => {
+		const href = String(url);
+		if (href.startsWith("https://cloudflare-dns.com/dns-query")) return fetchImpl(url);
+		throw new Error("TLS Handshake Failed.");
+	}) as typeof fetch);
+	assert.equal(tls.status, null);
+	assert.equal(tls.info, "Error: TLS Handshake Failed.");
 });
