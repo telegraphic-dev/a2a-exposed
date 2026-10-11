@@ -342,6 +342,37 @@ async function verifyIdToken(token: string, jwks: { keys?: any[] }, expect: { is
 	return { subject: typeof claims.sub === "string" ? claims.sub : String(claims.email) };
 }
 
+type OidcCallback = { kind: OidcKind; state: string; code: string | null; error: string | null };
+type OpenedOidc = { row: any; userCode: string | null } | (FinishResult & { ok: false });
+
+/** Local callback checks. `consume` deletes the sign-in row; a probe leaves it for the real GET. */
+async function openOidc(ctx: TenantContext, o: OidcCallback, consume: boolean): Promise<OpenedOidc> {
+	const state = o.state || "";
+	if (!/^[A-Za-z0-9_-]{20,128}$/.test(state)) return { ok: false, error: "This sign-in expired or was already used. Nothing was approved.", reason: "state", userCode: null };
+	const row: any = consume
+		? await ctx.DB.prepare("DELETE FROM oidc_txns WHERE state = ? RETURNING *").bind(state).first()
+		: await ctx.DB.prepare("SELECT * FROM oidc_txns WHERE state = ?").bind(state).first();
+	if (!row || row.kind !== o.kind) return { ok: false, error: "This sign-in expired or was already used. Nothing was approved.", reason: "state", userCode: null };
+	const userCode = row.user_code || null;
+	if (Date.now() >= row.expires_ms) return { ok: false, error: "This sign-in expired. Nothing was approved.", reason: "expired", userCode };
+	if (o.error || !o.code) return { ok: false, error: "Sign-in was cancelled. Nothing was approved.", reason: "cancelled", userCode };
+	if (!approvalPolicy(ctx.gates.approvalOidc).oidc || !ctx.approvalClientSecret())
+		return { ok: false, error: "OpenID Connect approval is not configured.", reason: "config", userCode };
+	return { row, userCode };
+}
+
+export type ReadOidcResult = (FinishResult & { ok: false }) | { ok: true; pending: true; userCode: string | null };
+
+/**
+ * What a callback can know without spending it. The sign-in row stays, and the identity provider is not called,
+ * so a HEAD probe cannot approve or burn the one-time state.
+ */
+export async function readOidc(ctx: TenantContext, o: OidcCallback): Promise<ReadOidcResult> {
+	const opened = await openOidc(ctx, o, false);
+	if ("ok" in opened) return opened;
+	return { ok: true, pending: true, userCode: opened.userCode };
+}
+
 /**
  * Complete a sign-in. The state row is deleted on every callback, including failure, so it cannot be replayed.
  * The CSRF cookie is not read here: SameSite=Strict is dropped on the cross-site return from the identity
@@ -350,23 +381,21 @@ async function verifyIdToken(token: string, jwks: { keys?: any[] }, expect: { is
 export async function finishOidc(ctx: TenantContext, o: {
 	kind: OidcKind; redirectUri: string; state: string; code: string | null; error: string | null;
 }): Promise<FinishResult> {
-	const state = o.state || "";
-	if (!/^[A-Za-z0-9_-]{20,128}$/.test(state)) return { ok: false, error: "This sign-in expired or was already used. Nothing was approved.", reason: "state", userCode: null };
-	const row: any = await ctx.DB.prepare("DELETE FROM oidc_txns WHERE state = ? RETURNING *").bind(state).first();
-	if (!row || row.kind !== o.kind) return { ok: false, error: "This sign-in expired or was already used. Nothing was approved.", reason: "state", userCode: null };
-	const userCode = row.user_code || null;
-	if (Date.now() >= row.expires_ms) return { ok: false, error: "This sign-in expired. Nothing was approved.", reason: "expired", userCode };
-	if (o.error || !o.code) return { ok: false, error: "Sign-in was cancelled. Nothing was approved.", reason: "cancelled", userCode };
+	const opened = await openOidc(ctx, o, true);
+	if ("ok" in opened) return opened;
+	const { row, userCode } = opened;
+	const code = o.code;
+	if (!code) return { ok: false, error: "Sign-in was cancelled. Nothing was approved.", reason: "cancelled", userCode };
 	const gate = ctx.gates.approvalOidc;
 	const secret = ctx.approvalClientSecret();
-	if (!approvalPolicy(gate).oidc || !secret) return { ok: false, error: "OpenID Connect approval is not configured.", reason: "config", userCode };
+	if (!secret) return { ok: false, error: "OpenID Connect approval is not configured.", reason: "config", userCode };
 	let disc: Discovery;
 	try { disc = await discover(ctx, gate.issuer); }
 	catch { return { ok: false, error: UNREACHABLE, reason: "discovery", userCode }; }
 	let idToken = "";
 	try {
 		const body = new URLSearchParams({
-			grant_type: "authorization_code", code: o.code, redirect_uri: o.redirectUri,
+			grant_type: "authorization_code", code, redirect_uri: o.redirectUri,
 			client_id: gate.clientId, client_secret: secret, code_verifier: row.verifier,
 		});
 		const res = await idpFetch(ctx, disc.token_endpoint, {

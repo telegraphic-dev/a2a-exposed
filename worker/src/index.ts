@@ -1209,6 +1209,15 @@ const pairingCleanup = (ctx: TenantContext, now: number) => [
 	ctx.DB.prepare("DELETE FROM oidc_txns WHERE expires_ms < ?").bind(now),
 ];
 
+/**
+ * True when this call is past `limit`. HEAD peeks: the counter is not incremented, and a count already at the cap
+ * is past it, which is the decision one more increment would make.
+ */
+async function overLimit(ctx: TenantContext, key: string, windowS: number, limit: number, head: boolean): Promise<boolean> {
+	const n = await bump(ctx, key, windowS, head);
+	return head ? n >= limit : n > limit;
+}
+
 /** Fixed-window counter: increments and returns the count for `key` in the current window (peek: no increment). */
 async function bump(ctx: TenantContext, key: string, windowS: number, peek = false): Promise<number> {
 	const now = Date.now(), start = Math.floor(now / (windowS * 1000));
@@ -1405,7 +1414,7 @@ function cookie(req: Request, name: string): string {
 }
 
 /** GET/POST /device: the owner approves or denies a request with the approval password (no scripts, strict CSP). */
-async function devicePage(req: Request, ctx: TenantContext, url: URL): Promise<Response> {
+async function devicePage(req: Request, ctx: TenantContext, url: URL, head = false): Promise<Response> {
 	const nonce = P.randomB64(), ip = clientIp(req);
 	const csrfName = "a2a_device_csrf";
 	let csrf = cookie(req, csrfName);
@@ -1420,7 +1429,7 @@ async function devicePage(req: Request, ctx: TenantContext, url: URL): Promise<R
 	};
 	const show = async (raw: string | null, notice?: P.PageModel["notice"]) => {
 		model.notice = notice;
-		if (raw && (await bump(ctx, `look:ip:${ip || "?"}`, P.LIMITS.lookupsWindowS)) > P.LIMITS.lookupsPerIp) {
+		if (raw && await overLimit(ctx, `look:ip:${ip || "?"}`, P.LIMITS.lookupsWindowS, P.LIMITS.lookupsPerIp, head)) {
 			model.askCode = true;
 			model.notice = { kind: "error", text: "Too many code lookups from this address. Try again in a few minutes." };
 			return;
@@ -1514,7 +1523,7 @@ async function devicePage(req: Request, ctx: TenantContext, url: URL): Promise<R
 }
 
 /** GET /device/oidc/callback: the identity provider returns here. State is the CSRF; the cookie is not re-checked. */
-async function deviceOidcCallback(req: Request, ctx: TenantContext, url: URL): Promise<Response> {
+async function deviceOidcCallback(req: Request, ctx: TenantContext, url: URL, head = false): Promise<Response> {
 	const nonce = P.randomB64();
 	const pw = await approvalPassword(ctx);
 	const model: P.PageModel = { agentName: ctx.AGENT_NAME || "this A2A inbox", mode: pairingMode(ctx), cli: cliCommand(ctx), csrf: P.randomB64(), passwordSet: !!pw, ...approvalPageBits(ctx) };
@@ -1523,10 +1532,31 @@ async function deviceOidcCallback(req: Request, ctx: TenantContext, url: URL): P
 		h["set-cookie"] = `a2a_device_csrf=${model.csrf}; Path=/device; Secure; HttpOnly; SameSite=Strict; Max-Age=3600`;
 		return new Response(P.devicePage(model, nonce), { status, headers: h });
 	};
-	const done = await O.finishOidc(ctx, {
-		kind: "device", redirectUri: `${oauthUrls(ctx).page}/oidc/callback`,
+	const callback = {
+		kind: "device" as const, redirectUri: `${oauthUrls(ctx).page}/oidc/callback`,
 		state: url.searchParams.get("state") || "", code: url.searchParams.get("code"), error: url.searchParams.get("error"),
-	});
+	};
+	// HEAD must not delete the sign-in or approve. A still-open sign-in answers with the device page (200, the status a
+	// completed approval uses) and does not say approved. The browser GET still finishes it.
+	if (head) {
+		const seen = await O.readOidc(ctx, callback);
+		if (!seen.ok) {
+			if (seen.userCode) {
+				const pending = await pendingRequest(ctx, seen.userCode);
+				if (pending && pending.status === "pending" && Date.now() < pending.expires_ms) model.request = pageRequest(pending);
+			}
+			model.notice = { kind: "error", text: seen.error };
+			return send(400);
+		}
+		const pending = seen.userCode ? await pendingRequest(ctx, seen.userCode) : null;
+		if (pending && pending.status === "pending" && Date.now() < pending.expires_ms) {
+			model.request = pageRequest(pending);
+			return send(200);
+		}
+		model.notice = { kind: "error", text: "Nothing was approved." };
+		return send(409);
+	}
+	const done = await O.finishOidc(ctx, callback);
 	if (!done.ok) {
 		log("oidc_rejected", { kind: "device", reason: done.reason });
 		if (done.userCode) {
@@ -1562,7 +1592,7 @@ async function liveSetup(ctx: TenantContext, token: string): Promise<{ rec: Setu
 }
 
 /** GET/POST /device/setup: set or change the approval password from a one-time link. Same frame and CSRF as /device. The form posts only to this host, so form-action stays 'self'. */
-async function setupPage(req: Request, ctx: TenantContext, url: URL): Promise<Response> {
+async function setupPage(req: Request, ctx: TenantContext, url: URL, head = false): Promise<Response> {
 	const nonce = P.randomB64(), ip = clientIp(req);
 	const csrfName = "a2a_device_csrf";
 	let csrf = cookie(req, csrfName);
@@ -1580,7 +1610,7 @@ async function setupPage(req: Request, ctx: TenantContext, url: URL): Promise<Re
 		model.notice = { kind: "error", text };
 		return send(status);
 	};
-	if ((await bump(ctx, `setup:ip:${ip || "?"}`, P.LIMITS.setupWindowS)) > P.LIMITS.setupPerIp) {
+	if (await overLimit(ctx, `setup:ip:${ip || "?"}`, P.LIMITS.setupWindowS, P.LIMITS.setupPerIp, head)) {
 		log("password_setup_rate_limited", { ip });
 		return invalid(429, "Too many attempts from this address. Try again in a few minutes.");
 	}
@@ -1874,7 +1904,7 @@ async function pinnedGet(ip: string, url: string, max: number, signal: AbortSign
  *  Document (fetched with SSRF guards: public https host other than this Worker whose A/AAAA records are all public
  *  (DNS-over-HTTPS), connected to at that checked IP (no DNS rebinding), no redirects, no credentials, 5 s, 5 KB; cached for its
  *  max-age; failures and invalid documents are not cached). `ip` rate-limits fetches (not cached lookups). */
-async function resolveClient(ctx: TenantContext, id: string, ip?: string): Promise<{ client?: Json; error?: string }> {
+async function resolveClient(ctx: TenantContext, id: string, ip?: string, head = false): Promise<{ client?: Json; error?: string }> {
 	if (!id) return { error: "client_id is required" };
 	if (!/^https:\/\//i.test(id)) {
 		const c: Json = await ctx.DB.prepare("SELECT * FROM oauth_clients WHERE client_id = ?").bind(id).first();
@@ -1885,6 +1915,12 @@ async function resolveClient(ctx: TenantContext, id: string, ip?: string): Promi
 	const now = Date.now();
 	const hit: Json = await ctx.DB.prepare("SELECT * FROM oauth_client_metadata WHERE client_id = ? AND expires_ms > ?").bind(id, now).first();
 	if (hit) return { client: { ...hit, cimd: true } };
+	// HEAD does not fetch the document or spend the lookup limit. A cache miss is the same refusal as a failed fetch.
+	if (head) {
+		if (ip !== undefined && await overLimit(ctx, `cimd:ip:${ip || "?"}`, 3600, M.CIMD.fetchesPerIpPerHour, true))
+			return { error: "Too many client metadata lookups from this address. Try again later." };
+		return { error: "The client's metadata document could not be fetched." };
+	}
 	if (ip !== undefined && (await bump(ctx, `cimd:ip:${ip || "?"}`, 3600)) > M.CIMD.fetchesPerIpPerHour)
 		return { error: "Too many client metadata lookups from this address. Try again later." };
 	const signal = AbortSignal.timeout(M.CIMD.timeoutMs);
@@ -1923,11 +1959,11 @@ async function resolveClient(ctx: TenantContext, id: string, ip?: string): Promi
 type AuthzCheck = { fatal?: string; error?: string; description?: string; client?: Json; redirect?: string; params: Record<string, string> };
 
 /** Validate an authorization request. fatal: show an error page (no trustworthy redirect); error: redirect back with it. */
-async function checkAuthorize(ctx: TenantContext, q: Record<string, string>, ip: string): Promise<AuthzCheck> {
+async function checkAuthorize(ctx: TenantContext, q: Record<string, string>, ip: string, head = false): Promise<AuthzCheck> {
 	const params: Record<string, string> = {};
 	for (const k of ["response_type", "client_id", "redirect_uri", "state", "code_challenge", "code_challenge_method", "scope", "resource"])
 		if (typeof q[k] === "string" && q[k] !== "") params[k] = q[k].slice(0, 2048);
-	const rc = await resolveClient(ctx, params.client_id || "", ip);
+	const rc = await resolveClient(ctx, params.client_id || "", ip, head);
 	if (!rc.client) return { fatal: rc.error!, params };
 	const client = rc.client;
 	const uris: string[] = JSON.parse(client.redirect_uris_json || "[]");
@@ -1951,7 +1987,7 @@ function redirectWith(ctx: TenantContext, redirect: string, q: Record<string, st
 }
 
 /** GET/POST /oauth/authorize: the owner approves an MCP client with the approval password (same lockout as /device). */
-async function authorizePage(req: Request, ctx: TenantContext, url: URL): Promise<Response> {
+async function authorizePage(req: Request, ctx: TenantContext, url: URL, head = false): Promise<Response> {
 	const nonce = P.randomB64(), ip = clientIp(req);
 	const csrfName = "a2a_mcp_csrf";
 	let csrf = cookie(req, csrfName);
@@ -1962,7 +1998,7 @@ async function authorizePage(req: Request, ctx: TenantContext, url: URL): Promis
 		try { form = P.parseParams(await readBody(req, { ...ctx, MAX_BODY: "16384" }), "application/x-www-form-urlencoded"); } catch { /* empty */ }
 	}
 	const q = req.method === "GET" ? Object.fromEntries(url.searchParams) : form;
-	const c = await checkAuthorize(ctx, q, ip);
+	const c = await checkAuthorize(ctx, q, ip, head);
 	const pw = await approvalPassword(ctx);
 	const page = (status: number, body: string, formOrigins: string[] = []) => {
 		// Approve and deny 302 to the client. OpenID Connect 302s to the issuer. Chrome checks both against form-action.
@@ -2033,13 +2069,20 @@ async function issueMcpCode(ctx: TenantContext, clientName: string, redirect: st
  * The identity provider navigates here with a GET. The code redirect is that navigation's 302, not a form post, so form-action does not apply to the client origin.
  * The error page has no form.
  */
-async function mcpOidcCallback(req: Request, ctx: TenantContext, url: URL): Promise<Response> {
+async function mcpOidcCallback(req: Request, ctx: TenantContext, url: URL, head = false): Promise<Response> {
 	const nonce = P.randomB64();
 	const fail = (status: number, text: string) => new Response(P.pageShell("Connect an MCP client", nonce, `<p class="n error">${P.esc(text)}</p>`), { status, headers: P.pageHeaders(nonce) });
-	const done = await O.finishOidc(ctx, {
-		kind: "mcp", redirectUri: `${oauthUrls(ctx).authorize}/oidc/callback`,
+	const callback = {
+		kind: "mcp" as const, redirectUri: `${oauthUrls(ctx).authorize}/oidc/callback`,
 		state: url.searchParams.get("state") || "", code: url.searchParams.get("code"), error: url.searchParams.get("error"),
-	});
+	};
+	// The successful GET is a 302 that carries a newly issued code. HEAD does not issue that code or delete the sign-in,
+	// so it stays on the not-approved page. The browser GET still completes the redirect.
+	if (head) {
+		const seen = await O.readOidc(ctx, callback);
+		return fail(400, seen.ok ? "Nothing was approved." : seen.error);
+	}
+	const done = await O.finishOidc(ctx, callback);
 	if (!done.ok) {
 		log("oidc_rejected", { kind: "mcp", reason: done.reason });
 		return fail(400, done.error);
@@ -2492,11 +2535,11 @@ async function handle(req: Request, ctx: TenantContext, ectx: ExecutionContext, 
 			if (req.method === "GET" && path === "/.well-known/oauth-protected-resource/mcp") return json(mcpResourceMetadata(ctx), 200, { "access-control-allow-origin": "*" });
 			if (req.method === "GET" && path === "/.well-known/oauth-authorization-server") return json(oauthMetadata(ctx), 200, { "access-control-allow-origin": "*" });
 			if (req.method === "POST" && path === "/oauth/register") return await registerClient(req, ctx);
-			if (req.method === "GET" && path === "/oauth/authorize/oidc/callback") return await mcpOidcCallback(req, ctx, url);
-			if ((req.method === "GET" || req.method === "POST") && path === "/oauth/authorize") return await authorizePage(req, ctx, url);
+			if (req.method === "GET" && path === "/oauth/authorize/oidc/callback") return await mcpOidcCallback(req, ctx, url, head);
+			if ((req.method === "GET" || req.method === "POST") && path === "/oauth/authorize") return await authorizePage(req, ctx, url, head);
 			if (req.method === "POST" && path === "/oauth/revoke") return await revokeEndpoint(req, ctx);
 			if (req.method === "POST" && path === "/oauth/token") return await tokenEndpoint(req, ctx);
-			if (path === "/device/setup" && (req.method === "GET" || req.method === "POST")) return await setupPage(req, ctx, url);
+			if (path === "/device/setup" && (req.method === "GET" || req.method === "POST")) return await setupPage(req, ctx, url, head);
 		}
 		if (path === "/.well-known/oauth-authorization-server" || path === "/.well-known/oauth-protected-resource" || path.startsWith("/oauth/") || path === "/device" || path === "/device/setup" || path === "/device/oidc/callback") {
 			if (!pairingOn(ctx)) return json({ error: "not_found", error_description: "device-flow pairing is disabled on this inbox (PAIRING_APPROVAL=off); ask its operator for a token" }, 404);
@@ -2504,9 +2547,9 @@ async function handle(req: Request, ctx: TenantContext, ectx: ExecutionContext, 
 			if (req.method === "GET" && path === "/.well-known/oauth-protected-resource") return json(protectedResourceMetadata(ctx), 200, { "access-control-allow-origin": "*" });
 			if (req.method === "POST" && path === "/oauth/device_authorization") return await deviceAuthorization(req, ctx, ectx);
 			if (req.method === "POST" && path === "/oauth/token") return await tokenEndpoint(req, ctx);
-			if (path === "/device" && (req.method === "GET" || req.method === "POST")) return await devicePage(req, ctx, url);
-			if (req.method === "GET" && path === "/device/oidc/callback") return await deviceOidcCallback(req, ctx, url);
-			if (path === "/device/setup" && (req.method === "GET" || req.method === "POST")) return await setupPage(req, ctx, url);
+			if (path === "/device" && (req.method === "GET" || req.method === "POST")) return await devicePage(req, ctx, url, head);
+			if (req.method === "GET" && path === "/device/oidc/callback") return await deviceOidcCallback(req, ctx, url, head);
+			if (path === "/device/setup" && (req.method === "GET" || req.method === "POST")) return await setupPage(req, ctx, url, head);
 			return json({ error: "not found" }, 404);
 		}
 		if (req.method === "POST" && (path === "/" || path === "/a2a" || path === "/a2a/v1")) return await handleRpc(req, ctx, ectx);

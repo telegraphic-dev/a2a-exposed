@@ -578,11 +578,23 @@ test("metadata advertises CIMD and RFC 9207 iss; DCR accepts application_type; n
 test("Client ID Metadata Documents: fetched, validated, cached; consent shows the client_id host; tokens and refresh work", async (t) => {
 	const s = setup(); t.after(s.restore);
 	s.cimd["/oauth/metadata.json"] = { body: cimdDoc(), headers: { "cache-control": "max-age=600" } };
+	const challenge = await M.s256(b64url(crypto.getRandomValues(new Uint8Array(32))));
+	const probe = new URLSearchParams({ response_type: "code", client_id: CIMD_ID, redirect_uri: CLAUDE_CB, state: "s1", code_challenge: challenge, code_challenge_method: "S256" });
+	const head = await s.call("HEAD", `/oauth/authorize?${probe}`);
+	assert.equal(head.status, 400);
+	assert.equal(head.text, "");
+	assert.equal(s.cimdFetches.length, 0, "HEAD does not fetch client metadata");
+	assert.equal(s.DB.db.prepare("SELECT COUNT(*) AS n FROM oauth_client_metadata").get()!.n, 0);
+	assert.equal(s.DB.db.prepare("SELECT COUNT(*) AS n FROM pairing_rate WHERE key LIKE 'cimd:%'").get()!.n, 0);
 	const r = await authorizeWith(s, CIMD_ID, { resource: `${BASE}/mcp` });
 	assert.equal(r.page.status, 200, r.page.text);
 	assert.match(r.page.text, /CIMD Client/);
 	assert.match(r.page.text, /Client identity published at<\/th><td>client\.example\.org/);
 	assert.equal(s.cimdFetches.length, 1);
+	const cached = await s.call("HEAD", `/oauth/authorize?${new URLSearchParams(r.q)}`);
+	assert.equal(cached.status, 200);
+	assert.equal(cached.text, "");
+	assert.equal(s.cimdFetches.length, 1, "a cached document is not fetched again for HEAD");
 	assert.equal(s.cimdFetches[0].ip, "93.184.216.34", "connected to the DNS-checked address (pinned: no rebinding)");
 	assert.equal(s.cimdFetches[0].sni, "client.example.org", "TLS verified for the client_id host");
 	assert.equal(s.cimdFetches[0].port, 443);

@@ -89,6 +89,38 @@ test("HEAD answers like GET with an empty body, and a self-hosted card stays cac
 	assert.equal(owner.text, "");
 });
 
+test("HEAD does not spend setup or pairing lookup limits", async (t) => {
+	const s = setup();
+	t.after(s.restore);
+	const link = (await s.owner("POST", "/owner/pairing/password-link", {})).data;
+	const path = new URL(link.url).pathname + new URL(link.url).search;
+	const ip = "192.0.2.20";
+	for (let i = 0; i < P.LIMITS.setupPerIp; i++) {
+		const h = await s.call("HEAD", path, { ip });
+		assert.equal(h.status, 200, h.text);
+		assert.equal(h.text, "");
+	}
+	assert.equal(s.DB.db.prepare("SELECT COUNT(*) AS n FROM pairing_rate WHERE key = ?").get(`setup:ip:${ip}`)!.n, 0);
+	for (let i = 0; i < P.LIMITS.setupPerIp; i++) assert.equal((await s.call("GET", path, { ip })).status, 200);
+	const blocked = await s.call("HEAD", path, { ip });
+	assert.equal(blocked.status, 429);
+	assert.equal(blocked.text, "");
+	assert.equal((s.DB.db.prepare("SELECT count FROM pairing_rate WHERE key = ?").get(`setup:ip:${ip}`) as { count: number }).count, P.LIMITS.setupPerIp);
+	assert.equal((await s.call("GET", path, { ip })).status, 429);
+
+	const d = await s.start(undefined, "192.0.2.21");
+	const look = `/device?user_code=${d.data.user_code}`;
+	for (let i = 0; i < P.LIMITS.lookupsPerIp; i++) {
+		const h = await s.call("HEAD", look, { ip: "192.0.2.21" });
+		assert.equal(h.status, 200);
+		assert.equal(h.text, "");
+	}
+	const page = await s.call("GET", look, { ip: "192.0.2.21" });
+	assert.equal(page.status, 200);
+	assert.match(page.text, /Barry Bot/);
+	assert.equal(page.text.includes("Too many code lookups"), false);
+});
+
 test("pairing helpers: user codes, labels, requester text, params, password hashing", async () => {
 	for (let i = 0; i < 200; i++) assert.match(P.newUserCode(), /^[BCDFGHJKLMNPQRSTVWXZ]{4}[2-9]{4}$/);
 	assert.equal(P.formatUserCode("WDJB4827"), "WDJB-4827");
