@@ -56,6 +56,24 @@ function plane() {
 								clientId: "query-alias",
 								agentCardUrl: "https://user:secret@card.example/card.json",
 							},
+							{
+								userCode: "MNPR-2345",
+								clientName: "Local",
+								clientId: "local-alias",
+								agentCardUrl: "https://localhost/card.json",
+							},
+							{
+								userCode: "STVW-6789",
+								clientName: "Tail",
+								clientId: "tail-alias",
+								agentCardUrl: "https://box.ts.net/card.json",
+							},
+							{
+								userCode: "BCDF-6789",
+								clientName: "Lan",
+								clientId: "lan-alias",
+								agentCardUrl: "https://10.1.2.3/card.json",
+							},
 						],
 					},
 				};
@@ -142,6 +160,12 @@ test("the agent page approves a claimed pairing, confirms revoke, and lists outb
 		assert.equal(html.includes('href="javascript:'), false);
 		assert.match(html, /user:secret@card\.example/);
 		assert.equal(html.includes('href="https://user:secret@'), false);
+		assert.match(html, /https:\/\/localhost\/card\.json/);
+		assert.equal(html.includes('href="https://localhost/'), false);
+		assert.match(html, /https:\/\/box\.ts\.net\/card\.json/);
+		assert.equal(html.includes('href="https://box.ts.net/'), false);
+		assert.match(html, /https:\/\/10\.1\.2\.3\/card\.json/);
+		assert.equal(html.includes('href="https://10.1.2.3/'), false);
 		assert.match(html, /the token old-peer/);
 		assert.match(html, /<code>WDJB-4827<\/code>/);
 		assert.match(html, /name="action" value="approve"/);
@@ -171,7 +195,24 @@ test("the agent page approves a claimed pairing, confirms revoke, and lists outb
 		assert.match(bad.headers.get("location") ?? "", /peer=code$/);
 		assert.equal(target.calls.length, before);
 
-		const approved = await app.request(`${origin}/app/agents/northwind`, { method: "POST", headers, body: "action=approve&code=WDJB-4827" });
+		const sessionToken = await db.prepare("SELECT token FROM session").first<{ token: string }>();
+		assert.ok(sessionToken?.token);
+		const bearerSession = await app.request(`${origin}/api/auth/get-session`, { headers: { authorization: `Bearer ${sessionToken!.token}` } });
+		assert.equal((await bearerSession.json() as { user?: { email?: string } }).user?.email, "person@example.com");
+		const bearerOnly = await app.request(`${origin}/app/agents/northwind`, {
+			method: "POST",
+			headers: { authorization: `Bearer ${sessionToken!.token}`, origin, "sec-fetch-site": "same-origin", "content-type": "application/x-www-form-urlencoded" },
+			body: "action=approve&code=WDJB-4827",
+		});
+		assert.equal(bearerOnly.status, 303);
+		assert.match(bearerOnly.headers.get("location") ?? "", /\/app$/);
+		assert.equal(target.calls.length, before);
+
+		const approved = await app.request(`${origin}/app/agents/northwind`, {
+			method: "POST",
+			headers: { ...headers, authorization: "Bearer not-a-session" },
+			body: "action=approve&code=WDJB-4827",
+		});
 		assert.match(approved.headers.get("location") ?? "", /peer=approved$/);
 		assert.equal(approved.headers.get("location")!.includes(token), false);
 		const approveCall = target.calls.at(-1)!;

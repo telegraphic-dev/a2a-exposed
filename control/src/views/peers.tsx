@@ -59,13 +59,33 @@ function when(value: unknown): string {
 	return value.slice(0, 16).replace("T", " ");
 }
 
+/** Hosts that only resolve on a private network. Same classification as the Worker's `isPrivateHost`. */
+function privateHost(host: string): boolean {
+	const h = host.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+	if (!h.includes(".") && !h.includes(":")) return true;
+	if (/(^|\.)(localhost|local|lan|home|internal|intranet|corp|home\.arpa|ts\.net)$/.test(h)) return true;
+	const m = h.match(/^(\d+)\.(\d+)\.\d+\.\d+$/);
+	if (m) {
+		const [a, b] = [Number(m[1]), Number(m[2])];
+		return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127);
+	}
+	if (!h.includes(":")) return false;
+	if (h === "::" || h === "::1" || /^f[cd]/.test(h) || /^fe[89ab]/.test(h) || /^fec/.test(h)) return true;
+	const e = h.match(/^(?:::ffff:|64:ff9b::|::)(?:(\d+\.\d+\.\d+\.\d+)|([0-9a-f]{1,4}):([0-9a-f]{1,4}))$/);
+	if (e) {
+		const v4 = e[1] || [parseInt(e[2]!, 16) >> 8, parseInt(e[2]!, 16) & 255, parseInt(e[3]!, 16) >> 8, parseInt(e[3]!, 16) & 255].join(".");
+		return privateHost(v4);
+	}
+	return false;
+}
+
 /** Text of a claimed URL, and an href only for a public https URL with no query or userinfo. */
 function cardOf(value: unknown): { text: string; href: string } {
 	const text = plain(value, 500);
 	if (!text) return { text: "", href: "" };
 	try {
 		const url = new URL(text);
-		const linkable = url.protocol === "https:" && !url.username && !url.password && !url.search && !url.hash;
+		const linkable = url.protocol === "https:" && !url.username && !url.password && !url.search && !url.hash && !privateHost(url.hostname);
 		const href = linkable ? (url.pathname === "/" ? url.origin : url.href) : "";
 		return { text, href };
 	} catch {

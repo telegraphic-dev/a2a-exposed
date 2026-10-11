@@ -10,7 +10,7 @@ import { renderWake, redact, cloudflareErrorHint, defaultDebounceSeconds, defaul
 import { fetchCheckedWake } from "./wake-target.ts";
 import * as P from "./pairing.ts";
 import * as M from "./mcp.ts";
-import { accountIdOf, DASHBOARD_ACTOR_HEADER, matchOwnerRpc, ownerResponseLeaks, type OwnerRpcRequest, type OwnerRpcResult } from "./owner-rpc.ts";
+import { accountIdOf, DASHBOARD_ACTOR_HEADER, matchOwnerRpc, ownerResponseLeaks, scrubOwnerClaims, type OwnerRpcRequest, type OwnerRpcResult } from "./owner-rpc.ts";
 import { resolveTenant, type TenantContext, type WorkerBindings } from "./tenancy.ts";
 import { exportRows, toSql } from "./export.ts";
 import { backupDatabase, DAILY_CRON } from "./backup.ts";
@@ -2138,7 +2138,7 @@ export async function runOwnerRpc(ctx: TenantContext, ectx: ExecutionContext, in
 		log("owner_rpc", { tenant, accountId, method: matched.route.method, route: matched.route.name, status });
 		return { status, body: { error } };
 	}
-	const data = await res.json().catch(() => null);
+	const data = scrubOwnerClaims(await res.json().catch(() => null));
 	if (data === null || ownerResponseLeaks(data)) return refuse(500, "response withheld", "secret");
 	log("owner_rpc", { tenant, accountId, method: matched.route.method, route: matched.route.name, status: res.status });
 	return { status: res.status, body: data };

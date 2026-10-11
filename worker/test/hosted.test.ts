@@ -635,6 +635,20 @@ test("TenantStore.owner runs an allowlisted owner call and does not return a pee
 	assert.equal(started.status, 200, JSON.stringify(device));
 	const code = device.user_code ?? "";
 	assert.match(code, /^[BCDFGHJKLMNPQRSTVWXZ]{4}-[2-9]{4}$/);
+	const shapedName = "a2aow_" + "a".repeat(20);
+	const shapedCard = "https://card.example/card.json?t=" + "c".repeat(16);
+	const shapedStart = await mf.dispatchFetch("https://carol.example.com/oauth/device_authorization", {
+		method: "POST",
+		headers: { "content-type": "application/x-www-form-urlencoded", "cf-connecting-ip": "198.51.100.23" },
+		body: `client_name=${encodeURIComponent(shapedName)}&client_id=shaped-alias&agent_card_url=${encodeURIComponent(shapedCard)}`,
+	});
+	assert.equal(shapedStart.status, 200);
+	const shapedList = await stub.owner({ accountId: "acct_carol", method: "GET", path: "/owner/pairing" });
+	assert.equal(shapedList.status, 200);
+	const shapedText = JSON.stringify(shapedList.body);
+	assert.equal(shapedText.includes(shapedName), false);
+	assert.equal(shapedText.includes("t=" + "c".repeat(16)), false);
+	assert.match(shapedText, /Barry Bot/);
 	const pendingPairing = await stub.owner({ accountId: "acct_carol", method: "GET", path: "/owner/pairing" });
 	const pending = (pendingPairing.body as { pending?: { userCode?: string; clientName?: string; clientId?: string; agentCardUrl?: string }[] }).pending ?? [];
 	assert.equal(pending.some((row) => row.userCode === code && row.clientName === "Barry Bot" && row.clientId === "barry-alias" && row.agentCardUrl === "https://barry.example/.well-known/agent-card.json"), true);

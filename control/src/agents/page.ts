@@ -32,6 +32,13 @@ function page(html: string, status: number, env: ControlEnv, title: string): Res
 	});
 }
 
+/** Cookie session only. The CLI device token is a bearer session, and that is not a dashboard sign-in. */
+function browserHeaders(request: Request): Headers {
+	const headers = new Headers(request.headers);
+	headers.delete("authorization");
+	return headers;
+}
+
 function agentName(request: Request): string {
 	const pathname = new URL(request.url).pathname;
 	const prefix = "/app/agents/";
@@ -96,7 +103,7 @@ export async function handleAgent(
 	const back = (query: string) => redirect(new URL(`/app/agents/${name}${query}`, request.url).href);
 	if (request.method === "POST" && !sameOrigin(request)) return name ? back("?error=origin") : page("No such agent.", 404, env, "Agent");
 	const loaded = await loadAuth(env, request, deps);
-	const session = loaded ? await loaded.auth.api.getSession({ headers: request.headers }) : null;
+	const session = loaded ? await loaded.auth.api.getSession({ headers: browserHeaders(request) }) : null;
 	const accountId = session?.user?.id ?? "";
 	if (!accountId) return redirect(new URL("/app", request.url).href);
 	if (!name) return page("No such agent.", 404, env, "Agent");

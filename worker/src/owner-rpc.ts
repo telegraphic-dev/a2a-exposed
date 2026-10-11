@@ -159,6 +159,30 @@ function stringLeaks(value: string, key: string | null): boolean {
 	return key !== null && SECRET_KEYS.has(key.toLowerCase()) && value.length >= 16;
 }
 
+/** Claimed display fields. A token-shaped value is blanked so one request cannot withhold the list. */
+const CLAIM_KEYS = new Set(["clientname", "client_name", "clientid", "client_id", "agentcardurl", "agent_card_url"]);
+
+function claimLeaks(value: string): boolean {
+	return TOKEN_RE.test(value) || SETUP_RE.test(value) || USERINFO_RE.test(value);
+}
+
+/**
+ * Replace a claimed name, alias, or card that is shaped like a peer token, a setup secret, or URL
+ * userinfo with an empty string. Other keys are left for `ownerResponseLeaks`.
+ */
+export function scrubOwnerClaims(value: unknown, depth = 0): unknown {
+	if (value == null || depth > 20) return value;
+	if (Array.isArray(value)) return value.map((item) => scrubOwnerClaims(item, depth + 1));
+	if (typeof value !== "object") return value;
+	const out: Record<string, unknown> = {};
+	for (const [key, item] of Object.entries(value)) {
+		out[key] = typeof item === "string" && CLAIM_KEYS.has(key.toLowerCase()) && claimLeaks(item)
+			? ""
+			: scrubOwnerClaims(item, depth + 1);
+	}
+	return out;
+}
+
 /** A rendered wake whose credential header was not masked. The header name is the caller's choice. */
 function wakePreviewLeaks(value: object): boolean {
 	const headers = (value as { method?: unknown; headers?: unknown }).headers;
