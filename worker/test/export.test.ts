@@ -10,8 +10,8 @@ import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import worker from "../src/index.ts";
 import { d1 } from "./d1.ts";
 import { sha256 } from "../src/a2a.ts";
-import { exportRows, redactExport, REDACTED_SQL_SKIP, toSql, bookmarkForTime, restoreBookmark, restartAfterResult, ExportError, EXPORT_TABLES, RESTORE_RESTART_DELAY_MS } from "../src/export.ts";
-import { ownerResponseLeaks } from "../src/owner-rpc.ts";
+import { exportRows, redactExport, REDACTED_SQL_SKIP, scrubSecretText, toSql, bookmarkForTime, restoreBookmark, restartAfterResult, ExportError, EXPORT_TABLES, RESTORE_RESTART_DELAY_MS } from "../src/export.ts";
+import { ownerResponseLeaks, TOKEN_PREFIXES } from "../src/owner-rpc.ts";
 import { doSqlD1, type SqlStorageLike, type TxRunner } from "../src/storage.ts";
 import { backupDatabase, backupDirectory, exportTenantSql, hostedDailyBackup, olderThanRetention, pruneSnapshots, snapshotKey, DAILY_CRON, type R2BucketLike } from "../src/backup.ts";
 import { namespaceForRegion, type DoNamespace } from "../src/tenancy.ts";
@@ -138,6 +138,26 @@ test("redactExport drops credential material and leaves the full dump unchanged"
 	assert.match(toSql(file), /verifier-secret-value/);
 	assert.match(toSql(file), new RegExp(hash));
 	assert.match(toSql(file), /replaces_hash/);
+});
+
+test("scrubSecretText redacts a hosted owner token on the log and export paths", () => {
+	assert.ok(TOKEN_PREFIXES.includes("a2aot_"));
+	for (const prefix of TOKEN_PREFIXES) {
+		const token = prefix + "Q".repeat(43);
+		assert.equal(scrubSecretText(`see ${token} end`), "see [redacted] end", prefix);
+		assert.equal(scrubSecretText(token), "[redacted]", prefix);
+		assert.equal(ownerResponseLeaks(token), true, prefix);
+	}
+	const owner = "a2aot_" + "Q".repeat(43);
+	const redacted = redactExport({
+		format: "a2a-exposed-export",
+		version: 1,
+		exportedAt: "2026-10-11T00:00:00.000Z",
+		tables: { history: [{ context_id: "ctx-owner", ts: "2026-10-11T00:00:00.000Z", dir: "in", text: owner }] },
+	});
+	assert.equal(redacted.tables.history?.[0]?.text, "[redacted]");
+	assert.equal(toSql(redacted, { skip: REDACTED_SQL_SKIP }).includes(owner), false);
+	assert.equal(ownerResponseLeaks(redacted), false);
 });
 
 test("redactExport removes device_requests.replaces_hash", () => {

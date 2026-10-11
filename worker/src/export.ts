@@ -3,7 +3,6 @@
 // `secrets_enc`) are left out. The SQL text is a dump the operator already owns.
 
 import type { SqlDb } from "./tenancy.ts";
-import { TOKEN_PREFIXES } from "./owner-rpc.ts";
 
 export class ExportError extends Error {
 	constructor(message: string) {
@@ -109,7 +108,7 @@ const USERINFO_SUB = /([a-z][a-z0-9+.-]*:\/\/)[^/?\s]*@/gi;
 
 /** Replace a peer token, a hosted owner token (`a2aot_`), a setup secret, or URL userinfo. The rest of the text stays. */
 export function scrubSecretText(value: string): string {
-	const tokens = new RegExp(`(?:${TOKEN_PREFIXES.join("|")})[A-Za-z0-9_-]{20,}`, "g");
+	const tokens = /(?:a2aow_|s2a_|a2amcp_|a2amcpr_|a2aot_)[A-Za-z0-9_-]{20,}/g;
 	return value.replace(tokens, "[redacted]").replace(SETUP_SUB, "$1t=[redacted]").replace(USERINFO_SUB, "$1[redacted]@");
 }
 
