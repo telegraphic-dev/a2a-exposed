@@ -18,6 +18,7 @@ test("health is ok and the shell names no hosted service", async () => {
 	assert.equal(page.status, 200);
 	assert.equal(page.headers.get("x-robots-tag"), "noindex");
 	assert.match(page.headers.get("content-security-policy") ?? "", /default-src 'none'/);
+	assert.match(page.headers.get("content-security-policy") ?? "", /script-src 'none'/);
 	assert.equal(page.headers.get("referrer-policy"), "same-origin");
 	const html = await page.text();
 	assert.match(html, /Inbox: sign in \/ create an agent/);

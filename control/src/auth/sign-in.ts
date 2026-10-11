@@ -1,6 +1,7 @@
 import { INVITE_COOKIE, hostCookie } from "./cookies.ts";
 import { hasAccount, invitePending, validInviteCode } from "./invites.ts";
 import type { AuthOptions } from "./options.ts";
+import { SIGN_IN_DEADLINE_MS, within } from "./deadline.ts";
 import { sameOrigin } from "./origin.ts";
 import { connectingIp, verifyTurnstile } from "./turnstile.ts";
 
@@ -120,7 +121,14 @@ function appUrl(request: Request, error?: string): string {
 	return url.href;
 }
 
-export async function handleSignIn(request: Request, auth: AuthHandler, options: AuthOptions): Promise<Response> {
+export async function handleSignIn(request: Request, auth: AuthHandler, options: AuthOptions, deadlineMs = SIGN_IN_DEADLINE_MS): Promise<Response> {
+	return within(deadlineMs, () => finishSignIn(request, auth, options), () => {
+		console.error(JSON.stringify({ event: "social_sign_in_timeout" }));
+		return redirect(appUrl(request, "deadline"));
+	});
+}
+
+async function finishSignIn(request: Request, auth: AuthHandler, options: AuthOptions): Promise<Response> {
 	if (!sameOrigin(request)) {
 		logSignInFailure(403, "origin", "The sign-in request came from another site.");
 		return redirect(appUrl(request, "origin"));

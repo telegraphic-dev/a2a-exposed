@@ -172,7 +172,8 @@ Control plane account (only when that deployment's login is on)
                                 --json prints the control origin and email, not the token.
                                 A browser sign-in that does not complete returns to /app?error=<code>.
                                 The control Worker logs social_sign_in_failed before the provider
-                                page, and oauth_callback_failed when the provider sends the browser back
+                                page, social_sign_in_timeout when that sign-in does not return, and
+                                oauth_callback_failed when the provider sends the browser back
 
 Presets: grok-bot | claude-code | openclaw-wake | openclaw-agent | hermes | generic
 Config: ${C.CONFIG_FILE}  (override dir with --config-dir DIR or A2A_CONFIG_DIR; env vars override file values)

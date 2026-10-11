@@ -1,6 +1,9 @@
 /** Bound for an OAuth callback. The provider token request has no timeout of its own. */
 export const CALLBACK_DEADLINE_MS = 12_000;
 
+/** Bound for the whole sign-in request, including the account lookup and the Turnstile check. */
+export const SIGN_IN_DEADLINE_MS = 10_000;
+
 /**
  * Resolve with `run` or, once `ms` has passed, with `onTimeout`.
  * A late failure from `run` is ignored after the deadline has already won.

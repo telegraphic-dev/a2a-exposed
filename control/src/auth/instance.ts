@@ -1,21 +1,13 @@
 import { createAuth, type Auth } from "./create-auth.ts";
 import { resolveAuth, type AuthDeps, type AuthEnv, type AuthOptions } from "./options.ts";
 
-const cache = new WeakMap<object, Map<string, Promise<Auth>>>();
-
+/**
+ * Build the auth handler for this request. D1 belongs to the request that
+ * received the binding. A handler kept from an earlier request waits on that
+ * binding and never answers.
+ */
 export async function loadAuth(env: AuthEnv, request: Request, deps: AuthDeps = {}): Promise<{ auth: Auth; options: AuthOptions } | null> {
 	const options = resolveAuth(env, request, deps);
 	if (!options) return null;
-	const host = env as object;
-	let origins = cache.get(host);
-	if (!origins) {
-		origins = new Map();
-		cache.set(host, origins);
-	}
-	let pending = origins.get(options.baseURL);
-	if (!pending) {
-		pending = createAuth(options);
-		origins.set(options.baseURL, pending);
-	}
-	return { auth: await pending, options };
+	return { auth: await createAuth(options), options };
 }
