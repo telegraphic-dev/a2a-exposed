@@ -140,6 +140,32 @@ test("redactExport drops credential material and leaves the full dump unchanged"
 	assert.match(toSql(file), /replaces_hash/);
 });
 
+test("redactExport removes device_requests.replaces_hash", () => {
+	const replaces = "cd".repeat(32);
+	const redacted = redactExport({
+		format: "a2a-exposed-export",
+		version: 1,
+		exportedAt: "2026-10-11T00:00:00.000Z",
+		tables: {
+			device_requests: [{
+				device_hash: "device-hash-secret",
+				user_code: "WDJB4827",
+				status: "pending",
+				replaces_label: "ada",
+				replaces_hash: replaces,
+			}],
+		},
+	});
+	const row = redacted.tables.device_requests?.[0] ?? {};
+	assert.equal(Object.hasOwn(row, "replaces_hash"), false);
+	assert.equal(row.replaces_label, "ada");
+	assert.equal(row.device_hash, "redacted:WDJB4827");
+	const sql = toSql(redacted, { skip: REDACTED_SQL_SKIP });
+	assert.equal(sql.includes("replaces_hash"), false);
+	assert.equal(sql.includes(replaces), false);
+	assert.equal(JSON.stringify(redacted).includes(replaces), false);
+});
+
 test("exportRows reads every application table in one batch", async () => {
 	const DB = db();
 	await DB.prepare("INSERT INTO peers (label, token_hash, created_at) VALUES ('ada', 'h', 't')").run();

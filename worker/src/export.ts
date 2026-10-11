@@ -141,13 +141,14 @@ export function redactExport(file: ExportFile): ExportFile {
 			if (name === "settings" && (row.key === "approval_password" || row.key === "password_setup")) continue;
 			const out: Record<string, unknown> = {};
 			for (const [key, value] of Object.entries(row)) {
-				if (omit.has(key)) continue;
+				if (omit.has(key) || key.toLowerCase() === "replaces_hash") continue;
 				if ((name === "peers" && key === "token_hash") || (name === "device_requests" && key === "device_hash")) {
 					out[key] = placeholder(name, row, index);
 					continue;
 				}
 				out[key] = typeof value === "string" ? scrubSecretText(value) : value;
 			}
+			delete out.replaces_hash;
 			rows.push(out);
 		}
 		tables[name] = rows;
