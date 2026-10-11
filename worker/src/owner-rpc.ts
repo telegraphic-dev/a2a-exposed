@@ -25,6 +25,12 @@ const SECRET_KEYS = new Set([
 	"clientsecret", "client_secret", "pushtoken", "push_token", "authorization",
 ]);
 
+/**
+ * Header `runOwnerRpc` sets when `actor` is `human`. `handleOwner` honors it only on an in-process call.
+ * A request from the network cannot become that decision by sending the header.
+ */
+export const DASHBOARD_ACTOR_HEADER = "x-a2a-dashboard-actor";
+
 export interface OwnerRpcRequest {
 	accountId: string;
 	method: string;
@@ -33,6 +39,11 @@ export interface OwnerRpcRequest {
 	query?: Record<string, string>;
 	/** Refused. The owner HTTP API is where a body is accepted. */
 	body?: unknown;
+	/**
+	 * Dashboard approve or deny after the control plane has checked a recent sign-in.
+	 * Any other value is refused. Absent keeps the owner HTTP API's actor (`agent` or `owner`).
+	 */
+	actor?: "human";
 }
 
 export interface OwnerRpcResult {

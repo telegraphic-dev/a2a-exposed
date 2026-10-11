@@ -348,6 +348,7 @@ test("/app shows a message for each sign-in error", async () => {
 		email_not_found: "That account has no email address.",
 		unable_to_create_user: "The account could not be created.",
 		access_denied: "Sign-in was cancelled.",
+		reauth: "Sign in again to approve, deny, or revoke. This session is older than 10 minutes.",
 	};
 	for (const [code, message] of Object.entries(messages)) {
 		const html = await (await app.request(`${origin}/app?error=${code}`)).text();

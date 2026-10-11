@@ -1,16 +1,23 @@
 import { loadAuth } from "../auth/instance.ts";
 import { sameOrigin } from "../auth/origin.ts";
 import type { AuthDeps } from "../auth/options.ts";
+import { recentSignIn } from "../auth/recent.ts";
 import type { ControlEnv } from "../env.ts";
 import { dataPlaneFromEnv, type DataPlane } from "../tenants/push.ts";
 import { configFields, saveWakeSettings, tenantForAccount, wakeSettingsOf } from "../tenants/wake.ts";
 import { renderAgentPage } from "../views/agent.tsx";
 import { renderApp, securityHeaders } from "../views/document.tsx";
 import { inboxCountsOf, renderOverview } from "../views/overview.tsx";
+import { inboundPeersOf, outboundPeersOf, pendingPairingsOf, renderPeers } from "../views/peers.tsx";
 import { renderWakeSection, wakePreviewOf } from "../views/wake.tsx";
 
-function redirect(location: string): Response {
-	return new Response(null, { status: 303, headers: { location, "cache-control": "no-store" } });
+const CODE = /^[BCDFGHJKLMNPQRSTVWXZ]{4}-?[2-9]{4}$/i;
+const LABEL = /^[A-Za-z0-9_-]{1,32}$/;
+
+function redirect(location: string, cookies: string[] = []): Response {
+	const headers = new Headers({ location, "cache-control": "no-store" });
+	for (const cookie of cookies) headers.append("set-cookie", cookie);
+	return new Response(null, { status: 303, headers });
 }
 
 function page(html: string, status: number, env: ControlEnv, title: string): Response {
@@ -48,6 +55,37 @@ function testCode(result: { status: number; body: unknown }): string {
 	return "failed";
 }
 
+function logDecision(tenant: string, accountId: string, decision: string, ok: boolean, status?: number): void {
+	console.log(JSON.stringify({
+		ts: new Date().toISOString(),
+		event: ok ? "dashboard_decision" : "dashboard_decision_failed",
+		tenant,
+		accountId,
+		decision,
+		...(status === undefined ? {} : { status }),
+	}));
+}
+
+async function clearSession(auth: { handler(request: Request): Promise<Response> }, request: Request): Promise<string[]> {
+	const origin = new URL(request.url).origin;
+	const headers = new Headers({ "content-type": "application/json", origin });
+	const cookie = request.headers.get("cookie");
+	if (cookie) headers.set("cookie", cookie);
+	const response = await auth.handler(new Request(new URL("/api/auth/sign-out", origin), {
+		method: "POST",
+		headers,
+		body: "{}",
+	}));
+	return typeof response.headers.getSetCookie === "function" ? response.headers.getSetCookie() : [];
+}
+
+function peerQuery(action: "approve" | "deny" | "revoke", status: number): string {
+	if (status === 200) return action === "approve" ? "approved" : action === "deny" ? "denied" : "revoked";
+	if (action === "revoke" && status === 404) return "missing";
+	if (action !== "revoke" && (status === 404 || status === 409)) return "decided";
+	return "failed";
+}
+
 /** GET or POST `/app/agents/:name`. Ownership is checked before any owner call. */
 export async function handleAgent(
 	request: Request,
@@ -72,6 +110,45 @@ export async function handleAgent(
 		if (length > 16_000) return back("?error=key");
 		const form = await request.formData();
 		const action = String(form.get("action") ?? "");
+		if (action === "approve" || action === "deny" || action === "revoke") {
+			if (!recentSignIn(session)) {
+				console.log(JSON.stringify({ ts: new Date().toISOString(), event: "dashboard_reauth", tenant: row.id, accountId, decision: action }));
+				let cookies: string[] = [];
+				try { cookies = await clearSession(loaded.auth, request); } catch { /* still do not call owner */ }
+				return redirect(new URL("/app?error=reauth", request.url).href, cookies);
+			}
+			if (!plane.owner || row.status !== "active") {
+				logDecision(row.id, accountId, action, false);
+				return back("?peer=failed");
+			}
+			if (action === "revoke") {
+				const label = String(form.get("label") ?? "");
+				if (!LABEL.test(label)) return back("?peer=label");
+				if (String(form.get("confirm") ?? "") !== "1") return back(`?confirm=${encodeURIComponent(label)}`);
+				try {
+					const result = await plane.owner(row.id, row.region, { accountId, method: "DELETE", path: `/owner/peers/${encodeURIComponent(label)}` });
+					const query = peerQuery("revoke", result.status);
+					logDecision(row.id, accountId, "revoked", query === "revoked", result.status);
+					return back(`?peer=${query}`);
+				} catch {
+					logDecision(row.id, accountId, "revoked", false);
+					return back("?peer=failed");
+				}
+			}
+			const code = String(form.get("code") ?? "");
+			if (!CODE.test(code)) return back("?peer=code");
+			const decision = action === "approve" ? "approved" : "denied";
+			const path = `/owner/pairing/${encodeURIComponent(code)}/${action}`;
+			try {
+				const result = await plane.owner(row.id, row.region, { accountId, method: "POST", path, actor: "human" });
+				const query = peerQuery(action, result.status);
+				logDecision(row.id, accountId, decision, query === decision, result.status);
+				return back(`?peer=${query}`);
+			} catch {
+				logDecision(row.id, accountId, decision, false);
+				return back("?peer=failed");
+			}
+		}
 		if (action === "test") {
 			if (!plane.owner) return back("?test=failed");
 			try {
@@ -98,6 +175,19 @@ export async function handleAgent(
 	const settings = wakeSettingsOf(configFields(row.config_json));
 	let preview = null;
 	let counts = null;
+	let pending = null;
+	let inbound = null;
+	let outbound = null;
+	const listed = async (path: string, event: string): Promise<unknown> => {
+		if (!plane.owner) return undefined;
+		try {
+			const result = await plane.owner(row.id, row.region, { accountId, method: "GET", path });
+			return result.status === 200 ? result.body : undefined;
+		} catch {
+			console.log(JSON.stringify({ ts: new Date().toISOString(), event, tenant: row.id }));
+			return undefined;
+		}
+	};
 	if (plane.owner && row.status === "active") {
 		try {
 			const result = await plane.owner(row.id, row.region, { accountId, method: "GET", path: "/owner/summary" });
@@ -106,6 +196,12 @@ export async function handleAgent(
 			console.log(JSON.stringify({ ts: new Date().toISOString(), event: "inbox_counts_failed", tenant: row.id }));
 			counts = null;
 		}
+		const pairingBody = await listed("/owner/pairing", "pairing_list_failed");
+		const peersBody = await listed("/owner/peers", "peers_list_failed");
+		const outboundBody = await listed("/owner/outbound-peers", "outbound_peers_list_failed");
+		pending = pairingBody === undefined ? null : pendingPairingsOf(pairingBody);
+		inbound = peersBody === undefined ? null : inboundPeersOf(peersBody);
+		outbound = outboundBody === undefined ? null : outboundPeersOf(outboundBody);
 	}
 	if (plane.owner) {
 		try {
@@ -118,6 +214,14 @@ export async function handleAgent(
 	const url = new URL(request.url);
 	const html = renderAgentPage({
 		overviewHtml: renderOverview({ status: row.status, publicUrl: publicUrl(env.TENANT_DOMAIN, name), counts }),
+		peersHtml: renderPeers({
+			name,
+			pending,
+			inbound,
+			outbound,
+			confirmLabel: url.searchParams.get("confirm") ?? "",
+			peer: url.searchParams.get("peer") ?? "",
+		}),
 		wakeHtml: renderWakeSection({
 			name,
 			url: settings.url,

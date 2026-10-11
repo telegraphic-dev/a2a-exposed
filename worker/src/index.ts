@@ -10,7 +10,7 @@ import { renderWake, redact, cloudflareErrorHint, defaultDebounceSeconds, defaul
 import { fetchCheckedWake } from "./wake-target.ts";
 import * as P from "./pairing.ts";
 import * as M from "./mcp.ts";
-import { accountIdOf, matchOwnerRpc, ownerResponseLeaks, type OwnerRpcRequest, type OwnerRpcResult } from "./owner-rpc.ts";
+import { accountIdOf, DASHBOARD_ACTOR_HEADER, matchOwnerRpc, ownerResponseLeaks, type OwnerRpcRequest, type OwnerRpcResult } from "./owner-rpc.ts";
 import { resolveTenant, type TenantContext, type WorkerBindings } from "./tenancy.ts";
 import { exportRows, toSql } from "./export.ts";
 import { backupDatabase, DAILY_CRON } from "./backup.ts";
@@ -1034,7 +1034,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			return json({ revoked: true, label });
 		}
 	}
-	if (seg[0] === "pairing") return await ownerPairing(req, ctx, m, seg.slice(1), body);
+	if (seg[0] === "pairing") return await ownerPairing(req, ctx, m, seg.slice(1), body, trusted);
 	if (seg[0] === "mcp" && !seg[1] && m === "GET") {
 		const rows = await ctx.DB.prepare("SELECT label, client_id, client_name, redirect_host, scope, created_at, last_used_at, revoked_at, refresh_expires_ms FROM mcp_grants ORDER BY created_at").all();
 		return json({ enabled: mcpOn(ctx), url: oauthUrls(ctx).mcp, grants: (rows.results as Json[]).map((r) => ({ ...r, refresh_expires_ms: undefined,
@@ -1591,7 +1591,7 @@ async function setupPage(req: Request, ctx: TenantContext, url: URL): Promise<Re
 }
 
 /** Owner API: /owner/pairing (list, mode), /owner/pairing/password (set), /owner/pairing/<code>/approve|deny. */
-async function ownerPairing(req: Request, ctx: TenantContext, m: string, seg: string[], body: () => Promise<Json>): Promise<Response> {
+async function ownerPairing(req: Request, ctx: TenantContext, m: string, seg: string[], body: () => Promise<Json>, trusted = false): Promise<Response> {
 	const mode = pairingMode(ctx);
 	if (!seg[0] && m === "GET") {
 		const now = Date.now();
@@ -1642,9 +1642,12 @@ async function ownerPairing(req: Request, ctx: TenantContext, m: string, seg: st
 		const code = P.normUserCode(decodeURIComponent(seg[0]));
 		if (!code) return json({ error: "not a valid code (it looks like WDJB-4827)" }, 400);
 		const approve = seg[1] === "approve";
-		if (approve && mode !== "agent")
+		// The header is set only by runOwnerRpc for actor "human". A network request is not trusted, so the same
+		// header on /owner/* does not approve and does not change who is logged.
+		const dashboardHuman = trusted && req.headers.get(DASHBOARD_ACTOR_HEADER) === "human";
+		if (approve && mode !== "agent" && !dashboardHuman)
 			return json({ error: `approval mode is human: the owner approves on ${oauthUrls(ctx).page}?user_code=${P.formatUserCode(code)} with the approval password. \`pair approve\` works only after \`${cliCommand(ctx)} deploy --pairing-approval agent\`, and only if your human wants the agent to approve. \`pair deny\` works in every mode.` }, 403);
-		const d = await decide(ctx, code, approve, approve ? "agent" : "owner");
+		const d = await decide(ctx, code, approve, dashboardHuman ? "human" : approve ? "agent" : "owner");
 		if (!d.ok) return json({ error: d.error }, 409);
 		return json({ ok: true, decision: approve ? "approved" : "denied", userCode: P.formatUserCode(code), label: d.label || null,
 			clientName: d.request.client_name || d.request.client_id || null, replaced: !!d.replaced });
@@ -2113,13 +2116,19 @@ export async function runOwnerRpc(ctx: TenantContext, ectx: ExecutionContext, in
 	const matched = matchOwnerRpc(raw?.method, raw?.path, raw?.query);
 	if (!matched.ok) return refuse(matched.reason === "query" ? 400 : 404, matched.reason === "query" ? "query is not allowed" : "not found", matched.reason);
 	if (raw?.body !== undefined && raw.body !== null) return refuse(400, "this call takes no body", "body");
+	const actor = (raw as { actor?: unknown } | null)?.actor;
+	if (actor !== undefined && actor !== "human") return refuse(400, "actor is invalid", "actor");
+	const pairingDecision = matched.route.name === "POST /owner/pairing/:code/approve" || matched.route.name === "POST /owner/pairing/:code/deny";
+	if (actor === "human" && !pairingDecision) return refuse(400, "actor is invalid", "actor");
 	let origin = "https://tenant.invalid";
 	try {
 		const u = new URL(ctx.PUBLIC_URL);
 		if (u.protocol === "https:" || u.protocol === "http:") origin = u.origin;
 	} catch { /* the handler reads the path, not this origin */ }
 	const url = new URL(origin + matched.route.path + matched.route.search);
-	const req = new Request(url, { method: matched.route.method, headers: { "content-type": "application/json" } });
+	const headers = new Headers({ "content-type": "application/json" });
+	if (actor === "human") headers.set(DASHBOARD_ACTOR_HEADER, "human");
+	const req = new Request(url, { method: matched.route.method, headers });
 	let res: Response;
 	try { res = await handleOwner(req, ctx, ectx, url.pathname, url, true); }
 	catch (e: any) {

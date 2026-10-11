@@ -3,6 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import worker from "../src/index.ts";
+import { DASHBOARD_ACTOR_HEADER } from "../src/owner-rpc.ts";
 import * as P from "../src/pairing.ts";
 import { wakeSummary, renderWake, type WakeEvent } from "../src/wake.ts";
 import { d1 } from "./d1.ts";
@@ -221,10 +222,13 @@ test("human approval: pending, slow_down, page approve with the password, single
 	advance(16);
 	assert.equal((await s.poll(d.device_code)).data.error, "authorization_pending");
 
-	// human mode: the owner API (the agent) cannot approve
+	// human mode: the owner API (the agent) cannot approve, and the dashboard header does not change that
 	const oa = await s.owner("POST", `/owner/pairing/${d.user_code}/approve`);
 	assert.equal(oa.status, 403);
 	assert.match(oa.data.error, /approval mode is human: the owner approves on https:\/\/agent\.example\.com\/device\?user_code=/);
+	const spoofed = await s.call("POST", `/owner/pairing/${d.user_code}/approve`, { headers: { authorization: "Bearer owner-secret", [DASHBOARD_ACTOR_HEADER]: "human" } });
+	assert.equal(spoofed.status, 403);
+	assert.match(spoofed.data.error, /approval mode is human/);
 	const list = await s.owner("GET", "/owner/pairing");
 	assert.deepEqual([list.data.mode, list.data.passwordSet, list.data.pending.length, list.data.pending[0].userCode], ["human", false, 1, d.user_code]);
 
@@ -289,10 +293,19 @@ test("human approval: pending, slow_down, page approve with the password, single
 });
 
 test("a pairing label comes from the client name, a second one is suffixed, and inbox from uses it", async (t) => {
+	const lines: string[] = [];
+	const orig = console.log;
+	console.log = (...args: unknown[]) => { lines.push(args.map((part) => String(part)).join(" ")); orig(...args); };
+	t.after(() => { console.log = orig; });
 	const s = setup({ PAIRING_APPROVAL: "agent" }); t.after(s.restore);
 	const first = (await s.start({ client_name: "tester-alpha", client_id: "other-alias" }, "203.0.113.40")).data;
-	const approved = await s.owner("POST", `/owner/pairing/${first.user_code}/approve`);
+	const approved = await s.call("POST", `/owner/pairing/${first.user_code}/approve`, { headers: { authorization: "Bearer owner-secret", [DASHBOARD_ACTOR_HEADER]: "human" } });
 	assert.equal(approved.data.label, "tester-alpha");
+	const decided = s.DB.db.prepare("SELECT decided_by FROM device_requests WHERE user_code = ?").get(first.user_code.replace("-", "")) as { decided_by: string };
+	assert.equal(decided.decided_by, "agent");
+	const logged = lines.find((line) => line.includes("pairing_approved"));
+	assert.match(logged ?? "", /"by":"agent"/);
+	assert.equal((logged ?? "").includes('"by":"human"'), false);
 	const token = (await s.poll(first.device_code)).data.access_token;
 	const sent = await s.call("POST", "/", {
 		json: { jsonrpc: "2.0", id: 1, method: "SendMessage", params: { message: { role: "ROLE_USER", parts: [{ text: "hello" }] } } },

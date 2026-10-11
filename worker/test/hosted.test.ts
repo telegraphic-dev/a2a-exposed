@@ -504,7 +504,7 @@ test("TenantStore.owner runs an allowlisted owner call and does not return a pee
 	const ns = await mf.getDurableObjectNamespace("TENANT_DO");
 	const hash = await sha256("owner-carol");
 	type OwnerStub = {
-		owner(input: { accountId: string; method: string; path: string; query?: Record<string, string>; body?: unknown }): Promise<{ status: number; body: unknown }>;
+		owner(input: { accountId: string; method: string; path: string; query?: Record<string, string>; body?: unknown; actor?: string }): Promise<{ status: number; body: unknown }>;
 		storageStatus(): Promise<{ configured: boolean; tables: string[] }>;
 		pushConfig(body: Record<string, unknown>): Promise<{ applied: boolean }>;
 	};
@@ -520,6 +520,14 @@ test("TenantStore.owner runs an allowlisted owner call and does not return a pee
 	const saw = async (part: string) => {
 		const start = Date.now();
 		while (!lines.some((l) => l.includes(part))) {
+			if (Date.now() - start > 2000) return false;
+			await new Promise((r) => setTimeout(r, 20));
+		}
+		return true;
+	};
+	const sawAfter = async (from: number, part: string) => {
+		const start = Date.now();
+		while (!lines.slice(from).some((l) => l.includes(part))) {
 			if (Date.now() - start > 2000) return false;
 			await new Promise((r) => setTimeout(r, 20));
 		}
@@ -617,6 +625,65 @@ test("TenantStore.owner runs an allowlisted owner call and does not return a pee
 	const httpPreview = await (await http("GET", "/owner/wake/preview", "Bearer owner-carol")).json() as { hasKey?: boolean };
 	assert.equal(httpPreview.hasKey, true);
 	assert.equal(JSON.stringify(httpPreview).includes(wakeKey), false);
+
+	const started = await mf.dispatchFetch("https://carol.example.com/oauth/device_authorization", {
+		method: "POST",
+		headers: { "content-type": "application/x-www-form-urlencoded", "cf-connecting-ip": "198.51.100.20" },
+		body: "client_name=Barry+Bot&client_id=barry-alias&agent_card_url=https://barry.example/.well-known/agent-card.json",
+	});
+	const device = await started.json() as { user_code?: string };
+	assert.equal(started.status, 200, JSON.stringify(device));
+	const code = device.user_code ?? "";
+	assert.match(code, /^[BCDFGHJKLMNPQRSTVWXZ]{4}-[2-9]{4}$/);
+	const pendingPairing = await stub.owner({ accountId: "acct_carol", method: "GET", path: "/owner/pairing" });
+	const pending = (pendingPairing.body as { pending?: { userCode?: string; clientName?: string; clientId?: string; agentCardUrl?: string }[] }).pending ?? [];
+	assert.equal(pending.some((row) => row.userCode === code && row.clientName === "Barry Bot" && row.clientId === "barry-alias" && row.agentCardUrl === "https://barry.example/.well-known/agent-card.json"), true);
+	const refused = await stub.owner({ accountId: "acct_carol", method: "POST", path: `/owner/pairing/${code}/approve` });
+	assert.equal(refused.status, 403);
+	const httpSpoof = await mf.dispatchFetch(`https://carol.example.com/owner/pairing/${code}/approve`, {
+		method: "POST",
+		headers: { authorization: "Bearer owner-carol", "content-type": "application/json", "x-a2a-dashboard-actor": "human" },
+	});
+	assert.equal(httpSpoof.status, 403);
+	const approved = await stub.owner({ accountId: "acct_carol", method: "POST", path: `/owner/pairing/${code}/approve`, actor: "human" });
+	assert.equal(approved.status, 200);
+	assert.equal((approved.body as { decision?: string }).decision, "approved");
+	assert.equal(await saw('"event":"pairing_approved"'), true);
+	assert.equal(lines.some((line) => line.includes('"event":"pairing_approved"') && line.includes('"by":"human"')), true);
+
+	const deniedStart = await mf.dispatchFetch("https://carol.example.com/oauth/device_authorization", {
+		method: "POST",
+		headers: { "content-type": "application/x-www-form-urlencoded", "cf-connecting-ip": "198.51.100.21" },
+		body: "client_name=Deny+Bot&client_id=deny-alias",
+	});
+	const deniedDevice = await deniedStart.json() as { user_code?: string };
+	assert.equal(deniedStart.status, 200);
+	const ownerDenyAt = lines.length;
+	const ownerDenied = await stub.owner({ accountId: "acct_carol", method: "POST", path: `/owner/pairing/${deniedDevice.user_code}/deny` });
+	assert.equal(ownerDenied.status, 200);
+	assert.equal(await saw('"event":"pairing_denied"'), true);
+	const ownerDenyLine = lines.slice(ownerDenyAt).find((line) => line.includes('"event":"pairing_denied"')) ?? "";
+	assert.match(ownerDenyLine, /"by":"owner"/);
+	assert.equal(ownerDenyLine.includes('"by":"human"'), false);
+
+	const humanDenyStart = await mf.dispatchFetch("https://carol.example.com/oauth/device_authorization", {
+		method: "POST",
+		headers: { "content-type": "application/x-www-form-urlencoded", "cf-connecting-ip": "198.51.100.22" },
+		body: "client_name=Human+Deny&client_id=human-deny",
+	});
+	const humanDenyDevice = await humanDenyStart.json() as { user_code?: string };
+	assert.equal(humanDenyStart.status, 200);
+	const humanDenyAt = lines.length;
+	const humanDenied = await stub.owner({ accountId: "acct_carol", method: "POST", path: `/owner/pairing/${humanDenyDevice.user_code}/deny`, actor: "human" });
+	assert.equal(humanDenied.status, 200);
+	assert.equal(await sawAfter(humanDenyAt, '"by":"human"'), true);
+	assert.equal(lines.slice(humanDenyAt).some((line) => line.includes('"event":"pairing_denied"') && line.includes('"by":"human"')), true);
+
+	const flagged = await stub.owner({ accountId: "acct_carol", method: "GET", path: "/owner/peers", actor: "human" });
+	assert.equal(flagged.status, 400);
+	const badActor = await stub.owner({ accountId: "acct_carol", method: "POST", path: "/owner/pairing/WDJB-4827/approve", actor: "agent" });
+	assert.equal(badActor.status, 400);
+	assert.equal(await saw('"reason":"actor"'), true);
 
 	await stub.pushConfig({ version: 3, tenantId: "id-carol", name: "carol", status: "suspended", ownerTokenHash: hash, config: { AGENT_NAME: "Carol" } });
 	const suspended = await stub.owner({ accountId: "acct_carol", method: "GET", path: "/owner/peers" });
