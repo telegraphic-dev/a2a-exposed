@@ -34,18 +34,28 @@ export function openDb() {
 			return { results, meta: { changes: results.length } };
 		},
 	});
+	// One write transaction at a time, as D1 does. Overlapping batches wait instead of nesting BEGIN.
+	let pending = Promise.resolve();
 	return {
 		prepare: (sql: string) => stmt(sql),
 		async batch(statements: { all(): Promise<{ results: unknown[] }> }[]) {
-			db.exec("BEGIN");
+			const previous = pending;
+			let release = () => {};
+			pending = new Promise<void>((resolve) => { release = resolve; });
+			await previous;
 			try {
-				const out = [];
-				for (const statement of statements) out.push(await statement.all());
-				db.exec("COMMIT");
-				return out;
-			} catch (error) {
-				try { db.exec("ROLLBACK"); } catch { /* the statement failed before the write */ }
-				throw error;
+				db.exec("BEGIN");
+				try {
+					const out = [];
+					for (const statement of statements) out.push(await statement.all());
+					db.exec("COMMIT");
+					return out;
+				} catch (error) {
+					try { db.exec("ROLLBACK"); } catch { /* the statement failed before the write */ }
+					throw error;
+				}
+			} finally {
+				release();
 			}
 		},
 		async exec(sql: string) {

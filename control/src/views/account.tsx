@@ -1,8 +1,10 @@
+import { AGENT_LIMIT } from "../tenants/create.ts";
+
 const ERRORS: Record<string, string> = {
 	invalid_name: "Use 4–32 letters, numbers, or hyphens.",
 	reserved_name: "That name is reserved.",
 	taken: "That name is taken.",
-	limit: "This account can have 2 agents.",
+	limit: `This account can have ${AGENT_LIMIT} agents.`,
 	origin: "That request came from another site.",
 	unavailable: "Agents are not available.",
 };
@@ -52,7 +54,7 @@ export function renderAccount(input: {
 }): string {
 	const image = avatarUrl(input.image);
 	const error = input.error ? ERRORS[input.error] ?? "" : "";
-	const atLimit = input.agents.length >= 2;
+	const atLimit = input.agents.length >= AGENT_LIMIT;
 	return (
 		<div>
 			<div class="who">
@@ -66,10 +68,11 @@ export function renderAccount(input: {
 				<div class="token" role="status">
 					<p>Copy this owner token now. It will not be shown again.</p>
 					<pre><code>{input.ownerToken}</code></pre>
+					<script src="/owner-token.js"></script>
 				</div>
 			) : ""}
 			{error ? <p class="alert" role="alert">{error}</p> : ""}
-			{atLimit && !error ? <p class="alert" role="alert">This account can have 2 agents.</p> : ""}
+			{atLimit && !error ? <p class="alert" role="alert">This account can have {AGENT_LIMIT} agents.</p> : ""}
 			{input.agents.length ? (
 				<ul class="agents">
 					{input.agents.map((agent) => {

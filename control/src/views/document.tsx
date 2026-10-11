@@ -11,9 +11,9 @@ const KNOWN_IMG_ORIGINS = new Set([
 	"https://lh3.googleusercontent.com",
 ]);
 
-export function securityHeaders(options: { turnstile?: boolean; formAction?: readonly string[]; imgSrc?: readonly string[] } = {}): Record<string, string> {
+export function securityHeaders(options: { turnstile?: boolean; formAction?: readonly string[]; imgSrc?: readonly string[]; scriptSelf?: boolean } = {}): Record<string, string> {
 	const host = options.turnstile ? "https://challenges.cloudflare.com" : "'none'";
-	const script = options.turnstile ? "'self' https://challenges.cloudflare.com" : "'none'";
+	const script = options.turnstile ? "'self' https://challenges.cloudflare.com" : options.scriptSelf ? "'self'" : "'none'";
 	const formAction = ["'self'", ...(options.formAction ?? []).filter((origin) => KNOWN_FORM_ORIGINS.has(origin))].join(" ");
 	const imgSrc = ["'self'", ...(options.imgSrc ?? []).filter((origin) => KNOWN_IMG_ORIGINS.has(origin))].join(" ");
 	const csp = [

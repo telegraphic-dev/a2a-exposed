@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApp } from "../src/app.ts";
+import { createTenant } from "../src/tenants/create.ts";
 import { dataPlaneFromEnv, flushOutbox, type DataPlane, type TenantPush } from "../src/tenants/push.ts";
 import { openDb } from "./sql.ts";
 
@@ -201,6 +202,37 @@ test("eu and fedramp select a jurisdiction and default stays on the namespace", 
 	await bound.pushConfig({ ...body, version: 2 }, "fedramp");
 	await bound.pushConfig({ ...body, version: 3 }, "default");
 	assert.deepEqual(seen, ["jurisdiction:eu", "get:t1", "jurisdiction:fedramp", "get:t1", "get:t1"]);
+});
+
+test("the database rejects a third agent for one account", async () => {
+	const db = openDb();
+	const insert = (name: string) => db.prepare(
+		`INSERT INTO tenants (
+		   id, name, owner_account_id, status, region, config_json, limits_json, approval_json,
+		   owner_token_hash, secrets_enc, config_version, created_at, updated_at
+		 ) VALUES (?, ?, 'acct', 'active', 'default', '{}', '{}', '{}', 'hash', NULL, 1, ?, ?)`,
+	).bind(crypto.randomUUID(), name, "2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z").run();
+	await insert("alpha1");
+	await insert("bravo1");
+	await assert.rejects(insert("charlie"), /agent_limit/);
+	assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM tenants WHERE owner_account_id = 'acct'").first<{ n: number }>())?.n, 2);
+	const plane = { async putDirectory() {}, async pushConfig() { return { version: 1, applied: true }; } };
+	const created = await createTenant(db, plane, { accountId: "acct", name: "delta1" });
+	assert.deepEqual(created, { ok: false, error: "limit" });
+});
+
+test("two overlapping creates cannot both pass the free-plan limit", async () => {
+	const db = openDb();
+	const plane = { async putDirectory() {}, async pushConfig() { return { version: 1, applied: true }; } };
+	const first = await createTenant(db, plane, { accountId: "acct", name: "alpha1" });
+	assert.equal(first.ok, true);
+	const raced = await Promise.all([
+		createTenant(db, plane, { accountId: "acct", name: "bravo1" }),
+		createTenant(db, plane, { accountId: "acct", name: "charlie" }),
+	]);
+	const results = raced.map((result) => result.ok ? "ok" : result.error).sort();
+	assert.deepEqual(results, ["limit", "ok"]);
+	assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM tenants").first<{ n: number }>())?.n, 2);
 });
 
 test("a directory write does not roll a newer version backwards", async () => {

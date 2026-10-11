@@ -100,8 +100,11 @@ function callbackGaveUp(request: Request): Response {
 	return new Response(null, { status: 302, headers: { location: url.href, "cache-control": "no-store" } });
 }
 
-function pageHeaders(turnstile: boolean, options?: AuthOptions | null, imgSrc: string[] = []): Record<string, string> {
-	return securityHeaders({ turnstile, formAction: options ? enabledProviderOrigins(options) : [], imgSrc });
+function pageHeaders(turnstile: boolean, options?: AuthOptions | null, imgSrc: string[] = [], scriptSelf = false): Record<string, string> {
+	return {
+		...securityHeaders({ turnstile, formAction: options ? enabledProviderOrigins(options) : [], imgSrc, scriptSelf }),
+		"cache-control": "no-store",
+	};
 }
 
 function redirectTo(location: string, cookies: string[] = []): Response {
@@ -184,7 +187,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 		const shell = await renderShell(c.req.raw);
 		if (shell.clearOwner) c.header("set-cookie", hostCookie(OWNER_COOKIE, "", 0));
 		const headers = shell.signedIn
-			? pageHeaders(false, null, shell.imageHosts)
+			? pageHeaders(false, null, shell.imageHosts, shell.clearOwner)
 			: pageHeaders(shell.turnstile, shell.options);
 		return c.html(shell.html, 200, headers);
 	});
@@ -194,7 +197,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 		const shell = await renderShell(c.req.raw);
 		if (shell.clearOwner) c.header("set-cookie", hostCookie(OWNER_COOKIE, "", 0));
 		const headers = shell.signedIn
-			? pageHeaders(false, null, shell.imageHosts)
+			? pageHeaders(false, null, shell.imageHosts, shell.clearOwner)
 			: pageHeaders(shell.turnstile, shell.options);
 		return c.html(shell.html, 200, headers);
 	});

@@ -47,8 +47,6 @@ export async function createTenant(
 	const name = input.name.trim().toLowerCase();
 	const problem = tenantNameProblem(name);
 	if (problem) return { ok: false, error: problem === "reserved_name" ? "reserved_name" : "invalid_name" };
-	const counted = await db.prepare("SELECT COUNT(*) AS n FROM tenants WHERE owner_account_id = ?").bind(input.accountId).first<{ n: number }>();
-	if ((counted?.n ?? 0) >= AGENT_LIMIT) return { ok: false, error: "limit" };
 	const existing = await db.prepare("SELECT id FROM tenants WHERE name = ?").bind(name).first<{ id: string }>();
 	if (existing) return { ok: false, error: "taken" };
 
@@ -78,6 +76,7 @@ export async function createTenant(
 		]);
 	} catch (error) {
 		const message = String(error);
+		if (message.includes("agent_limit")) return { ok: false, error: "limit" };
 		if (/unique|constraint/i.test(message)) return { ok: false, error: "taken" };
 		throw error;
 	}

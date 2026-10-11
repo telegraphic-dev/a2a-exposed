@@ -95,6 +95,9 @@ test("a signed-in account sees itself, can sign out, and creates two agents", as
 	assert.match(once, /will not be shown again/);
 	assert.match(once, /https:\/\/northwind\.example\.com/);
 	assert.match(once, /\d{4}-\d{2}-\d{2}/);
+	assert.match(once, /src="\/owner-token\.js"/);
+	assert.equal(shown.headers.get("cache-control"), "no-store");
+	assert.match(shown.headers.get("content-security-policy") ?? "", /script-src 'self'/);
 	assert.match(shown.headers.get("set-cookie") ?? "", new RegExp(`${OWNER_COOKIE}=`));
 	assert.match(shown.headers.get("set-cookie") ?? "", /Max-Age=0/);
 	const again = await (await app.request(`${origin}/app`, { headers: { cookie } })).text();
