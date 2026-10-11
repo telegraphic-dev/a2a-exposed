@@ -47,11 +47,10 @@ export const PROVIDER_ORIGINS = {
 
 const ALLOWED_PROVIDER_ORIGINS = new Set<string>(Object.values(PROVIDER_ORIGINS));
 
-export function enabledProviderOrigins(options: { github?: unknown; google?: unknown; cloudflare?: unknown }): string[] {
+export function enabledProviderOrigins(options: { github?: unknown; google?: unknown }): string[] {
 	const origins: string[] = [];
 	if (options.github) origins.push(PROVIDER_ORIGINS.github);
 	if (options.google) origins.push(PROVIDER_ORIGINS.google);
-	if (options.cloudflare) origins.push(PROVIDER_ORIGINS.cloudflare);
 	return origins;
 }
 
@@ -152,7 +151,6 @@ async function finishSignIn(request: Request, auth: AuthHandler, options: AuthOp
 	const allowed = new Set([
 		...(options.github ? ["github"] : []),
 		...(options.google ? ["google"] : []),
-		...(options.cloudflare ? ["cloudflare"] : []),
 		...(options.mailer || options.emailBinding ? ["email"] : []),
 	]);
 	if (!allowed.has(provider)) return redirect(appUrl(request, "unavailable"));

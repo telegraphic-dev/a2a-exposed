@@ -33,6 +33,10 @@ const plain: Record<string, string> = {
 
 // Secrets stay out of the production config so a deploy does not require them.
 // `cf dev` reads the same names from .dev.vars.
+// The Cloudflare client secret is the exception once its client id is set: the
+// id is a plain var, and `npm run deploy` passes the secret from secrets.env
+// via `cf deploy --secrets-file`. The value is not written here. With the id
+// unset, that file is not required.
 const DEV_SECRETS = [
 	"AUTH_SECRET",
 	"GITHUB_CLIENT_ID",
@@ -90,7 +94,12 @@ export default defineConfig((ctx) => ({
 				...(envBindings.EMAIL ? {} : { EMAIL: bindings.sendEmail() }),
 				...Object.fromEntries(DEV_SECRETS.map((key) => [key, bindings.secret()])),
 			}
-			: envBindings,
+			: {
+				...envBindings,
+				...(v("CLOUDFLARE_OAUTH_CLIENT_ID")
+					? { CLOUDFLARE_OAUTH_CLIENT_SECRET: bindings.secret() }
+					: {}),
+			},
 		...(fetchTriggers.length ? { triggers: fetchTriggers } : {}),
 	},
 }));

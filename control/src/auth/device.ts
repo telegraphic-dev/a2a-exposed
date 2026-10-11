@@ -69,7 +69,6 @@ export async function handleDevice(request: Request, auth: Auth, options: AuthOp
 			providers: [
 				options.github ? "github" : "",
 				options.google ? "google" : "",
-				options.cloudflare ? "cloudflare" : "",
 			].filter(Boolean),
 			magicLink: Boolean(options.mailer || options.emailBinding),
 			invitesRequired: options.invitesRequired,

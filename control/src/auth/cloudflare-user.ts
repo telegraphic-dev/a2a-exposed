@@ -1,7 +1,9 @@
-// Cloudflare's user-details.read payload has an email and no verification field.
-// Better Auth would treat a trusted provider as verified enough to link accounts,
-// so this mapping never reports the address as verified. Callers leave Cloudflare
-// out of trustedProviders as well.
+// Trust is per provider. GET /client/v4/user (scope user-details.read) returns
+// an email and no verification field. Cloudflare lets an account sign in before
+// that email is verified, so this mapping never reports the address as verified.
+// Callers do not match it against SIGNUP_ALLOWLIST and do not put Cloudflare in
+// trustedProviders. A payload field named email_verified is not read. Connect
+// stores the Cloudflare account id, not this email, and does not open a session.
 export interface CloudflareUserResult {
 	id?: string;
 	email?: string;

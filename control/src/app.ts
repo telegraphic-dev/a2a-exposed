@@ -2,7 +2,8 @@ import { Hono, type Context } from "hono";
 import { CALLBACK_DEADLINE_MS, within } from "./auth/deadline.ts";
 import { connectingIp, verifyTurnstile } from "./auth/turnstile.ts";
 import { agentReturnPath } from "./auth/return.ts";
-import { enabledProviderOrigins, handleSignIn } from "./auth/sign-in.ts";
+import { cloudflareIsLinked, finishCloudflareLink, handleCloudflareAccount } from "./auth/cloudflare-link.ts";
+import { enabledProviderOrigins, handleSignIn, PROVIDER_ORIGINS } from "./auth/sign-in.ts";
 import { loadAuth } from "./auth/instance.ts";
 import { signupClosedText, type SignupAllowlist } from "./auth/allowlist.ts";
 import { authBlockers, resolveAuth, type AuthDeps, type AuthOptions } from "./auth/options.ts";
@@ -14,6 +15,8 @@ import { accountAgentLimit, configuredFreeAgentLimit, createTenant, listTenants 
 import { dataPlaneFromEnv, type DataPlane } from "./tenants/push.ts";
 import type { ControlEnv } from "./env.ts";
 import { handleAgent } from "./agents/page.ts";
+import { recentSignIn } from "./auth/recent.ts";
+import { brandConfig } from "@brand/brand.config.ts";
 import { avatarOrigin, avatarUrl, renderAccount } from "./views/account.tsx";
 import { renderApp, securityHeaders } from "./views/document.tsx";
 import { renderSignIn } from "./views/sign-in.tsx";
@@ -122,11 +125,21 @@ function callbackGaveUp(request: Request): Response {
 	return new Response(null, { status: 302, headers: { location: url.href, "cache-control": "no-store" } });
 }
 
-function pageHeaders(turnstile: boolean, options?: AuthOptions | null, imgSrc: string[] = [], scriptSelf = false): Record<string, string> {
+function pageHeaders(turnstile: boolean, options?: AuthOptions | null, imgSrc: string[] = [], scriptSelf = false, linkOrigins: string[] = []): Record<string, string> {
 	return {
-		...securityHeaders({ turnstile, formAction: options ? enabledProviderOrigins(options) : [], imgSrc, scriptSelf }),
+		...securityHeaders({
+			turnstile,
+			formAction: [...(options ? enabledProviderOrigins(options) : []), ...linkOrigins],
+			imgSrc,
+			scriptSelf,
+		}),
 		"cache-control": "no-store",
 	};
+}
+
+/** Signed-in account pages post connect to this host, then the browser follows the redirect to Cloudflare. */
+function accountLinkOrigins(options: AuthOptions | null): string[] {
+	return options?.cloudflare ? [PROVIDER_ORIGINS.cloudflare] : [];
 }
 
 function redirectTo(location: string, cookies: string[] = []): Response {
@@ -148,7 +161,7 @@ function htmlPathFor(pathname: string): string {
 	return pathname;
 }
 
-export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: DataPlane; callbackDeadlineMs?: number; signInDeadlineMs?: number } = {}) {
+export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: DataPlane; callbackDeadlineMs?: number; signInDeadlineMs?: number; cloudflareFetchMs?: number } = {}) {
 	const app = new Hono<{ Bindings: ControlEnv }>();
 
 	app.use("*", async (c, next) => {
@@ -209,7 +222,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 		const shell = await renderShell(c.req.raw);
 		if (shell.clearOwner) c.header("set-cookie", hostCookie(OWNER_COOKIE, "", 0));
 		const headers = shell.signedIn
-			? pageHeaders(false, null, shell.imageHosts, shell.clearOwner)
+			? pageHeaders(false, null, shell.imageHosts, shell.clearOwner, shell.linkOrigins)
 			: pageHeaders(shell.turnstile, shell.options);
 		return c.html(shell.html, 200, headers);
 	});
@@ -227,7 +240,6 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 			providers: [
 				loaded.options.github ? "github" : "",
 				loaded.options.google ? "google" : "",
-				loaded.options.cloudflare ? "cloudflare" : "",
 			].filter(Boolean),
 			magicLink: Boolean(loaded.options.mailer || loaded.options.emailBinding),
 			invitesRequired: loaded.options.invitesRequired,
@@ -246,7 +258,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 		const shell = await renderShell(c.req.raw);
 		if (shell.clearOwner) c.header("set-cookie", hostCookie(OWNER_COOKIE, "", 0));
 		const headers = shell.signedIn
-			? pageHeaders(false, null, shell.imageHosts, shell.clearOwner)
+			? pageHeaders(false, null, shell.imageHosts, shell.clearOwner, shell.linkOrigins)
 			: pageHeaders(shell.turnstile, shell.options);
 		return c.html(shell.html, 200, headers);
 	});
@@ -260,6 +272,12 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 		// Approval posts stay on this host. The sign-in form on this page can still leave for a provider.
 		return c.html(result.html ?? "", 200, pageHeaders(Boolean(result.turnstile), loaded.options));
 	}
+	app.post("/app/account/cloudflare", async (c) => {
+		const request = c.req.raw;
+		const loaded = await loadAuth(env, request, deps);
+		if (!loaded) return c.json({ error: "not_found" }, 404);
+		return handleCloudflareAccount(request, loaded.auth, loaded.options);
+	});
 	app.post("/app/sign-out", async (c) => {
 		const request = c.req.raw;
 		if (!sameOrigin(request)) return redirectTo(new URL("/app?error=origin", request.url).href);
@@ -284,6 +302,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 	});
 	app.all("/api/auth/*", async (c) => {
 		let request = c.req.raw;
+		const callbackPath = new URL(request.url).pathname;
 		const loaded = await loadAuth(env, request, deps);
 		if (!loaded) return c.json({ error: "not_found" }, 404);
 		if (loaded.options.turnstile && turnstileEndpoint(request)) {
@@ -301,17 +320,30 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 			headers.delete("x-captcha-response");
 			request = new Request(request, { headers });
 		}
+		// Cloudflare is a connect, not a sign-in. This path never reaches Better Auth.
+		// The same callback deadline aborts a token or profile call that is still running.
+		if (callbackPath === "/api/auth/callback/cloudflare") {
+			const providerAbort = new AbortController();
+			const deadline = deps.callbackDeadlineMs ?? CALLBACK_DEADLINE_MS;
+			return within(
+				deadline,
+				() => finishCloudflareLink(request, loaded.auth, loaded.options, deps.cloudflareFetchMs, providerAbort.signal),
+				() => callbackGaveUp(request),
+				providerAbort,
+			);
+		}
 		const handle = () => loaded.auth.handler(request);
 		const list = loaded.options.signupAllowlist;
 		// A missing OAuth state redirects immediately. This bound is for the token
 		// exchange, which does not time out on its own. A redirect does not call
 		// onAPIError.onError, so the code on that Location is logged here.
-		if (!new URL(request.url).pathname.startsWith("/api/auth/callback/")) return closedSignup(request, await handle(), list);
+		if (!callbackPath.startsWith("/api/auth/callback/")) return closedSignup(request, await handle(), list);
 		const deadline = deps.callbackDeadlineMs ?? CALLBACK_DEADLINE_MS;
 		const response = await within(deadline, handle, () => callbackGaveUp(request));
-		const code = callbackError(request, response);
+		const shown = await closedSignup(request, response, list);
+		const code = callbackError(request, shown);
 		if (code && code !== "deadline") logCallbackFailure(request, code);
-		return closedSignup(request, response, list);
+		return shown;
 	});
 
 	app.get("/api/v1/tenants", (c) => tenants(c, "GET"));
@@ -401,6 +433,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 		signedIn: boolean;
 		imageHosts: string[];
 		clearOwner: boolean;
+		linkOrigins: string[];
 	}> {
 		const loaded = await loadAuth(env, request, deps);
 		const url = new URL(request.url);
@@ -424,6 +457,11 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 				signupClosed: loaded.options.signupAllowlist !== null,
 				closedMessage: signupClosedText(env),
 				deleted: url.searchParams.get("deleted") === "1",
+				brand: brandConfig(env).name,
+				cloudflare: Boolean(loaded.options.cloudflare),
+				cloudflareLinked: await cloudflareIsLinked(loaded.options.database, session.user.id),
+				recent: recentSignIn(session),
+				disconnected: url.searchParams.get("disconnected") === "1",
 			});
 			return {
 				html: renderApp(env, body, "Your agents"),
@@ -432,6 +470,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 				signedIn: true,
 				imageHosts: image ? [avatarOrigin(image)] : [],
 				clearOwner: Boolean(token),
+				linkOrigins: accountLinkOrigins(loaded.options),
 			};
 		}
 		let body = "";
@@ -440,7 +479,6 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 				providers: [
 					loaded.options.github ? "github" : "",
 					loaded.options.google ? "google" : "",
-					loaded.options.cloudflare ? "cloudflare" : "",
 				].filter(Boolean),
 				magicLink: Boolean(loaded.options.mailer || loaded.options.emailBinding),
 				invitesRequired: loaded.options.invitesRequired,
@@ -461,6 +499,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 			signedIn: false,
 			imageHosts: [],
 			clearOwner: false,
+			linkOrigins: [],
 		};
 	}
 

@@ -27,7 +27,7 @@ test("a provider id without its secret is not enabled", () => {
 	assert.equal(resolveAuth({ GITHUB_CLIENT_ID: "id", AUTH_SECRET: secret, DB: openDb() }, new Request("https://control.example.com/app")), null);
 });
 
-test("Cloudflare profiles are never treated as verified", () => {
+test("a Cloudflare profile is not verified", () => {
 	const user = mapCloudflareUser({ id: "u1", email: "person@example.com", first_name: "Pat", last_name: "Lee", email_verified: true } as { id: string; email: string; first_name: string; last_name: string });
 	assert.equal(user?.emailVerified, false);
 	assert.equal(user?.name, "Pat Lee");
@@ -68,6 +68,7 @@ test("magic link sets the host session cookie and an invite is required only the
 	assert.match(html, /Invite code/);
 	assert.match(html, /name="provider" value="email"/);
 	assert.doesNotMatch(html, /value="github"/);
+	assert.doesNotMatch(html, /value="cloudflare"/);
 
 	const missing = await app.request("https://control.example.com/app/sign-in", {
 		method: "POST",
@@ -274,15 +275,24 @@ test("a social url outside the provider list is not followed", async () => {
 		handler: async () => Response.json({ url: "https://accounts.google.com/o/oauth2/v2/auth", redirect: true }),
 	}, resolveAuth({ ...env, GOOGLE_CLIENT_ID: "g-id", GOOGLE_CLIENT_SECRET: "g-secret" }, new Request(`${origin}/app`))!);
 	assert.equal(new URL(google.headers.get("location") ?? "").origin, "https://accounts.google.com");
+	const cloudflareOptions = resolveAuth({
+		...env,
+		CLOUDFLARE_OAUTH_CLIENT_ID: "cf-id",
+		CLOUDFLARE_OAUTH_CLIENT_SECRET: "cf-secret",
+	}, new Request(`${origin}/app`));
+	assert.ok(cloudflareOptions);
 	const cloudflare = await handleSignIn(formRequest("provider=cloudflare"), {
-		handler: async () => Response.json({ url: "https://dash.cloudflare.com/oauth2/auth", redirect: true }),
-	}, resolveAuth({
+		handler: async () => { throw new Error("cloudflare is not a sign-in provider"); },
+	}, cloudflareOptions);
+	assert.match(cloudflare.headers.get("location") ?? "", /error=unavailable$/);
+	assert.equal(cloudflare.headers.get("location")?.includes("dash.cloudflare.com"), false);
+	const onlyCloudflare = authBlockers({
 		AUTH_SECRET: secret,
 		DB: db,
 		CLOUDFLARE_OAUTH_CLIENT_ID: "cf-id",
 		CLOUDFLARE_OAUTH_CLIENT_SECRET: "cf-secret",
-	}, new Request(`${origin}/app`))!);
-	assert.equal(new URL(cloudflare.headers.get("location") ?? "").origin, "https://dash.cloudflare.com");
+	});
+	assert.ok(onlyCloudflare.some((line) => line.includes("No login provider")));
 });
 
 test("social Turnstile failures redirect to error=turnstile", async () => {
@@ -379,12 +389,12 @@ test("provider buttons stay off until Turnstile finishes", async () => {
 	assert.match(html, /<button class="provider provider-github"[^>]*disabled[^>]*>/);
 	assert.match(html, /Continue with GitHub/);
 	assert.match(html, /Continue with Google/);
-	assert.match(html, /Continue with Cloudflare/);
+	assert.equal(html.includes("Continue with Cloudflare"), false);
+	assert.equal(html.includes('value="cloudflare"'), false);
 	assert.match(html, /fill="#EA4335"/);
 	assert.match(html, /fill="#4285F4"/);
 	assert.match(html, /fill="#FBBC05"/);
 	assert.match(html, /fill="#34A853"/);
-	assert.match(html, /class="provider provider-cloudflare"/);
 	assert.match(html, /Waiting for the check…/);
 	assert.equal(html.includes("style="), false);
 	const css = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/app.css"), "utf8");
@@ -420,6 +430,7 @@ test("/app form-action allows only the enabled provider origins", async () => {
 	assert.match(csp, /form-action 'self' https:\/\/github\.com;/);
 	assert.equal(csp.includes("accounts.google.com"), false);
 	assert.equal(csp.includes("dash.cloudflare.com"), false);
+	assert.equal((await page.text()).includes('value="cloudflare"'), false);
 
 	const all = createApp({
 		...githubEnv(db),
@@ -428,10 +439,14 @@ test("/app form-action allows only the enabled provider origins", async () => {
 		CLOUDFLARE_OAUTH_CLIENT_ID: "cf-id",
 		CLOUDFLARE_OAUTH_CLIENT_SECRET: "cf-secret",
 	}, { database: db });
-	const wide = (await all.request(`${origin}/app`)).headers.get("content-security-policy") ?? "";
-	assert.match(wide, /form-action 'self' https:\/\/github\.com https:\/\/accounts\.google\.com https:\/\/dash\.cloudflare\.com;/);
+	const widePage = await all.request(`${origin}/app`);
+	const wide = widePage.headers.get("content-security-policy") ?? "";
+	assert.match(wide, /form-action 'self' https:\/\/github\.com https:\/\/accounts\.google\.com;/);
+	assert.equal(wide.includes("dash.cloudflare.com"), false);
+	assert.equal((await widePage.text()).includes("Continue with Cloudflare"), false);
 	const device = (await all.request(`${origin}/app/device`)).headers.get("content-security-policy") ?? "";
-	assert.match(device, /form-action 'self' https:\/\/github\.com https:\/\/accounts\.google\.com https:\/\/dash\.cloudflare\.com;/);
+	assert.match(device, /form-action 'self' https:\/\/github\.com https:\/\/accounts\.google\.com;/);
+	assert.equal(device.includes("dash.cloudflare.com"), false);
 });
 
 test("a sign-in that does not return redirects to deadline", async () => {

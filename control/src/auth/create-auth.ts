@@ -1,11 +1,10 @@
 import { betterAuth } from "better-auth";
 import { APIError } from "better-auth/api";
-import { genericOAuth, magicLink } from "better-auth/plugins";
+import { magicLink } from "better-auth/plugins";
 import { bearer } from "better-auth/plugins/bearer";
 import { deviceAuthorization } from "better-auth/plugins/device-authorization";
 import { CLI_CLIENT_ID } from "./device.ts";
 import { jwt } from "better-auth/plugins/jwt";
-import { mapCloudflareUser } from "./cloudflare-user.ts";
 import { INVITE_COOKIE, SESSION_COOKIE, readCookie } from "./cookies.ts";
 import { emailAllowed, emailIsVerified } from "./allowlist.ts";
 import { consumeInvite, rememberMagicInvite, takeMagicInvite, validInviteCode } from "./invites.ts";
@@ -13,16 +12,14 @@ import type { AuthOptions } from "./options.ts";
 import { cloudflareMailer } from "../mail/cloudflare.ts";
 import type { Mailer } from "../mail/types.ts";
 
-// Better Auth links when the provider is trusted OR the profile says the email
-// is verified. A trusted provider would therefore link an unverified address.
-// The list stays empty so only a provider-verified email (GitHub primary
-// `verified`, Google `email_verified`, or a magic link) can attach to an
-// existing account. Cloudflare is mapped with emailVerified false.
+// Better Auth links when the provider is trusted or the profile says the email
+// is verified, and only onto an account whose email is already verified. The
+// list stays empty: a trusted provider would attach an address that provider
+// did not verify. GitHub links when its primary email is `verified`. Google
+// links when `email_verified` is true. A magic link is verified because the
+// link was received. Cloudflare is not a sign-in provider. A signed-in account
+// connects it from /app, and that callback does not create a session.
 export const TRUSTED_PROVIDERS: string[] = [];
-
-const AUTHORIZE = "https://dash.cloudflare.com/oauth2/auth";
-const TOKEN = "https://dash.cloudflare.com/oauth2/token";
-const USER = "https://api.cloudflare.com/client/v4/user";
 
 async function mailerFor(options: AuthOptions): Promise<Mailer | undefined> {
 	if (options.mailer) return options.mailer;
@@ -33,27 +30,6 @@ async function mailerFor(options: AuthOptions): Promise<Mailer | undefined> {
 export async function createAuth(options: AuthOptions) {
 	const mailer = await mailerFor(options);
 	const plugins = [];
-	if (options.cloudflare) {
-		plugins.push(genericOAuth({
-			config: [{
-				providerId: "cloudflare",
-				clientId: options.cloudflare.clientId,
-				clientSecret: options.cloudflare.clientSecret,
-				authorizationUrl: AUTHORIZE,
-				tokenUrl: TOKEN,
-				scopes: ["user-details.read"],
-				pkce: true,
-				async getUserInfo(tokens) {
-					const accessToken = tokens.accessToken;
-					if (!accessToken) return null;
-					const response = await fetch(USER, { headers: { authorization: `Bearer ${accessToken}` } });
-					if (!response.ok) return null;
-					const body = await response.json() as { result?: Parameters<typeof mapCloudflareUser>[0] };
-					return mapCloudflareUser(body.result);
-				},
-			}],
-		}));
-	}
 	if (mailer) {
 		plugins.push(magicLink({
 			expiresIn: 60 * 5,
@@ -117,10 +93,11 @@ export async function createAuth(options: AuthOptions) {
 		},
 		user: {
 			// Fresh provider profile, including a later sign-in. An unverified address never matches.
-			validateUserInfo: async ({ user }) => {
+			// Trust is per provider. GitHub uses `verified` and Google uses `email_verified`.
+			validateUserInfo: async (info: { user: { email?: unknown; emailVerified?: unknown } }) => {
 				if (!options.signupAllowlist) return;
-				const email = typeof user.email === "string" ? user.email : "";
-				if (!emailAllowed(options.signupAllowlist, email, emailIsVerified(user.emailVerified))) return { error: "invite" };
+				const email = typeof info.user.email === "string" ? info.user.email : "";
+				if (!emailAllowed(options.signupAllowlist, email, emailIsVerified(info.user.emailVerified))) return { error: "invite" };
 			},
 		},
 		databaseHooks: {
