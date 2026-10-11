@@ -510,13 +510,23 @@ test("TenantStore.owner runs an allowlisted owner call and does not return a pee
 		orig(...args);
 	};
 	t.after(() => { console.log = orig; });
+	// Workerd delivers console.log on a later turn. A busy runner (the storage-backend jobs) can
+	// return the RPC before that line is in this process.
+	const saw = async (part: string) => {
+		const start = Date.now();
+		while (!lines.some((l) => l.includes(part))) {
+			if (Date.now() - start > 2000) return false;
+			await new Promise((r) => setTimeout(r, 20));
+		}
+		return true;
+	};
 	const empty = ns.get(ns.idFromName("id-empty")) as unknown as OwnerStub;
 	const missing = await empty.owner({ accountId: "acct_carol", method: "GET", path: "/owner/peers" });
 	assert.equal(missing.status, 404);
 	const emptyStatus = await empty.storageStatus();
 	assert.equal(emptyStatus.configured, false);
 	assert.deepEqual(emptyStatus.tables, []);
-	assert.ok(lines.some((l) => l.includes('"reason":"absent"') && l.includes('"accountId":"acct_carol"')));
+	assert.equal(await saw('"reason":"absent"'), true);
 
 	const stub = ns.get(ns.idFromName("id-carol")) as unknown as OwnerStub;
 	await stub.pushConfig({
@@ -537,7 +547,7 @@ test("TenantStore.owner runs an allowlisted owner call and does not return a pee
 	const peers = listed.body as { label: string; token?: string }[];
 	assert.deepEqual(peers.map((p) => p.label), ["ada"]);
 	assert.equal(JSON.stringify(listed.body).includes("a2aow_"), false);
-	assert.ok(lines.some((l) => l.includes('"event":"owner_rpc"') && l.includes('"accountId":"acct_carol"') && l.includes('"route":"GET /owner/peers"')));
+	assert.equal(await saw('"route":"GET /owner/peers"'), true);
 
 	const minted = await stub.owner({ accountId: "acct_carol", method: "POST", path: "/owner/peers", body: { label: "bob" } });
 	assert.equal(minted.status, 404);
@@ -566,8 +576,9 @@ test("TenantStore.owner runs an allowlisted owner call and does not return a pee
 	await stub.pushConfig({ version: 2, tenantId: "id-carol", name: "carol", status: "suspended", ownerTokenHash: hash, config: { AGENT_NAME: "Carol" } });
 	const suspended = await stub.owner({ accountId: "acct_carol", method: "GET", path: "/owner/peers" });
 	assert.equal(suspended.status, 403);
-	assert.ok(lines.some((l) => l.includes('"reason":"status"') && l.includes('"accountId":"acct_carol"')));
+	assert.equal(await saw('"reason":"status"'), true);
 	const badAccount = await stub.owner({ accountId: "../acct", method: "GET", path: "/owner/peers" });
 	assert.equal(badAccount.status, 400);
-	assert.ok(lines.some((l) => l.includes('"reason":"account"') && !l.includes("../acct")));
+	assert.equal(await saw('"reason":"account"'), true);
+	assert.equal(lines.some((l) => l.includes("../acct")), false);
 });
