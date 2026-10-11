@@ -3,10 +3,14 @@ import { brandConfig } from "@brand/brand.config.ts";
 import { Footer } from "@brand/Footer.tsx";
 import { Header } from "@brand/Header.tsx";
 import { SignInAside } from "@brand/SignInAside.tsx";
+import { PROVIDER_ORIGINS } from "../auth/sign-in.ts";
 
-export function securityHeaders(options: { turnstile?: boolean } = {}): Record<string, string> {
+const KNOWN_FORM_ORIGINS = new Set<string>(Object.values(PROVIDER_ORIGINS));
+
+export function securityHeaders(options: { turnstile?: boolean; formAction?: readonly string[] } = {}): Record<string, string> {
 	const host = options.turnstile ? "https://challenges.cloudflare.com" : "'none'";
 	const script = options.turnstile ? "'self' https://challenges.cloudflare.com" : "'none'";
+	const formAction = ["'self'", ...(options.formAction ?? []).filter((origin) => KNOWN_FORM_ORIGINS.has(origin))].join(" ");
 	const csp = [
 		"default-src 'none'",
 		"style-src 'self'",
@@ -15,7 +19,7 @@ export function securityHeaders(options: { turnstile?: boolean } = {}): Record<s
 		`frame-src ${host}`,
 		`connect-src ${host}`,
 		"base-uri 'none'",
-		"form-action 'self'",
+		`form-action ${formAction}`,
 		"frame-ancestors 'none'",
 	].join("; ");
 	return {

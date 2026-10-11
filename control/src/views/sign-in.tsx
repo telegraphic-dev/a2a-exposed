@@ -11,7 +11,7 @@ const ERRORS: Record<string, string> = {
 	"invalid-input-response": "The check failed. Try again.",
 	"missing-input-response": "The check failed. Try again.",
 	"bad-request": "The check failed. Try again.",
-	"timeout-or-duplicate": "The check expired. Try again.",
+	"timeout-or-duplicate": "The check expired. Please try again.",
 	"invalid-input-secret": "The sign-in check is not configured.",
 	"missing-input-secret": "The sign-in check is not configured.",
 	turnstile_unavailable: "The check could not be completed.",
