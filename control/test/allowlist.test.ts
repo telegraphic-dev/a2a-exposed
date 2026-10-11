@@ -469,6 +469,66 @@ test("a Cloudflare connect that cannot read the provider returns to /app", async
 	await shows(await connect("token-hang"), "deadline", /Sign-in took too long\. Try again\./);
 });
 
+test("a Cloudflare sign-in whose profile is not JSON returns to /app", async (t) => {
+	const original = globalThis.fetch;
+	let profile = "json";
+	globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+		const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+		if (url.startsWith("https://github.com/login/oauth/access_token")) return Response.json({ access_token: "gho_test", token_type: "bearer" });
+		if (url === "https://api.github.com/user") return Response.json({ id: 7, login: "mona", name: "Mona", email: "mona@example.com" });
+		if (url === "https://api.github.com/user/emails") return Response.json([{ email: "mona@example.com", primary: true, verified: true, visibility: "public" }]);
+		if (url.startsWith("https://dash.cloudflare.com/oauth2/token")) return Response.json({ access_token: "cf_test", token_type: "bearer" });
+		if (url === "https://api.cloudflare.com/client/v4/user") {
+			if (profile === "text") return new Response("not json", { status: 200, headers: { "content-type": "application/json" } });
+			return Response.json({ success: true, result: { id: "cf-user", email: "pat@cloud.test", first_name: "Pat", last_name: "Lee" } });
+		}
+		return original(input, init);
+	}) as typeof fetch;
+	t.after(() => { globalThis.fetch = original; });
+
+	const env = {
+		AUTH_SECRET: secret,
+		GITHUB_CLIENT_ID: "gh-id",
+		GITHUB_CLIENT_SECRET: "gh-secret",
+		CLOUDFLARE_OAUTH_CLIENT_ID: "cf-id",
+		CLOUDFLARE_OAUTH_CLIENT_SECRET: "cf-secret",
+		SIGNUP_ALLOWLIST: "mona@example.com",
+	};
+
+	const unlinkedDb = openDb();
+	const unlinked = createApp({ ...env, DB: unlinkedDb }, { database: unlinkedDb });
+	profile = "text";
+	const refused = await providerCallback(unlinked, "cloudflare");
+	assert.equal(refused.status, 302, await refused.clone().text());
+	const refusedLocation = new URL(refused.headers.get("location") ?? "", origin);
+	assert.equal(refusedLocation.searchParams.get("error"), "unable_to_get_user_info");
+	assert.match(await (await unlinked.request(refusedLocation)).text(), /The provider did not return an account\./);
+	assert.equal((await unlinkedDb.prepare('SELECT COUNT(*) AS n FROM "user"').first<{ n: number }>())?.n, 0);
+
+	profile = "json";
+	const linkedDb = openDb();
+	const linked = createApp({ ...env, DB: linkedDb }, { database: linkedDb });
+	const github = await providerCallback(linked, "github");
+	const session = github.headers.getSetCookie().find((value) => value.startsWith(`${SESSION_COOKIE}=`))!.split(";")[0];
+	const posted = await linked.request(`${origin}/app/account/cloudflare`, {
+		method: "POST",
+		headers: { origin, cookie: session, "content-type": "application/x-www-form-urlencoded" },
+		body: "action=connect",
+	});
+	const state = new URL(posted.headers.get("location") ?? "").searchParams.get("state") ?? "";
+	const connected = await linked.request(`${origin}/api/auth/callback/cloudflare?code=abc&state=${encodeURIComponent(state)}`, { headers: { cookie: session } });
+	assert.equal(new URL(connected.headers.get("location") ?? "", origin).searchParams.get("connected"), "1");
+
+	profile = "text";
+	const again = await providerCallback(linked, "cloudflare");
+	assert.equal(again.status, 302, await again.clone().text());
+	const againLocation = new URL(again.headers.get("location") ?? "", origin);
+	assert.equal(againLocation.searchParams.get("error"), "unable_to_get_user_info");
+	assert.match(await (await linked.request(againLocation)).text(), /The provider did not return an account\./);
+	assert.equal((await linkedDb.prepare('SELECT COUNT(*) AS n FROM "user"').first<{ n: number }>())?.n, 1);
+	assert.equal((await linkedDb.prepare(`SELECT COUNT(*) AS n FROM "account" WHERE "providerId" = 'cloudflare'`).first<{ n: number }>())?.n, 1);
+});
+
 test("a mistyped invite code is not shown as an allowlist refusal", async () => {
 	const db = openDb();
 	const app = createApp({

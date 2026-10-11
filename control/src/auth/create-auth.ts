@@ -5,6 +5,7 @@ import { bearer } from "better-auth/plugins/bearer";
 import { deviceAuthorization } from "better-auth/plugins/device-authorization";
 import { CLI_CLIENT_ID } from "./device.ts";
 import { jwt } from "better-auth/plugins/jwt";
+import { CLOUDFLARE_FETCH_MS, readCloudflare } from "./cloudflare-link.ts";
 import { mapCloudflareUser } from "./cloudflare-user.ts";
 import { INVITE_COOKIE, SESSION_COOKIE, readCookie } from "./cookies.ts";
 import { emailAllowed, emailIsVerified } from "./allowlist.ts";
@@ -51,9 +52,11 @@ export async function createAuth(options: AuthOptions) {
 				async getUserInfo(tokens) {
 					const accessToken = tokens.accessToken;
 					if (!accessToken) return null;
-					const response = await fetch(USER, { headers: { authorization: `Bearer ${accessToken}` } });
-					if (!response.ok) return null;
-					const body = await response.json() as { result?: Parameters<typeof mapCloudflareUser>[0] };
+					const profile = await readCloudflare(USER, {
+						headers: { authorization: `Bearer ${accessToken}`, accept: "application/json" },
+					}, CLOUDFLARE_FETCH_MS);
+					if (profile.kind !== "ok" || !profile.body || typeof profile.body !== "object") return null;
+					const body = profile.body as { result?: Parameters<typeof mapCloudflareUser>[0] };
 					return mapCloudflareUser(body.result);
 				},
 			}],

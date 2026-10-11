@@ -69,7 +69,7 @@ function startDeadline(ms: number): { done: Promise<never>; stop: () => void } {
 type ProviderRead = { kind: "ok"; body: unknown } | { kind: "deadline" } | { kind: "failed" };
 
 /** Token or profile read. A stalled socket, a rejected fetch, or a body that is not JSON does not throw. */
-async function readProvider(url: string, init: RequestInit, fetchMs: number): Promise<ProviderRead> {
+export async function readCloudflare(url: string, init: RequestInit, fetchMs = CLOUDFLARE_FETCH_MS): Promise<ProviderRead> {
 	const signal = AbortSignal.timeout(fetchMs);
 	const deadline = startDeadline(fetchMs);
 	try {
@@ -232,7 +232,7 @@ export async function finishCloudflareLink(request: Request, auth: SessionAuth, 
 		client_secret: options.cloudflare.clientSecret,
 		code_verifier: verifier,
 	});
-	const token = await readProvider(TOKEN, {
+	const token = await readCloudflare(TOKEN, {
 		method: "POST",
 		headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
 		body,
@@ -241,7 +241,7 @@ export async function finishCloudflareLink(request: Request, auth: SessionAuth, 
 	const tokenBody = token.kind === "ok" && token.body && typeof token.body === "object" ? token.body as { access_token?: unknown } : null;
 	const accessToken = typeof tokenBody?.access_token === "string" ? tokenBody.access_token : "";
 	if (!accessToken) return redirect(appRedirect(request, "invalid_code"), [], 302);
-	const profile = await readProvider(USER, { headers: { authorization: `Bearer ${accessToken}`, accept: "application/json" } }, fetchMs);
+	const profile = await readCloudflare(USER, { headers: { authorization: `Bearer ${accessToken}`, accept: "application/json" } }, fetchMs);
 	if (profile.kind === "deadline") return redirect(appRedirect(request, "deadline"), [], 302);
 	const profileBody = profile.kind === "ok" && profile.body && typeof profile.body === "object"
 		? profile.body as { result?: Parameters<typeof mapCloudflareUser>[0] }
