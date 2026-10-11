@@ -447,3 +447,67 @@ test("a failed same-zone fetch logs idp_unreachable with status and host", async
 	assert.equal(JSON.stringify(last).includes("connect failed"), false);
 	assert.equal(JSON.stringify(last).includes(SECRET), false);
 });
+
+test("an identity-provider error page is cancelled and not buffered", async (t) => {
+	const s = setup({ ...oidcEnv, APPROVAL_OIDC_ISSUER: ZONE }); t.after(s.restore);
+	let pulls = 0;
+	let cancelled = false;
+	s.env.CONTROL_SERVICE = {
+		async fetch() {
+			return new Response(new ReadableStream({
+				pull(controller) {
+					pulls++;
+					controller.enqueue(new Uint8Array(64 * 1024));
+				},
+				cancel() { cancelled = true; },
+			}), { status: 522 });
+		},
+	};
+	globalThis.fetch = (async () => { throw new Error("public fetch must not run"); }) as typeof fetch;
+	const d = await s.start();
+	const started = Date.now();
+	const { post } = await s.postOidc(d.data.user_code);
+	assert.ok(Date.now() - started < 1000, "error headers should return without reading the body");
+	assert.equal(post.status, 502);
+	assert.match(post.text, /The identity provider could not be reached/);
+	assert.equal(cancelled, true);
+	assert.ok(pulls < 3, `buffered ${pulls} chunks`);
+	const line = s.logs.map((entry) => { try { return JSON.parse(entry); } catch { return null; } }).find((entry) => entry?.event === "idp_unreachable");
+	assert.equal(line?.status, 522);
+	assert.equal(line?.op, "discovery");
+});
+
+test("a same-zone issuer that does not answer is given up, and the binding request carries the issuer host", async (t) => {
+	const issuer = "https://example.com";
+	const s = setup({
+		...oidcEnv, APPROVAL_OIDC_ISSUER: issuer, PUBLIC_URL: "https://northwind.example.com", TENANT_DOMAIN: "example.com",
+	});
+	t.after(s.restore);
+	let host = "";
+	s.env.CONTROL_SERVICE = {
+		async fetch(input: RequestInfo | URL) {
+			const req = input instanceof Request ? input : new Request(input);
+			host = req.headers.get("host") || "";
+			assert.equal(new URL(req.url).origin, issuer);
+			await new Promise((resolve) => setTimeout(resolve, 8000));
+			return Response.json({
+				issuer, authorization_endpoint: `${issuer}/authorize`, token_endpoint: `${issuer}/token`, jwks_uri: `${issuer}/jwks`,
+			});
+		},
+	};
+	globalThis.fetch = (async () => { throw new Error("public fetch must not run"); }) as typeof fetch;
+	const d = await s.start();
+	const started = Date.now();
+	const { post } = await s.postOidc(d.data.user_code);
+	const waited = Date.now() - started;
+	assert.equal(host, "example.com");
+	assert.ok(waited < 7000, `waited ${waited}ms`);
+	assert.equal(post.status, 502, post.text);
+	assert.match(post.text, /The identity provider could not be reached/);
+	const line = s.logs.map((entry) => { try { return JSON.parse(entry); } catch { return null; } }).find((entry) => entry?.event === "idp_unreachable");
+	assert.equal(line?.op, "discovery");
+	assert.equal(line?.status, 0);
+	assert.equal(line?.host, "example.com");
+	assert.equal(line?.error, "AbortError");
+	assert.equal(JSON.stringify(line).includes("The operation was aborted"), false);
+});

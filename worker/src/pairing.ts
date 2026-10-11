@@ -194,7 +194,7 @@ export function devicePage(m: PageModel, nonce: string): string {
 	const rows = r ? [
 		["Code", formatUserCode(r.userCode)],
 		["Agent (as it calls itself)", r.clientName || r.clientId || "(no name given)"],
-		...(r.clientId && r.clientName && r.clientId !== r.clientName ? [["Client id", r.clientId]] : []),
+		...(r.clientId && r.clientName && r.clientId !== r.clientName ? [["Alias (claimed)", r.clientId]] : []),
 		["Agent card (claimed)", r.agentCardUrl ? r.agentCardUrl + (cardIsPrivate(r.agentCardUrl) ? " (private network address, e.g. a Tailnet: not publicly reachable, so this inbox can't check it; informational only)" : "") : "(none given)"],
 		["Requested from", [r.ip || "unknown address", r.country].filter(Boolean).join(", ")],
 		["Expires", `${Math.max(0, Math.round((r.expiresMs - Date.now()) / 60000))} min`],
@@ -202,7 +202,7 @@ export function devicePage(m: PageModel, nonce: string): string {
 	] : [];
 	const notice = m.notice ? `<p class="n ${m.notice.kind}">${esc(m.notice.text)}</p>` : "";
 	const details = r ? `<table>${rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join("")}</table>
-<p class="w">Approve only if you expected this request and the code matches the one you were given. The name and card URL are claimed by the requester. Approving gives it a token to send messages to this inbox; revoke it any time with <code>${esc(m.cli)} token revoke &lt;label&gt;</code>.</p>` : "";
+<p class="w">Approve only if you expected this request and the code matches the one you were given. The name, alias and card URL are claimed by the requester. Approving gives it a token to send messages to this inbox; revoke it any time with <code>${esc(m.cli)} token revoke &lt;label&gt;</code>.</p>` : "";
 	const noPassword = `<p class="n info">No approval password is set yet. Easiest: ask your agent to run <code>${esc(m.cli)} pair set-password --web</code> and send you the one-time link, then set the password on that page. Or run <code>${esc(m.cli)} pair set-password</code> yourself in a terminal on the owner's machine. Then reload this page. You can deny without a password.</p>`;
 	const denyOnly = `<form method="post" action="/device">
 <input type="hidden" name="csrf" value="${esc(m.csrf)}"><input type="hidden" name="user_code" value="${esc(r ? formatUserCode(r.userCode) : "")}">

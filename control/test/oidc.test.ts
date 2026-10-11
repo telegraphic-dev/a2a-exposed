@@ -30,6 +30,31 @@ test("the issuer stays closed until login is configured", async () => {
 	assert.equal(response.status, 404);
 });
 
+test("discovery does not wait on D1", async () => {
+	const hanging = {
+		prepare() {
+			return {
+				bind() { return this; },
+				first: () => new Promise(() => {}),
+				all: () => new Promise(() => {}),
+				run: () => new Promise(() => {}),
+			};
+		},
+		batch: () => new Promise(() => {}),
+		exec: () => new Promise(() => {}),
+	};
+	const app = createApp(
+		{ AUTH_SECRET: secret, DB: hanging, ISSUER: "https://example.com" },
+		{ database: hanging, mailer: { async send() {} } },
+	);
+	const res = await Promise.race([
+		app.request("https://example.com/.well-known/openid-configuration"),
+		new Promise<Response>((_, reject) => setTimeout(() => reject(new Error("discovery waited on D1")), 500)),
+	]);
+	assert.equal(res.status, 200);
+	assert.equal((await res.json() as { issuer: string }).issuer, "https://example.com");
+});
+
 test("a signed-in owner can approve through the issuer and the client secret is not returned", async () => {
 	const db = openDb();
 	const sent: { text: string }[] = [];

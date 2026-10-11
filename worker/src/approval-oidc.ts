@@ -125,46 +125,93 @@ function logUnreachable(host: string, op: IdpOp, status: number, error?: unknown
 	console.log(JSON.stringify(kw));
 }
 
+function startDeadline(): { signal: AbortSignal; stop: () => void } {
+	const ac = new AbortController();
+	const timer = setTimeout(() => ac.abort(), FETCH_MS);
+	return { signal: ac.signal, stop: () => clearTimeout(timer) };
+}
+
+function aborted(signal: AbortSignal): Promise<never> {
+	if (signal.aborted) return Promise.reject(new DOMException("The operation was aborted", "AbortError"));
+	return new Promise((_, reject) => {
+		signal.addEventListener("abort", () => reject(new DOMException("The operation was aborted", "AbortError")), { once: true });
+	});
+}
+
+/** An error page is cancelled and not read. Only a successful body is buffered, and only up to `max`. */
+function dropBody(res: Response): void {
+	try { void res.body?.cancel().catch(() => {}); } catch { /* already closed */ }
+}
+
+async function takeBody(res: Response, signal: AbortSignal, max: number): Promise<Response> {
+	if (!res.ok) {
+		dropBody(res);
+		return new Response(null, { status: res.status, statusText: res.statusText });
+	}
+	const len = Number(res.headers.get("content-length") || 0);
+	if (len > max) {
+		dropBody(res);
+		throw new Error("large");
+	}
+	const text = await Promise.race([res.text(), aborted(signal)]);
+	if (text.length > max) throw new Error("large");
+	const headers = new Headers(res.headers);
+	headers.delete("content-length");
+	return new Response(text, { status: res.status, statusText: res.statusText, headers });
+}
+
 /**
  * Discovery, token and JWKS for an issuer on this tenant's zone go through CONTROL_SERVICE.
  * A public fetch of that zone can miss the control Worker (wildcard route, 522, or the site Worker).
  * Any other issuer, and a deploy with the binding unset, uses fetch.
+ * The binding request sets Host to the issuer host. Without that header the control Worker on the
+ * zone apex sees no Host, and the subrequest does not finish. Every call, binding or fetch, stops
+ * after FETCH_MS and the page says the provider could not be reached.
  */
 async function idpFetch(ctx: TenantContext, url: string, init: RequestInit, op: IdpOp): Promise<Response> {
 	let host = "";
 	try { host = new URL(url).hostname; } catch { /* logged as a failed fetch */ }
 	const binding = ctx.controlService();
 	const viaBinding = !!(binding && host && reachesControl(pageHostname(ctx), host, ctx.gates.tenantDomain));
+	const { signal, stop } = startDeadline();
 	try {
-		// A service binding rejects `redirect` and `signal` on the request (they do not cross the
-		// binding). The timeout still applies here. Redirects stay an error: the binding does not follow them.
-		const res = viaBinding ? await bindingFetch(binding!, url, init) : await fetch(url, init);
-		if (!res.ok) logUnreachable(host, op, res.status);
-		return res;
+		const res = await Promise.race([
+			viaBinding ? bindingFetch(binding!, url, init, signal) : publicFetch(url, init, signal),
+			aborted(signal),
+		]);
+		const full = await Promise.race([takeBody(res, signal, 65536), aborted(signal)]);
+		if (!full.ok) logUnreachable(host, op, full.status);
+		return full;
 	} catch (error) {
 		logUnreachable(host, op, 0, error);
 		throw new Error("http");
+	} finally {
+		stop();
 	}
 }
 
-async function bindingFetch(binding: NonNullable<ReturnType<TenantContext["controlService"]>>, url: string, init: RequestInit): Promise<Response> {
+function publicFetch(url: string, init: RequestInit, signal: AbortSignal): Promise<Response> {
+	return fetch(url, { method: init.method, headers: init.headers, body: init.body, redirect: "error", signal });
+}
+
+async function bindingFetch(binding: NonNullable<ReturnType<TenantContext["controlService"]>>, url: string, init: RequestInit, signal: AbortSignal): Promise<Response> {
 	const headers = new Headers(init.headers);
+	// `new Request(url)` does not keep Host across a service binding. The apex issuer is then
+	// a request with no Host, which does not match the control Worker's route or ISSUER, and the
+	// subrequest never completes. Set Host to the URL host. `redirect` and `signal` stay off the
+	// Request (they do not cross the binding). `signal` is passed to fetch so the runtime cancels it.
+	headers.set("host", new URL(url).host);
 	const req = new Request(url, { method: init.method || "GET", headers, body: init.body });
-	let timer: ReturnType<typeof setTimeout> | undefined;
 	try {
-		return await Promise.race([
-			binding.fetch(req),
-			new Promise<Response>((_, reject) => {
-				timer = setTimeout(() => reject(new DOMException("The operation was aborted", "AbortError")), FETCH_MS);
-			}),
-		]);
-	} finally {
-		if (timer !== undefined) clearTimeout(timer);
+		return await binding.fetch(req, { signal });
+	} catch (error) {
+		if (error instanceof TypeError && !signal.aborted) return binding.fetch(req);
+		throw error;
 	}
 }
 
 async function getJson(ctx: TenantContext, url: string, op: IdpOp): Promise<any> {
-	const res = await idpFetch(ctx, url, { headers: { accept: "application/json" }, redirect: "error", signal: AbortSignal.timeout(FETCH_MS) }, op);
+	const res = await idpFetch(ctx, url, { headers: { accept: "application/json" } }, op);
 	if (!res.ok) throw new Error("http");
 	return readJson(res, 65536);
 }
@@ -307,7 +354,7 @@ export async function finishOidc(ctx: TenantContext, o: {
 		});
 		const res = await idpFetch(ctx, disc.token_endpoint, {
 			method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
-			body, redirect: "error", signal: AbortSignal.timeout(FETCH_MS),
+			body,
 		}, "token");
 		if (!res.ok) return { ok: false, error: UNREACHABLE, reason: "token", userCode };
 		const tok = await readJson(res, 65536);

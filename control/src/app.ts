@@ -3,7 +3,7 @@ import { CALLBACK_DEADLINE_MS, within } from "./auth/deadline.ts";
 import { connectingIp, verifyTurnstile } from "./auth/turnstile.ts";
 import { enabledProviderOrigins, handleSignIn } from "./auth/sign-in.ts";
 import { loadAuth } from "./auth/instance.ts";
-import { authBlockers, type AuthDeps, type AuthOptions } from "./auth/options.ts";
+import { authBlockers, resolveAuth, type AuthDeps, type AuthOptions } from "./auth/options.ts";
 import { OIDC_COOKIE, authorize, discoveryDocument, exchangeCode, issuerOrigin, readTokenForm, resumeQuery } from "./oidc/issuer.ts";
 import { OWNER_COOKIE, hostCookie, readCookie } from "./auth/cookies.ts";
 import { deviceCodeFromCookie, handleDevice } from "./auth/device.ts";
@@ -409,10 +409,12 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 		};
 	}
 
-	app.get("/.well-known/openid-configuration", async (c) => {
+	// Static document. Do not build Better Auth here: that starts a handler bound to this
+	// request's D1, and a handler kept past the response waits on that binding forever.
+	// Login is on when resolveAuth would build one. The same check gates sign-in.
+	app.get("/.well-known/openid-configuration", (c) => {
 		const issuer = issuerOrigin(env, c.req.raw);
-		const loaded = issuer ? await loadAuth(env, c.req.raw, deps) : null;
-		if (!loaded) return c.json({ error: "not_found" }, 404);
+		if (!issuer || !resolveAuth(env, c.req.raw, deps)) return c.json({ error: "not_found" }, 404);
 		return c.json(discoveryDocument(issuer), 200, { "cache-control": "no-store" });
 	});
 	app.get("/api/oidc/authorize", (c) => oidcAuthorize(c));
