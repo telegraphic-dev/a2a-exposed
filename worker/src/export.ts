@@ -92,15 +92,80 @@ export async function exportRows(db: SqlDb, now = new Date()): Promise<ExportFil
 	return { format: "a2a-exposed-export", version: 1, exportedAt: now.toISOString(), tables };
 }
 
-/** DELETE then INSERT for every allowlisted table. Safe to run on a database that already has the schema. */
-export function toSql(file: ExportFile): string {
+/** Live-credential tables. A dashboard SQL copy skips them so the script does not delete rows it does not return. */
+export const REDACTED_SQL_SKIP = ["oauth_codes", "oidc_txns"] as const;
+
+const OMIT_COLUMNS: Record<string, readonly string[]> = {
+	tasks: ["push_configs_json"],
+	outbound: ["push_token_hash"],
+	mcp_grants: ["access_hash", "refresh_hash"],
+	outbound_peers: ["token_enc"],
+	device_requests: ["replaces_hash"],
+};
+
+const SETUP_SUB = /([?&])t=[A-Za-z0-9_-]{16,}/g;
+const USERINFO_SUB = /([a-z][a-z0-9+.-]*:\/\/)[^/?\s]*@/gi;
+
+/** Replace a peer token, a hosted owner token (`a2aot_`), a setup secret, or URL userinfo. The rest of the text stays. */
+export function scrubSecretText(value: string): string {
+	const tokens = /(?:a2aow_|s2a_|a2amcp_|a2amcpr_|a2aot_)[A-Za-z0-9_-]{20,}/g;
+	return value.replace(tokens, "[redacted]").replace(SETUP_SUB, "$1t=[redacted]").replace(USERINFO_SUB, "$1[redacted]@");
+}
+
+function placeholder(table: string, row: Record<string, unknown>, index: number): string {
+	const label = table === "peers" ? row.label : row.user_code;
+	const suffix = typeof label === "string" && label ? label : String(index);
+	return `redacted:${suffix}`;
+}
+
+/**
+ * A copy of `file` safe to show on the dashboard.
+ * Nullable credential columns are removed, including `device_requests.replaces_hash` (the hash of the token a re-pair would replace).
+ * `peers.token_hash` and `device_requests.device_hash` are NOT NULL, so they become `redacted:…` (not the hash, and not a token that authenticates).
+ * `oauth_codes` and `oidc_txns` are emptied. The approval-password row and the password-setup row (its value is the hash of the live setup token) are removed.
+ * Token-shaped text, including a hosted owner token (`a2aot_`), is scrubbed. The input is not changed: the CLI dump stays complete.
+ */
+export function redactExport(file: ExportFile): ExportFile {
 	if (file.format !== "a2a-exposed-export" || file.version !== 1) throw new ExportError("export: bad file");
 	if (!/^[\dTZ:.-]+$/.test(file.exportedAt)) throw new ExportError("export: bad timestamp");
+	const tables: ExportFile["tables"] = {};
+	for (const name of EXPORT_TABLES) {
+		if ((REDACTED_SQL_SKIP as readonly string[]).includes(name)) {
+			tables[name] = [];
+			continue;
+		}
+		const omit = new Set(OMIT_COLUMNS[name] ?? []);
+		const rows: Record<string, unknown>[] = [];
+		for (const [index, row] of (file.tables[name] ?? []).entries()) {
+			if (name === "settings" && (row.key === "approval_password" || row.key === "password_setup")) continue;
+			const out: Record<string, unknown> = {};
+			for (const [key, value] of Object.entries(row)) {
+				if (omit.has(key) || key.toLowerCase() === "replaces_hash") continue;
+				if ((name === "peers" && key === "token_hash") || (name === "device_requests" && key === "device_hash")) {
+					out[key] = placeholder(name, row, index);
+					continue;
+				}
+				out[key] = typeof value === "string" ? scrubSecretText(value) : value;
+			}
+			delete out.replaces_hash;
+			rows.push(out);
+		}
+		tables[name] = rows;
+	}
+	return { format: "a2a-exposed-export", version: 1, exportedAt: file.exportedAt, tables };
+}
+
+/** DELETE then INSERT for every allowlisted table. Safe to run on a database that already has the schema. `skip` leaves those tables out of the script. */
+export function toSql(file: ExportFile, options?: { skip?: readonly string[] }): string {
+	if (file.format !== "a2a-exposed-export" || file.version !== 1) throw new ExportError("export: bad file");
+	if (!/^[\dTZ:.-]+$/.test(file.exportedAt)) throw new ExportError("export: bad timestamp");
+	const skip = new Set(options?.skip ?? []);
 	const lines = [
 		`-- a2a-exposed-export ${file.version}`,
 		`-- exported_at ${file.exportedAt}`,
 	];
 	for (const name of EXPORT_TABLES) {
+		if (skip.has(name)) continue;
 		lines.push(`DELETE FROM ${quoteIdent(name)};`);
 		for (const row of file.tables[name] ?? []) {
 			const cols = Object.keys(row);

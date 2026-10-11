@@ -722,3 +722,35 @@ test("owner summary counts tasks and pending pairing requests without their text
 	assert.equal(text.includes(taskId), false);
 	assert.equal(s.DB.db.prepare("SELECT pending_json FROM wakes WHERE context_id = ?").get("ctx-keep")?.pending_json, pending);
 });
+
+test("owner log lists history without data_json and does not clear a pending wake", async (t) => {
+	const s = setup(); t.after(s.restore);
+	const issued = await s.owner("POST", "/owner/peers", { label: "ada" });
+	assert.match(issued.data.token, /^a2aow_/);
+	const pasted = "a2aow_" + "b".repeat(20);
+	const owner = "a2aot_" + "Q".repeat(43);
+	const sent = await s.call("POST", "/", {
+		json: { jsonrpc: "2.0", id: 1, method: "message/send", params: { message: { kind: "message", role: "user", messageId: "m-log", parts: [{ kind: "text", text: "hello from ada" }] } } },
+		headers: { authorization: `Bearer ${issued.data.token}` },
+	});
+	assert.equal(sent.status, 200, JSON.stringify(sent.data));
+	const taskId = sent.data.result.id;
+	const pending = JSON.stringify({ taskIds: [taskId] });
+	const now = Date.now();
+	s.DB.db.prepare("INSERT INTO wakes (context_id, last_sent_ms, pending_json, pending_since_ms) VALUES (?, ?, ?, ?)").run("ctx-keep", now, pending, now);
+	const secret = JSON.stringify({ token: pasted, messageId: "m-log" });
+	s.DB.db.prepare("UPDATE history SET text = ?, data_json = ? WHERE dir = 'in'").run(`hello ${pasted} and ${owner} there`, secret);
+	const log = await s.owner("GET", "/owner/log");
+	assert.equal(log.status, 200);
+	const text = JSON.stringify(log.data);
+	assert.match(text, /hello \[redacted\] and \[redacted\] there/);
+	assert.equal(text.includes(pasted), false);
+	assert.equal(text.includes(owner), false);
+	assert.equal(text.includes(secret), false);
+	assert.equal(text.includes("data_json"), false);
+	assert.equal(text.includes('"data"'), false);
+	assert.equal(s.DB.db.prepare("SELECT pending_json FROM wakes WHERE context_id = ?").get("ctx-keep")?.pending_json, pending);
+	const inbox = await s.owner("GET", "/owner/inbox");
+	assert.equal(inbox.status, 200);
+	assert.equal(s.DB.db.prepare("SELECT pending_json FROM wakes WHERE context_id = ?").get("ctx-keep")?.pending_json, null);
+});

@@ -586,8 +586,42 @@ test("TenantStore.owner runs an allowlisted owner call and does not return a pee
 
 	const setup = await stub.owner({ accountId: "acct_carol", method: "POST", path: "/owner/pairing/password-link" });
 	assert.equal(setup.status, 404);
+	const pasted = "a2aow_" + "b".repeat(20);
+	const sentPaste = await http("POST", "/", `Bearer ${issued.token}`, {
+		jsonrpc: "2.0", id: 2, method: "message/send",
+		params: { message: { kind: "message", role: "user", messageId: "m-paste", parts: [{ kind: "text", text: `note ${pasted} end` }] } },
+	});
+	assert.equal(sentPaste.status, 200, await sentPaste.clone().text());
+	const httpExport = await (await http("GET", "/owner/export", "Bearer owner-carol")).json() as { tables?: { peers?: { token_hash?: string }[] } };
+	assert.match(httpExport.tables?.peers?.[0]?.token_hash ?? "", /^[0-9a-f]{64}$/);
+	assert.equal(JSON.stringify(httpExport).includes(pasted), true, "the owner HTTP export stays the full dump");
 	const dumped = await stub.owner({ accountId: "acct_carol", method: "GET", path: "/owner/export" });
-	assert.equal(dumped.status, 404);
+	assert.equal(dumped.status, 200);
+	const dumpedText = JSON.stringify(dumped.body);
+	assert.match(dumpedText, /"token_hash":"redacted:ada"/);
+	assert.match(dumpedText, /note \[redacted\] end/);
+	assert.equal(dumpedText.includes(pasted), false);
+	assert.equal(dumpedText.includes(issued.token ?? ""), false);
+	assert.equal(dumpedText.includes("tenant-secret-value"), false);
+	assert.equal(dumpedText.includes(httpExport.tables?.peers?.[0]?.token_hash ?? "missing-hash"), false);
+	const sqlDump = await stub.owner({ accountId: "acct_carol", method: "GET", path: "/owner/export", query: { format: "sql" } });
+	assert.equal(sqlDump.status, 200);
+	const sql = (sqlDump.body as { sql?: string }).sql ?? "";
+	assert.match(sql, /note \[redacted\] end/);
+	assert.match(sql, /redacted:ada/);
+	assert.match(sql, /Do not load it onto a live inbox/);
+	assert.equal(sql.includes(pasted), false);
+	assert.equal(sql.includes("oauth_codes"), false);
+	assert.equal(sql.includes("oidc_txns"), false);
+	assert.equal(sql.includes(issued.token ?? ""), false);
+	const badFormat = await stub.owner({ accountId: "acct_carol", method: "GET", path: "/owner/export", query: { format: "json" } });
+	assert.equal(badFormat.status, 400);
+	const logged = await stub.owner({ accountId: "acct_carol", method: "GET", path: "/owner/log" });
+	assert.equal(logged.status, 200);
+	const loggedText = JSON.stringify(logged.body);
+	assert.match(loggedText, /note \[redacted\] end/);
+	assert.equal(loggedText.includes(pasted), false);
+	assert.equal(loggedText.includes("data_json"), false);
 	const oddQuery = await stub.owner({ accountId: "acct_carol", method: "GET", path: "/owner/inbox", query: { format: "sql" } });
 	assert.equal(oddQuery.status, 400);
 	const pairing = await stub.owner({ accountId: "acct_carol", method: "GET", path: "/owner/pairing" });

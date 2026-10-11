@@ -29,13 +29,19 @@ test("owner RPC allowlist is the management reads and the calls that do not retu
 	assert.equal(ok("GET", "/owner/wake/preview")?.name, "GET /owner/wake/preview");
 	assert.equal(ok("POST", "/owner/wake/test")?.name, "POST /owner/wake/test");
 	assert.equal(ok("GET", "/owner/contexts")?.name, "GET /owner/contexts");
+	assert.equal(ok("GET", "/owner/log")?.name, "GET /owner/log");
+	assert.equal(ok("GET", "/owner/export")?.name, "GET /owner/export");
+	assert.equal(ok("GET", "/owner/export", { format: "sql" })?.search, "?format=sql");
 
 	const refused = (method: string, path: string, query?: Record<string, string>) => matchOwnerRpc(method, path, query);
 	assert.deepEqual(refused("POST", "/owner/peers"), { ok: false, reason: "path" });
 	assert.deepEqual(refused("POST", "/owner/pairing/password-link"), { ok: false, reason: "path" });
 	assert.deepEqual(refused("PUT", "/owner/pairing/password"), { ok: false, reason: "path" });
 	assert.deepEqual(refused("PUT", "/owner/outbound-peers/ada"), { ok: false, reason: "path" });
-	assert.deepEqual(refused("GET", "/owner/export"), { ok: false, reason: "path" });
+	assert.deepEqual(refused("GET", "/owner/export", { format: "json" }), { ok: false, reason: "query" });
+	assert.deepEqual(refused("GET", "/owner/export", { format: "sql", n: "1" }), { ok: false, reason: "query" });
+	assert.deepEqual(refused("POST", "/owner/export"), { ok: false, reason: "path" });
+	assert.deepEqual(refused("GET", "/owner/log", { n: "10" }), { ok: false, reason: "query" });
 	assert.deepEqual(refused("POST", "/owner/purge"), { ok: false, reason: "path" });
 	assert.deepEqual(refused("POST", "/owner/tasks/task-1/reply"), { ok: false, reason: "path" });
 	assert.deepEqual(refused("POST", "/owner/history"), { ok: false, reason: "path" });
@@ -54,6 +60,7 @@ test("owner RPC allowlist is the management reads and the calls that do not retu
 
 test("owner RPC withholds peer tokens and decrypted secrets", () => {
 	const token = "a2aow_" + "a".repeat(43);
+	assert.equal(ownerResponseLeaks("a2aot_" + "Q".repeat(43)), true);
 	assert.equal(ownerResponseLeaks({ label: "ada", revoked_at: null }), false);
 	assert.equal(ownerResponseLeaks([{ text: "hello" }]), false);
 	assert.equal(ownerResponseLeaks({ token }), true);

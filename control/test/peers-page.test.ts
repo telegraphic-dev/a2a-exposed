@@ -171,6 +171,8 @@ test("the agent page approves a claimed pairing, confirms revoke, and lists outb
 		assert.match(html, /name="action" value="approve"/);
 		assert.match(html, /name="action" value="deny"/);
 		assert.match(html, /<code>ada<\/code>/);
+		assert.match(html, /pairing WDJB-4827/);
+		assert.match(html, /<time datetime="2026-10-01T08:00:00.000Z">2026-10-01 08:00 UTC<\/time>/);
 		assert.match(html, /Ada &lt;b&gt;/);
 		assert.equal(html.includes("Gone Peer"), false);
 		assert.match(html, /<code>north<\/code>/);

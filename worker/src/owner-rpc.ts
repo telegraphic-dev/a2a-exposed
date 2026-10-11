@@ -1,7 +1,7 @@
 // Hosted owner RPC allowlist. The control plane calls TenantStore.owner() after it has checked that
 // the account owns the tenant. This list is the only paths that call may run, and it is stricter than
-// the owner HTTP API: routes that mint a peer token, return a setup secret, accept a plaintext peer
-// token, or dump credential material (export) are not here. Self-host never calls this.
+// the owner HTTP API: routes that mint a peer token, return a setup secret, or accept a plaintext peer
+// token are not here. GET /owner/export is here only because runOwnerRpc redacts it first. Self-host never calls this.
 
 import { ID_RE } from "./a2a.ts";
 import { credentialIsMasked, previewHeaderPlain } from "./wake.ts";
@@ -15,7 +15,9 @@ const ALIAS = /^[A-Za-z0-9_.-]{1,64}$/;
 /** Display form WDJB-4827 or the stored form WDJB4827. Vowels and 0/1 are not in a real code. */
 const USER_CODE = /^[BCDFGHJKLMNPQRSTVWXZ]{4}-?[2-9]{4}$/i;
 
-const TOKEN_RE = /^(?:a2aow_|s2a_|a2amcp_|a2amcpr_)[A-Za-z0-9_-]{20,}$/;
+/** Peer tokens, MCP tokens, and the hosted owner token (`a2aot_`). */
+export const TOKEN_PREFIXES = ["a2aow_", "s2a_", "a2amcp_", "a2amcpr_", "a2aot_"] as const;
+const TOKEN_RE = new RegExp(`^(?:${TOKEN_PREFIXES.join("|")})[A-Za-z0-9_-]{20,}$`);
 const SETUP_RE = /(?:\?|&)t=[A-Za-z0-9_-]{16,}/;
 const USERINFO_RE = /^[a-z][a-z0-9+.-]*:\/\/[^/?\s]*@/i;
 /** A non-empty string under one of these keys is a secret, even when it is not a token shape. */
@@ -110,6 +112,14 @@ function historyQuery(q: Record<string, string>): string | null {
 	return `?n=${q.n}`;
 }
 
+/** `format=sql` is the only export query. The RPC still calls the JSON handler and redacts before building SQL. */
+function exportQuery(q: Record<string, string>): string | null {
+	for (const k of Object.keys(q)) if (k !== "format") return null;
+	if (q.format === undefined) return "";
+	if (q.format !== "sql") return null;
+	return "?format=sql";
+}
+
 interface RouteDef {
 	method: "GET" | "POST" | "DELETE";
 	name: string;
@@ -138,6 +148,8 @@ const ROUTES: RouteDef[] = [
 	{ method: "GET", name: "GET /owner/wake/preview", take: (s) => s.length === 3 && s[1] === "wake" && s[2] === "preview", search: noQuery, path: () => "/owner/wake/preview" },
 	{ method: "POST", name: "POST /owner/wake/test", take: (s) => s.length === 3 && s[1] === "wake" && s[2] === "test", search: noQuery, path: () => "/owner/wake/test" },
 	{ method: "GET", name: "GET /owner/contexts", take: (s) => s.length === 2 && s[1] === "contexts", search: noQuery, path: () => "/owner/contexts" },
+	{ method: "GET", name: "GET /owner/log", take: (s) => s.length === 2 && s[1] === "log", search: noQuery, path: () => "/owner/log" },
+	{ method: "GET", name: "GET /owner/export", take: (s) => s.length === 2 && s[1] === "export", search: exportQuery, path: () => "/owner/export" },
 ];
 
 /** Method + path (+ query) on the owner RPC allowlist, or why it is not. */

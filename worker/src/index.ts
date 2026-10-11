@@ -12,7 +12,7 @@ import * as P from "./pairing.ts";
 import * as M from "./mcp.ts";
 import { accountIdOf, DASHBOARD_ACTOR_HEADER, matchOwnerRpc, ownerResponseLeaks, scrubOwnerClaims, type OwnerRpcRequest, type OwnerRpcResult } from "./owner-rpc.ts";
 import { resolveTenant, type TenantContext, type WorkerBindings } from "./tenancy.ts";
-import { exportRows, toSql } from "./export.ts";
+import { exportRows, redactExport, REDACTED_SQL_SKIP, scrubSecretText, toSql } from "./export.ts";
 import { backupDatabase, DAILY_CRON } from "./backup.ts";
 import * as O from "./approval-oidc.ts";
 type Json = any;
@@ -1146,6 +1146,27 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 		const rows = await ctx.DB.prepare("SELECT context_id, COUNT(*) AS entries, MAX(ts) AS last FROM history GROUP BY context_id ORDER BY last DESC LIMIT 100").all();
 		return json(rows.results);
 	}
+	if (seg[0] === "log" && !seg[1] && m === "GET") {
+		// Recent history, newest first. Unlike GET /owner/inbox this does not clear a pending wake, and it does not return data_json.
+		const clip = (v: unknown, max: number) => typeof v === "string" ? scrubSecretText(v).slice(0, max) : null;
+		const rows = await ctx.DB.prepare(
+			"SELECT seq, context_id, ts, dir, peer, task_id, role, state, event, text FROM history ORDER BY seq DESC LIMIT 100",
+		).all();
+		return json({
+			entries: (rows.results as Json[]).map((r) => ({
+				seq: typeof r.seq === "number" ? r.seq : Number(r.seq),
+				contextId: clip(r.context_id, 200),
+				ts: clip(r.ts, 40),
+				dir: clip(r.dir, 16),
+				peer: clip(r.peer, 200),
+				taskId: clip(r.task_id, 200),
+				role: clip(r.role, 32),
+				state: clip(r.state, 32),
+				event: clip(r.event, 64),
+				text: clip(r.text, 2000),
+			})),
+		});
+	}
 	if (seg[0] === "export" && !seg[1] && m === "GET") {
 		const file = await exportRows(ctx.DB);
 		if (url.searchParams.get("format") === "sql") {
@@ -2138,7 +2159,9 @@ export async function runOwnerRpc(ctx: TenantContext, ectx: ExecutionContext, in
 		const u = new URL(ctx.PUBLIC_URL);
 		if (u.protocol === "https:" || u.protocol === "http:") origin = u.origin;
 	} catch { /* the handler reads the path, not this origin */ }
-	const url = new URL(origin + matched.route.path + matched.route.search);
+	// format=sql is text/plain on the HTTP API. The RPC always reads the JSON dump, then redacts, then builds SQL.
+	const search = matched.route.path === "/owner/export" ? "" : matched.route.search;
+	const url = new URL(origin + matched.route.path + search);
 	const headers = new Headers({ "content-type": "application/json" });
 	if (actor === "human") headers.set(DASHBOARD_ACTOR_HEADER, "human");
 	const req = new Request(url, { method: matched.route.method, headers });
@@ -2151,7 +2174,22 @@ export async function runOwnerRpc(ctx: TenantContext, ectx: ExecutionContext, in
 		log("owner_rpc", { tenant, accountId, method: matched.route.method, route: matched.route.name, status });
 		return { status, body: { error } };
 	}
-	const data = scrubOwnerClaims(await res.json().catch(() => null));
+	let data = scrubOwnerClaims(await res.json().catch(() => null));
+	if (matched.route.path === "/owner/export" && res.ok && data && typeof data === "object") {
+		try {
+			const file = redactExport(data as Parameters<typeof redactExport>[0]);
+			data = matched.route.search === "?format=sql"
+				? {
+					exportedAt: file.exportedAt,
+					sql: "-- Dashboard copy. This is not a backup. Do not load it onto a live inbox.\n"
+						+ "-- Stored token hashes are replaced with redacted: values that do not authenticate, or left out. Ciphertext, push tokens, re-pair hashes, OAuth codes, the approval-password hash, password-setup hashes, and OpenID Connect sign-in rows are omitted.\n"
+						+ toSql(file, { skip: REDACTED_SQL_SKIP }),
+				}
+				: file;
+		} catch {
+			return refuse(500, "response withheld", "secret");
+		}
+	}
 	if (data === null || ownerResponseLeaks(data)) return refuse(500, "response withheld", "secret");
 	log("owner_rpc", { tenant, accountId, method: matched.route.method, route: matched.route.name, status: res.status });
 	return { status: res.status, body: data };

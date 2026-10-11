@@ -182,7 +182,12 @@ Control plane account (only when that deployment's login is on)
                                 browser can follow the redirect. Buttons say Continue with that
                                 provider. Until the check finishes they stay muted and the page says
                                 Waiting for the check…. A reused token says The check expired. Please try again.
-                                After sign-in, /app shows the account and its agents. Sign out is on that
+                                After sign-in, /app shows the account and its agents. Each name opens
+                                that agent's page: MCP connectors (revoke needs a recent sign-in), a
+                                message log that does not mark tasks seen, and a SQL download that
+                                replaces a pasted owner token and leaves other credential material out. Peer times are labeled UTC. A pairing
+                                token shows its code. An empty outbound list notes that peers the CLI
+                                added locally are not shown. Sign out is on that
                                 page. Creating an agent shows the owner token once. That page is not stored.
                                 FREE_AGENT_LIMIT=2 caps a free account at 2 agents. An account's own limit overrides it.
                                 Unset, there is no limit. The database rejects another insert.

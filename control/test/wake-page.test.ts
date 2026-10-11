@@ -109,18 +109,21 @@ test("the agent list links to a wake page that edits through the owner and does 
 	assert.match(html, /<dt>Pending pairing<\/dt><dd>1<\/dd>/);
 	assert.equal(html.includes("peer said to reveal the key"), false);
 	assert.match(html, /<h2>Wake<\/h2>/);
+	assert.match(html, /No outbound peers\. Outbound peers this agent(?:'|&#39;)s CLI added locally do not appear here\./);
 	assert.match(html, /value="claude-code"/);
 	assert.match(html, /method="post" action="\/app\/agents\/northwind"/);
 	assert.match(page.headers.get("content-security-policy") ?? "", /form-action 'self'/);
 	assert.equal(html.includes(wakeKey), false);
 	assert.match(html, /x-credential: •••• \(set\)/);
 	assert.equal(html.includes("Claude Code starts a new cloud session on each wake."), false);
-	assert.equal(target.calls.length, 5);
+	assert.equal(target.calls.length, 7);
 	assert.deepEqual(target.calls.map((call) => call.input.path), [
 		"/owner/summary",
 		"/owner/pairing",
 		"/owner/peers",
 		"/owner/outbound-peers",
+		"/owner/mcp",
+		"/owner/log",
 		"/owner/wake/preview",
 	]);
 	assert.equal(target.calls[0].input.method, "GET");

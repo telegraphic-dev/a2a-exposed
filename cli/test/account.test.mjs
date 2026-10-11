@@ -89,6 +89,13 @@ test("login help names the callback error", async () => {
 	assert.match(stdout, /Continue with/);
 	assert.match(stdout, /Waiting for the check/);
 	assert.match(stdout, /The check expired\. Please try again/);
+	assert.match(stdout, /MCP connectors/);
+	assert.match(stdout, /message log that does not mark tasks seen/);
+	assert.match(stdout, /SQL download/);
+	assert.match(stdout, /pasted owner token/);
+	assert.match(stdout, /labeled UTC/);
+	assert.match(stdout, /token shows its code/);
+	assert.match(stdout, /added locally are not shown/);
 	assert.match(stdout, /owner token once/);
 	assert.match(stdout, /not stored/);
 	assert.match(stdout, /FREE_AGENT_LIMIT=2/);
