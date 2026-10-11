@@ -100,10 +100,11 @@ const OMIT_COLUMNS: Record<string, readonly string[]> = {
 	outbound: ["push_token_hash"],
 	mcp_grants: ["access_hash", "refresh_hash"],
 	outbound_peers: ["token_enc"],
+	device_requests: ["replaces_hash"],
 };
 
-/** Whole-string and embedded shapes `ownerResponseLeaks` treats as secrets, plus the same tokens inside a sentence. */
-const TOKEN_SUB = /(?:a2aow_|s2a_|a2amcp_|a2amcpr_)[A-Za-z0-9_-]{20,}/g;
+/** Whole-string and embedded shapes `ownerResponseLeaks` treats as secrets, plus the same tokens inside a sentence. `a2aot_` is a hosted owner token. */
+const TOKEN_SUB = /(?:a2aow_|s2a_|a2amcp_|a2amcpr_|a2aot_)[A-Za-z0-9_-]{20,}/g;
 const SETUP_SUB = /([?&])t=[A-Za-z0-9_-]{16,}/g;
 const USERINFO_SUB = /([a-z][a-z0-9+.-]*:\/\/)[^/?\s]*@/gi;
 
@@ -120,9 +121,10 @@ function placeholder(table: string, row: Record<string, unknown>, index: number)
 
 /**
  * A copy of `file` safe to show on the dashboard.
- * Nullable credential columns are removed. `peers.token_hash` and `device_requests.device_hash` are NOT NULL, so they
- * become `redacted:…` (not the hash, and not a token that authenticates). `oauth_codes` and `oidc_txns` are emptied.
- * The approval-password row is removed. Token-shaped text is scrubbed. The input is not changed: the CLI dump stays complete.
+ * Nullable credential columns are removed, including `device_requests.replaces_hash` (the hash of the token a re-pair would replace).
+ * `peers.token_hash` and `device_requests.device_hash` are NOT NULL, so they become `redacted:…` (not the hash, and not a token that authenticates).
+ * `oauth_codes` and `oidc_txns` are emptied. The approval-password row and the password-setup row (its value is the hash of the live setup token) are removed.
+ * Token-shaped text, including a hosted owner token (`a2aot_`), is scrubbed. The input is not changed: the CLI dump stays complete.
  */
 export function redactExport(file: ExportFile): ExportFile {
 	if (file.format !== "a2a-exposed-export" || file.version !== 1) throw new ExportError("export: bad file");
@@ -136,7 +138,7 @@ export function redactExport(file: ExportFile): ExportFile {
 		const omit = new Set(OMIT_COLUMNS[name] ?? []);
 		const rows: Record<string, unknown>[] = [];
 		for (const [index, row] of (file.tables[name] ?? []).entries()) {
-			if (name === "settings" && row.key === "approval_password") continue;
+			if (name === "settings" && (row.key === "approval_password" || row.key === "password_setup")) continue;
 			const out: Record<string, unknown> = {};
 			for (const [key, value] of Object.entries(row)) {
 				if (omit.has(key)) continue;

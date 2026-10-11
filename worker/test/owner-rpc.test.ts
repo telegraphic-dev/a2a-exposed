@@ -60,6 +60,7 @@ test("owner RPC allowlist is the management reads and the calls that do not retu
 
 test("owner RPC withholds peer tokens and decrypted secrets", () => {
 	const token = "a2aow_" + "a".repeat(43);
+	assert.equal(ownerResponseLeaks("a2aot_" + "Q".repeat(43)), true);
 	assert.equal(ownerResponseLeaks({ label: "ada", revoked_at: null }), false);
 	assert.equal(ownerResponseLeaks([{ text: "hello" }]), false);
 	assert.equal(ownerResponseLeaks({ token }), true);

@@ -74,15 +74,19 @@ test("redactExport drops credential material and leaves the full dump unchanged"
 	const DB = db();
 	const now = "2026-10-11T00:00:00.000Z";
 	const token = "a2aow_" + "a".repeat(20);
+	const owner = "a2aot_" + "Q".repeat(43);
 	const hash = "ab".repeat(32);
+	const replaces = "cd".repeat(32);
+	const setupHash = "ef".repeat(32);
 	const setup = "c".repeat(16);
 	await DB.prepare("INSERT INTO peers (label, token_hash, created_at) VALUES ('ada', ?, ?)").bind(hash, now).run();
-	await DB.prepare("INSERT INTO history (context_id, ts, dir, text) VALUES ('ctx-1', ?, 'in', ?)").bind(now, `see ${token} at https://user:secret@hooks.example/wake?t=${setup}`).run();
+	await DB.prepare("INSERT INTO history (context_id, ts, dir, text) VALUES ('ctx-1', ?, 'in', ?)").bind(now, `see ${token} and ${owner} at https://user:secret@hooks.example/wake?t=${setup}`).run();
 	await DB.prepare("INSERT INTO tasks (id, context_id, peer, state, protocol, created_at, updated_at, status_json, artifacts_json, push_configs_json) VALUES ('task-1', 'ctx-1', 'ada', 'submitted', '1.0', ?, ?, '{}', '[]', ?)").bind(now, now, JSON.stringify([{ token }])).run();
 	await DB.prepare("INSERT INTO outbound (task_id, context_id, peer, push_token_hash, sent_at, task_json) VALUES ('task-1', 'ctx-1', 'ada', 'push-hash-secret', ?, ?)").bind(now, JSON.stringify({ token })).run();
 	await DB.prepare("INSERT INTO settings (key, value) VALUES ('approval_password', ?)").bind(JSON.stringify({ hash: "x".repeat(40) })).run();
+	await DB.prepare("INSERT INTO settings (key, value) VALUES ('password_setup', ?)").bind(JSON.stringify({ hash: setupHash, createdMs: 1, expiresMs: 2, failures: 0 })).run();
 	await DB.prepare("INSERT INTO settings (key, value) VALUES ('theme', 'kept')").run();
-	await DB.prepare("INSERT INTO device_requests (device_hash, user_code, status, created_ms, expires_ms, interval_s) VALUES ('device-hash-secret', 'WDJB4827', 'pending', 1, 2, 5)").run();
+	await DB.prepare("INSERT INTO device_requests (device_hash, user_code, status, created_ms, expires_ms, interval_s, replaces_label, replaces_hash) VALUES ('device-hash-secret', 'WDJB4827', 'pending', 1, 2, 5, 'ada', ?)").bind(replaces).run();
 	await DB.prepare("INSERT INTO oauth_codes (code_hash, client_id, redirect_uri, code_challenge, scope, resource, created_ms, expires_ms) VALUES ('code-hash', 'client', 'https://client.example/cb', 'challenge-secret-value', 'mcp', 'https://agent.example/mcp', 1, 2)").run();
 	await DB.prepare("INSERT INTO mcp_grants (label, client_id, scope, access_hash, refresh_hash, created_at) VALUES ('mcp-claude', 'client', 'mcp', 'access-hash-secret', 'refresh-hash-secret', ?)").bind(now).run();
 	await DB.prepare("INSERT INTO outbound_peers (alias, url, token_enc, created_at, updated_at) VALUES ('ada', 'https://ada.example', 'ciphertext-secret-value', ?, ?)").bind(now, now).run();
@@ -90,10 +94,14 @@ test("redactExport drops credential material and leaves the full dump unchanged"
 	const file = await exportRows(DB, new Date(now));
 	const redacted = redactExport(file);
 	assert.equal(file.tables.peers?.[0]?.token_hash, hash, "the CLI dump still has the hash");
+	assert.equal(file.tables.device_requests?.[0]?.replaces_hash, replaces);
+	assert.equal(file.tables.settings?.some((row) => row.key === "password_setup"), true);
 	assert.equal(file.tables.oidc_txns?.[0]?.verifier, "verifier-secret-value");
 	assert.equal(redacted.tables.peers?.[0]?.token_hash, "redacted:ada");
 	assert.equal(redacted.tables.peers?.[0]?.label, "ada");
 	assert.equal(redacted.tables.device_requests?.[0]?.device_hash, "redacted:WDJB4827");
+	assert.equal(redacted.tables.device_requests?.[0]?.replaces_hash, undefined);
+	assert.equal(redacted.tables.device_requests?.[0]?.replaces_label, "ada");
 	assert.equal(redacted.tables.device_requests?.[0]?.user_code, "WDJB4827");
 	assert.equal(redacted.tables.tasks?.[0]?.push_configs_json, undefined);
 	assert.equal(redacted.tables.outbound?.[0]?.push_token_hash, undefined);
@@ -106,9 +114,9 @@ test("redactExport drops credential material and leaves the full dump unchanged"
 	assert.deepEqual(redacted.tables.oauth_codes, []);
 	assert.deepEqual(redacted.tables.oidc_txns, []);
 	assert.deepEqual(redacted.tables.settings?.map((row) => row.key), ["theme"]);
-	assert.equal(redacted.tables.history?.[0]?.text, "see [redacted] at https://[redacted]@hooks.example/wake?t=[redacted]");
+	assert.equal(redacted.tables.history?.[0]?.text, "see [redacted] and [redacted] at https://[redacted]@hooks.example/wake?t=[redacted]");
 	const dumped = JSON.stringify(redacted);
-	for (const secret of [token, hash, "device-hash-secret", "ciphertext-secret-value", "verifier-secret-value", "csrf-secret-value", "challenge-secret-value", "access-hash-secret", "refresh-hash-secret", "push-hash-secret", "approval_password", "user:secret", `t=${setup}`]) {
+	for (const secret of [token, owner, hash, replaces, setupHash, "device-hash-secret", "ciphertext-secret-value", "verifier-secret-value", "csrf-secret-value", "challenge-secret-value", "access-hash-secret", "refresh-hash-secret", "push-hash-secret", "approval_password", "password_setup", "user:secret", `t=${setup}`]) {
 		assert.equal(dumped.includes(secret), false, secret);
 	}
 	const sql = toSql(redacted, { skip: REDACTED_SQL_SKIP });

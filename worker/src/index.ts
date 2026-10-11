@@ -2182,7 +2182,7 @@ export async function runOwnerRpc(ctx: TenantContext, ectx: ExecutionContext, in
 				? {
 					exportedAt: file.exportedAt,
 					sql: "-- Dashboard copy. This is not a backup. Do not load it onto a live inbox.\n"
-						+ "-- Stored token hashes are replaced with redacted: values that do not authenticate. Ciphertext, push tokens, OAuth codes, the approval-password hash, and OpenID Connect sign-in rows are omitted.\n"
+						+ "-- Stored token hashes are replaced with redacted: values that do not authenticate, or left out. Ciphertext, push tokens, re-pair hashes, OAuth codes, the approval-password hash, password-setup hashes, and OpenID Connect sign-in rows are omitted.\n"
 						+ toSql(file, { skip: REDACTED_SQL_SKIP }),
 				}
 				: file;

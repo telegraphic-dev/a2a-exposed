@@ -13,7 +13,7 @@ const EXPORT_ERRORS: Record<string, string> = {
 };
 
 const LABEL = /^[A-Za-z0-9_-]{1,64}$/;
-const TOKEN_RE = /(?:a2aow_|s2a_|a2amcp_|a2amcpr_)[A-Za-z0-9_-]{20,}/;
+const TOKEN_RE = /(?:a2aow_|s2a_|a2amcp_|a2amcpr_|a2aot_)[A-Za-z0-9_-]{20,}/;
 const SETUP_RE = /(?:\?|&)t=[A-Za-z0-9_-]{16,}/;
 
 export interface McpConnector {
@@ -166,7 +166,7 @@ export function renderRecords(input: {
 				</ul>
 			)}
 			<h2>Export</h2>
-			<p>Download a SQL copy of this agent. Stored token hashes are replaced and do not authenticate. Ciphertext, push tokens, OAuth codes, the approval-password hash, and OpenID Connect sign-in rows are left out. This file is not a backup. The full dump is <code>npx a2a-exposed export</code> with the owner token.</p>
+			<p>Download a SQL copy of this agent. Stored token hashes are replaced or left out and do not authenticate. Ciphertext, push tokens, re-pair hashes, OAuth codes, the approval-password hash, password-setup hashes, and OpenID Connect sign-in rows are left out. This file is not a backup. The full dump is <code>npx a2a-exposed export</code> with the owner token.</p>
 			{exportProblem ? <p class="alert" role="alert">{exportProblem}</p> : ""}
 			<form method="post" action={action}>
 				<input type="hidden" name="action" value="export" />

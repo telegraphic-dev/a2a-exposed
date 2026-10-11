@@ -15,7 +15,7 @@ import { renderWakeSection, wakePreviewOf } from "../views/wake.tsx";
 const CODE = /^[BCDFGHJKLMNPQRSTVWXZ]{4}-?[2-9]{4}$/i;
 const LABEL = /^[A-Za-z0-9_-]{1,32}$/;
 const MCP_LABEL = /^[A-Za-z0-9_-]{1,64}$/;
-const TOKEN_RE = /(?:a2aow_|s2a_|a2amcp_|a2amcpr_)[A-Za-z0-9_-]{20,}/;
+const TOKEN_RE = /(?:a2aow_|s2a_|a2amcp_|a2amcpr_|a2aot_)[A-Za-z0-9_-]{20,}/;
 const SETUP_RE = /(?:\?|&)t=[A-Za-z0-9_-]{16,}/;
 
 function redirect(location: string, cookies: string[] = []): Response {
