@@ -9,6 +9,7 @@ import * as st from "./status.mjs";
 import * as pair from "./pair.mjs";
 import * as account from "./account.mjs";
 import * as upd from "./update.mjs";
+import * as fb from "./feedback.mjs";
 
 const VERSION = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 
@@ -204,6 +205,13 @@ Control plane account (only when that deployment's login is on)
                                 return, and oauth_callback_failed when the provider sends the browser
                                 back
 
+Feedback
+  feedback "message" [--kind bug|idea|other] [--contact x]
+                                report a bug or an idea. Posts to the control plane when this
+                                inbox is hosted and that plane accepts feedback. Otherwise prints
+                                a GitHub issue link and does not open a browser. The CLI version
+                                is included. Don't put tokens, passwords, or keys in the message.
+
 Presets: grok-bot | claude-code | openclaw-wake | openclaw-agent | hermes | generic
 Config: ${C.CONFIG_FILE}  (override dir with --config-dir DIR or A2A_CONFIG_DIR; env vars override file values)
 Update notice: at most a daily background check of the npm registry; off with A2A_NO_UPDATE_CHECK=1 (or DO_NOT_TRACK=1)`;
@@ -230,6 +238,7 @@ const SPEC = {
 	signup: { "control-url": S, json: B },
 	login: { "control-url": S, json: B },
 	pair: { json: B, web: B, ttl: S, issuer: S, "client-id": S, subjects: S, methods: S, "secret-stdin": B },
+	feedback: { kind: S, contact: S },
 };
 const STATES = ["completed", "input-required", "failed", "rejected", "working"];
 
@@ -313,6 +322,18 @@ export async function main(argv) {
 		case "send": return cmd.send(o);
 		case "poll": return cmd.poll(need(p[0], "poll --to <peer> <taskId>"), o);
 		case "outbound": return cmd.outbound(need(p[0], "outbound <taskId>"));
+		case "feedback": {
+			const message = p.join(" ").trim();
+			need(message, `feedback "message" [--kind bug|idea|other] [--contact x]`);
+			const kind = o.kind || "other";
+			if (!fb.KINDS.includes(kind)) throw new CliError("--kind must be bug, idea, or other");
+			const result = await fb.runFeedback({
+				message, kind, contact: o.contact || "", version: VERSION, agent: C.get("A2A_AGENT_NAME"),
+				baseUrl: C.get("A2A_BASE_URL"), ownerToken: C.get("A2A_OWNER_TOKEN"),
+			});
+			console.log(result.url);
+			return;
+		}
 		default: throw new CliError(`unknown command ${name} (see --help)`);
 	}
 }

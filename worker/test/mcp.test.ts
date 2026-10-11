@@ -327,10 +327,26 @@ test("scope: the MCP token is not an owner or peer token, and peer/owner tokens 
 	assert.equal((await s.call("GET", "/mcp", { headers: { authorization: `Bearer ${a.access_token}` } })).status, 405);
 	// tools can't administer tokens or pairings
 	const names = (await s.mcp(a.access_token, "tools/list")).data.result.tools.map((x: any) => x.name);
-	assert.deepEqual(names, ["inbox", "show_task", "history", "mark_working", "reply", "send", "poll_outbound", "list_peers", "pairing_requests"]);
+	assert.deepEqual(names, ["inbox", "show_task", "history", "mark_working", "reply", "send", "poll_outbound", "list_peers", "pairing_requests", "send_feedback"]);
 	assert.ok(!names.some((n: string) => /approve|deny|token|revoke|issue|password/.test(n)));
 	const unknown = await s.mcp(a.access_token, "tools/call", { name: "approve_pairing", arguments: { code: "X" } });
 	assert.equal(unknown.data.error.code, -32602);
+});
+
+test("send_feedback returns a GitHub issue link and strips tokens", async (t) => {
+	const s = setup(); t.after(s.restore);
+	const a = await s.connect();
+	const token = "a2aot_" + "a".repeat(24);
+	const r = await s.tool(a.access_token, "send_feedback", { message: `dropped a task ${token}`, kind: "bug" });
+	assert.equal(r.isError, false);
+	const link = r.content[0].text.split("\n").pop() ?? "";
+	const url = new URL(link);
+	assert.equal(`${url.origin}${url.pathname}`, "https://github.com/telegraphic-dev/a2a-exposed/issues/new");
+	const body = url.searchParams.get("body") ?? "";
+	assert.equal(body.includes(token), false);
+	assert.match(body, /\[redacted\]/);
+	assert.match(body, /Source: mcp/);
+	assert.equal((await s.tool(a.access_token, "send_feedback", {})).isError, true);
 });
 
 test("JSON-RPC plumbing: notifications 202, batches and junk rejected, unknown method", async (t) => {

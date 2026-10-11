@@ -33,4 +33,11 @@ export interface ControlEnv extends PlaneEnv {
 	FREE_AGENT_LIMIT?: string;
 	/** Same secret as the data-plane Worker. Seals wake secrets. Unset: a new key cannot be saved. */
 	TENANT_SECRETS_KEY?: string;
+	/**
+	 * Fine-grained token with Issues write on FEEDBACK_REPO only. A secret, not a var.
+	 * Not a GITHUB_* name: that prefix is the sign-in OAuth app. Unset: POST /api/feedback is 404.
+	 */
+	FEEDBACK_GITHUB_TOKEN?: string;
+	/** owner/repo that receives feedback issues. Both this and the token must be set, or the route is 404. */
+	FEEDBACK_REPO?: string;
 }

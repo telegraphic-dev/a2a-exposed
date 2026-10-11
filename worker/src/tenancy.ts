@@ -94,6 +94,8 @@ export interface WorkerBindings extends ConfigFields {
 	WAKE_TARGET_POLICY?: string;
 	/** https URL shown later on the landing page and over-quota errors. Parsed, not rendered yet. */
 	SIGNUP_URL?: string;
+	/** https origin, no path. A hosted tenant posts feedback there. Ignored on a self-hosted inbox. */
+	FEEDBACK_URL?: string;
 	/** "hosted" reserves footer / plan badge. Parsed, not rendered yet. */
 	BRANDING?: string;
 	APPROVAL_OIDC_ISSUER?: string;
@@ -159,6 +161,8 @@ export interface FeatureGates {
 	wakeTargetPolicy: "" | "public-https";
 	signupUrl: string;
 	branding: "" | "hosted";
+	/** https origin of a control plane that accepts POST /api/feedback, or "". Ignored unless mode is host. */
+	feedbackUrl: string;
 	dataRegion: DataRegion;
 	tenantDomain: string;
 	approvalOidc: ApprovalOidcGate;
@@ -204,6 +208,18 @@ export async function derivePeerKey(ikm: string, info = PEER_KEY_INFO): Promise<
 
 function csv(v: string | undefined): string[] {
 	return (v || "").split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+/** https origin with no userinfo and no path, or "". A path, query, or hash is refused. */
+function httpsOriginOnly(v: string | undefined): string {
+	const s = (v || "").trim();
+	if (!s) return "";
+	try {
+		const u = new URL(s);
+		if (u.protocol !== "https:" || u.username || u.password) return "";
+		if ((u.pathname !== "/" && u.pathname !== "") || u.search || u.hash) return "";
+		return u.origin;
+	} catch { return ""; }
 }
 
 /** https URL with no userinfo, or "" when the value is missing or not https. The string is kept as configured. */
@@ -272,6 +288,7 @@ export function parseGates(env: WorkerBindings): ParsedGates {
 			wakeTargetPolicy: env.WAKE_TARGET_POLICY === "public-https" ? "public-https" : "",
 			signupUrl: httpsUrl(env.SIGNUP_URL),
 			branding: env.BRANDING === "hosted" ? "hosted" : "",
+			feedbackUrl: httpsOriginOnly(env.FEEDBACK_URL),
 			dataRegion,
 			tenantDomain: (env.TENANT_DOMAIN || "").trim().toLowerCase().replace(/^\.+|\.+$/g, ""),
 			approvalOidc: {
@@ -393,6 +410,15 @@ export class TenantContext implements ConfigFields {
 	/** Control Worker binding, or undefined when this deploy has none. */
 	controlService(): ControlFetcher | undefined {
 		return this.#controlService;
+	}
+
+	/**
+	 * Bucket id for feedback rate limits. Hosted mode sends the stored owner-token hash (already SHA-256).
+	 * Self-host has no separate hash to send and returns "".
+	 */
+	feedbackRateKey(): string {
+		const hash = (this.#ownerTokenHash || "").trim().toLowerCase();
+		return HEX64.test(hash) ? hash : "";
 	}
 
 	/**

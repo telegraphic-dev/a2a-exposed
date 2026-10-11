@@ -40,6 +40,7 @@ export function renderDocument(input: {
 	title?: string;
 	description?: string;
 	bodyHtml?: string;
+	extraHtml?: string;
 	robots: string;
 	aside?: boolean;
 }): string {
@@ -67,6 +68,7 @@ export function renderDocument(input: {
 					<h1>{heading}</h1>
 					{input.aside ? <SignInAside /> : ""}
 					{input.bodyHtml ? raw(input.bodyHtml) : ""}
+					{input.extraHtml ? raw(input.extraHtml) : ""}
 				</main>
 				<Footer name={brand.name} links={brand.footerLinks} />
 			</body>
@@ -82,12 +84,13 @@ export function renderHome(env?: { BRAND_NAME?: string }): string {
 	});
 }
 
-export function renderApp(env?: { BRAND_NAME?: string }, bodyHtml?: string, title?: string): string {
+export function renderApp(env?: { BRAND_NAME?: string }, bodyHtml?: string, title?: string, extraHtml?: string): string {
 	return renderDocument({
 		env,
 		title,
 		robots: "noindex",
 		aside: !bodyHtml,
 		bodyHtml,
+		extraHtml,
 	});
 }

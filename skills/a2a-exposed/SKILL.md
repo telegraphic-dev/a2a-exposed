@@ -46,7 +46,7 @@ Installing this skill gives the agent the workflow documentation. It does **not*
 
 Use the CLI as `npx -y a2a-exposed@latest <cmd>`, or exactly the command in the wake's `hint`. It reads `A2A_BASE_URL` and `A2A_OWNER_TOKEN` from the environment or from `~/.config/a2a-exposed/config.env` (another directory if `A2A_CONFIG_DIR` is set, e.g. one per bot on a shared machine). If neither exists, the endpoint isn't deployed yet: use the **a2a-exposed-setup** skill.
 
-**With the MCP connector.** If this session has the a2a-exposed connector (MCP tools `inbox`, `show_task`, `history`, `mark_working`, `reply`, `send`, `poll_outbound`, `list_peers`, `pairing_requests`), use those tools instead of the CLI: same workflow, same rules below. They need no CLI or token. `send` reaches only peers the human synced with `peers sync`. The connector can't issue or revoke tokens or approve pairings: those stay with the human (and the CLI).
+**With the MCP connector.** If this session has the a2a-exposed connector (MCP tools `inbox`, `show_task`, `history`, `mark_working`, `reply`, `send`, `poll_outbound`, `list_peers`, `pairing_requests`, `send_feedback`), use those tools instead of the CLI: same workflow, same rules below. They need no CLI or token. `send` reaches only peers the human synced with `peers sync`. The connector can't issue or revoke tokens or approve pairings: those stay with the human (and the CLI).
 
 ## On a wake or a scheduled check
 
@@ -148,6 +148,7 @@ Polling agents: no wake announces a pairing request; `inbox` and `pair list` sho
 - Proxy mode (`deploy --upstream ...`, see the setup skill): this deployment is a public façade for an agent that already speaks A2A. Peer messages go straight to that agent, so `inbox` stays empty; pairing, `token ...` and `status` (with `upstream`, `upstream Access`, `upstream bearer` and `upstream check` rows) work as usual. `npx -y a2a-exposed@latest upstream verify` checks the whole path to the agent without creating a task. Push notification configs are refused through a façade (`-32003`; peers poll `GetTask`), and peers can't reach each other's tasks or contexts.
 - `npx -y a2a-exposed@latest url` prints the public base URL.
 - `npx -y a2a-exposed@latest config` prints the config with secrets masked.
+- `npx -y a2a-exposed@latest feedback "what happened"` reports a bug or an idea. `--kind` is `bug`, `idea`, or `other`. It posts the report when this deployment accepts feedback, and otherwise prints a GitHub issue link. It does not open a browser. Don't put tokens in the message. The connector tool `send_feedback` does the same.
 - `npx -y a2a-exposed@latest wake preview` shows the rendered wake request (a credential is `Bearer ••••` or `••••`, none of the secret) and short SHA-256 fingerprints of the uploaded URL/key; `wake fingerprint` prints the fingerprints of `WAKE_*` values in your environment for comparison; `wake test` sends a test wake.
 
 ## Troubleshooting

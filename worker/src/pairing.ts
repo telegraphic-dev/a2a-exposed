@@ -262,7 +262,7 @@ export function landingPage(m: LandingModel, nonce: string): string {
 <tr><th>Authentication</th><td>Bearer token${m.pairing ? ` (<a href="/device">pairing page</a>)` : ""}</td></tr>
 </table>
 ${skills}${connect}
-<p class="w">Served by <a href="https://github.com/telegraphic-dev/a2a-exposed">a2a-exposed</a>.</p>`);
+<footer class="w">Served by <a href="https://github.com/telegraphic-dev/a2a-exposed">a2a-exposed</a>.</footer>`);
 }
 
 /** Security headers for the landing page: the /device CSP minus forms, cacheable for a few minutes (no per-visitor state). */

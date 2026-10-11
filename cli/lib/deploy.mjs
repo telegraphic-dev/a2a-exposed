@@ -9,6 +9,7 @@ import { CLI, cardUrlProblem, cfErrorCode, die, fetchUpstreamCard, fingerprint, 
 import { owner, ownerTry } from "./commands.mjs";
 import { readHidden } from "./pair.mjs";
 import * as WD from "./workersdev.mjs";
+import { printStar } from "./feedback.mjs";
 
 const PKG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 /** Each Claude Code routine fire is a new cloud session: a 2xx only means a session started. */
@@ -432,6 +433,7 @@ export async function init(o) {
 	reportSwitch(switched);
 	proxyNote(secrets);
 	console.error(`config saved to ${C.CONFIG_FILE} (chmod 600). Next: ${CLI} status (shows the next setup step)`);
+	printStar();
 }
 
 /** Proxy / expose mode reminder after a deploy (the upstream credentials are secrets: only their names are shown). */
