@@ -20,12 +20,12 @@ export interface McpConnector {
 	label: string;
 	name: string;
 	host: string;
-	since: string;
-	used: string;
+	since: { text: string; datetime: string } | null;
+	used: { text: string; datetime: string } | null;
 }
 
 export interface LogEntry {
-	ts: string;
+	ts: { text: string; datetime: string } | null;
 	dir: string;
 	peer: string;
 	text: string;
@@ -40,9 +40,10 @@ function plain(value: unknown, max: number): string {
 	return text;
 }
 
-function when(value: unknown): string {
-	if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value) || value.length > 40) return "";
-	return value.slice(0, 16).replace("T", " ");
+function when(value: unknown): { text: string; datetime: string } | null {
+	if (typeof value !== "string" || value.length > 40 || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(value)) return null;
+	if (!Number.isFinite(Date.parse(value))) return null;
+	return { text: `${value.slice(0, 16).replace("T", " ")} UTC`, datetime: value };
 }
 
 /** Active MCP connectors. Null when the response is not a connector list. Extra fields are ignored. */
@@ -134,8 +135,8 @@ export function renderRecords(input: {
 								<dd>{row.name || "(none given)"}</dd>
 								<dt>Redirect host</dt>
 								<dd>{row.host || "(none)"}</dd>
-								{row.since ? <><dt>Since</dt><dd>{row.since}</dd></> : ""}
-								{row.used ? <><dt>Last used</dt><dd>{row.used}</dd></> : ""}
+								{row.since ? <><dt>Since</dt><dd><time datetime={row.since.datetime}>{row.since.text}</time></dd></> : ""}
+								{row.used ? <><dt>Last used</dt><dd><time datetime={row.used.datetime}>{row.used.text}</time></dd></> : ""}
 							</dl>
 							<form method="post" action={action}>
 								<input type="hidden" name="action" value="revoke-mcp" />
@@ -152,7 +153,7 @@ export function renderRecords(input: {
 				<ul class="log">
 					{input.entries.map((row) => (
 						<li>
-							{row.ts ? <span>{row.ts}</span> : ""}
+							{row.ts ? <time datetime={row.ts.datetime}>{row.ts.text}</time> : ""}
 							{" "}
 							{row.dir ? <code>{row.dir}</code> : ""}
 							{" "}

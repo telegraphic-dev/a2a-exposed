@@ -18,21 +18,27 @@ const ALIAS = /^[A-Za-z0-9_.-]{1,64}$/;
 const TOKEN_RE = /(?:a2aow_|s2a_|a2amcp_|a2amcpr_)[A-Za-z0-9_-]{20,}/;
 const SETUP_RE = /(?:\?|&)t=[A-Za-z0-9_-]{16,}/;
 
+export interface UtcStamp {
+	text: string;
+	datetime: string;
+}
+
 export interface PendingPairing {
 	code: string;
 	name: string;
 	alias: string;
 	cardText: string;
 	cardHref: string;
-	expires: string;
+	expires: UtcStamp | null;
 	replaces: string;
 }
 
 export interface InboundPeer {
 	label: string;
 	source: string;
+	code: string;
 	name: string;
-	since: string;
+	since: UtcStamp | null;
 }
 
 export interface OutboundPeer {
@@ -54,9 +60,11 @@ function formatCode(value: unknown): string {
 	return CODE.test(raw) ? `${raw.slice(0, 4)}-${raw.slice(4)}` : "";
 }
 
-function when(value: unknown): string {
-	if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value) || value.length > 40) return "";
-	return value.slice(0, 16).replace("T", " ");
+/** UTC instant from an ISO timestamp that ends in Z. The label says UTC; the attribute keeps the instant. */
+function when(value: unknown): UtcStamp | null {
+	if (typeof value !== "string" || value.length > 40 || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(value)) return null;
+	if (!Number.isFinite(Date.parse(value))) return null;
+	return { text: `${value.slice(0, 16).replace("T", " ")} UTC`, datetime: value };
 }
 
 /** Hosts that only resolve on a private network. Same classification as the Worker's `isPrivateHost`. */
@@ -126,12 +134,13 @@ export function inboundPeersOf(body: unknown): InboundPeer[] | null {
 	const out: InboundPeer[] = [];
 	for (const row of body) {
 		if (!row || typeof row !== "object") continue;
-		const record = row as { label?: unknown; revoked_at?: unknown; source?: unknown; client_name?: unknown; created_at?: unknown };
+		const record = row as { label?: unknown; revoked_at?: unknown; source?: unknown; client_name?: unknown; created_at?: unknown; user_code?: unknown };
 		if (record.revoked_at) continue;
 		const label = plain(record.label, 32);
 		if (!LABEL.test(label)) continue;
+		const recordCode = formatCode(record.user_code);
 		const source = record.source == null || record.source === "" ? "issued" : record.source === "pairing" ? "pairing" : "other";
-		out.push({ label, source, name: plain(record.client_name, 200), since: when(record.created_at) });
+		out.push({ label, source, code: source === "pairing" ? recordCode : "", name: plain(record.client_name, 200), since: when(record.created_at) });
 		if (out.length >= 100) break;
 	}
 	return out;
@@ -183,7 +192,7 @@ export function renderPeers(input: {
 						<dd>{row.alias || "(none given)"}</dd>
 						<dt>Card (claimed)</dt>
 						<dd>{row.cardHref ? <a href={row.cardHref} rel="noreferrer">{row.cardText}</a> : row.cardText || "(none given)"}</dd>
-						{row.expires ? <><dt>Expires</dt><dd>{row.expires}</dd></> : ""}
+						{row.expires ? <><dt>Expires</dt><dd><time datetime={row.expires.datetime}>{row.expires.text}</time></dd></> : ""}
 						{row.replaces ? <><dt>Replaces</dt><dd>the token {row.replaces}</dd></> : ""}
 					</dl>
 					<div class="actions">
@@ -218,10 +227,10 @@ export function renderPeers(input: {
 						<dt>Label</dt>
 						<dd><code>{peer.label}</code></dd>
 						<dt>Source</dt>
-						<dd>{peer.source}</dd>
+						<dd>{peer.code ? `pairing ${peer.code}` : peer.source}</dd>
 						<dt>Name (claimed)</dt>
 						<dd>{peer.name || "(none given)"}</dd>
-						{peer.since ? <><dt>Since</dt><dd>{peer.since}</dd></> : ""}
+						{peer.since ? <><dt>Since</dt><dd><time datetime={peer.since.datetime}>{peer.since.text}</time></dd></> : ""}
 					</dl>
 					<form method="post" action={action}>
 						<input type="hidden" name="action" value="revoke" />
@@ -231,7 +240,7 @@ export function renderPeers(input: {
 				</article>
 			))}
 			<h3>Outbound peers</h3>
-			{input.outbound === null ? <p>Outbound peers are not available.</p> : input.outbound.length === 0 ? <p>No outbound peers.</p> : (
+			{input.outbound === null ? <p>Outbound peers are not available.</p> : input.outbound.length === 0 ? <p>No outbound peers. Outbound peers this agent's CLI added locally do not appear here.</p> : (
 				<ul>
 					{input.outbound.map((peer) => (
 						<li>

@@ -104,6 +104,8 @@ test("the agent page lists MCP connectors, a read-only log, and downloads a reda
 		assert.match(html, /<h2>MCP connectors<\/h2>/);
 		assert.match(html, /MCP is on\./);
 		assert.match(html, /<code>mcp-claude<\/code>/);
+		assert.match(html, /<time datetime="2026-10-01T08:00:00.000Z">2026-10-01 08:00 UTC<\/time>/);
+		assert.match(html, /<time datetime="2026-10-11T12:00:00.000Z">2026-10-11 12:00 UTC<\/time>/);
 		assert.match(html, /Claude &lt;script&gt;alert\(1\)&lt;\/script&gt;/);
 		assert.equal(html.includes("<script>alert"), false);
 		assert.match(html, /claude\.ai/);
