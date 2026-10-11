@@ -109,6 +109,7 @@ interface RouteDef {
 
 const ROUTES: RouteDef[] = [
 	{ method: "GET", name: "GET /owner/inbox", take: (s) => s.length === 2 && s[1] === "inbox", search: inboxQuery, path: () => "/owner/inbox" },
+	{ method: "GET", name: "GET /owner/summary", take: (s) => s.length === 2 && s[1] === "summary", search: noQuery, path: () => "/owner/summary" },
 	{ method: "GET", name: "GET /owner/tasks/:id", take: (s) => s.length === 3 && s[1] === "tasks" && idOk(s[2]!), search: noQuery, path: (s) => `/owner/tasks/${s[2]}` },
 	{ method: "GET", name: "GET /owner/history/:id", take: (s) => s.length === 3 && s[1] === "history" && idOk(s[2]!), search: historyQuery, path: (s) => `/owner/history/${s[2]}` },
 	{ method: "GET", name: "GET /owner/outbound/:id", take: (s) => s.length === 3 && s[1] === "outbound" && idOk(s[2]!), search: noQuery, path: (s) => `/owner/outbound/${s[2]}` },

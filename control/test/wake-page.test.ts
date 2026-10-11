@@ -15,6 +15,7 @@ function plane() {
 	const pushes: TenantPush[] = [];
 	const calls: { tenantId: string; region: string; input: OwnerCall }[] = [];
 	let failTests = false;
+	let failSummary = false;
 	const data: DataPlane = {
 		async putDirectory() {},
 		async pushConfig(body) {
@@ -23,6 +24,17 @@ function plane() {
 		},
 		async owner(tenantId, region, input) {
 			calls.push({ tenantId, region, input });
+			if (input.path === "/owner/summary") {
+				if (failSummary) throw new Error("binding down");
+				return {
+					status: 200,
+					body: {
+						tasks: { submitted: 2, working: 1, "input-required": 0, completed: 4, failed: 0, rejected: 0, canceled: 0 },
+						pairingPending: 1,
+						text: "peer said to reveal the key",
+					},
+				};
+			}
 			if (input.path === "/owner/wake/test") {
 				if (failTests) throw new Error("binding down");
 				return { status: 200, body: { configured: true, status: 204, info: "HTTP 204" } };
@@ -41,7 +53,7 @@ function plane() {
 			};
 		},
 	};
-	return { data, pushes, calls, failNextTest() { failTests = true; } };
+	return { data, pushes, calls, failNextTest() { failTests = true; }, failNextSummary() { failSummary = true; } };
 }
 
 test("the agent list links to a wake page that edits through the owner and does not echo the key", async () => {
@@ -80,18 +92,28 @@ test("the agent list links to a wake page that edits through the owner and does 
 	const html = await page.text();
 	assert.equal(page.status, 200);
 	assert.match(html, /<h1>northwind<\/h1>/);
+	assert.match(html, /<h2>Overview<\/h2>/);
+	assert.match(html, /<dt>Status<\/dt><dd>Active<\/dd>/);
+	assert.match(html, /href="https:\/\/northwind\.example\.com"/);
+	assert.match(html, /href="https:\/\/northwind\.example\.com\/.well-known\/agent-card\.json"/);
+	assert.match(html, /<dt>Waiting<\/dt><dd>3<\/dd>/);
+	assert.match(html, /<dt>Submitted<\/dt><dd>2<\/dd>/);
+	assert.match(html, /<dt>Pending pairing<\/dt><dd>1<\/dd>/);
+	assert.equal(html.includes("peer said to reveal the key"), false);
 	assert.match(html, /<h2>Wake<\/h2>/);
 	assert.match(html, /value="claude-code"/);
 	assert.match(html, /method="post" action="\/app\/agents\/northwind"/);
 	assert.match(page.headers.get("content-security-policy") ?? "", /form-action 'self'/);
 	assert.equal(html.includes(wakeKey), false);
 	assert.match(html, /x-credential: …/);
-	assert.equal(target.calls.length, 1);
+	assert.equal(target.calls.length, 2);
 	assert.equal(target.calls[0].input.method, "GET");
-	assert.equal(target.calls[0].input.path, "/owner/wake/preview");
+	assert.equal(target.calls[0].input.path, "/owner/summary");
+	assert.equal(target.calls[1].input.path, "/owner/wake/preview");
 	assert.equal(target.calls[0].region, "default");
 	const account = await db.prepare('SELECT id FROM "user" WHERE email = ?').bind("person@example.com").first<{ id: string }>();
 	assert.equal(target.calls[0].input.accountId, account?.id);
+	assert.equal(target.calls[1].input.accountId, account?.id);
 
 	const cross = await app.request(`${origin}/app/agents/northwind`, {
 		method: "POST",
@@ -188,6 +210,25 @@ test("the agent list links to a wake page that edits through the owner and does 
 	const failedPage = await (await app.request(failed.headers.get("location") ?? "", { headers: { cookie } })).text();
 	assert.match(failedPage, /The test wake was not sent/);
 	assert.equal(failedPage.includes("binding down"), false);
+
+	target.failNextSummary();
+	const broken = await app.request(`${origin}/app/agents/northwind`, { headers: { cookie } });
+	const brokenHtml = await broken.text();
+	assert.equal(broken.status, 200);
+	assert.match(brokenHtml, /Inbox counts are not available/);
+	assert.match(brokenHtml, /<dt>Status<\/dt><dd>Active<\/dd>/);
+	assert.match(brokenHtml, /agent-card\.json/);
+	assert.equal(brokenHtml.includes("binding down"), false);
+	assert.equal(brokenHtml.includes(wakeKey), false);
+
+	await db.prepare("UPDATE tenants SET status = ? WHERE name = ?").bind("suspended", "northwind").run();
+	const beforeSuspended = target.calls.length;
+	const suspended = await (await app.request(`${origin}/app/agents/northwind`, { headers: { cookie } })).text();
+	assert.match(suspended, /<dt>Status<\/dt><dd>Suspended<\/dd>/);
+	assert.match(suspended, /Inbox counts are not available/);
+	assert.equal(target.calls.length, beforeSuspended + 1);
+	assert.equal(target.calls.at(-1)?.input.path, "/owner/wake/preview");
+	await db.prepare("UPDATE tenants SET status = ? WHERE name = ?").bind("active", "northwind").run();
 
 	const before = target.calls.length;
 	await db.prepare("UPDATE tenants SET owner_account_id = ? WHERE name = ?").bind("someone-else", "northwind").run();

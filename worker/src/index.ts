@@ -906,6 +906,21 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 	const seg = path.split("/").filter(Boolean).slice(1); // after "owner"
 	const body = async () => { const raw = await readBody(req, ctx); return raw ? JSON.parse(raw) : {}; };
 
+	if (seg[0] === "summary" && !seg[1] && m === "GET") {
+		// Counts only. Unlike GET /owner/inbox this does not return message text or clear a pending wake.
+		const known = ["submitted", "working", "input-required", "completed", "failed", "rejected", "canceled"];
+		const tasks: Record<string, number> = {};
+		for (const state of known) tasks[state] = 0;
+		const rows = await ctx.DB.prepare("SELECT state, COUNT(*) AS n FROM tasks GROUP BY state").all();
+		for (const r of rows.results as Json[]) {
+			if (typeof r.state !== "string" || !known.includes(r.state)) continue;
+			const n = Number(r.n);
+			if (Number.isSafeInteger(n) && n >= 0) tasks[r.state] = n;
+		}
+		const pending: Json = await ctx.DB.prepare("SELECT COUNT(*) AS n FROM device_requests WHERE status = 'pending' AND expires_ms > ?").bind(Date.now()).first();
+		const pairing = Number(pending?.n ?? 0);
+		return json({ tasks, pairingPending: Number.isSafeInteger(pairing) && pairing >= 0 ? pairing : 0 });
+	}
 	if (seg[0] === "inbox" && m === "GET") {
 		const contextFilter = url.searchParams.get("context");
 		const all = url.searchParams.get("all") === "1";

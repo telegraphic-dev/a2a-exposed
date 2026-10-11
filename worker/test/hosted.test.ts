@@ -214,6 +214,10 @@ test("per-tenant SQLite: directory, config push, and isolation", async (t) => {
 	const aliceInbox = await (await call("https://alice.example.com/owner/inbox?all=1", "GET", `Bearer ${tokenA}`)).json() as { text: string }[];
 	assert.equal(aliceInbox.length, 1);
 	assert.match(aliceInbox[0]!.text, /hello alice/);
+	const aliceSummary = await (await call("https://alice.example.com/owner/summary", "GET", `Bearer ${tokenA}`)).json() as { tasks: { submitted: number }; pairingPending: number };
+	assert.equal(aliceSummary.tasks.submitted, 1);
+	assert.equal(aliceSummary.pairingPending, 0);
+	assert.equal(JSON.stringify(aliceSummary).includes("hello alice"), false);
 
 	// workerd's local runtime throws "Jurisdiction restrictions are not implemented" on namespace.jurisdiction().
 	// namespaceForRegion() is covered in tenancy.test.ts; production Durable Objects do honour eu / fedramp.
@@ -542,6 +546,18 @@ test("TenantStore.owner runs an allowlisted owner call and does not return a pee
 	assert.equal((await http("POST", "/owner/peers", "Bearer platform-owner", { label: "nope" })).status, 401, "self-host owner token still does not unlock a tenant");
 	const issued = await (await http("POST", "/owner/peers", "Bearer owner-carol", { label: "ada" })).json() as { token?: string };
 	assert.match(issued.token ?? "", /^a2aow_/, "the owner HTTP API still returns the new token");
+	const sentCarol = await http("POST", "/", `Bearer ${issued.token}`, {
+		jsonrpc: "2.0", id: 1, method: "message/send",
+		params: { message: { kind: "message", role: "user", messageId: "m-carol", parts: [{ kind: "text", text: "hello from carol peer" }] } },
+	});
+	assert.equal(sentCarol.status, 200, await sentCarol.clone().text());
+	const summary = await stub.owner({ accountId: "acct_carol", method: "GET", path: "/owner/summary" });
+	assert.equal(summary.status, 200);
+	const summaryBody = summary.body as { tasks?: { submitted?: number }; pairingPending?: number };
+	assert.equal(summaryBody.tasks?.submitted, 1);
+	assert.equal(summaryBody.pairingPending, 0);
+	assert.equal(JSON.stringify(summary.body).includes("hello from carol peer"), false);
+	assert.equal(await saw('"route":"GET /owner/summary"'), true);
 
 	const listed = await stub.owner({ accountId: "acct_carol", method: "GET", path: "/owner/peers" });
 	assert.equal(listed.status, 200);
