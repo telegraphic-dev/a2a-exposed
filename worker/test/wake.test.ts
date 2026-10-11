@@ -116,6 +116,13 @@ test("generic custom key header is rendered with prefix and redacted in previews
 	assert.ok(!JSON.stringify(red).includes("supersecretvalue"));
 });
 
+test("a key header the preview shows in full is not used for the key", async () => {
+	const req = (await renderWake({ preset: "generic", url: "https://hooks.example.com/abc", key: "supersecretvalue", keyHeader: "Content-Type", keyPrefix: "" }, ev))!;
+	assert.equal(req.headers["authorization"], "supersecretvalue");
+	assert.equal(req.headers["content-type"], "application/json");
+	assert.equal(redact(req).headers["authorization"], "supe…");
+});
+
 test("generic key header is redacted even when its name is not a secret word", async () => {
 	const req = (await renderWake({ preset: "generic", url: "https://hooks.example.com/abc", key: "supersecretvalue", keyHeader: "X-Credential", keyPrefix: "" }, ev))!;
 	assert.equal(req.headers["x-credential"], "supersecretvalue");

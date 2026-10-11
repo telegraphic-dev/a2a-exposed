@@ -47,8 +47,9 @@ export type ConfigFields = { [K in ConfigKey]?: string };
 
 /**
  * Non-secret platform defaults a hosted tenant inherits when its pushed config omits them.
- * Wake secrets, upstream secrets and OWNER_TOKEN are never inherited: in hosted mode they come only from the
- * tenant overlay (or not at all). Decrypting `secrets_enc` into wake credentials is a follow-up.
+ * Wake secrets, upstream secrets and OWNER_TOKEN are never inherited. In hosted mode the secret wake
+ * fields come from decrypting `secrets_enc` (see the tenant object). A plaintext copy in the pushed
+ * config is used only when that ciphertext is absent.
  */
 const HOSTED_PLATFORM_DEFAULTS: readonly ConfigKey[] = ["MAX_BODY", "RATE_PER_MIN", "PBKDF2_ITERATIONS", "MCP", "PAIRING_APPROVAL"];
 

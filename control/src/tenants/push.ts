@@ -21,14 +21,25 @@ export interface DirectoryEntry {
 	version: number;
 }
 
+export interface OwnerCall {
+	accountId: string;
+	method: string;
+	path: string;
+}
+
 export interface DataPlane {
 	putDirectory(name: string, entry: DirectoryEntry): Promise<void>;
 	pushConfig(body: TenantPush, region: string): Promise<{ version: number; applied: boolean }>;
+	/** Allowlisted owner call. Absent on a test double that never renders an agent page. */
+	owner?(tenantId: string, region: string, input: OwnerCall): Promise<{ status: number; body: unknown }>;
 }
 
 interface DoNamespace {
 	idFromName(name: string): unknown;
-	get(id: unknown): { pushConfig(body: TenantPush): Promise<{ version: number; applied: boolean }> };
+	get(id: unknown): {
+		pushConfig(body: TenantPush): Promise<{ version: number; applied: boolean }>;
+		owner?(input: OwnerCall): Promise<{ status: number; body: unknown }>;
+	};
 	jurisdiction?(location: string): DoNamespace;
 }
 
@@ -63,6 +74,12 @@ export function dataPlaneFromEnv(env: PlaneEnv): DataPlane | null {
 		async pushConfig(body, region) {
 			const ns = namespaceFor(objects, region);
 			return ns.get(ns.idFromName(body.tenantId)).pushConfig(body);
+		},
+		async owner(tenantId, region, input) {
+			const ns = namespaceFor(objects, region);
+			const stub = ns.get(ns.idFromName(tenantId));
+			if (!stub.owner) throw new Error("owner rpc is not available");
+			return stub.owner(input);
 		},
 	};
 }

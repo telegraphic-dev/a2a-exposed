@@ -71,6 +71,9 @@ button.provider-email:hover:not(:disabled):not([aria-disabled="true"]) { backgro
 .avatar { width: 2.5rem; height: 2.5rem; border-radius: 999px; }
 .agents { list-style: none; margin: 1rem 0; padding: 0; }
 .agents li { display: flex; justify-content: space-between; gap: 1rem; padding: 0.6rem 0; border-top: 1px solid var(--line); }
+.wake label { display: block; }
+.wake input, .wake select { display: block; width: 100%; margin-top: 0.25rem; font: inherit; }
+.wake .preview { white-space: pre-wrap; }
 .token { margin: 1rem 0; }
 button.action {
 	appearance: none;

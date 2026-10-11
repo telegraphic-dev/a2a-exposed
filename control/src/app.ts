@@ -12,6 +12,7 @@ import { sameOrigin } from "./auth/origin.ts";
 import { accountAgentLimit, configuredFreeAgentLimit, createTenant, listTenants } from "./tenants/create.ts";
 import { dataPlaneFromEnv, type DataPlane } from "./tenants/push.ts";
 import type { ControlEnv } from "./env.ts";
+import { handleAgent } from "./agents/page.ts";
 import { avatarOrigin, avatarUrl, renderAccount } from "./views/account.tsx";
 import { renderApp, securityHeaders } from "./views/document.tsx";
 import { renderSignIn } from "./views/sign-in.tsx";
@@ -213,6 +214,8 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 	});
 	app.get("/app/device", (c) => devicePage(c));
 	app.post("/app/device", (c) => devicePage(c));
+	app.get("/app/agents/:name", (c) => handleAgent(c.req.raw, env, deps));
+	app.post("/app/agents/:name", (c) => handleAgent(c.req.raw, env, deps));
 	app.get("/app/*", async (c) => {
 		const shell = await renderShell(c.req.raw);
 		if (shell.clearOwner) c.header("set-cookie", hostCookie(OWNER_COOKIE, "", 0));

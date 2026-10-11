@@ -203,7 +203,11 @@ export async function renderWake(cfg: WakeConfig, ev: WakeEvent, opts: { nowMs?:
 			break;
 		case "generic":
 		default: {
-			if (cfg.key) headers[(cfg.keyHeader || "authorization").toLowerCase()] = (cfg.keyPrefix ?? "Bearer ") + cfg.key;
+			// A header the preview shows in full must not carry the key.
+			if (cfg.key) {
+				const requested = (cfg.keyHeader || "authorization").toLowerCase();
+				headers[previewHeaderPlain(requested) ? "authorization" : requested] = (cfg.keyPrefix ?? "Bearer ") + cfg.key;
+			}
 			headers["x-request-id"] = requestId;
 			body = cfg.bodyTemplate ? renderTemplate(cfg.bodyTemplate, ev, cli) : JSON.stringify(wakePayload(ev, cli));
 			if (cfg.hmacSecret) await hermesSign(headers, cfg.hmacSecret, body, nowMs);

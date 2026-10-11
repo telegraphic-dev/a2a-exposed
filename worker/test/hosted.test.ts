@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import worker from "../src/index.ts";
 import { sha256 } from "../src/a2a.ts";
+import { sealWakeSecrets } from "../src/wake-secrets.ts";
 import { d1 } from "./d1.ts";
 
 const require = createRequire(new URL("../package.json", import.meta.url));
@@ -573,7 +574,35 @@ test("TenantStore.owner runs an allowlisted owner call and does not return a pee
 	assert.equal(JSON.stringify(preview.body).includes("platform-secret"), false);
 	assert.equal(JSON.stringify(preview.body).includes("tenant-secret-value"), false);
 
-	await stub.pushConfig({ version: 2, tenantId: "id-carol", name: "carol", status: "suspended", ownerTokenHash: hash, config: { AGENT_NAME: "Carol" } });
+	const wakeKey = "z9Qx-secret-value-0199";
+	const sealed = await sealWakeSecrets("platform-secret", "id-carol", { WAKE_WEBHOOK_KEY: wakeKey });
+	assert.ok(sealed);
+	assert.equal(sealed!.includes(wakeKey), false);
+	await stub.pushConfig({
+		version: 2, tenantId: "id-carol", name: "carol", status: "active", ownerTokenHash: hash,
+		secretsEnc: sealed,
+		config: {
+			AGENT_NAME: "Carol",
+			WAKE_WEBHOOK_URL: "https://hooks.example/wake",
+			WAKE_PRESET: "generic",
+			WAKE_KEY_HEADER: "X-Credential",
+			WAKE_WEBHOOK_KEY: "plaintext-key-should-not-appear",
+		},
+	});
+	const woken = await stub.owner({ accountId: "acct_carol", method: "GET", path: "/owner/wake/preview" });
+	assert.equal(woken.status, 200);
+	const wokenText = JSON.stringify(woken.body);
+	assert.equal(wokenText.includes(wakeKey), false);
+	assert.equal(wokenText.includes("plaintext-key-should-not-appear"), false);
+	assert.equal(wokenText.includes("platform-secret"), false);
+	const wokenBody = woken.body as { hasKey?: boolean; request?: { headers?: Record<string, string> } };
+	assert.equal(wokenBody.hasKey, true);
+	assert.equal(wokenBody.request?.headers?.["x-credential"], "Bearer z9Qx…");
+	const httpPreview = await (await http("GET", "/owner/wake/preview", "Bearer owner-carol")).json() as { hasKey?: boolean };
+	assert.equal(httpPreview.hasKey, true);
+	assert.equal(JSON.stringify(httpPreview).includes(wakeKey), false);
+
+	await stub.pushConfig({ version: 3, tenantId: "id-carol", name: "carol", status: "suspended", ownerTokenHash: hash, config: { AGENT_NAME: "Carol" } });
 	const suspended = await stub.owner({ accountId: "acct_carol", method: "GET", path: "/owner/peers" });
 	assert.equal(suspended.status, 403);
 	assert.equal(await saw('"reason":"status"'), true);

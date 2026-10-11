@@ -1,0 +1,86 @@
+// Wake secrets sealed for one hosted tenant. The control plane writes `secrets_enc`; the tenant
+// object decrypts it when it builds the tenant context. Self-host does not use this.
+// Keep worker/src/wake-secrets.ts in step with this file.
+
+const INFO = "tenant-wake-secrets v1";
+const SALT = "a2a-exposed";
+
+/** Secret wake fields. Anything else in the blob is ignored. */
+export const WAKE_SECRET_KEYS = [
+	"WAKE_WEBHOOK_KEY",
+	"WAKE_HMAC_SECRET",
+	"WAKE_ACCESS_CLIENT_ID",
+	"WAKE_ACCESS_CLIENT_SECRET",
+] as const;
+
+export type WakeSecretKey = (typeof WAKE_SECRET_KEYS)[number];
+export type WakeSecrets = Partial<Record<WakeSecretKey, string>>;
+
+const b64 = (b: Uint8Array) => btoa(String.fromCharCode(...b));
+const unb64 = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+
+async function derive(ikm: string, tenantId: string): Promise<CryptoKey | null> {
+	if (!ikm || !tenantId) return null;
+	const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(ikm), "HKDF", false, ["deriveKey"]);
+	return crypto.subtle.deriveKey(
+		{ name: "HKDF", hash: "SHA-256", salt: new TextEncoder().encode(SALT), info: new TextEncoder().encode(`${INFO}\0${tenantId}`) },
+		base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"],
+	);
+}
+
+function payloadOf(secrets: WakeSecrets): Record<string, string> | null {
+	const payload: Record<string, string> = {};
+	for (const key of WAKE_SECRET_KEYS) {
+		const value = secrets[key];
+		if (value == null || value === "") continue;
+		if (typeof value !== "string" || value.length > 4096) return null;
+		payload[key] = value;
+	}
+	return payload;
+}
+
+/** `v1.<iv>.<ciphertext>`, or null when the key or a value is unusable. */
+export async function sealWakeSecrets(ikm: string, tenantId: string, secrets: WakeSecrets): Promise<string | null> {
+	const key = await derive(ikm, tenantId);
+	const payload = payloadOf(secrets);
+	if (!key || !payload) return null;
+	const iv = crypto.getRandomValues(new Uint8Array(12));
+	const ct = new Uint8Array(await crypto.subtle.encrypt(
+		{ name: "AES-GCM", iv, additionalData: new TextEncoder().encode(tenantId) },
+		key,
+		new TextEncoder().encode(JSON.stringify(payload)),
+	));
+	return `v1.${b64(iv)}.${b64(ct)}`;
+}
+
+/**
+ * The sealed fields, `{}` when there is nothing to open, or null when the blob cannot be read.
+ * A null result must not be treated as "no secrets": the caller keeps the previous ciphertext.
+ */
+export async function openWakeSecrets(ikm: string, tenantId: string, sealed: string | null | undefined): Promise<WakeSecrets | null> {
+	if (sealed == null || sealed === "") return {};
+	if (sealed.length > 16384) return null;
+	const key = await derive(ikm, tenantId);
+	if (!key) return null;
+	const [version, iv, ct, extra] = sealed.split(".");
+	if (version !== "v1" || !iv || !ct || extra !== undefined) return null;
+	try {
+		const plain = new TextDecoder().decode(await crypto.subtle.decrypt(
+			{ name: "AES-GCM", iv: unb64(iv), additionalData: new TextEncoder().encode(tenantId) },
+			key,
+			unb64(ct),
+		));
+		if (plain.length > 16384) return null;
+		const parsed = JSON.parse(plain) as unknown;
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+		const out: WakeSecrets = {};
+		for (const name of WAKE_SECRET_KEYS) {
+			const value = (parsed as Record<string, unknown>)[name];
+			if (typeof value !== "string" || !value || value.length > 4096) continue;
+			out[name] = value;
+		}
+		return out;
+	} catch {
+		return null;
+	}
+}
