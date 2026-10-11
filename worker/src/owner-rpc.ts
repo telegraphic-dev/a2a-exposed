@@ -25,6 +25,12 @@ const SECRET_KEYS = new Set([
 	"clientsecret", "client_secret", "pushtoken", "push_token", "authorization",
 ]);
 
+/**
+ * Header `runOwnerRpc` sets when `actor` is `human`. `handleOwner` honors it only on an in-process call.
+ * A request from the network cannot become that decision by sending the header.
+ */
+export const DASHBOARD_ACTOR_HEADER = "x-a2a-dashboard-actor";
+
 export interface OwnerRpcRequest {
 	accountId: string;
 	method: string;
@@ -33,6 +39,11 @@ export interface OwnerRpcRequest {
 	query?: Record<string, string>;
 	/** Refused. The owner HTTP API is where a body is accepted. */
 	body?: unknown;
+	/**
+	 * Dashboard approve or deny after the control plane has checked a recent sign-in.
+	 * Any other value is refused. Absent keeps the owner HTTP API's actor (`agent` or `owner`).
+	 */
+	actor?: "human";
 }
 
 export interface OwnerRpcResult {
@@ -146,6 +157,30 @@ export function matchOwnerRpc(method: unknown, path: unknown, query: unknown): O
 function stringLeaks(value: string, key: string | null): boolean {
 	if (TOKEN_RE.test(value) || SETUP_RE.test(value) || USERINFO_RE.test(value)) return true;
 	return key !== null && SECRET_KEYS.has(key.toLowerCase()) && value.length >= 16;
+}
+
+/** Claimed display fields. A token-shaped value is blanked so one request cannot withhold the list. */
+const CLAIM_KEYS = new Set(["clientname", "client_name", "clientid", "client_id", "agentcardurl", "agent_card_url"]);
+
+function claimLeaks(value: string): boolean {
+	return TOKEN_RE.test(value) || SETUP_RE.test(value) || USERINFO_RE.test(value);
+}
+
+/**
+ * Replace a claimed name, alias, or card that is shaped like a peer token, a setup secret, or URL
+ * userinfo with an empty string. Other keys are left for `ownerResponseLeaks`.
+ */
+export function scrubOwnerClaims(value: unknown, depth = 0): unknown {
+	if (value == null || depth > 20) return value;
+	if (Array.isArray(value)) return value.map((item) => scrubOwnerClaims(item, depth + 1));
+	if (typeof value !== "object") return value;
+	const out: Record<string, unknown> = {};
+	for (const [key, item] of Object.entries(value)) {
+		out[key] = typeof item === "string" && CLAIM_KEYS.has(key.toLowerCase()) && claimLeaks(item)
+			? ""
+			: scrubOwnerClaims(item, depth + 1);
+	}
+	return out;
 }
 
 /** A rendered wake whose credential header was not masked. The header name is the caller's choice. */

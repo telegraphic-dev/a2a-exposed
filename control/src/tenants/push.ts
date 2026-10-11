@@ -25,6 +25,8 @@ export interface OwnerCall {
 	accountId: string;
 	method: string;
 	path: string;
+	/** Dashboard approve or deny. The control plane sets this only after a recent sign-in. */
+	actor?: "human";
 }
 
 export interface DataPlane {

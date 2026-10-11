@@ -1,7 +1,7 @@
 // Owner RPC allowlist and response filter. No Durable Object: the hosted test calls TenantStore.owner.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { accountIdOf, matchOwnerRpc, ownerResponseLeaks } from "../src/owner-rpc.ts";
+import { accountIdOf, matchOwnerRpc, ownerResponseLeaks, scrubOwnerClaims } from "../src/owner-rpc.ts";
 
 test("owner RPC allowlist is the management reads and the calls that do not return a secret", () => {
 	const ok = (method: string, path: string, query?: Record<string, string>) => {
@@ -71,4 +71,35 @@ test("owner RPC withholds peer tokens and decrypted secrets", () => {
 	}), false);
 	assert.equal(ownerResponseLeaks({ fingerprints: { url: "0123456789ab", key: null } }), false);
 	assert.equal(ownerResponseLeaks({ token_hash: "ab".repeat(32) }), false);
+});
+
+test("a token-shaped claim is blanked and the rest of the list is returned", () => {
+	const token = "a2aow_" + "a".repeat(20);
+	const setup = "https://card.example/card.json?t=" + "c".repeat(16);
+	const userinfo = "https://user:secret@card.example/card.json";
+	const raw = {
+		pending: [
+			{ userCode: "WDJB-4827", clientName: token, clientId: "barry-alias", agentCardUrl: setup },
+			{ userCode: "BCDF-2345", clientName: "Barry Bot", clientId: token, agentCardUrl: "https://barry.example/card.json" },
+			{ client_name: token, agent_card_url: userinfo },
+		],
+		token,
+	};
+	assert.equal(ownerResponseLeaks(raw), true);
+	const scrubbed = scrubOwnerClaims(raw) as { pending: { clientName: string; clientId: string; agentCardUrl: string; client_name?: string; agent_card_url?: string }[]; token: string };
+	assert.equal(scrubbed.pending[0]!.clientName, "");
+	assert.equal(scrubbed.pending[0]!.clientId, "barry-alias");
+	assert.equal(scrubbed.pending[0]!.agentCardUrl, "");
+	assert.equal(scrubbed.pending[1]!.clientName, "Barry Bot");
+	assert.equal(scrubbed.pending[1]!.clientId, "");
+	assert.equal(scrubbed.pending[1]!.agentCardUrl, "https://barry.example/card.json");
+	assert.equal(scrubbed.pending[2]!.client_name, "");
+	assert.equal(scrubbed.pending[2]!.agent_card_url, "");
+	assert.equal(scrubbed.token, token);
+	assert.equal(ownerResponseLeaks(scrubbed), true, "a real token under another key is still withheld");
+	const listed = scrubOwnerClaims({ pending: raw.pending });
+	assert.equal(ownerResponseLeaks(listed), false);
+	assert.equal(JSON.stringify(listed).includes(token), false);
+	assert.equal(JSON.stringify(listed).includes("t=" + "c".repeat(16)), false);
+	assert.equal(JSON.stringify(listed).includes("user:secret"), false);
 });
