@@ -76,6 +76,11 @@ if (hosted) {
 	envBindings.TENANT_DO = bindings.durableObject({ worker: name, exportName: "TenantStore" });
 	envBindings.TENANT_DIRECTORY = bindings.kv();
 }
+// Optional service binding to the control Worker. Unset: OpenID Connect keeps using fetch, which is
+// what a self-host deploy needs for an external issuer. Set A2A_CONTROL_SERVICE to that Worker's name
+// so a tenant on the same zone does not fetch the issuer through the public route.
+const controlService = v("A2A_CONTROL_SERVICE");
+if (controlService) envBindings.CONTROL_SERVICE = bindings.worker({ worker: controlService });
 if (backups) {
 	const region = v("DATA_REGION");
 	const bucketName = v("A2A_BACKUP_BUCKET_NAME");

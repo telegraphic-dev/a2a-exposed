@@ -52,6 +52,11 @@ export type ConfigFields = { [K in ConfigKey]?: string };
  */
 const HOSTED_PLATFORM_DEFAULTS: readonly ConfigKey[] = ["MAX_BODY", "RATE_PER_MIN", "PBKDF2_ITERATIONS", "MCP", "PAIRING_APPROVAL"];
 
+/** Worker-to-Worker fetch. Present when the deploy sets `A2A_CONTROL_SERVICE`. */
+export interface ControlFetcher {
+	fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
+}
+
 /** Bindings the Worker entry sees. Gate bindings are optional and empty by default. */
 export interface WorkerBindings extends ConfigFields {
 	DB: SqlDb;
@@ -97,6 +102,11 @@ export interface WorkerBindings extends ConfigFields {
 	APPROVAL_OIDC_ALLOWED_SUBJECTS?: string;
 	/** Comma-separated: password, oidc. Unset keeps the password and also offers OIDC once it is fully configured. */
 	APPROVAL_METHODS?: string;
+	/**
+	 * Service binding to the control Worker. Used for OpenID Connect discovery, token and JWKS
+	 * when the issuer is on this tenant's zone. Unset: those calls use `fetch` (self-host, and any other issuer).
+	 */
+	CONTROL_SERVICE?: ControlFetcher;
 }
 
 export interface KvNamespace {
@@ -348,13 +358,15 @@ export class TenantContext implements ConfigFields {
 	readonly #secretsKey?: string;
 	/** OpenID Connect client secret. Never logged and never copied onto `gates`. */
 	readonly #approvalClientSecret?: string;
+	/** Control Worker binding. Not a secret. Absent on a self-host deploy. */
+	readonly #controlService?: ControlFetcher;
 	#peerKey: Promise<CryptoKey | null> | null = null;
 
 	constructor(init: {
 		id: string; mode: TenancyMode; status: string; db: SqlDb; publicUrl: string;
 		gates: FeatureGates; limits: Record<string, unknown>; approval: Record<string, unknown>;
 		config: ConfigFields; ownerToken?: string; ownerTokenHash?: string; secretsKey?: string;
-		approvalClientSecret?: string;
+		approvalClientSecret?: string; controlService?: ControlFetcher;
 	}) {
 		this.id = init.id;
 		this.mode = init.mode;
@@ -368,12 +380,18 @@ export class TenantContext implements ConfigFields {
 		this.#ownerTokenHash = init.ownerTokenHash;
 		this.#secretsKey = init.secretsKey;
 		this.#approvalClientSecret = init.approvalClientSecret;
+		this.#controlService = init.controlService;
 		Object.assign(this, init.config);
 	}
 
 	/** OpenID Connect client secret, or "" when unset. Callers must not log the return value. */
 	approvalClientSecret(): string {
 		return this.#approvalClientSecret || "";
+	}
+
+	/** Control Worker binding, or undefined when this deploy has none. */
+	controlService(): ControlFetcher | undefined {
+		return this.#controlService;
 	}
 
 	/**
@@ -422,6 +440,7 @@ export function resolveTenant(env: WorkerBindings, req?: Request): TenantContext
 		limits: {}, approval: {}, config: pickConfig(env, CONFIG_KEYS),
 		ownerToken: env.OWNER_TOKEN, secretsKey: undefined,
 		approvalClientSecret: (env.APPROVAL_OIDC_CLIENT_SECRET || "").trim(),
+		controlService: env.CONTROL_SERVICE,
 	});
 }
 
@@ -446,5 +465,6 @@ export function hostedTenantContext(env: WorkerBindings, overlay: HostedOverlay)
 		limits: overlay.limits || {}, approval: approval.publicRecord,
 		config, ownerTokenHash: hash || undefined, secretsKey: parsed.secretsKey,
 		approvalClientSecret: approval.clientSecret,
+		controlService: env.CONTROL_SERVICE,
 	});
 }
