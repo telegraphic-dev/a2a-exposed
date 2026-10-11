@@ -4,7 +4,9 @@ import { sameOrigin } from "../auth/origin.ts";
 import type { AuthDeps } from "../auth/options.ts";
 import { recentSignIn } from "../auth/recent.ts";
 import type { ControlEnv } from "../env.ts";
+import { deleteTenant } from "../tenants/delete.ts";
 import { dataPlaneFromEnv, type DataPlane } from "../tenants/push.ts";
+import { TENANT_NAME } from "../tenants/reserved.ts";
 import { rotateOwnerToken } from "../tenants/rotate.ts";
 import { configFields, saveWakeSettings, tenantForAccount, wakeSettingsOf } from "../tenants/wake.ts";
 import { renderAgentPage } from "../views/agent.tsx";
@@ -137,7 +139,24 @@ export async function handleAgent(
 	const plane = deps.dataPlane ?? dataPlaneFromEnv(env);
 	if (!loaded || !plane) return page("Agents are not available.", 404, env, "Agent");
 	const row = await tenantForAccount(loaded.options.database, accountId, name);
-	if (!row) return page("No such agent.", 404, env, "Agent");
+	if (!row) {
+		if (request.method === "POST" && TENANT_NAME.test(name)) {
+			const length = Number(request.headers.get("content-length") || "0");
+			if (length > 16_000) return back("?error=key");
+			const form = await request.formData();
+			const typed = form.get("agent-name");
+			if (String(form.get("action") ?? "") === "delete-agent" && typed !== null && String(typed) === name) {
+				if (!recentSignIn(session)) {
+					console.log(JSON.stringify({ ts: new Date().toISOString(), event: "dashboard_reauth", tenant: null, accountId, decision: "delete-agent" }));
+					let cookies: string[] = [];
+					try { cookies = await clearSession(loaded.auth, request); } catch { /* still do not delete */ }
+					return redirect(new URL("/app?error=reauth", request.url).href, cookies);
+				}
+				return redirect(new URL("/app?deleted=1", request.url).href);
+			}
+		}
+		return page("No such agent.", 404, env, "Agent");
+	}
 
 	if (request.method === "POST") {
 		const length = Number(request.headers.get("content-length") || "0");
@@ -224,6 +243,24 @@ export async function handleAgent(
 			}
 			logDecision(row.id, accountId, "owner_token_rotated", true);
 			return redirect(new URL(`/app/agents/${name}`, request.url).href, [hostCookie(OWNER_COOKIE, `${row.name}.${rotated.token}`, 120)]);
+		}
+		if (action === "delete-agent") {
+			if (!recentSignIn(session)) {
+				console.log(JSON.stringify({ ts: new Date().toISOString(), event: "dashboard_reauth", tenant: row.id, accountId, decision: "delete-agent" }));
+				let cookies: string[] = [];
+				try { cookies = await clearSession(loaded.auth, request); } catch { /* still do not delete */ }
+				return redirect(new URL("/app?error=reauth", request.url).href, cookies);
+			}
+			const typed = form.get("agent-name");
+			if (typed === null) return back("?confirm-delete=1");
+			if (String(typed) !== row.name) return back("?confirm-delete=1&delete=name");
+			const removed = await deleteTenant(loaded.options.database, plane, { accountId, name });
+			if (!removed.ok) {
+				logDecision(row.id, accountId, "agent_deleted", false);
+				return back("?confirm-delete=1&delete=failed");
+			}
+			logDecision(row.id, accountId, "agent_deleted", true);
+			return redirect(new URL("/app?deleted=1", request.url).href);
 		}
 		if (action === "export") {
 			if (!plane.owner || row.status !== "active") return back("?export=failed");
@@ -332,7 +369,10 @@ export async function handleAgent(
 			ownerToken,
 			confirmRotate: url.searchParams.get("confirm-token") === "1",
 			tokenNotice: url.searchParams.get("token") ?? "",
+			confirmDelete: url.searchParams.get("confirm-delete") === "1",
+			deleteNotice: url.searchParams.get("delete") ?? "",
 		}),
+		reauthHref: recentSignIn(session) ? "" : `/app/sign-in?return=${encodeURIComponent(`/app/agents/${name}`)}`,
 		peersHtml: renderPeers({
 			name,
 			pending,

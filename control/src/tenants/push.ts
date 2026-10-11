@@ -36,6 +36,10 @@ export interface DataPlane {
 	pushConfig(body: TenantPush, region: string): Promise<{ version: number; applied: boolean }>;
 	/** Allowlisted owner call. Absent on a test double that never renders an agent page. */
 	owner?(tenantId: string, region: string, input: OwnerCall): Promise<{ status: number; body: unknown }>;
+	/** Remove `tenant:<name>`. A missing key is success. Absent until the data plane can delete an agent. */
+	deleteDirectory?(name: string): Promise<void>;
+	/** Wipe that tenant's Durable Object storage. A second call on an empty object succeeds. */
+	deleteStorage?(tenantId: string, region: string): Promise<void>;
 }
 
 interface DoNamespace {
@@ -43,6 +47,7 @@ interface DoNamespace {
 	get(id: unknown): {
 		pushConfig(body: TenantPush): Promise<{ version: number; applied: boolean }>;
 		owner?(input: OwnerCall): Promise<{ status: number; body: unknown }>;
+		deleteStorage?(): Promise<unknown>;
 	};
 	jurisdiction?(location: string): DoNamespace;
 }
@@ -50,6 +55,7 @@ interface DoNamespace {
 interface DirectoryKv {
 	get(key: string, type: "json"): Promise<unknown>;
 	put(key: string, value: string): Promise<void>;
+	delete?(key: string): Promise<void>;
 }
 
 export interface PlaneEnv {
@@ -71,8 +77,12 @@ export function dataPlaneFromEnv(env: PlaneEnv): DataPlane | null {
 	if (!directory || !objects) return null;
 	return {
 		async putDirectory(name, entry) {
-			const current = await directory.get(`tenant:${name}`, "json") as { version?: unknown } | null;
-			if (current && typeof current.version === "number" && current.version > entry.version) return;
+			const current = await directory.get(`tenant:${name}`, "json") as { version?: unknown; id?: unknown; status?: unknown } | null;
+			const other = !!current && typeof current.id === "string" && current.id !== entry.id;
+			// A deleted id stays deleted. A different live tenant is not replaced. A new id may replace a tombstone.
+			if (other && current?.status !== "deleted") return;
+			if (!other && current?.status === "deleted" && current.id === entry.id) return;
+			if (!other && current && typeof current.version === "number" && current.version > entry.version) return;
 			await directory.put(`tenant:${name}`, JSON.stringify(entry));
 		},
 		async pushConfig(body, region) {
@@ -84,6 +94,16 @@ export function dataPlaneFromEnv(env: PlaneEnv): DataPlane | null {
 			const stub = ns.get(ns.idFromName(tenantId));
 			if (!stub.owner) throw new Error("owner rpc is not available");
 			return stub.owner(input);
+		},
+		async deleteDirectory(name) {
+			if (!directory.delete) throw new Error("directory delete is not available");
+			await directory.delete(`tenant:${name}`);
+		},
+		async deleteStorage(tenantId, region) {
+			const ns = namespaceFor(objects, region);
+			const stub = ns.get(ns.idFromName(tenantId));
+			if (!stub.deleteStorage) throw new Error("delete storage is not available");
+			await stub.deleteStorage();
 		},
 	};
 }
@@ -130,14 +150,80 @@ export function pushFromRow(row: OutboxRow): TenantPush {
 	};
 }
 
-/** Push one outbox row, then delete it when the object reports that version or newer. */
-export async function deliverOutbox(db: Sql, plane: DataPlane, row: OutboxRow): Promise<boolean> {
-	const body = pushFromRow(row);
-	await plane.putDirectory(row.name, { id: row.id, status: row.status, region: row.region, version: row.version });
-	const result = await plane.pushConfig(body, row.region);
-	if (result.version < row.version) return false;
-	await db.prepare("DELETE FROM config_outbox WHERE tenant_id = ? AND version <= ?").bind(row.id, result.version).run();
-	return true;
+const OUTBOX_LOCK_MS = 60_000;
+
+async function acquireOutboxLock(db: Sql, holder: string): Promise<void> {
+	const started = Date.now();
+	for (;;) {
+		const now = Date.now();
+		const updated = await db.prepare(
+			`UPDATE control_locks SET holder = ?, expires_ms = ?
+			 WHERE name = 'outbox' AND (holder = '' OR holder = ? OR expires_ms <= ?)`,
+		).bind(holder, now + OUTBOX_LOCK_MS, holder, now).run();
+		if ((updated.meta?.changes ?? 0) === 1) return;
+		if (now - started > 10_000) throw new Error("outbox lock busy");
+		await new Promise((resolve) => setTimeout(resolve, 5));
+	}
+}
+
+async function releaseOutboxLock(db: Sql, holder: string): Promise<void> {
+	await db.prepare(
+		"UPDATE control_locks SET holder = '', expires_ms = 0 WHERE name = 'outbox' AND holder = ?",
+	).bind(holder).run();
+}
+
+/** One writer at a time for delivery and delete. A crashed holder expires after a minute. */
+export async function withOutboxLock<T>(db: Sql, fn: () => Promise<T>): Promise<T> {
+	const holder = crypto.randomUUID();
+	await acquireOutboxLock(db, holder);
+	try {
+		return await fn();
+	} finally {
+		await releaseOutboxLock(db, holder);
+	}
+}
+
+interface LiveTenant {
+	id: string;
+	name: string;
+	status: string;
+	region: string;
+	config_json: string;
+	limits_json: string;
+	approval_json: string;
+	owner_token_hash: string;
+	secrets_enc: string | null;
+	config_version: number;
+}
+
+async function liveTenant(db: Sql, id: string): Promise<LiveTenant | null> {
+	return db.prepare(
+		`SELECT id, name, status, region, config_json, limits_json, approval_json, owner_token_hash, secrets_enc, config_version
+		 FROM tenants WHERE id = ?`,
+	).bind(id).first<LiveTenant>();
+}
+
+/**
+ * Push one outbox row, then delete it when the object reports that version or newer.
+ * The row is read again under the outbox lock. A tenant that is gone or deleting is not written:
+ * a flush that loaded the row earlier must not put it back after delete.
+ * `beforeLock` runs after that load and before the lock, so a test can delete the agent in between.
+ */
+export async function deliverOutbox(db: Sql, plane: DataPlane, row: OutboxRow, beforeLock?: () => Promise<void>): Promise<boolean> {
+	if (beforeLock) await beforeLock();
+	return withOutboxLock(db, async () => {
+		const live = await liveTenant(db, row.id);
+		if (!live || live.status === "deleting" || live.status === "deleted") {
+			await db.prepare("DELETE FROM config_outbox WHERE tenant_id = ?").bind(row.id).run();
+			return true;
+		}
+		const body = pushFromRow({ ...row, status: live.status, config_json: live.config_json, limits_json: live.limits_json, approval_json: live.approval_json, owner_token_hash: live.owner_token_hash, secrets_enc: live.secrets_enc, region: live.region, name: live.name });
+		await plane.putDirectory(live.name, { id: live.id, status: live.status, region: live.region, version: row.version });
+		const result = await plane.pushConfig(body, live.region);
+		if (result.version < row.version) return false;
+		await db.prepare("DELETE FROM config_outbox WHERE tenant_id = ? AND version <= ?").bind(row.id, result.version).run();
+		return true;
+	});
 }
 
 /** Retry every pending push. A row older than five minutes is logged; the token is not. */

@@ -269,6 +269,9 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 	async pushConfig(body: TenantConfigPush): Promise<{ version: number; applied: boolean }> {
 		return await this.ctx.blockConcurrencyWhile(async () => {
 			checkPush(body);
+			const deleted = await (this.ctx.storage as unknown as { get(key: string): Promise<unknown> }).get("tenant_deleted");
+			// deleteStorage leaves this key after wiping SQL. A later push must not recreate the agent.
+			if (deleted != null) return { version: 0, applied: false };
 			const current = this.#row ?? readRow(this.#sql);
 			if (current && body.version <= current.version) {
 				// A previous push may have stored this version and then failed while migrating. Catch up; don't rewrite the row.
@@ -320,6 +323,30 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 	/** No secrets. Tests use this to show a 404 did not create application tables. */
 	async storageStatus(): Promise<{ configured: boolean; version: number; tables: string[] }> {
 		return { configured: this.#row !== null, version: this.#row?.version ?? 0, tables: appTables(this.#sql) };
+	}
+
+	/**
+	 * Drop this object's alarm and storage. A second call on an empty object succeeds.
+	 * Not an owner HTTP route. Self-host never calls it.
+	 */
+	async deleteStorage(): Promise<{ deleted: true }> {
+		return await this.ctx.blockConcurrencyWhile(async () => {
+			const storage = this.ctx.storage as unknown as {
+				deleteAlarm(): Promise<void>;
+				deleteAll(): Promise<void>;
+				put(key: string, value: string): Promise<void>;
+			};
+			const tenantId = this.#row?.tenantId ?? null;
+			await storage.deleteAlarm();
+			await storage.deleteAll();
+			const left = readRow(this.#sql);
+			if (left) throw new Error("deleteStorage: data remains");
+			// After SQL is gone. A later pushConfig sees this and does not recreate the agent.
+			await storage.put("tenant_deleted", "1");
+			this.#row = null;
+			console.log(JSON.stringify({ ts: new Date().toISOString(), event: "tenant_storage_deleted", tenant: tenantId }));
+			return { deleted: true };
+		});
 	}
 
 	/** SQL dump of the application tables. Refuses an object that has no config row. */

@@ -1,6 +1,7 @@
 import { Hono, type Context } from "hono";
 import { CALLBACK_DEADLINE_MS, within } from "./auth/deadline.ts";
 import { connectingIp, verifyTurnstile } from "./auth/turnstile.ts";
+import { agentReturnPath } from "./auth/return.ts";
 import { enabledProviderOrigins, handleSignIn } from "./auth/sign-in.ts";
 import { loadAuth } from "./auth/instance.ts";
 import { signupClosedText, type SignupAllowlist } from "./auth/allowlist.ts";
@@ -214,6 +215,31 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 	});
 	app.get("/app/device", (c) => devicePage(c));
 	app.post("/app/device", (c) => devicePage(c));
+	app.get("/app/sign-in", async (c) => {
+		const request = c.req.raw;
+		const next = agentReturnPath(new URL(request.url).searchParams.get("return") ?? "");
+		const loaded = await loadAuth(env, request, deps);
+		if (!loaded) return c.json({ error: "not_found" }, 404);
+		const session = await loaded.auth.api.getSession({ headers: request.headers });
+		if (!next && session?.user?.id) return c.redirect(new URL("/app", request.url).href, 302);
+		const url = new URL(request.url);
+		const body = renderSignIn({
+			providers: [
+				loaded.options.github ? "github" : "",
+				loaded.options.google ? "google" : "",
+				loaded.options.cloudflare ? "cloudflare" : "",
+			].filter(Boolean),
+			magicLink: Boolean(loaded.options.mailer || loaded.options.emailBinding),
+			invitesRequired: loaded.options.invitesRequired,
+			signupClosed: loaded.options.signupAllowlist !== null,
+			closedMessage: signupClosedText(env),
+			turnstileSiteKey: loaded.options.turnstile?.siteKey,
+			error: url.searchParams.get("error") ?? undefined,
+			sent: url.searchParams.get("sent") === "1",
+			next,
+		});
+		return c.html(renderApp(env, body), 200, pageHeaders(Boolean(loaded.options.turnstile), loaded.options));
+	});
 	app.get("/app/agents/:name", (c) => handleAgent(c.req.raw, env, deps));
 	app.post("/app/agents/:name", (c) => handleAgent(c.req.raw, env, deps));
 	app.get("/app/*", async (c) => {
@@ -397,6 +423,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 				agentLimit,
 				signupClosed: loaded.options.signupAllowlist !== null,
 				closedMessage: signupClosedText(env),
+				deleted: url.searchParams.get("deleted") === "1",
 			});
 			return {
 				html: renderApp(env, body, "Your agents"),

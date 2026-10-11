@@ -100,7 +100,7 @@ const OMIT_COLUMNS: Record<string, readonly string[]> = {
 	outbound: ["push_token_hash"],
 	mcp_grants: ["access_hash", "refresh_hash"],
 	outbound_peers: ["token_enc"],
-	device_requests: ["replaces_hash"],
+	device_requests: ["replaces_hash", "ip", "country"],
 };
 
 const SETUP_SUB = /([?&])t=[A-Za-z0-9_-]{16,}/g;
@@ -120,7 +120,7 @@ function placeholder(table: string, row: Record<string, unknown>, index: number)
 
 /**
  * A copy of `file` safe to show on the dashboard.
- * Nullable credential columns are removed, including `device_requests.replaces_hash` (the hash of the token a re-pair would replace).
+ * Nullable credential columns are removed, including `device_requests.replaces_hash` (the hash of the token a re-pair would replace) and `device_requests.ip` and `device_requests.country` (the requester's address).
  * `peers.token_hash` and `device_requests.device_hash` are NOT NULL, so they become `redacted:…` (not the hash, and not a token that authenticates).
  * `oauth_codes` and `oidc_txns` are emptied. The approval-password row and the password-setup row (its value is the hash of the live setup token) are removed.
  * Token-shaped text, including a hosted owner token (`a2aot_`), is scrubbed. The input is not changed: the CLI dump stays complete.

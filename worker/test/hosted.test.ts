@@ -750,3 +750,58 @@ test("TenantStore.owner runs an allowlisted owner call and does not return a pee
 	assert.equal(await saw('"reason":"account"'), true);
 	assert.equal(lines.some((l) => l.includes("../acct")), false);
 });
+
+test("TenantStore.deleteStorage wipes the object and a second call succeeds", async (t) => {
+	const mf = await start({
+		bindings: {
+			TENANCY: "host",
+			TENANT_DOMAIN: "example.com",
+			OWNER_TOKEN: "platform-owner",
+		},
+		kvNamespaces: { TENANT_DIRECTORY: "tenants-delete" },
+		durableObjects: { TENANT_DO: { className: "TenantStore", useSQLite: true } },
+	});
+	t.after(() => mf.dispose());
+	await mf.ready;
+	const kv = await mf.getKVNamespace("TENANT_DIRECTORY");
+	const ns = await mf.getDurableObjectNamespace("TENANT_DO");
+	const hash = await sha256("owner-delta");
+	type Stub = {
+		pushConfig(body: Record<string, unknown>): Promise<{ version: number; applied: boolean }>;
+		deleteStorage(): Promise<{ deleted: boolean }>;
+		storageStatus(): Promise<{ configured: boolean; tables: string[] }>;
+	};
+	const stub = ns.get(ns.idFromName("id-delta")) as unknown as Stub;
+	await stub.pushConfig({
+		version: 1, tenantId: "id-delta", name: "delta", status: "active", ownerTokenHash: hash,
+		config: { AGENT_NAME: "delta" },
+	});
+	await kv.put("tenant:delta", JSON.stringify({ id: "id-delta", status: "active", region: "default", version: 1 }));
+	const before = await stub.storageStatus();
+	assert.equal(before.configured, true);
+	assert.ok(before.tables.includes("tenant_config"));
+	const http = await mf.dispatchFetch("https://delta.example.com/owner/delete", {
+		method: "POST",
+		headers: { authorization: "Bearer owner-delta" },
+	});
+	assert.equal(http.status, 404);
+	assert.equal((await stub.storageStatus()).configured, true, "the owner HTTP API does not wipe storage");
+	const wiped = await stub.deleteStorage();
+	assert.equal(wiped.deleted, true);
+	const after = await stub.storageStatus();
+	assert.equal(after.configured, false);
+	assert.deepEqual(after.tables, []);
+	const again = await stub.deleteStorage();
+	assert.equal(again.deleted, true);
+	assert.equal((await stub.storageStatus()).configured, false);
+	assert.deepEqual((await stub.storageStatus()).tables, []);
+	const refused = await stub.pushConfig({
+		version: 2, tenantId: "id-delta", name: "delta", status: "active", ownerTokenHash: hash,
+		config: { AGENT_NAME: "delta" },
+	});
+	assert.equal(refused.applied, false);
+	assert.equal(refused.version, 0);
+	const stayed = await stub.storageStatus();
+	assert.equal(stayed.configured, false);
+	assert.deepEqual(stayed.tables, []);
+});
