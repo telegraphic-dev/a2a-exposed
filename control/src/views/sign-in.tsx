@@ -1,3 +1,5 @@
+import { SIGNUP_CLOSED } from "../auth/allowlist.ts";
+
 const PROVIDERS = [
 	["github", "Continue with GitHub"],
 	["google", "Continue with Google"],
@@ -88,12 +90,16 @@ export function renderSignIn(input: {
 	providers: string[];
 	magicLink: boolean;
 	invitesRequired: boolean;
+	/** When set, `error=invite` is the allowlist refusal, not a bad invite code. */
+	signupClosed?: boolean;
 	turnstileSiteKey?: string;
 	notice?: string;
 	error?: string;
 	sent?: boolean;
 }): string {
-	const error = input.error ? ERRORS[input.error] ?? ERRORS.auth : "";
+	const error = input.error === "invite" && input.signupClosed
+		? SIGNUP_CLOSED
+		: input.error ? ERRORS[input.error] ?? ERRORS.auth : "";
 	const buttons = PROVIDERS.filter(([id]) => input.providers.includes(id));
 	return (
 		<div>

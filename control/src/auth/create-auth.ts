@@ -7,6 +7,7 @@ import { CLI_CLIENT_ID } from "./device.ts";
 import { jwt } from "better-auth/plugins/jwt";
 import { mapCloudflareUser } from "./cloudflare-user.ts";
 import { INVITE_COOKIE, SESSION_COOKIE, readCookie } from "./cookies.ts";
+import { emailAllowed, emailIsVerified } from "./allowlist.ts";
 import { consumeInvite, rememberMagicInvite, takeMagicInvite, validInviteCode } from "./invites.ts";
 import type { AuthOptions } from "./options.ts";
 import { cloudflareMailer } from "../mail/cloudflare.ts";
@@ -114,6 +115,14 @@ export async function createAuth(options: AuthOptions) {
 			// three sign-ins per ten seconds, then 429.
 			ipAddress: { ipAddressHeaders: ["cf-connecting-ip"] },
 		},
+		user: {
+			// Fresh provider profile, including a later sign-in. An unverified address never matches.
+			validateUserInfo: async ({ user }) => {
+				if (!options.signupAllowlist) return;
+				const email = typeof user.email === "string" ? user.email : "";
+				if (!emailAllowed(options.signupAllowlist, email, emailIsVerified(user.emailVerified))) return { error: "invite" };
+			},
+		},
 		databaseHooks: {
 			user: {
 				create: {
@@ -126,6 +135,23 @@ export async function createAuth(options: AuthOptions) {
 						const code = fromLink || readCookie(request?.headers.get("cookie") ?? null, INVITE_COOKIE);
 						const accepted = email ? await consumeInvite(options.database, code, email) : false;
 						if (!accepted) throw new APIError("FORBIDDEN", { message: "Invite required", code: "INVITE_REQUIRED" });
+					},
+				},
+			},
+			session: {
+				create: {
+					// Returning magic-link and CLI device sessions do not pass validateUserInfo.
+					before: async (session) => {
+						if (!options.signupAllowlist) return;
+						const userId = typeof session.userId === "string" ? session.userId : "";
+						const row = userId
+							? await options.database.prepare(
+								`SELECT email, "emailVerified" AS email_verified FROM "user" WHERE id = ?`,
+							).bind(userId).first<{ email: string; email_verified: number | boolean }>()
+							: null;
+						if (!row || !emailAllowed(options.signupAllowlist, row.email, emailIsVerified(row.email_verified))) {
+							throw new APIError("FORBIDDEN", { message: "Invite required", code: "invite" });
+						}
 					},
 				},
 			},

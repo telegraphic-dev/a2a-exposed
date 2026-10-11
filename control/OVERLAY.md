@@ -51,6 +51,7 @@ Every binding is optional and read from the environment in `cloudflare.config.ts
 | `MAIL_FROM` | Sender address. With the `EMAIL` send binding, turns on email sign-in. |
 | `TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY` | Optional. Both are required before the widget is shown. |
 | `INVITES_REQUIRED` | `1` requires an `invite_` code in `invites` before the first account for an email is created. Unset: anyone who can use a configured provider can sign in. |
+| `SIGNUP_ALLOWLIST` | Comma-separated exact emails and `*@domain` wildcards, matched case-insensitively against the provider's verified email. `*@example.com` matches `person@example.com` and not `person@sub.example.com`. Unset or empty: sign-in stays open. A non-empty list is checked when the account is created and on every later sign-in, including a magic link and a CLI device session. An address the provider has not verified does not match, so Cloudflare does not pass this list. A refusal returns to `/app?error=invite` and the page says "Hosted a2a.exposed is invite-only for now." The addresses for a hosted deploy are set in that deploy, not in this tree. |
 | `FREE_AGENT_LIMIT` | Default number of agents per account, a non-negative integer. Unset or empty: no cap. An account's `agent_limit` overrides it. |
 | `CONTROL_WORKERS_LOGS` | `1` enables Workers Logs with query strings redacted. |
 | `CLOUDFLARE_ACCOUNT_ID` | Account, when the token can see more than one. |

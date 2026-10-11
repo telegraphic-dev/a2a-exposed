@@ -96,6 +96,8 @@ test("login help names the callback error", async () => {
 	assert.match(stdout, /own limit overrides it/);
 	assert.match(stdout, /no limit/);
 	assert.match(stdout, /rejects another insert/);
+	assert.match(stdout, /SIGNUP_ALLOWLIST/);
+	assert.match(stdout, /\/app\?error=invite/);
 });
 
 test("login refuses a control URL that is not https", async () => {
