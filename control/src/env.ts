@@ -27,6 +27,6 @@ export interface ControlEnv extends PlaneEnv {
 	TURNSTILE_SECRET_KEY?: string;
 	/** `1` requires an invite code before the first account is created. */
 	INVITES_REQUIRED?: string;
-	/** Default agents per account. Unset: no cap, unless that account sets agent_limit. */
+	/** Default agents per account. Unset on the running Worker: no cap, unless that account sets agent_limit. A hosted deploy binds 2 when this is left unset. */
 	FREE_AGENT_LIMIT?: string;
 }

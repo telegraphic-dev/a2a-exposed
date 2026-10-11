@@ -221,7 +221,7 @@ test("per-tenant SQLite: directory, config push, and isolation", async (t) => {
 });
 
 test("hosted approval reaches a same-zone issuer through CONTROL_SERVICE", async (t) => {
-	const issuer = "https://example.com";
+	const issuer = "https://control.example.com";
 	const tenant = "https://northwind.example.com";
 	const bindingUrls: string[] = [];
 	const publicHosts: string[] = [];
@@ -248,7 +248,7 @@ test("hosted approval reaches a same-zone issuer through CONTROL_SERVICE", async
 				return new Response("missing", { status: 404 });
 			},
 		},
-		// A public fetch of the zone apex does not reach the control Worker. If it is attempted, answer 522.
+		// A public fetch of another host on this zone does not reach the control Worker. If it is attempted, answer 522.
 		outboundService: async (request: Request) => {
 			publicHosts.push(new URL(request.url).hostname);
 			return new Response("origin is unreachable", { status: 522 });
@@ -299,7 +299,7 @@ test("hosted approval reaches a same-zone issuer through CONTROL_SERVICE", async
 	assert.equal(post.status, 302, await post.text());
 	assert.equal(new URL(post.headers.get("location") || "").origin + new URL(post.headers.get("location") || "").pathname, `${issuer}/api/oidc/authorize`);
 	assert.deepEqual(bindingUrls, [`${issuer}/.well-known/openid-configuration`]);
-	assert.equal(publicHosts.includes("example.com"), false, `public fetch hit ${publicHosts.join(",")}`);
+	assert.equal(publicHosts.includes("control.example.com"), false, `public fetch hit ${publicHosts.join(",")}`);
 
 	const missed = await start({
 		bindings: { TENANCY: "host", TENANT_DOMAIN: "example.com", TENANT_SECRETS_KEY: "platform-secret" },

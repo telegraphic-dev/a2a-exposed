@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import worker, { dispatch } from "../src/index.ts";
 import * as M from "../src/mcp.ts";
-import { approvalPolicy, sameZoneHost } from "../src/approval-oidc.ts";
+import { approvalPolicy, hostOnZone, reachesControl, sameZoneHost } from "../src/approval-oidc.ts";
 import { hostedTenantContext, parseGates, type WorkerBindings } from "../src/tenancy.ts";
 import { d1 } from "./d1.ts";
 
@@ -117,7 +117,8 @@ test("unset /device has no OpenID Connect button", async (t) => {
 
 test("configured /device redirects to the issuer with PKCE and approves on a valid id token", async (t) => {
 	const s = setup(oidcEnv); t.after(s.restore);
-	// Different zone from the tenant: the control binding must not see this issuer.
+	// Different zone from the tenant domain: the control binding must not see this issuer.
+	s.env.TENANT_DOMAIN = "example.com";
 	s.env.CONTROL_SERVICE = { fetch() { throw new Error("external issuer must use fetch"); } };
 	const d = await s.start();
 	const code = d.data.user_code as string;
@@ -337,9 +338,15 @@ test("sameZoneHost matches a parent zone and not a lookalike label", () => {
 	assert.equal(sameZoneHost("example.com", "northwind.example.com"), true);
 	assert.equal(sameZoneHost("example.com", "example.com"), true);
 	assert.equal(sameZoneHost("agent.example.com", "idp.example"), false);
+	assert.equal(sameZoneHost("northwind.example.com", "control.example.com"), false);
 	assert.equal(sameZoneHost("notexample.com", "example.com"), false);
 	assert.equal(sameZoneHost("example.com.evil.example", "example.com"), false);
 	assert.equal(sameZoneHost("", "example.com"), false);
+	assert.equal(hostOnZone("control.example.com", "example.com"), true);
+	assert.equal(hostOnZone("notexample.com", "example.com"), false);
+	assert.equal(reachesControl("northwind.example.com", "control.example.com", "example.com"), true);
+	assert.equal(reachesControl("northwind.example.com", "control.example.com", ""), false);
+	assert.equal(reachesControl("agent.example.com", "idp.example", "example.com"), false);
 });
 
 const ZONE = "https://example.com";
@@ -384,6 +391,30 @@ test("a same-zone issuer is reached through CONTROL_SERVICE, not a public fetch"
 	assert.equal(joined.includes("idp_unreachable"), false);
 	assert.equal(joined.includes(SECRET), false);
 	assert.equal(joined.includes("auth-code"), false);
+});
+
+test("a sibling control host on the tenant domain uses CONTROL_SERVICE", async (t) => {
+	const issuer = "https://control.example.com";
+	const s = setup({
+		...oidcEnv, APPROVAL_OIDC_ISSUER: issuer, PUBLIC_URL: "https://northwind.example.com", TENANT_DOMAIN: "example.com",
+	});
+	t.after(s.restore);
+	const urls: string[] = [];
+	s.env.CONTROL_SERVICE = {
+		async fetch(input: RequestInfo | URL, init?: RequestInit) {
+			const req = input instanceof Request ? input : new Request(input, init);
+			urls.push(new URL(req.url).pathname);
+			return Response.json({
+				issuer, authorization_endpoint: `${issuer}/authorize`, token_endpoint: `${issuer}/token`, jwks_uri: `${issuer}/jwks`,
+			});
+		},
+	};
+	globalThis.fetch = (async () => new Response("unreachable", { status: 522 })) as typeof fetch;
+	const d = await s.start();
+	const { post } = await s.postOidc(d.data.user_code);
+	assert.equal(post.status, 302, post.text);
+	assert.equal(new URL(post.headers.get("location")!).origin, issuer);
+	assert.deepEqual(urls, ["/.well-known/openid-configuration"]);
 });
 
 test("a failed same-zone fetch logs idp_unreachable with status and host", async (t) => {

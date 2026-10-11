@@ -27,15 +27,33 @@ export function issuerBase(issuer: string): string {
 	return issuer.replace(/\/+$/, "");
 }
 
+function bareHost(host: string): string {
+	return host.trim().toLowerCase().replace(/^\.+|\.+$/g, "");
+}
+
+/** True when `host` is `zone` or a subdomain of it. `notexample.com` is not under `example.com`. */
+export function hostOnZone(host: string, zone: string): boolean {
+	const name = bareHost(host);
+	const parent = bareHost(zone);
+	if (!name || !parent) return false;
+	return name === parent || name.endsWith(`.${parent}`);
+}
+
 /**
  * True when the two hosts are the same, or one is a subdomain of the other.
  * `notexample.com` is not a subdomain of `example.com`.
  */
 export function sameZoneHost(pageHost: string, targetHost: string): boolean {
-	const a = pageHost.trim().toLowerCase().replace(/\.$/, "");
-	const b = targetHost.trim().toLowerCase().replace(/\.$/, "");
-	if (!a || !b) return false;
-	return a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`);
+	return hostOnZone(pageHost, targetHost) || hostOnZone(targetHost, pageHost);
+}
+
+/**
+ * Use the control binding when the target is on the configured tenant domain
+ * (`control.example.com` and `northwind.example.com` share `example.com`), or when one host is under the other.
+ */
+export function reachesControl(pageHost: string, targetHost: string, tenantDomain: string): boolean {
+	if (hostOnZone(targetHost, tenantDomain)) return true;
+	return sameZoneHost(pageHost, targetHost);
 }
 
 /**
@@ -116,7 +134,7 @@ async function idpFetch(ctx: TenantContext, url: string, init: RequestInit, op: 
 	let host = "";
 	try { host = new URL(url).hostname; } catch { /* logged as a failed fetch */ }
 	const binding = ctx.controlService();
-	const viaBinding = !!(binding && host && sameZoneHost(pageHostname(ctx), host));
+	const viaBinding = !!(binding && host && reachesControl(pageHostname(ctx), host, ctx.gates.tenantDomain));
 	try {
 		// A service binding rejects `redirect` and `signal` on the request (they do not cross the
 		// binding). The timeout still applies here. Redirects stay an error: the binding does not follow them.

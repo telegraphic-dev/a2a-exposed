@@ -2,6 +2,7 @@
 // Nothing account-specific, and no hosted hostname, is committed here.
 import { bindings, defineConfig, triggers } from "cf/config";
 import * as entry from "./src/index.ts" with { type: "cf-worker" };
+import { deployedFreeAgentLimit } from "./src/deploy-limit.ts";
 import { RUN_WORKER_FIRST } from "./src/routing.ts";
 
 const e: Record<string, string | undefined> = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env ?? {};
@@ -27,7 +28,9 @@ const plain: Record<string, string> = {
 	MAIL_FROM: v("MAIL_FROM"),
 	TURNSTILE_SITE_KEY: v("TURNSTILE_SITE_KEY"),
 	INVITES_REQUIRED: v("INVITES_REQUIRED") === "1" ? "1" : "",
-	FREE_AGENT_LIMIT: /^\d+$/.test(v("FREE_AGENT_LIMIT")) ? v("FREE_AGENT_LIMIT") : "",
+	// Hosted (a tenant domain or a data-plane worker) defaults to 2 when this is unset. `none` binds no cap.
+	// A neutral deploy, with neither of those set, still binds nothing.
+	FREE_AGENT_LIMIT: deployedFreeAgentLimit(v("FREE_AGENT_LIMIT"), !!(v("TENANT_DOMAIN") || v("CONTROL_DATA_PLANE"))),
 };
 
 // Secrets stay out of the production config so a deploy does not require them.
