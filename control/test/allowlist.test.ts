@@ -362,6 +362,50 @@ test("connecting Cloudflare signs in by account id, and disconnect removes it", 
 	assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM "user"').first<{ n: number }>())?.n, 1);
 });
 
+test("one Cloudflare account stays bound to the user who claimed it", async (t) => {
+	t.after(cloudflareFetch("pat@cloud.test"));
+	const db = openDb();
+	const sent: { text: string }[] = [];
+	const app = createApp({
+		AUTH_SECRET: secret,
+		DB: db,
+		GITHUB_CLIENT_ID: "gh-id",
+		GITHUB_CLIENT_SECRET: "gh-secret",
+		CLOUDFLARE_OAUTH_CLIENT_ID: "cf-id",
+		CLOUDFLARE_OAUTH_CLIENT_SECRET: "cf-secret",
+		SIGNUP_ALLOWLIST: "mona@example.com, other@example.com",
+	}, { database: db, mailer: { async send(message) { sent.push({ text: message.text }); } } });
+	const github = await providerCallback(app, "github");
+	const mona = github.headers.getSetCookie().find((value) => value.startsWith(`${SESSION_COOKIE}=`))!.split(";")[0];
+	const other = await magicLink(app, sent, "other@example.com");
+	const otherSession = other.headers.getSetCookie().find((value) => value.startsWith(`${SESSION_COOKIE}=`))!.split(";")[0];
+
+	async function connect(cookie: string): Promise<Response> {
+		const posted = await app.request(`${origin}/app/account/cloudflare`, {
+			method: "POST",
+			headers: { origin, cookie, "content-type": "application/x-www-form-urlencoded" },
+			body: "action=connect",
+		});
+		assert.equal(posted.status, 303);
+		const state = new URL(posted.headers.get("location") ?? "").searchParams.get("state") ?? "";
+		assert.match(state, /^cfl_/);
+		return app.request(`${origin}/api/auth/callback/cloudflare?code=abc&state=${encodeURIComponent(state)}`, { headers: { cookie } });
+	}
+
+	const [first, second] = await Promise.all([connect(mona), connect(otherSession)]);
+	const outcome = (response: Response) => new URL(response.headers.get("location") ?? "", origin).searchParams;
+	const outcomes = [outcome(first), outcome(second)];
+	assert.deepEqual(outcomes.map((params) => params.get("connected")).filter((value) => value === "1"), ["1"]);
+	assert.deepEqual(outcomes.map((params) => params.get("error")).filter(Boolean), ["account_already_linked_to_different_user"]);
+	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM "account" WHERE "providerId" = 'cloudflare'`).first<{ n: number }>())?.n, 1);
+
+	const now = new Date().toISOString();
+	const duplicate = db.prepare(
+		`INSERT INTO "account" (id, "accountId", "providerId", "userId", "createdAt", "updatedAt") VALUES (?, 'cf-user', 'cloudflare', ?, ?, ?)`,
+	).bind("second-row", (await db.prepare('SELECT id FROM "user" LIMIT 1').first<{ id: string }>())?.id, now, now);
+	await assert.rejects(() => duplicate.run(), /UNIQUE constraint failed/i);
+});
+
 test("a mistyped invite code is not shown as an allowlist refusal", async () => {
 	const db = openDb();
 	const app = createApp({

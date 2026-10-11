@@ -199,16 +199,18 @@ export async function finishCloudflareLink(request: Request, auth: SessionAuth, 
 	const profileBody = await profile.json() as { result?: Parameters<typeof mapCloudflareUser>[0] };
 	const user = mapCloudflareUser(profileBody.result);
 	if (!user) return redirect(appRedirect(request, "unable_to_get_user_info"), [], 302);
-	const existing = await options.database.prepare(
+	const now = new Date().toISOString();
+	// account_provider_account_idx makes this insert lose when another callback already
+	// claimed the same Cloudflare account. The following read is the winner, so two
+	// overlapping connects cannot both report success.
+	await options.database.prepare(
+		`INSERT INTO "account" (id, "accountId", "providerId", "userId", "accessToken", "refreshToken", "idToken", "accessTokenExpiresAt", "refreshTokenExpiresAt", "scope", "password", "createdAt", "updatedAt")
+		 VALUES (?, ?, 'cloudflare', ?, NULL, NULL, NULL, NULL, NULL, 'user-details.read', NULL, ?, ?)
+		 ON CONFLICT ("providerId", "accountId") DO NOTHING`,
+	).bind(randomId(), user.id, userId, now, now).run();
+	const owner = await options.database.prepare(
 		`SELECT "userId" FROM "account" WHERE "providerId" = 'cloudflare' AND "accountId" = ?`,
 	).bind(user.id).first<{ userId: string }>();
-	if (existing && existing.userId !== userId) return redirect(appRedirect(request, "account_already_linked_to_different_user"), [], 302);
-	if (!existing) {
-		const now = new Date().toISOString();
-		await options.database.prepare(
-			`INSERT INTO "account" (id, "accountId", "providerId", "userId", "accessToken", "refreshToken", "idToken", "accessTokenExpiresAt", "refreshTokenExpiresAt", "scope", "password", "createdAt", "updatedAt")
-			 VALUES (?, ?, 'cloudflare', ?, NULL, NULL, NULL, NULL, NULL, 'user-details.read', NULL, ?, ?)`,
-		).bind(randomId(), user.id, userId, now, now).run();
-	}
+	if (owner?.userId !== userId) return redirect(appRedirect(request, "account_already_linked_to_different_user"), [], 302);
 	return redirect(appRedirect(request, undefined, "connected"), [], 302);
 }
