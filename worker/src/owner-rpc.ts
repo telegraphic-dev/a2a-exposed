@@ -4,6 +4,7 @@
 // token, or dump credential material (export) are not here. Self-host never calls this.
 
 import { ID_RE } from "./a2a.ts";
+import { previewHeaderPlain } from "./wake.ts";
 
 /** Control-plane account id. Slashes and dots are refused so the value cannot be a path. */
 export const ACCOUNT_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -146,6 +147,17 @@ function stringLeaks(value: string, key: string | null): boolean {
 	return key !== null && SECRET_KEYS.has(key.toLowerCase()) && value.length >= 16;
 }
 
+/** A rendered wake whose credential header was not masked. The header name is the caller's choice. */
+function wakePreviewLeaks(value: object): boolean {
+	const headers = (value as { method?: unknown; headers?: unknown }).headers;
+	if ((value as { method?: unknown }).method !== "POST" || !headers || typeof headers !== "object" || Array.isArray(headers)) return false;
+	for (const [k, v] of Object.entries(headers)) {
+		if (typeof v !== "string" || previewHeaderPlain(k) || v.endsWith("…")) continue;
+		return true;
+	}
+	return false;
+}
+
 /** True when a JSON value carries a peer token, a setup secret, a URL userinfo, or a secret field. */
 export function ownerResponseLeaks(value: unknown, depth = 0, key: string | null = null): boolean {
 	if (depth > 20) return true;
@@ -153,6 +165,7 @@ export function ownerResponseLeaks(value: unknown, depth = 0, key: string | null
 	if (typeof value === "number" || typeof value === "boolean" || value == null) return false;
 	if (Array.isArray(value)) return value.some((v) => ownerResponseLeaks(v, depth + 1, null));
 	if (typeof value === "object") {
+		if (wakePreviewLeaks(value)) return true;
 		for (const [k, v] of Object.entries(value)) {
 			if (ownerResponseLeaks(v, depth + 1, k)) return true;
 		}
