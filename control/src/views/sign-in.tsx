@@ -1,4 +1,5 @@
 import { SIGNUP_CLOSED } from "../auth/allowlist.ts";
+import { CLOUDFLARE_REAUTH, CLOUDFLARE_UNLINKED } from "../auth/cloudflare-link.ts";
 import { REAUTH_MESSAGE } from "../auth/recent.ts";
 
 const PROVIDERS = [
@@ -86,6 +87,8 @@ const ERRORS: Record<string, string> = {
 	nonce_binding_missing: "The provider identity did not match.",
 	no_callback_url: "Sign-in did not complete. Try again.",
 	reauth: REAUTH_MESSAGE,
+	cloudflare_unlinked: CLOUDFLARE_UNLINKED,
+	cloudflare_reauth: CLOUDFLARE_REAUTH,
 };
 
 export function renderSignIn(input: {

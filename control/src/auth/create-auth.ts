@@ -18,9 +18,9 @@ import type { Mailer } from "../mail/types.ts";
 // list stays empty: a trusted provider would attach an address that provider
 // did not verify. GitHub links when its primary email is `verified`. Google
 // links when `email_verified` is true. A magic link is verified because the
-// link was received. Cloudflare is not in this list. mapCloudflareUser reports
-// that provider's account email as verified, so it links the same way as a
-// verified GitHub email. That trust is per provider.
+// link was received. Cloudflare is not in this list. Its email is never
+// verified, so it does not auto-link and does not match SIGNUP_ALLOWLIST.
+// A signed-in account connects it explicitly; later sign-in uses the account id.
 export const TRUSTED_PROVIDERS: string[] = [];
 
 const AUTHORIZE = "https://dash.cloudflare.com/oauth2/auth";
@@ -46,6 +46,8 @@ export async function createAuth(options: AuthOptions) {
 				tokenUrl: TOKEN,
 				scopes: ["user-details.read"],
 				pkce: true,
+				disableSignUp: true,
+				accountSubject: ({ profile }) => typeof profile.id === "string" ? profile.id.trim() : "",
 				async getUserInfo(tokens) {
 					const accessToken = tokens.accessToken;
 					if (!accessToken) return null;
@@ -120,12 +122,18 @@ export async function createAuth(options: AuthOptions) {
 		},
 		user: {
 			// Fresh provider profile, including a later sign-in. An unverified address never matches.
-			// emailVerified is per provider. GitHub and Google use their own flags.
-			// mapCloudflareUser sets it for Cloudflare.
-			validateUserInfo: async ({ user }) => {
+			// Trust is per provider. GitHub uses `verified` and Google uses `email_verified`.
+			// Cloudflare's email is never that flag. A linked Cloudflare sign-in is admitted
+			// here; the session hook still checks the stored account, not the Cloudflare email.
+			validateUserInfo: async (info: { user: { email?: unknown; emailVerified?: unknown }; source?: { action?: string; oauth?: { providerId?: string } } }) => {
+				const provider = info.source?.oauth?.providerId;
+				if (provider === "cloudflare") {
+					if (info.source?.action === "sign-in") return;
+					return { error: "cloudflare_unlinked" };
+				}
 				if (!options.signupAllowlist) return;
-				const email = typeof user.email === "string" ? user.email : "";
-				if (!emailAllowed(options.signupAllowlist, email, emailIsVerified(user.emailVerified))) return { error: "invite" };
+				const email = typeof info.user.email === "string" ? info.user.email : "";
+				if (!emailAllowed(options.signupAllowlist, email, emailIsVerified(info.user.emailVerified))) return { error: "invite" };
 			},
 		},
 		databaseHooks: {

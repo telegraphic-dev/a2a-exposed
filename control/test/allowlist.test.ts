@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { SIGNUP_CLOSED, emailAllowed, signupAllowlist } from "../src/auth/allowlist.ts";
+import { CLOUDFLARE_REAUTH, CLOUDFLARE_UNLINKED } from "../src/auth/cloudflare-link.ts";
 import { mapCloudflareUser } from "../src/auth/cloudflare-user.ts";
 import { SESSION_COOKIE } from "../src/auth/cookies.ts";
 import { createApp } from "../src/app.ts";
@@ -31,7 +32,8 @@ test("an empty allowlist is open and a wildcard does not cover a subdomain", () 
 	assert.equal(emailAllowed(exact, "O'Connor@Example.com", true), true);
 	assert.equal(emailAllowed(exact, "user!tag@example.com", true), true);
 	const cloudflare = mapCloudflareUser({ id: "u1", email: "mona@example.com" });
-	assert.equal(emailAllowed(list, cloudflare?.email ?? "", cloudflare?.emailVerified === true), true);
+	assert.equal(cloudflare?.emailVerified, false);
+	assert.equal(emailAllowed(list, cloudflare?.email ?? "", cloudflare?.emailVerified === true), false);
 });
 
 function mailerApp(allowlist?: string) {
@@ -194,66 +196,7 @@ test("GitHub sign-in uses the verified email and refuses an unverified one", asy
 	assert.equal(count?.n, 0);
 });
 
-test("an allowlisted Cloudflare email signs in and another is refused", async (t) => {
-	const original = globalThis.fetch;
-	globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-		const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-		if (url.startsWith("https://dash.cloudflare.com/oauth2/token")) return Response.json({ access_token: "cf_test", token_type: "bearer" });
-		if (url === "https://api.cloudflare.com/client/v4/user") {
-			return Response.json({ success: true, result: { id: "cf-user", email: "mona@example.com", first_name: "Mona", last_name: "Lisa" } });
-		}
-		return original(input, init);
-	}) as typeof fetch;
-	t.after(() => { globalThis.fetch = original; });
-
-	const callbackFor = async (app: ReturnType<typeof createApp>) => {
-		const posted = await app.request(`${origin}/app/sign-in`, {
-			method: "POST",
-			headers: { origin, "content-type": "application/x-www-form-urlencoded" },
-			body: "provider=cloudflare",
-		});
-		assert.equal(posted.status, 303, await posted.clone().text());
-		const authorize = new URL(posted.headers.get("location") ?? "", origin);
-		assert.equal(authorize.origin, "https://dash.cloudflare.com");
-		const state = authorize.searchParams.get("state") ?? "";
-		const jar = posted.headers.getSetCookie().map((value) => value.split(";")[0]).join("; ");
-		return app.request(`${origin}/api/auth/callback/cloudflare?code=abc&state=${encodeURIComponent(state)}`, { headers: { cookie: jar } });
-	};
-
-	const db = openDb();
-	const env = {
-		AUTH_SECRET: secret,
-		DB: db,
-		CLOUDFLARE_OAUTH_CLIENT_ID: "cf-id",
-		CLOUDFLARE_OAUTH_CLIENT_SECRET: "cf-secret",
-		SIGNUP_ALLOWLIST: "Mona@Example.COM",
-	};
-	const app = createApp(env, { database: db });
-	const admitted = await callbackFor(app);
-	assert.equal(admitted.status, 302, await admitted.clone().text());
-	assert.equal(new URL(admitted.headers.get("location") ?? "", origin).searchParams.get("error"), null);
-	assert.ok(admitted.headers.getSetCookie().some((value) => value.startsWith(`${SESSION_COOKIE}=`)));
-	const row = await db.prepare('SELECT email, "emailVerified" AS email_verified FROM "user"').first<{ email: string; email_verified: number }>();
-	assert.equal(row?.email, "mona@example.com");
-	assert.equal(row?.email_verified, 1);
-
-	env.SIGNUP_ALLOWLIST = "*@nope.test";
-	const removed = await callbackFor(app);
-	assert.equal(removed.status, 302);
-	assert.equal(new URL(removed.headers.get("location") ?? "", origin).searchParams.get("error"), "invite");
-	assert.equal(removed.headers.getSetCookie().some((value) => value.startsWith(`${SESSION_COOKIE}=`)), false);
-
-	const fresh = openDb();
-	const refusedApp = createApp({ ...env, DB: fresh, SIGNUP_ALLOWLIST: "*@nope.test" }, { database: fresh });
-	const refused = await callbackFor(refusedApp);
-	assert.equal(refused.status, 302);
-	assert.equal(new URL(refused.headers.get("location") ?? "", origin).searchParams.get("error"), "invite");
-	assert.equal(refused.headers.getSetCookie().some((value) => value.startsWith(`${SESSION_COOKIE}=`)), false);
-	const count = await fresh.prepare('SELECT COUNT(*) AS n FROM "user"').first<{ n: number }>();
-	assert.equal(count?.n, 0);
-});
-
-test("Cloudflare links a verified email the same way GitHub does", async (t) => {
+function cloudflareFetch(email: string) {
 	const original = globalThis.fetch;
 	globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 		const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -262,12 +205,28 @@ test("Cloudflare links a verified email the same way GitHub does", async (t) => 
 		if (url === "https://api.github.com/user/emails") return Response.json([{ email: "mona@example.com", primary: true, verified: true, visibility: "public" }]);
 		if (url.startsWith("https://dash.cloudflare.com/oauth2/token")) return Response.json({ access_token: "cf_test", token_type: "bearer" });
 		if (url === "https://api.cloudflare.com/client/v4/user") {
-			return Response.json({ success: true, result: { id: "cf-user", email: "mona@example.com", first_name: "Mona", last_name: "Lisa" } });
+			return Response.json({ success: true, result: { id: "cf-user", email, first_name: "Pat", last_name: "Lee" } });
 		}
 		return original(input, init);
 	}) as typeof fetch;
-	t.after(() => { globalThis.fetch = original; });
+	return () => { globalThis.fetch = original; };
+}
 
+async function providerCallback(app: ReturnType<typeof createApp>, provider: "github" | "cloudflare", cookie = "") {
+	const posted = await app.request(`${origin}/app/sign-in`, {
+		method: "POST",
+		headers: { origin, "content-type": "application/x-www-form-urlencoded", ...(cookie ? { cookie } : {}) },
+		body: `provider=${provider}`,
+	});
+	assert.equal(posted.status, 303, await posted.clone().text());
+	const authorize = new URL(posted.headers.get("location") ?? "", origin);
+	const state = authorize.searchParams.get("state") ?? "";
+	const jar = [cookie, ...posted.headers.getSetCookie().map((value) => value.split(";")[0])].filter(Boolean).join("; ");
+	return app.request(`${origin}/api/auth/callback/${provider}?code=abc&state=${encodeURIComponent(state)}`, { headers: { cookie: jar } });
+}
+
+test("an unlinked Cloudflare sign-in creates no account", async (t) => {
+	t.after(cloudflareFetch("mona@example.com"));
 	const db = openDb();
 	const app = createApp({
 		AUTH_SECRET: secret,
@@ -276,30 +235,131 @@ test("Cloudflare links a verified email the same way GitHub does", async (t) => 
 		GITHUB_CLIENT_SECRET: "gh-secret",
 		CLOUDFLARE_OAUTH_CLIENT_ID: "cf-id",
 		CLOUDFLARE_OAUTH_CLIENT_SECRET: "cf-secret",
+		SIGNUP_ALLOWLIST: "Mona@Example.COM",
 	}, { database: db });
-	const callbackFor = async (provider: "github" | "cloudflare") => {
-		const posted = await app.request(`${origin}/app/sign-in`, {
-			method: "POST",
-			headers: { origin, "content-type": "application/x-www-form-urlencoded" },
-			body: `provider=${provider}`,
-		});
-		assert.equal(posted.status, 303, await posted.clone().text());
-		const authorize = new URL(posted.headers.get("location") ?? "", origin);
-		const state = authorize.searchParams.get("state") ?? "";
-		const jar = posted.headers.getSetCookie().map((value) => value.split(";")[0]).join("; ");
-		return app.request(`${origin}/api/auth/callback/${provider}?code=abc&state=${encodeURIComponent(state)}`, { headers: { cookie: jar } });
-	};
-	const github = await callbackFor("github");
+	const refused = await providerCallback(app, "cloudflare");
+	assert.equal(refused.status, 302);
+	const location = new URL(refused.headers.get("location") ?? "", origin);
+	assert.equal(location.searchParams.get("error"), "cloudflare_unlinked");
+	assert.equal(refused.headers.getSetCookie().some((value) => value.startsWith(`${SESSION_COOKIE}=`) && !value.includes("Max-Age=0")), false);
+	const page = await app.request(location.href);
+	assert.match(await page.text(), new RegExp(CLOUDFLARE_UNLINKED.replace(/[.]/g, "\\.")));
+	assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM "user"').first<{ n: number }>())?.n, 0);
+	assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM "account"').first<{ n: number }>())?.n, 0);
+
+	const github = await providerCallback(app, "github");
 	assert.equal(github.status, 302, await github.clone().text());
-	assert.ok(github.headers.getSetCookie().some((value) => value.startsWith(`${SESSION_COOKIE}=`)));
-	const cloudflare = await callbackFor("cloudflare");
+	assert.equal(new URL(github.headers.get("location") ?? "", origin).searchParams.get("error"), null);
+	const again = await providerCallback(app, "cloudflare");
+	assert.equal(new URL(again.headers.get("location") ?? "", origin).searchParams.get("error"), "cloudflare_unlinked");
+	assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM "user"').first<{ n: number }>())?.n, 1);
+	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM "account" WHERE "providerId" = 'cloudflare'`).first<{ n: number }>())?.n, 0);
+	const stored = await db.prepare('SELECT email, "emailVerified" AS email_verified FROM "user"').first<{ email: string; email_verified: number }>();
+	assert.equal(stored?.email, "mona@example.com");
+	assert.equal(stored?.email_verified, 1);
+});
+
+test("connecting Cloudflare signs in by account id, and disconnect removes it", async (t) => {
+	t.after(cloudflareFetch("other@cloud.test"));
+	const db = openDb();
+	const env = {
+		AUTH_SECRET: secret,
+		DB: db,
+		GITHUB_CLIENT_ID: "gh-id",
+		GITHUB_CLIENT_SECRET: "gh-secret",
+		CLOUDFLARE_OAUTH_CLIENT_ID: "cf-id",
+		CLOUDFLARE_OAUTH_CLIENT_SECRET: "cf-secret",
+		SIGNUP_ALLOWLIST: "Mona@Example.COM",
+	};
+	const app = createApp(env, { database: db });
+	const github = await providerCallback(app, "github");
+	const session = github.headers.getSetCookie().find((value) => value.startsWith(`${SESSION_COOKIE}=`))!.split(";")[0];
+	const accountPage = await app.request(`${origin}/app`, { headers: { cookie: session } });
+	const html = await accountPage.text();
+	assert.match(html, /Connect Cloudflare/);
+	assert.match(html, /action="\/app\/account\/cloudflare"/);
+	assert.match(accountPage.headers.get("content-security-policy") ?? "", /form-action 'self' https:\/\/dash\.cloudflare\.com/);
+
+	const staleAt = new Date(Date.now() - 11 * 60 * 1000).toISOString();
+	await db.prepare('UPDATE "session" SET "createdAt" = ?').bind(staleAt).run();
+	const stale = await app.request(`${origin}/app/account/cloudflare`, {
+		method: "POST",
+		headers: { origin, cookie: session, "content-type": "application/x-www-form-urlencoded" },
+		body: "action=connect",
+	});
+	assert.equal(new URL(stale.headers.get("location") ?? "", origin).searchParams.get("error"), "cloudflare_reauth");
+	assert.match(await (await app.request(stale.headers.get("location") ?? "")).text(), new RegExp(CLOUDFLARE_REAUTH.replace(/[.]/g, "\\.")));
+	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM "account" WHERE "providerId" = 'cloudflare'`).first<{ n: number }>())?.n, 0);
+
+	const fresh = await providerCallback(app, "github");
+	const freshSession = fresh.headers.getSetCookie().find((value) => value.startsWith(`${SESSION_COOKIE}=`))!.split(";")[0];
+	const cross = await app.request(`${origin}/app/account/cloudflare`, {
+		method: "POST",
+		headers: { origin: "https://evil.example", "sec-fetch-site": "cross-site", cookie: freshSession, "content-type": "application/x-www-form-urlencoded" },
+		body: "action=connect",
+	});
+	assert.equal(new URL(cross.headers.get("location") ?? "", origin).searchParams.get("error"), "origin");
+
+	const connect = await app.request(`${origin}/app/account/cloudflare`, {
+		method: "POST",
+		headers: { origin, cookie: freshSession, "content-type": "application/x-www-form-urlencoded" },
+		body: "action=connect",
+	});
+	assert.equal(connect.status, 303);
+	const authorize = new URL(connect.headers.get("location") ?? "");
+	assert.equal(authorize.origin, "https://dash.cloudflare.com");
+	assert.equal(authorize.searchParams.get("scope"), "user-details.read");
+	assert.equal(authorize.searchParams.get("code_challenge_method"), "S256");
+	assert.match(authorize.searchParams.get("redirect_uri") ?? "", /\/api\/auth\/callback\/cloudflare$/);
+	const state = authorize.searchParams.get("state") ?? "";
+	assert.match(state, /^cfl_/);
+	const linked = await app.request(`${origin}/api/auth/callback/cloudflare?code=abc&state=${encodeURIComponent(state)}`, { headers: { cookie: freshSession } });
+	assert.equal(linked.status, 302, await linked.clone().text());
+	assert.equal(new URL(linked.headers.get("location") ?? "", origin).searchParams.get("connected"), "1");
+	assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM "user"').first<{ n: number }>())?.n, 1);
+	const account = await db.prepare(
+		`SELECT "accountId", "userId" FROM "account" WHERE "providerId" = 'cloudflare'`,
+	).first<{ accountId: string; userId: string }>();
+	assert.equal(account?.accountId, "cf-user");
+	const user = await db.prepare('SELECT email, name, "emailVerified" AS email_verified FROM "user"').first<{ email: string; name: string; email_verified: number }>();
+	assert.equal(user?.email, "mona@example.com");
+	assert.equal(user?.name, "Mona");
+	assert.equal(user?.email_verified, 1);
+	assert.equal(account?.userId, (await db.prepare('SELECT id FROM "user"').first<{ id: string }>())?.id);
+	const again = await app.request(`${origin}/app/account/cloudflare`, {
+		method: "POST",
+		headers: { origin, cookie: freshSession, "content-type": "application/x-www-form-urlencoded" },
+		body: "action=connect",
+	});
+	assert.equal(new URL(again.headers.get("location") ?? "", origin).searchParams.get("connected"), "1");
+	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM "account" WHERE "providerId" = 'cloudflare'`).first<{ n: number }>())?.n, 1);
+
+	const signedOut = await app.request(`${origin}/app/sign-out`, {
+		method: "POST",
+		headers: { origin, cookie: freshSession },
+	});
+	assert.equal(signedOut.status, 303);
+	const cloudflare = await providerCallback(app, "cloudflare");
 	assert.equal(cloudflare.status, 302, await cloudflare.clone().text());
 	assert.equal(new URL(cloudflare.headers.get("location") ?? "", origin).searchParams.get("error"), null);
-	assert.ok(cloudflare.headers.getSetCookie().some((value) => value.startsWith(`${SESSION_COOKIE}=`)));
-	const users = await db.prepare('SELECT COUNT(*) AS n FROM "user"').first<{ n: number }>();
-	const accounts = await db.prepare('SELECT providerId FROM "account" ORDER BY providerId').all();
-	assert.equal(users?.n, 1);
-	assert.deepEqual((accounts.results as { providerId: string }[]).map((row) => row.providerId), ["cloudflare", "github"]);
+	const cloudflareSession = cloudflare.headers.getSetCookie().find((value) => value.startsWith(`${SESSION_COOKIE}=`))!.split(";")[0];
+	const home = await app.request(`${origin}/app`, { headers: { cookie: cloudflareSession } });
+	const homeHtml = await home.text();
+	assert.match(homeHtml, /mona@example.com/);
+	assert.match(homeHtml, /Disconnect Cloudflare/);
+	assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM "user"').first<{ n: number }>())?.n, 1);
+
+	const disconnect = await app.request(`${origin}/app/account/cloudflare`, {
+		method: "POST",
+		headers: { origin, cookie: cloudflareSession, "content-type": "application/x-www-form-urlencoded" },
+		body: "action=disconnect",
+	});
+	assert.equal(new URL(disconnect.headers.get("location") ?? "", origin).searchParams.get("disconnected"), "1");
+	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM "account" WHERE "providerId" = 'cloudflare'`).first<{ n: number }>())?.n, 0);
+	assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM "user"').first<{ n: number }>())?.n, 1);
+	const after = await providerCallback(app, "cloudflare");
+	assert.equal(new URL(after.headers.get("location") ?? "", origin).searchParams.get("error"), "cloudflare_unlinked");
+	assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM "user"').first<{ n: number }>())?.n, 1);
 });
 
 test("a mistyped invite code is not shown as an allowlist refusal", async () => {

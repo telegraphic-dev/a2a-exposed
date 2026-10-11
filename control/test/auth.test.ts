@@ -27,9 +27,9 @@ test("a provider id without its secret is not enabled", () => {
 	assert.equal(resolveAuth({ GITHUB_CLIENT_ID: "id", AUTH_SECRET: secret, DB: openDb() }, new Request("https://control.example.com/app")), null);
 });
 
-test("a Cloudflare profile is verified for this provider", () => {
-	const user = mapCloudflareUser({ id: "u1", email: "person@example.com", first_name: "Pat", last_name: "Lee", email_verified: false } as { id: string; email: string; first_name: string; last_name: string });
-	assert.equal(user?.emailVerified, true);
+test("a Cloudflare profile is not verified", () => {
+	const user = mapCloudflareUser({ id: "u1", email: "person@example.com", first_name: "Pat", last_name: "Lee", email_verified: true } as { id: string; email: string; first_name: string; last_name: string });
+	assert.equal(user?.emailVerified, false);
 	assert.equal(user?.name, "Pat Lee");
 	assert.equal(mapCloudflareUser({ id: "", email: "person@example.com" }), null);
 });

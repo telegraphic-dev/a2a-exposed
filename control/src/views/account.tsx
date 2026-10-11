@@ -1,4 +1,5 @@
 import { SIGNUP_CLOSED } from "../auth/allowlist.ts";
+import { CLOUDFLARE_REAUTH } from "../auth/cloudflare-link.ts";
 import { REAUTH_MESSAGE } from "../auth/recent.ts";
 import { TokenBlock } from "./token-block.tsx";
 
@@ -9,6 +10,12 @@ const ERRORS: Record<string, string> = {
 	origin: "That request came from another site.",
 	unavailable: "Agents are not available.",
 	reauth: REAUTH_MESSAGE,
+	auth: "Sign-in did not complete.",
+	state_mismatch: "Sign-in expired. Try again.",
+	no_code: "The provider did not finish sign-in. Try again.",
+	invalid_code: "The provider rejected the sign-in. Try again.",
+	unable_to_get_user_info: "The provider did not return an account.",
+	account_already_linked_to_different_user: "That account is already linked to someone else.",
 };
 
 function limitMessage(limit: number | null): string {
@@ -71,6 +78,12 @@ export function renderAccount(input: {
 	signupClosed?: boolean;
 	closedMessage?: string;
 	deleted?: boolean;
+	/** Cloudflare sign-in is configured. The button connects or disconnects it. */
+	cloudflare?: boolean;
+	cloudflareLinked?: boolean;
+	/** False when this session is older than 10 minutes. The post still checks. */
+	recent?: boolean;
+	disconnected?: boolean;
 }): string {
 	const image = avatarUrl(input.image);
 	const capped = limitMessage(input.agentLimit);
@@ -86,6 +99,19 @@ export function renderAccount(input: {
 			<form method="post" action="/app/sign-out">
 				<p><button class="action" type="submit">Sign out</button></p>
 			</form>
+			{input.cloudflare ? (
+				<form method="post" action="/app/account/cloudflare">
+					{input.cloudflareLinked
+						? <p>Cloudflare is connected.</p>
+						: <p>Cloudflare can be connected to this account. It does not create an account.</p>}
+					{input.disconnected ? <p role="status">Cloudflare was disconnected.</p> : ""}
+					{input.recent ? "" : <p class="alert" role="status">{CLOUDFLARE_REAUTH}</p>}
+					<p>
+						<input type="hidden" name="action" value={input.cloudflareLinked ? "disconnect" : "connect"} />
+						<button class="action" type="submit">{input.cloudflareLinked ? "Disconnect Cloudflare" : "Connect Cloudflare"}</button>
+					</p>
+				</form>
+			) : ""}
 			{input.ownerToken ? <TokenBlock token={input.ownerToken} lead="Copy this owner token now. It will not be shown again." /> : ""}
 			{input.deleted ? <p role="status">{deletedNotice(input.agentLimit, input.agents.length)}</p> : ""}
 			{error ? <p class="alert" role="alert">{error}</p> : ""}
