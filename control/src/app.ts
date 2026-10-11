@@ -16,6 +16,7 @@ import { dataPlaneFromEnv, type DataPlane } from "./tenants/push.ts";
 import type { ControlEnv } from "./env.ts";
 import { handleAgent } from "./agents/page.ts";
 import { recentSignIn } from "./auth/recent.ts";
+import { brandConfig } from "@brand/brand.config.ts";
 import { avatarOrigin, avatarUrl, renderAccount } from "./views/account.tsx";
 import { renderApp, securityHeaders } from "./views/document.tsx";
 import { renderSignIn } from "./views/sign-in.tsx";
@@ -141,25 +142,6 @@ function accountLinkOrigins(options: AuthOptions | null): string[] {
 	return options?.cloudflare ? [PROVIDER_ORIGINS.cloudflare] : [];
 }
 
-function rewriteCloudflareSignup(request: Request, response: Response): Response {
-	if (new URL(request.url).pathname !== "/api/auth/callback/cloudflare") return response;
-	const location = response.headers.get("location");
-	if (!location) return response;
-	let url: URL;
-	try {
-		url = new URL(location, request.url);
-	} catch {
-		return response;
-	}
-	if (url.origin !== new URL(request.url).origin || url.pathname !== "/app") return response;
-	const error = url.searchParams.get("error");
-	if (error !== "signup_disabled" && error !== "account_not_linked" && error !== "cloudflare_unlinked") return response;
-	url.searchParams.set("error", "cloudflare_unlinked");
-	const headers = new Headers(response.headers);
-	headers.set("location", url.href);
-	return new Response(null, { status: response.status, headers });
-}
-
 function redirectTo(location: string, cookies: string[] = []): Response {
 	const headers = new Headers({ location, "cache-control": "no-store" });
 	for (const cookie of cookies) headers.append("set-cookie", cookie);
@@ -258,7 +240,6 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 			providers: [
 				loaded.options.github ? "github" : "",
 				loaded.options.google ? "google" : "",
-				loaded.options.cloudflare ? "cloudflare" : "",
 			].filter(Boolean),
 			magicLink: Boolean(loaded.options.mailer || loaded.options.emailBinding),
 			invitesRequired: loaded.options.invitesRequired,
@@ -322,8 +303,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 	app.all("/api/auth/*", async (c) => {
 		let request = c.req.raw;
 		const callbackPath = new URL(request.url).pathname;
-		const providerAbort = callbackPath.startsWith("/api/auth/callback/") ? new AbortController() : undefined;
-		const loaded = await loadAuth(env, request, { ...deps, providerAbort: providerAbort?.signal });
+		const loaded = await loadAuth(env, request, deps);
 		if (!loaded) return c.json({ error: "not_found" }, 404);
 		if (loaded.options.turnstile && turnstileEndpoint(request)) {
 			const token = request.headers.get("x-captcha-response") ?? "";
@@ -340,9 +320,9 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 			headers.delete("x-captcha-response");
 			request = new Request(request, { headers });
 		}
-		if (request.method === "GET" && callbackPath === "/api/auth/callback/cloudflare") {
-			const linked = await finishCloudflareLink(request, loaded.auth, loaded.options, deps.cloudflareFetchMs);
-			if (linked) return linked;
+		// Cloudflare is a connect, not a sign-in. This path never reaches Better Auth.
+		if (callbackPath === "/api/auth/callback/cloudflare") {
+			return finishCloudflareLink(request, loaded.auth, loaded.options, deps.cloudflareFetchMs);
 		}
 		const handle = () => loaded.auth.handler(request);
 		const list = loaded.options.signupAllowlist;
@@ -351,8 +331,8 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 		// onAPIError.onError, so the code on that Location is logged here.
 		if (!callbackPath.startsWith("/api/auth/callback/")) return closedSignup(request, await handle(), list);
 		const deadline = deps.callbackDeadlineMs ?? CALLBACK_DEADLINE_MS;
-		const response = await within(deadline, handle, () => callbackGaveUp(request), providerAbort);
-		const shown = rewriteCloudflareSignup(request, await closedSignup(request, response, list));
+		const response = await within(deadline, handle, () => callbackGaveUp(request));
+		const shown = await closedSignup(request, response, list);
 		const code = callbackError(request, shown);
 		if (code && code !== "deadline") logCallbackFailure(request, code);
 		return shown;
@@ -469,6 +449,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 				signupClosed: loaded.options.signupAllowlist !== null,
 				closedMessage: signupClosedText(env),
 				deleted: url.searchParams.get("deleted") === "1",
+				brand: brandConfig(env).name,
 				cloudflare: Boolean(loaded.options.cloudflare),
 				cloudflareLinked: await cloudflareIsLinked(loaded.options.database, session.user.id),
 				recent: recentSignIn(session),
@@ -490,7 +471,6 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 				providers: [
 					loaded.options.github ? "github" : "",
 					loaded.options.google ? "google" : "",
-					loaded.options.cloudflare ? "cloudflare" : "",
 				].filter(Boolean),
 				magicLink: Boolean(loaded.options.mailer || loaded.options.emailBinding),
 				invitesRequired: loaded.options.invitesRequired,

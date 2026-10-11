@@ -1,5 +1,5 @@
 import { SIGNUP_CLOSED } from "../auth/allowlist.ts";
-import { CLOUDFLARE_REAUTH } from "../auth/cloudflare-link.ts";
+import { CLOUDFLARE_REAUTH, CLOUDFLARE_UNLINKED } from "../auth/cloudflare-link.ts";
 import { REAUTH_MESSAGE } from "../auth/recent.ts";
 import { TokenBlock } from "./token-block.tsx";
 
@@ -17,6 +17,7 @@ const ERRORS: Record<string, string> = {
 	invalid_code: "The provider rejected the sign-in. Try again.",
 	unable_to_get_user_info: "The provider did not return an account.",
 	account_already_linked_to_different_user: "That account is already linked to someone else.",
+	cloudflare_unlinked: CLOUDFLARE_UNLINKED,
 };
 
 function limitMessage(limit: number | null): string {
@@ -79,7 +80,9 @@ export function renderAccount(input: {
 	signupClosed?: boolean;
 	closedMessage?: string;
 	deleted?: boolean;
-	/** Cloudflare sign-in is configured. The button connects or disconnects it. */
+	/** Shown in the Cloudflare connect line. The neutral name is Inbox. */
+	brand?: string;
+	/** Cloudflare connect is configured. The button connects or disconnects it. */
 	cloudflare?: boolean;
 	cloudflareLinked?: boolean;
 	/** False when this session is older than 10 minutes. The post still checks. */
@@ -102,9 +105,8 @@ export function renderAccount(input: {
 			</form>
 			{input.cloudflare ? (
 				<form method="post" action="/app/account/cloudflare">
-					{input.cloudflareLinked
-						? <p>Cloudflare is connected.</p>
-						: <p>Cloudflare can be connected to this account. It does not create an account.</p>}
+					<p>Lets {input.brand?.trim() || "Inbox"} set things up in your Cloudflare account. It isn't used to sign in.</p>
+					{input.cloudflareLinked ? <p>Cloudflare is connected.</p> : ""}
 					{input.disconnected ? <p role="status">Cloudflare was disconnected.</p> : ""}
 					{input.recent ? "" : <p class="alert" role="status">{CLOUDFLARE_REAUTH}</p>}
 					<p>

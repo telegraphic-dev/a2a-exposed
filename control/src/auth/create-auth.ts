@@ -1,12 +1,10 @@
 import { betterAuth } from "better-auth";
 import { APIError } from "better-auth/api";
-import { genericOAuth, magicLink } from "better-auth/plugins";
+import { magicLink } from "better-auth/plugins";
 import { bearer } from "better-auth/plugins/bearer";
 import { deviceAuthorization } from "better-auth/plugins/device-authorization";
 import { CLI_CLIENT_ID } from "./device.ts";
 import { jwt } from "better-auth/plugins/jwt";
-import { CLOUDFLARE_FETCH_MS, readCloudflare } from "./cloudflare-link.ts";
-import { mapCloudflareUser } from "./cloudflare-user.ts";
 import { INVITE_COOKIE, SESSION_COOKIE, readCookie } from "./cookies.ts";
 import { emailAllowed, emailIsVerified } from "./allowlist.ts";
 import { consumeInvite, rememberMagicInvite, takeMagicInvite, validInviteCode } from "./invites.ts";
@@ -19,14 +17,9 @@ import type { Mailer } from "../mail/types.ts";
 // list stays empty: a trusted provider would attach an address that provider
 // did not verify. GitHub links when its primary email is `verified`. Google
 // links when `email_verified` is true. A magic link is verified because the
-// link was received. Cloudflare is not in this list. Its email is never
-// verified, so it does not auto-link and does not match SIGNUP_ALLOWLIST.
-// A signed-in account connects it explicitly; later sign-in uses the account id.
+// link was received. Cloudflare is not a sign-in provider. A signed-in account
+// connects it from /app, and that callback does not create a session.
 export const TRUSTED_PROVIDERS: string[] = [];
-
-const AUTHORIZE = "https://dash.cloudflare.com/oauth2/auth";
-const TOKEN = "https://dash.cloudflare.com/oauth2/token";
-const USER = "https://api.cloudflare.com/client/v4/user";
 
 async function mailerFor(options: AuthOptions): Promise<Mailer | undefined> {
 	if (options.mailer) return options.mailer;
@@ -37,66 +30,6 @@ async function mailerFor(options: AuthOptions): Promise<Mailer | undefined> {
 export async function createAuth(options: AuthOptions) {
 	const mailer = await mailerFor(options);
 	const plugins = [];
-	if (options.cloudflare) {
-		plugins.push(genericOAuth({
-			config: [{
-				providerId: "cloudflare",
-				clientId: options.cloudflare.clientId,
-				clientSecret: options.cloudflare.clientSecret,
-				authorizationUrl: AUTHORIZE,
-				tokenUrl: TOKEN,
-				scopes: ["user-details.read"],
-				pkce: true,
-				disableSignUp: true,
-				accountSubject: ({ profile }) => typeof profile.id === "string" ? profile.id.trim() : "",
-				async getToken(data) {
-					const body = new URLSearchParams({
-						grant_type: "authorization_code",
-						code: data.code,
-						redirect_uri: data.redirectURI,
-						client_id: options.cloudflare!.clientId,
-						client_secret: options.cloudflare!.clientSecret,
-					});
-					if (data.codeVerifier) body.set("code_verifier", data.codeVerifier);
-					const fetchMs = options.cloudflareFetchMs ?? CLOUDFLARE_FETCH_MS;
-					const token = await readCloudflare(TOKEN, {
-						method: "POST",
-						headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
-						body,
-					}, fetchMs, options.providerAbort);
-					if (token.kind !== "ok" || !token.body || typeof token.body !== "object") throw new Error("invalid_code");
-					const record = token.body as Record<string, unknown>;
-					const accessToken = typeof record.access_token === "string" ? record.access_token : "";
-					if (!accessToken) throw new Error("invalid_code");
-					const expiresIn = typeof record.expires_in === "number" ? record.expires_in : undefined;
-					const refreshExpires = typeof record.refresh_token_expires_in === "number" ? record.refresh_token_expires_in : undefined;
-					const scopes = Array.isArray(record.scope)
-						? record.scope.filter((item): item is string => typeof item === "string" && item.length > 0)
-						: typeof record.scope === "string" ? record.scope.split(/\s+/).filter(Boolean) : [];
-					return {
-						tokenType: typeof record.token_type === "string" ? record.token_type : undefined,
-						accessToken,
-						refreshToken: typeof record.refresh_token === "string" ? record.refresh_token : undefined,
-						accessTokenExpiresAt: expiresIn ? new Date(Date.now() + expiresIn * 1000) : undefined,
-						refreshTokenExpiresAt: refreshExpires ? new Date(Date.now() + refreshExpires * 1000) : undefined,
-						scopes,
-						idToken: typeof record.id_token === "string" ? record.id_token : undefined,
-						raw: record,
-					};
-				},
-				async getUserInfo(tokens) {
-					const accessToken = tokens.accessToken;
-					if (!accessToken) return null;
-					const profile = await readCloudflare(USER, {
-						headers: { authorization: `Bearer ${accessToken}`, accept: "application/json" },
-					}, options.cloudflareFetchMs ?? CLOUDFLARE_FETCH_MS, options.providerAbort);
-					if (profile.kind !== "ok" || !profile.body || typeof profile.body !== "object") return null;
-					const body = profile.body as { result?: Parameters<typeof mapCloudflareUser>[0] };
-					return mapCloudflareUser(body.result);
-				},
-			}],
-		}));
-	}
 	if (mailer) {
 		plugins.push(magicLink({
 			expiresIn: 60 * 5,
@@ -161,14 +94,7 @@ export async function createAuth(options: AuthOptions) {
 		user: {
 			// Fresh provider profile, including a later sign-in. An unverified address never matches.
 			// Trust is per provider. GitHub uses `verified` and Google uses `email_verified`.
-			// Cloudflare's email is never that flag. A linked Cloudflare sign-in is admitted
-			// here; the session hook still checks the stored account, not the Cloudflare email.
-			validateUserInfo: async (info: { user: { email?: unknown; emailVerified?: unknown }; source?: { action?: string; oauth?: { providerId?: string } } }) => {
-				const provider = info.source?.oauth?.providerId;
-				if (provider === "cloudflare") {
-					if (info.source?.action === "sign-in") return;
-					return { error: "cloudflare_unlinked" };
-				}
+			validateUserInfo: async (info: { user: { email?: unknown; emailVerified?: unknown } }) => {
 				if (!options.signupAllowlist) return;
 				const email = typeof info.user.email === "string" ? info.user.email : "";
 				if (!emailAllowed(options.signupAllowlist, email, emailIsVerified(info.user.emailVerified))) return { error: "invite" };

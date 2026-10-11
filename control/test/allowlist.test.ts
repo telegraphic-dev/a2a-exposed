@@ -212,7 +212,7 @@ function cloudflareFetch(email: string) {
 	return () => { globalThis.fetch = original; };
 }
 
-async function providerCallback(app: ReturnType<typeof createApp>, provider: "github" | "cloudflare", cookie = "") {
+async function providerCallback(app: ReturnType<typeof createApp>, provider: "github", cookie = "") {
 	const posted = await app.request(`${origin}/app/sign-in`, {
 		method: "POST",
 		headers: { origin, "content-type": "application/x-www-form-urlencoded", ...(cookie ? { cookie } : {}) },
@@ -225,7 +225,7 @@ async function providerCallback(app: ReturnType<typeof createApp>, provider: "gi
 	return app.request(`${origin}/api/auth/callback/${provider}?code=abc&state=${encodeURIComponent(state)}`, { headers: { cookie: jar } });
 }
 
-test("an unlinked Cloudflare sign-in creates no account", async (t) => {
+test("a Cloudflare callback without a session is refused and creates no session", async (t) => {
 	t.after(cloudflareFetch("mona@example.com"));
 	const db = openDb();
 	const app = createApp({
@@ -237,7 +237,21 @@ test("an unlinked Cloudflare sign-in creates no account", async (t) => {
 		CLOUDFLARE_OAUTH_CLIENT_SECRET: "cf-secret",
 		SIGNUP_ALLOWLIST: "Mona@Example.COM",
 	}, { database: db });
-	const refused = await providerCallback(app, "cloudflare");
+	const signIn = await app.request(`${origin}/app`);
+	const signInHtml = await signIn.text();
+	assert.equal(signInHtml.includes("Continue with Cloudflare"), false);
+	assert.equal(signInHtml.includes('value="cloudflare"'), false);
+	assert.equal(signIn.headers.get("content-security-policy")?.includes("dash.cloudflare.com"), false);
+	const posted = await app.request(`${origin}/app/sign-in`, {
+		method: "POST",
+		headers: { origin, "content-type": "application/x-www-form-urlencoded" },
+		body: "provider=cloudflare",
+	});
+	assert.equal(posted.status, 303);
+	assert.equal(new URL(posted.headers.get("location") ?? "", origin).searchParams.get("error"), "unavailable");
+	assert.equal(posted.headers.get("location")?.includes("dash.cloudflare.com"), false);
+
+	const refused = await app.request(`${origin}/api/auth/callback/cloudflare?code=abc&state=not-a-connect`);
 	assert.equal(refused.status, 302);
 	const location = new URL(refused.headers.get("location") ?? "", origin);
 	assert.equal(location.searchParams.get("error"), "cloudflare_unlinked");
@@ -246,20 +260,25 @@ test("an unlinked Cloudflare sign-in creates no account", async (t) => {
 	assert.match(await page.text(), new RegExp(CLOUDFLARE_UNLINKED.replace(/[.]/g, "\\.")));
 	assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM "user"').first<{ n: number }>())?.n, 0);
 	assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM "account"').first<{ n: number }>())?.n, 0);
+	assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM "session"').first<{ n: number }>())?.n, 0);
 
 	const github = await providerCallback(app, "github");
 	assert.equal(github.status, 302, await github.clone().text());
 	assert.equal(new URL(github.headers.get("location") ?? "", origin).searchParams.get("error"), null);
-	const again = await providerCallback(app, "cloudflare");
+	const session = github.headers.getSetCookie().find((value) => value.startsWith(`${SESSION_COOKIE}=`))!.split(";")[0];
+	const sessions = (await db.prepare('SELECT COUNT(*) AS n FROM "session"').first<{ n: number }>())?.n;
+	const again = await app.request(`${origin}/api/auth/callback/cloudflare?code=abc&state=not-a-connect`, { headers: { cookie: session } });
 	assert.equal(new URL(again.headers.get("location") ?? "", origin).searchParams.get("error"), "cloudflare_unlinked");
+	assert.equal(again.headers.getSetCookie().some((value) => value.startsWith(`${SESSION_COOKIE}=`) && !value.includes("Max-Age=0")), false);
 	assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM "user"').first<{ n: number }>())?.n, 1);
+	assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM "session"').first<{ n: number }>())?.n, sessions);
 	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM "account" WHERE "providerId" = 'cloudflare'`).first<{ n: number }>())?.n, 0);
 	const stored = await db.prepare('SELECT email, "emailVerified" AS email_verified FROM "user"').first<{ email: string; email_verified: number }>();
 	assert.equal(stored?.email, "mona@example.com");
 	assert.equal(stored?.email_verified, 1);
 });
 
-test("connecting Cloudflare signs in by account id, and disconnect removes it", async (t) => {
+test("connecting Cloudflare records the account, and disconnect removes it", async (t) => {
 	t.after(cloudflareFetch("other@cloud.test"));
 	const db = openDb();
 	const env = {
@@ -277,6 +296,8 @@ test("connecting Cloudflare signs in by account id, and disconnect removes it", 
 	const accountPage = await app.request(`${origin}/app`, { headers: { cookie: session } });
 	const html = await accountPage.text();
 	assert.match(html, /Connect Cloudflare/);
+	assert.match(html, /Lets Inbox set things up in your Cloudflare account\. It isn&#39;t used to sign in\./);
+	assert.equal(html.includes("Continue with Cloudflare"), false);
 	assert.match(html, /action="\/app\/account\/cloudflare"/);
 	assert.match(accountPage.headers.get("content-security-policy") ?? "", /form-action 'self' https:\/\/dash\.cloudflare\.com/);
 
@@ -300,9 +321,23 @@ test("connecting Cloudflare signs in by account id, and disconnect removes it", 
 	});
 	assert.equal(new URL(cross.headers.get("location") ?? "", origin).searchParams.get("error"), "origin");
 
-	const connect = await app.request(`${origin}/app/account/cloudflare`, {
+	const pending = await app.request(`${origin}/app/account/cloudflare`, {
 		method: "POST",
 		headers: { origin, cookie: freshSession, "content-type": "application/x-www-form-urlencoded" },
+		body: "action=connect",
+	});
+	const pendingState = new URL(pending.headers.get("location") ?? "").searchParams.get("state") ?? "";
+	await db.prepare('UPDATE "session" SET "createdAt" = ?').bind(staleAt).run();
+	const late = await app.request(`${origin}/api/auth/callback/cloudflare?code=abc&state=${encodeURIComponent(pendingState)}`, { headers: { cookie: freshSession } });
+	assert.equal(new URL(late.headers.get("location") ?? "", origin).searchParams.get("error"), "cloudflare_reauth");
+	assert.equal(late.headers.getSetCookie().some((value) => value.startsWith(`${SESSION_COOKIE}=`) && !value.includes("Max-Age=0")), false);
+	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM "account" WHERE "providerId" = 'cloudflare'`).first<{ n: number }>())?.n, 0);
+
+	const live = await providerCallback(app, "github");
+	const liveSession = live.headers.getSetCookie().find((value) => value.startsWith(`${SESSION_COOKIE}=`))!.split(";")[0];
+	const connect = await app.request(`${origin}/app/account/cloudflare`, {
+		method: "POST",
+		headers: { origin, cookie: liveSession, "content-type": "application/x-www-form-urlencoded" },
 		body: "action=connect",
 	});
 	assert.equal(connect.status, 303);
@@ -313,14 +348,17 @@ test("connecting Cloudflare signs in by account id, and disconnect removes it", 
 	assert.match(authorize.searchParams.get("redirect_uri") ?? "", /\/api\/auth\/callback\/cloudflare$/);
 	const state = authorize.searchParams.get("state") ?? "";
 	assert.match(state, /^cfl_/);
-	const linked = await app.request(`${origin}/api/auth/callback/cloudflare?code=abc&state=${encodeURIComponent(state)}`, { headers: { cookie: freshSession } });
+	const linked = await app.request(`${origin}/api/auth/callback/cloudflare?code=abc&state=${encodeURIComponent(state)}`, { headers: { cookie: liveSession } });
 	assert.equal(linked.status, 302, await linked.clone().text());
 	assert.equal(new URL(linked.headers.get("location") ?? "", origin).searchParams.get("connected"), "1");
 	assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM "user"').first<{ n: number }>())?.n, 1);
 	const account = await db.prepare(
-		`SELECT "accountId", "userId" FROM "account" WHERE "providerId" = 'cloudflare'`,
-	).first<{ accountId: string; userId: string }>();
+		`SELECT "accountId", "userId", "accessToken" AS access_token, "refreshToken" AS refresh_token FROM "account" WHERE "providerId" = 'cloudflare'`,
+	).first<{ accountId: string; userId: string; access_token: string | null; refresh_token: string | null }>();
 	assert.equal(account?.accountId, "cf-user");
+	assert.equal(account?.access_token, null);
+	assert.equal(account?.refresh_token, null);
+	assert.equal(linked.headers.getSetCookie().some((value) => value.startsWith(`${SESSION_COOKIE}=`)), false);
 	const user = await db.prepare('SELECT email, name, "emailVerified" AS email_verified FROM "user"').first<{ email: string; name: string; email_verified: number }>();
 	assert.equal(user?.email, "mona@example.com");
 	assert.equal(user?.name, "Mona");
@@ -328,38 +366,45 @@ test("connecting Cloudflare signs in by account id, and disconnect removes it", 
 	assert.equal(account?.userId, (await db.prepare('SELECT id FROM "user"').first<{ id: string }>())?.id);
 	const again = await app.request(`${origin}/app/account/cloudflare`, {
 		method: "POST",
-		headers: { origin, cookie: freshSession, "content-type": "application/x-www-form-urlencoded" },
+		headers: { origin, cookie: liveSession, "content-type": "application/x-www-form-urlencoded" },
 		body: "action=connect",
 	});
 	assert.equal(new URL(again.headers.get("location") ?? "", origin).searchParams.get("connected"), "1");
 	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM "account" WHERE "providerId" = 'cloudflare'`).first<{ n: number }>())?.n, 1);
 
-	const signedOut = await app.request(`${origin}/app/sign-out`, {
-		method: "POST",
-		headers: { origin, cookie: freshSession },
-	});
-	assert.equal(signedOut.status, 303);
-	const cloudflare = await providerCallback(app, "cloudflare");
-	assert.equal(cloudflare.status, 302, await cloudflare.clone().text());
-	assert.equal(new URL(cloudflare.headers.get("location") ?? "", origin).searchParams.get("error"), null);
-	const cloudflareSession = cloudflare.headers.getSetCookie().find((value) => value.startsWith(`${SESSION_COOKIE}=`))!.split(";")[0];
-	const home = await app.request(`${origin}/app`, { headers: { cookie: cloudflareSession } });
+	const home = await app.request(`${origin}/app`, { headers: { cookie: liveSession } });
 	const homeHtml = await home.text();
 	assert.match(homeHtml, /mona@example.com/);
 	assert.match(homeHtml, /Disconnect Cloudflare/);
 	assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM "user"').first<{ n: number }>())?.n, 1);
 
+	const signedOut = await app.request(`${origin}/app/sign-out`, {
+		method: "POST",
+		headers: { origin, cookie: liveSession },
+	});
+	assert.equal(signedOut.status, 303);
+	const sessions = (await db.prepare('SELECT COUNT(*) AS n FROM "session"').first<{ n: number }>())?.n;
+	const cloudflare = await app.request(`${origin}/api/auth/callback/cloudflare?code=abc&state=not-a-connect`);
+	assert.equal(cloudflare.status, 302);
+	assert.equal(new URL(cloudflare.headers.get("location") ?? "", origin).searchParams.get("error"), "cloudflare_unlinked");
+	assert.equal(cloudflare.headers.getSetCookie().some((value) => value.startsWith(`${SESSION_COOKIE}=`) && !value.includes("Max-Age=0")), false);
+	assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM "session"').first<{ n: number }>())?.n, sessions);
+	assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM "user"').first<{ n: number }>())?.n, 1);
+
+	const againIn = await providerCallback(app, "github");
+	const returnSession = againIn.headers.getSetCookie().find((value) => value.startsWith(`${SESSION_COOKIE}=`))!.split(";")[0];
 	const disconnect = await app.request(`${origin}/app/account/cloudflare`, {
 		method: "POST",
-		headers: { origin, cookie: cloudflareSession, "content-type": "application/x-www-form-urlencoded" },
+		headers: { origin, cookie: returnSession, "content-type": "application/x-www-form-urlencoded" },
 		body: "action=disconnect",
 	});
 	assert.equal(new URL(disconnect.headers.get("location") ?? "", origin).searchParams.get("disconnected"), "1");
 	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM "account" WHERE "providerId" = 'cloudflare'`).first<{ n: number }>())?.n, 0);
 	assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM "user"').first<{ n: number }>())?.n, 1);
-	const after = await providerCallback(app, "cloudflare");
+	const after = await app.request(`${origin}/api/auth/callback/cloudflare?code=abc&state=not-a-connect`);
 	assert.equal(new URL(after.headers.get("location") ?? "", origin).searchParams.get("error"), "cloudflare_unlinked");
 	assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM "user"').first<{ n: number }>())?.n, 1);
+	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM "account" WHERE "providerId" = 'cloudflare'`).first<{ n: number }>())?.n, 0);
 });
 
 test("one Cloudflare account stays bound to the user who claimed it", async (t) => {
@@ -469,7 +514,7 @@ test("a Cloudflare connect that cannot read the provider returns to /app", async
 	await shows(await connect("token-hang"), "deadline", /Sign-in took too long\. Try again\./);
 });
 
-test("a Cloudflare sign-in whose profile is not JSON returns to /app", async (t) => {
+test("a Cloudflare connect whose profile is not JSON returns to /app", async (t) => {
 	const original = globalThis.fetch;
 	let profile = "json";
 	globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -498,12 +543,12 @@ test("a Cloudflare sign-in whose profile is not JSON returns to /app", async (t)
 	const unlinkedDb = openDb();
 	const unlinked = createApp({ ...env, DB: unlinkedDb }, { database: unlinkedDb });
 	profile = "text";
-	const refused = await providerCallback(unlinked, "cloudflare");
+	const refused = await unlinked.request(`${origin}/api/auth/callback/cloudflare?code=abc&state=not-a-connect`);
 	assert.equal(refused.status, 302, await refused.clone().text());
-	const refusedLocation = new URL(refused.headers.get("location") ?? "", origin);
-	assert.equal(refusedLocation.searchParams.get("error"), "unable_to_get_user_info");
-	assert.match(await (await unlinked.request(refusedLocation)).text(), /The provider did not return an account\./);
+	assert.equal(new URL(refused.headers.get("location") ?? "", origin).searchParams.get("error"), "cloudflare_unlinked");
+	assert.equal(refused.headers.getSetCookie().some((value) => value.startsWith(`${SESSION_COOKIE}=`) && !value.includes("Max-Age=0")), false);
 	assert.equal((await unlinkedDb.prepare('SELECT COUNT(*) AS n FROM "user"').first<{ n: number }>())?.n, 0);
+	assert.equal((await unlinkedDb.prepare('SELECT COUNT(*) AS n FROM "session"').first<{ n: number }>())?.n, 0);
 
 	profile = "json";
 	const linkedDb = openDb();
@@ -520,24 +565,27 @@ test("a Cloudflare sign-in whose profile is not JSON returns to /app", async (t)
 	assert.equal(new URL(connected.headers.get("location") ?? "", origin).searchParams.get("connected"), "1");
 
 	profile = "text";
-	const again = await providerCallback(linked, "cloudflare");
+	const again = await linked.request(`${origin}/api/auth/callback/cloudflare?code=abc&state=not-a-connect`, { headers: { cookie: session } });
 	assert.equal(again.status, 302, await again.clone().text());
-	const againLocation = new URL(again.headers.get("location") ?? "", origin);
-	assert.equal(againLocation.searchParams.get("error"), "unable_to_get_user_info");
-	assert.match(await (await linked.request(againLocation)).text(), /The provider did not return an account\./);
+	assert.equal(new URL(again.headers.get("location") ?? "", origin).searchParams.get("error"), "cloudflare_unlinked");
+	assert.equal(again.headers.getSetCookie().some((value) => value.startsWith(`${SESSION_COOKIE}=`) && !value.includes("Max-Age=0")), false);
 	assert.equal((await linkedDb.prepare('SELECT COUNT(*) AS n FROM "user"').first<{ n: number }>())?.n, 1);
 	assert.equal((await linkedDb.prepare(`SELECT COUNT(*) AS n FROM "account" WHERE "providerId" = 'cloudflare'`).first<{ n: number }>())?.n, 1);
+	const sessions = (await linkedDb.prepare('SELECT COUNT(*) AS n FROM "session"').first<{ n: number }>())?.n;
+	assert.equal(sessions, 1);
 });
 
-test("a Cloudflare token exchange stops and the callback deadline cancels it", async (t) => {
+test("a Cloudflare connect token exchange stops after its bound", async (t) => {
 	const original = globalThis.fetch;
 	let aborted = false;
+	let tokenCalls = 0;
 	globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 		const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
 		if (url.startsWith("https://github.com/login/oauth/access_token")) return Response.json({ access_token: "gho_test", token_type: "bearer" });
 		if (url === "https://api.github.com/user") return Response.json({ id: 7, login: "mona", name: "Mona", email: "mona@example.com" });
 		if (url === "https://api.github.com/user/emails") return Response.json([{ email: "mona@example.com", primary: true, verified: true, visibility: "public" }]);
 		if (url.startsWith("https://dash.cloudflare.com/oauth2/token")) {
+			tokenCalls += 1;
 			const signal = init?.signal;
 			return new Promise((_resolve, reject) => {
 				const fail = () => {
@@ -560,27 +608,35 @@ test("a Cloudflare token exchange stops and the callback deadline cancels it", a
 		CLOUDFLARE_OAUTH_CLIENT_SECRET: "cf-secret",
 	};
 
+	const idleDb = openDb();
+	const idle = createApp({ ...env, DB: idleDb }, { database: idleDb, cloudflareFetchMs: 30_000 });
+	const started = Date.now();
+	const refused = await idle.request(`${origin}/api/auth/callback/cloudflare?code=abc&state=not-a-connect`);
+	assert.ok(Date.now() - started < 1000, `callback took ${Date.now() - started}ms`);
+	assert.equal(new URL(refused.headers.get("location") ?? "", origin).searchParams.get("error"), "cloudflare_unlinked");
+	assert.equal(tokenCalls, 0);
+	assert.equal((await idleDb.prepare('SELECT COUNT(*) AS n FROM "session"').first<{ n: number }>())?.n, 0);
+
 	const fastDb = openDb();
 	const fast = createApp({ ...env, DB: fastDb }, { database: fastDb, cloudflareFetchMs: 40 });
+	const github = await providerCallback(fast, "github");
+	const session = github.headers.getSetCookie().find((value) => value.startsWith(`${SESSION_COOKIE}=`))!.split(";")[0];
+	const posted = await fast.request(`${origin}/app/account/cloudflare`, {
+		method: "POST",
+		headers: { origin, cookie: session, "content-type": "application/x-www-form-urlencoded" },
+		body: "action=connect",
+	});
+	const state = new URL(posted.headers.get("location") ?? "").searchParams.get("state") ?? "";
 	aborted = false;
-	const started = Date.now();
-	const limited = await providerCallback(fast, "cloudflare");
-	assert.ok(Date.now() - started < 1000, `token exchange took ${Date.now() - started}ms`);
+	const limitedAt = Date.now();
+	const limited = await fast.request(`${origin}/api/auth/callback/cloudflare?code=abc&state=${encodeURIComponent(state)}`, { headers: { cookie: session } });
+	assert.ok(Date.now() - limitedAt < 1000, `token exchange took ${Date.now() - limitedAt}ms`);
 	assert.equal(limited.status, 302, await limited.clone().text());
-	assert.equal(new URL(limited.headers.get("location") ?? "", origin).searchParams.get("error"), "invalid_code");
+	assert.equal(new URL(limited.headers.get("location") ?? "", origin).searchParams.get("error"), "deadline");
 	assert.equal(aborted, true);
-	assert.equal((await fastDb.prepare('SELECT COUNT(*) AS n FROM "user"').first<{ n: number }>())?.n, 0);
-
-	const slowDb = openDb();
-	const slow = createApp({ ...env, DB: slowDb }, { database: slowDb, cloudflareFetchMs: 30_000, callbackDeadlineMs: 40 });
-	aborted = false;
-	const outer = Date.now();
-	const gaveUp = await providerCallback(slow, "cloudflare");
-	assert.ok(Date.now() - outer < 1000, `callback took ${Date.now() - outer}ms`);
-	assert.equal(gaveUp.status, 302, await gaveUp.clone().text());
-	assert.equal(new URL(gaveUp.headers.get("location") ?? "", origin).searchParams.get("error"), "deadline");
-	assert.equal(aborted, true);
-	assert.equal((await slowDb.prepare('SELECT COUNT(*) AS n FROM "user"').first<{ n: number }>())?.n, 0);
+	assert.equal(limited.headers.getSetCookie().some((value) => value.startsWith(`${SESSION_COOKIE}=`) && !value.includes("Max-Age=0")), false);
+	assert.equal((await fastDb.prepare(`SELECT COUNT(*) AS n FROM "account" WHERE "providerId" = 'cloudflare'`).first<{ n: number }>())?.n, 0);
+	assert.equal((await fastDb.prepare('SELECT COUNT(*) AS n FROM "user"').first<{ n: number }>())?.n, 1);
 });
 
 test("a mistyped invite code is not shown as an allowlist refusal", async () => {

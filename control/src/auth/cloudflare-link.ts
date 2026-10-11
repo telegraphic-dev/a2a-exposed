@@ -144,7 +144,7 @@ async function deleteLinkState(db: Sql, state: string): Promise<void> {
 	await db.prepare(`DELETE FROM verification WHERE identifier = ?`).bind(`cf-link:${state}`).run();
 }
 
-/** True when this callback belongs to a connect we started, not a Continue-with sign-in. */
+/** True when this callback belongs to a connect we started. */
 export function cloudflareLinkState(request: Request): boolean {
 	const state = new URL(request.url).searchParams.get("state") ?? "";
 	return state.startsWith(STATE_PREFIX);
@@ -200,12 +200,15 @@ export async function handleCloudflareAccount(request: Request, auth: SessionAut
 }
 
 /**
- * Completes a connect callback. Returns null when the state is a normal sign-in,
- * so Better Auth can sign in by the linked Cloudflare account id.
- * The Cloudflare email is not stored on the user and is not checked against the allowlist.
+ * Completes a connect callback. Any other Cloudflare callback is refused and
+ * does not create or resume a session. The access token is used to read the
+ * account id and is not stored. The email is not stored and is not checked
+ * against the allowlist.
  */
-export async function finishCloudflareLink(request: Request, auth: SessionAuth, options: AuthOptions, fetchMs = CLOUDFLARE_FETCH_MS): Promise<Response | null> {
-	if (!cloudflareLinkState(request) || !options.cloudflare) return null;
+export async function finishCloudflareLink(request: Request, auth: SessionAuth, options: AuthOptions, fetchMs = CLOUDFLARE_FETCH_MS): Promise<Response> {
+	if (request.method !== "GET" || !options.cloudflare || !cloudflareLinkState(request)) {
+		return redirect(appRedirect(request, "cloudflare_unlinked"), [], 302);
+	}
 	const url = new URL(request.url);
 	const state = url.searchParams.get("state") ?? "";
 	const code = url.searchParams.get("code") ?? "";
@@ -223,7 +226,12 @@ export async function finishCloudflareLink(request: Request, auth: SessionAuth, 
 	const userId = typeof saved.userId === "string" ? saved.userId : "";
 	const verifier = typeof saved.verifier === "string" ? saved.verifier : "";
 	const session = await sessionOf(auth, request);
-	if (!userId || !verifier || session?.user?.id !== userId) return redirect(appRedirect(request, "auth"), [], 302);
+	if (!session?.user?.id) return redirect(appRedirect(request, "cloudflare_unlinked"), [], 302);
+	if (!recentSignIn(session)) {
+		const cookies = await clearSession(auth, request).catch(() => []);
+		return redirect(appRedirect(request, "cloudflare_reauth"), cookies, 302);
+	}
+	if (!userId || !verifier || session.user.id !== userId) return redirect(appRedirect(request, "auth"), [], 302);
 	if (!code) return redirect(appRedirect(request, "no_code"), [], 302);
 	const body = new URLSearchParams({
 		grant_type: "authorization_code",

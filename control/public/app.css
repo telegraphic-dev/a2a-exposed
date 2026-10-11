@@ -63,8 +63,6 @@ button.provider-github { background: #24292f; color: #fff; border-color: #24292f
 button.provider-github:hover:not(:disabled):not([aria-disabled="true"]) { background: #1b1f23; }
 button.provider-google { background: #fff; color: #1f1f1f; border-color: #747775; }
 button.provider-google:hover:not(:disabled):not([aria-disabled="true"]) { background: #f2f2f2; }
-button.provider-cloudflare { background: #f38020; color: #fff; border-color: #f38020; }
-button.provider-cloudflare:hover:not(:disabled):not([aria-disabled="true"]) { background: #e06f12; }
 button.provider-email { background: #fff; color: var(--text); border-color: var(--line); }
 button.provider-email:hover:not(:disabled):not([aria-disabled="true"]) { background: #fff; }
 .who { display: flex; gap: 0.75rem; align-items: center; }

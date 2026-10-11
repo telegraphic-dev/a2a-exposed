@@ -28,17 +28,14 @@ export interface AuthOptions {
 	invitesRequired: boolean;
 	/** Null when unset: sign-in is open. A list admits only those verified emails. */
 	signupAllowlist: SignupAllowlist | null;
-	/** Per Cloudflare token and profile call. The callback deadline aborts one that is still running. */
+	/** Per Cloudflare token and profile call during connect. */
 	cloudflareFetchMs?: number;
-	/** Aborted when the callback deadline wins. This request's auth handler closes over it. */
-	providerAbort?: AbortSignal;
 }
 
 export interface AuthDeps {
 	database?: Sql;
 	mailer?: Mailer;
 	cloudflareFetchMs?: number;
-	providerAbort?: AbortSignal;
 }
 
 export interface AuthEnv {
@@ -97,8 +94,8 @@ export function authBlockers(env: AuthEnv, deps: AuthDeps = {}): string[] {
 	if (env.MAIL_FROM?.trim() && !mailer) blockers.push("Email is not configured.");
 	const github = pair(env.GITHUB_CLIENT_ID, env.GITHUB_CLIENT_SECRET);
 	const google = pair(env.GOOGLE_CLIENT_ID, env.GOOGLE_CLIENT_SECRET);
-	const cloudflare = pair(env.CLOUDFLARE_OAUTH_CLIENT_ID, env.CLOUDFLARE_OAUTH_CLIENT_SECRET);
-	if (!github && !google && !cloudflare && !mailer) blockers.push("No login provider is fully configured.");
+	// Cloudflare connects an account. It is not a way to sign in.
+	if (!github && !google && !mailer) blockers.push("No login provider is fully configured.");
 	return blockers;
 }
 
@@ -127,6 +124,5 @@ export function resolveAuth(env: AuthEnv, request: Request, deps: AuthDeps = {})
 		invitesRequired: env.INVITES_REQUIRED?.trim() === "1",
 		signupAllowlist: signupAllowlist(env.SIGNUP_ALLOWLIST),
 		cloudflareFetchMs: deps.cloudflareFetchMs,
-		providerAbort: deps.providerAbort,
 	};
 }
