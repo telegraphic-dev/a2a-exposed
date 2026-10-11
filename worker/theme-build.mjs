@@ -125,6 +125,8 @@ export function assertInlineCss(css) {
 	if (/@import\b/i.test(parsed)) throw new Error("the theme imports a stylesheet");
 	if (/@font-face\b/i.test(parsed)) throw new Error("the theme loads a font");
 	if (/url\s*\(/i.test(parsed)) throw new Error("the theme loads a url");
+	// image() and image-set() take a string as an image source, so the address never appears as url().
+	if (/\bimage-set\s*\(/i.test(parsed) || /\bimage\s*\(/i.test(parsed)) throw new Error("the theme loads an image");
 	if (/expression\s*\(/i.test(parsed) || /javascript\s*:/i.test(parsed)) throw new Error("the theme has a script");
 	if (/-moz-binding\s*:/i.test(parsed) || /behavior\s*:/i.test(parsed)) throw new Error("the theme has a binding");
 	return text;

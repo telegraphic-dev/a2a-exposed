@@ -51,6 +51,12 @@ test("WORKER_THEME replaces the module only when the CSS stays inline", () => {
 		"a{content:\"foo\\\"bar\";background:url(https://example.com/a.png)}",
 		"a{content:\"foo\\\nbar\";background:url(https://example.com/a.png)}",
 		"a{content:\"url(https://example.com/a.png)\nbackground:url(https://example.com/b.png)}",
+		"body{background-image:image-set(\"https://example.com/p.png\" 1x)}",
+		"body{background-image:image(\"https://example.com/p.png\")}",
+		"body{background-image:-webkit-image-set(\"https://example.com/p.png\" 1x)}",
+		"body{background-image:image-\\73 et(\"https://example.com/p.png\" 1x)}",
+		"body{background-image:\\69mage(\"https://example.com/p.png\")}",
+		"body{background-image:image-set/*x*/(\"https://example.com/p.png\" 1x)}",
 	]) {
 		fs.writeFileSync(file, bad);
 		assert.throws(() => applyWorkerTheme("/work/src/theme.ts", file), /WORKER_THEME was refused/);
@@ -60,6 +66,8 @@ test("WORKER_THEME replaces the module only when the CSS stays inline", () => {
 		"a { content: \"url(https://example.com/a.png)\" }",
 		"a { content: \"foo\\\nurl(https://example.com/a.png)\" }",
 		"body { color: \\3c }",
+		"body { background-image: linear-gradient(#fff, #000); }",
+		"a { content: \"image-set(https://example.com/p.png)\" }",
 	]) {
 		fs.writeFileSync(file, ok);
 		assert.doesNotThrow(() => applyWorkerTheme("/work/src/theme.ts", file));
