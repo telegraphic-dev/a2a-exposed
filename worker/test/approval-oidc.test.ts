@@ -448,6 +448,35 @@ test("a failed same-zone fetch logs idp_unreachable with status and host", async
 	assert.equal(JSON.stringify(last).includes(SECRET), false);
 });
 
+test("an identity-provider error page is cancelled and not buffered", async (t) => {
+	const s = setup({ ...oidcEnv, APPROVAL_OIDC_ISSUER: ZONE }); t.after(s.restore);
+	let pulls = 0;
+	let cancelled = false;
+	s.env.CONTROL_SERVICE = {
+		async fetch() {
+			return new Response(new ReadableStream({
+				pull(controller) {
+					pulls++;
+					controller.enqueue(new Uint8Array(64 * 1024));
+				},
+				cancel() { cancelled = true; },
+			}), { status: 522 });
+		},
+	};
+	globalThis.fetch = (async () => { throw new Error("public fetch must not run"); }) as typeof fetch;
+	const d = await s.start();
+	const started = Date.now();
+	const { post } = await s.postOidc(d.data.user_code);
+	assert.ok(Date.now() - started < 1000, "error headers should return without reading the body");
+	assert.equal(post.status, 502);
+	assert.match(post.text, /The identity provider could not be reached/);
+	assert.equal(cancelled, true);
+	assert.ok(pulls < 3, `buffered ${pulls} chunks`);
+	const line = s.logs.map((entry) => { try { return JSON.parse(entry); } catch { return null; } }).find((entry) => entry?.event === "idp_unreachable");
+	assert.equal(line?.status, 522);
+	assert.equal(line?.op, "discovery");
+});
+
 test("a same-zone issuer that does not answer is given up, and the binding request carries the issuer host", async (t) => {
 	const issuer = "https://example.com";
 	const s = setup({

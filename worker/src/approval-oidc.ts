@@ -138,10 +138,21 @@ function aborted(signal: AbortSignal): Promise<never> {
 	});
 }
 
-/** Buffer the body under the same deadline. A stream that never ends must not hold the page. */
+/** An error page is cancelled and not read. Only a successful body is buffered, and only up to `max`. */
+function dropBody(res: Response): void {
+	try { void res.body?.cancel().catch(() => {}); } catch { /* already closed */ }
+}
+
 async function takeBody(res: Response, signal: AbortSignal, max: number): Promise<Response> {
+	if (!res.ok) {
+		dropBody(res);
+		return new Response(null, { status: res.status, statusText: res.statusText });
+	}
 	const len = Number(res.headers.get("content-length") || 0);
-	if (len > max) throw new Error("large");
+	if (len > max) {
+		dropBody(res);
+		throw new Error("large");
+	}
 	const text = await Promise.race([res.text(), aborted(signal)]);
 	if (text.length > max) throw new Error("large");
 	const headers = new Headers(res.headers);
