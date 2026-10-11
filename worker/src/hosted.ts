@@ -322,6 +322,27 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 		return { configured: this.#row !== null, version: this.#row?.version ?? 0, tables: appTables(this.#sql) };
 	}
 
+	/**
+	 * Drop this object's alarm and storage. A second call on an empty object succeeds.
+	 * Not an owner HTTP route. Self-host never calls it.
+	 */
+	async deleteStorage(): Promise<{ deleted: true }> {
+		return await this.ctx.blockConcurrencyWhile(async () => {
+			const storage = this.ctx.storage as unknown as {
+				deleteAlarm(): Promise<void>;
+				deleteAll(): Promise<void>;
+			};
+			const tenantId = this.#row?.tenantId ?? null;
+			await storage.deleteAlarm();
+			await storage.deleteAll();
+			const left = readRow(this.#sql);
+			if (left) throw new Error("deleteStorage: data remains");
+			this.#row = null;
+			console.log(JSON.stringify({ ts: new Date().toISOString(), event: "tenant_storage_deleted", tenant: tenantId }));
+			return { deleted: true };
+		});
+	}
+
 	/** SQL dump of the application tables. Refuses an object that has no config row. */
 	async exportSql(): Promise<{ sql: string; exportedAt: string }> {
 		return await this.ctx.blockConcurrencyWhile(async () => {

@@ -100,6 +100,8 @@ export function renderSignIn(input: {
 	notice?: string;
 	error?: string;
 	sent?: boolean;
+	/** A validated `/app/agents/<name>` path. Empty stays on `/app`. */
+	next?: string;
 }): string {
 	const error = input.error === "invite" && input.signupClosed
 		? (input.closedMessage?.trim() || SIGNUP_CLOSED)
@@ -111,6 +113,7 @@ export function renderSignIn(input: {
 			{error ? <p class="alert" role="alert">{error}</p> : ""}
 			{input.sent ? <p>Check your email for a sign-in link.</p> : ""}
 			<form method="post" action="/app/sign-in">
+				{input.next ? <input type="hidden" name="next" value={input.next} /> : ""}
 				{input.invitesRequired ? (
 					<p>
 						<label>

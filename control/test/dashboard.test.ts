@@ -91,6 +91,10 @@ test("a signed-in account sees itself, can sign out, and creates two agents", as
 	const once = await shown.text();
 	const token = once.match(/a2aot_[A-Za-z0-9_-]+/)?.[0] ?? "";
 	assert.match(token, /^a2aot_/);
+	assert.match(once, new RegExp(`value="${token}"`));
+	assert.equal(once.includes(`>${token}<`), false);
+	assert.equal(once.includes(`${token}\n`), false);
+	assert.equal(once.includes(`\n${token}`), false);
 	assert.match(once, /Copy this owner token now/);
 	assert.match(once, /will not be shown again/);
 	assert.match(once, /https:\/\/northwind\.example\.com/);

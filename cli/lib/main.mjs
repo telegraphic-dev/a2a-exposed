@@ -192,6 +192,7 @@ Control plane account (only when that deployment's login is on)
                                 that token after a confirmation and a recent sign-in. The new token is
                                 shown once on that agent's page. The previous one stops working immediately.
                                 The token is shown only when the stored hash is still that token.
+                                Deleting an agent asks for its name and a recent sign-in. A self-hosted inbox has no such delete.
                                 That page is not stored.
                                 FREE_AGENT_LIMIT=2 caps a free account at 2 agents. An account's own limit overrides it.
                                 Unset, there is no limit. The database rejects another insert.

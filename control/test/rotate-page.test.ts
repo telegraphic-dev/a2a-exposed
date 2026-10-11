@@ -128,7 +128,10 @@ test("the agent page rotates the owner token once after confirmation", async () 
 		const shown = await app.request(`${origin}/app/agents/northwind`, { headers: { cookie: `${cookie}; ${OWNER_COOKIE}=${encodeURIComponent(packed)}` } });
 		const html = await shown.text();
 		assert.match(html, /Copy this owner token now/);
-		assert.match(html, new RegExp(token));
+		assert.match(html, new RegExp(`value="${token}"`));
+		assert.equal(html.includes(`>${token}<`), false);
+		assert.equal(html.includes(`${token}\n`), false);
+		assert.equal(html.includes(`\n${token}`), false);
 		assert.match(html, /src="\/owner-token\.js"/);
 		assert.match(shown.headers.get("content-security-policy") ?? "", /script-src 'self'/);
 		assert.match(shown.headers.get("cache-control") ?? "", /no-store/);

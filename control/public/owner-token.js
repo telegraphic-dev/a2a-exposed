@@ -1,3 +1,26 @@
+// The token is the input value. A copy of that field is the token alone, with no surrounding whitespace.
+function tokenValue(root) {
+	var node = root.querySelector(".token-value");
+	if (!node || typeof node.value !== "string") return "";
+	return node.value.replace(/^\s+|\s+$/g, "");
+}
+
+document.addEventListener("copy", function (event) {
+	var root = document.querySelector(".token");
+	if (!root || !event.clipboardData) return;
+	var field = root.querySelector(".token-value");
+	if (!field) return;
+	var sel = document.getSelection();
+	if (!sel || !sel.rangeCount) return;
+	var node = sel.anchorNode;
+	var el = node && node.nodeType === 1 ? node : node && node.parentNode;
+	if (!el || (el !== field && !field.contains(el))) return;
+	var text = tokenValue(root);
+	if (!text) return;
+	event.preventDefault();
+	event.clipboardData.setData("text/plain", text);
+});
+
 // A restored page still has the token in the snapshot after the cookie was cleared.
 window.addEventListener("pageshow", function (event) {
 	if (!event.persisted) return;

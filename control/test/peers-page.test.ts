@@ -295,7 +295,7 @@ test("the agent page approves a claimed pairing, confirms revoke, and lists outb
 		const cleared = stale.headers.getSetCookie().find((value) => value.startsWith("__Host-a2a_session=")) ?? "";
 		assert.match(cleared, /Max-Age=0/);
 		const home = await (await app.request(`${origin}/app?error=reauth`)).text();
-		assert.match(home, /Sign in again to approve, deny, revoke, or rotate the owner token\. This session is older than 10 minutes\./);
+		assert.match(home, /Sign in again to approve, deny, revoke, rotate the owner token, or delete the agent\. This session is older than 10 minutes\./);
 		const who = await (await app.request(`${origin}/api/auth/get-session`, { headers: { cookie } })).json() as { user?: { id?: string } } | null;
 		assert.equal(who?.user?.id, undefined);
 		assert.equal(lines.some((line) => line.includes("dashboard_reauth") && line.includes(tenant?.id ?? "missing") && !line.includes("WDJB-4827")), true);

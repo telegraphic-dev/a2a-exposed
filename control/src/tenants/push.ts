@@ -36,6 +36,10 @@ export interface DataPlane {
 	pushConfig(body: TenantPush, region: string): Promise<{ version: number; applied: boolean }>;
 	/** Allowlisted owner call. Absent on a test double that never renders an agent page. */
 	owner?(tenantId: string, region: string, input: OwnerCall): Promise<{ status: number; body: unknown }>;
+	/** Remove `tenant:<name>`. A missing key is success. Absent until the data plane can delete an agent. */
+	deleteDirectory?(name: string): Promise<void>;
+	/** Wipe that tenant's Durable Object storage. A second call on an empty object succeeds. */
+	deleteStorage?(tenantId: string, region: string): Promise<void>;
 }
 
 interface DoNamespace {
@@ -43,6 +47,7 @@ interface DoNamespace {
 	get(id: unknown): {
 		pushConfig(body: TenantPush): Promise<{ version: number; applied: boolean }>;
 		owner?(input: OwnerCall): Promise<{ status: number; body: unknown }>;
+		deleteStorage?(): Promise<unknown>;
 	};
 	jurisdiction?(location: string): DoNamespace;
 }
@@ -50,6 +55,7 @@ interface DoNamespace {
 interface DirectoryKv {
 	get(key: string, type: "json"): Promise<unknown>;
 	put(key: string, value: string): Promise<void>;
+	delete?(key: string): Promise<void>;
 }
 
 export interface PlaneEnv {
@@ -84,6 +90,16 @@ export function dataPlaneFromEnv(env: PlaneEnv): DataPlane | null {
 			const stub = ns.get(ns.idFromName(tenantId));
 			if (!stub.owner) throw new Error("owner rpc is not available");
 			return stub.owner(input);
+		},
+		async deleteDirectory(name) {
+			if (!directory.delete) throw new Error("directory delete is not available");
+			await directory.delete(`tenant:${name}`);
+		},
+		async deleteStorage(tenantId, region) {
+			const ns = namespaceFor(objects, region);
+			const stub = ns.get(ns.idFromName(tenantId));
+			if (!stub.deleteStorage) throw new Error("delete storage is not available");
+			await stub.deleteStorage();
 		},
 	};
 }

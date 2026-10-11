@@ -1,4 +1,5 @@
 import { INVITE_COOKIE, hostCookie } from "./cookies.ts";
+import { agentReturnPath } from "./return.ts";
 import { hasAccount, invitePending, validInviteCode } from "./invites.ts";
 import type { AuthOptions } from "./options.ts";
 import { SIGN_IN_DEADLINE_MS, within } from "./deadline.ts";
@@ -183,15 +184,16 @@ async function finishSignIn(request: Request, auth: AuthHandler, options: AuthOp
 	if (ip) headers.set("cf-connecting-ip", ip);
 	// The Turnstile token was consumed above. It is single-use, so it is not sent on.
 	const path = provider === "email" ? "/api/auth/sign-in/magic-link" : "/api/auth/sign-in/social";
+	const callbackURL = agentReturnPath(String(form.get("next") ?? "")) || "/app";
 	const body = provider === "email"
 		? {
 			email,
-			callbackURL: "/app",
+			callbackURL,
 			errorCallbackURL: "/app",
-			newUserCallbackURL: "/app",
+			newUserCallbackURL: callbackURL,
 			...(options.invitesRequired && invite && !returning ? { metadata: { invite } } : {}),
 		}
-		: { provider, callbackURL: "/app", errorCallbackURL: "/app" };
+		: { provider, callbackURL, errorCallbackURL: "/app", newUserCallbackURL: callbackURL };
 	const response = await auth.handler(new Request(new URL(path, origin), { method: "POST", headers, body: JSON.stringify(body) }));
 	const cookies = cookiesFrom(response);
 	if (options.invitesRequired && invite && !returning) cookies.push(hostCookie(INVITE_COOKIE, invite, 60 * 15));

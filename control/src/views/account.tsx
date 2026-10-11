@@ -1,5 +1,6 @@
 import { SIGNUP_CLOSED } from "../auth/allowlist.ts";
 import { REAUTH_MESSAGE } from "../auth/recent.ts";
+import { TokenBlock } from "./token-block.tsx";
 
 const ERRORS: Record<string, string> = {
 	invalid_name: "Use 4–32 letters, numbers, or hyphens.",
@@ -59,6 +60,7 @@ export function renderAccount(input: {
 	agentLimit: number | null;
 	signupClosed?: boolean;
 	closedMessage?: string;
+	deleted?: boolean;
 }): string {
 	const image = avatarUrl(input.image);
 	const capped = limitMessage(input.agentLimit);
@@ -74,13 +76,8 @@ export function renderAccount(input: {
 			<form method="post" action="/app/sign-out">
 				<p><button class="action" type="submit">Sign out</button></p>
 			</form>
-			{input.ownerToken ? (
-				<div class="token" role="status">
-					<p>Copy this owner token now. It will not be shown again.</p>
-					<pre><code>{input.ownerToken}</code></pre>
-					<script src="/owner-token.js"></script>
-				</div>
-			) : ""}
+			{input.ownerToken ? <TokenBlock token={input.ownerToken} lead="Copy this owner token now. It will not be shown again." /> : ""}
+			{input.deleted ? <p role="status">That agent was deleted. Its inbox, peers, connectors, and wake settings are gone. The slot is free.</p> : ""}
 			{error ? <p class="alert" role="alert">{error}</p> : ""}
 			{atLimit && !error ? <p class="alert" role="alert">{capped}</p> : ""}
 			{input.agents.length ? (

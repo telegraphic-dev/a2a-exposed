@@ -88,7 +88,7 @@ test("redactExport drops credential material and leaves the full dump unchanged"
 	await DB.prepare("INSERT INTO settings (key, value) VALUES ('approval_password', ?)").bind(JSON.stringify({ hash: "x".repeat(40) })).run();
 	await DB.prepare("INSERT INTO settings (key, value) VALUES ('password_setup', ?)").bind(JSON.stringify({ hash: setupHash, createdMs: 1, expiresMs: 2, failures: 0 })).run();
 	await DB.prepare("INSERT INTO settings (key, value) VALUES ('theme', 'kept')").run();
-	await DB.prepare("INSERT INTO device_requests (device_hash, user_code, status, created_ms, expires_ms, interval_s, replaces_label, replaces_hash) VALUES ('device-hash-secret', 'WDJB4827', 'pending', 1, 2, 5, 'ada', ?)").bind(replaces).run();
+	await DB.prepare("INSERT INTO device_requests (device_hash, user_code, status, created_ms, expires_ms, interval_s, replaces_label, replaces_hash, ip, country) VALUES ('device-hash-secret', 'WDJB4827', 'pending', 1, 2, 5, 'ada', ?, '203.0.113.50', 'XQ')").bind(replaces).run();
 	await DB.prepare("INSERT INTO oauth_codes (code_hash, client_id, redirect_uri, code_challenge, scope, resource, created_ms, expires_ms) VALUES ('code-hash', 'client', 'https://client.example/cb', 'challenge-secret-value', 'mcp', 'https://agent.example/mcp', 1, 2)").run();
 	await DB.prepare("INSERT INTO mcp_grants (label, client_id, scope, access_hash, refresh_hash, created_at) VALUES ('mcp-claude', 'client', 'mcp', 'access-hash-secret', 'refresh-hash-secret', ?)").bind(now).run();
 	await DB.prepare("INSERT INTO outbound_peers (alias, url, token_enc, created_at, updated_at) VALUES ('ada', 'https://ada.example', 'ciphertext-secret-value', ?, ?)").bind(now, now).run();
@@ -97,12 +97,16 @@ test("redactExport drops credential material and leaves the full dump unchanged"
 	const redacted = redactExport(file);
 	assert.equal(file.tables.peers?.[0]?.token_hash, hash, "the CLI dump still has the hash");
 	assert.equal(file.tables.device_requests?.[0]?.replaces_hash, replaces);
+	assert.equal(file.tables.device_requests?.[0]?.ip, "203.0.113.50");
+	assert.equal(file.tables.device_requests?.[0]?.country, "XQ");
 	assert.equal(file.tables.settings?.some((row) => row.key === "password_setup"), true);
 	assert.equal(file.tables.oidc_txns?.[0]?.verifier, "verifier-secret-value");
 	assert.equal(redacted.tables.peers?.[0]?.token_hash, "redacted:ada");
 	assert.equal(redacted.tables.peers?.[0]?.label, "ada");
 	assert.equal(redacted.tables.device_requests?.[0]?.device_hash, "redacted:WDJB4827");
 	assert.equal(redacted.tables.device_requests?.[0]?.replaces_hash, undefined);
+	assert.equal(Object.hasOwn(redacted.tables.device_requests?.[0] ?? {}, "ip"), false);
+	assert.equal(Object.hasOwn(redacted.tables.device_requests?.[0] ?? {}, "country"), false);
 	assert.equal(redacted.tables.device_requests?.[0]?.replaces_label, "ada");
 	assert.equal(redacted.tables.device_requests?.[0]?.user_code, "WDJB4827");
 	assert.equal(redacted.tables.tasks?.[0]?.push_configs_json, undefined);
@@ -130,6 +134,8 @@ test("redactExport drops credential material and leaves the full dump unchanged"
 	assert.equal(sql.includes("oauth_codes"), false);
 	assert.equal(sql.includes("oidc_txns"), false);
 	assert.equal(sql.includes("replaces_hash"), false);
+	assert.equal(sql.includes("203.0.113.50"), false);
+	assert.equal(sql.includes("XQ"), false);
 	assert.equal(sql.includes("password_setup"), false);
 	assert.equal(ownerResponseLeaks({ sql }), false);
 	for (const secret of [token, owner, hash, replaces, setupHash]) {
@@ -138,6 +144,8 @@ test("redactExport drops credential material and leaves the full dump unchanged"
 	assert.match(toSql(file), /verifier-secret-value/);
 	assert.match(toSql(file), new RegExp(hash));
 	assert.match(toSql(file), /replaces_hash/);
+	assert.match(toSql(file), /203\.0\.113\.50/);
+	assert.match(toSql(file), /'XQ'/);
 });
 
 test("scrubSecretText redacts a hosted owner token on the log and export paths", () => {
@@ -173,17 +181,34 @@ test("redactExport removes device_requests.replaces_hash", () => {
 				status: "pending",
 				replaces_label: "ada",
 				replaces_hash: replaces,
+				ip: "203.0.113.50",
+				country: "XQ",
 			}],
 		},
 	});
 	const row = redacted.tables.device_requests?.[0] ?? {};
 	assert.equal(Object.hasOwn(row, "replaces_hash"), false);
+	assert.equal(Object.hasOwn(row, "ip"), false);
+	assert.equal(Object.hasOwn(row, "country"), false);
 	assert.equal(row.replaces_label, "ada");
 	assert.equal(row.device_hash, "redacted:WDJB4827");
 	const sql = toSql(redacted, { skip: REDACTED_SQL_SKIP });
 	assert.equal(sql.includes("replaces_hash"), false);
+	assert.equal(sql.includes("203.0.113.50"), false);
 	assert.equal(sql.includes(replaces), false);
 	assert.equal(JSON.stringify(redacted).includes(replaces), false);
+});
+
+test("self-host owner HTTP has no delete route", async () => {
+	const DB = db();
+	const env = { DB, PUBLIC_URL: BASE, OWNER_TOKEN: "owner-secret" };
+	const res = await worker.fetch(new Request(BASE + "/owner/delete", {
+		method: "POST",
+		headers: { authorization: "Bearer owner-secret" },
+	}) as never, env as never, ectx as never);
+	assert.equal(res.status, 404);
+	const tables = await DB.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'peers'").all<{ name: string }>();
+	assert.equal(tables.results.length, 1);
 });
 
 test("exportRows reads every application table in one batch", async () => {

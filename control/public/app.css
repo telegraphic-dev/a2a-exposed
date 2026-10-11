@@ -86,6 +86,16 @@ button.provider-email:hover:not(:disabled):not([aria-disabled="true"]) { backgro
 .wake input, .wake select { display: block; width: 100%; margin-top: 0.25rem; font: inherit; }
 .wake .preview { white-space: pre-wrap; }
 .token { margin: 1rem 0; }
+.token .token-value {
+	display: block;
+	width: 100%;
+	margin: 0;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	font: inherit;
+	color: inherit;
+}
 button.action {
 	appearance: none;
 	background: var(--accent);
