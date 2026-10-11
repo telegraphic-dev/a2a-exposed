@@ -23,6 +23,13 @@ test("an empty allowlist is open and a wildcard does not cover a subdomain", () 
 	assert.equal(emailAllowed(list, "other@sub.example.com", true), false);
 	assert.equal(emailAllowed(list, "mona@example.com", false), false);
 	assert.equal(emailAllowed(signupAllowlist("nope"), "mona@example.com", true), false);
+	const exact = signupAllowlist("O'Connor@Example.com, user!tag@example.com, has space@example.com");
+	assert.ok(exact);
+	assert.equal(exact.emails.has("o'connor@example.com"), true);
+	assert.equal(exact.emails.has("user!tag@example.com"), true);
+	assert.equal(exact.emails.has("has space@example.com"), false);
+	assert.equal(emailAllowed(exact, "O'Connor@Example.com", true), true);
+	assert.equal(emailAllowed(exact, "user!tag@example.com", true), true);
 	const cloudflare = mapCloudflareUser({ id: "u1", email: "mona@example.com" });
 	assert.equal(emailAllowed(list, cloudflare?.email ?? "", cloudflare?.emailVerified === true), false);
 });
@@ -185,4 +192,25 @@ test("GitHub sign-in uses the verified email and refuses an unverified one", asy
 	assert.equal(new URL(refused.headers.get("location") ?? "", origin).searchParams.get("error"), "invite");
 	const count = await fresh.prepare('SELECT COUNT(*) AS n FROM "user"').first<{ n: number }>();
 	assert.equal(count?.n, 0);
+});
+
+test("a mistyped invite code is not shown as an allowlist refusal", async () => {
+	const db = openDb();
+	const app = createApp({
+		AUTH_SECRET: secret,
+		DB: db,
+		INVITES_REQUIRED: "1",
+		SIGNUP_ALLOWLIST: "person@example.com",
+	}, { database: db, mailer: { async send() {} } });
+	const posted = await app.request(`${origin}/app/sign-in`, {
+		method: "POST",
+		headers: { origin, "content-type": "application/x-www-form-urlencoded" },
+		body: "provider=email&email=person@example.com&invite=not-a-code",
+	});
+	assert.equal(posted.status, 303);
+	const location = new URL(posted.headers.get("location") ?? "", origin);
+	assert.equal(location.searchParams.get("error"), "INVITE_REQUIRED");
+	const html = await (await app.request(location.href)).text();
+	assert.match(html, /That invite code is not valid/);
+	assert.equal(html.includes(SIGNUP_CLOSED), false);
 });

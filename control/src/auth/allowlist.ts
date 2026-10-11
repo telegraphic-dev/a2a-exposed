@@ -1,5 +1,14 @@
-/** Shown when a sign-in is refused because SIGNUP_ALLOWLIST is set. */
-export const SIGNUP_CLOSED = "Hosted a2a.exposed is invite-only for now.";
+import { brandConfig } from "@brand/brand.config.ts";
+
+/** Neutral sentence when a brand overlay does not set `signupClosed`. */
+export const SIGNUP_CLOSED = "Sign-in is invite-only for now.";
+
+/** The brand sentence when `signupClosed` is set, otherwise the neutral sentence. */
+export function signupClosedText(env: { BRAND_NAME?: string } = {}): string {
+	const configured = brandConfig(env).signupClosed;
+	const text = typeof configured === "string" ? configured.trim() : "";
+	return text || SIGNUP_CLOSED;
+}
 
 export interface SignupAllowlist {
 	emails: Set<string>;
@@ -7,16 +16,19 @@ export interface SignupAllowlist {
 }
 
 const DOMAIN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
-const LOCAL = /^[a-z0-9._%+-]+$/;
+const LOCAL_MAX = 64;
 
 function domainOk(value: string): boolean {
 	return value.length <= 253 && DOMAIN.test(value);
 }
 
+/** One `@`, a non-empty local part, and a dotted domain. The local part is otherwise opaque, so `o'connor` and `user!tag` stay. */
 function emailOk(value: string): boolean {
-	const at = value.lastIndexOf("@");
-	if (at <= 0) return false;
-	return LOCAL.test(value.slice(0, at)) && domainOk(value.slice(at + 1));
+	const at = value.indexOf("@");
+	if (at <= 0 || at !== value.lastIndexOf("@")) return false;
+	const local = value.slice(0, at);
+	if (local.length > LOCAL_MAX || /[\s\u0000-\u001f<>]/.test(local)) return false;
+	return domainOk(value.slice(at + 1));
 }
 
 /**

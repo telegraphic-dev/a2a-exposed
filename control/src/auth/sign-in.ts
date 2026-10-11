@@ -161,7 +161,7 @@ async function finishSignIn(request: Request, auth: AuthHandler, options: AuthOp
 	if (needsInvite || (options.invitesRequired && invite)) {
 		const address = provider === "email" ? email : undefined;
 		if (!validInviteCode(invite) || !await invitePending(options.database, invite, address)) {
-			return redirect(appUrl(request, "invite"));
+			return redirect(appUrl(request, "INVITE_REQUIRED"));
 		}
 	}
 	const token = String(form.get("cf-turnstile-response") ?? "");

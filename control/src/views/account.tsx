@@ -56,10 +56,11 @@ export function renderAccount(input: {
 	canCreate: boolean;
 	agentLimit: number | null;
 	signupClosed?: boolean;
+	closedMessage?: string;
 }): string {
 	const image = avatarUrl(input.image);
 	const capped = limitMessage(input.agentLimit);
-	const closed = input.signupClosed && input.error === "invite" ? SIGNUP_CLOSED : "";
+	const closed = input.signupClosed && input.error === "invite" ? (input.closedMessage?.trim() || SIGNUP_CLOSED) : "";
 	const error = input.error === "limit" ? capped : closed || (input.error ? ERRORS[input.error] ?? "" : "");
 	const atLimit = input.agentLimit != null && input.agents.length >= input.agentLimit;
 	return (

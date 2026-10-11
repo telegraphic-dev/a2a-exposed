@@ -90,15 +90,17 @@ export function renderSignIn(input: {
 	providers: string[];
 	magicLink: boolean;
 	invitesRequired: boolean;
-	/** When set, `error=invite` is the allowlist refusal, not a bad invite code. */
+	/** When set, `error=invite` is the allowlist refusal. A bad invite code uses `INVITE_REQUIRED`. */
 	signupClosed?: boolean;
+	/** Brand sentence for an allowlist refusal. The neutral sentence is used when this is empty. */
+	closedMessage?: string;
 	turnstileSiteKey?: string;
 	notice?: string;
 	error?: string;
 	sent?: boolean;
 }): string {
 	const error = input.error === "invite" && input.signupClosed
-		? SIGNUP_CLOSED
+		? (input.closedMessage?.trim() || SIGNUP_CLOSED)
 		: input.error ? ERRORS[input.error] ?? ERRORS.auth : "";
 	const buttons = PROVIDERS.filter(([id]) => input.providers.includes(id));
 	return (

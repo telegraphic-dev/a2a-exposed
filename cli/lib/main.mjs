@@ -180,7 +180,7 @@ Control plane account (only when that deployment's login is on)
                                 FREE_AGENT_LIMIT=2 caps a free account at 2 agents. An account's own limit overrides it.
                                 Unset, there is no limit. The database rejects another insert.
                                 SIGNUP_ALLOWLIST, when set, admits only those verified emails. Unset, sign-in stays open.
-                                A refusal returns to /app?error=invite and says the deployment is invite-only.
+                                A refusal returns to /app?error=invite and the page says Sign-in is invite-only for now.
                                 The control Worker logs social_sign_in_failed before the
                                 provider page, social_sign_in_timeout when that sign-in does not
                                 return, and oauth_callback_failed when the provider sends the browser

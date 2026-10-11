@@ -3,7 +3,7 @@ import { CALLBACK_DEADLINE_MS, within } from "./auth/deadline.ts";
 import { connectingIp, verifyTurnstile } from "./auth/turnstile.ts";
 import { enabledProviderOrigins, handleSignIn } from "./auth/sign-in.ts";
 import { loadAuth } from "./auth/instance.ts";
-import type { SignupAllowlist } from "./auth/allowlist.ts";
+import { signupClosedText, type SignupAllowlist } from "./auth/allowlist.ts";
 import { authBlockers, resolveAuth, type AuthDeps, type AuthOptions } from "./auth/options.ts";
 import { OIDC_COOKIE, authorize, discoveryDocument, exchangeCode, issuerOrigin, readTokenForm, resumeQuery } from "./oidc/issuer.ts";
 import { OWNER_COOKIE, hostCookie, readCookie } from "./auth/cookies.ts";
@@ -393,6 +393,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 				canCreate: Boolean(plane),
 				agentLimit,
 				signupClosed: loaded.options.signupAllowlist !== null,
+				closedMessage: signupClosedText(env),
 			});
 			return {
 				html: renderApp(env, body, "Your agents"),
@@ -414,6 +415,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 				magicLink: Boolean(loaded.options.mailer || loaded.options.emailBinding),
 				invitesRequired: loaded.options.invitesRequired,
 				signupClosed: loaded.options.signupAllowlist !== null,
+				closedMessage: signupClosedText(env),
 				turnstileSiteKey: loaded.options.turnstile?.siteKey,
 				error: url.searchParams.get("error") ?? undefined,
 				sent: url.searchParams.get("sent") === "1",

@@ -119,10 +119,9 @@ test("control sources do not name a hosted domain", () => {
 		}
 	};
 	walk(root);
-	const closed = "Hosted " + banned[0] + " is invite-only for now.";
 	const hits: string[] = [];
 	for (const file of files) {
-		const text = fs.readFileSync(file, "utf8").split(closed).join("");
+		const text = fs.readFileSync(file, "utf8");
 		for (const word of banned) if (text.includes(word)) hits.push(`${path.relative(root, file)}: ${word}`);
 	}
 	assert.deepEqual(hits, []);

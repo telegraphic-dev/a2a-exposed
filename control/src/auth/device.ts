@@ -1,4 +1,4 @@
-import { emailAllowed, emailIsVerified } from "./allowlist.ts";
+import { emailAllowed, emailIsVerified, signupClosedText } from "./allowlist.ts";
 import type { Auth } from "./create-auth.ts";
 import { hostCookie, readCookie } from "./cookies.ts";
 import type { AuthOptions } from "./options.ts";
@@ -74,6 +74,7 @@ export async function handleDevice(request: Request, auth: Auth, options: AuthOp
 			magicLink: Boolean(options.mailer || options.emailBinding),
 			invitesRequired: options.invitesRequired,
 			signupClosed: options.signupAllowlist !== null,
+			closedMessage: signupClosedText(env),
 			turnstileSiteKey: options.turnstile?.siteKey,
 			error: error || undefined,
 		});
