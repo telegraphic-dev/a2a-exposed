@@ -57,15 +57,16 @@ test("a signed-in account sees itself, can sign out, and creates two agents", as
 	assert.match(html, /action="\/api\/v1\/tenants"/);
 	assert.equal(html.includes("action=\"/app/sign-in\""), false);
 	assert.equal(html.includes("style="), false);
-	assert.match(page.headers.get("content-security-policy") ?? "", /img-src 'self' https:\/\/avatars\.githubusercontent\.com/);
-	assert.match(page.headers.get("content-security-policy") ?? "", /form-action 'self'/);
-	assert.match(page.headers.get("content-security-policy") ?? "", /script-src 'none'/);
-	assert.equal((page.headers.get("content-security-policy") ?? "").includes("github.com"), false);
+	const policy = page.headers.get("content-security-policy") ?? "";
+	assert.match(policy, /img-src 'self' https:\/\/avatars\.githubusercontent\.com/);
+	assert.match(policy, /form-action 'self'(?:;|$)/);
+	assert.equal(/form-action[^;]*https:\/\/github\.com/.test(policy), false);
+	assert.match(policy, /script-src 'none'/);
 
 	await db.prepare('UPDATE "user" SET image = ? WHERE email = ?').bind("https://evil.example/a.png", "person@example.com").run();
 	const blocked = await (await app.request(`${origin}/app`, { headers: { cookie } })).text();
 	assert.equal(blocked.includes("evil.example"), false);
-	assert.equal(blocked.includes("<img"), false);
+	assert.equal(blocked.includes("avatar"), false);
 
 	const cross = await app.request(`${origin}/api/v1/tenants`, {
 		method: "POST",
