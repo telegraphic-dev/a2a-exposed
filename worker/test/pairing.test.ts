@@ -62,6 +62,34 @@ function setup(over: Record<string, string> = {}) {
 	return { env, DB, wakes, call, owner, start, poll, decidePage, restore: () => { globalThis.fetch = origFetch; } };
 }
 
+test("HEAD answers like GET with an empty body, and a self-hosted card stays cached for 5 minutes", async (t) => {
+	const s = setup();
+	t.after(s.restore);
+	const get = await s.call("GET", "/.well-known/agent-card.json");
+	assert.equal(get.status, 200);
+	assert.equal(get.headers.get("cache-control"), "public, max-age=300");
+	const head = await s.call("HEAD", "/.well-known/agent-card.json");
+	assert.equal(head.status, 200);
+	assert.equal(head.text, "");
+	assert.equal(head.headers.get("cache-control"), "public, max-age=300");
+	assert.match(head.headers.get("content-type") ?? "", /^application\/json/);
+	assert.equal(head.headers.get("content-length"), String(Buffer.byteLength(get.text)));
+	const legacy = await s.call("HEAD", "/.well-known/agent.json");
+	assert.equal(legacy.status, 200);
+	assert.equal(legacy.text, "");
+	assert.equal(legacy.headers.get("cache-control"), "public, max-age=300");
+	const health = await s.call("HEAD", "/health");
+	assert.equal(health.status, 200);
+	assert.equal(health.text, "");
+	assert.match(health.headers.get("content-type") ?? "", /^application\/json/);
+	const missing = await s.call("HEAD", "/no-such-route");
+	assert.equal(missing.status, 404);
+	assert.equal(missing.text, "");
+	const owner = await s.call("HEAD", "/owner/peers");
+	assert.equal(owner.status, 401);
+	assert.equal(owner.text, "");
+});
+
 test("pairing helpers: user codes, labels, requester text, params, password hashing", async () => {
 	for (let i = 0; i < 200; i++) assert.match(P.newUserCode(), /^[BCDFGHJKLMNPQRSTVWXZ]{4}[2-9]{4}$/);
 	assert.equal(P.formatUserCode("WDJB4827"), "WDJB-4827");

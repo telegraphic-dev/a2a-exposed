@@ -15,6 +15,16 @@ function limitMessage(limit: number | null): string {
 	return limit == null ? "" : `This account can have ${limit} agents.`;
 }
 
+/** How many creates remain after a delete. A count above the cap is still at the limit. */
+export function deletedNotice(limit: number | null, agents: number): string {
+	const gone = "That agent was deleted. Its inbox, peers, connectors, and wake settings are gone.";
+	if (limit == null) return `${gone} You can create another agent.`;
+	const left = limit - agents;
+	if (left === 1) return `${gone} You can create 1 more agent.`;
+	if (left > 1) return `${gone} You can create ${left} more agents.`;
+	return `${gone} You're at your limit of ${limit} ${limit === 1 ? "agent" : "agents"}.`;
+}
+
 const AVATAR_HOSTS = new Set(["avatars.githubusercontent.com", "lh3.googleusercontent.com"]);
 
 /** HTTPS avatar on a host the page CSP allows, or "". */
@@ -77,7 +87,7 @@ export function renderAccount(input: {
 				<p><button class="action" type="submit">Sign out</button></p>
 			</form>
 			{input.ownerToken ? <TokenBlock token={input.ownerToken} lead="Copy this owner token now. It will not be shown again." /> : ""}
-			{input.deleted ? <p role="status">That agent was deleted. Its inbox, peers, connectors, and wake settings are gone. The slot is free.</p> : ""}
+			{input.deleted ? <p role="status">{deletedNotice(input.agentLimit, input.agents.length)}</p> : ""}
 			{error ? <p class="alert" role="alert">{error}</p> : ""}
 			{atLimit && !error ? <p class="alert" role="alert">{capped}</p> : ""}
 			{input.agents.length ? (

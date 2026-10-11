@@ -181,6 +181,17 @@ test("per-tenant SQLite: directory, config push, and isolation", async (t) => {
 	await kv.put("tenant:bobby", JSON.stringify({ id: "id-bobby", status: "active", region: "", version: 1 }));
 
 	const card = async (name: string, headers?: HeadersInit) => (await mf.dispatchFetch(`https://${name}.example.com/.well-known/agent-card.json`, { headers })).json() as Promise<{ name: string }>;
+	const aliceCard = await mf.dispatchFetch("https://alice.example.com/.well-known/agent-card.json");
+	assert.equal(aliceCard.headers.get("cache-control"), "public, max-age=60");
+	assert.equal((await aliceCard.json() as { name: string }).name, "Alice");
+	const aliceHead = await mf.dispatchFetch("https://alice.example.com/.well-known/agent-card.json", { method: "HEAD" });
+	assert.equal(aliceHead.status, 200);
+	assert.equal(await aliceHead.text(), "");
+	assert.equal(aliceHead.headers.get("content-type"), "application/json");
+	assert.equal(aliceHead.headers.get("cache-control"), "public, max-age=60");
+	const aliceLegacy = await mf.dispatchFetch("https://alice.example.com/.well-known/agent.json", { method: "HEAD" });
+	assert.equal(aliceLegacy.status, 200);
+	assert.equal(await aliceLegacy.text(), "");
 	assert.equal((await card("alice")).name, "Alice");
 	assert.equal((await card("bobby")).name, "Bob");
 	assert.equal((await card("alice", { "x-a2a-tenant": JSON.stringify({ name: "bob", config: { AGENT_NAME: "Bob" } }) })).name, "Alice");

@@ -2462,15 +2462,33 @@ async function handleMcp(req: Request, ctx: TenantContext, ectx: ExecutionContex
 	return rpcError(id, M.ERR.METHOD_NOT_FOUND, `method not found: ${msg.method}`);
 }
 
+/** Hosted cards disappear when the agent is deleted. There is no purge binding, so the public max-age is short. Self-host has no such delete. */
+function cardCacheControl(ctx: TenantContext): string {
+	return ctx.mode === "host" ? "public, max-age=60" : "public, max-age=300";
+}
+
+/** Same status and headers as the GET response, with an empty body. Content-Length is the GET body's size. */
+async function emptyHead(res: Response): Promise<Response> {
+	const headers = new Headers(res.headers);
+	try {
+		if (res.body && !headers.has("content-length")) {
+			const bytes = await res.arrayBuffer();
+			headers.set("content-length", String(bytes.byteLength));
+		} else await res.body?.cancel();
+	} catch { /* the status and headers still answer the HEAD */ }
+	return new Response(null, { status: res.status, headers });
+}
+
 async function handle(req: Request, ctx: TenantContext, ectx: ExecutionContext): Promise<Response> {
+	if (req.method === "HEAD") return emptyHead(await handle(new Request(req.url, { method: "GET", headers: req.headers }), ctx, ectx));
 	const url = new URL(req.url);
 	const path = url.pathname;
 	try {
 		if (req.method === "GET" && path === "/.well-known/agent-card.json")
-			return json(await agentCard(ctx), 200, { "access-control-allow-origin": "*", "cache-control": "public, max-age=300" });
+			return json(await agentCard(ctx), 200, { "access-control-allow-origin": "*", "cache-control": cardCacheControl(ctx) });
 		// legacy discovery path (A2A 0.2): the 0.3-shaped card that clients of that era parse
 		if (req.method === "GET" && path === "/.well-known/agent.json")
-			return json(agentCard03(ctx, await agentCard(ctx)), 200, { "access-control-allow-origin": "*", "cache-control": "public, max-age=300" });
+			return json(agentCard03(ctx, await agentCard(ctx)), 200, { "access-control-allow-origin": "*", "cache-control": cardCacheControl(ctx) });
 		if (req.method === "GET" && path === "/health") return json({ ok: true, publicUrl: ctx.PUBLIC_URL, mode: proxyMode(ctx) ? "proxy" : "inbox", mcp: mcpOn(ctx) });
 		if (path === "/mcp") return mcpOn(ctx) ? await handleMcp(req, ctx, ectx, url) : json({ error: "not_found", error_description: "the MCP server is turned off on this inbox (MCP=off)" }, 404);
 		if (mcpOn(ctx)) {
