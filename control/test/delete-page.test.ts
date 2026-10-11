@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApp } from "../src/app.ts";
+import { renderAccount } from "../src/views/account.tsx";
 import { createTenant } from "../src/tenants/create.ts";
 import { deleteTenant } from "../src/tenants/delete.ts";
 import { dataPlaneFromEnv, deliverOutbox, type DataPlane, type OutboxRow, type TenantPush } from "../src/tenants/push.ts";
@@ -125,6 +126,8 @@ test("the agent page deletes an agent after the name is typed", async () => {
 		assert.match(lines.find((line) => line.includes("agent_deleted")) ?? "", /"event":"dashboard_decision"/);
 		const home = await (await app.request(`${origin}/app?deleted=1`, { headers: { cookie } })).text();
 		assert.match(home, /That agent was deleted/);
+		assert.match(home, /You can create 1 more agent/);
+		assert.equal(home.includes("The slot is free"), false);
 		assert.equal(home.includes("northwind"), false);
 
 		const again = await app.request(`${origin}/app/agents/northwind`, { method: "POST", headers, body: "action=delete-agent&agent-name=northwind" });
@@ -138,6 +141,41 @@ test("the agent page deletes an agent after the name is typed", async () => {
 	} finally {
 		console.log = original;
 	}
+});
+
+test("the deleted notice counts the slots that remain", () => {
+	const agent = (name: string) => ({ name, publicUrl: null, createdAt: "2026-01-02T00:00:00.000Z" });
+	const page = (limit: number | null, names: string[]) => renderAccount({
+		name: "A", email: "a@example.com", canCreate: true, deleted: true, agentLimit: limit, agents: names.map(agent),
+	});
+	assert.match(page(2, []), /You can create 2 more agents/);
+	assert.match(page(2, ["eastwind"]), /You can create 1 more agent\./);
+	assert.match(page(2, ["eastwind", "westwind"]), /at your limit of 2 agents/);
+	assert.match(page(1, ["eastwind", "westwind"]), /at your limit of 1 agent/);
+	assert.match(page(null, []), /You can create another agent/);
+	assert.equal(page(2, []).includes("The slot is free"), false);
+});
+
+test("a delete while the account is over its cap does not say a slot is free", async () => {
+	const db = openDb();
+	const sent: { text: string }[] = [];
+	const target = plane();
+	const app = createApp(
+		{ AUTH_SECRET: secret, DB: db, TENANT_DOMAIN: "example.com", FREE_AGENT_LIMIT: "2" },
+		{ database: db, mailer: { async send(message) { sent.push({ text: message.text }); } }, dataPlane: target.data },
+	);
+	const cookie = await signIn(app, sent);
+	const headers = { cookie, origin, "sec-fetch-site": "same-origin", "content-type": "application/x-www-form-urlencoded" };
+	assert.equal((await app.request(`${origin}/api/v1/tenants`, { method: "POST", headers, body: "name=northwind" })).status, 303);
+	assert.equal((await app.request(`${origin}/api/v1/tenants`, { method: "POST", headers, body: "name=eastwind" })).status, 303);
+	await db.prepare('UPDATE "user" SET agent_limit = 1').run();
+	const removed = await app.request(`${origin}/app/agents/northwind`, { method: "POST", headers, body: "action=delete-agent&agent-name=northwind" });
+	assert.match(removed.headers.get("location") ?? "", /\/app\?deleted=1$/);
+	const home = await (await app.request(`${origin}/app?deleted=1`, { headers: { cookie } })).text();
+	assert.match(home, /at your limit of 1 agent/);
+	assert.match(home, /eastwind/);
+	assert.equal(home.includes("The slot is free"), false);
+	assert.equal(home.includes("You can create 1 more agent"), false);
 });
 
 test("a failed delete leaves the agent and a retry finishes it", async () => {

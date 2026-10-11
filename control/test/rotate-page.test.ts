@@ -133,6 +133,9 @@ test("the agent page rotates the owner token once after confirmation", async () 
 		assert.equal(html.includes(`${token}\n`), false);
 		assert.equal(html.includes(`\n${token}`), false);
 		assert.match(html, /src="\/owner-token\.js"/);
+		assert.match(html, /class="action copy-token"/);
+		assert.match(html, /type="button"/);
+		assert.match(html, /hidden=""/);
 		assert.match(shown.headers.get("content-security-policy") ?? "", /script-src 'self'/);
 		assert.match(shown.headers.get("cache-control") ?? "", /no-store/);
 		assert.match(shown.headers.get("set-cookie") ?? "", new RegExp(`${OWNER_COOKIE}=`));

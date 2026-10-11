@@ -62,6 +62,65 @@ function setup(over: Record<string, string> = {}) {
 	return { env, DB, wakes, call, owner, start, poll, decidePage, restore: () => { globalThis.fetch = origFetch; } };
 }
 
+test("HEAD answers like GET with an empty body, and a self-hosted card stays cached for 5 minutes", async (t) => {
+	const s = setup();
+	t.after(s.restore);
+	const get = await s.call("GET", "/.well-known/agent-card.json");
+	assert.equal(get.status, 200);
+	assert.equal(get.headers.get("cache-control"), "public, max-age=300");
+	const head = await s.call("HEAD", "/.well-known/agent-card.json");
+	assert.equal(head.status, 200);
+	assert.equal(head.text, "");
+	assert.equal(head.headers.get("cache-control"), "public, max-age=300");
+	assert.match(head.headers.get("content-type") ?? "", /^application\/json/);
+	const legacy = await s.call("HEAD", "/.well-known/agent.json");
+	assert.equal(legacy.status, 200);
+	assert.equal(legacy.text, "");
+	assert.equal(legacy.headers.get("cache-control"), "public, max-age=300");
+	const health = await s.call("HEAD", "/health");
+	assert.equal(health.status, 200);
+	assert.equal(health.text, "");
+	assert.match(health.headers.get("content-type") ?? "", /^application\/json/);
+	const missing = await s.call("HEAD", "/no-such-route");
+	assert.equal(missing.status, 404);
+	assert.equal(missing.text, "");
+	const owner = await s.call("HEAD", "/owner/peers");
+	assert.equal(owner.status, 401);
+	assert.equal(owner.text, "");
+});
+
+test("HEAD does not spend setup or pairing lookup limits", async (t) => {
+	const s = setup();
+	t.after(s.restore);
+	const link = (await s.owner("POST", "/owner/pairing/password-link", {})).data;
+	const path = new URL(link.url).pathname + new URL(link.url).search;
+	const ip = "192.0.2.20";
+	for (let i = 0; i < P.LIMITS.setupPerIp; i++) {
+		const h = await s.call("HEAD", path, { ip });
+		assert.equal(h.status, 200, h.text);
+		assert.equal(h.text, "");
+	}
+	assert.equal(s.DB.db.prepare("SELECT COUNT(*) AS n FROM pairing_rate WHERE key = ?").get(`setup:ip:${ip}`)!.n, 0);
+	for (let i = 0; i < P.LIMITS.setupPerIp; i++) assert.equal((await s.call("GET", path, { ip })).status, 200);
+	const blocked = await s.call("HEAD", path, { ip });
+	assert.equal(blocked.status, 429);
+	assert.equal(blocked.text, "");
+	assert.equal((s.DB.db.prepare("SELECT count FROM pairing_rate WHERE key = ?").get(`setup:ip:${ip}`) as { count: number }).count, P.LIMITS.setupPerIp);
+	assert.equal((await s.call("GET", path, { ip })).status, 429);
+
+	const d = await s.start(undefined, "192.0.2.21");
+	const look = `/device?user_code=${d.data.user_code}`;
+	for (let i = 0; i < P.LIMITS.lookupsPerIp; i++) {
+		const h = await s.call("HEAD", look, { ip: "192.0.2.21" });
+		assert.equal(h.status, 200);
+		assert.equal(h.text, "");
+	}
+	const page = await s.call("GET", look, { ip: "192.0.2.21" });
+	assert.equal(page.status, 200);
+	assert.match(page.text, /Barry Bot/);
+	assert.equal(page.text.includes("Too many code lookups"), false);
+});
+
 test("pairing helpers: user codes, labels, requester text, params, password hashing", async () => {
 	for (let i = 0; i < 200; i++) assert.match(P.newUserCode(), /^[BCDFGHJKLMNPQRSTVWXZ]{4}[2-9]{4}$/);
 	assert.equal(P.formatUserCode("WDJB4827"), "WDJB-4827");
@@ -753,4 +812,10 @@ test("owner log lists history without data_json and does not clear a pending wak
 	const inbox = await s.owner("GET", "/owner/inbox");
 	assert.equal(inbox.status, 200);
 	assert.equal(s.DB.db.prepare("SELECT pending_json FROM wakes WHERE context_id = ?").get("ctx-keep")?.pending_json, null);
+	const again = JSON.stringify({ taskIds: [taskId] });
+	s.DB.db.prepare("UPDATE wakes SET pending_json = ?, pending_since_ms = ? WHERE context_id = ?").run(again, Date.now(), "ctx-keep");
+	const head = await s.owner("HEAD", "/owner/inbox");
+	assert.equal(head.status, 200);
+	assert.equal(head.text, "");
+	assert.equal(s.DB.db.prepare("SELECT pending_json FROM wakes WHERE context_id = ?").get("ctx-keep")?.pending_json, again);
 });

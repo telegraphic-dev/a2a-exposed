@@ -5,6 +5,35 @@ function tokenValue(root) {
 	return node.value.replace(/^\s+|\s+$/g, "");
 }
 
+function bindToken(root) {
+	var button = root.querySelector(".copy-token");
+	if (!button) return;
+	button.hidden = false;
+	button.addEventListener("click", function () {
+		var text = tokenValue(root);
+		var field = root.querySelector(".token-value");
+		if (!text) return;
+		var mark = function () { button.textContent = "Copied"; };
+		var select = function () {
+			if (!field || !field.focus || !field.select) return;
+			field.focus();
+			field.select();
+		};
+		var fallback = function () {
+			select();
+			try { if (document.execCommand("copy")) mark(); } catch (e) { /* the field stays selected */ }
+		};
+		if (navigator.clipboard && navigator.clipboard.writeText) {
+			navigator.clipboard.writeText(text).then(mark, fallback);
+			return;
+		}
+		fallback();
+	});
+}
+
+var tokens = document.querySelectorAll(".token");
+for (var i = 0; i < tokens.length; i++) bindToken(tokens[i]);
+
 document.addEventListener("copy", function (event) {
 	var root = document.querySelector(".token");
 	if (!root || !event.clipboardData) return;

@@ -86,8 +86,11 @@ button.provider-email:hover:not(:disabled):not([aria-disabled="true"]) { backgro
 .wake input, .wake select { display: block; width: 100%; margin-top: 0.25rem; font: inherit; }
 .wake .preview { white-space: pre-wrap; }
 .token { margin: 1rem 0; }
+.token .token-actions { display: flex; gap: 0.75rem; align-items: center; }
 .token .token-value {
 	display: block;
+	flex: 1;
+	min-width: 0;
 	width: 100%;
 	margin: 0;
 	padding: 0;
@@ -96,6 +99,7 @@ button.provider-email:hover:not(:disabled):not([aria-disabled="true"]) { backgro
 	font: inherit;
 	color: inherit;
 }
+.token .copy-token { flex: none; }
 button.action {
 	appearance: none;
 	background: var(--accent);

@@ -100,6 +100,9 @@ test("a signed-in account sees itself, can sign out, and creates two agents", as
 	assert.match(once, /https:\/\/northwind\.example\.com/);
 	assert.match(once, /\d{4}-\d{2}-\d{2}/);
 	assert.match(once, /src="\/owner-token\.js"/);
+	assert.match(once, /class="action copy-token"/);
+	assert.match(once, /type="button"/);
+	assert.match(once, /hidden=""/);
 	assert.equal(shown.headers.get("cache-control"), "no-store");
 	assert.match(shown.headers.get("content-security-policy") ?? "", /script-src 'self'/);
 	assert.match(shown.headers.get("set-cookie") ?? "", new RegExp(`${OWNER_COOKIE}=`));

@@ -8,7 +8,10 @@ export function TokenBlock(props: { token: string; lead: string }) {
 	return (
 		<div class="token" role="status">
 			<p>{props.lead}</p>
-			<input class="token-value" type="text" readonly value={value} autocomplete="off" aria-label="Owner token" />
+			<p class="token-actions">
+				<input class="token-value" type="text" readonly value={value} autocomplete="off" aria-label="Owner token" />
+				<button class="action copy-token" type="button" hidden>Copy</button>
+			</p>
 			<script src="/owner-token.js"></script>
 		</div>
 	);

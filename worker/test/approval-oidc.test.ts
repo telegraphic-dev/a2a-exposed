@@ -369,6 +369,37 @@ test("email allowlist matches and a hosted tenant uses its own approval, not the
 	assert.equal(s.tokenBodies.at(-1)!.client_secret, "tenant-secret");
 });
 
+test("HEAD on an OpenID Connect callback leaves the sign-in unused", async (t) => {
+	const s = setup(oidcEnv); t.after(s.restore);
+	const d = await s.start();
+	const { post } = await s.postOidc(d.data.user_code);
+	assert.equal(post.status, 302, post.text);
+	const loc = new URL(post.headers.get("location")!);
+	const state = loc.searchParams.get("state")!;
+	s.setClaims(() => claims({ nonce: loc.searchParams.get("nonce")! }));
+	const head = await s.call("HEAD", `/device/oidc/callback?code=auth-code&state=${state}`);
+	assert.equal(head.status, 200);
+	assert.equal(head.text, "");
+	assert.match(head.headers.get("content-type") || "", /^text\/html/);
+	assert.equal(s.tokenBodies.length, 0);
+	assert.equal(s.DB.db.prepare("SELECT COUNT(*) AS n FROM oidc_txns WHERE state = ?").get(state)!.n, 1);
+	const back = await s.call("GET", `/device/oidc/callback?code=auth-code&state=${state}`);
+	assert.equal(back.status, 200, back.text);
+	assert.match(back.text, /Approved/);
+	assert.equal(s.tokenBodies.length, 1);
+
+	const again = await s.start();
+	const started = await s.postOidc(again.data.user_code);
+	const state2 = new URL(started.post.headers.get("location")!).searchParams.get("state")!;
+	const denied = await s.call("HEAD", `/device/oidc/callback?error=access_denied&state=${state2}`);
+	assert.equal(denied.status, 400);
+	assert.equal(denied.text, "");
+	assert.equal(s.DB.db.prepare("SELECT COUNT(*) AS n FROM oidc_txns WHERE state = ?").get(state2)!.n, 1);
+	const still = await s.call("GET", `/device/oidc/callback?error=access_denied&state=${state2}`);
+	assert.equal(still.status, 400);
+	assert.equal(s.DB.db.prepare("SELECT COUNT(*) AS n FROM oidc_txns WHERE state = ?").get(state2)!.n, 0);
+});
+
 test("MCP consent offers Continue with the issuer and the callback issues the authorization code", async (t) => {
 	const s = setup(oidcEnv); t.after(s.restore);
 	const reg = await s.call("POST", "/oauth/register", { json: { client_name: "Claude", redirect_uris: ["https://claude.ai/api/mcp/auth_callback"] } });
@@ -386,7 +417,15 @@ test("MCP consent offers Continue with the issuer and the callback issues the au
 	const loc = new URL(post.headers.get("location")!);
 	assert.equal(loc.search.includes("st-1"), false, "the MCP state is not the identity provider's state");
 	s.setClaims(() => claims({ nonce: loc.searchParams.get("nonce")! }));
-	const back = await s.call("GET", `/oauth/authorize/oidc/callback?code=auth-code&state=${loc.searchParams.get("state")}`);
+	const state = loc.searchParams.get("state")!;
+	const head = await s.call("HEAD", `/oauth/authorize/oidc/callback?code=auth-code&state=${state}`);
+	assert.equal(head.status, 400);
+	assert.equal(head.text, "");
+	assert.equal(head.headers.get("location"), null);
+	assert.equal(s.tokenBodies.length, 0);
+	assert.equal(s.DB.db.prepare("SELECT COUNT(*) AS n FROM oidc_txns WHERE state = ?").get(state)!.n, 1);
+	assert.equal(s.DB.db.prepare("SELECT COUNT(*) AS n FROM oauth_codes").get()!.n, 0);
+	const back = await s.call("GET", `/oauth/authorize/oidc/callback?code=auth-code&state=${state}`);
 	assert.equal(back.status, 302, back.text);
 	const callbackError = await s.call("GET", "/oauth/authorize/oidc/callback?error=access_denied");
 	assert.equal(callbackError.status, 400);
