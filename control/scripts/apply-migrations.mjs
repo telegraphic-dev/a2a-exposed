@@ -11,12 +11,17 @@ function value(env, key) {
 	return (env[key] ?? "").trim();
 }
 
-/** Which D1 database this deploy should migrate. No id and no name means login is off. */
+/**
+ * The database argument for `cf d1 migrations apply`. An id is passed through.
+ * A name-only binding is passed through as the name. `cf d1 list` is not used:
+ * its stdout is not guaranteed JSON.
+ * No id and no name means login is off.
+ */
 export function migrationDatabase(env) {
 	const id = value(env, "CONTROL_D1_ID");
 	const name = value(env, "CONTROL_D1_NAME");
-	if (id) return { id };
-	if (name) return { name };
+	if (id) return { database: id };
+	if (name) return { database: name };
 	return { skip: true };
 }
 
@@ -26,37 +31,14 @@ function runCf(args, env) {
 	return { status: result.status ?? 1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
 }
 
-/** Resolve a name-only binding to the database id `cf d1 migrations apply` requires. */
-export function resolveDatabaseId(target, env, run = runCf) {
-	if (target.skip) return { skip: true };
-	if (target.id) return { id: target.id };
-	const listed = run(["d1", "list"], env);
-	if (listed.status !== 0) return { error: "could not list D1 databases" };
-	let rows;
-	try {
-		rows = JSON.parse(listed.stdout);
-	} catch {
-		return { error: "could not read the D1 list" };
-	}
-	if (!Array.isArray(rows)) return { error: "could not read the D1 list" };
-	const found = rows.find((row) => row && row.name === target.name && typeof row.uuid === "string" && row.uuid);
-	if (!found) return { error: "the control D1 database was not found" };
-	return { id: found.uuid };
-}
-
 function main() {
 	const target = migrationDatabase(process.env);
 	if (target.skip) {
 		console.error("D1 is unset; skipping control migrations");
 		return 0;
 	}
-	const resolved = resolveDatabaseId(target, process.env);
-	if (!resolved.id) {
-		console.error(resolved.error || "the control D1 database was not found");
-		return 1;
-	}
 	console.error("applying control D1 migrations");
-	const applied = runCf(["d1", "migrations", "apply", resolved.id, "--dir", "migrations"], process.env);
+	const applied = runCf(["d1", "migrations", "apply", target.database, "--dir", "migrations"], process.env);
 	if (applied.stdout) process.stdout.write(applied.stdout);
 	if (applied.stderr) process.stderr.write(applied.stderr);
 	return applied.status === 0 ? 0 : (applied.status || 1);
