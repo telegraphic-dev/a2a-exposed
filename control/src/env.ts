@@ -27,6 +27,8 @@ export interface ControlEnv extends PlaneEnv {
 	TURNSTILE_SECRET_KEY?: string;
 	/** `1` requires an invite code before the first account is created. */
 	INVITES_REQUIRED?: string;
+	/** Comma-separated exact emails and `*@domain` wildcards. Unset or empty: sign-in is open. */
+	SIGNUP_ALLOWLIST?: string;
 	/** Default agents per account. Unset or empty: no cap, unless that account sets agent_limit. An explicit non-negative integer sets the cap. */
 	FREE_AGENT_LIMIT?: string;
 }

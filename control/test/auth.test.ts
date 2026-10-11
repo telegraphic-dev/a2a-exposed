@@ -75,7 +75,7 @@ test("magic link sets the host session cookie and an invite is required only the
 		body: "provider=email&email=person@example.com",
 	});
 	assert.equal(missing.status, 303);
-	assert.match(missing.headers.get("location") ?? "", /error=invite/);
+	assert.match(missing.headers.get("location") ?? "", /error=INVITE_REQUIRED/);
 
 	const code = await insertInvite(db);
 	const posted = await app.request("https://control.example.com/app/sign-in", {

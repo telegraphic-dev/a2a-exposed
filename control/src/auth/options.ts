@@ -1,3 +1,4 @@
+import { signupAllowlist, type SignupAllowlist } from "./allowlist.ts";
 import type { Sql } from "./invites.ts";
 import type { Mailer } from "../mail/types.ts";
 import { authBaseURL } from "./origin.ts";
@@ -25,6 +26,8 @@ export interface AuthOptions {
 	emailBinding?: { send(message: unknown): Promise<void> };
 	turnstile?: TurnstileConfig;
 	invitesRequired: boolean;
+	/** Null when unset: sign-in is open. A list admits only those verified emails. */
+	signupAllowlist: SignupAllowlist | null;
 }
 
 export interface AuthDeps {
@@ -46,6 +49,8 @@ export interface AuthEnv {
 	TURNSTILE_SITE_KEY?: string;
 	TURNSTILE_SECRET_KEY?: string;
 	INVITES_REQUIRED?: string;
+	/** Comma-separated exact emails and `*@domain` wildcards. Unset or empty: open. */
+	SIGNUP_ALLOWLIST?: string;
 	SITE_URL?: string;
 	ISSUER?: string;
 }
@@ -114,5 +119,6 @@ export function resolveAuth(env: AuthEnv, request: Request, deps: AuthDeps = {})
 		emailBinding: !deps.mailer && env.EMAIL && mailFrom ? env.EMAIL : undefined,
 		turnstile: turnstileSite && turnstileSecret ? { siteKey: turnstileSite, secret: turnstileSecret } : undefined,
 		invitesRequired: env.INVITES_REQUIRED?.trim() === "1",
+		signupAllowlist: signupAllowlist(env.SIGNUP_ALLOWLIST),
 	};
 }

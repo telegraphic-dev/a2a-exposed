@@ -1,3 +1,4 @@
+import { emailAllowed, emailIsVerified, signupClosedText } from "./allowlist.ts";
 import type { Auth } from "./create-auth.ts";
 import { hostCookie, readCookie } from "./cookies.ts";
 import type { AuthOptions } from "./options.ts";
@@ -72,6 +73,8 @@ export async function handleDevice(request: Request, auth: Auth, options: AuthOp
 			].filter(Boolean),
 			magicLink: Boolean(options.mailer || options.emailBinding),
 			invitesRequired: options.invitesRequired,
+			signupClosed: options.signupAllowlist !== null,
+			closedMessage: signupClosedText(env),
 			turnstileSiteKey: options.turnstile?.siteKey,
 			error: error || undefined,
 		});
@@ -95,6 +98,9 @@ export async function handleDevice(request: Request, auth: Auth, options: AuthOp
 	}
 	if (!signedIn) {
 		return { kind: "redirect", location: page(request, { user_code: code, error: "auth" }), cookie: hostCookie(DEVICE_COOKIE, code, 60 * 10) };
+	}
+	if (action === "approve" && !emailAllowed(options.signupAllowlist, session?.user?.email ?? "", emailIsVerified(session?.user?.emailVerified))) {
+		return { kind: "redirect", location: new URL("/app?error=invite", request.url).href };
 	}
 	const typed = userCode(String(form.get("confirm") ?? ""));
 	if (action === "approve" && typed !== code) {

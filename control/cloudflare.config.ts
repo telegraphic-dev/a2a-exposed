@@ -27,6 +27,7 @@ const plain: Record<string, string> = {
 	MAIL_FROM: v("MAIL_FROM"),
 	TURNSTILE_SITE_KEY: v("TURNSTILE_SITE_KEY"),
 	INVITES_REQUIRED: v("INVITES_REQUIRED") === "1" ? "1" : "",
+	SIGNUP_ALLOWLIST: v("SIGNUP_ALLOWLIST"),
 	FREE_AGENT_LIMIT: /^\d+$/.test(v("FREE_AGENT_LIMIT")) ? v("FREE_AGENT_LIMIT") : "",
 };
 
@@ -44,6 +45,7 @@ const DEV_SECRETS = [
 	"TURNSTILE_SECRET_KEY",
 	"MAIL_FROM",
 	"INVITES_REQUIRED",
+	"SIGNUP_ALLOWLIST",
 ];
 
 const envBindings: Record<string, any> = {

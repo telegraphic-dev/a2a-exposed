@@ -1,3 +1,5 @@
+import { SIGNUP_CLOSED } from "../auth/allowlist.ts";
+
 const ERRORS: Record<string, string> = {
 	invalid_name: "Use 4–32 letters, numbers, or hyphens.",
 	reserved_name: "That name is reserved.",
@@ -53,10 +55,13 @@ export function renderAccount(input: {
 	error?: string;
 	canCreate: boolean;
 	agentLimit: number | null;
+	signupClosed?: boolean;
+	closedMessage?: string;
 }): string {
 	const image = avatarUrl(input.image);
 	const capped = limitMessage(input.agentLimit);
-	const error = input.error === "limit" ? capped : input.error ? ERRORS[input.error] ?? "" : "";
+	const closed = input.signupClosed && input.error === "invite" ? (input.closedMessage?.trim() || SIGNUP_CLOSED) : "";
+	const error = input.error === "limit" ? capped : closed || (input.error ? ERRORS[input.error] ?? "" : "");
 	const atLimit = input.agentLimit != null && input.agents.length >= input.agentLimit;
 	return (
 		<div>

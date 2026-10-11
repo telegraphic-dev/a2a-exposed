@@ -3,6 +3,7 @@ import { CALLBACK_DEADLINE_MS, within } from "./auth/deadline.ts";
 import { connectingIp, verifyTurnstile } from "./auth/turnstile.ts";
 import { enabledProviderOrigins, handleSignIn } from "./auth/sign-in.ts";
 import { loadAuth } from "./auth/instance.ts";
+import { signupClosedText, type SignupAllowlist } from "./auth/allowlist.ts";
 import { authBlockers, resolveAuth, type AuthDeps, type AuthOptions } from "./auth/options.ts";
 import { OIDC_COOKIE, authorize, discoveryDocument, exchangeCode, issuerOrigin, readTokenForm, resumeQuery } from "./oidc/issuer.ts";
 import { OWNER_COOKIE, hostCookie, readCookie } from "./auth/cookies.ts";
@@ -20,6 +21,25 @@ import { renderSignIn } from "./views/sign-in.tsx";
  * sibling host could post it with the SameSite=Lax session cookie and no preflight. A browser Origin
  * or Sec-Fetch-Site from anywhere but this host is rejected. A non-browser client sends neither header.
  */
+/** A 403 from the allowlist is a browser page, except the CLI device-token poll. */
+async function closedSignup(request: Request, response: Response, list: SignupAllowlist | null): Promise<Response> {
+	if (!list || response.status !== 403) return response;
+	if (new URL(request.url).pathname.endsWith("/device/token")) return response;
+	const type = response.headers.get("content-type") ?? "";
+	if (!type.includes("json")) return response;
+	let code = "";
+	try {
+		const body = await response.clone().json() as { code?: unknown };
+		if (typeof body?.code === "string") code = body.code;
+	} catch {
+		return response;
+	}
+	if (code !== "invite") return response;
+	const url = new URL("/app", request.url);
+	url.searchParams.set("error", "invite");
+	return new Response(null, { status: 302, headers: { location: url.href, "cache-control": "no-store" } });
+}
+
 function allowsTenantWrite(request: Request): boolean {
 	const media = (request.headers.get("content-type") ?? "").split(";")[0]?.trim().toLowerCase();
 	if (media !== "application/json") return false;
@@ -253,15 +273,16 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 			request = new Request(request, { headers });
 		}
 		const handle = () => loaded.auth.handler(request);
+		const list = loaded.options.signupAllowlist;
 		// A missing OAuth state redirects immediately. This bound is for the token
 		// exchange, which does not time out on its own. A redirect does not call
 		// onAPIError.onError, so the code on that Location is logged here.
-		if (!new URL(request.url).pathname.startsWith("/api/auth/callback/")) return handle();
+		if (!new URL(request.url).pathname.startsWith("/api/auth/callback/")) return closedSignup(request, await handle(), list);
 		const deadline = deps.callbackDeadlineMs ?? CALLBACK_DEADLINE_MS;
 		const response = await within(deadline, handle, () => callbackGaveUp(request));
 		const code = callbackError(request, response);
 		if (code && code !== "deadline") logCallbackFailure(request, code);
-		return response;
+		return closedSignup(request, response, list);
 	});
 
 	app.get("/api/v1/tenants", (c) => tenants(c, "GET"));
@@ -371,6 +392,8 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 				error: url.searchParams.get("error") ?? undefined,
 				canCreate: Boolean(plane),
 				agentLimit,
+				signupClosed: loaded.options.signupAllowlist !== null,
+				closedMessage: signupClosedText(env),
 			});
 			return {
 				html: renderApp(env, body, "Your agents"),
@@ -391,6 +414,8 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 				].filter(Boolean),
 				magicLink: Boolean(loaded.options.mailer || loaded.options.emailBinding),
 				invitesRequired: loaded.options.invitesRequired,
+				signupClosed: loaded.options.signupAllowlist !== null,
+				closedMessage: signupClosedText(env),
 				turnstileSiteKey: loaded.options.turnstile?.siteKey,
 				error: url.searchParams.get("error") ?? undefined,
 				sent: url.searchParams.get("sent") === "1",
