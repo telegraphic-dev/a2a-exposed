@@ -1418,7 +1418,7 @@ async function devicePage(req: Request, ctx: TenantContext, url: URL): Promise<R
 		if (!started.ok) {
 			log("oidc_rejected", { kind: "device", reason: started.reason });
 			await show(form.user_code, { kind: "error", text: started.error });
-			return send(started.reason === "config" ? 400 : 502);
+			return send(started.reason === "config" || started.reason === "endpoint_origin" ? 400 : 502);
 		}
 		log("oidc_start", { kind: "device", issuer: O.issuerHost(ctx.gates.approvalOidc.issuer) });
 		return redirect302(started.location);
@@ -1934,7 +1934,7 @@ async function authorizePage(req: Request, ctx: TenantContext, url: URL): Promis
 		});
 		if (!started.ok) {
 			log("oidc_rejected", { kind: "mcp", reason: started.reason });
-			return show(started.reason === "config" ? 400 : 502, { kind: "error", text: started.error });
+			return show(started.reason === "config" || started.reason === "endpoint_origin" ? 400 : 502, { kind: "error", text: started.error });
 		}
 		log("oidc_start", { kind: "mcp", issuer: O.issuerHost(ctx.gates.approvalOidc.issuer) });
 		return redirect302(started.location);

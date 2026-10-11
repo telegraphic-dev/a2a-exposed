@@ -197,6 +197,29 @@ test("form-action lists only the OpenID Connect issuer origin, and only when tha
 	assert.equal(formAction(g2.headers), "'self'");
 });
 
+test("an authorization endpoint on another origin is not started", async (t) => {
+	const s = setup(oidcEnv); t.after(s.restore);
+	const inner = globalThis.fetch;
+	globalThis.fetch = (async (url: any, init: any) => {
+		const u = new URL(String(url));
+		if (u.origin === ISSUER && u.pathname === "/.well-known/openid-configuration") {
+			return Response.json({
+				issuer: ISSUER, authorization_endpoint: "https://login.example/authorize",
+				token_endpoint: `${ISSUER}/token`, jwks_uri: `${ISSUER}/jwks`,
+			});
+		}
+		return inner(url, init);
+	}) as typeof fetch;
+	const d = await s.start();
+	const { post } = await s.postOidc(d.data.user_code as string);
+	assert.equal(post.status, 400, post.text);
+	assert.match(post.text, /not on the issuer origin/);
+	assert.equal(post.headers.get("location"), null);
+	const tok = await s.call("POST", "/oauth/token", { form: { grant_type: GRANT, device_code: d.data.device_code } });
+	assert.equal(tok.data.error, "authorization_pending");
+	assert.equal(s.logs.join("\n").includes("login.example"), false);
+});
+
 test("wrong sub, wrong nonce and expired exp do not approve", async (t) => {
 	const s = setup(oidcEnv); t.after(s.restore);
 	const bad = async (over: Record<string, unknown>) => {
