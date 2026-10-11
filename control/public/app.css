@@ -67,6 +67,21 @@ button.provider-cloudflare { background: #f38020; color: #fff; border-color: #f3
 button.provider-cloudflare:hover:not(:disabled):not([aria-disabled="true"]) { background: #e06f12; }
 button.provider-email { background: #fff; color: var(--text); border-color: var(--line); }
 button.provider-email:hover:not(:disabled):not([aria-disabled="true"]) { background: #fff; }
+.who { display: flex; gap: 0.75rem; align-items: center; }
+.avatar { width: 2.5rem; height: 2.5rem; border-radius: 999px; }
+.agents { list-style: none; margin: 1rem 0; padding: 0; }
+.agents li { display: flex; justify-content: space-between; gap: 1rem; padding: 0.6rem 0; border-top: 1px solid var(--line); }
+.token { margin: 1rem 0; }
+button.action {
+	appearance: none;
+	background: var(--accent);
+	color: #fff;
+	border: 0;
+	border-radius: 4px;
+	padding: 0.5rem 0.9rem;
+	font: inherit;
+	cursor: pointer;
+}
 button[name="provider"]:disabled,
 button[name="provider"]:disabled:hover,
 button[name="provider"][aria-disabled="true"],

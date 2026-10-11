@@ -175,6 +175,8 @@ Control plane account (only when that deployment's login is on)
                                 browser can follow the redirect. Buttons say Continue with that
                                 provider. Until the check finishes they stay muted and the page says
                                 Waiting for the check…. A reused token says The check expired. Please try again.
+                                After sign-in, /app shows the account and its agents. Sign out is on that
+                                page. Creating an agent shows the owner token once. An account can have 2 agents.
                                 The control Worker logs social_sign_in_failed before the
                                 provider page, social_sign_in_timeout when that sign-in does not
                                 return, and oauth_callback_failed when the provider sends the browser

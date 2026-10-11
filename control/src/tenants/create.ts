@@ -14,9 +14,12 @@ export interface CreatedTenant {
 	pushed: boolean;
 }
 
+/** Free plan. Enforced on every create, including the signed-in form. */
+export const AGENT_LIMIT = 2;
+
 export type CreateResult =
 	| { ok: true; tenant: CreatedTenant }
-	| { ok: false; error: "invalid_name" | "reserved_name" | "taken" };
+	| { ok: false; error: "invalid_name" | "reserved_name" | "taken" | "limit" };
 
 function regionOf(dataRegion: string | undefined): string {
 	const value = (dataRegion || "").trim().toLowerCase();
@@ -44,6 +47,8 @@ export async function createTenant(
 	const name = input.name.trim().toLowerCase();
 	const problem = tenantNameProblem(name);
 	if (problem) return { ok: false, error: problem === "reserved_name" ? "reserved_name" : "invalid_name" };
+	const counted = await db.prepare("SELECT COUNT(*) AS n FROM tenants WHERE owner_account_id = ?").bind(input.accountId).first<{ n: number }>();
+	if ((counted?.n ?? 0) >= AGENT_LIMIT) return { ok: false, error: "limit" };
 	const existing = await db.prepare("SELECT id FROM tenants WHERE name = ?").bind(name).first<{ id: string }>();
 	if (existing) return { ok: false, error: "taken" };
 
@@ -95,16 +100,17 @@ export async function createTenant(
 	};
 }
 
-export async function listTenants(db: Sql, accountId: string, domain?: string): Promise<{ id: string; name: string; status: string; publicUrl: string | null; version: number }[]> {
+export async function listTenants(db: Sql, accountId: string, domain?: string): Promise<{ id: string; name: string; status: string; publicUrl: string | null; version: number; createdAt: string }[]> {
 	const listed = await db.prepare(
-		"SELECT id, name, status, config_version FROM tenants WHERE owner_account_id = ? ORDER BY created_at",
-	).bind(accountId).all<{ id: string; name: string; status: string; config_version: number }>();
+		"SELECT id, name, status, config_version, created_at FROM tenants WHERE owner_account_id = ? ORDER BY created_at",
+	).bind(accountId).all<{ id: string; name: string; status: string; config_version: number; created_at: string }>();
 	const host = (domain || "").trim().toLowerCase().replace(/^\.+|\.+$/g, "");
 	return listed.results.map((row) => ({
 		id: row.id,
 		name: row.name,
 		status: row.status,
 		version: row.config_version,
+		createdAt: row.created_at,
 		publicUrl: host ? `https://${row.name}.${host}` : null,
 	}));
 }

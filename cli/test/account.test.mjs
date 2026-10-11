@@ -89,6 +89,8 @@ test("login help names the callback error", async () => {
 	assert.match(stdout, /Continue with/);
 	assert.match(stdout, /Waiting for the check/);
 	assert.match(stdout, /The check expired\. Please try again/);
+	assert.match(stdout, /owner token once/);
+	assert.match(stdout, /2 agents/);
 });
 
 test("login refuses a control URL that is not https", async () => {

@@ -5,11 +5,13 @@ import { enabledProviderOrigins, handleSignIn } from "./auth/sign-in.ts";
 import { loadAuth } from "./auth/instance.ts";
 import { authBlockers, type AuthDeps, type AuthOptions } from "./auth/options.ts";
 import { OIDC_COOKIE, authorize, discoveryDocument, exchangeCode, issuerOrigin, readTokenForm, resumeQuery } from "./oidc/issuer.ts";
-import { hostCookie } from "./auth/cookies.ts";
+import { OWNER_COOKIE, hostCookie, readCookie } from "./auth/cookies.ts";
 import { deviceCodeFromCookie, handleDevice } from "./auth/device.ts";
+import { sameOrigin } from "./auth/origin.ts";
 import { createTenant, listTenants } from "./tenants/create.ts";
 import { dataPlaneFromEnv, type DataPlane } from "./tenants/push.ts";
 import type { ControlEnv } from "./env.ts";
+import { avatarOrigin, avatarUrl, renderAccount } from "./views/account.tsx";
 import { renderApp, securityHeaders } from "./views/document.tsx";
 import { renderSignIn } from "./views/sign-in.tsx";
 
@@ -98,8 +100,19 @@ function callbackGaveUp(request: Request): Response {
 	return new Response(null, { status: 302, headers: { location: url.href, "cache-control": "no-store" } });
 }
 
-function pageHeaders(turnstile: boolean, options?: AuthOptions | null): Record<string, string> {
-	return securityHeaders({ turnstile, formAction: options ? enabledProviderOrigins(options) : [] });
+function pageHeaders(turnstile: boolean, options?: AuthOptions | null, imgSrc: string[] = []): Record<string, string> {
+	return securityHeaders({ turnstile, formAction: options ? enabledProviderOrigins(options) : [], imgSrc });
+}
+
+function redirectTo(location: string, cookies: string[] = []): Response {
+	const headers = new Headers({ location, "cache-control": "no-store" });
+	for (const cookie of cookies) headers.append("set-cookie", cookie);
+	return new Response(null, { status: 303, headers });
+}
+
+function formMedia(request: Request): boolean {
+	const media = (request.headers.get("content-type") ?? "").split(";")[0]?.trim().toLowerCase();
+	return media === "application/x-www-form-urlencoded";
 }
 
 function htmlPathFor(pathname: string): string {
@@ -169,13 +182,21 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 			if (session?.user?.id) return c.redirect(new URL(`/app/device?user_code=${pendingDevice}`, c.req.url).href, 302);
 		}
 		const shell = await renderShell(c.req.raw);
-		return c.html(shell.html, 200, pageHeaders(shell.turnstile, shell.options));
+		if (shell.clearOwner) c.header("set-cookie", hostCookie(OWNER_COOKIE, "", 0));
+		const headers = shell.signedIn
+			? pageHeaders(false, null, shell.imageHosts)
+			: pageHeaders(shell.turnstile, shell.options);
+		return c.html(shell.html, 200, headers);
 	});
 	app.get("/app/device", (c) => devicePage(c));
 	app.post("/app/device", (c) => devicePage(c));
 	app.get("/app/*", async (c) => {
 		const shell = await renderShell(c.req.raw);
-		return c.html(shell.html, 200, pageHeaders(shell.turnstile, shell.options));
+		if (shell.clearOwner) c.header("set-cookie", hostCookie(OWNER_COOKIE, "", 0));
+		const headers = shell.signedIn
+			? pageHeaders(false, null, shell.imageHosts)
+			: pageHeaders(shell.turnstile, shell.options);
+		return c.html(shell.html, 200, headers);
 	});
 	async function devicePage(c: Context<{ Bindings: ControlEnv }>) {
 		const loaded = await loadAuth(env, c.req.raw, deps);
@@ -187,6 +208,23 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 		// Approval posts stay on this host. The sign-in form on this page can still leave for a provider.
 		return c.html(result.html ?? "", 200, pageHeaders(Boolean(result.turnstile), loaded.options));
 	}
+	app.post("/app/sign-out", async (c) => {
+		const request = c.req.raw;
+		if (!sameOrigin(request)) return redirectTo(new URL("/app?error=origin", request.url).href);
+		const loaded = await loadAuth(env, request, deps);
+		if (!loaded) return c.json({ error: "not_found" }, 404);
+		const origin = new URL(request.url).origin;
+		const headers = new Headers({ "content-type": "application/json", origin });
+		const cookie = request.headers.get("cookie");
+		if (cookie) headers.set("cookie", cookie);
+		const response = await loaded.auth.handler(new Request(new URL("/api/auth/sign-out", origin), {
+			method: "POST",
+			headers,
+			body: "{}",
+		}));
+		const cleared = typeof response.headers.getSetCookie === "function" ? response.headers.getSetCookie() : [];
+		return redirectTo(new URL("/app", request.url).href, cleared);
+	});
 	app.post("/app/sign-in", async (c) => {
 		const loaded = await loadAuth(env, c.req.raw, deps);
 		if (!loaded) return c.json({ error: "not_found" }, 404);
@@ -228,8 +266,31 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 
 	async function tenants(c: Context<{ Bindings: ControlEnv }>, method: "GET" | "POST") {
 		const request = c.req.raw;
+		const postedForm = method === "POST" && formMedia(request);
 		const plane = deps.dataPlane ?? dataPlaneFromEnv(env);
 		const loaded = await loadAuth(env, request, deps);
+		if (postedForm) {
+			const back = (error?: string) => {
+				const url = new URL("/app", request.url);
+				if (error) url.searchParams.set("error", error);
+				return redirectTo(url.href);
+			};
+			if (!sameOrigin(request)) return back("origin");
+			if (!loaded || !plane) return back("unavailable");
+			const session = await loaded.auth.api.getSession({ headers: request.headers });
+			if (!session?.user?.id) return back();
+			const form = await request.formData();
+			const created = await createTenant(loaded.options.database, plane, {
+				accountId: session.user.id,
+				name: String(form.get("name") ?? ""),
+				domain: env.TENANT_DOMAIN,
+				dataRegion: env.DATA_REGION,
+				issuer: issuerOrigin(env, request),
+				label: env.BRAND_NAME,
+			});
+			if (!created.ok) return back(created.error);
+			return redirectTo(new URL("/app", request.url).href, [hostCookie(OWNER_COOKIE, created.tenant.ownerToken, 120)]);
+		}
 		if (!loaded || !plane) return c.json({ error: "not_found" }, 404);
 		if (method === "POST" && !allowsTenantWrite(request)) return c.json({ error: "forbidden" }, 403);
 		const session = await loaded.auth.api.getSession({ headers: request.headers });
@@ -262,7 +323,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 			issuer: issuerOrigin(env, request), label: env.BRAND_NAME,
 		});
 		if (!created.ok) {
-			const status = created.error === "taken" ? 409 : 400;
+			const status = created.error === "taken" ? 409 : created.error === "limit" ? 403 : 400;
 			return c.json({ error: created.error }, status);
 		}
 		const tenant = created.tenant;
@@ -278,10 +339,41 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 		}, 201);
 	}
 
-	async function renderShell(request: Request): Promise<{ html: string; turnstile: boolean; options: AuthOptions | null }> {
+	async function renderShell(request: Request): Promise<{
+		html: string;
+		turnstile: boolean;
+		options: AuthOptions | null;
+		signedIn: boolean;
+		imageHosts: string[];
+		clearOwner: boolean;
+	}> {
 		const loaded = await loadAuth(env, request, deps);
 		const url = new URL(request.url);
 		const turnstile = Boolean(loaded?.options.turnstile);
+		const session = loaded ? await loaded.auth.api.getSession({ headers: request.headers }) : null;
+		if (loaded && session?.user?.id) {
+			const plane = deps.dataPlane ?? dataPlaneFromEnv(env);
+			const agents = await listTenants(loaded.options.database, session.user.id, env.TENANT_DOMAIN);
+			const token = readCookie(request.headers.get("cookie"), OWNER_COOKIE);
+			const image = avatarUrl(typeof session.user.image === "string" ? session.user.image : "");
+			const body = renderAccount({
+				name: session.user.name ?? "",
+				email: session.user.email ?? "",
+				image,
+				agents,
+				ownerToken: token || undefined,
+				error: url.searchParams.get("error") ?? undefined,
+				canCreate: Boolean(plane),
+			});
+			return {
+				html: renderApp(env, body, "Your agents"),
+				turnstile,
+				options: loaded.options,
+				signedIn: true,
+				imageHosts: image ? [avatarOrigin(image)] : [],
+				clearOwner: Boolean(token),
+			};
+		}
 		let body = "";
 		if (loaded) {
 			body = renderSignIn({
@@ -300,7 +392,14 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 			const blockers = authBlockers(env, deps);
 			if (blockers.length) body = renderSignIn({ providers: [], magicLink: false, invitesRequired: false, notice: blockers[0] });
 		}
-		return { html: renderApp(env, body || undefined), turnstile, options: loaded?.options ?? null };
+		return {
+			html: renderApp(env, body || undefined),
+			turnstile,
+			options: loaded?.options ?? null,
+			signedIn: false,
+			imageHosts: [],
+			clearOwner: false,
+		};
 	}
 
 	app.get("/.well-known/openid-configuration", async (c) => {
