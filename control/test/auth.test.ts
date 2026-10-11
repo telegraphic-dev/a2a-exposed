@@ -384,6 +384,7 @@ test("a sign-in that does not return redirects to deadline", async () => {
 	assert.ok(options);
 	const logged: string[] = [];
 	const previous = console.error;
+	const originalFetch = globalThis.fetch;
 	console.error = (...args: unknown[]) => { logged.push(args.map(String).join(" ")); };
 	try {
 		const started = Date.now();
@@ -393,7 +394,25 @@ test("a sign-in that does not return redirects to deadline", async () => {
 		assert.ok(Date.now() - started < 1000);
 		assert.match(response.headers.get("location") ?? "", /error=deadline$/);
 		assert.ok(logged.some((line) => line.includes("\"event\":\"social_sign_in_timeout\"")));
+		globalThis.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+			if (url.startsWith("https://challenges.cloudflare.com/turnstile/v0/siteverify")) return new Promise(() => {}) as Promise<Response>;
+			return originalFetch(input, init);
+		};
+		const checked = resolveAuth({
+			...githubEnv(db),
+			TURNSTILE_SITE_KEY: "site-key",
+			TURNSTILE_SECRET_KEY: "secret-key",
+		}, new Request(`${origin}/app`));
+		assert.ok(checked);
+		const turnstileStarted = Date.now();
+		const waiting = await handleSignIn(formRequest("provider=github&cf-turnstile-response=widget-token"), {
+			handler: async () => { throw new Error("not called"); },
+		}, checked, 40);
+		assert.ok(Date.now() - turnstileStarted < 1000);
+		assert.match(waiting.headers.get("location") ?? "", /error=deadline$/);
 	} finally {
+		globalThis.fetch = originalFetch;
 		console.error = previous;
 	}
 });
