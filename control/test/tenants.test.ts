@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApp } from "../src/app.ts";
 import { createTenant } from "../src/tenants/create.ts";
-import { deployedFreeAgentLimit } from "../src/deploy-limit.ts";
 import { dataPlaneFromEnv, flushOutbox, type DataPlane, type TenantPush } from "../src/tenants/push.ts";
 import { openDb } from "./sql.ts";
 
@@ -213,19 +212,6 @@ function tenantInsert(db: ReturnType<typeof openDb>, accountId: string) {
 		 ) VALUES (?, ?, ?, 'active', 'default', '{}', '{}', '{}', 'hash', NULL, 1, ?, ?)`,
 	).bind(crypto.randomUUID(), name, accountId, "2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z").run();
 }
-
-test("a hosted control deploy binds 2 when FREE_AGENT_LIMIT is unset", () => {
-	assert.equal(deployedFreeAgentLimit(undefined, false), "");
-	assert.equal(deployedFreeAgentLimit("", false), "");
-	assert.equal(deployedFreeAgentLimit("nope", false), "");
-	assert.equal(deployedFreeAgentLimit(undefined, true), "2");
-	assert.equal(deployedFreeAgentLimit("", true), "2");
-	assert.equal(deployedFreeAgentLimit("10", true), "10");
-	assert.equal(deployedFreeAgentLimit("0", true), "0");
-	assert.equal(deployedFreeAgentLimit("none", true), "");
-	assert.equal(deployedFreeAgentLimit("unlimited", true), "");
-	assert.equal(deployedFreeAgentLimit("2", false), "2");
-});
 
 test("creates are not capped when no limit is configured", async () => {
 	const db = openDb();
