@@ -269,6 +269,9 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 	async pushConfig(body: TenantConfigPush): Promise<{ version: number; applied: boolean }> {
 		return await this.ctx.blockConcurrencyWhile(async () => {
 			checkPush(body);
+			const deleted = await (this.ctx.storage as unknown as { get(key: string): Promise<unknown> }).get("tenant_deleted");
+			// deleteStorage leaves this key after wiping SQL. A later push must not recreate the agent.
+			if (deleted != null) return { version: 0, applied: false };
 			const current = this.#row ?? readRow(this.#sql);
 			if (current && body.version <= current.version) {
 				// A previous push may have stored this version and then failed while migrating. Catch up; don't rewrite the row.
@@ -331,12 +334,15 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 			const storage = this.ctx.storage as unknown as {
 				deleteAlarm(): Promise<void>;
 				deleteAll(): Promise<void>;
+				put(key: string, value: string): Promise<void>;
 			};
 			const tenantId = this.#row?.tenantId ?? null;
 			await storage.deleteAlarm();
 			await storage.deleteAll();
 			const left = readRow(this.#sql);
 			if (left) throw new Error("deleteStorage: data remains");
+			// After SQL is gone. A later pushConfig sees this and does not recreate the agent.
+			await storage.put("tenant_deleted", "1");
 			this.#row = null;
 			console.log(JSON.stringify({ ts: new Date().toISOString(), event: "tenant_storage_deleted", tenant: tenantId }));
 			return { deleted: true };

@@ -291,3 +291,29 @@ test("a directory write does not roll a newer version backwards", async () => {
 	await bound.putDirectory("northwind", { id: "t1", status: "active", region: "default", version: 5 });
 	assert.deepEqual(versions, [5]);
 });
+
+test("a deleted directory id is not overwritten and a new id can replace the tombstone", async () => {
+	const store = new Map<string, string>();
+	const kv = {
+		async get(key: string) {
+			const raw = store.get(key);
+			return raw ? JSON.parse(raw) as unknown : null;
+		},
+		async put(key: string, value: string) { store.set(key, value); },
+	};
+	const objects = {
+		idFromName(name: string) { return name; },
+		get() { return { async pushConfig(body: TenantPush) { return { version: body.version, applied: true }; } }; },
+	};
+	const bound = dataPlaneFromEnv({ TENANT_DIRECTORY: kv, TENANT_DO: objects });
+	assert.ok(bound);
+	await bound.putDirectory("northwind", { id: "old", status: "deleted", region: "default", version: 4 });
+	await bound.putDirectory("northwind", { id: "old", status: "active", region: "default", version: 9 });
+	assert.equal(JSON.parse(store.get("tenant:northwind")!).status, "deleted");
+	assert.equal(JSON.parse(store.get("tenant:northwind")!).id, "old");
+	await bound.putDirectory("northwind", { id: "new", status: "active", region: "default", version: 1 });
+	assert.equal(JSON.parse(store.get("tenant:northwind")!).id, "new");
+	assert.equal(JSON.parse(store.get("tenant:northwind")!).status, "active");
+	await bound.putDirectory("northwind", { id: "old", status: "active", region: "default", version: 20 });
+	assert.equal(JSON.parse(store.get("tenant:northwind")!).id, "new");
+});

@@ -1,7 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApp } from "../src/app.ts";
-import type { DataPlane, TenantPush } from "../src/tenants/push.ts";
+import { createTenant } from "../src/tenants/create.ts";
+import { deleteTenant } from "../src/tenants/delete.ts";
+import { dataPlaneFromEnv, deliverOutbox, type DataPlane, type OutboxRow, type TenantPush } from "../src/tenants/push.ts";
 import { openDb } from "./sql.ts";
 
 const secret = "test-secret-test-secret-test-secret";
@@ -115,10 +117,11 @@ test("the agent page deletes an agent after the name is typed", async () => {
 		assert.match(removed.headers.get("location") ?? "", /\/app\?deleted=1$/);
 		assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM tenants").first<{ n: number }>())?.n, 0);
 		assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM config_outbox").first<{ n: number }>())?.n, 0);
-		assert.equal(target.removed.at(-1), "northwind");
+		assert.equal(target.removed.length, 0);
+		assert.deepEqual(target.directory.at(-1), { name: "northwind", status: "deleted", version: target.directory.at(-2)?.version });
+		assert.equal(target.directory.at(-2)?.status, "deleting");
 		assert.equal(target.wiped.length, 1);
 		assert.equal(target.pushes.at(-1)?.status, "deleting");
-		assert.equal(target.directory.some((entry) => entry.status === "deleting"), true);
 		assert.match(lines.find((line) => line.includes("agent_deleted")) ?? "", /"event":"dashboard_decision"/);
 		const home = await (await app.request(`${origin}/app?deleted=1`, { headers: { cookie } })).text();
 		assert.match(home, /That agent was deleted/);
@@ -152,6 +155,7 @@ test("a failed delete leaves the agent and a retry finishes it", async () => {
 	assert.match(failed.headers.get("location") ?? "", /delete=failed/);
 	const row = await db.prepare("SELECT status FROM tenants WHERE name = ?").bind("northwind").first<{ status: string }>();
 	assert.equal(row?.status, "deleting");
+	assert.equal(target.directory.some((entry) => entry.status === "deleted"), false);
 	assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM config_outbox").first<{ n: number }>())?.n, 0);
 	const blocked = await app.request(`${origin}/api/v1/tenants`, { method: "POST", headers, body: "name=eastwind" });
 	assert.match(blocked.headers.get("location") ?? "", /error=limit/);
@@ -159,6 +163,7 @@ test("a failed delete leaves the agent and a retry finishes it", async () => {
 	assert.match(retried.headers.get("location") ?? "", /\/app\?deleted=1$/);
 	assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM tenants").first<{ n: number }>())?.n, 0);
 	assert.equal(target.wiped.length, 1);
+	assert.equal(target.directory.at(-1)?.status, "deleted");
 	const freed = await app.request(`${origin}/api/v1/tenants`, { method: "POST", headers, body: "name=eastwind" });
 	assert.equal(freed.status, 303);
 });
@@ -178,6 +183,7 @@ test("a push that fails does not remove the agent", async () => {
 	assert.match(failed.headers.get("location") ?? "", /delete=failed/);
 	assert.equal(target.wiped.length, 0);
 	assert.equal(target.removed.length, 0);
+	assert.equal(target.directory.some((entry) => entry.status === "deleted"), false);
 	const row = await db.prepare("SELECT status FROM tenants WHERE name = ?").bind("northwind").first<{ status: string }>();
 	assert.equal(row?.status, "deleting");
 });
@@ -237,4 +243,126 @@ test("sign-in from the agent page returns to that page", async () => {
 	const bad = sent[1].text.match(/https:\/\/control\.example\.com\/api\/auth\/magic-link\/verify\?[^\s]+/);
 	assert.ok(bad);
 	assert.equal(new URL(bad[0]).searchParams.get("callbackURL"), "/app");
+});
+
+function kvPlane() {
+	const store = new Map<string, string>();
+	const pushes: TenantPush[] = [];
+	const wiped: string[] = [];
+	let onActive: (() => Promise<void>) | null = null;
+	const kv = {
+		async get(key: string) {
+			const raw = store.get(key);
+			return raw ? JSON.parse(raw) as unknown : null;
+		},
+		async put(key: string, value: string) { store.set(key, value); },
+		async delete(key: string) { store.delete(key); },
+	};
+	const objects = {
+		idFromName(name: string) { return name; },
+		get(id: unknown) {
+			return {
+				async pushConfig(body: TenantPush) {
+					if (onActive && body.status === "active") await onActive();
+					pushes.push(body);
+					return { version: body.version, applied: true };
+				},
+				async deleteStorage() { wiped.push(String(id)); },
+			};
+		},
+	};
+	const plane = dataPlaneFromEnv({ TENANT_DIRECTORY: kv, TENANT_DO: objects });
+	if (!plane) throw new Error("data plane");
+	return {
+		plane, pushes, wiped,
+		holdActive(fn: () => Promise<void>) { onActive = fn; },
+		entry(name: string) {
+			const raw = store.get(`tenant:${name}`);
+			return raw ? JSON.parse(raw) as { id: string; status: string; version: number } : null;
+		},
+	};
+}
+
+async function staleRow(db: ReturnType<typeof openDb>, name: string): Promise<OutboxRow> {
+	const stored = await db.prepare(
+		`SELECT id, name, status, region, config_json, limits_json, approval_json, owner_token_hash, secrets_enc, config_version, created_at
+		 FROM tenants WHERE name = ?`,
+	).bind(name).first<OutboxRow & { config_version: number }>();
+	if (!stored) throw new Error("missing tenant");
+	return { ...stored, version: stored.config_version };
+}
+
+test("a flush that already loaded the agent does not write it back after delete", async () => {
+	const db = openDb();
+	const target = kvPlane();
+	const created = await createTenant(db, target.plane, { accountId: "acct", name: "northwind" });
+	assert.equal(created.ok, true);
+	if (!created.ok) return;
+	const stale = await staleRow(db, "northwind");
+	let release!: () => void;
+	const hold = new Promise<void>((resolve) => { release = resolve; });
+	let entered!: () => void;
+	const saw = new Promise<void>((resolve) => { entered = resolve; });
+	const delivery = deliverOutbox(db, target.plane, stale, async () => {
+		entered();
+		await hold;
+	});
+	await saw;
+	const pushesAtDelete = target.pushes.length;
+	const removed = await deleteTenant(db, target.plane, { accountId: "acct", name: "northwind" });
+	assert.equal(removed.ok, true);
+	assert.equal(target.entry("northwind")?.status, "deleted");
+	assert.equal(target.entry("northwind")?.id, created.tenant.id);
+	const pushesAfterDelete = target.pushes.length;
+	assert.ok(pushesAfterDelete > pushesAtDelete);
+	release();
+	assert.equal(await delivery, true);
+	assert.equal(target.pushes.length, pushesAfterDelete);
+	assert.equal(target.entry("northwind")?.status, "deleted");
+	assert.equal(target.entry("northwind")?.id, created.tenant.id);
+	assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM tenants").first<{ n: number }>())?.n, 0);
+
+	const reused = await createTenant(db, target.plane, { accountId: "acct", name: "northwind" });
+	assert.equal(reused.ok, true);
+	if (!reused.ok) return;
+	assert.notEqual(reused.tenant.id, created.tenant.id);
+	assert.equal(target.entry("northwind")?.id, reused.tenant.id);
+	assert.equal(target.entry("northwind")?.status, "active");
+	const afterReuse = target.pushes.length;
+	assert.equal(await deliverOutbox(db, target.plane, stale), true);
+	assert.equal(target.pushes.length, afterReuse);
+	assert.equal(target.entry("northwind")?.id, reused.tenant.id);
+	assert.equal(target.entry("northwind")?.status, "active");
+});
+
+test("delete waits until an in-flight delivery finishes, then the hostname stays deleted", async () => {
+	const db = openDb();
+	const target = kvPlane();
+	const created = await createTenant(db, target.plane, { accountId: "acct", name: "northwind" });
+	assert.equal(created.ok, true);
+	const stale = await staleRow(db, "northwind");
+	let release!: () => void;
+	const gate = new Promise<void>((resolve) => { release = resolve; });
+	let entered!: () => void;
+	const saw = new Promise<void>((resolve) => { entered = resolve; });
+	target.holdActive(async () => {
+		entered();
+		await gate;
+	});
+	const delivery = deliverOutbox(db, target.plane, stale);
+	await saw;
+	let settled = false;
+	const deleting = deleteTenant(db, target.plane, { accountId: "acct", name: "northwind" }).then((result) => {
+		settled = true;
+		return result;
+	});
+	await new Promise((resolve) => setTimeout(resolve, 40));
+	assert.equal(settled, false);
+	assert.equal(target.wiped.length, 0);
+	release();
+	assert.equal((await deleting).ok, true);
+	assert.equal(await delivery, true);
+	assert.equal(target.wiped.length, 1);
+	assert.equal(target.entry("northwind")?.status, "deleted");
+	assert.equal(target.entry("northwind")?.id, created.ok ? created.tenant.id : "");
 });

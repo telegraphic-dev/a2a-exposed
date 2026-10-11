@@ -767,7 +767,7 @@ test("TenantStore.deleteStorage wipes the object and a second call succeeds", as
 	const ns = await mf.getDurableObjectNamespace("TENANT_DO");
 	const hash = await sha256("owner-delta");
 	type Stub = {
-		pushConfig(body: Record<string, unknown>): Promise<{ applied: boolean }>;
+		pushConfig(body: Record<string, unknown>): Promise<{ version: number; applied: boolean }>;
 		deleteStorage(): Promise<{ deleted: boolean }>;
 		storageStatus(): Promise<{ configured: boolean; tables: string[] }>;
 	};
@@ -795,4 +795,13 @@ test("TenantStore.deleteStorage wipes the object and a second call succeeds", as
 	assert.equal(again.deleted, true);
 	assert.equal((await stub.storageStatus()).configured, false);
 	assert.deepEqual((await stub.storageStatus()).tables, []);
+	const refused = await stub.pushConfig({
+		version: 2, tenantId: "id-delta", name: "delta", status: "active", ownerTokenHash: hash,
+		config: { AGENT_NAME: "delta" },
+	});
+	assert.equal(refused.applied, false);
+	assert.equal(refused.version, 0);
+	const stayed = await stub.storageStatus();
+	assert.equal(stayed.configured, false);
+	assert.deepEqual(stayed.tables, []);
 });

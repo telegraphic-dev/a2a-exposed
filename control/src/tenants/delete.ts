@@ -1,21 +1,38 @@
 import type { Sql } from "../auth/invites.ts";
-import { pushFromRow, type DataPlane, type OutboxRow } from "./push.ts";
+import { pushFromRow, withOutboxLock, type DataPlane, type OutboxRow } from "./push.ts";
 import { tenantForAccount } from "./wake.ts";
 
 export type DeleteResult = { ok: true } | { ok: false; error: "failed" | "unavailable" };
 
 /**
  * Remove one agent the account owns.
- * The control row is deleted last, so the agent-limit slot stays taken until the directory entry
- * and the Durable Object storage are gone. A retry continues from `deleting` and does not put the
- * new state in the outbox, so a flush cannot write the agent back after the wipe.
+ * The control row is deleted last, so the agent-limit slot stays taken until the Durable Object
+ * storage is gone. The directory entry stays, with status `deleted`, so an older put cannot make
+ * the hostname active again. A new agent id may replace that tombstone. Delivery of an outbox row
+ * takes the same lock and reads the tenant again, so a flush that already loaded the row does not
+ * write it back. A retry continues from `deleting`.
  */
 export async function deleteTenant(
 	db: Sql,
 	plane: DataPlane,
 	input: { accountId: string; name: string },
 ): Promise<DeleteResult> {
-	if (!plane.deleteDirectory || !plane.deleteStorage) return { ok: false, error: "unavailable" };
+	const wipe = plane.deleteStorage;
+	if (!wipe) return { ok: false, error: "unavailable" };
+	try {
+		return await withOutboxLock(db, () => deleteTenantLocked(db, plane, wipe, input));
+	} catch (error) {
+		console.log(JSON.stringify({ ts: new Date().toISOString(), event: "agent_delete_failed", error: String(error).slice(0, 200) }));
+		return { ok: false, error: "failed" };
+	}
+}
+
+async function deleteTenantLocked(
+	db: Sql,
+	plane: DataPlane,
+	wipe: (tenantId: string, region: string) => Promise<void>,
+	input: { accountId: string; name: string },
+): Promise<DeleteResult> {
 	const marked = await markDeleting(db, input.accountId, input.name);
 	if (marked === "missing") return { ok: true };
 	if (marked === "failed") return { ok: false, error: "failed" };
@@ -37,8 +54,9 @@ export async function deleteTenant(
 	try {
 		await plane.putDirectory(marked.name, { id: marked.id, status: "deleting", region: marked.region, version: marked.config_version });
 		await plane.pushConfig(body, marked.region);
-		await plane.deleteDirectory(marked.name);
-		await plane.deleteStorage(marked.id, marked.region);
+		await wipe(marked.id, marked.region);
+		// Keep the key. Deleting it would let a stale put recreate an active hostname.
+		await plane.putDirectory(marked.name, { id: marked.id, status: "deleted", region: marked.region, version: marked.config_version });
 	} catch (error) {
 		console.log(JSON.stringify({ ts: now, event: "agent_delete_failed", tenant: marked.id, error: String(error).slice(0, 200) }));
 		return { ok: false, error: "failed" };
