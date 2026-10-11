@@ -37,17 +37,28 @@ const PAGE_CODES = new Set([
 	"INVALID_ERROR_CALLBACK_URL",
 ]);
 
-const PROVIDER_ORIGINS = new Set([
-	"https://github.com",
-	"https://accounts.google.com",
-	"https://dash.cloudflare.com",
-]);
+/** Origins a sign-in form may navigate to. The page CSP lists only the ones that are enabled. */
+export const PROVIDER_ORIGINS = {
+	github: "https://github.com",
+	google: "https://accounts.google.com",
+	cloudflare: "https://dash.cloudflare.com",
+} as const;
+
+const ALLOWED_PROVIDER_ORIGINS = new Set<string>(Object.values(PROVIDER_ORIGINS));
+
+export function enabledProviderOrigins(options: { github?: unknown; google?: unknown; cloudflare?: unknown }): string[] {
+	const origins: string[] = [];
+	if (options.github) origins.push(PROVIDER_ORIGINS.github);
+	if (options.google) origins.push(PROVIDER_ORIGINS.google);
+	if (options.cloudflare) origins.push(PROVIDER_ORIGINS.cloudflare);
+	return origins;
+}
 
 function allowedProviderUrl(value: string): string | null {
 	try {
 		const url = new URL(value);
 		if (url.username || url.password) return null;
-		if (!PROVIDER_ORIGINS.has(url.origin)) return null;
+		if (!ALLOWED_PROVIDER_ORIGINS.has(url.origin)) return null;
 		return url.href;
 	} catch {
 		return null;

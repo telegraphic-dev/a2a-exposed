@@ -85,6 +85,10 @@ test("login help names the callback error", async () => {
 	assert.match(stdout, /oauth_callback_failed/);
 	assert.match(stdout, /social_sign_in_failed/);
 	assert.match(stdout, /social_sign_in_timeout/);
+	assert.match(stdout, /form-action/);
+	assert.match(stdout, /Continue with/);
+	assert.match(stdout, /Waiting for the check/);
+	assert.match(stdout, /The check expired\. Please try again/);
 });
 
 test("login refuses a control URL that is not https", async () => {
