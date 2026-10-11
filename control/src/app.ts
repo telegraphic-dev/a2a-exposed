@@ -6,7 +6,7 @@ import { loadAuth } from "./auth/instance.ts";
 import { signupClosedText, type SignupAllowlist } from "./auth/allowlist.ts";
 import { authBlockers, resolveAuth, type AuthDeps, type AuthOptions } from "./auth/options.ts";
 import { OIDC_COOKIE, authorize, discoveryDocument, exchangeCode, issuerOrigin, readTokenForm, resumeQuery } from "./oidc/issuer.ts";
-import { OWNER_COOKIE, hostCookie, readCookie } from "./auth/cookies.ts";
+import { OWNER_COOKIE, bareOwnerToken, hostCookie, readCookie } from "./auth/cookies.ts";
 import { deviceCodeFromCookie, handleDevice } from "./auth/device.ts";
 import { sameOrigin } from "./auth/origin.ts";
 import { accountAgentLimit, configuredFreeAgentLimit, createTenant, listTenants } from "./tenants/create.ts";
@@ -383,7 +383,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 		if (loaded && session?.user?.id) {
 			const plane = deps.dataPlane ?? dataPlaneFromEnv(env);
 			const agents = await listTenants(loaded.options.database, session.user.id, env.TENANT_DOMAIN);
-			const token = readCookie(request.headers.get("cookie"), OWNER_COOKIE);
+			const token = bareOwnerToken(readCookie(request.headers.get("cookie"), OWNER_COOKIE));
 			const image = avatarUrl(typeof session.user.image === "string" ? session.user.image : "");
 			const agentLimit = await accountAgentLimit(loaded.options.database, session.user.id, configuredFreeAgentLimit(env.FREE_AGENT_LIMIT));
 			const body = renderAccount({

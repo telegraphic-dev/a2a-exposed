@@ -1,9 +1,11 @@
+import { OWNER_COOKIE, hostCookie, ownerTokenForAgent, readCookie } from "../auth/cookies.ts";
 import { loadAuth } from "../auth/instance.ts";
 import { sameOrigin } from "../auth/origin.ts";
 import type { AuthDeps } from "../auth/options.ts";
 import { recentSignIn } from "../auth/recent.ts";
 import type { ControlEnv } from "../env.ts";
 import { dataPlaneFromEnv, type DataPlane } from "../tenants/push.ts";
+import { rotateOwnerToken } from "../tenants/rotate.ts";
 import { configFields, saveWakeSettings, tenantForAccount, wakeSettingsOf } from "../tenants/wake.ts";
 import { renderAgentPage } from "../views/agent.tsx";
 import { renderApp, securityHeaders } from "../views/document.tsx";
@@ -24,16 +26,15 @@ function redirect(location: string, cookies: string[] = []): Response {
 	return new Response(null, { status: 303, headers });
 }
 
-function page(html: string, status: number, env: ControlEnv, title: string): Response {
-	return new Response(renderApp(env, html, title), {
-		status,
-		headers: {
-			"content-type": "text/html; charset=utf-8",
-			...securityHeaders(),
-			"cache-control": "no-store",
-			"x-robots-tag": "noindex",
-		},
+function page(html: string, status: number, env: ControlEnv, title: string, extra?: { cookies?: string[]; scriptSelf?: boolean }): Response {
+	const headers = new Headers({
+		"content-type": "text/html; charset=utf-8",
+		...securityHeaders({ scriptSelf: extra?.scriptSelf }),
+		"cache-control": "no-store",
+		"x-robots-tag": "noindex",
 	});
+	for (const cookie of extra?.cookies ?? []) headers.append("set-cookie", cookie);
+	return new Response(renderApp(env, html, title), { status, headers });
 }
 
 /** Cookie session only. The CLI device token is a bearer session, and that is not a dashboard sign-in. */
@@ -206,6 +207,24 @@ export async function handleAgent(
 				return back("?mcp=failed");
 			}
 		}
+		if (action === "rotate-token") {
+			if (!recentSignIn(session)) {
+				console.log(JSON.stringify({ ts: new Date().toISOString(), event: "dashboard_reauth", tenant: row.id, accountId, decision: "rotate-token" }));
+				let cookies: string[] = [];
+				try { cookies = await clearSession(loaded.auth, request); } catch { /* still do not rotate */ }
+				return redirect(new URL("/app?error=reauth", request.url).href, cookies);
+			}
+			if (row.status === "deleting" || row.status === "deleted") return back("?token=gone");
+			if (String(form.get("confirm") ?? "") !== "1") return back("?confirm-token=1");
+			const rotated = await rotateOwnerToken(loaded.options.database, plane, { accountId, name });
+			if (!rotated.ok) {
+				logDecision(row.id, accountId, "owner_token_rotated", false);
+				const query = rotated.error === "gone" ? "gone" : rotated.error === "replaced" ? "replaced" : "failed";
+				return back(`?token=${query}`);
+			}
+			logDecision(row.id, accountId, "owner_token_rotated", true);
+			return redirect(new URL(`/app/agents/${name}`, request.url).href, [hostCookie(OWNER_COOKIE, `${row.name}.${rotated.token}`, 120)]);
+		}
 		if (action === "export") {
 			if (!plane.owner || row.status !== "active") return back("?export=failed");
 			try {
@@ -303,8 +322,17 @@ export async function handleAgent(
 		}
 	}
 	const url = new URL(request.url);
+	const ownerToken = ownerTokenForAgent(readCookie(request.headers.get("cookie"), OWNER_COOKIE), row.name);
 	const html = renderAgentPage({
-		overviewHtml: renderOverview({ status: row.status, publicUrl: publicUrl(env.TENANT_DOMAIN, name), counts }),
+		overviewHtml: renderOverview({
+			status: row.status,
+			publicUrl: publicUrl(env.TENANT_DOMAIN, name),
+			counts,
+			name,
+			ownerToken,
+			confirmRotate: url.searchParams.get("confirm-token") === "1",
+			tokenNotice: url.searchParams.get("token") ?? "",
+		}),
 		peersHtml: renderPeers({
 			name,
 			pending,
@@ -332,5 +360,7 @@ export async function handleAgent(
 			test: url.searchParams.get("test") ?? "",
 		}),
 	});
-	return page(html, 200, env, name);
+	return page(html, 200, env, name, {
+		...(ownerToken ? { cookies: [hostCookie(OWNER_COOKIE, "", 0)], scriptSelf: true } : {}),
+	});
 }

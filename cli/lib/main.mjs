@@ -188,7 +188,11 @@ Control plane account (only when that deployment's login is on)
                                 replaces a pasted owner token and leaves other credential material out. Peer times are labeled UTC. A pairing
                                 token shows its code. An empty outbound list notes that peers the CLI
                                 added locally are not shown. Sign out is on that
-                                page. Creating an agent shows the owner token once. That page is not stored.
+                                page. Creating an agent shows the owner token once. The agent page rotates
+                                that token after a confirmation and a recent sign-in. The new token is
+                                shown once on that agent's page. The previous one stops working immediately.
+                                The token is shown only when the stored hash is still that token.
+                                That page is not stored.
                                 FREE_AGENT_LIMIT=2 caps a free account at 2 agents. An account's own limit overrides it.
                                 Unset, there is no limit. The database rejects another insert.
                                 SIGNUP_ALLOWLIST, when set, admits only those verified emails. Unset, sign-in stays open.

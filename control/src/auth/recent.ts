@@ -1,7 +1,7 @@
-/** A dashboard approve, deny, or revoke needs a sign-in from about the last 10 minutes. */
+/** A dashboard approve, deny, revoke, or owner-token rotation needs a sign-in from about the last 10 minutes. */
 export const RECENT_SIGN_IN_MS = 10 * 60 * 1000;
 
-export const REAUTH_MESSAGE = "Sign in again to approve, deny, or revoke. This session is older than 10 minutes.";
+export const REAUTH_MESSAGE = "Sign in again to approve, deny, revoke, or rotate the owner token. This session is older than 10 minutes.";
 
 const CLOCK_SKEW_MS = 60_000;
 
