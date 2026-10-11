@@ -1,5 +1,4 @@
 import { mapCloudflareUser } from "./cloudflare-user.ts";
-import { providerAbortSignal } from "./deadline.ts";
 import type { Sql } from "./invites.ts";
 import type { AuthOptions } from "./options.ts";
 import { recentSignIn } from "./recent.ts";
@@ -70,9 +69,8 @@ function startDeadline(ms: number): { done: Promise<never>; stop: () => void } {
 type ProviderRead = { kind: "ok"; body: unknown } | { kind: "deadline" } | { kind: "failed" };
 
 /** Token or profile read. A stalled socket, a rejected fetch, or a body that is not JSON does not throw. */
-export async function readCloudflare(url: string, init: RequestInit, fetchMs = CLOUDFLARE_FETCH_MS): Promise<ProviderRead> {
+export async function readCloudflare(url: string, init: RequestInit, fetchMs = CLOUDFLARE_FETCH_MS, outer?: AbortSignal): Promise<ProviderRead> {
 	const timeout = AbortSignal.timeout(fetchMs);
-	const outer = providerAbortSignal();
 	const signal = outer ? AbortSignal.any([timeout, outer]) : timeout;
 	const deadline = startDeadline(fetchMs);
 	try {

@@ -321,7 +321,9 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 	});
 	app.all("/api/auth/*", async (c) => {
 		let request = c.req.raw;
-		const loaded = await loadAuth(env, request, deps);
+		const callbackPath = new URL(request.url).pathname;
+		const providerAbort = callbackPath.startsWith("/api/auth/callback/") ? new AbortController() : undefined;
+		const loaded = await loadAuth(env, request, { ...deps, providerAbort: providerAbort?.signal });
 		if (!loaded) return c.json({ error: "not_found" }, 404);
 		if (loaded.options.turnstile && turnstileEndpoint(request)) {
 			const token = request.headers.get("x-captcha-response") ?? "";
@@ -338,7 +340,6 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 			headers.delete("x-captcha-response");
 			request = new Request(request, { headers });
 		}
-		const callbackPath = new URL(request.url).pathname;
 		if (request.method === "GET" && callbackPath === "/api/auth/callback/cloudflare") {
 			const linked = await finishCloudflareLink(request, loaded.auth, loaded.options, deps.cloudflareFetchMs);
 			if (linked) return linked;
@@ -350,7 +351,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 		// onAPIError.onError, so the code on that Location is logged here.
 		if (!callbackPath.startsWith("/api/auth/callback/")) return closedSignup(request, await handle(), list);
 		const deadline = deps.callbackDeadlineMs ?? CALLBACK_DEADLINE_MS;
-		const response = await within(deadline, handle, () => callbackGaveUp(request));
+		const response = await within(deadline, handle, () => callbackGaveUp(request), providerAbort);
 		const shown = rewriteCloudflareSignup(request, await closedSignup(request, response, list));
 		const code = callbackError(request, shown);
 		if (code && code !== "deadline") logCallbackFailure(request, code);

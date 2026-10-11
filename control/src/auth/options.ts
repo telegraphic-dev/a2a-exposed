@@ -30,12 +30,15 @@ export interface AuthOptions {
 	signupAllowlist: SignupAllowlist | null;
 	/** Per Cloudflare token and profile call. The callback deadline aborts one that is still running. */
 	cloudflareFetchMs?: number;
+	/** Aborted when the callback deadline wins. This request's auth handler closes over it. */
+	providerAbort?: AbortSignal;
 }
 
 export interface AuthDeps {
 	database?: Sql;
 	mailer?: Mailer;
 	cloudflareFetchMs?: number;
+	providerAbort?: AbortSignal;
 }
 
 export interface AuthEnv {
@@ -124,5 +127,6 @@ export function resolveAuth(env: AuthEnv, request: Request, deps: AuthDeps = {})
 		invitesRequired: env.INVITES_REQUIRED?.trim() === "1",
 		signupAllowlist: signupAllowlist(env.SIGNUP_ALLOWLIST),
 		cloudflareFetchMs: deps.cloudflareFetchMs,
+		providerAbort: deps.providerAbort,
 	};
 }

@@ -63,7 +63,7 @@ export async function createAuth(options: AuthOptions) {
 						method: "POST",
 						headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
 						body,
-					}, fetchMs);
+					}, fetchMs, options.providerAbort);
 					if (token.kind !== "ok" || !token.body || typeof token.body !== "object") throw new Error("invalid_code");
 					const record = token.body as Record<string, unknown>;
 					const accessToken = typeof record.access_token === "string" ? record.access_token : "";
@@ -89,7 +89,7 @@ export async function createAuth(options: AuthOptions) {
 					if (!accessToken) return null;
 					const profile = await readCloudflare(USER, {
 						headers: { authorization: `Bearer ${accessToken}`, accept: "application/json" },
-					}, options.cloudflareFetchMs ?? CLOUDFLARE_FETCH_MS);
+					}, options.cloudflareFetchMs ?? CLOUDFLARE_FETCH_MS, options.providerAbort);
 					if (profile.kind !== "ok" || !profile.body || typeof profile.body !== "object") return null;
 					const body = profile.body as { result?: Parameters<typeof mapCloudflareUser>[0] };
 					return mapCloudflareUser(body.result);
