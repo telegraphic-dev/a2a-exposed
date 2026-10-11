@@ -21,6 +21,7 @@ import { bookmarkForTime as readBookmark, exportRows, restoreBookmark as applyBo
 import { hostedDailyBackup } from "./backup.ts";
 import { lookupDirectory, pinDirectoryRegion, tenantNameFromHost, tenantRegion, TENANT_NAME, type DirectoryEntry } from "./directory.ts";
 import { hostedTenantContext, namespaceForRegion, parseGates, type WorkerBindings } from "./tenancy.ts";
+import { WAKE_SECRET_KEYS, openWakeSecrets } from "./wake-secrets.ts";
 
 export { clearDirectoryCache, directoryKey, lookupDirectory, parseDirectoryEntry, pinDirectoryRegion, tenantNameFromHost, tenantRegion, TENANT_NAME } from "./directory.ts";
 export type { DirectoryEntry };
@@ -33,7 +34,7 @@ const gone = () => Response.json({ error: "this agent is gone" }, { status: 410,
 
 const TENANT_ID = /^[A-Za-z0-9._:-]{1,128}$/;
 
-/** Versioned config pushed by the control plane. `secretsEnc` is stored and not decrypted here. */
+/** Versioned config pushed by the control plane. `secretsEnc` is decrypted into the wake credentials when the context is built. */
 export interface TenantConfigPush {
 	version: number;
 	tenantId: string;
@@ -152,14 +153,29 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 		});
 	}
 
-	#tenant(fallbackOrigin = "") {
+	async #tenant(fallbackOrigin = "") {
 		const row = this.#row;
 		if (!row) return null;
-		const domain = parseGates(this.env).gates.tenantDomain;
+		const parsed = parseGates(this.env);
+		const domain = parsed.gates.tenantDomain;
 		const publicUrl = domain ? `https://${row.name}.${domain}` : (fallbackOrigin || this.env.PUBLIC_URL || "");
+		const config = { ...row.config };
+		// Once a ciphertext is stored, the secret wake fields come only from it. A plaintext copy in
+		// config_json is ignored, and a blob that cannot be opened leaves those fields unset.
+		if (row.secretsEnc) {
+			const opened = await openWakeSecrets(parsed.secretsKey || "", row.tenantId, row.secretsEnc);
+			if (!opened) {
+				console.log(JSON.stringify({ ts: new Date().toISOString(), event: "wake_secrets_unreadable", tenant: row.tenantId }));
+			}
+			for (const key of WAKE_SECRET_KEYS) {
+				const value = opened?.[key];
+				if (value) config[key] = value;
+				else delete config[key];
+			}
+		}
 		return hostedTenantContext(this.env, {
 			id: row.tenantId, db: this.#db, publicUrl, ownerTokenHash: row.ownerTokenHash,
-			config: row.config, limits: row.limits, approval: row.approval, status: row.status,
+			config, limits: row.limits, approval: row.approval, status: row.status,
 		});
 	}
 
@@ -199,7 +215,7 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 				await storage.deleteAlarm();
 				return;
 			}
-			const tenant = this.#tenant();
+			const tenant = await this.#tenant();
 			if (!tenant) return;
 			const at = await nextCronAt(tenant);
 			if (at == null || !Number.isFinite(at)) {
@@ -227,7 +243,7 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 	}
 
 	async #runAlarm(): Promise<void> {
-		const tenant = this.#row?.status === "active" ? this.#tenant() : null;
+		const tenant = this.#row?.status === "active" ? await this.#tenant() : null;
 		if (tenant) {
 			try { await cronFlush(tenant, this.#ectx()); }
 			catch (e) { console.log(JSON.stringify({ ts: new Date().toISOString(), event: "alarm_failed", error: String(e).slice(0, 200) })); }
@@ -354,7 +370,7 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 			console.log(JSON.stringify({ ts: new Date().toISOString(), event: "owner_rpc_refused", tenant: null, accountId, reason: "absent" }));
 			return { status: 404, body: { error: "no such agent" } };
 		}
-		const tenant = this.#tenant();
+		const tenant = await this.#tenant();
 		if (!tenant) return { status: 404, body: { error: "no such agent" } };
 		return runOwnerRpc(tenant, this.#ectx(), input);
 	}
@@ -368,7 +384,7 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 			if (row.status === "deleting") return gone();
 			return notFound();
 		}
-		const tenant = this.#tenant(new URL(req.url).origin);
+		const tenant = await this.#tenant(new URL(req.url).origin);
 		if (!tenant) return notFound();
 		// Do not arm from the rows visible here. sendWake runs in waitUntil and, on 429/503, inserts the retry
 		// after this response returns. requeueWake arms in that insert. Arm again when those tasks finish so a

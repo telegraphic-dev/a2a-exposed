@@ -88,7 +88,8 @@ export function renderAccount(input: {
 						const when = createdOn(agent.createdAt);
 						return (
 							<li>
-								{href ? <a href={href}>{agent.name}</a> : <span>{agent.name}</span>}
+								<a href={`/app/agents/${agent.name}`}>{agent.name}</a>
+								{href ? <a href={href}>{href}</a> : ""}
 								{when ? <span>{when}</span> : ""}
 							</li>
 						);

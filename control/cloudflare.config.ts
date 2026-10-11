@@ -57,6 +57,7 @@ if (d1Id || d1Name) {
 if (v("MAIL_FROM")) envBindings.EMAIL = bindings.sendEmail();
 const dataPlane = v("CONTROL_DATA_PLANE");
 const directoryId = v("CONTROL_TENANT_DIRECTORY_ID");
+if (dataPlane && directoryId) DEV_SECRETS.push("TENANT_SECRETS_KEY");
 if (dataPlane) envBindings.TENANT_DO = bindings.durableObject({ worker: dataPlane, exportName: "TenantStore" });
 if (directoryId) envBindings.TENANT_DIRECTORY = bindings.kv({ id: directoryId });
 for (const [key, value] of Object.entries(plain)) if (value) envBindings[key] = bindings.text(value);
