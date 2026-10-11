@@ -39,3 +39,42 @@ aside {
 }
 pre, code { font-family: ui-monospace, monospace; }
 pre { overflow: auto; padding: 0.75rem 1rem; background: #fff; border: 1px solid var(--line); }
+.providers { display: flex; flex-direction: column; gap: 0.6rem; }
+.check-wait { margin: 0.75rem 0; color: var(--muted); font-size: 0.9rem; }
+form[action="/app/sign-in"]:has(button[name="provider"]:not(:disabled)) .check-wait { display: none; }
+button.provider {
+	appearance: none;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 0.65rem;
+	width: 100%;
+	min-height: 2.75rem;
+	padding: 0.55rem 1rem;
+	border: 1px solid transparent;
+	border-radius: 4px;
+	font: inherit;
+	font-weight: 600;
+	line-height: 1.2;
+	cursor: pointer;
+}
+button.provider svg { width: 1.125rem; height: 1.125rem; flex: none; }
+button.provider-github { background: #24292f; color: #fff; border-color: #24292f; }
+button.provider-github:hover:not(:disabled):not([aria-disabled="true"]) { background: #1b1f23; }
+button.provider-google { background: #fff; color: #1f1f1f; border-color: #747775; }
+button.provider-google:hover:not(:disabled):not([aria-disabled="true"]) { background: #f2f2f2; }
+button.provider-cloudflare { background: #f38020; color: #fff; border-color: #f38020; }
+button.provider-cloudflare:hover:not(:disabled):not([aria-disabled="true"]) { background: #e06f12; }
+button.provider-email { background: #fff; color: var(--text); border-color: var(--line); }
+button.provider-email:hover:not(:disabled):not([aria-disabled="true"]) { background: #fff; }
+button[name="provider"]:disabled,
+button[name="provider"]:disabled:hover,
+button[name="provider"][aria-disabled="true"],
+button[name="provider"][aria-disabled="true"]:hover {
+	opacity: 0.45;
+	cursor: not-allowed;
+	filter: grayscale(1);
+	background: #e6e1d6;
+	color: var(--muted);
+	border-color: var(--line);
+}

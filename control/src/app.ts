@@ -1,9 +1,9 @@
 import { Hono, type Context } from "hono";
 import { CALLBACK_DEADLINE_MS, within } from "./auth/deadline.ts";
 import { connectingIp, verifyTurnstile } from "./auth/turnstile.ts";
-import { handleSignIn } from "./auth/sign-in.ts";
+import { enabledProviderOrigins, handleSignIn } from "./auth/sign-in.ts";
 import { loadAuth } from "./auth/instance.ts";
-import { authBlockers, type AuthDeps } from "./auth/options.ts";
+import { authBlockers, type AuthDeps, type AuthOptions } from "./auth/options.ts";
 import { OIDC_COOKIE, authorize, discoveryDocument, exchangeCode, issuerOrigin, readTokenForm, resumeQuery } from "./oidc/issuer.ts";
 import { hostCookie } from "./auth/cookies.ts";
 import { deviceCodeFromCookie, handleDevice } from "./auth/device.ts";
@@ -98,6 +98,10 @@ function callbackGaveUp(request: Request): Response {
 	return new Response(null, { status: 302, headers: { location: url.href, "cache-control": "no-store" } });
 }
 
+function pageHeaders(turnstile: boolean, options?: AuthOptions | null): Record<string, string> {
+	return securityHeaders({ turnstile, formAction: options ? enabledProviderOrigins(options) : [] });
+}
+
 function htmlPathFor(pathname: string): string {
 	if (pathname.endsWith(".md")) {
 		const bare = pathname.slice(0, -3);
@@ -165,13 +169,13 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 			if (session?.user?.id) return c.redirect(new URL(`/app/device?user_code=${pendingDevice}`, c.req.url).href, 302);
 		}
 		const shell = await renderShell(c.req.raw);
-		return c.html(shell.html, 200, securityHeaders({ turnstile: shell.turnstile }));
+		return c.html(shell.html, 200, pageHeaders(shell.turnstile, shell.options));
 	});
 	app.get("/app/device", (c) => devicePage(c));
 	app.post("/app/device", (c) => devicePage(c));
 	app.get("/app/*", async (c) => {
 		const shell = await renderShell(c.req.raw);
-		return c.html(shell.html, 200, securityHeaders({ turnstile: shell.turnstile }));
+		return c.html(shell.html, 200, pageHeaders(shell.turnstile, shell.options));
 	});
 	async function devicePage(c: Context<{ Bindings: ControlEnv }>) {
 		const loaded = await loadAuth(env, c.req.raw, deps);
@@ -180,7 +184,8 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 		if (result.kind === "closed") return c.json({ error: "not_found" }, 404);
 		if (result.cookie) c.header("set-cookie", result.cookie);
 		if (result.kind === "redirect") return c.redirect(result.location ?? "/app/device", 303);
-		return c.html(result.html ?? "", 200, securityHeaders({ turnstile: result.turnstile }));
+		// Approval posts stay on this host. The sign-in form on this page can still leave for a provider.
+		return c.html(result.html ?? "", 200, pageHeaders(Boolean(result.turnstile), loaded.options));
 	}
 	app.post("/app/sign-in", async (c) => {
 		const loaded = await loadAuth(env, c.req.raw, deps);
@@ -273,7 +278,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 		}, 201);
 	}
 
-	async function renderShell(request: Request): Promise<{ html: string; turnstile: boolean }> {
+	async function renderShell(request: Request): Promise<{ html: string; turnstile: boolean; options: AuthOptions | null }> {
 		const loaded = await loadAuth(env, request, deps);
 		const url = new URL(request.url);
 		const turnstile = Boolean(loaded?.options.turnstile);
@@ -295,7 +300,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 			const blockers = authBlockers(env, deps);
 			if (blockers.length) body = renderSignIn({ providers: [], magicLink: false, invitesRequired: false, notice: blockers[0] });
 		}
-		return { html: renderApp(env, body || undefined), turnstile };
+		return { html: renderApp(env, body || undefined), turnstile, options: loaded?.options ?? null };
 	}
 
 	app.get("/.well-known/openid-configuration", async (c) => {
@@ -313,6 +318,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 		const loaded = issuer ? await loadAuth(env, request, deps) : null;
 		if (!loaded) return c.json({ error: "not_found" }, 404);
 		const session = await loaded.auth.api.getSession({ headers: request.headers });
+		// A GET, not a form. The client's redirect_uri is outside form-action, and this response does not post there.
 		const result = await authorize(loaded.options.database, request, session?.user?.id ? { id: session.user.id } : null);
 		if (result.cookie) c.header("set-cookie", result.cookie);
 		if (result.location) return c.redirect(result.location, 302);
