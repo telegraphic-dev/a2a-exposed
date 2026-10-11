@@ -73,7 +73,6 @@ test("HEAD answers like GET with an empty body, and a self-hosted card stays cac
 	assert.equal(head.text, "");
 	assert.equal(head.headers.get("cache-control"), "public, max-age=300");
 	assert.match(head.headers.get("content-type") ?? "", /^application\/json/);
-	assert.equal(head.headers.get("content-length"), String(Buffer.byteLength(get.text)));
 	const legacy = await s.call("HEAD", "/.well-known/agent.json");
 	assert.equal(legacy.status, 200);
 	assert.equal(legacy.text, "");
@@ -781,4 +780,10 @@ test("owner log lists history without data_json and does not clear a pending wak
 	const inbox = await s.owner("GET", "/owner/inbox");
 	assert.equal(inbox.status, 200);
 	assert.equal(s.DB.db.prepare("SELECT pending_json FROM wakes WHERE context_id = ?").get("ctx-keep")?.pending_json, null);
+	const again = JSON.stringify({ taskIds: [taskId] });
+	s.DB.db.prepare("UPDATE wakes SET pending_json = ?, pending_since_ms = ? WHERE context_id = ?").run(again, Date.now(), "ctx-keep");
+	const head = await s.owner("HEAD", "/owner/inbox");
+	assert.equal(head.status, 200);
+	assert.equal(head.text, "");
+	assert.equal(s.DB.db.prepare("SELECT pending_json FROM wakes WHERE context_id = ?").get("ctx-keep")?.pending_json, again);
 });

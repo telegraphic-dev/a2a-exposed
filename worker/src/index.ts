@@ -911,7 +911,7 @@ function ownerTaskView(t: Json): Json {
 	};
 }
 
-async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionContext, path: string, url: URL, trusted = false): Promise<Response> {
+async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionContext, path: string, url: URL, trusted = false, head = false): Promise<Response> {
 	// trusted: an in-process call. MCP tools use ownerCall (paths fixed in the tool code). The hosted
 	// owner() RPC uses runOwnerRpc, which has its own allowlist. A request from the network is never trusted.
 	if (!trusted && !(await isOwner(ctx, req.headers.get("authorization")))) return json({ error: "unauthorized" }, 401);
@@ -949,13 +949,16 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			const lastUser = [...t.history].reverse().find((x: Json) => x.role === "user") || {};
 			out.push({ taskId: t.id, contextId: t.contextId, from: t._peer, state: t.status.state, updated: t.status.timestamp, text: A.textOf(lastUser) });
 		}
-		// the owner has now seen these tasks: drop pending wakes that only cover them
-		const seen = new Set(out.map((o) => o.taskId));
-		const pend = await ctx.DB.prepare("SELECT context_id, pending_json FROM wakes WHERE pending_json IS NOT NULL").all();
-		for (const p of pend.results as Json[]) {
-			const ids: string[] = JSON.parse(p.pending_json).taskIds || [];
-			if (ids.length && ids.every((i) => seen.has(i)))
-				await ctx.DB.prepare("UPDATE wakes SET pending_json = NULL, pending_since_ms = NULL WHERE context_id = ? AND pending_json = ?").bind(p.context_id, p.pending_json).run();
+		// the owner has now seen these tasks: drop pending wakes that only cover them.
+		// HEAD returns the same status and headers and does not mark the inbox seen.
+		if (!head) {
+			const seen = new Set(out.map((o) => o.taskId));
+			const pend = await ctx.DB.prepare("SELECT context_id, pending_json FROM wakes WHERE pending_json IS NOT NULL").all();
+			for (const p of pend.results as Json[]) {
+				const ids: string[] = JSON.parse(p.pending_json).taskIds || [];
+				if (ids.length && ids.every((i) => seen.has(i)))
+					await ctx.DB.prepare("UPDATE wakes SET pending_json = NULL, pending_since_ms = NULL WHERE context_id = ? AND pending_json = ?").bind(p.context_id, p.pending_json).run();
+			}
 		}
 		return json(out);
 	}
@@ -2467,20 +2470,14 @@ function cardCacheControl(ctx: TenantContext): string {
 	return ctx.mode === "host" ? "public, max-age=60" : "public, max-age=300";
 }
 
-/** Same status and headers as the GET response, with an empty body. Content-Length is the GET body's size. */
+/** Same status and headers as the GET response, with an empty body. The body is discarded, not copied. */
 async function emptyHead(res: Response): Promise<Response> {
-	const headers = new Headers(res.headers);
-	try {
-		if (res.body && !headers.has("content-length")) {
-			const bytes = await res.arrayBuffer();
-			headers.set("content-length", String(bytes.byteLength));
-		} else await res.body?.cancel();
-	} catch { /* the status and headers still answer the HEAD */ }
-	return new Response(null, { status: res.status, headers });
+	try { await res.body?.cancel(); } catch { /* the status and headers still answer the HEAD */ }
+	return new Response(null, { status: res.status, headers: res.headers });
 }
 
-async function handle(req: Request, ctx: TenantContext, ectx: ExecutionContext): Promise<Response> {
-	if (req.method === "HEAD") return emptyHead(await handle(new Request(req.url, { method: "GET", headers: req.headers }), ctx, ectx));
+async function handle(req: Request, ctx: TenantContext, ectx: ExecutionContext, head = false): Promise<Response> {
+	if (req.method === "HEAD") return emptyHead(await handle(new Request(req.url, { method: "GET", headers: req.headers }), ctx, ectx, true));
 	const url = new URL(req.url);
 	const path = url.pathname;
 	try {
@@ -2514,7 +2511,7 @@ async function handle(req: Request, ctx: TenantContext, ectx: ExecutionContext):
 		}
 		if (req.method === "POST" && (path === "/" || path === "/a2a" || path === "/a2a/v1")) return await handleRpc(req, ctx, ectx);
 		if (req.method === "POST" && path === "/push") return await handlePush(req, ctx, ectx);
-		if (path === "/owner" || path.startsWith("/owner/")) return await handleOwner(req, ctx, ectx, path, url);
+		if (path === "/owner" || path.startsWith("/owner/")) return await handleOwner(req, ctx, ectx, path, url, false, head);
 		if ((req.method === "GET" || req.method === "HEAD") && path === "/") return await landing(req, ctx, url);
 		return json({ error: "not found" }, 404);
 	} catch (e: any) {
