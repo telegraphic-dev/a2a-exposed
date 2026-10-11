@@ -36,7 +36,7 @@ Every binding is optional and read from the environment in `cloudflare.config.ts
 | `CONTROL_WORKER_NAME` | Worker name. Default `a2a-exposed-control`. |
 | `CONTROL_HOSTNAME` | Custom domain. Unset: `workers.dev`. |
 | `CONTROL_ROUTE` / `CONTROL_ROUTE_ZONE` | Extra fetch route (`triggers.fetch`). |
-| `CONTROL_D1_NAME` / `CONTROL_D1_ID` | Control D1 binding `DB`. Omitted when both are unset. Login needs it. Apply `control/migrations/` with `cf d1 migrations apply`. |
+| `CONTROL_D1_NAME` / `CONTROL_D1_ID` | Control D1 binding `DB`. Omitted when both are unset. Login needs it. `npm run deploy` applies `control/migrations/` with `cf d1 migrations apply` before `cf deploy`. A failed apply does not deploy. |
 | `CONTROL_DATA_PLANE` | Worker name that exports `TenantStore`. With the directory id, turns on `POST /api/v1/tenants` and a five-minute outbox retry. |
 | `CONTROL_TENANT_DIRECTORY_ID` | KV namespace id of the data plane's name directory. The same namespace the inbox reads. |
 | `BRAND_NAME` | Name in the shell. Default `Inbox`. |
@@ -74,4 +74,4 @@ Account linking follows the provider's verified-email flag, and only onto an acc
 
 ## Migrations
 
-`control/migrations/` will hold append-only numbered SQL for Control D1, same rule as `worker/migrations/`. There are none yet.
+`control/migrations/` is append-only numbered SQL for Control D1, same rule as `worker/migrations/`. Add a new numbered file; do not edit an old one. `npm run deploy` applies every file not yet recorded in `d1_migrations`, in numeric order, and then runs `cf deploy`. The Cloudflare connect insert needs the unique index in `0008_account_provider.sql`, so that apply finishes before the new Worker is uploaded. With `CONTROL_D1_ID` and `CONTROL_D1_NAME` both unset, deploy skips this step. A direct `cf deploy` does not apply migrations.
