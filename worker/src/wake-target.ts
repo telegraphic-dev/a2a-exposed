@@ -1,7 +1,14 @@
 // Wake URL checks for WAKE_TARGET_POLICY=public-https. Unset stays the previous fetch
 // (any URL the operator configured, redirects followed by the platform).
+//
+// The TCP connection is to an address from the DNS check. TLS is not the runtime's
+// startTls({ expectedServerHostname }): on the Workers edge that sends no SNI when the
+// socket was opened to an IP (cloudflare/workerd#6903), so the peer aborts before HTTP.
+// The handshake runs in-process, with the URL hostname as SNI, over that pinned socket.
+// A socket still cannot open a Cloudflare address, so a *.workers.dev target does not connect.
+import { CertificateError, Client, TlsError } from "tunnelfetch";
 import { isPrivateHost } from "./a2a.ts";
-import { isPublicIp, net, parseHttpResponse, type PinnedSocket } from "./mcp.ts";
+import { isPublicIp } from "./mcp.ts";
 
 /** DNS-over-HTTPS resolver. Same endpoint the client-metadata fetch uses. */
 export const DOH_URL = "https://cloudflare-dns.com/dns-query";
@@ -9,14 +16,33 @@ export const DOH_URL = "https://cloudflare-dns.com/dns-query";
 /** Original request plus this many redirects. Each hop is checked before it is requested. */
 const MAX_REDIRECTS = 3;
 
+const REQUEST_TIMEOUT_MS = 15_000;
+
 /** Host to addresses. `null` means the lookup failed and the caller must fail closed. */
 export type AddressLookup = (host: string) => Promise<string[] | null>;
 
-type Connect = NonNullable<typeof net.connect>;
+type WakeSocket = {
+	readable: ReadableStream<Uint8Array>;
+	writable: WritableStream<Uint8Array>;
+	opened?: Promise<{ remoteAddress?: string | null }>;
+	close?: () => Promise<void>;
+};
+
+/** Raw TCP. Production uses `cloudflare:sockets`. Tests replace it. */
+export type WakeConnect = (address: { hostname: string; port: number }, options?: { secureTransport?: "off" | "on" | "starttls"; allowHalfOpen?: boolean }) => WakeSocket;
+
+/** One checked hop. `ip` is the address the socket must use. `hostname` is the TLS name. */
+export type CheckedDeliver = (url: string, init: RequestInit, target: { ip: string; hostname: string }) => Promise<Response>;
+
+export const wakeNet: { connect: null | WakeConnect; deliver: null | CheckedDeliver } = { connect: null, deliver: null };
 
 export type WakeDeps = {
 	lookup?: AddressLookup;
-	connect?: Connect;
+	connect?: WakeConnect;
+	deliver?: CheckedDeliver;
+	/** Deliver a URL on this host in-process. Used for a wake aimed at this inbox. */
+	localHost?: string;
+	local?: (url: string, init: RequestInit) => Promise<Response>;
 };
 
 function bareHost(host: string): string {
@@ -69,8 +95,8 @@ export async function publicWakeProblem(url: string, lookup: AddressLookup = loo
 	return "refused" in checked ? checked.refused : "";
 }
 
-/** The address the next request must use. A name is resolved once; the returned IP is from that answer. */
-export async function checkedWakeAddress(url: string, lookup: AddressLookup = lookupAddresses): Promise<{ ip: string } | { refused: string }> {
+/** Every public address from one lookup. The socket uses the first. The TLS name is the URL host. */
+async function checkedWakeAddresses(url: string, lookup: AddressLookup): Promise<{ hostname: string; ips: string[] } | { refused: string }> {
 	let parsed: URL;
 	try { parsed = new URL(url); } catch { return { refused: "not a URL" }; }
 	if (parsed.protocol !== "https:") return { refused: "must be https" };
@@ -78,79 +104,99 @@ export async function checkedWakeAddress(url: string, lookup: AddressLookup = lo
 	const host = parsed.hostname;
 	if (!host || isPrivateHost(host)) return { refused: "private or internal host" };
 	const bare = bareHost(host);
-	if (isIpLiteral(host)) return isPublicIp(bare) ? { ip: bare } : { refused: "private or reserved address" };
+	if (isIpLiteral(host)) return isPublicIp(bare) ? { hostname: bare, ips: [bare] } : { refused: "private or reserved address" };
 	let ips: string[] | null;
 	try { ips = await lookup(host); } catch { return { refused: "its address could not be checked" }; }
 	if (ips == null) return { refused: "its address could not be checked" };
 	if (!ips.length) return { refused: "the host has no address" };
 	if (!ips.every((ip) => isPublicIp(ip))) return { refused: "resolves to a private or reserved address" };
-	return { ip: ips[0] };
+	return { hostname: host, ips };
 }
 
-function headerEntries(headers: HeadersInit | undefined): [string, string][] {
-	const out: [string, string][] = [];
-	const list = new Headers(headers);
-	list.forEach((value, key) => out.push([key, value]));
-	return out;
-}
-
-function requestBytes(method: string, url: URL, headers: HeadersInit | undefined, body: Uint8Array): Uint8Array {
-	const lines = [`${method} ${url.pathname}${url.search} HTTP/1.1`, `host: ${url.host}`];
-	for (const [key, value] of headerEntries(headers)) {
-		if (key === "host" || key === "content-length" || key === "connection" || key === "transfer-encoding") continue;
-		if (/[\r\n]/.test(key) || /[\r\n]/.test(value)) throw new Error("invalid header");
-		lines.push(`${key}: ${value}`);
-	}
-	if (body.byteLength) lines.push(`content-length: ${body.byteLength}`);
-	lines.push("connection: close");
-	const head = new TextEncoder().encode(lines.join("\r\n") + "\r\n\r\n");
-	const raw = new Uint8Array(head.byteLength + body.byteLength);
-	raw.set(head);
-	raw.set(body, head.byteLength);
-	return raw;
-}
-
-async function readSocket(sock: PinnedSocket, cap: number): Promise<Uint8Array> {
-	const reader = sock.readable.getReader();
-	const chunks: Uint8Array[] = [];
-	let n = 0;
-	for (;;) {
-		const { done, value } = await reader.read();
-		if (done) break;
-		n += value.byteLength;
-		if (n > cap) break;
-		chunks.push(value);
-	}
-	const raw = new Uint8Array(Math.min(n, cap));
-	let o = 0;
-	for (const chunk of chunks) {
-		const take = Math.min(chunk.byteLength, raw.byteLength - o);
-		raw.set(chunk.subarray(0, take), o);
-		o += take;
-	}
-	return raw;
+/** The address the next request must use. A name is resolved once; the returned IP is from that answer. */
+export async function checkedWakeAddress(url: string, lookup: AddressLookup = lookupAddresses): Promise<{ ip: string } | { refused: string }> {
+	const checked = await checkedWakeAddresses(url, lookup);
+	if ("refused" in checked) return checked;
+	return { ip: checked.ips[0]! };
 }
 
 /**
- * HTTPS to `ip`, with TLS checked for the URL's hostname. The platform does not resolve the name again.
+ * Dial `ip`, ignoring the hostname the TLS stack passes in. The handshake names that hostname
+ * itself; this function only chooses the TCP address.
  */
-async function pinnedRequest(ip: string, url: string, method: string, headers: HeadersInit | undefined, body: Uint8Array, connect: Connect): Promise<Response> {
-	const parsed = new URL(url);
-	const sock = connect({ hostname: ip, port: Number(parsed.port || 443) }, { secureTransport: "starttls" }).startTls({ expectedServerHostname: parsed.hostname });
+export function dialChecked(ip: string, connect: WakeConnect): WakeConnect {
+	return (addr) => connect({ hostname: ip, port: addr.port }, { secureTransport: "off", allowHalfOpen: false });
+}
+
+async function runtimeConnect(): Promise<WakeConnect> {
+	if (wakeNet.connect) return wakeNet.connect;
+	const sockets = await import("cloudflare:sockets");
+	return sockets.connect as unknown as WakeConnect;
+}
+
+/** Enough of an error body to recognise a Cloudflare status page. A success body is not kept. */
+const HINT_BYTES = 4096;
+
+/**
+ * HTTPS to the checked IP, with SNI and certificate verification for the URL host.
+ * `forceTunnel` keeps the platform from fetching the hostname again.
+ * The body is copied before the client closes, because closing drops the socket.
+ */
+async function deliverPinned(url: string, init: RequestInit, target: { ip: string; hostname: string }, connect: WakeConnect): Promise<Response> {
+	const client = new Client({
+		connect: dialChecked(target.ip, connect),
+		forceTunnel: true,
+		maxRedirects: 0,
+		maxBodyBytes: Infinity,
+		http2: false,
+		keepAlive: false,
+		timeouts: { totalMs: REQUEST_TIMEOUT_MS },
+	});
 	try {
-		const writer = sock.writable.getWriter();
-		await writer.write(requestBytes(method, parsed, headers, body));
-		writer.releaseLock();
-		const raw = await readSocket(sock, 65536);
-		const message = parseHttpResponse(raw);
-		if (typeof message === "string") throw new Error(message);
-		const responseHeaders = new Headers();
-		for (const [key, value] of Object.entries(message.headers)) responseHeaders.set(key, value);
-		const payload = message.status === 204 || message.status === 304 ? null : message.body;
-		return new Response(payload, { status: message.status, headers: responseHeaders });
+		const res = await client.fetch(url, {
+			method: init.method,
+			headers: init.headers,
+			body: init.body,
+			redirect: "manual",
+		});
+		return await responseForCaller(res);
+	} catch (e) {
+		if (e instanceof TlsError || e instanceof CertificateError) throw new Error("TLS Handshake Failed.");
+		throw e;
 	} finally {
-		await sock.close().catch(() => {});
+		await client.close().catch(() => {});
 	}
+}
+
+/** Status and headers, plus the start of an error body. The live socket is not returned. */
+async function responseForCaller(res: Response): Promise<Response> {
+	const headers = new Headers(res.headers);
+	if (res.ok || !res.body) {
+		await res.body?.cancel().catch(() => {});
+		return new Response(null, { status: res.status, headers });
+	}
+	const reader = res.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let total = 0;
+	try {
+		while (total < HINT_BYTES) {
+			const next = await reader.read();
+			if (next.done || !next.value) break;
+			chunks.push(next.value);
+			total += next.value.byteLength;
+		}
+	} finally {
+		await reader.cancel().catch(() => {});
+	}
+	const merged = new Uint8Array(Math.min(total, HINT_BYTES));
+	let offset = 0;
+	for (const chunk of chunks) {
+		const take = Math.min(chunk.byteLength, merged.byteLength - offset);
+		if (take <= 0) break;
+		merged.set(chunk.subarray(0, take), offset);
+		offset += take;
+	}
+	return new Response(merged, { status: res.status, headers });
 }
 
 function bodyBytes(body: BodyInit | null | undefined): Uint8Array {
@@ -161,8 +207,9 @@ function bodyBytes(body: BodyInit | null | undefined): Uint8Array {
 }
 
 /**
- * POST (or whatever `init` says) to `url` on the address that passed the public-https check.
- * A redirect is followed only when it stays on the same origin, and that hop is checked and pinned again.
+ * POST (or whatever `init` says) to `url` after the public-https check.
+ * The socket opens to an address from that check. TLS uses the hostname.
+ * A redirect is followed only when it stays on the same origin, and that hop is checked again.
  * A cross-origin redirect is refused, so wake credentials are not sent to another host.
  * 301, 302, and 303 drop the body. 307 and 308 keep it.
  */
@@ -172,24 +219,31 @@ export async function fetchCheckedWake(
 	deps: WakeDeps = {},
 ): Promise<{ response: Response } | { refused: string }> {
 	const lookup = deps.lookup ?? lookupAddresses;
-	const connect = async (): Promise<Connect> => {
-		if (deps.connect) return deps.connect;
-		if (net.connect) return net.connect;
-		return (await import("cloudflare:sockets")).connect as unknown as Connect;
-	};
 	let current = url;
 	let method = (init.method || "GET").toUpperCase();
 	let body = bodyBytes(method === "GET" || method === "HEAD" ? undefined : init.body);
 	for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-		const checked = await checkedWakeAddress(current, lookup);
+		const checked = await checkedWakeAddresses(current, lookup);
 		if ("refused" in checked) return checked;
-		const res = await pinnedRequest(checked.ip, current, method, init.headers, method === "GET" || method === "HEAD" ? new Uint8Array() : body, await connect());
+		const nextInit: RequestInit = {
+			method,
+			headers: init.headers,
+			body: method === "GET" || method === "HEAD" || body.byteLength === 0 ? undefined : body,
+			redirect: "manual",
+		};
+		const target = { ip: checked.ips[0]!, hostname: checked.hostname };
+		let res: Response;
+		if (deps.local && deps.localHost && new URL(current).host === deps.localHost) res = await deps.local(current, nextInit);
+		else if (deps.deliver) res = await deps.deliver(current, nextInit, target);
+		else if (wakeNet.deliver) res = await wakeNet.deliver(current, nextInit, target);
+		else res = await deliverPinned(current, nextInit, target, deps.connect ?? wakeNet.connect ?? await runtimeConnect());
 		const location = res.headers.get("location");
 		if (res.status < 300 || res.status >= 400 || !location) return { response: res };
+		await res.body?.cancel().catch(() => {});
 		if (hop === MAX_REDIRECTS) return { refused: "too many redirects" };
 		let next: URL;
 		try { next = new URL(location, current); } catch { return { refused: "not a URL" }; }
-		const ahead = await checkedWakeAddress(next.href, lookup);
+		const ahead = await checkedWakeAddresses(next.href, lookup);
 		if ("refused" in ahead) return ahead;
 		if (next.origin !== new URL(current).origin) return { refused: "cross-origin redirect" };
 		if (res.status === 303 || ((res.status === 301 || res.status === 302) && method !== "GET" && method !== "HEAD")) {

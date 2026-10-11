@@ -56,9 +56,25 @@ function publicUrl(domain: string | undefined, name: string): string {
 
 function testCode(result: { status: number; body: unknown }): string {
 	if (result.status !== 200 || !result.body || typeof result.body !== "object") return "failed";
-	const body = result.body as { configured?: unknown; status?: unknown };
+	const body = result.body as { configured?: unknown; status?: unknown; info?: unknown };
 	if (body.configured === false) return "none";
 	if (typeof body.status === "number" && body.status >= 100 && body.status <= 599) return String(body.status);
+	const info = typeof body.info === "string" ? body.info : "";
+	if (/tls handshake failed/i.test(info)) return "tls";
+	const refused = /^refused: (.+)$/.exec(info);
+	const reasons: Record<string, string> = {
+		"not a URL": "https",
+		"must be https": "https",
+		"must not contain credentials": "https",
+		"private or internal host": "private",
+		"private or reserved address": "private",
+		"resolves to a private or reserved address": "private",
+		"its address could not be checked": "dns",
+		"the host has no address": "dns",
+		"cross-origin redirect": "redirect",
+		"too many redirects": "redirect",
+	};
+	if (refused && reasons[refused[1]]) return reasons[refused[1]];
 	return "failed";
 }
 

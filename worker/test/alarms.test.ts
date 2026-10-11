@@ -41,6 +41,23 @@ test("nextCronAt is the earliest wake, rate row, or expiry", async () => {
 	assert.equal(await nextCronAt(tenant, now), now + 801);
 });
 
+test("zero and an unset generic cap stay unlimited; an unset Claude cap is 25", async () => {
+	const now = 1_700_000_000_000;
+	const hour = Math.floor(now / 3600000);
+	const due = now - 60_000;
+	const open = due + 10_000;
+	async function arm(over: Record<string, string>, count: number) {
+		const { DB, tenant } = ctx(over);
+		await DB.prepare("INSERT INTO wake_budget (hour, count) VALUES (?, ?)").bind(hour, count).run();
+		await DB.prepare("INSERT INTO wakes (context_id, last_sent_ms, pending_json, pending_since_ms) VALUES ('c', ?, '{}', ?)").bind(due, now).run();
+		return nextCronAt(tenant, now);
+	}
+	assert.equal(await arm({ WAKE_MAX_PER_HOUR: "0" }, 100), open);
+	assert.equal(await arm({ WAKE_MAX_PER_HOUR: "" }, 100), open);
+	assert.equal(await arm({ WAKE_PRESET: "claude-code", WAKE_MAX_PER_HOUR: "0" }, 100), open);
+	assert.equal(await arm({ WAKE_PRESET: "claude-code", WAKE_MAX_PER_HOUR: "" }, 25), (hour + 1) * 3600000);
+});
+
 test("an hourly cap holds an already-due wake until the next hour", async () => {
 	const now = 1_700_000_000_000;
 	const hour = Math.floor(now / 3600000);

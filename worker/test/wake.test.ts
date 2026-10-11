@@ -120,14 +120,15 @@ test("a key header the preview shows in full is not used for the key", async () 
 	const req = (await renderWake({ preset: "generic", url: "https://hooks.example.com/abc", key: "supersecretvalue", keyHeader: "Content-Type", keyPrefix: "" }, ev))!;
 	assert.equal(req.headers["authorization"], "supersecretvalue");
 	assert.equal(req.headers["content-type"], "application/json");
-	assert.equal(redact(req).headers["authorization"], "supe…");
+	assert.equal(redact(req).headers["authorization"], "••••");
+	assert.equal(JSON.stringify(redact(req)).includes("supe"), false);
 });
 
 test("generic key header is redacted even when its name is not a secret word", async () => {
 	const req = (await renderWake({ preset: "generic", url: "https://hooks.example.com/abc", key: "supersecretvalue", keyHeader: "X-Credential", keyPrefix: "" }, ev))!;
 	assert.equal(req.headers["x-credential"], "supersecretvalue");
 	const red = redact(req);
-	assert.equal(red.headers["x-credential"], "supe…");
+	assert.equal(red.headers["x-credential"], "••••");
 	assert.equal(red.headers["content-type"], "application/json");
 	assert.ok(!JSON.stringify(red).includes("supersecretvalue"));
 });
@@ -160,8 +161,9 @@ test("hermes HMAC is computed over the body only, unaffected by Access headers",
 
 test("redact masks both Access headers", async () => {
 	const r = redact((await renderWake({ preset: "openclaw-wake", url: "https://wake-x.example.com/hooks/wake", key: "hooks-token", ...ACCESS }, ev))!);
-	assert.equal(r.headers["CF-Access-Client-Id"], "abc1…");
-	assert.equal(r.headers["CF-Access-Client-Secret"], "s3cr…");
+	assert.equal(r.headers["CF-Access-Client-Id"], "••••");
+	assert.equal(r.headers["CF-Access-Client-Secret"], "••••");
+	assert.equal(r.headers["authorization"], "Bearer ••••");
 	assert.ok(!JSON.stringify(r).includes("s3cr3t-value"));
 });
 

@@ -43,7 +43,9 @@ export function wakePreviewOf(body: unknown): WakePreview {
 		if (request.headers && typeof request.headers === "object" && !Array.isArray(request.headers)) {
 			for (const [name, value] of Object.entries(request.headers)) {
 				if (typeof value !== "string" || value.length > 200) continue;
-				const shown = PLAIN_HEADERS.has(name.toLowerCase()) || value.endsWith("…") ? value : "…";
+				const shown = PLAIN_HEADERS.has(name.toLowerCase())
+					? value
+					: value === "••••" || value === "Bearer ••••" ? `${value} (set)` : "•••• (set)";
 				lines.push(`${name}: ${shown}`);
 			}
 		}
@@ -58,6 +60,11 @@ export function wakePreviewOf(body: unknown): WakePreview {
 function testMessage(code: string): string {
 	if (code === "none") return "No wake URL is set.";
 	if (code === "failed") return "The test wake was not sent.";
+	if (code === "tls") return "TLS handshake failed.";
+	if (code === "https") return "The wake URL must be https, with no username or password.";
+	if (code === "private") return "The wake URL is not a public address.";
+	if (code === "dns") return "The wake host could not be checked.";
+	if (code === "redirect") return "The wake URL redirected to another site.";
 	if (/^[1-5][0-9]{2}$/.test(code)) return `The test wake returned HTTP ${code}.`;
 	return "";
 }
@@ -85,7 +92,7 @@ export function renderWakeSection(input: {
 				<pre class="preview">{input.preview.lines.join("\n")}</pre>
 			) : <p>{input.preview ? "No wake URL is set." : "The wake preview is unavailable."}</p>}
 			{input.preview?.hasKey ? <p>A key is saved. Leave the key blank to keep it.</p> : ""}
-			<p>Claude Code starts a new cloud session on each wake.</p>
+			{input.preset === "claude-code" ? <p>Claude Code starts a new cloud session on each wake.</p> : ""}
 			<form method="post" action={action}>
 				<input type="hidden" name="action" value="save" />
 				<p>

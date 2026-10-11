@@ -4,7 +4,7 @@
 // token, or dump credential material (export) are not here. Self-host never calls this.
 
 import { ID_RE } from "./a2a.ts";
-import { previewHeaderPlain } from "./wake.ts";
+import { credentialIsMasked, previewHeaderPlain } from "./wake.ts";
 
 /** Control-plane account id. Slashes and dots are refused so the value cannot be a path. */
 export const ACCOUNT_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -188,7 +188,7 @@ function wakePreviewLeaks(value: object): boolean {
 	const headers = (value as { method?: unknown; headers?: unknown }).headers;
 	if ((value as { method?: unknown }).method !== "POST" || !headers || typeof headers !== "object" || Array.isArray(headers)) return false;
 	for (const [k, v] of Object.entries(headers)) {
-		if (typeof v !== "string" || previewHeaderPlain(k) || v.endsWith("…")) continue;
+		if (typeof v !== "string" || previewHeaderPlain(k) || credentialIsMasked(v)) continue;
 		return true;
 	}
 	return false;
