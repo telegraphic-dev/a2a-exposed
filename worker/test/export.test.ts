@@ -11,6 +11,7 @@ import worker from "../src/index.ts";
 import { d1 } from "./d1.ts";
 import { sha256 } from "../src/a2a.ts";
 import { exportRows, redactExport, REDACTED_SQL_SKIP, toSql, bookmarkForTime, restoreBookmark, restartAfterResult, ExportError, EXPORT_TABLES, RESTORE_RESTART_DELAY_MS } from "../src/export.ts";
+import { ownerResponseLeaks } from "../src/owner-rpc.ts";
 import { doSqlD1, type SqlStorageLike, type TxRunner } from "../src/storage.ts";
 import { backupDatabase, backupDirectory, exportTenantSql, hostedDailyBackup, olderThanRetention, pruneSnapshots, snapshotKey, DAILY_CRON, type R2BucketLike } from "../src/backup.ts";
 import { namespaceForRegion, type DoNamespace } from "../src/tenancy.ts";
@@ -81,6 +82,7 @@ test("redactExport drops credential material and leaves the full dump unchanged"
 	const setup = "c".repeat(16);
 	await DB.prepare("INSERT INTO peers (label, token_hash, created_at) VALUES ('ada', ?, ?)").bind(hash, now).run();
 	await DB.prepare("INSERT INTO history (context_id, ts, dir, text) VALUES ('ctx-1', ?, 'in', ?)").bind(now, `see ${token} and ${owner} at https://user:secret@hooks.example/wake?t=${setup}`).run();
+	await DB.prepare("INSERT INTO history (context_id, ts, dir, text) VALUES ('ctx-owner', ?, 'in', ?)").bind(now, owner).run();
 	await DB.prepare("INSERT INTO tasks (id, context_id, peer, state, protocol, created_at, updated_at, status_json, artifacts_json, push_configs_json) VALUES ('task-1', 'ctx-1', 'ada', 'submitted', '1.0', ?, ?, '{}', '[]', ?)").bind(now, now, JSON.stringify([{ token }])).run();
 	await DB.prepare("INSERT INTO outbound (task_id, context_id, peer, push_token_hash, sent_at, task_json) VALUES ('task-1', 'ctx-1', 'ada', 'push-hash-secret', ?, ?)").bind(now, JSON.stringify({ token })).run();
 	await DB.prepare("INSERT INTO settings (key, value) VALUES ('approval_password', ?)").bind(JSON.stringify({ hash: "x".repeat(40) })).run();
@@ -114,19 +116,28 @@ test("redactExport drops credential material and leaves the full dump unchanged"
 	assert.deepEqual(redacted.tables.oauth_codes, []);
 	assert.deepEqual(redacted.tables.oidc_txns, []);
 	assert.deepEqual(redacted.tables.settings?.map((row) => row.key), ["theme"]);
-	assert.equal(redacted.tables.history?.[0]?.text, "see [redacted] and [redacted] at https://[redacted]@hooks.example/wake?t=[redacted]");
+	const history = redacted.tables.history ?? [];
+	assert.equal(history.find((row) => row.context_id === "ctx-1")?.text, "see [redacted] and [redacted] at https://[redacted]@hooks.example/wake?t=[redacted]");
+	assert.equal(history.find((row) => row.context_id === "ctx-owner")?.text, "[redacted]");
 	const dumped = JSON.stringify(redacted);
 	for (const secret of [token, owner, hash, replaces, setupHash, "device-hash-secret", "ciphertext-secret-value", "verifier-secret-value", "csrf-secret-value", "challenge-secret-value", "access-hash-secret", "refresh-hash-secret", "push-hash-secret", "approval_password", "password_setup", "user:secret", `t=${setup}`]) {
 		assert.equal(dumped.includes(secret), false, secret);
 	}
+	assert.equal(ownerResponseLeaks(owner), true);
+	assert.equal(ownerResponseLeaks(redacted), false, "a pasted hosted owner token is redacted, so the dashboard export is returned");
 	const sql = toSql(redacted, { skip: REDACTED_SQL_SKIP });
 	assert.match(sql, /redacted:ada/);
 	assert.equal(sql.includes("oauth_codes"), false);
 	assert.equal(sql.includes("oidc_txns"), false);
-	assert.equal(sql.includes(token), false);
-	assert.equal(sql.includes(hash), false);
+	assert.equal(sql.includes("replaces_hash"), false);
+	assert.equal(sql.includes("password_setup"), false);
+	assert.equal(ownerResponseLeaks({ sql }), false);
+	for (const secret of [token, owner, hash, replaces, setupHash]) {
+		assert.equal(sql.includes(secret), false, secret);
+	}
 	assert.match(toSql(file), /verifier-secret-value/);
 	assert.match(toSql(file), new RegExp(hash));
+	assert.match(toSql(file), /replaces_hash/);
 });
 
 test("exportRows reads every application table in one batch", async () => {
