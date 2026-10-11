@@ -1,4 +1,4 @@
-import { OWNER_COOKIE, hostCookie, readCookie } from "../auth/cookies.ts";
+import { OWNER_COOKIE, hostCookie, ownerTokenForAgent, readCookie } from "../auth/cookies.ts";
 import { loadAuth } from "../auth/instance.ts";
 import { sameOrigin } from "../auth/origin.ts";
 import type { AuthDeps } from "../auth/options.ts";
@@ -15,7 +15,6 @@ import { logEntriesOf, mcpConnectorsOf, renderRecords } from "../views/records.t
 import { hasToken, scrubTokenText } from "../views/tokens.ts";
 import { renderWakeSection, wakePreviewOf } from "../views/wake.tsx";
 
-const OWNER_TOKEN = /^a2aot_[A-Za-z0-9_-]{43}$/;
 const CODE = /^[BCDFGHJKLMNPQRSTVWXZ]{4}-?[2-9]{4}$/i;
 const LABEL = /^[A-Za-z0-9_-]{1,32}$/;
 const MCP_LABEL = /^[A-Za-z0-9_-]{1,64}$/;
@@ -223,7 +222,7 @@ export async function handleAgent(
 				return back(rotated.error === "gone" ? "?token=gone" : "?token=failed");
 			}
 			logDecision(row.id, accountId, "owner_token_rotated", true);
-			return redirect(new URL(`/app/agents/${name}`, request.url).href, [hostCookie(OWNER_COOKIE, rotated.token, 120)]);
+			return redirect(new URL(`/app/agents/${name}`, request.url).href, [hostCookie(OWNER_COOKIE, `${row.name}.${rotated.token}`, 120)]);
 		}
 		if (action === "export") {
 			if (!plane.owner || row.status !== "active") return back("?export=failed");
@@ -322,8 +321,7 @@ export async function handleAgent(
 		}
 	}
 	const url = new URL(request.url);
-	const carried = readCookie(request.headers.get("cookie"), OWNER_COOKIE);
-	const ownerToken = OWNER_TOKEN.test(carried) ? carried : "";
+	const ownerToken = ownerTokenForAgent(readCookie(request.headers.get("cookie"), OWNER_COOKIE), row.name);
 	const html = renderAgentPage({
 		overviewHtml: renderOverview({
 			status: row.status,
@@ -362,7 +360,6 @@ export async function handleAgent(
 		}),
 	});
 	return page(html, 200, env, name, {
-		...(carried ? { cookies: [hostCookie(OWNER_COOKIE, "", 0)] } : {}),
-		...(ownerToken ? { scriptSelf: true } : {}),
+		...(ownerToken ? { cookies: [hostCookie(OWNER_COOKIE, "", 0)], scriptSelf: true } : {}),
 	});
 }

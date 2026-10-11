@@ -14,8 +14,10 @@ async function sha256(value: string): Promise<string> {
 
 /**
  * Replace the hosted owner-token hash and push that hash before returning the new token.
- * A push that does not apply rolls the row back, so the previous token still works.
- * Self-host never calls this: its owner token stays the Worker `OWNER_TOKEN`.
+ * A returned version equal to or newer than the one just written means that hash is already stored,
+ * which is what a concurrent outbox flush does, so the token is shown. A lower version rolls the row
+ * back. A push that throws is sent once more; if that also throws, the previous hash is pushed at the
+ * next version before the page reports failure. Self-host never calls this.
  */
 export async function rotateOwnerToken(
 	db: Sql,
@@ -55,23 +57,60 @@ export async function rotateOwnerToken(
 		config_json: row.config_json, limits_json: row.limits_json, approval_json: row.approval_json,
 		owner_token_hash: hash, secrets_enc: row.secrets_enc, version, created_at: now,
 	};
+	const stored = (result: { version: number }) => Number.isSafeInteger(result.version) && result.version >= version;
+	const reveal = async (dropOutbox: boolean): Promise<RotateResult> => {
+		try {
+			await plane.putDirectory(row.name, { id: row.id, status: row.status, region: row.region, version });
+			if (dropOutbox) await db.prepare("DELETE FROM config_outbox WHERE tenant_id = ? AND version <= ?").bind(row.id, version).run();
+		} catch (error) {
+			console.log(JSON.stringify({ ts: now, event: "outbox_push_failed", tenant: row.id, error: String(error).slice(0, 200) }));
+		}
+		console.log(JSON.stringify({ ts: now, event: "owner_token_rotated", tenant: row.id, accountId: input.accountId }));
+		return { ok: true, token };
+	};
+	const pushNew = () => plane.pushConfig(pushFromRow(outbox), row.region);
+	// The previous hash at the next version. Only an applied push counts: a newer stored version may
+	// already be this rotation's hash, and writing the old hash over the control row would hide it.
+	const restorePrevious = async (): Promise<boolean> => {
+		const next = version + 1;
+		const previous: OutboxRow = { ...outbox, owner_token_hash: row.owner_token_hash, version: next };
+		try {
+			const result = await plane.pushConfig(pushFromRow(previous), row.region);
+			if (!result.applied || !Number.isSafeInteger(result.version) || result.version < next) return false;
+		} catch (error) {
+			console.log(JSON.stringify({ ts: now, event: "outbox_push_failed", tenant: row.id, error: String(error).slice(0, 200) }));
+			return false;
+		}
+		await db.batch([
+			db.prepare(
+				`UPDATE tenants SET owner_token_hash = ?, config_version = ?, updated_at = ?
+				 WHERE id = ? AND owner_account_id = ? AND config_version = ? AND owner_token_hash = ?`,
+			).bind(row.owner_token_hash, next, now, row.id, input.accountId, version, hash),
+			db.prepare("DELETE FROM config_outbox WHERE tenant_id = ? AND version <= ?").bind(row.id, next),
+		]);
+		try {
+			await plane.putDirectory(row.name, { id: row.id, status: row.status, region: row.region, version: next });
+		} catch (error) {
+			console.log(JSON.stringify({ ts: now, event: "outbox_push_failed", tenant: row.id, error: String(error).slice(0, 200) }));
+		}
+		return true;
+	};
 	try {
-		const result = await plane.pushConfig(pushFromRow(outbox), row.region);
-		if (!result.applied) {
+		const result = await pushNew();
+		if (stored(result)) return reveal(true);
+		await undo();
+		return { ok: false, error: "failed" };
+	} catch (error) {
+		console.log(JSON.stringify({ ts: now, event: "outbox_push_failed", tenant: row.id, error: String(error).slice(0, 200) }));
+		try {
+			const result = await pushNew();
+			if (stored(result)) return reveal(true);
 			await undo();
 			return { ok: false, error: "failed" };
+		} catch (again) {
+			console.log(JSON.stringify({ ts: now, event: "outbox_push_failed", tenant: row.id, error: String(again).slice(0, 200) }));
+			if (await restorePrevious()) return { ok: false, error: "failed" };
+			return reveal(false);
 		}
-	} catch (error) {
-		console.log(JSON.stringify({ ts: now, event: "outbox_push_failed", tenant: row.id, error: String(error).slice(0, 200) }));
-		try { await undo(); } catch { /* the next rotation reads whatever row is left */ }
-		return { ok: false, error: "failed" };
 	}
-	try {
-		await plane.putDirectory(row.name, { id: row.id, status: row.status, region: row.region, version });
-		await db.prepare("DELETE FROM config_outbox WHERE tenant_id = ? AND version <= ?").bind(row.id, version).run();
-	} catch (error) {
-		console.log(JSON.stringify({ ts: now, event: "outbox_push_failed", tenant: row.id, error: String(error).slice(0, 200) }));
-	}
-	console.log(JSON.stringify({ ts: now, event: "owner_token_rotated", tenant: row.id, accountId: input.accountId }));
-	return { ok: true, token };
 }

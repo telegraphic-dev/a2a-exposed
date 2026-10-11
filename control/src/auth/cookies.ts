@@ -19,7 +19,25 @@ export function readCookie(header: string | null, name: string): string {
 	return "";
 }
 
-/** Host-only cookie. No Domain attribute: the __Host- prefix forbids one. */
+/** Host-only cookie. No Domain attribute: the __Host- prefix forbids one, and it requires Path=/. */
 export function hostCookie(name: string, value: string, maxAge: number): string {
 	return `${name}=${encodeURIComponent(value)}; Max-Age=${maxAge}; Path=/; HttpOnly; Secure; SameSite=Lax`;
+}
+
+const BARE_OWNER_TOKEN = /^a2aot_[A-Za-z0-9_-]{43}$/;
+
+/** Create stores the bare token. Anything else is not shown on the account page. */
+export function bareOwnerToken(value: string): string {
+	return BARE_OWNER_TOKEN.test(value) ? value : "";
+}
+
+/**
+ * Rotation stores `agentName.token`. The __Host- prefix requires Path=/, so the cookie is sent to
+ * every page; only the named agent's page may show it.
+ */
+export function ownerTokenForAgent(value: string, name: string): string {
+	const prefix = `${name}.`;
+	if (!name || !value.startsWith(prefix)) return "";
+	const token = value.slice(prefix.length);
+	return BARE_OWNER_TOKEN.test(token) ? token : "";
 }

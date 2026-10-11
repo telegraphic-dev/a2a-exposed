@@ -190,7 +190,8 @@ Control plane account (only when that deployment's login is on)
                                 added locally are not shown. Sign out is on that
                                 page. Creating an agent shows the owner token once. The agent page rotates
                                 that token after a confirmation and a recent sign-in. The new token is
-                                shown once, and the previous one stops working immediately. That page is not stored.
+                                shown once on that agent's page. The previous one stops working immediately.
+                                That page is not stored.
                                 FREE_AGENT_LIMIT=2 caps a free account at 2 agents. An account's own limit overrides it.
                                 Unset, there is no limit. The database rejects another insert.
                                 SIGNUP_ALLOWLIST, when set, admits only those verified emails. Unset, sign-in stays open.
