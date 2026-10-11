@@ -197,6 +197,7 @@ Control plane account (only when that deployment's login is on)
                                 FREE_AGENT_LIMIT=2 caps a free account at 2 agents. An account's own limit overrides it.
                                 Unset, there is no limit. The database rejects another insert.
                                 SIGNUP_ALLOWLIST, when set, admits only those verified emails. Unset, sign-in stays open.
+                                Cloudflare's account email counts as verified for that provider. GitHub still uses its own verified flag.
                                 A refusal returns to /app?error=invite and the page says Sign-in is invite-only for now.
                                 The control Worker logs social_sign_in_failed before the
                                 provider page, social_sign_in_timeout when that sign-in does not

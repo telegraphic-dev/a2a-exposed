@@ -13,11 +13,14 @@ import type { AuthOptions } from "./options.ts";
 import { cloudflareMailer } from "../mail/cloudflare.ts";
 import type { Mailer } from "../mail/types.ts";
 
-// Better Auth links when the provider is trusted OR the profile says the email
-// is verified. A trusted provider would therefore link an unverified address.
-// The list stays empty so only a provider-verified email (GitHub primary
-// `verified`, Google `email_verified`, or a magic link) can attach to an
-// existing account. Cloudflare is mapped with emailVerified false.
+// Better Auth links when the provider is trusted or the profile says the email
+// is verified, and only onto an account whose email is already verified. The
+// list stays empty: a trusted provider would attach an address that provider
+// did not verify. GitHub links when its primary email is `verified`. Google
+// links when `email_verified` is true. A magic link is verified because the
+// link was received. Cloudflare is not in this list. mapCloudflareUser reports
+// that provider's account email as verified, so it links the same way as a
+// verified GitHub email. That trust is per provider.
 export const TRUSTED_PROVIDERS: string[] = [];
 
 const AUTHORIZE = "https://dash.cloudflare.com/oauth2/auth";
@@ -117,6 +120,8 @@ export async function createAuth(options: AuthOptions) {
 		},
 		user: {
 			// Fresh provider profile, including a later sign-in. An unverified address never matches.
+			// emailVerified is per provider. GitHub and Google use their own flags.
+			// mapCloudflareUser sets it for Cloudflare.
 			validateUserInfo: async ({ user }) => {
 				if (!options.signupAllowlist) return;
 				const email = typeof user.email === "string" ? user.email : "";
