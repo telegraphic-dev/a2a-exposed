@@ -14,9 +14,25 @@ export interface CreatedTenant {
 	pushed: boolean;
 }
 
+/** Unset or not a non-negative integer: this deployment has no default cap. */
+export function configuredFreeAgentLimit(value: string | undefined): number | null {
+	const trimmed = (value ?? "").trim();
+	if (!/^\d+$/.test(trimmed)) return null;
+	const parsed = Number(trimmed);
+	return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+/** The account column wins. Null uses the configured default. Both empty: no cap. */
+export async function accountAgentLimit(db: Sql, accountId: string, freeAgentLimit: number | null): Promise<number | null> {
+	const row = await db.prepare('SELECT agent_limit AS n FROM "user" WHERE id = ?').bind(accountId).first<{ n: number | null }>();
+	if (!row || row.n == null) return freeAgentLimit;
+	const parsed = Number(row.n);
+	return Number.isSafeInteger(parsed) ? parsed : freeAgentLimit;
+}
+
 export type CreateResult =
 	| { ok: true; tenant: CreatedTenant }
-	| { ok: false; error: "invalid_name" | "reserved_name" | "taken" };
+	| { ok: false; error: "invalid_name" | "reserved_name" | "taken" | "limit" };
 
 function regionOf(dataRegion: string | undefined): string {
 	const value = (dataRegion || "").trim().toLowerCase();
@@ -39,7 +55,7 @@ function ownerToken(): string {
 export async function createTenant(
 	db: Sql,
 	plane: DataPlane,
-	input: { accountId: string; name: string; domain?: string; dataRegion?: string; issuer?: string; label?: string },
+	input: { accountId: string; name: string; domain?: string; dataRegion?: string; issuer?: string; label?: string; freeAgentLimit?: number | null },
 ): Promise<CreateResult> {
 	const name = input.name.trim().toLowerCase();
 	const problem = tenantNameProblem(name);
@@ -58,6 +74,12 @@ export async function createTenant(
 	const publicUrl = domain ? `https://${name}.${domain}` : null;
 	const client = await newApprovalClient({ accountId: input.accountId, issuer: input.issuer || "", publicUrl, label: input.label });
 	const approval = client?.approval ?? {};
+	// Committed before the insert. A rejected insert still keeps the current default,
+	// and the trigger reads it in the same database as the per-account column.
+	await db.prepare(
+		`INSERT INTO control_settings (id, free_agent_limit) VALUES (1, ?)
+		 ON CONFLICT(id) DO UPDATE SET free_agent_limit = excluded.free_agent_limit`,
+	).bind(input.freeAgentLimit ?? null).run();
 	try {
 		await db.batch([
 			db.prepare(
@@ -73,6 +95,7 @@ export async function createTenant(
 		]);
 	} catch (error) {
 		const message = String(error);
+		if (message.includes("agent_limit")) return { ok: false, error: "limit" };
 		if (/unique|constraint/i.test(message)) return { ok: false, error: "taken" };
 		throw error;
 	}
@@ -95,16 +118,17 @@ export async function createTenant(
 	};
 }
 
-export async function listTenants(db: Sql, accountId: string, domain?: string): Promise<{ id: string; name: string; status: string; publicUrl: string | null; version: number }[]> {
+export async function listTenants(db: Sql, accountId: string, domain?: string): Promise<{ id: string; name: string; status: string; publicUrl: string | null; version: number; createdAt: string }[]> {
 	const listed = await db.prepare(
-		"SELECT id, name, status, config_version FROM tenants WHERE owner_account_id = ? ORDER BY created_at",
-	).bind(accountId).all<{ id: string; name: string; status: string; config_version: number }>();
+		"SELECT id, name, status, config_version, created_at FROM tenants WHERE owner_account_id = ? ORDER BY created_at",
+	).bind(accountId).all<{ id: string; name: string; status: string; config_version: number; created_at: string }>();
 	const host = (domain || "").trim().toLowerCase().replace(/^\.+|\.+$/g, "");
 	return listed.results.map((row) => ({
 		id: row.id,
 		name: row.name,
 		status: row.status,
 		version: row.config_version,
+		createdAt: row.created_at,
 		publicUrl: host ? `https://${row.name}.${host}` : null,
 	}));
 }

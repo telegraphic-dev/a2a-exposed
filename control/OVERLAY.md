@@ -51,6 +51,7 @@ Every binding is optional and read from the environment in `cloudflare.config.ts
 | `MAIL_FROM` | Sender address. With the `EMAIL` send binding, turns on email sign-in. |
 | `TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY` | Optional. Both are required before the widget is shown. |
 | `INVITES_REQUIRED` | `1` requires an `invite_` code in `invites` before the first account for an email is created. Unset: anyone who can use a configured provider can sign in. |
+| `FREE_AGENT_LIMIT` | Default number of agents per account, a non-negative integer. Unset: no cap. An account's `agent_limit` overrides it. |
 | `CONTROL_WORKERS_LOGS` | `1` enables Workers Logs with query strings redacted. |
 | `CLOUDFLARE_ACCOUNT_ID` | Account, when the token can see more than one. |
 

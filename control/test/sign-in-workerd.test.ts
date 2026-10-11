@@ -10,7 +10,24 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const origin = "https://control.example.com";
 
 function statements(sql: string): string[] {
-	return sql.split("\n").map((line) => line.replace(/--.*$/, "")).join("\n").split(";").map((part) => part.trim()).filter(Boolean);
+	const text = sql.split("\n").map((line) => line.replace(/--.*$/, "")).join("\n");
+	const parts: string[] = [];
+	let current = "";
+	let depth = 0;
+	for (const token of text.split(/(\s+|;)/)) {
+		if (/^begin$/i.test(token)) depth += 1;
+		if (/^end$/i.test(token)) depth = Math.max(0, depth - 1);
+		if (token === ";" && depth === 0) {
+			const trimmed = current.trim();
+			if (trimmed) parts.push(trimmed);
+			current = "";
+			continue;
+		}
+		current += token;
+	}
+	const tail = current.trim();
+	if (tail) parts.push(tail);
+	return parts;
 }
 
 test("a page load then a Turnstile sign-in reaches GitHub under workerd", async () => {

@@ -6,15 +6,20 @@ import { SignInAside } from "@brand/SignInAside.tsx";
 import { PROVIDER_ORIGINS } from "../auth/sign-in.ts";
 
 const KNOWN_FORM_ORIGINS = new Set<string>(Object.values(PROVIDER_ORIGINS));
+const KNOWN_IMG_ORIGINS = new Set([
+	"https://avatars.githubusercontent.com",
+	"https://lh3.googleusercontent.com",
+]);
 
-export function securityHeaders(options: { turnstile?: boolean; formAction?: readonly string[] } = {}): Record<string, string> {
+export function securityHeaders(options: { turnstile?: boolean; formAction?: readonly string[]; imgSrc?: readonly string[]; scriptSelf?: boolean } = {}): Record<string, string> {
 	const host = options.turnstile ? "https://challenges.cloudflare.com" : "'none'";
-	const script = options.turnstile ? "'self' https://challenges.cloudflare.com" : "'none'";
+	const script = options.turnstile ? "'self' https://challenges.cloudflare.com" : options.scriptSelf ? "'self'" : "'none'";
 	const formAction = ["'self'", ...(options.formAction ?? []).filter((origin) => KNOWN_FORM_ORIGINS.has(origin))].join(" ");
+	const imgSrc = ["'self'", ...(options.imgSrc ?? []).filter((origin) => KNOWN_IMG_ORIGINS.has(origin))].join(" ");
 	const csp = [
 		"default-src 'none'",
 		"style-src 'self'",
-		"img-src 'self'",
+		imgSrc === "'self'" ? "img-src 'self'" : `img-src ${imgSrc}`,
 		`script-src ${script}`,
 		`frame-src ${host}`,
 		`connect-src ${host}`,
@@ -77,9 +82,10 @@ export function renderHome(env?: { BRAND_NAME?: string }): string {
 	});
 }
 
-export function renderApp(env?: { BRAND_NAME?: string }, bodyHtml?: string): string {
+export function renderApp(env?: { BRAND_NAME?: string }, bodyHtml?: string, title?: string): string {
 	return renderDocument({
 		env,
+		title,
 		robots: "noindex",
 		aside: !bodyHtml,
 		bodyHtml,
