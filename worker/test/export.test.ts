@@ -10,7 +10,7 @@ import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import worker from "../src/index.ts";
 import { d1 } from "./d1.ts";
 import { sha256 } from "../src/a2a.ts";
-import { exportRows, toSql, bookmarkForTime, restoreBookmark, restartAfterResult, ExportError, EXPORT_TABLES, RESTORE_RESTART_DELAY_MS } from "../src/export.ts";
+import { exportRows, redactExport, REDACTED_SQL_SKIP, toSql, bookmarkForTime, restoreBookmark, restartAfterResult, ExportError, EXPORT_TABLES, RESTORE_RESTART_DELAY_MS } from "../src/export.ts";
 import { doSqlD1, type SqlStorageLike, type TxRunner } from "../src/storage.ts";
 import { backupDatabase, backupDirectory, exportTenantSql, hostedDailyBackup, olderThanRetention, pruneSnapshots, snapshotKey, DAILY_CRON, type R2BucketLike } from "../src/backup.ts";
 import { namespaceForRegion, type DoNamespace } from "../src/tenancy.ts";
@@ -68,6 +68,57 @@ test("export SQL writes a NUL byte as char(0) so the script stays valid", () => 
 	fresh.exec(sql);
 	const hex = fresh.prepare("SELECT hex(text) AS h FROM history").get() as { h: string };
 	assert.equal(hex.h, Buffer.from(raw, "utf8").toString("hex").toUpperCase());
+});
+
+test("redactExport drops credential material and leaves the full dump unchanged", async () => {
+	const DB = db();
+	const now = "2026-10-11T00:00:00.000Z";
+	const token = "a2aow_" + "a".repeat(20);
+	const hash = "ab".repeat(32);
+	const setup = "c".repeat(16);
+	await DB.prepare("INSERT INTO peers (label, token_hash, created_at) VALUES ('ada', ?, ?)").bind(hash, now).run();
+	await DB.prepare("INSERT INTO history (context_id, ts, dir, text) VALUES ('ctx-1', ?, 'in', ?)").bind(now, `see ${token} at https://user:secret@hooks.example/wake?t=${setup}`).run();
+	await DB.prepare("INSERT INTO tasks (id, context_id, peer, state, protocol, created_at, updated_at, status_json, artifacts_json, push_configs_json) VALUES ('task-1', 'ctx-1', 'ada', 'submitted', '1.0', ?, ?, '{}', '[]', ?)").bind(now, now, JSON.stringify([{ token }])).run();
+	await DB.prepare("INSERT INTO outbound (task_id, context_id, peer, push_token_hash, sent_at, task_json) VALUES ('task-1', 'ctx-1', 'ada', 'push-hash-secret', ?, ?)").bind(now, JSON.stringify({ token })).run();
+	await DB.prepare("INSERT INTO settings (key, value) VALUES ('approval_password', ?)").bind(JSON.stringify({ hash: "x".repeat(40) })).run();
+	await DB.prepare("INSERT INTO settings (key, value) VALUES ('theme', 'kept')").run();
+	await DB.prepare("INSERT INTO device_requests (device_hash, user_code, status, created_ms, expires_ms, interval_s) VALUES ('device-hash-secret', 'WDJB4827', 'pending', 1, 2, 5)").run();
+	await DB.prepare("INSERT INTO oauth_codes (code_hash, client_id, redirect_uri, code_challenge, scope, resource, created_ms, expires_ms) VALUES ('code-hash', 'client', 'https://client.example/cb', 'challenge-secret-value', 'mcp', 'https://agent.example/mcp', 1, 2)").run();
+	await DB.prepare("INSERT INTO mcp_grants (label, client_id, scope, access_hash, refresh_hash, created_at) VALUES ('mcp-claude', 'client', 'mcp', 'access-hash-secret', 'refresh-hash-secret', ?)").bind(now).run();
+	await DB.prepare("INSERT INTO outbound_peers (alias, url, token_enc, created_at, updated_at) VALUES ('ada', 'https://ada.example', 'ciphertext-secret-value', ?, ?)").bind(now, now).run();
+	await DB.prepare("INSERT INTO oidc_txns (state, nonce, verifier, kind, csrf, payload_json, expires_ms) VALUES ('state-1', 'nonce-1', 'verifier-secret-value', 'device', 'csrf-secret-value', '{}', 1)").run();
+	const file = await exportRows(DB, new Date(now));
+	const redacted = redactExport(file);
+	assert.equal(file.tables.peers?.[0]?.token_hash, hash, "the CLI dump still has the hash");
+	assert.equal(file.tables.oidc_txns?.[0]?.verifier, "verifier-secret-value");
+	assert.equal(redacted.tables.peers?.[0]?.token_hash, "redacted:ada");
+	assert.equal(redacted.tables.peers?.[0]?.label, "ada");
+	assert.equal(redacted.tables.device_requests?.[0]?.device_hash, "redacted:WDJB4827");
+	assert.equal(redacted.tables.device_requests?.[0]?.user_code, "WDJB4827");
+	assert.equal(redacted.tables.tasks?.[0]?.push_configs_json, undefined);
+	assert.equal(redacted.tables.outbound?.[0]?.push_token_hash, undefined);
+	assert.equal(redacted.tables.outbound?.[0]?.task_json, JSON.stringify({ token: "[redacted]" }));
+	assert.equal(redacted.tables.mcp_grants?.[0]?.access_hash, undefined);
+	assert.equal(redacted.tables.mcp_grants?.[0]?.refresh_hash, undefined);
+	assert.equal(redacted.tables.mcp_grants?.[0]?.label, "mcp-claude");
+	assert.equal(redacted.tables.outbound_peers?.[0]?.token_enc, undefined);
+	assert.equal(redacted.tables.outbound_peers?.[0]?.alias, "ada");
+	assert.deepEqual(redacted.tables.oauth_codes, []);
+	assert.deepEqual(redacted.tables.oidc_txns, []);
+	assert.deepEqual(redacted.tables.settings?.map((row) => row.key), ["theme"]);
+	assert.equal(redacted.tables.history?.[0]?.text, "see [redacted] at https://[redacted]@hooks.example/wake?t=[redacted]");
+	const dumped = JSON.stringify(redacted);
+	for (const secret of [token, hash, "device-hash-secret", "ciphertext-secret-value", "verifier-secret-value", "csrf-secret-value", "challenge-secret-value", "access-hash-secret", "refresh-hash-secret", "push-hash-secret", "approval_password", "user:secret", `t=${setup}`]) {
+		assert.equal(dumped.includes(secret), false, secret);
+	}
+	const sql = toSql(redacted, { skip: REDACTED_SQL_SKIP });
+	assert.match(sql, /redacted:ada/);
+	assert.equal(sql.includes("oauth_codes"), false);
+	assert.equal(sql.includes("oidc_txns"), false);
+	assert.equal(sql.includes(token), false);
+	assert.equal(sql.includes(hash), false);
+	assert.match(toSql(file), /verifier-secret-value/);
+	assert.match(toSql(file), new RegExp(hash));
 });
 
 test("exportRows reads every application table in one batch", async () => {

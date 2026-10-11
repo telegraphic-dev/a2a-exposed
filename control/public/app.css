@@ -73,12 +73,15 @@ button.provider-email:hover:not(:disabled):not([aria-disabled="true"]) { backgro
 .agents li { display: flex; justify-content: space-between; gap: 1rem; padding: 0.6rem 0; border-top: 1px solid var(--line); }
 .overview dt { color: var(--muted); }
 .overview dd { margin: 0 0 0.5rem; }
-.peers dt { color: var(--muted); }
-.peers dd { margin: 0 0 0.5rem; }
-.peers article { margin: 1rem 0; padding-top: 0.75rem; border-top: 1px solid var(--line); }
+.peers dt, .records dt { color: var(--muted); }
+.peers dd, .records dd { margin: 0 0 0.5rem; }
+.peers article, .records article { margin: 1rem 0; padding-top: 0.75rem; border-top: 1px solid var(--line); }
 .peers .actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
-.peers .confirm { margin: 1rem 0; padding: 0.9rem 1rem; border: 1px solid var(--line); background: #fff; }
-.peers button.deny { background: #fff; color: var(--text); border: 1px solid var(--line); }
+.peers .confirm, .records .confirm { margin: 1rem 0; padding: 0.9rem 1rem; border: 1px solid var(--line); background: #fff; }
+.peers button.deny, .records button.deny { background: #fff; color: var(--text); border: 1px solid var(--line); }
+.records .log { list-style: none; margin: 1rem 0; padding: 0; }
+.records .log li { margin: 0.75rem 0; padding-top: 0.75rem; border-top: 1px solid var(--line); }
+.records .log p { margin: 0.25rem 0 0; }
 .wake label { display: block; }
 .wake input, .wake select { display: block; width: 100%; margin-top: 0.25rem; font: inherit; }
 .wake .preview { white-space: pre-wrap; }

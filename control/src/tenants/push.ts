@@ -25,6 +25,8 @@ export interface OwnerCall {
 	accountId: string;
 	method: string;
 	path: string;
+	/** Allowlisted query parameters only. */
+	query?: Record<string, string>;
 	/** Dashboard approve or deny. The control plane sets this only after a recent sign-in. */
 	actor?: "human";
 }

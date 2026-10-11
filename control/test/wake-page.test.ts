@@ -115,12 +115,14 @@ test("the agent list links to a wake page that edits through the owner and does 
 	assert.equal(html.includes(wakeKey), false);
 	assert.match(html, /x-credential: •••• \(set\)/);
 	assert.equal(html.includes("Claude Code starts a new cloud session on each wake."), false);
-	assert.equal(target.calls.length, 5);
+	assert.equal(target.calls.length, 7);
 	assert.deepEqual(target.calls.map((call) => call.input.path), [
 		"/owner/summary",
 		"/owner/pairing",
 		"/owner/peers",
 		"/owner/outbound-peers",
+		"/owner/mcp",
+		"/owner/log",
 		"/owner/wake/preview",
 	]);
 	assert.equal(target.calls[0].input.method, "GET");

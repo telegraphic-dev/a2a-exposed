@@ -9,10 +9,14 @@ import { renderAgentPage } from "../views/agent.tsx";
 import { renderApp, securityHeaders } from "../views/document.tsx";
 import { inboxCountsOf, renderOverview } from "../views/overview.tsx";
 import { inboundPeersOf, outboundPeersOf, pendingPairingsOf, renderPeers } from "../views/peers.tsx";
+import { logEntriesOf, mcpConnectorsOf, renderRecords } from "../views/records.tsx";
 import { renderWakeSection, wakePreviewOf } from "../views/wake.tsx";
 
 const CODE = /^[BCDFGHJKLMNPQRSTVWXZ]{4}-?[2-9]{4}$/i;
 const LABEL = /^[A-Za-z0-9_-]{1,32}$/;
+const MCP_LABEL = /^[A-Za-z0-9_-]{1,64}$/;
+const TOKEN_RE = /(?:a2aow_|s2a_|a2amcp_|a2amcpr_)[A-Za-z0-9_-]{20,}/;
+const SETUP_RE = /(?:\?|&)t=[A-Za-z0-9_-]{16,}/;
 
 function redirect(location: string, cookies: string[] = []): Response {
 	const headers = new Headers({ location, "cache-control": "no-store" });
@@ -109,6 +113,12 @@ function peerQuery(action: "approve" | "deny" | "revoke", status: number): strin
 	return "failed";
 }
 
+function exportLeaks(sql: string): boolean {
+	if (TOKEN_RE.test(sql) || SETUP_RE.test(sql)) return true;
+	// A scrubbed userinfo is `https://[redacted]@host`. Any other userinfo is still a secret.
+	return /:\/\/(?!\[redacted\]@)[^/?\s]*@/.test(sql);
+}
+
 /** GET or POST `/app/agents/:name`. Ownership is checked before any owner call. */
 export async function handleAgent(
 	request: Request,
@@ -172,6 +182,57 @@ export async function handleAgent(
 				return back("?peer=failed");
 			}
 		}
+		if (action === "revoke-mcp") {
+			if (!recentSignIn(session)) {
+				console.log(JSON.stringify({ ts: new Date().toISOString(), event: "dashboard_reauth", tenant: row.id, accountId, decision: "revoke-mcp" }));
+				let cookies: string[] = [];
+				try { cookies = await clearSession(loaded.auth, request); } catch { /* still do not call owner */ }
+				return redirect(new URL("/app?error=reauth", request.url).href, cookies);
+			}
+			const label = String(form.get("label") ?? "");
+			if (!MCP_LABEL.test(label)) return back("?mcp=label");
+			if (String(form.get("confirm") ?? "") !== "1") return back(`?confirm-mcp=${encodeURIComponent(label)}`);
+			if (!plane.owner || row.status !== "active") {
+				logDecision(row.id, accountId, "mcp_revoked", false);
+				return back("?mcp=failed");
+			}
+			try {
+				const result = await plane.owner(row.id, row.region, { accountId, method: "DELETE", path: `/owner/mcp/${encodeURIComponent(label)}` });
+				const query = result.status === 200 ? "revoked" : result.status === 404 ? "missing" : "failed";
+				logDecision(row.id, accountId, "mcp_revoked", query === "revoked", result.status);
+				return back(`?mcp=${query}`);
+			} catch {
+				logDecision(row.id, accountId, "mcp_revoked", false);
+				return back("?mcp=failed");
+			}
+		}
+		if (action === "export") {
+			if (!plane.owner || row.status !== "active") return back("?export=failed");
+			try {
+				const result = await plane.owner(row.id, row.region, { accountId, method: "GET", path: "/owner/export", query: { format: "sql" } });
+				const sql = result.status === 200 && result.body && typeof result.body === "object"
+					? (result.body as { sql?: unknown }).sql
+					: "";
+				if (typeof sql !== "string" || !sql || exportLeaks(sql)) {
+					console.log(JSON.stringify({ ts: new Date().toISOString(), event: "export_failed", tenant: row.id }));
+					return back("?export=failed");
+				}
+				const fileName = /^[a-z0-9-]{1,32}$/.test(name) ? `${name}.sql` : "agent.sql";
+				return new Response(sql, {
+					status: 200,
+					headers: {
+						"content-type": "text/plain; charset=utf-8",
+						"content-disposition": `attachment; filename="${fileName}"`,
+						"cache-control": "no-store",
+						"x-content-type-options": "nosniff",
+						"x-robots-tag": "noindex",
+					},
+				});
+			} catch {
+				console.log(JSON.stringify({ ts: new Date().toISOString(), event: "export_failed", tenant: row.id }));
+				return back("?export=failed");
+			}
+		}
 		if (action === "test") {
 			if (!plane.owner) return back("?test=failed");
 			try {
@@ -201,6 +262,8 @@ export async function handleAgent(
 	let pending = null;
 	let inbound = null;
 	let outbound = null;
+	let mcp = null;
+	let entries = null;
 	const listed = async (path: string, event: string): Promise<unknown> => {
 		if (!plane.owner) return undefined;
 		try {
@@ -222,9 +285,13 @@ export async function handleAgent(
 		const pairingBody = await listed("/owner/pairing", "pairing_list_failed");
 		const peersBody = await listed("/owner/peers", "peers_list_failed");
 		const outboundBody = await listed("/owner/outbound-peers", "outbound_peers_list_failed");
+		const mcpBody = await listed("/owner/mcp", "mcp_list_failed");
+		const logBody = await listed("/owner/log", "message_log_failed");
 		pending = pairingBody === undefined ? null : pendingPairingsOf(pairingBody);
 		inbound = peersBody === undefined ? null : inboundPeersOf(peersBody);
 		outbound = outboundBody === undefined ? null : outboundPeersOf(outboundBody);
+		mcp = mcpBody === undefined ? null : mcpConnectorsOf(mcpBody);
+		entries = logBody === undefined ? null : logEntriesOf(logBody);
 	}
 	if (plane.owner) {
 		try {
@@ -244,6 +311,14 @@ export async function handleAgent(
 			outbound,
 			confirmLabel: url.searchParams.get("confirm") ?? "",
 			peer: url.searchParams.get("peer") ?? "",
+		}),
+		recordsHtml: renderRecords({
+			name,
+			mcp,
+			entries,
+			confirmLabel: url.searchParams.get("confirm-mcp") ?? "",
+			mcpNotice: url.searchParams.get("mcp") ?? "",
+			exportNotice: url.searchParams.get("export") ?? "",
 		}),
 		wakeHtml: renderWakeSection({
 			name,
