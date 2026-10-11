@@ -57,23 +57,28 @@ export async function rotateOwnerToken(
 	const reveal = async (confirmed: boolean): Promise<RotateResult> => {
 		// A later rotation can advance the version with a different hash. Do not show this token then.
 		if (!(await hashStillOurs())) return { ok: false, error: "replaced" };
+		const live = await db.prepare(
+			"SELECT config_version FROM tenants WHERE id = ? AND owner_account_id = ?",
+		).bind(row.id, input.accountId).first<{ config_version: number }>();
+		const liveVersion = live?.config_version;
+		const flushVersion = typeof liveVersion === "number" && Number.isSafeInteger(liveVersion) ? liveVersion : version;
 		try {
-			await plane.putDirectory(row.name, { id: row.id, status: row.status, region: row.region, version });
+			await plane.putDirectory(row.name, { id: row.id, status: row.status, region: row.region, version: confirmed ? version : flushVersion });
 			if (confirmed) {
 				await db.prepare("DELETE FROM config_outbox WHERE tenant_id = ? AND version <= ?").bind(row.id, version).run();
 			} else {
-				// The tenant may already have this hash, or not. Keep a flush from dropping it, and the page shows the token.
+				// Queue the live version. An older one is ignored once a restore has already been stored, and the flush then drops it.
 				await db.prepare(
 					`INSERT INTO config_outbox (tenant_id, version, created_at) VALUES (?, ?, ?)
 					 ON CONFLICT (tenant_id, version) DO NOTHING`,
-				).bind(row.id, version, now).run();
+				).bind(row.id, flushVersion, now).run();
 			}
 		} catch (error) {
 			console.log(JSON.stringify({ ts: now, event: "outbox_push_failed", tenant: row.id, error: String(error).slice(0, 200) }));
 		}
 		if (!(await hashStillOurs())) {
 			try {
-				await db.prepare("DELETE FROM config_outbox WHERE tenant_id = ? AND version = ?").bind(row.id, version).run();
+				await db.prepare("DELETE FROM config_outbox WHERE tenant_id = ? AND version = ?").bind(row.id, flushVersion).run();
 			} catch { /* the token is still not shown */ }
 			return { ok: false, error: "replaced" };
 		}
@@ -112,7 +117,24 @@ export async function rotateOwnerToken(
 				result = await plane.pushConfig(pushFromRow(previous), row.region);
 			} catch (again) {
 				console.log(JSON.stringify({ ts: now, event: "outbox_push_failed", tenant: row.id, error: String(again).slice(0, 200) }));
-				// The version stays reserved and the new hash stays in the row. The caller shows that token.
+				// The old hash may already be stored at `next`. Put this hash at the following version,
+				// which that tenant will accept. Do not queue the original version: it is ignored and then dropped.
+				const repair = next + 1;
+				const moved = await db.prepare(
+					`UPDATE tenants SET config_version = ?, updated_at = ?
+					 WHERE id = ? AND owner_account_id = ? AND config_version = ? AND owner_token_hash = ?`,
+				).bind(repair, now, row.id, input.accountId, next, hash).run();
+				if (moved.meta?.changes !== 1) return false;
+				try {
+					const repaired = await plane.pushConfig(pushFromRow({ ...outbox, version: repair }), row.region);
+					if (Number.isSafeInteger(repaired.version) && repaired.version >= repair && (await hashStillOurs())) return false;
+				} catch (error) {
+					console.log(JSON.stringify({ ts: now, event: "outbox_push_failed", tenant: row.id, error: String(error).slice(0, 200) }));
+				}
+				await db.prepare(
+					`INSERT INTO config_outbox (tenant_id, version, created_at) VALUES (?, ?, ?)
+					 ON CONFLICT (tenant_id, version) DO NOTHING`,
+				).bind(row.id, repair, now).run();
 				return false;
 			}
 		}

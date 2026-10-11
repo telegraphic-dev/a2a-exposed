@@ -300,10 +300,40 @@ test("a push that cannot be restored still returns the new token", async () => {
 	const packed = cookieValue(rotated.headers.getSetCookie().find((value) => value.startsWith(`${OWNER_COOKIE}=`)) ?? "");
 	assert.match(packed, /^northwind\.a2aot_/);
 	const after = await db.prepare("SELECT owner_token_hash, config_version FROM tenants WHERE name = ?").bind("northwind").first<{ owner_token_hash: string; config_version: number }>();
-	assert.equal(after?.config_version, 3);
+	assert.equal(after?.config_version, 4);
 	assert.notEqual(after?.owner_token_hash, before?.owner_token_hash);
-	const pending = await db.prepare("SELECT COUNT(*) AS n FROM config_outbox").first<{ n: number }>();
-	assert.equal(Number(pending?.n), 1);
+	const pending = await db.prepare("SELECT version FROM config_outbox").all<{ version: number }>();
+	assert.deepEqual(pending.results.map((row) => row.version), [4]);
+});
+
+test("a restore that applies and then loses its response is superseded", async () => {
+	const db = openDb();
+	const sent: { text: string }[] = [];
+	const target = plane();
+	target.data.pushConfig = async (body) => {
+		target.pushes.push(body);
+		if (body.version === 2) return { version: 1, applied: false };
+		if (body.version === 3) throw new Error("applied then lost");
+		return { version: body.version, applied: true };
+	};
+	const app = createApp(
+		{ AUTH_SECRET: secret, DB: db, TENANT_DOMAIN: "example.com" },
+		{ database: db, mailer: { async send(message) { sent.push({ text: message.text }); } }, dataPlane: target.data },
+	);
+	const cookie = await signIn(app, sent);
+	const headers = { cookie, origin, "sec-fetch-site": "same-origin", "content-type": "application/x-www-form-urlencoded" };
+	assert.equal((await app.request(`${origin}/api/v1/tenants`, { method: "POST", headers, body: "name=Northwind" })).status, 303);
+	const before = await db.prepare("SELECT owner_token_hash FROM tenants WHERE name = ?").bind("northwind").first<{ owner_token_hash: string }>();
+	const rotated = await app.request(`${origin}/app/agents/northwind`, { method: "POST", headers, body: "action=rotate-token&confirm=1" });
+	assert.equal(rotated.status, 303);
+	assert.match(cookieValue(rotated.headers.getSetCookie().find((value) => value.startsWith(`${OWNER_COOKIE}=`)) ?? ""), /^northwind\.a2aot_/);
+	const after = await db.prepare("SELECT owner_token_hash, config_version FROM tenants WHERE name = ?").bind("northwind").first<{ owner_token_hash: string; config_version: number }>();
+	assert.equal(after?.config_version, 4);
+	assert.notEqual(after?.owner_token_hash, before?.owner_token_hash);
+	assert.equal(target.pushes.some((body) => body.version === 3 && body.ownerTokenHash === before?.owner_token_hash), true);
+	assert.equal(target.pushes.some((body) => body.version === 4 && body.ownerTokenHash === after?.owner_token_hash), true);
+	const pending = await db.prepare("SELECT version FROM config_outbox").all<{ version: number }>();
+	assert.equal(pending.results.some((row) => row.version < 4), false);
 });
 
 test("the rotation cookie is shown only on that agent's page", async () => {
