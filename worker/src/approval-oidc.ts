@@ -23,6 +23,18 @@ export function issuerHost(issuer: string): string {
 	try { return new URL(issuer).host; } catch { return ""; }
 }
 
+/**
+ * Origin to list in `form-action` when OpenID Connect approval is on.
+ * Scheme, host, and port only. A path, userinfo, or a non-https issuer is not included.
+ */
+export function formActionOrigin(issuer: string): string {
+	try {
+		const u = new URL(issuer);
+		if (u.protocol !== "https:" || u.username || u.password) return "";
+		return u.origin;
+	} catch { return ""; }
+}
+
 export function issuerBase(issuer: string): string {
 	return issuer.replace(/\/+$/, "");
 }
@@ -241,6 +253,11 @@ export async function startOidc(ctx: TenantContext, o: {
 	let disc: Discovery;
 	try { disc = await discover(ctx, gate.issuer); }
 	catch { return { ok: false, error: UNREACHABLE, reason: "discovery" }; }
+	// form-action lists only the issuer origin. A sign-in address on another origin would be blocked by the browser.
+	const authOrigin = formActionOrigin(disc.authorization_endpoint);
+	if (!authOrigin || authOrigin !== formActionOrigin(gate.issuer)) {
+		return { ok: false, error: "The identity provider's sign-in address is not on the issuer origin. Nothing was approved.", reason: "endpoint_origin" };
+	}
 	const { verifier, challenge } = await pkce();
 	const state = b64url(crypto.getRandomValues(new Uint8Array(32)));
 	const nonce = b64url(crypto.getRandomValues(new Uint8Array(32)));
