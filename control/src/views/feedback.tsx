@@ -17,6 +17,7 @@ export function renderFeedback(input: {
 	return (
 		<div>
 			<p>A bug, an idea, or something that got in the way. Don't include tokens, passwords, or keys.</p>
+			<p>Reproduction steps help most.</p>
 			{error ? <p class="alert" role="alert">{error}</p> : ""}
 			{input.sent ? <p role="status">Sent.{input.issueUrl ? <> <a href={input.issueUrl}>Issue</a></> : ""}</p> : ""}
 			<form class="feedback" method="post" action="/app/feedback">
@@ -34,6 +35,65 @@ export function renderFeedback(input: {
 							<option value="bug">Bug</option>
 							<option value="idea">Idea</option>
 							<option value="other" selected>Other</option>
+						</select>
+					</label>
+				</p>
+				<p>
+					<label>
+						Steps <span>Optional. The exact commands, and what you saw.</span>
+						<textarea name="steps" maxlength={4000} />
+					</label>
+				</p>
+				<p>
+					<label>
+						Expected <span>Optional.</span>
+						<textarea class="short" name="expected" maxlength={2000} />
+					</label>
+				</p>
+				<p>
+					<label>
+						Actual <span>Optional. Error output belongs here, without tokens or keys.</span>
+						<textarea class="short" name="actual" maxlength={2000} />
+					</label>
+				</p>
+				<p>
+					<label>
+						Agent <span>Optional. Claude Code, Grok Bot, n8n, or custom.</span>
+						<input name="agent" maxlength={80} autocomplete="off" />
+					</label>
+				</p>
+				<p>
+					<label>
+						Environment <span>Optional.</span>
+						<select name="environment">
+							<option value="">Optional</option>
+							<option value="local laptop">Local laptop</option>
+							<option value="cloud VM/VPS">Cloud VM/VPS</option>
+							<option value="CI">CI</option>
+							<option value="cloud agent sandbox">Cloud agent sandbox</option>
+							<option value="Cloudflare Worker">Cloudflare Worker</option>
+						</select>
+					</label>
+				</p>
+				<p>
+					<label>
+						OS <span>Optional.</span>
+						<input name="os" maxlength={80} autocomplete="off" />
+					</label>
+				</p>
+				<p>
+					<label>
+						Node <span>Optional. The Node.js version.</span>
+						<input name="node" maxlength={32} autocomplete="off" />
+					</label>
+				</p>
+				<p>
+					<label>
+						Mode <span>Optional.</span>
+						<select name="mode">
+							<option value="">Optional</option>
+							<option value="hosted">Hosted</option>
+							<option value="self-host">Self-host</option>
 						</select>
 					</label>
 				</p>

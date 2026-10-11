@@ -207,10 +207,13 @@ Control plane account (only when that deployment's login is on)
 
 Feedback
   feedback "message" [--kind bug|idea|other] [--contact x]
-                                report a bug or an idea. Posts to the control plane when this
-                                inbox is hosted and that plane accepts feedback. Otherwise prints
-                                a GitHub issue link and does not open a browser. The CLI version
-                                is included. Don't put tokens, passwords, or keys in the message.
+            [--steps S] [--expected S] [--actual S] [--agent A] [--environment E]
+                                report a bug or an idea. Reproduction steps help most.
+                                Posts to the control plane when this inbox is hosted and that
+                                plane accepts feedback. Otherwise prints a GitHub issue link
+                                and does not open a browser. The CLI adds its version, the OS,
+                                the Node version, and hosted or self-host. Don't put tokens,
+                                passwords, or keys in the message.
 
 Presets: grok-bot | claude-code | openclaw-wake | openclaw-agent | hermes | generic
 Config: ${C.CONFIG_FILE}  (override dir with --config-dir DIR or A2A_CONFIG_DIR; env vars override file values)
@@ -238,7 +241,7 @@ const SPEC = {
 	signup: { "control-url": S, json: B },
 	login: { "control-url": S, json: B },
 	pair: { json: B, web: B, ttl: S, issuer: S, "client-id": S, subjects: S, methods: S, "secret-stdin": B },
-	feedback: { kind: S, contact: S },
+	feedback: { kind: S, contact: S, steps: S, expected: S, actual: S, agent: S, environment: S },
 };
 const STATES = ["completed", "input-required", "failed", "rejected", "working"];
 
@@ -324,11 +327,13 @@ export async function main(argv) {
 		case "outbound": return cmd.outbound(need(p[0], "outbound <taskId>"));
 		case "feedback": {
 			const message = p.join(" ").trim();
-			need(message, `feedback "message" [--kind bug|idea|other] [--contact x]`);
+			need(message, `feedback "message" [--kind bug|idea|other] [--steps S] [--expected S] [--actual S] [--agent A] [--environment E]`);
 			const kind = o.kind || "other";
 			if (!fb.KINDS.includes(kind)) throw new CliError("--kind must be bug, idea, or other");
 			const result = await fb.runFeedback({
-				message, kind, contact: o.contact || "", version: VERSION, agent: C.get("A2A_AGENT_NAME"),
+				message, kind, contact: o.contact || "", version: VERSION,
+				steps: o.steps || "", expected: o.expected || "", actual: o.actual || "",
+				agent: o.agent || "", environment: o.environment || "",
 				baseUrl: C.get("A2A_BASE_URL"), ownerToken: C.get("A2A_OWNER_TOKEN"),
 			});
 			console.log(result.url);

@@ -16,6 +16,14 @@ export interface FeedbackNote {
 	kind: string;
 	contact: string;
 	version: string;
+	steps?: string;
+	expected?: string;
+	actual?: string;
+	agent?: string;
+	environment?: string;
+	os?: string;
+	node?: string;
+	mode?: string;
 }
 
 /** scrubSecretText, then a Bearer value. The rest of the text stays. */
@@ -54,20 +62,41 @@ function acceptedIssueUrl(value: unknown): string {
 	}
 }
 
-function documentOf(ctx: TenantContext, input: FeedbackNote): { title: string; body: string } {
-	const message = scrubFeedbackText(input.message).trim().slice(0, 4000);
-	const kind: FeedbackKind = KINDS.includes(input.kind as FeedbackKind) ? input.kind as FeedbackKind : "other";
-	const contact = scrubFeedbackText(input.contact).trim().slice(0, 200);
-	const version = scrubFeedbackText(input.version).trim().slice(0, 64);
-	const agent = scrubFeedbackText(ctx.AGENT_NAME || "").trim().slice(0, 80);
+const SECTIONS: [keyof FeedbackNote, string, number][] = [
+	["steps", "Steps", 4000],
+	["expected", "Expected", 2000],
+	["actual", "Actual", 2000],
+	["agent", "Agent", 80],
+	["environment", "Environment", 120],
+	["os", "OS", 80],
+	["node", "Node", 32],
+	["mode", "Mode", 16],
+	["contact", "Contact", 200],
+];
+
+function piece(value: string, max: number): string {
+	return scrubFeedbackText(value).trim().slice(0, max);
+}
+
+function documentOf(input: FeedbackNote, kind: FeedbackKind): { title: string; body: string } {
+	const message = piece(input.message, 4000);
 	const line = message.split(/\r?\n/).map((part) => part.trim()).find(Boolean) || "feedback";
 	const title = `[${kind}] ${line.length > 72 ? `${line.slice(0, 69)}...` : line}`;
-	const lines = [`Source: mcp`, `Kind: ${kind}`];
-	if (version) lines.push(`Version: ${version}`);
-	if (agent) lines.push(`Agent: ${agent}`);
-	if (contact) lines.push(`Contact: ${contact}`);
-	lines.push("", message);
-	return { title, body: lines.join("\n") };
+	const head = ["Source: mcp", `Kind: ${kind}`];
+	const version = piece(input.version || "", 64);
+	if (version) head.push(`Version: ${version}`);
+	const parts = [head.join("\n"), `## What happened\n\n${message}`];
+	for (const [key, heading, max] of SECTIONS) {
+		const text = piece(String(input[key] ?? ""), max);
+		if (text) parts.push(`## ${heading}\n\n${text}`);
+	}
+	return { title, body: parts.join("\n\n") };
+}
+
+function modeOf(ctx: TenantContext, given: string): string {
+	if (!given) return ctx.mode === "host" ? "hosted" : "self-host";
+	if (given === "hosted" || given === "self-host") return given;
+	throw new Error("mode must be hosted or self-host");
 }
 
 async function postFeedback(ctx: TenantContext, endpoint: string, body: string, fetchImpl?: typeof fetch): Promise<Response> {
@@ -98,11 +127,16 @@ export async function sendFeedback(ctx: TenantContext, input: FeedbackNote, fetc
 	if (!message.trim() || message.length > 4000) throw new Error("message must be 1-4000 characters");
 	if (input.kind && !KINDS.includes(input.kind as FeedbackKind)) throw new Error("kind must be bug, idea, or other");
 	if ((input.contact || "").length > 200) throw new Error("contact is too long");
-	const doc = documentOf(ctx, input);
+	if ((input.steps || "").length > 4000) throw new Error("steps is too long");
+	if ((input.expected || "").length > 2000 || (input.actual || "").length > 2000) throw new Error("expected or actual is too long");
+	if ((input.agent || "").length > 80) throw new Error("agent is too long");
+	if ((input.environment || "").length > 120) throw new Error("environment is too long");
+	const kind: FeedbackKind = KINDS.includes(input.kind as FeedbackKind) ? input.kind as FeedbackKind : "other";
+	const note: FeedbackNote = { ...input, message, kind, mode: modeOf(ctx, input.mode || "") };
+	const doc = documentOf(note, kind);
 	const fallback = feedbackIssueUrl(doc.title, doc.body);
 	const endpoint = feedbackEndpoint(ctx);
 	if (!endpoint) return { filed: false, issue_url: fallback };
-	const kind: FeedbackKind = KINDS.includes(input.kind as FeedbackKind) ? input.kind as FeedbackKind : "other";
 	let response: Response;
 	try {
 		response = await postFeedback(ctx, endpoint, JSON.stringify({
@@ -110,8 +144,15 @@ export async function sendFeedback(ctx: TenantContext, input: FeedbackNote, fetc
 			kind,
 			contact: scrubFeedbackText(input.contact || ""),
 			source: "mcp",
-			agent: scrubFeedbackText(ctx.AGENT_NAME || ""),
+			agent: scrubFeedbackText(input.agent || ""),
 			version: scrubFeedbackText(input.version || ""),
+			steps: scrubFeedbackText(input.steps || ""),
+			expected: scrubFeedbackText(input.expected || ""),
+			actual: scrubFeedbackText(input.actual || ""),
+			environment: scrubFeedbackText(input.environment || ""),
+			os: scrubFeedbackText(input.os || ""),
+			node: scrubFeedbackText(input.node || ""),
+			mode: note.mode,
 		}), fetchImpl);
 	} catch {
 		throw new Error("feedback could not be filed");

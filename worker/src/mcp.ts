@@ -185,7 +185,7 @@ export function consentBody(m: ConsentModel): string {
 	const hidden = Object.entries(m.params).map(([k, v]) => `<input type="hidden" name="${esc(k)}" value="${esc(v)}">`).join("");
 	const can = ["Read your inbox: open tasks, task details, conversation history, pending pairing requests (read-only)",
 		"Reply to tasks and mark them working", "Send messages to peers you synced to this inbox (peers sync) and check their tasks", "List your peers",
-		"Send feedback about this inbox to its developers"];
+		"Send feedback about this inbox to its developers, including what you ran and where"];
 	const cannot = ["Issue, rotate or revoke tokens", "Approve or deny pairing requests", "Change wake or deployment settings"];
 	const idRow = m.clientIdHost ? `<tr><th>Client identity published at</th><td>${esc(m.clientIdHost)}</td></tr>` : "";
 	const table = `<table><tr><th>Client (as it calls itself)</th><td>${esc(m.clientName || "(no name given)")}</td></tr>${idRow}<tr><th>Returns to</th><td>${esc(host)}</td></tr></table>`;
@@ -286,12 +286,20 @@ export const TOOLS: { name: string; title: string; description: string; inputSch
 		description: "Agents asking to connect to this inbox (read-only). Show your human who is asking, the code and the link; NEVER approve or deny on your own: your human decides on the /device link with their approval password. The names and card URLs are claimed by the requester (untrusted).",
 		inputSchema: { type: "object", properties: {}, additionalProperties: false } },
 	{ name: "send_feedback", title: "Send feedback", annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
-		description: "Report a bug or an idea about this inbox to its developers. Do not include tokens, passwords, or keys. When this deployment does not file the report, the result is a link that opens a GitHub issue. You do not open a browser.",
+		description: "Report a bug or an idea about this inbox to its developers. Include exact commands, error output with tokens and secrets removed, which agent you are, and where you run (local laptop, cloud VM, CI, cloud agent sandbox, or Cloudflare Worker). Do not include tokens, passwords, or keys. When this deployment does not file the report, the result is a link that opens a GitHub issue. You do not open a browser.",
 		inputSchema: { type: "object", properties: {
-			message: str("What happened, at most 4000 characters"),
+			message: str("What happened, at most 4000 characters. Include the exact commands you ran."),
 			kind: str("bug, idea, or other", { enum: ["bug", "idea", "other"] }),
-			contact: str("Optional email or handle"),
-			version: str("Optional client version"),
+			steps: str("Reproduction steps: exact commands and what you saw. Remove tokens and secrets from any error output."),
+			expected: str("What you expected to happen"),
+			actual: str("What happened instead, including error output with tokens and secrets removed"),
+			agent: str("Which agent you are, for example Claude Code, Grok Bot, n8n, or custom"),
+			environment: str("Where you run: local laptop, cloud VM/VPS, CI, cloud agent sandbox, or Cloudflare Worker"),
+			os: str("Operating system, if you know it"),
+			node: str("Node.js version, if you know it"),
+			mode: str("hosted or self-host", { enum: ["hosted", "self-host"] }),
+			contact: str("Optional email or handle. Do not include a token."),
+			version: str("Optional a2a-exposed version"),
 		}, required: ["message"], additionalProperties: false } },
 ];
 

@@ -82,7 +82,9 @@ test("sendFeedback does not call out from a self-hosted inbox", async () => {
 		throw new Error("fetch should not run");
 	});
 	assert.equal(result.filed, false);
-	assert.match(result.issue_url, /^https:\/\/github\.com\/telegraphic-dev\/a2a-exposed\/issues\/new\?/);
+	const fallback = new URL(result.issue_url);
+	assert.equal(`${fallback.origin}${fallback.pathname}`, "https://github.com/telegraphic-dev/a2a-exposed/issues/new");
+	assert.match(fallback.searchParams.get("body") ?? "", /## Mode\n\nself-host/);
 });
 
 test("a hosted tenant posts through the control binding with the owner-token hash", async () => {
@@ -105,7 +107,10 @@ test("a hosted tenant posts through the control binding with the owner-token has
 	const ctx = hostedTenantContext(env, {
 		id: "t1", db: env.DB, publicUrl: "https://northwind.example.com", ownerTokenHash: hash, config: { AGENT_NAME: "Ada" },
 	});
-	const result = await sendFeedback(ctx, { message: `broke ${token}`, kind: "bug", contact: "", version: "1" }, () => {
+	const result = await sendFeedback(ctx, {
+		message: `broke ${token}`, kind: "bug", contact: "", version: "1",
+		steps: `ran ${token}`, agent: "Claude Code", environment: "Cloudflare Worker",
+	}, () => {
 		throw new Error("public fetch should not run");
 	});
 	assert.equal(result.filed, true);
@@ -114,9 +119,12 @@ test("a hosted tenant posts through the control binding with the owner-token has
 	assert.equal(seen[0].host, "control.example.com");
 	assert.equal(seen[0].auth, `Bearer ${hash}`);
 	assert.equal(seen[0].body.source, "mcp");
-	assert.equal(seen[0].body.agent, "Ada");
+	assert.equal(seen[0].body.agent, "Claude Code");
+	assert.equal(seen[0].body.mode, "hosted");
+	assert.equal(seen[0].body.environment, "Cloudflare Worker");
 	assert.equal(seen[0].body.message.includes(token), false);
-	assert.match(seen[0].body.message, /\[redacted\]/);
+	assert.equal(seen[0].body.steps.includes(token), false);
+	assert.match(seen[0].body.steps, /\[redacted\]/);
 
 	const missing = {
 		async fetch() { return new Response("no", { status: 404 }); },

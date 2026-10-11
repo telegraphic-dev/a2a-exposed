@@ -2399,6 +2399,14 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 				kind,
 				contact: argStr(a, "contact", false),
 				version: argStr(a, "version", false),
+				steps: argStr(a, "steps", false),
+				expected: argStr(a, "expected", false),
+				actual: argStr(a, "actual", false),
+				agent: argStr(a, "agent", false),
+				environment: argStr(a, "environment", false),
+				os: argStr(a, "os", false),
+				node: argStr(a, "node", false),
+				mode: argStr(a, "mode", false),
 			});
 			return result.filed
 				? `Feedback filed: ${result.issue_url}`

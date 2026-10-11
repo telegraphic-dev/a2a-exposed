@@ -11,10 +11,17 @@ export const MESSAGE_MAX = 4000;
 export const PER_HOUR = 5;
 export const GITHUB_TIMEOUT_MS = 5000;
 const WINDOW_MS = 60 * 60 * 1000;
-const BODY_MAX = 16_000;
+const BODY_MAX = 32_000;
 const CONTACT_MAX = 200;
 const AGENT_MAX = 80;
+const STEPS_MAX = 4000;
+const DETAIL_MAX = 2000;
+const ENVIRONMENT_MAX = 120;
+const OS_MAX = 80;
+const NODE_MAX = 32;
 const VERSION_RE = /^[A-Za-z0-9._+-]{1,64}$/;
+const NODE_RE = /^[A-Za-z0-9._+-]{1,32}$/;
+const MODES = ["hosted", "self-host"] as const;
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const KINDS = ["bug", "idea", "other"] as const;
 const SOURCES = ["web", "cli", "mcp"] as const;
@@ -41,6 +48,13 @@ export interface FeedbackInput {
 	source: Source;
 	agent: string;
 	version: string;
+	steps: string;
+	expected: string;
+	actual: string;
+	environment: string;
+	os: string;
+	node: string;
+	mode: string;
 }
 
 export type FeedbackResult =
@@ -83,24 +97,38 @@ function clip(value: string, max: number): string {
 	return clean.length > max ? clean.slice(0, max) : clean;
 }
 
+const SECTIONS: [keyof FeedbackInput, string, number][] = [
+	["steps", "Steps", STEPS_MAX],
+	["expected", "Expected", DETAIL_MAX],
+	["actual", "Actual", DETAIL_MAX],
+	["agent", "Agent", AGENT_MAX],
+	["environment", "Environment", ENVIRONMENT_MAX],
+	["os", "OS", OS_MAX],
+	["node", "Node", NODE_MAX],
+	["mode", "Mode", 16],
+	["contact", "Contact", CONTACT_MAX],
+];
+
+function clean(value: string, max: number, token: string): string {
+	let text = clip(value, max);
+	if (token.length >= 8) text = text.split(token).join("[redacted]");
+	return text;
+}
+
 export function issueDocument(input: FeedbackInput, token: string): { title: string; body: string; labels: string[] } {
-	let message = clip(input.message, MESSAGE_MAX);
-	let contact = input.contact ? clip(input.contact, CONTACT_MAX) : "";
-	let agent = input.agent ? clip(input.agent, AGENT_MAX) : "";
-	if (token.length >= 8) {
-		message = message.split(token).join("[redacted]");
-		contact = contact.split(token).join("[redacted]");
-		agent = agent.split(token).join("[redacted]");
-	}
+	const message = clean(input.message, MESSAGE_MAX, token);
 	const line = message.split(/\r?\n/).map((part) => part.trim()).find(Boolean) || "feedback";
 	const title = `[${input.kind}] ${line.length > 72 ? `${line.slice(0, 69)}...` : line}`;
-	const lines = [`Source: ${input.source}`, `Kind: ${input.kind}`];
-	if (input.version) lines.push(`Version: ${input.version}`);
-	if (agent) lines.push(`Agent: ${escapeText(agent)}`);
-	if (contact) lines.push(`Contact: ${escapeText(contact)}`);
-	lines.push("", escapeText(message));
+	const head = [`Source: ${input.source}`, `Kind: ${input.kind}`];
+	const version = clean(input.version || "", 64, token);
+	if (version) head.push(`Version: ${version}`);
+	const parts = [head.join("\n"), `## What happened\n\n${escapeText(message)}`];
+	for (const [key, heading, max] of SECTIONS) {
+		const text = clean(input[key] || "", max, token);
+		if (text) parts.push(`## ${heading}\n\n${escapeText(text)}`);
+	}
 	const labels = ["feedback", ...(input.source === "cli" || input.source === "mcp" ? ["from-agent"] : [])];
-	return { title, body: lines.join("\n"), labels };
+	return { title, body: parts.join("\n\n"), labels };
 }
 
 function jsonResult(status: number, body: Record<string, unknown>, headers?: Record<string, string>): FeedbackResult {
@@ -125,12 +153,29 @@ export function parseFeedback(record: Record<string, unknown>): FeedbackInput | 
 	const source = field(record, "source");
 	if (!SOURCES.includes(source as Source)) return "invalid_source";
 	const contact = field(record, "contact");
-	if (contact.length > CONTACT_MAX) return "invalid_contact";
+	if (contact.length > CONTACT_MAX || /[\n\r]/.test(contact)) return "invalid_contact";
 	const agent = field(record, "agent");
-	if (agent.length > AGENT_MAX) return "invalid_agent";
+	if (agent.length > AGENT_MAX || /[\n\r]/.test(agent)) return "invalid_agent";
 	const version = field(record, "version");
 	if (version && !VERSION_RE.test(version)) return "invalid_version";
-	return { message, kind: kind as Kind, contact, source: source as Source, agent, version };
+	const steps = field(record, "steps");
+	if (steps.length > STEPS_MAX) return "invalid_steps";
+	const expected = field(record, "expected");
+	if (expected.length > DETAIL_MAX) return "invalid_expected";
+	const actual = field(record, "actual");
+	if (actual.length > DETAIL_MAX) return "invalid_actual";
+	const environment = field(record, "environment");
+	if (environment.length > ENVIRONMENT_MAX || /[\n\r]/.test(environment)) return "invalid_environment";
+	const os = field(record, "os");
+	if (os.length > OS_MAX || /[\n\r]/.test(os)) return "invalid_os";
+	const node = field(record, "node");
+	if (node && !NODE_RE.test(node)) return "invalid_node";
+	const mode = field(record, "mode");
+	if (mode && !MODES.includes(mode as (typeof MODES)[number])) return "invalid_mode";
+	return {
+		message, kind: kind as Kind, contact, source: source as Source, agent, version,
+		steps, expected, actual, environment, os, node, mode,
+	};
 }
 
 async function sha256(value: string): Promise<string> {
@@ -310,7 +355,7 @@ function pageError(code: string): string {
 	if (code === "turnstile") return "turnstile";
 	if (code === "timeout") return "timeout";
 	if (code === "forbidden") return "origin";
-	if (code === "invalid_message" || code === "invalid_kind" || code === "invalid_contact" || code === "invalid_agent" || code === "invalid_version" || code === "invalid_source") return "invalid";
+	if (code.startsWith("invalid")) return "invalid";
 	return "unavailable";
 }
 

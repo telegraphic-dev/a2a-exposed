@@ -31,7 +31,7 @@ function run(args) {
 
 test("with no inbox, feedback prints an encoded GitHub issue URL", async () => {
 	const token = "a2aot_" + "a".repeat(24);
-	const r = await run(["feedback", `saw ${token} then Bearer supersecretvalue`, "--kind", "bug", "--contact", "ada@example.com"]);
+	const r = await run(["feedback", `saw ${token} then Bearer supersecretvalue`, "--kind", "bug", "--contact", "ada@example.com", "--steps", `1. ran ${token}`, "--expected", "a reply", "--actual", "nothing", "--agent", "Claude Code", "--environment", "local laptop"]);
 	assert.equal(r.status, 0, r.stderr);
 	const url = new URL(r.stdout.trim());
 	assert.equal(`${url.origin}${url.pathname}`, "https://github.com/telegraphic-dev/a2a-exposed/issues/new");
@@ -40,7 +40,15 @@ test("with no inbox, feedback prints an encoded GitHub issue URL", async () => {
 	assert.match(body, new RegExp(`Version: ${VERSION.replace(/\./g, "\\.")}`));
 	assert.match(body, /Source: cli/);
 	assert.match(body, /Kind: bug/);
-	assert.match(body, /Contact: ada@example.com/);
+	assert.match(body, /## Contact\n\nada@example.com/);
+	assert.match(body, /## Steps\n\n1\. ran \[redacted\]/);
+	assert.match(body, /## Expected\n\na reply/);
+	assert.match(body, /## Actual\n\nnothing/);
+	assert.match(body, /## Agent\n\nClaude Code/);
+	assert.match(body, /## Environment\n\nlocal laptop/);
+	assert.match(body, /## Mode\n\nself-host/);
+	assert.match(body, /## OS\n\n/);
+	assert.match(body, new RegExp(`## Node\\n\\n${process.version.replace(/\./g, "\\.")}`));
 	assert.equal(body.includes(token), false);
 	assert.equal(body.includes("supersecretvalue"), false);
 	assert.match(body, /\[redacted\]/);
@@ -70,6 +78,9 @@ test("a hosted inbox posts, a 404 falls back, and a 429 does not", async () => {
 			assert.equal(body.kind, "idea");
 			assert.equal(body.message.includes(token), false);
 			assert.match(body.message, /\[redacted\]/);
+			assert.equal(body.mode, "hosted");
+			assert.match(body.os, /\S/);
+			assert.equal(body.node, process.version);
 			return Response.json({ ok: true, issue_url: filed });
 		},
 	});

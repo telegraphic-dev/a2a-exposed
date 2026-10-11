@@ -337,7 +337,9 @@ test("send_feedback returns a GitHub issue link and strips tokens", async (t) =>
 	const s = setup(); t.after(s.restore);
 	const a = await s.connect();
 	const token = "a2aot_" + "a".repeat(24);
-	const r = await s.tool(a.access_token, "send_feedback", { message: `dropped a task ${token}`, kind: "bug" });
+	const r = await s.tool(a.access_token, "send_feedback", {
+		message: `dropped a task ${token}`, kind: "bug", steps: `ran ${token}`, agent: "Claude Code", environment: "cloud agent sandbox",
+	});
 	assert.equal(r.isError, false);
 	const link = r.content[0].text.split("\n").pop() ?? "";
 	const url = new URL(link);
@@ -346,6 +348,14 @@ test("send_feedback returns a GitHub issue link and strips tokens", async (t) =>
 	assert.equal(body.includes(token), false);
 	assert.match(body, /\[redacted\]/);
 	assert.match(body, /Source: mcp/);
+	assert.match(body, /## Steps\n\nran \[redacted\]/);
+	assert.match(body, /## Agent\n\nClaude Code/);
+	assert.match(body, /## Environment\n\ncloud agent sandbox/);
+	assert.match(body, /## Mode\n\nself-host/);
+	const listed = (await s.mcp(a.access_token, "tools/list")).data.result.tools.find((tool: { name: string }) => tool.name === "send_feedback");
+	assert.match(listed.description, /exact commands/);
+	assert.match(listed.inputSchema.properties.steps.description, /Remove tokens and secrets/);
+	assert.match(listed.inputSchema.properties.environment.description, /cloud agent sandbox/);
 	assert.equal((await s.tool(a.access_token, "send_feedback", {})).isError, true);
 });
 

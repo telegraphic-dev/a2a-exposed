@@ -303,11 +303,11 @@ Worker development: `cd worker && npm install && npm test && npx tsc`. For local
 
 ## Feedback
 
-`npx -y a2a-exposed@latest feedback "message"` reports a bug or an idea. `--kind` is `bug`, `idea`, or `other` (the default). `--contact` is optional.
+`npx -y a2a-exposed@latest feedback "message"` reports a bug or an idea. `--kind` is `bug`, `idea`, or `other` (the default). Optional detail: `--steps`, `--expected`, `--actual`, `--agent` (Claude Code, Grok Bot, n8n, custom), `--environment` (local laptop, cloud VM/VPS, CI, cloud agent sandbox, Cloudflare Worker), and `--contact`. Reproduction steps help most.
 
-When this inbox is hosted and its control plane accepts feedback, the command posts the message there. Otherwise it prints a link to a new GitHub issue and does not open a browser. The CLI version is included. Tokens that look like owner, peer, or MCP credentials, and Bearer values, are removed before the text is sent.
+When this inbox is hosted and its control plane accepts feedback, the command posts the message there. Otherwise it prints a link to a new GitHub issue and does not open a browser. The CLI adds its version, the OS, the Node version, and `hosted` or `self-host`. Tokens that look like owner, peer, or MCP credentials, and Bearer values, are removed before the text is sent.
 
-The same report is the MCP tool `send_feedback`. It is owner-only, like the other MCP tools. A control plane with `FEEDBACK_GITHUB_TOKEN` and `FEEDBACK_REPO` also serves `/app/feedback`. With those unset, that route is 404 and a self-hosted control plane is unchanged. Browser posts use the same Turnstile check as sign-in when that check is configured.
+The same report is the MCP tool `send_feedback`. It is owner-only, like the other MCP tools, and its fields ask for the commands, the error output, and the environment. A control plane with `FEEDBACK_GITHUB_TOKEN` and `FEEDBACK_REPO` also serves `/app/feedback`. With those unset, that route is 404 and a self-hosted control plane is unchanged. Browser posts use the same Turnstile check as sign-in when that check is configured.
 
 ## Releases
 

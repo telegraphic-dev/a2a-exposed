@@ -54,12 +54,28 @@ test("issue body is escaped and drops the configured token", () => {
 		source: "cli",
 		agent: "Ada",
 		version: "0.7.0",
+		steps: "1. open <b>x</b>",
+		expected: "a card",
+		actual: "a blank page",
+		environment: "local laptop",
+		os: "linux 6.12.94",
+		node: "v22.20.0",
+		mode: "self-host",
 	}, ghToken);
 	assert.equal(doc.title, "[bug] hello <b>there</b> & [redacted]");
-	assert.match(doc.body, /&lt;b&gt;there&lt;\/b&gt; &amp; \[redacted\]/);
+	assert.match(doc.body, /## What happened\n\nhello &lt;b&gt;there&lt;\/b&gt; &amp; \[redacted\]/);
+	assert.match(doc.body, /## Steps\n\n1\. open &lt;b&gt;x&lt;\/b&gt;/);
+	assert.match(doc.body, /## Expected\n\na card/);
+	assert.match(doc.body, /## Actual\n\na blank page/);
+	assert.match(doc.body, /## Agent\n\nAda/);
+	assert.match(doc.body, /## Environment\n\nlocal laptop/);
+	assert.match(doc.body, /## OS\n\nlinux 6\.12\.94/);
+	assert.match(doc.body, /## Node\n\nv22\.20\.0/);
+	assert.match(doc.body, /## Mode\n\nself-host/);
+	assert.match(doc.body, /## Contact\n\nada@example.com/);
 	assert.equal(doc.body.includes(ghToken), false);
 	assert.deepEqual(doc.labels, ["feedback", "from-agent"]);
-	assert.deepEqual(issueDocument({ message: "hi", kind: "idea", contact: "", source: "web", agent: "", version: "" }, ghToken).labels, ["feedback"]);
+	assert.deepEqual(issueDocument({ message: "hi", kind: "idea", contact: "", source: "web", agent: "", version: "", steps: "", expected: "", actual: "", environment: "", os: "", node: "", mode: "" }, ghToken).labels, ["feedback"]);
 });
 
 test("unconfigured feedback is 404, including a partial config", async () => {
@@ -109,6 +125,14 @@ test("a configured post files an issue and the page links to feedback", async ()
 	assert.equal(form.status, 200);
 	const page = await form.text();
 	assert.match(page, /<form class="feedback"/);
+	assert.match(page, /Reproduction steps help most/);
+	assert.match(page, /name="steps"/);
+	assert.match(page, /name="expected"/);
+	assert.match(page, /name="actual"/);
+	assert.match(page, /name="agent"/);
+	assert.match(page, /name="environment"/);
+	assert.match(page, /cloud agent sandbox/);
+	assert.match(page, /name="mode"/);
 	assert.match(form.headers.get("content-security-policy") ?? "", /script-src 'none'/);
 	assert.equal(/<script/.test(page), false);
 });
@@ -257,6 +281,15 @@ test("a database error on the rate table is 503", async () => {
 	const res = await post(app, { message: "hi", source: "cli" }, { authorization: "Bearer owner-token-value" });
 	assert.equal(res.status, 503);
 	assert.deepEqual(await res.json(), { error: "unavailable" });
+});
+
+test("a mode that is not hosted or self-host is rejected", async () => {
+	const gh = githubFetch();
+	const app = createApp(env(), { fetch: gh.fetch });
+	const res = await post(app, { message: "hi", source: "cli", mode: "both" });
+	assert.equal(res.status, 400);
+	assert.deepEqual(await res.json(), { error: "invalid_mode" });
+	assert.equal(gh.calls.length, 0);
 });
 
 test("the form posts and redirects to the issue", async () => {
