@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import worker, { dispatch } from "../src/index.ts";
 import * as M from "../src/mcp.ts";
-import { approvalPolicy, hostOnZone, reachesControl, sameZoneHost } from "../src/approval-oidc.ts";
+import { approvalPolicy, formActionOrigin, hostOnZone, reachesControl, sameZoneHost } from "../src/approval-oidc.ts";
 import { hostedTenantContext, parseGates, type WorkerBindings } from "../src/tenancy.ts";
 import { d1 } from "./d1.ts";
 
@@ -154,6 +154,70 @@ test("configured /device redirects to the issuer with PKCE and approves on a val
 	const list = await s.call("GET", "/owner/pairing", { headers: { authorization: "Bearer owner-secret" } });
 	assert.deepEqual(list.data.approvalMethods, ["password", "oidc"]);
 	assert.equal(list.data.oidcIssuer, "idp.example");
+});
+
+function formAction(headers: Headers): string {
+	return /form-action ([^;]+)/.exec(headers.get("content-security-policy") || "")?.[1] || "";
+}
+
+test("form-action lists only the OpenID Connect issuer origin, and only when that approval is on", async (t) => {
+	assert.equal(formActionOrigin(ISSUER), ISSUER);
+	assert.equal(formActionOrigin(`${ISSUER}/realms/app`), ISSUER);
+	assert.equal(formActionOrigin("https://idp.example:8443/realms/app"), "https://idp.example:8443");
+	assert.equal(formActionOrigin("https://user:secret@idp.example"), "");
+	assert.equal(formActionOrigin("http://idp.example"), "");
+
+	const s = setup(oidcEnv); t.after(s.restore);
+	const d = await s.start();
+	const g = await s.page(d.data.user_code);
+	assert.equal(formAction(g.headers), `'self' ${ISSUER}`);
+	assert.equal(g.headers.get("content-security-policy")!.includes(`${ISSUER}/`), false);
+
+	const downFetch = globalThis.fetch;
+	globalThis.fetch = (async () => { throw new Error("down"); }) as typeof fetch;
+	const failed = await s.postOidc(d.data.user_code);
+	globalThis.fetch = downFetch;
+	assert.equal(failed.post.status, 502, failed.post.text);
+	assert.match(failed.post.text, /Approve with idp\.example/);
+	assert.equal(formAction(failed.post.headers), `'self' ${ISSUER}`);
+
+	const back = await s.call("GET", "/device/oidc/callback?error=access_denied");
+	assert.equal(back.status, 400);
+	assert.equal(formAction(back.headers), `'self' ${ISSUER}`);
+
+	const setupPage = await s.call("GET", "/device/setup");
+	assert.equal(formAction(setupPage.headers), "'self'");
+	const land = await s.call("GET", "/", { headers: { accept: "text/html" } });
+	assert.match(land.headers.get("content-security-policy") || "", /form-action 'none'/);
+
+	const pw = setup({ ...oidcEnv, APPROVAL_METHODS: "password" }); t.after(pw.restore);
+	const d2 = await pw.start();
+	const g2 = await pw.page(d2.data.user_code);
+	assert.equal(g2.text.includes("Approve with"), false);
+	assert.equal(formAction(g2.headers), "'self'");
+});
+
+test("an authorization endpoint on another origin is not started", async (t) => {
+	const s = setup(oidcEnv); t.after(s.restore);
+	const inner = globalThis.fetch;
+	globalThis.fetch = (async (url: any, init: any) => {
+		const u = new URL(String(url));
+		if (u.origin === ISSUER && u.pathname === "/.well-known/openid-configuration") {
+			return Response.json({
+				issuer: ISSUER, authorization_endpoint: "https://login.example/authorize",
+				token_endpoint: `${ISSUER}/token`, jwks_uri: `${ISSUER}/jwks`,
+			});
+		}
+		return inner(url, init);
+	}) as typeof fetch;
+	const d = await s.start();
+	const { post } = await s.postOidc(d.data.user_code as string);
+	assert.equal(post.status, 400, post.text);
+	assert.match(post.text, /not on the issuer origin/);
+	assert.equal(post.headers.get("location"), null);
+	const tok = await s.call("POST", "/oauth/token", { form: { grant_type: GRANT, device_code: d.data.device_code } });
+	assert.equal(tok.data.error, "authorization_pending");
+	assert.equal(s.logs.join("\n").includes("login.example"), false);
 });
 
 test("wrong sub, wrong nonce and expired exp do not approve", async (t) => {
@@ -314,6 +378,7 @@ test("MCP consent offers Continue with the issuer and the callback issues the au
 	const g = await s.call("GET", `/oauth/authorize?${new URLSearchParams(q)}`);
 	assert.match(g.text, /Continue with idp\.example/);
 	assert.match(g.text, /No approval password is set yet/);
+	assert.equal(/form-action ([^;]+)/.exec(g.headers.get("content-security-policy") || "")?.[1], `'self' https://claude.ai ${ISSUER}`);
 	const cookie = (g.headers.get("set-cookie") || "").split(";")[0];
 	const csrf = /name="csrf" value="([^"]+)"/.exec(g.text)![1];
 	const post = await s.call("POST", "/oauth/authorize", { form: { ...q, csrf, decision: "oidc" }, cookie, headers: { origin: BASE } });
@@ -323,6 +388,10 @@ test("MCP consent offers Continue with the issuer and the callback issues the au
 	s.setClaims(() => claims({ nonce: loc.searchParams.get("nonce")! }));
 	const back = await s.call("GET", `/oauth/authorize/oidc/callback?code=auth-code&state=${loc.searchParams.get("state")}`);
 	assert.equal(back.status, 302, back.text);
+	const callbackError = await s.call("GET", "/oauth/authorize/oidc/callback?error=access_denied");
+	assert.equal(callbackError.status, 400);
+	assert.equal(callbackError.text.includes("<form"), false);
+	assert.equal(/form-action ([^;]+)/.exec(callbackError.headers.get("content-security-policy") || "")?.[1], "'self'");
 	const client = new URL(back.headers.get("location")!);
 	assert.equal(client.origin, "https://claude.ai");
 	assert.equal(client.searchParams.get("state"), "st-1");
