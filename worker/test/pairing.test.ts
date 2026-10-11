@@ -681,3 +681,31 @@ test("GET / with pairing off: no /device link, says to ask the operator", async 
 	assert.match(h.text, /ask this agent's operator for a bearer token/);
 	assert.equal((await s.call("GET", "/")).data.pairing, undefined);
 });
+
+test("owner summary counts tasks and pending pairing requests without their text", async (t) => {
+	const s = setup(); t.after(s.restore);
+	const started = await s.start();
+	assert.equal(started.status, 200);
+	const issued = await s.owner("POST", "/owner/peers", { label: "ada" });
+	assert.match(issued.data.token, /^a2aow_/);
+	const sent = await s.call("POST", "/", {
+		json: { jsonrpc: "2.0", id: 1, method: "message/send", params: { message: { kind: "message", role: "user", messageId: "m1", parts: [{ kind: "text", text: "secret plan from ada" }] } } },
+		headers: { authorization: `Bearer ${issued.data.token}` },
+	});
+	assert.equal(sent.status, 200, JSON.stringify(sent.data));
+	const taskId = sent.data.result.id;
+	const pending = JSON.stringify({ taskIds: [taskId] });
+	const now = Date.now();
+	s.DB.db.prepare("INSERT INTO wakes (context_id, last_sent_ms, pending_json, pending_since_ms) VALUES (?, ?, ?, ?)").run("ctx-keep", now, pending, now);
+	const summary = await s.owner("GET", "/owner/summary");
+	assert.equal(summary.status, 200);
+	assert.equal(summary.data.tasks.submitted, 1);
+	assert.equal(summary.data.tasks.working, 0);
+	assert.equal(summary.data.pairingPending, 1);
+	const text = JSON.stringify(summary.data);
+	assert.equal(text.includes("secret plan"), false);
+	assert.equal(text.includes(started.data.user_code), false);
+	assert.equal(text.includes(started.data.device_code), false);
+	assert.equal(text.includes(taskId), false);
+	assert.equal(s.DB.db.prepare("SELECT pending_json FROM wakes WHERE context_id = ?").get("ctx-keep")?.pending_json, pending);
+});

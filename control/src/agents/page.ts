@@ -6,6 +6,7 @@ import { dataPlaneFromEnv, type DataPlane } from "../tenants/push.ts";
 import { configFields, saveWakeSettings, tenantForAccount, wakeSettingsOf } from "../tenants/wake.ts";
 import { renderAgentPage } from "../views/agent.tsx";
 import { renderApp, securityHeaders } from "../views/document.tsx";
+import { inboxCountsOf, renderOverview } from "../views/overview.tsx";
 import { renderWakeSection, wakePreviewOf } from "../views/wake.tsx";
 
 function redirect(location: string): Response {
@@ -96,6 +97,16 @@ export async function handleAgent(
 
 	const settings = wakeSettingsOf(configFields(row.config_json));
 	let preview = null;
+	let counts = null;
+	if (plane.owner && row.status === "active") {
+		try {
+			const result = await plane.owner(row.id, row.region, { accountId, method: "GET", path: "/owner/summary" });
+			if (result.status === 200) counts = inboxCountsOf(result.body);
+		} catch {
+			console.log(JSON.stringify({ ts: new Date().toISOString(), event: "inbox_counts_failed", tenant: row.id }));
+			counts = null;
+		}
+	}
 	if (plane.owner) {
 		try {
 			const result = await plane.owner(row.id, row.region, { accountId, method: "GET", path: "/owner/wake/preview" });
@@ -106,7 +117,7 @@ export async function handleAgent(
 	}
 	const url = new URL(request.url);
 	const html = renderAgentPage({
-		publicUrl: publicUrl(env.TENANT_DOMAIN, name),
+		overviewHtml: renderOverview({ status: row.status, publicUrl: publicUrl(env.TENANT_DOMAIN, name), counts }),
 		wakeHtml: renderWakeSection({
 			name,
 			url: settings.url,
