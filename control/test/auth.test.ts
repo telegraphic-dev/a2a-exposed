@@ -364,6 +364,10 @@ test("provider buttons stay off until Turnstile finishes", async () => {
 	const db = openDb();
 	const app = createApp({
 		...githubEnv(db),
+		GOOGLE_CLIENT_ID: "google-id",
+		GOOGLE_CLIENT_SECRET: "google-secret",
+		CLOUDFLARE_OAUTH_CLIENT_ID: "cf-id",
+		CLOUDFLARE_OAUTH_CLIENT_SECRET: "cf-secret",
 		TURNSTILE_SITE_KEY: "site-key",
 		TURNSTILE_SECRET_KEY: "secret-key",
 	}, { database: db });
@@ -371,7 +375,28 @@ test("provider buttons stay off until Turnstile finishes", async () => {
 	const html = await page.text();
 	const csp = page.headers.get("content-security-policy") ?? "";
 	assert.match(csp, /script-src 'self' https:\/\/challenges\.cloudflare\.com/);
-	assert.match(html, /<button[^>]*disabled[^>]*>GitHub<\/button>/);
+	assert.match(html, /<button class="provider provider-github"[^>]*disabled[^>]*>/);
+	assert.match(html, /Continue with GitHub/);
+	assert.match(html, /Continue with Google/);
+	assert.match(html, /Continue with Cloudflare/);
+	assert.match(html, /fill="#EA4335"/);
+	assert.match(html, /fill="#4285F4"/);
+	assert.match(html, /fill="#FBBC05"/);
+	assert.match(html, /fill="#34A853"/);
+	assert.match(html, /class="provider provider-cloudflare"/);
+	assert.match(html, /Waiting for the check…/);
+	assert.equal(html.includes("style="), false);
+	const css = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/app.css"), "utf8");
+	assert.match(css, /button\[name="provider"\]:disabled/);
+	assert.match(css, /\[aria-disabled="true"\]/);
+	assert.match(css, /cursor:\s*not-allowed/);
+	assert.match(css, /opacity:\s*0\.45/);
+	assert.match(css, /#24292f/);
+	assert.match(css, /:disabled:hover/);
+	const plain = await (await createApp(githubEnv(db), { database: db }).request(`${origin}/app`)).text();
+	assert.match(plain, /Continue with GitHub/);
+	assert.equal(plain.includes("Waiting for the check"), false);
+	assert.equal(/<button[^>]*disabled/.test(plain), false);
 	assert.match(html, /data-callback="a2aTurnstileReady"/);
 	assert.match(html, /data-expired-callback="a2aTurnstileWait"/);
 	assert.match(html, /data-error-callback="a2aTurnstileWait"/);
