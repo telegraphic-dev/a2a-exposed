@@ -332,6 +332,139 @@ test("the rotation cookie is shown only on that agent's page", async () => {
 	assert.match(shown, new RegExp(token));
 });
 
+test("a later rotation is not shown this token", async () => {
+	const db = openDb();
+	const sent: { text: string }[] = [];
+	const target = plane();
+	const push = target.data.pushConfig.bind(target.data);
+	target.data.pushConfig = async (body, region) => {
+		if (body.version === 2) {
+			await db.prepare("UPDATE tenants SET owner_token_hash = ?, config_version = ? WHERE name = ?").bind("later-rotation", 3, "northwind").run();
+			target.pushes.push(body);
+			return { version: 3, applied: false };
+		}
+		return push(body, region);
+	};
+	const app = createApp(
+		{ AUTH_SECRET: secret, DB: db, TENANT_DOMAIN: "example.com" },
+		{ database: db, mailer: { async send(message) { sent.push({ text: message.text }); } }, dataPlane: target.data },
+	);
+	const cookie = await signIn(app, sent);
+	const headers = { cookie, origin, "sec-fetch-site": "same-origin", "content-type": "application/x-www-form-urlencoded" };
+	assert.equal((await app.request(`${origin}/api/v1/tenants`, { method: "POST", headers, body: "name=Northwind" })).status, 303);
+	const before = await db.prepare("SELECT owner_token_hash FROM tenants WHERE name = ?").bind("northwind").first<{ owner_token_hash: string }>();
+	const rotated = await app.request(`${origin}/app/agents/northwind`, { method: "POST", headers, body: "action=rotate-token&confirm=1" });
+	assert.match(rotated.headers.get("location") ?? "", /token=replaced$/);
+	assert.equal(rotated.headers.getSetCookie().some((value) => value.startsWith(`${OWNER_COOKIE}=`) && !value.includes("Max-Age=0")), false);
+	const after = await db.prepare("SELECT owner_token_hash, config_version FROM tenants WHERE name = ?").bind("northwind").first<{ owner_token_hash: string; config_version: number }>();
+	assert.equal(after?.owner_token_hash, "later-rotation");
+	assert.equal(after?.config_version, 3);
+	assert.equal(target.pushes.some((body) => body.version > 2), false);
+	assert.notEqual(target.pushes.find((body) => body.version === 2)?.ownerTokenHash, before?.owner_token_hash);
+	const html = await (await app.request(rotated.headers.get("location") ?? "", { headers: { cookie } })).text();
+	assert.match(html, /A later rotation replaced this token/);
+	assert.equal(html.includes("a2aot_"), false);
+	const pending = await db.prepare("SELECT COUNT(*) AS n FROM config_outbox").first<{ n: number }>();
+	assert.equal(Number(pending?.n), 0);
+});
+
+test("a newer config version that still has this hash shows the token", async () => {
+	const db = openDb();
+	const sent: { text: string }[] = [];
+	const target = plane();
+	const push = target.data.pushConfig.bind(target.data);
+	target.data.pushConfig = async (body, region) => {
+		if (body.version === 2) {
+			await db.prepare("UPDATE tenants SET config_version = ? WHERE name = ?").bind(4, "northwind").run();
+			target.pushes.push(body);
+			return { version: 4, applied: false };
+		}
+		return push(body, region);
+	};
+	const app = createApp(
+		{ AUTH_SECRET: secret, DB: db, TENANT_DOMAIN: "example.com" },
+		{ database: db, mailer: { async send(message) { sent.push({ text: message.text }); } }, dataPlane: target.data },
+	);
+	const cookie = await signIn(app, sent);
+	const headers = { cookie, origin, "sec-fetch-site": "same-origin", "content-type": "application/x-www-form-urlencoded" };
+	assert.equal((await app.request(`${origin}/api/v1/tenants`, { method: "POST", headers, body: "name=Northwind" })).status, 303);
+	const before = await db.prepare("SELECT owner_token_hash FROM tenants WHERE name = ?").bind("northwind").first<{ owner_token_hash: string }>();
+	const rotated = await app.request(`${origin}/app/agents/northwind`, { method: "POST", headers, body: "action=rotate-token&confirm=1" });
+	assert.equal(rotated.status, 303);
+	assert.match(cookieValue(rotated.headers.getSetCookie().find((value) => value.startsWith(`${OWNER_COOKIE}=`)) ?? ""), /^northwind\.a2aot_/);
+	const after = await db.prepare("SELECT owner_token_hash, config_version FROM tenants WHERE name = ?").bind("northwind").first<{ owner_token_hash: string; config_version: number }>();
+	assert.equal(after?.config_version, 4);
+	assert.notEqual(after?.owner_token_hash, before?.owner_token_hash);
+	assert.equal(target.pushes.some((body) => body.version > 2), false);
+});
+
+test("a low version after a later rotation does not restore the previous hash", async () => {
+	const db = openDb();
+	const sent: { text: string }[] = [];
+	const target = plane();
+	let attempts = 0;
+	target.data.pushConfig = async (body) => {
+		if (body.version === 2) {
+			attempts += 1;
+			if (attempts === 1) {
+				await db.prepare("UPDATE tenants SET owner_token_hash = ?, config_version = ? WHERE name = ?").bind("later-rotation", 5, "northwind").run();
+			}
+			target.pushes.push(body);
+			return { version: 1, applied: false };
+		}
+		target.pushes.push(body);
+		return { version: body.version, applied: true };
+	};
+	const app = createApp(
+		{ AUTH_SECRET: secret, DB: db, TENANT_DOMAIN: "example.com" },
+		{ database: db, mailer: { async send(message) { sent.push({ text: message.text }); } }, dataPlane: target.data },
+	);
+	const cookie = await signIn(app, sent);
+	const headers = { cookie, origin, "sec-fetch-site": "same-origin", "content-type": "application/x-www-form-urlencoded" };
+	assert.equal((await app.request(`${origin}/api/v1/tenants`, { method: "POST", headers, body: "name=Northwind" })).status, 303);
+	const before = await db.prepare("SELECT owner_token_hash FROM tenants WHERE name = ?").bind("northwind").first<{ owner_token_hash: string }>();
+	const rotated = await app.request(`${origin}/app/agents/northwind`, { method: "POST", headers, body: "action=rotate-token&confirm=1" });
+	assert.match(rotated.headers.get("location") ?? "", /token=replaced$/);
+	const after = await db.prepare("SELECT owner_token_hash, config_version FROM tenants WHERE name = ?").bind("northwind").first<{ owner_token_hash: string; config_version: number }>();
+	assert.equal(after?.owner_token_hash, "later-rotation");
+	assert.equal(after?.config_version, 5);
+	assert.equal(target.pushes.some((body) => body.ownerTokenHash === before?.owner_token_hash && body.version > 1), false);
+	assert.equal(rotated.headers.getSetCookie().some((value) => value.includes("a2aot_")), false);
+});
+
+test("a restore that loses the row puts the later hash back", async () => {
+	const db = openDb();
+	const sent: { text: string }[] = [];
+	const target = plane("refuse");
+	const push = target.data.pushConfig.bind(target.data);
+	target.data.pushConfig = async (body, region) => {
+		if (body.version === 3 && body.ownerTokenHash !== "later-rotation") {
+			await db.prepare("UPDATE tenants SET owner_token_hash = ?, config_version = ? WHERE name = ?").bind("later-rotation", 4, "northwind").run();
+		}
+		return push(body, region);
+	};
+	const app = createApp(
+		{ AUTH_SECRET: secret, DB: db, TENANT_DOMAIN: "example.com" },
+		{ database: db, mailer: { async send(message) { sent.push({ text: message.text }); } }, dataPlane: target.data },
+	);
+	const cookie = await signIn(app, sent);
+	const headers = { cookie, origin, "sec-fetch-site": "same-origin", "content-type": "application/x-www-form-urlencoded" };
+	assert.equal((await app.request(`${origin}/api/v1/tenants`, { method: "POST", headers, body: "name=Northwind" })).status, 303);
+	const before = await db.prepare("SELECT owner_token_hash FROM tenants WHERE name = ?").bind("northwind").first<{ owner_token_hash: string }>();
+	const rotated = await app.request(`${origin}/app/agents/northwind`, { method: "POST", headers, body: "action=rotate-token&confirm=1" });
+	assert.match(rotated.headers.get("location") ?? "", /token=replaced$/);
+	assert.equal(rotated.headers.getSetCookie().some((value) => value.includes("a2aot_")), false);
+	const after = await db.prepare("SELECT owner_token_hash, config_version FROM tenants WHERE name = ?").bind("northwind").first<{ owner_token_hash: string; config_version: number }>();
+	assert.equal(after?.owner_token_hash, "later-rotation");
+	assert.equal(after?.config_version, 5);
+	assert.equal(target.pushes.at(-1)?.version, 5);
+	assert.equal(target.pushes.at(-1)?.ownerTokenHash, "later-rotation");
+	assert.equal(target.pushes.some((body) => body.version === 3 && body.ownerTokenHash === before?.owner_token_hash), true);
+	const html = await (await app.request(rotated.headers.get("location") ?? "", { headers: { cookie } })).text();
+	assert.match(html, /A later rotation replaced this token/);
+	assert.equal(html.includes("a2aot_"), false);
+});
+
 test("a deleting agent does not rotate", async () => {
 	const db = openDb();
 	const sent: { text: string }[] = [];

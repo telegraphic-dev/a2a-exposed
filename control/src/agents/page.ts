@@ -219,7 +219,8 @@ export async function handleAgent(
 			const rotated = await rotateOwnerToken(loaded.options.database, plane, { accountId, name });
 			if (!rotated.ok) {
 				logDecision(row.id, accountId, "owner_token_rotated", false);
-				return back(rotated.error === "gone" ? "?token=gone" : "?token=failed");
+				const query = rotated.error === "gone" ? "gone" : rotated.error === "replaced" ? "replaced" : "failed";
+				return back(`?token=${query}`);
 			}
 			logDecision(row.id, accountId, "owner_token_rotated", true);
 			return redirect(new URL(`/app/agents/${name}`, request.url).href, [hostCookie(OWNER_COOKIE, `${row.name}.${rotated.token}`, 120)]);

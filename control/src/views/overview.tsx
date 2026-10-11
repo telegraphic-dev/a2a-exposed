@@ -65,6 +65,7 @@ function httpsUrl(value: string): string {
 
 const TOKEN_NOTICES: Record<string, string> = {
 	failed: "The owner token was not rotated. The previous token still works.",
+	replaced: "A later rotation replaced this token. It is not shown. Use the token from that rotation.",
 	gone: "This agent is gone.",
 };
 

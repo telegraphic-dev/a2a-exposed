@@ -5,7 +5,7 @@ import { tenantForAccount } from "./wake.ts";
 
 export type RotateResult =
 	| { ok: true; token: string }
-	| { ok: false; error: "missing" | "gone" | "conflict" | "failed" };
+	| { ok: false; error: "missing" | "gone" | "conflict" | "failed" | "replaced" };
 
 async function sha256(value: string): Promise<string> {
 	const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
@@ -16,10 +16,11 @@ async function sha256(value: string): Promise<string> {
  * Replace the hosted owner-token hash and push that hash before returning the new token.
  * The outbox row is not written first: a flush could deliver the new hash after a push that
  * reported an older version and before the row was rolled back, and the page would then hide
- * the only token that works. A returned version equal to or newer than this one means the hash
- * is already stored. A lower version is checked once more, and only then is the row rolled back.
- * A push that throws is sent once more; if that also throws, the previous hash is pushed at the
- * next version before the page reports failure. Self-host never calls this.
+ * the only token that works. A returned version equal to or newer than this one is not enough:
+ * the stored hash has to still be this token, because a later rotation may already have moved
+ * the version. A lower version is checked once more. Only then, and only while this hash is
+ * still the stored one, is the previous hash pushed at the next version. A push that throws is
+ * sent once more. Self-host never calls this.
  */
 export async function rotateOwnerToken(
 	db: Sql,
@@ -45,7 +46,16 @@ export async function rotateOwnerToken(
 		owner_token_hash: hash, secrets_enc: row.secrets_enc, version, created_at: now,
 	};
 	const stored = (result: { version: number }) => Number.isSafeInteger(result.version) && result.version >= version;
+	const liveHash = async (): Promise<string | null> => {
+		const current = await db.prepare(
+			"SELECT owner_token_hash FROM tenants WHERE id = ? AND owner_account_id = ?",
+		).bind(row.id, input.accountId).first<{ owner_token_hash: string }>();
+		return current?.owner_token_hash ?? null;
+	};
+	const hashStillOurs = async () => (await liveHash()) === hash;
 	const reveal = async (confirmed: boolean): Promise<RotateResult> => {
+		// A later rotation can advance the version with a different hash. Do not show this token then.
+		if (!(await hashStillOurs())) return { ok: false, error: "replaced" };
 		try {
 			await plane.putDirectory(row.name, { id: row.id, status: row.status, region: row.region, version });
 			if (confirmed) {
@@ -59,6 +69,12 @@ export async function rotateOwnerToken(
 			}
 		} catch (error) {
 			console.log(JSON.stringify({ ts: now, event: "outbox_push_failed", tenant: row.id, error: String(error).slice(0, 200) }));
+		}
+		if (!(await hashStillOurs())) {
+			try {
+				await db.prepare("DELETE FROM config_outbox WHERE tenant_id = ? AND version = ?").bind(row.id, version).run();
+			} catch { /* the token is still not shown */ }
+			return { ok: false, error: "replaced" };
 		}
 		console.log(JSON.stringify({ ts: now, event: "owner_token_rotated", tenant: row.id, accountId: input.accountId }));
 		return { ok: true, token };
@@ -77,6 +93,8 @@ export async function rotateOwnerToken(
 	// The previous hash at the next version. Only an applied push counts: a newer stored version may
 	// already be this rotation's hash, and writing the old hash over the control row would hide it.
 	const restorePrevious = async (): Promise<boolean> => {
+		// A later rotation already replaced this hash. Leave that row alone.
+		if (!(await hashStillOurs())) return false;
 		const next = version + 1;
 		const previous: OutboxRow = { ...outbox, owner_token_hash: row.owner_token_hash, version: next };
 		try {
@@ -86,13 +104,36 @@ export async function rotateOwnerToken(
 			console.log(JSON.stringify({ ts: now, event: "outbox_push_failed", tenant: row.id, error: String(error).slice(0, 200) }));
 			return false;
 		}
-		await db.batch([
-			db.prepare(
-				`UPDATE tenants SET owner_token_hash = ?, config_version = ?, updated_at = ?
-				 WHERE id = ? AND owner_account_id = ? AND config_version = ? AND owner_token_hash = ?`,
-			).bind(row.owner_token_hash, next, now, row.id, input.accountId, version, hash),
-			db.prepare("DELETE FROM config_outbox WHERE tenant_id = ? AND version <= ?").bind(row.id, next),
-		]);
+		const restored = await db.prepare(
+			`UPDATE tenants SET owner_token_hash = ?, config_version = ?, updated_at = ?
+			 WHERE id = ? AND owner_account_id = ? AND config_version = ? AND owner_token_hash = ?`,
+		).bind(row.owner_token_hash, next, now, row.id, input.accountId, version, hash).run();
+		if (restored.meta?.changes !== 1) {
+			// The push stored the previous hash, then a later rotation moved the row. Put that
+			// later hash back at a newer version so the token it showed still authenticates.
+			const current = await db.prepare(
+				"SELECT owner_token_hash, config_version FROM tenants WHERE id = ? AND owner_account_id = ?",
+			).bind(row.id, input.accountId).first<{ owner_token_hash: string; config_version: number }>();
+			if (current && current.owner_token_hash !== row.owner_token_hash) {
+				const repair = Math.max(current.config_version, next) + 1;
+				try {
+					const result = await plane.pushConfig(
+						pushFromRow({ ...outbox, owner_token_hash: current.owner_token_hash, version: repair }),
+						row.region,
+					);
+					if (result.applied && Number.isSafeInteger(result.version) && result.version >= repair) {
+						await db.prepare(
+							`UPDATE tenants SET config_version = ?, updated_at = ?
+							 WHERE id = ? AND owner_account_id = ? AND config_version = ? AND owner_token_hash = ?`,
+						).bind(repair, now, row.id, input.accountId, current.config_version, current.owner_token_hash).run();
+					}
+				} catch (error) {
+					console.log(JSON.stringify({ ts: now, event: "outbox_push_failed", tenant: row.id, error: String(error).slice(0, 200) }));
+				}
+			}
+			return false;
+		}
+		await db.prepare("DELETE FROM config_outbox WHERE tenant_id = ? AND version <= ?").bind(row.id, next).run();
 		try {
 			await plane.putDirectory(row.name, { id: row.id, status: row.status, region: row.region, version: next });
 		} catch (error) {
