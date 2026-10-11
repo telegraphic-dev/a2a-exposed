@@ -406,6 +406,69 @@ test("one Cloudflare account stays bound to the user who claimed it", async (t) 
 	await assert.rejects(() => duplicate.run(), /UNIQUE constraint failed/i);
 });
 
+test("a Cloudflare connect that cannot read the provider returns to /app", async (t) => {
+	const original = globalThis.fetch;
+	let mode = "github";
+	globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+		const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+		if (url.startsWith("https://github.com/login/oauth/access_token")) return Response.json({ access_token: "gho_test", token_type: "bearer" });
+		if (url === "https://api.github.com/user") return Response.json({ id: 7, login: "mona", name: "Mona", email: "mona@example.com" });
+		if (url === "https://api.github.com/user/emails") return Response.json([{ email: "mona@example.com", primary: true, verified: true, visibility: "public" }]);
+		if (mode === "token-throw") throw new TypeError("fetch failed");
+		if (mode === "token-bad-json") return new Response("not-json", { status: 200, headers: { "content-type": "application/json" } });
+		if (mode === "token-hang") return new Promise(() => {});
+		if (url.startsWith("https://dash.cloudflare.com/oauth2/token")) return Response.json({ access_token: "cf_test", token_type: "bearer" });
+		if (mode === "profile-throw") throw new TypeError("fetch failed");
+		if (mode === "profile-bad-json") return new Response("{", { status: 200, headers: { "content-type": "application/json" } });
+		return original(input, init);
+	}) as typeof fetch;
+	t.after(() => { globalThis.fetch = original; });
+
+	const db = openDb();
+	const app = createApp({
+		AUTH_SECRET: secret,
+		DB: db,
+		GITHUB_CLIENT_ID: "gh-id",
+		GITHUB_CLIENT_SECRET: "gh-secret",
+		CLOUDFLARE_OAUTH_CLIENT_ID: "cf-id",
+		CLOUDFLARE_OAUTH_CLIENT_SECRET: "cf-secret",
+		SIGNUP_ALLOWLIST: "mona@example.com",
+	}, { database: db, cloudflareFetchMs: 40 });
+	const github = await providerCallback(app, "github");
+	const session = github.headers.getSetCookie().find((value) => value.startsWith(`${SESSION_COOKIE}=`))!.split(";")[0];
+
+	async function connect(next: string): Promise<Response> {
+		mode = "github";
+		const posted = await app.request(`${origin}/app/account/cloudflare`, {
+			method: "POST",
+			headers: { origin, cookie: session, "content-type": "application/x-www-form-urlencoded" },
+			body: "action=connect",
+		});
+		assert.equal(posted.status, 303);
+		const state = new URL(posted.headers.get("location") ?? "").searchParams.get("state") ?? "";
+		mode = next;
+		const started = Date.now();
+		const response = await app.request(`${origin}/api/auth/callback/cloudflare?code=abc&state=${encodeURIComponent(state)}`, { headers: { cookie: session } });
+		assert.equal(response.status, 302, await response.clone().text());
+		if (next === "token-hang") assert.ok(Date.now() - started < 1000, `callback took ${Date.now() - started}ms`);
+		return response;
+	}
+
+	async function shows(response: Response, error: string, message: RegExp) {
+		const location = new URL(response.headers.get("location") ?? "", origin);
+		assert.equal(location.searchParams.get("error"), error);
+		const page = await app.request(location, { headers: { cookie: session } });
+		assert.match(await page.text(), message);
+		assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM "account" WHERE "providerId" = 'cloudflare'`).first<{ n: number }>())?.n, 0);
+	}
+
+	await shows(await connect("token-throw"), "invalid_code", /The provider rejected the sign-in\. Try again\./);
+	await shows(await connect("token-bad-json"), "invalid_code", /The provider rejected the sign-in\. Try again\./);
+	await shows(await connect("profile-throw"), "unable_to_get_user_info", /The provider did not return an account\./);
+	await shows(await connect("profile-bad-json"), "unable_to_get_user_info", /The provider did not return an account\./);
+	await shows(await connect("token-hang"), "deadline", /Sign-in took too long\. Try again\./);
+});
+
 test("a mistyped invite code is not shown as an allowlist refusal", async () => {
 	const db = openDb();
 	const app = createApp({

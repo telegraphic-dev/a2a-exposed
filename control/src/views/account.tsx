@@ -13,6 +13,7 @@ const ERRORS: Record<string, string> = {
 	auth: "Sign-in did not complete.",
 	state_mismatch: "Sign-in expired. Try again.",
 	no_code: "The provider did not finish sign-in. Try again.",
+	deadline: "Sign-in took too long. Try again.",
 	invalid_code: "The provider rejected the sign-in. Try again.",
 	unable_to_get_user_info: "The provider did not return an account.",
 	account_already_linked_to_different_user: "That account is already linked to someone else.",

@@ -179,7 +179,7 @@ function htmlPathFor(pathname: string): string {
 	return pathname;
 }
 
-export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: DataPlane; callbackDeadlineMs?: number; signInDeadlineMs?: number } = {}) {
+export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: DataPlane; callbackDeadlineMs?: number; signInDeadlineMs?: number; cloudflareFetchMs?: number } = {}) {
 	const app = new Hono<{ Bindings: ControlEnv }>();
 
 	app.use("*", async (c, next) => {
@@ -340,7 +340,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 		}
 		const callbackPath = new URL(request.url).pathname;
 		if (request.method === "GET" && callbackPath === "/api/auth/callback/cloudflare") {
-			const linked = await finishCloudflareLink(request, loaded.auth, loaded.options);
+			const linked = await finishCloudflareLink(request, loaded.auth, loaded.options, deps.cloudflareFetchMs);
 			if (linked) return linked;
 		}
 		const handle = () => loaded.auth.handler(request);

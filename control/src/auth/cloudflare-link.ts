@@ -12,6 +12,8 @@ const TOKEN = "https://dash.cloudflare.com/oauth2/token";
 const USER = "https://api.cloudflare.com/client/v4/user";
 const STATE_PREFIX = "cfl_";
 const LINK_TTL_MS = 10 * 60 * 1000;
+/** Bound for one provider call, including the response body. The token and the profile each get one. */
+export const CLOUDFLARE_FETCH_MS = 5_000;
 
 type SessionAuth = {
 	handler(request: Request): Promise<Response>;
@@ -55,6 +57,51 @@ function redirect(location: string, cookies: string[] = [], status = 303): Respo
 	const headers = new Headers({ location, "cache-control": "no-store" });
 	for (const cookie of cookies) headers.append("set-cookie", cookie);
 	return new Response(null, { status, headers });
+}
+
+function startDeadline(ms: number): { done: Promise<never>; stop: () => void } {
+	let rejectDeadline: (error: unknown) => void = () => {};
+	const done = new Promise<never>((_, reject) => { rejectDeadline = reject; });
+	const timer = setTimeout(() => rejectDeadline(new DOMException("The operation was aborted", "TimeoutError")), ms);
+	return { done, stop: () => clearTimeout(timer) };
+}
+
+type ProviderRead = { kind: "ok"; body: unknown } | { kind: "deadline" } | { kind: "failed" };
+
+/** Token or profile read. A stalled socket, a rejected fetch, or a body that is not JSON does not throw. */
+async function readProvider(url: string, init: RequestInit, fetchMs: number): Promise<ProviderRead> {
+	const signal = AbortSignal.timeout(fetchMs);
+	const deadline = startDeadline(fetchMs);
+	try {
+		const request = fetch(url, { ...init, signal }).then(
+			(response) => ({ response }),
+			() => ({ response: null }),
+		);
+		let response: Response | null;
+		try {
+			({ response } = await Promise.race([request, deadline.done]));
+		} catch {
+			return { kind: "deadline" };
+		}
+		if (!response) return signal.aborted ? { kind: "deadline" } : { kind: "failed" };
+		if (!response.ok) {
+			void response.body?.cancel().catch(() => {});
+			return { kind: "failed" };
+		}
+		const parsed = response.json().then(
+			(body) => ({ body, failed: false }),
+			() => ({ body: undefined, failed: true }),
+		);
+		try {
+			const winner = await Promise.race([parsed, deadline.done]);
+			if (winner.failed) return signal.aborted ? { kind: "deadline" } : { kind: "failed" };
+			return { kind: "ok", body: winner.body };
+		} catch {
+			return { kind: "deadline" };
+		}
+	} finally {
+		deadline.stop();
+	}
 }
 
 function expiresMs(value: unknown): number {
@@ -156,7 +203,7 @@ export async function handleCloudflareAccount(request: Request, auth: SessionAut
  * so Better Auth can sign in by the linked Cloudflare account id.
  * The Cloudflare email is not stored on the user and is not checked against the allowlist.
  */
-export async function finishCloudflareLink(request: Request, auth: SessionAuth, options: AuthOptions): Promise<Response | null> {
+export async function finishCloudflareLink(request: Request, auth: SessionAuth, options: AuthOptions, fetchMs = CLOUDFLARE_FETCH_MS): Promise<Response | null> {
 	if (!cloudflareLinkState(request) || !options.cloudflare) return null;
 	const url = new URL(request.url);
 	const state = url.searchParams.get("state") ?? "";
@@ -185,19 +232,21 @@ export async function finishCloudflareLink(request: Request, auth: SessionAuth, 
 		client_secret: options.cloudflare.clientSecret,
 		code_verifier: verifier,
 	});
-	const token = await fetch(TOKEN, {
+	const token = await readProvider(TOKEN, {
 		method: "POST",
 		headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
 		body,
-	});
-	if (!token.ok) return redirect(appRedirect(request, "invalid_code"), [], 302);
-	const tokenBody = await token.json() as { access_token?: unknown };
-	const accessToken = typeof tokenBody.access_token === "string" ? tokenBody.access_token : "";
+	}, fetchMs);
+	if (token.kind === "deadline") return redirect(appRedirect(request, "deadline"), [], 302);
+	const tokenBody = token.kind === "ok" && token.body && typeof token.body === "object" ? token.body as { access_token?: unknown } : null;
+	const accessToken = typeof tokenBody?.access_token === "string" ? tokenBody.access_token : "";
 	if (!accessToken) return redirect(appRedirect(request, "invalid_code"), [], 302);
-	const profile = await fetch(USER, { headers: { authorization: `Bearer ${accessToken}`, accept: "application/json" } });
-	if (!profile.ok) return redirect(appRedirect(request, "unable_to_get_user_info"), [], 302);
-	const profileBody = await profile.json() as { result?: Parameters<typeof mapCloudflareUser>[0] };
-	const user = mapCloudflareUser(profileBody.result);
+	const profile = await readProvider(USER, { headers: { authorization: `Bearer ${accessToken}`, accept: "application/json" } }, fetchMs);
+	if (profile.kind === "deadline") return redirect(appRedirect(request, "deadline"), [], 302);
+	const profileBody = profile.kind === "ok" && profile.body && typeof profile.body === "object"
+		? profile.body as { result?: Parameters<typeof mapCloudflareUser>[0] }
+		: null;
+	const user = mapCloudflareUser(profileBody?.result);
 	if (!user) return redirect(appRedirect(request, "unable_to_get_user_info"), [], 302);
 	const now = new Date().toISOString();
 	// account_provider_account_idx makes this insert lose when another callback already
