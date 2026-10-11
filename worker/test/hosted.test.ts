@@ -219,3 +219,127 @@ test("per-tenant SQLite: directory, config push, and isolation", async (t) => {
 	await alice.stub.pushConfig({ version: 4, tenantId: "id-alice", name: "alice", status: "suspended", ownerTokenHash: hashA, config: { AGENT_NAME: "Alice 3" } });
 	assert.equal((await mf.dispatchFetch("https://alice.example.com/health")).status, 403, "the object enforces a newer status than the directory cache");
 });
+
+test("hosted approval reaches a same-zone issuer through CONTROL_SERVICE", async (t) => {
+	const issuer = "https://example.com";
+	const tenant = "https://northwind.example.com";
+	const bindingUrls: string[] = [];
+	const publicHosts: string[] = [];
+	const mf = await start({
+		bindings: {
+			TENANCY: "host",
+			TENANT_DOMAIN: "example.com",
+			TENANT_SECRETS_KEY: "platform-secret",
+		},
+		kvNamespaces: { TENANT_DIRECTORY: "tenants-oidc" },
+		durableObjects: { TENANT_DO: { className: "TenantStore", useSQLite: true } },
+		serviceBindings: {
+			CONTROL_SERVICE: async (request: Request) => {
+				const url = new URL(request.url);
+				bindingUrls.push(`${url.origin}${url.pathname}`);
+				if (url.origin === issuer && url.pathname === "/.well-known/openid-configuration") {
+					return Response.json({
+						issuer,
+						authorization_endpoint: `${issuer}/api/oidc/authorize`,
+						token_endpoint: `${issuer}/api/oidc/token`,
+						jwks_uri: `${issuer}/api/auth/jwks`,
+					});
+				}
+				return new Response("missing", { status: 404 });
+			},
+		},
+		// A public fetch of the zone apex does not reach the control Worker. If it is attempted, answer 522.
+		outboundService: async (request: Request) => {
+			publicHosts.push(new URL(request.url).hostname);
+			return new Response("origin is unreachable", { status: 522 });
+		},
+	});
+	t.after(() => mf.dispose());
+	await mf.ready;
+	const kv = await mf.getKVNamespace("TENANT_DIRECTORY");
+	const ns = await mf.getDurableObjectNamespace("TENANT_DO");
+	const hash = await sha256("owner-north");
+	const stub = ns.get(ns.idFromName("id-north")) as unknown as { pushConfig(body: Record<string, unknown>): Promise<{ applied: boolean }> };
+	const pushed = await stub.pushConfig({
+		version: 1, tenantId: "id-north", name: "northwind", status: "active", ownerTokenHash: hash,
+		approval: {
+			issuer, clientId: "client-1", clientSecret: "tenant-secret-value",
+			allowedSubjects: ["owner-1"], label: "Example",
+		},
+	});
+	assert.equal(pushed.applied, true, JSON.stringify(pushed));
+	await kv.put("tenant:northwind", JSON.stringify({ id: "id-north", status: "active", region: "default", version: 1 }));
+
+	const started = await mf.dispatchFetch(`${tenant}/oauth/device_authorization`, {
+		method: "POST",
+		headers: { "content-type": "application/x-www-form-urlencoded", "cf-connecting-ip": "198.51.100.8" },
+		body: "client_name=Barry+Bot&client_id=barry",
+	});
+	const device = await started.json() as { user_code?: string };
+	assert.equal(started.status, 200, JSON.stringify(device));
+	assert.ok(device.user_code);
+	const page = await mf.dispatchFetch(`${tenant}/device?user_code=${device.user_code}`, {
+		headers: { "cf-connecting-ip": "198.51.100.8" },
+	});
+	const html = await page.text();
+	assert.match(html, /Approve with Example/);
+	const csrf = /name="csrf" value="([^"]+)"/.exec(html)?.[1] ?? "";
+	const cookie = (page.headers.get("set-cookie") || "").split(";")[0];
+	const post = await mf.dispatchFetch(`${tenant}/device`, {
+		method: "POST",
+		redirect: "manual",
+		headers: {
+			"content-type": "application/x-www-form-urlencoded",
+			origin: tenant,
+			cookie,
+			"cf-connecting-ip": "198.51.100.8",
+		},
+		body: new URLSearchParams({ csrf, user_code: device.user_code, decision: "oidc" }).toString(),
+	});
+	assert.equal(post.status, 302, await post.text());
+	assert.equal(new URL(post.headers.get("location") || "").origin + new URL(post.headers.get("location") || "").pathname, `${issuer}/api/oidc/authorize`);
+	assert.deepEqual(bindingUrls, [`${issuer}/.well-known/openid-configuration`]);
+	assert.equal(publicHosts.includes("example.com"), false, `public fetch hit ${publicHosts.join(",")}`);
+
+	const missed = await start({
+		bindings: { TENANCY: "host", TENANT_DOMAIN: "example.com", TENANT_SECRETS_KEY: "platform-secret" },
+		kvNamespaces: { TENANT_DIRECTORY: "tenants-oidc-miss" },
+		durableObjects: { TENANT_DO: { className: "TenantStore", useSQLite: true } },
+		outboundService: async () => new Response("origin is unreachable", { status: 522 }),
+	});
+	t.after(() => missed.dispose());
+	await missed.ready;
+	const missedKv = await missed.getKVNamespace("TENANT_DIRECTORY");
+	const missedNs = await missed.getDurableObjectNamespace("TENANT_DO");
+	const missedStub = missedNs.get(missedNs.idFromName("id-north")) as unknown as { pushConfig(body: Record<string, unknown>): Promise<{ applied: boolean }> };
+	await missedStub.pushConfig({
+		version: 1, tenantId: "id-north", name: "northwind", status: "active", ownerTokenHash: hash,
+		approval: { issuer, clientId: "client-1", clientSecret: "tenant-secret-value", allowedSubjects: ["owner-1"], label: "Example" },
+	});
+	await missedKv.put("tenant:northwind", JSON.stringify({ id: "id-north", status: "active", region: "default", version: 1 }));
+	const missedStart = await missed.dispatchFetch(`${tenant}/oauth/device_authorization`, {
+		method: "POST",
+		headers: { "content-type": "application/x-www-form-urlencoded", "cf-connecting-ip": "198.51.100.9" },
+		body: "client_name=Barry+Bot&client_id=barry",
+	});
+	const missedDevice = await missedStart.json() as { user_code: string };
+	const missedPage = await missed.dispatchFetch(`${tenant}/device?user_code=${missedDevice.user_code}`, {
+		headers: { "cf-connecting-ip": "198.51.100.9" },
+	});
+	const missedHtml = await missedPage.text();
+	const missedCsrf = /name="csrf" value="([^"]+)"/.exec(missedHtml)?.[1] ?? "";
+	const missedCookie = (missedPage.headers.get("set-cookie") || "").split(";")[0];
+	const missedPost = await missed.dispatchFetch(`${tenant}/device`, {
+		method: "POST",
+		redirect: "manual",
+		headers: {
+			"content-type": "application/x-www-form-urlencoded",
+			origin: tenant,
+			cookie: missedCookie,
+			"cf-connecting-ip": "198.51.100.9",
+		},
+		body: new URLSearchParams({ csrf: missedCsrf, user_code: missedDevice.user_code, decision: "oidc" }).toString(),
+	});
+	assert.equal(missedPost.status, 502);
+	assert.match(await missedPost.text(), /The identity provider could not be reached/);
+});

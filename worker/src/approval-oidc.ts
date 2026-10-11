@@ -28,6 +28,17 @@ export function issuerBase(issuer: string): string {
 }
 
 /**
+ * True when the two hosts are the same, or one is a subdomain of the other.
+ * `notexample.com` is not a subdomain of `example.com`.
+ */
+export function sameZoneHost(pageHost: string, targetHost: string): boolean {
+	const a = pageHost.trim().toLowerCase().replace(/\.$/, "");
+	const b = targetHost.trim().toLowerCase().replace(/\.$/, "");
+	if (!a || !b) return false;
+	return a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`);
+}
+
+/**
  * What the approval pages offer.
  * OIDC is on when it is fully configured and methods include oidc, or when methods were not specified.
  * Password stays on unless methods were specified as oidc only AND the OIDC config is complete
@@ -83,8 +94,59 @@ async function readJson(res: Response, max: number): Promise<any> {
 	return JSON.parse(text);
 }
 
-async function getJson(url: string): Promise<any> {
-	const res = await fetch(url, { headers: { accept: "application/json" }, redirect: "error", signal: AbortSignal.timeout(FETCH_MS) });
+type IdpOp = "discovery" | "token" | "jwks";
+
+function pageHostname(ctx: TenantContext): string {
+	try { return new URL(ctx.PUBLIC_URL).hostname; } catch { return ""; }
+}
+
+function logUnreachable(host: string, op: IdpOp, status: number, error?: unknown) {
+	const name = error instanceof Error ? error.name : "";
+	const kw: Record<string, unknown> = { ts: A.nowIso(), event: "idp_unreachable", op, status, host };
+	if (!status) kw.error = /^[A-Za-z][A-Za-z0-9_]{0,40}$/.test(name) ? name : "fetch_failed";
+	console.log(JSON.stringify(kw));
+}
+
+/**
+ * Discovery, token and JWKS for an issuer on this tenant's zone go through CONTROL_SERVICE.
+ * A public fetch of that zone can miss the control Worker (wildcard route, 522, or the site Worker).
+ * Any other issuer, and a deploy with the binding unset, uses fetch.
+ */
+async function idpFetch(ctx: TenantContext, url: string, init: RequestInit, op: IdpOp): Promise<Response> {
+	let host = "";
+	try { host = new URL(url).hostname; } catch { /* logged as a failed fetch */ }
+	const binding = ctx.controlService();
+	const viaBinding = !!(binding && host && sameZoneHost(pageHostname(ctx), host));
+	try {
+		// A service binding rejects `redirect` and `signal` on the request (they do not cross the
+		// binding). The timeout still applies here. Redirects stay an error: the binding does not follow them.
+		const res = viaBinding ? await bindingFetch(binding!, url, init) : await fetch(url, init);
+		if (!res.ok) logUnreachable(host, op, res.status);
+		return res;
+	} catch (error) {
+		logUnreachable(host, op, 0, error);
+		throw new Error("http");
+	}
+}
+
+async function bindingFetch(binding: NonNullable<ReturnType<TenantContext["controlService"]>>, url: string, init: RequestInit): Promise<Response> {
+	const headers = new Headers(init.headers);
+	const req = new Request(url, { method: init.method || "GET", headers, body: init.body });
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		return await Promise.race([
+			binding.fetch(req),
+			new Promise<Response>((_, reject) => {
+				timer = setTimeout(() => reject(new DOMException("The operation was aborted", "AbortError")), FETCH_MS);
+			}),
+		]);
+	} finally {
+		if (timer !== undefined) clearTimeout(timer);
+	}
+}
+
+async function getJson(ctx: TenantContext, url: string, op: IdpOp): Promise<any> {
+	const res = await idpFetch(ctx, url, { headers: { accept: "application/json" }, redirect: "error", signal: AbortSignal.timeout(FETCH_MS) }, op);
 	if (!res.ok) throw new Error("http");
 	return readJson(res, 65536);
 }
@@ -95,8 +157,8 @@ interface Discovery {
 	jwks_uri: string;
 }
 
-async function discover(issuer: string): Promise<Discovery> {
-	const doc = await getJson(`${issuerBase(issuer)}/.well-known/openid-configuration`);
+async function discover(ctx: TenantContext, issuer: string): Promise<Discovery> {
+	const doc = await getJson(ctx, `${issuerBase(issuer)}/.well-known/openid-configuration`, "discovery");
 	if (issuerBase(String(doc?.issuer || "")) !== issuerBase(issuer)) throw new Error("issuer");
 	return {
 		authorization_endpoint: httpsEndpoint(doc.authorization_endpoint),
@@ -112,7 +174,7 @@ export async function startOidc(ctx: TenantContext, o: {
 	const gate = ctx.gates.approvalOidc;
 	if (!approvalPolicy(gate).oidc || !ctx.approvalClientSecret()) return { ok: false, error: "OpenID Connect approval is not configured.", reason: "config" };
 	let disc: Discovery;
-	try { disc = await discover(gate.issuer); }
+	try { disc = await discover(ctx, gate.issuer); }
 	catch { return { ok: false, error: UNREACHABLE, reason: "discovery" }; }
 	const { verifier, challenge } = await pkce();
 	const state = b64url(crypto.getRandomValues(new Uint8Array(32)));
@@ -217,7 +279,7 @@ export async function finishOidc(ctx: TenantContext, o: {
 	const secret = ctx.approvalClientSecret();
 	if (!approvalPolicy(gate).oidc || !secret) return { ok: false, error: "OpenID Connect approval is not configured.", reason: "config", userCode };
 	let disc: Discovery;
-	try { disc = await discover(gate.issuer); }
+	try { disc = await discover(ctx, gate.issuer); }
 	catch { return { ok: false, error: UNREACHABLE, reason: "discovery", userCode }; }
 	let idToken = "";
 	try {
@@ -225,16 +287,16 @@ export async function finishOidc(ctx: TenantContext, o: {
 			grant_type: "authorization_code", code: o.code, redirect_uri: o.redirectUri,
 			client_id: gate.clientId, client_secret: secret, code_verifier: row.verifier,
 		});
-		const res = await fetch(disc.token_endpoint, {
+		const res = await idpFetch(ctx, disc.token_endpoint, {
 			method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
 			body, redirect: "error", signal: AbortSignal.timeout(FETCH_MS),
-		});
+		}, "token");
 		if (!res.ok) return { ok: false, error: UNREACHABLE, reason: "token", userCode };
 		const tok = await readJson(res, 65536);
 		idToken = typeof tok.id_token === "string" ? tok.id_token : "";
 	} catch { return { ok: false, error: UNREACHABLE, reason: "token", userCode }; }
 	let jwks: { keys?: any[] };
-	try { jwks = await getJson(disc.jwks_uri); }
+	try { jwks = await getJson(ctx, disc.jwks_uri, "jwks"); }
 	catch { return { ok: false, error: UNREACHABLE, reason: "jwks", userCode }; }
 	const verified = await verifyIdToken(idToken, jwks, { iss: gate.issuer, aud: gate.clientId, nonce: row.nonce, subjects: gate.allowedSubjects });
 	if ("reason" in verified) return { ok: false, error: FAIL, reason: verified.reason, userCode };

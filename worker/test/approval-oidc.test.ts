@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import worker, { dispatch } from "../src/index.ts";
 import * as M from "../src/mcp.ts";
-import { approvalPolicy } from "../src/approval-oidc.ts";
+import { approvalPolicy, sameZoneHost } from "../src/approval-oidc.ts";
 import { hostedTenantContext, parseGates, type WorkerBindings } from "../src/tenancy.ts";
 import { d1 } from "./d1.ts";
 
@@ -117,6 +117,8 @@ test("unset /device has no OpenID Connect button", async (t) => {
 
 test("configured /device redirects to the issuer with PKCE and approves on a valid id token", async (t) => {
 	const s = setup(oidcEnv); t.after(s.restore);
+	// Different zone from the tenant: the control binding must not see this issuer.
+	s.env.CONTROL_SERVICE = { fetch() { throw new Error("external issuer must use fetch"); } };
 	const d = await s.start();
 	const code = d.data.user_code as string;
 	const { page, post } = await s.postOidc(code);
@@ -328,4 +330,89 @@ test("MCP consent offers Continue with the issuer and the callback issues the au
 		redirect_uri: q.redirect_uri, code_verifier: verifier, resource: `${BASE}/mcp` } });
 	assert.equal(tok.status, 200, tok.text);
 	assert.ok(String(tok.data.access_token).startsWith("a2amcp_"));
+});
+
+test("sameZoneHost matches a parent zone and not a lookalike label", () => {
+	assert.equal(sameZoneHost("northwind.example.com", "example.com"), true);
+	assert.equal(sameZoneHost("example.com", "northwind.example.com"), true);
+	assert.equal(sameZoneHost("example.com", "example.com"), true);
+	assert.equal(sameZoneHost("agent.example.com", "idp.example"), false);
+	assert.equal(sameZoneHost("notexample.com", "example.com"), false);
+	assert.equal(sameZoneHost("example.com.evil.example", "example.com"), false);
+	assert.equal(sameZoneHost("", "example.com"), false);
+});
+
+const ZONE = "https://example.com";
+
+test("a same-zone issuer is reached through CONTROL_SERVICE, not a public fetch", async (t) => {
+	const s = setup({ ...oidcEnv, APPROVAL_OIDC_ISSUER: ZONE }); t.after(s.restore);
+	const urls: string[] = [];
+	let publicCalls = 0;
+	let next = () => claims({ iss: ZONE });
+	s.env.CONTROL_SERVICE = {
+		async fetch(input: RequestInfo | URL, init?: RequestInit) {
+			const req = input instanceof Request ? input : new Request(input, init);
+			urls.push(new URL(req.url).pathname);
+			const u = new URL(req.url);
+			if (u.origin === ZONE && u.pathname === "/.well-known/openid-configuration")
+				return Response.json({ issuer: ZONE, authorization_endpoint: `${ZONE}/authorize`, token_endpoint: `${ZONE}/token`, jwks_uri: `${ZONE}/jwks` });
+			if (u.origin === ZONE && u.pathname === "/jwks") return Response.json({ keys: [jwk] });
+			if (u.origin === ZONE && u.pathname === "/token") {
+				s.tokenBodies.push(Object.fromEntries(new URLSearchParams(await req.text())));
+				return Response.json({ id_token: signJwt(next()) });
+			}
+			return new Response("missing", { status: 404 });
+		},
+	};
+	globalThis.fetch = (async () => { publicCalls++; return new Response("unreachable", { status: 522 }); }) as typeof fetch;
+	const d = await s.start();
+	const code = d.data.user_code as string;
+	const { post } = await s.postOidc(code);
+	assert.equal(post.status, 302, post.text);
+	const loc = new URL(post.headers.get("location")!);
+	assert.equal(loc.origin + loc.pathname, `${ZONE}/authorize`);
+	assert.equal(publicCalls, 0, "the public fetch of the same zone was not used");
+	assert.deepEqual(urls, ["/.well-known/openid-configuration"]);
+	next = () => claims({ iss: ZONE, nonce: loc.searchParams.get("nonce")! });
+	const back = await s.call("GET", `/device/oidc/callback?code=auth-code&state=${loc.searchParams.get("state")}`);
+	assert.equal(back.status, 200, back.text);
+	assert.match(back.text, /Approved/);
+	assert.deepEqual(urls, ["/.well-known/openid-configuration", "/.well-known/openid-configuration", "/token", "/jwks"]);
+	assert.equal(s.tokenBodies[0].client_secret, SECRET);
+	assert.equal(publicCalls, 0);
+	const joined = s.logs.join("\n");
+	assert.equal(joined.includes("idp_unreachable"), false);
+	assert.equal(joined.includes(SECRET), false);
+	assert.equal(joined.includes("auth-code"), false);
+});
+
+test("a failed same-zone fetch logs idp_unreachable with status and host", async (t) => {
+	const s = setup({ ...oidcEnv, APPROVAL_OIDC_ISSUER: ZONE }); t.after(s.restore);
+	s.env.CONTROL_SERVICE = { async fetch() { return new Response("origin is unreachable", { status: 522 }); } };
+	globalThis.fetch = (async () => { throw new Error("public fetch must not run"); }) as typeof fetch;
+	const d = await s.start();
+	const code = d.data.user_code as string;
+	const { post } = await s.postOidc(code);
+	assert.equal(post.status, 502, post.text);
+	assert.match(post.text, /The identity provider could not be reached/);
+	const line = s.logs.map((entry) => { try { return JSON.parse(entry); } catch { return null; } }).find((entry) => entry?.event === "idp_unreachable");
+	assert.ok(line, s.logs.join("\n"));
+	assert.equal(line.op, "discovery");
+	assert.equal(line.status, 522);
+	assert.equal(line.host, "example.com");
+	assert.equal(JSON.stringify(line).includes(SECRET), false);
+	assert.equal(JSON.stringify(line).includes(code), false);
+	assert.equal(JSON.stringify(line).includes("origin is unreachable"), false);
+
+	delete s.env.CONTROL_SERVICE;
+	globalThis.fetch = (async () => { const err = new TypeError("connect failed"); throw err; }) as typeof fetch;
+	const again = await s.postOidc((await s.start()).data.user_code);
+	assert.equal(again.post.status, 502);
+	const thrown = s.logs.map((entry) => { try { return JSON.parse(entry); } catch { return null; } }).filter((entry) => entry?.event === "idp_unreachable");
+	const last = thrown.at(-1);
+	assert.equal(last.status, 0);
+	assert.equal(last.host, "example.com");
+	assert.equal(last.error, "TypeError");
+	assert.equal(JSON.stringify(last).includes("connect failed"), false);
+	assert.equal(JSON.stringify(last).includes(SECRET), false);
 });
