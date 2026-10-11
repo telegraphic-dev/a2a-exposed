@@ -49,12 +49,47 @@ export async function createAuth(options: AuthOptions) {
 				pkce: true,
 				disableSignUp: true,
 				accountSubject: ({ profile }) => typeof profile.id === "string" ? profile.id.trim() : "",
+				async getToken(data) {
+					const body = new URLSearchParams({
+						grant_type: "authorization_code",
+						code: data.code,
+						redirect_uri: data.redirectURI,
+						client_id: options.cloudflare!.clientId,
+						client_secret: options.cloudflare!.clientSecret,
+					});
+					if (data.codeVerifier) body.set("code_verifier", data.codeVerifier);
+					const fetchMs = options.cloudflareFetchMs ?? CLOUDFLARE_FETCH_MS;
+					const token = await readCloudflare(TOKEN, {
+						method: "POST",
+						headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
+						body,
+					}, fetchMs);
+					if (token.kind !== "ok" || !token.body || typeof token.body !== "object") throw new Error("invalid_code");
+					const record = token.body as Record<string, unknown>;
+					const accessToken = typeof record.access_token === "string" ? record.access_token : "";
+					if (!accessToken) throw new Error("invalid_code");
+					const expiresIn = typeof record.expires_in === "number" ? record.expires_in : undefined;
+					const refreshExpires = typeof record.refresh_token_expires_in === "number" ? record.refresh_token_expires_in : undefined;
+					const scopes = Array.isArray(record.scope)
+						? record.scope.filter((item): item is string => typeof item === "string" && item.length > 0)
+						: typeof record.scope === "string" ? record.scope.split(/\s+/).filter(Boolean) : [];
+					return {
+						tokenType: typeof record.token_type === "string" ? record.token_type : undefined,
+						accessToken,
+						refreshToken: typeof record.refresh_token === "string" ? record.refresh_token : undefined,
+						accessTokenExpiresAt: expiresIn ? new Date(Date.now() + expiresIn * 1000) : undefined,
+						refreshTokenExpiresAt: refreshExpires ? new Date(Date.now() + refreshExpires * 1000) : undefined,
+						scopes,
+						idToken: typeof record.id_token === "string" ? record.id_token : undefined,
+						raw: record,
+					};
+				},
 				async getUserInfo(tokens) {
 					const accessToken = tokens.accessToken;
 					if (!accessToken) return null;
 					const profile = await readCloudflare(USER, {
 						headers: { authorization: `Bearer ${accessToken}`, accept: "application/json" },
-					}, CLOUDFLARE_FETCH_MS);
+					}, options.cloudflareFetchMs ?? CLOUDFLARE_FETCH_MS);
 					if (profile.kind !== "ok" || !profile.body || typeof profile.body !== "object") return null;
 					const body = profile.body as { result?: Parameters<typeof mapCloudflareUser>[0] };
 					return mapCloudflareUser(body.result);

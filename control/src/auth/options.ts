@@ -28,11 +28,14 @@ export interface AuthOptions {
 	invitesRequired: boolean;
 	/** Null when unset: sign-in is open. A list admits only those verified emails. */
 	signupAllowlist: SignupAllowlist | null;
+	/** Per Cloudflare token and profile call. The callback deadline aborts one that is still running. */
+	cloudflareFetchMs?: number;
 }
 
 export interface AuthDeps {
 	database?: Sql;
 	mailer?: Mailer;
+	cloudflareFetchMs?: number;
 }
 
 export interface AuthEnv {
@@ -120,5 +123,6 @@ export function resolveAuth(env: AuthEnv, request: Request, deps: AuthDeps = {})
 		turnstile: turnstileSite && turnstileSecret ? { siteKey: turnstileSite, secret: turnstileSecret } : undefined,
 		invitesRequired: env.INVITES_REQUIRED?.trim() === "1",
 		signupAllowlist: signupAllowlist(env.SIGNUP_ALLOWLIST),
+		cloudflareFetchMs: deps.cloudflareFetchMs,
 	};
 }

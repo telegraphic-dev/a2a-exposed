@@ -529,6 +529,60 @@ test("a Cloudflare sign-in whose profile is not JSON returns to /app", async (t)
 	assert.equal((await linkedDb.prepare(`SELECT COUNT(*) AS n FROM "account" WHERE "providerId" = 'cloudflare'`).first<{ n: number }>())?.n, 1);
 });
 
+test("a Cloudflare token exchange stops and the callback deadline cancels it", async (t) => {
+	const original = globalThis.fetch;
+	let aborted = false;
+	globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+		const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+		if (url.startsWith("https://github.com/login/oauth/access_token")) return Response.json({ access_token: "gho_test", token_type: "bearer" });
+		if (url === "https://api.github.com/user") return Response.json({ id: 7, login: "mona", name: "Mona", email: "mona@example.com" });
+		if (url === "https://api.github.com/user/emails") return Response.json([{ email: "mona@example.com", primary: true, verified: true, visibility: "public" }]);
+		if (url.startsWith("https://dash.cloudflare.com/oauth2/token")) {
+			const signal = init?.signal;
+			return new Promise((_resolve, reject) => {
+				const fail = () => {
+					aborted = true;
+					reject(new DOMException("The operation was aborted", "AbortError"));
+				};
+				if (signal?.aborted) return fail();
+				signal?.addEventListener("abort", fail, { once: true });
+			});
+		}
+		return original(input, init);
+	}) as typeof fetch;
+	t.after(() => { globalThis.fetch = original; });
+
+	const env = {
+		AUTH_SECRET: secret,
+		GITHUB_CLIENT_ID: "gh-id",
+		GITHUB_CLIENT_SECRET: "gh-secret",
+		CLOUDFLARE_OAUTH_CLIENT_ID: "cf-id",
+		CLOUDFLARE_OAUTH_CLIENT_SECRET: "cf-secret",
+	};
+
+	const fastDb = openDb();
+	const fast = createApp({ ...env, DB: fastDb }, { database: fastDb, cloudflareFetchMs: 40 });
+	aborted = false;
+	const started = Date.now();
+	const limited = await providerCallback(fast, "cloudflare");
+	assert.ok(Date.now() - started < 1000, `token exchange took ${Date.now() - started}ms`);
+	assert.equal(limited.status, 302, await limited.clone().text());
+	assert.equal(new URL(limited.headers.get("location") ?? "", origin).searchParams.get("error"), "invalid_code");
+	assert.equal(aborted, true);
+	assert.equal((await fastDb.prepare('SELECT COUNT(*) AS n FROM "user"').first<{ n: number }>())?.n, 0);
+
+	const slowDb = openDb();
+	const slow = createApp({ ...env, DB: slowDb }, { database: slowDb, cloudflareFetchMs: 30_000, callbackDeadlineMs: 40 });
+	aborted = false;
+	const outer = Date.now();
+	const gaveUp = await providerCallback(slow, "cloudflare");
+	assert.ok(Date.now() - outer < 1000, `callback took ${Date.now() - outer}ms`);
+	assert.equal(gaveUp.status, 302, await gaveUp.clone().text());
+	assert.equal(new URL(gaveUp.headers.get("location") ?? "", origin).searchParams.get("error"), "deadline");
+	assert.equal(aborted, true);
+	assert.equal((await slowDb.prepare('SELECT COUNT(*) AS n FROM "user"').first<{ n: number }>())?.n, 0);
+});
+
 test("a mistyped invite code is not shown as an allowlist refusal", async () => {
 	const db = openDb();
 	const app = createApp({
