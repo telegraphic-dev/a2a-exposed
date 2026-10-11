@@ -1,4 +1,5 @@
 import { SIGNUP_CLOSED } from "../auth/allowlist.ts";
+import { REAUTH_MESSAGE } from "../auth/recent.ts";
 
 const ERRORS: Record<string, string> = {
 	invalid_name: "Use 4–32 letters, numbers, or hyphens.",
@@ -6,6 +7,7 @@ const ERRORS: Record<string, string> = {
 	taken: "That name is taken.",
 	origin: "That request came from another site.",
 	unavailable: "Agents are not available.",
+	reauth: REAUTH_MESSAGE,
 };
 
 function limitMessage(limit: number | null): string {

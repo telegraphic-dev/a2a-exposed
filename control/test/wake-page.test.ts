@@ -43,6 +43,10 @@ function plane() {
 				}
 				return { status: 200, body: testBody };
 			}
+			if (input.path === "/owner/pairing") return { status: 200, body: { pending: [] } };
+			if (input.path === "/owner/peers") return { status: 200, body: [] };
+			if (input.path === "/owner/outbound-peers") return { status: 200, body: [] };
+			if (input.path !== "/owner/wake/preview") return { status: 404, body: {} };
 			return {
 				status: 200,
 				body: {
@@ -111,14 +115,18 @@ test("the agent list links to a wake page that edits through the owner and does 
 	assert.equal(html.includes(wakeKey), false);
 	assert.match(html, /x-credential: •••• \(set\)/);
 	assert.equal(html.includes("Claude Code starts a new cloud session on each wake."), false);
-	assert.equal(target.calls.length, 2);
+	assert.equal(target.calls.length, 5);
+	assert.deepEqual(target.calls.map((call) => call.input.path), [
+		"/owner/summary",
+		"/owner/pairing",
+		"/owner/peers",
+		"/owner/outbound-peers",
+		"/owner/wake/preview",
+	]);
 	assert.equal(target.calls[0].input.method, "GET");
-	assert.equal(target.calls[0].input.path, "/owner/summary");
-	assert.equal(target.calls[1].input.path, "/owner/wake/preview");
 	assert.equal(target.calls[0].region, "default");
 	const account = await db.prepare('SELECT id FROM "user" WHERE email = ?').bind("person@example.com").first<{ id: string }>();
-	assert.equal(target.calls[0].input.accountId, account?.id);
-	assert.equal(target.calls[1].input.accountId, account?.id);
+	for (const call of target.calls) assert.equal(call.input.accountId, account?.id);
 
 	const cross = await app.request(`${origin}/app/agents/northwind`, {
 		method: "POST",

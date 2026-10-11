@@ -1,4 +1,5 @@
 import { SIGNUP_CLOSED } from "../auth/allowlist.ts";
+import { REAUTH_MESSAGE } from "../auth/recent.ts";
 
 const PROVIDERS = [
 	["github", "Continue with GitHub"],
@@ -84,6 +85,7 @@ const ERRORS: Record<string, string> = {
 	issuer_missing: "The provider identity did not match.",
 	nonce_binding_missing: "The provider identity did not match.",
 	no_callback_url: "Sign-in did not complete. Try again.",
+	reauth: REAUTH_MESSAGE,
 };
 
 export function renderSignIn(input: {
