@@ -19,8 +19,9 @@ async function sha256(value: string): Promise<string> {
  * the only token that works. A returned version equal to or newer than this one is not enough:
  * the stored hash has to still be this token, because a later rotation may already have moved
  * the version. A lower version is checked once more. Only then, and only while this hash is
- * still the stored one, is the previous hash pushed at the next version. A push that throws is
- * sent once more. Self-host never calls this.
+ * still the stored one, that next version is reserved and then the previous hash is pushed there.
+ * Reserving first keeps another rotation from committing a different hash at the same version.
+ * A push that throws is sent once more. Self-host never calls this.
  */
 export async function rotateOwnerToken(
 	db: Sql,
@@ -90,49 +91,39 @@ export async function rotateOwnerToken(
 		if (await restorePrevious()) return { ok: false, error: "failed" };
 		return reveal(false);
 	};
-	// The previous hash at the next version. Only an applied push counts: a newer stored version may
-	// already be this rotation's hash, and writing the old hash over the control row would hide it.
+	// The previous hash at the next version. That version is reserved before the push, so another
+	// rotation cannot commit a different hash at the same number and then treat a rejected push as stored.
 	const restorePrevious = async (): Promise<boolean> => {
 		// A later rotation already replaced this hash. Leave that row alone.
 		if (!(await hashStillOurs())) return false;
 		const next = version + 1;
+		const reserved = await db.prepare(
+			`UPDATE tenants SET config_version = ?, updated_at = ?
+			 WHERE id = ? AND owner_account_id = ? AND config_version = ? AND owner_token_hash = ?`,
+		).bind(next, now, row.id, input.accountId, version, hash).run();
+		if (reserved.meta?.changes !== 1) return false;
 		const previous: OutboxRow = { ...outbox, owner_token_hash: row.owner_token_hash, version: next };
+		let result: { version: number; applied: boolean };
 		try {
-			const result = await plane.pushConfig(pushFromRow(previous), row.region);
-			if (!result.applied || !Number.isSafeInteger(result.version) || result.version < next) return false;
+			result = await plane.pushConfig(pushFromRow(previous), row.region);
 		} catch (error) {
 			console.log(JSON.stringify({ ts: now, event: "outbox_push_failed", tenant: row.id, error: String(error).slice(0, 200) }));
-			return false;
-		}
-		const restored = await db.prepare(
-			`UPDATE tenants SET owner_token_hash = ?, config_version = ?, updated_at = ?
-			 WHERE id = ? AND owner_account_id = ? AND config_version = ? AND owner_token_hash = ?`,
-		).bind(row.owner_token_hash, next, now, row.id, input.accountId, version, hash).run();
-		if (restored.meta?.changes !== 1) {
-			// The push stored the previous hash, then a later rotation moved the row. Put that
-			// later hash back at a newer version so the token it showed still authenticates.
-			const current = await db.prepare(
-				"SELECT owner_token_hash, config_version FROM tenants WHERE id = ? AND owner_account_id = ?",
-			).bind(row.id, input.accountId).first<{ owner_token_hash: string; config_version: number }>();
-			if (current && current.owner_token_hash !== row.owner_token_hash) {
-				const repair = Math.max(current.config_version, next) + 1;
-				try {
-					const result = await plane.pushConfig(
-						pushFromRow({ ...outbox, owner_token_hash: current.owner_token_hash, version: repair }),
-						row.region,
-					);
-					if (result.applied && Number.isSafeInteger(result.version) && result.version >= repair) {
-						await db.prepare(
-							`UPDATE tenants SET config_version = ?, updated_at = ?
-							 WHERE id = ? AND owner_account_id = ? AND config_version = ? AND owner_token_hash = ?`,
-						).bind(repair, now, row.id, input.accountId, current.config_version, current.owner_token_hash).run();
-					}
-				} catch (error) {
-					console.log(JSON.stringify({ ts: now, event: "outbox_push_failed", tenant: row.id, error: String(error).slice(0, 200) }));
-				}
+			try {
+				result = await plane.pushConfig(pushFromRow(previous), row.region);
+			} catch (again) {
+				console.log(JSON.stringify({ ts: now, event: "outbox_push_failed", tenant: row.id, error: String(again).slice(0, 200) }));
+				// The version stays reserved and the new hash stays in the row. The caller shows that token.
+				return false;
 			}
-			return false;
 		}
+		// An equal version is this reserved push, or a repeat of it. A higher version belongs to a later write.
+		if (!Number.isSafeInteger(result.version) || result.version < next) return false;
+		if (!result.applied && result.version !== next) return false;
+		const restored = await db.prepare(
+			`UPDATE tenants SET owner_token_hash = ?, updated_at = ?
+			 WHERE id = ? AND owner_account_id = ? AND config_version = ? AND owner_token_hash = ?`,
+		).bind(row.owner_token_hash, now, row.id, input.accountId, next, hash).run();
+		if (restored.meta?.changes !== 1) return false;
 		await db.prepare("DELETE FROM config_outbox WHERE tenant_id = ? AND version <= ?").bind(row.id, next).run();
 		try {
 			await plane.putDirectory(row.name, { id: row.id, status: row.status, region: row.region, version: next });

@@ -300,7 +300,7 @@ test("a push that cannot be restored still returns the new token", async () => {
 	const packed = cookieValue(rotated.headers.getSetCookie().find((value) => value.startsWith(`${OWNER_COOKIE}=`)) ?? "");
 	assert.match(packed, /^northwind\.a2aot_/);
 	const after = await db.prepare("SELECT owner_token_hash, config_version FROM tenants WHERE name = ?").bind("northwind").first<{ owner_token_hash: string; config_version: number }>();
-	assert.equal(after?.config_version, 2);
+	assert.equal(after?.config_version, 3);
 	assert.notEqual(after?.owner_token_hash, before?.owner_token_hash);
 	const pending = await db.prepare("SELECT COUNT(*) AS n FROM config_outbox").first<{ n: number }>();
 	assert.equal(Number(pending?.n), 1);
@@ -432,7 +432,48 @@ test("a low version after a later rotation does not restore the previous hash", 
 	assert.equal(rotated.headers.getSetCookie().some((value) => value.includes("a2aot_")), false);
 });
 
-test("a restore that loses the row puts the later hash back", async () => {
+test("a restore reserves its version before another rotation can take it", async () => {
+	const db = openDb();
+	const sent: { text: string }[] = [];
+	const target = plane("refuse");
+	const push = target.data.pushConfig.bind(target.data);
+	let reserved = false;
+	target.data.pushConfig = async (body, region) => {
+		if (body.version === 3) {
+			const row = await db.prepare("SELECT owner_token_hash, config_version FROM tenants WHERE name = ?").bind("northwind").first<{ owner_token_hash: string; config_version: number }>();
+			assert.equal(row?.config_version, 3);
+			assert.notEqual(row?.owner_token_hash, body.ownerTokenHash);
+			const stolen = await db.prepare(
+				"UPDATE tenants SET owner_token_hash = ?, config_version = ? WHERE name = ? AND config_version = ?",
+			).bind("later-rotation", 3, "northwind", 2).run();
+			assert.equal(stolen.meta?.changes, 0);
+			reserved = true;
+		}
+		return push(body, region);
+	};
+	const app = createApp(
+		{ AUTH_SECRET: secret, DB: db, TENANT_DOMAIN: "example.com" },
+		{ database: db, mailer: { async send(message) { sent.push({ text: message.text }); } }, dataPlane: target.data },
+	);
+	const cookie = await signIn(app, sent);
+	const headers = { cookie, origin, "sec-fetch-site": "same-origin", "content-type": "application/x-www-form-urlencoded" };
+	assert.equal((await app.request(`${origin}/api/v1/tenants`, { method: "POST", headers, body: "name=Northwind" })).status, 303);
+	const before = await db.prepare("SELECT owner_token_hash FROM tenants WHERE name = ?").bind("northwind").first<{ owner_token_hash: string }>();
+	const rotated = await app.request(`${origin}/app/agents/northwind`, { method: "POST", headers, body: "action=rotate-token&confirm=1" });
+	assert.equal(reserved, true);
+	assert.match(rotated.headers.get("location") ?? "", /token=failed$/);
+	assert.equal(rotated.headers.getSetCookie().some((value) => value.includes("a2aot_")), false);
+	const after = await db.prepare("SELECT owner_token_hash, config_version FROM tenants WHERE name = ?").bind("northwind").first<{ owner_token_hash: string; config_version: number }>();
+	assert.equal(after?.owner_token_hash, before?.owner_token_hash);
+	assert.equal(after?.config_version, 3);
+	assert.equal(target.pushes.at(-1)?.version, 3);
+	assert.equal(target.pushes.at(-1)?.ownerTokenHash, before?.owner_token_hash);
+	const html = await (await app.request(rotated.headers.get("location") ?? "", { headers: { cookie } })).text();
+	assert.match(html, /The owner token was not rotated/);
+	assert.equal(html.includes("a2aot_"), false);
+});
+
+test("a later rotation during restore is left in place", async () => {
 	const db = openDb();
 	const sent: { text: string }[] = [];
 	const target = plane("refuse");
@@ -456,9 +497,8 @@ test("a restore that loses the row puts the later hash back", async () => {
 	assert.equal(rotated.headers.getSetCookie().some((value) => value.includes("a2aot_")), false);
 	const after = await db.prepare("SELECT owner_token_hash, config_version FROM tenants WHERE name = ?").bind("northwind").first<{ owner_token_hash: string; config_version: number }>();
 	assert.equal(after?.owner_token_hash, "later-rotation");
-	assert.equal(after?.config_version, 5);
-	assert.equal(target.pushes.at(-1)?.version, 5);
-	assert.equal(target.pushes.at(-1)?.ownerTokenHash, "later-rotation");
+	assert.equal(after?.config_version, 4);
+	assert.equal(target.pushes.some((body) => body.version > 3), false);
 	assert.equal(target.pushes.some((body) => body.version === 3 && body.ownerTokenHash === before?.owner_token_hash), true);
 	const html = await (await app.request(rotated.headers.get("location") ?? "", { headers: { cookie } })).text();
 	assert.match(html, /A later rotation replaced this token/);
