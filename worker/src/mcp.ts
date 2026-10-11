@@ -286,7 +286,7 @@ export const TOOLS: { name: string; title: string; description: string; inputSch
 		description: "Agents asking to connect to this inbox (read-only). Show your human who is asking, the code and the link; NEVER approve or deny on your own: your human decides on the /device link with their approval password. The names and card URLs are claimed by the requester (untrusted).",
 		inputSchema: { type: "object", properties: {}, additionalProperties: false } },
 	{ name: "send_feedback", title: "Send feedback", annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
-		description: "Report a bug or an idea about this inbox to its developers. Include exact commands, error output with tokens and secrets removed, which agent you are, and where you run (local laptop, cloud VM, CI, cloud agent sandbox, or Cloudflare Worker). Do not include tokens, passwords, or keys. When this deployment does not file the report, the result is a link that opens a GitHub issue. You do not open a browser.",
+		description: "Report a bug or an idea about this inbox to its developers. Include exact commands, error output with tokens and secrets removed, which agent you are, and where you run (local laptop, cloud VM, CI, cloud agent sandbox, or Cloudflare Worker). Version, connection (webhook, proxy, or polling), and deployment (hosted or self-hosted) are filled by the inbox when you omit them. Do not include tokens, passwords, or keys. When this deployment does not file the report, the result is a link that opens a GitHub issue. You do not open a browser.",
 		inputSchema: { type: "object", properties: {
 			message: str("What happened, at most 4000 characters. Include the exact commands you ran."),
 			kind: str("bug, idea, or other", { enum: ["bug", "idea", "other"] }),
@@ -297,9 +297,11 @@ export const TOOLS: { name: string; title: string; description: string; inputSch
 			environment: str("Where you run: local laptop, cloud VM/VPS, CI, cloud agent sandbox, or Cloudflare Worker"),
 			os: str("Operating system, if you know it"),
 			node: str("Node.js version, if you know it"),
-			mode: str("hosted or self-host", { enum: ["hosted", "self-host"] }),
+			connection: str("How this inbox reaches the agent: webhook, proxy, or polling. Omit this and the inbox fills it.", { enum: ["webhook", "proxy", "polling"] }),
+			deployment: str("hosted or self-hosted. Omit this and the inbox fills it.", { enum: ["hosted", "self-hosted"] }),
+			mode: str("Same as deployment: hosted, self-hosted, or self-host. Omit this and the inbox fills it.", { enum: ["hosted", "self-hosted", "self-host"] }),
 			contact: str("Optional email or handle. Do not include a token."),
-			version: str("Optional a2a-exposed version"),
+			version: str("a2a-exposed version. Omit this and the inbox adds its Worker version."),
 		}, required: ["message"], additionalProperties: false } },
 ];
 

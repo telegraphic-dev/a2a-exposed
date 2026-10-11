@@ -350,13 +350,21 @@ test("send_feedback returns a GitHub issue link and strips tokens", async (t) =>
 	assert.match(body, /Source: mcp/);
 	assert.match(body, /## Steps\n\nran \[redacted\]/);
 	assert.match(body, /## Agent\n\nClaude Code/);
-	assert.match(body, /## Environment\n\ncloud agent sandbox/);
-	assert.match(body, /## Mode\n\nself-host/);
+	assert.match(body, /## Environment\n\nDeployment: self-hosted\nConnection: webhook wake\nVersion: worker 0\.7\.0\nWhere: cloud agent sandbox/);
+	assert.equal(body.includes("hook.example.net"), false);
+	assert.equal(body.includes("## Mode"), false);
 	const listed = (await s.mcp(a.access_token, "tools/list")).data.result.tools.find((tool: { name: string }) => tool.name === "send_feedback");
 	assert.match(listed.description, /exact commands/);
+	assert.match(listed.description, /filled by the inbox/);
 	assert.match(listed.inputSchema.properties.steps.description, /Remove tokens and secrets/);
 	assert.match(listed.inputSchema.properties.environment.description, /cloud agent sandbox/);
+	assert.match(listed.inputSchema.properties.connection.description, /webhook, proxy, or polling/);
+	assert.match(listed.inputSchema.properties.deployment.description, /self-hosted/);
+	assert.match(listed.inputSchema.properties.version.description, /Worker version/);
 	assert.equal((await s.tool(a.access_token, "send_feedback", {})).isError, true);
+	const { token: peerTok } = await s.inbound("barry", "hello");
+	assert.equal((await s.mcp(peerTok, "tools/call", { name: "send_feedback", arguments: { message: "hi" } })).status, 401);
+	assert.equal((await s.mcp("owner-secret", "tools/call", { name: "send_feedback", arguments: { message: "hi" } })).status, 401);
 });
 
 test("JSON-RPC plumbing: notifications 202, batches and junk rejected, unknown method", async (t) => {

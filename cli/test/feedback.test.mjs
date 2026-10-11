@@ -37,7 +37,6 @@ test("with no inbox, feedback prints an encoded GitHub issue URL", async () => {
 	assert.equal(`${url.origin}${url.pathname}`, "https://github.com/telegraphic-dev/a2a-exposed/issues/new");
 	assert.match(url.searchParams.get("title") ?? "", /^\[bug\] saw /);
 	const body = url.searchParams.get("body") ?? "";
-	assert.match(body, new RegExp(`Version: ${VERSION.replace(/\./g, "\\.")}`));
 	assert.match(body, /Source: cli/);
 	assert.match(body, /Kind: bug/);
 	assert.match(body, /## Contact\n\nada@example.com/);
@@ -45,20 +44,24 @@ test("with no inbox, feedback prints an encoded GitHub issue URL", async () => {
 	assert.match(body, /## Expected\n\na reply/);
 	assert.match(body, /## Actual\n\nnothing/);
 	assert.match(body, /## Agent\n\nClaude Code/);
-	assert.match(body, /## Environment\n\nlocal laptop/);
-	assert.match(body, /## Mode\n\nself-host/);
-	assert.match(body, /## OS\n\n/);
-	assert.match(body, new RegExp(`## Node\\n\\n${process.version.replace(/\./g, "\\.")}`));
+	assert.match(body, new RegExp(
+		`## Environment\\n\\nDeployment: self-hosted\\nConnection: polling\\nVersion: ${VERSION.replace(/\./g, "\\.")}\\nWhere: local laptop\\nOS: `,
+	));
+	assert.match(body, new RegExp(`Node: ${process.version.replace(/\./g, "\\.")}`));
+	assert.equal(body.includes("## Mode"), false);
 	assert.equal(body.includes(token), false);
 	assert.equal(body.includes("supersecretvalue"), false);
 	assert.match(body, /\[redacted\]/);
 	assert.equal(r.stdout.split("\n").filter(Boolean).length, 1);
 });
 
-test("an unknown kind is refused", async () => {
+test("an unknown kind or connection is refused", async () => {
 	const r = await run(["feedback", "hi", "--kind", "nope"]);
 	assert.equal(r.status, 1);
 	assert.match(r.stderr, /--kind must be bug, idea, or other/);
+	const connection = await run(["feedback", "hi", "--connection", "socket"]);
+	assert.equal(connection.status, 1);
+	assert.match(connection.stderr, /--connection must be webhook, proxy, or polling/);
 });
 
 test("a hosted inbox posts, a 404 falls back, and a 429 does not", async () => {
@@ -69,16 +72,17 @@ test("a hosted inbox posts, a 404 falls back, and a 429 does not", async () => {
 	const ok = await runFeedback({
 		...base,
 		fetchImpl: async (url, init) => {
-			if (String(url).endsWith("/owner/feedback")) return Response.json({ hosted: true, url: "https://control.example.com/api/feedback" });
+			if (String(url).endsWith("/owner/feedback")) return Response.json({ hosted: true, url: "https://control.example.com/api/feedback", version: "0.7.0", connection: "webhook" });
 			posts += 1;
 			assert.equal(new Headers(init.headers).get("authorization"), "Bearer owner-secret");
 			const body = JSON.parse(String(init.body));
 			assert.equal(body.source, "cli");
-			assert.equal(body.version, VERSION);
+			assert.equal(body.version, `${VERSION} (worker 0.7.0)`);
 			assert.equal(body.kind, "idea");
 			assert.equal(body.message.includes(token), false);
 			assert.match(body.message, /\[redacted\]/);
-			assert.equal(body.mode, "hosted");
+			assert.equal(body.deployment, "hosted");
+			assert.equal(body.connection, "webhook");
 			assert.match(body.os, /\S/);
 			assert.equal(body.node, process.version);
 			return Response.json({ ok: true, issue_url: filed });
@@ -101,4 +105,17 @@ test("a hosted inbox posts, a 404 falls back, and a 429 does not", async () => {
 			? Response.json({ hosted: true, url: "https://control.example.com/api/feedback" })
 			: Response.json({ error: "rate_limit" }, { status: 429 }),
 	}), (error) => error instanceof CliError && /too many/.test(error.message));
+
+	const overridden = await runFeedback({
+		...base,
+		connection: "proxy",
+		fetchImpl: async (url, init) => {
+			if (String(url).endsWith("/owner/feedback")) return Response.json({ hosted: true, url: "https://control.example.com/api/feedback", version: "0.7.0", connection: "webhook" });
+			const body = JSON.parse(String(init.body));
+			assert.equal(body.connection, "proxy");
+			assert.equal(body.deployment, "hosted");
+			return Response.json({ ok: true, issue_url: filed });
+		},
+	});
+	assert.equal(overridden.filed, true);
 });

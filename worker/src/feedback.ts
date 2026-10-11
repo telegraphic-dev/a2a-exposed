@@ -3,13 +3,18 @@
 import { reachesControl } from "./approval-oidc.ts";
 import { scrubSecretText } from "./export.ts";
 import type { TenantContext } from "./tenancy.ts";
+import { VERSION } from "./version.ts";
 
 export const ISSUE_REPO = "telegraphic-dev/a2a-exposed";
+/** Inbox build. The same value as `version` in cli/package.json. */
+export const WORKER_VERSION = VERSION;
 const TIMEOUT_MS = 5000;
 const BEARER_RE = /bearer\s+\S{8,200}/gi;
 const KINDS = ["bug", "idea", "other"] as const;
+const CONNECTIONS = ["webhook", "proxy", "polling"] as const;
 
 export type FeedbackKind = (typeof KINDS)[number];
+export type FeedbackConnection = (typeof CONNECTIONS)[number];
 
 export interface FeedbackNote {
 	message: string;
@@ -24,11 +29,46 @@ export interface FeedbackNote {
 	os?: string;
 	node?: string;
 	mode?: string;
+	connection?: string;
+	deployment?: string;
 }
 
 /** scrubSecretText, then a Bearer value. The rest of the text stays. */
 export function scrubFeedbackText(value: string): string {
 	return scrubSecretText(value).replace(BEARER_RE, "Bearer [redacted]");
+}
+
+/**
+ * How this inbox reaches the agent. Proxy when an upstream is set, webhook when a wake URL is set,
+ * otherwise polling. `none` and `off` are not an upstream. The URLs themselves are not returned.
+ */
+export function connectionOf(ctx: TenantContext): FeedbackConnection {
+	const upstream = (ctx.UPSTREAM_URL || "").trim().toLowerCase();
+	if (upstream && upstream !== "none" && upstream !== "off") return "proxy";
+	if ((ctx.WAKE_WEBHOOK_URL || "").trim()) return "webhook";
+	return "polling";
+}
+
+function connectionPhrase(value: string): string {
+	if (value === "webhook") return "webhook wake";
+	if (value === "proxy") return "proxy";
+	if (value === "polling") return "polling";
+	return "unknown";
+}
+
+function deploymentPhrase(value: string): string {
+	if (value === "hosted") return "hosted";
+	if (value === "self-hosted" || value === "self-host") return "self-hosted";
+	return "unknown";
+}
+
+/** The caller's version, plus this Worker's build when that version does not already name it. */
+function versionLine(given: string): string {
+	const worker = `worker ${WORKER_VERSION}`;
+	const raw = given.trim();
+	if (raw.endsWith(`(${worker})`) && /^[A-Za-z0-9._+();: -]{1,80}$/.test(raw)) return raw;
+	const cli = raw.replace(/[^A-Za-z0-9._+-]/g, "").slice(0, 32);
+	return cli ? `${cli} (worker ${WORKER_VERSION})` : worker;
 }
 
 /** https origin + /api/feedback when this tenant is hosted and FEEDBACK_URL is that origin. Otherwise "". */
@@ -62,41 +102,59 @@ function acceptedIssueUrl(value: unknown): string {
 	}
 }
 
-const SECTIONS: [keyof FeedbackNote, string, number][] = [
+const BEFORE: [keyof FeedbackNote, string, number][] = [
 	["steps", "Steps", 4000],
 	["expected", "Expected", 2000],
 	["actual", "Actual", 2000],
 	["agent", "Agent", 80],
-	["environment", "Environment", 120],
-	["os", "OS", 80],
-	["node", "Node", 32],
-	["mode", "Mode", 16],
-	["contact", "Contact", 200],
 ];
 
 function piece(value: string, max: number): string {
 	return scrubFeedbackText(value).trim().slice(0, max);
 }
 
+function environmentBlock(input: FeedbackNote): string {
+	const version = piece(input.version || "", 80);
+	const where = piece(input.environment || "", 120);
+	const os = piece(input.os || "", 80);
+	const node = piece(input.node || "", 32);
+	const lines = [
+		`Deployment: ${deploymentPhrase(input.deployment || input.mode || "")}`,
+		`Connection: ${connectionPhrase(input.connection || "")}`,
+		`Version: ${version || "unknown"}`,
+	];
+	if (where) lines.push(`Where: ${where}`);
+	if (os) lines.push(`OS: ${os}`);
+	if (node) lines.push(`Node: ${node}`);
+	return `## Environment\n\n${lines.join("\n")}`;
+}
+
 function documentOf(input: FeedbackNote, kind: FeedbackKind): { title: string; body: string } {
 	const message = piece(input.message, 4000);
 	const line = message.split(/\r?\n/).map((part) => part.trim()).find(Boolean) || "feedback";
 	const title = `[${kind}] ${line.length > 72 ? `${line.slice(0, 69)}...` : line}`;
-	const head = ["Source: mcp", `Kind: ${kind}`];
-	const version = piece(input.version || "", 64);
-	if (version) head.push(`Version: ${version}`);
-	const parts = [head.join("\n"), `## What happened\n\n${message}`];
-	for (const [key, heading, max] of SECTIONS) {
+	const parts = [["Source: mcp", `Kind: ${kind}`].join("\n"), `## What happened\n\n${message}`];
+	for (const [key, heading, max] of BEFORE) {
 		const text = piece(String(input[key] ?? ""), max);
 		if (text) parts.push(`## ${heading}\n\n${text}`);
 	}
+	parts.push(environmentBlock(input));
+	const contact = piece(input.contact || "", 200);
+	if (contact) parts.push(`## Contact\n\n${contact}`);
 	return { title, body: parts.join("\n\n") };
 }
 
-function modeOf(ctx: TenantContext, given: string): string {
-	if (!given) return ctx.mode === "host" ? "hosted" : "self-host";
-	if (given === "hosted" || given === "self-host") return given;
-	throw new Error("mode must be hosted or self-host");
+function deploymentOf(ctx: TenantContext, given: string): string {
+	const value = given === "self-host" ? "self-hosted" : given;
+	if (!value) return ctx.mode === "host" ? "hosted" : "self-hosted";
+	if (value === "hosted" || value === "self-hosted") return value;
+	throw new Error("deployment must be hosted or self-hosted");
+}
+
+function connectionChoice(ctx: TenantContext, given: string): string {
+	if (!given) return connectionOf(ctx);
+	if ((CONNECTIONS as readonly string[]).includes(given)) return given;
+	throw new Error("connection must be webhook, proxy, or polling");
 }
 
 async function postFeedback(ctx: TenantContext, endpoint: string, body: string, fetchImpl?: typeof fetch): Promise<Response> {
@@ -132,7 +190,12 @@ export async function sendFeedback(ctx: TenantContext, input: FeedbackNote, fetc
 	if ((input.agent || "").length > 80) throw new Error("agent is too long");
 	if ((input.environment || "").length > 120) throw new Error("environment is too long");
 	const kind: FeedbackKind = KINDS.includes(input.kind as FeedbackKind) ? input.kind as FeedbackKind : "other";
-	const note: FeedbackNote = { ...input, message, kind, mode: modeOf(ctx, input.mode || "") };
+	const deployment = deploymentOf(ctx, input.deployment || input.mode || "");
+	const note: FeedbackNote = {
+		...input, message, kind, deployment, mode: deployment,
+		connection: connectionChoice(ctx, input.connection || ""),
+		version: versionLine(scrubFeedbackText(input.version || "")),
+	};
 	const doc = documentOf(note, kind);
 	const fallback = feedbackIssueUrl(doc.title, doc.body);
 	const endpoint = feedbackEndpoint(ctx);
@@ -145,14 +208,16 @@ export async function sendFeedback(ctx: TenantContext, input: FeedbackNote, fetc
 			contact: scrubFeedbackText(input.contact || ""),
 			source: "mcp",
 			agent: scrubFeedbackText(input.agent || ""),
-			version: scrubFeedbackText(input.version || ""),
 			steps: scrubFeedbackText(input.steps || ""),
 			expected: scrubFeedbackText(input.expected || ""),
 			actual: scrubFeedbackText(input.actual || ""),
 			environment: scrubFeedbackText(input.environment || ""),
 			os: scrubFeedbackText(input.os || ""),
 			node: scrubFeedbackText(input.node || ""),
-			mode: note.mode,
+			mode: note.deployment,
+			deployment: note.deployment,
+			connection: note.connection,
+			version: note.version,
 		}), fetchImpl);
 	} catch {
 		throw new Error("feedback could not be filed");

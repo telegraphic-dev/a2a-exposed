@@ -8,6 +8,7 @@ import { deleteTenant } from "../tenants/delete.ts";
 import { dataPlaneFromEnv, type DataPlane } from "../tenants/push.ts";
 import { TENANT_NAME } from "../tenants/reserved.ts";
 import { rotateOwnerToken } from "../tenants/rotate.ts";
+import { feedbackOn, inboxConnection } from "../feedback.ts";
 import { configFields, saveWakeSettings, tenantForAccount, wakeSettingsOf } from "../tenants/wake.ts";
 import { renderAgentPage } from "../views/agent.tsx";
 import { renderApp, securityHeaders } from "../views/document.tsx";
@@ -313,7 +314,9 @@ export async function handleAgent(
 		return back("?saved=1");
 	}
 
-	const settings = wakeSettingsOf(configFields(row.config_json));
+	const config = configFields(row.config_json);
+	const settings = wakeSettingsOf(config);
+	const feedback = feedbackOn(env) ? { connection: inboxConnection(config) } : undefined;
 	let preview = null;
 	let counts = null;
 	let pending = null;
@@ -399,6 +402,7 @@ export async function handleAgent(
 			error: url.searchParams.get("error") ?? "",
 			test: url.searchParams.get("test") ?? "",
 		}),
+		feedback,
 	});
 	return page(html, 200, env, name, {
 		...(ownerToken ? { cookies: [hostCookie(OWNER_COOKIE, "", 0)], scriptSelf: true } : {}),

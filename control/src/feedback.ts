@@ -19,9 +19,10 @@ const DETAIL_MAX = 2000;
 const ENVIRONMENT_MAX = 120;
 const OS_MAX = 80;
 const NODE_MAX = 32;
-const VERSION_RE = /^[A-Za-z0-9._+-]{1,64}$/;
+const VERSION_RE = /^[A-Za-z0-9._+();: -]{1,80}$/;
 const NODE_RE = /^[A-Za-z0-9._+-]{1,32}$/;
-const MODES = ["hosted", "self-host"] as const;
+const DEPLOYMENTS = ["hosted", "self-hosted"] as const;
+const CONNECTIONS = ["webhook", "proxy", "polling"] as const;
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const KINDS = ["bug", "idea", "other"] as const;
 const SOURCES = ["web", "cli", "mcp"] as const;
@@ -54,7 +55,8 @@ export interface FeedbackInput {
 	environment: string;
 	os: string;
 	node: string;
-	mode: string;
+	connection: string;
+	deployment: string;
 }
 
 export type FeedbackResult =
@@ -97,17 +99,33 @@ function clip(value: string, max: number): string {
 	return clean.length > max ? clean.slice(0, max) : clean;
 }
 
-const SECTIONS: [keyof FeedbackInput, string, number][] = [
+const BEFORE: [keyof FeedbackInput, string, number][] = [
 	["steps", "Steps", STEPS_MAX],
 	["expected", "Expected", DETAIL_MAX],
 	["actual", "Actual", DETAIL_MAX],
 	["agent", "Agent", AGENT_MAX],
-	["environment", "Environment", ENVIRONMENT_MAX],
-	["os", "OS", OS_MAX],
-	["node", "Node", NODE_MAX],
-	["mode", "Mode", 16],
-	["contact", "Contact", CONTACT_MAX],
 ];
+
+/** Proxy when an upstream is set, webhook when a wake URL is set, otherwise polling. The URLs stay out of the result. */
+export function inboxConnection(config: Record<string, string>): (typeof CONNECTIONS)[number] {
+	const upstream = (config.UPSTREAM_URL ?? "").trim().toLowerCase();
+	if (upstream && upstream !== "none" && upstream !== "off") return "proxy";
+	if ((config.WAKE_WEBHOOK_URL ?? "").trim()) return "webhook";
+	return "polling";
+}
+
+function connectionPhrase(value: string): string {
+	if (value === "webhook") return "webhook wake";
+	if (value === "proxy") return "proxy";
+	if (value === "polling") return "polling";
+	return "unknown";
+}
+
+function deploymentPhrase(value: string): string {
+	if (value === "hosted") return "hosted";
+	if (value === "self-hosted" || value === "self-host") return "self-hosted";
+	return "unknown";
+}
 
 function clean(value: string, max: number, token: string): string {
 	let text = clip(value, max);
@@ -115,18 +133,34 @@ function clean(value: string, max: number, token: string): string {
 	return text;
 }
 
+function environmentSection(input: FeedbackInput, token: string): string {
+	const version = clean(input.version || "", 80, token);
+	const where = clean(input.environment || "", ENVIRONMENT_MAX, token);
+	const os = clean(input.os || "", OS_MAX, token);
+	const node = clean(input.node || "", NODE_MAX, token);
+	const lines = [
+		`Deployment: ${deploymentPhrase(input.deployment)}`,
+		`Connection: ${connectionPhrase(input.connection)}`,
+		`Version: ${version ? escapeText(version) : "unknown"}`,
+	];
+	if (where) lines.push(`Where: ${escapeText(where)}`);
+	if (os) lines.push(`OS: ${escapeText(os)}`);
+	if (node) lines.push(`Node: ${escapeText(node)}`);
+	return `## Environment\n\n${lines.join("\n")}`;
+}
+
 export function issueDocument(input: FeedbackInput, token: string): { title: string; body: string; labels: string[] } {
 	const message = clean(input.message, MESSAGE_MAX, token);
 	const line = message.split(/\r?\n/).map((part) => part.trim()).find(Boolean) || "feedback";
 	const title = `[${input.kind}] ${line.length > 72 ? `${line.slice(0, 69)}...` : line}`;
-	const head = [`Source: ${input.source}`, `Kind: ${input.kind}`];
-	const version = clean(input.version || "", 64, token);
-	if (version) head.push(`Version: ${version}`);
-	const parts = [head.join("\n"), `## What happened\n\n${escapeText(message)}`];
-	for (const [key, heading, max] of SECTIONS) {
+	const parts = [[`Source: ${input.source}`, `Kind: ${input.kind}`].join("\n"), `## What happened\n\n${escapeText(message)}`];
+	for (const [key, heading, max] of BEFORE) {
 		const text = clean(input[key] || "", max, token);
 		if (text) parts.push(`## ${heading}\n\n${escapeText(text)}`);
 	}
+	parts.push(environmentSection(input, token));
+	const contact = clean(input.contact || "", CONTACT_MAX, token);
+	if (contact) parts.push(`## Contact\n\n${escapeText(contact)}`);
 	const labels = ["feedback", ...(input.source === "cli" || input.source === "mcp" ? ["from-agent"] : [])];
 	return { title, body: parts.join("\n\n"), labels };
 }
@@ -170,12 +204,24 @@ export function parseFeedback(record: Record<string, unknown>): FeedbackInput | 
 	if (os.length > OS_MAX || /[\n\r]/.test(os)) return "invalid_os";
 	const node = field(record, "node");
 	if (node && !NODE_RE.test(node)) return "invalid_node";
-	const mode = field(record, "mode");
-	if (mode && !MODES.includes(mode as (typeof MODES)[number])) return "invalid_mode";
+	const connection = field(record, "connection");
+	if (connection && !CONNECTIONS.includes(connection as (typeof CONNECTIONS)[number])) return "invalid_connection";
+	const named = deploymentValue(field(record, "deployment"));
+	if (named === null) return "invalid_deployment";
+	const alias = deploymentValue(field(record, "mode"));
+	if (alias === null) return "invalid_mode";
 	return {
 		message, kind: kind as Kind, contact, source: source as Source, agent, version,
-		steps, expected, actual, environment, os, node, mode,
+		steps, expected, actual, environment, os, node, connection, deployment: named || alias,
 	};
+}
+
+/** Empty stays empty. `self-host` is the older spelling of self-hosted. Anything else is rejected. */
+function deploymentValue(value: string): string | null {
+	if (!value) return "";
+	if (value === "self-host") return "self-hosted";
+	if (DEPLOYMENTS.includes(value as (typeof DEPLOYMENTS)[number])) return value;
+	return null;
 }
 
 async function sha256(value: string): Promise<string> {
@@ -374,12 +420,14 @@ export function createFeedback(env: ControlEnv, deps: FeedbackDeps = {}) {
 			if (typeof input === "string") return jsonResult(400, { error: input });
 			return submitFeedback(request, env, input, record, memory, deps);
 		},
-		async page(request: Request, render: (input: { turnstileSiteKey?: string; error?: string; sent?: boolean; issueUrl?: string }) => string): Promise<FeedbackResult> {
+		async page(request: Request, render: (input: { turnstileSiteKey?: string; error?: string; sent?: boolean; issueUrl?: string; connection?: string; deployment?: string }) => string): Promise<FeedbackResult> {
 			if (!feedbackOn(env)) return jsonResult(404, { error: "not_found" });
 			const turnstile = turnstileOf(env);
 			const url = new URL(request.url);
 			if (request.method === "GET") {
 				const issue = githubIssueUrl(feedbackRepo(env), url.searchParams.get("issue"));
+				const connection = url.searchParams.get("connection") ?? "";
+				const deployment = url.searchParams.get("deployment") ?? "";
 				return {
 					kind: "html",
 					turnstile: Boolean(turnstile),
@@ -388,6 +436,8 @@ export function createFeedback(env: ControlEnv, deps: FeedbackDeps = {}) {
 						error: url.searchParams.get("error") ?? undefined,
 						sent: url.searchParams.get("sent") === "1",
 						issueUrl: issue || undefined,
+						connection: CONNECTIONS.includes(connection as (typeof CONNECTIONS)[number]) ? connection : "",
+						deployment: DEPLOYMENTS.includes(deployment as (typeof DEPLOYMENTS)[number]) ? deployment : "",
 					}),
 				};
 			}

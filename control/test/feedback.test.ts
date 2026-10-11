@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApp } from "../src/app.ts";
-import { issueDocument, scrubFeedbackText } from "../src/feedback.ts";
+import { inboxConnection, issueDocument, scrubFeedbackText } from "../src/feedback.ts";
 import { openDb } from "./sql.ts";
 
 const origin = "https://control.example.com";
@@ -60,7 +60,8 @@ test("issue body is escaped and drops the configured token", () => {
 		environment: "local laptop",
 		os: "linux 6.12.94",
 		node: "v22.20.0",
-		mode: "self-host",
+		connection: "polling",
+		deployment: "self-host",
 	}, ghToken);
 	assert.equal(doc.title, "[bug] hello <b>there</b> & [redacted]");
 	assert.match(doc.body, /## What happened\n\nhello &lt;b&gt;there&lt;\/b&gt; &amp; \[redacted\]/);
@@ -68,14 +69,17 @@ test("issue body is escaped and drops the configured token", () => {
 	assert.match(doc.body, /## Expected\n\na card/);
 	assert.match(doc.body, /## Actual\n\na blank page/);
 	assert.match(doc.body, /## Agent\n\nAda/);
-	assert.match(doc.body, /## Environment\n\nlocal laptop/);
-	assert.match(doc.body, /## OS\n\nlinux 6\.12\.94/);
-	assert.match(doc.body, /## Node\n\nv22\.20\.0/);
-	assert.match(doc.body, /## Mode\n\nself-host/);
+	assert.match(doc.body, /## Environment\n\nDeployment: self-hosted\nConnection: polling\nVersion: 0\.7\.0\nWhere: local laptop\nOS: linux 6\.12\.94\nNode: v22\.20\.0/);
 	assert.match(doc.body, /## Contact\n\nada@example.com/);
+	assert.equal(doc.body.includes("## Mode"), false);
 	assert.equal(doc.body.includes(ghToken), false);
 	assert.deepEqual(doc.labels, ["feedback", "from-agent"]);
-	assert.deepEqual(issueDocument({ message: "hi", kind: "idea", contact: "", source: "web", agent: "", version: "", steps: "", expected: "", actual: "", environment: "", os: "", node: "", mode: "" }, ghToken).labels, ["feedback"]);
+	const empty = issueDocument({ message: "hi", kind: "idea", contact: "", source: "web", agent: "", version: "", steps: "", expected: "", actual: "", environment: "", os: "", node: "", connection: "", deployment: "" }, ghToken);
+	assert.deepEqual(empty.labels, ["feedback"]);
+	assert.match(empty.body, /## Environment\n\nDeployment: unknown\nConnection: unknown\nVersion: unknown/);
+	const both = issueDocument({ message: "hi", kind: "bug", contact: "", source: "cli", agent: "", version: "0.7.0 (worker 0.7.0)", steps: "", expected: "", actual: "", environment: "", os: "", node: "", connection: "webhook", deployment: "hosted" }, ghToken);
+	assert.match(both.body, /Version: 0\.7\.0 \(worker 0\.7\.0\)/);
+	assert.match(both.body, /Connection: webhook wake/);
 });
 
 test("unconfigured feedback is 404, including a partial config", async () => {
@@ -132,7 +136,10 @@ test("a configured post files an issue and the page links to feedback", async ()
 	assert.match(page, /name="agent"/);
 	assert.match(page, /name="environment"/);
 	assert.match(page, /cloud agent sandbox/);
-	assert.match(page, /name="mode"/);
+	assert.match(page, /name="version"/);
+	assert.match(page, /name="connection"/);
+	assert.match(page, /name="deployment"/);
+	assert.equal(page.includes('name="mode"'), false);
 	assert.match(form.headers.get("content-security-policy") ?? "", /script-src 'none'/);
 	assert.equal(/<script/.test(page), false);
 });
@@ -283,13 +290,39 @@ test("a database error on the rate table is 503", async () => {
 	assert.deepEqual(await res.json(), { error: "unavailable" });
 });
 
-test("a mode that is not hosted or self-host is rejected", async () => {
+test("a mode that is not hosted or self-hosted is rejected", async () => {
 	const gh = githubFetch();
 	const app = createApp(env(), { fetch: gh.fetch });
 	const res = await post(app, { message: "hi", source: "cli", mode: "both" });
 	assert.equal(res.status, 400);
 	assert.deepEqual(await res.json(), { error: "invalid_mode" });
+	const deployment = await post(app, { message: "hi", source: "cli", deployment: "both" });
+	assert.equal(deployment.status, 400);
+	assert.deepEqual(await deployment.json(), { error: "invalid_deployment" });
+	const connection = await post(app, { message: "hi", source: "cli", connection: "socket" });
+	assert.equal(connection.status, 400);
+	assert.deepEqual(await connection.json(), { error: "invalid_connection" });
 	assert.equal(gh.calls.length, 0);
+
+	const older = await post(app, { message: "hi", source: "cli", mode: "self-host", connection: "webhook", version: "0.7.0 (worker 0.7.0)" });
+	assert.equal(older.status, 200);
+	assert.match(gh.calls[0].json.body, /Deployment: self-hosted/);
+	assert.match(gh.calls[0].json.body, /Connection: webhook wake/);
+	assert.match(gh.calls[0].json.body, /Version: 0\.7\.0 \(worker 0\.7\.0\)/);
+});
+
+test("the form prefills connection and deployment from the query", async () => {
+	const app = createApp(env());
+	const form = await app.request(`${origin}/app/feedback?connection=webhook&deployment=hosted`);
+	const page = await form.text();
+	assert.match(page, /<option value="webhook" selected/);
+	assert.match(page, /<option value="hosted" selected/);
+	assert.equal(page.includes('value="proxy" selected'), false);
+	const junk = await app.request(`${origin}/app/feedback?connection=webhook%22%3E&deployment=self-host`);
+	const ignored = await junk.text();
+	assert.equal(ignored.includes('value="webhook&quot;'), false);
+	assert.equal(ignored.includes('value="webhook" selected'), false);
+	assert.equal(ignored.includes('value="self-hosted" selected'), false);
 });
 
 test("the form posts and redirects to the issue", async () => {
@@ -309,4 +342,69 @@ test("the form posts and redirects to the issue", async () => {
 	assert.equal(gh.calls[0].json.labels.includes("from-agent"), false);
 	const page = await app.request(location);
 	assert.match(await page.text(), /Sent/);
+});
+
+test("inboxConnection prefers an upstream, then a wake URL, and never returns the URL", () => {
+	assert.equal(inboxConnection({}), "polling");
+	assert.equal(inboxConnection({ UPSTREAM_URL: "none", WAKE_WEBHOOK_URL: "https://hooks.example/wake" }), "webhook");
+	assert.equal(inboxConnection({ UPSTREAM_URL: "off" }), "polling");
+	assert.equal(inboxConnection({ UPSTREAM_URL: "https://up.example", WAKE_WEBHOOK_URL: "https://hooks.example/wake" }), "proxy");
+});
+
+test("the agent page shows hosted and the connection, and links to the prefilled form", async () => {
+	const db = openDb();
+	const sent: { text: string }[] = [];
+	const data = {
+		async putDirectory() {},
+		async pushConfig() { return { version: 1, applied: true }; },
+		async owner() { return { status: 200, body: {} }; },
+	};
+	const secret = "test-secret-test-secret-test-secret";
+	const app = createApp(
+		{ ...env(), AUTH_SECRET: secret, DB: db, TENANT_DOMAIN: "example.com" },
+		{ database: db, mailer: { async send(message: { text: string }) { sent.push({ text: message.text }); } }, dataPlane: data },
+	);
+	const posted = await app.request(`${origin}/app/sign-in`, {
+		method: "POST",
+		headers: { origin, "content-type": "application/x-www-form-urlencoded" },
+		body: "provider=email&email=person@example.com",
+	});
+	assert.equal(posted.status, 303);
+	const link = sent[0].text.match(/https:\/\/control\.example\.com\/api\/auth\/magic-link\/verify\?[^\s]+/);
+	assert.ok(link);
+	const verified = await app.request(link[0]);
+	const cookie = verified.headers.getSetCookie().find((value) => value.startsWith("__Host-a2a_session="))!.split(";")[0];
+	const created = await app.request(`${origin}/api/v1/tenants`, {
+		method: "POST",
+		headers: { cookie, origin, "sec-fetch-site": "same-origin", "content-type": "application/x-www-form-urlencoded" },
+		body: "name=Northwind",
+	});
+	assert.equal(created.status, 303);
+	await db.prepare("UPDATE tenants SET config_json = ? WHERE name = ?").bind(JSON.stringify({
+		AGENT_NAME: "northwind",
+		WAKE_WEBHOOK_URL: "https://hooks.example/wake",
+		UPSTREAM_URL: "none",
+	}), "northwind").run();
+	const html = await (await app.request(`${origin}/app/agents/northwind`, { headers: { cookie } })).text();
+	assert.match(html, /Deployment: hosted\. Connection: webhook wake\./);
+	assert.match(html, /href="\/app\/feedback\?deployment=hosted&(?:amp;)?connection=webhook"/);
+	const sentence = html.split("Deployment: hosted")[1]?.split("</p>")[0] ?? "";
+	assert.equal(sentence.includes("hooks.example"), false);
+
+	await db.prepare("UPDATE tenants SET config_json = ? WHERE name = ?").bind(JSON.stringify({
+		AGENT_NAME: "northwind",
+		UPSTREAM_URL: "https://up.example",
+		WAKE_WEBHOOK_URL: "https://hooks.example/wake",
+	}), "northwind").run();
+	const proxy = await (await app.request(`${origin}/app/agents/northwind`, { headers: { cookie } })).text();
+	assert.match(proxy, /Connection: proxy\./);
+	assert.match(proxy, /connection=proxy"/);
+	assert.equal(proxy.split("Deployment: hosted")[1]?.split("</p>")[0]?.includes("up.example"), false);
+
+	const off = createApp(
+		{ AUTH_SECRET: secret, DB: db, TENANT_DOMAIN: "example.com" },
+		{ database: db, dataPlane: data },
+	);
+	const quiet = await (await off.request(`${origin}/app/agents/northwind`, { headers: { cookie } })).text();
+	assert.equal(quiet.includes("Send feedback"), false);
 });

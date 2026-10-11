@@ -3,7 +3,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import worker, { dispatch } from "../src/index.ts";
 import { sha256 } from "../src/a2a.ts";
-import { feedbackEndpoint, feedbackIssueUrl, scrubFeedbackText, sendFeedback } from "../src/feedback.ts";
+import { connectionOf, feedbackEndpoint, feedbackIssueUrl, scrubFeedbackText, sendFeedback, WORKER_VERSION } from "../src/feedback.ts";
+import { readFileSync } from "node:fs";
 import { hostedTenantContext, resolveTenant, type WorkerBindings } from "../src/tenancy.ts";
 import { d1 } from "./d1.ts";
 
@@ -55,8 +56,16 @@ test("GET /owner/feedback is hosted only for a hosted tenant", async () => {
 	const env = selfEnv({ FEEDBACK_URL: "https://control.example.com" });
 	assert.equal((await call(env, "/owner/feedback")).status, 401);
 	const owned = await call(env, "/owner/feedback", { authorization: "Bearer owner-secret" });
-	assert.deepEqual(owned.data, { hosted: false });
+	assert.deepEqual(owned.data, { hosted: false, version: WORKER_VERSION, connection: "polling" });
 	assert.equal(feedbackEndpoint(resolveTenant(env)), "");
+	assert.equal(WORKER_VERSION, JSON.parse(readFileSync(new URL("../../cli/package.json", import.meta.url), "utf8")).version);
+	const waking = selfEnv({ WAKE_WEBHOOK_URL: "https://hooks.example/wake" });
+	const wakeFacts = await call(waking, "/owner/feedback", { authorization: "Bearer owner-secret" });
+	assert.equal(wakeFacts.data.connection, "webhook");
+	assert.equal(JSON.stringify(wakeFacts.data).includes("hooks.example"), false);
+	const proxy = selfEnv({ UPSTREAM_URL: "https://up.example", WAKE_WEBHOOK_URL: "https://hooks.example/wake" });
+	assert.equal(connectionOf(resolveTenant(proxy)), "proxy");
+	assert.equal(connectionOf(resolveTenant(selfEnv({ UPSTREAM_URL: "none", WAKE_WEBHOOK_URL: "https://hooks.example/wake" }))), "webhook");
 
 	const hash = await sha256("owner-secret");
 	const hostedEnv = selfEnv({
@@ -73,7 +82,7 @@ test("GET /owner/feedback is hosted only for a hosted tenant", async () => {
 		headers: { authorization: "Bearer owner-secret" },
 	}), ctx, run.ectx);
 	await run.done();
-	assert.deepEqual(await res.json(), { hosted: true, url: "https://control.example.com/api/feedback" });
+	assert.deepEqual(await res.json(), { hosted: true, url: "https://control.example.com/api/feedback", version: WORKER_VERSION, connection: "polling" });
 });
 
 test("sendFeedback does not call out from a self-hosted inbox", async () => {
@@ -84,7 +93,9 @@ test("sendFeedback does not call out from a self-hosted inbox", async () => {
 	assert.equal(result.filed, false);
 	const fallback = new URL(result.issue_url);
 	assert.equal(`${fallback.origin}${fallback.pathname}`, "https://github.com/telegraphic-dev/a2a-exposed/issues/new");
-	assert.match(fallback.searchParams.get("body") ?? "", /## Mode\n\nself-host/);
+	const body = fallback.searchParams.get("body") ?? "";
+	assert.match(body, /## Environment\n\nDeployment: self-hosted\nConnection: polling\nVersion: worker 0\.7\.0/);
+	assert.equal(body.includes("## Mode"), false);
 });
 
 test("a hosted tenant posts through the control binding with the owner-token hash", async () => {
@@ -121,6 +132,9 @@ test("a hosted tenant posts through the control binding with the owner-token has
 	assert.equal(seen[0].body.source, "mcp");
 	assert.equal(seen[0].body.agent, "Claude Code");
 	assert.equal(seen[0].body.mode, "hosted");
+	assert.equal(seen[0].body.deployment, "hosted");
+	assert.equal(seen[0].body.connection, "polling");
+	assert.equal(seen[0].body.version, `1 (worker ${WORKER_VERSION})`);
 	assert.equal(seen[0].body.environment, "Cloudflare Worker");
 	assert.equal(seen[0].body.message.includes(token), false);
 	assert.equal(seen[0].body.steps.includes(token), false);

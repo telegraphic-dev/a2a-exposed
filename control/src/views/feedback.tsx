@@ -7,11 +7,17 @@ const ERRORS: Record<string, string> = {
 	origin: "That request came from another site.",
 };
 
+function picked(current: string | undefined, value: string): true | undefined {
+	return current === value ? true : undefined;
+}
+
 export function renderFeedback(input: {
 	turnstileSiteKey?: string;
 	error?: string;
 	sent?: boolean;
 	issueUrl?: string;
+	connection?: string;
+	deployment?: string;
 }): string {
 	const error = input.error ? ERRORS[input.error] ?? ERRORS.unavailable : "";
 	return (
@@ -89,11 +95,28 @@ export function renderFeedback(input: {
 				</p>
 				<p>
 					<label>
-						Mode <span>Optional.</span>
-						<select name="mode">
-							<option value="">Optional</option>
-							<option value="hosted">Hosted</option>
-							<option value="self-host">Self-host</option>
+						Version <span>Optional. The a2a-exposed version.</span>
+						<input name="version" maxlength={80} autocomplete="off" />
+					</label>
+				</p>
+				<p>
+					<label>
+						Connection <span>Webhook wake, proxy, or polling.</span>
+						<select name="connection">
+							<option value="" selected={picked(input.connection, "")}>Unknown</option>
+							<option value="webhook" selected={picked(input.connection, "webhook")}>Webhook wake</option>
+							<option value="proxy" selected={picked(input.connection, "proxy")}>Proxy</option>
+							<option value="polling" selected={picked(input.connection, "polling")}>Polling</option>
+						</select>
+					</label>
+				</p>
+				<p>
+					<label>
+						Deployment <span>Hosted or self-hosted.</span>
+						<select name="deployment">
+							<option value="" selected={picked(input.deployment, "")}>Unknown</option>
+							<option value="hosted" selected={picked(input.deployment, "hosted")}>Hosted</option>
+							<option value="self-hosted" selected={picked(input.deployment, "self-hosted")}>Self-hosted</option>
 						</select>
 					</label>
 				</p>
