@@ -130,7 +130,7 @@ Recipe, rewrite rules and threat model: [setup skill, "Already have A2A on a Tai
 
 Agents connect without pasting tokens into chat. Each inbox is an OAuth 2.0 authorization server for the Device Authorization Grant (RFC 8628). A human approves every connection.
 
-1. Agent A runs `npx -y a2a-exposed@latest connect https://b.example.com`. It prints a code (`WDJB-4827`) and a link to B's `/device` page; A's human relays the code to B's owner.
+1. Agent A runs `npx -y a2a-exposed@latest connect https://b.example.com`. It prints a code (`WDJB-4827`) and a link to B's `/device` page; A's human relays the code to B's owner. The request names A with the card it sends (`--card-url`, otherwise A's deployment card; `--name` overrides that). If that card can't be read, the name is the configured agent name, the worker name, or the public host's first label. B's peer label is that name, with `-2`, `-3`, … when the label is already taken, and later messages from A show that label as `from`.
 2. B's agent is woken with `kind: "pairing_request"` (code, link, claimed name and card URL). It asks its human and never approves on its own.
 3. B's owner opens the link, checks the code, and approves with the **approval password** (set once with `pair set-password --web` from a one-time link, or typed in a terminal with `pair set-password`; only the human knows it). Deny needs no password. Polling agents (no webhook) see the request in `inbox` / `pair list` instead of a wake.
 4. A's `connect` gets a normal per-peer token, stores it as outbound peer, and never prints it. B's `token list` shows `via pairing: code WDJB-4827`; `token revoke` ends it.

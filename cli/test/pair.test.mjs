@@ -12,7 +12,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseEnv } from "../lib/config.mjs";
 import { deploySecretsFromEnv } from "../lib/deploy.mjs";
-import { deviceEndpointsFromCard, passwordRecord } from "../lib/pair.mjs";
+import { deviceEndpointsFromCard, hostAlias, pairingClientName, passwordRecord } from "../lib/pair.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const BIN = path.join(HERE, "..", "bin", "a2a-exposed.mjs");
@@ -68,6 +68,73 @@ async function mockServer(t, { script = [], card = true, metadata = false } = {}
 	t.after(() => srv.close());
 	return { url: `http://127.0.0.1:${srv.address().port}`, seen };
 }
+
+test("pairingClientName uses the card name, then the configured name, then the local alias", () => {
+	assert.equal(pairingClientName({ explicit: "Override", cardName: "tester-alpha", agentName: "Other", workerName: "worker", ownUrl: "https://northwind.example.com" }), "Override");
+	assert.equal(pairingClientName({ cardName: "tester-alpha", agentName: "Other", workerName: "worker", ownUrl: "https://northwind.example.com" }), "tester-alpha");
+	assert.equal(pairingClientName({ agentName: "Client Bot", workerName: "client-bot", ownUrl: "https://client.example.com" }), "Client Bot");
+	assert.equal(pairingClientName({ workerName: "client-bot", ownUrl: "https://client.example.com" }), "client-bot");
+	assert.equal(pairingClientName({ ownUrl: "https://tester-alpha.example.com" }), "tester-alpha");
+	assert.equal(hostAlias("https://tester-alpha.example.com"), "tester-alpha");
+	assert.equal(hostAlias("http://127.0.0.1:8787"), "");
+	assert.equal(pairingClientName({}), "a2a-exposed agent");
+});
+
+test("connect sends this deployment's card name, and falls back to the worker name", async (t) => {
+	const cardSrv = http.createServer((req, res) => {
+		res.writeHead(req.url === "/.well-known/agent-card.json" ? 200 : 404, { "content-type": "application/json" });
+		res.end(req.url === "/.well-known/agent-card.json" ? JSON.stringify({ name: "tester-alpha" }) : "");
+	});
+	await new Promise((r) => cardSrv.listen(0, "127.0.0.1", r));
+	t.after(() => cardSrv.close());
+	const own = `http://127.0.0.1:${cardSrv.address().port}`;
+	const named = await mockServer(t, { script: [{ access_token: "a2aow_named", token_type: "Bearer" }] });
+	const s = sandbox(t, { A2A_BASE_URL: own, A2A_AGENT_NAME: "Configured Name" });
+	let r = await s.cli(["connect", named.url, "--alias", "peer1", "--no-wait"]);
+	assert.equal(r.status, 0, r.stderr);
+	assert.equal(named.seen.device[0].params.client_name, "tester-alpha", "the live card name beats the configured name");
+
+	const fallen = await mockServer(t, { script: [{ access_token: "a2aow_fall", token_type: "Bearer" }] });
+	const s2 = sandbox(t, { A2A_BASE_URL: "http://127.0.0.1:1", A2A_WORKER_NAME: "tester-beta" });
+	r = await s2.cli(["connect", fallen.url, "--alias", "peer1", "--no-wait"]);
+	assert.equal(r.status, 0, r.stderr);
+	assert.equal(fallen.seen.device[0].params.client_name, "tester-beta", "worker name when the card can't be read");
+});
+
+test("connect --card-url names the request with that card, not the deployment card", async (t) => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "a2a-card-url-"));
+	t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+	const log = path.join(dir, "fetch.log");
+	const routes = path.join(dir, "routes.json");
+	const jean = "https://jean.tail1234.ts.net/.well-known/agent-card.json";
+	const broken = "https://broken.tail1234.ts.net/.well-known/agent-card.json";
+	const peer = "https://peer.example/.well-known/agent-card.json";
+	fs.writeFileSync(routes, JSON.stringify({
+		[jean]: { status: 200, body: { name: "Jean" } },
+		[broken]: { status: 0 },
+		"https://facade.example.com/.well-known/agent-card.json": { status: 200, body: { name: "deployment-card" } },
+		[peer]: { status: 200, body: { name: "Peer Inbox", supportedInterfaces: [{ url: "https://peer.example/", protocolBinding: "JSONRPC", protocolVersion: "1.0" }], securitySchemes: { pairing: { oauth2SecurityScheme: { flows: { deviceCode: { deviceAuthorizationUrl: "https://peer.example/oauth/device_authorization", tokenUrl: "https://peer.example/oauth/token", scopes: {} } } } } } } },
+		"https://peer.example/oauth/device_authorization": { status: 200, body: { device_code: "dev-code-secret", user_code: "WDJB-4827", verification_uri: "https://peer.example/device", verification_uri_complete: "https://peer.example/device?user_code=WDJB-4827", expires_in: 600, interval: 5 } },
+	}));
+	const stub = { NODE_OPTIONS: `--import ${path.join(HERE, "fetch-stub.mjs")}`, A2A_TEST_FETCH_ROUTES: routes, A2A_TEST_FETCH_LOG: log };
+	const posted = () => fs.readFileSync(log, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((x) => x.url.endsWith("/oauth/device_authorization")).map((x) => Object.fromEntries(new URLSearchParams(x.body)));
+	const s = sandbox(t, {});
+	let r = await s.cli(["connect", peer, "--alias", "peer1", "--card-url", jean, "--no-wait"], { extraEnv: stub });
+	assert.equal(r.status, 0, r.stderr);
+	assert.deepEqual(posted().at(-1), { client_name: "Jean", client_id: "peer1", agent_card_url: jean });
+
+	r = await s.cli(["connect", peer, "--alias", "peer2", "--card-url", jean, "--name", "Override", "--no-wait"], { extraEnv: stub });
+	assert.equal(r.status, 0, r.stderr);
+	assert.equal(posted().at(-1).client_name, "Override", "--name still wins");
+
+	const s2 = sandbox(t, { A2A_BASE_URL: "https://facade.example.com", A2A_WORKER_NAME: "tester-beta" });
+	r = await s2.cli(["connect", peer, "--alias", "peer3", "--card-url", broken, "--no-wait"], { extraEnv: stub });
+	assert.equal(r.status, 0, r.stderr);
+	const last = posted().at(-1);
+	assert.equal(last.client_name, "tester-beta", "a card that can't be read does not fall back to the deployment card");
+	assert.equal(last.agent_card_url, broken);
+	assert.equal(fs.readFileSync(log, "utf8").includes("facade.example.com"), false);
+});
 
 test("deviceEndpointsFromCard reads the A2A 1.0 oauth2SecurityScheme deviceCode flow", () => {
 	assert.equal(deviceEndpointsFromCard({ securitySchemes: { bearer: { httpAuthSecurityScheme: { scheme: "Bearer" } } } }), null);

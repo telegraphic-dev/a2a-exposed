@@ -126,7 +126,11 @@ Pairing (OAuth 2.0 device flow, RFC 8628: agents connect without pasting tokens 
                           peer then swaps the old token for the new one under the same label (older peers
                           keep the old token until their owner revokes it). --card-url: the card to name in
                           the request (default: this deployment's); a *.ts.net / LAN card is sent as
-                          informational (flagged "not publicly reachable"), a non-https one is left out
+                          informational (flagged "not publicly reachable"), a non-https one is left out.
+                          The name sent is the card named in the request (--card-url, otherwise this
+                          deployment's). --name overrides it. If that card can't be read, the name is the
+                          configured agent name, the worker name, or the public host's first label. The
+                          other inbox labels the token from that name and adds -2, -3, … when it is taken
   pair set-password --web [--ttl MIN] [--json]
                           one-time link (default 15 min, single use) where your human sets or changes the
                           approval password on a web page. Send it to them privately; never open or fill it
