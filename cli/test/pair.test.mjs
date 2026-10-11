@@ -12,7 +12,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseEnv } from "../lib/config.mjs";
 import { deploySecretsFromEnv } from "../lib/deploy.mjs";
-import { deviceEndpointsFromCard, passwordRecord } from "../lib/pair.mjs";
+import { deviceEndpointsFromCard, hostAlias, pairingClientName, passwordRecord } from "../lib/pair.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const BIN = path.join(HERE, "..", "bin", "a2a-exposed.mjs");
@@ -68,6 +68,38 @@ async function mockServer(t, { script = [], card = true, metadata = false } = {}
 	t.after(() => srv.close());
 	return { url: `http://127.0.0.1:${srv.address().port}`, seen };
 }
+
+test("pairingClientName uses the card name, then the configured name, then the local alias", () => {
+	assert.equal(pairingClientName({ explicit: "Override", cardName: "tester-alpha", agentName: "Other", workerName: "worker", ownUrl: "https://northwind.example.com" }), "Override");
+	assert.equal(pairingClientName({ cardName: "tester-alpha", agentName: "Other", workerName: "worker", ownUrl: "https://northwind.example.com" }), "tester-alpha");
+	assert.equal(pairingClientName({ agentName: "Client Bot", workerName: "client-bot", ownUrl: "https://client.example.com" }), "Client Bot");
+	assert.equal(pairingClientName({ workerName: "client-bot", ownUrl: "https://client.example.com" }), "client-bot");
+	assert.equal(pairingClientName({ ownUrl: "https://tester-alpha.example.com" }), "tester-alpha");
+	assert.equal(hostAlias("https://tester-alpha.example.com"), "tester-alpha");
+	assert.equal(hostAlias("http://127.0.0.1:8787"), "");
+	assert.equal(pairingClientName({}), "a2a-exposed agent");
+});
+
+test("connect sends this deployment's card name, and falls back to the worker name", async (t) => {
+	const cardSrv = http.createServer((req, res) => {
+		res.writeHead(req.url === "/.well-known/agent-card.json" ? 200 : 404, { "content-type": "application/json" });
+		res.end(req.url === "/.well-known/agent-card.json" ? JSON.stringify({ name: "tester-alpha" }) : "");
+	});
+	await new Promise((r) => cardSrv.listen(0, "127.0.0.1", r));
+	t.after(() => cardSrv.close());
+	const own = `http://127.0.0.1:${cardSrv.address().port}`;
+	const named = await mockServer(t, { script: [{ access_token: "a2aow_named", token_type: "Bearer" }] });
+	const s = sandbox(t, { A2A_BASE_URL: own, A2A_AGENT_NAME: "Configured Name" });
+	let r = await s.cli(["connect", named.url, "--alias", "peer1", "--no-wait"]);
+	assert.equal(r.status, 0, r.stderr);
+	assert.equal(named.seen.device[0].params.client_name, "tester-alpha", "the live card name beats the configured name");
+
+	const fallen = await mockServer(t, { script: [{ access_token: "a2aow_fall", token_type: "Bearer" }] });
+	const s2 = sandbox(t, { A2A_BASE_URL: "http://127.0.0.1:1", A2A_WORKER_NAME: "tester-beta" });
+	r = await s2.cli(["connect", fallen.url, "--alias", "peer1", "--no-wait"]);
+	assert.equal(r.status, 0, r.stderr);
+	assert.equal(fallen.seen.device[0].params.client_name, "tester-beta", "worker name when the card can't be read");
+});
 
 test("deviceEndpointsFromCard reads the A2A 1.0 oauth2SecurityScheme deviceCode flow", () => {
 	assert.equal(deviceEndpointsFromCard({ securitySchemes: { bearer: { httpAuthSecurityScheme: { scheme: "Bearer" } } } }), null);

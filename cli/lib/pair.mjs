@@ -193,6 +193,39 @@ export function deviceEndpointsFromCard(card) {
 const slug = (s) => String(s || "").replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32).replace(/-+$/, "").toLowerCase();
 const sleep = (s) => new Promise((r) => setTimeout(r, s * 1000 * Number(process.env.A2A_POLL_SCALE || 1)));
 
+/** First DNS label of this deployment's public URL, or "" for loopback and an unusable host. */
+export function hostAlias(ownUrl) {
+	if (!ownUrl) return "";
+	try {
+		const host = new URL(ownUrl).hostname;
+		if (host === "localhost" || host === "127.0.0.1" || host === "[::1]") return "";
+		return slug(host.split(".")[0]);
+	} catch { return ""; }
+}
+
+/**
+ * client_name for a pairing request. An explicit `--name` wins, then this deployment's card name,
+ * then the configured agent name, then the local alias (worker name, else the public host's first label).
+ */
+export function pairingClientName({ explicit = "", cardName = "", agentName = "", workerName = "", ownUrl = "" } = {}) {
+	const text = (v) => String(v || "").replace(/\s+/g, " ").trim().slice(0, 64);
+	for (const v of [explicit, cardName, agentName, workerName, hostAlias(ownUrl)]) {
+		const t = text(v);
+		if (t) return t;
+	}
+	return "a2a-exposed agent";
+}
+
+/** Name on this deployment's agent card, or "" when there is no base URL or the card can't be read. */
+async function ownCardName() {
+	const own = baseUrl();
+	if (!/^https?:\/\//.test(own || "")) return "";
+	try {
+		const { status, data } = await httpJson(`${own.replace(/\/$/, "")}/.well-known/agent-card.json`, { timeout: 3000 });
+		return status === 200 && data && typeof data.name === "string" ? data.name : "";
+	} catch { return ""; }
+}
+
 async function postForm(url, params, bearer = null) {
 	let r;
 	const headers = { "content-type": "application/x-www-form-urlencoded", accept: "application/json" };
@@ -315,7 +348,7 @@ A different agent at the same URL? Pass another --alias.`);
 		`Resuming the pairing request to ${peerName} (code ${st.userCode}, link ${st.verificationUriComplete}).`);
 	else {
 		const own = baseUrl();
-		const params = { client_name: o.name || C.get("A2A_AGENT_NAME") || C.get("A2A_WORKER_NAME") || "a2a-exposed agent", client_id: C.get("A2A_WORKER_NAME") || alias };
+		const params = { client_name: pairingClientName({ explicit: o.name, cardName: await ownCardName(), agentName: C.get("A2A_AGENT_NAME"), workerName: C.get("A2A_WORKER_NAME"), ownUrl: own }), client_id: C.get("A2A_WORKER_NAME") || alias };
 		const card = cardUrlToSend(o["card-url"], own, o.json);
 		if (card) params.agent_card_url = card;
 		// replacing: present the old token, so a peer that supports it swaps the token under the same label (no orphan)

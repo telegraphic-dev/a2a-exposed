@@ -288,6 +288,25 @@ test("human approval: pending, slow_down, page approve with the password, single
 	assert.equal((await s.call("POST", "/", { json: { jsonrpc: "2.0", id: 1, method: "GetTask", params: { id: "x" } }, headers: { authorization: `Bearer ${p.data.access_token}` } })).status, 401);
 });
 
+test("a pairing label comes from the client name, a second one is suffixed, and inbox from uses it", async (t) => {
+	const s = setup({ PAIRING_APPROVAL: "agent" }); t.after(s.restore);
+	const first = (await s.start({ client_name: "tester-alpha", client_id: "other-alias" }, "203.0.113.40")).data;
+	const approved = await s.owner("POST", `/owner/pairing/${first.user_code}/approve`);
+	assert.equal(approved.data.label, "tester-alpha");
+	const token = (await s.poll(first.device_code)).data.access_token;
+	const sent = await s.call("POST", "/", {
+		json: { jsonrpc: "2.0", id: 1, method: "SendMessage", params: { message: { role: "ROLE_USER", parts: [{ text: "hello" }] } } },
+		headers: { authorization: `Bearer ${token}`, "a2a-version": "1.0" },
+	});
+	assert.equal(sent.status, 200, JSON.stringify(sent.data));
+	const inbox = await s.owner("GET", "/owner/inbox");
+	assert.equal(inbox.data.length, 1);
+	assert.equal(inbox.data[0].from, "tester-alpha");
+	assert.equal(inbox.data[0].text, "hello");
+	const second = (await s.start({ client_name: "tester-alpha", client_id: "another" }, "203.0.113.41")).data;
+	assert.equal((await s.owner("POST", `/owner/pairing/${second.user_code}/approve`)).data.label, "tester-alpha-2");
+});
+
 test("labels are deduplicated; denied and expired requests; JSON bodies; bad requests", async (t) => {
 	const s = setup({ PAIRING_APPROVAL: "agent" }); t.after(s.restore);
 	await s.owner("POST", "/owner/peers", { label: "barry" });
