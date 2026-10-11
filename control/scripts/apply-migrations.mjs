@@ -1,6 +1,8 @@
 // Runs before `cf deploy`. The Cloudflare connect insert uses
 // ON CONFLICT ("providerId", "accountId"), which SQLite rejects until
-// 0008_account_provider.sql is applied. A failed apply must not deploy.
+// 0008_account_provider.sql is applied. That file drops an existing duplicate
+// first, keeping the earliest row, so the index can be created. A failed apply
+// must not deploy.
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
