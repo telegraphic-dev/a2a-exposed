@@ -15,6 +15,7 @@ const BODY_MAX = 32_000;
 const CONTACT_MAX = 200;
 const AGENT_MAX = 80;
 const STEPS_MAX = 4000;
+const LOGS_MAX = 4000;
 const DETAIL_MAX = 2000;
 const ENVIRONMENT_MAX = 120;
 const OS_MAX = 80;
@@ -23,6 +24,7 @@ const VERSION_RE = /^[A-Za-z0-9._+();: -]{1,80}$/;
 const NODE_RE = /^[A-Za-z0-9._+-]{1,32}$/;
 const DEPLOYMENTS = ["hosted", "self-hosted"] as const;
 const CONNECTIONS = ["webhook", "proxy", "polling"] as const;
+const ENVIRONMENTS = ["local", "cloud VM", "CI", "cloud agent sandbox", "other"] as const;
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const KINDS = ["bug", "idea", "other"] as const;
 const SOURCES = ["web", "cli", "mcp"] as const;
@@ -57,6 +59,7 @@ export interface FeedbackInput {
 	node: string;
 	connection: string;
 	deployment: string;
+	logs: string;
 }
 
 export type FeedbackResult =
@@ -99,11 +102,21 @@ function clip(value: string, max: number): string {
 	return clean.length > max ? clean.slice(0, max) : clean;
 }
 
-const BEFORE: [keyof FeedbackInput, string, number][] = [
-	["steps", "Steps", STEPS_MAX],
-	["expected", "Expected", DETAIL_MAX],
-	["actual", "Actual", DETAIL_MAX],
-	["agent", "Agent", AGENT_MAX],
+/** Headings match the `label` of each field in `.github/ISSUE_TEMPLATE/bug_report.yml`. */
+const FORM_FIELDS: [keyof FeedbackInput, string, number, boolean][] = [
+	["message", "What happened", MESSAGE_MAX, true],
+	["version", "a2a-exposed version", 80, true],
+	["connection", "Connection type", 16, true],
+	["deployment", "Deployment", 16, true],
+	["agent", "Agent", AGENT_MAX, false],
+	["environment", "Environment", ENVIRONMENT_MAX, false],
+	["steps", "Reproduction steps", STEPS_MAX, false],
+	["expected", "Expected", DETAIL_MAX, false],
+	["actual", "Actual", DETAIL_MAX, false],
+	["logs", "Logs", LOGS_MAX, false],
+	["os", "OS", OS_MAX, false],
+	["node", "Node", NODE_MAX, false],
+	["contact", "Contact", CONTACT_MAX, false],
 ];
 
 /** Proxy when an upstream is set, webhook when a wake URL is set, otherwise polling. The URLs stay out of the result. */
@@ -114,17 +127,23 @@ export function inboxConnection(config: Record<string, string>): (typeof CONNECT
 	return "polling";
 }
 
-function connectionPhrase(value: string): string {
-	if (value === "webhook") return "webhook wake";
-	if (value === "proxy") return "proxy";
-	if (value === "polling") return "polling";
+function connectionText(value: string): string {
+	if (value === "webhook" || value === "proxy" || value === "polling") return value;
 	return "unknown";
 }
 
-function deploymentPhrase(value: string): string {
+function deploymentText(value: string): string {
 	if (value === "hosted") return "hosted";
 	if (value === "self-hosted" || value === "self-host") return "self-hosted";
 	return "unknown";
+}
+
+/** Dropdown options from the bug report form. Older phrases map onto those options. */
+function environmentValue(value: string): string {
+	const text = value.trim();
+	if ((ENVIRONMENTS as readonly string[]).includes(text)) return text;
+	const aliases: Record<string, string> = { "local laptop": "local", "cloud vm/vps": "cloud VM" };
+	return aliases[text.toLowerCase()] || text;
 }
 
 function clean(value: string, max: number, token: string): string {
@@ -133,36 +152,32 @@ function clean(value: string, max: number, token: string): string {
 	return text;
 }
 
-function environmentSection(input: FeedbackInput, token: string): string {
-	const version = clean(input.version || "", 80, token);
-	const where = clean(input.environment || "", ENVIRONMENT_MAX, token);
-	const os = clean(input.os || "", OS_MAX, token);
-	const node = clean(input.node || "", NODE_MAX, token);
-	const lines = [
-		`Deployment: ${deploymentPhrase(input.deployment)}`,
-		`Connection: ${connectionPhrase(input.connection)}`,
-		`Version: ${version ? escapeText(version) : "unknown"}`,
-	];
-	if (where) lines.push(`Where: ${escapeText(where)}`);
-	if (os) lines.push(`OS: ${escapeText(os)}`);
-	if (node) lines.push(`Node: ${escapeText(node)}`);
-	return `## Environment\n\n${lines.join("\n")}`;
+function formValue(input: FeedbackInput, key: keyof FeedbackInput, token: string, max: number): string {
+	if (key === "connection") return connectionText(input.connection);
+	if (key === "deployment") return deploymentText(input.deployment);
+	if (key === "version") return clean(input.version || "", max, token) || "unknown";
+	if (key === "environment") return environmentValue(clean(input.environment || "", max, token));
+	return clean(input[key] || "", max, token);
+}
+
+/** The same labels as the GitHub form for this kind, plus `from-agent` when an agent filed it. */
+function issueLabels(input: FeedbackInput): string[] {
+	const labels = input.kind === "bug" ? ["bug", "feedback"] : input.kind === "idea" ? ["enhancement", "feedback"] : ["feedback"];
+	if (input.source === "cli" || input.source === "mcp") labels.push("from-agent");
+	return labels;
 }
 
 export function issueDocument(input: FeedbackInput, token: string): { title: string; body: string; labels: string[] } {
 	const message = clean(input.message, MESSAGE_MAX, token);
 	const line = message.split(/\r?\n/).map((part) => part.trim()).find(Boolean) || "feedback";
 	const title = `[${input.kind}] ${line.length > 72 ? `${line.slice(0, 69)}...` : line}`;
-	const parts = [[`Source: ${input.source}`, `Kind: ${input.kind}`].join("\n"), `## What happened\n\n${escapeText(message)}`];
-	for (const [key, heading, max] of BEFORE) {
-		const text = clean(input[key] || "", max, token);
-		if (text) parts.push(`## ${heading}\n\n${escapeText(text)}`);
+	const parts: string[] = [];
+	for (const [key, heading, max, always] of FORM_FIELDS) {
+		const text = formValue(input, key, token, max);
+		if (!text && !always) continue;
+		parts.push(`### ${heading}\n\n${escapeText(text || "unknown")}`);
 	}
-	parts.push(environmentSection(input, token));
-	const contact = clean(input.contact || "", CONTACT_MAX, token);
-	if (contact) parts.push(`## Contact\n\n${escapeText(contact)}`);
-	const labels = ["feedback", ...(input.source === "cli" || input.source === "mcp" ? ["from-agent"] : [])];
-	return { title, body: parts.join("\n\n"), labels };
+	return { title, body: parts.join("\n\n"), labels: issueLabels(input) };
 }
 
 function jsonResult(status: number, body: Record<string, unknown>, headers?: Record<string, string>): FeedbackResult {
@@ -194,6 +209,9 @@ export function parseFeedback(record: Record<string, unknown>): FeedbackInput | 
 	if (version && !VERSION_RE.test(version)) return "invalid_version";
 	const steps = field(record, "steps");
 	if (steps.length > STEPS_MAX) return "invalid_steps";
+	if ((kind as Kind) === "bug" && !steps.trim()) return "steps_required";
+	const logs = field(record, "logs");
+	if (logs.length > LOGS_MAX) return "invalid_logs";
 	const expected = field(record, "expected");
 	if (expected.length > DETAIL_MAX) return "invalid_expected";
 	const actual = field(record, "actual");
@@ -212,7 +230,8 @@ export function parseFeedback(record: Record<string, unknown>): FeedbackInput | 
 	if (alias === null) return "invalid_mode";
 	return {
 		message, kind: kind as Kind, contact, source: source as Source, agent, version,
-		steps, expected, actual, environment, os, node, connection, deployment: named || alias,
+		steps, expected, actual, environment: environmentValue(environment), os, node, logs,
+		connection, deployment: named || alias,
 	};
 }
 
@@ -401,6 +420,7 @@ function pageError(code: string): string {
 	if (code === "turnstile") return "turnstile";
 	if (code === "timeout") return "timeout";
 	if (code === "forbidden") return "origin";
+	if (code === "steps_required") return "steps";
 	if (code.startsWith("invalid")) return "invalid";
 	return "unavailable";
 }

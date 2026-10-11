@@ -22,31 +22,66 @@ export function scrubFeedbackText(value) {
 		.replace(BEARER_RE, "Bearer [redacted]");
 }
 
-export function feedbackIssueUrl(title, body) {
-	const url = new URL(`https://github.com/${ISSUE_REPO}/issues/new`);
-	url.searchParams.set("title", title);
-	url.searchParams.set("body", body);
-	return url.href;
+const ENVIRONMENTS = ["local", "cloud VM", "CI", "cloud agent sandbox", "other"];
+const FORM_FIELDS = [
+	["message", "What happened", true],
+	["version", "a2a-exposed version", true],
+	["connection", "Connection type", true],
+	["deployment", "Deployment", true],
+	["agent", "Agent", false],
+	["environment", "Environment", false],
+	["steps", "Reproduction steps", false],
+	["expected", "Expected", false],
+	["actual", "Actual", false],
+	["logs", "Logs", false],
+	["os", "OS", false],
+	["node", "Node", false],
+	["contact", "Contact", false],
+];
+
+function environmentValue(value) {
+	const text = String(value || "").trim();
+	if (ENVIRONMENTS.includes(text)) return text;
+	const aliases = { "local laptop": "local", "cloud vm/vps": "cloud VM" };
+	return aliases[text.toLowerCase()] || text;
 }
 
-const LIMIT = {
-	message: 4000, steps: 4000, expected: 2000, actual: 2000, contact: 200,
-	agent: 80, environment: 120, os: 80, node: 32, version: 80,
-};
-const BEFORE = [["steps", "Steps"], ["expected", "Expected"], ["actual", "Actual"], ["agent", "Agent"]];
-
-function connectionPhrase(value) {
-	if (value === "webhook") return "webhook wake";
-	if (value === "proxy") return "proxy";
-	if (value === "polling") return "polling";
-	return "unknown";
+function connectionText(value) {
+	return CONNECTIONS.includes(value) ? value : "unknown";
 }
 
-function deploymentPhrase(value) {
+function deploymentText(value) {
 	if (value === "hosted") return "hosted";
 	if (value === "self-hosted" || value === "self-host") return "self-hosted";
 	return "unknown";
 }
+
+/** Prefill the bug report form. Query names are the form field ids. Dropdowns are set only when the value is one of their options. */
+export function feedbackIssueUrl(input) {
+	const url = new URL(`https://github.com/${ISSUE_REPO}/issues/new`);
+	url.searchParams.set("template", "bug_report.yml");
+	if (input.title) url.searchParams.set("title", input.title);
+	let message = String(input.message || "").trim();
+	const environment = environmentValue(input.environment);
+	if (environment && !ENVIRONMENTS.includes(environment)) message = `${message}\n\nEnvironment: ${environment}`.trim();
+	const values = {
+		...input,
+		message,
+		environment: ENVIRONMENTS.includes(environment) ? environment : "",
+		connection: CONNECTIONS.includes(input.connection) ? input.connection : "",
+		deployment: input.deployment === "hosted" || input.deployment === "self-hosted" ? input.deployment : "",
+	};
+	for (const id of ["message", "version", "connection", "deployment", "agent", "environment", "steps", "expected", "actual", "logs", "os", "node", "contact"]) {
+		const value = String(values[id] || "").trim();
+		if (value && value !== "unknown") url.searchParams.set(id, value);
+	}
+	return url.href;
+}
+
+const LIMIT = {
+	message: 4000, steps: 4000, expected: 2000, actual: 2000, logs: 4000, contact: 200,
+	agent: 80, environment: 120, os: 80, node: 32, version: 80,
+};
 
 /** Proxy when A2A_UPSTREAM_URL is set, webhook when WAKE_WEBHOOK_URL is set, otherwise polling. The URLs stay out of the result. */
 export function localConnection() {
@@ -62,34 +97,24 @@ export function localFacts() {
 	return { os: raw.slice(0, LIMIT.os), node: process.version.slice(0, LIMIT.node) };
 }
 
-function environmentBlock(input) {
-	const version = scrubFeedbackText(input.version || "").trim();
-	const where = scrubFeedbackText(input.environment || "").trim();
-	const osName = scrubFeedbackText(input.os || "").trim();
-	const node = scrubFeedbackText(input.node || "").trim();
-	const lines = [
-		`Deployment: ${deploymentPhrase(input.deployment || input.mode || "")}`,
-		`Connection: ${connectionPhrase(input.connection || "")}`,
-		`Version: ${version || "unknown"}`,
-	];
-	if (where) lines.push(`Where: ${where}`);
-	if (osName) lines.push(`OS: ${osName}`);
-	if (node) lines.push(`Node: ${node}`);
-	return `## Environment\n\n${lines.join("\n")}`;
+function formText(input, key) {
+	if (key === "connection") return connectionText(input.connection);
+	if (key === "deployment") return deploymentText(input.deployment || input.mode);
+	if (key === "version") return scrubFeedbackText(input.version || "").trim() || "unknown";
+	if (key === "environment") return environmentValue(scrubFeedbackText(input.environment || "").trim());
+	return scrubFeedbackText(input[key] || "").trim();
 }
 
 export function feedbackDocument(input) {
 	const message = scrubFeedbackText(input.message).trim();
 	const line = message.split(/\r?\n/).map((part) => part.trim()).find(Boolean) || "feedback";
 	const title = `[${input.kind}] ${line.length > 72 ? `${line.slice(0, 69)}...` : line}`;
-	const parts = [[`Source: ${input.source || "cli"}`, `Kind: ${input.kind}`].join("\n"), `## What happened\n\n${message}`];
-	for (const [key, heading] of BEFORE) {
-		const text = scrubFeedbackText(input[key] || "").trim();
-		if (text) parts.push(`## ${heading}\n\n${text}`);
+	const parts = [];
+	for (const [key, heading, always] of FORM_FIELDS) {
+		const text = formText(input, key);
+		if (!text && !always) continue;
+		parts.push(`### ${heading}\n\n${text || "unknown"}`);
 	}
-	parts.push(environmentBlock(input));
-	const contact = scrubFeedbackText(input.contact || "").trim();
-	if (contact) parts.push(`## Contact\n\n${contact}`);
 	return { title, body: parts.join("\n\n") };
 }
 
@@ -155,6 +180,7 @@ export async function runFeedback(input) {
 		steps: input.steps || "",
 		expected: input.expected || "",
 		actual: input.actual || "",
+		logs: input.logs || "",
 		agent: input.agent || "",
 		environment: input.environment || "",
 		os: input.os || facts.os,
@@ -167,6 +193,7 @@ export async function runFeedback(input) {
 	for (const [key, max] of Object.entries(LIMIT)) {
 		if (String(fields[key] ?? "").length > max) throw new CliError(`${key} is too long`);
 	}
+	if (kind === "bug" && !String(fields.steps).trim()) throw new CliError("a bug report needs reproduction steps (--steps)");
 	const base = String(input.baseUrl || "").replace(/\/$/, "");
 	const token = String(input.ownerToken || "");
 	const call = input.fetchImpl ?? fetch;
@@ -195,7 +222,25 @@ export async function runFeedback(input) {
 	} else fields.deployment = "self-hosted";
 	if (!fields.connection) fields.connection = localConnection();
 	const doc = feedbackDocument(fields);
-	const fallback = () => ({ filed: false, url: feedbackIssueUrl(doc.title, doc.body) });
+	const fallback = () => ({
+		filed: false,
+		url: feedbackIssueUrl({
+			title: doc.title,
+			message: scrubFeedbackText(fields.message),
+			version: scrubFeedbackText(fields.version),
+			connection: fields.connection,
+			deployment: fields.deployment,
+			agent: scrubFeedbackText(fields.agent),
+			environment: environmentValue(scrubFeedbackText(fields.environment)),
+			steps: scrubFeedbackText(fields.steps),
+			expected: scrubFeedbackText(fields.expected),
+			actual: scrubFeedbackText(fields.actual),
+			logs: scrubFeedbackText(fields.logs),
+			os: scrubFeedbackText(fields.os),
+			node: scrubFeedbackText(fields.node),
+			contact: scrubFeedbackText(fields.contact),
+		}),
+	});
 	if (!endpoint) return fallback();
 	let response;
 	try {
@@ -216,7 +261,8 @@ export async function runFeedback(input) {
 				steps: scrubFeedbackText(fields.steps),
 				expected: scrubFeedbackText(fields.expected),
 				actual: scrubFeedbackText(fields.actual),
-				environment: scrubFeedbackText(fields.environment),
+				logs: scrubFeedbackText(fields.logs),
+				environment: environmentValue(scrubFeedbackText(fields.environment)),
 				os: scrubFeedbackText(fields.os),
 				node: scrubFeedbackText(fields.node),
 				mode: fields.deployment,

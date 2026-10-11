@@ -45,11 +45,14 @@ test("scrubFeedbackText removes token shapes and Bearer values", () => {
 	assert.match(text, /Bearer \[redacted\]/);
 });
 
-test("the fallback URL carries the title and body", () => {
-	const url = new URL(feedbackIssueUrl("hi <there>", "line\nBearer supersecretvalue"));
+test("the fallback URL prefills the bug report form", () => {
+	const url = new URL(feedbackIssueUrl({ title: "hi <there>", message: "line", logs: "Bearer supersecretvalue" }));
 	assert.equal(`${url.origin}${url.pathname}`, "https://github.com/telegraphic-dev/a2a-exposed/issues/new");
+	assert.equal(url.searchParams.get("template"), "bug_report.yml");
+	assert.equal(url.searchParams.get("body"), null);
 	assert.equal(url.searchParams.get("title"), "hi <there>");
-	assert.match(url.searchParams.get("body") ?? "", /Bearer supersecretvalue/);
+	assert.equal(url.searchParams.get("message"), "line");
+	assert.match(url.searchParams.get("logs") ?? "", /Bearer supersecretvalue/);
 });
 
 test("GET /owner/feedback is hosted only for a hosted tenant", async () => {
@@ -93,9 +96,17 @@ test("sendFeedback does not call out from a self-hosted inbox", async () => {
 	assert.equal(result.filed, false);
 	const fallback = new URL(result.issue_url);
 	assert.equal(`${fallback.origin}${fallback.pathname}`, "https://github.com/telegraphic-dev/a2a-exposed/issues/new");
-	const body = fallback.searchParams.get("body") ?? "";
-	assert.match(body, /## Environment\n\nDeployment: self-hosted\nConnection: polling\nVersion: worker 0\.7\.0/);
-	assert.equal(body.includes("## Mode"), false);
+	assert.equal(fallback.searchParams.get("template"), "bug_report.yml");
+	assert.equal(fallback.searchParams.get("body"), null);
+	assert.equal(fallback.searchParams.get("deployment"), "self-hosted");
+	assert.equal(fallback.searchParams.get("connection"), "polling");
+	assert.equal(fallback.searchParams.get("version"), `worker ${WORKER_VERSION}`);
+	await assert.rejects(
+		() => sendFeedback(ctx, { message: "hello", kind: "bug", contact: "", version: "" }, () => {
+			throw new Error("fetch should not run");
+		}),
+		/reproduction steps/,
+	);
 });
 
 test("a hosted tenant posts through the control binding with the owner-token hash", async () => {
@@ -146,9 +157,11 @@ test("a hosted tenant posts through the control binding with the owner-token has
 	const again = hostedTenantContext({ ...env, CONTROL_SERVICE: missing }, {
 		id: "t1", db: env.DB, publicUrl: "https://northwind.example.com", ownerTokenHash: hash,
 	});
-	const fell = await sendFeedback(again, { message: "still broken", kind: "bug", contact: "", version: "" });
+	const fell = await sendFeedback(again, { message: "still broken", kind: "bug", contact: "", version: "", steps: "open it" });
 	assert.equal(fell.filed, false);
-	assert.match(fell.issue_url, /issues\/new\?/);
+	const fellUrl = new URL(fell.issue_url);
+	assert.equal(fellUrl.searchParams.get("template"), "bug_report.yml");
+	assert.equal(fellUrl.searchParams.get("steps"), "open it");
 });
 
 test("the landing page footer links to the repository", async () => {

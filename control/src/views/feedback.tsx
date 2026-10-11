@@ -5,6 +5,7 @@ const ERRORS: Record<string, string> = {
 	timeout: "That took too long. Try again.",
 	unavailable: "Feedback could not be filed. Try again.",
 	origin: "That request came from another site.",
+	steps: "A bug report needs reproduction steps.",
 };
 
 function picked(current: string | undefined, value: string): true | undefined {
@@ -46,7 +47,7 @@ export function renderFeedback(input: {
 				</p>
 				<p>
 					<label>
-						Steps <span>Optional. The exact commands, and what you saw.</span>
+						Steps <span>Required for a bug. The exact commands, and what you saw.</span>
 						<textarea name="steps" maxlength={4000} />
 					</label>
 				</p>
@@ -64,6 +65,12 @@ export function renderFeedback(input: {
 				</p>
 				<p>
 					<label>
+						Logs <span>Optional. Remove tokens, passwords, and keys before pasting.</span>
+						<textarea name="logs" maxlength={4000} />
+					</label>
+				</p>
+				<p>
+					<label>
 						Agent <span>Optional. Claude Code, Grok Bot, n8n, or custom.</span>
 						<input name="agent" maxlength={80} autocomplete="off" />
 					</label>
@@ -73,11 +80,11 @@ export function renderFeedback(input: {
 						Environment <span>Optional.</span>
 						<select name="environment">
 							<option value="">Optional</option>
-							<option value="local laptop">Local laptop</option>
-							<option value="cloud VM/VPS">Cloud VM/VPS</option>
+							<option value="local">Local</option>
+							<option value="cloud VM">Cloud VM</option>
 							<option value="CI">CI</option>
 							<option value="cloud agent sandbox">Cloud agent sandbox</option>
-							<option value="Cloudflare Worker">Cloudflare Worker</option>
+							<option value="other">Other</option>
 						</select>
 					</label>
 				</p>

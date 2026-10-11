@@ -12,6 +12,8 @@ const TIMEOUT_MS = 5000;
 const BEARER_RE = /bearer\s+\S{8,200}/gi;
 const KINDS = ["bug", "idea", "other"] as const;
 const CONNECTIONS = ["webhook", "proxy", "polling"] as const;
+const ENVIRONMENTS = ["local", "cloud VM", "CI", "cloud agent sandbox", "other"] as const;
+const DEPLOYMENTS = ["hosted", "self-hosted"] as const;
 
 export type FeedbackKind = (typeof KINDS)[number];
 export type FeedbackConnection = (typeof CONNECTIONS)[number];
@@ -31,6 +33,7 @@ export interface FeedbackNote {
 	mode?: string;
 	connection?: string;
 	deployment?: string;
+	logs?: string;
 }
 
 /** scrubSecretText, then a Bearer value. The rest of the text stays. */
@@ -49,17 +52,22 @@ export function connectionOf(ctx: TenantContext): FeedbackConnection {
 	return "polling";
 }
 
-function connectionPhrase(value: string): string {
-	if (value === "webhook") return "webhook wake";
-	if (value === "proxy") return "proxy";
-	if (value === "polling") return "polling";
+function connectionText(value: string): string {
+	if (value === "webhook" || value === "proxy" || value === "polling") return value;
 	return "unknown";
 }
 
-function deploymentPhrase(value: string): string {
+function deploymentText(value: string): string {
 	if (value === "hosted") return "hosted";
 	if (value === "self-hosted" || value === "self-host") return "self-hosted";
 	return "unknown";
+}
+
+function environmentValue(value: string): string {
+	const text = value.trim();
+	if ((ENVIRONMENTS as readonly string[]).includes(text)) return text;
+	const aliases: Record<string, string> = { "local laptop": "local", "cloud vm/vps": "cloud VM" };
+	return aliases[text.toLowerCase()] || text;
 }
 
 /** The caller's version, plus this Worker's build when that version does not already name it. */
@@ -79,10 +87,47 @@ export function feedbackEndpoint(ctx: TenantContext): string {
 	return `${origin}/api/feedback`;
 }
 
-export function feedbackIssueUrl(title: string, body: string): string {
+/** Prefill `.github/ISSUE_TEMPLATE/bug_report.yml`. Query names are that form's field ids. */
+export function feedbackIssueUrl(input: {
+	title: string;
+	message?: string;
+	version?: string;
+	connection?: string;
+	deployment?: string;
+	agent?: string;
+	environment?: string;
+	steps?: string;
+	expected?: string;
+	actual?: string;
+	logs?: string;
+	os?: string;
+	node?: string;
+	contact?: string;
+}): string {
 	const url = new URL(`https://github.com/${ISSUE_REPO}/issues/new`);
-	url.searchParams.set("title", title);
-	url.searchParams.set("body", body);
+	url.searchParams.set("template", "bug_report.yml");
+	url.searchParams.set("title", input.title);
+	let message = (input.message || "").trim();
+	const environment = environmentValue(input.environment || "");
+	if (environment && !(ENVIRONMENTS as readonly string[]).includes(environment)) message = `${message}\n\nEnvironment: ${environment}`.trim();
+	const values: Record<string, string> = {
+		message,
+		version: (input.version || "").trim(),
+		connection: (CONNECTIONS as readonly string[]).includes(input.connection || "") ? input.connection || "" : "",
+		deployment: (DEPLOYMENTS as readonly string[]).includes(input.deployment || "") ? input.deployment || "" : "",
+		agent: (input.agent || "").trim(),
+		environment: (ENVIRONMENTS as readonly string[]).includes(environment) ? environment : "",
+		steps: (input.steps || "").trim(),
+		expected: (input.expected || "").trim(),
+		actual: (input.actual || "").trim(),
+		logs: (input.logs || "").trim(),
+		os: (input.os || "").trim(),
+		node: (input.node || "").trim(),
+		contact: (input.contact || "").trim(),
+	};
+	for (const [key, value] of Object.entries(values)) {
+		if (value && value !== "unknown") url.searchParams.set(key, value);
+	}
 	return url.href;
 }
 
@@ -102,46 +147,30 @@ function acceptedIssueUrl(value: unknown): string {
 	}
 }
 
-const BEFORE: [keyof FeedbackNote, string, number][] = [
-	["steps", "Steps", 4000],
-	["expected", "Expected", 2000],
-	["actual", "Actual", 2000],
-	["agent", "Agent", 80],
-];
-
 function piece(value: string, max: number): string {
 	return scrubFeedbackText(value).trim().slice(0, max);
 }
 
-function environmentBlock(input: FeedbackNote): string {
-	const version = piece(input.version || "", 80);
-	const where = piece(input.environment || "", 120);
-	const os = piece(input.os || "", 80);
-	const node = piece(input.node || "", 32);
-	const lines = [
-		`Deployment: ${deploymentPhrase(input.deployment || input.mode || "")}`,
-		`Connection: ${connectionPhrase(input.connection || "")}`,
-		`Version: ${version || "unknown"}`,
-	];
-	if (where) lines.push(`Where: ${where}`);
-	if (os) lines.push(`OS: ${os}`);
-	if (node) lines.push(`Node: ${node}`);
-	return `## Environment\n\n${lines.join("\n")}`;
-}
-
-function documentOf(input: FeedbackNote, kind: FeedbackKind): { title: string; body: string } {
+function documentOf(input: FeedbackNote, kind: FeedbackKind): { title: string; fields: Record<string, string> } {
 	const message = piece(input.message, 4000);
 	const line = message.split(/\r?\n/).map((part) => part.trim()).find(Boolean) || "feedback";
 	const title = `[${kind}] ${line.length > 72 ? `${line.slice(0, 69)}...` : line}`;
-	const parts = [["Source: mcp", `Kind: ${kind}`].join("\n"), `## What happened\n\n${message}`];
-	for (const [key, heading, max] of BEFORE) {
-		const text = piece(String(input[key] ?? ""), max);
-		if (text) parts.push(`## ${heading}\n\n${text}`);
-	}
-	parts.push(environmentBlock(input));
-	const contact = piece(input.contact || "", 200);
-	if (contact) parts.push(`## Contact\n\n${contact}`);
-	return { title, body: parts.join("\n\n") };
+	const fields: Record<string, string> = {
+		message,
+		version: piece(input.version || "", 80),
+		connection: connectionText(input.connection || ""),
+		deployment: deploymentText(input.deployment || input.mode || ""),
+		agent: piece(input.agent || "", 80),
+		environment: environmentValue(piece(input.environment || "", 120)),
+		steps: piece(input.steps || "", 4000),
+		expected: piece(input.expected || "", 2000),
+		actual: piece(input.actual || "", 2000),
+		logs: piece(input.logs || "", 4000),
+		os: piece(input.os || "", 80),
+		node: piece(input.node || "", 32),
+		contact: piece(input.contact || "", 200),
+	};
+	return { title, fields };
 }
 
 function deploymentOf(ctx: TenantContext, given: string): string {
@@ -189,7 +218,9 @@ export async function sendFeedback(ctx: TenantContext, input: FeedbackNote, fetc
 	if ((input.expected || "").length > 2000 || (input.actual || "").length > 2000) throw new Error("expected or actual is too long");
 	if ((input.agent || "").length > 80) throw new Error("agent is too long");
 	if ((input.environment || "").length > 120) throw new Error("environment is too long");
+	if ((input.logs || "").length > 4000) throw new Error("logs is too long");
 	const kind: FeedbackKind = KINDS.includes(input.kind as FeedbackKind) ? input.kind as FeedbackKind : "other";
+	if (kind === "bug" && !String(input.steps || "").trim()) throw new Error("a bug report needs reproduction steps");
 	const deployment = deploymentOf(ctx, input.deployment || input.mode || "");
 	const note: FeedbackNote = {
 		...input, message, kind, deployment, mode: deployment,
@@ -197,7 +228,7 @@ export async function sendFeedback(ctx: TenantContext, input: FeedbackNote, fetc
 		version: versionLine(scrubFeedbackText(input.version || "")),
 	};
 	const doc = documentOf(note, kind);
-	const fallback = feedbackIssueUrl(doc.title, doc.body);
+	const fallback = feedbackIssueUrl({ title: doc.title, ...doc.fields });
 	const endpoint = feedbackEndpoint(ctx);
 	if (!endpoint) return { filed: false, issue_url: fallback };
 	let response: Response;
@@ -211,7 +242,8 @@ export async function sendFeedback(ctx: TenantContext, input: FeedbackNote, fetc
 			steps: scrubFeedbackText(input.steps || ""),
 			expected: scrubFeedbackText(input.expected || ""),
 			actual: scrubFeedbackText(input.actual || ""),
-			environment: scrubFeedbackText(input.environment || ""),
+			logs: scrubFeedbackText(input.logs || ""),
+			environment: environmentValue(scrubFeedbackText(input.environment || "")),
 			os: scrubFeedbackText(input.os || ""),
 			node: scrubFeedbackText(input.node || ""),
 			mode: note.deployment,

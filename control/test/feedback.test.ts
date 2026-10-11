@@ -62,24 +62,35 @@ test("issue body is escaped and drops the configured token", () => {
 		node: "v22.20.0",
 		connection: "polling",
 		deployment: "self-host",
+		logs: "",
 	}, ghToken);
 	assert.equal(doc.title, "[bug] hello <b>there</b> & [redacted]");
-	assert.match(doc.body, /## What happened\n\nhello &lt;b&gt;there&lt;\/b&gt; &amp; \[redacted\]/);
-	assert.match(doc.body, /## Steps\n\n1\. open &lt;b&gt;x&lt;\/b&gt;/);
-	assert.match(doc.body, /## Expected\n\na card/);
-	assert.match(doc.body, /## Actual\n\na blank page/);
-	assert.match(doc.body, /## Agent\n\nAda/);
-	assert.match(doc.body, /## Environment\n\nDeployment: self-hosted\nConnection: polling\nVersion: 0\.7\.0\nWhere: local laptop\nOS: linux 6\.12\.94\nNode: v22\.20\.0/);
-	assert.match(doc.body, /## Contact\n\nada@example.com/);
-	assert.equal(doc.body.includes("## Mode"), false);
+	assert.match(doc.body, /### What happened\n\nhello &lt;b&gt;there&lt;\/b&gt; &amp; \[redacted\]/);
+	assert.match(doc.body, /### Reproduction steps\n\n1\. open &lt;b&gt;x&lt;\/b&gt;/);
+	assert.match(doc.body, /### Expected\n\na card/);
+	assert.match(doc.body, /### Actual\n\na blank page/);
+	assert.match(doc.body, /### Agent\n\nAda/);
+	assert.match(doc.body, /### Environment\n\nlocal/);
+	assert.match(doc.body, /### a2a-exposed version\n\n0\.7\.0/);
+	assert.match(doc.body, /### Connection type\n\npolling/);
+	assert.match(doc.body, /### Deployment\n\nself-hosted/);
+	assert.match(doc.body, /### OS\n\nlinux 6\.12\.94/);
+	assert.match(doc.body, /### Node\n\nv22\.20\.0/);
+	assert.match(doc.body, /### Contact\n\nada@example.com/);
+	assert.equal(/^## [^#]/m.test(doc.body), false);
+	assert.equal(doc.body.includes("Source:"), false);
 	assert.equal(doc.body.includes(ghToken), false);
-	assert.deepEqual(doc.labels, ["feedback", "from-agent"]);
-	const empty = issueDocument({ message: "hi", kind: "idea", contact: "", source: "web", agent: "", version: "", steps: "", expected: "", actual: "", environment: "", os: "", node: "", connection: "", deployment: "" }, ghToken);
-	assert.deepEqual(empty.labels, ["feedback"]);
-	assert.match(empty.body, /## Environment\n\nDeployment: unknown\nConnection: unknown\nVersion: unknown/);
-	const both = issueDocument({ message: "hi", kind: "bug", contact: "", source: "cli", agent: "", version: "0.7.0 (worker 0.7.0)", steps: "", expected: "", actual: "", environment: "", os: "", node: "", connection: "webhook", deployment: "hosted" }, ghToken);
-	assert.match(both.body, /Version: 0\.7\.0 \(worker 0\.7\.0\)/);
-	assert.match(both.body, /Connection: webhook wake/);
+	assert.deepEqual(doc.labels, ["bug", "feedback", "from-agent"]);
+	const empty = issueDocument({ message: "hi", kind: "idea", contact: "", source: "web", agent: "", version: "", steps: "", expected: "", actual: "", environment: "", os: "", node: "", connection: "", deployment: "", logs: "" }, ghToken);
+	assert.deepEqual(empty.labels, ["enhancement", "feedback"]);
+	assert.match(empty.body, /### a2a-exposed version\n\nunknown/);
+	assert.match(empty.body, /### Connection type\n\nunknown/);
+	assert.match(empty.body, /### Deployment\n\nunknown/);
+	assert.equal(empty.body.includes("### Reproduction steps"), false);
+	const both = issueDocument({ message: "hi", kind: "bug", contact: "", source: "cli", agent: "", version: "0.7.0 (worker 0.7.0)", steps: "open it", expected: "", actual: "", environment: "", os: "", node: "", connection: "webhook", deployment: "hosted", logs: "" }, ghToken);
+	assert.match(both.body, /### a2a-exposed version\n\n0\.7\.0 \(worker 0\.7\.0\)/);
+	assert.match(both.body, /### Connection type\n\nwebhook/);
+	assert.deepEqual(both.labels, ["bug", "feedback", "from-agent"]);
 });
 
 test("unconfigured feedback is 404, including a partial config", async () => {
@@ -109,15 +120,17 @@ test("unconfigured feedback is 404, including a partial config", async () => {
 test("a configured post files an issue and the page links to feedback", async () => {
 	const gh = githubFetch();
 	const app = createApp(env(), { fetch: gh.fetch });
-	const res = await post(app, { message: "the form forgot a field", kind: "bug", source: "web", version: "0.7.0" });
+	const res = await post(app, { message: "the form forgot a field", kind: "bug", source: "web", version: "0.7.0", steps: "1. open the form" });
 	assert.equal(res.status, 200);
 	assert.deepEqual(await res.json(), { ok: true, issue_url: issue() });
 	assert.equal(gh.calls.length, 1);
 	assert.equal(gh.calls[0].url, `https://api.github.com/repos/${repo}/issues`);
 	assert.equal(new Headers(gh.calls[0].init.headers).get("user-agent"), "a2a-exposed");
 	assert.equal(new Headers(gh.calls[0].init.headers).get("authorization"), `Bearer ${ghToken}`);
-	assert.deepEqual(gh.calls[0].json.labels, ["feedback"]);
-	assert.match(gh.calls[0].json.body, /Source: web/);
+	assert.deepEqual(gh.calls[0].json.labels, ["bug", "feedback"]);
+	assert.match(gh.calls[0].json.body, /### What happened\n\nthe form forgot a field/);
+	assert.match(gh.calls[0].json.body, /### Reproduction steps\n\n1\. open the form/);
+	assert.equal(gh.calls[0].json.body.includes("Source:"), false);
 	assert.equal(gh.calls[0].json.body.includes(ghToken), false);
 
 	const home = await app.request(`${origin}/app`);
@@ -135,7 +148,16 @@ test("a configured post files an issue and the page links to feedback", async ()
 	assert.match(page, /name="actual"/);
 	assert.match(page, /name="agent"/);
 	assert.match(page, /name="environment"/);
+	assert.match(page, /Required for a bug/);
+	assert.match(page, /name="logs"/);
+	assert.match(page, /Remove tokens, passwords, and keys before pasting/);
+	assert.match(page, /value="local"/);
+	assert.match(page, /value="cloud VM"/);
+	assert.match(page, /value="CI"/);
 	assert.match(page, /cloud agent sandbox/);
+	assert.match(page, /value="other"/);
+	assert.equal(page.includes("local laptop"), false);
+	assert.equal(page.includes("Cloudflare Worker"), false);
 	assert.match(page, /name="version"/);
 	assert.match(page, /name="connection"/);
 	assert.match(page, /name="deployment"/);
@@ -306,9 +328,27 @@ test("a mode that is not hosted or self-hosted is rejected", async () => {
 
 	const older = await post(app, { message: "hi", source: "cli", mode: "self-host", connection: "webhook", version: "0.7.0 (worker 0.7.0)" });
 	assert.equal(older.status, 200);
-	assert.match(gh.calls[0].json.body, /Deployment: self-hosted/);
-	assert.match(gh.calls[0].json.body, /Connection: webhook wake/);
-	assert.match(gh.calls[0].json.body, /Version: 0\.7\.0 \(worker 0\.7\.0\)/);
+	assert.match(gh.calls[0].json.body, /### Deployment\n\nself-hosted/);
+	assert.match(gh.calls[0].json.body, /### Connection type\n\nwebhook/);
+	assert.match(gh.calls[0].json.body, /### a2a-exposed version\n\n0\.7\.0 \(worker 0\.7\.0\)/);
+});
+
+test("a bug without steps is refused", async () => {
+	const gh = githubFetch();
+	const app = createApp(env(), { fetch: gh.fetch });
+	const res = await post(app, { message: "it broke", kind: "bug", source: "cli", steps: "   " });
+	assert.equal(res.status, 400);
+	assert.deepEqual(await res.json(), { error: "steps_required" });
+	assert.equal(gh.calls.length, 0);
+	const page = await app.request(`${origin}/app/feedback`, {
+		method: "POST",
+		headers: { "content-type": "application/x-www-form-urlencoded", origin },
+		body: "message=broke&kind=bug&steps=",
+	});
+	assert.equal(page.status, 303);
+	assert.match(page.headers.get("location") ?? "", /error=steps/);
+	const shown = await app.request(`${origin}/app/feedback?error=steps`);
+	assert.match(await shown.text(), /A bug report needs reproduction steps/);
 });
 
 test("the form prefills connection and deployment from the query", async () => {

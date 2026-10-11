@@ -207,16 +207,18 @@ Control plane account (only when that deployment's login is on)
 
 Feedback
   feedback "message" [--kind bug|idea|other] [--contact x]
-            [--steps S] [--expected S] [--actual S] [--agent A] [--environment E]
+            [--steps S] [--expected S] [--actual S] [--logs S] [--agent A]
+            [--environment local|cloud VM|CI|cloud agent sandbox|other]
             [--connection webhook|proxy|polling]
-                                report a bug or an idea. Reproduction steps help most.
+                                report a bug or an idea. A bug needs --steps.
                                 Posts to the control plane when this inbox is hosted and that
-                                plane accepts feedback. Otherwise prints a GitHub issue link
-                                and does not open a browser. The CLI adds its version, the
-                                inbox Worker version when the inbox reports it, the OS, the
-                                Node version, the connection (webhook wake, proxy, or polling),
-                                and hosted or self-hosted. --connection overrides that
-                                detection. Don't put tokens, passwords, or keys in the message.
+                                plane accepts feedback. Otherwise prints a link to the bug
+                                report form and does not open a browser. The CLI adds its
+                                version, the inbox Worker version when the inbox reports it,
+                                the OS, the Node version, the connection (webhook, proxy, or
+                                polling), and hosted or self-hosted. --connection overrides
+                                that detection. Don't put tokens, passwords, or keys in the
+                                message. Remove them from --logs too.
 
 Presets: grok-bot | claude-code | openclaw-wake | openclaw-agent | hermes | generic
 Config: ${C.CONFIG_FILE}  (override dir with --config-dir DIR or A2A_CONFIG_DIR; env vars override file values)
@@ -244,7 +246,7 @@ const SPEC = {
 	signup: { "control-url": S, json: B },
 	login: { "control-url": S, json: B },
 	pair: { json: B, web: B, ttl: S, issuer: S, "client-id": S, subjects: S, methods: S, "secret-stdin": B },
-	feedback: { kind: S, contact: S, steps: S, expected: S, actual: S, agent: S, environment: S, connection: S },
+	feedback: { kind: S, contact: S, steps: S, expected: S, actual: S, logs: S, agent: S, environment: S, connection: S },
 };
 const STATES = ["completed", "input-required", "failed", "rejected", "working"];
 
@@ -330,13 +332,13 @@ export async function main(argv) {
 		case "outbound": return cmd.outbound(need(p[0], "outbound <taskId>"));
 		case "feedback": {
 			const message = p.join(" ").trim();
-			need(message, `feedback "message" [--kind bug|idea|other] [--steps S] [--expected S] [--actual S] [--agent A] [--environment E] [--connection webhook|proxy|polling]`);
+			need(message, `feedback "message" [--kind bug|idea|other] [--steps S] [--expected S] [--actual S] [--logs S] [--agent A] [--environment E] [--connection webhook|proxy|polling]`);
 			const kind = o.kind || "other";
 			if (!fb.KINDS.includes(kind)) throw new CliError("--kind must be bug, idea, or other");
 			if (o.connection && !fb.CONNECTIONS.includes(o.connection)) throw new CliError("--connection must be webhook, proxy, or polling");
 			const result = await fb.runFeedback({
 				message, kind, contact: o.contact || "", version: VERSION,
-				steps: o.steps || "", expected: o.expected || "", actual: o.actual || "",
+				steps: o.steps || "", expected: o.expected || "", actual: o.actual || "", logs: o.logs || "",
 				agent: o.agent || "", environment: o.environment || "",
 				connection: o.connection || "",
 				baseUrl: C.get("A2A_BASE_URL"), ownerToken: C.get("A2A_OWNER_TOKEN"),

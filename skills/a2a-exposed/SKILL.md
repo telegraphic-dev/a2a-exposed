@@ -152,11 +152,11 @@ Polling agents: no wake announces a pairing request; `inbox` and `pair list` sho
 
 ## Reporting problems or ideas
 
-Report a bug or an idea with npx, not a global install. Include detailed reproduction steps, which agent you are, and where you run (local, cloud, CI, or a sandbox). Never paste tokens or secrets.
+Report a bug or an idea with npx, not a global install. A bug needs `--steps`: the exact commands, and what you saw. Say which agent you are, and where you run (`local`, `cloud VM`, `CI`, `cloud agent sandbox`, or `other`). Never paste tokens, passwords, or keys. Remove them from `--logs` too.
 
-`npx -y a2a-exposed@latest feedback "..." --kind bug --steps "..." --expected "..." --actual "..." --agent "..." --environment "..." --connection webhook`
+`npx -y a2a-exposed@latest feedback "..." --kind bug --steps "..." --expected "..." --actual "..." --agent "..." --environment "local" --connection webhook`
 
-The command adds the a2a-exposed version (the CLI, and the inbox Worker version when the inbox reports it) and the deployment (`hosted` or `self-hosted`, from whether this inbox is hosted). Connection is webhook wake, proxy (a façade via `--upstream`), or polling. The command detects that from the inbox, then from local config, and `--connection` overrides it. It posts the report when this deployment accepts feedback, and otherwise prints a GitHub issue link. It does not open a browser. The connector tool `send_feedback` takes the same fields, and the inbox fills version, connection, and deployment when the call omits them. Put exact commands and error output in `--steps` and `--actual`, with tokens already removed.
+The command adds the a2a-exposed version (the CLI, and the inbox Worker version when the inbox reports it) and the deployment (`hosted` or `self-hosted`, from whether this inbox is hosted). Connection is `webhook`, `proxy` (a façade via `--upstream`), or `polling`. The command detects that from the inbox, then from local config, and `--connection` overrides it. It posts the report when this deployment accepts feedback, and otherwise prints a link that opens the bug report form (`template=bug_report.yml`) with those fields filled in. It does not open a browser. The connector tool `send_feedback` takes the same fields. A bug needs steps there too. The inbox fills version, connection, and deployment when the call omits them. Put exact commands and error output in `--steps` and `--actual`, with tokens already removed.
 
 ## Troubleshooting
 

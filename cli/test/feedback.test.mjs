@@ -35,24 +35,32 @@ test("with no inbox, feedback prints an encoded GitHub issue URL", async () => {
 	assert.equal(r.status, 0, r.stderr);
 	const url = new URL(r.stdout.trim());
 	assert.equal(`${url.origin}${url.pathname}`, "https://github.com/telegraphic-dev/a2a-exposed/issues/new");
+	assert.equal(url.searchParams.get("template"), "bug_report.yml");
+	assert.equal(url.searchParams.get("body"), null);
 	assert.match(url.searchParams.get("title") ?? "", /^\[bug\] saw /);
-	const body = url.searchParams.get("body") ?? "";
-	assert.match(body, /Source: cli/);
-	assert.match(body, /Kind: bug/);
-	assert.match(body, /## Contact\n\nada@example.com/);
-	assert.match(body, /## Steps\n\n1\. ran \[redacted\]/);
-	assert.match(body, /## Expected\n\na reply/);
-	assert.match(body, /## Actual\n\nnothing/);
-	assert.match(body, /## Agent\n\nClaude Code/);
-	assert.match(body, new RegExp(
-		`## Environment\\n\\nDeployment: self-hosted\\nConnection: polling\\nVersion: ${VERSION.replace(/\./g, "\\.")}\\nWhere: local laptop\\nOS: `,
-	));
-	assert.match(body, new RegExp(`Node: ${process.version.replace(/\./g, "\\.")}`));
-	assert.equal(body.includes("## Mode"), false);
-	assert.equal(body.includes(token), false);
-	assert.equal(body.includes("supersecretvalue"), false);
-	assert.match(body, /\[redacted\]/);
+	const message = url.searchParams.get("message") ?? "";
+	assert.match(message, /\[redacted\]/);
+	assert.equal(message.includes(token), false);
+	assert.equal(message.includes("supersecretvalue"), false);
+	assert.match(url.searchParams.get("steps") ?? "", /1\. ran \[redacted\]/);
+	assert.equal(url.searchParams.get("expected"), "a reply");
+	assert.equal(url.searchParams.get("actual"), "nothing");
+	assert.equal(url.searchParams.get("agent"), "Claude Code");
+	assert.equal(url.searchParams.get("environment"), "local");
+	assert.equal(url.searchParams.get("connection"), "polling");
+	assert.equal(url.searchParams.get("deployment"), "self-hosted");
+	assert.equal(url.searchParams.get("version"), VERSION);
+	assert.equal(url.searchParams.get("contact"), "ada@example.com");
+	assert.match(url.searchParams.get("os") ?? "", /\S/);
+	assert.equal(url.searchParams.get("node"), process.version);
 	assert.equal(r.stdout.split("\n").filter(Boolean).length, 1);
+});
+
+test("a bug without steps is refused before a link is printed", async () => {
+	const r = await run(["feedback", "it broke", "--kind", "bug"]);
+	assert.equal(r.status, 1);
+	assert.match(r.stderr, /reproduction steps/);
+	assert.equal(r.stdout.trim(), "");
 });
 
 test("an unknown kind or connection is refused", async () => {
@@ -98,6 +106,8 @@ test("a hosted inbox posts, a 404 falls back, and a 429 does not", async () => {
 	});
 	assert.equal(missing.filed, false);
 	assert.match(missing.url, /^https:\/\/github\.com\/telegraphic-dev\/a2a-exposed\/issues\/new\?/);
+	assert.equal(new URL(missing.url).searchParams.get("template"), "bug_report.yml");
+	assert.equal(new URL(missing.url).searchParams.get("body"), null);
 
 	await assert.rejects(() => runFeedback({
 		...base,
