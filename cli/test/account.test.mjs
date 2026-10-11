@@ -91,7 +91,10 @@ test("login help names the callback error", async () => {
 	assert.match(stdout, /The check expired\. Please try again/);
 	assert.match(stdout, /owner token once/);
 	assert.match(stdout, /not stored/);
+	assert.match(stdout, /FREE_AGENT_LIMIT=2/);
 	assert.match(stdout, /2 agents/);
+	assert.match(stdout, /own limit overrides it/);
+	assert.match(stdout, /no limit/);
 	assert.match(stdout, /rejects another insert/);
 });
 

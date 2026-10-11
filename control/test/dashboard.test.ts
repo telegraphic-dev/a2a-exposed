@@ -25,7 +25,7 @@ test("a signed-in account sees itself, can sign out, and creates two agents", as
 	const db = openDb();
 	const sent: { text: string }[] = [];
 	const app = createApp(
-		{ AUTH_SECRET: secret, DB: db, TENANT_DOMAIN: "example.com" },
+		{ AUTH_SECRET: secret, DB: db, TENANT_DOMAIN: "example.com", FREE_AGENT_LIMIT: "2" },
 		{ database: db, mailer: { async send(message) { sent.push({ text: message.text }); } }, dataPlane: plane() },
 	);
 	const posted = await app.request(`${origin}/app/sign-in`, {
@@ -136,6 +136,17 @@ test("a signed-in account sees itself, can sign out, and creates two agents", as
 	assert.match(limited, /This account can have 2 agents/);
 	assert.equal(limited.includes("Create agent"), false);
 	assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM tenants").first<{ n: number }>())?.n, 2);
+
+	await db.prepare('UPDATE "user" SET agent_limit = 10 WHERE email = ?').bind("person@example.com").run();
+	const raised = await app.request(`${origin}/api/v1/tenants`, {
+		method: "POST",
+		headers: { cookie, "content-type": "application/json" },
+		body: JSON.stringify({ name: "fabrikam" }),
+	});
+	assert.equal(raised.status, 201);
+	const raisedPage = await (await app.request(`${origin}/app`, { headers: { cookie } })).text();
+	assert.match(raisedPage, /Create agent/);
+	assert.equal(raisedPage.includes("This account can have 2 agents"), false);
 
 	const signedOut = await app.request(`${origin}/app/sign-out`, {
 		method: "POST",

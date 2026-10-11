@@ -8,7 +8,7 @@ import { OIDC_COOKIE, authorize, discoveryDocument, exchangeCode, issuerOrigin, 
 import { OWNER_COOKIE, hostCookie, readCookie } from "./auth/cookies.ts";
 import { deviceCodeFromCookie, handleDevice } from "./auth/device.ts";
 import { sameOrigin } from "./auth/origin.ts";
-import { createTenant, listTenants } from "./tenants/create.ts";
+import { accountAgentLimit, configuredFreeAgentLimit, createTenant, listTenants } from "./tenants/create.ts";
 import { dataPlaneFromEnv, type DataPlane } from "./tenants/push.ts";
 import type { ControlEnv } from "./env.ts";
 import { avatarOrigin, avatarUrl, renderAccount } from "./views/account.tsx";
@@ -290,6 +290,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 				dataRegion: env.DATA_REGION,
 				issuer: issuerOrigin(env, request),
 				label: env.BRAND_NAME,
+				freeAgentLimit: configuredFreeAgentLimit(env.FREE_AGENT_LIMIT),
 			});
 			if (!created.ok) return back(created.error);
 			return redirectTo(new URL("/app", request.url).href, [hostCookie(OWNER_COOKIE, created.tenant.ownerToken, 120)]);
@@ -324,6 +325,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 		const created = await createTenant(loaded.options.database, plane, {
 			accountId, name, domain: env.TENANT_DOMAIN, dataRegion: env.DATA_REGION,
 			issuer: issuerOrigin(env, request), label: env.BRAND_NAME,
+			freeAgentLimit: configuredFreeAgentLimit(env.FREE_AGENT_LIMIT),
 		});
 		if (!created.ok) {
 			const status = created.error === "taken" ? 409 : created.error === "limit" ? 403 : 400;
@@ -359,6 +361,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 			const agents = await listTenants(loaded.options.database, session.user.id, env.TENANT_DOMAIN);
 			const token = readCookie(request.headers.get("cookie"), OWNER_COOKIE);
 			const image = avatarUrl(typeof session.user.image === "string" ? session.user.image : "");
+			const agentLimit = await accountAgentLimit(loaded.options.database, session.user.id, configuredFreeAgentLimit(env.FREE_AGENT_LIMIT));
 			const body = renderAccount({
 				name: session.user.name ?? "",
 				email: session.user.email ?? "",
@@ -367,6 +370,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 				ownerToken: token || undefined,
 				error: url.searchParams.get("error") ?? undefined,
 				canCreate: Boolean(plane),
+				agentLimit,
 			});
 			return {
 				html: renderApp(env, body, "Your agents"),

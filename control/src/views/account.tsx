@@ -1,13 +1,14 @@
-import { AGENT_LIMIT } from "../tenants/create.ts";
-
 const ERRORS: Record<string, string> = {
 	invalid_name: "Use 4–32 letters, numbers, or hyphens.",
 	reserved_name: "That name is reserved.",
 	taken: "That name is taken.",
-	limit: `This account can have ${AGENT_LIMIT} agents.`,
 	origin: "That request came from another site.",
 	unavailable: "Agents are not available.",
 };
+
+function limitMessage(limit: number | null): string {
+	return limit == null ? "" : `This account can have ${limit} agents.`;
+}
 
 const AVATAR_HOSTS = new Set(["avatars.githubusercontent.com", "lh3.googleusercontent.com"]);
 
@@ -51,10 +52,12 @@ export function renderAccount(input: {
 	ownerToken?: string;
 	error?: string;
 	canCreate: boolean;
+	agentLimit: number | null;
 }): string {
 	const image = avatarUrl(input.image);
-	const error = input.error ? ERRORS[input.error] ?? "" : "";
-	const atLimit = input.agents.length >= AGENT_LIMIT;
+	const capped = limitMessage(input.agentLimit);
+	const error = input.error === "limit" ? capped : input.error ? ERRORS[input.error] ?? "" : "";
+	const atLimit = input.agentLimit != null && input.agents.length >= input.agentLimit;
 	return (
 		<div>
 			<div class="who">
@@ -72,7 +75,7 @@ export function renderAccount(input: {
 				</div>
 			) : ""}
 			{error ? <p class="alert" role="alert">{error}</p> : ""}
-			{atLimit && !error ? <p class="alert" role="alert">This account can have {AGENT_LIMIT} agents.</p> : ""}
+			{atLimit && !error ? <p class="alert" role="alert">{capped}</p> : ""}
 			{input.agents.length ? (
 				<ul class="agents">
 					{input.agents.map((agent) => {

@@ -177,7 +177,8 @@ Control plane account (only when that deployment's login is on)
                                 Waiting for the check…. A reused token says The check expired. Please try again.
                                 After sign-in, /app shows the account and its agents. Sign out is on that
                                 page. Creating an agent shows the owner token once. That page is not stored.
-                                An account can have 2 agents, and the database rejects another insert.
+                                FREE_AGENT_LIMIT=2 caps a free account at 2 agents. An account's own limit overrides it.
+                                Unset, there is no limit. The database rejects another insert.
                                 The control Worker logs social_sign_in_failed before the
                                 provider page, social_sign_in_timeout when that sign-in does not
                                 return, and oauth_callback_failed when the provider sends the browser
