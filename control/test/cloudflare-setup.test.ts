@@ -20,7 +20,7 @@ import {
 	TUNNEL_WRITE,
 	USER_DETAILS_READ,
 	WORKERS_ROUTES_WRITE,
-	WORKERS_SCRIPTS_WRITE,
+	WORKERS_WRITE,
 	ZONE_READ,
 	cloudflareAuthorizeUrl,
 	consentScope,
@@ -36,7 +36,7 @@ const origin = "https://control.example.com";
 const INBOX_WORKERS = [
 	USER_DETAILS_READ,
 	"account-settings.read",
-	WORKERS_SCRIPTS_WRITE,
+	WORKERS_WRITE,
 	D1_WRITE,
 	OFFLINE_ACCESS,
 ];
@@ -56,6 +56,10 @@ test("each setup choice requests only the scopes that choice needs", () => {
 			assert.equal(new Set(list).size, list.length);
 			assert.equal(list.includes("access-app.write"), false);
 			assert.equal(list.includes("workers-platform.write"), false);
+			assert.equal(list.includes("workers-scripts.write"), false);
+			assert.equal(list.includes("account:read"), false);
+			assert.equal(list.includes("user:read"), false);
+			assert.equal(list.includes(WORKERS_WRITE), true);
 			assert.equal(list.includes(ZONE_READ), host === "zone");
 			assert.equal(list.includes(DNS_WRITE), host === "zone");
 			assert.equal(list.includes(WORKERS_ROUTES_WRITE), host === "zone");
@@ -90,7 +94,7 @@ test("a declined optional scope names the setup it blocks", () => {
 	const bothZone = describeSetupGrant({
 		choice: "both",
 		host: "zone",
-		granted_scope: `${USER_DETAILS_READ} account-settings.read ${WORKERS_SCRIPTS_WRITE}`,
+		granted_scope: `${USER_DETAILS_READ} account-settings.read ${WORKERS_WRITE}`,
 		refresh_enc: null,
 	});
 	assert.ok(bothZone);
@@ -102,7 +106,7 @@ test("a declined optional scope names the setup it blocks", () => {
 	assert.match(bothZone.blocked.join(" "), /blocks the façade/);
 	assert.match(bothZone.blocked.join(" "), /inbox does not need a tunnel/);
 	assert.match(bothZone.blocked.join(" "), /Without a refresh token/);
-	assert.equal(bothZone.lines.find((line) => line.name === "Workers Scripts Write")?.state, "granted");
+	assert.equal(bothZone.lines.find((line) => line.name === "Workers Edit")?.state, "granted");
 	assert.equal(bothZone.lines.find((line) => line.name === "D1 Write")?.state, "declined");
 
 	const workers = describeSetupGrant({
@@ -224,7 +228,7 @@ test("the choice page explains a workers.dev inbox, then asks Cloudflare only fo
 	assert.match(reviewHtml, /give your agent a public A2A address/);
 	assert.match(reviewHtml, /my-agent\.yourname\.workers\.dev/);
 	assert.match(reviewHtml, /D1 Write/);
-	assert.match(reviewHtml, /Workers Scripts Write/);
+	assert.match(reviewHtml, /Workers Edit/);
 	assert.match(reviewHtml, /Continue to Cloudflare/);
 	assert.equal(reviewHtml.includes("Zone Read"), false);
 	assert.equal(reviewHtml.includes("DNS Write"), false);
@@ -438,4 +442,124 @@ test("a refresh stores the new single-use token and a rejection drops the old on
 	const missing = await refreshCloudflareGrant(client);
 	assert.equal(missing.ok, false);
 	if (!missing.ok) assert.equal(missing.error, "no_grant");
+});
+
+test("a Cloudflare error comes back to the setup page in plain language", async (t) => {
+	t.after(githubFetch(consentScope("inbox", "workers")));
+	const db = openDb();
+	const app = createApp({
+		AUTH_SECRET: secret,
+		DB: db,
+		GITHUB_CLIENT_ID: "gh-id",
+		GITHUB_CLIENT_SECRET: "gh-secret",
+		CLOUDFLARE_OAUTH_CLIENT_ID: "cf-id",
+		CLOUDFLARE_OAUTH_CLIENT_SECRET: "cf-secret",
+	}, { database: db });
+	const cookie = await signIn(app);
+	const consent = await app.request(`${origin}/app/cloudflare`, {
+		method: "POST",
+		headers: { origin, cookie, "content-type": "application/x-www-form-urlencoded" },
+		body: "action=consent&choice=inbox&host=workers",
+	});
+	const state = new URL(consent.headers.get("location") ?? "").searchParams.get("state") ?? "";
+	assert.match(state, /^cfl_/);
+	const logs: string[] = [];
+	const previous = console.error;
+	console.error = (...args: unknown[]) => { logs.push(args.map(String).join(" ")); };
+	t.after(() => { console.error = previous; });
+	const freshState = async () => {
+		const started = await app.request(`${origin}/app/cloudflare`, {
+			method: "POST",
+			headers: { origin, cookie, "content-type": "application/x-www-form-urlencoded" },
+			body: "action=consent&choice=inbox&host=workers",
+		});
+		const next = new URL(started.headers.get("location") ?? "").searchParams.get("state") ?? "";
+		assert.match(next, /^cfl_/);
+		return next;
+	};
+
+	const outsider = await app.request(
+		`${origin}/api/auth/callback/cloudflare?error=access_denied&error_description=${encodeURIComponent("The resource owner denied the request.")}&state=${encodeURIComponent(state)}`,
+	);
+	const outsiderUrl = new URL(outsider.headers.get("location") ?? "", origin);
+	assert.equal(outsider.status, 302);
+	assert.equal(outsiderUrl.pathname, "/app");
+	assert.equal(outsiderUrl.searchParams.get("error"), "cloudflare_unlinked");
+	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM verification WHERE identifier = ?`).bind(`cf-link:${state}`).first<{ n: number }>())?.n, 1);
+	assert.equal(logs.join("\n").includes("cloudflare_oauth_error"), false);
+
+	const description = "The OAuth 2.0 Client is not allowed to request scope 'workers-scripts.write'.";
+	const refused = await app.request(
+		`${origin}/api/auth/callback/cloudflare?error=invalid_scope&error_description=${encodeURIComponent(description)}&code=super-secret-code&state=${encodeURIComponent(state)}`,
+		{ headers: { cookie } },
+	);
+	const refusedUrl = new URL(refused.headers.get("location") ?? "", origin);
+	assert.equal(refused.status, 302);
+	assert.equal(refusedUrl.pathname, "/app/cloudflare");
+	assert.equal(refusedUrl.searchParams.get("error"), "refused");
+	assert.equal(refusedUrl.pathname === "/app", false);
+	const refusedHtml = await (await app.request(refusedUrl, { headers: { cookie } })).text();
+	assert.match(refusedHtml, /Cloudflare refused the permissions/);
+	assert.match(refusedHtml, /not allowed to ask for one of them/);
+	assert.equal(refusedHtml.includes("The provider did not finish sign-in"), false);
+	assert.equal(refusedHtml.includes("super-secret-code"), false);
+	const logged = logs.join("\n");
+	assert.match(logged, /cloudflare_oauth_error/);
+	assert.match(logged, /invalid_scope/);
+	assert.match(logged, /workers-scripts\.write/);
+	assert.equal(logged.includes("super-secret-code"), false);
+	assert.equal(logged.includes(state), false);
+	assert.equal(logged.includes("cf-secret"), false);
+	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM verification WHERE identifier = ?`).bind(`cf-link:${state}`).first<{ n: number }>())?.n, 0);
+
+	const cancelledState = await freshState();
+	const cancelled = await app.request(
+		`${origin}/api/auth/callback/cloudflare?error=access_denied&error_description=${encodeURIComponent("The resource owner or authorization server denied the request.")}&state=${encodeURIComponent(cancelledState)}`,
+		{ headers: { cookie } },
+	);
+	const cancelledUrl = new URL(cancelled.headers.get("location") ?? "", origin);
+	assert.equal(cancelledUrl.pathname, "/app/cloudflare");
+	assert.equal(cancelledUrl.searchParams.get("error"), "cancelled");
+	assert.match(await (await app.request(cancelledUrl, { headers: { cookie } })).text(), /You cancelled the Cloudflare permissions/);
+
+	const leaks = [
+		"Bearer cf_access_SECRET failed",
+		"rejected code=super-secret-code",
+		"token=cfut_SECRETVALUE",
+		"id_token=eyJhbGciOiJub25lIn0.eyJzdWIiOiIxIn0.sig",
+		"saw eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signaturevalue",
+	];
+	for (const leak of leaks) {
+		const leakState = await freshState();
+		const secretDescription = await app.request(
+			`${origin}/api/auth/callback/cloudflare?error=server_error&error_description=${encodeURIComponent(leak)}&state=${encodeURIComponent(leakState)}`,
+			{ headers: { cookie } },
+		);
+		const secretUrl = new URL(secretDescription.headers.get("location") ?? "", origin);
+		assert.equal(secretUrl.pathname, "/app/cloudflare");
+		assert.equal(secretUrl.searchParams.get("error"), "provider");
+		assert.match(await (await app.request(secretUrl, { headers: { cookie } })).text(), /did not finish granting permissions/);
+	}
+	const loggedAfterLeaks = logs.join("\n");
+	assert.match(loggedAfterLeaks, /"error_description":"redacted"/);
+	for (const secret of ["cf_access_SECRET", "super-secret-code", "cfut_SECRETVALUE", "eyJhbGciOiJub25lIn0", "eyJzdWIiOiIxIn0", "signaturevalue"]) {
+		assert.equal(loggedAfterLeaks.includes(secret), false, secret);
+	}
+	assert.match(loggedAfterLeaks, /denied the request/);
+
+	const again = await app.request(`${origin}/app/cloudflare`, {
+		method: "POST",
+		headers: { origin, cookie, "content-type": "application/x-www-form-urlencoded" },
+		body: "action=consent&choice=inbox&host=workers",
+	});
+	const bareState = new URL(again.headers.get("location") ?? "").searchParams.get("state") ?? "";
+	const bare = await app.request(`${origin}/api/auth/callback/cloudflare?state=${encodeURIComponent(bareState)}`, { headers: { cookie } });
+	const bareUrl = new URL(bare.headers.get("location") ?? "", origin);
+	assert.equal(bareUrl.pathname, "/app/cloudflare");
+	assert.equal(bareUrl.searchParams.get("error"), "provider");
+	assert.equal(bareUrl.searchParams.get("error") === "no_code", false);
+
+	const stranger = await app.request(`${origin}/api/auth/callback/cloudflare?code=abc&state=not-a-connect`, { headers: { cookie } });
+	assert.equal(new URL(stranger.headers.get("location") ?? "", origin).searchParams.get("error"), "cloudflare_unlinked");
+	assert.equal(new URL(stranger.headers.get("location") ?? "", origin).pathname, "/app");
 });

@@ -1,27 +1,32 @@
 // Scopes for "Set me up on Cloudflare". Each id is what the authorize request sends.
 //
-// Confirmed as scope ids in Cloudflare's own docs or blog:
-// - user-details.read, workers-scripts.write, zone.read
-//   (blog: task-based OAuth consent, the client JSON)
-// - offline_access
-//   (API reference for creating an OAuth client: a protocol scope added from the
-//   refresh_token grant type, not from the scope picker)
+// A dashboard OAuth client stores dot-delimited ids from GET /client/v4/oauth/scopes.
+// The create-client API rejects colon-delimited scopes. Wrangler's account:read,
+// user:read, d1:write, zone:read, and workers_routes:write are the first-party
+// catalog, not those ids, except where the dotted form is the same word
+// (d1.write, zone.read). A live probe refused the colon forms with the same
+// invalid_scope error as an invented scope.
 //
-// On the staging client (owner, 2026-10-12) and also reported as accepted ids
-// outside those docs:
-// - account-settings.read, d1.write, dns.write
-//   (a published consent receipt lists them as granted ids)
-// - workers-routes.write
-//   (third parties report the authorize endpoint accepts it; not in the docs examples)
-// - argotunnel.write
-//   (the staging client allows it; a third-party table maps Cloudflare Tunnel Write
-//   to this id). Not confirmed from Cloudflare's published scope list.
+// Staging accepted user-details.read and account-settings.read, then refused
+// workers-scripts.write. The client was registered with Workers Edit, which is
+// wrangler's workers:write (scripts, routes, KV, and zones), not Workers Scripts
+// Write. workers.write is not in the scope catalog. That is the one colon scope
+// this request sends.
 //
-// Not requested: access-app.write. The staging client allows it. A façade behind
-// Access is not a choice here. A third-party quote of GET /oauth/scopes includes
-// access-app.read, not the write id.
-// Not requested: workers-platform.write and account.read. The create-client docs
-// show those ids and do not say they include D1, routes, DNS, Tunnel, or Access.
+// Dashboard label → id:
+// - User Details Read → user-details.read
+// - Account Settings Read → account-settings.read
+// - Workers Edit → workers:write
+// - D1 Edit → d1.write
+// - Workers Routes Edit → workers-routes.write
+// - DNS Edit → dns.write
+// - Zone Read → zone.read
+// - Argo Tunnel (Legacy) Edit → argotunnel.write (catalog name Cloudflare Tunnel Write)
+// - offline_access (a protocol scope added from the refresh_token grant, not the picker)
+//
+// Not requested: access-app.write (Access Apps Edit). A façade behind Access is
+// not a choice here.
+// Not requested: workers-platform.write, workers-scripts.write, and account.read.
 
 export type SetupChoice = "inbox" | "facade" | "both";
 export type SetupHost = "workers" | "zone";
@@ -37,7 +42,8 @@ export interface ScopeReason {
 
 export const USER_DETAILS_READ = "user-details.read";
 export const ACCOUNT_SETTINGS_READ = "account-settings.read";
-export const WORKERS_SCRIPTS_WRITE = "workers-scripts.write";
+/** Wrangler's Workers Edit scope. Not workers-scripts.write, which staging refused. */
+export const WORKERS_WRITE = "workers:write";
 export const D1_WRITE = "d1.write";
 export const WORKERS_ROUTES_WRITE = "workers-routes.write";
 export const DNS_WRITE = "dns.write";
@@ -109,14 +115,14 @@ export function setupScopes(choice: SetupChoice, host: SetupHost): ScopeReason[]
 			declined: "Without Account Settings Read, this dashboard cannot see which Cloudflare account you picked, so this setup cannot continue.",
 		},
 		{
-			id: WORKERS_SCRIPTS_WRITE,
-			name: "Workers Scripts Write",
+			id: WORKERS_WRITE,
+			name: "Workers Edit",
 			why: facade && !inbox
 				? "Uploads the façade Worker into that account."
 				: facade
 					? "Uploads the inbox Worker and the façade Worker into that account."
 					: "Uploads the inbox Worker into that account.",
-			declined: `Without Workers Scripts Write, the Worker cannot be uploaded. That blocks ${variant(choice)}.`,
+			declined: `Without Workers Edit, the Worker cannot be uploaded. That blocks ${variant(choice)}.`,
 		},
 		{
 			id: D1_WRITE,

@@ -98,12 +98,28 @@ button.provider-email:hover:not(:disabled):not([aria-disabled="true"]) { backgro
 	color: inherit;
 }
 .token .copy-token { flex: none; }
-.setup { width: 100%; }
-.setup .choices {
+/* The overlay header is full-bleed. A fieldset's min-content width can shrink
+   this column to the example URL. A definite minimum keeps the normal measure. */
+body:has(.setup) {
+	width: min(45rem, 100%);
+	max-width: 45rem;
+}
+.setup {
+	box-sizing: border-box;
 	width: 100%;
+	min-width: min(40rem, calc(100vw - 2.5rem));
+	max-width: 100%;
+}
+.setup .choices {
+	display: flex;
+	flex-direction: column;
+	box-sizing: border-box;
+	width: 100%;
+	max-width: 100%;
 	margin: 0 0 1.25rem;
 	padding: 0;
 	border: 0;
+	min-width: 0;
 	min-inline-size: 0;
 }
 .setup .choices legend {

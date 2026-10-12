@@ -14,6 +14,9 @@ const ERRORS: Record<string, string> = {
 	choice: "Choose what to set up, and where it should live.",
 	auth: "Cloudflare did not finish. Try again.",
 	origin: "That request came from another site.",
+	cancelled: "You cancelled the Cloudflare permissions.",
+	refused: "Cloudflare refused the permissions. This app is not allowed to ask for one of them.",
+	provider: "Cloudflare did not finish granting permissions.",
 };
 
 function stateWord(state: SetupReport["lines"][number]["state"]): string {

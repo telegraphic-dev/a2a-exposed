@@ -71,6 +71,45 @@ function setupPage(request: Request, error?: string): string {
 	return url.href;
 }
 
+/** OAuth error codes are short tokens. Anything else is not logged as-is. */
+function safeProviderError(value: string): string {
+	const trimmed = value.trim().slice(0, 64);
+	return /^[A-Za-z0-9._~:-]+$/.test(trimmed) ? trimmed : "unrecognized";
+}
+
+/**
+ * Query names whose values are credentials. Matched as `name=value` or `name: value`,
+ * including a percent-encoded `=`. `authorization server` has neither, so it stays.
+ */
+const SECRET_PARAM = /\b(?:id_token|access_token|refresh_token|client_secret|authorization|code|token)\s*(?:=|%3d|:)\s*\S/i;
+/** A compact JWS: `eyJ` header, payload, signature. Error text does not look like this. */
+const JWT_SHAPED = /\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/;
+
+/** The description is logged. A code, a token, an id_token, or a JWT is not. */
+function safeProviderDescription(value: string): string {
+	const cleaned = value.replace(/[\u0000-\u001f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 300);
+	if (!cleaned) return "";
+	if (SECRET_PARAM.test(cleaned) || /bearer\s+\S/i.test(cleaned) || JWT_SHAPED.test(cleaned)) return "redacted";
+	return cleaned;
+}
+
+/** Query `error` on the connect callback, as a setup-page code. */
+export function cloudflareSetupErrorCode(providerError: string): "cancelled" | "refused" | "provider" {
+	if (providerError === "access_denied") return "cancelled";
+	if (providerError === "invalid_scope") return "refused";
+	return "provider";
+}
+
+function logCloudflareProviderError(providerError: string, description: string): void {
+	const error = safeProviderError(providerError);
+	const errorDescription = safeProviderDescription(description);
+	console.error(JSON.stringify({
+		event: "cloudflare_oauth_error",
+		error,
+		...(errorDescription ? { error_description: errorDescription } : {}),
+	}));
+}
+
 function redirect(location: string, cookies: string[] = [], status = 303): Response {
 	const headers = new Headers({ location, "cache-control": "no-store" });
 	for (const cookie of cookies) headers.append("set-cookie", cookie);
@@ -360,6 +399,25 @@ export async function handleCloudflareSetup(request: Request, auth: SessionAuth,
 	return { kind: "response", response: await startCloudflareOAuth(request, options, userId, choice, host) };
 }
 
+/** The pending connect row belongs to this request's signed-in account. */
+async function sessionOwnsConnectState(request: Request, auth: SessionAuth, options: AuthOptions, state: string): Promise<boolean> {
+	if (!state.startsWith(STATE_PREFIX)) return false;
+	const row = await options.database.prepare(
+		`SELECT value, expiresAt FROM verification WHERE identifier = ?`,
+	).bind(`cf-link:${state}`).first<{ value: string; expiresAt: unknown }>();
+	if (!row || expiresMs(row.expiresAt) <= Date.now()) return false;
+	let saved: { userId?: unknown };
+	try {
+		saved = JSON.parse(row.value) as { userId?: unknown };
+	} catch {
+		return false;
+	}
+	const userId = typeof saved.userId === "string" ? saved.userId : "";
+	if (!userId) return false;
+	const session = await sessionOf(auth, request);
+	return session?.user?.id === userId;
+}
+
 /**
  * Completes a connect callback. Any other Cloudflare callback is refused and
  * does not create or resume a session. The access token is used to read the
@@ -368,10 +426,22 @@ export async function handleCloudflareSetup(request: Request, auth: SessionAuth,
  * checked against the allowlist.
  */
 export async function finishCloudflareLink(request: Request, auth: SessionAuth, options: AuthOptions, fetchMs = CLOUDFLARE_FETCH_MS, outer?: AbortSignal): Promise<Response> {
-	if (request.method !== "GET" || !options.cloudflare || !cloudflareLinkState(request)) {
+	if (request.method !== "GET" || !options.cloudflare) {
 		return redirect(appRedirect(request, "cloudflare_unlinked"), [], 302);
 	}
 	const url = new URL(request.url);
+	const providerError = url.searchParams.get("error");
+	if (providerError) {
+		const state = url.searchParams.get("state") ?? "";
+		const owned = await sessionOwnsConnectState(request, auth, options, state);
+		if (!owned) return redirect(appRedirect(request, "cloudflare_unlinked"), [], 302);
+		await deleteLinkState(options.database, state);
+		logCloudflareProviderError(providerError, url.searchParams.get("error_description") ?? "");
+		return redirect(setupPage(request, cloudflareSetupErrorCode(providerError)), [], 302);
+	}
+	if (!cloudflareLinkState(request)) {
+		return redirect(appRedirect(request, "cloudflare_unlinked"), [], 302);
+	}
 	const state = url.searchParams.get("state") ?? "";
 	const code = url.searchParams.get("code") ?? "";
 	const row = await options.database.prepare(
@@ -398,23 +468,22 @@ export async function finishCloudflareLink(request: Request, auth: SessionAuth, 
 		return redirect(appRedirect(request, "auth"), [], 302);
 	}
 	const session = await sessionOf(auth, request);
+	// Knowing the state is not enough to throw away the pending connect.
 	if (!session?.user?.id) {
-		await deleteLinkState(options.database, state);
 		return redirect(appRedirect(request, "cloudflare_unlinked"), [], 302);
 	}
 	if (!userId || !verifier || session.user.id !== userId) {
-		await deleteLinkState(options.database, state);
 		return redirect(appRedirect(request, "auth"), [], 302);
 	}
 	if (!recentSignIn(session)) {
 		if (!code || code.length > 2048) {
 			await deleteLinkState(options.database, state);
-			return redirect(appRedirect(request, "no_code"), [], 302);
+			return redirect(setupPage(request, "provider"), [], 302);
 		}
 		return reauthResponse(request, auth, options, { userId, action: "finish", state, code }, "/app/cloudflare", 302);
 	}
 	await deleteLinkState(options.database, state);
-	if (!code) return redirect(appRedirect(request, "no_code"), [], 302);
+	if (!code) return redirect(setupPage(request, "provider"), [], 302);
 	const body = new URLSearchParams({
 		grant_type: "authorization_code",
 		code,
