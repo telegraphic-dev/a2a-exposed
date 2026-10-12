@@ -1,5 +1,6 @@
 // GitHub App auth for feedback issues. The app id and private key turn the path on.
-// FEEDBACK_GITHUB_TOKEN stays the fallback when the app is not configured.
+// FEEDBACK_GITHUB_TOKEN stays the fallback when the app id or the private key is unset.
+// A set id with a key that is not a PEM does not use that token.
 // None of these names use the GITHUB_* prefix: that prefix is the sign-in OAuth app.
 import type { ControlEnv } from "./env.ts";
 
@@ -32,9 +33,20 @@ export interface GithubAccess {
 	secrets: string[];
 }
 
-/** A numeric app id and a PEM private key, PKCS#1 or PKCS#8. Anything else is not the app. */
+/** A numeric app id and a PEM private key, PKCS#1 or PKCS#8. */
 export function feedbackAppReady(env: ControlEnv): boolean {
 	return Boolean(appId(env) && pemKind(normalizePem(env.FEEDBACK_GITHUB_APP_PRIVATE_KEY ?? "")));
+}
+
+/**
+ * Both the app id and the private key are set, but they are not a numeric id plus a PEM.
+ * That is a broken app, not an unset one: the personal access token must not file the issue.
+ */
+export function feedbackAppBroken(env: ControlEnv): boolean {
+	const id = (env.FEEDBACK_GITHUB_APP_ID ?? "").trim();
+	const key = (env.FEEDBACK_GITHUB_APP_PRIVATE_KEY ?? "").trim();
+	if (!id || !key) return false;
+	return !feedbackAppReady(env);
 }
 
 export function feedbackPat(env: ControlEnv): string {
@@ -182,6 +194,7 @@ function secretsFor(token: string, pat: string, jwt: string): string[] {
  */
 export async function githubAccessToken(env: ControlEnv, repo: string, deps: GithubCallDeps): Promise<GithubAccess> {
 	const pat = feedbackPat(env);
+	if (feedbackAppBroken(env)) throw new Error("github app auth failed");
 	if (!feedbackAppReady(env)) {
 		if (!pat) throw new Error("github app auth failed");
 		return { token: pat, secrets: secretsFor(pat, "", "") };

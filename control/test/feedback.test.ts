@@ -116,9 +116,7 @@ test("unconfigured feedback is 404, including a partial config", async () => {
 		{ FEEDBACK_GITHUB_APP_PRIVATE_KEY: pemHeaders },
 		{ FEEDBACK_GITHUB_APP_ID: "4242", FEEDBACK_GITHUB_APP_PRIVATE_KEY: pemHeaders },
 		{ FEEDBACK_GITHUB_APP_ID: "   ", FEEDBACK_GITHUB_APP_PRIVATE_KEY: pemHeaders, FEEDBACK_REPO: repo },
-		{ FEEDBACK_GITHUB_APP_ID: "nope", FEEDBACK_GITHUB_APP_PRIVATE_KEY: pemHeaders, FEEDBACK_REPO: repo },
 		{ FEEDBACK_GITHUB_APP_ID: "4242", FEEDBACK_GITHUB_APP_PRIVATE_KEY: "   ", FEEDBACK_REPO: repo },
-		{ FEEDBACK_GITHUB_APP_ID: "4242", FEEDBACK_GITHUB_APP_PRIVATE_KEY: "not-a-pem", FEEDBACK_REPO: repo },
 		{ FEEDBACK_GITHUB_APP_ID: "4242", FEEDBACK_GITHUB_APP_PRIVATE_KEY: pemHeaders, FEEDBACK_REPO: "not a repo" },
 	]) {
 		const app = createApp(partial);
@@ -571,6 +569,36 @@ test("an explicit installation id and a PKCS#8 key skip the lookup, including a 
 	assert.equal(gh.calls.find((call) => call.url.includes("/access_tokens"))?.url, "https://api.github.com/app/installations/77/access_tokens");
 	const payload = jwtPayload(gh.calls[0].authorization.slice("Bearer ".length), keys.publicKey);
 	assert.equal(payload.iss, "4242");
+});
+
+test("a set app id with a malformed key is 502 and does not use the personal access token", async () => {
+	const calls: string[] = [];
+	const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+		calls.push(new Headers(init?.headers).get("authorization") ?? "");
+		return Response.json({ html_url: issue() }, { status: 201 });
+	}) as typeof fetch;
+	const logs: string[] = [];
+	const orig = console.error;
+	console.error = (...args: unknown[]) => { logs.push(args.map(String).join(" ")); };
+	try {
+		for (const partial of [
+			{ FEEDBACK_GITHUB_APP_ID: "4242", FEEDBACK_GITHUB_APP_PRIVATE_KEY: "not-a-pem", FEEDBACK_GITHUB_TOKEN: ghToken, FEEDBACK_REPO: repo },
+			{ FEEDBACK_GITHUB_APP_ID: "nope", FEEDBACK_GITHUB_APP_PRIVATE_KEY: "-----BEGIN RSA PRIVATE KEY-----\nMIIB\n-----END RSA PRIVATE KEY-----", FEEDBACK_GITHUB_TOKEN: ghToken, FEEDBACK_REPO: repo },
+			{ FEEDBACK_GITHUB_APP_ID: "4242", FEEDBACK_GITHUB_APP_PRIVATE_KEY: "not-a-pem", FEEDBACK_REPO: repo },
+		]) {
+			const app = createApp(partial, { fetch });
+			const res = await post(app, { message: "hi", source: "cli" });
+			assert.equal(res.status, 502, JSON.stringify(partial));
+			assert.deepEqual(await res.json(), { error: "unavailable" });
+			const page = await app.request(`${origin}/app/feedback`);
+			assert.equal(page.status, 200, JSON.stringify(partial));
+		}
+		assert.equal(calls.length, 0);
+		assert.equal(logs.join("\n").includes(ghToken), false);
+		assert.equal(logs.join("\n").includes("not-a-pem"), false);
+	} finally {
+		console.error = orig;
+	}
 });
 
 test("GitHub App auth failures are 502 and the log does not include the key or the token", async () => {

@@ -1,13 +1,15 @@
 // POST /api/feedback files a GitHub issue when FEEDBACK_REPO is set and either the GitHub App
 // (FEEDBACK_GITHUB_APP_ID and FEEDBACK_GITHUB_APP_PRIVATE_KEY) or FEEDBACK_GITHUB_TOKEN is set.
 // Neither credential, or no valid repo, is 404, so a self-hosted control plane is unchanged.
-// The app is preferred when both are set. The token is the self-host fallback.
+// The app is used when the id and private key are both set. A set id with a key that is not a PEM,
+// or a non-numeric id with a set key, is 502 and does not fall back to the token.
+// The token is the self-host fallback only when the app id or the private key is unset.
 // None of these names use the GITHUB_* prefix: that prefix is the sign-in OAuth app.
 import { connectingIp, verifyTurnstile, type TurnstileFailure } from "./auth/turnstile.ts";
 import { sameOrigin } from "./auth/origin.ts";
 import type { Sql } from "./auth/invites.ts";
 import type { ControlEnv } from "./env.ts";
-import { feedbackAppReady, feedbackPat, githubAccessToken, type GithubTokenCache } from "./feedback-app.ts";
+import { feedbackAppBroken, feedbackAppReady, feedbackPat, githubAccessToken, type GithubTokenCache } from "./feedback-app.ts";
 
 export const MESSAGE_MAX = 4000;
 export const PER_HOUR = 5;
@@ -79,7 +81,7 @@ export function feedbackRepo(env: ControlEnv): string {
 }
 
 export function feedbackOn(env: ControlEnv): boolean {
-	return Boolean(feedbackRepo(env) && (feedbackAppReady(env) || feedbackPat(env)));
+	return Boolean(feedbackRepo(env) && (feedbackAppReady(env) || feedbackAppBroken(env) || feedbackPat(env)));
 }
 
 export function turnstileOf(env: ControlEnv): { siteKey: string; secret: string } | null {
