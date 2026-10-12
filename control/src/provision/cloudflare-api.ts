@@ -34,11 +34,13 @@ export async function cfCall(input: {
 	path: string;
 	json?: unknown;
 	raw?: { body: BodyInit; contentType: string };
+	/** Return the response body as text. Used to read a Worker script, which is not JSON. */
+	asText?: boolean;
 	fetchMs: number;
 }): Promise<CfResponse> {
 	const headers: Record<string, string> = {
 		authorization: `Bearer ${input.token}`,
-		accept: "application/json",
+		accept: input.asText ? "*/*" : "application/json",
 	};
 	let body: BodyInit | undefined;
 	if (input.raw) {
@@ -66,6 +68,7 @@ export async function cfCall(input: {
 		return { ok: false, status: response.status, code: null };
 	}
 	const text = await response.text().catch(() => "");
+	if (input.asText) return response.ok ? { ok: true, status: response.status, body: text } : { ok: false, status: response.status, code: null };
 	let parsed: unknown = null;
 	if (text) {
 		try { parsed = JSON.parse(text); } catch { parsed = null; }
@@ -176,11 +179,20 @@ export async function d1Query(input: { fetchImpl: typeof fetch; token: string; f
 	return d1Rows(read.body);
 }
 
-export async function workerExists(input: { fetchImpl: typeof fetch; token: string; fetchMs: number; accountId: string; name: string }): Promise<boolean | CfFailure> {
-	const read = await cfCall({ ...input, method: "GET", path: `/accounts/${input.accountId}/workers/scripts/${input.name}/settings` });
-	if (read.ok) return true;
-	if (read.status === 404) return false;
-	return read;
+/** The banner `bundle-inbox.mjs` writes. A script without it was not uploaded by this page. */
+export const INBOX_SCRIPT_MARKER = "a2a-exposed inbox";
+
+/**
+ * Whether the named Worker is absent, the inbox this page uploaded, or someone else's script.
+ * A saved database id is not proof: a later retry must not replace a Worker it did not create.
+ */
+export async function inboxScriptOwnership(input: { fetchImpl: typeof fetch; token: string; fetchMs: number; accountId: string; name: string }): Promise<"missing" | "ours" | "other" | CfFailure> {
+	const settings = await cfCall({ ...input, method: "GET", path: `/accounts/${input.accountId}/workers/scripts/${input.name}/settings` });
+	if (!settings.ok) return settings.status === 404 ? "missing" : settings;
+	const script = await cfCall({ ...input, method: "GET", path: `/accounts/${input.accountId}/workers/scripts/${input.name}`, asText: true });
+	if (!script.ok) return script.status === 404 ? "missing" : script;
+	const body = typeof script.body === "string" ? script.body : "";
+	return body.includes(INBOX_SCRIPT_MARKER) ? "ours" : "other";
 }
 
 /** Module-syntax script upload. `metadata` carries the D1 binding and the owner token. */

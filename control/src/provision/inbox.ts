@@ -15,8 +15,8 @@ import {
 	listZones,
 	registerWorkersDevSubdomain,
 	setWorkersDevEnabled,
+	inboxScriptOwnership,
 	uploadWorker,
-	workerExists,
 	workersDevSubdomain,
 	type CfAccount,
 	type CfFailure,
@@ -321,16 +321,8 @@ export async function provisionInbox(input: {
 			publicUrl = `https://${workerName}.${subdomain}.workers.dev`;
 		}
 
-		const present = await workerExists({ ...api, accountId: account.id, name: workerName });
-		if (typeof present !== "boolean") {
-			logFailure("worker", present);
-			await releaseClaim(input.database, input.userId);
-			return { ok: false, error: failureError(present, "other") };
-		}
-		if (present && !row?.d1_id) {
-			await releaseClaim(input.database, input.userId);
-			return { ok: false, error: "taken" };
-		}
+		const before = await guardExistingScript(api, account.id, workerName, input.database, input.userId);
+		if (before !== true) return before;
 
 		let d1Id = row?.d1_id ?? "";
 		if (!d1Id) {
@@ -362,6 +354,9 @@ export async function provisionInbox(input: {
 			await patchInbox(input.database, input.userId, now, { status: "pending", d1Id, cfAccountId: account.id });
 			return { ok: false, error: "partial" };
 		}
+
+		const again = await guardExistingScript(api, account.id, workerName, input.database, input.userId);
+		if (again !== true) return again;
 
 		const ownerToken = newOwnerToken();
 		const uploaded = await uploadWorker({
@@ -412,6 +407,25 @@ export async function provisionInbox(input: {
 		await patchInbox(input.database, input.userId, now, { status: "pending" }).catch(() => {});
 		return { ok: false, error: "failed" };
 	}
+}
+
+/** Refuses a Worker this page did not upload. Missing, or a script that still has the inbox banner, may continue. */
+async function guardExistingScript(
+	api: { fetchImpl: typeof fetch; token: string; fetchMs: number },
+	accountId: string,
+	name: string,
+	database: Sql,
+	userId: string,
+): Promise<true | ProvisionOutcome> {
+	const state = await inboxScriptOwnership({ ...api, accountId, name });
+	if (state === "missing" || state === "ours") return true;
+	if (state === "other") {
+		await releaseClaim(database, userId);
+		return { ok: false, error: "taken" };
+	}
+	logFailure("worker", state);
+	await releaseClaim(database, userId);
+	return { ok: false, error: failureError(state, "other") };
 }
 
 function planNames(host: SetupHost, fields: ProvisionFields, existing: InboxRow | null): { ok: true; workerName: string; hostname: string } | { ok: false; error: ProvisionError } {
