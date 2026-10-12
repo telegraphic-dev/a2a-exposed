@@ -155,6 +155,7 @@ These talk to a control plane whose login is on. A self-hosted inbox does not ne
 | `A2A_BASE_URL` | Public base URL of the Worker |
 | `A2A_OWNER_TOKEN` | Owner API token |
 | `A2A_HOSTNAME` | Custom hostname. Omit for workers.dev |
+| `A2A_DOCUMENTATION_URL` | Public https documentation link on the agent card |
 | `A2A_NO_UPDATE_CHECK` | `1` turns off the daily npm update notice. `DO_NOT_TRACK=1` does the same |
 | `CLOUDFLARE_API_TOKEN` | API token when browser login is blocked |
 | `CLOUDFLARE_ACCOUNT_ID` | Account, when the token can see more than one |

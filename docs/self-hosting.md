@@ -133,7 +133,7 @@ It reports Access (credentials missing or refused), the agent's bearer (missing 
 
 ### Card rewrite
 
-Interfaces point at the façade's public URL. Security schemes and OAuth URLs are the façade's. Name, skills, and version come from the upstream card, unless `--agent-*` overrides them. Private, Tailnet, LAN, localhost, and tunnel-hostname URLs are removed. `signatures` are dropped. The inbox card (no `--upstream`) scrubs the same fields on the description, skills, provider URL, and documentation URL.
+Interfaces point at the façade's public URL. Security schemes and OAuth URLs are the façade's. Name, skills, and version come from the upstream card, unless `--agent-*` or `--provider-*` overrides them. A public https `A2A_DOCUMENTATION_URL` in `config.env` is the documentation link on the card. Private, Tailnet, LAN, localhost, and tunnel-hostname URLs are removed. `signatures` are dropped. The inbox card (no `--upstream`) scrubs the same fields on the description, skills, provider URL, and documentation URL.
 
 The façade forwards `SendMessage`, `GetTask`, and `CancelTask` (1.0 and 0.3). Another peer's task returns `-32001`. An unknown or unrecorded context returns `-32602`. `ListTasks` returns `-32004`. Push notification config calls return `-32003`, because the upstream would call the peer's URL from inside your network. Peers poll `GetTask`. Streaming returns `-32004`. The extended card is not proxied. The card advertises only the JSON-RPC versions the upstream card lists.
 

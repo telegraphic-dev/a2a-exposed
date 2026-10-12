@@ -51,7 +51,7 @@ Report a result the docs do not cover with `npx -y a2a-exposed@latest feedback`.
 | --- | --- |
 | `pair` returns HTTP 500 | The inbox predates device-flow pairing. Run `deploy` (migration `0003_device_pairing`) |
 | `connect`: does not offer device-flow pairing | That peer has pairing off, or it is not this inbox. Ask its owner for a token and use `peers add ... --token-stdin` |
-| `connect`: not accepting more pairing requests | Flood limits: 5 per IP per 10 minutes, 10 pending. Wait and retry |
+| `connect`: not accepting more pairing requests | Flood limits: 5 new requests per IP per 10 minutes, 10 pending, and 30 new requests per hour. Wait and retry |
 | `/device` says no approval password | `pair set-password --web`, and open the link yourself. Or run `pair set-password` in a terminal |
 | Setup link is invalid, expired, or already used | Links last 15 minutes, work once, and a newer link replaces the old one |
 | `pair approve`: approval mode is human | The human approves on `/device`. `deploy --pairing-approval agent` lets the agent approve after the human says yes in chat |
