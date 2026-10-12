@@ -211,12 +211,14 @@ Feedback
             [--environment local|cloud VM|CI|cloud agent sandbox|other]
             [--connection webhook|proxy|polling] [--yes]
                                 report a bug or an idea. A bug needs --steps.
-                                The report is a public GitHub issue on
-                                telegraphic-dev/a2a-exposed. Do not include confidential
-                                information: secrets, tokens, owner or pairing tokens,
-                                private URLs or hostnames, message contents, or personal
-                                data. Prints that warning and asks before sending, unless
-                                --yes is set. Off a terminal, --yes is required.
+                                The report is a public GitHub issue. The warning names
+                                the repository before it sends. A hosted inbox uses the
+                                control plane's FEEDBACK_REPO. Otherwise the link opens
+                                the form on telegraphic-dev/a2a-exposed. Do not include
+                                confidential information: secrets, tokens, owner or pairing
+                                tokens, private URLs or hostnames, message contents, or
+                                personal data. Prints that warning and asks before sending,
+                                unless --yes is set. Off a terminal, --yes is required.
                                 Posts to the control plane when this inbox is hosted and that
                                 plane accepts feedback. Otherwise prints a link to the bug
                                 report form and does not open a browser. The CLI adds its
@@ -342,7 +344,8 @@ export async function main(argv) {
 			if (!fb.KINDS.includes(kind)) throw new CliError("--kind must be bug, idea, or other");
 			if (o.connection && !fb.CONNECTIONS.includes(o.connection)) throw new CliError("--connection must be webhook, proxy, or polling");
 			if (kind === "bug" && !String(o.steps || "").trim()) throw new CliError("a bug report needs reproduction steps (--steps)");
-			await fb.confirmPublicIssue(Boolean(o.yes));
+			const repo = await fb.feedbackPublicRepo({ baseUrl: C.get("A2A_BASE_URL"), ownerToken: C.get("A2A_OWNER_TOKEN") });
+			await fb.confirmPublicIssue(Boolean(o.yes), undefined, undefined, repo);
 			const result = await fb.runFeedback({
 				message, kind, contact: o.contact || "", version: VERSION,
 				steps: o.steps || "", expected: o.expected || "", actual: o.actual || "", logs: o.logs || "",

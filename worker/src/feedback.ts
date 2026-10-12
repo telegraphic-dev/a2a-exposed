@@ -6,7 +6,43 @@ import type { TenantContext } from "./tenancy.ts";
 import { VERSION } from "./version.ts";
 
 export const ISSUE_REPO = "telegraphic-dev/a2a-exposed";
-export const PUBLIC_ISSUE_NOTE = `This report is filed as a public GitHub issue on ${ISSUE_REPO}. Do not include confidential information: secrets, tokens, owner or pairing tokens, private URLs or hostnames, message contents, or personal data.`;
+const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+
+/** Name the repository that receives the issue. The prefilled form uses ISSUE_REPO. A filed issue uses the repository in its URL. */
+export function publicIssueNote(repo: string): string {
+	const name = REPO_RE.test(repo) && !repo.includes("..") ? repo : ISSUE_REPO;
+	return `This report is filed as a public GitHub issue on ${name}. Do not include confidential information: secrets, tokens, owner or pairing tokens, private URLs or hostnames, message contents, or personal data.`;
+}
+
+export const PUBLIC_ISSUE_NOTE = publicIssueNote(ISSUE_REPO);
+
+/** Owner/name from a GitHub issue URL or the prefilled new-issue URL. Empty when the URL is not that shape. */
+export function repoFromIssueUrl(value: string): string {
+	try {
+		const url = new URL(value);
+		const match = url.pathname.match(/^\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/issues(?:\/|$)/);
+		if (url.protocol !== "https:" || url.hostname !== "github.com" || url.username || url.password || !match) return "";
+		const repo = `${match[1]}/${match[2]}`;
+		return REPO_RE.test(repo) && !repo.includes("..") ? repo : "";
+	} catch {
+		return "";
+	}
+}
+
+export function feedbackResultText(result: { filed: boolean; issue_url: string }): string {
+	const note = publicIssueNote(repoFromIssueUrl(result.issue_url));
+	return result.filed
+		? `${note}\nFeedback filed: ${result.issue_url}`
+		: `${note}\nFeedback was not filed from here. Open this link to create the issue:\n${result.issue_url}`;
+}
+
+/** Tool description. A repository is named only when this call already knows it. A hosted inbox learns the name from the issue URL in the result. */
+export function feedbackToolDescription(repo: string): string {
+	const note = REPO_RE.test(repo) && !repo.includes("..")
+		? publicIssueNote(repo)
+		: "This report is filed as a public GitHub issue on this deployment's configured feedback repository. The result names that repository. Do not include confidential information: secrets, tokens, owner or pairing tokens, private URLs or hostnames, message contents, or personal data.";
+	return `${note} Redact before sending. Report a bug or an idea about this inbox to its developers. A bug requires reproduction steps. Include exact commands, error output with tokens and secrets removed, which agent you are, and where you run (local, cloud VM, CI, cloud agent sandbox, or other). Version, connection (webhook, proxy, or polling), and deployment (hosted or self-hosted) are filled by the inbox when you omit them. When this deployment does not file the report, the result is a link to the bug report form. You do not open a browser.`;
+}
 /** Inbox build. The same value as `version` in cli/package.json. */
 export const WORKER_VERSION = VERSION;
 const TIMEOUT_MS = 5000;

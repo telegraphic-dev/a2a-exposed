@@ -8,7 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CliError } from "../lib/a2a.mjs";
 import { Readable } from "node:stream";
-import { confirmPublicIssue, PUBLIC_ISSUE_WARNING, runFeedback } from "../lib/feedback.mjs";
+import { confirmPublicIssue, feedbackPublicRepo, PUBLIC_ISSUE_WARNING, runFeedback } from "../lib/feedback.mjs";
 
 const BIN = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "bin", "a2a-exposed.mjs");
 const VERSION = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
@@ -94,6 +94,34 @@ test("an unknown kind or connection is refused", async () => {
 	const connection = await run(["feedback", "hi", "--connection", "socket"]);
 	assert.equal(connection.status, 1);
 	assert.match(connection.stderr, /--connection must be webhook, proxy, or polling/);
+});
+
+test("a hosted inbox names the control plane repository, and does not guess when that name is missing", async () => {
+	const repo = "example-org/example-repo";
+	let gets = 0;
+	const named = await feedbackPublicRepo({
+		baseUrl: "https://agent.example.com",
+		ownerToken: "owner-secret",
+		fetchImpl: async (url, init) => {
+			if (String(url).endsWith("/owner/feedback")) return Response.json({ hosted: true, url: "https://control.example.com/api/feedback", connection: "polling" });
+			gets += 1;
+			assert.equal(init.method, "GET");
+			assert.equal(new Headers(init.headers).get("authorization") ?? "", "");
+			return Response.json({ repo });
+		},
+	});
+	assert.equal(named, repo);
+	assert.equal(gets, 1);
+	const local = await feedbackPublicRepo({ fetchImpl: async () => { throw new Error("no network"); } });
+	assert.equal(local, "telegraphic-dev/a2a-exposed");
+	await assert.rejects(() => feedbackPublicRepo({
+		baseUrl: "https://agent.example.com",
+		ownerToken: "owner-secret",
+		fetchImpl: async (url) => {
+			if (String(url).endsWith("/owner/feedback")) return Response.json({ hosted: true, url: "https://control.example.com/api/feedback" });
+			return Response.json({ error: "method" }, { status: 405 });
+		},
+	}), (error) => error instanceof CliError && /did not name the public repository/.test(error.message));
 });
 
 test("a hosted inbox posts, a 404 falls back, and a 429 does not", async () => {

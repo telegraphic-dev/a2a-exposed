@@ -456,6 +456,7 @@ export function createFeedback(env: ControlEnv, deps: FeedbackDeps = {}) {
 	return {
 		async api(request: Request): Promise<FeedbackResult> {
 			if (!feedbackOn(env)) return jsonResult(404, { error: "not_found" });
+			if (request.method === "GET") return jsonResult(200, { repo: feedbackRepo(env) });
 			if (request.method !== "POST") return jsonResult(405, { error: "method" });
 			const record = await readRecord(request);
 			if (record === "large") return jsonResult(413, { error: "invalid_message" });

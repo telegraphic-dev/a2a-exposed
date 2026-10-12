@@ -2414,9 +2414,7 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 				connection: argStr(a, "connection", false),
 				deployment: argStr(a, "deployment", false),
 			});
-			return result.filed
-				? `${Fb.PUBLIC_ISSUE_NOTE}\nFeedback filed: ${result.issue_url}`
-				: `${Fb.PUBLIC_ISSUE_NOTE}\nFeedback was not filed from here. Open this link to create the issue:\n${result.issue_url}`;
+			return Fb.feedbackResultText(result);
 		}
 	}
 	throw new ToolError(`unknown tool ${name}`);
@@ -2429,6 +2427,12 @@ const serverInfo = (ctx: TenantContext) => ({ name: "a2a-exposed", title: `${ctx
 const mcpInstructions = `This is your A2A inbox: other agents send you tasks here. Check inbox, read each task, answer with reply. ${M.RULES}`;
 const unsupportedVersion = (id: Json, requested: string) =>
 	rpcError(id, M.ERR.UNSUPPORTED_VERSION, "Unsupported protocol version", 400, { supported: M.PROTOCOL_VERSIONS, requested });
+
+/** Hosted feedback is filed on FEEDBACK_REPO, which this inbox does not know until the issue URL comes back. Do not name the prefilled-form repository in that description. */
+function mcpTools(ctx: TenantContext) {
+	if (!Fb.feedbackEndpoint(ctx)) return M.TOOLS;
+	return M.TOOLS.map((tool) => tool.name === "send_feedback" ? { ...tool, description: Fb.feedbackToolDescription("") } : tool);
+}
 
 /** One tools/call, shared by both eras. */
 async function callTool(ctx: TenantContext, ectx: ExecutionContext, grant: Json, params: Json): Promise<{ error?: [number, string]; result?: Json }> {
@@ -2501,7 +2505,7 @@ async function handleMcp(req: Request, ctx: TenantContext, ectx: ExecutionContex
 			case "server/discover":
 				return done({ supportedVersions: M.PROTOCOL_VERSIONS, capabilities: { tools: {} }, instructions: mcpInstructions, ttlMs: M.LIST_TTL_MS, cacheScope: "private" });
 			case "tools/list":
-				return done({ tools: M.TOOLS, ttlMs: M.LIST_TTL_MS, cacheScope: "private" });
+				return done({ tools: mcpTools(ctx), ttlMs: M.LIST_TTL_MS, cacheScope: "private" });
 			case "tools/call": {
 				const r = await callTool(ctx, ectx, grant, params);
 				return r.error ? rpcError(id, r.error[0], r.error[1]) : done(r.result);
@@ -2530,7 +2534,7 @@ async function handleMcp(req: Request, ctx: TenantContext, ectx: ExecutionContex
 				capabilities: { tools: { listChanged: false } }, serverInfo: serverInfo(ctx), instructions: mcpInstructions });
 		}
 		case "ping": return rpcResult(id, {});
-		case "tools/list": return rpcResult(id, { tools: M.TOOLS });
+		case "tools/list": return rpcResult(id, { tools: mcpTools(ctx) });
 		case "tools/call": {
 			const r = await callTool(ctx, ectx, grant, params);
 			return r.error ? rpcError(id, r.error[0], r.error[1]) : rpcResult(id, r.result);

@@ -27,11 +27,19 @@ export function scrubFeedbackText(value) {
 		.replace(API_KEY_RE, "[redacted]");
 }
 
-export const PUBLIC_ISSUE_WARNING = `This report is filed as a public GitHub issue on ${ISSUE_REPO}. Do not include confidential information: secrets, tokens, owner or pairing tokens, private URLs or hostnames, message contents, or personal data.`;
+const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+
+/** The repository that will receive the issue. The prefilled form is ISSUE_REPO. A hosted post uses the control plane's name. */
+export function publicIssueWarning(repo = ISSUE_REPO) {
+	const name = typeof repo === "string" && REPO_RE.test(repo) && repo.length <= 100 && !repo.includes("..") ? repo : ISSUE_REPO;
+	return `This report is filed as a public GitHub issue on ${name}. Do not include confidential information: secrets, tokens, owner or pairing tokens, private URLs or hostnames, message contents, or personal data.`;
+}
+
+export const PUBLIC_ISSUE_WARNING = publicIssueWarning(ISSUE_REPO);
 
 /** Print the public-issue warning. On a terminal, wait for y or yes unless `yes` is set. Off a terminal, `--yes` is required. */
-export async function confirmPublicIssue(yes, input = process.stdin, output = process.stderr) {
-	output.write(`${PUBLIC_ISSUE_WARNING}\n`);
+export async function confirmPublicIssue(yes, input = process.stdin, output = process.stderr, repo = ISSUE_REPO) {
+	output.write(`${publicIssueWarning(repo)}\n`);
 	if (yes) return;
 	if (!input.isTTY) throw new CliError("feedback files a public GitHub issue; pass --yes to send it");
 	const rl = readline.createInterface({ input, output });
@@ -182,6 +190,51 @@ function githubIssue(value) {
 
 async function readJson(response) {
 	try { return await response.json(); } catch { return null; }
+}
+
+function namedRepo(value) {
+	const repo = typeof value === "string" ? value.trim() : "";
+	if (!REPO_RE.test(repo) || repo.length > 100 || repo.includes("..")) return "";
+	return repo;
+}
+
+/**
+ * Repository named in the warning before a report is sent.
+ * No hosted endpoint: the prefilled form on ISSUE_REPO.
+ * Hosted: GET /api/feedback must return `{ repo }`. A missing name does not guess ISSUE_REPO.
+ */
+export async function feedbackPublicRepo(input) {
+	const base = String(input.baseUrl || "").replace(/\/$/, "");
+	const token = String(input.ownerToken || "");
+	const call = input.fetchImpl ?? fetch;
+	if (!base || !token) return ISSUE_REPO;
+	let probe;
+	try {
+		probe = await call(`${base}/owner/feedback`, {
+			headers: { accept: "application/json", authorization: `Bearer ${token}` },
+			redirect: "error",
+			signal: AbortSignal.timeout(5000),
+		});
+	} catch {
+		probe = null;
+	}
+	const info = probe && probe.ok ? await readJson(probe) : null;
+	if (!info || info.hosted !== true || !feedbackUrlOk(info.url)) return ISSUE_REPO;
+	let named;
+	try {
+		named = await call(info.url, {
+			method: "GET",
+			headers: { accept: "application/json" },
+			redirect: "error",
+			signal: AbortSignal.timeout(5000),
+		});
+	} catch {
+		named = null;
+	}
+	const body = named && named.ok ? await readJson(named) : null;
+	const repo = namedRepo(body?.repo);
+	if (!repo) throw new CliError("the control plane did not name the public repository; feedback was not sent");
+	return repo;
 }
 
 /**

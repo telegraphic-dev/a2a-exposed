@@ -112,6 +112,8 @@ test("unconfigured feedback is 404, including a partial config", async () => {
 	const off = createApp();
 	const api = await off.request(`${origin}/api/feedback`, { method: "POST", headers: { "content-type": "application/json" }, body: "{\"message\":\"hi\",\"source\":\"cli\"}" });
 	assert.equal(api.status, 404);
+	const unnamed = await off.request(`${origin}/api/feedback`);
+	assert.equal(unnamed.status, 404);
 	assert.deepEqual(await api.json(), { error: "not_found" });
 	const page = await off.request(`${origin}/app/feedback`);
 	assert.equal(page.status, 404);
@@ -142,6 +144,10 @@ test("unconfigured feedback is 404, including a partial config", async () => {
 test("a configured post files an issue and the page links to feedback", async () => {
 	const gh = githubFetch();
 	const app = createApp(env(), { fetch: gh.fetch });
+	const named = await app.request(`${origin}/api/feedback`);
+	assert.equal(named.status, 200);
+	assert.deepEqual(await named.json(), { repo });
+	assert.equal(gh.calls.length, 0);
 	const res = await post(app, { message: "the form forgot a field", kind: "bug", source: "web", version: "0.7.0", steps: "1. open the form" });
 	assert.equal(res.status, 200);
 	assert.deepEqual(await res.json(), { ok: true, issue_url: issue() });
