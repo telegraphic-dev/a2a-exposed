@@ -4,6 +4,7 @@ import { connectingIp, verifyTurnstile } from "./auth/turnstile.ts";
 import { signInReturnPath } from "./auth/return.ts";
 import { readCloudflareGrant } from "./auth/cloudflare-grant.ts";
 import { CLOUDFLARE_REAUTH_NOTICE, cloudflareIsLinked, finishCloudflareLink, handleCloudflareAccount, handleCloudflareSetup, resumeCloudflare } from "./auth/cloudflare-link.ts";
+import { recentSignIn } from "./auth/recent.ts";
 import { describeSetupGrant } from "./auth/cloudflare-setup.ts";
 import { enabledProviderOrigins, handleSignIn, PROVIDER_ORIGINS } from "./auth/sign-in.ts";
 import { loadAuth } from "./auth/instance.ts";
@@ -24,6 +25,7 @@ import { renderApp, securityHeaders } from "./views/document.tsx";
 import { renderSignIn } from "./views/sign-in.tsx";
 import { createFeedback, feedbackOn, type FeedbackDeps, type FeedbackResult } from "./feedback.ts";
 import type { InboxMigration, InboxWizard } from "./provision/inbox.ts";
+import { PERMISSION_WAIT } from "./provision/permission-wait.ts";
 import { hashOwnerToken, readCloudflareInbox } from "./provision/inbox-row.ts";
 import { renderFeedback } from "./views/feedback.tsx";
 
@@ -201,7 +203,7 @@ async function loadInboxMigrations(env: ControlEnv, request: Request): Promise<I
 	}
 }
 
-export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & { dataPlane?: DataPlane; callbackDeadlineMs?: number; signInDeadlineMs?: number; cloudflareFetchMs?: number; inboxScript?: string; inboxMigrations?: InboxMigration[] } = {}) {
+export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & { dataPlane?: DataPlane; callbackDeadlineMs?: number; signInDeadlineMs?: number; cloudflareFetchMs?: number; inboxScript?: string; inboxMigrations?: InboxMigration[]; permissionDelaysMs?: number[] } = {}) {
 	const app = new Hono<{ Bindings: ControlEnv }>();
 	const feedback = createFeedback(env, deps);
 	const feedbackLink = feedbackOn(env) ? `<p><a href="/app/feedback">Feedback</a></p>` : undefined;
@@ -338,6 +340,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 			script: deps.inboxScript != null ? deps.inboxScript : await loadInboxScript(env, request),
 			migrations: deps.inboxMigrations ?? await loadInboxMigrations(env, request),
 			fetchMs: deps.cloudflareFetchMs,
+			permissionDelaysMs: deps.permissionDelaysMs,
 		};
 	}
 	async function cloudflareSetupPage(c: Context<{ Bindings: ControlEnv }>, review?: { choice: "inbox" | "facade" | "both"; host: "workers" | "zone" }, extra?: { wizard?: InboxWizard; ownerToken?: string }) {
@@ -351,8 +354,9 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 		let clearResume = false;
 		let resumedWizard: InboxWizard | null = null;
 		let resumedOwner = "";
-		if (!review) {
-			const resumed = await resumeCloudflare(request, loaded.auth, loaded.options, await provisionDeps(request));
+		const provision = review ? null : await provisionDeps(request);
+		if (!review && provision) {
+			const resumed = await resumeCloudflare(request, loaded.auth, loaded.options, provision);
 			if (resumed?.kind === "response") return resumed.response;
 			if (resumed?.kind === "clear") clearResume = true;
 			if (resumed?.kind === "wizard") {
@@ -365,11 +369,41 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 		const grant = review ? null : await readCloudflareGrant(loaded.options.database, userId);
 		const inbox = review ? null : await readCloudflareInbox(loaded.options.database, userId);
 		const report = grant ? describeSetupGrant(grant) : null;
-		const wizard = extra?.wizard ?? resumedWizard ?? (report?.inbox ? (await import("./provision/inbox.ts")).viewInboxWizard({ grant, inbox }) : null);
+		const recent = recentSignIn(session);
+		const inboxPage = report?.inbox ? await import("./provision/inbox.ts") : null;
+		let wizard = extra?.wizard ?? resumedWizard ?? (inboxPage ? inboxPage.viewInboxWizard({ grant, inbox }) : null);
+		let steppedOwner = extra?.ownerToken || resumedOwner || "";
+		// A permission wait reloads this page. One try per request, and only while the sign-in is still recent.
+		if (!review && !extra?.wizard && !resumedWizard && provision && inboxPage && loaded.options.cloudflare && inboxPage.permissionRetryDue(inbox) && recent) {
+			const outcome = await inboxPage.runInboxStep({
+				database: loaded.options.database,
+				secret: loaded.options.secret,
+				clientId: loaded.options.cloudflare.clientId,
+				clientSecret: loaded.options.cloudflare.clientSecret,
+				userId,
+				fields: inboxPage.viewInboxWizard({ grant, inbox }).fields,
+				script: provision.script,
+				migrations: provision.migrations,
+				fetchMs: provision.fetchMs,
+				permissionDelaysMs: provision.permissionDelaysMs,
+			});
+			wizard = outcome.wizard;
+			if (outcome.ownerToken) steppedOwner = outcome.ownerToken;
+		}
+		// A sign-in older than 10 minutes cannot reload the wait. Try again sends them to sign in, then continues this step.
+		if (wizard && !recent && wizard.steps.some((step) => step.text === PERMISSION_WAIT)) {
+			wizard = {
+				...wizard,
+				refreshSeconds: undefined,
+				steps: wizard.steps.map((step) => step.text === PERMISSION_WAIT
+					? { ...step, control: "retry" as const, button: "Try again" }
+					: step),
+			};
+		}
 		const token = bareOwnerToken(readCookie(request.headers.get("cookie"), CF_OWNER_COOKIE));
 		const cookieOwner = token && inbox?.owner_token_hash && inbox.owner_token_hash === await hashOwnerToken(token) ? token : "";
 		if (token) c.header("set-cookie", hostCookie(CF_OWNER_COOKIE, "", 0), { append: true });
-		const ownerToken = extra?.ownerToken || resumedOwner || wizard?.ownerToken || cookieOwner;
+		const ownerToken = steppedOwner || wizard?.ownerToken || cookieOwner;
 		const body = renderCloudflareSetup({
 			brand: brandConfig(env).name,
 			error: url.searchParams.get("error") ?? undefined,
@@ -382,6 +416,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 			wizard,
 		});
 		if (clearResume) c.header("set-cookie", hostCookie(CLOUDFLARE_RESUME_COOKIE, "", 0), { append: true });
+		if (wizard?.refreshSeconds && recent) c.header("refresh", String(wizard.refreshSeconds));
 		return c.html(renderApp(env, body, "Set me up on Cloudflare", feedbackLink), 200, pageHeaders(false, null, [], Boolean(ownerToken), accountLinkOrigins(loaded.options)));
 	}
 	async function cloudflareSetupPost(c: Context<{ Bindings: ControlEnv }>) {
