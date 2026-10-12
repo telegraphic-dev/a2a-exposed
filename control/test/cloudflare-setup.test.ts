@@ -20,11 +20,12 @@ import {
 	TUNNEL_WRITE,
 	USER_DETAILS_READ,
 	WORKERS_ROUTES_WRITE,
-	WORKERS_SCRIPTS_EDIT,
+	WORKERS_SCRIPTS_ADMIN,
 	ZONE_READ,
 	cloudflareAuthorizeUrl,
 	consentScope,
 	describeSetupGrant,
+	inboxCanProvision,
 	setupScopes,
 	type SetupChoice,
 	type SetupHost,
@@ -36,6 +37,7 @@ const origin = "https://control.example.com";
 /** Ids the staging OAuth client allows. offline_access is implicit and still requested. */
 const CLIENT_SCOPES = new Set([
 	"d1.write",
+	"workers-scripts.admin",
 	"workers-scripts.edit",
 	"workers-routes.write",
 	"dns.write",
@@ -51,7 +53,7 @@ const CLIENT_SCOPES = new Set([
 const INBOX_WORKERS = [
 	USER_DETAILS_READ,
 	"account-settings.read",
-	WORKERS_SCRIPTS_EDIT,
+	WORKERS_SCRIPTS_ADMIN,
 	D1_WRITE,
 	OFFLINE_ACCESS,
 ];
@@ -72,13 +74,14 @@ test("each setup choice requests only the scopes that choice needs", () => {
 			assert.equal(list.includes("access-app.write"), false);
 			assert.equal(list.includes("workers-platform.write"), false);
 			assert.equal(list.includes("workers-scripts.write"), false);
+			assert.equal(list.includes("workers-scripts.edit"), false);
 			assert.equal(list.includes("workers:write"), false);
 			assert.equal(list.includes("zone-access.read"), false);
 			assert.equal(list.includes("zone-access.write"), false);
 			assert.equal(list.includes("argotunnel.read"), false);
 			assert.equal(list.includes("account:read"), false);
 			assert.equal(list.includes("user:read"), false);
-			assert.equal(list.includes(WORKERS_SCRIPTS_EDIT), true);
+			assert.equal(list.includes(WORKERS_SCRIPTS_ADMIN), true);
 			for (const id of list) assert.equal(CLIENT_SCOPES.has(id), true, id);
 			assert.equal(list.includes(ZONE_READ), host === "zone");
 			assert.equal(list.includes(DNS_WRITE), host === "zone");
@@ -114,7 +117,7 @@ test("a declined optional scope names the setup it blocks", () => {
 	const bothZone = describeSetupGrant({
 		choice: "both",
 		host: "zone",
-		granted_scope: `${USER_DETAILS_READ} account-settings.read ${WORKERS_SCRIPTS_EDIT}`,
+		granted_scope: `${USER_DETAILS_READ} account-settings.read ${WORKERS_SCRIPTS_ADMIN}`,
 		refresh_enc: null,
 	});
 	assert.ok(bothZone);
@@ -126,7 +129,8 @@ test("a declined optional scope names the setup it blocks", () => {
 	assert.match(bothZone.blocked.join(" "), /blocks the façade/);
 	assert.match(bothZone.blocked.join(" "), /inbox does not need a tunnel/);
 	assert.match(bothZone.blocked.join(" "), /Without a refresh token/);
-	assert.equal(bothZone.lines.find((line) => line.name === "Workers Scripts Edit")?.state, "granted");
+	assert.equal(bothZone.lines.find((line) => line.name === "Workers Admin")?.state, "granted");
+	assert.equal(bothZone.needsReconnect, false);
 	assert.equal(bothZone.lines.find((line) => line.name === "D1 Write")?.state, "declined");
 
 	const workers = describeSetupGrant({
@@ -137,8 +141,29 @@ test("a declined optional scope names the setup it blocks", () => {
 	});
 	assert.ok(workers);
 	assert.deepEqual(workers.blocked, []);
+	assert.equal(workers.needsReconnect, false);
 	assert.equal(workers.lines.some((line) => line.name === "Zone Read"), false);
+	assert.equal(workers.lines.find((line) => line.name === "Workers Admin")?.state, "granted");
+	assert.match(workers.lines.find((line) => line.name === "Workers Admin")?.why ?? "", /Uploads the inbox Worker into your account/);
 	assert.equal(workers.refreshSaved, true);
+
+	const staleAdmin = describeSetupGrant({
+		choice: "inbox",
+		host: "workers",
+		granted_scope: `${USER_DETAILS_READ} account-settings.read workers-scripts.edit ${D1_WRITE} ${OFFLINE_ACCESS}`,
+		refresh_enc: "v1.sealed",
+	});
+	assert.ok(staleAdmin);
+	assert.equal(staleAdmin.needsReconnect, true);
+	assert.equal(staleAdmin.lines.find((line) => line.name === "Workers Admin")?.state, "declined");
+	assert.match(staleAdmin.blocked.join(" "), /Without Workers Admin/);
+	assert.match(staleAdmin.blocked.join(" "), /Connect again to grant it/);
+	assert.equal(inboxCanProvision({
+		choice: "inbox",
+		host: "workers",
+		granted_scope: `${USER_DETAILS_READ} account-settings.read workers-scripts.edit ${D1_WRITE} ${OFFLINE_ACCESS}`,
+		refresh_enc: "v1.sealed",
+	}), false);
 
 	const unknown = describeSetupGrant({
 		choice: "inbox",
@@ -147,6 +172,7 @@ test("a declined optional scope names the setup it blocks", () => {
 		refresh_enc: null,
 	});
 	assert.match(unknown?.blocked.join(" ") ?? "", /did not say which permissions/);
+	assert.equal(unknown?.needsReconnect, true);
 	assert.equal(unknown?.lines.every((line) => line.state === "unknown"), true);
 });
 
@@ -220,7 +246,9 @@ test("the choice page explains a workers.dev inbox, then asks Cloudflare only fo
 	const page = await app.request(`${origin}/app/cloudflare`, { headers: { cookie } });
 	const html = await page.text();
 	assert.match(html, /Set me up on Cloudflare/);
+	assert.match(html, /one step at a time/);
 	assert.match(html, /available on every plan/);
+	assert.match(html, /not a way to sign in/);
 	assert.match(html, /What do you want\?/);
 	assert.match(html, /Give my agent a public A2A address/);
 	assert.match(html, /It receives messages, and we wake it by webhook/);
@@ -233,8 +261,9 @@ test("the choice page explains a workers.dev inbox, then asks Cloudflare only fo
 	assert.match(html, /class="choice"/);
 	assert.match(html, /does not ask to list your domains or edit DNS/);
 	assert.equal(html.includes("older than 10 minutes"), false);
-	assert.match(html, /creates a public address for messages/);
-	assert.match(html, /not created here/);
+	assert.match(html, /creates a public address for your agent/);
+	assert.equal(html.includes("not created here"), false);
+	assert.equal(html.includes("Start a different setup"), false);
 	assert.equal(html.includes("Nothing has been created"), false);
 	assert.match(page.headers.get("content-security-policy") ?? "", /form-action 'self' https:\/\/dash\.cloudflare\.com/);
 
@@ -248,7 +277,10 @@ test("the choice page explains a workers.dev inbox, then asks Cloudflare only fo
 	assert.match(reviewHtml, /give your agent a public A2A address/);
 	assert.match(reviewHtml, /my-agent\.yourname\.workers\.dev/);
 	assert.match(reviewHtml, /D1 Write/);
-	assert.match(reviewHtml, /Workers Scripts Edit/);
+	assert.match(reviewHtml, /Workers Admin/);
+	assert.match(reviewHtml, /Uploads the inbox Worker into your account/);
+	assert.equal(reviewHtml.includes("Workers Scripts Edit"), false);
+	assert.equal(reviewHtml.includes("workers-scripts.edit"), false);
 	assert.match(reviewHtml, /Continue to Cloudflare/);
 	assert.equal(reviewHtml.includes("Zone Read"), false);
 	assert.equal(reviewHtml.includes("DNS Write"), false);
@@ -281,6 +313,16 @@ test("the choice page explains a workers.dev inbox, then asks Cloudflare only fo
 	const done = await app.request(landed, { headers: { cookie } });
 	const doneHtml = await done.text();
 	assert.match(doneHtml, /Check the Cloudflare account/);
+	assert.match(doneHtml, /<details class="restart">/);
+	assert.match(doneHtml, /Start a different setup/);
+	assert.equal(doneHtml.includes('details class="restart" open'), false);
+	const heldAt = doneHtml.indexOf('<details class="restart">');
+	const held = doneHtml.slice(heldAt, doneHtml.indexOf("</details>", heldAt));
+	assert.match(held, /What do you want\?/);
+	assert.match(held, /Which web address\?/);
+	assert.match(held, /Review permissions/);
+	assert.equal(doneHtml.slice(0, heldAt).includes("What do you want?"), false);
+	assert.ok(doneHtml.indexOf("Check the Cloudflare account") < heldAt);
 	assert.match(doneHtml, /Cloudflare is connected, and the permissions this inbox needs are granted/);
 	assert.match(doneHtml, /A refresh token is saved encrypted/);
 	assert.match(doneHtml, /single-use/);
@@ -314,6 +356,78 @@ test("the choice page explains a workers.dev inbox, then asks Cloudflare only fo
 	assert.equal(old.headers.get("location")?.includes("dash.cloudflare.com"), false);
 });
 
+test("a saved grant without Workers Admin asks to connect again and does not run the steps", async (t) => {
+	t.after(githubFetch(consentScope("inbox", "workers")));
+	const db = openDb();
+	const app = createApp({
+		AUTH_SECRET: secret,
+		DB: db,
+		GITHUB_CLIENT_ID: "gh-id",
+		GITHUB_CLIENT_SECRET: "gh-secret",
+		CLOUDFLARE_OAUTH_CLIENT_ID: "cf-id",
+		CLOUDFLARE_OAUTH_CLIENT_SECRET: "cf-secret",
+	}, { database: db, inboxScript: "export default {}", inboxMigrations: [] });
+	const cookie = await signIn(app);
+	const userId = (await db.prepare('SELECT id FROM "user"').first<{ id: string }>())?.id ?? "";
+	const oldScope = `${USER_DETAILS_READ} account-settings.read workers-scripts.edit ${D1_WRITE} ${OFFLINE_ACCESS}`;
+	await saveCloudflareGrant(db, secret, {
+		userId,
+		accountId: "cf-user",
+		choice: "inbox",
+		host: "workers",
+		requestedScope: oldScope,
+		grantedScope: oldScope,
+		refreshToken: "old-refresh-SECRET",
+		expiresIn: 3600,
+	});
+	const html = await (await app.request(`${origin}/app/cloudflare`, { headers: { cookie } })).text();
+	assert.match(html, /Without Workers Admin/);
+	assert.match(html, /Connect again to grant it/);
+	assert.match(html, />Connect again</);
+	assert.equal(html.includes('class="steps"'), false);
+	assert.equal(html.includes("Check the Cloudflare account"), false);
+	assert.equal(html.includes("old-refresh-SECRET"), false);
+	const heldAt = html.indexOf('<details class="restart">');
+	assert.ok(heldAt > html.indexOf("Connect again"));
+	const held = html.slice(heldAt, html.indexOf("</details>", heldAt));
+	assert.match(held, /What do you want\?/);
+	assert.match(held, /Review permissions/);
+	assert.equal(html.slice(0, heldAt).includes("What do you want?"), false);
+
+	const stepped = await app.request(`${origin}/app/cloudflare`, {
+		method: "POST",
+		headers: { origin, cookie, "content-type": "application/x-www-form-urlencoded" },
+		body: "action=step&step=upload&name=my-agent",
+	});
+	const steppedHtml = await stepped.text();
+	assert.match(steppedHtml, />Connect again</);
+	assert.equal(steppedHtml.includes('class="steps"'), false);
+	assert.equal(await readCloudflareInboxSafe(db, userId), null);
+
+	const review = await app.request(`${origin}/app/cloudflare`, {
+		method: "POST",
+		headers: { origin, cookie, "content-type": "application/x-www-form-urlencoded" },
+		body: "action=review&choice=inbox&host=workers",
+	});
+	const reviewHtml = await review.text();
+	assert.match(reviewHtml, /Workers Admin/);
+	assert.match(reviewHtml, /Uploads the inbox Worker into your account/);
+	assert.equal(reviewHtml.includes(">Connect again<"), false);
+	const consent = await app.request(`${origin}/app/cloudflare`, {
+		method: "POST",
+		headers: { origin, cookie, "content-type": "application/x-www-form-urlencoded" },
+		body: "action=consent&choice=inbox&host=workers",
+	});
+	const scope = new URL(consent.headers.get("location") ?? "").searchParams.get("scope") ?? "";
+	assert.match(scope, /workers-scripts\.admin/);
+	assert.equal(scope.includes("workers-scripts.edit"), false);
+});
+
+async function readCloudflareInboxSafe(db: ReturnType<typeof openDb>, userId: string): Promise<unknown> {
+	const row = await db.prepare(`SELECT "userId" FROM cloudflare_inbox WHERE "userId" = ?`).bind(userId).first();
+	return row;
+}
+
 test("a façade on your own domain asks for the tunnel and the zone, and a declined scope is named", async (t) => {
 	const granted = consentScope("facade", "zone").split(" ").filter((scope) => scope !== D1_WRITE && scope !== TUNNEL_WRITE).join(" ");
 	t.after(githubFetch(granted, ""));
@@ -335,6 +449,8 @@ test("a façade on your own domain asks for the tunnel and the zone, and a decli
 	const reviewHtml = await review.text();
 	assert.match(reviewHtml, /agent you already run reachable/);
 	assert.match(reviewHtml, /agent\.example\.com/);
+	assert.match(reviewHtml, /Workers Admin/);
+	assert.match(reviewHtml, /Uploads the façade Worker into your account/);
 	assert.match(reviewHtml, /Cloudflare Tunnel Write/);
 	assert.match(reviewHtml, /Zone Read/);
 	assert.match(reviewHtml, /DNS Write/);

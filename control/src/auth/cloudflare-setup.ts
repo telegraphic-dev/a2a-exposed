@@ -1,20 +1,23 @@
 // Scopes for "Set me up on Cloudflare". Each id is what the authorize request sends.
 //
-// The staging OAuth client allows these ids: d1.write, workers-scripts.edit,
-// workers-routes.write, dns.write, zone.read, zone-access.read, zone-access.write,
-// argotunnel.read, argotunnel.write, account-settings.read, user-details.read.
+// The staging OAuth client allows these ids: d1.write, workers-scripts.admin,
+// workers-scripts.edit, workers-routes.write, dns.write, zone.read,
+// zone-access.read, zone-access.write, argotunnel.read, argotunnel.write,
+// account-settings.read, user-details.read.
 // offline_access is not in that list. It is a protocol scope, and the request
 // still includes it so Cloudflare can issue a refresh token.
 //
-// Cloudflare refused workers:write and workers-scripts.write. Uploading a script
-// uses workers-scripts.edit (Workers Scripts Edit). Colon scopes such as
-// wrangler's account:read, user:read, and workers_routes:write are not registered
-// on this client.
+// Cloudflare refused workers:write and workers-scripts.write. workers-scripts.edit
+// can create D1 and run migrations, and the script upload answers
+// "No access to the specified resource". Uploading a script uses
+// workers-scripts.admin (Workers Admin). workers-scripts.edit is not requested.
+// Colon scopes such as wrangler's account:read, user:read, and
+// workers_routes:write are not registered on this client.
 //
 // Dashboard label → id:
 // - User Details Read → user-details.read
 // - Account Settings Read → account-settings.read
-// - Workers Scripts Edit → workers-scripts.edit
+// - Workers Admin → workers-scripts.admin
 // - D1 Write → d1.write
 // - Workers Routes Write → workers-routes.write
 // - DNS Write → dns.write
@@ -22,11 +25,11 @@
 // - Cloudflare Tunnel Write → argotunnel.write
 // - offline_access (refresh token; not a picker permission)
 //
-// Not requested, even when the client allows them: zone-access.read and
-// zone-access.write (Access). A façade behind Access is not a choice here.
-// argotunnel.read is not requested. Creating a tunnel uses argotunnel.write.
-// Not requested: workers:write, workers-scripts.write, workers-platform.write,
-// access-app.write, and account.read.
+// Not requested, even when the client allows them: workers-scripts.edit,
+// zone-access.read, and zone-access.write (Access). A façade behind Access is
+// not a choice here. argotunnel.read is not requested. Creating a tunnel uses
+// argotunnel.write. Not requested: workers:write, workers-scripts.write,
+// workers-platform.write, access-app.write, and account.read.
 
 export type SetupChoice = "inbox" | "facade" | "both";
 export type SetupHost = "workers" | "zone";
@@ -42,8 +45,8 @@ export interface ScopeReason {
 
 export const USER_DETAILS_READ = "user-details.read";
 export const ACCOUNT_SETTINGS_READ = "account-settings.read";
-/** Workers Scripts Edit. Staging refused workers:write and workers-scripts.write. */
-export const WORKERS_SCRIPTS_EDIT = "workers-scripts.edit";
+/** Workers Admin. Script upload needs this. workers-scripts.edit does not upload. */
+export const WORKERS_SCRIPTS_ADMIN = "workers-scripts.admin";
 export const D1_WRITE = "d1.write";
 export const WORKERS_ROUTES_WRITE = "workers-routes.write";
 export const DNS_WRITE = "dns.write";
@@ -115,14 +118,14 @@ export function setupScopes(choice: SetupChoice, host: SetupHost): ScopeReason[]
 			declined: "Without Account Settings Read, this dashboard cannot see which Cloudflare account you picked, so this setup cannot continue.",
 		},
 		{
-			id: WORKERS_SCRIPTS_EDIT,
-			name: "Workers Scripts Edit",
+			id: WORKERS_SCRIPTS_ADMIN,
+			name: "Workers Admin",
 			why: facade && !inbox
-				? "Uploads the façade Worker into that account."
+				? "Uploads the façade Worker into your account."
 				: facade
-					? "Uploads the inbox Worker and the façade Worker into that account."
-					: "Uploads the inbox Worker into that account.",
-			declined: `Without Workers Scripts Edit, the Worker cannot be uploaded. That blocks ${variant(choice)}.`,
+					? "Uploads the inbox Worker and the façade Worker into your account."
+					: "Uploads the inbox Worker into your account.",
+			declined: `Without Workers Admin, the Worker cannot be uploaded. Connect again to grant it. That blocks ${variant(choice)}.`,
 		},
 		{
 			id: D1_WRITE,
@@ -209,6 +212,8 @@ export interface SetupReport {
 	facade: boolean;
 	inbox: boolean;
 	host: SetupHost;
+	/** Saved grant did not include Workers Admin. The page asks them to connect again. */
+	needsReconnect: boolean;
 }
 
 /**
@@ -256,5 +261,6 @@ export function describeSetupGrant(row: {
 		facade: includesFacade(choice),
 		inbox: includesInbox(choice),
 		host,
+		needsReconnect: !known || !granted.has(WORKERS_SCRIPTS_ADMIN),
 	};
 }
