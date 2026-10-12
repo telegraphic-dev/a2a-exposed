@@ -71,6 +71,37 @@ function setupPage(request: Request, error?: string): string {
 	return url.href;
 }
 
+/** OAuth error codes are short tokens. Anything else is not logged as-is. */
+function safeProviderError(value: string): string {
+	const trimmed = value.trim().slice(0, 64);
+	return /^[A-Za-z0-9._~:-]+$/.test(trimmed) ? trimmed : "unrecognized";
+}
+
+/** The description is logged. Codes, tokens, and the state are not. */
+function safeProviderDescription(value: string): string {
+	const cleaned = value.replace(/[\u0000-\u001f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 300);
+	if (!cleaned) return "";
+	if (/bearer\s+\S|client_secret|refresh_token|access_token|authorization\s*[:=]/i.test(cleaned)) return "redacted";
+	return cleaned;
+}
+
+/** Query `error` on the connect callback, as a setup-page code. */
+export function cloudflareSetupErrorCode(providerError: string): "cancelled" | "refused" | "provider" {
+	if (providerError === "access_denied") return "cancelled";
+	if (providerError === "invalid_scope") return "refused";
+	return "provider";
+}
+
+function logCloudflareProviderError(providerError: string, description: string): void {
+	const error = safeProviderError(providerError);
+	const errorDescription = safeProviderDescription(description);
+	console.error(JSON.stringify({
+		event: "cloudflare_oauth_error",
+		error,
+		...(errorDescription ? { error_description: errorDescription } : {}),
+	}));
+}
+
 function redirect(location: string, cookies: string[] = [], status = 303): Response {
 	const headers = new Headers({ location, "cache-control": "no-store" });
 	for (const cookie of cookies) headers.append("set-cookie", cookie);
@@ -368,10 +399,20 @@ export async function handleCloudflareSetup(request: Request, auth: SessionAuth,
  * checked against the allowlist.
  */
 export async function finishCloudflareLink(request: Request, auth: SessionAuth, options: AuthOptions, fetchMs = CLOUDFLARE_FETCH_MS, outer?: AbortSignal): Promise<Response> {
-	if (request.method !== "GET" || !options.cloudflare || !cloudflareLinkState(request)) {
+	if (request.method !== "GET" || !options.cloudflare) {
 		return redirect(appRedirect(request, "cloudflare_unlinked"), [], 302);
 	}
 	const url = new URL(request.url);
+	const providerError = url.searchParams.get("error");
+	if (providerError) {
+		logCloudflareProviderError(providerError, url.searchParams.get("error_description") ?? "");
+		const state = url.searchParams.get("state") ?? "";
+		if (state.startsWith(STATE_PREFIX)) await deleteLinkState(options.database, state);
+		return redirect(setupPage(request, cloudflareSetupErrorCode(providerError)), [], 302);
+	}
+	if (!cloudflareLinkState(request)) {
+		return redirect(appRedirect(request, "cloudflare_unlinked"), [], 302);
+	}
 	const state = url.searchParams.get("state") ?? "";
 	const code = url.searchParams.get("code") ?? "";
 	const row = await options.database.prepare(
@@ -409,12 +450,12 @@ export async function finishCloudflareLink(request: Request, auth: SessionAuth, 
 	if (!recentSignIn(session)) {
 		if (!code || code.length > 2048) {
 			await deleteLinkState(options.database, state);
-			return redirect(appRedirect(request, "no_code"), [], 302);
+			return redirect(setupPage(request, "provider"), [], 302);
 		}
 		return reauthResponse(request, auth, options, { userId, action: "finish", state, code }, "/app/cloudflare", 302);
 	}
 	await deleteLinkState(options.database, state);
-	if (!code) return redirect(appRedirect(request, "no_code"), [], 302);
+	if (!code) return redirect(setupPage(request, "provider"), [], 302);
 	const body = new URLSearchParams({
 		grant_type: "authorization_code",
 		code,
