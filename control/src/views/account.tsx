@@ -1,5 +1,5 @@
 import { SIGNUP_CLOSED } from "../auth/allowlist.ts";
-import { CLOUDFLARE_REAUTH, CLOUDFLARE_UNLINKED } from "../auth/cloudflare-link.ts";
+import { CLOUDFLARE_UNLINKED } from "../auth/cloudflare-link.ts";
 import { REAUTH_MESSAGE } from "../auth/recent.ts";
 import { TokenBlock } from "./token-block.tsx";
 
@@ -85,8 +85,6 @@ export function renderAccount(input: {
 	/** Cloudflare connect is configured. The button connects or disconnects it. */
 	cloudflare?: boolean;
 	cloudflareLinked?: boolean;
-	/** False when this session is older than 10 minutes. The post still checks. */
-	recent?: boolean;
 	disconnected?: boolean;
 }): string {
 	const image = avatarUrl(input.image);
@@ -108,7 +106,6 @@ export function renderAccount(input: {
 					<p>Lets {input.brand?.trim() || "Inbox"} set things up in your Cloudflare account. It isn't used to sign in.</p>
 					{input.cloudflareLinked ? <p>Cloudflare is connected.</p> : ""}
 					{input.disconnected ? <p role="status">Cloudflare was disconnected.</p> : ""}
-					{input.recent ? "" : <p class="alert" role="status">{CLOUDFLARE_REAUTH}</p>}
 					<p><a href="/app/cloudflare">Set me up on Cloudflare</a></p>
 					{input.cloudflareLinked ? (
 						<form method="post" action="/app/account/cloudflare">

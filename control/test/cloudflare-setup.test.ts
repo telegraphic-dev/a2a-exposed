@@ -197,8 +197,18 @@ test("the choice page explains a workers.dev inbox, then asks Cloudflare only fo
 	const html = await page.text();
 	assert.match(html, /Set me up on Cloudflare/);
 	assert.match(html, /available on every plan/);
-	assert.match(html, /Suggested for an inbox that does not use a tunnel/);
+	assert.match(html, /What do you want\?/);
+	assert.match(html, /Give my agent a public A2A address/);
+	assert.match(html, /It receives messages, and we wake it by webhook/);
+	assert.match(html, /Make an agent I already run reachable by other agents/);
+	assert.match(html, /We connect it securely/);
+	assert.match(html, /Which web address\?/);
+	assert.match(html, /A free address from Cloudflare/);
+	assert.match(html, /https:\/\/my-agent\.yourname\.workers\.dev/);
+	assert.match(html, /https:\/\/agent\.example\.com/);
+	assert.match(html, /class="choice"/);
 	assert.match(html, /does not ask to list your domains or edit DNS/);
+	assert.equal(html.includes("older than 10 minutes"), false);
 	assert.match(html, /asks for permission only/);
 	assert.match(html, /comes later/);
 	assert.equal(html.includes("Nothing has been created"), false);
@@ -211,6 +221,8 @@ test("the choice page explains a workers.dev inbox, then asks Cloudflare only fo
 	});
 	const reviewHtml = await review.text();
 	assert.equal(review.status, 200);
+	assert.match(reviewHtml, /give your agent a public A2A address/);
+	assert.match(reviewHtml, /my-agent\.yourname\.workers\.dev/);
 	assert.match(reviewHtml, /D1 Write/);
 	assert.match(reviewHtml, /Workers Scripts Write/);
 	assert.match(reviewHtml, /Continue to Cloudflare/);
@@ -294,6 +306,8 @@ test("a façade on your own domain asks for the tunnel and the zone, and a decli
 		body: "action=review&choice=facade&host=zone",
 	});
 	const reviewHtml = await review.text();
+	assert.match(reviewHtml, /agent you already run reachable/);
+	assert.match(reviewHtml, /agent\.example\.com/);
 	assert.match(reviewHtml, /Cloudflare Tunnel Write/);
 	assert.match(reviewHtml, /Zone Read/);
 	assert.match(reviewHtml, /DNS Write/);

@@ -1,5 +1,5 @@
 import { SIGNUP_CLOSED } from "../auth/allowlist.ts";
-import { CLOUDFLARE_REAUTH, CLOUDFLARE_UNLINKED } from "../auth/cloudflare-link.ts";
+import { CLOUDFLARE_REAUTH_NOTICE, CLOUDFLARE_UNLINKED } from "../auth/cloudflare-link.ts";
 import { REAUTH_MESSAGE } from "../auth/recent.ts";
 
 const PROVIDERS = [
@@ -83,7 +83,6 @@ const ERRORS: Record<string, string> = {
 	no_callback_url: "Sign-in did not complete. Try again.",
 	reauth: REAUTH_MESSAGE,
 	cloudflare_unlinked: CLOUDFLARE_UNLINKED,
-	cloudflare_reauth: CLOUDFLARE_REAUTH,
 };
 
 export function renderSignIn(input: {
@@ -98,16 +97,20 @@ export function renderSignIn(input: {
 	notice?: string;
 	error?: string;
 	sent?: boolean;
-	/** A validated `/app/agents/<name>` path. Empty stays on `/app`. */
+	/** A validated return path: an agent page, `/app`, or `/app/cloudflare`. Empty stays on `/app`. */
 	next?: string;
 }): string {
-	const error = input.error === "invite" && input.signupClosed
-		? (input.closedMessage?.trim() || SIGNUP_CLOSED)
-		: input.error ? ERRORS[input.error] ?? ERRORS.auth : "";
+	const cloudflareReauth = input.error === "cloudflare_reauth";
+	const notice = input.notice || (cloudflareReauth ? CLOUDFLARE_REAUTH_NOTICE : "");
+	const error = cloudflareReauth
+		? ""
+		: input.error === "invite" && input.signupClosed
+			? (input.closedMessage?.trim() || SIGNUP_CLOSED)
+			: input.error ? ERRORS[input.error] ?? ERRORS.auth : "";
 	const buttons = PROVIDERS.filter(([id]) => input.providers.includes(id));
 	return (
 		<div>
-			{input.notice ? <p>{input.notice}</p> : ""}
+			{notice ? <p>{notice}</p> : ""}
 			{error ? <p class="alert" role="alert">{error}</p> : ""}
 			{input.sent ? <p>Check your email for a sign-in link.</p> : ""}
 			<form method="post" action="/app/sign-in">

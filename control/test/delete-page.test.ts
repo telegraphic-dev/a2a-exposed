@@ -252,6 +252,12 @@ test("an old sign-in is named on the agent page before a destructive post", asyn
 	const evil = await (await app.request(`${origin}/app/sign-in?return=https://evil.example`)).text();
 	assert.equal(evil.includes("evil.example"), false);
 	assert.equal(evil.includes('name="next"'), false);
+	const setupReturn = await (await app.request(`${origin}/app/sign-in?return=/app/cloudflare`)).text();
+	assert.match(setupReturn, /name="next" value="\/app\/cloudflare"/);
+	const accountReturn = await (await app.request(`${origin}/app/sign-in?return=/app`)).text();
+	assert.match(accountReturn, /name="next" value="\/app"/);
+	const extra = await (await app.request(`${origin}/app/sign-in?return=/app/cloudflare/extra`)).text();
+	assert.equal(extra.includes('name="next"'), false);
 });
 
 test("sign-in from the agent page returns to that page", async () => {
@@ -281,6 +287,15 @@ test("sign-in from the agent page returns to that page", async () => {
 	const bad = sent[1].text.match(/https:\/\/control\.example\.com\/api\/auth\/magic-link\/verify\?[^\s]+/);
 	assert.ok(bad);
 	assert.equal(new URL(bad[0]).searchParams.get("callbackURL"), "/app");
+	const cloudflareReturn = await app.request(`${origin}/app/sign-in`, {
+		method: "POST",
+		headers: { origin, "content-type": "application/x-www-form-urlencoded" },
+		body: "provider=email&email=person@example.com&next=/app/cloudflare",
+	});
+	assert.equal(cloudflareReturn.status, 303);
+	const cloudflareLink = sent[2].text.match(/https:\/\/control\.example\.com\/api\/auth\/magic-link\/verify\?[^\s]+/);
+	assert.ok(cloudflareLink);
+	assert.equal(new URL(cloudflareLink[0]).searchParams.get("callbackURL"), "/app/cloudflare");
 });
 
 function kvPlane() {

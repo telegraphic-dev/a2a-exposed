@@ -1,3 +1,4 @@
+import { CLOUDFLARE_RESUME_COOKIE, hostCookie, readCookie } from "./cookies.ts";
 import { deleteCloudflareGrant, saveCloudflareGrant } from "./cloudflare-grant.ts";
 import { mapCloudflareUser } from "./cloudflare-user.ts";
 import {
@@ -14,12 +15,15 @@ import { recentSignIn } from "./recent.ts";
 import { sameOrigin } from "./origin.ts";
 
 export const CLOUDFLARE_UNLINKED = "Sign in another way first, then connect Cloudflare from your account.";
-export const CLOUDFLARE_REAUTH = "Sign in again to connect or disconnect Cloudflare. This session is older than 10 minutes.";
+/** Shown on the sign-in page when connect, disconnect, or consent needs a fresh sign-in. */
+export const CLOUDFLARE_REAUTH_NOTICE = "For your security, please sign in again to change your Cloudflare connection.";
 
 const TOKEN = "https://dash.cloudflare.com/oauth2/token";
 const USER = "https://api.cloudflare.com/client/v4/user";
 const STATE_PREFIX = "cfl_";
 const LINK_TTL_MS = 10 * 60 * 1000;
+const RESUME_PREFIX = "cf-resume:";
+const RESUME_TTL_MS = 10 * 60 * 1000;
 /** Bound for one provider call, including the response body. The token and the profile each get one. */
 export const CLOUDFLARE_FETCH_MS = 5_000;
 
@@ -164,6 +168,114 @@ export function cloudflareLinkState(request: Request): boolean {
 	return state.startsWith(STATE_PREFIX);
 }
 
+type CloudflareResume =
+	| { userId: string; action: "disconnect" }
+	| { userId: string; action: "consent"; choice: SetupChoice; host: SetupHost }
+	| { userId: string; action: "finish"; state: string; code: string };
+
+function signInForCloudflare(request: Request, returnPath: "/app" | "/app/cloudflare"): string {
+	const url = new URL("/app/sign-in", request.url);
+	url.searchParams.set("return", returnPath);
+	url.searchParams.set("reauth", "cloudflare");
+	return url.href;
+}
+
+async function saveResume(db: Sql, resume: CloudflareResume): Promise<string> {
+	const token = randomId();
+	const now = new Date();
+	const expires = new Date(now.getTime() + RESUME_TTL_MS);
+	await db.prepare(
+		`INSERT INTO verification (id, identifier, value, expiresAt, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?)`,
+	).bind(
+		randomId(),
+		`${RESUME_PREFIX}${token}`,
+		JSON.stringify(resume),
+		expires.toISOString(),
+		now.toISOString(),
+		now.toISOString(),
+	).run();
+	return token;
+}
+
+/** Sign out, then send the browser to sign in. The action waits in a one-time row, not in the URL. */
+async function reauthResponse(request: Request, auth: SessionAuth, options: AuthOptions, resume: CloudflareResume, returnPath: "/app" | "/app/cloudflare", status = 303): Promise<Response> {
+	const token = await saveResume(options.database, resume);
+	const cookies = await clearSession(auth, request).catch((): string[] => []);
+	cookies.push(hostCookie(CLOUDFLARE_RESUME_COOKIE, token, Math.floor(RESUME_TTL_MS / 1000)));
+	return redirect(signInForCloudflare(request, returnPath), cookies, status);
+}
+
+function withCookie(response: Response, cookie: string): Response {
+	const headers = new Headers(response.headers);
+	headers.append("set-cookie", cookie);
+	return new Response(response.body, { status: response.status, headers });
+}
+
+function resumeOf(value: string): CloudflareResume | null {
+	let saved: { userId?: unknown; action?: unknown; choice?: unknown; host?: unknown; state?: unknown; code?: unknown };
+	try {
+		saved = JSON.parse(value) as typeof saved;
+	} catch {
+		return null;
+	}
+	const userId = typeof saved.userId === "string" ? saved.userId : "";
+	if (!userId || userId.length > 128) return null;
+	if (saved.action === "disconnect") return { userId, action: "disconnect" };
+	if (saved.action === "consent") {
+		const choice = parseSetupChoice(saved.choice);
+		const host = parseSetupHost(saved.host);
+		if (!choice || !host) return null;
+		return { userId, action: "consent", choice, host };
+	}
+	if (saved.action === "finish") {
+		const state = typeof saved.state === "string" ? saved.state : "";
+		const code = typeof saved.code === "string" ? saved.code : "";
+		if (!state.startsWith(STATE_PREFIX) || state.length > 80 || !code || code.length > 2048) return null;
+		return { userId, action: "finish", state, code };
+	}
+	return null;
+}
+
+export type CloudflareResumeResult = { kind: "response"; response: Response } | { kind: "clear" };
+
+/**
+ * Finishes a connect, disconnect, or consent the user already asked for, after a fresh sign-in.
+ * No resume cookie returns null. A signed-out visit leaves the row in place.
+ * A mismatch or an expired row clears the cookie and does not act.
+ */
+export async function resumeCloudflare(request: Request, auth: SessionAuth, options: AuthOptions): Promise<CloudflareResumeResult | null> {
+	if (!options.cloudflare) return null;
+	const token = readCookie(request.headers.get("cookie"), CLOUDFLARE_RESUME_COOKIE);
+	if (!/^[0-9a-f]{32}$/.test(token)) return null;
+	const session = await sessionOf(auth, request);
+	const userId = session?.user?.id ?? "";
+	if (!userId) return null;
+	const identifier = `${RESUME_PREFIX}${token}`;
+	const row = await options.database.prepare(
+		`SELECT value, expiresAt FROM verification WHERE identifier = ?`,
+	).bind(identifier).first<{ value: string; expiresAt: unknown }>();
+	await options.database.prepare(`DELETE FROM verification WHERE identifier = ?`).bind(identifier).run();
+	const clear = hostCookie(CLOUDFLARE_RESUME_COOKIE, "", 0);
+	const resume = row && expiresMs(row.expiresAt) > Date.now() ? resumeOf(row.value) : null;
+	if (!resume || resume.userId !== userId || !recentSignIn(session)) return { kind: "clear" };
+	if (resume.action === "disconnect") {
+		await deleteCloudflareGrant(options.database, userId);
+		await options.database.prepare(
+			`DELETE FROM "account" WHERE "userId" = ? AND "providerId" = 'cloudflare'`,
+		).bind(userId).run();
+		return { kind: "response", response: redirect(appRedirect(request, undefined, "disconnected"), [clear]) };
+	}
+	if (resume.action === "consent") {
+		const started = await startCloudflareOAuth(request, options, userId, resume.choice, resume.host);
+		return { kind: "response", response: withCookie(started, clear) };
+	}
+	const url = new URL("/api/auth/callback/cloudflare", request.url);
+	url.searchParams.set("code", resume.code);
+	url.searchParams.set("state", resume.state);
+	const finished = await finishCloudflareLink(new Request(url, { method: "GET", headers: request.headers }), auth, options);
+	return { kind: "response", response: withCookie(finished, clear) };
+}
+
 export async function handleCloudflareAccount(request: Request, auth: SessionAuth, options: AuthOptions): Promise<Response> {
 	if (!options.cloudflare) return new Response(JSON.stringify({ error: "not_found" }), { status: 404, headers: { "content-type": "application/json", "cache-control": "no-store" } });
 	if (!sameOrigin(request)) return redirect(appRedirect(request, "origin"));
@@ -172,13 +284,10 @@ export async function handleCloudflareAccount(request: Request, auth: SessionAut
 	const session = await sessionOf(auth, request);
 	const userId = session?.user?.id ?? "";
 	if (!userId) return redirect(appRedirect(request));
-	if (!recentSignIn(session)) {
-		const cookies = await clearSession(auth, request).catch(() => []);
-		return redirect(appRedirect(request, "cloudflare_reauth"), cookies);
-	}
 	const form = await request.formData();
 	const action = String(form.get("action") ?? "");
 	if (action === "disconnect") {
+		if (!recentSignIn(session)) return reauthResponse(request, auth, options, { userId, action: "disconnect" }, "/app");
 		await deleteCloudflareGrant(options.database, userId);
 		await options.database.prepare(
 			`DELETE FROM "account" WHERE "userId" = ? AND "providerId" = 'cloudflare'`,
@@ -235,17 +344,19 @@ export async function handleCloudflareSetup(request: Request, auth: SessionAuth,
 	const session = await sessionOf(auth, request);
 	const userId = session?.user?.id ?? "";
 	if (!userId) return { kind: "response", response: redirect(appRedirect(request)) };
-	if (!recentSignIn(session)) {
-		const cookies = await clearSession(auth, request).catch(() => []);
-		return { kind: "response", response: redirect(appRedirect(request, "cloudflare_reauth"), cookies) };
-	}
 	const form = await request.formData();
 	const action = String(form.get("action") ?? "");
 	const choice = parseSetupChoice(String(form.get("choice") ?? ""));
 	const host = parseSetupHost(String(form.get("host") ?? ""));
-	if (action !== "review" && action !== "consent") return { kind: "response", response: redirect(setupPage(request)) };
+	if (action === "review") {
+		if (!choice || !host) return { kind: "response", response: redirect(setupPage(request, "choice")) };
+		return { kind: "review", choice, host };
+	}
+	if (action !== "consent") return { kind: "response", response: redirect(setupPage(request)) };
 	if (!choice || !host) return { kind: "response", response: redirect(setupPage(request, "choice")) };
-	if (action === "review") return { kind: "review", choice, host };
+	if (!recentSignIn(session)) {
+		return { kind: "response", response: await reauthResponse(request, auth, options, { userId, action: "consent", choice, host }, "/app/cloudflare") };
+	}
 	return { kind: "response", response: await startCloudflareOAuth(request, options, userId, choice, host) };
 }
 
@@ -266,12 +377,15 @@ export async function finishCloudflareLink(request: Request, auth: SessionAuth, 
 	const row = await options.database.prepare(
 		`SELECT value, expiresAt FROM verification WHERE identifier = ?`,
 	).bind(`cf-link:${state}`).first<{ value: string; expiresAt: unknown }>();
-	await deleteLinkState(options.database, state);
-	if (!row || expiresMs(row.expiresAt) <= Date.now()) return redirect(appRedirect(request, "state_mismatch"), [], 302);
+	if (!row || expiresMs(row.expiresAt) <= Date.now()) {
+		await deleteLinkState(options.database, state);
+		return redirect(appRedirect(request, "state_mismatch"), [], 302);
+	}
 	let saved: { userId?: unknown; verifier?: unknown; choice?: unknown; host?: unknown };
 	try {
 		saved = JSON.parse(row.value) as { userId?: unknown; verifier?: unknown; choice?: unknown; host?: unknown };
 	} catch {
+		await deleteLinkState(options.database, state);
 		return redirect(appRedirect(request, "auth"), [], 302);
 	}
 	const userId = typeof saved.userId === "string" ? saved.userId : "";
@@ -279,14 +393,27 @@ export async function finishCloudflareLink(request: Request, auth: SessionAuth, 
 	const choice = parseSetupChoice(saved.choice);
 	const host = parseSetupHost(saved.host);
 	const setup = choice && host ? { choice, host } : null;
-	if ((saved.choice != null || saved.host != null) && !setup) return redirect(appRedirect(request, "auth"), [], 302);
-	const session = await sessionOf(auth, request);
-	if (!session?.user?.id) return redirect(appRedirect(request, "cloudflare_unlinked"), [], 302);
-	if (!recentSignIn(session)) {
-		const cookies = await clearSession(auth, request).catch(() => []);
-		return redirect(appRedirect(request, "cloudflare_reauth"), cookies, 302);
+	if ((saved.choice != null || saved.host != null) && !setup) {
+		await deleteLinkState(options.database, state);
+		return redirect(appRedirect(request, "auth"), [], 302);
 	}
-	if (!userId || !verifier || session.user.id !== userId) return redirect(appRedirect(request, "auth"), [], 302);
+	const session = await sessionOf(auth, request);
+	if (!session?.user?.id) {
+		await deleteLinkState(options.database, state);
+		return redirect(appRedirect(request, "cloudflare_unlinked"), [], 302);
+	}
+	if (!userId || !verifier || session.user.id !== userId) {
+		await deleteLinkState(options.database, state);
+		return redirect(appRedirect(request, "auth"), [], 302);
+	}
+	if (!recentSignIn(session)) {
+		if (!code || code.length > 2048) {
+			await deleteLinkState(options.database, state);
+			return redirect(appRedirect(request, "no_code"), [], 302);
+		}
+		return reauthResponse(request, auth, options, { userId, action: "finish", state, code }, "/app/cloudflare", 302);
+	}
+	await deleteLinkState(options.database, state);
 	if (!code) return redirect(appRedirect(request, "no_code"), [], 302);
 	const body = new URLSearchParams({
 		grant_type: "authorization_code",

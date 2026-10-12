@@ -1,23 +1,22 @@
 import { Hono, type Context } from "hono";
 import { CALLBACK_DEADLINE_MS, within } from "./auth/deadline.ts";
 import { connectingIp, verifyTurnstile } from "./auth/turnstile.ts";
-import { agentReturnPath } from "./auth/return.ts";
+import { signInReturnPath } from "./auth/return.ts";
 import { readCloudflareGrant } from "./auth/cloudflare-grant.ts";
-import { cloudflareIsLinked, finishCloudflareLink, handleCloudflareAccount, handleCloudflareSetup } from "./auth/cloudflare-link.ts";
+import { CLOUDFLARE_REAUTH_NOTICE, cloudflareIsLinked, finishCloudflareLink, handleCloudflareAccount, handleCloudflareSetup, resumeCloudflare } from "./auth/cloudflare-link.ts";
 import { describeSetupGrant } from "./auth/cloudflare-setup.ts";
 import { enabledProviderOrigins, handleSignIn, PROVIDER_ORIGINS } from "./auth/sign-in.ts";
 import { loadAuth } from "./auth/instance.ts";
 import { signupClosedText, type SignupAllowlist } from "./auth/allowlist.ts";
 import { authBlockers, resolveAuth, type AuthDeps, type AuthOptions } from "./auth/options.ts";
 import { OIDC_COOKIE, authorize, discoveryDocument, exchangeCode, issuerOrigin, readTokenForm, resumeQuery } from "./oidc/issuer.ts";
-import { OWNER_COOKIE, bareOwnerToken, hostCookie, readCookie } from "./auth/cookies.ts";
+import { CLOUDFLARE_RESUME_COOKIE, OWNER_COOKIE, bareOwnerToken, hostCookie, readCookie } from "./auth/cookies.ts";
 import { deviceCodeFromCookie, handleDevice } from "./auth/device.ts";
 import { sameOrigin } from "./auth/origin.ts";
 import { accountAgentLimit, configuredFreeAgentLimit, createTenant, listTenants } from "./tenants/create.ts";
 import { dataPlaneFromEnv, type DataPlane } from "./tenants/push.ts";
 import type { ControlEnv } from "./env.ts";
 import { handleAgent } from "./agents/page.ts";
-import { recentSignIn } from "./auth/recent.ts";
 import { brandConfig } from "@brand/brand.config.ts";
 import { avatarOrigin, avatarUrl, renderAccount } from "./views/account.tsx";
 import { renderCloudflareSetup } from "./views/cloudflare-setup.tsx";
@@ -226,8 +225,16 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 			const session = loaded ? await loaded.auth.api.getSession({ headers: c.req.raw.headers }) : null;
 			if (session?.user?.id) return c.redirect(new URL(`/app/device?user_code=${pendingDevice}`, c.req.url).href, 302);
 		}
+		const resumeAuth = await loadAuth(env, c.req.raw, deps);
+		let clearResume = false;
+		if (resumeAuth) {
+			const resumed = await resumeCloudflare(c.req.raw, resumeAuth.auth, resumeAuth.options);
+			if (resumed?.kind === "response") return resumed.response;
+			if (resumed?.kind === "clear") clearResume = true;
+		}
 		const shell = await renderShell(c.req.raw);
 		if (shell.clearOwner) c.header("set-cookie", hostCookie(OWNER_COOKIE, "", 0));
+		if (clearResume) c.header("set-cookie", hostCookie(CLOUDFLARE_RESUME_COOKIE, "", 0), { append: true });
 		const headers = shell.signedIn
 			? pageHeaders(false, null, shell.imageHosts, shell.clearOwner, shell.linkOrigins)
 			: pageHeaders(shell.turnstile, shell.options);
@@ -237,12 +244,13 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 	app.post("/app/device", (c) => devicePage(c));
 	app.get("/app/sign-in", async (c) => {
 		const request = c.req.raw;
-		const next = agentReturnPath(new URL(request.url).searchParams.get("return") ?? "");
+		const url = new URL(request.url);
+		const next = signInReturnPath(url.searchParams.get("return") ?? "");
 		const loaded = await loadAuth(env, request, deps);
 		if (!loaded) return c.json({ error: "not_found" }, 404);
 		const session = await loaded.auth.api.getSession({ headers: request.headers });
 		if (!next && session?.user?.id) return c.redirect(new URL("/app", request.url).href, 302);
-		const url = new URL(request.url);
+		const reauth = url.searchParams.get("reauth") === "cloudflare" || url.searchParams.get("error") === "cloudflare_reauth";
 		const body = renderSignIn({
 			providers: [
 				loaded.options.github ? "github" : "",
@@ -253,7 +261,8 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 			signupClosed: loaded.options.signupAllowlist !== null,
 			closedMessage: signupClosedText(env),
 			turnstileSiteKey: loaded.options.turnstile?.siteKey,
-			error: url.searchParams.get("error") ?? undefined,
+			notice: reauth ? CLOUDFLARE_REAUTH_NOTICE : undefined,
+			error: reauth ? undefined : url.searchParams.get("error") ?? undefined,
 			sent: url.searchParams.get("sent") === "1",
 			next,
 		});
@@ -296,17 +305,23 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 		const session = await loaded.auth.api.getSession({ headers: request.headers });
 		const userId = session?.user?.id ?? "";
 		if (!userId) return redirectTo(new URL("/app", request.url).href);
+		let clearResume = false;
+		if (!review) {
+			const resumed = await resumeCloudflare(request, loaded.auth, loaded.options);
+			if (resumed?.kind === "response") return resumed.response;
+			if (resumed?.kind === "clear") clearResume = true;
+		}
 		const url = new URL(request.url);
 		const grant = review ? null : await readCloudflareGrant(loaded.options.database, userId);
 		const body = renderCloudflareSetup({
 			brand: brandConfig(env).name,
 			error: url.searchParams.get("error") ?? undefined,
-			recent: recentSignIn(session),
 			linked: await cloudflareIsLinked(loaded.options.database, userId),
 			connected: url.searchParams.get("connected") === "1",
 			report: grant ? describeSetupGrant(grant) : null,
 			review,
 		});
+		if (clearResume) c.header("set-cookie", hostCookie(CLOUDFLARE_RESUME_COOKIE, "", 0), { append: true });
 		return c.html(renderApp(env, body, "Set me up on Cloudflare", feedbackLink), 200, pageHeaders(false, null, [], false, accountLinkOrigins(loaded.options)));
 	}
 	async function cloudflareSetupPost(c: Context<{ Bindings: ControlEnv }>) {
@@ -503,7 +518,6 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 				brand: brandConfig(env).name,
 				cloudflare: Boolean(loaded.options.cloudflare),
 				cloudflareLinked: await cloudflareIsLinked(loaded.options.database, session.user.id),
-				recent: recentSignIn(session),
 				disconnected: url.searchParams.get("disconnected") === "1",
 			});
 			return {
