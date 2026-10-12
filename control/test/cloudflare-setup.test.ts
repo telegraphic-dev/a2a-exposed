@@ -467,6 +467,26 @@ test("a Cloudflare error comes back to the setup page in plain language", async 
 	const previous = console.error;
 	console.error = (...args: unknown[]) => { logs.push(args.map(String).join(" ")); };
 	t.after(() => { console.error = previous; });
+	const freshState = async () => {
+		const started = await app.request(`${origin}/app/cloudflare`, {
+			method: "POST",
+			headers: { origin, cookie, "content-type": "application/x-www-form-urlencoded" },
+			body: "action=consent&choice=inbox&host=workers",
+		});
+		const next = new URL(started.headers.get("location") ?? "").searchParams.get("state") ?? "";
+		assert.match(next, /^cfl_/);
+		return next;
+	};
+
+	const outsider = await app.request(
+		`${origin}/api/auth/callback/cloudflare?error=access_denied&error_description=${encodeURIComponent("The resource owner denied the request.")}&state=${encodeURIComponent(state)}`,
+	);
+	const outsiderUrl = new URL(outsider.headers.get("location") ?? "", origin);
+	assert.equal(outsider.status, 302);
+	assert.equal(outsiderUrl.pathname, "/app");
+	assert.equal(outsiderUrl.searchParams.get("error"), "cloudflare_unlinked");
+	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM verification WHERE identifier = ?`).bind(`cf-link:${state}`).first<{ n: number }>())?.n, 1);
+	assert.equal(logs.join("\n").includes("cloudflare_oauth_error"), false);
 
 	const description = "The OAuth 2.0 Client is not allowed to request scope 'workers-scripts.write'.";
 	const refused = await app.request(
@@ -492,8 +512,9 @@ test("a Cloudflare error comes back to the setup page in plain language", async 
 	assert.equal(logged.includes("cf-secret"), false);
 	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM verification WHERE identifier = ?`).bind(`cf-link:${state}`).first<{ n: number }>())?.n, 0);
 
+	const cancelledState = await freshState();
 	const cancelled = await app.request(
-		`${origin}/api/auth/callback/cloudflare?error=access_denied&error_description=${encodeURIComponent("The resource owner or authorization server denied the request.")}&state=${encodeURIComponent(state)}`,
+		`${origin}/api/auth/callback/cloudflare?error=access_denied&error_description=${encodeURIComponent("The resource owner or authorization server denied the request.")}&state=${encodeURIComponent(cancelledState)}`,
 		{ headers: { cookie } },
 	);
 	const cancelledUrl = new URL(cancelled.headers.get("location") ?? "", origin);
@@ -509,8 +530,9 @@ test("a Cloudflare error comes back to the setup page in plain language", async 
 		"saw eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signaturevalue",
 	];
 	for (const leak of leaks) {
+		const leakState = await freshState();
 		const secretDescription = await app.request(
-			`${origin}/api/auth/callback/cloudflare?error=server_error&error_description=${encodeURIComponent(leak)}`,
+			`${origin}/api/auth/callback/cloudflare?error=server_error&error_description=${encodeURIComponent(leak)}&state=${encodeURIComponent(leakState)}`,
 			{ headers: { cookie } },
 		);
 		const secretUrl = new URL(secretDescription.headers.get("location") ?? "", origin);

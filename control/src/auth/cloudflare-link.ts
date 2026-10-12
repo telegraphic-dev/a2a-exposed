@@ -399,6 +399,25 @@ export async function handleCloudflareSetup(request: Request, auth: SessionAuth,
 	return { kind: "response", response: await startCloudflareOAuth(request, options, userId, choice, host) };
 }
 
+/** The pending connect row belongs to this request's signed-in account. */
+async function sessionOwnsConnectState(request: Request, auth: SessionAuth, options: AuthOptions, state: string): Promise<boolean> {
+	if (!state.startsWith(STATE_PREFIX)) return false;
+	const row = await options.database.prepare(
+		`SELECT value, expiresAt FROM verification WHERE identifier = ?`,
+	).bind(`cf-link:${state}`).first<{ value: string; expiresAt: unknown }>();
+	if (!row || expiresMs(row.expiresAt) <= Date.now()) return false;
+	let saved: { userId?: unknown };
+	try {
+		saved = JSON.parse(row.value) as { userId?: unknown };
+	} catch {
+		return false;
+	}
+	const userId = typeof saved.userId === "string" ? saved.userId : "";
+	if (!userId) return false;
+	const session = await sessionOf(auth, request);
+	return session?.user?.id === userId;
+}
+
 /**
  * Completes a connect callback. Any other Cloudflare callback is refused and
  * does not create or resume a session. The access token is used to read the
@@ -413,9 +432,11 @@ export async function finishCloudflareLink(request: Request, auth: SessionAuth, 
 	const url = new URL(request.url);
 	const providerError = url.searchParams.get("error");
 	if (providerError) {
-		logCloudflareProviderError(providerError, url.searchParams.get("error_description") ?? "");
 		const state = url.searchParams.get("state") ?? "";
-		if (state.startsWith(STATE_PREFIX)) await deleteLinkState(options.database, state);
+		const owned = await sessionOwnsConnectState(request, auth, options, state);
+		if (!owned) return redirect(appRedirect(request, "cloudflare_unlinked"), [], 302);
+		await deleteLinkState(options.database, state);
+		logCloudflareProviderError(providerError, url.searchParams.get("error_description") ?? "");
 		return redirect(setupPage(request, cloudflareSetupErrorCode(providerError)), [], 302);
 	}
 	if (!cloudflareLinkState(request)) {
@@ -447,12 +468,11 @@ export async function finishCloudflareLink(request: Request, auth: SessionAuth, 
 		return redirect(appRedirect(request, "auth"), [], 302);
 	}
 	const session = await sessionOf(auth, request);
+	// Knowing the state is not enough to throw away the pending connect.
 	if (!session?.user?.id) {
-		await deleteLinkState(options.database, state);
 		return redirect(appRedirect(request, "cloudflare_unlinked"), [], 302);
 	}
 	if (!userId || !verifier || session.user.id !== userId) {
-		await deleteLinkState(options.database, state);
 		return redirect(appRedirect(request, "auth"), [], 302);
 	}
 	if (!recentSignIn(session)) {
