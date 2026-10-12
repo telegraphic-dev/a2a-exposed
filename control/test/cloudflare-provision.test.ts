@@ -20,6 +20,27 @@ const accountId = "a".repeat(32);
 const d1Id = "b".repeat(32);
 const stubScript = "export default { fetch() { return new Response('inbox-stub') } }";
 
+function assertChoicesHeld(html: string, actionOutside: string) {
+	const start = html.indexOf('<details class="restart">');
+	const end = html.indexOf("</details>", start);
+	assert.ok(start > 0 && end > start);
+	const held = html.slice(start, end);
+	assert.equal(held.includes(" open"), false);
+	assert.match(held, /Start a different setup/);
+	assert.match(held, /What do you want\?/);
+	assert.match(held, /Which web address\?/);
+	assert.match(held, /Review permissions/);
+	assert.equal(html.slice(0, start).includes("What do you want?"), false);
+	assert.ok(html.indexOf(actionOutside) < start, actionOutside);
+}
+
+function assertChoicesOpen(html: string) {
+	assert.equal(html.includes("Start a different setup"), false);
+	assert.match(html, /What do you want\?/);
+	assert.match(html, /Review permissions/);
+	assert.match(html, /To ask for a different setup, choose again/);
+}
+
 test("migration statements keep semicolons inside strings and drop line comments", () => {
 	const statements = sqlStatements("-- note\nCREATE TABLE t (note TEXT); INSERT INTO t (note) VALUES ('a;b');");
 	assert.deepEqual(statements, ["CREATE TABLE t (note TEXT)", "INSERT INTO t (note) VALUES ('a;b')"]);
@@ -240,6 +261,7 @@ test("a workers.dev inbox walks one step at a time and the owner token is shown 
 	const page = await (await app.request(`${origin}/app/cloudflare`, { headers: { cookie } })).text();
 	assert.match(page, /Cloudflare is connected, and the permissions this inbox needs are granted/);
 	assert.match(page, /Check the Cloudflare account/);
+	assertChoicesHeld(page, "Check the Cloudflare account");
 	assert.match(page, /Not checked yet/);
 	assert.equal(api.calls.length, 0);
 
@@ -300,6 +322,7 @@ test("a workers.dev inbox walks one step at a time and the owner token is shown 
 	const html = await verified.text();
 	assert.match(html, /https:\/\/my-agent\.example\.workers\.dev/);
 	assert.match(html, /The inbox answers/);
+	assertChoicesOpen(html);
 	assert.equal(html.includes(shown), false);
 	assert.equal(html.includes(SETUP_NOT_PROVISIONED), false);
 	assert.equal(api.calls.filter((call) => call.url.startsWith("https://dash.cloudflare.com/")).length, beforeVerify);
@@ -660,7 +683,9 @@ test("an existing Worker name is refused and a failed upload can be continued", 
 	t.after(failed.restore);
 	await walkWorkers(app, cookie, "migrations");
 	const partial = await postStep(app, cookie, "action=step&step=upload&name=my-agent");
-	assert.match(await partial.text(), /Cloudflare stops while uploading the inbox/);
+	const partialHtml = await partial.text();
+	assert.match(partialHtml, /Cloudflare stops while uploading the inbox/);
+	assertChoicesHeld(partialHtml, "Try again");
 	const userId = (await db.prepare('SELECT id FROM "user"').first<{ id: string }>())?.id ?? "";
 	assert.equal((await readCloudflareInbox(db, userId))?.d1_id, d1Id);
 	assert.equal((await readCloudflareInbox(db, userId))?.status, "pending");

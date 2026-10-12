@@ -108,6 +108,70 @@ function stepForm(step: WizardStepView, wizard: InboxWizard) {
 	);
 }
 
+function savedChoice(report: SetupReport): SetupChoice {
+	if (report.inbox && report.facade) return "both";
+	if (report.facade) return "facade";
+	return "inbox";
+}
+
+function choiceForm(prompt: string) {
+	return (
+		<form method="post" action="/app/cloudflare">
+			{prompt ? <p>{prompt}</p> : ""}
+			<fieldset class="choices">
+				<legend>What do you want?</legend>
+				<label class="choice">
+					<input type="radio" name="choice" value="inbox" checked required />
+					<span class="choice-body">
+						<span class="choice-title">Give my agent a public A2A address</span>
+						<span class="choice-detail">It receives messages, and we wake it by webhook.</span>
+						<span class="choice-hint">Inbox</span>
+					</span>
+				</label>
+				<label class="choice">
+					<input type="radio" name="choice" value="facade" />
+					<span class="choice-body">
+						<span class="choice-title">Make an agent I already run reachable by other agents</span>
+						<span class="choice-detail">It already speaks A2A on my own machine or server. We connect it securely.</span>
+						<span class="choice-hint">Façade, through a Cloudflare Tunnel</span>
+					</span>
+				</label>
+				<label class="choice">
+					<input type="radio" name="choice" value="both" />
+					<span class="choice-body">
+						<span class="choice-title">Both</span>
+						<span class="choice-detail">A public address for messages, and a secure connection for an agent I already run.</span>
+						<span class="choice-hint">Inbox and façade</span>
+					</span>
+				</label>
+			</fieldset>
+			<fieldset class="choices">
+				<legend>Which web address?</legend>
+				<label class="choice">
+					<input type="radio" name="host" value="workers" checked required />
+					<span class="choice-body">
+						<span class="choice-title">A free address from Cloudflare</span>
+						<span class="choice-detail">Recommended.</span>
+						<span class="choice-example">https://my-agent.yourname.workers.dev</span>
+						<span class="choice-hint">This does not ask to list your domains or edit DNS.</span>
+					</span>
+				</label>
+				<label class="choice">
+					<input type="radio" name="host" value="zone" />
+					<span class="choice-body">
+						<span class="choice-title">My own domain</span>
+						<span class="choice-detail">It must already be in your Cloudflare account.</span>
+						<span class="choice-example">https://agent.example.com</span>
+						<span class="choice-hint">This step cannot move a domain onto Cloudflare.</span>
+					</span>
+				</label>
+			</fieldset>
+			<input type="hidden" name="action" value="review" />
+			<p><button class="action" type="submit">Review permissions</button></p>
+		</form>
+	);
+}
+
 function wizardSteps(wizard: InboxWizard) {
 	const created = httpsUrl(wizard.publicUrl);
 	return (
@@ -154,10 +218,13 @@ export function renderCloudflareSetup(input: {
 	const scopes = review ? setupScopes(review.choice, review.host) : [];
 	const report = input.report ?? null;
 	const created = httpsUrl(input.createdUrl);
-	const wizard = input.wizard && report?.inbox ? input.wizard : null;
+	const reconnect = Boolean(report?.needsReconnect) && !created;
+	const wizard = input.wizard && report?.inbox && !reconnect ? input.wizard : null;
+	const setupBusy = Boolean(wizard && wizard.steps.some((step) => step.state !== "pass"));
+	const holdChoices = reconnect || setupBusy;
 	return (
 		<div class="setup">
-			<p>Lets {brand} set this up in your Cloudflare account. It is not used to sign in. {EVERY_PLAN} After Cloudflare allows it, this page checks one requirement at a time, then creates a public address for messages in your account. A connection for an agent you already run is not created here.</p>
+			<p>{brand} creates a public address for your agent in your Cloudflare account, one step at a time. {EVERY_PLAN} It is not a way to sign in.</p>
 			{error ? <p class="alert" role="alert">{error}</p> : ""}
 			{input.connected && input.linked && !report ? (
 				<p role="status">Cloudflare is connected for your user profile only. Choose a setup below to grant the permissions that setup needs. Nothing has been created in your Cloudflare account.</p>
@@ -173,6 +240,14 @@ export function renderCloudflareSetup(input: {
 						))}
 					</ul>
 					{report.blocked.map((text) => <p class="alert" role="alert">{text}</p>)}
+					{reconnect ? (
+						<form method="post" action="/app/cloudflare">
+							<input type="hidden" name="action" value="review" />
+							<input type="hidden" name="choice" value={savedChoice(report)} />
+							<input type="hidden" name="host" value={report.host} />
+							<p><button class="action" type="submit">Connect again</button></p>
+						</form>
+					) : ""}
 					{!wizard && created ? (
 						<p role="status">Your agent has a public address at <a href={created}>{created}</a>. Other agents find it at {created}/.well-known/agent-card.json. A new address can take a few minutes to answer.</p>
 					) : ""}
@@ -218,60 +293,13 @@ export function renderCloudflareSetup(input: {
 						<a href="/app/cloudflare">Choose again</a>
 					</p>
 				</form>
+			) : holdChoices ? (
+				<details class="restart">
+					<summary>Start a different setup</summary>
+					{choiceForm("")}
+				</details>
 			) : (
-				<form method="post" action="/app/cloudflare">
-					{report ? <p>To ask for a different setup, choose again.</p> : ""}
-					<fieldset class="choices">
-						<legend>What do you want?</legend>
-						<label class="choice">
-							<input type="radio" name="choice" value="inbox" checked required />
-							<span class="choice-body">
-								<span class="choice-title">Give my agent a public A2A address</span>
-								<span class="choice-detail">It receives messages, and we wake it by webhook.</span>
-								<span class="choice-hint">Inbox</span>
-							</span>
-						</label>
-						<label class="choice">
-							<input type="radio" name="choice" value="facade" />
-							<span class="choice-body">
-								<span class="choice-title">Make an agent I already run reachable by other agents</span>
-								<span class="choice-detail">It already speaks A2A on my own machine or server. We connect it securely.</span>
-								<span class="choice-hint">Façade, through a Cloudflare Tunnel</span>
-							</span>
-						</label>
-						<label class="choice">
-							<input type="radio" name="choice" value="both" />
-							<span class="choice-body">
-								<span class="choice-title">Both</span>
-								<span class="choice-detail">A public address for messages, and a secure connection for an agent I already run.</span>
-								<span class="choice-hint">Inbox and façade</span>
-							</span>
-						</label>
-					</fieldset>
-					<fieldset class="choices">
-						<legend>Which web address?</legend>
-						<label class="choice">
-							<input type="radio" name="host" value="workers" checked required />
-							<span class="choice-body">
-								<span class="choice-title">A free address from Cloudflare</span>
-								<span class="choice-detail">Recommended.</span>
-								<span class="choice-example">https://my-agent.yourname.workers.dev</span>
-								<span class="choice-hint">This does not ask to list your domains or edit DNS.</span>
-							</span>
-						</label>
-						<label class="choice">
-							<input type="radio" name="host" value="zone" />
-							<span class="choice-body">
-								<span class="choice-title">My own domain</span>
-								<span class="choice-detail">It must already be in your Cloudflare account.</span>
-								<span class="choice-example">https://agent.example.com</span>
-								<span class="choice-hint">This step cannot move a domain onto Cloudflare.</span>
-							</span>
-						</label>
-					</fieldset>
-					<input type="hidden" name="action" value="review" />
-					<p><button class="action" type="submit">Review permissions</button></p>
-				</form>
+				choiceForm(report ? "To ask for a different setup, choose again." : "")
 			)}
 			<p><a href="/app">Back to your agents</a></p>
 		</div>

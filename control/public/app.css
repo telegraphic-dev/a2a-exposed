@@ -123,6 +123,14 @@ body:has(.setup) {
 }
 .setup .steps > li.pass { border-color: var(--accent); }
 .setup .steps > li p { margin: 0.35rem 0; }
+.setup .restart { margin: 0 0 1rem; }
+.setup .restart > summary {
+	color: var(--accent);
+	cursor: pointer;
+	font-size: 0.92rem;
+	width: fit-content;
+}
+.setup .restart[open] > summary { margin-bottom: 0.75rem; }
 .setup .steps .choice-hint { display: inline; }
 .setup .choices {
 	display: flex;
