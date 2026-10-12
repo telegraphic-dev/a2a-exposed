@@ -7,6 +7,7 @@
 	"scripts": {
 		"build": "cf build",
 		"deploy": "cf deploy",
+		"pretest": "node scripts/stamp-version.mjs",
 		"test": "node --import ./test/register-hooks.mjs --test test/*.test.ts",
 		"typecheck": "cf workers types && tsc"
 	},
