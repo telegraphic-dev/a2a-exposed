@@ -21,17 +21,19 @@ const ERRORS: Record<string, string> = {
 };
 
 function limitMessage(limit: number | null): string {
-	return limit == null ? "" : `This account can have ${limit} agents.`;
+	if (limit == null) return "";
+	const noun = limit === 1 ? "hosted agent" : "hosted agents";
+	return `This account can have ${limit} ${noun}. An agent in your Cloudflare account does not use one of these.`;
 }
 
-/** How many creates remain after a delete. A count above the cap is still at the limit. */
+/** How many hosted creates remain after a delete. A count above the cap is still at the limit. */
 export function deletedNotice(limit: number | null, agents: number): string {
 	const gone = "That agent was deleted. Its inbox, peers, connectors, and wake settings are gone.";
-	if (limit == null) return `${gone} You can create another agent.`;
+	if (limit == null) return `${gone} You can create another hosted agent.`;
 	const left = limit - agents;
-	if (left === 1) return `${gone} You can create 1 more agent.`;
-	if (left > 1) return `${gone} You can create ${left} more agents.`;
-	return `${gone} You're at your limit of ${limit} ${limit === 1 ? "agent" : "agents"}.`;
+	if (left === 1) return `${gone} You can create 1 more hosted agent.`;
+	if (left > 1) return `${gone} You can create ${left} more hosted agents.`;
+	return `${gone} You're at your limit of ${limit} hosted ${limit === 1 ? "agent" : "agents"}.`;
 }
 
 const AVATAR_HOSTS = new Set(["avatars.githubusercontent.com", "lh3.googleusercontent.com"]);
@@ -68,6 +70,17 @@ function agentUrl(value: string | null): string {
 	}
 }
 
+/** The hostname on the public address, or the agent name when there is no address yet. */
+export function hostedHostname(name: string, publicUrl: string | null): string {
+	const href = agentUrl(publicUrl);
+	if (!href) return name;
+	try {
+		return new URL(href).hostname;
+	} catch {
+		return name;
+	}
+}
+
 export function renderAccount(input: {
 	name: string;
 	email: string;
@@ -88,9 +101,16 @@ export function renderAccount(input: {
 	disconnected?: boolean;
 	/** Public address of an inbox created in the user's Cloudflare account. */
 	cloudflareInbox?: string | null;
+	/** Agents that live in the user's Cloudflare account. They do not use a hosted slot. */
+	cloudflareAgents?: { id: string; host: string; createdAt: string }[];
+	/** Shown after Forget only. */
+	forgotCloudflare?: boolean;
+	/** Shown after Remove from my Cloudflare finishes. */
+	removedCloudflare?: boolean;
 }): string {
 	const image = avatarUrl(input.image);
 	const cloudflareInbox = agentUrl(input.cloudflareInbox ?? null);
+	const cloudflareAgents = input.cloudflareAgents ?? [];
 	const capped = limitMessage(input.agentLimit);
 	const closed = input.signupClosed && input.error === "invite" ? (input.closedMessage?.trim() || SIGNUP_CLOSED) : "";
 	const error = input.error === "limit" ? capped : closed || (input.error ? ERRORS[input.error] ?? "" : "");
@@ -109,8 +129,8 @@ export function renderAccount(input: {
 					<p>Lets {input.brand?.trim() || "Inbox"} set things up in your Cloudflare account. It isn't used to sign in.</p>
 					{input.cloudflareLinked ? <p>Cloudflare is connected.</p> : ""}
 					{input.disconnected ? <p role="status">Cloudflare was disconnected.</p> : ""}
-					<p><a href="/app/cloudflare">Set me up on Cloudflare</a></p>
-					{cloudflareInbox ? <p>Your Cloudflare inbox is at <a href={cloudflareInbox}>{cloudflareInbox}</a>.</p> : ""}
+					<p><a href="/app/cloudflare">In my Cloudflare account</a></p>
+					{cloudflareInbox && !cloudflareAgents.length ? <p>Your Cloudflare inbox is at <a href={cloudflareInbox}>{cloudflareInbox}</a>.</p> : ""}
 					{input.cloudflareLinked ? (
 						<form method="post" action="/app/account/cloudflare">
 							<p>
@@ -123,21 +143,29 @@ export function renderAccount(input: {
 			) : ""}
 			{input.ownerToken ? <TokenBlock token={input.ownerToken} lead="Copy this owner token now. It will not be shown again." /> : ""}
 			{input.deleted ? <p role="status">{deletedNotice(input.agentLimit, input.agents.length)}</p> : ""}
+			{input.removedCloudflare ? <p role="status">That agent was removed from your Cloudflare account.</p> : ""}
+			{input.forgotCloudflare ? <p role="status">That agent was dropped from this dashboard. It is still in your Cloudflare account.</p> : ""}
 			{error ? <p class="alert" role="alert">{error}</p> : ""}
 			{atLimit && !error ? <p class="alert" role="alert">{capped}</p> : ""}
-			{input.agents.length ? (
+			{input.agents.length || cloudflareAgents.length ? (
 				<ul class="agents">
 					{input.agents.map((agent) => {
-						const href = agentUrl(agent.publicUrl);
 						const when = createdOn(agent.createdAt);
 						return (
 							<li>
-								<a href={`/app/agents/${agent.name}`}>{agent.name}</a>
-								{href ? <a href={href}>{href}</a> : ""}
+								<span class="agent-name"><a href={`/app/agents/${agent.name}`}>{hostedHostname(agent.name, agent.publicUrl)}</a></span>
 								{when ? <span>{when}</span> : ""}
 							</li>
 						);
 					})}
+					{cloudflareAgents.map((agent) => (
+						<li>
+							<span class="agent-name">
+								<a href={`/app/cloudflare/${agent.id}`}>{agent.host}</a>
+								<span class="where">In your Cloudflare</span>
+							</span>
+						</li>
+					))}
 				</ul>
 			) : <p>No agents yet.</p>}
 			{input.canCreate && !atLimit ? (

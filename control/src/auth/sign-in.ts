@@ -132,6 +132,16 @@ function appUrl(request: Request, error?: string): string {
 	return url.href;
 }
 
+/** A missing human-check token stays on the sign-in page, including the Cloudflare return path. */
+function turnstileRetry(request: Request, next: string): string {
+	if (!next || next === "/app") return appUrl(request, "turnstile");
+	const url = new URL("/app/sign-in", request.url);
+	url.searchParams.set("return", next);
+	if (next === "/app/cloudflare" || next.startsWith("/app/cloudflare/")) url.searchParams.set("reauth", "cloudflare");
+	url.searchParams.set("error", "turnstile");
+	return url.href;
+}
+
 export async function handleSignIn(request: Request, auth: AuthHandler, options: AuthOptions, deadlineMs = SIGN_IN_DEADLINE_MS): Promise<Response> {
 	return within(deadlineMs, () => finishSignIn(request, auth, options), () => {
 		console.error(JSON.stringify({ event: "social_sign_in_timeout" }));
@@ -164,7 +174,8 @@ async function finishSignIn(request: Request, auth: AuthHandler, options: AuthOp
 		}
 	}
 	const token = String(form.get("cf-turnstile-response") ?? "");
-	if (options.turnstile && !token) return redirect(appUrl(request, "turnstile"));
+	const next = signInReturnPath(String(form.get("next") ?? ""));
+	if (options.turnstile && !token) return redirect(turnstileRetry(request, next));
 	const ip = connectingIp(request);
 	if (options.turnstile) {
 		const failure = await verifyTurnstile(options.turnstile.secret, token, ip);

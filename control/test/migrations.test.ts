@@ -114,3 +114,27 @@ test("0013 adds wizard columns on an inbox row that already exists", () => {
 	assert.equal(row.step_error, null);
 	assert.equal(db.prepare(`SELECT worker_name FROM cloudflare_inbox WHERE "userId" = 'user-a'`).get()?.worker_name, "my-agent");
 });
+
+test("0014 keeps an existing inbox and allows a second one", () => {
+	const db = new DatabaseSync(":memory:");
+	apply(db, files.filter((name) => name < "0014_cloudflare_inbox_agent.sql"));
+	insertUser(db, "user-a", "a@example.com");
+	db.prepare(
+		`INSERT INTO cloudflare_inbox ("userId", cf_account_id, worker_name, d1_name, host, hostname, status, public_url, created_at, updated_at)
+		 VALUES ('user-a', 'account', 'my-agent', 'my-agent', 'zone', 'myagent.example.com', 'ready', 'https://myagent.example.com', ?, ?)`,
+	).run(earlier, earlier);
+	apply(db, ["0014_cloudflare_inbox_agent.sql"]);
+	const kept = db.prepare(`SELECT id, zone_id, hostname FROM cloudflare_inbox WHERE "userId" = 'user-a'`).get() as {
+		id: string;
+		zone_id: string | null;
+		hostname: string;
+	};
+	assert.equal(kept.id, "user-a");
+	assert.equal(kept.zone_id, null);
+	assert.equal(kept.hostname, "myagent.example.com");
+	db.prepare(
+		`INSERT INTO cloudflare_inbox (id, "userId", cf_account_id, worker_name, d1_name, host, status, created_at, updated_at)
+		 VALUES (?, 'user-a', 'account', 'other', 'other', 'workers', 'pending', ?, ?)`,
+	).run("b".repeat(32), later, later);
+	assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM cloudflare_inbox WHERE "userId" = 'user-a'`).get()?.n, 2);
+});

@@ -101,7 +101,9 @@ test("login help names the callback error", async () => {
 	assert.match(stdout, /previous one stops working immediately/);
 	assert.match(stdout, /not stored/);
 	assert.match(stdout, /FREE_AGENT_LIMIT=2/);
-	assert.match(stdout, /2 agents/);
+	assert.match(stdout, /2 hosted agents/);
+	assert.match(stdout, /does not use one of these/);
+	assert.match(stdout, /listed\s+by its hostname/);
 	assert.match(stdout, /own limit overrides it/);
 	assert.match(stdout, /no limit/);
 	assert.match(stdout, /rejects another insert/);

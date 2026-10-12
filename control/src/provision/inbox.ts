@@ -5,7 +5,7 @@
 import { describeSetupGrant, inboxCanProvision, parseSetupChoice, parseSetupHost, type SetupHost } from "../auth/cloudflare-setup.ts";
 import { readCloudflareGrant, refreshCloudflareGrant } from "../auth/cloudflare-grant.ts";
 import type { Sql } from "../auth/invites.ts";
-import { hashOwnerToken, readCloudflareInbox, type InboxRow } from "./inbox-row.ts";
+import { hashOwnerToken, readCloudflareInbox, readCloudflareInboxById, readInboxById, type InboxRow } from "./inbox-row.ts";
 import { newOwnerToken } from "../tenants/create.ts";
 import {
 	attachHostname,
@@ -58,12 +58,16 @@ export interface ProvisionFields {
 	subdomain: string;
 	account: string;
 	step: string;
+	/** Which Cloudflare agent this step belongs to. Empty starts or continues the open one. */
+	inbox: string;
+	/** Zone id chosen from the account, for a domain address. */
+	zone: string;
 }
 
 export const WIZARD_STEPS = ["grant", "account", "address", "name", "database", "migrations", "upload", "verify"] as const;
 export type WizardStepId = (typeof WIZARD_STEPS)[number];
 export type WizardState = "pass" | "fail" | "fixable" | "wait";
-export type WizardControl = "" | "retry" | "continue" | "account" | "subdomain" | "name" | "hostname";
+export type WizardControl = "" | "retry" | "continue" | "account" | "subdomain" | "name" | "hostname" | "zone";
 
 export interface WizardStepView {
 	id: WizardStepId;
@@ -80,13 +84,15 @@ export interface InboxWizard {
 	steps: WizardStepView[];
 	fields: ProvisionFields;
 	accounts?: { id: string; name: string }[];
-	zones?: { name: string }[];
+	zones?: { id?: string; name: string }[];
 	ownerToken?: string;
 	publicUrl: string | null;
 	facade: boolean;
 	host: SetupHost;
-	/** Seconds until the browser reloads this page to try the permission again. */
+	/** Seconds until the page tries the permission again. Script does this in place. */
 	refreshSeconds?: number;
+	/** Cloudflare dashboard pages for resources this setup created. */
+	links?: { label: string; href: string }[];
 }
 
 interface StoredStepNote {
@@ -99,7 +105,7 @@ interface StoredStepNote {
 	/** Earliest time the page may try this step again. */
 	retryAt?: number;
 	accounts?: { id: string; name: string }[];
-	zones?: { name: string }[];
+	zones?: { id?: string; name: string }[];
 	/** When set, the name step can be chosen again. */
 	reopenName?: boolean;
 	/** Typed values to show again after a refresh. */
@@ -123,23 +129,46 @@ function logFailure(step: string, failure: CfFailure, attempt?: number): void {
 	console.log(JSON.stringify(line));
 }
 
-async function beginStep(db: Sql, userId: string, host: SetupHost, now: number): Promise<"go" | "busy" | "ready"> {
+function newInboxId(): string {
+	const bytes = new Uint8Array(16);
+	crypto.getRandomValues(bytes);
+	return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/** A new Cloudflare agent. The finished ones stay. */
+export async function createCloudflareAgent(db: Sql, userId: string, host: SetupHost, now = Date.now()): Promise<string> {
+	const id = newInboxId();
+	const stamp = new Date(now).toISOString();
+	await db.prepare(
+		`INSERT INTO cloudflare_inbox (
+		   id, "userId", cf_account_id, worker_name, d1_name, host, status, created_at, updated_at
+		 ) VALUES (?, ?, '', '', '', ?, 'pending', ?, ?)`,
+	).bind(id, userId, host, stamp, stamp).run();
+	return id;
+}
+
+async function beginStep(db: Sql, userId: string, host: SetupHost, now: number, inboxId = ""): Promise<"go" | "busy" | "ready"> {
 	const stamp = new Date(now).toISOString();
 	const cutoff = new Date(now - WORKING_MS).toISOString();
+	const row = inboxId ? await readCloudflareInboxById(db, userId, inboxId) : await readCloudflareInbox(db, userId);
+	if (row?.status === "ready" || row?.status === "removing") return "ready";
+	if (!row) {
+		await db.prepare(
+			`INSERT INTO cloudflare_inbox (
+			   id, "userId", cf_account_id, worker_name, d1_name, host, status, created_at, updated_at
+			 ) VALUES (?, ?, '', '', '', ?, 'working', ?, ?)`,
+		).bind(newInboxId(), userId, host, stamp, stamp).run();
+		return "go";
+	}
 	const result = await db.prepare(
-		`INSERT INTO cloudflare_inbox (
-		   "userId", cf_account_id, worker_name, d1_name, d1_id, public_url, owner_token_hash, host, hostname, status, created_at, updated_at
-		 ) VALUES (?, '', '', '', NULL, NULL, NULL, ?, NULL, 'working', ?, ?)
-		 ON CONFLICT ("userId") DO UPDATE SET status = 'working', updated_at = excluded.updated_at
-		 WHERE cloudflare_inbox.status != 'ready'
-		   AND (cloudflare_inbox.status != 'working' OR cloudflare_inbox.updated_at <= ?)`,
-	).bind(userId, host, stamp, stamp, cutoff).run();
-	const row = await readCloudflareInbox(db, userId);
-	if (row?.status === "ready" && row.public_url) return "ready";
+		`UPDATE cloudflare_inbox SET status = 'working', updated_at = ?
+		 WHERE id = ? AND status != 'ready' AND status != 'removing'
+		   AND (status != 'working' OR updated_at <= ?)`,
+	).bind(stamp, row.id, cutoff).run();
 	return result.meta?.changes === 1 ? "go" : "busy";
 }
 
-async function patchInbox(db: Sql, userId: string, now: number, fields: {
+async function patchInbox(db: Sql, inboxId: string, now: number, fields: {
 	status?: string;
 	cfAccountId?: string;
 	d1Id?: string | null;
@@ -151,14 +180,15 @@ async function patchInbox(db: Sql, userId: string, now: number, fields: {
 	wizardStep?: string | null;
 	workersSubdomain?: string | null;
 	stepError?: string | null;
+	zoneId?: string | null;
 }): Promise<void> {
-	const row = await readCloudflareInbox(db, userId);
+	const row = await readInboxById(db, inboxId);
 	if (!row) return;
 	await db.prepare(
 		`UPDATE cloudflare_inbox SET
 		   status = ?, cf_account_id = ?, d1_id = ?, public_url = ?, owner_token_hash = ?, hostname = ?, worker_name = ?, d1_name = ?, script_tag = ?,
-		   wizard_step = ?, workers_subdomain = ?, step_error = ?, updated_at = ?
-		 WHERE "userId" = ?`,
+		   wizard_step = ?, workers_subdomain = ?, step_error = ?, zone_id = ?, updated_at = ?
+		 WHERE id = ?`,
 	).bind(
 		fields.status ?? row.status,
 		fields.cfAccountId ?? row.cf_account_id,
@@ -172,14 +202,15 @@ async function patchInbox(db: Sql, userId: string, now: number, fields: {
 		fields.wizardStep === undefined ? row.wizard_step : fields.wizardStep,
 		fields.workersSubdomain === undefined ? row.workers_subdomain : fields.workersSubdomain,
 		fields.stepError === undefined ? row.step_error : fields.stepError,
+		fields.zoneId === undefined ? row.zone_id : fields.zoneId,
 		new Date(now).toISOString(),
-		userId,
+		inboxId,
 	).run();
 }
 
-async function releaseWorking(db: Sql, userId: string, now: number): Promise<void> {
-	const row = await readCloudflareInbox(db, userId);
-	if (row?.status === "working") await patchInbox(db, userId, now, { status: "pending" });
+async function releaseWorking(db: Sql, inboxId: string, now: number): Promise<void> {
+	const row = await readInboxById(db, inboxId);
+	if (row?.status === "working") await patchInbox(db, inboxId, now, { status: "pending" });
 }
 
 function scriptMetadata(input: { d1Id: string; publicUrl: string; workerName: string; ownerToken: string; scriptTag: string }) {
@@ -250,18 +281,22 @@ export function fieldsFromForm(form: FormData): ProvisionFields {
 		subdomain: text("subdomain", 80).toLowerCase(),
 		account: text("account", 80),
 		step: text("step", 32),
+		inbox: text("inbox", 64).toLowerCase(),
+		zone: text("zone", 64),
 	};
 }
 
-export function resumeFields(value: { name?: unknown; hostname?: unknown; subdomain?: unknown; account?: unknown; step?: unknown }): ProvisionFields | null {
+export function resumeFields(value: { name?: unknown; hostname?: unknown; subdomain?: unknown; account?: unknown; step?: unknown; inbox?: unknown; zone?: unknown }): ProvisionFields | null {
 	const name = typeof value.name === "string" ? value.name : "";
 	const hostname = typeof value.hostname === "string" ? value.hostname : "";
 	const subdomain = typeof value.subdomain === "string" ? value.subdomain : "";
 	const account = typeof value.account === "string" ? value.account : "";
 	const step = typeof value.step === "string" ? value.step : "";
-	if (name.length > 63 || hostname.length > 253 || subdomain.length > 63 || account.length > 64 || step.length > 32) return null;
+	const inbox = typeof value.inbox === "string" ? value.inbox : "";
+	const zone = typeof value.zone === "string" ? value.zone : "";
+	if (name.length > 63 || hostname.length > 253 || subdomain.length > 63 || account.length > 64 || step.length > 32 || inbox.length > 64 || zone.length > 64) return null;
 	if (step && !isStep(step)) return null;
-	return { name, hostname, subdomain, account, step };
+	return { name, hostname, subdomain, account, step, inbox, zone };
 }
 
 function isStep(value: string): value is WizardStepId {
@@ -291,6 +326,8 @@ function shownFields(row: InboxRow | null, fields: ProvisionFields | null | unde
 		subdomain: fields?.subdomain || note?.subdomain || "",
 		account: fields?.account || row?.cf_account_id || "",
 		step: "",
+		inbox: fields?.inbox || row?.id || "",
+		zone: fields?.zone || row?.zone_id || "",
 	};
 }
 
@@ -310,20 +347,42 @@ function stepMeta(id: WizardStepId, host: SetupHost): { title: string; hint: str
 }
 
 function passText(id: WizardStepId, host: SetupHost, row: InboxRow | null): string {
+	const named = row?.worker_name ?? "";
+	const subdomain = row?.workers_subdomain ?? "";
 	switch (id) {
 		case "grant": return "Cloudflare is connected, and the permissions this inbox needs are granted.";
 		case "account": return "This Cloudflare account is selected.";
-		case "address": return host === "zone"
-			? "This address is on a domain in this Cloudflare account."
-			: row?.workers_subdomain
-				? `This account has the free address name ${row.workers_subdomain}.`
-				: "This account has a free address name.";
-		case "name": return "This name is free.";
-		case "database": return "The database is created.";
+		case "address":
+			if (host === "zone") return row?.hostname ? `Domain ${row.hostname}` : "This address is on a domain in this Cloudflare account.";
+			if (named && subdomain) return `Address ${named}.${subdomain}.workers.dev`;
+			if (subdomain) return `Address name ${subdomain}.workers.dev`;
+			return "This account has a free address name.";
+		case "name": return named ? `Inbox name ${named}: free` : "This name is free.";
+		case "database": return named ? `Database ${named} is created` : "The database is created.";
 		case "migrations": return "The database setup is applied.";
 		case "upload": return "The inbox is uploaded.";
 		case "verify": return "The inbox answers.";
 	}
+}
+
+const DASH_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** Links to the Cloudflare dashboard resources this setup created. */
+export function dashboardLinks(row: InboxRow | null): { label: string; href: string }[] {
+	if (!row || !DASH_ID.test(row.cf_account_id)) return [];
+	const base = `https://dash.cloudflare.com/${row.cf_account_id}`;
+	const links: { label: string; href: string }[] = [];
+	if (row.worker_name && LABEL_RE.test(row.worker_name)) {
+		links.push({ label: "Worker", href: `${base}/workers/services/view/${row.worker_name}/production` });
+	}
+	if (row.d1_id && DASH_ID.test(row.d1_id)) {
+		links.push({ label: "Database", href: `${base}/workers/d1/databases/${row.d1_id}` });
+	}
+	if (row.host === "zone" && row.zone_id && DASH_ID.test(row.zone_id)) {
+		links.push({ label: "DNS record", href: `${base}/${row.zone_id}/dns/records` });
+	}
+	if (row.host !== "zone") links.push({ label: "workers.dev name", href: `${base}/workers/subdomain` });
+	return links;
 }
 
 function continueButton(id: WizardStepId, host: SetupHost): string {
@@ -343,6 +402,7 @@ function controlFor(note: StoredStepNote, host: SetupHost): { control: WizardCon
 	if (note.state === "fail") return { control: "retry", button: "Try again" };
 	if (note.accounts?.length) return { control: "account", button: "Use this account" };
 	if (note.step === "address" && host === "workers") return { control: "subdomain", button: "Create this workers.dev name" };
+	if (note.step === "address" && note.zones?.some((zone) => zone.id) && !note.hostname) return { control: "zone", button: "Use this domain" };
 	if (note.step === "address") return { control: "hostname", button: "Check this address" };
 	if (note.step === "name" && host === "workers") return { control: "name", button: "Check this name" };
 	if (note.step === "name") return { control: "hostname", button: "Check this address" };
@@ -365,7 +425,7 @@ function readNote(raw: string | null | undefined): StoredStepNote | null {
 		? note.accounts.filter((account) => account && ID_RE.test(account.id) && typeof account.name === "string").slice(0, 12)
 		: [];
 	const zones = Array.isArray(note.zones)
-		? note.zones.filter((zone) => zone && typeof zone.name === "string" && zone.name.length > 0 && zone.name.length <= 253).slice(0, 20)
+		? note.zones.filter((zone) => zone && typeof zone.name === "string" && zone.name.length > 0 && zone.name.length <= 253 && (zone.id === undefined || ID_RE.test(zone.id))).slice(0, 20)
 		: [];
 	const name = typeof note.name === "string" ? note.name.slice(0, 63) : "";
 	const hostname = typeof note.hostname === "string" ? note.hostname.slice(0, 253) : "";
@@ -382,7 +442,7 @@ function readNote(raw: string | null | undefined): StoredStepNote | null {
 		text: note.text.slice(0, 400),
 		cloudflare: note.cloudflare.slice(0, 400),
 		...(accounts.length ? { accounts: accounts.map((account) => ({ id: account.id, name: account.name.slice(0, 80) })) } : {}),
-		...(zones.length ? { zones: zones.map((zone) => ({ name: zone.name.slice(0, 80) })) } : {}),
+		...(zones.length ? { zones: zones.map((zone) => ({ ...(zone.id ? { id: zone.id } : {}), name: zone.name.slice(0, 80) })) } : {}),
 		...(note.reopenName ? { reopenName: true } : {}),
 		...(name ? { name } : {}),
 		...(hostname ? { hostname } : {}),
@@ -401,7 +461,7 @@ function noteJson(note: StoredStepNote): string {
 		text,
 		cloudflare,
 		...(note.accounts?.length ? { accounts: note.accounts.slice(0, 12).map((account) => ({ id: account.id, name: account.name.slice(0, 80) })) } : {}),
-		...(note.zones?.length ? { zones: note.zones.slice(0, 20).map((zone) => ({ name: zone.name.slice(0, 80) })) } : {}),
+		...(note.zones?.length ? { zones: note.zones.slice(0, 20).map((zone) => ({ ...(zone.id && ID_RE.test(zone.id) ? { id: zone.id } : {}), name: zone.name.slice(0, 80) })) } : {}),
 		...(note.reopenName ? { reopenName: true } : {}),
 		...(note.name ? { name: note.name.slice(0, 63) } : {}),
 		...(note.hostname ? { hostname: note.hostname.slice(0, 253) } : {}),
@@ -434,7 +494,7 @@ export function viewInboxWizard(input: {
 	fields?: ProvisionFields | null;
 	overlay?: StoredStepNote | null;
 }): InboxWizard {
-	const host = parseSetupHost(input.grant?.host) ?? "workers";
+	const host = parseSetupHost(input.inbox?.host) ?? parseSetupHost(input.grant?.host) ?? "workers";
 	const stored = input.overlay ?? readNote(input.inbox?.step_error);
 	const fields = shownFields(input.inbox, input.fields, stored);
 	const choice = input.grant ? parseSetupChoice(input.grant.choice) : null;
@@ -465,7 +525,7 @@ export function viewInboxWizard(input: {
 				return { ...meta, id, state: note.state, text: note.text, cloudflare: note.cloudflare, control: ui.control, button: ui.button };
 			}
 			if (id === "address" && host === "zone") {
-				return { ...meta, id, state: "fixable", text: "Type the web address for this inbox.", cloudflare: "", control: "hostname", button: "Check this address" };
+				return { ...meta, id, state: "fixable", text: "Choose a domain in this Cloudflare account.", cloudflare: "", control: "continue", button: "Show my domains" };
 			}
 			if (id === "name" && host === "workers") {
 				return { ...meta, id, state: "fixable", text: "Type a name for this inbox.", cloudflare: "", control: "name", button: "Check this name" };
@@ -487,6 +547,7 @@ export function viewInboxWizard(input: {
 		facade: Boolean(report?.facade),
 		host,
 		...(refreshSeconds ? { refreshSeconds } : {}),
+		...(done ? { links: dashboardLinks(input.inbox) } : {}),
 	};
 }
 
@@ -519,7 +580,7 @@ interface StepCtx {
 }
 
 async function wizardNow(ctx: StepCtx, overlay?: StoredStepNote | null): Promise<InboxWizard> {
-	const inbox = await readCloudflareInbox(ctx.db, ctx.userId);
+	const inbox = await readInboxById(ctx.db, ctx.row.id);
 	return viewInboxWizard({ grant: ctx.grant, inbox, fields: ctx.fields, overlay });
 }
 
@@ -533,7 +594,7 @@ function noted(ctx: StepCtx, note: StoredStepNote): StoredStepNote {
 }
 
 async function remember(ctx: StepCtx, note: StoredStepNote): Promise<InboxWizard> {
-	await patchInbox(ctx.db, ctx.userId, ctx.now, { stepError: noteJson(noted(ctx, note)), status: "pending" });
+	await patchInbox(ctx.db, ctx.row.id, ctx.now, { stepError: noteJson(noted(ctx, note)), status: "pending" });
 	return wizardNow(ctx);
 }
 
@@ -583,8 +644,8 @@ async function probeInbox(fetchImpl: typeof fetch, url: string, fetchMs: number)
 	}
 }
 
-function activeZoneNames(zones: CfZone[]): { name: string }[] {
-	return zones.filter((zone) => zone.status === "active").map((zone) => ({ name: zone.name }));
+function activeZones(zones: CfZone[]): { id: string; name: string }[] {
+	return zones.filter((zone) => zone.status === "active").map((zone) => ({ id: zone.id, name: zone.name }));
 }
 
 function refreshProblem(error: string): { state: "fail" | "fixable"; text: string } {
@@ -619,19 +680,23 @@ export async function runInboxStep(input: {
 	const fetchMs = input.fetchMs ?? 10_000;
 	const fetchImpl = input.fetchImpl ?? fetch;
 	const grant = await readCloudflareGrant(input.database, input.userId);
-	const host = parseSetupHost(grant?.host) ?? "workers";
 	const fields = input.fields;
+	const targeted = fields.inbox
+		? await readCloudflareInboxById(input.database, input.userId, fields.inbox)
+		: await readCloudflareInbox(input.database, input.userId);
+	const host = parseSetupHost(targeted?.host) ?? parseSetupHost(grant?.host) ?? "workers";
 	if (!grant || !parseSetupChoice(grant.choice) || !parseSetupHost(grant.host)) {
-		return { wizard: viewInboxWizard({ grant, inbox: await readCloudflareInbox(input.database, input.userId), fields }) };
+		return { wizard: viewInboxWizard({ grant, inbox: targeted, fields }) };
 	}
-	const row = await readCloudflareInbox(input.database, input.userId);
+	const row = targeted;
 	if (row?.status === "ready" && row.public_url) return { wizard: viewInboxWizard({ grant, inbox: row, fields }) };
+	if (row?.status === "removing") return { wizard: viewInboxWizard({ grant, inbox: row, fields }) };
 	if (!inboxCanProvision(grant)) return { wizard: viewInboxWizard({ grant, inbox: row, fields }) };
 	const next = nextId(lastPassed(row));
 	const requested = fields.step && isStep(fields.step) ? fields.step : next;
 	if (requested !== next) return { wizard: viewInboxWizard({ grant, inbox: row, fields }) };
 
-	const claimed = await beginStep(input.database, input.userId, host, now);
+	const claimed = await beginStep(input.database, input.userId, host, now, fields.inbox);
 	if (claimed === "ready") {
 		return { wizard: viewInboxWizard({ grant, inbox: await readCloudflareInbox(input.database, input.userId), fields }) };
 	}
@@ -639,9 +704,8 @@ export async function runInboxStep(input: {
 		const overlay: StoredStepNote = { step: next, state: "fail", text: "A setup is already running. Try again in a moment.", cloudflare: "" };
 		return { wizard: viewInboxWizard({ grant, inbox: row, fields, overlay }) };
 	}
-	const locked = (await readCloudflareInbox(input.database, input.userId)) ?? row;
+	const locked = (fields.inbox ? await readCloudflareInboxById(input.database, input.userId, fields.inbox) : await readCloudflareInbox(input.database, input.userId)) ?? row;
 	if (!locked) {
-		await releaseWorking(input.database, input.userId, now);
 		return { wizard: viewInboxWizard({ grant, inbox: null, fields }) };
 	}
 	const ctx: StepCtx = {
@@ -693,7 +757,7 @@ export async function runInboxStep(input: {
 		}).catch(() => viewInboxWizard({ grant, inbox: locked, fields }));
 		return { wizard };
 	} finally {
-		await releaseWorking(input.database, input.userId, now).catch(() => {});
+		await releaseWorking(input.database, locked.id, now).catch(() => {});
 	}
 }
 
@@ -733,7 +797,7 @@ async function runAccount(ctx: StepCtx): Promise<InboxWizard> {
 			accounts: accounts.map((account) => ({ id: account.id, name: account.name })),
 		});
 	}
-	await patchInbox(ctx.db, ctx.userId, ctx.now, { cfAccountId: selected.id, wizardStep: "account", stepError: null, status: "pending" });
+	await patchInbox(ctx.db, ctx.row.id, ctx.now, { cfAccountId: selected.id, wizardStep: "account", stepError: null, status: "pending" });
 	return wizardNow(ctx);
 }
 
@@ -757,7 +821,7 @@ async function runWorkersAddress(ctx: StepCtx, accountId: string): Promise<Inbox
 		return remember(ctx, { step: "address", state: "fail", text: "Cloudflare stops while checking the workers.dev name.", cloudflare: describeCfFailure(current) });
 	}
 	if (typeof current === "string" && current) {
-		await patchInbox(ctx.db, ctx.userId, ctx.now, { workersSubdomain: current, wizardStep: "address", stepError: null, status: "pending", cfAccountId: accountId });
+		await patchInbox(ctx.db, ctx.row.id, ctx.now, { workersSubdomain: current, wizardStep: "address", stepError: null, status: "pending", cfAccountId: accountId });
 		return wizardNow(ctx);
 	}
 	if (!ctx.fields.subdomain) {
@@ -775,18 +839,35 @@ async function runWorkersAddress(ctx: StepCtx, accountId: string): Promise<Inbox
 		logFailure("subdomain-create", registered);
 		return remember(ctx, { step: "address", state: "fail", text: "Cloudflare stops while creating the workers.dev name.", cloudflare: describeCfFailure(registered) });
 	}
-	await patchInbox(ctx.db, ctx.userId, ctx.now, { workersSubdomain: ctx.fields.subdomain, wizardStep: "address", stepError: null, status: "pending", cfAccountId: accountId });
+	await patchInbox(ctx.db, ctx.row.id, ctx.now, { workersSubdomain: ctx.fields.subdomain, wizardStep: "address", stepError: null, status: "pending", cfAccountId: accountId });
 	return wizardNow(ctx);
 }
 
 async function runZoneAddress(ctx: StepCtx, accountId: string): Promise<InboxWizard> {
-	if (!HOST_RE.test(ctx.fields.hostname) || ctx.fields.hostname.endsWith(".workers.dev")) {
-		return remember(ctx, { step: "address", state: "fixable", text: "Use a web address on a domain already in this Cloudflare account, such as agent.example.com.", cloudflare: "" });
-	}
 	const zones = await listZones({ ...apiOf(ctx), accountId });
 	if (!Array.isArray(zones)) {
 		logFailure("zones", zones);
 		return remember(ctx, { step: "address", state: "fail", text: "Cloudflare stops while reading domains in this account.", cloudflare: describeCfFailure(zones) });
+	}
+	const listed = activeZones(zones);
+	const picked = ctx.fields.zone ? listed.find((zone) => zone.id === ctx.fields.zone) ?? null : null;
+	if (picked) {
+		const label = ctx.fields.name;
+		const hostname = label ? `${label}.${picked.name}` : picked.name;
+		if (label && !LABEL_RE.test(label)) {
+			return remember(ctx, { step: "address", state: "fixable", text: "Use a short name: lowercase letters, numbers, and hyphens.", cloudflare: "", zones: listed });
+		}
+		if (!HOST_RE.test(hostname) || hostname.endsWith(".workers.dev")) {
+			return remember(ctx, { step: "address", state: "fixable", text: "Choose a domain in this Cloudflare account.", cloudflare: "", zones: listed });
+		}
+		await patchInbox(ctx.db, ctx.row.id, ctx.now, { hostname, zoneId: picked.id, wizardStep: "address", stepError: null, status: "pending", cfAccountId: accountId });
+		return wizardNow(ctx);
+	}
+	if (!ctx.fields.hostname) {
+		return remember(ctx, { step: "address", state: "fixable", text: "Choose a domain in this Cloudflare account.", cloudflare: "", zones: listed });
+	}
+	if (!HOST_RE.test(ctx.fields.hostname) || ctx.fields.hostname.endsWith(".workers.dev")) {
+		return remember(ctx, { step: "address", state: "fixable", text: "Use a web address on a domain already in this Cloudflare account, such as agent.example.com.", cloudflare: "", zones: listed });
 	}
 	const zone = zoneForHostname(ctx.fields.hostname, zones);
 	if (!zone) {
@@ -795,10 +876,10 @@ async function runZoneAddress(ctx: StepCtx, accountId: string): Promise<InboxWiz
 			state: "fixable",
 			text: "That address is not on a domain in this Cloudflare account.",
 			cloudflare: "",
-			zones: activeZoneNames(zones),
+			zones: listed,
 		});
 	}
-	await patchInbox(ctx.db, ctx.userId, ctx.now, { hostname: ctx.fields.hostname, wizardStep: "address", stepError: null, status: "pending", cfAccountId: accountId });
+	await patchInbox(ctx.db, ctx.row.id, ctx.now, { hostname: ctx.fields.hostname, zoneId: zone.id, wizardStep: "address", stepError: null, status: "pending", cfAccountId: accountId });
 	return wizardNow(ctx);
 }
 
@@ -808,7 +889,7 @@ async function runName(ctx: StepCtx): Promise<InboxWizard> {
 	const workerName = ctx.host === "workers" ? ctx.fields.name : workerNameFromHostname(ctx.fields.hostname || ctx.row.hostname || "");
 	if (!workerName || !LABEL_RE.test(workerName)) {
 		if (ctx.host === "zone") {
-			await patchInbox(ctx.db, ctx.userId, ctx.now, {
+			await patchInbox(ctx.db, ctx.row.id, ctx.now, {
 				wizardStep: "account",
 				stepError: noteJson(noted(ctx, { step: "address", state: "fixable", text: "Use a web address on a domain already in this Cloudflare account, such as agent.example.com.", cloudflare: "" })),
 				status: "pending",
@@ -825,12 +906,12 @@ async function runName(ctx: StepCtx): Promise<InboxWizard> {
 	if (typeof found === "string" && !sameTag(ctx.row.script_tag ?? "", found)) {
 		return remember(ctx, { step: "name", state: "fixable", text: "A Worker with that name is already in this Cloudflare account. Choose another name.", cloudflare: "" });
 	}
-	await patchInbox(ctx.db, ctx.userId, ctx.now, { workerName, wizardStep: "name", stepError: null, status: "pending", cfAccountId: accountId });
+	await patchInbox(ctx.db, ctx.row.id, ctx.now, { workerName, wizardStep: "name", stepError: null, status: "pending", cfAccountId: accountId });
 	return wizardNow(ctx);
 }
 
 async function reopenName(ctx: StepCtx, text: string, cloudflare: string): Promise<InboxWizard> {
-	await patchInbox(ctx.db, ctx.userId, ctx.now, {
+	await patchInbox(ctx.db, ctx.row.id, ctx.now, {
 		wizardStep: "address",
 		workerName: "",
 		stepError: noteJson(noted(ctx, { step: "name", state: "fixable", text, cloudflare, reopenName: true })),
@@ -844,7 +925,7 @@ async function runDatabase(ctx: StepCtx): Promise<InboxWizard> {
 	const workerName = ctx.row.worker_name;
 	if (!accountId || !workerName) return remember(ctx, { step: "database", state: "fail", text: "Choose a name before creating the database.", cloudflare: "" });
 	if (ctx.row.d1_id) {
-		await patchInbox(ctx.db, ctx.userId, ctx.now, { wizardStep: "database", stepError: null, status: "pending" });
+		await patchInbox(ctx.db, ctx.row.id, ctx.now, { wizardStep: "database", stepError: null, status: "pending" });
 		return wizardNow(ctx);
 	}
 	const found = await findD1({ ...apiOf(ctx), accountId, name: workerName });
@@ -859,7 +940,7 @@ async function runDatabase(ctx: StepCtx): Promise<InboxWizard> {
 		if (created.status === 409) return reopenName(ctx, "A database with that name is already in this Cloudflare account. Choose another name.", describeCfFailure(created));
 		return failOrWait(ctx, "database", created, "Cloudflare stops while creating the database.", "d1-create");
 	}
-	await patchInbox(ctx.db, ctx.userId, ctx.now, {
+	await patchInbox(ctx.db, ctx.row.id, ctx.now, {
 		d1Id: created.uuid,
 		scriptTag: ctx.row.script_tag || newScriptTag(),
 		wizardStep: "database",
@@ -880,7 +961,7 @@ async function runMigrations(ctx: StepCtx): Promise<InboxWizard> {
 	if (migrated !== true) {
 		return failOrWait(ctx, "migrations", migrated, "Cloudflare stops while applying the database setup.", "migrations");
 	}
-	await patchInbox(ctx.db, ctx.userId, ctx.now, { wizardStep: "migrations", stepError: null, status: "pending" });
+	await patchInbox(ctx.db, ctx.row.id, ctx.now, { wizardStep: "migrations", stepError: null, status: "pending" });
 	return wizardNow(ctx);
 }
 
@@ -902,7 +983,7 @@ async function runUpload(ctx: StepCtx): Promise<{ wizard: InboxWizard; ownerToke
 		return { wizard: await remember(ctx, { step: "upload", state: "fail", text: "This dashboard cannot upload the inbox right now.", cloudflare: "" }) };
 	}
 	if (ctx.host === "workers" && !ctx.row.workers_subdomain) {
-		await patchInbox(ctx.db, ctx.userId, ctx.now, {
+		await patchInbox(ctx.db, ctx.row.id, ctx.now, {
 			wizardStep: "account",
 			stepError: noteJson(noted(ctx, { step: "address", state: "fixable", text: "This Cloudflare account has no workers.dev name yet. Type one below.", cloudflare: "" })),
 			status: "pending",
@@ -910,7 +991,7 @@ async function runUpload(ctx: StepCtx): Promise<{ wizard: InboxWizard; ownerToke
 		return { wizard: await wizardNow(ctx) };
 	}
 	if (ctx.host === "zone" && !ctx.row.hostname) {
-		await patchInbox(ctx.db, ctx.userId, ctx.now, {
+		await patchInbox(ctx.db, ctx.row.id, ctx.now, {
 			wizardStep: "account",
 			stepError: noteJson(noted(ctx, { step: "address", state: "fixable", text: "Type the web address for this inbox.", cloudflare: "" })),
 			status: "pending",
@@ -959,7 +1040,7 @@ async function runUpload(ctx: StepCtx): Promise<{ wizard: InboxWizard; ownerToke
 		if (disabled !== true && disabled.status !== 404) logFailure("workers-dev-off", disabled);
 	}
 	const ownerTokenHash = await hashOwnerToken(ownerToken);
-	await patchInbox(ctx.db, ctx.userId, ctx.now, {
+	await patchInbox(ctx.db, ctx.row.id, ctx.now, {
 		wizardStep: "upload",
 		ownerTokenHash,
 		scriptTag,
@@ -982,6 +1063,6 @@ async function runVerify(ctx: StepCtx): Promise<InboxWizard> {
 		const cloudflare = probe.failure.thrown ? describeCfFailure(probe.failure) : "";
 		return remember(ctx, { step: "verify", state: "fail", text: `The inbox does not answer yet.${http} A new address can take a few minutes.`, cloudflare });
 	}
-	await patchInbox(ctx.db, ctx.userId, ctx.now, { status: "ready", wizardStep: "verify", publicUrl: url, stepError: null });
+	await patchInbox(ctx.db, ctx.row.id, ctx.now, { status: "ready", wizardStep: "verify", publicUrl: url, stepError: null });
 	return wizardNow(ctx);
 }

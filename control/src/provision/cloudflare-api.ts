@@ -406,3 +406,52 @@ export async function attachHostname(input: { fetchImpl: typeof fetch; token: st
 	});
 	return read.ok ? true : read;
 }
+
+export interface CfDomain {
+	id: string;
+	hostname: string;
+	service: string;
+}
+
+function gone(read: true | CfFailure): true | CfFailure {
+	return read === true || read.status === 404 ? true : read;
+}
+
+export async function deleteWorker(input: { fetchImpl: typeof fetch; token: string; fetchMs: number; accountId: string; name: string }): Promise<true | CfFailure> {
+	const read = await cfCall({ ...input, method: "DELETE", path: `/accounts/${input.accountId}/workers/scripts/${input.name}` });
+	return gone(read.ok ? true : read);
+}
+
+export async function getD1(input: { fetchImpl: typeof fetch; token: string; fetchMs: number; accountId: string; databaseId: string }): Promise<{ uuid: string; name: string } | null | CfFailure> {
+	const read = await cfCall({ ...input, method: "GET", path: `/accounts/${input.accountId}/d1/database/${input.databaseId}` });
+	if (!read.ok) return read.status === 404 ? null : read;
+	const row = resultObject(read.body);
+	const uuid = typeof row?.uuid === "string" ? row.uuid : "";
+	const name = typeof row?.name === "string" ? row.name : "";
+	if (!ID_RE.test(uuid)) return null;
+	return { uuid, name };
+}
+
+export async function deleteD1(input: { fetchImpl: typeof fetch; token: string; fetchMs: number; accountId: string; databaseId: string }): Promise<true | CfFailure> {
+	const read = await cfCall({ ...input, method: "DELETE", path: `/accounts/${input.accountId}/d1/database/${input.databaseId}` });
+	return gone(read.ok ? true : read);
+}
+
+export async function listWorkersDomains(input: { fetchImpl: typeof fetch; token: string; fetchMs: number; accountId: string }): Promise<CfDomain[] | CfFailure> {
+	const read = await cfCall({ ...input, method: "GET", path: `/accounts/${input.accountId}/workers/domains` });
+	if (!read.ok) return read;
+	const domains: CfDomain[] = [];
+	for (const row of resultList(read.body)) {
+		const id = typeof row.id === "string" ? row.id : "";
+		const hostname = typeof row.hostname === "string" ? row.hostname.trim().toLowerCase() : "";
+		const service = typeof row.service === "string" ? row.service : "";
+		if (!ID_RE.test(id) || !hostname) continue;
+		domains.push({ id, hostname, service });
+	}
+	return domains;
+}
+
+export async function deleteWorkersDomain(input: { fetchImpl: typeof fetch; token: string; fetchMs: number; accountId: string; domainId: string }): Promise<true | CfFailure> {
+	const read = await cfCall({ ...input, method: "DELETE", path: `/accounts/${input.accountId}/workers/domains/${input.domainId}` });
+	return gone(read.ok ? true : read);
+}

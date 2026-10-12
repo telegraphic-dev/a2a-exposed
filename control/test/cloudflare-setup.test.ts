@@ -9,7 +9,7 @@ import {
 	saveCloudflareGrant,
 	sealCloudflareRefresh,
 } from "../src/auth/cloudflare-grant.ts";
-import { SESSION_COOKIE } from "../src/auth/cookies.ts";
+import { CLOUDFLARE_RESUME_COOKIE, SESSION_COOKIE } from "../src/auth/cookies.ts";
 import {
 	ACCESS_NOT_REQUESTED,
 	D1_WRITE,
@@ -295,7 +295,8 @@ test("the choice page explains a workers.dev inbox, then asks Cloudflare only fo
 	assert.match(html, /Make an agent I already run reachable by other agents/);
 	assert.match(html, /We connect it securely/);
 	assert.match(html, /Which web address\?/);
-	assert.match(html, /A free address from Cloudflare/);
+	assert.match(html, /A free workers\.dev address/);
+	assert.match(html, /My own domain/);
 	assert.match(html, /https:\/\/my-agent\.yourname\.workers\.dev/);
 	assert.match(html, /https:\/\/agent\.example\.com/);
 	assert.match(html, /class="choice"/);
@@ -350,7 +351,10 @@ test("the choice page explains a workers.dev inbox, then asks Cloudflare only fo
 	const landed = new URL(linked.headers.get("location") ?? "", origin);
 	assert.equal(landed.pathname, "/app/cloudflare");
 	assert.equal(landed.searchParams.get("connected"), "1");
-	const done = await app.request(landed, { headers: { cookie } });
+	const started = await app.request(landed, { headers: { cookie } });
+	assert.equal(started.status, 303);
+	assert.match(started.headers.get("location") ?? "", /\/app\/cloudflare\/[0-9a-f]{32}$/);
+	const done = await app.request(started.headers.get("location") ?? "", { headers: { cookie } });
 	const doneHtml = await done.text();
 	assert.match(doneHtml, /Check the Cloudflare account/);
 	assert.match(doneHtml, /<details class="restart">/);
@@ -360,7 +364,7 @@ test("the choice page explains a workers.dev inbox, then asks Cloudflare only fo
 	const held = doneHtml.slice(heldAt, doneHtml.indexOf("</details>", heldAt));
 	assert.match(held, /What do you want\?/);
 	assert.match(held, /Which web address\?/);
-	assert.match(held, /Review permissions/);
+	assert.match(held, /Create this agent/);
 	assert.equal(doneHtml.slice(0, heldAt).includes("What do you want?"), false);
 	assert.ok(doneHtml.indexOf("Check the Cloudflare account") < heldAt);
 	assert.match(doneHtml, /Cloudflare is connected, and the permissions this inbox needs are granted/);
@@ -806,6 +810,39 @@ test("Connect again continues to Cloudflare's consent screen after a fresh sign-
 	assert.equal(scope.includes("workers-routes.write"), false);
 	assert.equal(scope.includes("argotunnel.write"), false);
 	assert.equal(authorize.searchParams.get("code_challenge_method"), "S256");
+});
+
+test("consent continues when the fresh sign-in does not send the resume cookie", async (t) => {
+	t.after(githubFetch(consentScope("inbox", "workers")));
+	const db = openDb();
+	const app = createApp({
+		AUTH_SECRET: secret,
+		DB: db,
+		GITHUB_CLIENT_ID: "gh-id",
+		GITHUB_CLIENT_SECRET: "gh-secret",
+		CLOUDFLARE_OAUTH_CLIENT_ID: "cf-id",
+		CLOUDFLARE_OAUTH_CLIENT_SECRET: "cf-secret",
+	}, { database: db, inboxScript: "export default {}", inboxMigrations: [] });
+	const jar = new Map<string, string>();
+	await githubRoundTrip(app, jar);
+	await ageSession(db);
+	const stale = await app.request(`${origin}/app/cloudflare`, {
+		method: "POST",
+		headers: { origin, cookie: cookieHeader(jar), "content-type": "application/x-www-form-urlencoded" },
+		body: "action=consent&choice=inbox&host=workers",
+	});
+	applyCookies(jar, stale);
+	assert.equal(jar.has(CLOUDFLARE_RESUME_COOKIE), true);
+	jar.delete(CLOUDFLARE_RESUME_COOKIE);
+	const signedIn = await githubRoundTrip(app, jar, "/app/cloudflare");
+	const back = new URL(signedIn.headers.get("location") ?? "", origin);
+	assert.equal(back.pathname, "/app/cloudflare");
+	const continued = await app.request(back, { headers: { cookie: cookieHeader(jar) } });
+	assert.equal(continued.status, 303);
+	const authorize = new URL(continued.headers.get("location") ?? "");
+	assert.equal(authorize.origin, "https://dash.cloudflare.com");
+	assert.equal(authorize.pathname, "/oauth2/auth");
+	assert.equal(authorize.searchParams.get("scope"), consentScope("inbox", "workers"));
 });
 
 test("Continue to Cloudflare keeps the same choices after a fresh sign-in", async (t) => {

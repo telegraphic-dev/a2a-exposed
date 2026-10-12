@@ -228,7 +228,16 @@ export function inboxCanProvision(row: {
 }): boolean {
 	const choice = parseSetupChoice(row.choice);
 	const host = parseSetupHost(row.host);
-	if (!choice || !host || !includesInbox(choice) || !row.refresh_enc) return false;
+	if (!choice || !host) return false;
+	return grantCoversInbox(row, choice, host);
+}
+
+/** True when the saved grant can create this inbox. Tunnel permission blocks only a façade. */
+export function grantCoversInbox(row: {
+	granted_scope: string | null;
+	refresh_enc: string | null;
+}, choice: SetupChoice, host: SetupHost): boolean {
+	if (!includesInbox(choice) || !row.refresh_enc) return false;
 	const { known, granted } = grantedScopeSet(row.granted_scope);
 	if (!known) return false;
 	return setupScopes(choice, host).every((scope) => scope.id === TUNNEL_WRITE || granted.has(scope.id));

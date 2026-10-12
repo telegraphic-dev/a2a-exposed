@@ -143,10 +143,10 @@ export function renderSignIn(input: {
 				{input.turnstileSiteKey ? <p class="check-wait">Waiting for the check…</p> : ""}
 				<p class="providers">
 					{buttons.map(([id, label]) => input.turnstileSiteKey
-						? <button class={`provider provider-${id}`} name="provider" value={id} type="submit" disabled><ProviderMark id={id} />{label}</button>
+						? <button class={`provider provider-${id}`} name="provider" value={id} type="submit" disabled aria-disabled="true"><ProviderMark id={id} />{label}</button>
 						: <button class={`provider provider-${id}`} name="provider" value={id} type="submit"><ProviderMark id={id} />{label}</button>)}
 					{input.magicLink ? input.turnstileSiteKey
-						? <button class="provider provider-email" name="provider" value="email" type="submit" disabled>Email</button>
+						? <button class="provider provider-email" name="provider" value="email" type="submit" disabled aria-disabled="true">Email</button>
 						: <button class="provider provider-email" name="provider" value="email" type="submit">Email</button> : ""}
 				</p>
 			</form>

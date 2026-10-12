@@ -90,7 +90,7 @@ test("the agent list links to a wake page that edits through the owner and does 
 	assert.equal(created.status, 303);
 	const list = await (await app.request(`${origin}/app`, { headers: { cookie } })).text();
 	assert.match(list, /href="\/app\/agents\/northwind"/);
-	assert.match(list, /https:\/\/northwind\.example\.com/);
+	assert.match(list, /northwind\.example\.com/);
 
 	const unsigned = await app.request(`${origin}/app/agents/northwind`);
 	assert.equal(unsigned.status, 303);

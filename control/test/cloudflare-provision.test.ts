@@ -29,16 +29,23 @@ function assertChoicesHeld(html: string, actionOutside: string) {
 	assert.match(held, /Start a different setup/);
 	assert.match(held, /What do you want\?/);
 	assert.match(held, /Which web address\?/);
-	assert.match(held, /Review permissions/);
+	assert.match(held, /Create this agent/);
 	assert.equal(html.slice(0, start).includes("What do you want?"), false);
 	assert.ok(html.indexOf(actionOutside) < start, actionOutside);
 }
 
 function assertChoicesOpen(html: string) {
 	assert.equal(html.includes("Start a different setup"), false);
-	assert.match(html, /What do you want\?/);
-	assert.match(html, /Review permissions/);
-	assert.match(html, /To ask for a different setup, choose again/);
+	assert.equal(html.includes("What do you want?"), false);
+	assert.match(html, /In my Cloudflare account/);
+	assert.match(html, /Remove from my Cloudflare/);
+	assert.match(html, />Worker</);
+	assert.match(html, />Database</);
+}
+
+function refreshSeconds(html: string): number {
+	const match = html.match(/data-refresh-seconds="(\d+)"/);
+	return match ? Number(match[1]) : 0;
 }
 
 test("migration statements keep semicolons inside strings and drop line comments", () => {
@@ -116,6 +123,8 @@ interface ApiOptions {
 	verifyStatus?: number;
 	/** Remaining permission failures before that call succeeds. */
 	permissionLeft?: { d1?: number; query?: number; upload?: number; account?: number };
+	domains?: { id: string; hostname: string; service: string }[];
+	d1Name?: string;
 }
 
 function cloudflareApi(options: ApiOptions) {
@@ -185,6 +194,11 @@ function cloudflareApi(options: ApiOptions) {
 		if (url.endsWith("/subdomain") && method === "POST") return json({ success: true, result: { enabled: true } });
 		if (url.includes("/zones?")) return json({ success: true, result: options.zones ?? [] });
 		if (url.endsWith("/workers/domains") && method === "PUT") return json({ success: true, result: { hostname: "agent.example.com" } });
+		if (url.endsWith("/workers/domains") && method === "GET") return json({ success: true, result: options.domains ?? [] });
+		if (url.includes("/workers/domains/") && method === "DELETE") return json({ success: true, result: {} });
+		if (url.includes("/d1/database/") && method === "GET") return json({ success: true, result: { uuid: d1Id, name: options.d1Name ?? "my-agent" } });
+		if (url.includes("/d1/database/") && method === "DELETE") return json({ success: true, result: {} });
+		if (method === "DELETE" && /\/workers\/scripts\/[^/]+$/.test(url)) return json({ success: true, result: {} });
 		return new Response(`unexpected ${method} ${url}`, { status: 500 });
 	}) as typeof fetch;
 	return { calls, restore: () => { globalThis.fetch = original; } };
@@ -213,7 +227,7 @@ async function finishPermissionWaits(app: ReturnType<typeof createApp>, cookie: 
 		assert.equal(html.includes("code 7403"), false);
 		assert.equal(html.includes("No access to the specified resource"), false);
 		assert.equal(html.includes("Copy this owner token now."), false);
-		assert.match(response.headers.get("refresh") ?? "", /^[1-9]\d*$/);
+		assert.ok(refreshSeconds(html) >= 1);
 		response = await app.request(`${origin}/app/cloudflare`, { headers: { cookie } });
 		assert.equal(response.status, 200);
 		html = await response.text();
@@ -295,7 +309,9 @@ test("a workers.dev inbox walks one step at a time and the owner token is shown 
 	await consentInbox(app, cookie);
 	const api = cloudflareApi({});
 	t.after(api.restore);
-	const page = await (await app.request(`${origin}/app/cloudflare`, { headers: { cookie } })).text();
+	const started = await app.request(`${origin}/app/cloudflare?connected=1`, { headers: { cookie } });
+	assert.equal(started.status, 303);
+	const page = await (await app.request(started.headers.get("location") ?? "", { headers: { cookie } })).text();
 	assert.match(page, /Cloudflare is connected, and the permissions this inbox needs are granted/);
 	assert.match(page, /Check the Cloudflare account/);
 	assertChoicesHeld(page, "Check the Cloudflare account");
@@ -310,17 +326,17 @@ test("a workers.dev inbox walks one step at a time and the owner token is shown 
 	assert.equal(accountHtml.includes("https://my-agent.example.workers.dev"), false);
 
 	const address = await postStep(app, cookie, "action=step&step=address&name=my-agent");
-	assert.match(await address.text(), /free address name example/);
+	assert.match(await address.text(), /Address name example\.workers\.dev/);
 	assert.equal(apiCalls(api.calls).some((call) => call.url.includes("/d1/database")), false);
 	assert.ok(apiCalls(api.calls).some((call) => call.url.endsWith("/workers/subdomain")));
 
 	const named = await postStep(app, cookie, "action=step&step=name&name=my-agent");
-	assert.match(await named.text(), /This name is free/);
+	assert.match(await named.text(), /Inbox name my-agent: free/);
 	assert.equal(apiCalls(api.calls).some((call) => call.method === "POST" && call.url.endsWith("/d1/database")), false);
 	assert.equal(apiCalls(api.calls).some((call) => call.method === "GET" && call.url.includes("/workers/scripts/") && !call.url.endsWith("/settings")), false);
 
 	const database = await postStep(app, cookie, "action=step&step=database&name=my-agent");
-	assert.match(await database.text(), /The database is created/);
+	assert.match(await database.text(), /Database my-agent is created/);
 	assert.equal(apiCalls(api.calls).filter((call) => call.method === "POST" && call.url.endsWith("/d1/database")).length, 1);
 	assert.equal(apiCalls(api.calls).some((call) => call.url.endsWith("/query")), false);
 
@@ -376,8 +392,10 @@ test("a workers.dev inbox walks one step at a time and the owner token is shown 
 	assert.equal(apiCalls(api.calls).length, beforeAgain);
 	assert.match(await again.text(), /The inbox answers/);
 	const accountPage = await (await app.request(`${origin}/app`, { headers: { cookie } })).text();
-	assert.match(accountPage, /Your Cloudflare inbox is at/);
-	assert.match(accountPage, /https:\/\/my-agent\.example\.workers\.dev/);
+	assert.match(accountPage, /my-agent\.example\.workers\.dev/);
+	assert.match(accountPage, /In your Cloudflare/);
+	assert.match(accountPage, new RegExp(`/app/cloudflare/${inbox?.id}`));
+	assert.equal(accountPage.includes("https://my-agent.example.workers.dev"), false);
 	assert.equal(accountPage.includes(shown), false);
 });
 
@@ -589,7 +607,7 @@ test("a missing workers.dev name asks for one and does not create a database", a
 	assert.match(html, /Create this workers\.dev name/);
 	assert.equal(api.calls.some((call) => call.method === "POST" && call.url.endsWith("/d1/database")), false);
 	const retried = await postStep(app, cookie, "action=step&step=address&name=my-agent&subdomain=picked");
-	assert.match(await retried.text(), /free address name picked/);
+	assert.match(await retried.text(), /Address name picked\.workers\.dev/);
 	assert.ok(api.calls.some((call) => call.method === "PUT" && call.url.endsWith("/workers/subdomain")));
 	assert.equal(api.calls.some((call) => call.method === "POST" && call.url.endsWith("/d1/database")), false);
 });
@@ -866,7 +884,7 @@ test("creating the database waits through code 10000, then continues", async (t)
 	const started = await postStep(app, cookie, "action=step&step=database&name=my-agent");
 	const done = await finishPermissionWaits(app, cookie, started);
 	assert.equal(done.hops, 2);
-	assert.match(done.html, /The database is created/);
+	assert.match(done.html, /Database my-agent is created/);
 	assert.match(done.html, /Apply the database setup/);
 	assert.equal(done.html.includes(PERMISSION_WAIT), false);
 	assert.equal(done.response.headers.get("refresh"), null);
@@ -956,7 +974,7 @@ test("a permission wait does not run again until the pause has passed", async (t
 	const waiting = await postStep(app, cookie, "action=step&step=database&name=my-agent");
 	const html = await waiting.text();
 	assert.match(html, new RegExp(PERMISSION_WAIT.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-	const refresh = Number(waiting.headers.get("refresh"));
+	const refresh = refreshSeconds(html);
 	assert.ok(refresh >= 58 && refresh <= 60, String(refresh));
 	assert.equal(creates(), 1);
 	const early = await app.request(`${origin}/app/cloudflare`, { headers: { cookie } });
@@ -1034,7 +1052,194 @@ test("a stale sign-in during a permission wait offers Try again and then continu
 	const continuedHtml = await continued.text();
 	assert.equal(continued.status, 200);
 	assert.match(continuedHtml, /Waiting for Cloudflare to apply the new permission/);
-	assert.match(continued.headers.get("refresh") ?? "", /^[1-9]\d*$/);
+	assert.ok(refreshSeconds(continuedHtml) >= 1);
 	assert.equal(continuedHtml.includes(">Try again<"), false);
 	assert.equal(creates(), 2);
+});
+
+test("a setup step answers with the new page instead of a reload", async (t) => {
+	t.after(githubFetch(consentScope("inbox", "workers")));
+	const db = openDb();
+	const app = appFor(db);
+	const cookie = await signIn(app);
+	await consentInbox(app, cookie);
+	const api = cloudflareApi({});
+	t.after(api.restore);
+	const response = await app.request(`${origin}/app/cloudflare`, {
+		method: "POST",
+		headers: { origin, cookie, "content-type": "application/x-www-form-urlencoded", accept: "application/json", "x-setup-partial": "1" },
+		body: "action=step&step=account&name=my-agent",
+	});
+	assert.equal(response.status, 200);
+	assert.match(response.headers.get("content-type") ?? "", /json/);
+	const body = await response.json() as { html?: string; redirect?: string };
+	assert.equal(body.redirect, undefined);
+	assert.match(body.html ?? "", /This Cloudflare account is selected/);
+	assert.match(body.html ?? "", /data-setup-root/);
+	assert.equal(response.headers.get("refresh"), null);
+});
+
+test("your own domain lists the domains in the account", async (t) => {
+	t.after(githubFetch(consentScope("inbox", "zone")));
+	const db = openDb();
+	const app = appFor(db);
+	const cookie = await signIn(app);
+	await consentInbox(app, cookie, "zone");
+	const zoneId = "d".repeat(32);
+	const api = cloudflareApi({ zones: [{ id: zoneId, name: "example.com", status: "active" }] });
+	t.after(api.restore);
+	const account = await postStep(app, cookie, "action=step&step=account");
+	assert.match(await account.text(), /Show my domains/);
+	const listed = await postStep(app, cookie, "action=step&step=address");
+	const html = await listed.text();
+	assert.match(html, /Which domain\?/);
+	assert.match(html, /example\.com/);
+	assert.match(html, /name="zone"/);
+	assert.equal(html.includes('name="hostname"'), false);
+	const picked = await postStep(app, cookie, `action=step&step=address&zone=${zoneId}&name=myagent`);
+	assert.match(await picked.text(), /Domain myagent\.example\.com/);
+	const userId = (await db.prepare('SELECT id FROM "user"').first<{ id: string }>())?.id ?? "";
+	const row = await readCloudflareInbox(db, userId);
+	assert.equal(row?.hostname, "myagent.example.com");
+	assert.equal(row?.zone_id, zoneId);
+	assert.equal(api.calls.some((call) => call.method === "POST" && call.url.endsWith("/d1/database")), false);
+});
+
+test("a finished agent stays, and Create this agent starts another", async (t) => {
+	t.after(githubFetch(consentScope("inbox", "workers")));
+	const db = openDb();
+	const app = appFor(db);
+	const cookie = await signIn(app);
+	await consentInbox(app, cookie);
+	const api = cloudflareApi({});
+	t.after(api.restore);
+	await walkWorkers(app, cookie, "verify");
+	const userId = (await db.prepare('SELECT id FROM "user"').first<{ id: string }>())?.id ?? "";
+	const first = await readCloudflareInbox(db, userId);
+	assert.equal(first?.status, "ready");
+	const before = apiCalls(api.calls).length;
+	const created = await app.request(`${origin}/app/cloudflare`, {
+		method: "POST",
+		headers: { origin, cookie, "content-type": "application/x-www-form-urlencoded" },
+		body: "action=create&choice=inbox&host=workers",
+	});
+	assert.equal(created.status, 303);
+	const nextUrl = new URL(created.headers.get("location") ?? "", origin);
+	assert.match(nextUrl.pathname, /^\/app\/cloudflare\/[0-9a-f]{32}$/);
+	assert.notEqual(nextUrl.pathname, `/app/cloudflare/${first?.id}`);
+	const page = await (await app.request(nextUrl, { headers: { cookie } })).text();
+	assert.match(page, /Check the Cloudflare account/);
+	assert.equal(page.includes("https://my-agent.example.workers.dev"), false);
+	assert.equal(apiCalls(api.calls).length, before);
+	const rows = await db.prepare(`SELECT id, status, public_url FROM cloudflare_inbox WHERE "userId" = ? ORDER BY created_at`).bind(userId).all<{ id: string; status: string; public_url: string | null }>();
+	assert.equal(rows.results.length, 2);
+	assert.equal(rows.results[0]?.status, "ready");
+	assert.equal(rows.results[0]?.public_url, "https://my-agent.example.workers.dev");
+	assert.equal(rows.results[1]?.status, "pending");
+	assert.equal(rows.results[1]?.id, nextUrl.pathname.slice("/app/cloudflare/".length));
+});
+
+async function readyInbox(app: ReturnType<typeof createApp>, cookie: string, db: ReturnType<typeof openDb>) {
+	await walkWorkers(app, cookie, "verify");
+	const userId = (await db.prepare('SELECT id FROM "user"').first<{ id: string }>())?.id ?? "";
+	const row = await readCloudflareInbox(db, userId);
+	assert.ok(row?.id);
+	return row!;
+}
+
+test("Remove from my Cloudflare deletes the Worker and database this setup created", async (t) => {
+	t.after(githubFetch(consentScope("inbox", "workers")));
+	const db = openDb();
+	const app = appFor(db);
+	const cookie = await signIn(app);
+	await consentInbox(app, cookie);
+	const options: ApiOptions = {};
+	const api = cloudflareApi(options);
+	t.after(api.restore);
+	const row = await readyInbox(app, cookie, db);
+	options.scriptExists = true;
+	options.scriptTag = row.script_tag ?? "";
+	const before = api.calls.length;
+	const confirm = await (await app.request(`${origin}/app/cloudflare/${row.id}?remove=1`, { headers: { cookie } })).text();
+	assert.match(confirm, /Remove from my Cloudflare deletes only what this setup created/);
+	assert.match(confirm, /Worker/);
+	assert.match(confirm, /my-agent/);
+	assert.match(confirm, /Database/);
+	assert.match(confirm, /Forget only/);
+	assert.equal(api.calls.length, before);
+	const worker = await app.request(`${origin}/app/cloudflare/${row.id}`, {
+		method: "POST",
+		headers: { origin, cookie, "content-type": "application/x-www-form-urlencoded" },
+		body: "action=remove",
+	});
+	const workerHtml = await worker.text();
+	assert.match(workerHtml, /my-agent is removed/);
+	assert.match(workerHtml, /data-auto="1"/);
+	assert.equal(api.calls.filter((call) => call.method === "DELETE" && /\/workers\/scripts\/my-agent$/.test(call.url)).length, 1);
+	assert.equal(api.calls.filter((call) => call.method === "DELETE" && call.url.includes("/d1/database/")).length, 0);
+	const finished = await app.request(`${origin}/app/cloudflare/${row.id}`, {
+		method: "POST",
+		headers: { origin, cookie, "content-type": "application/x-www-form-urlencoded" },
+		body: "action=remove",
+	});
+	assert.equal(finished.status, 303);
+	assert.match(finished.headers.get("location") ?? "", /removedCloudflare=1/);
+	assert.equal(api.calls.filter((call) => call.method === "DELETE" && call.url.includes("/d1/database/")).length, 1);
+	const home = await (await app.request(finished.headers.get("location") ?? "", { headers: { cookie } })).text();
+	assert.match(home, /That agent was removed from your Cloudflare account/);
+	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM cloudflare_inbox`).first<{ n: number }>())?.n, 0);
+});
+
+test("a Worker this setup did not create stays, and one already deleted counts as gone", async (t) => {
+	t.after(githubFetch(consentScope("inbox", "workers")));
+	const db = openDb();
+	const app = appFor(db);
+	const cookie = await signIn(app);
+	await consentInbox(app, cookie);
+	const options: ApiOptions = {};
+	const api = cloudflareApi(options);
+	t.after(api.restore);
+	const row = await readyInbox(app, cookie, db);
+	options.scriptExists = true;
+	options.scriptTag = "not-this-setup";
+	const mismatch = await app.request(`${origin}/app/cloudflare/${row.id}`, {
+		method: "POST",
+		headers: { origin, cookie, "content-type": "application/x-www-form-urlencoded" },
+		body: "action=remove",
+	});
+	assert.match(await mismatch.text(), /This Worker was not created by this setup, so it stays/);
+	assert.equal(api.calls.some((call) => call.method === "DELETE" && call.url.includes("/workers/scripts/")), false);
+	await db.prepare(`UPDATE cloudflare_inbox SET status = 'ready', step_error = NULL WHERE id = ?`).bind(row.id).run();
+	options.scriptExists = false;
+	const gone = await app.request(`${origin}/app/cloudflare/${row.id}`, {
+		method: "POST",
+		headers: { origin, cookie, "content-type": "application/x-www-form-urlencoded" },
+		body: "action=remove",
+	});
+	assert.match(await gone.text(), /Already gone/);
+	assert.equal(api.calls.some((call) => call.method === "DELETE" && call.url.includes("/workers/scripts/")), false);
+});
+
+test("Forget only drops the dashboard row and does not call Cloudflare", async (t) => {
+	t.after(githubFetch(consentScope("inbox", "workers")));
+	const db = openDb();
+	const app = appFor(db);
+	const cookie = await signIn(app);
+	await consentInbox(app, cookie);
+	const api = cloudflareApi({});
+	t.after(api.restore);
+	const row = await readyInbox(app, cookie, db);
+	const before = api.calls.length;
+	const forgot = await app.request(`${origin}/app/cloudflare/${row.id}`, {
+		method: "POST",
+		headers: { origin, cookie, "content-type": "application/x-www-form-urlencoded" },
+		body: "action=forget",
+	});
+	assert.equal(forgot.status, 303);
+	assert.match(forgot.headers.get("location") ?? "", /forgotCloudflare=1/);
+	assert.equal(api.calls.length, before);
+	const home = await (await app.request(forgot.headers.get("location") ?? "", { headers: { cookie } })).text();
+	assert.match(home, /dropped from this dashboard/);
+	assert.match(home, /still in your Cloudflare account/);
+	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM cloudflare_inbox`).first<{ n: number }>())?.n, 0);
 });

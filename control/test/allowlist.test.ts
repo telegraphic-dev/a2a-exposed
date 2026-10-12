@@ -295,7 +295,7 @@ test("connecting Cloudflare records the account, and disconnect removes it", asy
 	const session = github.headers.getSetCookie().find((value) => value.startsWith(`${SESSION_COOKIE}=`))!.split(";")[0];
 	const accountPage = await app.request(`${origin}/app`, { headers: { cookie: session } });
 	const html = await accountPage.text();
-	assert.match(html, /Set me up on Cloudflare/);
+	assert.match(html, /In my Cloudflare account/);
 	assert.match(html, /href="\/app\/cloudflare"/);
 	assert.match(html, /Lets Inbox set things up in your Cloudflare account\. It isn&#39;t used to sign in\./);
 	assert.equal(html.includes("Continue with Cloudflare"), false);
