@@ -318,7 +318,7 @@ test("connecting Cloudflare records the account, and disconnect removes it", asy
 	});
 	assert.equal(staleReview.status, 200);
 	const staleReviewHtml = await staleReview.text();
-	assert.match(staleReviewHtml, /Workers Edit/);
+	assert.match(staleReviewHtml, /Workers Scripts Edit/);
 	assert.equal(staleReviewHtml.includes(CLOUDFLARE_REAUTH_NOTICE), false);
 	const stale = await app.request(`${origin}/app/cloudflare`, {
 		method: "POST",
@@ -344,7 +344,7 @@ test("connecting Cloudflare records the account, and disconnect removes it", asy
 	assert.equal(continued.status, 303);
 	const continuedUrl = new URL(continued.headers.get("location") ?? "");
 	assert.equal(continuedUrl.origin, "https://dash.cloudflare.com");
-	assert.equal(continuedUrl.searchParams.get("scope"), "user-details.read account-settings.read workers:write d1.write offline_access");
+	assert.equal(continuedUrl.searchParams.get("scope"), "user-details.read account-settings.read workers-scripts.edit d1.write offline_access");
 	assert.ok(continued.headers.getSetCookie().some((value) => value.startsWith(`${CLOUDFLARE_RESUME_COOKIE}=`) && value.includes("Max-Age=0")));
 
 	const fresh = await providerCallback(app, "github");
@@ -387,7 +387,7 @@ test("connecting Cloudflare records the account, and disconnect removes it", asy
 	assert.equal(connect.status, 303);
 	const authorize = new URL(connect.headers.get("location") ?? "");
 	assert.equal(authorize.origin, "https://dash.cloudflare.com");
-	assert.equal(authorize.searchParams.get("scope"), "user-details.read account-settings.read workers:write d1.write offline_access");
+	assert.equal(authorize.searchParams.get("scope"), "user-details.read account-settings.read workers-scripts.edit d1.write offline_access");
 	assert.equal(authorize.searchParams.get("code_challenge_method"), "S256");
 	assert.match(authorize.searchParams.get("redirect_uri") ?? "", /\/api\/auth\/callback\/cloudflare$/);
 	const state = authorize.searchParams.get("state") ?? "";

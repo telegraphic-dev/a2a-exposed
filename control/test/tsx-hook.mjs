@@ -16,14 +16,21 @@ export async function resolve(specifier, context, nextResolve) {
 		const file = path.join(brandDir(), specifier.slice("@brand/".length));
 		return { url: pathToFileURL(file).href, shortCircuit: true };
 	}
-	if (specifier.endsWith(".tsx")) {
+	if (specifier.endsWith(".tsx") || specifier.endsWith(".sql?raw")) {
 		const parent = context.parentURL ? path.dirname(fileURLToPath(context.parentURL)) : root;
-		return { url: pathToFileURL(path.resolve(parent, specifier)).href, shortCircuit: true };
+		const file = specifier.endsWith(".sql?raw") ? specifier.slice(0, -"?raw".length) : specifier;
+		const url = pathToFileURL(path.resolve(parent, file)).href;
+		return { url: specifier.endsWith(".sql?raw") ? `${url}?raw` : url, shortCircuit: true };
 	}
 	return nextResolve(specifier, context);
 }
 
 export async function load(url, context, nextLoad) {
+	if (url.includes(".sql?raw")) {
+		const file = fileURLToPath(url.slice(0, url.indexOf(".sql?raw") + ".sql".length));
+		const source = fs.readFileSync(file, "utf8");
+		return { format: "module", source: `export default ${JSON.stringify(source)};`, shortCircuit: true };
+	}
 	if (url.endsWith(".ts") || url.endsWith(".tsx")) {
 		const source = fs.readFileSync(fileURLToPath(url), "utf8");
 		const result = esbuild.transformSync(source, {

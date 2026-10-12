@@ -1,32 +1,32 @@
 // Scopes for "Set me up on Cloudflare". Each id is what the authorize request sends.
 //
-// A dashboard OAuth client stores dot-delimited ids from GET /client/v4/oauth/scopes.
-// The create-client API rejects colon-delimited scopes. Wrangler's account:read,
-// user:read, d1:write, zone:read, and workers_routes:write are the first-party
-// catalog, not those ids, except where the dotted form is the same word
-// (d1.write, zone.read). A live probe refused the colon forms with the same
-// invalid_scope error as an invented scope.
+// The staging OAuth client allows these ids: d1.write, workers-scripts.edit,
+// workers-routes.write, dns.write, zone.read, zone-access.read, zone-access.write,
+// argotunnel.read, argotunnel.write, account-settings.read, user-details.read.
+// offline_access is not in that list. It is a protocol scope, and the request
+// still includes it so Cloudflare can issue a refresh token.
 //
-// Staging accepted user-details.read and account-settings.read, then refused
-// workers-scripts.write. The client was registered with Workers Edit, which is
-// wrangler's workers:write (scripts, routes, KV, and zones), not Workers Scripts
-// Write. workers.write is not in the scope catalog. That is the one colon scope
-// this request sends.
+// Cloudflare refused workers:write and workers-scripts.write. Uploading a script
+// uses workers-scripts.edit (Workers Scripts Edit). Colon scopes such as
+// wrangler's account:read, user:read, and workers_routes:write are not registered
+// on this client.
 //
 // Dashboard label → id:
 // - User Details Read → user-details.read
 // - Account Settings Read → account-settings.read
-// - Workers Edit → workers:write
-// - D1 Edit → d1.write
-// - Workers Routes Edit → workers-routes.write
-// - DNS Edit → dns.write
+// - Workers Scripts Edit → workers-scripts.edit
+// - D1 Write → d1.write
+// - Workers Routes Write → workers-routes.write
+// - DNS Write → dns.write
 // - Zone Read → zone.read
-// - Argo Tunnel (Legacy) Edit → argotunnel.write (catalog name Cloudflare Tunnel Write)
-// - offline_access (a protocol scope added from the refresh_token grant, not the picker)
+// - Cloudflare Tunnel Write → argotunnel.write
+// - offline_access (refresh token; not a picker permission)
 //
-// Not requested: access-app.write (Access Apps Edit). A façade behind Access is
-// not a choice here.
-// Not requested: workers-platform.write, workers-scripts.write, and account.read.
+// Not requested, even when the client allows them: zone-access.read and
+// zone-access.write (Access). A façade behind Access is not a choice here.
+// argotunnel.read is not requested. Creating a tunnel uses argotunnel.write.
+// Not requested: workers:write, workers-scripts.write, workers-platform.write,
+// access-app.write, and account.read.
 
 export type SetupChoice = "inbox" | "facade" | "both";
 export type SetupHost = "workers" | "zone";
@@ -42,8 +42,8 @@ export interface ScopeReason {
 
 export const USER_DETAILS_READ = "user-details.read";
 export const ACCOUNT_SETTINGS_READ = "account-settings.read";
-/** Wrangler's Workers Edit scope. Not workers-scripts.write, which staging refused. */
-export const WORKERS_WRITE = "workers:write";
+/** Workers Scripts Edit. Staging refused workers:write and workers-scripts.write. */
+export const WORKERS_SCRIPTS_EDIT = "workers-scripts.edit";
 export const D1_WRITE = "d1.write";
 export const WORKERS_ROUTES_WRITE = "workers-routes.write";
 export const DNS_WRITE = "dns.write";
@@ -51,8 +51,8 @@ export const ZONE_READ = "zone.read";
 export const TUNNEL_WRITE = "argotunnel.write";
 export const OFFLINE_ACCESS = "offline_access";
 
-/** Shown after consent. Provisioning is not this step. */
-export const SETUP_NOT_PROVISIONED = "Nothing has been created in your Cloudflare account yet. Creating the Worker, the database, and any tunnel is a later step.";
+/** Shown when this page has not created anything and is not offering to create the inbox. */
+export const SETUP_NOT_PROVISIONED = "Nothing has been created in your Cloudflare account yet.";
 
 export const TUNNEL_CONNECTOR_LATER = "A tunnel needs cloudflared running on a machine you control. This page cannot start that, and that step is not built yet.";
 
@@ -115,14 +115,14 @@ export function setupScopes(choice: SetupChoice, host: SetupHost): ScopeReason[]
 			declined: "Without Account Settings Read, this dashboard cannot see which Cloudflare account you picked, so this setup cannot continue.",
 		},
 		{
-			id: WORKERS_WRITE,
-			name: "Workers Edit",
+			id: WORKERS_SCRIPTS_EDIT,
+			name: "Workers Scripts Edit",
 			why: facade && !inbox
 				? "Uploads the façade Worker into that account."
 				: facade
 					? "Uploads the inbox Worker and the façade Worker into that account."
 					: "Uploads the inbox Worker into that account.",
-			declined: `Without Workers Edit, the Worker cannot be uploaded. That blocks ${variant(choice)}.`,
+			declined: `Without Workers Scripts Edit, the Worker cannot be uploaded. That blocks ${variant(choice)}.`,
 		},
 		{
 			id: D1_WRITE,
@@ -148,7 +148,7 @@ export function setupScopes(choice: SetupChoice, host: SetupHost): ScopeReason[]
 			{
 				id: ZONE_READ,
 				name: "Zone Read",
-				why: "Lists the domains on the Cloudflare account you pick, so a later step can ask which one to use.",
+				why: "Lists the domains on the Cloudflare account you pick, so this page can check that your address is on one of them.",
 				declined: "Without Zone Read, the domains on your Cloudflare account cannot be listed. That blocks a setup on your own domain. A workers.dev address does not need it.",
 			},
 		);
@@ -207,6 +207,26 @@ export interface SetupReport {
 	blocked: string[];
 	refreshSaved: boolean;
 	facade: boolean;
+	inbox: boolean;
+	host: SetupHost;
+}
+
+/**
+ * True when the saved grant can create an inbox. A missing tunnel permission blocks
+ * only the façade. The inbox does not need it.
+ */
+export function inboxCanProvision(row: {
+	choice: string;
+	host: string;
+	granted_scope: string | null;
+	refresh_enc: string | null;
+}): boolean {
+	const choice = parseSetupChoice(row.choice);
+	const host = parseSetupHost(row.host);
+	if (!choice || !host || !includesInbox(choice) || !row.refresh_enc) return false;
+	const { known, granted } = grantedScopeSet(row.granted_scope);
+	if (!known) return false;
+	return setupScopes(choice, host).every((scope) => scope.id === TUNNEL_WRITE || granted.has(scope.id));
 }
 
 export function describeSetupGrant(row: {
@@ -234,5 +254,7 @@ export function describeSetupGrant(row: {
 		blocked,
 		refreshSaved: Boolean(row.refresh_enc),
 		facade: includesFacade(choice),
+		inbox: includesInbox(choice),
+		host,
 	};
 }

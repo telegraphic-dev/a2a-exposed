@@ -94,6 +94,22 @@ if (!largest || largest.size > limit) {
 	process.exit(1);
 }
 
+const inbox = files.find((file) => file.endsWith("inbox-worker.js.txt"));
+if (!inbox || fs.statSync(inbox).size < 1000) {
+	console.error("check-build: inbox-worker.js.txt is missing from the build. Run node scripts/bundle-inbox.mjs first.");
+	process.exit(1);
+}
+const inboxText = fs.readFileSync(inbox, "utf8");
+if (!inboxText.includes("a2a-exposed inbox") || !inboxText.includes("export")) {
+	console.error("check-build: inbox-worker.js.txt is not the bundled inbox");
+	process.exit(1);
+}
+const migrations = files.find((file) => file.endsWith("inbox-migrations.json"));
+if (!migrations || !fs.readFileSync(migrations, "utf8").includes("0001_init.sql")) {
+	console.error("check-build: inbox-migrations.json is missing from the build. Run node scripts/bundle-inbox.mjs first.");
+	process.exit(1);
+}
+
 const blob = files.map((file) => fs.readFileSync(file, "utf8")).join("\n");
 if (!blob.includes("sign in / create an agent")) {
 	console.error("check-build: built assets are missing the neutral page");

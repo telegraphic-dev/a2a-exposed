@@ -19,6 +19,10 @@ secrets.json
 deploy.env
 config.env
 
+# inbox script bundled into the control plane at build time
+control/public/inbox-worker.js.txt
+control/public/inbox-migrations.json
+
 # generated at npm pack time (cli/scripts/sync-worker.mjs, prepack)
 cli/worker/
 cli/LICENSE
