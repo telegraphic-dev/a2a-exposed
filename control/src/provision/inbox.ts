@@ -18,6 +18,7 @@ import {
 	listZones,
 	registerWorkersDevSubdomain,
 	setWorkersDevEnabled,
+	permissionNotReady,
 	subdomainMissing,
 	uploadWorker,
 	workerProvisionTag,
@@ -44,6 +45,11 @@ export interface InboxMigration {
 }
 
 const WORKING_MS = 2 * 60 * 1000;
+/** Shown while a just-granted permission has not reached D1 or the script upload yet. */
+export const PERMISSION_WAIT = "Waiting for Cloudflare to apply the new permission…";
+/** Four tries: the first call, then these pauses. About 15 seconds in all. */
+export const PERMISSION_DELAYS_MS = [2_000, 4_000, 8_000];
+export const PERMISSION_TRIES = 4;
 const MIGRATIONS_TABLE = "CREATE TABLE IF NOT EXISTS d1_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL)";
 
 export interface ProvisionFields {
@@ -79,13 +85,19 @@ export interface InboxWizard {
 	publicUrl: string | null;
 	facade: boolean;
 	host: SetupHost;
+	/** Seconds until the browser reloads this page to try the permission again. */
+	refreshSeconds?: number;
 }
 
 interface StoredStepNote {
 	step: WizardStepId;
-	state: "fail" | "fixable";
+	state: "fail" | "fixable" | "wait";
 	text: string;
 	cloudflare: string;
+	/** Permission tries already made for this step. The next one adds one. */
+	permissionTries?: number;
+	/** Earliest time the page may try this step again. */
+	retryAt?: number;
 	accounts?: { id: string; name: string }[];
 	zones?: { name: string }[];
 	/** When set, the name step can be chosen again. */
@@ -96,13 +108,14 @@ interface StoredStepNote {
 	subdomain?: string;
 }
 
-function logFailure(step: string, failure: CfFailure): void {
+function logFailure(step: string, failure: CfFailure, attempt?: number): void {
 	const line: Record<string, unknown> = {
 		event: "cloudflare_provision_failed",
 		step,
 		status: failure.status,
 		errors: failure.errors ?? [],
 	};
+	if (attempt) line.attempt = attempt;
 	if (failure.thrown) {
 		line.name = failure.thrown.name;
 		line.message = failure.thrown.message;
@@ -326,6 +339,7 @@ function continueButton(id: WizardStepId, host: SetupHost): string {
 }
 
 function controlFor(note: StoredStepNote, host: SetupHost): { control: WizardControl; button: string } {
+	if (note.state === "wait") return { control: "", button: "" };
 	if (note.state === "fail") return { control: "retry", button: "Try again" };
 	if (note.accounts?.length) return { control: "account", button: "Use this account" };
 	if (note.step === "address" && host === "workers") return { control: "subdomain", button: "Create this workers.dev name" };
@@ -345,7 +359,7 @@ function readNote(raw: string | null | undefined): StoredStepNote | null {
 	}
 	if (!parsed || typeof parsed !== "object") return null;
 	const note = parsed as StoredStepNote;
-	if (!isStep(note.step) || (note.state !== "fail" && note.state !== "fixable")) return null;
+	if (!isStep(note.step) || (note.state !== "fail" && note.state !== "fixable" && note.state !== "wait")) return null;
 	if (typeof note.text !== "string" || typeof note.cloudflare !== "string") return null;
 	const accounts = Array.isArray(note.accounts)
 		? note.accounts.filter((account) => account && ID_RE.test(account.id) && typeof account.name === "string").slice(0, 12)
@@ -356,6 +370,12 @@ function readNote(raw: string | null | undefined): StoredStepNote | null {
 	const name = typeof note.name === "string" ? note.name.slice(0, 63) : "";
 	const hostname = typeof note.hostname === "string" ? note.hostname.slice(0, 253) : "";
 	const subdomain = typeof note.subdomain === "string" ? note.subdomain.slice(0, 63) : "";
+	const permissionTries = Number.isInteger(note.permissionTries) && (note.permissionTries ?? 0) >= 1 && (note.permissionTries ?? 0) < PERMISSION_TRIES
+		? note.permissionTries
+		: undefined;
+	const retryAt = typeof note.retryAt === "number" && Number.isFinite(note.retryAt) && note.retryAt > 0 && note.retryAt < 1e15
+		? note.retryAt
+		: undefined;
 	return {
 		step: note.step,
 		state: note.state,
@@ -367,6 +387,8 @@ function readNote(raw: string | null | undefined): StoredStepNote | null {
 		...(name ? { name } : {}),
 		...(hostname ? { hostname } : {}),
 		...(subdomain ? { subdomain } : {}),
+		...(note.state === "wait" && permissionTries ? { permissionTries } : {}),
+		...(note.state === "wait" && retryAt ? { retryAt } : {}),
 	};
 }
 
@@ -384,6 +406,8 @@ function noteJson(note: StoredStepNote): string {
 		...(note.name ? { name: note.name.slice(0, 63) } : {}),
 		...(note.hostname ? { hostname: note.hostname.slice(0, 253) } : {}),
 		...(note.subdomain ? { subdomain: note.subdomain.slice(0, 63) } : {}),
+		...(note.state === "wait" && note.permissionTries ? { permissionTries: note.permissionTries } : {}),
+		...(note.state === "wait" && note.retryAt ? { retryAt: note.retryAt } : {}),
 	});
 }
 
@@ -450,6 +474,10 @@ export function viewInboxWizard(input: {
 		}
 		return { ...meta, id, state: "wait", text: "Not checked yet.", cloudflare: "", control: "", button: "" };
 	});
+	const waiting = Boolean(note && note.state === "wait" && note.step === next && typeof note.retryAt === "number");
+	const refreshSeconds = waiting
+		? Math.max(1, Math.ceil(((note?.retryAt ?? 0) - Date.now()) / 1000))
+		: undefined;
 	return {
 		steps,
 		fields,
@@ -458,7 +486,17 @@ export function viewInboxWizard(input: {
 		publicUrl: done ? input.inbox?.public_url ?? null : null,
 		facade: Boolean(report?.facade),
 		host,
+		...(refreshSeconds ? { refreshSeconds } : {}),
 	};
+}
+
+/** True when this page should try the waiting step again. A future `retryAt` waits. */
+export function permissionRetryDue(inbox: InboxRow | null, now = Date.now()): boolean {
+	if (!inbox || inbox.status === "ready") return false;
+	const note = readNote(inbox.step_error);
+	if (!note || note.state !== "wait") return false;
+	if (typeof note.retryAt !== "number") return true;
+	return now >= note.retryAt;
 }
 
 interface StepCtx {
@@ -477,6 +515,7 @@ interface StepCtx {
 	script: string;
 	migrations: InboxMigration[];
 	grant: { choice: string; host: string; granted_scope: string | null; refresh_enc: string | null };
+	permissionDelaysMs: number[];
 }
 
 async function wizardNow(ctx: StepCtx, overlay?: StoredStepNote | null): Promise<InboxWizard> {
@@ -496,6 +535,29 @@ function noted(ctx: StepCtx, note: StoredStepNote): StoredStepNote {
 async function remember(ctx: StepCtx, note: StoredStepNote): Promise<InboxWizard> {
 	await patchInbox(ctx.db, ctx.userId, ctx.now, { stepError: noteJson(noted(ctx, note)), status: "pending" });
 	return wizardNow(ctx);
+}
+
+/**
+ * A permission that was just granted can fail the first calls. Try again after a
+ * short pause, up to 4 times. Other failures show immediately.
+ */
+async function failOrWait(ctx: StepCtx, step: WizardStepId, failure: CfFailure, text: string, logStep: string): Promise<InboxWizard> {
+	const previous = readNote(ctx.row.step_error);
+	const tries = previous?.step === step && previous.permissionTries ? previous.permissionTries + 1 : 1;
+	const permission = permissionNotReady(failure);
+	logFailure(logStep, failure, permission ? tries : undefined);
+	if (!permission || tries >= PERMISSION_TRIES) {
+		return remember(ctx, { step, state: "fail", text, cloudflare: describeCfFailure(failure) });
+	}
+	const delay = ctx.permissionDelaysMs[tries - 1] ?? ctx.permissionDelaysMs.at(-1) ?? PERMISSION_DELAYS_MS.at(-1) ?? 8_000;
+	return remember(ctx, {
+		step,
+		state: "wait",
+		text: PERMISSION_WAIT,
+		cloudflare: "",
+		permissionTries: tries,
+		retryAt: ctx.now + delay,
+	});
 }
 
 function plannedUrl(row: InboxRow, host: SetupHost): string {
@@ -550,6 +612,8 @@ export async function runInboxStep(input: {
 	fetchMs?: number;
 	now?: number;
 	fetchImpl?: typeof fetch;
+	/** Pauses after a permission error. Tests pass zeros. Production waits about 15 seconds across 4 tries. */
+	permissionDelaysMs?: number[];
 }): Promise<{ wizard: InboxWizard; ownerToken?: string }> {
 	const now = input.now ?? Date.now();
 	const fetchMs = input.fetchMs ?? 10_000;
@@ -596,6 +660,7 @@ export async function runInboxStep(input: {
 		script: input.script,
 		migrations: input.migrations,
 		grant,
+		permissionDelaysMs: input.permissionDelaysMs ?? PERMISSION_DELAYS_MS,
 	};
 	try {
 		if (next !== "verify") {
@@ -784,8 +849,7 @@ async function runDatabase(ctx: StepCtx): Promise<InboxWizard> {
 	}
 	const found = await findD1({ ...apiOf(ctx), accountId, name: workerName });
 	if (found && typeof found === "object" && "ok" in found) {
-		logFailure("d1-list", found);
-		return remember(ctx, { step: "database", state: "fail", text: "Cloudflare stops while looking for the database.", cloudflare: describeCfFailure(found) });
+		return failOrWait(ctx, "database", found, "Cloudflare stops while looking for the database.", "d1-list");
 	}
 	if (found && typeof found === "object" && "uuid" in found) {
 		return reopenName(ctx, "A database with that name is already in this Cloudflare account. Choose another name.", "");
@@ -793,8 +857,7 @@ async function runDatabase(ctx: StepCtx): Promise<InboxWizard> {
 	const created = await createD1({ ...apiOf(ctx), accountId, name: workerName });
 	if (!("uuid" in created)) {
 		if (created.status === 409) return reopenName(ctx, "A database with that name is already in this Cloudflare account. Choose another name.", describeCfFailure(created));
-		logFailure("d1-create", created);
-		return remember(ctx, { step: "database", state: "fail", text: "Cloudflare stops while creating the database.", cloudflare: describeCfFailure(created) });
+		return failOrWait(ctx, "database", created, "Cloudflare stops while creating the database.", "d1-create");
 	}
 	await patchInbox(ctx.db, ctx.userId, ctx.now, {
 		d1Id: created.uuid,
@@ -815,8 +878,7 @@ async function runMigrations(ctx: StepCtx): Promise<InboxWizard> {
 	if (!ctx.migrations.length) return remember(ctx, { step: "migrations", state: "fail", text: "This dashboard cannot set up the database right now.", cloudflare: "" });
 	const migrated = await applyMigrations({ ...apiOf(ctx), accountId, databaseId, migrations: ctx.migrations });
 	if (migrated !== true) {
-		logFailure("migrations", migrated);
-		return remember(ctx, { step: "migrations", state: "fail", text: "Cloudflare stops while applying the database setup.", cloudflare: describeCfFailure(migrated) });
+		return failOrWait(ctx, "migrations", migrated, "Cloudflare stops while applying the database setup.", "migrations");
 	}
 	await patchInbox(ctx.db, ctx.userId, ctx.now, { wizardStep: "migrations", stepError: null, status: "pending" });
 	return wizardNow(ctx);
@@ -826,8 +888,7 @@ async function guardScript(ctx: StepCtx, accountId: string, name: string): Promi
 	const found = await workerProvisionTag({ ...apiOf(ctx), accountId, name });
 	if (found === null) return true;
 	if (typeof found !== "string") {
-		logFailure("worker", found);
-		return remember(ctx, { step: "upload", state: "fail", text: "Cloudflare stops while checking the name.", cloudflare: describeCfFailure(found) });
+		return failOrWait(ctx, "upload", found, "Cloudflare stops while checking the name.", "worker");
 	}
 	if (sameTag(ctx.row.script_tag ?? "", found)) return true;
 	return remember(ctx, { step: "upload", state: "fail", text: "A Worker with that name is already in this Cloudflare account. This page does not replace it.", cloudflare: "" });
@@ -874,20 +935,17 @@ async function runUpload(ctx: StepCtx): Promise<{ wizard: InboxWizard; ownerToke
 		metadata: scriptMetadata({ d1Id: databaseId, publicUrl, workerName, ownerToken, scriptTag }),
 	});
 	if (uploaded !== true) {
-		logFailure("upload", uploaded);
-		return { wizard: await remember(ctx, { step: "upload", state: "fail", text: "Cloudflare stops while uploading the inbox.", cloudflare: describeCfFailure(uploaded) }) };
+		return { wizard: await failOrWait(ctx, "upload", uploaded, "Cloudflare stops while uploading the inbox.", "upload") };
 	}
 	if (ctx.host === "workers") {
 		const enabled = await setWorkersDevEnabled({ ...apiOf(ctx), accountId, name: workerName, enabled: true });
 		if (enabled !== true) {
-			logFailure("workers-dev", enabled);
-			return { wizard: await remember(ctx, { step: "upload", state: "fail", text: "Cloudflare stops while turning on the free address.", cloudflare: describeCfFailure(enabled) }) };
+			return { wizard: await failOrWait(ctx, "upload", enabled, "Cloudflare stops while turning on the free address.", "workers-dev") };
 		}
 	} else {
 		const zones = await listZones({ ...apiOf(ctx), accountId });
 		if (!Array.isArray(zones)) {
-			logFailure("zones", zones);
-			return { wizard: await remember(ctx, { step: "upload", state: "fail", text: "Cloudflare stops while reading domains in this account.", cloudflare: describeCfFailure(zones) }) };
+			return { wizard: await failOrWait(ctx, "upload", zones, "Cloudflare stops while reading domains in this account.", "zones") };
 		}
 		const zone = zoneForHostname(ctx.row.hostname ?? "", zones);
 		if (!zone) {
@@ -895,8 +953,7 @@ async function runUpload(ctx: StepCtx): Promise<{ wizard: InboxWizard; ownerToke
 		}
 		const attached = await attachHostname({ ...apiOf(ctx), accountId, workerName, hostname: ctx.row.hostname ?? "", zoneId: zone.id });
 		if (attached !== true) {
-			logFailure("hostname", attached);
-			return { wizard: await remember(ctx, { step: "upload", state: "fail", text: "Cloudflare stops while attaching the address.", cloudflare: describeCfFailure(attached) }) };
+			return { wizard: await failOrWait(ctx, "upload", attached, "Cloudflare stops while attaching the address.", "hostname") };
 		}
 		const disabled = await setWorkersDevEnabled({ ...apiOf(ctx), accountId, name: workerName, enabled: false });
 		if (disabled !== true && disabled.status !== 404) logFailure("workers-dev-off", disabled);

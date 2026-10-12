@@ -224,6 +224,46 @@ async function signIn(app: ReturnType<typeof createApp>) {
 	return done.headers.getSetCookie().find((value) => value.startsWith(`${SESSION_COOKIE}=`))!.split(";")[0];
 }
 
+function applyCookies(jar: Map<string, string>, response: Response) {
+	for (const raw of response.headers.getSetCookie()) {
+		const parts = raw.split(";").map((part) => part.trim());
+		const pair = parts[0] ?? "";
+		const eq = pair.indexOf("=");
+		if (eq <= 0) continue;
+		const name = pair.slice(0, eq);
+		const cleared = parts.some((part) => /^max-age=0$/i.test(part));
+		if (cleared) jar.delete(name);
+		else jar.set(name, pair.slice(eq + 1));
+	}
+}
+
+function cookieHeader(jar: Map<string, string>): string {
+	return [...jar].map(([name, value]) => `${name}=${value}`).join("; ");
+}
+
+async function githubRoundTrip(app: ReturnType<typeof createApp>, jar: Map<string, string>, next = "") {
+	const posted = await app.request(`${origin}/app/sign-in`, {
+		method: "POST",
+		headers: { origin, cookie: cookieHeader(jar), "content-type": "application/x-www-form-urlencoded" },
+		body: next ? `provider=github&next=${encodeURIComponent(next)}` : "provider=github",
+	});
+	applyCookies(jar, posted);
+	const authorize = new URL(posted.headers.get("location") ?? "", origin);
+	const state = authorize.searchParams.get("state") ?? "";
+	const done = await app.request(`${origin}/api/auth/callback/github?code=abc&state=${encodeURIComponent(state)}`, {
+		headers: { cookie: cookieHeader(jar) },
+	});
+	applyCookies(jar, done);
+	return done;
+}
+
+async function ageSession(db: ReturnType<typeof openDb>) {
+	const session = await db.prepare("SELECT id, createdAt FROM session").first<{ id: string; createdAt: string | number }>();
+	const staleAt = new Date(new Date(session!.createdAt).getTime() - 11 * 60 * 1000);
+	const stored = typeof session!.createdAt === "number" ? staleAt.getTime() : staleAt.toISOString();
+	await db.prepare("UPDATE session SET createdAt = ? WHERE id = ?").bind(stored, session!.id).run();
+}
+
 test("the choice page explains a workers.dev inbox, then asks Cloudflare only for those scopes", async (t) => {
 	t.after(githubFetch(consentScope("inbox", "workers")));
 	const db = openDb();
@@ -384,6 +424,12 @@ test("a saved grant without Workers Admin asks to connect again and does not run
 	assert.match(html, /Without Workers Admin/);
 	assert.match(html, /Connect again to grant it/);
 	assert.match(html, />Connect again</);
+	const connectAt = html.indexOf(">Connect again<");
+	const connectForm = html.slice(html.lastIndexOf("<form", connectAt), html.indexOf("</form>", connectAt));
+	assert.match(connectForm, /name="action" value="consent"/);
+	assert.match(connectForm, /name="choice" value="inbox"/);
+	assert.match(connectForm, /name="host" value="workers"/);
+	assert.equal(connectForm.includes('value="review"'), false);
 	assert.equal(html.includes('class="steps"'), false);
 	assert.equal(html.includes("Check the Cloudflare account"), false);
 	assert.equal(html.includes("old-refresh-SECRET"), false);
@@ -701,4 +747,89 @@ test("a Cloudflare error comes back to the setup page in plain language", async 
 	const stranger = await app.request(`${origin}/api/auth/callback/cloudflare?code=abc&state=not-a-connect`, { headers: { cookie } });
 	assert.equal(new URL(stranger.headers.get("location") ?? "", origin).searchParams.get("error"), "cloudflare_unlinked");
 	assert.equal(new URL(stranger.headers.get("location") ?? "", origin).pathname, "/app");
+});
+
+async function consentAfterReauth(app: ReturnType<typeof createApp>, jar: Map<string, string>, body: string) {
+	const stale = await app.request(`${origin}/app/cloudflare`, {
+		method: "POST",
+		headers: { origin, cookie: cookieHeader(jar), "content-type": "application/x-www-form-urlencoded" },
+		body,
+	});
+	applyCookies(jar, stale);
+	const signInUrl = new URL(stale.headers.get("location") ?? "", origin);
+	assert.equal(signInUrl.pathname, "/app/sign-in");
+	assert.equal(signInUrl.searchParams.get("reauth"), "cloudflare");
+	assert.equal(signInUrl.searchParams.get("return"), "/app/cloudflare");
+	const signedIn = await githubRoundTrip(app, jar, "/app/cloudflare");
+	const back = new URL(signedIn.headers.get("location") ?? "", origin);
+	assert.equal(back.pathname, "/app/cloudflare");
+	const continued = await app.request(back, { headers: { cookie: cookieHeader(jar) } });
+	assert.equal(continued.status, 303);
+	return new URL(continued.headers.get("location") ?? "");
+}
+
+test("Connect again continues to Cloudflare's consent screen after a fresh sign-in", async (t) => {
+	t.after(githubFetch(consentScope("inbox", "workers")));
+	const db = openDb();
+	const app = createApp({
+		AUTH_SECRET: secret,
+		DB: db,
+		GITHUB_CLIENT_ID: "gh-id",
+		GITHUB_CLIENT_SECRET: "gh-secret",
+		CLOUDFLARE_OAUTH_CLIENT_ID: "cf-id",
+		CLOUDFLARE_OAUTH_CLIENT_SECRET: "cf-secret",
+	}, { database: db, inboxScript: "export default {}", inboxMigrations: [] });
+	const jar = new Map<string, string>();
+	const first = await githubRoundTrip(app, jar);
+	assert.equal(new URL(first.headers.get("location") ?? "", origin).pathname, "/app");
+	const userId = (await db.prepare('SELECT id FROM "user"').first<{ id: string }>())?.id ?? "";
+	const oldScope = `${USER_DETAILS_READ} account-settings.read workers-scripts.edit ${D1_WRITE} ${OFFLINE_ACCESS}`;
+	await saveCloudflareGrant(db, secret, {
+		userId,
+		accountId: "cf-user",
+		choice: "inbox",
+		host: "workers",
+		requestedScope: oldScope,
+		grantedScope: oldScope,
+		refreshToken: "old-refresh-SECRET",
+		expiresIn: 3600,
+	});
+	await ageSession(db);
+	const authorize = await consentAfterReauth(app, jar, "action=consent&choice=inbox&host=workers");
+	assert.equal(authorize.origin, "https://dash.cloudflare.com");
+	assert.equal(authorize.pathname, "/oauth2/auth");
+	const scope = authorize.searchParams.get("scope") ?? "";
+	assert.equal(scope, consentScope("inbox", "workers"));
+	assert.match(scope, /workers-scripts\.admin/);
+	assert.equal(scope.includes("zone.read"), false);
+	assert.equal(scope.includes("dns.write"), false);
+	assert.equal(scope.includes("workers-routes.write"), false);
+	assert.equal(scope.includes("argotunnel.write"), false);
+	assert.equal(authorize.searchParams.get("code_challenge_method"), "S256");
+});
+
+test("Continue to Cloudflare keeps the same choices after a fresh sign-in", async (t) => {
+	t.after(githubFetch(consentScope("both", "zone")));
+	const db = openDb();
+	const app = createApp({
+		AUTH_SECRET: secret,
+		DB: db,
+		GITHUB_CLIENT_ID: "gh-id",
+		GITHUB_CLIENT_SECRET: "gh-secret",
+		CLOUDFLARE_OAUTH_CLIENT_ID: "cf-id",
+		CLOUDFLARE_OAUTH_CLIENT_SECRET: "cf-secret",
+	}, { database: db });
+	const jar = new Map<string, string>();
+	await githubRoundTrip(app, jar);
+	await ageSession(db);
+	const authorize = await consentAfterReauth(app, jar, "action=consent&choice=both&host=zone");
+	assert.equal(authorize.origin, "https://dash.cloudflare.com");
+	assert.equal(authorize.pathname, "/oauth2/auth");
+	assert.equal(authorize.searchParams.get("scope"), consentScope("both", "zone"));
+	const scope = authorize.searchParams.get("scope") ?? "";
+	assert.match(scope, /workers-scripts\.admin/);
+	assert.match(scope, /workers-routes\.write/);
+	assert.match(scope, /dns\.write/);
+	assert.match(scope, /zone\.read/);
+	assert.match(scope, /argotunnel\.write/);
 });

@@ -89,6 +89,21 @@ function thrownFailure(error: unknown): CfFailure {
 	return { ok: false, status: 0, code: null, errors: [], thrown: { name, message } };
 }
 
+const PERMISSION_CODES = new Set([10000, 7403]);
+const NO_ACCESS = "no access to the specified resource";
+
+/**
+ * True when Cloudflare has not applied a permission that was just granted.
+ * The same call succeeds a few seconds later. Codes 10000 and 7403, and the
+ * script-upload message, are that delay. Other failures are not.
+ */
+export function permissionNotReady(failure: CfFailure): boolean {
+	if (failure.code != null && PERMISSION_CODES.has(failure.code)) return true;
+	return failure.errors.some((error) =>
+		(error.code != null && PERMISSION_CODES.has(error.code))
+		|| error.message.toLowerCase().includes(NO_ACCESS));
+}
+
 /** True when this response means the account has no workers.dev name yet. */
 export function subdomainMissing(failure: CfFailure): boolean {
 	if (failure.status === 404) return true;

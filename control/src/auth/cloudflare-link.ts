@@ -218,6 +218,8 @@ export interface CloudflareProvisionDeps {
 	script: string;
 	migrations: InboxMigration[];
 	fetchMs?: number;
+	/** Pauses after a permission error. Tests pass zeros. */
+	permissionDelaysMs?: number[];
 }
 
 function signInForCloudflare(request: Request, returnPath: "/app" | "/app/cloudflare"): string {
@@ -418,6 +420,7 @@ async function runCloudflareProvision(request: Request, options: AuthOptions, us
 		script: deps.script,
 		migrations: deps.migrations,
 		fetchMs: deps.fetchMs,
+		permissionDelaysMs: deps.permissionDelaysMs,
 	});
 	return { kind: "wizard", wizard: outcome.wizard, ownerToken: outcome.ownerToken };
 }

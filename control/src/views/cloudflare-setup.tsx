@@ -9,7 +9,7 @@ import {
 	type SetupHost,
 	type SetupReport,
 } from "../auth/cloudflare-setup.ts";
-import type { InboxWizard, WizardStepView } from "../provision/inbox.ts";
+import { PERMISSION_WAIT, type InboxWizard, type WizardStepView } from "../provision/inbox.ts";
 import { TokenBlock } from "./token-block.tsx";
 
 const ERRORS: Record<string, string> = {
@@ -183,6 +183,8 @@ function wizardSteps(wizard: InboxWizard) {
 					</p>
 					{step.state === "fail" ? (
 						<p class="alert" role="alert">{step.text}{step.cloudflare ? ` ${step.cloudflare}` : ""}</p>
+					) : step.text === PERMISSION_WAIT ? (
+						<p class="choice-hint" role="status">{step.text}</p>
 					) : (
 						<p>{step.text}</p>
 					)}
@@ -242,7 +244,7 @@ export function renderCloudflareSetup(input: {
 					{report.blocked.map((text) => <p class="alert" role="alert">{text}</p>)}
 					{reconnect ? (
 						<form method="post" action="/app/cloudflare">
-							<input type="hidden" name="action" value="review" />
+							<input type="hidden" name="action" value="consent" />
 							<input type="hidden" name="choice" value={savedChoice(report)} />
 							<input type="hidden" name="host" value={report.host} />
 							<p><button class="action" type="submit">Connect again</button></p>

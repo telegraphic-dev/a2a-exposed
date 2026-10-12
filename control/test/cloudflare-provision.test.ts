@@ -8,8 +8,8 @@ import { SESSION_COOKIE } from "../src/auth/cookies.ts";
 import { openCloudflareRefresh } from "../src/auth/cloudflare-grant.ts";
 import { SETUP_NOT_PROVISIONED, TUNNEL_CONNECTOR_LATER, consentScope } from "../src/auth/cloudflare-setup.ts";
 import { INBOX_MIGRATIONS } from "../src/provision/inbox-migrations.ts";
-import { PROVISION_TAG_NAME, cfCall } from "../src/provision/cloudflare-api.ts";
-import { hashOwnerToken, readCloudflareInbox } from "../src/provision/inbox.ts";
+import { PROVISION_TAG_NAME, cfCall, permissionNotReady } from "../src/provision/cloudflare-api.ts";
+import { PERMISSION_DELAYS_MS, PERMISSION_TRIES, PERMISSION_WAIT, hashOwnerToken, readCloudflareInbox } from "../src/provision/inbox.ts";
 import { zoneForHostname } from "../src/provision/names.ts";
 import { sqlStatements } from "../src/provision/statements.ts";
 import { openDb } from "./sql.ts";
@@ -114,6 +114,8 @@ interface ApiOptions {
 	d1Existing?: { uuid: string; name: string }[];
 	queryStatus?: number;
 	verifyStatus?: number;
+	/** Remaining permission failures before that call succeeds. */
+	permissionLeft?: { d1?: number; query?: number; upload?: number; account?: number };
 }
 
 function cloudflareApi(options: ApiOptions) {
@@ -132,12 +134,20 @@ function cloudflareApi(options: ApiOptions) {
 		if (!url.includes("cloudflare.com")) return original(input as RequestInfo, init);
 		calls.push({ method, url, body, authorization });
 		const json = (payload: unknown, status = 200) => Response.json(payload, { status });
+		const permission = (kind: "d1" | "query" | "upload" | "account", status: number, errors: { code?: number; message: string }[]) => {
+			const left = options.permissionLeft?.[kind] ?? 0;
+			if (left <= 0) return null;
+			options.permissionLeft![kind] = left - 1;
+			return json({ success: false, errors }, status);
+		};
 		if (url.startsWith("https://dash.cloudflare.com/oauth2/token")) {
 			const refresh = new URLSearchParams(body).get("refresh_token");
 			return json({ access_token: "cf_access_SECRET", refresh_token: `next-${refresh}`, expires_in: 3600 });
 		}
 		if (url.endsWith("/accounts?per_page=50")) {
 			if (options.accountsThrow) throw new TypeError("Invalid header value.");
+			const denied = permission("account", 403, [{ code: 10000, message: "Authentication error" }]);
+			if (denied) return denied;
 			return json({ success: true, result: options.accounts ?? [{ id: accountId, name: "Example account" }] });
 		}
 		if (url.endsWith("/workers/subdomain") && method === "GET") {
@@ -156,14 +166,20 @@ function cloudflareApi(options: ApiOptions) {
 		}
 		if (url.includes("/d1/database?") && method === "GET") return json({ success: true, result: options.d1Existing ?? [] });
 		if (url.endsWith("/d1/database") && method === "POST") {
+			const denied = permission("d1", 403, [{ code: 10000, message: "Authentication error" }]);
+			if (denied) return denied;
 			if (options.d1Status) return json({ success: false, errors: options.d1Errors ?? [{ code: 7500, message: "database name is invalid" }] }, options.d1Status);
 			return json({ success: true, result: { uuid: d1Id, name: "my-agent" } });
 		}
 		if (url.endsWith("/query") && method === "POST") {
+			const denied = permission("query", 403, [{ code: 7403, message: "Unauthorized" }]);
+			if (denied) return denied;
 			if (options.queryStatus) return json({ success: false, errors: [{ code: 7500, message: "query failed" }] }, options.queryStatus);
 			return json({ success: true, result: [{ results: [], success: true }] });
 		}
 		if (url.includes("/workers/scripts/") && method === "PUT") {
+			const denied = permission("upload", 403, [{ message: "No access to the specified resource" }]);
+			if (denied) return denied;
 			return options.uploadStatus ? new Response("", { status: options.uploadStatus }) : json({ success: true, result: {} });
 		}
 		if (url.endsWith("/subdomain") && method === "POST") return json({ success: true, result: { enabled: true } });
@@ -174,7 +190,7 @@ function cloudflareApi(options: ApiOptions) {
 	return { calls, restore: () => { globalThis.fetch = original; } };
 }
 
-function appFor(db: ReturnType<typeof openDb>) {
+function appFor(db: ReturnType<typeof openDb>, permissionDelaysMs?: number[]) {
 	return createApp({
 		AUTH_SECRET: secret,
 		DB: db,
@@ -182,7 +198,28 @@ function appFor(db: ReturnType<typeof openDb>) {
 		GITHUB_CLIENT_SECRET: "gh-secret",
 		CLOUDFLARE_OAUTH_CLIENT_ID: "cf-id",
 		CLOUDFLARE_OAUTH_CLIENT_SECRET: "cf-secret",
-	}, { database: db, inboxScript: stubScript, inboxMigrations: INBOX_MIGRATIONS });
+	}, { database: db, inboxScript: stubScript, inboxMigrations: INBOX_MIGRATIONS, ...(permissionDelaysMs ? { permissionDelaysMs } : {}) });
+}
+
+async function finishPermissionWaits(app: ReturnType<typeof createApp>, cookie: string, first: Response) {
+	let response = first;
+	let html = await response.text();
+	let hops = 0;
+	while (html.includes(PERMISSION_WAIT)) {
+		assert.ok(hops < 6, html);
+		assert.match(html, /class="choice-hint" role="status">Waiting for Cloudflare to apply the new permission…</);
+		assert.equal(html.includes(">Try again<"), false);
+		assert.equal(html.includes("code 10000"), false);
+		assert.equal(html.includes("code 7403"), false);
+		assert.equal(html.includes("No access to the specified resource"), false);
+		assert.equal(html.includes("Copy this owner token now."), false);
+		assert.match(response.headers.get("refresh") ?? "", /^[1-9]\d*$/);
+		response = await app.request(`${origin}/app/cloudflare`, { headers: { cookie } });
+		assert.equal(response.status, 200);
+		html = await response.text();
+		hops++;
+	}
+	return { html, response, hops };
 }
 
 async function consentInbox(app: ReturnType<typeof createApp>, cookie: string, host: "workers" | "zone" = "workers") {
@@ -794,4 +831,161 @@ test("a façade alone does not create Cloudflare resources", async (t) => {
 	assert.match(html, /does not create the tunnel/);
 	assert.equal(html.includes("Check the Cloudflare account"), false);
 	assert.equal(html.includes("Create it in Cloudflare"), false);
+});
+
+test("a just-granted permission is retried for about 15 seconds, and other errors are not", () => {
+	assert.equal(PERMISSION_TRIES, 4);
+	assert.deepEqual(PERMISSION_DELAYS_MS, [2_000, 4_000, 8_000]);
+	assert.equal(PERMISSION_DELAYS_MS.reduce((sum, delay) => sum + delay, 0), 14_000);
+	const failure = (code: number | null, message: string) => ({
+		ok: false as const,
+		status: 403,
+		code,
+		errors: [{ code, message }],
+	});
+	assert.equal(permissionNotReady(failure(10000, "Authentication error")), true);
+	assert.equal(permissionNotReady(failure(7403, "Unauthorized")), true);
+	assert.equal(permissionNotReady(failure(null, "No access to the specified resource")), true);
+	assert.equal(permissionNotReady(failure(null, "NO ACCESS TO THE SPECIFIED RESOURCE")), true);
+	assert.equal(permissionNotReady({ ok: false, status: 403, code: null, errors: [{ code: 10000, message: "Authentication error" }] }), true);
+	assert.equal(permissionNotReady(failure(7500, "database name is invalid")), false);
+	assert.equal(permissionNotReady({ ok: false, status: 500, code: null, errors: [] }), false);
+});
+
+test("creating the database waits through code 10000, then continues", async (t) => {
+	t.after(githubFetch(consentScope("inbox", "workers")));
+	const db = openDb();
+	const app = appFor(db, [0, 0, 0]);
+	const cookie = await signIn(app);
+	await consentInbox(app, cookie);
+	const options: ApiOptions = { permissionLeft: { d1: 2 } };
+	const api = cloudflareApi(options);
+	t.after(api.restore);
+	await walkWorkers(app, cookie, "name");
+	const creates = () => api.calls.filter((call) => call.method === "POST" && call.url.endsWith("/d1/database")).length;
+	const started = await postStep(app, cookie, "action=step&step=database&name=my-agent");
+	const done = await finishPermissionWaits(app, cookie, started);
+	assert.equal(done.hops, 2);
+	assert.match(done.html, /The database is created/);
+	assert.match(done.html, /Apply the database setup/);
+	assert.equal(done.html.includes(PERMISSION_WAIT), false);
+	assert.equal(done.response.headers.get("refresh"), null);
+	assert.equal(creates(), 3);
+	await app.request(`${origin}/app/cloudflare`, { headers: { cookie } });
+	assert.equal(creates(), 3);
+});
+
+test("database setup shows code 7403 only after four tries", async (t) => {
+	t.after(githubFetch(consentScope("inbox", "workers")));
+	const db = openDb();
+	const app = appFor(db, [0, 0, 0]);
+	const cookie = await signIn(app);
+	await consentInbox(app, cookie);
+	const options: ApiOptions = { permissionLeft: { query: 4 } };
+	const api = cloudflareApi(options);
+	t.after(api.restore);
+	await walkWorkers(app, cookie, "database");
+	const queries = () => api.calls.filter((call) => call.method === "POST" && call.url.endsWith("/query")).length;
+	const started = await postStep(app, cookie, "action=step&step=migrations&name=my-agent");
+	const done = await finishPermissionWaits(app, cookie, started);
+	assert.equal(done.hops, 3);
+	assert.match(done.html, /Cloudflare stops while applying the database setup/);
+	assert.match(done.html, /code 7403/);
+	assert.match(done.html, />Try again</);
+	assert.equal(done.html.includes(PERMISSION_WAIT), false);
+	assert.equal(done.response.headers.get("refresh"), null);
+	assert.equal(queries(), 4);
+	await app.request(`${origin}/app/cloudflare`, { headers: { cookie } });
+	assert.equal(queries(), 4);
+});
+
+test("uploading the inbox waits through no access, then shows the owner token", async (t) => {
+	t.after(githubFetch(consentScope("inbox", "workers")));
+	const db = openDb();
+	const app = appFor(db, [0, 0, 0]);
+	const cookie = await signIn(app);
+	await consentInbox(app, cookie);
+	const options: ApiOptions = { permissionLeft: { upload: 3 } };
+	const api = cloudflareApi(options);
+	t.after(api.restore);
+	await walkWorkers(app, cookie, "migrations");
+	const puts = () => api.calls.filter((call) => call.method === "PUT" && call.url.includes("/workers/scripts/")).length;
+	const started = await postStep(app, cookie, "action=step&step=upload&name=my-agent");
+	const done = await finishPermissionWaits(app, cookie, started);
+	assert.equal(done.hops, 3);
+	assert.match(done.html, /The inbox is uploaded/);
+	assert.match(done.html, /Copy this owner token now/);
+	assert.equal(done.html.includes("No access to the specified resource"), false);
+	assert.equal(done.html.includes(PERMISSION_WAIT), false);
+	assert.equal(puts(), 4);
+});
+
+test("an account permission error is shown at once and is not retried", async (t) => {
+	t.after(githubFetch(consentScope("inbox", "workers")));
+	const db = openDb();
+	const app = appFor(db, [0, 0, 0]);
+	const cookie = await signIn(app);
+	await consentInbox(app, cookie);
+	const options: ApiOptions = { permissionLeft: { account: 5 } };
+	const api = cloudflareApi(options);
+	t.after(api.restore);
+	const accounts = () => api.calls.filter((call) => call.url.endsWith("/accounts?per_page=50")).length;
+	const failed = await postStep(app, cookie, "action=step&step=account&name=my-agent");
+	const html = await failed.text();
+	assert.match(html, /Cloudflare stops while reading your accounts/);
+	assert.match(html, /code 10000/);
+	assert.match(html, />Try again</);
+	assert.equal(html.includes(PERMISSION_WAIT), false);
+	assert.equal(failed.headers.get("refresh"), null);
+	assert.equal(accounts(), 1);
+	await app.request(`${origin}/app/cloudflare`, { headers: { cookie } });
+	assert.equal(accounts(), 1);
+});
+
+test("a permission wait does not run again until the pause has passed", async (t) => {
+	t.after(githubFetch(consentScope("inbox", "workers")));
+	const db = openDb();
+	const app = appFor(db, [60_000, 0, 0]);
+	const cookie = await signIn(app);
+	await consentInbox(app, cookie);
+	const options: ApiOptions = { permissionLeft: { d1: 5 } };
+	const api = cloudflareApi(options);
+	t.after(api.restore);
+	await walkWorkers(app, cookie, "name");
+	const creates = () => api.calls.filter((call) => call.method === "POST" && call.url.endsWith("/d1/database")).length;
+	const waiting = await postStep(app, cookie, "action=step&step=database&name=my-agent");
+	const html = await waiting.text();
+	assert.match(html, new RegExp(PERMISSION_WAIT.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+	const refresh = Number(waiting.headers.get("refresh"));
+	assert.ok(refresh >= 58 && refresh <= 60, String(refresh));
+	assert.equal(creates(), 1);
+	const early = await app.request(`${origin}/app/cloudflare`, { headers: { cookie } });
+	assert.match(await early.text(), /Waiting for Cloudflare to apply the new permission/);
+	assert.equal(creates(), 1);
+});
+
+test("a permission wait does not reload after the sign-in is older than 10 minutes", async (t) => {
+	t.after(githubFetch(consentScope("inbox", "workers")));
+	const db = openDb();
+	const app = appFor(db, [0, 0, 0]);
+	const cookie = await signIn(app);
+	await consentInbox(app, cookie);
+	const options: ApiOptions = { permissionLeft: { d1: 5 } };
+	const api = cloudflareApi(options);
+	t.after(api.restore);
+	await walkWorkers(app, cookie, "name");
+	const creates = () => api.calls.filter((call) => call.method === "POST" && call.url.endsWith("/d1/database")).length;
+	const waiting = await postStep(app, cookie, "action=step&step=database&name=my-agent");
+	assert.match(await waiting.text(), /Waiting for Cloudflare to apply the new permission/);
+	assert.equal(creates(), 1);
+	const session = await db.prepare("SELECT id, createdAt FROM session").first<{ id: string; createdAt: string | number }>();
+	const staleAt = new Date(new Date(session!.createdAt).getTime() - 11 * 60 * 1000);
+	const stored = typeof session!.createdAt === "number" ? staleAt.getTime() : staleAt.toISOString();
+	await db.prepare("UPDATE session SET createdAt = ? WHERE id = ?").bind(stored, session!.id).run();
+	const stale = await app.request(`${origin}/app/cloudflare`, { headers: { cookie } });
+	const html = await stale.text();
+	assert.match(html, /Waiting for Cloudflare to apply the new permission/);
+	assert.equal(html.includes(">Try again<"), false);
+	assert.equal(stale.headers.get("refresh"), null);
+	assert.equal(creates(), 1);
 });
