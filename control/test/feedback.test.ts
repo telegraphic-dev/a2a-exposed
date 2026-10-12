@@ -2,8 +2,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createVerify, generateKeyPairSync } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { createApp } from "../src/app.ts";
 import { inboxConnection, issueDocument, scrubFeedbackText } from "../src/feedback.ts";
+import { feedbackPlainId } from "../src/feedback-plain.ts";
 import { openDb } from "./sql.ts";
 
 const origin = "https://control.example.com";
@@ -35,6 +37,18 @@ function post(app: ReturnType<typeof createApp>, body: Record<string, unknown>, 
 		body: JSON.stringify(body),
 	});
 }
+
+test("deploy binds a non-numeric feedback app id and installation id", () => {
+	assert.equal(feedbackPlainId("4242"), "4242");
+	assert.equal(feedbackPlainId(" nope "), "nope");
+	assert.equal(feedbackPlainId("not-an-id"), "not-an-id");
+	assert.equal(feedbackPlainId("   "), "");
+	assert.equal(feedbackPlainId(undefined), "");
+	const source = readFileSync(new URL("../cloudflare.config.ts", import.meta.url), "utf8");
+	assert.match(source, /FEEDBACK_GITHUB_APP_ID: feedbackPlainId\(e\.FEEDBACK_GITHUB_APP_ID\)/);
+	assert.match(source, /FEEDBACK_GITHUB_APP_INSTALLATION_ID: feedbackPlainId\(e\.FEEDBACK_GITHUB_APP_INSTALLATION_ID\)/);
+	assert.doesNotMatch(source, /FEEDBACK_GITHUB_APP_(?:ID|INSTALLATION_ID): \/\^\\d/);
+});
 
 test("scrubFeedbackText strips tokens, setup secrets, userinfo, and Bearer values", () => {
 	const token = "a2aot_" + "AbcdEf0123456789abcd";
