@@ -15,8 +15,9 @@ import {
 	listZones,
 	registerWorkersDevSubdomain,
 	setWorkersDevEnabled,
-	inboxScriptOwnership,
 	uploadWorker,
+	workerProvisionTag,
+	PROVISION_TAG_NAME,
 	workersDevSubdomain,
 	type CfAccount,
 	type CfFailure,
@@ -55,6 +56,7 @@ export interface InboxRow {
 	host: string;
 	hostname: string | null;
 	status: string;
+	script_tag: string | null;
 	created_at: string;
 	updated_at: string;
 }
@@ -88,7 +90,7 @@ export async function hashOwnerToken(token: string): Promise<string> {
 export async function readCloudflareInbox(db: Sql, userId: string): Promise<InboxRow | null> {
 	if (!userId) return null;
 	return db.prepare(
-		`SELECT "userId" AS userId, cf_account_id, worker_name, d1_name, d1_id, public_url, owner_token_hash, host, hostname, status, created_at, updated_at
+		`SELECT "userId" AS userId, cf_account_id, worker_name, d1_name, d1_id, public_url, owner_token_hash, host, hostname, status, script_tag, created_at, updated_at
 		 FROM cloudflare_inbox WHERE "userId" = ?`,
 	).bind(userId).first<InboxRow>();
 }
@@ -128,12 +130,13 @@ async function patchInbox(db: Sql, userId: string, now: number, fields: {
 	ownerTokenHash?: string;
 	hostname?: string | null;
 	workerName?: string;
+	scriptTag?: string;
 }): Promise<void> {
 	const row = await readCloudflareInbox(db, userId);
 	if (!row) return;
 	await db.prepare(
 		`UPDATE cloudflare_inbox SET
-		   status = ?, cf_account_id = ?, d1_id = ?, public_url = ?, owner_token_hash = ?, hostname = ?, worker_name = ?, d1_name = ?, updated_at = ?
+		   status = ?, cf_account_id = ?, d1_id = ?, public_url = ?, owner_token_hash = ?, hostname = ?, worker_name = ?, d1_name = ?, script_tag = ?, updated_at = ?
 		 WHERE "userId" = ?`,
 	).bind(
 		fields.status ?? row.status,
@@ -144,6 +147,7 @@ async function patchInbox(db: Sql, userId: string, now: number, fields: {
 		fields.hostname === undefined ? row.hostname : fields.hostname,
 		fields.workerName ?? row.worker_name,
 		fields.workerName ?? row.d1_name,
+		fields.scriptTag ?? row.script_tag,
 		new Date(now).toISOString(),
 		userId,
 	).run();
@@ -158,7 +162,7 @@ async function releaseClaim(db: Sql, userId: string): Promise<void> {
 	await db.prepare(`DELETE FROM cloudflare_inbox WHERE "userId" = ? AND d1_id IS NULL AND public_url IS NULL`).bind(userId).run();
 }
 
-function scriptMetadata(input: { d1Id: string; publicUrl: string; workerName: string; ownerToken: string }) {
+function scriptMetadata(input: { d1Id: string; publicUrl: string; workerName: string; ownerToken: string; scriptTag: string }) {
 	return {
 		main_module: "index.js",
 		compatibility_date: INBOX_COMPATIBILITY_DATE,
@@ -168,9 +172,23 @@ function scriptMetadata(input: { d1Id: string; publicUrl: string; workerName: st
 			{ type: "plain_text", name: "AGENT_NAME", text: input.workerName },
 			{ type: "plain_text", name: "PAIRING_APPROVAL", text: "human" },
 			{ type: "plain_text", name: "WAKE_PRESET", text: "generic" },
+			{ type: "plain_text", name: PROVISION_TAG_NAME, text: input.scriptTag },
 			{ type: "secret_text", name: "OWNER_TOKEN", text: input.ownerToken },
 		],
 	};
+}
+
+function newScriptTag(): string {
+	const bytes = new Uint8Array(32);
+	crypto.getRandomValues(bytes);
+	return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function sameTag(left: string, right: string): boolean {
+	if (left.length !== right.length || !left) return false;
+	let diff = 0;
+	for (let i = 0; i < left.length; i++) diff |= left.charCodeAt(i) ^ right.charCodeAt(i);
+	return diff === 0;
 }
 
 async function applyMigrations(input: {
@@ -343,9 +361,14 @@ export async function provisionInbox(input: {
 				return { ok: false, error: created.status === 409 ? "taken" : failureError(created, "other") };
 			}
 			d1Id = created.uuid;
-			await patchInbox(input.database, input.userId, now, { d1Id, cfAccountId: account.id, workerName, status: "pending" });
+			await patchInbox(input.database, input.userId, now, { d1Id, cfAccountId: account.id, workerName, status: "pending", scriptTag: row?.script_tag || newScriptTag() });
 		} else {
-			await patchInbox(input.database, input.userId, now, { cfAccountId: account.id, status: "working" });
+			await patchInbox(input.database, input.userId, now, { cfAccountId: account.id, status: "working", scriptTag: row?.script_tag || newScriptTag() });
+		}
+		const scriptTag = (await readCloudflareInbox(input.database, input.userId))?.script_tag ?? "";
+		if (!scriptTag) {
+			await releaseClaim(input.database, input.userId);
+			return { ok: false, error: "failed" };
 		}
 
 		const migrated = await applyMigrations({ ...api, accountId: account.id, databaseId: d1Id, migrations: input.migrations });
@@ -365,7 +388,7 @@ export async function provisionInbox(input: {
 			accountId: account.id,
 			name: workerName,
 			script: input.script,
-			metadata: scriptMetadata({ d1Id, publicUrl, workerName, ownerToken }),
+			metadata: scriptMetadata({ d1Id, publicUrl, workerName, ownerToken, scriptTag }),
 		});
 		if (uploaded !== true) {
 			logFailure("upload", uploaded);
@@ -409,7 +432,7 @@ export async function provisionInbox(input: {
 	}
 }
 
-/** Refuses a Worker this page did not upload. Missing, or a script that still has the inbox banner, may continue. */
+/** Refuses a Worker unless it is absent or its settings still carry the tag stored here. The script source is not consulted. */
 async function guardExistingScript(
 	api: { fetchImpl: typeof fetch; token: string; fetchMs: number },
 	accountId: string,
@@ -417,15 +440,17 @@ async function guardExistingScript(
 	database: Sql,
 	userId: string,
 ): Promise<true | ProvisionOutcome> {
-	const state = await inboxScriptOwnership({ ...api, accountId, name });
-	if (state === "missing" || state === "ours") return true;
-	if (state === "other") {
+	const found = await workerProvisionTag({ ...api, accountId, name });
+	if (found === null) return true;
+	if (typeof found !== "string") {
+		logFailure("worker", found);
 		await releaseClaim(database, userId);
-		return { ok: false, error: "taken" };
+		return { ok: false, error: failureError(found, "other") };
 	}
-	logFailure("worker", state);
+	const saved = (await readCloudflareInbox(database, userId))?.script_tag ?? "";
+	if (sameTag(saved, found)) return true;
 	await releaseClaim(database, userId);
-	return { ok: false, error: failureError(state, "other") };
+	return { ok: false, error: "taken" };
 }
 
 function planNames(host: SetupHost, fields: ProvisionFields, existing: InboxRow | null): { ok: true; workerName: string; hostname: string } | { ok: false; error: ProvisionError } {

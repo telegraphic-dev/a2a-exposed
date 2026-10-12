@@ -8,6 +8,7 @@ import { SESSION_COOKIE } from "../src/auth/cookies.ts";
 import { openCloudflareRefresh } from "../src/auth/cloudflare-grant.ts";
 import { SETUP_NOT_PROVISIONED, TUNNEL_CONNECTOR_LATER, consentScope } from "../src/auth/cloudflare-setup.ts";
 import { INBOX_MIGRATIONS } from "../src/provision/inbox-migrations.ts";
+import { PROVISION_TAG_NAME } from "../src/provision/cloudflare-api.ts";
 import { hashOwnerToken, readCloudflareInbox } from "../src/provision/inbox.ts";
 import { zoneForHostname } from "../src/provision/names.ts";
 import { sqlStatements } from "../src/provision/statements.ts";
@@ -77,7 +78,7 @@ interface Call {
 	authorization: string;
 }
 
-function cloudflareApi(options: { subdomain?: string; scriptExists?: boolean; scriptBody?: string; uploadStatus?: number; zones?: { id: string; name: string; status: string }[]; accounts?: { id: string; name: string }[] }) {
+function cloudflareApi(options: { subdomain?: string; scriptExists?: boolean; scriptTag?: string; uploadStatus?: number; zones?: { id: string; name: string; status: string }[]; accounts?: { id: string; name: string }[] }) {
 	const calls: Call[] = [];
 	const original = globalThis.fetch;
 	globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -100,11 +101,13 @@ function cloudflareApi(options: { subdomain?: string; scriptExists?: boolean; sc
 		}
 		if (url.endsWith("/workers/subdomain") && method === "PUT") return json({ success: true, result: { subdomain: "picked" } });
 		if (url.includes("/workers/scripts/") && url.endsWith("/settings")) {
-			return options.scriptExists ? json({ success: true, result: {} }) : new Response("", { status: 404 });
+			if (!options.scriptExists) return new Response("", { status: 404 });
+			const bindings = options.scriptTag ? [{ type: "plain_text", name: PROVISION_TAG_NAME, text: options.scriptTag }] : [];
+			return json({ success: true, result: { bindings } });
 		}
 		if (url.includes("/workers/scripts/") && method === "GET") {
 			if (!options.scriptExists) return new Response("", { status: 404 });
-			return new Response(options.scriptBody ?? "export default { fetch() { return new Response('user-worker') } }", { status: 200, headers: { "content-type": "application/javascript" } });
+			return new Response("/* a2a-exposed inbox */\nexport default { fetch() { return new Response('user-worker') } }", { status: 200, headers: { "content-type": "application/javascript" } });
 		}
 		if (url.includes("/d1/database?") && method === "GET") return json({ success: true, result: [] });
 		if (url.endsWith("/d1/database") && method === "POST") return json({ success: true, result: { uuid: d1Id, name: "my-agent" } });
@@ -337,13 +340,13 @@ test("an existing Worker name is refused and a failed upload can be continued", 
 	assert.equal(JSON.stringify(await readCloudflareInbox(db, userId)).includes("cf_access_SECRET"), false);
 });
 
-test("a retry does not replace a Worker this page did not create", async (t) => {
+test("a retry does not replace a Worker that only contains the inbox comment", async (t) => {
 	t.after(githubFetch(consentScope("inbox", "workers")));
 	const db = openDb();
 	const app = appFor(db);
 	const cookie = await signIn(app);
 	await consentInbox(app, cookie);
-	const options = { scriptExists: false, uploadStatus: 500 as number | undefined, scriptBody: "export default { fetch() { return new Response('user-worker') } }" };
+	const options = { scriptExists: false, uploadStatus: 500 as number | undefined, scriptTag: "" };
 	const api = cloudflareApi(options);
 	t.after(api.restore);
 	const partial = await app.request(`${origin}/app/cloudflare`, {
@@ -369,13 +372,13 @@ test("a retry does not replace a Worker this page did not create", async (t) => 
 	assert.equal((await readCloudflareInbox(db, userId))?.d1_id, d1Id);
 });
 
-test("a retry continues when the existing script is the inbox this page uploaded", async (t) => {
+test("a retry continues when the script settings carry the tag this page stored", async (t) => {
 	t.after(githubFetch(consentScope("inbox", "workers")));
 	const db = openDb();
 	const app = appFor(db);
 	const cookie = await signIn(app);
 	await consentInbox(app, cookie);
-	const options = { scriptExists: false, uploadStatus: 500 as number | undefined, scriptBody: "/* a2a-exposed inbox */\nexport default {}" };
+	const options = { scriptExists: false, uploadStatus: 500 as number | undefined, scriptTag: "" };
 	const api = cloudflareApi(options);
 	t.after(api.restore);
 	const partial = await app.request(`${origin}/app/cloudflare`, {
@@ -384,6 +387,11 @@ test("a retry continues when the existing script is the inbox this page uploaded
 		body: "action=provision&name=my-agent",
 	});
 	assert.equal(new URL(partial.headers.get("location") ?? "", origin).searchParams.get("error"), "partial");
+	const userId = (await db.prepare('SELECT id FROM "user"').first<{ id: string }>())?.id ?? "";
+	const savedTag = (await readCloudflareInbox(db, userId))?.script_tag ?? "";
+	assert.equal(savedTag.length, 64);
+	assert.equal(savedTag.includes("a2a-exposed inbox"), false);
+	options.scriptTag = savedTag;
 	options.scriptExists = true;
 	options.uploadStatus = undefined;
 	const again = await app.request(`${origin}/app/cloudflare`, {
@@ -393,9 +401,9 @@ test("a retry continues when the existing script is the inbox this page uploaded
 	});
 	assert.equal(again.status, 303);
 	assert.equal(new URL(again.headers.get("location") ?? "", origin).searchParams.get("error"), null);
-	const userId = (await db.prepare('SELECT id FROM "user"').first<{ id: string }>())?.id ?? "";
 	assert.equal((await readCloudflareInbox(db, userId))?.status, "ready");
-	assert.ok(api.calls.some((call) => call.method === "PUT" && call.url.includes("/workers/scripts/") && call.body.includes("inbox-stub")));
+	assert.ok(api.calls.some((call) => call.method === "PUT" && call.url.includes("/workers/scripts/") && call.body.includes(PROVISION_TAG_NAME) && call.body.includes(savedTag)));
+	assert.equal(api.calls.some((call) => call.method === "GET" && call.url.includes("/workers/scripts/") && !call.url.endsWith("/settings")), false);
 });
 
 test("a façade alone does not create Cloudflare resources", async (t) => {

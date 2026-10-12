@@ -80,3 +80,17 @@ test("0011 adds the Cloudflare inbox table on a database that already has a user
 	apply(db, ["0011_cloudflare_inbox.sql"]);
 	assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM cloudflare_inbox`).get()?.n, 1);
 });
+
+test("0012 adds script_tag on an inbox row that already exists", () => {
+	const db = new DatabaseSync(":memory:");
+	apply(db, files.filter((name) => name < "0012_cloudflare_inbox_tag.sql"));
+	insertUser(db, "user-a", "a@example.com");
+	db.prepare(
+		`INSERT INTO cloudflare_inbox ("userId", cf_account_id, worker_name, d1_name, host, status, created_at, updated_at)
+		 VALUES ('user-a', 'account', 'my-agent', 'my-agent', 'workers', 'pending', ?, ?)`,
+	).run(earlier, earlier);
+	apply(db, ["0012_cloudflare_inbox_tag.sql"]);
+	assert.equal(db.prepare(`SELECT script_tag FROM cloudflare_inbox WHERE "userId" = 'user-a'`).get()?.script_tag, null);
+	db.prepare(`UPDATE cloudflare_inbox SET script_tag = ? WHERE "userId" = 'user-a'`).run("ab".repeat(32));
+	assert.equal(db.prepare(`SELECT script_tag FROM cloudflare_inbox WHERE "userId" = 'user-a'`).get()?.script_tag, "ab".repeat(32));
+});

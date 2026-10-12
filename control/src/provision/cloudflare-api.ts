@@ -34,13 +34,11 @@ export async function cfCall(input: {
 	path: string;
 	json?: unknown;
 	raw?: { body: BodyInit; contentType: string };
-	/** Return the response body as text. Used to read a Worker script, which is not JSON. */
-	asText?: boolean;
 	fetchMs: number;
 }): Promise<CfResponse> {
 	const headers: Record<string, string> = {
 		authorization: `Bearer ${input.token}`,
-		accept: input.asText ? "*/*" : "application/json",
+		accept: "application/json",
 	};
 	let body: BodyInit | undefined;
 	if (input.raw) {
@@ -68,7 +66,6 @@ export async function cfCall(input: {
 		return { ok: false, status: response.status, code: null };
 	}
 	const text = await response.text().catch(() => "");
-	if (input.asText) return response.ok ? { ok: true, status: response.status, body: text } : { ok: false, status: response.status, code: null };
 	let parsed: unknown = null;
 	if (text) {
 		try { parsed = JSON.parse(text); } catch { parsed = null; }
@@ -179,20 +176,26 @@ export async function d1Query(input: { fetchImpl: typeof fetch; token: string; f
 	return d1Rows(read.body);
 }
 
-/** The banner `bundle-inbox.mjs` writes. A script without it was not uploaded by this page. */
-export const INBOX_SCRIPT_MARKER = "a2a-exposed inbox";
+/** Plain-text setting this page writes. The script source is not proof of ownership. */
+export const PROVISION_TAG_NAME = "A2A_PROVISION_TAG";
 
 /**
- * Whether the named Worker is absent, the inbox this page uploaded, or someone else's script.
- * A saved database id is not proof: a later retry must not replace a Worker it did not create.
+ * The provision tag on this script. `null` when the script does not exist.
+ * An empty string means the script is there and does not carry this page's tag.
+ * The script body is not read: a comment in the source is not this value.
  */
-export async function inboxScriptOwnership(input: { fetchImpl: typeof fetch; token: string; fetchMs: number; accountId: string; name: string }): Promise<"missing" | "ours" | "other" | CfFailure> {
+export async function workerProvisionTag(input: { fetchImpl: typeof fetch; token: string; fetchMs: number; accountId: string; name: string }): Promise<string | null | CfFailure> {
 	const settings = await cfCall({ ...input, method: "GET", path: `/accounts/${input.accountId}/workers/scripts/${input.name}/settings` });
-	if (!settings.ok) return settings.status === 404 ? "missing" : settings;
-	const script = await cfCall({ ...input, method: "GET", path: `/accounts/${input.accountId}/workers/scripts/${input.name}`, asText: true });
-	if (!script.ok) return script.status === 404 ? "missing" : script;
-	const body = typeof script.body === "string" ? script.body : "";
-	return body.includes(INBOX_SCRIPT_MARKER) ? "ours" : "other";
+	if (!settings.ok) return settings.status === 404 ? null : settings;
+	const bindings = resultObject(settings.body)?.bindings;
+	if (!Array.isArray(bindings)) return "";
+	for (const binding of bindings) {
+		if (!binding || typeof binding !== "object") continue;
+		const row = binding as { type?: unknown; name?: unknown; text?: unknown };
+		if (row.type !== "plain_text" || row.name !== PROVISION_TAG_NAME || typeof row.text !== "string") continue;
+		return row.text;
+	}
+	return "";
 }
 
 /** Module-syntax script upload. `metadata` carries the D1 binding and the owner token. */
