@@ -267,18 +267,89 @@ test("a stale sign-in still shows the Cloudflare account list after sign-in", as
 	const accountPage = await app.request(`${origin}/app`, { headers: { cookie: `${fresh}; ${resume}` } });
 	assert.equal(accountPage.status, 303);
 	assert.equal(new URL(accountPage.headers.get("location") ?? "", origin).pathname, "/app/cloudflare");
+	assert.equal(accountPage.headers.getSetCookie().some((value) => value.startsWith("__Host-a2a_cf_resume=") && value.includes("Max-Age=0")), false);
 	assert.equal(api.calls.length, 0);
+	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM verification WHERE identifier LIKE 'cf-resume:%'`).first<{ n: number }>())?.n, 1);
 	const continued = await app.request(`${origin}/app/cloudflare`, { headers: { cookie: `${fresh}; ${resume}` } });
 	assert.equal(continued.status, 200);
 	const html = await continued.text();
+	assert.match(html, /Which Cloudflare account\?/);
 	assert.match(html, /Choose the Cloudflare account to use/);
 	assert.match(html, /Example account/);
 	assert.match(html, /Other account/);
 	assert.match(html, new RegExp(`value="${accountId}"`));
 	assert.match(html, new RegExp(`value="${otherId}"`));
+	assert.match(html, /value="my-agent"/);
 	assert.equal(html.includes("?error=account"), false);
 	assert.equal(api.calls.some((call) => call.method === "POST" && call.url.endsWith("/d1/database")), false);
 	assert.equal(api.calls.some((call) => call.method === "PUT" && call.url.includes("/workers/scripts/")), false);
+	assert.ok(continued.headers.getSetCookie().some((value) => value.startsWith("__Host-a2a_cf_resume=") && value.includes("Max-Age=0")));
+
+	const created = await app.request(`${origin}/app/cloudflare`, {
+		method: "POST",
+		headers: { origin, cookie: fresh, "content-type": "application/x-www-form-urlencoded" },
+		body: `action=provision&name=my-agent&account=${otherId}`,
+	});
+	assert.equal(created.status, 303);
+	assert.ok(api.calls.some((call) => call.method === "POST" && call.url.endsWith("/d1/database")));
+	const userId = (await db.prepare('SELECT id FROM "user"').first<{ id: string }>())?.id ?? "";
+	assert.equal((await readCloudflareInbox(db, userId))?.cf_account_id, otherId);
+});
+
+async function staleSession(db: ReturnType<typeof openDb>) {
+	const session = await db.prepare("SELECT id, createdAt FROM session").first<{ id: string; createdAt: string | number }>();
+	const staleAt = new Date(new Date(session!.createdAt).getTime() - 11 * 60 * 1000);
+	const stored = typeof session!.createdAt === "number" ? staleAt.getTime() : staleAt.toISOString();
+	await db.prepare("UPDATE session SET createdAt = ? WHERE id = ?").bind(stored, session!.id).run();
+}
+
+test("a stale sign-in keeps a missing workers.dev name on the setup page", async (t) => {
+	t.after(githubFetch(consentScope("inbox", "workers")));
+	const db = openDb();
+	const app = appFor(db);
+	const cookie = await signIn(app);
+	await consentInbox(app, cookie);
+	await staleSession(db);
+	const api = cloudflareApi({ subdomain: "" });
+	t.after(api.restore);
+	const posted = await app.request(`${origin}/app/cloudflare`, {
+		method: "POST",
+		headers: { origin, cookie, "content-type": "application/x-www-form-urlencoded" },
+		body: "action=provision&name=my-agent",
+	});
+	const resume = posted.headers.getSetCookie().find((value) => value.startsWith("__Host-a2a_cf_resume="))?.split(";")[0] ?? "";
+	const fresh = await signIn(app);
+	const page = await app.request(`${origin}/app/cloudflare`, { headers: { cookie: `${fresh}; ${resume}` } });
+	assert.equal(page.status, 200);
+	const html = await page.text();
+	assert.match(html, /no workers\.dev name yet/);
+	assert.match(html, /value="my-agent"/);
+	assert.equal(api.calls.some((call) => call.method === "POST" && call.url.endsWith("/d1/database")), false);
+});
+
+test("a stale sign-in keeps the zone list when the hostname is not on a domain", async (t) => {
+	t.after(githubFetch(consentScope("inbox", "zone")));
+	const db = openDb();
+	const app = appFor(db);
+	const cookie = await signIn(app);
+	await consentInbox(app, cookie, "zone");
+	await staleSession(db);
+	const api = cloudflareApi({ zones: [{ id: "d".repeat(32), name: "example.com", status: "active" }] });
+	t.after(api.restore);
+	const posted = await app.request(`${origin}/app/cloudflare`, {
+		method: "POST",
+		headers: { origin, cookie, "content-type": "application/x-www-form-urlencoded" },
+		body: "action=provision&hostname=https://other.example.net/inbox",
+	});
+	const resume = posted.headers.getSetCookie().find((value) => value.startsWith("__Host-a2a_cf_resume="))?.split(";")[0] ?? "";
+	const fresh = await signIn(app);
+	const page = await app.request(`${origin}/app/cloudflare`, { headers: { cookie: `${fresh}; ${resume}` } });
+	assert.equal(page.status, 200);
+	const html = await page.text();
+	assert.match(html, /That address is not on a domain in this Cloudflare account\./);
+	assert.match(html, /example\.com/);
+	assert.match(html, /value="other\.example\.net"/);
+	assert.equal(api.calls.some((call) => call.method === "POST" && call.url.endsWith("/d1/database")), false);
 });
 
 test("your own domain attaches the hostname and does not claim the tunnel is done", async (t) => {
