@@ -100,6 +100,33 @@ function concat(parts: Uint8Array[]): Uint8Array {
 	return out;
 }
 
+/**
+ * A GitHub App auth failure. `code` is safe to log: `key_parse`, `jwt_rejected:<status>`,
+ * `installation:<status>`, or `token:<status>`. It never contains the key, the JWT, or a token.
+ * `status` is the HTTP status from GitHub, or 0 when GitHub was not called.
+ */
+export class GithubAuthError extends Error {
+	readonly code: string;
+	readonly status: number;
+	constructor(code: string, status = 0) {
+		super(code);
+		this.name = "GithubAuthError";
+		this.code = code;
+		this.status = status;
+	}
+}
+
+function authError(code: string, status = 0): GithubAuthError {
+	return new GithubAuthError(code, status);
+}
+
+/** 401 means GitHub rejected the app JWT. Any other status belongs to the call that failed. */
+function httpAuthFailure(step: "installation" | "token", status: number): GithubAuthError {
+	const http = Number.isInteger(status) && status >= 0 && status <= 999 ? status : 0;
+	if (http === 401) return authError(`jwt_rejected:${http}`, http);
+	return authError(`${step}:${http}`, http);
+}
+
 /** GitHub's downloaded key is PKCS#1. WebCrypto imports PKCS#8. */
 export function pkcs1ToPkcs8(pkcs1: Uint8Array): Uint8Array {
 	const version = Uint8Array.of(0x02, 0x01, 0x00);
@@ -107,9 +134,22 @@ export function pkcs1ToPkcs8(pkcs1: Uint8Array): Uint8Array {
 	return der(0x30, concat([version, RSA_ALG, privateKey]));
 }
 
+/**
+ * Base64 between the PEM banners only. Text outside those lines is ignored, including an HCL
+ * heredoc marker (`<<-EOT` / `EOT`). Whitespace, CRLF, and a literal `\n` inside the body are ignored.
+ */
 function pemBytes(pem: string): Uint8Array {
-	const body = pem.replace(/-----BEGIN [^-]+-----/g, "").replace(/-----END [^-]+-----/g, "").replace(/\s+/g, "");
-	const binary = atob(body);
+	const text = pem.replace(/\\n/g, "\n");
+	const match = text.match(/-----BEGIN [^-]*KEY-----([\s\S]*?)-----END [^-]*KEY-----/);
+	const body = (match?.[1] ?? "").replace(/\s+/g, "");
+	if (!body) throw authError("key_parse");
+	let binary: string;
+	try {
+		binary = atob(body);
+	} catch {
+		throw authError("key_parse");
+	}
+	if (!binary) throw authError("key_parse");
 	const bytes = new Uint8Array(binary.length);
 	for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
 	return bytes;
@@ -125,16 +165,21 @@ async function appJwt(env: ControlEnv, nowMs: number): Promise<string> {
 	const id = appId(env);
 	const pem = normalizePem(env.FEEDBACK_GITHUB_APP_PRIVATE_KEY ?? "");
 	const kind = pemKind(pem);
-	if (!id || !kind) throw new Error("github app auth failed");
-	const raw = pemBytes(pem);
-	const pkcs8 = kind === "pkcs1" ? pkcs1ToPkcs8(raw) : raw;
-	const key = await crypto.subtle.importKey("pkcs8", pkcs8, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]);
-	const iat = Math.floor(nowMs / 1000) - 60;
-	const header = b64url(new TextEncoder().encode(JSON.stringify({ alg: "RS256", typ: "JWT" })));
-	const payload = b64url(new TextEncoder().encode(JSON.stringify({ iat, exp: iat + 600, iss: id })));
-	const signing = new TextEncoder().encode(`${header}.${payload}`);
-	const signature = new Uint8Array(await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, signing));
-	return `${header}.${payload}.${b64url(signature)}`;
+	if (!id || !kind) throw authError("key_parse");
+	try {
+		const raw = pemBytes(pem);
+		const pkcs8 = kind === "pkcs1" ? pkcs1ToPkcs8(raw) : raw;
+		const key = await crypto.subtle.importKey("pkcs8", pkcs8, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]);
+		const iat = Math.floor(nowMs / 1000) - 60;
+		const header = b64url(new TextEncoder().encode(JSON.stringify({ alg: "RS256", typ: "JWT" })));
+		const payload = b64url(new TextEncoder().encode(JSON.stringify({ iat, exp: iat + 600, iss: id })));
+		const signing = new TextEncoder().encode(`${header}.${payload}`);
+		const signature = new Uint8Array(await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, signing));
+		return `${header}.${payload}.${b64url(signature)}`;
+	} catch (error) {
+		if (error instanceof GithubAuthError) throw error;
+		throw authError("key_parse");
+	}
 }
 
 function githubHeaders(bearer: string): Record<string, string> {
@@ -161,7 +206,8 @@ async function githubJson(call: typeof fetch, url: string, init: RequestInit): P
 function installationIdOf(env: ControlEnv): string {
 	const id = (env.FEEDBACK_GITHUB_APP_INSTALLATION_ID ?? "").trim();
 	if (!id) return "";
-	if (!APP_ID_RE.test(id)) throw new Error("github app auth failed");
+	// Not an HTTP failure: GitHub is not called, so the status in the code is 0.
+	if (!APP_ID_RE.test(id)) throw authError("installation:0", 0);
 	return id;
 }
 
@@ -189,12 +235,11 @@ function secretsFor(token: string, pat: string, jwt: string): string[] {
 
 /**
  * Installation token when the app is configured, otherwise the personal access token.
- * The installation token is cached until a minute before it expires. Failures throw a short error
- * that does not include the key, the JWT, or the token.
+ * The installation token is cached until a minute before it expires. Failures throw GithubAuthError.
  */
 export async function githubAccessToken(env: ControlEnv, repo: string, deps: GithubCallDeps): Promise<GithubAccess> {
 	const pat = feedbackPat(env);
-	if (feedbackAppBroken(env)) throw new Error("github app auth failed");
+	if (feedbackAppBroken(env)) throw authError("key_parse");
 	if (!feedbackAppReady(env)) {
 		if (!pat) throw new Error("github app auth failed");
 		return { token: pat, secrets: secretsFor(pat, "", "") };
@@ -214,7 +259,7 @@ export async function githubAccessToken(env: ControlEnv, repo: string, deps: Git
 		});
 		const id = found.body?.id;
 		const text = typeof id === "number" && Number.isSafeInteger(id) && id > 0 ? String(id) : "";
-		if (!found.ok || !APP_ID_RE.test(text)) throw new Error("github app auth failed");
+		if (!found.ok || !APP_ID_RE.test(text)) throw httpAuthFailure("installation", found.status);
 		installationId = text;
 		cache.installationId = text;
 	}
@@ -222,7 +267,7 @@ export async function githubAccessToken(env: ControlEnv, repo: string, deps: Git
 		method: "POST", redirect: "error", signal: AbortSignal.timeout(timeout), headers,
 	});
 	const token = typeof minted.body?.token === "string" ? minted.body.token : "";
-	if (!minted.ok || token.length < 8) throw new Error("github app auth failed");
+	if (!minted.ok || token.length < 8) throw httpAuthFailure("token", minted.status);
 	let expiresAt = now + FALLBACK_TTL_MS;
 	if (typeof minted.body?.expires_at === "string") {
 		const parsed = Date.parse(minted.body.expires_at);
