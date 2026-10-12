@@ -110,6 +110,20 @@ body:has(.setup) {
 	min-width: min(40rem, calc(100vw - 2.5rem));
 	max-width: 100%;
 }
+.setup .steps {
+	list-style: none;
+	margin: 0 0 1.25rem;
+	padding: 0;
+}
+.setup .steps > li {
+	margin: 0 0 0.75rem;
+	padding: 0.7rem 0.85rem;
+	border: 1px solid var(--line);
+	border-radius: 6px;
+}
+.setup .steps > li.pass { border-color: var(--accent); }
+.setup .steps > li p { margin: 0.35rem 0; }
+.setup .steps .choice-hint { display: inline; }
 .setup .choices {
 	display: flex;
 	flex-direction: column;

@@ -94,3 +94,23 @@ test("0012 adds script_tag on an inbox row that already exists", () => {
 	db.prepare(`UPDATE cloudflare_inbox SET script_tag = ? WHERE "userId" = 'user-a'`).run("ab".repeat(32));
 	assert.equal(db.prepare(`SELECT script_tag FROM cloudflare_inbox WHERE "userId" = 'user-a'`).get()?.script_tag, "ab".repeat(32));
 });
+
+test("0013 adds wizard columns on an inbox row that already exists", () => {
+	const db = new DatabaseSync(":memory:");
+	apply(db, files.filter((name) => name < "0013_cloudflare_inbox_wizard.sql"));
+	insertUser(db, "user-a", "a@example.com");
+	db.prepare(
+		`INSERT INTO cloudflare_inbox ("userId", cf_account_id, worker_name, d1_name, host, status, created_at, updated_at)
+		 VALUES ('user-a', 'account', 'my-agent', 'my-agent', 'workers', 'pending', ?, ?)`,
+	).run(earlier, earlier);
+	apply(db, ["0013_cloudflare_inbox_wizard.sql"]);
+	const row = db.prepare(`SELECT wizard_step, workers_subdomain, step_error FROM cloudflare_inbox WHERE "userId" = 'user-a'`).get() as {
+		wizard_step: string | null;
+		workers_subdomain: string | null;
+		step_error: string | null;
+	};
+	assert.equal(row.wizard_step, null);
+	assert.equal(row.workers_subdomain, null);
+	assert.equal(row.step_error, null);
+	assert.equal(db.prepare(`SELECT worker_name FROM cloudflare_inbox WHERE "userId" = 'user-a'`).get()?.worker_name, "my-agent");
+});

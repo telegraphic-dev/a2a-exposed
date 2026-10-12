@@ -280,7 +280,8 @@ test("the choice page explains a workers.dev inbox, then asks Cloudflare only fo
 	assert.equal(landed.searchParams.get("connected"), "1");
 	const done = await app.request(landed, { headers: { cookie } });
 	const doneHtml = await done.text();
-	assert.match(doneHtml, /Create it in Cloudflare/);
+	assert.match(doneHtml, /Check the Cloudflare account/);
+	assert.match(doneHtml, /Cloudflare is connected, and the permissions this inbox needs are granted/);
 	assert.match(doneHtml, /A refresh token is saved encrypted/);
 	assert.match(doneHtml, /single-use/);
 	assert.match(doneHtml, /can continue/);
