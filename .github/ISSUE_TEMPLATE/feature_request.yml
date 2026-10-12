@@ -1,0 +1,45 @@
+name: Feature request
+description: An idea for a2a-exposed.
+title: "[idea] "
+labels: ["enhancement", "feedback"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include tokens, passwords, or keys.
+  - type: textarea
+    id: message
+    attributes:
+      label: What happened
+      description: The idea, and why it would help.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: a2a-exposed version
+      description: Optional. The CLI version, and the inbox Worker version if you know it.
+      placeholder: 0.7.0 (worker 0.7.0)
+    validations:
+      required: false
+  - type: input
+    id: connection
+    attributes:
+      label: Connection type
+      description: Optional. webhook, proxy, or polling.
+    validations:
+      required: false
+  - type: input
+    id: deployment
+    attributes:
+      label: Deployment
+      description: Optional. hosted or self-hosted.
+    validations:
+      required: false
+  - type: input
+    id: agent
+    attributes:
+      label: Agent
+      description: Optional. Claude Code, Grok Bot, n8n, or custom.
+    validations:
+      required: false

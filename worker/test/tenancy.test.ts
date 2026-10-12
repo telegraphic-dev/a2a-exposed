@@ -24,6 +24,7 @@ test("gates: unset is single-tenant and every reserved gate is off", () => {
 	assert.equal(g.wakeTargetPolicy, "");
 	assert.equal(g.signupUrl, "");
 	assert.equal(g.branding, "");
+	assert.equal(g.feedbackUrl, "");
 	assert.equal(g.dataRegion, "");
 	assert.equal(g.tenantDomain, "");
 	assert.deepEqual(g.approvalOidc, { issuer: "", clientId: "", hasClientSecret: false, allowedSubjects: [], methods: ["password"], methodsSpecified: false, label: "" });
@@ -42,6 +43,7 @@ test("gates: only exact values turn on; typos and non-https URLs stay off", () =
 	assert.equal(g.branding, "");
 	assert.equal(g.dataRegion, "");
 	assert.equal(g.signupUrl, "");
+	assert.equal(g.feedbackUrl, "");
 	assert.equal(g.approvalOidc.issuer, "");
 	assert.deepEqual(g.approvalOidc.methods, ["password"]);
 	assert.equal(g.approvalOidc.methodsSpecified, false);
@@ -50,7 +52,8 @@ test("gates: only exact values turn on; typos and non-https URLs stay off", () =
 	const on = parseGates({
 		DB: dummy, TENANCY: "host", TENANT_DO: {} as any, QUOTAS: "on", USAGE_SINK: "d1",
 		WAKE_TARGET_POLICY: "public-https", BRANDING: "hosted", DATA_REGION: "EU",
-		SIGNUP_URL: "https://example.com/start", APPROVAL_OIDC_ISSUER: "https://example.com",
+		SIGNUP_URL: "https://example.com/start", FEEDBACK_URL: "https://control.example.com",
+		APPROVAL_OIDC_ISSUER: "https://example.com",
 		APPROVAL_OIDC_CLIENT_ID: "client", APPROVAL_OIDC_CLIENT_SECRET: "secret",
 		APPROVAL_OIDC_ALLOWED_SUBJECTS: " acct_1 , acct_2 ", APPROVAL_METHODS: "oidc,password",
 		TENANT_DOMAIN: "example.com",
@@ -63,6 +66,9 @@ test("gates: only exact values turn on; typos and non-https URLs stay off", () =
 	assert.equal(on.branding, "hosted");
 	assert.equal(on.dataRegion, "eu");
 	assert.equal(on.signupUrl, "https://example.com/start");
+	assert.equal(on.feedbackUrl, "https://control.example.com");
+	assert.equal(parseGates({ DB: dummy, FEEDBACK_URL: "http://control.example.com" } as WorkerBindings).gates.feedbackUrl, "");
+	assert.equal(parseGates({ DB: dummy, FEEDBACK_URL: "https://control.example.com/api" } as WorkerBindings).gates.feedbackUrl, "");
 	assert.equal(on.approvalOidc.issuer, "https://example.com");
 	assert.equal(on.approvalOidc.hasClientSecret, true);
 	assert.deepEqual(on.approvalOidc.allowedSubjects, ["acct_1", "acct_2"]);

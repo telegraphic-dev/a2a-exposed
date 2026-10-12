@@ -20,6 +20,8 @@ import { brandConfig } from "@brand/brand.config.ts";
 import { avatarOrigin, avatarUrl, renderAccount } from "./views/account.tsx";
 import { renderApp, securityHeaders } from "./views/document.tsx";
 import { renderSignIn } from "./views/sign-in.tsx";
+import { createFeedback, feedbackOn, type FeedbackDeps, type FeedbackResult } from "./feedback.ts";
+import { renderFeedback } from "./views/feedback.tsx";
 
 /**
  * A state-changing tenant call must be JSON. `text/plain` is a CORS-safelisted type, so a page on a
@@ -161,8 +163,10 @@ function htmlPathFor(pathname: string): string {
 	return pathname;
 }
 
-export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: DataPlane; callbackDeadlineMs?: number; signInDeadlineMs?: number; cloudflareFetchMs?: number } = {}) {
+export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & { dataPlane?: DataPlane; callbackDeadlineMs?: number; signInDeadlineMs?: number; cloudflareFetchMs?: number } = {}) {
 	const app = new Hono<{ Bindings: ControlEnv }>();
+	const feedback = createFeedback(env, deps);
+	const feedbackLink = feedbackOn(env) ? `<p><a href="/app/feedback">Feedback</a></p>` : undefined;
 
 	app.use("*", async (c, next) => {
 		const assetPath = markdownPath(c.req.path);
@@ -254,6 +258,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 	});
 	app.get("/app/agents/:name", (c) => handleAgent(c.req.raw, env, deps));
 	app.post("/app/agents/:name", (c) => handleAgent(c.req.raw, env, deps));
+	app.all("/app/feedback", (c) => feedbackPage(c));
 	app.get("/app/*", async (c) => {
 		const shell = await renderShell(c.req.raw);
 		if (shell.clearOwner) c.header("set-cookie", hostCookie(OWNER_COOKIE, "", 0));
@@ -346,6 +351,10 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 		return shown;
 	});
 
+	app.all("/api/feedback", async (c) => {
+		const result = await feedback.api(c.req.raw);
+		return feedbackResponse(c, result);
+	});
 	app.get("/api/v1/tenants", (c) => tenants(c, "GET"));
 	app.post("/api/v1/tenants", (c) => tenants(c, "POST"));
 
@@ -464,7 +473,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 				disconnected: url.searchParams.get("disconnected") === "1",
 			});
 			return {
-				html: renderApp(env, body, "Your agents"),
+				html: renderApp(env, body, "Your agents", feedbackLink),
 				turnstile,
 				options: loaded.options,
 				signedIn: true,
@@ -493,7 +502,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 			if (blockers.length) body = renderSignIn({ providers: [], magicLink: false, invitesRequired: false, notice: blockers[0] });
 		}
 		return {
-			html: renderApp(env, body || undefined),
+			html: renderApp(env, body || undefined, undefined, feedbackLink),
 			turnstile,
 			options: loaded?.options ?? null,
 			signedIn: false,
@@ -552,6 +561,17 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & { dataPlane?: D
 		addVary(headers, "Accept");
 		return new Response(asset.body, { status: asset.status, statusText: asset.statusText, headers });
 	});
+
+	async function feedbackPage(c: Context<{ Bindings: ControlEnv }>) {
+		const result = await feedback.page(c.req.raw, (input) => renderFeedback(input));
+		return feedbackResponse(c, result);
+	}
+
+	function feedbackResponse(c: Context<{ Bindings: ControlEnv }>, result: FeedbackResult) {
+		if (result.kind === "redirect") return c.redirect(result.location, 303);
+		if (result.kind === "html") return c.html(renderApp(env, result.html, "Feedback"), 200, pageHeaders(result.turnstile));
+		return c.json(result.body, result.status as 200, result.headers);
+	}
 
 	return app;
 }

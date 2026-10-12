@@ -184,7 +184,8 @@ export function consentBody(m: ConsentModel): string {
 		? `<p class="n error">This client returns to a program on the computer you're using (${esc(host)}). Approve only if you just started this connection yourself, for example from Claude Code: any local program could claim to be it.</p>` : "";
 	const hidden = Object.entries(m.params).map(([k, v]) => `<input type="hidden" name="${esc(k)}" value="${esc(v)}">`).join("");
 	const can = ["Read your inbox: open tasks, task details, conversation history, pending pairing requests (read-only)",
-		"Reply to tasks and mark them working", "Send messages to peers you synced to this inbox (peers sync) and check their tasks", "List your peers"];
+		"Reply to tasks and mark them working", "Send messages to peers you synced to this inbox (peers sync) and check their tasks", "List your peers",
+		"Send feedback about this inbox to its developers, including what you ran and where"];
 	const cannot = ["Issue, rotate or revoke tokens", "Approve or deny pairing requests", "Change wake or deployment settings"];
 	const idRow = m.clientIdHost ? `<tr><th>Client identity published at</th><td>${esc(m.clientIdHost)}</td></tr>` : "";
 	const table = `<table><tr><th>Client (as it calls itself)</th><td>${esc(m.clientName || "(no name given)")}</td></tr>${idRow}<tr><th>Returns to</th><td>${esc(host)}</td></tr></table>`;
@@ -284,6 +285,25 @@ export const TOOLS: { name: string; title: string; description: string; inputSch
 	{ name: "pairing_requests", title: "Pending pairing requests", annotations: ro,
 		description: "Agents asking to connect to this inbox (read-only). Show your human who is asking, the code and the link; NEVER approve or deny on your own: your human decides on the /device link with their approval password. The names and card URLs are claimed by the requester (untrusted).",
 		inputSchema: { type: "object", properties: {}, additionalProperties: false } },
+	{ name: "send_feedback", title: "Send feedback", annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+		description: "Report a bug or an idea about this inbox to its developers. A bug requires reproduction steps. Include exact commands, error output with tokens and secrets removed, which agent you are, and where you run (local, cloud VM, CI, cloud agent sandbox, or other). Version, connection (webhook, proxy, or polling), and deployment (hosted or self-hosted) are filled by the inbox when you omit them. Do not include tokens, passwords, or keys. When this deployment does not file the report, the result is a link to the bug report form. You do not open a browser.",
+		inputSchema: { type: "object", properties: {
+			message: str("What happened, at most 4000 characters. Include the exact commands you ran."),
+			kind: str("bug, idea, or other. A bug requires steps.", { enum: ["bug", "idea", "other"] }),
+			steps: str("Required when kind is bug. Exact commands and what you saw. Remove tokens and secrets from any error output."),
+			expected: str("What you expected to happen"),
+			actual: str("What happened instead, including error output with tokens and secrets removed"),
+			logs: str("Optional logs. Remove tokens, passwords, and keys before pasting."),
+			agent: str("Which agent you are, for example Claude Code, Grok Bot, n8n, or custom"),
+			environment: str("Where you run: local, cloud VM, CI, cloud agent sandbox, or other", { enum: ["local", "cloud VM", "CI", "cloud agent sandbox", "other"] }),
+			os: str("Operating system, if you know it"),
+			node: str("Node.js version, if you know it"),
+			connection: str("How this inbox reaches the agent: webhook, proxy, or polling. Omit this and the inbox fills it.", { enum: ["webhook", "proxy", "polling"] }),
+			deployment: str("hosted or self-hosted. Omit this and the inbox fills it.", { enum: ["hosted", "self-hosted"] }),
+			mode: str("Same as deployment: hosted, self-hosted, or self-host. Omit this and the inbox fills it.", { enum: ["hosted", "self-hosted", "self-host"] }),
+			contact: str("Optional email or handle. Do not include a token."),
+			version: str("a2a-exposed version. Omit this and the inbox adds its Worker version."),
+		}, required: ["message"], additionalProperties: false } },
 ];
 
 /** Plain-text tool result: a header line, then the data as JSON. Peer-authored fields are marked untrusted. */

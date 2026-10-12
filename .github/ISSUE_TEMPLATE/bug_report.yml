@@ -1,0 +1,115 @@
+name: Bug report
+description: Something failed. Include the version, how this inbox is connected, and the steps.
+title: "[bug] "
+labels: ["bug", "feedback"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include tokens, passwords, or keys.
+  - type: textarea
+    id: message
+    attributes:
+      label: What happened
+      description: A short account of the bug.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: a2a-exposed version
+      description: The CLI version, and the inbox Worker version if you know it.
+      placeholder: 0.7.0 (worker 0.7.0)
+    validations:
+      required: true
+  - type: dropdown
+    id: connection
+    attributes:
+      label: Connection type
+      description: How this inbox reaches the agent. Webhook wake, a proxy or façade (--upstream), or polling.
+      options:
+        - webhook
+        - proxy
+        - polling
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment
+      options:
+        - hosted
+        - self-hosted
+    validations:
+      required: true
+  - type: input
+    id: agent
+    attributes:
+      label: Agent
+      description: Claude Code, Grok Bot, n8n, or custom.
+      placeholder: Claude Code
+    validations:
+      required: true
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      options:
+        - local
+        - cloud VM
+        - CI
+        - cloud agent sandbox
+        - other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: The exact commands, and what you saw.
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Optional. Remove tokens, passwords, and keys before pasting.
+    validations:
+      required: false
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      description: Optional.
+    validations:
+      required: false
+  - type: input
+    id: node
+    attributes:
+      label: Node
+      description: Optional. The Node.js version.
+    validations:
+      required: false
+  - type: input
+    id: contact
+    attributes:
+      label: Contact
+      description: Optional. An email or a handle. Not a token.
+    validations:
+      required: false

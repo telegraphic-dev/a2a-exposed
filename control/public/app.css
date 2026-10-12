@@ -108,6 +108,16 @@ button.action {
 	font: inherit;
 	cursor: pointer;
 }
+form.feedback label { display: block; font-weight: 600; }
+form.feedback label span { display: block; font-weight: 400; color: var(--muted); }
+form.feedback textarea,
+form.feedback input,
+form.feedback select { display: block; width: 100%; margin-top: 0.25rem; font: inherit; }
+form.feedback textarea { min-height: 6rem; }
+form.feedback textarea.short { min-height: 3.5rem; }
+form[action="/app/feedback"]:has(button.action:not(:disabled)) .check-wait { display: none; }
+form.feedback button.action:disabled,
+form.feedback button.action:disabled:hover { opacity: 0.45; cursor: not-allowed; }
 button[name="provider"]:disabled,
 button[name="provider"]:disabled:hover,
 button[name="provider"][aria-disabled="true"],

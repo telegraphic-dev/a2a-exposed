@@ -114,6 +114,8 @@ test("init without --hostname: learns the existing subdomain from cf, saves the 
 	const r = await s.init();
 	assert.equal(r.status, 0, r.stderr);
 	assert.equal(r.stdout.trim(), "https://wdtest.acme.workers.dev");
+	assert.match(r.stderr, /Like it\? Star us: https:\/\/github\.com\/telegraphic-dev\/a2a-exposed/);
+	assert.equal(r.stdout.includes("Like it?"), false);
 	const c = s.config();
 	assert.equal(c.A2A_BASE_URL, "https://wdtest.acme.workers.dev");
 	assert.equal(c.A2A_WORKERS_DEV_SUBDOMAIN, "acme");
@@ -143,6 +145,7 @@ test("init without a subdomain on the account explains how to create one", async
 	const r = await s.init("--workers-dev");
 	assert.equal(r.status, 1);
 	assert.match(r.stderr, /no workers\.dev subdomain yet/);
+	assert.equal(r.stderr.includes("Like it? Star us:"), false);
 	assert.match(r.stderr, /--workers-dev-subdomain <name>/);
 	assert.match(r.stderr, /dash\.cloudflare\.com\/acc123\/workers\/onboarding/);
 	assert.ok(!s.config().A2A_BASE_URL);

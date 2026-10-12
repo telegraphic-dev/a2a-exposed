@@ -327,10 +327,49 @@ test("scope: the MCP token is not an owner or peer token, and peer/owner tokens 
 	assert.equal((await s.call("GET", "/mcp", { headers: { authorization: `Bearer ${a.access_token}` } })).status, 405);
 	// tools can't administer tokens or pairings
 	const names = (await s.mcp(a.access_token, "tools/list")).data.result.tools.map((x: any) => x.name);
-	assert.deepEqual(names, ["inbox", "show_task", "history", "mark_working", "reply", "send", "poll_outbound", "list_peers", "pairing_requests"]);
+	assert.deepEqual(names, ["inbox", "show_task", "history", "mark_working", "reply", "send", "poll_outbound", "list_peers", "pairing_requests", "send_feedback"]);
 	assert.ok(!names.some((n: string) => /approve|deny|token|revoke|issue|password/.test(n)));
 	const unknown = await s.mcp(a.access_token, "tools/call", { name: "approve_pairing", arguments: { code: "X" } });
 	assert.equal(unknown.data.error.code, -32602);
+});
+
+test("send_feedback returns a GitHub issue link and strips tokens", async (t) => {
+	const s = setup(); t.after(s.restore);
+	const a = await s.connect();
+	const token = "a2aot_" + "a".repeat(24);
+	const r = await s.tool(a.access_token, "send_feedback", {
+		message: `dropped a task ${token}`, kind: "bug", steps: `ran ${token}`, agent: "Claude Code", environment: "cloud agent sandbox",
+	});
+	assert.equal(r.isError, false);
+	const link = r.content[0].text.split("\n").pop() ?? "";
+	const url = new URL(link);
+	assert.equal(`${url.origin}${url.pathname}`, "https://github.com/telegraphic-dev/a2a-exposed/issues/new");
+	assert.equal(url.searchParams.get("template"), "bug_report.yml");
+	assert.equal(url.searchParams.get("body"), null);
+	assert.equal((url.searchParams.get("message") ?? "").includes(token), false);
+	assert.match(url.searchParams.get("message") ?? "", /\[redacted\]/);
+	assert.match(url.searchParams.get("steps") ?? "", /ran \[redacted\]/);
+	assert.equal(url.searchParams.get("agent"), "Claude Code");
+	assert.equal(url.searchParams.get("environment"), "cloud agent sandbox");
+	assert.equal(url.searchParams.get("connection"), "webhook");
+	assert.equal(url.searchParams.get("deployment"), "self-hosted");
+	assert.equal(url.searchParams.get("version"), "worker 0.7.0");
+	assert.equal((url.searchParams.get("message") ?? "").includes("hook.example.net"), false);
+	const listed = (await s.mcp(a.access_token, "tools/list")).data.result.tools.find((tool: { name: string }) => tool.name === "send_feedback");
+	assert.match(listed.description, /exact commands/);
+	assert.match(listed.description, /filled by the inbox/);
+	assert.match(listed.inputSchema.properties.steps.description, /Remove tokens and secrets/);
+	assert.match(listed.inputSchema.properties.environment.description, /cloud agent sandbox/);
+	assert.match(listed.inputSchema.properties.connection.description, /webhook, proxy, or polling/);
+	assert.match(listed.inputSchema.properties.deployment.description, /self-hosted/);
+	assert.match(listed.inputSchema.properties.version.description, /Worker version/);
+	assert.equal((await s.tool(a.access_token, "send_feedback", {})).isError, true);
+	const missingSteps = await s.tool(a.access_token, "send_feedback", { message: "broke", kind: "bug" });
+	assert.equal(missingSteps.isError, true);
+	assert.match(missingSteps.content[0].text, /reproduction steps/);
+	const { token: peerTok } = await s.inbound("barry", "hello");
+	assert.equal((await s.mcp(peerTok, "tools/call", { name: "send_feedback", arguments: { message: "hi" } })).status, 401);
+	assert.equal((await s.mcp("owner-secret", "tools/call", { name: "send_feedback", arguments: { message: "hi" } })).status, 401);
 });
 
 test("JSON-RPC plumbing: notifications 202, batches and junk rejected, unknown method", async (t) => {

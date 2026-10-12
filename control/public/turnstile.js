@@ -1,8 +1,19 @@
+function a2aTurnstileForms() {
+	var actions = ["/app/sign-in", "/app/feedback"];
+	var forms = [];
+	for (var i = 0; i < actions.length; i++) {
+		var form = document.querySelector("form[action='" + actions[i] + "']");
+		if (form) forms.push(form);
+	}
+	return forms;
+}
+
 function a2aTurnstileButtons(enabled) {
-	var form = document.querySelector("form[action='/app/sign-in']");
-	if (!form) return;
-	var buttons = form.querySelectorAll("button[name='provider']");
-	for (var i = 0; i < buttons.length; i++) buttons[i].disabled = !enabled;
+	var forms = a2aTurnstileForms();
+	for (var f = 0; f < forms.length; f++) {
+		var buttons = forms[f].querySelectorAll("button[name='provider'], button.action");
+		for (var i = 0; i < buttons.length; i++) buttons[i].disabled = !enabled;
+	}
 }
 
 function a2aTurnstileReady() {
@@ -26,6 +37,8 @@ window.addEventListener("pageshow", function (event) {
 // Reset after this submit has copied the token, so a blocked redirect can be tried again.
 window.addEventListener("submit", function (event) {
 	var form = event.target;
-	if (!form || !form.getAttribute || form.getAttribute("action") !== "/app/sign-in") return;
+	if (!form || !form.getAttribute) return;
+	var action = form.getAttribute("action");
+	if (action !== "/app/sign-in" && action !== "/app/feedback") return;
 	setTimeout(a2aTurnstileReset, 0);
 });

@@ -49,6 +49,7 @@ const plain: Record<string, string> = {
 	// Hosted multi-tenant gates. All empty by default, and empty is omitted, so a self-host deploy is unchanged.
 	// TENANCY=host switches the entrypoint to src/hosted.ts and adds TENANT_DO + TENANT_DIRECTORY below.
 	// QUOTAS, USAGE_SINK, SIGNUP_URL and BRANDING are parsed and reserved.
+	// FEEDBACK_URL is an https origin. Only a hosted tenant posts feedback there. Unset on a self-hosted inbox.
 	// WAKE_TARGET_POLICY=public-https refuses a wake that is not public https. The socket opens to an address from that check, and TLS names the hostname (see wake-target.ts).
 	// APPROVAL_OIDC_* turn on OpenID Connect approval when issuer, client id, secret and allowlist are all set.
 	TENANCY: v("TENANCY"),
@@ -59,6 +60,7 @@ const plain: Record<string, string> = {
 	WAKE_TARGET_POLICY: v("WAKE_TARGET_POLICY"),
 	SIGNUP_URL: v("SIGNUP_URL"),
 	BRANDING: v("BRANDING"),
+	FEEDBACK_URL: v("FEEDBACK_URL"),
 	APPROVAL_OIDC_ISSUER: v("APPROVAL_OIDC_ISSUER"),
 	APPROVAL_OIDC_CLIENT_ID: v("APPROVAL_OIDC_CLIENT_ID"),
 	APPROVAL_OIDC_ALLOWED_SUBJECTS: v("APPROVAL_OIDC_ALLOWED_SUBJECTS"),
