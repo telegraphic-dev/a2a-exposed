@@ -16,4 +16,4 @@ Optional speed-up on your own machine: `npm i -g a2a-exposed@latest`, then `a2a-
 - **Outbound:** `peers add|list|rm`, `send`, `poll`, `outbound`
 - **Config:** `~/.config/a2a-exposed/config.env` (chmod 600; override the directory with `A2A_CONFIG_DIR`). Environment variables override file values; a peer token (`PEER_<ALIAS>_TOKEN`) that differs between the two prints a warning on stderr.
 
-See the repository README and the skills in `skills/` for full documentation. License: MIT.
+See the repository [README](https://github.com/telegraphic-dev/a2a-exposed#readme) and [docs](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/README.md). The skills in `skills/` are the agent workflows. License: MIT.

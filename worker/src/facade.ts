@@ -123,7 +123,7 @@ export type FacadeCardInput = {
 
 /** The public A2A 1.0 card for a façade in front of a private upstream.
  *
- *  Rewrite rules (documented in the README and the setup skill):
+ *  Rewrite rules (documented in docs/self-hosting.md and the setup skill):
  *  - supportedInterfaces: one JSONRPC interface per protocol version the upstream advertises (1.0 / 0.3; both when the
  *    upstream card is unavailable), every one at `${publicBase}/`. Upstream interface URLs, gRPC / HTTP+JSON
  *    interfaces, `url`, `additionalInterfaces` and `preferredTransport` are never copied.
