@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import worker, { dispatch } from "../src/index.ts";
 import { sha256 } from "../src/a2a.ts";
-import { connectionOf, feedbackEndpoint, feedbackIssueUrl, scrubFeedbackText, sendFeedback, WORKER_VERSION } from "../src/feedback.ts";
+import { connectionOf, feedbackEndpoint, feedbackIssueUrl, feedbackResultText, feedbackToolDescription, scrubFeedbackText, sendFeedback, WORKER_VERSION } from "../src/feedback.ts";
 import { readFileSync } from "node:fs";
 import { hostedTenantContext, resolveTenant, type WorkerBindings } from "../src/tenancy.ts";
 import { d1 } from "./d1.ts";
@@ -38,9 +38,12 @@ async function call(env: WorkerBindings, path: string, headers: Record<string, s
 
 test("scrubFeedbackText removes token shapes and Bearer values", () => {
 	const token = "a2aow_" + "b".repeat(24);
-	const text = scrubFeedbackText(`token ${token} and Bearer supersecretvalue stay out`);
+	const pem = "-----BEGIN RSA PRIVATE KEY-----\nSECRETKEYMATERIAL\n-----END RSA PRIVATE KEY-----";
+	const text = scrubFeedbackText(`token ${token} and Bearer supersecretvalue stay out ${pem} AKIAIOSFODNN7EXAMPLE`);
 	assert.equal(text.includes(token), false);
 	assert.equal(text.includes("supersecretvalue"), false);
+	assert.equal(text.includes("SECRETKEYMATERIAL"), false);
+	assert.equal(text.includes("AKIAIOSFODNN7EXAMPLE"), false);
 	assert.match(text, /\[redacted\]/);
 	assert.match(text, /Bearer \[redacted\]/);
 });
@@ -86,6 +89,18 @@ test("GET /owner/feedback is hosted only for a hosted tenant", async () => {
 	}), ctx, run.ectx);
 	await run.done();
 	assert.deepEqual(await res.json(), { hosted: true, url: "https://control.example.com/api/feedback", version: WORKER_VERSION, connection: "polling" });
+});
+
+test("the public-issue note names the repository in the issue URL", () => {
+	const filed = feedbackResultText({ filed: true, issue_url: "https://github.com/example-org/example-repo/issues/4" });
+	assert.match(filed, /public GitHub issue on example-org\/example-repo/);
+	assert.equal(filed.includes("telegraphic-dev/a2a-exposed"), false);
+	assert.match(filed, /Feedback filed: https:\/\/github.com\/example-org\/example-repo\/issues\/4/);
+	const form = feedbackResultText({ filed: false, issue_url: feedbackIssueUrl({ title: "hi" }) });
+	assert.match(form, /public GitHub issue on telegraphic-dev\/a2a-exposed/);
+	assert.match(feedbackToolDescription(""), /configured feedback repository/);
+	assert.equal(feedbackToolDescription("").includes("telegraphic-dev/a2a-exposed"), false);
+	assert.match(feedbackToolDescription("example-org/example-repo"), /public GitHub issue on example-org\/example-repo/);
 });
 
 test("sendFeedback does not call out from a self-hosted inbox", async () => {

@@ -7,7 +7,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CliError } from "../lib/a2a.mjs";
-import { runFeedback } from "../lib/feedback.mjs";
+import { Readable } from "node:stream";
+import { confirmPublicIssue, feedbackPublicRepo, PUBLIC_ISSUE_WARNING, runFeedback } from "../lib/feedback.mjs";
 
 const BIN = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "bin", "a2a-exposed.mjs");
 const VERSION = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
@@ -31,8 +32,10 @@ function run(args) {
 
 test("with no inbox, feedback prints an encoded GitHub issue URL", async () => {
 	const token = "a2aot_" + "a".repeat(24);
-	const r = await run(["feedback", `saw ${token} then Bearer supersecretvalue`, "--kind", "bug", "--contact", "ada@example.com", "--steps", `1. ran ${token}`, "--expected", "a reply", "--actual", "nothing", "--agent", "Claude Code", "--environment", "local laptop"]);
+	const r = await run(["feedback", `saw ${token} then Bearer supersecretvalue`, "--kind", "bug", "--contact", "ada@example.com", "--steps", `1. ran ${token}`, "--expected", "a reply", "--actual", "nothing", "--agent", "Claude Code", "--environment", "local laptop", "--yes"]);
 	assert.equal(r.status, 0, r.stderr);
+	assert.match(r.stderr, /public GitHub issue on telegraphic-dev\/a2a-exposed/);
+	assert.match(r.stderr, /confidential information/);
 	const url = new URL(r.stdout.trim());
 	assert.equal(`${url.origin}${url.pathname}`, "https://github.com/telegraphic-dev/a2a-exposed/issues/new");
 	assert.equal(url.searchParams.get("template"), "bug_report.yml");
@@ -56,6 +59,27 @@ test("with no inbox, feedback prints an encoded GitHub issue URL", async () => {
 	assert.equal(r.stdout.split("\n").filter(Boolean).length, 1);
 });
 
+test("feedback without --yes does not send off a terminal", async () => {
+	const r = await run(["feedback", "hello"]);
+	assert.equal(r.status, 1);
+	assert.equal(r.stdout.trim(), "");
+	assert.match(r.stderr, /public GitHub issue on telegraphic-dev\/a2a-exposed/);
+	assert.match(r.stderr, /pass --yes/);
+});
+
+test("confirmPublicIssue asks on a terminal and accepts yes", async () => {
+	const declined = Readable.from(["n\n"]);
+	declined.isTTY = true;
+	let asked = "";
+	const output = { write(chunk) { asked += chunk; return true; } };
+	await assert.rejects(() => confirmPublicIssue(false, declined, output), (error) => error instanceof CliError && /not sent/.test(error.message));
+	assert.match(asked, /File this public issue\? \[y\/N\] /);
+	assert.ok(asked.startsWith(PUBLIC_ISSUE_WARNING));
+	const accepted = Readable.from(["yes\n"]);
+	accepted.isTTY = true;
+	await confirmPublicIssue(false, accepted, output);
+});
+
 test("a bug without steps is refused before a link is printed", async () => {
 	const r = await run(["feedback", "it broke", "--kind", "bug"]);
 	assert.equal(r.status, 1);
@@ -70,6 +94,34 @@ test("an unknown kind or connection is refused", async () => {
 	const connection = await run(["feedback", "hi", "--connection", "socket"]);
 	assert.equal(connection.status, 1);
 	assert.match(connection.stderr, /--connection must be webhook, proxy, or polling/);
+});
+
+test("a hosted inbox names the control plane repository, and does not guess when that name is missing", async () => {
+	const repo = "example-org/example-repo";
+	let gets = 0;
+	const named = await feedbackPublicRepo({
+		baseUrl: "https://agent.example.com",
+		ownerToken: "owner-secret",
+		fetchImpl: async (url, init) => {
+			if (String(url).endsWith("/owner/feedback")) return Response.json({ hosted: true, url: "https://control.example.com/api/feedback", connection: "polling" });
+			gets += 1;
+			assert.equal(init.method, "GET");
+			assert.equal(new Headers(init.headers).get("authorization") ?? "", "");
+			return Response.json({ repo });
+		},
+	});
+	assert.equal(named, repo);
+	assert.equal(gets, 1);
+	const local = await feedbackPublicRepo({ fetchImpl: async () => { throw new Error("no network"); } });
+	assert.equal(local, "telegraphic-dev/a2a-exposed");
+	await assert.rejects(() => feedbackPublicRepo({
+		baseUrl: "https://agent.example.com",
+		ownerToken: "owner-secret",
+		fetchImpl: async (url) => {
+			if (String(url).endsWith("/owner/feedback")) return Response.json({ hosted: true, url: "https://control.example.com/api/feedback" });
+			return Response.json({ error: "method" }, { status: 405 });
+		},
+	}), (error) => error instanceof CliError && /did not name the public repository/.test(error.message));
 });
 
 test("a hosted inbox posts, a 404 falls back, and a 429 does not", async () => {

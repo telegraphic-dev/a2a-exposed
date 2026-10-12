@@ -209,16 +209,23 @@ Feedback
   feedback "message" [--kind bug|idea|other] [--contact x]
             [--steps S] [--expected S] [--actual S] [--logs S] [--agent A]
             [--environment local|cloud VM|CI|cloud agent sandbox|other]
-            [--connection webhook|proxy|polling]
+            [--connection webhook|proxy|polling] [--yes]
                                 report a bug or an idea. A bug needs --steps.
+                                The report is a public GitHub issue. The warning names
+                                the repository before it sends. A hosted inbox uses the
+                                control plane's FEEDBACK_REPO. Otherwise the link opens
+                                the form on telegraphic-dev/a2a-exposed. Do not include
+                                confidential information: secrets, tokens, owner or pairing
+                                tokens, private URLs or hostnames, message contents, or
+                                personal data. Prints that warning and asks before sending,
+                                unless --yes is set. Off a terminal, --yes is required.
                                 Posts to the control plane when this inbox is hosted and that
                                 plane accepts feedback. Otherwise prints a link to the bug
                                 report form and does not open a browser. The CLI adds its
                                 version, the inbox Worker version when the inbox reports it,
                                 the OS, the Node version, the connection (webhook, proxy, or
                                 polling), and hosted or self-hosted. --connection overrides
-                                that detection. Don't put tokens, passwords, or keys in the
-                                message. Remove them from --logs too.
+                                that detection. Remove tokens from the message and from --logs.
 
 Presets: grok-bot | claude-code | openclaw-wake | openclaw-agent | hermes | generic
 Config: ${C.CONFIG_FILE}  (override dir with --config-dir DIR or A2A_CONFIG_DIR; env vars override file values)
@@ -246,7 +253,7 @@ const SPEC = {
 	signup: { "control-url": S, json: B },
 	login: { "control-url": S, json: B },
 	pair: { json: B, web: B, ttl: S, issuer: S, "client-id": S, subjects: S, methods: S, "secret-stdin": B },
-	feedback: { kind: S, contact: S, steps: S, expected: S, actual: S, logs: S, agent: S, environment: S, connection: S },
+	feedback: { kind: S, contact: S, steps: S, expected: S, actual: S, logs: S, agent: S, environment: S, connection: S, yes: B },
 };
 const STATES = ["completed", "input-required", "failed", "rejected", "working"];
 
@@ -336,6 +343,9 @@ export async function main(argv) {
 			const kind = o.kind || "other";
 			if (!fb.KINDS.includes(kind)) throw new CliError("--kind must be bug, idea, or other");
 			if (o.connection && !fb.CONNECTIONS.includes(o.connection)) throw new CliError("--connection must be webhook, proxy, or polling");
+			if (kind === "bug" && !String(o.steps || "").trim()) throw new CliError("a bug report needs reproduction steps (--steps)");
+			const repo = await fb.feedbackPublicRepo({ baseUrl: C.get("A2A_BASE_URL"), ownerToken: C.get("A2A_OWNER_TOKEN") });
+			await fb.confirmPublicIssue(Boolean(o.yes), undefined, undefined, repo);
 			const result = await fb.runFeedback({
 				message, kind, contact: o.contact || "", version: VERSION,
 				steps: o.steps || "", expected: o.expected || "", actual: o.actual || "", logs: o.logs || "",

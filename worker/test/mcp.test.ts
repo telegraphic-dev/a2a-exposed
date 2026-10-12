@@ -342,6 +342,8 @@ test("send_feedback returns a GitHub issue link and strips tokens", async (t) =>
 		message: `dropped a task ${token}`, kind: "bug", steps: `ran ${token}`, agent: "Claude Code", environment: "cloud agent sandbox",
 	});
 	assert.equal(r.isError, false);
+	assert.match(r.content[0].text, /public GitHub issue on telegraphic-dev\/a2a-exposed/);
+	assert.match(r.content[0].text, /confidential information/);
 	const link = r.content[0].text.split("\n").pop() ?? "";
 	const url = new URL(link);
 	assert.equal(`${url.origin}${url.pathname}`, "https://github.com/telegraphic-dev/a2a-exposed/issues/new");
@@ -357,6 +359,8 @@ test("send_feedback returns a GitHub issue link and strips tokens", async (t) =>
 	assert.equal(url.searchParams.get("version"), `worker ${WORKER_VERSION}`);
 	assert.equal((url.searchParams.get("message") ?? "").includes("hook.example.net"), false);
 	const listed = (await s.mcp(a.access_token, "tools/list")).data.result.tools.find((tool: { name: string }) => tool.name === "send_feedback");
+	assert.match(listed.description, /public GitHub issue on telegraphic-dev\/a2a-exposed/);
+	assert.match(listed.description, /Redact before sending/);
 	assert.match(listed.description, /exact commands/);
 	assert.match(listed.description, /filled by the inbox/);
 	assert.match(listed.inputSchema.properties.steps.description, /Remove tokens and secrets/);

@@ -2,6 +2,7 @@
 // Nothing account-specific, and no hosted hostname, is committed here.
 import { bindings, defineConfig, triggers } from "cf/config";
 import * as entry from "./src/index.ts" with { type: "cf-worker" };
+import { feedbackPlainId } from "./src/feedback-plain.ts";
 import { RUN_WORKER_FIRST } from "./src/routing.ts";
 
 const e: Record<string, string | undefined> = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env ?? {};
@@ -30,6 +31,10 @@ const plain: Record<string, string> = {
 	SIGNUP_ALLOWLIST: v("SIGNUP_ALLOWLIST"),
 	FREE_AGENT_LIMIT: /^\d+$/.test(v("FREE_AGENT_LIMIT")) ? v("FREE_AGENT_LIMIT") : "",
 	FEEDBACK_REPO: v("FEEDBACK_REPO"),
+	// Keep a typo. The worker answers 502 for a non-numeric id; blanking it
+	// here would look unset and could file the issue with the personal access token.
+	FEEDBACK_GITHUB_APP_ID: feedbackPlainId(e.FEEDBACK_GITHUB_APP_ID),
+	FEEDBACK_GITHUB_APP_INSTALLATION_ID: feedbackPlainId(e.FEEDBACK_GITHUB_APP_INSTALLATION_ID),
 };
 
 // Secrets stay out of the production config so a deploy does not require them.
@@ -52,6 +57,7 @@ const DEV_SECRETS = [
 	"INVITES_REQUIRED",
 	"SIGNUP_ALLOWLIST",
 	"FEEDBACK_GITHUB_TOKEN",
+	"FEEDBACK_GITHUB_APP_PRIVATE_KEY",
 ];
 
 const envBindings: Record<string, any> = {

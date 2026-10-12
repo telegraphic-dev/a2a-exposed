@@ -1,5 +1,6 @@
 // Feedback: post to a hosted control plane when this inbox points at one, otherwise print a GitHub issue link.
 import os from "node:os";
+import readline from "node:readline/promises";
 import { CliError } from "./a2a.mjs";
 import * as C from "./config.mjs";
 
@@ -12,14 +13,42 @@ const TOKEN_RE = /(?:a2aow_|s2a_|a2amcp_|a2amcpr_|a2aot_)[A-Za-z0-9_-]{20,}/g;
 const SETUP_RE = /([?&])t=[A-Za-z0-9_-]{16,}/g;
 const USERINFO_RE = /([a-z][a-z0-9+.-]*:\/\/)[^/?\s]*@/gi;
 const BEARER_RE = /bearer\s+\S{8,200}/gi;
+const PEM_RE = /-----BEGIN (?:[A-Z0-9]+ )?PRIVATE KEY-----[\s\S]*?(?:-----END (?:[A-Z0-9]+ )?PRIVATE KEY-----|$)/g;
+const API_KEY_RE = /(?:(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|\bAKIA[0-9A-Z]{16}\b|\bsk_(?:live|test)_[A-Za-z0-9]{10,}|\brk_(?:live|test)_[A-Za-z0-9]{10,}|\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}|\bxox[baprs]-[A-Za-z0-9-]{10,}|\bAIza[0-9A-Za-z_-]{35}\b)/g;
 
-/** Same shapes as the Worker's scrubSecretText, plus a Bearer value. */
+/** Same shapes as the Worker's scrubSecretText, plus a Bearer value, a PEM private key, and common API-key prefixes. */
 export function scrubFeedbackText(value) {
 	return String(value ?? "")
 		.replace(TOKEN_RE, "[redacted]")
 		.replace(SETUP_RE, "$1t=[redacted]")
 		.replace(USERINFO_RE, "$1[redacted]@")
-		.replace(BEARER_RE, "Bearer [redacted]");
+		.replace(BEARER_RE, "Bearer [redacted]")
+		.replace(PEM_RE, "[redacted]")
+		.replace(API_KEY_RE, "[redacted]");
+}
+
+const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+
+/** The repository that will receive the issue. The prefilled form is ISSUE_REPO. A hosted post uses the control plane's name. */
+export function publicIssueWarning(repo = ISSUE_REPO) {
+	const name = typeof repo === "string" && REPO_RE.test(repo) && repo.length <= 100 && !repo.includes("..") ? repo : ISSUE_REPO;
+	return `This report is filed as a public GitHub issue on ${name}. Do not include confidential information: secrets, tokens, owner or pairing tokens, private URLs or hostnames, message contents, or personal data.`;
+}
+
+export const PUBLIC_ISSUE_WARNING = publicIssueWarning(ISSUE_REPO);
+
+/** Print the public-issue warning. On a terminal, wait for y or yes unless `yes` is set. Off a terminal, `--yes` is required. */
+export async function confirmPublicIssue(yes, input = process.stdin, output = process.stderr, repo = ISSUE_REPO) {
+	output.write(`${publicIssueWarning(repo)}\n`);
+	if (yes) return;
+	if (!input.isTTY) throw new CliError("feedback files a public GitHub issue; pass --yes to send it");
+	const rl = readline.createInterface({ input, output });
+	try {
+		const answer = (await rl.question("File this public issue? [y/N] ")).trim().toLowerCase();
+		if (answer !== "y" && answer !== "yes") throw new CliError("feedback not sent");
+	} finally {
+		rl.close();
+	}
 }
 
 const ENVIRONMENTS = ["local", "cloud VM", "CI", "cloud agent sandbox", "other"];
@@ -161,6 +190,51 @@ function githubIssue(value) {
 
 async function readJson(response) {
 	try { return await response.json(); } catch { return null; }
+}
+
+function namedRepo(value) {
+	const repo = typeof value === "string" ? value.trim() : "";
+	if (!REPO_RE.test(repo) || repo.length > 100 || repo.includes("..")) return "";
+	return repo;
+}
+
+/**
+ * Repository named in the warning before a report is sent.
+ * No hosted endpoint: the prefilled form on ISSUE_REPO.
+ * Hosted: GET /api/feedback must return `{ repo }`. A missing name does not guess ISSUE_REPO.
+ */
+export async function feedbackPublicRepo(input) {
+	const base = String(input.baseUrl || "").replace(/\/$/, "");
+	const token = String(input.ownerToken || "");
+	const call = input.fetchImpl ?? fetch;
+	if (!base || !token) return ISSUE_REPO;
+	let probe;
+	try {
+		probe = await call(`${base}/owner/feedback`, {
+			headers: { accept: "application/json", authorization: `Bearer ${token}` },
+			redirect: "error",
+			signal: AbortSignal.timeout(5000),
+		});
+	} catch {
+		probe = null;
+	}
+	const info = probe && probe.ok ? await readJson(probe) : null;
+	if (!info || info.hosted !== true || !feedbackUrlOk(info.url)) return ISSUE_REPO;
+	let named;
+	try {
+		named = await call(info.url, {
+			method: "GET",
+			headers: { accept: "application/json" },
+			redirect: "error",
+			signal: AbortSignal.timeout(5000),
+		});
+	} catch {
+		named = null;
+	}
+	const body = named && named.ok ? await readJson(named) : null;
+	const repo = namedRepo(body?.repo);
+	if (!repo) throw new CliError("the control plane did not name the public repository; feedback was not sent");
+	return repo;
 }
 
 /**
