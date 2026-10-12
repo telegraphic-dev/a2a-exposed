@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { SIGNUP_CLOSED, emailAllowed, signupAllowlist } from "../src/auth/allowlist.ts";
-import { CLOUDFLARE_REAUTH, CLOUDFLARE_UNLINKED } from "../src/auth/cloudflare-link.ts";
+import { CLOUDFLARE_REAUTH_NOTICE, CLOUDFLARE_UNLINKED } from "../src/auth/cloudflare-link.ts";
 import { mapCloudflareUser } from "../src/auth/cloudflare-user.ts";
-import { SESSION_COOKIE } from "../src/auth/cookies.ts";
+import { CLOUDFLARE_RESUME_COOKIE, SESSION_COOKIE } from "../src/auth/cookies.ts";
 import { createApp } from "../src/app.ts";
 import { openDb } from "./sql.ts";
 
@@ -304,14 +304,48 @@ test("connecting Cloudflare records the account, and disconnect removes it", asy
 
 	const staleAt = new Date(Date.now() - 11 * 60 * 1000).toISOString();
 	await db.prepare('UPDATE "session" SET "createdAt" = ?').bind(staleAt).run();
+	const staleChoice = await (await app.request(`${origin}/app/cloudflare`, { headers: { cookie: session } })).text();
+	const staleAccount = await (await app.request(`${origin}/app`, { headers: { cookie: session } })).text();
+	assert.match(staleChoice, /What do you want\?/);
+	assert.equal(staleChoice.includes(CLOUDFLARE_REAUTH_NOTICE), false);
+	assert.equal(staleChoice.includes("older than 10 minutes"), false);
+	assert.equal(staleAccount.includes(CLOUDFLARE_REAUTH_NOTICE), false);
+	assert.equal(staleAccount.includes("older than 10 minutes"), false);
+	const staleReview = await app.request(`${origin}/app/cloudflare`, {
+		method: "POST",
+		headers: { origin, cookie: session, "content-type": "application/x-www-form-urlencoded" },
+		body: "action=review&choice=inbox&host=workers",
+	});
+	assert.equal(staleReview.status, 200);
+	const staleReviewHtml = await staleReview.text();
+	assert.match(staleReviewHtml, /Workers Scripts Write/);
+	assert.equal(staleReviewHtml.includes(CLOUDFLARE_REAUTH_NOTICE), false);
 	const stale = await app.request(`${origin}/app/cloudflare`, {
 		method: "POST",
 		headers: { origin, cookie: session, "content-type": "application/x-www-form-urlencoded" },
 		body: "action=consent&choice=inbox&host=workers",
 	});
-	assert.equal(new URL(stale.headers.get("location") ?? "", origin).searchParams.get("error"), "cloudflare_reauth");
-	assert.match(await (await app.request(stale.headers.get("location") ?? "")).text(), new RegExp(CLOUDFLARE_REAUTH.replace(/[.]/g, "\\.")));
+	const staleUrl = new URL(stale.headers.get("location") ?? "", origin);
+	assert.equal(staleUrl.pathname, "/app/sign-in");
+	assert.equal(staleUrl.searchParams.get("reauth"), "cloudflare");
+	assert.equal(staleUrl.searchParams.get("return"), "/app/cloudflare");
+	assert.equal(staleUrl.searchParams.get("error"), null);
+	const staleSignIn = await (await app.request(staleUrl.href)).text();
+	assert.match(staleSignIn, new RegExp(CLOUDFLARE_REAUTH_NOTICE.replace(/[.]/g, "\\.")));
+	assert.equal(staleSignIn.includes("older than 10 minutes"), false);
+	assert.equal(staleSignIn.includes('class="alert"'), false);
+	assert.match(staleSignIn, /name="next" value="\/app\/cloudflare"/);
+	assert.ok(stale.headers.getSetCookie().some((value) => value.startsWith(`${SESSION_COOKIE}=`) && value.includes("Max-Age=0")));
 	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM "account" WHERE "providerId" = 'cloudflare'`).first<{ n: number }>())?.n, 0);
+	const resume = stale.headers.getSetCookie().find((value) => value.startsWith(`${CLOUDFLARE_RESUME_COOKIE}=`))!.split(";")[0];
+	const resumedIn = await providerCallback(app, "github");
+	const resumedSession = resumedIn.headers.getSetCookie().find((value) => value.startsWith(`${SESSION_COOKIE}=`))!.split(";")[0];
+	const continued = await app.request(`${origin}/app/cloudflare`, { headers: { cookie: `${resumedSession}; ${resume}` } });
+	assert.equal(continued.status, 303);
+	const continuedUrl = new URL(continued.headers.get("location") ?? "");
+	assert.equal(continuedUrl.origin, "https://dash.cloudflare.com");
+	assert.equal(continuedUrl.searchParams.get("scope"), "user-details.read account-settings.read workers-scripts.write d1.write offline_access");
+	assert.ok(continued.headers.getSetCookie().some((value) => value.startsWith(`${CLOUDFLARE_RESUME_COOKIE}=`) && value.includes("Max-Age=0")));
 
 	const fresh = await providerCallback(app, "github");
 	const freshSession = fresh.headers.getSetCookie().find((value) => value.startsWith(`${SESSION_COOKIE}=`))!.split(";")[0];
@@ -330,9 +364,18 @@ test("connecting Cloudflare records the account, and disconnect removes it", asy
 	const pendingState = new URL(pending.headers.get("location") ?? "").searchParams.get("state") ?? "";
 	await db.prepare('UPDATE "session" SET "createdAt" = ?').bind(staleAt).run();
 	const late = await app.request(`${origin}/api/auth/callback/cloudflare?code=abc&state=${encodeURIComponent(pendingState)}`, { headers: { cookie: freshSession } });
-	assert.equal(new URL(late.headers.get("location") ?? "", origin).searchParams.get("error"), "cloudflare_reauth");
+	const lateUrl = new URL(late.headers.get("location") ?? "", origin);
+	assert.equal(lateUrl.pathname, "/app/sign-in");
+	assert.equal(lateUrl.searchParams.get("reauth"), "cloudflare");
+	assert.equal(lateUrl.searchParams.get("return"), "/app/cloudflare");
 	assert.equal(late.headers.getSetCookie().some((value) => value.startsWith(`${SESSION_COOKIE}=`) && !value.includes("Max-Age=0")), false);
 	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM "account" WHERE "providerId" = 'cloudflare'`).first<{ n: number }>())?.n, 0);
+	const lateResume = late.headers.getSetCookie().find((value) => value.startsWith(`${CLOUDFLARE_RESUME_COOKIE}=`))!.split(";")[0];
+	const lateIn = await providerCallback(app, "github");
+	const lateSession = lateIn.headers.getSetCookie().find((value) => value.startsWith(`${SESSION_COOKIE}=`))!.split(";")[0];
+	const lateDone = await app.request(`${origin}/app/cloudflare`, { headers: { cookie: `${lateSession}; ${lateResume}` } });
+	assert.equal(new URL(lateDone.headers.get("location") ?? "", origin).searchParams.get("connected"), "1");
+	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM "account" WHERE "providerId" = 'cloudflare'`).first<{ n: number }>())?.n, 1);
 
 	const live = await providerCallback(app, "github");
 	const liveSession = live.headers.getSetCookie().find((value) => value.startsWith(`${SESSION_COOKIE}=`))!.split(";")[0];
@@ -379,6 +422,38 @@ test("connecting Cloudflare records the account, and disconnect removes it", asy
 	assert.match(homeHtml, /mona@example.com/);
 	assert.match(homeHtml, /Disconnect Cloudflare/);
 	assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM "user"').first<{ n: number }>())?.n, 1);
+
+	await db.prepare('UPDATE "session" SET "createdAt" = ?').bind(staleAt).run();
+	const staleDisconnect = await app.request(`${origin}/app/account/cloudflare`, {
+		method: "POST",
+		headers: { origin, cookie: liveSession, "content-type": "application/x-www-form-urlencoded" },
+		body: "action=disconnect",
+	});
+	const disconnectSignIn = new URL(staleDisconnect.headers.get("location") ?? "", origin);
+	assert.equal(disconnectSignIn.pathname, "/app/sign-in");
+	assert.equal(disconnectSignIn.searchParams.get("return"), "/app");
+	assert.equal(disconnectSignIn.searchParams.get("reauth"), "cloudflare");
+	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM "account" WHERE "providerId" = 'cloudflare'`).first<{ n: number }>())?.n, 1);
+	const disconnectResume = staleDisconnect.headers.getSetCookie().find((value) => value.startsWith(`${CLOUDFLARE_RESUME_COOKIE}=`))!.split(";")[0];
+	await db.prepare(`UPDATE verification SET value = ? WHERE identifier LIKE 'cf-resume:%'`).bind(JSON.stringify({ userId: "someone-else", action: "disconnect" })).run();
+	const mismatchIn = await providerCallback(app, "github");
+	const mismatchSession = mismatchIn.headers.getSetCookie().find((value) => value.startsWith(`${SESSION_COOKIE}=`))!.split(";")[0];
+	const mismatch = await app.request(`${origin}/app`, { headers: { cookie: `${mismatchSession}; ${disconnectResume}` } });
+	assert.equal(mismatch.status, 200);
+	assert.match(await mismatch.text(), /Disconnect Cloudflare/);
+	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM "account" WHERE "providerId" = 'cloudflare'`).first<{ n: number }>())?.n, 1);
+	await db.prepare('UPDATE "session" SET "createdAt" = ?').bind(staleAt).run();
+	const staleDisconnectAgain = await app.request(`${origin}/app/account/cloudflare`, {
+		method: "POST",
+		headers: { origin, cookie: mismatchSession, "content-type": "application/x-www-form-urlencoded" },
+		body: "action=disconnect",
+	});
+	const disconnectResumeAgain = staleDisconnectAgain.headers.getSetCookie().find((value) => value.startsWith(`${CLOUDFLARE_RESUME_COOKIE}=`))!.split(";")[0];
+	const disconnectIn = await providerCallback(app, "github");
+	const disconnectSession = disconnectIn.headers.getSetCookie().find((value) => value.startsWith(`${SESSION_COOKIE}=`))!.split(";")[0];
+	const disconnected = await app.request(`${origin}/app`, { headers: { cookie: `${disconnectSession}; ${disconnectResumeAgain}` } });
+	assert.equal(new URL(disconnected.headers.get("location") ?? "", origin).searchParams.get("disconnected"), "1");
+	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM "account" WHERE "providerId" = 'cloudflare'`).first<{ n: number }>())?.n, 0);
 
 	const signedOut = await app.request(`${origin}/app/sign-out`, {
 		method: "POST",

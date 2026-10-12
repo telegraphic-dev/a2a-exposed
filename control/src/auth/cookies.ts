@@ -2,6 +2,8 @@ export const SESSION_COOKIE = "__Host-a2a_session";
 export const INVITE_COOKIE = "__Host-a2a_invite";
 /** One-time owner token for the page that follows a form create. Not the session. */
 export const OWNER_COOKIE = "__Host-a2a_owner";
+/** One-time Cloudflare connect or disconnect to finish after a fresh sign-in. Not the session. */
+export const CLOUDFLARE_RESUME_COOKIE = "__Host-a2a_cf_resume";
 
 export function readCookie(header: string | null, name: string): string {
 	if (!header) return "";

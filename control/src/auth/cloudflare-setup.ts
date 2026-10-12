@@ -80,14 +80,14 @@ function variant(choice: SetupChoice): string {
 
 export function setupSummary(choice: SetupChoice, host: SetupHost): string {
 	const what = choice === "inbox"
-		? "a new inbox"
+		? "give your agent a public A2A address"
 		: choice === "facade"
-			? "a façade for an existing A2A agent"
-			: "a new inbox and a façade for an existing A2A agent";
+			? "make an agent you already run reachable by other agents"
+			: "give your agent a public A2A address and make an agent you already run reachable";
 	const where = host === "workers"
-		? "a free workers.dev address"
-		: "a domain already on your Cloudflare account";
-	return `You chose ${what} on ${where}.`;
+		? "a free Cloudflare address such as my-agent.yourname.workers.dev"
+		: "your own domain, such as agent.example.com";
+	return `You chose to ${what}, on ${where}.`;
 }
 
 /** Scopes this choice needs, in the order the consent URL sends them. */
