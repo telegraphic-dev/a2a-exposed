@@ -86,8 +86,11 @@ export function renderAccount(input: {
 	cloudflare?: boolean;
 	cloudflareLinked?: boolean;
 	disconnected?: boolean;
+	/** Public address of an inbox created in the user's Cloudflare account. */
+	cloudflareInbox?: string | null;
 }): string {
 	const image = avatarUrl(input.image);
+	const cloudflareInbox = agentUrl(input.cloudflareInbox ?? null);
 	const capped = limitMessage(input.agentLimit);
 	const closed = input.signupClosed && input.error === "invite" ? (input.closedMessage?.trim() || SIGNUP_CLOSED) : "";
 	const error = input.error === "limit" ? capped : closed || (input.error ? ERRORS[input.error] ?? "" : "");
@@ -107,6 +110,7 @@ export function renderAccount(input: {
 					{input.cloudflareLinked ? <p>Cloudflare is connected.</p> : ""}
 					{input.disconnected ? <p role="status">Cloudflare was disconnected.</p> : ""}
 					<p><a href="/app/cloudflare">Set me up on Cloudflare</a></p>
+					{cloudflareInbox ? <p>Your Cloudflare inbox is at <a href={cloudflareInbox}>{cloudflareInbox}</a>.</p> : ""}
 					{input.cloudflareLinked ? (
 						<form method="post" action="/app/account/cloudflare">
 							<p>

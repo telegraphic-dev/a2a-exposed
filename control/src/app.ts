@@ -4,13 +4,13 @@ import { connectingIp, verifyTurnstile } from "./auth/turnstile.ts";
 import { signInReturnPath } from "./auth/return.ts";
 import { readCloudflareGrant } from "./auth/cloudflare-grant.ts";
 import { CLOUDFLARE_REAUTH_NOTICE, cloudflareIsLinked, finishCloudflareLink, handleCloudflareAccount, handleCloudflareSetup, resumeCloudflare } from "./auth/cloudflare-link.ts";
-import { describeSetupGrant } from "./auth/cloudflare-setup.ts";
+import { describeSetupGrant, inboxCanProvision } from "./auth/cloudflare-setup.ts";
 import { enabledProviderOrigins, handleSignIn, PROVIDER_ORIGINS } from "./auth/sign-in.ts";
 import { loadAuth } from "./auth/instance.ts";
 import { signupClosedText, type SignupAllowlist } from "./auth/allowlist.ts";
 import { authBlockers, resolveAuth, type AuthDeps, type AuthOptions } from "./auth/options.ts";
 import { OIDC_COOKIE, authorize, discoveryDocument, exchangeCode, issuerOrigin, readTokenForm, resumeQuery } from "./oidc/issuer.ts";
-import { CLOUDFLARE_RESUME_COOKIE, OWNER_COOKIE, bareOwnerToken, hostCookie, readCookie } from "./auth/cookies.ts";
+import { CF_OWNER_COOKIE, CLOUDFLARE_RESUME_COOKIE, OWNER_COOKIE, bareOwnerToken, hostCookie, readCookie } from "./auth/cookies.ts";
 import { deviceCodeFromCookie, handleDevice } from "./auth/device.ts";
 import { sameOrigin } from "./auth/origin.ts";
 import { accountAgentLimit, configuredFreeAgentLimit, createTenant, listTenants } from "./tenants/create.ts";
@@ -23,6 +23,7 @@ import { renderCloudflareSetup } from "./views/cloudflare-setup.tsx";
 import { renderApp, securityHeaders } from "./views/document.tsx";
 import { renderSignIn } from "./views/sign-in.tsx";
 import { createFeedback, feedbackOn, type FeedbackDeps, type FeedbackResult } from "./feedback.ts";
+import { hashOwnerToken, readCloudflareInbox, type InboxMigration, type ProvisionFields } from "./provision/inbox.ts";
 import { renderFeedback } from "./views/feedback.tsx";
 
 /**
@@ -165,7 +166,41 @@ function htmlPathFor(pathname: string): string {
 	return pathname;
 }
 
-export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & { dataPlane?: DataPlane; callbackDeadlineMs?: number; signInDeadlineMs?: number; cloudflareFetchMs?: number } = {}) {
+async function loadInboxScript(env: ControlEnv, request: Request): Promise<string> {
+	if (!env.ASSETS) return "";
+	try {
+		const asset = await env.ASSETS.fetch(new URL("/inbox-worker.js.txt", request.url));
+		if (!asset.ok) return "";
+		const text = await asset.text();
+		return text.length > 5_000_000 ? "" : text;
+	} catch {
+		return "";
+	}
+}
+
+async function loadInboxMigrations(env: ControlEnv, request: Request): Promise<InboxMigration[]> {
+	if (!env.ASSETS) return [];
+	try {
+		const asset = await env.ASSETS.fetch(new URL("/inbox-migrations.json", request.url));
+		if (!asset.ok) return [];
+		const parsed: unknown = await asset.json();
+		if (!Array.isArray(parsed) || parsed.length > 50) return [];
+		const migrations: InboxMigration[] = [];
+		for (const row of parsed) {
+			if (!row || typeof row !== "object") return [];
+			const name = (row as { name?: unknown }).name;
+			const sql = (row as { sql?: unknown }).sql;
+			if (typeof name !== "string" || typeof sql !== "string") return [];
+			if (!/^\d{4}_[a-z0-9_]+\.sql$/.test(name) || sql.length > 500_000) return [];
+			migrations.push({ name, sql });
+		}
+		return migrations;
+	} catch {
+		return [];
+	}
+}
+
+export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & { dataPlane?: DataPlane; callbackDeadlineMs?: number; signInDeadlineMs?: number; cloudflareFetchMs?: number; inboxScript?: string; inboxMigrations?: InboxMigration[] } = {}) {
 	const app = new Hono<{ Bindings: ControlEnv }>();
 	const feedback = createFeedback(env, deps);
 	const feedbackLink = feedbackOn(env) ? `<p><a href="/app/feedback">Feedback</a></p>` : undefined;
@@ -228,7 +263,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 		const resumeAuth = await loadAuth(env, c.req.raw, deps);
 		let clearResume = false;
 		if (resumeAuth) {
-			const resumed = await resumeCloudflare(c.req.raw, resumeAuth.auth, resumeAuth.options);
+			const resumed = await resumeCloudflare(c.req.raw, resumeAuth.auth, resumeAuth.options, await provisionDeps(c.req.raw));
 			if (resumed?.kind === "response") return resumed.response;
 			if (resumed?.kind === "clear") clearResume = true;
 		}
@@ -297,7 +332,14 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 		if (!loaded) return c.json({ error: "not_found" }, 404);
 		return handleCloudflareAccount(request, loaded.auth, loaded.options);
 	});
-	async function cloudflareSetupPage(c: Context<{ Bindings: ControlEnv }>, review?: { choice: "inbox" | "facade" | "both"; host: "workers" | "zone" }) {
+	async function provisionDeps(request: Request) {
+		return {
+			script: deps.inboxScript != null ? deps.inboxScript : await loadInboxScript(env, request),
+			migrations: deps.inboxMigrations ?? await loadInboxMigrations(env, request),
+			fetchMs: deps.cloudflareFetchMs,
+		};
+	}
+	async function cloudflareSetupPage(c: Context<{ Bindings: ControlEnv }>, review?: { choice: "inbox" | "facade" | "both"; host: "workers" | "zone" }, extra?: { error?: string; accounts?: { id: string; name: string }[]; zones?: { name: string }[]; fields?: ProvisionFields }) {
 		const request = c.req.raw;
 		const loaded = await loadAuth(env, request, deps);
 		if (!loaded) return c.json({ error: "not_found" }, 404);
@@ -307,29 +349,40 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 		if (!userId) return redirectTo(new URL("/app", request.url).href);
 		let clearResume = false;
 		if (!review) {
-			const resumed = await resumeCloudflare(request, loaded.auth, loaded.options);
+			const resumed = await resumeCloudflare(request, loaded.auth, loaded.options, await provisionDeps(request));
 			if (resumed?.kind === "response") return resumed.response;
 			if (resumed?.kind === "clear") clearResume = true;
 		}
 		const url = new URL(request.url);
 		const grant = review ? null : await readCloudflareGrant(loaded.options.database, userId);
+		const inbox = review ? null : await readCloudflareInbox(loaded.options.database, userId);
+		const token = bareOwnerToken(readCookie(request.headers.get("cookie"), CF_OWNER_COOKIE));
+		const ownerToken = token && inbox?.owner_token_hash && inbox.owner_token_hash === await hashOwnerToken(token) ? token : "";
+		if (token) c.header("set-cookie", hostCookie(CF_OWNER_COOKIE, "", 0), { append: true });
 		const body = renderCloudflareSetup({
 			brand: brandConfig(env).name,
-			error: url.searchParams.get("error") ?? undefined,
+			error: extra?.error ?? url.searchParams.get("error") ?? undefined,
 			linked: await cloudflareIsLinked(loaded.options.database, userId),
 			connected: url.searchParams.get("connected") === "1",
 			report: grant ? describeSetupGrant(grant) : null,
 			review,
+			createdUrl: inbox?.status === "ready" ? inbox.public_url : null,
+			ownerToken: ownerToken || undefined,
+			canCreate: Boolean(grant && inboxCanProvision(grant) && inbox?.status !== "ready"),
+			accounts: extra?.accounts,
+			zones: extra?.zones,
+			fields: extra?.fields ?? (inbox && inbox.status !== "ready" ? { name: inbox.worker_name, hostname: inbox.hostname ?? "", subdomain: "", account: "" } : null),
 		});
 		if (clearResume) c.header("set-cookie", hostCookie(CLOUDFLARE_RESUME_COOKIE, "", 0), { append: true });
-		return c.html(renderApp(env, body, "Set me up on Cloudflare", feedbackLink), 200, pageHeaders(false, null, [], false, accountLinkOrigins(loaded.options)));
+		return c.html(renderApp(env, body, "Set me up on Cloudflare", feedbackLink), 200, pageHeaders(false, null, [], Boolean(ownerToken), accountLinkOrigins(loaded.options)));
 	}
 	async function cloudflareSetupPost(c: Context<{ Bindings: ControlEnv }>) {
 		const request = c.req.raw;
 		const loaded = await loadAuth(env, request, deps);
 		if (!loaded) return c.json({ error: "not_found" }, 404);
-		const result = await handleCloudflareSetup(request, loaded.auth, loaded.options);
+		const result = await handleCloudflareSetup(request, loaded.auth, loaded.options, await provisionDeps(request));
 		if (result.kind === "review") return cloudflareSetupPage(c, result);
+		if (result.kind === "provision-form") return cloudflareSetupPage(c, undefined, result);
 		return result.response;
 	}
 	app.post("/app/sign-out", async (c) => {
@@ -519,6 +572,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 				cloudflare: Boolean(loaded.options.cloudflare),
 				cloudflareLinked: await cloudflareIsLinked(loaded.options.database, session.user.id),
 				disconnected: url.searchParams.get("disconnected") === "1",
+				cloudflareInbox: (await readCloudflareInbox(loaded.options.database, session.user.id))?.public_url,
 			});
 			return {
 				html: renderApp(env, body, "Your agents", feedbackLink),

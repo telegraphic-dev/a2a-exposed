@@ -51,8 +51,8 @@ export const ZONE_READ = "zone.read";
 export const TUNNEL_WRITE = "argotunnel.write";
 export const OFFLINE_ACCESS = "offline_access";
 
-/** Shown after consent. Provisioning is not this step. */
-export const SETUP_NOT_PROVISIONED = "Nothing has been created in your Cloudflare account yet. Creating the Worker, the database, and any tunnel is a later step.";
+/** Shown when this page has not created anything and is not offering to create the inbox. */
+export const SETUP_NOT_PROVISIONED = "Nothing has been created in your Cloudflare account yet.";
 
 export const TUNNEL_CONNECTOR_LATER = "A tunnel needs cloudflared running on a machine you control. This page cannot start that, and that step is not built yet.";
 
@@ -148,7 +148,7 @@ export function setupScopes(choice: SetupChoice, host: SetupHost): ScopeReason[]
 			{
 				id: ZONE_READ,
 				name: "Zone Read",
-				why: "Lists the domains on the Cloudflare account you pick, so a later step can ask which one to use.",
+				why: "Lists the domains on the Cloudflare account you pick, so this page can check that your address is on one of them.",
 				declined: "Without Zone Read, the domains on your Cloudflare account cannot be listed. That blocks a setup on your own domain. A workers.dev address does not need it.",
 			},
 		);
@@ -207,6 +207,26 @@ export interface SetupReport {
 	blocked: string[];
 	refreshSaved: boolean;
 	facade: boolean;
+	inbox: boolean;
+	host: SetupHost;
+}
+
+/**
+ * True when the saved grant can create an inbox. A missing tunnel permission blocks
+ * only the façade. The inbox does not need it.
+ */
+export function inboxCanProvision(row: {
+	choice: string;
+	host: string;
+	granted_scope: string | null;
+	refresh_enc: string | null;
+}): boolean {
+	const choice = parseSetupChoice(row.choice);
+	const host = parseSetupHost(row.host);
+	if (!choice || !host || !includesInbox(choice) || !row.refresh_enc) return false;
+	const { known, granted } = grantedScopeSet(row.granted_scope);
+	if (!known) return false;
+	return setupScopes(choice, host).every((scope) => scope.id === TUNNEL_WRITE || granted.has(scope.id));
 }
 
 export function describeSetupGrant(row: {
@@ -234,5 +254,7 @@ export function describeSetupGrant(row: {
 		blocked,
 		refreshSaved: Boolean(row.refresh_enc),
 		facade: includesFacade(choice),
+		inbox: includesInbox(choice),
+		host,
 	};
 }

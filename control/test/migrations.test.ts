@@ -66,3 +66,17 @@ test("0010 adds the Cloudflare grant table on a database that already has accoun
 	apply(db, ["0010_cloudflare_grant.sql"]);
 	assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM cloudflare_grant`).get()?.n, 1);
 });
+
+test("0011 adds the Cloudflare inbox table on a database that already has a user", () => {
+	const db = new DatabaseSync(":memory:");
+	apply(db, files.filter((name) => name < "0011_cloudflare_inbox.sql"));
+	insertUser(db, "user-a", "a@example.com");
+	apply(db, ["0011_cloudflare_inbox.sql"]);
+	db.prepare(
+		`INSERT INTO cloudflare_inbox ("userId", cf_account_id, worker_name, d1_name, host, status, created_at, updated_at)
+		 VALUES ('user-a', 'account', 'my-agent', 'my-agent', 'workers', 'ready', ?, ?)`,
+	).run(earlier, earlier);
+	assert.equal(db.prepare(`SELECT public_url FROM cloudflare_inbox WHERE "userId" = 'user-a'`).get()?.public_url, null);
+	apply(db, ["0011_cloudflare_inbox.sql"]);
+	assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM cloudflare_inbox`).get()?.n, 1);
+});

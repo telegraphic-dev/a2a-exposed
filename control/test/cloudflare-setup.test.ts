@@ -213,8 +213,8 @@ test("the choice page explains a workers.dev inbox, then asks Cloudflare only fo
 	assert.match(html, /class="choice"/);
 	assert.match(html, /does not ask to list your domains or edit DNS/);
 	assert.equal(html.includes("older than 10 minutes"), false);
-	assert.match(html, /asks for permission only/);
-	assert.match(html, /comes later/);
+	assert.match(html, /creates a public address for messages/);
+	assert.match(html, /not created here/);
 	assert.equal(html.includes("Nothing has been created"), false);
 	assert.match(page.headers.get("content-security-policy") ?? "", /form-action 'self' https:\/\/dash\.cloudflare\.com/);
 
@@ -260,10 +260,12 @@ test("the choice page explains a workers.dev inbox, then asks Cloudflare only fo
 	assert.equal(landed.searchParams.get("connected"), "1");
 	const done = await app.request(landed, { headers: { cookie } });
 	const doneHtml = await done.text();
-	assert.match(doneHtml, /Nothing has been created in your Cloudflare account yet/);
+	assert.match(doneHtml, /Create it in Cloudflare/);
 	assert.match(doneHtml, /A refresh token is saved encrypted/);
 	assert.match(doneHtml, /single-use/);
-	assert.match(doneHtml, /does not use it yet/);
+	assert.match(doneHtml, /can continue/);
+	assert.equal(doneHtml.includes("Nothing has been created"), false);
+	assert.equal(doneHtml.includes("does not use it yet"), false);
 	assert.equal(doneHtml.includes("Not granted."), false);
 	assert.equal(doneHtml.includes("cf_refresh_SECRET"), false);
 	assert.equal(doneHtml.includes("cf_access_SECRET"), false);

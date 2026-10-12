@@ -4,6 +4,8 @@ export const INVITE_COOKIE = "__Host-a2a_invite";
 export const OWNER_COOKIE = "__Host-a2a_owner";
 /** One-time Cloudflare connect or disconnect to finish after a fresh sign-in. Not the session. */
 export const CLOUDFLARE_RESUME_COOKIE = "__Host-a2a_cf_resume";
+/** One-time owner token for an inbox created in the user's Cloudflare account. Not the session. */
+export const CF_OWNER_COOKIE = "__Host-a2a_cf_owner";
 
 export function readCookie(header: string | null, name: string): string {
 	if (!header) return "";
