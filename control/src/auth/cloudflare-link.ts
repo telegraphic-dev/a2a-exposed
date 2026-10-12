@@ -13,7 +13,7 @@ import type { Sql } from "./invites.ts";
 import type { AuthOptions } from "./options.ts";
 import { recentSignIn } from "./recent.ts";
 import { sameOrigin } from "./origin.ts";
-import { fieldsFromForm, resumeFields, runInboxStep, type InboxMigration, type InboxWizard, type ProvisionFields } from "../provision/inbox.ts";
+import type { InboxMigration, InboxWizard, ProvisionFields } from "../provision/inbox.ts";
 
 export const CLOUDFLARE_UNLINKED = "Sign in another way first, then connect Cloudflare from your account.";
 /** Shown on the sign-in page when connect, disconnect, or consent needs a fresh sign-in. */
@@ -258,7 +258,7 @@ function withCookie(response: Response, cookie: string): Response {
 	return new Response(response.body, { status: response.status, headers });
 }
 
-function resumeOf(value: string): CloudflareResume | null {
+async function resumeOf(value: string): Promise<CloudflareResume | null> {
 	let saved: { userId?: unknown; action?: unknown; choice?: unknown; host?: unknown; state?: unknown; code?: unknown; fields?: unknown };
 	try {
 		saved = JSON.parse(value) as typeof saved;
@@ -281,6 +281,7 @@ function resumeOf(value: string): CloudflareResume | null {
 		return { userId, action: "finish", state, code };
 	}
 	if (saved.action === "provision") {
+		const { resumeFields } = await import("../provision/inbox.ts");
 		const fields = saved.fields && typeof saved.fields === "object" ? resumeFields(saved.fields as { name?: unknown; hostname?: unknown; subdomain?: unknown; account?: unknown; step?: unknown }) : null;
 		if (!fields) return null;
 		return { userId, action: "provision", fields };
@@ -311,7 +312,7 @@ export async function resumeCloudflare(request: Request, auth: SessionAuth, opti
 		`SELECT value, expiresAt FROM verification WHERE identifier = ?`,
 	).bind(identifier).first<{ value: string; expiresAt: unknown }>();
 	const clear = hostCookie(CLOUDFLARE_RESUME_COOKIE, "", 0);
-	const resume = row && expiresMs(row.expiresAt) > Date.now() ? resumeOf(row.value) : null;
+	const resume = row && expiresMs(row.expiresAt) > Date.now() ? await resumeOf(row.value) : null;
 	if (!resume || resume.userId !== userId || !recentSignIn(session)) {
 		await options.database.prepare(`DELETE FROM verification WHERE identifier = ?`).bind(identifier).run();
 		return { kind: "clear" };
@@ -406,6 +407,7 @@ export type CloudflareSetupPost =
 
 async function runCloudflareProvision(request: Request, options: AuthOptions, userId: string, fields: ProvisionFields, deps: CloudflareProvisionDeps): Promise<Exclude<CloudflareSetupPost, { kind: "review" }>> {
 	if (!options.cloudflare) return { kind: "response", response: redirect(setupPage(request)) };
+	const { runInboxStep } = await import("../provision/inbox.ts");
 	const outcome = await runInboxStep({
 		database: options.database,
 		secret: options.secret,
@@ -440,6 +442,7 @@ export async function handleCloudflareSetup(request: Request, auth: SessionAuth,
 		return { kind: "review", choice, host };
 	}
 	if (action === "provision" || action === "step") {
+		const { fieldsFromForm } = await import("../provision/inbox.ts");
 		const fields = fieldsFromForm(form);
 		if (!recentSignIn(session)) {
 			return { kind: "response", response: await reauthResponse(request, auth, options, { userId, action: "provision", fields }, "/app/cloudflare") };

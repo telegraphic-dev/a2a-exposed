@@ -23,7 +23,8 @@ import { renderCloudflareSetup } from "./views/cloudflare-setup.tsx";
 import { renderApp, securityHeaders } from "./views/document.tsx";
 import { renderSignIn } from "./views/sign-in.tsx";
 import { createFeedback, feedbackOn, type FeedbackDeps, type FeedbackResult } from "./feedback.ts";
-import { hashOwnerToken, readCloudflareInbox, viewInboxWizard, type InboxMigration, type InboxWizard } from "./provision/inbox.ts";
+import type { InboxMigration, InboxWizard } from "./provision/inbox.ts";
+import { hashOwnerToken, readCloudflareInbox } from "./provision/inbox-row.ts";
 import { renderFeedback } from "./views/feedback.tsx";
 
 /**
@@ -364,7 +365,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 		const grant = review ? null : await readCloudflareGrant(loaded.options.database, userId);
 		const inbox = review ? null : await readCloudflareInbox(loaded.options.database, userId);
 		const report = grant ? describeSetupGrant(grant) : null;
-		const wizard = extra?.wizard ?? resumedWizard ?? (report?.inbox ? viewInboxWizard({ grant, inbox }) : null);
+		const wizard = extra?.wizard ?? resumedWizard ?? (report?.inbox ? (await import("./provision/inbox.ts")).viewInboxWizard({ grant, inbox }) : null);
 		const token = bareOwnerToken(readCookie(request.headers.get("cookie"), CF_OWNER_COOKIE));
 		const cookieOwner = token && inbox?.owner_token_hash && inbox.owner_token_hash === await hashOwnerToken(token) ? token : "";
 		if (token) c.header("set-cookie", hostCookie(CF_OWNER_COOKIE, "", 0), { append: true });
