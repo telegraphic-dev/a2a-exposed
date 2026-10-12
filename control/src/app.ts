@@ -263,7 +263,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 		const resumeAuth = await loadAuth(env, c.req.raw, deps);
 		let clearResume = false;
 		if (resumeAuth) {
-			const resumed = await resumeCloudflare(c.req.raw, resumeAuth.auth, resumeAuth.options, await provisionDeps(c.req.raw));
+			const resumed = await resumeCloudflare(c.req.raw, resumeAuth.auth, resumeAuth.options, await provisionDeps(c.req.raw), true);
 			if (resumed?.kind === "response") return resumed.response;
 			if (resumed?.kind === "clear") clearResume = true;
 		}
@@ -348,10 +348,15 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 		const userId = session?.user?.id ?? "";
 		if (!userId) return redirectTo(new URL("/app", request.url).href);
 		let clearResume = false;
+		let resumedForm: Extract<NonNullable<Awaited<ReturnType<typeof resumeCloudflare>>>, { kind: "provision-form" }> | null = null;
 		if (!review) {
 			const resumed = await resumeCloudflare(request, loaded.auth, loaded.options, await provisionDeps(request));
 			if (resumed?.kind === "response") return resumed.response;
 			if (resumed?.kind === "clear") clearResume = true;
+			if (resumed?.kind === "provision-form") {
+				c.header("set-cookie", resumed.setCookie, { append: true });
+				resumedForm = resumed;
+			}
 		}
 		const url = new URL(request.url);
 		const grant = review ? null : await readCloudflareGrant(loaded.options.database, userId);
@@ -361,7 +366,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 		if (token) c.header("set-cookie", hostCookie(CF_OWNER_COOKIE, "", 0), { append: true });
 		const body = renderCloudflareSetup({
 			brand: brandConfig(env).name,
-			error: extra?.error ?? url.searchParams.get("error") ?? undefined,
+			error: resumedForm?.error ?? extra?.error ?? url.searchParams.get("error") ?? undefined,
 			linked: await cloudflareIsLinked(loaded.options.database, userId),
 			connected: url.searchParams.get("connected") === "1",
 			report: grant ? describeSetupGrant(grant) : null,
@@ -369,9 +374,9 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 			createdUrl: inbox?.status === "ready" ? inbox.public_url : null,
 			ownerToken: ownerToken || undefined,
 			canCreate: Boolean(grant && inboxCanProvision(grant) && inbox?.status !== "ready"),
-			accounts: extra?.accounts,
-			zones: extra?.zones,
-			fields: extra?.fields ?? (inbox && inbox.status !== "ready" ? { name: inbox.worker_name, hostname: inbox.hostname ?? "", subdomain: "", account: "" } : null),
+			accounts: resumedForm?.accounts ?? extra?.accounts,
+			zones: resumedForm?.zones ?? extra?.zones,
+			fields: resumedForm?.fields ?? extra?.fields ?? (inbox && inbox.status !== "ready" ? { name: inbox.worker_name, hostname: inbox.hostname ?? "", subdomain: "", account: "" } : null),
 		});
 		if (clearResume) c.header("set-cookie", hostCookie(CLOUDFLARE_RESUME_COOKIE, "", 0), { append: true });
 		return c.html(renderApp(env, body, "Set me up on Cloudflare", feedbackLink), 200, pageHeaders(false, null, [], Boolean(ownerToken), accountLinkOrigins(loaded.options)));

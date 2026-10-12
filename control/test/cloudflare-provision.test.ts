@@ -242,6 +242,45 @@ test("a stale sign-in does not call Cloudflare, and the same create continues af
 	assert.ok(api.calls.some((call) => call.method === "PUT" && call.url.includes("/workers/scripts/")));
 });
 
+test("a stale sign-in still shows the Cloudflare account list after sign-in", async (t) => {
+	t.after(githubFetch(consentScope("inbox", "workers")));
+	const db = openDb();
+	const app = appFor(db);
+	const cookie = await signIn(app);
+	await consentInbox(app, cookie);
+	const session = await db.prepare("SELECT id, createdAt FROM session").first<{ id: string; createdAt: string | number }>();
+	const staleAt = new Date(new Date(session!.createdAt).getTime() - 11 * 60 * 1000);
+	const stored = typeof session!.createdAt === "number" ? staleAt.getTime() : staleAt.toISOString();
+	await db.prepare("UPDATE session SET createdAt = ? WHERE id = ?").bind(stored, session!.id).run();
+	const otherId = "c".repeat(32);
+	const api = cloudflareApi({ accounts: [{ id: accountId, name: "Example account" }, { id: otherId, name: "Other account" }] });
+	t.after(api.restore);
+	const posted = await app.request(`${origin}/app/cloudflare`, {
+		method: "POST",
+		headers: { origin, cookie, "content-type": "application/x-www-form-urlencoded" },
+		body: "action=provision&name=my-agent",
+	});
+	assert.equal(posted.status, 303);
+	assert.equal(api.calls.length, 0);
+	const resume = posted.headers.getSetCookie().find((value) => value.startsWith("__Host-a2a_cf_resume="))?.split(";")[0] ?? "";
+	const fresh = await signIn(app);
+	const accountPage = await app.request(`${origin}/app`, { headers: { cookie: `${fresh}; ${resume}` } });
+	assert.equal(accountPage.status, 303);
+	assert.equal(new URL(accountPage.headers.get("location") ?? "", origin).pathname, "/app/cloudflare");
+	assert.equal(api.calls.length, 0);
+	const continued = await app.request(`${origin}/app/cloudflare`, { headers: { cookie: `${fresh}; ${resume}` } });
+	assert.equal(continued.status, 200);
+	const html = await continued.text();
+	assert.match(html, /Choose the Cloudflare account to use/);
+	assert.match(html, /Example account/);
+	assert.match(html, /Other account/);
+	assert.match(html, new RegExp(`value="${accountId}"`));
+	assert.match(html, new RegExp(`value="${otherId}"`));
+	assert.equal(html.includes("?error=account"), false);
+	assert.equal(api.calls.some((call) => call.method === "POST" && call.url.endsWith("/d1/database")), false);
+	assert.equal(api.calls.some((call) => call.method === "PUT" && call.url.includes("/workers/scripts/")), false);
+});
+
 test("your own domain attaches the hostname and does not claim the tunnel is done", async (t) => {
 	t.after(githubFetch(consentScope("both", "zone")));
 	const db = openDb();

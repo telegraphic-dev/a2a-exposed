@@ -288,14 +288,18 @@ function resumeOf(value: string): CloudflareResume | null {
 	return null;
 }
 
-export type CloudflareResumeResult = { kind: "response"; response: Response } | { kind: "clear" };
+export type CloudflareResumeResult =
+	| { kind: "response"; response: Response }
+	| { kind: "clear" }
+	| { kind: "provision-form"; error: string; accounts?: { id: string; name: string }[]; zones?: { name: string }[]; fields: ProvisionFields; setCookie: string };
 
 /**
  * Finishes a connect, disconnect, or consent the user already asked for, after a fresh sign-in.
  * No resume cookie returns null. A signed-out visit leaves the row in place.
  * A mismatch or an expired row clears the cookie and does not act.
+ * A create that still needs an account or a domain returns that form for the setup page to render.
  */
-export async function resumeCloudflare(request: Request, auth: SessionAuth, options: AuthOptions, provision?: CloudflareProvisionDeps | null): Promise<CloudflareResumeResult | null> {
+export async function resumeCloudflare(request: Request, auth: SessionAuth, options: AuthOptions, provision?: CloudflareProvisionDeps | null, deferProvision = false): Promise<CloudflareResumeResult | null> {
 	if (!options.cloudflare) return null;
 	const token = readCookie(request.headers.get("cookie"), CLOUDFLARE_RESUME_COOKIE);
 	if (!/^[0-9a-f]{32}$/.test(token)) return null;
@@ -306,10 +310,17 @@ export async function resumeCloudflare(request: Request, auth: SessionAuth, opti
 	const row = await options.database.prepare(
 		`SELECT value, expiresAt FROM verification WHERE identifier = ?`,
 	).bind(identifier).first<{ value: string; expiresAt: unknown }>();
-	await options.database.prepare(`DELETE FROM verification WHERE identifier = ?`).bind(identifier).run();
 	const clear = hostCookie(CLOUDFLARE_RESUME_COOKIE, "", 0);
 	const resume = row && expiresMs(row.expiresAt) > Date.now() ? resumeOf(row.value) : null;
-	if (!resume || resume.userId !== userId || !recentSignIn(session)) return { kind: "clear" };
+	if (!resume || resume.userId !== userId || !recentSignIn(session)) {
+		await options.database.prepare(`DELETE FROM verification WHERE identifier = ?`).bind(identifier).run();
+		return { kind: "clear" };
+	}
+	// The account page cannot show the account or domain choices. Leave the resume row for the setup page.
+	if (deferProvision && resume.action === "provision") {
+		return { kind: "response", response: redirect(setupPage(request)) };
+	}
+	await options.database.prepare(`DELETE FROM verification WHERE identifier = ?`).bind(identifier).run();
 	if (resume.action === "disconnect") {
 		await deleteCloudflareGrant(options.database, userId);
 		await options.database.prepare(
@@ -325,7 +336,7 @@ export async function resumeCloudflare(request: Request, auth: SessionAuth, opti
 		if (!provision) return { kind: "clear" };
 		const done = await runCloudflareProvision(request, options, userId, resume.fields, provision);
 		if (done.kind === "response") return { kind: "response", response: withCookie(done.response, clear) };
-		return { kind: "response", response: withCookie(provisionFormRedirect(request, done), clear) };
+		return { kind: "provision-form", error: done.error, accounts: done.accounts, zones: done.zones, fields: done.fields, setCookie: clear };
 	}
 	const url = new URL("/api/auth/callback/cloudflare", request.url);
 	url.searchParams.set("code", resume.code);
@@ -392,9 +403,6 @@ export type CloudflareSetupPost =
 	| { kind: "review"; choice: SetupChoice; host: SetupHost }
 	| { kind: "provision-form"; error: string; accounts?: { id: string; name: string }[]; zones?: { name: string }[]; fields: ProvisionFields };
 
-function provisionFormRedirect(request: Request, done: Extract<CloudflareSetupPost, { kind: "provision-form" }>): Response {
-	return redirect(setupPage(request, done.error));
-}
 
 async function runCloudflareProvision(request: Request, options: AuthOptions, userId: string, fields: ProvisionFields, deps: CloudflareProvisionDeps): Promise<Exclude<CloudflareSetupPost, { kind: "review" }>> {
 	if (!options.cloudflare) return { kind: "response", response: redirect(setupPage(request)) };
