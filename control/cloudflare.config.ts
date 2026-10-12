@@ -30,6 +30,8 @@ const plain: Record<string, string> = {
 	SIGNUP_ALLOWLIST: v("SIGNUP_ALLOWLIST"),
 	FREE_AGENT_LIMIT: /^\d+$/.test(v("FREE_AGENT_LIMIT")) ? v("FREE_AGENT_LIMIT") : "",
 	FEEDBACK_REPO: v("FEEDBACK_REPO"),
+	FEEDBACK_GITHUB_APP_ID: /^\d{1,20}$/.test(v("FEEDBACK_GITHUB_APP_ID")) ? v("FEEDBACK_GITHUB_APP_ID") : "",
+	FEEDBACK_GITHUB_APP_INSTALLATION_ID: /^\d{1,20}$/.test(v("FEEDBACK_GITHUB_APP_INSTALLATION_ID")) ? v("FEEDBACK_GITHUB_APP_INSTALLATION_ID") : "",
 };
 
 // Secrets stay out of the production config so a deploy does not require them.
@@ -52,6 +54,7 @@ const DEV_SECRETS = [
 	"INVITES_REQUIRED",
 	"SIGNUP_ALLOWLIST",
 	"FEEDBACK_GITHUB_TOKEN",
+	"FEEDBACK_GITHUB_APP_PRIVATE_KEY",
 ];
 
 const envBindings: Record<string, any> = {

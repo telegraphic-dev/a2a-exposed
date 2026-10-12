@@ -38,9 +38,12 @@ async function call(env: WorkerBindings, path: string, headers: Record<string, s
 
 test("scrubFeedbackText removes token shapes and Bearer values", () => {
 	const token = "a2aow_" + "b".repeat(24);
-	const text = scrubFeedbackText(`token ${token} and Bearer supersecretvalue stay out`);
+	const pem = "-----BEGIN RSA PRIVATE KEY-----\nSECRETKEYMATERIAL\n-----END RSA PRIVATE KEY-----";
+	const text = scrubFeedbackText(`token ${token} and Bearer supersecretvalue stay out ${pem} AKIAIOSFODNN7EXAMPLE`);
 	assert.equal(text.includes(token), false);
 	assert.equal(text.includes("supersecretvalue"), false);
+	assert.equal(text.includes("SECRETKEYMATERIAL"), false);
+	assert.equal(text.includes("AKIAIOSFODNN7EXAMPLE"), false);
 	assert.match(text, /\[redacted\]/);
 	assert.match(text, /Bearer \[redacted\]/);
 });

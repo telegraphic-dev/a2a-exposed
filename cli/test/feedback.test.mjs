@@ -7,7 +7,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CliError } from "../lib/a2a.mjs";
-import { runFeedback } from "../lib/feedback.mjs";
+import { Readable } from "node:stream";
+import { confirmPublicIssue, PUBLIC_ISSUE_WARNING, runFeedback } from "../lib/feedback.mjs";
 
 const BIN = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "bin", "a2a-exposed.mjs");
 const VERSION = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
@@ -31,8 +32,10 @@ function run(args) {
 
 test("with no inbox, feedback prints an encoded GitHub issue URL", async () => {
 	const token = "a2aot_" + "a".repeat(24);
-	const r = await run(["feedback", `saw ${token} then Bearer supersecretvalue`, "--kind", "bug", "--contact", "ada@example.com", "--steps", `1. ran ${token}`, "--expected", "a reply", "--actual", "nothing", "--agent", "Claude Code", "--environment", "local laptop"]);
+	const r = await run(["feedback", `saw ${token} then Bearer supersecretvalue`, "--kind", "bug", "--contact", "ada@example.com", "--steps", `1. ran ${token}`, "--expected", "a reply", "--actual", "nothing", "--agent", "Claude Code", "--environment", "local laptop", "--yes"]);
 	assert.equal(r.status, 0, r.stderr);
+	assert.match(r.stderr, /public GitHub issue on telegraphic-dev\/a2a-exposed/);
+	assert.match(r.stderr, /confidential information/);
 	const url = new URL(r.stdout.trim());
 	assert.equal(`${url.origin}${url.pathname}`, "https://github.com/telegraphic-dev/a2a-exposed/issues/new");
 	assert.equal(url.searchParams.get("template"), "bug_report.yml");
@@ -54,6 +57,27 @@ test("with no inbox, feedback prints an encoded GitHub issue URL", async () => {
 	assert.match(url.searchParams.get("os") ?? "", /\S/);
 	assert.equal(url.searchParams.get("node"), process.version);
 	assert.equal(r.stdout.split("\n").filter(Boolean).length, 1);
+});
+
+test("feedback without --yes does not send off a terminal", async () => {
+	const r = await run(["feedback", "hello"]);
+	assert.equal(r.status, 1);
+	assert.equal(r.stdout.trim(), "");
+	assert.match(r.stderr, /public GitHub issue on telegraphic-dev\/a2a-exposed/);
+	assert.match(r.stderr, /pass --yes/);
+});
+
+test("confirmPublicIssue asks on a terminal and accepts yes", async () => {
+	const declined = Readable.from(["n\n"]);
+	declined.isTTY = true;
+	let asked = "";
+	const output = { write(chunk) { asked += chunk; return true; } };
+	await assert.rejects(() => confirmPublicIssue(false, declined, output), (error) => error instanceof CliError && /not sent/.test(error.message));
+	assert.match(asked, /File this public issue\? \[y\/N\] /);
+	assert.ok(asked.startsWith(PUBLIC_ISSUE_WARNING));
+	const accepted = Readable.from(["yes\n"]);
+	accepted.isTTY = true;
+	await confirmPublicIssue(false, accepted, output);
 });
 
 test("a bug without steps is refused before a link is printed", async () => {

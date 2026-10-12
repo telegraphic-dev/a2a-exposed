@@ -1,11 +1,13 @@
-// POST /api/feedback files a GitHub issue when both settings are present. Either one unset is 404,
-// so a self-hosted control plane with no feedback config is unchanged.
-// The token is a fine-grained personal access token (Issues write on FEEDBACK_REPO only).
-// It is not named GITHUB_*: that prefix is the sign-in OAuth app.
+// POST /api/feedback files a GitHub issue when FEEDBACK_REPO is set and either the GitHub App
+// (FEEDBACK_GITHUB_APP_ID and FEEDBACK_GITHUB_APP_PRIVATE_KEY) or FEEDBACK_GITHUB_TOKEN is set.
+// Neither credential, or no valid repo, is 404, so a self-hosted control plane is unchanged.
+// The app is preferred when both are set. The token is the self-host fallback.
+// None of these names use the GITHUB_* prefix: that prefix is the sign-in OAuth app.
 import { connectingIp, verifyTurnstile, type TurnstileFailure } from "./auth/turnstile.ts";
 import { sameOrigin } from "./auth/origin.ts";
 import type { Sql } from "./auth/invites.ts";
 import type { ControlEnv } from "./env.ts";
+import { feedbackAppReady, feedbackPat, githubAccessToken, type GithubTokenCache } from "./feedback-app.ts";
 
 export const MESSAGE_MAX = 4000;
 export const PER_HOUR = 5;
@@ -32,16 +34,19 @@ const SOURCES = ["web", "cli", "mcp"] as const;
 type Kind = (typeof KINDS)[number];
 type Source = (typeof SOURCES)[number];
 
-/** Same token shapes as the Worker's scrubSecretText, plus a Bearer value. Keep the prefixes in step with TOKEN_PREFIXES. */
+/** Same token shapes as the Worker's scrubSecretText, plus a Bearer value, a PEM private key, and common API-key prefixes. */
 const TOKEN_RE = /(?:a2aow_|s2a_|a2amcp_|a2amcpr_|a2aot_)[A-Za-z0-9_-]{20,}/g;
 const SETUP_RE = /([?&])t=[A-Za-z0-9_-]{16,}/g;
 const USERINFO_RE = /([a-z][a-z0-9+.-]*:\/\/)[^/?\s]*@/gi;
 const BEARER_RE = /bearer\s+\S{8,200}/gi;
+const PEM_RE = /-----BEGIN (?:[A-Z0-9]+ )?PRIVATE KEY-----[\s\S]*?(?:-----END (?:[A-Z0-9]+ )?PRIVATE KEY-----|$)/g;
+const API_KEY_RE = /(?:(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|\bAKIA[0-9A-Z]{16}\b|\bsk_(?:live|test)_[A-Za-z0-9]{10,}|\brk_(?:live|test)_[A-Za-z0-9]{10,}|\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}|\bxox[baprs]-[A-Za-z0-9-]{10,}|\bAIza[0-9A-Za-z_-]{35}\b)/g;
 
 export interface FeedbackDeps {
 	fetch?: typeof fetch;
 	now?: () => number;
 	githubTimeoutMs?: number;
+	githubCache?: GithubTokenCache;
 }
 
 export interface FeedbackInput {
@@ -74,7 +79,7 @@ export function feedbackRepo(env: ControlEnv): string {
 }
 
 export function feedbackOn(env: ControlEnv): boolean {
-	return Boolean((env.FEEDBACK_GITHUB_TOKEN ?? "").trim() && feedbackRepo(env));
+	return Boolean(feedbackRepo(env) && (feedbackAppReady(env) || feedbackPat(env)));
 }
 
 export function turnstileOf(env: ControlEnv): { siteKey: string; secret: string } | null {
@@ -90,7 +95,9 @@ export function scrubFeedbackText(value: string): string {
 		.replace(TOKEN_RE, "[redacted]")
 		.replace(SETUP_RE, "$1t=[redacted]")
 		.replace(USERINFO_RE, "$1[redacted]@")
-		.replace(BEARER_RE, "Bearer [redacted]");
+		.replace(BEARER_RE, "Bearer [redacted]")
+		.replace(PEM_RE, "[redacted]")
+		.replace(API_KEY_RE, "[redacted]");
 }
 
 function escapeText(value: string): string {
@@ -146,18 +153,23 @@ function environmentValue(value: string): string {
 	return aliases[text.toLowerCase()] || text;
 }
 
-function clean(value: string, max: number, token: string): string {
+function secretList(token: string | readonly string[]): string[] {
+	const list = typeof token === "string" ? [token] : token;
+	return list.filter((item) => item.length >= 8);
+}
+
+function clean(value: string, max: number, secrets: readonly string[]): string {
 	let text = clip(value, max);
-	if (token.length >= 8) text = text.split(token).join("[redacted]");
+	for (const secret of secrets) text = text.split(secret).join("[redacted]");
 	return text;
 }
 
-function formValue(input: FeedbackInput, key: keyof FeedbackInput, token: string, max: number): string {
+function formValue(input: FeedbackInput, key: keyof FeedbackInput, secrets: readonly string[], max: number): string {
 	if (key === "connection") return connectionText(input.connection);
 	if (key === "deployment") return deploymentText(input.deployment);
-	if (key === "version") return clean(input.version || "", max, token) || "unknown";
-	if (key === "environment") return environmentValue(clean(input.environment || "", max, token));
-	return clean(input[key] || "", max, token);
+	if (key === "version") return clean(input.version || "", max, secrets) || "unknown";
+	if (key === "environment") return environmentValue(clean(input.environment || "", max, secrets));
+	return clean(input[key] || "", max, secrets);
 }
 
 /** The same labels as the GitHub form for this kind, plus `from-agent` when an agent filed it. */
@@ -167,13 +179,14 @@ function issueLabels(input: FeedbackInput): string[] {
 	return labels;
 }
 
-export function issueDocument(input: FeedbackInput, token: string): { title: string; body: string; labels: string[] } {
-	const message = clean(input.message, MESSAGE_MAX, token);
+export function issueDocument(input: FeedbackInput, token: string | readonly string[]): { title: string; body: string; labels: string[] } {
+	const secrets = secretList(token);
+	const message = clean(input.message, MESSAGE_MAX, secrets);
 	const line = message.split(/\r?\n/).map((part) => part.trim()).find(Boolean) || "feedback";
 	const title = `[${input.kind}] ${line.length > 72 ? `${line.slice(0, 69)}...` : line}`;
 	const parts: string[] = [];
 	for (const [key, heading, max, always] of FORM_FIELDS) {
-		const text = formValue(input, key, token, max);
+		const text = formValue(input, key, secrets, max);
 		if (!text && !always) continue;
 		parts.push(`### ${heading}\n\n${escapeText(text || "unknown")}`);
 	}
@@ -305,12 +318,26 @@ function githubIssueUrl(repo: string, value: unknown): string {
 	}
 }
 
+function githubFailure(error: unknown, source: string): FeedbackResult {
+	const name = error instanceof Error ? error.name : "";
+	const timeoutHit = name === "TimeoutError" || name === "AbortError";
+	console.error(JSON.stringify({ event: "feedback_failed", source, status: 0, error: timeoutHit ? "timeout" : "fetch" }));
+	return jsonResult(timeoutHit ? 504 : 502, { error: timeoutHit ? "timeout" : "unavailable" });
+}
+
 async function openIssue(env: ControlEnv, input: FeedbackInput, deps: FeedbackDeps): Promise<FeedbackResult> {
 	const repo = feedbackRepo(env);
-	const token = (env.FEEDBACK_GITHUB_TOKEN ?? "").trim();
-	const doc = issueDocument(input, token);
 	const timeout = deps.githubTimeoutMs ?? GITHUB_TIMEOUT_MS;
 	const call = deps.fetch ?? fetch;
+	let token = "";
+	let doc: ReturnType<typeof issueDocument>;
+	try {
+		const access = await githubAccessToken(env, repo, deps);
+		token = access.token;
+		doc = issueDocument(input, access.secrets);
+	} catch (error) {
+		return githubFailure(error, input.source);
+	}
 	const post = (labels: string[]) => call(`https://api.github.com/repos/${repo}/issues`, {
 		method: "POST",
 		redirect: "error",
@@ -332,10 +359,7 @@ async function openIssue(env: ControlEnv, input: FeedbackInput, deps: FeedbackDe
 			response = await post([]);
 		}
 	} catch (error) {
-		const name = error instanceof Error ? error.name : "";
-		const timeoutHit = name === "TimeoutError" || name === "AbortError";
-		console.error(JSON.stringify({ event: "feedback_failed", source: input.source, status: 0, error: timeoutHit ? "timeout" : "fetch" }));
-		return jsonResult(timeoutHit ? 504 : 502, { error: timeoutHit ? "timeout" : "unavailable" });
+		return githubFailure(error, input.source);
 	}
 	let payload: unknown = null;
 	try { payload = await response.json(); } catch { payload = null; }
@@ -440,7 +464,7 @@ export function createFeedback(env: ControlEnv, deps: FeedbackDeps = {}) {
 			if (typeof input === "string") return jsonResult(400, { error: input });
 			return submitFeedback(request, env, input, record, memory, deps);
 		},
-		async page(request: Request, render: (input: { turnstileSiteKey?: string; error?: string; sent?: boolean; issueUrl?: string; connection?: string; deployment?: string }) => string): Promise<FeedbackResult> {
+		async page(request: Request, render: (input: { turnstileSiteKey?: string; error?: string; sent?: boolean; issueUrl?: string; connection?: string; deployment?: string; repo?: string }) => string): Promise<FeedbackResult> {
 			if (!feedbackOn(env)) return jsonResult(404, { error: "not_found" });
 			const turnstile = turnstileOf(env);
 			const url = new URL(request.url);
@@ -458,6 +482,7 @@ export function createFeedback(env: ControlEnv, deps: FeedbackDeps = {}) {
 						issueUrl: issue || undefined,
 						connection: CONNECTIONS.includes(connection as (typeof CONNECTIONS)[number]) ? connection : "",
 						deployment: DEPLOYMENTS.includes(deployment as (typeof DEPLOYMENTS)[number]) ? deployment : "",
+						repo: feedbackRepo(env),
 					}),
 				};
 			}

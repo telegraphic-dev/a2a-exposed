@@ -19,6 +19,7 @@ export function renderFeedback(input: {
 	issueUrl?: string;
 	connection?: string;
 	deployment?: string;
+	repo?: string;
 }): string {
 	const error = input.error ? ERRORS[input.error] ?? ERRORS.unavailable : "";
 	return (
@@ -143,6 +144,7 @@ export function renderFeedback(input: {
 					/>
 				) : ""}
 				{input.turnstileSiteKey ? <p class="check-wait">Waiting for the check…</p> : ""}
+				<p>This report is filed as a public GitHub issue on {input.repo}. Do not include confidential information: secrets, tokens, owner or pairing tokens, private URLs or hostnames, message contents, or personal data.</p>
 				<p><button class="action" type="submit" disabled={input.turnstileSiteKey ? true : undefined}>Send</button></p>
 			</form>
 			{input.turnstileSiteKey ? (

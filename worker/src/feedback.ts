@@ -6,10 +6,13 @@ import type { TenantContext } from "./tenancy.ts";
 import { VERSION } from "./version.ts";
 
 export const ISSUE_REPO = "telegraphic-dev/a2a-exposed";
+export const PUBLIC_ISSUE_NOTE = `This report is filed as a public GitHub issue on ${ISSUE_REPO}. Do not include confidential information: secrets, tokens, owner or pairing tokens, private URLs or hostnames, message contents, or personal data.`;
 /** Inbox build. The same value as `version` in cli/package.json. */
 export const WORKER_VERSION = VERSION;
 const TIMEOUT_MS = 5000;
 const BEARER_RE = /bearer\s+\S{8,200}/gi;
+const PEM_RE = /-----BEGIN (?:[A-Z0-9]+ )?PRIVATE KEY-----[\s\S]*?(?:-----END (?:[A-Z0-9]+ )?PRIVATE KEY-----|$)/g;
+const API_KEY_RE = /(?:(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|\bAKIA[0-9A-Z]{16}\b|\bsk_(?:live|test)_[A-Za-z0-9]{10,}|\brk_(?:live|test)_[A-Za-z0-9]{10,}|\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}|\bxox[baprs]-[A-Za-z0-9-]{10,}|\bAIza[0-9A-Za-z_-]{35}\b)/g;
 const KINDS = ["bug", "idea", "other"] as const;
 const CONNECTIONS = ["webhook", "proxy", "polling"] as const;
 const ENVIRONMENTS = ["local", "cloud VM", "CI", "cloud agent sandbox", "other"] as const;
@@ -36,9 +39,12 @@ export interface FeedbackNote {
 	logs?: string;
 }
 
-/** scrubSecretText, then a Bearer value. The rest of the text stays. */
+/** scrubSecretText, then a Bearer value, a PEM private key, and common API-key prefixes. The rest of the text stays. */
 export function scrubFeedbackText(value: string): string {
-	return scrubSecretText(value).replace(BEARER_RE, "Bearer [redacted]");
+	return scrubSecretText(value)
+		.replace(BEARER_RE, "Bearer [redacted]")
+		.replace(PEM_RE, "[redacted]")
+		.replace(API_KEY_RE, "[redacted]");
 }
 
 /**

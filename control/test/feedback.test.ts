@@ -1,6 +1,7 @@
 // POST /api/feedback and /app/feedback. No network: GitHub and Turnstile are stubbed.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createVerify, generateKeyPairSync } from "node:crypto";
 import { createApp } from "../src/app.ts";
 import { inboxConnection, issueDocument, scrubFeedbackText } from "../src/feedback.ts";
 import { openDb } from "./sql.ts";
@@ -104,12 +105,21 @@ test("unconfigured feedback is 404, including a partial config", async () => {
 	const shell = await off.request(`${origin}/app`);
 	assert.equal((await shell.text()).includes("/app/feedback"), false);
 
+	const pemHeaders = "-----BEGIN RSA PRIVATE KEY-----\nMIIB\n-----END RSA PRIVATE KEY-----";
 	for (const partial of [
 		{ FEEDBACK_GITHUB_TOKEN: ghToken },
 		{ FEEDBACK_REPO: repo },
 		{ FEEDBACK_GITHUB_TOKEN: "   ", FEEDBACK_REPO: repo },
 		{ FEEDBACK_GITHUB_TOKEN: ghToken, FEEDBACK_REPO: "not a repo" },
 		{ FEEDBACK_GITHUB_TOKEN: ghToken, FEEDBACK_REPO: "a/b/c" },
+		{ FEEDBACK_GITHUB_APP_ID: "4242" },
+		{ FEEDBACK_GITHUB_APP_PRIVATE_KEY: pemHeaders },
+		{ FEEDBACK_GITHUB_APP_ID: "4242", FEEDBACK_GITHUB_APP_PRIVATE_KEY: pemHeaders },
+		{ FEEDBACK_GITHUB_APP_ID: "   ", FEEDBACK_GITHUB_APP_PRIVATE_KEY: pemHeaders, FEEDBACK_REPO: repo },
+		{ FEEDBACK_GITHUB_APP_ID: "nope", FEEDBACK_GITHUB_APP_PRIVATE_KEY: pemHeaders, FEEDBACK_REPO: repo },
+		{ FEEDBACK_GITHUB_APP_ID: "4242", FEEDBACK_GITHUB_APP_PRIVATE_KEY: "   ", FEEDBACK_REPO: repo },
+		{ FEEDBACK_GITHUB_APP_ID: "4242", FEEDBACK_GITHUB_APP_PRIVATE_KEY: "not-a-pem", FEEDBACK_REPO: repo },
+		{ FEEDBACK_GITHUB_APP_ID: "4242", FEEDBACK_GITHUB_APP_PRIVATE_KEY: pemHeaders, FEEDBACK_REPO: "not a repo" },
 	]) {
 		const app = createApp(partial);
 		const res = await post(app, { message: "hi", source: "cli" });
@@ -162,6 +172,9 @@ test("a configured post files an issue and the page links to feedback", async ()
 	assert.match(page, /name="connection"/);
 	assert.match(page, /name="deployment"/);
 	assert.equal(page.includes('name="mode"'), false);
+	assert.match(page, /public GitHub issue on example-org\/example-repo/);
+	assert.match(page, /Do not include confidential information: secrets, tokens, owner or pairing tokens, private URLs or hostnames, message contents, or personal data/);
+	assert.ok(page.indexOf("public GitHub issue") < page.indexOf("<button"));
 	assert.match(form.headers.get("content-security-policy") ?? "", /script-src 'none'/);
 	assert.equal(/<script/.test(page), false);
 });
@@ -447,4 +460,162 @@ test("the agent page shows hosted and the connection, and links to the prefilled
 	);
 	const quiet = await (await off.request(`${origin}/app/agents/northwind`, { headers: { cookie } })).text();
 	assert.equal(quiet.includes("Send feedback"), false);
+});
+
+function appKeys() {
+	const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+	return {
+		pkcs1: privateKey.export({ type: "pkcs1", format: "pem" }).toString(),
+		pkcs8: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+		publicKey,
+	};
+}
+
+function jwtPayload(jwt: string, publicKey: ReturnType<typeof generateKeyPairSync>["publicKey"]) {
+	const [header, payload, signature] = jwt.split(".");
+	const verify = createVerify("RSA-SHA256");
+	verify.update(`${header}.${payload}`);
+	verify.end();
+	assert.equal(verify.verify(publicKey, Buffer.from(signature, "base64url")), true);
+	return JSON.parse(Buffer.from(payload, "base64url").toString()) as { iss: string; iat: number; exp: number };
+}
+
+function appGithub(options: { expiresAt?: string; tokenStatus?: number } = {}) {
+	const calls: { url: string; method: string; authorization: string; body: string }[] = [];
+	let minted = 0;
+	const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+		const url = String(input);
+		const headers = new Headers(init?.headers);
+		calls.push({ url, method: init?.method ?? "GET", authorization: headers.get("authorization") ?? "", body: init?.body ? String(init.body) : "" });
+		if (url.endsWith("/installation")) return Response.json({ id: 424242 });
+		if (url.includes("/access_tokens")) {
+			minted += 1;
+			if ((options.tokenStatus ?? 201) !== 201) return Response.json({ message: "nope", token: "ghs_shouldnotbeloggedvalue" }, { status: options.tokenStatus });
+			const token = minted === 1 ? "ghs_installtokenvalue1234567890" : "ghs_refreshedtokenvalue1234567890";
+			const body: Record<string, string> = { token };
+			if (options.expiresAt) body.expires_at = options.expiresAt;
+			return Response.json(body);
+		}
+		if (url.endsWith("/issues")) return Response.json({ html_url: issue() }, { status: 201 });
+		return new Response("missing", { status: 500 });
+	}) as typeof fetch;
+	return { fetch, calls };
+}
+
+test("a GitHub App files the issue, prefers the app over the token, and reuses the installation token", async () => {
+	const keys = appKeys();
+	let now = 1_700_000_000_000;
+	const gh = appGithub({ expiresAt: new Date(now + 120_000).toISOString() });
+	const app = createApp({
+		FEEDBACK_GITHUB_APP_ID: "4242",
+		FEEDBACK_GITHUB_APP_PRIVATE_KEY: keys.pkcs1,
+		FEEDBACK_GITHUB_TOKEN: ghToken,
+		FEEDBACK_REPO: repo,
+	}, { fetch: gh.fetch, now: () => now });
+	const pem = "-----BEGIN RSA PRIVATE KEY-----\nSECRETKEYMATERIAL\n-----END RSA PRIVATE KEY-----";
+	const res = await post(app, {
+		message: `broke ${pem} AKIAIOSFODNN7EXAMPLE sk-proj-abcdefghijklmnopqrstuvwxyz ${ghToken}`,
+		source: "cli",
+	});
+	assert.equal(res.status, 200);
+	assert.equal(gh.calls.filter((call) => call.url.endsWith("/installation")).length, 1);
+	assert.equal(gh.calls.filter((call) => call.url.includes("/access_tokens")).length, 1);
+	assert.equal(gh.calls.filter((call) => call.url.endsWith("/issues")).length, 1);
+	const install = gh.calls.find((call) => call.url.endsWith("/installation"))!;
+	assert.equal(install.url, `https://api.github.com/repos/${repo}/installation`);
+	const payload = jwtPayload(install.authorization.slice("Bearer ".length), keys.publicKey);
+	assert.equal(payload.iss, "4242");
+	assert.equal(payload.iat, Math.floor(now / 1000) - 60);
+	assert.equal(payload.exp - payload.iat, 600);
+	const filed = gh.calls.find((call) => call.url.endsWith("/issues"))!;
+	assert.equal(filed.authorization, "Bearer ghs_installtokenvalue1234567890");
+	assert.equal(filed.authorization.includes(ghToken), false);
+	const body = JSON.parse(filed.body).body as string;
+	assert.equal(body.includes("SECRETKEYMATERIAL"), false);
+	assert.equal(body.includes("AKIAIOSFODNN7EXAMPLE"), false);
+	assert.equal(body.includes("sk-proj-abcdefghijklmnopqrstuvwxyz"), false);
+	assert.equal(body.includes(ghToken), false);
+	assert.equal(body.includes("ghs_installtokenvalue1234567890"), false);
+
+	const again = createApp({
+		FEEDBACK_GITHUB_APP_ID: "4242",
+		FEEDBACK_GITHUB_APP_PRIVATE_KEY: keys.pkcs1,
+		FEEDBACK_GITHUB_TOKEN: ghToken,
+		FEEDBACK_REPO: repo,
+	}, { fetch: gh.fetch, now: () => now });
+	assert.equal((await post(again, { message: "second", source: "cli" })).status, 200);
+	assert.equal(gh.calls.filter((call) => call.url.endsWith("/installation")).length, 1);
+	assert.equal(gh.calls.filter((call) => call.url.includes("/access_tokens")).length, 1);
+	assert.equal(gh.calls.filter((call) => call.url.endsWith("/issues")).length, 2);
+
+	now += 70_000;
+	assert.equal((await post(app, { message: "third", source: "cli" })).status, 200);
+	assert.equal(gh.calls.filter((call) => call.url.endsWith("/installation")).length, 1);
+	assert.equal(gh.calls.filter((call) => call.url.includes("/access_tokens")).length, 2);
+	const refreshed = [...gh.calls].reverse().find((call) => call.url.endsWith("/issues"))!;
+	assert.equal(refreshed.authorization, "Bearer ghs_refreshedtokenvalue1234567890");
+});
+
+test("an explicit installation id and a PKCS#8 key skip the lookup, including a one-line PEM", async () => {
+	const keys = appKeys();
+	const gh = appGithub({ expiresAt: "2026-10-12T12:00:00.000Z" });
+	const app = createApp({
+		FEEDBACK_GITHUB_APP_ID: "4242",
+		FEEDBACK_GITHUB_APP_PRIVATE_KEY: keys.pkcs8.replace(/\n/g, "\\n"),
+		FEEDBACK_GITHUB_APP_INSTALLATION_ID: "77",
+		FEEDBACK_REPO: repo,
+	}, { fetch: gh.fetch, now: () => Date.parse("2026-10-12T10:00:00.000Z") });
+	const res = await post(app, { message: "from pkcs8", source: "cli" });
+	assert.equal(res.status, 200);
+	assert.equal(gh.calls.some((call) => call.url.endsWith("/installation")), false);
+	assert.equal(gh.calls.find((call) => call.url.includes("/access_tokens"))?.url, "https://api.github.com/app/installations/77/access_tokens");
+	const payload = jwtPayload(gh.calls[0].authorization.slice("Bearer ".length), keys.publicKey);
+	assert.equal(payload.iss, "4242");
+});
+
+test("GitHub App auth failures are 502 and the log does not include the key or the token", async () => {
+	const logs: string[] = [];
+	const orig = console.error;
+	console.error = (...args: unknown[]) => { logs.push(args.map(String).join(" ")); };
+	try {
+		const marker = "THISKEYMATERIALSHOULDNOTBELOGGED";
+		const badKey = createApp({
+			FEEDBACK_GITHUB_APP_ID: "4242",
+			FEEDBACK_GITHUB_APP_PRIVATE_KEY: `-----BEGIN RSA PRIVATE KEY-----\n${marker}\n-----END RSA PRIVATE KEY-----`,
+			FEEDBACK_REPO: repo,
+		}, { fetch: (async () => { throw new Error("should not fetch"); }) as typeof fetch });
+		const bad = await post(badKey, { message: "hi", source: "cli" });
+		assert.equal(bad.status, 502);
+		assert.deepEqual(await bad.json(), { error: "unavailable" });
+
+		const badId = createApp({
+			FEEDBACK_GITHUB_APP_ID: "4242",
+			FEEDBACK_GITHUB_APP_PRIVATE_KEY: `-----BEGIN RSA PRIVATE KEY-----\n${marker}\n-----END RSA PRIVATE KEY-----`,
+			FEEDBACK_GITHUB_APP_INSTALLATION_ID: "not-an-id",
+			FEEDBACK_REPO: repo,
+		}, { fetch: (async () => { throw new Error("should not fetch"); }) as typeof fetch });
+		assert.equal((await post(badId, { message: "hi", source: "cli" })).status, 502);
+
+		const keys = appKeys();
+		const gh = appGithub({ tokenStatus: 401 });
+		const denied = createApp({
+			FEEDBACK_GITHUB_APP_ID: "4242",
+			FEEDBACK_GITHUB_APP_PRIVATE_KEY: keys.pkcs1,
+			FEEDBACK_REPO: repo,
+		}, { fetch: gh.fetch });
+		const res = await post(denied, { message: "hi", source: "cli" });
+		const deniedBody = await res.json();
+		assert.equal(res.status, 502);
+		assert.deepEqual(deniedBody, { error: "unavailable" });
+		const text = logs.join("\n");
+		assert.match(text, /"error":"fetch"/);
+		assert.equal(text.includes(marker), false);
+		assert.equal(text.includes("PRIVATE KEY"), false);
+		assert.equal(text.includes("ghs_shouldnotbeloggedvalue"), false);
+		assert.equal(text.includes("eyJ"), false);
+		assert.equal(text.includes(keys.pkcs1), false);
+		assert.equal(JSON.stringify(deniedBody).includes("ghs_"), false);
+	} finally {
+		console.error = orig;
+	}
 });

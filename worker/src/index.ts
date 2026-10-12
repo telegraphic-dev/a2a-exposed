@@ -2415,8 +2415,8 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 				deployment: argStr(a, "deployment", false),
 			});
 			return result.filed
-				? `Feedback filed: ${result.issue_url}`
-				: `Feedback was not filed from here. Open this link to create the issue:\n${result.issue_url}`;
+				? `${Fb.PUBLIC_ISSUE_NOTE}\nFeedback filed: ${result.issue_url}`
+				: `${Fb.PUBLIC_ISSUE_NOTE}\nFeedback was not filed from here. Open this link to create the issue:\n${result.issue_url}`;
 		}
 	}
 	throw new ToolError(`unknown tool ${name}`);

@@ -35,9 +35,18 @@ export interface ControlEnv extends PlaneEnv {
 	TENANT_SECRETS_KEY?: string;
 	/**
 	 * Fine-grained token with Issues write on FEEDBACK_REPO only. A secret, not a var.
-	 * Not a GITHUB_* name: that prefix is the sign-in OAuth app. Unset: POST /api/feedback is 404.
+	 * Fallback when the GitHub App below is unset. Not a GITHUB_* name: that prefix is the sign-in OAuth app.
 	 */
 	FEEDBACK_GITHUB_TOKEN?: string;
-	/** owner/repo that receives feedback issues. Both this and the token must be set, or the route is 404. */
+	/** GitHub App id that files feedback issues. A plain var. With the private key, preferred over the token. */
+	FEEDBACK_GITHUB_APP_ID?: string;
+	/**
+	 * PEM private key for that app. A secret, not a var. PKCS#1 (`BEGIN RSA PRIVATE KEY`) or PKCS#8 (`BEGIN PRIVATE KEY`).
+	 * A one-line value may encode newlines as `\n`.
+	 */
+	FEEDBACK_GITHUB_APP_PRIVATE_KEY?: string;
+	/** Installation id on FEEDBACK_REPO. Unset: look it up with the app JWT. A plain var. */
+	FEEDBACK_GITHUB_APP_INSTALLATION_ID?: string;
+	/** owner/repo that receives feedback issues. Required with the app or the token, or the route is 404. */
 	FEEDBACK_REPO?: string;
 }

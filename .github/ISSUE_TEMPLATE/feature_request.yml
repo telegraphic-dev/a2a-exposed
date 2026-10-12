@@ -6,7 +6,8 @@ body:
   - type: markdown
     attributes:
       value: |
-        Do not include tokens, passwords, or keys.
+        This report is filed as a public GitHub issue on telegraphic-dev/a2a-exposed.
+        Do not include confidential information: secrets, tokens, owner or pairing tokens, private URLs or hostnames, message contents, or personal data.
   - type: textarea
     id: message
     attributes:

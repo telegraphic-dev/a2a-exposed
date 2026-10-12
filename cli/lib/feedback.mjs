@@ -1,5 +1,6 @@
 // Feedback: post to a hosted control plane when this inbox points at one, otherwise print a GitHub issue link.
 import os from "node:os";
+import readline from "node:readline/promises";
 import { CliError } from "./a2a.mjs";
 import * as C from "./config.mjs";
 
@@ -12,14 +13,34 @@ const TOKEN_RE = /(?:a2aow_|s2a_|a2amcp_|a2amcpr_|a2aot_)[A-Za-z0-9_-]{20,}/g;
 const SETUP_RE = /([?&])t=[A-Za-z0-9_-]{16,}/g;
 const USERINFO_RE = /([a-z][a-z0-9+.-]*:\/\/)[^/?\s]*@/gi;
 const BEARER_RE = /bearer\s+\S{8,200}/gi;
+const PEM_RE = /-----BEGIN (?:[A-Z0-9]+ )?PRIVATE KEY-----[\s\S]*?(?:-----END (?:[A-Z0-9]+ )?PRIVATE KEY-----|$)/g;
+const API_KEY_RE = /(?:(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|\bAKIA[0-9A-Z]{16}\b|\bsk_(?:live|test)_[A-Za-z0-9]{10,}|\brk_(?:live|test)_[A-Za-z0-9]{10,}|\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}|\bxox[baprs]-[A-Za-z0-9-]{10,}|\bAIza[0-9A-Za-z_-]{35}\b)/g;
 
-/** Same shapes as the Worker's scrubSecretText, plus a Bearer value. */
+/** Same shapes as the Worker's scrubSecretText, plus a Bearer value, a PEM private key, and common API-key prefixes. */
 export function scrubFeedbackText(value) {
 	return String(value ?? "")
 		.replace(TOKEN_RE, "[redacted]")
 		.replace(SETUP_RE, "$1t=[redacted]")
 		.replace(USERINFO_RE, "$1[redacted]@")
-		.replace(BEARER_RE, "Bearer [redacted]");
+		.replace(BEARER_RE, "Bearer [redacted]")
+		.replace(PEM_RE, "[redacted]")
+		.replace(API_KEY_RE, "[redacted]");
+}
+
+export const PUBLIC_ISSUE_WARNING = `This report is filed as a public GitHub issue on ${ISSUE_REPO}. Do not include confidential information: secrets, tokens, owner or pairing tokens, private URLs or hostnames, message contents, or personal data.`;
+
+/** Print the public-issue warning. On a terminal, wait for y or yes unless `yes` is set. Off a terminal, `--yes` is required. */
+export async function confirmPublicIssue(yes, input = process.stdin, output = process.stderr) {
+	output.write(`${PUBLIC_ISSUE_WARNING}\n`);
+	if (yes) return;
+	if (!input.isTTY) throw new CliError("feedback files a public GitHub issue; pass --yes to send it");
+	const rl = readline.createInterface({ input, output });
+	try {
+		const answer = (await rl.question("File this public issue? [y/N] ")).trim().toLowerCase();
+		if (answer !== "y" && answer !== "yes") throw new CliError("feedback not sent");
+	} finally {
+		rl.close();
+	}
 }
 
 const ENVIRONMENTS = ["local", "cloud VM", "CI", "cloud agent sandbox", "other"];
