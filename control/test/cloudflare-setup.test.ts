@@ -501,16 +501,29 @@ test("a Cloudflare error comes back to the setup page in plain language", async 
 	assert.equal(cancelledUrl.searchParams.get("error"), "cancelled");
 	assert.match(await (await app.request(cancelledUrl, { headers: { cookie } })).text(), /You cancelled the Cloudflare permissions/);
 
-	const secretDescription = await app.request(
-		`${origin}/api/auth/callback/cloudflare?error=server_error&error_description=${encodeURIComponent("Bearer cf_access_SECRET failed")}`,
-		{ headers: { cookie } },
-	);
-	const secretUrl = new URL(secretDescription.headers.get("location") ?? "", origin);
-	assert.equal(secretUrl.pathname, "/app/cloudflare");
-	assert.equal(secretUrl.searchParams.get("error"), "provider");
-	assert.match(logs.join("\n"), /"error_description":"redacted"/);
-	assert.equal(logs.join("\n").includes("cf_access_SECRET"), false);
-	assert.match(await (await app.request(secretUrl, { headers: { cookie } })).text(), /did not finish granting permissions/);
+	const leaks = [
+		"Bearer cf_access_SECRET failed",
+		"rejected code=super-secret-code",
+		"token=cfut_SECRETVALUE",
+		"id_token=eyJhbGciOiJub25lIn0.eyJzdWIiOiIxIn0.sig",
+		"saw eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signaturevalue",
+	];
+	for (const leak of leaks) {
+		const secretDescription = await app.request(
+			`${origin}/api/auth/callback/cloudflare?error=server_error&error_description=${encodeURIComponent(leak)}`,
+			{ headers: { cookie } },
+		);
+		const secretUrl = new URL(secretDescription.headers.get("location") ?? "", origin);
+		assert.equal(secretUrl.pathname, "/app/cloudflare");
+		assert.equal(secretUrl.searchParams.get("error"), "provider");
+		assert.match(await (await app.request(secretUrl, { headers: { cookie } })).text(), /did not finish granting permissions/);
+	}
+	const loggedAfterLeaks = logs.join("\n");
+	assert.match(loggedAfterLeaks, /"error_description":"redacted"/);
+	for (const secret of ["cf_access_SECRET", "super-secret-code", "cfut_SECRETVALUE", "eyJhbGciOiJub25lIn0", "eyJzdWIiOiIxIn0", "signaturevalue"]) {
+		assert.equal(loggedAfterLeaks.includes(secret), false, secret);
+	}
+	assert.match(loggedAfterLeaks, /denied the request/);
 
 	const again = await app.request(`${origin}/app/cloudflare`, {
 		method: "POST",

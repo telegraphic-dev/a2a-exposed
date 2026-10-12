@@ -77,11 +77,19 @@ function safeProviderError(value: string): string {
 	return /^[A-Za-z0-9._~:-]+$/.test(trimmed) ? trimmed : "unrecognized";
 }
 
-/** The description is logged. Codes, tokens, and the state are not. */
+/**
+ * Query names whose values are credentials. Matched as `name=value` or `name: value`,
+ * including a percent-encoded `=`. `authorization server` has neither, so it stays.
+ */
+const SECRET_PARAM = /\b(?:id_token|access_token|refresh_token|client_secret|authorization|code|token)\s*(?:=|%3d|:)\s*\S/i;
+/** A compact JWS: `eyJ` header, payload, signature. Error text does not look like this. */
+const JWT_SHAPED = /\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/;
+
+/** The description is logged. A code, a token, an id_token, or a JWT is not. */
 function safeProviderDescription(value: string): string {
 	const cleaned = value.replace(/[\u0000-\u001f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 300);
 	if (!cleaned) return "";
-	if (/bearer\s+\S|client_secret|refresh_token|access_token|authorization\s*[:=]/i.test(cleaned)) return "redacted";
+	if (SECRET_PARAM.test(cleaned) || /bearer\s+\S/i.test(cleaned) || JWT_SHAPED.test(cleaned)) return "redacted";
 	return cleaned;
 }
 
