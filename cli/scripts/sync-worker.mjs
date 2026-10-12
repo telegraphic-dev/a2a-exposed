@@ -1,4 +1,5 @@
 // prepack: bundle the Worker template (../worker) into the npm package as ./worker
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,4 +15,6 @@ if (!fs.existsSync(path.join(src, "cloudflare.config.ts"))) {
 const skip = new Set(["node_modules", ".cloudflare", ".wrangler", "deploy.env", "package-lock.json"]);
 fs.rmSync(dst, { recursive: true, force: true });
 fs.cpSync(src, dst, { recursive: true, filter: (p) => !skip.has(path.basename(p)) && !/^\.(dev\.vars|env)/.test(path.basename(p)) });
+const stamped = spawnSync(process.execPath, [path.join(src, "scripts", "stamp-version.mjs"), path.join(dst, "src", "version.ts")], { stdio: "inherit" });
+if (stamped.status !== 0) process.exit(stamped.status || 1);
 console.error(`sync-worker: bundled ${path.relative(root, src)} -> worker/`);

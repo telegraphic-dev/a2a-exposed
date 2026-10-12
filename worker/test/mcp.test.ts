@@ -3,6 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import worker from "../src/index.ts";
+import { WORKER_VERSION } from "../src/feedback.ts";
 import * as P from "../src/pairing.ts";
 import * as M from "../src/mcp.ts";
 import { d1 } from "./d1.ts";
@@ -353,7 +354,7 @@ test("send_feedback returns a GitHub issue link and strips tokens", async (t) =>
 	assert.equal(url.searchParams.get("environment"), "cloud agent sandbox");
 	assert.equal(url.searchParams.get("connection"), "webhook");
 	assert.equal(url.searchParams.get("deployment"), "self-hosted");
-	assert.equal(url.searchParams.get("version"), "worker 0.7.0");
+	assert.equal(url.searchParams.get("version"), `worker ${WORKER_VERSION}`);
 	assert.equal((url.searchParams.get("message") ?? "").includes("hook.example.net"), false);
 	const listed = (await s.mcp(a.access_token, "tools/list")).data.result.tools.find((tool: { name: string }) => tool.name === "send_feedback");
 	assert.match(listed.description, /exact commands/);
