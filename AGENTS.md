@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guide for coding agents (and humans) changing this repository. User-facing docs are in `README.md` and `skills/`.
+Guide for coding agents (and humans) changing this repository. User-facing docs are in `README.md` (short intro), `docs/`, and `skills/`.
 
 ## Layout
 
@@ -40,6 +40,6 @@ The same Worker tests also run in CI against workerd storage (`STORAGE_BACKEND=d
 
 - Never commit secrets, account ids, zone names, or hostnames of real deployments; examples use `example.com`.
 - Never print secret values: previews mask them, and comparisons use SHA-256 fingerprints.
-- A user-visible change (command, flag, preset, output) updates `README.md`, the relevant `SKILL.md`, `cli/lib/main.mjs` help, and `CHANGELOG.md` in the same PR.
+- A user-visible change (command, flag, preset, output) updates `README.md` when the short intro changes, the relevant page under `docs/`, the relevant `SKILL.md`, `cli/lib/main.mjs` help, and `CHANGELOG.md` in the same PR.
 - New wake presets: see `CONTRIBUTING.md`.
 - Releases: bump `version` in `cli/package.json`, both skills' `metadata.version`, and every plugin manifest (`plugin.json`, `.cursor-plugin/`, `.grok-plugin/`, `.claude-plugin/`), add a `CHANGELOG.md` entry, merge, then push a `v<version>` tag. The workflow sets the npm version from the tag.
