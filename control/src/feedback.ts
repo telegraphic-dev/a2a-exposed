@@ -9,7 +9,7 @@ import { connectingIp, verifyTurnstile, type TurnstileFailure } from "./auth/tur
 import { sameOrigin } from "./auth/origin.ts";
 import type { Sql } from "./auth/invites.ts";
 import type { ControlEnv } from "./env.ts";
-import { feedbackAppBroken, feedbackAppReady, feedbackPat, GithubAuthError, githubAccessToken, type GithubTokenCache } from "./feedback-app.ts";
+import { feedbackAppBroken, feedbackAppReady, feedbackPat, GithubAuthError, GithubCallError, githubAccessToken, githubCall, isGithubRedirect, type GithubStep, type GithubTokenCache } from "./feedback-app.ts";
 
 export const MESSAGE_MAX = 4000;
 export const PER_HOUR = 5;
@@ -36,13 +36,14 @@ const SOURCES = ["web", "cli", "mcp"] as const;
 type Kind = (typeof KINDS)[number];
 type Source = (typeof SOURCES)[number];
 
-/** Same token shapes as the Worker's scrubSecretText, plus a Bearer value, a PEM private key, and common API-key prefixes. */
+/** Same token shapes as the Worker's scrubSecretText, plus a Bearer value, a PEM private key, common API-key prefixes, and a JWT. */
 const TOKEN_RE = /(?:a2aow_|s2a_|a2amcp_|a2amcpr_|a2aot_)[A-Za-z0-9_-]{20,}/g;
 const SETUP_RE = /([?&])t=[A-Za-z0-9_-]{16,}/g;
 const USERINFO_RE = /([a-z][a-z0-9+.-]*:\/\/)[^/?\s]*@/gi;
 const BEARER_RE = /bearer\s+\S{8,200}/gi;
 const PEM_RE = /-----BEGIN (?:[A-Z0-9]+ )?PRIVATE KEY-----[\s\S]*?(?:-----END (?:[A-Z0-9]+ )?PRIVATE KEY-----|$)/g;
 const API_KEY_RE = /(?:(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|\bAKIA[0-9A-Z]{16}\b|\bsk_(?:live|test)_[A-Za-z0-9]{10,}|\brk_(?:live|test)_[A-Za-z0-9]{10,}|\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}|\bxox[baprs]-[A-Za-z0-9-]{10,}|\bAIza[0-9A-Za-z_-]{35}\b)/g;
+const JWT_RE = /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g;
 
 export interface FeedbackDeps {
 	fetch?: typeof fetch;
@@ -91,12 +92,13 @@ export function turnstileOf(env: ControlEnv): { siteKey: string; secret: string 
 	return { siteKey, secret };
 }
 
-/** Strip peer, owner, MCP, and setup tokens, URL userinfo, and Bearer values. The rest of the text stays. */
+/** Strip peer, owner, MCP, and setup tokens, URL userinfo, Bearer values, a PEM private key, API keys, and JWTs. The rest of the text stays. */
 export function scrubFeedbackText(value: string): string {
 	return value
 		.replace(TOKEN_RE, "[redacted]")
 		.replace(SETUP_RE, "$1t=[redacted]")
 		.replace(USERINFO_RE, "$1[redacted]@")
+		.replace(JWT_RE, "[redacted]")
 		.replace(BEARER_RE, "Bearer [redacted]")
 		.replace(PEM_RE, "[redacted]")
 		.replace(API_KEY_RE, "[redacted]");
@@ -321,19 +323,38 @@ function githubIssueUrl(repo: string, value: unknown): string {
 }
 
 const AUTH_CODE = /^(?:key_parse|jwt_rejected:\d{1,3}|installation:\d{1,3}|token:\d{1,3})$/;
+const LOG_MESSAGE_MAX = 200;
+
+/** Exception name plus a short scrubbed message. Header lines and the private key are removed first. */
+function failureMessage(error: unknown): string {
+	const name = error instanceof Error && error.name ? error.name : "Error";
+	const raw = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+	const withoutHeaders = raw.replace(/\b(?:authorization|proxy-authorization)\b\s*[:=][^\n]*/gi, "[redacted]");
+	const scrubbed = scrubFeedbackText(withoutHeaders).replace(/\s+/g, " ").trim();
+	const clipped = scrubbed.length > LOG_MESSAGE_MAX ? scrubbed.slice(0, LOG_MESSAGE_MAX) : scrubbed;
+	return clipped ? `${name} ${clipped}` : name;
+}
+
+function logFeedbackFailed(source: string, status: number, error: string, step: string, message: string): void {
+	console.error(JSON.stringify({ event: "feedback_failed", source, status, error, step, message }));
+}
 
 function githubFailure(error: unknown, source: string): FeedbackResult {
-	const name = error instanceof Error ? error.name : "";
+	const cause = error instanceof GithubCallError ? (error.cause ?? error) : error;
+	const step = error instanceof GithubCallError ? error.step
+		: cause instanceof GithubAuthError ? cause.step
+		: "";
+	const name = cause instanceof Error ? cause.name : "";
 	const timeoutHit = name === "TimeoutError" || name === "AbortError";
 	let status = 0;
 	let reason = "fetch";
 	if (timeoutHit) {
 		reason = "timeout";
-	} else if (error instanceof GithubAuthError && AUTH_CODE.test(error.code)) {
-		status = Number.isInteger(error.status) && error.status >= 0 && error.status <= 999 ? error.status : 0;
-		reason = error.code;
+	} else if (cause instanceof GithubAuthError && AUTH_CODE.test(cause.code)) {
+		status = Number.isInteger(cause.status) && cause.status >= 0 && cause.status <= 999 ? cause.status : 0;
+		reason = cause.code;
 	}
-	console.error(JSON.stringify({ event: "feedback_failed", source, status, error: reason }));
+	logFeedbackFailed(source, status, reason, step, failureMessage(cause));
 	return jsonResult(timeoutHit ? 504 : 502, { error: timeoutHit ? "timeout" : "unavailable" });
 }
 
@@ -350,9 +371,8 @@ async function openIssue(env: ControlEnv, input: FeedbackInput, deps: FeedbackDe
 	} catch (error) {
 		return githubFailure(error, input.source);
 	}
-	const post = (labels: string[]) => call(`https://api.github.com/repos/${repo}/issues`, {
+	const post = (step: Extract<GithubStep, "issue" | "issue_retry">, labels: string[]) => githubCall(step, call, `https://api.github.com/repos/${repo}/issues`, {
 		method: "POST",
-		redirect: "error",
 		signal: AbortSignal.timeout(timeout),
 		headers: {
 			authorization: `Bearer ${token}`,
@@ -364,23 +384,30 @@ async function openIssue(env: ControlEnv, input: FeedbackInput, deps: FeedbackDe
 		body: JSON.stringify(labels.length ? { title: doc.title, body: doc.body, labels } : { title: doc.title, body: doc.body }),
 	});
 	let response: Response;
+	let step: Extract<GithubStep, "issue" | "issue_retry"> = "issue";
 	try {
-		response = await post(doc.labels);
+		response = await post("issue", doc.labels);
 		if (response.status === 422) {
 			await response.body?.cancel().catch(() => {});
-			response = await post([]);
+			step = "issue_retry";
+			response = await post("issue_retry", []);
 		}
 	} catch (error) {
 		return githubFailure(error, input.source);
 	}
+	const redirected = isGithubRedirect(response.status);
 	let payload: unknown = null;
-	try { payload = await response.json(); } catch { payload = null; }
-	const issue = githubIssueUrl(repo, asRecord(payload)?.html_url);
-	if (response.ok && issue) {
+	if (redirected) {
+		await response.body?.cancel().catch(() => {});
+	} else {
+		try { payload = await response.json(); } catch { payload = null; }
+	}
+	const issue = redirected ? "" : githubIssueUrl(repo, asRecord(payload)?.html_url);
+	if (!redirected && response.ok && issue) {
 		console.error(JSON.stringify({ event: "feedback_filed", source: input.source, status: response.status }));
 		return jsonResult(200, { ok: true, issue_url: issue });
 	}
-	console.error(JSON.stringify({ event: "feedback_failed", source: input.source, status: response.status }));
+	logFeedbackFailed(input.source, response.status, "http", step, failureMessage(new Error(`HTTP ${response.status}`)));
 	return jsonResult(502, { error: "unavailable" });
 }
 
