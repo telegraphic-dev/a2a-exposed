@@ -34,7 +34,7 @@ type SessionAuth = {
 	api: {
 		getSession(input: { headers: Headers }): Promise<{
 			user?: { id?: string };
-			session?: { createdAt?: unknown };
+			session?: { id?: string; createdAt?: unknown };
 		} | null>;
 	};
 };
@@ -225,9 +225,18 @@ export function inboxIdFromPath(pathname: string): string {
 	return match?.[1] ?? "";
 }
 
-export async function sessionIsFresh(db: Sql, session: { session?: { createdAt?: unknown } } | null, userId: string): Promise<boolean> {
+/**
+ * True when this session was created in the last 10 minutes.
+ * A missing timestamp is read from this session's row. Another session for the same account does not count.
+ */
+export async function sessionIsFresh(db: Sql, session: { session?: { id?: unknown; createdAt?: unknown } } | null, userId: string): Promise<boolean> {
 	if (recentSignIn(session)) return true;
-	const row = await db.prepare(`SELECT createdAt FROM session WHERE userId = ? ORDER BY createdAt DESC`).bind(userId).first<{ createdAt: unknown }>();
+	if (session?.session && "createdAt" in session.session && session.session.createdAt != null) return false;
+	const id = typeof session?.session?.id === "string" ? session.session.id : "";
+	if (!id || id.length > 128) return false;
+	const row = await db.prepare(
+		`SELECT createdAt FROM "session" WHERE id = ? AND "userId" = ?`,
+	).bind(id, userId).first<{ createdAt: unknown }>();
 	return recentSignIn({ session: { createdAt: row?.createdAt } });
 }
 

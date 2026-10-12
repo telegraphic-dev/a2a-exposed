@@ -9,6 +9,7 @@ import {
 	saveCloudflareGrant,
 	sealCloudflareRefresh,
 } from "../src/auth/cloudflare-grant.ts";
+import { sessionIsFresh } from "../src/auth/cloudflare-link.ts";
 import { CLOUDFLARE_RESUME_COOKIE, SESSION_COOKIE } from "../src/auth/cookies.ts";
 import {
 	ACCESS_NOT_REQUESTED,
@@ -843,6 +844,44 @@ test("consent continues when the fresh sign-in does not send the resume cookie",
 	assert.equal(authorize.origin, "https://dash.cloudflare.com");
 	assert.equal(authorize.pathname, "/oauth2/auth");
 	assert.equal(authorize.searchParams.get("scope"), consentScope("inbox", "workers"));
+});
+
+test("a newer session for the same account does not refresh an older one", async (t) => {
+	t.after(githubFetch(consentScope("inbox", "workers")));
+	const db = openDb();
+	const app = createApp({
+		AUTH_SECRET: secret,
+		DB: db,
+		GITHUB_CLIENT_ID: "gh-id",
+		GITHUB_CLIENT_SECRET: "gh-secret",
+		CLOUDFLARE_OAUTH_CLIENT_ID: "cf-id",
+		CLOUDFLARE_OAUTH_CLIENT_SECRET: "cf-secret",
+	}, { database: db, inboxScript: "export default {}", inboxMigrations: [] });
+	const jar = new Map<string, string>();
+	await githubRoundTrip(app, jar);
+	const current = await db.prepare('SELECT id, "userId" AS userId, createdAt FROM session').first<{ id: string; userId: string; createdAt: string }>();
+	assert.ok(current);
+	await ageSession(db);
+	const now = new Date().toISOString();
+	const later = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+	await db.prepare(
+		`INSERT INTO "session" (id, expiresAt, token, createdAt, updatedAt, "userId") VALUES (?, ?, ?, ?, ?, ?)`,
+	).bind("b".repeat(32), later, "c".repeat(32), now, now, current.userId).run();
+	const stale = await sessionIsFresh(db, { session: { id: current.id, createdAt: new Date(Date.now() - 11 * 60 * 1000).toISOString() } }, current.userId);
+	assert.equal(stale, false);
+	const missing = await sessionIsFresh(db, { session: { id: current.id } }, current.userId);
+	assert.equal(missing, false);
+	const other = await sessionIsFresh(db, { session: { id: "b".repeat(32) } }, current.userId);
+	assert.equal(other, true);
+	const posted = await app.request(`${origin}/app/cloudflare`, {
+		method: "POST",
+		headers: { origin, cookie: cookieHeader(jar), "content-type": "application/x-www-form-urlencoded" },
+		body: "action=consent&choice=inbox&host=workers",
+	});
+	const location = new URL(posted.headers.get("location") ?? "", origin);
+	assert.equal(location.pathname, "/app/sign-in");
+	assert.equal(location.searchParams.get("reauth"), "cloudflare");
+	assert.equal(location.origin, origin);
 });
 
 test("Continue to Cloudflare keeps the same choices after a fresh sign-in", async (t) => {

@@ -35,4 +35,4 @@ The Worker is deleted only when its provision tag still equals the tag stored fo
 
 "Forget only" deletes the dashboard row and does not call Cloudflare.
 
-A sign-in from the last 10 minutes is required. An older session signs in again and then continues that remove or forget.
+A sign-in from the last 10 minutes is required. That is this session. A newer sign-in somewhere else does not refresh it. An older session signs in again and then continues that remove or forget.
