@@ -57,6 +57,7 @@ test("a signed-in account sees itself, can sign out, and creates two agents", as
 	assert.match(html, /action="\/api\/v1\/tenants"/);
 	assert.equal(html.includes("action=\"/app/sign-in\""), false);
 	assert.equal(html.includes("Connect Cloudflare"), false);
+	assert.equal(html.includes("Set me up on Cloudflare"), false);
 	assert.equal(html.includes("style="), false);
 	const policy = page.headers.get("content-security-policy") ?? "";
 	assert.match(policy, /img-src 'self' https:\/\/avatars\.githubusercontent\.com/);
