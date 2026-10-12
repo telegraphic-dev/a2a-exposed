@@ -2,7 +2,9 @@ import { Hono, type Context } from "hono";
 import { CALLBACK_DEADLINE_MS, within } from "./auth/deadline.ts";
 import { connectingIp, verifyTurnstile } from "./auth/turnstile.ts";
 import { agentReturnPath } from "./auth/return.ts";
-import { cloudflareIsLinked, finishCloudflareLink, handleCloudflareAccount } from "./auth/cloudflare-link.ts";
+import { readCloudflareGrant } from "./auth/cloudflare-grant.ts";
+import { cloudflareIsLinked, finishCloudflareLink, handleCloudflareAccount, handleCloudflareSetup } from "./auth/cloudflare-link.ts";
+import { describeSetupGrant } from "./auth/cloudflare-setup.ts";
 import { enabledProviderOrigins, handleSignIn, PROVIDER_ORIGINS } from "./auth/sign-in.ts";
 import { loadAuth } from "./auth/instance.ts";
 import { signupClosedText, type SignupAllowlist } from "./auth/allowlist.ts";
@@ -18,6 +20,7 @@ import { handleAgent } from "./agents/page.ts";
 import { recentSignIn } from "./auth/recent.ts";
 import { brandConfig } from "@brand/brand.config.ts";
 import { avatarOrigin, avatarUrl, renderAccount } from "./views/account.tsx";
+import { renderCloudflareSetup } from "./views/cloudflare-setup.tsx";
 import { renderApp, securityHeaders } from "./views/document.tsx";
 import { renderSignIn } from "./views/sign-in.tsx";
 import { createFeedback, feedbackOn, type FeedbackDeps, type FeedbackResult } from "./feedback.ts";
@@ -259,6 +262,8 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 	app.get("/app/agents/:name", (c) => handleAgent(c.req.raw, env, deps));
 	app.post("/app/agents/:name", (c) => handleAgent(c.req.raw, env, deps));
 	app.all("/app/feedback", (c) => feedbackPage(c));
+	app.get("/app/cloudflare", (c) => cloudflareSetupPage(c));
+	app.post("/app/cloudflare", (c) => cloudflareSetupPost(c));
 	app.get("/app/*", async (c) => {
 		const shell = await renderShell(c.req.raw);
 		if (shell.clearOwner) c.header("set-cookie", hostCookie(OWNER_COOKIE, "", 0));
@@ -283,6 +288,35 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 		if (!loaded) return c.json({ error: "not_found" }, 404);
 		return handleCloudflareAccount(request, loaded.auth, loaded.options);
 	});
+	async function cloudflareSetupPage(c: Context<{ Bindings: ControlEnv }>, review?: { choice: "inbox" | "facade" | "both"; host: "workers" | "zone" }) {
+		const request = c.req.raw;
+		const loaded = await loadAuth(env, request, deps);
+		if (!loaded) return c.json({ error: "not_found" }, 404);
+		if (!loaded.options.cloudflare) return c.json({ error: "not_found" }, 404);
+		const session = await loaded.auth.api.getSession({ headers: request.headers });
+		const userId = session?.user?.id ?? "";
+		if (!userId) return redirectTo(new URL("/app", request.url).href);
+		const url = new URL(request.url);
+		const grant = review ? null : await readCloudflareGrant(loaded.options.database, userId);
+		const body = renderCloudflareSetup({
+			brand: brandConfig(env).name,
+			error: url.searchParams.get("error") ?? undefined,
+			recent: recentSignIn(session),
+			linked: await cloudflareIsLinked(loaded.options.database, userId),
+			connected: url.searchParams.get("connected") === "1",
+			report: grant ? describeSetupGrant(grant) : null,
+			review,
+		});
+		return c.html(renderApp(env, body, "Set me up on Cloudflare", feedbackLink), 200, pageHeaders(false, null, [], false, accountLinkOrigins(loaded.options)));
+	}
+	async function cloudflareSetupPost(c: Context<{ Bindings: ControlEnv }>) {
+		const request = c.req.raw;
+		const loaded = await loadAuth(env, request, deps);
+		if (!loaded) return c.json({ error: "not_found" }, 404);
+		const result = await handleCloudflareSetup(request, loaded.auth, loaded.options);
+		if (result.kind === "review") return cloudflareSetupPage(c, result);
+		return result.response;
+	}
 	app.post("/app/sign-out", async (c) => {
 		const request = c.req.raw;
 		if (!sameOrigin(request)) return redirectTo(new URL("/app?error=origin", request.url).href);

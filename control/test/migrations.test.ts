@@ -53,3 +53,16 @@ test("0008 drops a duplicate account before it creates the unique index", () => 
 	assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM "account"`).get()?.n, 3);
 	assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM "user"`).get()?.n, 2);
 });
+
+test("0010 adds the Cloudflare grant table on a database that already has accounts", () => {
+	const db = new DatabaseSync(":memory:");
+	apply(db, files.filter((name) => name < "0010_cloudflare_grant.sql"));
+	insertUser(db, "user-a", "a@example.com");
+	apply(db, ["0010_cloudflare_grant.sql"]);
+	db.prepare(
+		`INSERT INTO cloudflare_grant ("userId", "accountId", choice, host, requested_scope, created_at, updated_at) VALUES ('user-a', 'cf-user', 'inbox', 'workers', 'user-details.read', ?, ?)`,
+	).run(earlier, earlier);
+	assert.equal(db.prepare(`SELECT choice FROM cloudflare_grant WHERE "userId" = 'user-a'`).get()?.choice, "inbox");
+	apply(db, ["0010_cloudflare_grant.sql"]);
+	assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM cloudflare_grant`).get()?.n, 1);
+});

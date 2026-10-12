@@ -104,16 +104,21 @@ export function renderAccount(input: {
 				<p><button class="action" type="submit">Sign out</button></p>
 			</form>
 			{input.cloudflare ? (
-				<form method="post" action="/app/account/cloudflare">
+				<div>
 					<p>Lets {input.brand?.trim() || "Inbox"} set things up in your Cloudflare account. It isn't used to sign in.</p>
 					{input.cloudflareLinked ? <p>Cloudflare is connected.</p> : ""}
 					{input.disconnected ? <p role="status">Cloudflare was disconnected.</p> : ""}
 					{input.recent ? "" : <p class="alert" role="status">{CLOUDFLARE_REAUTH}</p>}
-					<p>
-						<input type="hidden" name="action" value={input.cloudflareLinked ? "disconnect" : "connect"} />
-						<button class="action" type="submit">{input.cloudflareLinked ? "Disconnect Cloudflare" : "Connect Cloudflare"}</button>
-					</p>
-				</form>
+					<p><a href="/app/cloudflare">Set me up on Cloudflare</a></p>
+					{input.cloudflareLinked ? (
+						<form method="post" action="/app/account/cloudflare">
+							<p>
+								<input type="hidden" name="action" value="disconnect" />
+								<button class="action" type="submit">Disconnect Cloudflare</button>
+							</p>
+						</form>
+					) : ""}
+				</div>
 			) : ""}
 			{input.ownerToken ? <TokenBlock token={input.ownerToken} lead="Copy this owner token now. It will not be shown again." /> : ""}
 			{input.deleted ? <p role="status">{deletedNotice(input.agentLimit, input.agents.length)}</p> : ""}

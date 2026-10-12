@@ -295,18 +295,19 @@ test("connecting Cloudflare records the account, and disconnect removes it", asy
 	const session = github.headers.getSetCookie().find((value) => value.startsWith(`${SESSION_COOKIE}=`))!.split(";")[0];
 	const accountPage = await app.request(`${origin}/app`, { headers: { cookie: session } });
 	const html = await accountPage.text();
-	assert.match(html, /Connect Cloudflare/);
+	assert.match(html, /Set me up on Cloudflare/);
+	assert.match(html, /href="\/app\/cloudflare"/);
 	assert.match(html, /Lets Inbox set things up in your Cloudflare account\. It isn&#39;t used to sign in\./);
 	assert.equal(html.includes("Continue with Cloudflare"), false);
-	assert.match(html, /action="\/app\/account\/cloudflare"/);
+	assert.equal(html.includes("Connect Cloudflare"), false);
 	assert.match(accountPage.headers.get("content-security-policy") ?? "", /form-action 'self' https:\/\/dash\.cloudflare\.com/);
 
 	const staleAt = new Date(Date.now() - 11 * 60 * 1000).toISOString();
 	await db.prepare('UPDATE "session" SET "createdAt" = ?').bind(staleAt).run();
-	const stale = await app.request(`${origin}/app/account/cloudflare`, {
+	const stale = await app.request(`${origin}/app/cloudflare`, {
 		method: "POST",
 		headers: { origin, cookie: session, "content-type": "application/x-www-form-urlencoded" },
-		body: "action=connect",
+		body: "action=consent&choice=inbox&host=workers",
 	});
 	assert.equal(new URL(stale.headers.get("location") ?? "", origin).searchParams.get("error"), "cloudflare_reauth");
 	assert.match(await (await app.request(stale.headers.get("location") ?? "")).text(), new RegExp(CLOUDFLARE_REAUTH.replace(/[.]/g, "\\.")));
@@ -314,17 +315,17 @@ test("connecting Cloudflare records the account, and disconnect removes it", asy
 
 	const fresh = await providerCallback(app, "github");
 	const freshSession = fresh.headers.getSetCookie().find((value) => value.startsWith(`${SESSION_COOKIE}=`))!.split(";")[0];
-	const cross = await app.request(`${origin}/app/account/cloudflare`, {
+	const cross = await app.request(`${origin}/app/cloudflare`, {
 		method: "POST",
 		headers: { origin: "https://evil.example", "sec-fetch-site": "cross-site", cookie: freshSession, "content-type": "application/x-www-form-urlencoded" },
-		body: "action=connect",
+		body: "action=consent&choice=inbox&host=workers",
 	});
 	assert.equal(new URL(cross.headers.get("location") ?? "", origin).searchParams.get("error"), "origin");
 
-	const pending = await app.request(`${origin}/app/account/cloudflare`, {
+	const pending = await app.request(`${origin}/app/cloudflare`, {
 		method: "POST",
 		headers: { origin, cookie: freshSession, "content-type": "application/x-www-form-urlencoded" },
-		body: "action=connect",
+		body: "action=consent&choice=inbox&host=workers",
 	});
 	const pendingState = new URL(pending.headers.get("location") ?? "").searchParams.get("state") ?? "";
 	await db.prepare('UPDATE "session" SET "createdAt" = ?').bind(staleAt).run();
@@ -335,15 +336,15 @@ test("connecting Cloudflare records the account, and disconnect removes it", asy
 
 	const live = await providerCallback(app, "github");
 	const liveSession = live.headers.getSetCookie().find((value) => value.startsWith(`${SESSION_COOKIE}=`))!.split(";")[0];
-	const connect = await app.request(`${origin}/app/account/cloudflare`, {
+	const connect = await app.request(`${origin}/app/cloudflare`, {
 		method: "POST",
 		headers: { origin, cookie: liveSession, "content-type": "application/x-www-form-urlencoded" },
-		body: "action=connect",
+		body: "action=consent&choice=inbox&host=workers",
 	});
 	assert.equal(connect.status, 303);
 	const authorize = new URL(connect.headers.get("location") ?? "");
 	assert.equal(authorize.origin, "https://dash.cloudflare.com");
-	assert.equal(authorize.searchParams.get("scope"), "user-details.read");
+	assert.equal(authorize.searchParams.get("scope"), "user-details.read account-settings.read workers-scripts.write d1.write offline_access");
 	assert.equal(authorize.searchParams.get("code_challenge_method"), "S256");
 	assert.match(authorize.searchParams.get("redirect_uri") ?? "", /\/api\/auth\/callback\/cloudflare$/);
 	const state = authorize.searchParams.get("state") ?? "";
@@ -364,12 +365,13 @@ test("connecting Cloudflare records the account, and disconnect removes it", asy
 	assert.equal(user?.name, "Mona");
 	assert.equal(user?.email_verified, 1);
 	assert.equal(account?.userId, (await db.prepare('SELECT id FROM "user"').first<{ id: string }>())?.id);
-	const again = await app.request(`${origin}/app/account/cloudflare`, {
+	const again = await app.request(`${origin}/app/cloudflare`, {
 		method: "POST",
 		headers: { origin, cookie: liveSession, "content-type": "application/x-www-form-urlencoded" },
-		body: "action=connect",
+		body: "action=consent&choice=inbox&host=workers",
 	});
-	assert.equal(new URL(again.headers.get("location") ?? "", origin).searchParams.get("connected"), "1");
+	assert.equal(again.status, 303);
+	assert.equal(new URL(again.headers.get("location") ?? "").origin, "https://dash.cloudflare.com");
 	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM "account" WHERE "providerId" = 'cloudflare'`).first<{ n: number }>())?.n, 1);
 
 	const home = await app.request(`${origin}/app`, { headers: { cookie: liveSession } });
@@ -426,10 +428,10 @@ test("one Cloudflare account stays bound to the user who claimed it", async (t) 
 	const otherSession = other.headers.getSetCookie().find((value) => value.startsWith(`${SESSION_COOKIE}=`))!.split(";")[0];
 
 	async function connect(cookie: string): Promise<Response> {
-		const posted = await app.request(`${origin}/app/account/cloudflare`, {
+		const posted = await app.request(`${origin}/app/cloudflare`, {
 			method: "POST",
 			headers: { origin, cookie, "content-type": "application/x-www-form-urlencoded" },
-			body: "action=connect",
+			body: "action=consent&choice=inbox&host=workers",
 		});
 		assert.equal(posted.status, 303);
 		const state = new URL(posted.headers.get("location") ?? "").searchParams.get("state") ?? "";
@@ -484,10 +486,10 @@ test("a Cloudflare connect that cannot read the provider returns to /app", async
 
 	async function connect(next: string): Promise<Response> {
 		mode = "github";
-		const posted = await app.request(`${origin}/app/account/cloudflare`, {
+		const posted = await app.request(`${origin}/app/cloudflare`, {
 			method: "POST",
 			headers: { origin, cookie: session, "content-type": "application/x-www-form-urlencoded" },
-			body: "action=connect",
+			body: "action=consent&choice=inbox&host=workers",
 		});
 		assert.equal(posted.status, 303);
 		const state = new URL(posted.headers.get("location") ?? "").searchParams.get("state") ?? "";
@@ -555,10 +557,10 @@ test("a Cloudflare connect whose profile is not JSON returns to /app", async (t)
 	const linked = createApp({ ...env, DB: linkedDb }, { database: linkedDb });
 	const github = await providerCallback(linked, "github");
 	const session = github.headers.getSetCookie().find((value) => value.startsWith(`${SESSION_COOKIE}=`))!.split(";")[0];
-	const posted = await linked.request(`${origin}/app/account/cloudflare`, {
+	const posted = await linked.request(`${origin}/app/cloudflare`, {
 		method: "POST",
 		headers: { origin, cookie: session, "content-type": "application/x-www-form-urlencoded" },
-		body: "action=connect",
+		body: "action=consent&choice=inbox&host=workers",
 	});
 	const state = new URL(posted.headers.get("location") ?? "").searchParams.get("state") ?? "";
 	const connected = await linked.request(`${origin}/api/auth/callback/cloudflare?code=abc&state=${encodeURIComponent(state)}`, { headers: { cookie: session } });
@@ -621,10 +623,10 @@ test("a Cloudflare connect token exchange stops after its bound", async (t) => {
 	const fast = createApp({ ...env, DB: fastDb }, { database: fastDb, cloudflareFetchMs: 40 });
 	const github = await providerCallback(fast, "github");
 	const session = github.headers.getSetCookie().find((value) => value.startsWith(`${SESSION_COOKIE}=`))!.split(";")[0];
-	const posted = await fast.request(`${origin}/app/account/cloudflare`, {
+	const posted = await fast.request(`${origin}/app/cloudflare`, {
 		method: "POST",
 		headers: { origin, cookie: session, "content-type": "application/x-www-form-urlencoded" },
-		body: "action=connect",
+		body: "action=consent&choice=inbox&host=workers",
 	});
 	const state = new URL(posted.headers.get("location") ?? "").searchParams.get("state") ?? "";
 	aborted = false;
@@ -643,10 +645,10 @@ test("a Cloudflare connect token exchange stops after its bound", async (t) => {
 	const slowGithub = await providerCallback(setup, "github");
 	const slow = createApp({ ...env, DB: slowDb }, { database: slowDb, cloudflareFetchMs: 30_000, callbackDeadlineMs: 40 });
 	const slowSession = slowGithub.headers.getSetCookie().find((value) => value.startsWith(`${SESSION_COOKIE}=`))!.split(";")[0];
-	const slowPosted = await slow.request(`${origin}/app/account/cloudflare`, {
+	const slowPosted = await slow.request(`${origin}/app/cloudflare`, {
 		method: "POST",
 		headers: { origin, cookie: slowSession, "content-type": "application/x-www-form-urlencoded" },
-		body: "action=connect",
+		body: "action=consent&choice=inbox&host=workers",
 	});
 	const slowState = new URL(slowPosted.headers.get("location") ?? "").searchParams.get("state") ?? "";
 	aborted = false;
