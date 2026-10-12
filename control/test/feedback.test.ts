@@ -12,6 +12,14 @@ const origin = "https://control.example.com";
 const repo = "example-org/example-repo";
 const ghToken = "ghp_testtokenvalue1234567890";
 
+// workerd rejects redirect modes other than follow and manual. Node's fetch accepts "error".
+const WORKERD_REDIRECT = 'Invalid redirect value, must be one of "follow" or "manual" ("error" won\'t be implemented since it does not make sense at the edge; use "manual" and check the response status code).';
+
+function assertWorkerdRedirect(init?: RequestInit) {
+	const redirect = init?.redirect;
+	if (redirect !== "follow" && redirect !== "manual") throw new TypeError(WORKERD_REDIRECT);
+}
+
 function env(over: Record<string, unknown> = {}) {
 	return { FEEDBACK_GITHUB_TOKEN: ghToken, FEEDBACK_REPO: repo, ...over };
 }
@@ -23,6 +31,7 @@ function issue(n = 7) {
 function githubFetch(body: Record<string, unknown> = { html_url: issue() }, status = 201) {
 	const calls: { url: string; init: RequestInit; json: any }[] = [];
 	const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+		assertWorkerdRedirect(init);
 		const json = JSON.parse(String(init?.body ?? "{}"));
 		calls.push({ url: String(input), init: init ?? {}, json });
 		return Response.json(body, { status });
@@ -52,11 +61,14 @@ test("deploy binds a non-numeric feedback app id and installation id", () => {
 
 test("scrubFeedbackText strips tokens, setup secrets, userinfo, and Bearer values", () => {
 	const token = "a2aot_" + "AbcdEf0123456789abcd";
-	const text = scrubFeedbackText(`see ${token} Bearer supersecretvalue https://user:pass@agent.example.com/x?t=setupsecrettokenvalue`);
+	const jwt = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI0MjQyIn0.sigvalue1234567890";
+	const text = scrubFeedbackText(`see ${token} Bearer supersecretvalue https://user:pass@agent.example.com/x?t=setupsecrettokenvalue ${jwt}`);
 	assert.equal(text.includes(token), false);
 	assert.equal(text.includes("supersecretvalue"), false);
 	assert.equal(text.includes("user:pass"), false);
 	assert.equal(text.includes("setupsecrettokenvalue"), false);
+	assert.equal(text.includes(jwt), false);
+	assert.equal(text.includes("eyJ"), false);
 	assert.match(text, /\[redacted\]/);
 	assert.match(text, /Bearer \[redacted\]/);
 });
@@ -153,6 +165,7 @@ test("a configured post files an issue and the page links to feedback", async ()
 	assert.deepEqual(await res.json(), { ok: true, issue_url: issue() });
 	assert.equal(gh.calls.length, 1);
 	assert.equal(gh.calls[0].url, `https://api.github.com/repos/${repo}/issues`);
+	assert.equal(gh.calls[0].init.redirect, "manual");
 	assert.equal(new Headers(gh.calls[0].init.headers).get("user-agent"), "a2a-exposed");
 	assert.equal(new Headers(gh.calls[0].init.headers).get("authorization"), `Bearer ${ghToken}`);
 	assert.deepEqual(gh.calls[0].json.labels, ["bug", "feedback"]);
@@ -200,6 +213,7 @@ test("a configured post files an issue and the page links to feedback", async ()
 test("a missing GitHub label is retried once without labels", async () => {
 	let n = 0;
 	const fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+		assertWorkerdRedirect(init);
 		n += 1;
 		const json = JSON.parse(String(init?.body));
 		if (n === 1) {
@@ -218,6 +232,7 @@ test("a missing GitHub label is retried once without labels", async () => {
 
 test("a GitHub call that does not finish is 504", async () => {
 	const fetch = ((_input: RequestInfo | URL, init?: RequestInit) => new Promise((_resolve, reject) => {
+		assertWorkerdRedirect(init);
 		const signal = init?.signal;
 		// AbortSignal.timeout does not keep the event loop alive. Hold it until the signal fires.
 		const keep = setInterval(() => {}, 1000);
@@ -499,12 +514,13 @@ function jwtPayload(jwt: string, publicKey: ReturnType<typeof generateKeyPairSyn
 }
 
 function appGithub(options: { expiresAt?: string; tokenStatus?: number; installationStatus?: number } = {}) {
-	const calls: { url: string; method: string; authorization: string; body: string }[] = [];
+	const calls: { url: string; method: string; authorization: string; body: string; redirect: string }[] = [];
 	let minted = 0;
 	const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+		assertWorkerdRedirect(init);
 		const url = String(input);
 		const headers = new Headers(init?.headers);
-		calls.push({ url, method: init?.method ?? "GET", authorization: headers.get("authorization") ?? "", body: init?.body ? String(init.body) : "" });
+		calls.push({ url, method: init?.method ?? "GET", authorization: headers.get("authorization") ?? "", body: init?.body ? String(init.body) : "", redirect: init?.redirect ?? "" });
 		if (url.endsWith("/installation")) {
 			const status = options.installationStatus ?? 200;
 			if (status !== 200) return Response.json({ message: "nope" }, { status });
@@ -545,6 +561,8 @@ test("a GitHub App files the issue, prefers the app over the token, and reuses t
 	assert.equal(gh.calls.filter((call) => call.url.endsWith("/issues")).length, 1);
 	const install = gh.calls.find((call) => call.url.endsWith("/installation"))!;
 	assert.equal(install.url, `https://api.github.com/repos/${repo}/installation`);
+	assert.equal(install.redirect, "manual");
+	assert.equal(gh.calls.every((call) => call.redirect === "manual"), true);
 	const payload = jwtPayload(install.authorization.slice("Bearer ".length), keys.publicKey);
 	assert.equal(payload.iss, "4242");
 	assert.equal(payload.iat, Math.floor(now / 1000) - 60);
@@ -598,6 +616,7 @@ test("an explicit installation id and a PKCS#8 key skip the lookup, including a 
 test("a set app id with a malformed key is 502 and does not use the personal access token", async () => {
 	const calls: string[] = [];
 	const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+		assertWorkerdRedirect(init);
 		calls.push(new Headers(init?.headers).get("authorization") ?? "");
 		return Response.json({ html_url: issue() }, { status: 201 });
 	}) as typeof fetch;
@@ -735,6 +754,11 @@ test("GitHub App auth failures are 502 and the log does not include the key or t
 		assert.match(text, /"status":401,"error":"jwt_rejected:401"/);
 		assert.match(text, /"status":404,"error":"installation:404"/);
 		assert.match(text, /"status":422,"error":"token:422"/);
+		assert.match(text, /"error":"key_parse","step":"jwt","message":"GithubAuthError key_parse"/);
+		assert.match(text, /"error":"installation:0","step":"installation"/);
+		assert.match(text, /"error":"jwt_rejected:401","step":"jwt"/);
+		assert.match(text, /"error":"installation:404","step":"installation"/);
+		assert.match(text, /"error":"token:422","step":"token"/);
 		assert.equal(text.includes('"error":"fetch"'), false);
 		assert.equal(text.includes(marker), false);
 		assert.equal(text.includes("PRIVATE KEY"), false);
@@ -746,5 +770,169 @@ test("GitHub App auth failures are 502 and the log does not include the key or t
 		assert.equal(JSON.stringify(deniedBody).includes("ghs_"), false);
 	} finally {
 		console.error = orig;
+	}
+});
+
+test("the GitHub mock throws the workerd TypeError unless redirect is follow or manual", async () => {
+	const gh = githubFetch();
+	const url = `https://api.github.com/repos/${repo}/issues`;
+	await assert.rejects(
+		() => gh.fetch(url, { method: "POST", redirect: "error", body: "{}" }),
+		(error: unknown) => {
+			assert.ok(error instanceof TypeError);
+			assert.equal(error.message, WORKERD_REDIRECT);
+			return true;
+		},
+	);
+	await assert.rejects(() => gh.fetch(url, { method: "POST", body: "{}" }), (error: unknown) => error instanceof TypeError);
+	const followed = await gh.fetch(url, { method: "POST", redirect: "follow", body: "{}" });
+	assert.equal(followed.status, 201);
+});
+
+function captureLogs() {
+	const logs: string[] = [];
+	const orig = console.error;
+	console.error = (...args: unknown[]) => { logs.push(args.map(String).join(" ")); };
+	return {
+		logs,
+		restore() { console.error = orig; },
+		text() { return logs.join("\n"); },
+	};
+}
+
+test("a GitHub redirect is a failure for that step", async () => {
+	const logs = captureLogs();
+	try {
+		const keys = appKeys();
+		const installation = appGithub({ installationStatus: 302 });
+		const missed = createApp({
+			FEEDBACK_GITHUB_APP_ID: "4242",
+			FEEDBACK_GITHUB_APP_PRIVATE_KEY: keys.pkcs1,
+			FEEDBACK_REPO: repo,
+		}, { fetch: installation.fetch, githubCache: {} });
+		const missedRes = await post(missed, { message: "hi", source: "cli" });
+		assert.equal(missedRes.status, 502);
+		assert.deepEqual(await missedRes.json(), { error: "unavailable" });
+		assert.equal(installation.calls.some((call) => call.url.includes("/access_tokens")), false);
+		assert.equal(installation.calls.some((call) => call.url.endsWith("/issues")), false);
+
+		const tokenKeys = appKeys();
+		const minted = appGithub({ tokenStatus: 307 });
+		const badToken = createApp({
+			FEEDBACK_GITHUB_APP_ID: "4242",
+			FEEDBACK_GITHUB_APP_PRIVATE_KEY: tokenKeys.pkcs8,
+			FEEDBACK_GITHUB_APP_INSTALLATION_ID: "77",
+			FEEDBACK_REPO: repo,
+		}, { fetch: minted.fetch, githubCache: {} });
+		const badTokenRes = await post(badToken, { message: "hi", source: "cli" });
+		assert.equal(badTokenRes.status, 502);
+		assert.deepEqual(await badTokenRes.json(), { error: "unavailable" });
+		assert.equal(minted.calls.some((call) => call.url.endsWith("/issues")), false);
+
+		const issueRedirect = githubFetch({ html_url: issue() }, 301);
+		const issueApp = createApp(env(), { fetch: issueRedirect.fetch });
+		const issueRes = await post(issueApp, { message: "hi", source: "cli" });
+		assert.equal(issueRes.status, 502);
+		assert.deepEqual(await issueRes.json(), { error: "unavailable" });
+		assert.equal(issueRedirect.calls.length, 1);
+
+		let retries = 0;
+		const retryRedirect = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+			assertWorkerdRedirect(init);
+			retries += 1;
+			if (retries === 1) return Response.json({ message: "missing" }, { status: 422 });
+			return Response.json({ html_url: issue() }, { status: 302 });
+		}) as typeof fetch;
+		const retryApp = createApp(env(), { fetch: retryRedirect });
+		const retryRes = await post(retryApp, { message: "hi", source: "cli" });
+		assert.equal(retryRes.status, 502);
+		assert.equal(retries, 2);
+
+		const text = logs.text();
+		assert.match(text, /"status":302,"error":"installation:302","step":"installation","message":"GithubAuthError installation:302"/);
+		assert.match(text, /"status":307,"error":"token:307","step":"token","message":"GithubAuthError token:307"/);
+		assert.match(text, /"status":301,"error":"http","step":"issue","message":"Error HTTP 301"/);
+		assert.match(text, /"status":302,"error":"http","step":"issue_retry","message":"Error HTTP 302"/);
+		assert.equal(text.includes(issue()), false);
+	} finally {
+		logs.restore();
+	}
+});
+
+test("a thrown GitHub error logs the step and a scrubbed message", async () => {
+	const token = "ghs_" + "supersecretinstallation";
+	const jwt = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI0MjQyIn0.sigvalue1234567890";
+	const pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIEsecretkeymaterial\n-----END RSA PRIVATE KEY-----";
+	const logs = captureLogs();
+	try {
+		const thrown = (step: string) => (async (_input: RequestInfo | URL, init?: RequestInit) => {
+			assertWorkerdRedirect(init);
+			const error = new TypeError(`${WORKERD_REDIRECT} ${step} ${token} Bearer ${jwt} authorization: Bearer ${token} ${pem} ${"x".repeat(400)}`);
+			Object.assign(error, { headers: { authorization: `Bearer ${token}`, key: pem }, key: pem });
+			throw error;
+		}) as typeof fetch;
+
+		const issueApp = createApp(env(), { fetch: thrown("issue") });
+		const issueRes = await post(issueApp, { message: "hi", source: "cli" });
+		assert.equal(issueRes.status, 502);
+		assert.deepEqual(await issueRes.json(), { error: "unavailable" });
+
+		let retries = 0;
+		const retryFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+			assertWorkerdRedirect(init);
+			retries += 1;
+			if (retries === 1) return Response.json({ message: "missing" }, { status: 422 });
+			const error = new Error(`retry ${token} ${jwt} ${pem}`);
+			Object.assign(error, { headers: { authorization: `Bearer ${jwt}` }, key: pem });
+			throw error;
+		}) as typeof fetch;
+		const retryApp = createApp(env(), { fetch: retryFetch });
+		const retryRes = await post(retryApp, { message: "hi", source: "cli" });
+		assert.equal(retryRes.status, 502);
+		assert.equal(retries, 2);
+
+		const keys = appKeys();
+		const installApp = createApp({
+			FEEDBACK_GITHUB_APP_ID: "4242",
+			FEEDBACK_GITHUB_APP_PRIVATE_KEY: keys.pkcs1,
+			FEEDBACK_REPO: repo,
+		}, { fetch: thrown("installation"), githubCache: {} });
+		const installRes = await post(installApp, { message: "hi", source: "cli" });
+		assert.equal(installRes.status, 502);
+
+		const text = logs.text();
+		const lines = text.split("\n").map((line) => JSON.parse(line) as { event: string; step: string; message: string; error: string; status: number });
+		const issueLine = lines.find((line) => line.step === "issue");
+		const retryLine = lines.find((line) => line.step === "issue_retry");
+		const installLine = lines.find((line) => line.step === "installation");
+		assert.ok(issueLine);
+		assert.ok(retryLine);
+		assert.ok(installLine);
+		assert.equal(issueLine.event, "feedback_failed");
+		assert.equal(issueLine.error, "fetch");
+		assert.equal(issueLine.status, 0);
+		assert.match(issueLine.message, /^TypeError /);
+		assert.match(issueLine.message, /manual/);
+		assert.match(retryLine.message, /^Error retry \[redacted\] \[redacted\]/);
+		assert.match(installLine.message, /^TypeError /);
+		assert.equal(installLine.step, "installation");
+		for (const line of [issueLine, retryLine, installLine]) {
+			assert.equal(line.message.includes(token), false);
+			assert.equal(line.message.includes(jwt), false);
+			assert.equal(line.message.includes("eyJ"), false);
+			assert.equal(line.message.includes("MIIE"), false);
+			assert.equal(line.message.includes("PRIVATE KEY"), false);
+			assert.equal(line.message.includes("authorization"), false);
+			const detail = line.message.slice(line.message.indexOf(" ") + 1);
+			assert.ok(detail.length <= 200);
+		}
+		assert.equal(text.includes('"headers"'), false);
+		assert.equal(text.includes(token), false);
+		assert.equal(text.includes(jwt), false);
+		assert.equal(text.includes("eyJ"), false);
+		assert.equal(text.includes("MIIE"), false);
+		assert.equal(text.includes(keys.pkcs1), false);
+	} finally {
+		logs.restore();
 	}
 });

@@ -100,31 +100,70 @@ function concat(parts: Uint8Array[]): Uint8Array {
 	return out;
 }
 
+/** Where a GitHub call failed. Safe to log. Never a header, a key, a JWT, or a token. */
+export type GithubStep = "installation" | "token" | "issue" | "issue_retry" | "jwt";
+
 /**
  * A GitHub App auth failure. `code` is safe to log: `key_parse`, `jwt_rejected:<status>`,
  * `installation:<status>`, or `token:<status>`. It never contains the key, the JWT, or a token.
  * `status` is the HTTP status from GitHub, or 0 when GitHub was not called.
+ * `step` is the call that failed. A 401 is `jwt`, because GitHub rejected the app JWT.
  */
 export class GithubAuthError extends Error {
 	readonly code: string;
 	readonly status: number;
-	constructor(code: string, status = 0) {
+	readonly step: GithubStep;
+	constructor(code: string, status = 0, step: GithubStep = "jwt") {
 		super(code);
 		this.name = "GithubAuthError";
 		this.code = code;
 		this.status = status;
+		this.step = step;
 	}
 }
 
-function authError(code: string, status = 0): GithubAuthError {
-	return new GithubAuthError(code, status);
+/**
+ * A GitHub call threw. `step` says which call. `cause` is the runtime error (for example the
+ * Workers TypeError for a redirect mode other than follow or manual). The message is the cause's
+ * message only, so a log can name that exception without the request headers or the private key.
+ */
+export class GithubCallError extends Error {
+	readonly step: GithubStep;
+	constructor(step: GithubStep, cause: unknown) {
+		const message = cause instanceof Error ? cause.message : "github call failed";
+		super(message, { cause });
+		this.name = "GithubCallError";
+		this.step = step;
+	}
+}
+
+function authError(code: string, status = 0, step: GithubStep = "jwt"): GithubAuthError {
+	return new GithubAuthError(code, status, step);
 }
 
 /** 401 means GitHub rejected the app JWT. Any other status belongs to the call that failed. */
 function httpAuthFailure(step: "installation" | "token", status: number): GithubAuthError {
 	const http = Number.isInteger(status) && status >= 0 && status <= 999 ? status : 0;
-	if (http === 401) return authError(`jwt_rejected:${http}`, http);
-	return authError(`${step}:${http}`, http);
+	if (http === 401) return authError(`jwt_rejected:${http}`, http, "jwt");
+	return authError(`${step}:${http}`, http, step);
+}
+
+/** Workers return a 3xx when redirect is manual. Following it would send the JWT or token to another host. */
+export function isGithubRedirect(status: number): boolean {
+	return Number.isInteger(status) && status >= 300 && status < 400;
+}
+
+/**
+ * GitHub fetch. Workers reject `redirect: "error"` (only follow and manual are allowed), so this
+ * always uses manual and the caller treats a 3xx as a failed step. A throw is wrapped with the step.
+ */
+export async function githubCall(step: GithubStep, call: typeof fetch, url: string, init: RequestInit): Promise<Response> {
+	try {
+		return await call(url, { ...init, redirect: "manual" });
+	} catch (error) {
+		if (error instanceof GithubCallError || error instanceof GithubAuthError) throw error;
+		throw new GithubCallError(step, error);
+	}
 }
 
 /** GitHub's downloaded key is PKCS#1. WebCrypto imports PKCS#8. */
@@ -191,8 +230,13 @@ function githubHeaders(bearer: string): Record<string, string> {
 	};
 }
 
-async function githubJson(call: typeof fetch, url: string, init: RequestInit): Promise<{ ok: boolean; status: number; body: Record<string, unknown> | null }> {
-	const response = await call(url, init);
+async function githubJson(step: "installation" | "token", call: typeof fetch, url: string, init: RequestInit): Promise<{ ok: boolean; status: number; body: Record<string, unknown> | null }> {
+	const response = await githubCall(step, call, url, init);
+	// A redirect is not a result. Drop the body so a Location target is never read as an installation id or a token.
+	if (isGithubRedirect(response.status)) {
+		await response.body?.cancel().catch(() => {});
+		return { ok: false, status: response.status, body: null };
+	}
 	let body: Record<string, unknown> | null = null;
 	try {
 		const parsed = await response.json();
@@ -207,7 +251,7 @@ function installationIdOf(env: ControlEnv): string {
 	const id = (env.FEEDBACK_GITHUB_APP_INSTALLATION_ID ?? "").trim();
 	if (!id) return "";
 	// Not an HTTP failure: GitHub is not called, so the status in the code is 0.
-	if (!APP_ID_RE.test(id)) throw authError("installation:0", 0);
+	if (!APP_ID_RE.test(id)) throw authError("installation:0", 0, "installation");
 	return id;
 }
 
@@ -254,20 +298,20 @@ export async function githubAccessToken(env: ControlEnv, repo: string, deps: Git
 	const headers = githubHeaders(jwt);
 	let installationId = pinned || cache.installationId || "";
 	if (!installationId) {
-		const found = await githubJson(call, `https://api.github.com/repos/${repo}/installation`, {
-			method: "GET", redirect: "error", signal: AbortSignal.timeout(timeout), headers,
+		const found = await githubJson("installation", call, `https://api.github.com/repos/${repo}/installation`, {
+			method: "GET", signal: AbortSignal.timeout(timeout), headers,
 		});
 		const id = found.body?.id;
 		const text = typeof id === "number" && Number.isSafeInteger(id) && id > 0 ? String(id) : "";
-		if (!found.ok || !APP_ID_RE.test(text)) throw httpAuthFailure("installation", found.status);
+		if (isGithubRedirect(found.status) || !found.ok || !APP_ID_RE.test(text)) throw httpAuthFailure("installation", found.status);
 		installationId = text;
 		cache.installationId = text;
 	}
-	const minted = await githubJson(call, `https://api.github.com/app/installations/${installationId}/access_tokens`, {
-		method: "POST", redirect: "error", signal: AbortSignal.timeout(timeout), headers,
+	const minted = await githubJson("token", call, `https://api.github.com/app/installations/${installationId}/access_tokens`, {
+		method: "POST", signal: AbortSignal.timeout(timeout), headers,
 	});
 	const token = typeof minted.body?.token === "string" ? minted.body.token : "";
-	if (!minted.ok || token.length < 8) throw httpAuthFailure("token", minted.status);
+	if (isGithubRedirect(minted.status) || !minted.ok || token.length < 8) throw httpAuthFailure("token", minted.status);
 	let expiresAt = now + FALLBACK_TTL_MS;
 	if (typeof minted.body?.expires_at === "string") {
 		const parsed = Date.parse(minted.body.expires_at);
