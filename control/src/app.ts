@@ -24,7 +24,8 @@ import { renderCloudflareSetup } from "./views/cloudflare-setup.tsx";
 import { renderApp, securityHeaders } from "./views/document.tsx";
 import { renderSignIn } from "./views/sign-in.tsx";
 import { createFeedback, feedbackOn, type FeedbackDeps, type FeedbackResult } from "./feedback.ts";
-import { permissionRetryDue, runInboxStep, viewInboxWizard, type InboxMigration, type InboxWizard } from "./provision/inbox.ts";
+import type { InboxMigration, InboxWizard } from "./provision/inbox.ts";
+import { PERMISSION_WAIT } from "./provision/permission-wait.ts";
 import { hashOwnerToken, readCloudflareInbox } from "./provision/inbox-row.ts";
 import { renderFeedback } from "./views/feedback.tsx";
 
@@ -369,17 +370,18 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 		const inbox = review ? null : await readCloudflareInbox(loaded.options.database, userId);
 		const report = grant ? describeSetupGrant(grant) : null;
 		const recent = recentSignIn(session);
-		let wizard = extra?.wizard ?? resumedWizard ?? (report?.inbox ? viewInboxWizard({ grant, inbox }) : null);
+		const inboxPage = report?.inbox ? await import("./provision/inbox.ts") : null;
+		let wizard = extra?.wizard ?? resumedWizard ?? (inboxPage ? inboxPage.viewInboxWizard({ grant, inbox }) : null);
 		let steppedOwner = extra?.ownerToken || resumedOwner || "";
 		// A permission wait reloads this page. One try per request, and only while the sign-in is still recent.
-		if (!review && !extra?.wizard && !resumedWizard && provision && report?.inbox && loaded.options.cloudflare && permissionRetryDue(inbox) && recent) {
-			const outcome = await runInboxStep({
+		if (!review && !extra?.wizard && !resumedWizard && provision && inboxPage && loaded.options.cloudflare && inboxPage.permissionRetryDue(inbox) && recent) {
+			const outcome = await inboxPage.runInboxStep({
 				database: loaded.options.database,
 				secret: loaded.options.secret,
 				clientId: loaded.options.cloudflare.clientId,
 				clientSecret: loaded.options.cloudflare.clientSecret,
 				userId,
-				fields: viewInboxWizard({ grant, inbox }).fields,
+				fields: inboxPage.viewInboxWizard({ grant, inbox }).fields,
 				script: provision.script,
 				migrations: provision.migrations,
 				fetchMs: provision.fetchMs,
@@ -387,6 +389,16 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 			});
 			wizard = outcome.wizard;
 			if (outcome.ownerToken) steppedOwner = outcome.ownerToken;
+		}
+		// A sign-in older than 10 minutes cannot reload the wait. Try again sends them to sign in, then continues this step.
+		if (wizard && !recent && wizard.steps.some((step) => step.text === PERMISSION_WAIT)) {
+			wizard = {
+				...wizard,
+				refreshSeconds: undefined,
+				steps: wizard.steps.map((step) => step.text === PERMISSION_WAIT
+					? { ...step, control: "retry" as const, button: "Try again" }
+					: step),
+			};
 		}
 		const token = bareOwnerToken(readCookie(request.headers.get("cookie"), CF_OWNER_COOKIE));
 		const cookieOwner = token && inbox?.owner_token_hash && inbox.owner_token_hash === await hashOwnerToken(token) ? token : "";

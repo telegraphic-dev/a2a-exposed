@@ -964,7 +964,23 @@ test("a permission wait does not run again until the pause has passed", async (t
 	assert.equal(creates(), 1);
 });
 
-test("a permission wait does not reload after the sign-in is older than 10 minutes", async (t) => {
+function applyCookies(jar: Map<string, string>, response: Response) {
+	for (const raw of response.headers.getSetCookie()) {
+		const parts = raw.split(";").map((part) => part.trim());
+		const pair = parts[0] ?? "";
+		const eq = pair.indexOf("=");
+		if (eq <= 0) continue;
+		const cleared = parts.some((part) => /^max-age=0$/i.test(part));
+		if (cleared) jar.delete(pair.slice(0, eq));
+		else jar.set(pair.slice(0, eq), pair.slice(eq + 1));
+	}
+}
+
+function cookieHeader(jar: Map<string, string>): string {
+	return [...jar].map(([name, value]) => `${name}=${value}`).join("; ");
+}
+
+test("a stale sign-in during a permission wait offers Try again and then continues", async (t) => {
 	t.after(githubFetch(consentScope("inbox", "workers")));
 	const db = openDb();
 	const app = appFor(db, [0, 0, 0]);
@@ -976,16 +992,49 @@ test("a permission wait does not reload after the sign-in is older than 10 minut
 	await walkWorkers(app, cookie, "name");
 	const creates = () => api.calls.filter((call) => call.method === "POST" && call.url.endsWith("/d1/database")).length;
 	const waiting = await postStep(app, cookie, "action=step&step=database&name=my-agent");
-	assert.match(await waiting.text(), /Waiting for Cloudflare to apply the new permission/);
+	const waitingHtml = await waiting.text();
+	assert.match(waitingHtml, /Waiting for Cloudflare to apply the new permission/);
+	assert.equal(waitingHtml.includes(">Try again<"), false);
 	assert.equal(creates(), 1);
 	const session = await db.prepare("SELECT id, createdAt FROM session").first<{ id: string; createdAt: string | number }>();
 	const staleAt = new Date(new Date(session!.createdAt).getTime() - 11 * 60 * 1000);
 	const stored = typeof session!.createdAt === "number" ? staleAt.getTime() : staleAt.toISOString();
 	await db.prepare("UPDATE session SET createdAt = ? WHERE id = ?").bind(stored, session!.id).run();
-	const stale = await app.request(`${origin}/app/cloudflare`, { headers: { cookie } });
+	const jar = new Map<string, string>([[SESSION_COOKIE, cookie.slice(cookie.indexOf("=") + 1)]]);
+	const stale = await app.request(`${origin}/app/cloudflare`, { headers: { cookie: cookieHeader(jar) } });
 	const html = await stale.text();
 	assert.match(html, /Waiting for Cloudflare to apply the new permission/);
-	assert.equal(html.includes(">Try again<"), false);
+	assert.match(html, />Try again</);
 	assert.equal(stale.headers.get("refresh"), null);
 	assert.equal(creates(), 1);
+	const again = await app.request(`${origin}/app/cloudflare`, {
+		method: "POST",
+		headers: { origin, cookie: cookieHeader(jar), "content-type": "application/x-www-form-urlencoded" },
+		body: "action=step&step=database&name=my-agent",
+	});
+	applyCookies(jar, again);
+	const signInUrl = new URL(again.headers.get("location") ?? "", origin);
+	assert.equal(signInUrl.pathname, "/app/sign-in");
+	assert.equal(signInUrl.searchParams.get("reauth"), "cloudflare");
+	assert.equal(signInUrl.searchParams.get("return"), "/app/cloudflare");
+	const posted = await app.request(`${origin}/app/sign-in`, {
+		method: "POST",
+		headers: { origin, cookie: cookieHeader(jar), "content-type": "application/x-www-form-urlencoded" },
+		body: "provider=github&next=%2Fapp%2Fcloudflare",
+	});
+	applyCookies(jar, posted);
+	const state = new URL(posted.headers.get("location") ?? "", origin).searchParams.get("state") ?? "";
+	const done = await app.request(`${origin}/api/auth/callback/github?code=abc&state=${encodeURIComponent(state)}`, {
+		headers: { cookie: cookieHeader(jar) },
+	});
+	applyCookies(jar, done);
+	const back = new URL(done.headers.get("location") ?? "", origin);
+	assert.equal(back.pathname, "/app/cloudflare");
+	const continued = await app.request(back, { headers: { cookie: cookieHeader(jar) } });
+	const continuedHtml = await continued.text();
+	assert.equal(continued.status, 200);
+	assert.match(continuedHtml, /Waiting for Cloudflare to apply the new permission/);
+	assert.match(continued.headers.get("refresh") ?? "", /^[1-9]\d*$/);
+	assert.equal(continuedHtml.includes(">Try again<"), false);
+	assert.equal(creates(), 2);
 });

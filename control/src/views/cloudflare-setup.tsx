@@ -9,7 +9,8 @@ import {
 	type SetupHost,
 	type SetupReport,
 } from "../auth/cloudflare-setup.ts";
-import { PERMISSION_WAIT, type InboxWizard, type WizardStepView } from "../provision/inbox.ts";
+import type { InboxWizard, WizardStepView } from "../provision/inbox.ts";
+import { PERMISSION_WAIT } from "../provision/permission-wait.ts";
 import { TokenBlock } from "./token-block.tsx";
 
 const ERRORS: Record<string, string> = {

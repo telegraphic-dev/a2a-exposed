@@ -29,6 +29,7 @@ import {
 	type CfFailure,
 	type CfZone,
 } from "./cloudflare-api.ts";
+import { PERMISSION_WAIT } from "./permission-wait.ts";
 import { HOST_RE, LABEL_RE, normalizeHostname, workerNameFromHostname, zoneForHostname } from "./names.ts";
 import { sqlStatements } from "./statements.ts";
 
@@ -45,8 +46,7 @@ export interface InboxMigration {
 }
 
 const WORKING_MS = 2 * 60 * 1000;
-/** Shown while a just-granted permission has not reached D1 or the script upload yet. */
-export const PERMISSION_WAIT = "Waiting for Cloudflare to apply the new permission…";
+export { PERMISSION_WAIT };
 /** Four tries: the first call, then these pauses. About 15 seconds in all. */
 export const PERMISSION_DELAYS_MS = [2_000, 4_000, 8_000];
 export const PERMISSION_TRIES = 4;
