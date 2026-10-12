@@ -20,7 +20,7 @@ import {
 	TUNNEL_WRITE,
 	USER_DETAILS_READ,
 	WORKERS_ROUTES_WRITE,
-	WORKERS_WRITE,
+	WORKERS_SCRIPTS_EDIT,
 	ZONE_READ,
 	cloudflareAuthorizeUrl,
 	consentScope,
@@ -33,10 +33,25 @@ import { openDb } from "./sql.ts";
 
 const secret = "test-secret-test-secret-test-secret";
 const origin = "https://control.example.com";
+/** Ids the staging OAuth client allows. offline_access is implicit and still requested. */
+const CLIENT_SCOPES = new Set([
+	"d1.write",
+	"workers-scripts.edit",
+	"workers-routes.write",
+	"dns.write",
+	"zone.read",
+	"zone-access.read",
+	"zone-access.write",
+	"argotunnel.read",
+	"argotunnel.write",
+	"account-settings.read",
+	"user-details.read",
+	"offline_access",
+]);
 const INBOX_WORKERS = [
 	USER_DETAILS_READ,
 	"account-settings.read",
-	WORKERS_WRITE,
+	WORKERS_SCRIPTS_EDIT,
 	D1_WRITE,
 	OFFLINE_ACCESS,
 ];
@@ -57,9 +72,14 @@ test("each setup choice requests only the scopes that choice needs", () => {
 			assert.equal(list.includes("access-app.write"), false);
 			assert.equal(list.includes("workers-platform.write"), false);
 			assert.equal(list.includes("workers-scripts.write"), false);
+			assert.equal(list.includes("workers:write"), false);
+			assert.equal(list.includes("zone-access.read"), false);
+			assert.equal(list.includes("zone-access.write"), false);
+			assert.equal(list.includes("argotunnel.read"), false);
 			assert.equal(list.includes("account:read"), false);
 			assert.equal(list.includes("user:read"), false);
-			assert.equal(list.includes(WORKERS_WRITE), true);
+			assert.equal(list.includes(WORKERS_SCRIPTS_EDIT), true);
+			for (const id of list) assert.equal(CLIENT_SCOPES.has(id), true, id);
 			assert.equal(list.includes(ZONE_READ), host === "zone");
 			assert.equal(list.includes(DNS_WRITE), host === "zone");
 			assert.equal(list.includes(WORKERS_ROUTES_WRITE), host === "zone");
@@ -94,7 +114,7 @@ test("a declined optional scope names the setup it blocks", () => {
 	const bothZone = describeSetupGrant({
 		choice: "both",
 		host: "zone",
-		granted_scope: `${USER_DETAILS_READ} account-settings.read ${WORKERS_WRITE}`,
+		granted_scope: `${USER_DETAILS_READ} account-settings.read ${WORKERS_SCRIPTS_EDIT}`,
 		refresh_enc: null,
 	});
 	assert.ok(bothZone);
@@ -106,7 +126,7 @@ test("a declined optional scope names the setup it blocks", () => {
 	assert.match(bothZone.blocked.join(" "), /blocks the façade/);
 	assert.match(bothZone.blocked.join(" "), /inbox does not need a tunnel/);
 	assert.match(bothZone.blocked.join(" "), /Without a refresh token/);
-	assert.equal(bothZone.lines.find((line) => line.name === "Workers Edit")?.state, "granted");
+	assert.equal(bothZone.lines.find((line) => line.name === "Workers Scripts Edit")?.state, "granted");
 	assert.equal(bothZone.lines.find((line) => line.name === "D1 Write")?.state, "declined");
 
 	const workers = describeSetupGrant({
@@ -228,7 +248,7 @@ test("the choice page explains a workers.dev inbox, then asks Cloudflare only fo
 	assert.match(reviewHtml, /give your agent a public A2A address/);
 	assert.match(reviewHtml, /my-agent\.yourname\.workers\.dev/);
 	assert.match(reviewHtml, /D1 Write/);
-	assert.match(reviewHtml, /Workers Edit/);
+	assert.match(reviewHtml, /Workers Scripts Edit/);
 	assert.match(reviewHtml, /Continue to Cloudflare/);
 	assert.equal(reviewHtml.includes("Zone Read"), false);
 	assert.equal(reviewHtml.includes("DNS Write"), false);
