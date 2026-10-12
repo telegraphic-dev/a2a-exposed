@@ -498,14 +498,18 @@ function jwtPayload(jwt: string, publicKey: ReturnType<typeof generateKeyPairSyn
 	return JSON.parse(Buffer.from(payload, "base64url").toString()) as { iss: string; iat: number; exp: number };
 }
 
-function appGithub(options: { expiresAt?: string; tokenStatus?: number } = {}) {
+function appGithub(options: { expiresAt?: string; tokenStatus?: number; installationStatus?: number } = {}) {
 	const calls: { url: string; method: string; authorization: string; body: string }[] = [];
 	let minted = 0;
 	const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 		const url = String(input);
 		const headers = new Headers(init?.headers);
 		calls.push({ url, method: init?.method ?? "GET", authorization: headers.get("authorization") ?? "", body: init?.body ? String(init.body) : "" });
-		if (url.endsWith("/installation")) return Response.json({ id: 424242 });
+		if (url.endsWith("/installation")) {
+			const status = options.installationStatus ?? 200;
+			if (status !== 200) return Response.json({ message: "nope" }, { status });
+			return Response.json({ id: 424242 });
+		}
 		if (url.includes("/access_tokens")) {
 			minted += 1;
 			if ((options.tokenStatus ?? 201) !== 201) return Response.json({ message: "nope", token: "ghs_shouldnotbeloggedvalue" }, { status: options.tokenStatus });
@@ -614,10 +618,43 @@ test("a set app id with a malformed key is 502 and does not use the personal acc
 			assert.equal(page.status, 200, JSON.stringify(partial));
 		}
 		assert.equal(calls.length, 0);
-		assert.equal(logs.join("\n").includes(ghToken), false);
-		assert.equal(logs.join("\n").includes("not-a-pem"), false);
+		const text = logs.join("\n");
+		assert.match(text, /"error":"key_parse"/);
+		assert.equal(text.includes('"error":"fetch"'), false);
+		assert.equal(text.includes(ghToken), false);
+		assert.equal(text.includes("not-a-pem"), false);
 	} finally {
 		console.error = orig;
+	}
+});
+
+test("a PEM with heredoc markers, CRLF, or literal newlines still signs", async () => {
+	const keys = appKeys();
+	const pkcs1 = keys.pkcs1.trim();
+	const pkcs8 = keys.pkcs8.trim();
+	const wrapped = [
+		`<<-EOT\n${pkcs1}\nEOT`,
+		`\r\n${pkcs1.replace(/\n/g, "\r\n")}\r\n`,
+		`<<-EOT\\n${pkcs1.replace(/\n/g, "\\n")}\\nEOT`,
+		`  note\n<<-EOT\r\n${pkcs1.replace(/\n/g, "\r\n")}\r\nEOT\n`,
+		`<<-EOT\\n${pkcs8.replace(/\n/g, "\\n")}\\nEOT`,
+	];
+	for (const privateKey of wrapped) {
+		const gh = appGithub();
+		const app = createApp({
+			FEEDBACK_GITHUB_APP_ID: "4242",
+			FEEDBACK_GITHUB_APP_PRIVATE_KEY: privateKey,
+			FEEDBACK_GITHUB_APP_INSTALLATION_ID: "77",
+			FEEDBACK_REPO: repo,
+		}, { fetch: gh.fetch, now: () => 1_700_000_000_000, githubCache: {} });
+		const res = await post(app, { message: "wrapped", source: "cli" });
+		assert.equal(res.status, 200, JSON.stringify(privateKey.slice(0, 24)));
+		const tokenCall = gh.calls.find((call) => call.url.includes("/access_tokens"));
+		assert.ok(tokenCall);
+		const payload = jwtPayload(tokenCall.authorization.slice("Bearer ".length), keys.publicKey);
+		assert.equal(payload.iss, "4242");
+		assert.equal(gh.calls.some((call) => call.url.endsWith("/installation")), false);
+		assert.equal(JSON.stringify(gh.calls).includes("<<-EOT"), false);
 	}
 });
 
@@ -642,7 +679,9 @@ test("GitHub App auth failures are 502 and the log does not include the key or t
 			FEEDBACK_GITHUB_APP_INSTALLATION_ID: "not-an-id",
 			FEEDBACK_REPO: repo,
 		}, { fetch: (async () => { throw new Error("should not fetch"); }) as typeof fetch });
-		assert.equal((await post(badId, { message: "hi", source: "cli" })).status, 502);
+		const badIdRes = await post(badId, { message: "hi", source: "cli" });
+		assert.equal(badIdRes.status, 502);
+		assert.deepEqual(await badIdRes.json(), { error: "unavailable" });
 
 		const keys = appKeys();
 		const gh = appGithub({ tokenStatus: 401 });
@@ -655,13 +694,55 @@ test("GitHub App auth failures are 502 and the log does not include the key or t
 		const deniedBody = await res.json();
 		assert.equal(res.status, 502);
 		assert.deepEqual(deniedBody, { error: "unavailable" });
+
+		const missedKeys = appKeys();
+		const missed = appGithub({ installationStatus: 404 });
+		const missingInstall = createApp({
+			FEEDBACK_GITHUB_APP_ID: "4242",
+			FEEDBACK_GITHUB_APP_PRIVATE_KEY: missedKeys.pkcs1,
+			FEEDBACK_REPO: repo,
+		}, { fetch: missed.fetch });
+		const missingRes = await post(missingInstall, { message: "hi", source: "cli" });
+		assert.equal(missingRes.status, 502);
+		assert.deepEqual(await missingRes.json(), { error: "unavailable" });
+		assert.equal(missed.calls.some((call) => call.url.includes("/access_tokens")), false);
+
+		const rejectedJwt = appGithub({ installationStatus: 401 });
+		const badJwt = createApp({
+			FEEDBACK_GITHUB_APP_ID: "4242",
+			FEEDBACK_GITHUB_APP_PRIVATE_KEY: keys.pkcs8,
+			FEEDBACK_REPO: repo,
+		}, { fetch: rejectedJwt.fetch });
+		const badJwtRes = await post(badJwt, { message: "hi", source: "cli" });
+		assert.equal(badJwtRes.status, 502);
+		assert.deepEqual(await badJwtRes.json(), { error: "unavailable" });
+
+		const minted = appGithub({ tokenStatus: 422 });
+		const badToken = createApp({
+			FEEDBACK_GITHUB_APP_ID: "4242",
+			FEEDBACK_GITHUB_APP_PRIVATE_KEY: keys.pkcs8,
+			FEEDBACK_GITHUB_APP_INSTALLATION_ID: "77",
+			FEEDBACK_REPO: repo,
+		}, { fetch: minted.fetch });
+		const badTokenRes = await post(badToken, { message: "hi", source: "cli" });
+		assert.equal(badTokenRes.status, 502);
+		assert.deepEqual(await badTokenRes.json(), { error: "unavailable" });
+		assert.equal(minted.calls.some((call) => call.url.endsWith("/installation")), false);
+
 		const text = logs.join("\n");
-		assert.match(text, /"error":"fetch"/);
+		assert.match(text, /"status":0,"error":"key_parse"/);
+		assert.match(text, /"status":0,"error":"installation:0"/);
+		assert.match(text, /"status":401,"error":"jwt_rejected:401"/);
+		assert.match(text, /"status":404,"error":"installation:404"/);
+		assert.match(text, /"status":422,"error":"token:422"/);
+		assert.equal(text.includes('"error":"fetch"'), false);
 		assert.equal(text.includes(marker), false);
 		assert.equal(text.includes("PRIVATE KEY"), false);
 		assert.equal(text.includes("ghs_shouldnotbeloggedvalue"), false);
 		assert.equal(text.includes("eyJ"), false);
 		assert.equal(text.includes(keys.pkcs1), false);
+		assert.equal(text.includes(keys.pkcs8), false);
+		assert.equal(text.includes(missedKeys.pkcs1), false);
 		assert.equal(JSON.stringify(deniedBody).includes("ghs_"), false);
 	} finally {
 		console.error = orig;

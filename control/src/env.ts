@@ -42,7 +42,7 @@ export interface ControlEnv extends PlaneEnv {
 	FEEDBACK_GITHUB_APP_ID?: string;
 	/**
 	 * PEM private key for that app. A secret, not a var. PKCS#1 (`BEGIN RSA PRIVATE KEY`) or PKCS#8 (`BEGIN PRIVATE KEY`).
-	 * A one-line value may encode newlines as `\n`.
+	 * A one-line value may encode newlines as `\n`. Text outside the BEGIN and END lines is ignored.
 	 */
 	FEEDBACK_GITHUB_APP_PRIVATE_KEY?: string;
 	/** Installation id on FEEDBACK_REPO. Unset: look it up with the app JWT. A plain var. */

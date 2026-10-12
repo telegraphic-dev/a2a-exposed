@@ -9,7 +9,7 @@ import { connectingIp, verifyTurnstile, type TurnstileFailure } from "./auth/tur
 import { sameOrigin } from "./auth/origin.ts";
 import type { Sql } from "./auth/invites.ts";
 import type { ControlEnv } from "./env.ts";
-import { feedbackAppBroken, feedbackAppReady, feedbackPat, githubAccessToken, type GithubTokenCache } from "./feedback-app.ts";
+import { feedbackAppBroken, feedbackAppReady, feedbackPat, GithubAuthError, githubAccessToken, type GithubTokenCache } from "./feedback-app.ts";
 
 export const MESSAGE_MAX = 4000;
 export const PER_HOUR = 5;
@@ -320,10 +320,20 @@ function githubIssueUrl(repo: string, value: unknown): string {
 	}
 }
 
+const AUTH_CODE = /^(?:key_parse|jwt_rejected:\d{1,3}|installation:\d{1,3}|token:\d{1,3})$/;
+
 function githubFailure(error: unknown, source: string): FeedbackResult {
 	const name = error instanceof Error ? error.name : "";
 	const timeoutHit = name === "TimeoutError" || name === "AbortError";
-	console.error(JSON.stringify({ event: "feedback_failed", source, status: 0, error: timeoutHit ? "timeout" : "fetch" }));
+	let status = 0;
+	let reason = "fetch";
+	if (timeoutHit) {
+		reason = "timeout";
+	} else if (error instanceof GithubAuthError && AUTH_CODE.test(error.code)) {
+		status = Number.isInteger(error.status) && error.status >= 0 && error.status <= 999 ? error.status : 0;
+		reason = error.code;
+	}
+	console.error(JSON.stringify({ event: "feedback_failed", source, status, error: reason }));
 	return jsonResult(timeoutHit ? 504 : 502, { error: timeoutHit ? "timeout" : "unavailable" });
 }
 
