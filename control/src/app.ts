@@ -4,7 +4,7 @@ import { connectingIp, verifyTurnstile } from "./auth/turnstile.ts";
 import { signInReturnPath } from "./auth/return.ts";
 import { readCloudflareGrant } from "./auth/cloudflare-grant.ts";
 import { CLOUDFLARE_REAUTH_NOTICE, cloudflareIsLinked, finishCloudflareLink, handleCloudflareAccount, handleCloudflareSetup, resumeCloudflare } from "./auth/cloudflare-link.ts";
-import { describeSetupGrant, inboxCanProvision } from "./auth/cloudflare-setup.ts";
+import { describeSetupGrant } from "./auth/cloudflare-setup.ts";
 import { enabledProviderOrigins, handleSignIn, PROVIDER_ORIGINS } from "./auth/sign-in.ts";
 import { loadAuth } from "./auth/instance.ts";
 import { signupClosedText, type SignupAllowlist } from "./auth/allowlist.ts";
@@ -23,7 +23,7 @@ import { renderCloudflareSetup } from "./views/cloudflare-setup.tsx";
 import { renderApp, securityHeaders } from "./views/document.tsx";
 import { renderSignIn } from "./views/sign-in.tsx";
 import { createFeedback, feedbackOn, type FeedbackDeps, type FeedbackResult } from "./feedback.ts";
-import { hashOwnerToken, readCloudflareInbox, type InboxMigration, type ProvisionFields } from "./provision/inbox.ts";
+import { hashOwnerToken, readCloudflareInbox, viewInboxWizard, type InboxMigration, type InboxWizard } from "./provision/inbox.ts";
 import { renderFeedback } from "./views/feedback.tsx";
 
 /**
@@ -339,7 +339,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 			fetchMs: deps.cloudflareFetchMs,
 		};
 	}
-	async function cloudflareSetupPage(c: Context<{ Bindings: ControlEnv }>, review?: { choice: "inbox" | "facade" | "both"; host: "workers" | "zone" }, extra?: { error?: string; accounts?: { id: string; name: string }[]; zones?: { name: string }[]; fields?: ProvisionFields }) {
+	async function cloudflareSetupPage(c: Context<{ Bindings: ControlEnv }>, review?: { choice: "inbox" | "facade" | "both"; host: "workers" | "zone" }, extra?: { wizard?: InboxWizard; ownerToken?: string }) {
 		const request = c.req.raw;
 		const loaded = await loadAuth(env, request, deps);
 		if (!loaded) return c.json({ error: "not_found" }, 404);
@@ -348,35 +348,37 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 		const userId = session?.user?.id ?? "";
 		if (!userId) return redirectTo(new URL("/app", request.url).href);
 		let clearResume = false;
-		let resumedForm: Extract<NonNullable<Awaited<ReturnType<typeof resumeCloudflare>>>, { kind: "provision-form" }> | null = null;
+		let resumedWizard: InboxWizard | null = null;
+		let resumedOwner = "";
 		if (!review) {
 			const resumed = await resumeCloudflare(request, loaded.auth, loaded.options, await provisionDeps(request));
 			if (resumed?.kind === "response") return resumed.response;
 			if (resumed?.kind === "clear") clearResume = true;
-			if (resumed?.kind === "provision-form") {
+			if (resumed?.kind === "wizard") {
 				c.header("set-cookie", resumed.setCookie, { append: true });
-				resumedForm = resumed;
+				resumedWizard = resumed.wizard;
+				resumedOwner = resumed.ownerToken ?? "";
 			}
 		}
 		const url = new URL(request.url);
 		const grant = review ? null : await readCloudflareGrant(loaded.options.database, userId);
 		const inbox = review ? null : await readCloudflareInbox(loaded.options.database, userId);
+		const report = grant ? describeSetupGrant(grant) : null;
+		const wizard = extra?.wizard ?? resumedWizard ?? (report?.inbox ? viewInboxWizard({ grant, inbox }) : null);
 		const token = bareOwnerToken(readCookie(request.headers.get("cookie"), CF_OWNER_COOKIE));
-		const ownerToken = token && inbox?.owner_token_hash && inbox.owner_token_hash === await hashOwnerToken(token) ? token : "";
+		const cookieOwner = token && inbox?.owner_token_hash && inbox.owner_token_hash === await hashOwnerToken(token) ? token : "";
 		if (token) c.header("set-cookie", hostCookie(CF_OWNER_COOKIE, "", 0), { append: true });
+		const ownerToken = extra?.ownerToken || resumedOwner || wizard?.ownerToken || cookieOwner;
 		const body = renderCloudflareSetup({
 			brand: brandConfig(env).name,
-			error: resumedForm?.error ?? extra?.error ?? url.searchParams.get("error") ?? undefined,
+			error: url.searchParams.get("error") ?? undefined,
 			linked: await cloudflareIsLinked(loaded.options.database, userId),
 			connected: url.searchParams.get("connected") === "1",
-			report: grant ? describeSetupGrant(grant) : null,
+			report,
 			review,
 			createdUrl: inbox?.status === "ready" ? inbox.public_url : null,
 			ownerToken: ownerToken || undefined,
-			canCreate: Boolean(grant && inboxCanProvision(grant) && inbox?.status !== "ready"),
-			accounts: resumedForm?.accounts ?? extra?.accounts,
-			zones: resumedForm?.zones ?? extra?.zones,
-			fields: resumedForm?.fields ?? extra?.fields ?? (inbox && inbox.status !== "ready" ? { name: inbox.worker_name, hostname: inbox.hostname ?? "", subdomain: "", account: "" } : null),
+			wizard,
 		});
 		if (clearResume) c.header("set-cookie", hostCookie(CLOUDFLARE_RESUME_COOKIE, "", 0), { append: true });
 		return c.html(renderApp(env, body, "Set me up on Cloudflare", feedbackLink), 200, pageHeaders(false, null, [], Boolean(ownerToken), accountLinkOrigins(loaded.options)));
@@ -387,7 +389,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 		if (!loaded) return c.json({ error: "not_found" }, 404);
 		const result = await handleCloudflareSetup(request, loaded.auth, loaded.options, await provisionDeps(request));
 		if (result.kind === "review") return cloudflareSetupPage(c, result);
-		if (result.kind === "provision-form") return cloudflareSetupPage(c, undefined, result);
+		if (result.kind === "wizard") return cloudflareSetupPage(c, undefined, result);
 		return result.response;
 	}
 	app.post("/app/sign-out", async (c) => {

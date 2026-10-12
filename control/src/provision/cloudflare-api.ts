@@ -4,10 +4,20 @@
 
 const API = "https://api.cloudflare.com/client/v4";
 
+export interface CfApiError {
+	code: number | null;
+	message: string;
+}
+
 export interface CfFailure {
 	ok: false;
 	status: number;
+	/** First numeric code in `errors`, or null. */
 	code: number | null;
+	/** Sanitised Cloudflare `errors` array. Empty when the call throws first. */
+	errors: CfApiError[];
+	/** Set when fetch throws before a response. The message is sanitised. */
+	thrown?: { name: string; message: string };
 }
 
 export interface CfSuccess {
@@ -18,12 +28,106 @@ export interface CfSuccess {
 
 export type CfResponse = CfSuccess | CfFailure;
 
-function errorCode(body: unknown): number | null {
-	if (!body || typeof body !== "object") return null;
+/** Query names whose values are credentials. `authorization server` has neither, so it stays. */
+const SECRET_PARAM = /\b(?:id_token|access_token|refresh_token|client_secret|authorization|code|token)\s*(?:=|%3d|:)\s*\S/i;
+const JWT_SHAPED = /\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/;
+
+/** A short Cloudflare message with tokens, bearer values, and JWTs removed. */
+export function sanitizeCloudflareText(value: string): string {
+	const cleaned = value.replace(/[\u0000-\u001f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 300);
+	if (!cleaned) return "";
+	if (SECRET_PARAM.test(cleaned) || /bearer\s+\S/i.test(cleaned) || JWT_SHAPED.test(cleaned)) return "redacted";
+	return cleaned;
+}
+
+/**
+ * Workers throw `TypeError: Invalid header value` before any HTTP response when the
+ * bearer token contains CR, LF, or NUL. Those bytes are not part of the token.
+ */
+export function headerSafeToken(token: string): string {
+	return token.replace(/[\r\n\u0000]/g, "").trim();
+}
+
+function numericCode(value: unknown): number | null {
+	return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function errorText(item: object): string {
+	const record = item as { message?: unknown; error_chain?: unknown };
+	const parts: string[] = [];
+	if (typeof record.message === "string") parts.push(record.message);
+	if (Array.isArray(record.error_chain)) {
+		for (const link of record.error_chain) {
+			if (!link || typeof link !== "object") continue;
+			const message = (link as { message?: unknown }).message;
+			if (typeof message === "string") parts.push(message);
+		}
+	}
+	return sanitizeCloudflareText(parts.join(" — "));
+}
+
+export function cloudflareErrors(body: unknown): CfApiError[] {
+	if (!body || typeof body !== "object") return [];
 	const errors = (body as { errors?: unknown }).errors;
-	const first = Array.isArray(errors) ? errors[0] : null;
-	const code = first && typeof first === "object" ? (first as { code?: unknown }).code : null;
-	return typeof code === "number" ? code : null;
+	if (!Array.isArray(errors)) return [];
+	const out: CfApiError[] = [];
+	for (const item of errors.slice(0, 8)) {
+		if (!item || typeof item !== "object") continue;
+		out.push({ code: numericCode((item as { code?: unknown }).code), message: errorText(item) });
+	}
+	return out;
+}
+
+function failureFrom(status: number, body: unknown, thrown?: { name: string; message: string }): CfFailure {
+	const errors = cloudflareErrors(body);
+	return { ok: false, status, code: errors.find((error) => error.code != null)?.code ?? null, errors, ...(thrown ? { thrown } : {}) };
+}
+
+function thrownFailure(error: unknown): CfFailure {
+	const name = error instanceof Error && error.name ? error.name.slice(0, 80) : "Error";
+	const message = sanitizeCloudflareText(error instanceof Error ? error.message : "");
+	return { ok: false, status: 0, code: null, errors: [], thrown: { name, message } };
+}
+
+/** True when this response means the account has no workers.dev name yet. */
+export function subdomainMissing(failure: CfFailure): boolean {
+	if (failure.status === 404) return true;
+	return failure.errors.some((error) =>
+		error.code === 10063
+		|| error.code === 10007
+		|| (/workers\.dev/i.test(error.message) && /subdomain|register|not found|does not have/i.test(error.message)));
+}
+
+/** Plain words for the page and for a stored note. No tokens. */
+export function describeCfFailure(failure: CfFailure): string {
+	if (failure.thrown) {
+		const detail = failure.thrown.message && failure.thrown.message !== "redacted"
+			? `${failure.thrown.name}: ${failure.thrown.message}`
+			: failure.thrown.name;
+		return `The request stops before Cloudflare answers (${detail}).`;
+	}
+	const parts: string[] = [];
+	for (const error of failure.errors) {
+		if (error.message === "redacted") {
+			parts.push(error.code != null
+				? `code ${error.code}. Cloudflare's message is hidden because it contains a secret.`
+				: "Cloudflare's message is hidden because it contains a secret.");
+		} else if (error.code != null && error.message) parts.push(`code ${error.code}: ${error.message}`);
+		else if (error.code != null) parts.push(`code ${error.code}`);
+		else if (error.message) parts.push(error.message);
+	}
+	if (parts.length) return `Cloudflare says ${parts.join("; ")}.`;
+	if (failure.status) return `Cloudflare answers HTTP ${failure.status}.`;
+	return "The request stops before Cloudflare answers.";
+}
+
+/**
+ * Workers throw `TypeError: Illegal invocation` before any response when `fetch`
+ * is called as a bare function (`const send = fetch; send(url)`). The receiver
+ * has to be the global object, which is how a direct `fetch()` call behaves.
+ */
+export function callFetch(fetchImpl: typeof fetch, url: string, init?: RequestInit): Promise<Response> {
+	return fetchImpl.call(globalThis, url, init);
 }
 
 /** One Cloudflare API call. A redirect is a failure: the token must not follow to another host. */
@@ -36,43 +140,46 @@ export async function cfCall(input: {
 	raw?: { body: BodyInit; contentType: string };
 	fetchMs: number;
 }): Promise<CfResponse> {
-	const headers: Record<string, string> = {
-		authorization: `Bearer ${input.token}`,
-		accept: "application/json",
-	};
+	const method = input.method.toUpperCase();
 	let body: BodyInit | undefined;
+	const headers = new Headers({ accept: "application/json" });
+	try {
+		headers.set("authorization", `Bearer ${headerSafeToken(input.token)}`);
+	} catch (error) {
+		return thrownFailure(error);
+	}
 	if (input.raw) {
-		headers["content-type"] = input.raw.contentType;
+		headers.set("content-type", input.raw.contentType);
 		body = input.raw.body;
 	} else if (input.json !== undefined) {
-		headers["content-type"] = "application/json";
+		headers.set("content-type", "application/json");
 		body = JSON.stringify(input.json);
 	}
-	const timeout = AbortSignal.timeout(input.fetchMs);
+	// A GET or HEAD with a body throws in Workers before any response. Omit the field.
+	const init: RequestInit = {
+		method,
+		headers,
+		redirect: "manual",
+		signal: AbortSignal.timeout(input.fetchMs),
+	};
+	if (body !== undefined && method !== "GET" && method !== "HEAD") init.body = body;
 	let response: Response;
 	try {
-		response = await input.fetchImpl(`${API}${input.path}`, {
-			method: input.method,
-			headers,
-			body,
-			redirect: "manual",
-			signal: timeout,
-		});
-	} catch {
-		return { ok: false, status: 0, code: null };
+		response = await callFetch(input.fetchImpl, `${API}${input.path}`, init);
+	} catch (error) {
+		return thrownFailure(error);
 	}
 	if (response.status >= 300 && response.status < 400) {
 		void response.body?.cancel().catch(() => {});
-		return { ok: false, status: response.status, code: null };
+		return failureFrom(response.status, null);
 	}
 	const text = await response.text().catch(() => "");
 	let parsed: unknown = null;
 	if (text) {
 		try { parsed = JSON.parse(text); } catch { parsed = null; }
 	}
-	const code = errorCode(parsed);
 	const success = parsed && typeof parsed === "object" ? (parsed as { success?: unknown }).success : undefined;
-	if (!response.ok || success === false) return { ok: false, status: response.status, code };
+	if (!response.ok || success === false) return failureFrom(response.status, parsed);
 	return { ok: true, status: response.status, body: parsed };
 }
 
@@ -161,7 +268,7 @@ export async function createD1(input: { fetchImpl: typeof fetch; token: string; 
 	if (!read.ok) return read;
 	const row = resultObject(read.body);
 	const uuid = typeof row?.uuid === "string" ? row.uuid : "";
-	if (!ID_RE.test(uuid)) return { ok: false, status: read.status, code: null };
+	if (!ID_RE.test(uuid)) return failureFrom(read.status, null);
 	return { uuid, name: input.name };
 }
 

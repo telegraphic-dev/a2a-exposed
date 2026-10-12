@@ -1,4 +1,4 @@
-import { CF_OWNER_COOKIE, CLOUDFLARE_RESUME_COOKIE, hostCookie, readCookie } from "./cookies.ts";
+import { CLOUDFLARE_RESUME_COOKIE, hostCookie, readCookie } from "./cookies.ts";
 import { deleteCloudflareGrant, saveCloudflareGrant } from "./cloudflare-grant.ts";
 import { mapCloudflareUser } from "./cloudflare-user.ts";
 import {
@@ -13,7 +13,7 @@ import type { Sql } from "./invites.ts";
 import type { AuthOptions } from "./options.ts";
 import { recentSignIn } from "./recent.ts";
 import { sameOrigin } from "./origin.ts";
-import { fieldsFromForm, provisionInbox, resumeFields, type InboxMigration, type ProvisionFields } from "../provision/inbox.ts";
+import { fieldsFromForm, resumeFields, runInboxStep, type InboxMigration, type InboxWizard, type ProvisionFields } from "../provision/inbox.ts";
 
 export const CLOUDFLARE_UNLINKED = "Sign in another way first, then connect Cloudflare from your account.";
 /** Shown on the sign-in page when connect, disconnect, or consent needs a fresh sign-in. */
@@ -281,7 +281,7 @@ function resumeOf(value: string): CloudflareResume | null {
 		return { userId, action: "finish", state, code };
 	}
 	if (saved.action === "provision") {
-		const fields = saved.fields && typeof saved.fields === "object" ? resumeFields(saved.fields as { name?: unknown; hostname?: unknown; subdomain?: unknown; account?: unknown }) : null;
+		const fields = saved.fields && typeof saved.fields === "object" ? resumeFields(saved.fields as { name?: unknown; hostname?: unknown; subdomain?: unknown; account?: unknown; step?: unknown }) : null;
 		if (!fields) return null;
 		return { userId, action: "provision", fields };
 	}
@@ -291,13 +291,13 @@ function resumeOf(value: string): CloudflareResume | null {
 export type CloudflareResumeResult =
 	| { kind: "response"; response: Response }
 	| { kind: "clear" }
-	| { kind: "provision-form"; error: string; accounts?: { id: string; name: string }[]; zones?: { name: string }[]; fields: ProvisionFields; setCookie: string };
+	| { kind: "wizard"; wizard: InboxWizard; ownerToken?: string; setCookie: string };
 
 /**
  * Finishes a connect, disconnect, or consent the user already asked for, after a fresh sign-in.
  * No resume cookie returns null. A signed-out visit leaves the row in place.
  * A mismatch or an expired row clears the cookie and does not act.
- * A create that still needs an account or a domain returns that form for the setup page to render.
+ * A create resumes that one step and returns the wizard for the setup page to render.
  */
 export async function resumeCloudflare(request: Request, auth: SessionAuth, options: AuthOptions, provision?: CloudflareProvisionDeps | null, deferProvision = false): Promise<CloudflareResumeResult | null> {
 	if (!options.cloudflare) return null;
@@ -336,7 +336,7 @@ export async function resumeCloudflare(request: Request, auth: SessionAuth, opti
 		if (!provision) return { kind: "clear" };
 		const done = await runCloudflareProvision(request, options, userId, resume.fields, provision);
 		if (done.kind === "response") return { kind: "response", response: withCookie(done.response, clear) };
-		return { kind: "provision-form", error: done.error, accounts: done.accounts, zones: done.zones, fields: done.fields, setCookie: clear };
+		return { kind: "wizard", wizard: done.wizard, ownerToken: done.ownerToken, setCookie: clear };
 	}
 	const url = new URL("/api/auth/callback/cloudflare", request.url);
 	url.searchParams.set("code", resume.code);
@@ -401,12 +401,12 @@ async function startCloudflareOAuth(request: Request, options: AuthOptions, user
 export type CloudflareSetupPost =
 	| { kind: "response"; response: Response }
 	| { kind: "review"; choice: SetupChoice; host: SetupHost }
-	| { kind: "provision-form"; error: string; accounts?: { id: string; name: string }[]; zones?: { name: string }[]; fields: ProvisionFields };
+	| { kind: "wizard"; wizard: InboxWizard; ownerToken?: string };
 
 
 async function runCloudflareProvision(request: Request, options: AuthOptions, userId: string, fields: ProvisionFields, deps: CloudflareProvisionDeps): Promise<Exclude<CloudflareSetupPost, { kind: "review" }>> {
 	if (!options.cloudflare) return { kind: "response", response: redirect(setupPage(request)) };
-	const outcome = await provisionInbox({
+	const outcome = await runInboxStep({
 		database: options.database,
 		secret: options.secret,
 		clientId: options.cloudflare.clientId,
@@ -417,14 +417,7 @@ async function runCloudflareProvision(request: Request, options: AuthOptions, us
 		migrations: deps.migrations,
 		fetchMs: deps.fetchMs,
 	});
-	if (outcome.ok) {
-		const cookies = outcome.ownerToken ? [hostCookie(CF_OWNER_COOKIE, outcome.ownerToken, 120)] : [];
-		return { kind: "response", response: redirect(setupPage(request), cookies) };
-	}
-	if (outcome.error === "account" || outcome.error === "zone" || outcome.error === "need_subdomain") {
-		return { kind: "provision-form", error: outcome.error, accounts: outcome.accounts, zones: outcome.zones, fields };
-	}
-	return { kind: "response", response: redirect(setupPage(request, outcome.error)) };
+	return { kind: "wizard", wizard: outcome.wizard, ownerToken: outcome.ownerToken };
 }
 
 /** Choice page post: explain the permissions, or start consent for that choice only. */
@@ -446,7 +439,7 @@ export async function handleCloudflareSetup(request: Request, auth: SessionAuth,
 		if (!choice || !host) return { kind: "response", response: redirect(setupPage(request, "choice")) };
 		return { kind: "review", choice, host };
 	}
-	if (action === "provision") {
+	if (action === "provision" || action === "step") {
 		const fields = fieldsFromForm(form);
 		if (!recentSignIn(session)) {
 			return { kind: "response", response: await reauthResponse(request, auth, options, { userId, action: "provision", fields }, "/app/cloudflare") };
