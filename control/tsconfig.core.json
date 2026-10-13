@@ -1,0 +1,25 @@
+{
+	"compilerOptions": {
+		"target": "es2024",
+		"lib": ["es2024"],
+		"module": "nodenext",
+		"moduleResolution": "nodenext",
+		"types": [],
+		"strict": true,
+		"declaration": true,
+		"emitDeclarationOnly": true,
+		"noEmit": false,
+		"allowImportingTsExtensions": true,
+		"rewriteRelativeImportExtensions": true,
+		"verbatimModuleSyntax": true,
+		"skipLibCheck": true,
+		"jsx": "react-jsx",
+		"jsxImportSource": "hono/jsx",
+		"paths": {
+			"@brand/*": ["./brand/*"]
+		},
+		"outDir": "../dist/types",
+		"rootDir": ".."
+	},
+	"files": ["src/core/index.ts", "src/sql-raw.d.ts"]
+}

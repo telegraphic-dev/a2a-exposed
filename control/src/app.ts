@@ -16,6 +16,7 @@ import { sameOrigin } from "./auth/origin.ts";
 import { accountAgentLimit, configuredFreeAgentLimit, createTenant, listTenants } from "./tenants/create.ts";
 import { dataPlaneFromEnv, type DataPlane } from "./tenants/push.ts";
 import type { ControlEnv } from "./env.ts";
+import { routes } from "./core/routes.ts";
 import { handleAgent } from "./agents/page.ts";
 import { brandConfig } from "@brand/brand.config.ts";
 import { avatarOrigin, avatarUrl, renderAccount, renderSettings } from "./views/account.tsx";
@@ -96,7 +97,7 @@ function addVary(headers: Headers, name: string): void {
 }
 
 function markdownPath(pathname: string): string | null {
-	if (pathname === "/health" || pathname.startsWith("/app") || pathname.startsWith("/api") || pathname.startsWith("/.well-known")) return null;
+	if (pathname === routes.health || pathname.startsWith("/app") || pathname.startsWith("/api") || pathname.startsWith("/.well-known")) return null;
 	if (pathname.endsWith(".md")) return pathname;
 	if (pathname.endsWith("/")) return `${pathname}index.md`;
 	return `${pathname}.md`;
@@ -288,7 +289,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 		await next();
 	});
 
-	app.get("/health", (c) => c.json({ ok: true }, 200, { "cache-control": "no-store" }));
+	app.get(routes.health, (c) => c.json({ ok: true }, 200, { "cache-control": "no-store" }));
 
 	app.get("/app", async (c) => {
 		const query = resumeQuery(c.req.header("cookie") ?? null);
@@ -643,8 +644,8 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 		const result = await feedback.api(c.req.raw);
 		return feedbackResponse(c, result);
 	});
-	app.get("/api/v1/tenants", (c) => tenants(c, "GET"));
-	app.post("/api/v1/tenants", (c) => tenants(c, "POST"));
+	app.get(routes.tenants, (c) => tenants(c, "GET"));
+	app.post(routes.tenants, (c) => tenants(c, "POST"));
 
 	async function tenants(c: Context<{ Bindings: ControlEnv }>, method: "GET" | "POST") {
 		const request = c.req.raw;

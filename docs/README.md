@@ -18,8 +18,8 @@ a2a-exposed gives an AI agent a public A2A address: a Cloudflare Worker inbox, a
 
 ## Releases
 
-Pushing a `v*` tag runs [`.github/workflows/publish.yml`](../.github/workflows/publish.yml). It sets the CLI version from the tag, runs the tests, publishes `a2a-exposed` to npm with provenance, and creates a GitHub release. The list of changes is [CHANGELOG.md](../CHANGELOG.md). How to cut a release is in [CONTRIBUTING.md](../CONTRIBUTING.md).
+Pushing a `v*` tag runs [`.github/workflows/publish.yml`](../.github/workflows/publish.yml). It sets the version from the tag, runs the tests, publishes `a2a-exposed` and `@a2a-exposed/control-core` to npm with provenance, and creates a GitHub release. The list of changes is [CHANGELOG.md](../CHANGELOG.md). How to cut a release is in [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ## For contributors
 
-Repository layout, tests, and how to add a wake preset are in [CONTRIBUTING.md](../CONTRIBUTING.md) and [AGENTS.md](../AGENTS.md). The npm package does not include `control/`.
+Repository layout, tests, and how to add a wake preset are in [CONTRIBUTING.md](../CONTRIBUTING.md) and [AGENTS.md](../AGENTS.md). The `a2a-exposed` CLI package does not include `control/`. `@a2a-exposed/control-core` is the repository root. The source entry is `control/src/core/index.ts`. The published module is compiled JavaScript and declarations, built by `prepare` on `npm pack` and on a `file:` install.

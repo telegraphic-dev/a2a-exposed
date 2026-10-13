@@ -54,6 +54,16 @@ jobs:
         working-directory: cli
         run: npm test
 
+      - name: Control - install, test, typecheck, build
+        working-directory: control
+        run: |
+          npm ci --no-audit --no-fund
+          npm test
+          npx cf workers types
+          npx tsc --noEmit
+          npm run build
+          node scripts/check-build.mjs
+
       # Auth: npm trusted publishing (OIDC) once it is configured for this package on npmjs.com;
       # otherwise the NPM_TOKEN secret (needed for the very first publish if it isn't done by hand).
       # prepack bundles ../worker into the package (scripts/sync-worker.mjs).
@@ -65,6 +75,29 @@ jobs:
         run: |
           if npm view "a2a-exposed@$VERSION" version >/dev/null 2>&1; then
             echo "a2a-exposed@$VERSION is already on npm; skipping publish"
+            exit 0
+          fi
+          DIST_TAG=latest
+          if [[ "$VERSION" == *-* ]]; then DIST_TAG=next; fi
+          npm publish --provenance --access public --tag "$DIST_TAG"
+
+      # prepare compiles dist/index.js and dist/types using control/node_modules.
+      # A file: install runs prepare. npm pack and npm publish run prepare and prepack.
+      - name: Publish control-core
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          node --input-type=module -e '
+            import fs from "node:fs";
+            const version = process.env.VERSION;
+            const text = fs.readFileSync("package.json", "utf8");
+            const next = text.replace(/"version": "[^"]+"/, `"version": "${version}"`);
+            if (next === text) throw new Error("version field missing");
+            fs.writeFileSync("package.json", next);
+          '
+          if npm view "@a2a-exposed/control-core@$VERSION" version >/dev/null 2>&1; then
+            echo "@a2a-exposed/control-core@$VERSION is already on npm; skipping publish"
             exit 0
           fi
           DIST_TAG=latest
