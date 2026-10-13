@@ -138,19 +138,19 @@ export function setupScopes(choice: SetupChoice, host: SetupHost): ScopeReason[]
 				id: WORKERS_ROUTES_WRITE,
 				name: "Workers Routes Write",
 				why: "Attaches the Worker to a hostname on a domain you already have in Cloudflare.",
-				declined: "Without Workers Routes Write, the Worker cannot be attached to a hostname on your domain. That blocks a setup on your own domain. A free Cloudflare address continues with its own permissions.",
+				declined: "Without Workers Routes Write, the Worker cannot be attached to a hostname on your domain. That blocks a setup on your own domain. A free address is set up with the permissions that address needs.",
 			},
 			{
 				id: DNS_WRITE,
 				name: "DNS Write",
 				why: "Creates the DNS record for that hostname.",
-				declined: "Without DNS Write, the DNS record for your domain cannot be created. That blocks a setup on your own domain. A free Cloudflare address continues with its own permissions.",
+				declined: "Without DNS Write, the DNS record for your domain cannot be created. That blocks a setup on your own domain. A free address is set up with the permissions that address needs.",
 			},
 			{
 				id: ZONE_READ,
 				name: "Zone Read",
 				why: "Lists the domains on the Cloudflare account you pick, so this page can check that your address is on one of them.",
-				declined: "Without Zone Read, the domains on your Cloudflare account cannot be listed. That blocks a setup on your own domain. A free Cloudflare address continues with its own permissions.",
+				declined: "Without Zone Read, the domains on your Cloudflare account cannot be listed. That blocks a setup on your own domain. A free address is set up with the permissions that address needs.",
 			},
 		);
 	}
@@ -160,7 +160,7 @@ export function setupScopes(choice: SetupChoice, host: SetupHost): ScopeReason[]
 			name: "Cloudflare Tunnel Write",
 			why: "Creates a tunnel from the façade Worker to your existing agent. You still run cloudflared on a machine you control.",
 			declined: inbox
-				? "Without Cloudflare Tunnel Write, a tunnel cannot be created. That blocks the façade. The inbox can still be created."
+				? "Without Cloudflare Tunnel Write, a tunnel cannot be created. That blocks the façade. The inbox is created without a tunnel."
 				: "Without Cloudflare Tunnel Write, a tunnel cannot be created. That blocks the façade.",
 		});
 	}

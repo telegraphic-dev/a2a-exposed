@@ -613,7 +613,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 			headers.delete("x-captcha-response");
 			request = new Request(request, { headers });
 		}
-		// Cloudflare is a connect, not a sign-in. This path never reaches Better Auth.
+		// Cloudflare connects an account. This path never reaches Better Auth.
 		// The same callback deadline aborts a token or profile call that is still running.
 		if (callbackPath === "/api/auth/callback/cloudflare") {
 			const providerAbort = new AbortController();

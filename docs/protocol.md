@@ -52,7 +52,7 @@ Authenticated with the owner token. The CLI is the supported way to call these. 
 | --- | --- |
 | Inbox | `GET /owner/inbox`, `GET /owner/tasks/<id>`, `GET /owner/history/<contextId>`, `POST /owner/tasks/<id>/working`, `POST /owner/tasks/<id>/reply` |
 | Summary | `GET /owner/summary` (counts only: tasks in each state, pending pairing requests; no message text; does not clear a pending wake) |
-| Log | `GET /owner/log` (recent history, newest first; a pending wake stays until the inbox is listed) |
+| Log | `GET /owner/log` (recent history, newest first; opening this log leaves a pending wake in place until you list the inbox) |
 | Export | `GET /owner/export` and `GET /owner/export?format=sql` |
 | Feedback discovery | `GET /owner/feedback` |
 | Façade | `GET /owner/facade`, `POST /owner/facade/verify` |

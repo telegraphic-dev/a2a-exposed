@@ -125,9 +125,10 @@ test("a declined optional scope names the setup it blocks", () => {
 	assert.match(bothZone.blocked.join(" "), /blocks the new inbox and the façade/);
 	assert.match(bothZone.blocked.join(" "), /Without Zone Read/);
 	assert.match(bothZone.blocked.join(" "), /own domain/);
+	assert.match(bothZone.blocked.join(" "), /A free address is set up with the permissions that address needs/);
 	assert.match(bothZone.blocked.join(" "), /Without Cloudflare Tunnel Write/);
 	assert.match(bothZone.blocked.join(" "), /blocks the façade/);
-	assert.match(bothZone.blocked.join(" "), /inbox can still be created/);
+	assert.match(bothZone.blocked.join(" "), /The inbox is created without a tunnel/);
 	assert.match(bothZone.blocked.join(" "), /Connect again and keep the refresh token/);
 	assert.equal(bothZone.lines.find((line) => line.name === "Workers Admin")?.state, "granted");
 	assert.equal(bothZone.needsReconnect, false);

@@ -152,7 +152,7 @@ export function renderRecords(input: {
 				</>
 			)}
 			<h2>Message log</h2>
-			<p>Recent history. A pending wake stays until the inbox is listed.</p>
+			<p>Recent history. Opening this log leaves a pending wake in place until you list the inbox.</p>
 			{input.entries === null ? <p>The message log is not available.</p> : input.entries.length === 0 ? <p>No messages.</p> : (
 				<details class="log-fold">
 					<summary>Latest messages</summary>

@@ -186,7 +186,7 @@ Control plane account (only when that deployment's login is on)
                                 After sign-in, /app shows the account and its agents. Each agent is listed
                                 by its hostname. A hosted name opens
                                 that agent's page: MCP connectors (revoke needs a recent sign-in), a
-                                message log of recent history. A pending wake stays until the inbox is listed. The SQL download
+                                message log of recent history. Opening this log leaves a pending wake in place until you list the inbox. The SQL download
                                 is a redacted copy and replaces a pasted owner token. Peer times are labeled UTC. A pairing
                                 token shows its code. An empty outbound list says peers added with the CLI
                                 on your machine stay in that CLI. Sign out is on that
@@ -194,12 +194,12 @@ Control plane account (only when that deployment's login is on)
                                 that token after a confirmation and a recent sign-in. The new token is
                                 shown once on that agent's page. The previous one stops working immediately.
                                 The token is shown only when the stored hash is still that token. A Copy button sits next to it. Without JavaScript the value still copies.
-                                Deleting an agent asks for its name and a recent sign-in. The account page says how many slots remain. A self-hosted inbox has no such delete.
+                                Deleting an agent asks for its name and a recent sign-in. The account page says how many hosted slots remain. A self-hosted inbox has no such delete.
                                 That page is not stored.
-                                FREE_AGENT_LIMIT=2 caps a free account at 2 hosted agents. An agent in your Cloudflare account does not use one of these. An account's own limit overrides it.
-                                Unset, there is no limit. The database rejects another insert.
+                                FREE_AGENT_LIMIT=2 caps a free account at 2 hosted agents. A Cloudflare agent stays outside that count. An account's own limit overrides it.
+                                Unset, there is no limit. The database rejects another hosted insert.
                                 SIGNUP_ALLOWLIST, when set, admits only those verified emails. Unset, sign-in stays open.
-                                Cloudflare does not match that list. Connect it from the account page after signing in another way.
+                                Sign-in uses GitHub, Google, or email. Connect Cloudflare from the account page after you sign in.
                                 A refusal returns to /app?error=invite and the page says Sign-in is invite-only for now.
                                 The control Worker logs social_sign_in_failed before the
                                 provider page, social_sign_in_timeout when that sign-in does not

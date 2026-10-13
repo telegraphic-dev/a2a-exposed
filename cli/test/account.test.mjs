@@ -90,7 +90,7 @@ test("login help names the callback error", async () => {
 	assert.match(stdout, /Waiting for the check/);
 	assert.match(stdout, /The check expired\. Please try again/);
 	assert.match(stdout, /MCP connectors/);
-	assert.match(stdout, /pending wake stays until the inbox is listed/);
+	assert.match(stdout, /Opening this log leaves a pending wake in place until you list the inbox/);
 	assert.match(stdout, /SQL download/);
 	assert.match(stdout, /pasted owner token/);
 	assert.match(stdout, /labeled UTC/);
@@ -102,11 +102,11 @@ test("login help names the callback error", async () => {
 	assert.match(stdout, /not stored/);
 	assert.match(stdout, /FREE_AGENT_LIMIT=2/);
 	assert.match(stdout, /2 hosted agents/);
-	assert.match(stdout, /does not use one of these/);
+	assert.match(stdout, /stays outside that count/);
 	assert.match(stdout, /listed\s+by its hostname/);
 	assert.match(stdout, /own limit overrides it/);
 	assert.match(stdout, /no limit/);
-	assert.match(stdout, /rejects another insert/);
+	assert.match(stdout, /rejects another hosted insert/);
 	assert.match(stdout, /SIGNUP_ALLOWLIST/);
 	assert.match(stdout, /\/app\?error=invite/);
 });

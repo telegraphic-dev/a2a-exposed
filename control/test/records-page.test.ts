@@ -117,7 +117,7 @@ test("the agent page lists MCP connectors, a read-only log, and downloads a reda
 		const freshMcp = html.slice(html.indexOf("<h2>MCP connectors</h2>"), html.indexOf("<h2>Message log</h2>"));
 		assert.equal(freshMcp.includes("older than 10 minutes"), false);
 		assert.match(html, /<h2>Message log<\/h2>/);
-		assert.match(html, /A pending wake stays until the inbox is listed/);
+		assert.match(html, /Opening this log leaves a pending wake in place until you list the inbox/);
 		assert.match(html, /hello &lt;script&gt;alert\(1\)&lt;\/script&gt;/);
 		assert.match(html, /note \[redacted\] and \[redacted\] end/);
 		assert.equal(html.includes(token), false);
