@@ -68,7 +68,9 @@ button.provider-email:hover:not(:disabled):not([aria-disabled="true"]) { backgro
 .who { display: flex; gap: 0.75rem; align-items: center; }
 .avatar { width: 2.5rem; height: 2.5rem; border-radius: 999px; }
 .agents { list-style: none; margin: 1rem 0; padding: 0; }
-.agents li { display: flex; justify-content: space-between; gap: 1rem; padding: 0.6rem 0; border-top: 1px solid var(--line); }
+.agents li { display: flex; justify-content: space-between; gap: 1rem; padding: 0.6rem 0; border-top: 1px solid var(--line); align-items: baseline; }
+.agents .agent-name { display: flex; flex-wrap: wrap; gap: 0.35rem 0.6rem; align-items: baseline; min-width: 0; }
+.agents .where { color: var(--muted); font-size: 0.82rem; }
 .overview dt { color: var(--muted); }
 .overview dd { margin: 0 0 0.5rem; }
 .peers dt, .records dt { color: var(--muted); }

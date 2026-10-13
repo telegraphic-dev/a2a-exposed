@@ -54,11 +54,12 @@ function stateWord(state: SetupReport["lines"][number]["state"]): string {
 	return "Cloudflare did not say.";
 }
 
-function stepForm(step: WizardStepView, wizard: InboxWizard) {
+function stepForm(step: WizardStepView, wizard: InboxWizard, auto = false) {
 	if (!step.control || !step.button) return "";
 	const fields = wizard.fields;
+	const action = fields.inbox ? `/app/cloudflare/${fields.inbox}` : "/app/cloudflare";
 	return (
-		<form method="post" action="/app/cloudflare">
+		<form method="post" action={action} data-setup="1" data-auto={auto ? "1" : undefined}>
 			{step.control === "account" && wizard.accounts?.length ? (
 				<fieldset class="choices">
 					<legend>Which Cloudflare account?</legend>
@@ -97,11 +98,32 @@ function stepForm(step: WizardStepView, wizard: InboxWizard) {
 					<span class="choice-hint">A domain already in this Cloudflare account.</span>
 				</p>
 			) : ""}
+			{step.control === "zone" && wizard.zones?.some((zone) => zone.id) ? (
+				<>
+					<fieldset class="choices">
+						<legend>Which domain?</legend>
+						{wizard.zones.filter((zone) => zone.id).map((zone) => (
+							<label class="choice">
+								<input type="radio" name="zone" value={zone.id} required />
+								<span class="choice-body"><span class="choice-title">{zone.name}</span></span>
+							</label>
+						))}
+					</fieldset>
+					<p>
+						<label>
+							Name on this domain
+							<input name="name" autocomplete="off" />
+						</label>
+						<span class="choice-hint">Leave this blank to use the domain itself. A short name makes name.domain.</span>
+					</p>
+				</>
+			) : ""}
 			{step.control !== "account" && fields.account ? <input type="hidden" name="account" value={fields.account} /> : ""}
-			{step.control !== "name" && fields.name ? <input type="hidden" name="name" value={fields.name} /> : ""}
+			{step.control !== "name" && step.control !== "zone" && fields.name ? <input type="hidden" name="name" value={fields.name} /> : ""}
+			{fields.inbox ? <input type="hidden" name="inbox" value={fields.inbox} /> : ""}
 			{step.control !== "hostname" && fields.hostname ? <input type="hidden" name="hostname" value={fields.hostname} /> : ""}
 			{step.control !== "subdomain" && fields.subdomain ? <input type="hidden" name="subdomain" value={fields.subdomain} /> : ""}
-			{wizard.zones?.length ? <p>Domains in this Cloudflare account: {wizard.zones.map((zone) => zone.name).join(", ")}.</p> : ""}
+			{step.control === "hostname" && wizard.zones?.length ? <p>Domains in this Cloudflare account: {wizard.zones.map((zone) => zone.name).join(", ")}.</p> : ""}
 			<input type="hidden" name="action" value="step" />
 			<input type="hidden" name="step" value={step.id} />
 			<p><button class="action" type="submit">{step.button}</button></p>
@@ -115,10 +137,31 @@ function savedChoice(report: SetupReport): SetupChoice {
 	return "inbox";
 }
 
-function choiceForm(prompt: string) {
+function choiceForm(prompt: string, createAgent: boolean) {
 	return (
-		<form method="post" action="/app/cloudflare">
+		<form method="post" action="/app/cloudflare" data-setup="1">
 			{prompt ? <p>{prompt}</p> : ""}
+			<fieldset class="choices">
+				<legend>Which web address?</legend>
+				<label class="choice">
+					<input type="radio" name="host" value="workers" checked required />
+					<span class="choice-body">
+						<span class="choice-title">A free workers.dev address</span>
+						<span class="choice-detail">Recommended.</span>
+						<span class="choice-example">https://my-agent.yourname.workers.dev</span>
+						<span class="choice-hint">This does not ask to list your domains or edit DNS.</span>
+					</span>
+				</label>
+				<label class="choice">
+					<input type="radio" name="host" value="zone" />
+					<span class="choice-body">
+						<span class="choice-title">My own domain</span>
+						<span class="choice-detail">Pick it from the domains already in your Cloudflare account.</span>
+						<span class="choice-example">https://agent.example.com</span>
+						<span class="choice-hint">This step cannot move a domain onto Cloudflare.</span>
+					</span>
+				</label>
+			</fieldset>
 			<fieldset class="choices">
 				<legend>What do you want?</legend>
 				<label class="choice">
@@ -146,29 +189,8 @@ function choiceForm(prompt: string) {
 					</span>
 				</label>
 			</fieldset>
-			<fieldset class="choices">
-				<legend>Which web address?</legend>
-				<label class="choice">
-					<input type="radio" name="host" value="workers" checked required />
-					<span class="choice-body">
-						<span class="choice-title">A free address from Cloudflare</span>
-						<span class="choice-detail">Recommended.</span>
-						<span class="choice-example">https://my-agent.yourname.workers.dev</span>
-						<span class="choice-hint">This does not ask to list your domains or edit DNS.</span>
-					</span>
-				</label>
-				<label class="choice">
-					<input type="radio" name="host" value="zone" />
-					<span class="choice-body">
-						<span class="choice-title">My own domain</span>
-						<span class="choice-detail">It must already be in your Cloudflare account.</span>
-						<span class="choice-example">https://agent.example.com</span>
-						<span class="choice-hint">This step cannot move a domain onto Cloudflare.</span>
-					</span>
-				</label>
-			</fieldset>
-			<input type="hidden" name="action" value="review" />
-			<p><button class="action" type="submit">Review permissions</button></p>
+			<input type="hidden" name="action" value={createAgent ? "create" : "review"} />
+			<p><button class="action" type="submit">{createAgent ? "Create this agent" : "Review permissions"}</button></p>
 		</form>
 	);
 }
@@ -193,10 +215,26 @@ function wizardSteps(wizard: InboxWizard) {
 					{step.id === "verify" && step.state === "pass" && created ? (
 						<p role="status">The inbox answers at <a href={created}>{created}</a>. Other agents find it at {created}/.well-known/agent-card.json. A new address can take a few minutes to answer.</p>
 					) : ""}
-					{stepForm(step, wizard)}
+					{step.text === PERMISSION_WAIT && wizard.refreshSeconds
+						? stepForm({ ...step, control: "continue", button: "Check again" }, wizard)
+						: stepForm(step, wizard)}
 				</li>
 			))}
 		</ol>
+	);
+}
+
+function dashboardLinks(wizard: InboxWizard) {
+	if (!wizard.links?.length) return "";
+	return (
+		<div>
+			<p>In your Cloudflare account:</p>
+			<ul>
+				{wizard.links.map((link) => (
+					<li><a href={link.href}>{link.label}</a></li>
+				))}
+			</ul>
+		</div>
 	);
 }
 
@@ -214,6 +252,16 @@ export function renderCloudflareSetup(input: {
 	/** Shown once, on the upload step. */
 	ownerToken?: string;
 	wizard?: InboxWizard | null;
+	/** The saved grant can create another inbox without asking again. */
+	createAgent?: boolean;
+	/** This agent's id, when the page is that agent. */
+	inboxId?: string;
+	/** Confirmation or progress for Remove from my Cloudflare. */
+	removal?: {
+		items: { title: string; detail: string }[];
+		steps: { id: string; title: string; state: "pass" | "fail" | "pending"; text: string; cloudflare: string }[];
+		confirming: boolean;
+	} | null;
 }): string {
 	const brand = input.brand.trim() || "Inbox";
 	const error = input.error ? ERRORS[input.error] ?? "" : "";
@@ -222,11 +270,15 @@ export function renderCloudflareSetup(input: {
 	const report = input.report ?? null;
 	const created = httpsUrl(input.createdUrl);
 	const reconnect = Boolean(report?.needsReconnect) && !created;
-	const wizard = input.wizard && report?.inbox && !reconnect ? input.wizard : null;
-	const setupBusy = Boolean(wizard && wizard.steps.some((step) => step.state !== "pass"));
+	const wizard = input.wizard && report?.inbox && !reconnect && !input.removal ? input.wizard : null;
+	const finished = Boolean(wizard && wizard.steps.every((step) => step.state === "pass"));
+	const setupBusy = Boolean(wizard && !finished && wizard.steps.some((step) => step.state !== "pass"));
 	const holdChoices = reconnect || setupBusy;
+	const refresh = wizard?.refreshSeconds && !input.removal ? String(wizard.refreshSeconds) : "";
+	const removal = input.removal;
+	const inboxId = input.inboxId || wizard?.fields.inbox || "";
 	return (
-		<div class="setup">
+		<div class="setup" data-setup-root data-refresh-seconds={refresh || undefined}>
 			<p>{brand} creates a public address for your agent in your Cloudflare account, one step at a time. {EVERY_PLAN} It is not a way to sign in.</p>
 			{error ? <p class="alert" role="alert">{error}</p> : ""}
 			{input.connected && input.linked && !report ? (
@@ -270,6 +322,11 @@ export function renderCloudflareSetup(input: {
 					)}
 					{wizard && input.ownerToken ? <TokenBlock token={input.ownerToken} lead="Copy this owner token now. It will not be shown again." /> : ""}
 					{wizard ? wizardSteps(wizard) : ""}
+					{finished ? dashboardLinks(wizard!) : ""}
+					{finished && inboxId ? (
+						<p><a href={`/app/cloudflare/${inboxId}?remove=1`}>Remove from my Cloudflare</a></p>
+					) : ""}
+					{finished ? <p><a href="/app/cloudflare">In my Cloudflare account</a></p> : ""}
 					{report.facade ? <p>{TUNNEL_CONNECTOR_LATER}</p> : ""}
 					{report.facade ? <p>{ACCESS_NOT_REQUESTED}</p> : ""}
 				</div>
@@ -299,11 +356,64 @@ export function renderCloudflareSetup(input: {
 			) : holdChoices ? (
 				<details class="restart">
 					<summary>Start a different setup</summary>
-					{choiceForm("")}
+					{choiceForm("", Boolean(input.createAgent))}
 				</details>
+			) : finished || removal ? (
+				""
 			) : (
-				choiceForm(report ? "To ask for a different setup, choose again." : "")
+				choiceForm(report ? "To ask for a different setup, choose again." : "", Boolean(input.createAgent))
 			)}
+			{removal ? (
+				<div class="confirm">
+					{removal.confirming ? (
+						<>
+							<p>Remove from my Cloudflare deletes only what this setup created:</p>
+							{removal.items.length ? (
+								<ul>
+									{removal.items.map((item) => (
+										<li><strong>{item.title}.</strong> {item.detail}</li>
+									))}
+								</ul>
+							) : <p>Nothing was created in your Cloudflare account.</p>}
+							<p>Anything else in your Cloudflare account stays.</p>
+							<form method="post" action={inboxId ? `/app/cloudflare/${inboxId}` : "/app/cloudflare"} data-setup="1">
+								<input type="hidden" name="action" value="remove" />
+								<p><button class="action" type="submit">Remove from my Cloudflare</button></p>
+							</form>
+							<form method="post" action={inboxId ? `/app/cloudflare/${inboxId}` : "/app/cloudflare"}>
+								<input type="hidden" name="action" value="forget" />
+								<p>Forget only drops this agent from the dashboard. The Worker, database, and address stay in Cloudflare.</p>
+								<p><button class="action" type="submit">Forget only</button></p>
+							</form>
+							<p><a href={inboxId ? `/app/cloudflare/${inboxId}` : "/app"}>Keep this agent</a></p>
+						</>
+					) : (
+						<>
+							<ol class="steps">
+								{removal.steps.map((step) => (
+									<li class={step.state === "pending" ? "wait" : step.state} data-step={step.id}>
+										<p><strong>{step.title}.</strong></p>
+										{step.state === "fail" ? (
+											<p class="alert" role="alert">{step.text}{step.cloudflare ? ` ${step.cloudflare}` : ""}</p>
+										) : <p>{step.text}</p>}
+									</li>
+								))}
+							</ol>
+							{removal.steps.some((step) => step.state === "fail") ? (
+								<form method="post" action={inboxId ? `/app/cloudflare/${inboxId}` : "/app/cloudflare"} data-setup="1">
+									<input type="hidden" name="action" value="remove" />
+									<p><button class="action" type="submit">Try again</button></p>
+								</form>
+							) : removal.steps.some((step) => step.state === "pending") ? (
+								<form method="post" action={inboxId ? `/app/cloudflare/${inboxId}` : "/app/cloudflare"} data-setup="1" data-auto="1">
+									<input type="hidden" name="action" value="remove" />
+									<p><button class="action" type="submit">Continue</button></p>
+								</form>
+							) : ""}
+						</>
+					)}
+				</div>
+			) : ""}
 			<p><a href="/app">Back to your agents</a></p>
 		</div>
 	).toString();

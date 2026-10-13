@@ -6,12 +6,16 @@ export const REAUTH_MESSAGE = "Sign in again to approve, deny, revoke, rotate th
 const CLOCK_SKEW_MS = 60_000;
 
 function signedInAt(value: unknown): number | null {
-	if (value instanceof Date) {
-		const ms = value.getTime();
+	if (value instanceof Date || (value !== null && typeof value === "object" && "getTime" in value && typeof (value as { getTime?: unknown }).getTime === "function")) {
+		const ms = (value as { getTime: () => number }).getTime();
 		return Number.isFinite(ms) ? ms : null;
 	}
-	if (typeof value === "number" && Number.isFinite(value)) return value;
-	if (typeof value === "string" && value.length > 0 && value.length < 40) {
+	if (typeof value === "number" && Number.isFinite(value)) {
+		// Seconds since the epoch are below 1e12. Milliseconds are not.
+		if (value > 0 && value < 1e12) return Math.round(value * 1000);
+		return value;
+	}
+	if (typeof value === "string" && value.trim()) {
 		const ms = Date.parse(value);
 		return Number.isFinite(ms) ? ms : null;
 	}

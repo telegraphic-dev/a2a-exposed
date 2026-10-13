@@ -305,7 +305,15 @@ test("social Turnstile failures redirect to error=turnstile", async () => {
 	const options = resolveAuth(env, new Request(`${origin}/app`));
 	assert.ok(options);
 	const missing = await handleSignIn(formRequest("provider=github"), { handler: async () => { throw new Error("not called"); } }, options);
-	assert.match(missing.headers.get("location") ?? "", /error=turnstile/);
+	const missingUrl = new URL(missing.headers.get("location") ?? "", origin);
+	assert.equal(missingUrl.pathname, "/app");
+	assert.equal(missingUrl.searchParams.get("error"), "turnstile");
+	const kept = await handleSignIn(formRequest("provider=github&next=/app/cloudflare"), { handler: async () => { throw new Error("not called"); } }, options);
+	const keptUrl = new URL(kept.headers.get("location") ?? "", origin);
+	assert.equal(keptUrl.pathname, "/app/sign-in");
+	assert.equal(keptUrl.searchParams.get("return"), "/app/cloudflare");
+	assert.equal(keptUrl.searchParams.get("reauth"), "cloudflare");
+	assert.equal(keptUrl.searchParams.get("error"), "turnstile");
 	const originalFetch = globalThis.fetch;
 	const originalError = console.error;
 	const logged: string[] = [];
@@ -386,7 +394,7 @@ test("provider buttons stay off until Turnstile finishes", async () => {
 	const html = await page.text();
 	const csp = page.headers.get("content-security-policy") ?? "";
 	assert.match(csp, /script-src 'self' https:\/\/challenges\.cloudflare\.com/);
-	assert.match(html, /<button class="provider provider-github"[^>]*disabled[^>]*>/);
+	assert.match(html, /<button class="provider provider-github"[^>]*disabled[^>]*aria-disabled="true"[^>]*>/);
 	assert.match(html, /Continue with GitHub/);
 	assert.match(html, /Continue with Google/);
 	assert.equal(html.includes("Continue with Cloudflare"), false);

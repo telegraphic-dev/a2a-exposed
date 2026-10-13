@@ -5,6 +5,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createApp } from "../src/app.ts";
 import { OWNER_COOKIE } from "../src/auth/cookies.ts";
+import { cloudflareHostname } from "../src/provision/inbox-row.ts";
+import { hostedHostname } from "../src/views/account.tsx";
 import type { DataPlane, TenantPush } from "../src/tenants/push.ts";
 import { openDb } from "./sql.ts";
 
@@ -99,7 +101,8 @@ test("a signed-in account sees itself, can sign out, and creates two agents", as
 	assert.equal(once.includes(`\n${token}`), false);
 	assert.match(once, /Copy this owner token now/);
 	assert.match(once, /will not be shown again/);
-	assert.match(once, /https:\/\/northwind\.example\.com/);
+	assert.match(once, /href="\/app\/agents\/northwind"/);
+	assert.match(once, /northwind\.example\.com/);
 	assert.match(once, /\d{4}-\d{2}-\d{2}/);
 	assert.match(once, /src="\/owner-token\.js"/);
 	assert.match(once, /class="action copy-token"/);
@@ -150,7 +153,8 @@ test("a signed-in account sees itself, can sign out, and creates two agents", as
 	assert.match(formLimited.headers.get("location") ?? "", /error=limit$/);
 	assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM tenants").first<{ n: number }>())?.n, 2);
 	const limited = await (await app.request(`${origin}/app?error=limit`, { headers: { cookie } })).text();
-	assert.match(limited, /This account can have 2 agents/);
+	assert.match(limited, /This account can have 2 hosted agents/);
+	assert.match(limited, /An agent in your Cloudflare account does not use one of these/);
 	assert.equal(limited.includes("Create agent"), false);
 	assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM tenants").first<{ n: number }>())?.n, 2);
 
@@ -192,4 +196,92 @@ test("the callback session cookie is __Host-a2a_session in production", async ()
 	child.stderr.on("data", (chunk) => { stderr += chunk; });
 	const status = await new Promise((resolve) => child.on("close", resolve));
 	assert.equal(status, 0, stderr);
+});
+
+test("the agent list uses the full hostname, and a Cloudflare agent does not use a hosted slot", async () => {
+	const party = "agent-to-agent." + "party";
+	const exposed = "a2a." + "exposed";
+	assert.equal(hostedHostname("the-agent", `https://the-agent.${party}`), `the-agent.${party}`);
+	assert.equal(hostedHostname("some-other", `https://some-other.${exposed}`), `some-other.${exposed}`);
+	assert.equal(cloudflareHostname({
+		public_url: null,
+		host: "workers",
+		hostname: null,
+		worker_name: "name",
+		workers_subdomain: "account-subdomain",
+	}), "name.account-subdomain.workers.dev");
+	assert.equal(cloudflareHostname({
+		public_url: "https://myagent.example.com",
+		host: "zone",
+		hostname: "myagent.example.com",
+		worker_name: "myagent",
+		workers_subdomain: null,
+	}), "myagent.example.com");
+
+	const db = openDb();
+	const sent: { text: string }[] = [];
+	const app = createApp(
+		{
+			AUTH_SECRET: secret,
+			DB: db,
+			TENANT_DOMAIN: party,
+			FREE_AGENT_LIMIT: "1",
+			CLOUDFLARE_OAUTH_CLIENT_ID: "cf-id",
+			CLOUDFLARE_OAUTH_CLIENT_SECRET: "cf-secret",
+		},
+		{ database: db, mailer: { async send(message) { sent.push({ text: message.text }); } }, dataPlane: plane() },
+	);
+	const posted = await app.request(`${origin}/app/sign-in`, {
+		method: "POST",
+		headers: { origin, "content-type": "application/x-www-form-urlencoded" },
+		body: "provider=email&email=person@example.com",
+	});
+	const link = sent[0].text.match(/https:\/\/control\.example\.com\/api\/auth\/magic-link\/verify\?[^\s]+/);
+	assert.ok(link);
+	const verified = await app.request(link[0]);
+	const cookie = verified.headers.getSetCookie().find((value) => value.startsWith("__Host-a2a_session="))!.split(";")[0];
+	const headers = { cookie, origin, "content-type": "application/x-www-form-urlencoded" };
+	assert.equal((await app.request(`${origin}/api/v1/tenants`, { method: "POST", headers, body: "name=the-agent" })).status, 303);
+	const blocked = await app.request(`${origin}/api/v1/tenants`, {
+		method: "POST",
+		headers: { cookie, "content-type": "application/json" },
+		body: JSON.stringify({ name: "some-other" }),
+	});
+	assert.equal(blocked.status, 403);
+	const userId = (await db.prepare('SELECT id FROM "user"').first<{ id: string }>())?.id ?? "";
+	const stamp = "2026-01-02T00:00:00.000Z";
+	const workersId = "a".repeat(32);
+	const zoneId = "b".repeat(32);
+	await db.prepare(
+		`INSERT INTO cloudflare_inbox (id, "userId", cf_account_id, worker_name, d1_name, public_url, host, workers_subdomain, status, created_at, updated_at)
+		 VALUES (?, ?, 'account', 'name', 'name', 'https://name.account-subdomain.workers.dev', 'workers', 'account-subdomain', 'ready', ?, ?)`,
+	).bind(workersId, userId, stamp, stamp).run();
+	await db.prepare(
+		`INSERT INTO cloudflare_inbox (id, "userId", cf_account_id, worker_name, d1_name, public_url, host, hostname, status, created_at, updated_at)
+		 VALUES (?, ?, 'account', 'myagent', 'myagent', 'https://myagent.example.com', 'zone', 'myagent.example.com', 'ready', ?, ?)`,
+	).bind(zoneId, userId, stamp, stamp).run();
+	const html = await (await app.request(`${origin}/app`, { headers: { cookie } })).text();
+	assert.match(html, new RegExp(`href="/app/agents/the-agent"[^>]*>the-agent\\.${party.replace(/\./g, "\\.")}`));
+	assert.match(html, new RegExp(`href="/app/cloudflare/${workersId}"[^>]*>name\\.account-subdomain\\.workers\\.dev`));
+	assert.match(html, new RegExp(`href="/app/cloudflare/${zoneId}"[^>]*>myagent\\.example\\.com`));
+	assert.match(html, /In your Cloudflare/);
+	assert.match(html, /In my Cloudflare account/);
+	assert.equal(html.includes(">Create agent<"), false);
+	assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM tenants").first<{ n: number }>())?.n, 1);
+	assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM cloudflare_inbox").first<{ n: number }>())?.n, 2);
+
+	const production = createApp(
+		{
+			AUTH_SECRET: secret,
+			DB: db,
+			TENANT_DOMAIN: exposed,
+			FREE_AGENT_LIMIT: "1",
+			GITHUB_CLIENT_ID: "gh-id",
+			GITHUB_CLIENT_SECRET: "gh-secret",
+		},
+		{ database: db, dataPlane: plane() },
+	);
+	const produced = await (await production.request(`${origin}/app`, { headers: { cookie } })).text();
+	assert.match(produced, new RegExp(`the-agent\\.${exposed.replace(/\./g, "\\.")}`));
+	assert.match(produced, /href="\/app\/agents\/the-agent"/);
 });

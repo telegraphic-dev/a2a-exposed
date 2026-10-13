@@ -1,9 +1,10 @@
 import { CLOUDFLARE_RESUME_COOKIE, hostCookie, readCookie } from "./cookies.ts";
-import { deleteCloudflareGrant, saveCloudflareGrant } from "./cloudflare-grant.ts";
+import { deleteCloudflareGrant, readCloudflareGrant, saveCloudflareGrant } from "./cloudflare-grant.ts";
 import { mapCloudflareUser } from "./cloudflare-user.ts";
 import {
 	cloudflareAuthorizeUrl,
 	consentScope,
+	grantCoversInbox,
 	parseSetupChoice,
 	parseSetupHost,
 	type SetupChoice,
@@ -33,7 +34,7 @@ type SessionAuth = {
 	api: {
 		getSession(input: { headers: Headers }): Promise<{
 			user?: { id?: string };
-			session?: { createdAt?: unknown };
+			session?: { id?: string; createdAt?: unknown };
 		} | null>;
 	};
 };
@@ -211,8 +212,33 @@ export function cloudflareLinkState(request: Request): boolean {
 type CloudflareResume =
 	| { userId: string; action: "disconnect" }
 	| { userId: string; action: "consent"; choice: SetupChoice; host: SetupHost }
+	| { userId: string; action: "create"; choice: SetupChoice; host: SetupHost }
 	| { userId: string; action: "finish"; state: string; code: string }
-	| { userId: string; action: "provision"; fields: ProvisionFields };
+	| { userId: string; action: "provision"; fields: ProvisionFields }
+	| { userId: string; action: "remove"; inboxId: string }
+	| { userId: string; action: "forget"; inboxId: string };
+
+const INBOX_ID = /^[0-9a-f]{32}$/;
+
+export function inboxIdFromPath(pathname: string): string {
+	const match = /^\/app\/cloudflare\/([0-9a-f]{32})$/.exec(pathname);
+	return match?.[1] ?? "";
+}
+
+/**
+ * True when this session was created in the last 10 minutes.
+ * A missing timestamp is read from this session's row. Another session for the same account does not count.
+ */
+export async function sessionIsFresh(db: Sql, session: { session?: { id?: unknown; createdAt?: unknown } } | null, userId: string): Promise<boolean> {
+	if (recentSignIn(session)) return true;
+	if (session?.session && "createdAt" in session.session && session.session.createdAt != null) return false;
+	const id = typeof session?.session?.id === "string" ? session.session.id : "";
+	if (!id || id.length > 128) return false;
+	const row = await db.prepare(
+		`SELECT createdAt FROM "session" WHERE id = ? AND "userId" = ?`,
+	).bind(id, userId).first<{ createdAt: unknown }>();
+	return recentSignIn({ session: { createdAt: row?.createdAt } });
+}
 
 export interface CloudflareProvisionDeps {
 	script: string;
@@ -261,7 +287,7 @@ function withCookie(response: Response, cookie: string): Response {
 }
 
 async function resumeOf(value: string): Promise<CloudflareResume | null> {
-	let saved: { userId?: unknown; action?: unknown; choice?: unknown; host?: unknown; state?: unknown; code?: unknown; fields?: unknown };
+	let saved: { userId?: unknown; action?: unknown; choice?: unknown; host?: unknown; state?: unknown; code?: unknown; fields?: unknown; inboxId?: unknown };
 	try {
 		saved = JSON.parse(value) as typeof saved;
 	} catch {
@@ -270,11 +296,16 @@ async function resumeOf(value: string): Promise<CloudflareResume | null> {
 	const userId = typeof saved.userId === "string" ? saved.userId : "";
 	if (!userId || userId.length > 128) return null;
 	if (saved.action === "disconnect") return { userId, action: "disconnect" };
-	if (saved.action === "consent") {
+	if (saved.action === "consent" || saved.action === "create") {
 		const choice = parseSetupChoice(saved.choice);
 		const host = parseSetupHost(saved.host);
 		if (!choice || !host) return null;
-		return { userId, action: "consent", choice, host };
+		return { userId, action: saved.action, choice, host };
+	}
+	if (saved.action === "remove" || saved.action === "forget") {
+		const inboxId = typeof saved.inboxId === "string" ? saved.inboxId : "";
+		if (!INBOX_ID.test(inboxId)) return null;
+		return { userId, action: saved.action, inboxId };
 	}
 	if (saved.action === "finish") {
 		const state = typeof saved.state === "string" ? saved.state : "";
@@ -296,31 +327,90 @@ export type CloudflareResumeResult =
 	| { kind: "clear" }
 	| { kind: "wizard"; wizard: InboxWizard; ownerToken?: string; setCookie: string };
 
+async function latestResumeForUser(db: Sql, userId: string): Promise<{ identifier: string; resume: CloudflareResume } | null> {
+	const listed = await db.prepare(
+		`SELECT identifier, value, expiresAt FROM verification WHERE identifier LIKE ? ORDER BY createdAt DESC LIMIT 20`,
+	).bind(`${RESUME_PREFIX}%`).all<{ identifier: string; value: string; expiresAt: unknown }>();
+	for (const row of listed.results) {
+		if (expiresMs(row.expiresAt) <= Date.now()) continue;
+		const resume = await resumeOf(row.value);
+		if (!resume || resume.userId !== userId || resume.action === "disconnect") continue;
+		return { identifier: row.identifier, resume };
+	}
+	return null;
+}
+
+function agentPath(request: Request, inboxId: string): string {
+	return new URL(`/app/cloudflare/${inboxId}`, request.url).href;
+}
+
+function accountFlag(request: Request, flag: "removedCloudflare" | "forgotCloudflare"): string {
+	const url = new URL("/app", request.url);
+	url.searchParams.set(flag, "1");
+	return url.href;
+}
+
+async function resumeCreate(request: Request, options: AuthOptions, userId: string, choice: SetupChoice, host: SetupHost, clear: string): Promise<CloudflareResumeResult> {
+	const grant = await readCloudflareGrant(options.database, userId);
+	if (!grant || !grantCoversInbox(grant, choice, host)) {
+		return { kind: "response", response: redirect(setupPage(request), [clear]) };
+	}
+	const { createCloudflareAgent } = await import("../provision/inbox.ts");
+	const inboxId = await createCloudflareAgent(options.database, userId, host);
+	return { kind: "response", response: redirect(agentPath(request, inboxId), [clear]) };
+}
+
+async function resumeRemoval(request: Request, options: AuthOptions, userId: string, inboxId: string, clear: string, fetchMs?: number): Promise<CloudflareResumeResult> {
+	if (!options.cloudflare) return { kind: "clear" };
+	const { runRemovalStep } = await import("../provision/remove.ts");
+	const outcome = await runRemovalStep({
+		database: options.database,
+		secret: options.secret,
+		clientId: options.cloudflare.clientId,
+		clientSecret: options.cloudflare.clientSecret,
+		userId,
+		inboxId,
+		fetchMs,
+	});
+	if (outcome.finished) return { kind: "response", response: redirect(accountFlag(request, "removedCloudflare"), [clear]) };
+	return { kind: "response", response: redirect(agentPath(request, inboxId), [clear]) };
+}
+
 /**
- * Finishes a connect, disconnect, or consent the user already asked for, after a fresh sign-in.
- * No resume cookie returns null. A signed-out visit leaves the row in place.
+ * Finishes a connect, disconnect, consent, create, or removal the user already asked for, after a fresh sign-in.
+ * A signed-out visit leaves the row in place. A missing resume cookie still continues when this sign-in is fresh
+ * and a resume row for this account is waiting. Disconnect still needs the cookie.
  * A mismatch or an expired row clears the cookie and does not act.
- * A create resumes that one step and returns the wizard for the setup page to render.
  */
 export async function resumeCloudflare(request: Request, auth: SessionAuth, options: AuthOptions, provision?: CloudflareProvisionDeps | null, deferProvision = false): Promise<CloudflareResumeResult | null> {
 	if (!options.cloudflare) return null;
 	const token = readCookie(request.headers.get("cookie"), CLOUDFLARE_RESUME_COOKIE);
-	if (!/^[0-9a-f]{32}$/.test(token)) return null;
+	const cookieOk = /^[0-9a-f]{32}$/.test(token);
 	const session = await sessionOf(auth, request);
 	const userId = session?.user?.id ?? "";
 	if (!userId) return null;
-	const identifier = `${RESUME_PREFIX}${token}`;
-	const row = await options.database.prepare(
-		`SELECT value, expiresAt FROM verification WHERE identifier = ?`,
-	).bind(identifier).first<{ value: string; expiresAt: unknown }>();
 	const clear = hostCookie(CLOUDFLARE_RESUME_COOKIE, "", 0);
-	const resume = row && expiresMs(row.expiresAt) > Date.now() ? await resumeOf(row.value) : null;
-	if (!resume || resume.userId !== userId || !recentSignIn(session)) {
-		await options.database.prepare(`DELETE FROM verification WHERE identifier = ?`).bind(identifier).run();
-		return { kind: "clear" };
+	let identifier = "";
+	let resume: CloudflareResume | null = null;
+	if (cookieOk) {
+		identifier = `${RESUME_PREFIX}${token}`;
+		const row = await options.database.prepare(
+			`SELECT value, expiresAt FROM verification WHERE identifier = ?`,
+		).bind(identifier).first<{ value: string; expiresAt: unknown }>();
+		resume = row && expiresMs(row.expiresAt) > Date.now() ? await resumeOf(row.value) : null;
+		if (!resume || resume.userId !== userId || !await sessionIsFresh(options.database, session, userId)) {
+			await options.database.prepare(`DELETE FROM verification WHERE identifier = ?`).bind(identifier).run();
+			return { kind: "clear" };
+		}
+	} else {
+		if (!await sessionIsFresh(options.database, session, userId)) return null;
+		const found = await latestResumeForUser(options.database, userId);
+		if (!found) return null;
+		identifier = found.identifier;
+		resume = found.resume;
 	}
-	// The account page cannot show the account or domain choices. Leave the resume row for the setup page.
-	if (deferProvision && resume.action === "provision") {
+	// The account page cannot show the steps. Leave the resume row for the setup page.
+	if (deferProvision && (resume.action === "provision" || resume.action === "create" || resume.action === "remove" || resume.action === "forget")) {
 		return { kind: "response", response: redirect(setupPage(request)) };
 	}
 	await options.database.prepare(`DELETE FROM verification WHERE identifier = ?`).bind(identifier).run();
@@ -335,12 +425,21 @@ export async function resumeCloudflare(request: Request, auth: SessionAuth, opti
 		const started = await startCloudflareOAuth(request, options, userId, resume.choice, resume.host);
 		return { kind: "response", response: withCookie(started, clear) };
 	}
+	if (resume.action === "create") return resumeCreate(request, options, userId, resume.choice, resume.host, clear);
+	if (resume.action === "forget") {
+		const { deleteCloudflareInbox } = await import("../provision/inbox-row.ts");
+		await deleteCloudflareInbox(options.database, userId, resume.inboxId);
+		return { kind: "response", response: redirect(accountFlag(request, "forgotCloudflare"), [clear]) };
+	}
+	if (resume.action === "remove") return resumeRemoval(request, options, userId, resume.inboxId, clear, provision?.fetchMs);
 	if (resume.action === "provision") {
 		if (!provision) return { kind: "clear" };
 		const done = await runCloudflareProvision(request, options, userId, resume.fields, provision);
 		if (done.kind === "response") return { kind: "response", response: withCookie(done.response, clear) };
+		if (done.kind !== "wizard") return { kind: "clear" };
 		return { kind: "wizard", wizard: done.wizard, ownerToken: done.ownerToken, setCookie: clear };
 	}
+	if (resume.action !== "finish") return { kind: "clear" };
 	const url = new URL("/api/auth/callback/cloudflare", request.url);
 	url.searchParams.set("code", resume.code);
 	url.searchParams.set("state", resume.state);
@@ -404,10 +503,11 @@ async function startCloudflareOAuth(request: Request, options: AuthOptions, user
 export type CloudflareSetupPost =
 	| { kind: "response"; response: Response }
 	| { kind: "review"; choice: SetupChoice; host: SetupHost }
-	| { kind: "wizard"; wizard: InboxWizard; ownerToken?: string };
+	| { kind: "wizard"; wizard: InboxWizard; ownerToken?: string }
+	| { kind: "agent"; inboxId: string };
 
 
-async function runCloudflareProvision(request: Request, options: AuthOptions, userId: string, fields: ProvisionFields, deps: CloudflareProvisionDeps): Promise<Exclude<CloudflareSetupPost, { kind: "review" }>> {
+async function runCloudflareProvision(request: Request, options: AuthOptions, userId: string, fields: ProvisionFields, deps: CloudflareProvisionDeps): Promise<Extract<CloudflareSetupPost, { kind: "response" | "wizard" }>> {
 	if (!options.cloudflare) return { kind: "response", response: redirect(setupPage(request)) };
 	const { runInboxStep } = await import("../provision/inbox.ts");
 	const outcome = await runInboxStep({
@@ -440,14 +540,54 @@ export async function handleCloudflareSetup(request: Request, auth: SessionAuth,
 	const action = String(form.get("action") ?? "");
 	const choice = parseSetupChoice(String(form.get("choice") ?? ""));
 	const host = parseSetupHost(String(form.get("host") ?? ""));
+	const pathInbox = inboxIdFromPath(new URL(request.url).pathname);
+	const fresh = await sessionIsFresh(options.database, session, userId);
 	if (action === "review") {
 		if (!choice || !host) return { kind: "response", response: redirect(setupPage(request, "choice")) };
 		return { kind: "review", choice, host };
 	}
+	if (action === "create") {
+		if (!choice || !host) return { kind: "response", response: redirect(setupPage(request, "choice")) };
+		if (!fresh) {
+			return { kind: "response", response: await reauthResponse(request, auth, options, { userId, action: "create", choice, host }, "/app/cloudflare") };
+		}
+		const grant = await readCloudflareGrant(options.database, userId);
+		if (!grant || !grantCoversInbox(grant, choice, host)) return { kind: "review", choice, host };
+		const { createCloudflareAgent } = await import("../provision/inbox.ts");
+		const inboxId = await createCloudflareAgent(options.database, userId, host);
+		return { kind: "response", response: redirect(agentPath(request, inboxId)) };
+	}
+	if (action === "remove" || action === "forget") {
+		const posted = String(form.get("inbox") ?? "").trim().toLowerCase();
+		const inboxId = pathInbox || (INBOX_ID.test(posted) ? posted : "");
+		if (!inboxId) return { kind: "response", response: redirect(setupPage(request)) };
+		if (!fresh) {
+			return { kind: "response", response: await reauthResponse(request, auth, options, { userId, action, inboxId }, "/app/cloudflare") };
+		}
+		if (action === "forget") {
+			const { deleteCloudflareInbox } = await import("../provision/inbox-row.ts");
+			await deleteCloudflareInbox(options.database, userId, inboxId);
+			return { kind: "response", response: redirect(accountFlag(request, "forgotCloudflare")) };
+		}
+		if (!options.cloudflare) return { kind: "response", response: redirect(setupPage(request)) };
+		const { runRemovalStep } = await import("../provision/remove.ts");
+		const outcome = await runRemovalStep({
+			database: options.database,
+			secret: options.secret,
+			clientId: options.cloudflare.clientId,
+			clientSecret: options.cloudflare.clientSecret,
+			userId,
+			inboxId,
+			fetchMs: provision?.fetchMs,
+		});
+		if (outcome.finished) return { kind: "response", response: redirect(accountFlag(request, "removedCloudflare")) };
+		return { kind: "agent", inboxId };
+	}
 	if (action === "provision" || action === "step") {
 		const { fieldsFromForm } = await import("../provision/inbox.ts");
 		const fields = fieldsFromForm(form);
-		if (!recentSignIn(session)) {
+		if (pathInbox) fields.inbox = pathInbox;
+		if (!fresh) {
 			return { kind: "response", response: await reauthResponse(request, auth, options, { userId, action: "provision", fields }, "/app/cloudflare") };
 		}
 		if (!provision) return { kind: "response", response: redirect(setupPage(request, "script")) };
@@ -455,7 +595,7 @@ export async function handleCloudflareSetup(request: Request, auth: SessionAuth,
 	}
 	if (action !== "consent") return { kind: "response", response: redirect(setupPage(request)) };
 	if (!choice || !host) return { kind: "response", response: redirect(setupPage(request, "choice")) };
-	if (!recentSignIn(session)) {
+	if (!fresh) {
 		return { kind: "response", response: await reauthResponse(request, auth, options, { userId, action: "consent", choice, host }, "/app/cloudflare") };
 	}
 	return { kind: "response", response: await startCloudflareOAuth(request, options, userId, choice, host) };

@@ -3,9 +3,8 @@ import { CALLBACK_DEADLINE_MS, within } from "./auth/deadline.ts";
 import { connectingIp, verifyTurnstile } from "./auth/turnstile.ts";
 import { signInReturnPath } from "./auth/return.ts";
 import { readCloudflareGrant } from "./auth/cloudflare-grant.ts";
-import { CLOUDFLARE_REAUTH_NOTICE, cloudflareIsLinked, finishCloudflareLink, handleCloudflareAccount, handleCloudflareSetup, resumeCloudflare } from "./auth/cloudflare-link.ts";
-import { recentSignIn } from "./auth/recent.ts";
-import { describeSetupGrant } from "./auth/cloudflare-setup.ts";
+import { CLOUDFLARE_REAUTH_NOTICE, cloudflareIsLinked, finishCloudflareLink, handleCloudflareAccount, handleCloudflareSetup, inboxIdFromPath, resumeCloudflare, sessionIsFresh } from "./auth/cloudflare-link.ts";
+import { describeSetupGrant, inboxCanProvision, parseSetupHost } from "./auth/cloudflare-setup.ts";
 import { enabledProviderOrigins, handleSignIn, PROVIDER_ORIGINS } from "./auth/sign-in.ts";
 import { loadAuth } from "./auth/instance.ts";
 import { signupClosedText, type SignupAllowlist } from "./auth/allowlist.ts";
@@ -26,7 +25,7 @@ import { renderSignIn } from "./views/sign-in.tsx";
 import { createFeedback, feedbackOn, type FeedbackDeps, type FeedbackResult } from "./feedback.ts";
 import type { InboxMigration, InboxWizard } from "./provision/inbox.ts";
 import { PERMISSION_WAIT } from "./provision/permission-wait.ts";
-import { hashOwnerToken, readCloudflareInbox } from "./provision/inbox-row.ts";
+import { cloudflareHostname, hashOwnerToken, listCloudflareInboxes, readCloudflareInboxById, type InboxRow } from "./provision/inbox-row.ts";
 import { renderFeedback } from "./views/feedback.tsx";
 
 /**
@@ -311,6 +310,8 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 	app.all("/app/feedback", (c) => feedbackPage(c));
 	app.get("/app/cloudflare", (c) => cloudflareSetupPage(c));
 	app.post("/app/cloudflare", (c) => cloudflareSetupPost(c));
+	app.get("/app/cloudflare/:inboxId", (c) => cloudflareSetupPage(c));
+	app.post("/app/cloudflare/:inboxId", (c) => cloudflareSetupPost(c));
 	app.get("/app/*", async (c) => {
 		const shell = await renderShell(c.req.raw);
 		if (shell.clearOwner) c.header("set-cookie", hostCookie(OWNER_COOKIE, "", 0));
@@ -343,7 +344,18 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 			permissionDelaysMs: deps.permissionDelaysMs,
 		};
 	}
-	async function cloudflareSetupPage(c: Context<{ Bindings: ControlEnv }>, review?: { choice: "inbox" | "facade" | "both"; host: "workers" | "zone" }, extra?: { wizard?: InboxWizard; ownerToken?: string }) {
+	function wantsSetupPartial(request: Request): boolean {
+		return request.headers.get("x-setup-partial") === "1";
+	}
+	function partialFromRedirect(response: Response): Response {
+		const location = response.headers.get("location");
+		if (!location || response.status < 300 || response.status >= 400) return response;
+		const headers = new Headers({ "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+		const cookies = typeof response.headers.getSetCookie === "function" ? response.headers.getSetCookie() : [];
+		for (const cookie of cookies) headers.append("set-cookie", cookie);
+		return new Response(JSON.stringify({ redirect: location }), { status: 200, headers });
+	}
+	async function cloudflareSetupPage(c: Context<{ Bindings: ControlEnv }>, review?: { choice: "inbox" | "facade" | "both"; host: "workers" | "zone" }, extra?: { wizard?: InboxWizard; ownerToken?: string; inboxId?: string }) {
 		const request = c.req.raw;
 		const loaded = await loadAuth(env, request, deps);
 		if (!loaded) return c.json({ error: "not_found" }, 404);
@@ -351,13 +363,17 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 		const session = await loaded.auth.api.getSession({ headers: request.headers });
 		const userId = session?.user?.id ?? "";
 		if (!userId) return redirectTo(new URL("/app", request.url).href);
+		const url = new URL(request.url);
+		const param = c.req.param("inboxId");
+		const pathInbox = inboxIdFromPath(url.pathname) || (extra?.inboxId && /^[0-9a-f]{32}$/.test(extra.inboxId) ? extra.inboxId : "");
+		if (param !== undefined && !pathInbox) return c.json({ error: "not_found" }, 404);
 		let clearResume = false;
 		let resumedWizard: InboxWizard | null = null;
 		let resumedOwner = "";
 		const provision = review ? null : await provisionDeps(request);
-		if (!review && provision) {
+		if (!review && provision && !extra?.wizard) {
 			const resumed = await resumeCloudflare(request, loaded.auth, loaded.options, provision);
-			if (resumed?.kind === "response") return resumed.response;
+			if (resumed?.kind === "response") return wantsSetupPartial(request) ? partialFromRedirect(resumed.response) : resumed.response;
 			if (resumed?.kind === "clear") clearResume = true;
 			if (resumed?.kind === "wizard") {
 				c.header("set-cookie", resumed.setCookie, { append: true });
@@ -365,16 +381,44 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 				resumedOwner = resumed.ownerToken ?? "";
 			}
 		}
-		const url = new URL(request.url);
 		const grant = review ? null : await readCloudflareGrant(loaded.options.database, userId);
-		const inbox = review ? null : await readCloudflareInbox(loaded.options.database, userId);
+		const rows = review ? [] : await listCloudflareInboxes(loaded.options.database, userId);
+		let inbox: InboxRow | null = null;
+		if (pathInbox) {
+			inbox = await readCloudflareInboxById(loaded.options.database, userId, pathInbox);
+			if (!inbox) return c.json({ error: "not_found" }, 404);
+		} else if (!review) {
+			inbox = rows.find((row) => row.status === "pending" || row.status === "working") ?? null;
+		}
+		if (!pathInbox && !review && !extra?.wizard && !resumedWizard && url.searchParams.get("connected") === "1" && grant && inboxCanProvision(grant)) {
+			const open = rows.find((row) => row.status === "pending" || row.status === "working");
+			const host = parseSetupHost(grant.host);
+			if (open) return redirectTo(new URL(`/app/cloudflare/${open.id}`, request.url).href);
+			if (host) {
+				const { createCloudflareAgent } = await import("./provision/inbox.ts");
+				const createdId = await createCloudflareAgent(loaded.options.database, userId, host);
+				return redirectTo(new URL(`/app/cloudflare/${createdId}`, request.url).href);
+			}
+		}
 		const report = grant ? describeSetupGrant(grant) : null;
-		const recent = recentSignIn(session);
-		const inboxPage = report?.inbox ? await import("./provision/inbox.ts") : null;
-		let wizard = extra?.wizard ?? resumedWizard ?? (inboxPage ? inboxPage.viewInboxWizard({ grant, inbox }) : null);
+		const recent = await sessionIsFresh(loaded.options.database, session, userId);
+		const confirming = Boolean(inbox && url.searchParams.get("remove") === "1" && inbox.status !== "removing");
+		const removing = Boolean(inbox && inbox.status === "removing" && !confirming);
+		let removal: { items: { title: string; detail: string }[]; steps: { id: string; title: string; state: "pass" | "fail" | "pending"; text: string; cloudflare: string }[]; confirming: boolean } | null = null;
+		if (inbox && (confirming || removing)) {
+			const removalMod = await import("./provision/remove.ts");
+			removal = {
+				confirming,
+				items: removalMod.removalItems(inbox),
+				steps: confirming ? [] : removalMod.removalSteps(inbox),
+			};
+		}
+		const inboxPage = report?.inbox && !removal ? await import("./provision/inbox.ts") : null;
+		const showWizard = Boolean(inboxPage && inbox && inbox.status !== "removing");
+		let wizard = extra?.wizard ?? resumedWizard ?? (showWizard && inboxPage ? inboxPage.viewInboxWizard({ grant, inbox }) : null);
 		let steppedOwner = extra?.ownerToken || resumedOwner || "";
 		// A permission wait reloads this page. One try per request, and only while the sign-in is still recent.
-		if (!review && !extra?.wizard && !resumedWizard && provision && inboxPage && loaded.options.cloudflare && inboxPage.permissionRetryDue(inbox) && recent) {
+		if (!review && !removal && !extra?.wizard && !resumedWizard && provision && inboxPage && loaded.options.cloudflare && inboxPage.permissionRetryDue(inbox) && recent) {
 			const outcome = await inboxPage.runInboxStep({
 				database: loaded.options.database,
 				secret: loaded.options.secret,
@@ -414,10 +458,16 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 			createdUrl: inbox?.status === "ready" ? inbox.public_url : null,
 			ownerToken: ownerToken || undefined,
 			wizard,
+			createAgent: Boolean(grant && inboxCanProvision(grant)),
+			inboxId: inbox?.id || wizard?.fields.inbox || pathInbox,
+			removal,
 		});
 		if (clearResume) c.header("set-cookie", hostCookie(CLOUDFLARE_RESUME_COOKIE, "", 0), { append: true });
-		if (wizard?.refreshSeconds && recent) c.header("refresh", String(wizard.refreshSeconds));
-		return c.html(renderApp(env, body, "Set me up on Cloudflare", feedbackLink), 200, pageHeaders(false, null, [], Boolean(ownerToken), accountLinkOrigins(loaded.options)));
+		if (wantsSetupPartial(request)) {
+			return c.json({ html: body, ...(wizard?.refreshSeconds && recent ? { refreshSeconds: wizard.refreshSeconds } : {}) }, 200, { "cache-control": "no-store" });
+		}
+		const setupScript = `${feedbackLink ?? ""}<script src="/setup.js"></script>`;
+		return c.html(renderApp(env, body, "Set me up on Cloudflare", setupScript), 200, pageHeaders(false, null, [], true, accountLinkOrigins(loaded.options)));
 	}
 	async function cloudflareSetupPost(c: Context<{ Bindings: ControlEnv }>) {
 		const request = c.req.raw;
@@ -426,7 +476,8 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 		const result = await handleCloudflareSetup(request, loaded.auth, loaded.options, await provisionDeps(request));
 		if (result.kind === "review") return cloudflareSetupPage(c, result);
 		if (result.kind === "wizard") return cloudflareSetupPage(c, undefined, result);
-		return result.response;
+		if (result.kind === "agent") return cloudflareSetupPage(c, undefined, { inboxId: result.inboxId });
+		return wantsSetupPartial(request) ? partialFromRedirect(result.response) : result.response;
 	}
 	app.post("/app/sign-out", async (c) => {
 		const request = c.req.raw;
@@ -615,7 +666,13 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 				cloudflare: Boolean(loaded.options.cloudflare),
 				cloudflareLinked: await cloudflareIsLinked(loaded.options.database, session.user.id),
 				disconnected: url.searchParams.get("disconnected") === "1",
-				cloudflareInbox: (await readCloudflareInbox(loaded.options.database, session.user.id))?.public_url,
+				cloudflareAgents: (await listCloudflareInboxes(loaded.options.database, session.user.id)).map((row) => ({
+					id: row.id,
+					host: cloudflareHostname(row),
+					createdAt: row.created_at,
+				})),
+				forgotCloudflare: url.searchParams.get("forgotCloudflare") === "1",
+				removedCloudflare: url.searchParams.get("removedCloudflare") === "1",
 			});
 			return {
 				html: renderApp(env, body, "Your agents", feedbackLink),
