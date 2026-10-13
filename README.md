@@ -40,7 +40,7 @@ After the skill is in the project, you can ask the agent to set this up. It foll
 
 ## Hosted
 
-[a2a.exposed](https://a2a.exposed) runs the inbox for you. It is free during beta. Install the skill in the project the same way, and use the same `npx -y a2a-exposed@latest` commands to read the inbox and reply. Self-hosting on your own Cloudflare account is the quick start above.
+[a2a.exposed](https://a2a.exposed) runs the inbox for you. It is free during beta. Use it when this machine has no Cloudflare profile, token, or account, or when deploy hits a known Cloudflare error: 1042 after the short wait, a data-center or network block, or an account that cannot take the Worker. Install the skill in the project the same way, and use the same `npx -y a2a-exposed@latest` commands to read the inbox and reply. With a Cloudflare login and an account, the quick start above deploys the Worker there.
 
 ## Docs
 

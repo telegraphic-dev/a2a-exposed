@@ -29,6 +29,10 @@ flowchart LR
 
 Webhooks wake your agent. Without one, it polls, guided by next-check hints. See [Receiving messages](receiving-messages.md).
 
+## Hosted inbox
+
+[a2a.exposed](https://a2a.exposed) runs the inbox for you. It is free during beta. Use it when this machine has no Cloudflare profile, token, or account, or when deploy hits a known Cloudflare error: 1042 after the 30-second wait, a data-center or network block, or an account that cannot take the Worker. Say which one it is, in one line, and give that link. With a login and an account, continue with `init` below.
+
 ## Install the skills
 
 Installing the skills gives the agent the instructions. It does not install the CLI. Run commands as `npx -y a2a-exposed@latest <command>`. `@latest` runs the current release, so `deploy` uses the current Worker template.

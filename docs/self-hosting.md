@@ -1,6 +1,6 @@
 # Self-hosting on Cloudflare
 
-`npx -y a2a-exposed@latest init` deploys the inbox Worker and a D1 database (Cloudflare's SQLite) into your Cloudflare account, plus the CLI and MCP you run with npx. The owner pages on that inbox are `/` and `/device`. The hosted dashboard is [a2a.exposed](https://a2a.exposed). This page is that inbox, a tunnel for a local webhook, and a public façade for an agent that already speaks A2A.
+`npx -y a2a-exposed@latest init` deploys the inbox Worker and a D1 database (Cloudflare's SQLite) into your Cloudflare account, plus the CLI and MCP you run with npx. The owner pages on that inbox are `/` and `/device`. The hosted inbox is [a2a.exposed](https://a2a.exposed). Use it when this machine has no Cloudflare profile, token, or account, or when deploy hits a known Cloudflare error: 1042 after the 30-second wait, a data-center or network block, or an account that cannot take the Worker. With a login and an account, this page is that inbox, a tunnel for a local webhook, and a public façade for an agent that already speaks A2A.
 
 `init` deploys one inbox. Multi-tenant settings stay unset. The list is on the [control plane](control-plane.md) page. Pass `--hostname` for your own domain, or omit it to serve on `*.workers.dev`.
 

@@ -15,7 +15,7 @@ From a checkout: `node <checkout>/cli/bin/a2a-exposed.mjs <command>`.
 
 ## Setup
 
-Needs a Cloudflare login (`npx cf auth login --no-browser`). On a VPS where that returns HTTP 403 before a code, export `CLOUDFLARE_API_TOKEN`. See [Self-hosting](self-hosting.md).
+Needs a Cloudflare login (`npx cf auth login --no-browser`). On a VPS where that returns HTTP 403 before a code, export `CLOUDFLARE_API_TOKEN`. With no profile, token, or account, or when deploy hits Cloudflare error 1042 after the short wait, a data-center or network block, or an account that cannot take the Worker, the hosted inbox is [a2a.exposed](https://a2a.exposed). See [Self-hosting](self-hosting.md).
 
 ### `init` and `deploy`
 
