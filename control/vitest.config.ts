@@ -1,5 +1,7 @@
 // Vitest runs inside workerd (Miniflare) via the Workers Vitest plugin.
-// These tests need D1 and the compatibility date below. The Cloudflare API is mocked in the test file.
+// The deploy cloudflare.config.ts stays out of this file: it reads deploy env
+// and declares assets. These tests only need D1 and the same compatibility date
+// as the control Worker. The Cloudflare API is mocked in the test file.
 import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-plugin";
 import path from "node:path";
 import { defineConfig } from "vitest/config";
