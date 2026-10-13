@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { openWakeSecrets as openHere, sealWakeSecrets as sealHere } from "../src/tenants/wake-secrets.ts";
 import { MAX_WAKE_SEALED, MAX_WAKE_VALUE, openWakeSecrets as openWorker, sealWakeSecrets as sealWorker, WAKE_SECRET_KEYS } from "../../worker/src/wake-secrets.ts";
 
-test("the control plane and the worker open each other's wake secrets", async () => {
+test("the library and the worker open each other's wake secrets", async () => {
 	const secrets = { WAKE_WEBHOOK_KEY: "z9Qx-secret-value-0199" };
 	const fromControl = await sealHere("platform-secret", "ten_a", secrets);
 	const fromWorker = await sealWorker("platform-secret", "ten_a", secrets);

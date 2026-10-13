@@ -1,4 +1,4 @@
-// Feedback from an owner-only MCP tool. A hosted tenant posts to the control plane.
+// Feedback from an owner-only MCP tool. A hosted tenant posts to the feedback URL.
 // Any other deploy returns a prefilled GitHub issue URL and does not call out.
 import { reachesControl } from "./approval-oidc.ts";
 import { scrubSecretText } from "./export.ts";
@@ -247,7 +247,7 @@ async function postFeedback(ctx: TenantContext, endpoint: string, body: string, 
 }
 
 /**
- * File the note when this tenant is hosted and the control plane accepts it.
+ * File the note when this tenant is hosted and the feedback URL accepts it.
  * No endpoint, or a 404, returns the prefilled issue URL and does not throw.
  * Anything else throws a short error with none of the message.
  */

@@ -1,4 +1,4 @@
-// Feedback: post to a hosted control plane when this inbox points at one, otherwise print a GitHub issue link.
+// Feedback: post when this inbox names a feedback URL, otherwise print a GitHub issue link.
 import os from "node:os";
 import readline from "node:readline/promises";
 import { CliError } from "./a2a.mjs";
@@ -29,7 +29,7 @@ export function scrubFeedbackText(value) {
 
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
-/** The repository that will receive the issue. The prefilled form is ISSUE_REPO. A hosted post uses the control plane's name. */
+/** The repository that will receive the issue. The prefilled form is ISSUE_REPO. A hosted post uses the name that URL returns. */
 export function publicIssueWarning(repo = ISSUE_REPO) {
 	const name = typeof repo === "string" && REPO_RE.test(repo) && repo.length <= 100 && !repo.includes("..") ? repo : ISSUE_REPO;
 	return `This report is filed as a public GitHub issue on ${name}. Do not include confidential information: secrets, tokens, owner or pairing tokens, private URLs or hostnames, message contents, or personal data.`;
@@ -233,7 +233,7 @@ export async function feedbackPublicRepo(input) {
 	}
 	const body = named && named.ok ? await readJson(named) : null;
 	const repo = namedRepo(body?.repo);
-	if (!repo) throw new CliError("the control plane did not name the public repository; feedback was not sent");
+	if (!repo) throw new CliError("the inbox did not name the public repository; feedback was not sent");
 	return repo;
 }
 

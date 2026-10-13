@@ -174,9 +174,9 @@ async function takeBody(res: Response, signal: AbortSignal, max: number): Promis
 
 /**
  * Discovery, token and JWKS for an issuer on this tenant's zone go through CONTROL_SERVICE.
- * A public fetch of that zone can miss the control Worker (wildcard route, 522, or the site Worker).
+ * A public fetch of that zone can miss the issuer (wildcard route, 522, or another Worker on the zone).
  * Any other issuer, and a deploy with the binding unset, uses fetch.
- * The binding request sets Host to the issuer host. Without that header the control Worker on the
+ * The binding request sets Host to the issuer host. Without that header an issuer on the
  * zone apex sees no Host, and the subrequest does not finish. Every call, binding or fetch, stops
  * after FETCH_MS and the page says the provider could not be reached.
  */
@@ -209,7 +209,7 @@ function publicFetch(url: string, init: RequestInit, signal: AbortSignal): Promi
 async function bindingFetch(binding: NonNullable<ReturnType<TenantContext["controlService"]>>, url: string, init: RequestInit, signal: AbortSignal): Promise<Response> {
 	const headers = new Headers(init.headers);
 	// `new Request(url)` does not keep Host across a service binding. The apex issuer is then
-	// a request with no Host, which does not match the control Worker's route or ISSUER, and the
+	// a request with no Host, which does not match the issuer route or ISSUER, and the
 	// subrequest never completes. Set Host to the URL host. `redirect` and `signal` stay off the
 	// Request (they do not cross the binding). `signal` is passed to fetch so the runtime cancels it.
 	headers.set("host", new URL(url).host);

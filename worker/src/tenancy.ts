@@ -106,8 +106,8 @@ export interface WorkerBindings extends ConfigFields {
 	/** Comma-separated: password, oidc. Unset keeps the password and also offers OIDC once it is fully configured. */
 	APPROVAL_METHODS?: string;
 	/**
-	 * Service binding to the control Worker. Used for OpenID Connect discovery, token and JWKS
-	 * when the issuer is on this tenant's zone. Unset: those calls use `fetch` (self-host, and any other issuer).
+	 * Service binding for OpenID Connect discovery, token, and JWKS when the issuer is on this
+	 * tenant's zone. Unset: those calls use `fetch`.
 	 */
 	CONTROL_SERVICE?: ControlFetcher;
 }
@@ -161,20 +161,20 @@ export interface FeatureGates {
 	wakeTargetPolicy: "" | "public-https";
 	signupUrl: string;
 	branding: "" | "hosted";
-	/** https origin of a control plane that accepts POST /api/feedback, or "". Ignored unless mode is host. */
+	/** https origin that accepts POST /api/feedback, or "". Ignored unless mode is host. */
 	feedbackUrl: string;
 	dataRegion: DataRegion;
 	tenantDomain: string;
 	approvalOidc: ApprovalOidcGate;
 }
 
-/** Pushed tenant row (control plane → DO). PR1 tests build a context from this; the DO stores it in PR2. */
+/** Pushed tenant row. Tests build a context from this; the Durable Object stores it. */
 export interface HostedOverlay {
 	id: string;
 	db: SqlDb;
 	publicUrl: string;
 	ownerTokenHash?: string | null;
-	/** Non-secret and, when the control plane includes them, secret config fields. Never OWNER_TOKEN. */
+	/** Non-secret and secret config fields. Never OWNER_TOKEN. */
 	config?: Record<string, string | undefined>;
 	limits?: Record<string, unknown>;
 	approval?: Record<string, unknown>;
@@ -376,7 +376,7 @@ export class TenantContext implements ConfigFields {
 	readonly #secretsKey?: string;
 	/** OpenID Connect client secret. Never logged and never copied onto `gates`. */
 	readonly #approvalClientSecret?: string;
-	/** Control Worker binding. Not a secret. Absent on a self-host deploy. */
+	/** Service binding for the issuer. Not a secret. Absent on a self-host deploy. */
 	readonly #controlService?: ControlFetcher;
 	#peerKey: Promise<CryptoKey | null> | null = null;
 
@@ -407,7 +407,7 @@ export class TenantContext implements ConfigFields {
 		return this.#approvalClientSecret || "";
 	}
 
-	/** Control Worker binding, or undefined when this deploy has none. */
+	/** Issuer service binding, or undefined when this deploy has none. */
 	controlService(): ControlFetcher | undefined {
 		return this.#controlService;
 	}

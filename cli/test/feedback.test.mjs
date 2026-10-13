@@ -96,7 +96,7 @@ test("an unknown kind or connection is refused", async () => {
 	assert.match(connection.stderr, /--connection must be webhook, proxy, or polling/);
 });
 
-test("a hosted inbox names the control plane repository, and does not guess when that name is missing", async () => {
+test("a hosted inbox names the repository, and does not guess when that name is missing", async () => {
 	const repo = "example-org/example-repo";
 	let gets = 0;
 	const named = await feedbackPublicRepo({

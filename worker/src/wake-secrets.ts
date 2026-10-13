@@ -1,4 +1,4 @@
-// Wake secrets sealed for one hosted tenant. The control plane writes `secrets_enc`; the tenant
+// Wake secrets sealed for one hosted tenant. The writer stores `secrets_enc`; the tenant
 // object decrypts it when it builds the tenant context. Self-host does not use this.
 // Keep control/src/tenants/wake-secrets.ts in step with this file.
 

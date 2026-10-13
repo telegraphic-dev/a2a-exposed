@@ -10,7 +10,7 @@ Report a result the docs do not cover with `npx -y a2a-exposed@latest feedback`.
 
 **No wakes, but the task is in the inbox.** Wakes are debounced per conversation. An hourly cap of 0, or an unset cap, does not suppress them. The `claude-code` preset defaults to 25 an hour when the cap is unset. A local webhook needs the tunnel or polling. Run `wake preview`, then `wake test`.
 
-**Where are the logs?** Real-time logs are in the Cloudflare dashboard. Persisted logs need `deploy --workers-logs on` (off by default), then the Worker's Observability / Logs tab. Query strings are redacted. Useful lines: `message_received`, `wake_sent`, `wake_failed`, `auth_failed`, `pairing_password_set`, and in proxy mode `upstream_error` / `upstream_verify` with a `reason`. A control-plane sign-in logs `social_sign_in_failed`, `social_sign_in_timeout`, or `oauth_callback_failed`. Those lines do not include the OAuth code, state, Turnstile token, or secret.
+**Where are the logs?** Real-time logs are in the Cloudflare dashboard. Persisted logs need `deploy --workers-logs on` (off by default), then the Worker's Observability / Logs tab. Query strings are redacted. Useful lines: `message_received`, `wake_sent`, `wake_failed`, `auth_failed`, `pairing_password_set`, and in proxy mode `upstream_error` / `upstream_verify` with a `reason`.
 
 **The CLI says a newer version is out.** `npx -y a2a-exposed@latest deploy`. With a global install, `npm i -g a2a-exposed@latest` first. See [Upgrading](upgrading.md).
 

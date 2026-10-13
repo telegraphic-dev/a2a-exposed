@@ -54,15 +54,12 @@ jobs:
         working-directory: cli
         run: npm test
 
-      - name: Control - install, test, typecheck, build
+      - name: Library - install, test, typecheck
         working-directory: control
         run: |
           npm ci --no-audit --no-fund
           npm test
-          npx cf workers types
           npx tsc --noEmit
-          npm run build
-          node scripts/check-build.mjs
 
       # CLI package. Auth is the NPM_TOKEN secret. prepack bundles ../worker (scripts/sync-worker.mjs).
       - name: Publish to npm

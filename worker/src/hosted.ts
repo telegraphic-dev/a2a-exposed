@@ -34,7 +34,7 @@ const gone = () => Response.json({ error: "this agent is gone" }, { status: 410,
 
 const TENANT_ID = /^[A-Za-z0-9._:-]{1,128}$/;
 
-/** Versioned config pushed by the control plane. `secretsEnc` is decrypted into the wake credentials when the context is built. */
+/** Versioned config pushed into the object. `secretsEnc` is decrypted into the wake credentials when the context is built. */
 export interface TenantConfigPush {
 	version: number;
 	tenantId: string;

@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/a2a-exposed)](https://www.npmjs.com/package/a2a-exposed) [![CI](https://github.com/telegraphic-dev/a2a-exposed/actions/workflows/ci.yml/badge.svg)](https://github.com/telegraphic-dev/a2a-exposed/actions/workflows/ci.yml)
 
-a2a-exposed gives an AI agent a public [A2A](https://a2a-protocol.org) address. A Cloudflare Worker serves the agent card and the JSON-RPC endpoint. Inbound messages become tasks in an inbox. Webhooks wake your agent. Without one, it polls, guided by next-check hints. The agent reads the inbox and replies with `npx -y a2a-exposed@latest`. The same command sends messages to other A2A agents (1.0 or 0.3). The owner pages on that inbox are `/` and `/device`. The hosted dashboard is [a2a.exposed](https://a2a.exposed).
+a2a-exposed gives an AI agent a public [A2A](https://a2a-protocol.org) address. A Cloudflare Worker serves the agent card and the JSON-RPC endpoint. Inbound messages become tasks in an inbox. Webhooks wake your agent. Without one, it polls, guided by next-check hints. The agent reads the inbox and replies with `npx -y a2a-exposed@latest`. The same command sends messages to other A2A agents (1.0 or 0.3). The owner pages on that inbox are `/` and `/device`.
 
 ## Who it's for
 
@@ -42,10 +42,6 @@ After the skill is in the project, you can ask the agent to set this up. It foll
 
 [a2a.exposed](https://a2a.exposed) runs the inbox for you. It is free during beta. A human signs in there. When this machine has no Cloudflare profile, token, or account, or when deploy hits a known Cloudflare error (1042 after the short wait, a data-center or network block, or an account that cannot take the Worker), name the reason and say "Ask your human to set it up on https://a2a.exposed." Install the skill in the project the same way, and use the same `npx -y a2a-exposed@latest` commands to read the inbox and reply. With a Cloudflare login and an account, the quick start above deploys the Worker there.
 
-## Control Worker
-
-The Worker in `control/` serves `GET /health`, plain feedback when `FEEDBACK_REPO` and `FEEDBACK_GITHUB_TOKEN` are set, and a static shell at `/app`. Sign-in, OpenID Connect, the dashboard, and `/api/v1/tenants` are on [a2a.exposed](https://a2a.exposed). The inbox Worker, the CLI, MCP, and the owner pages `/` and `/device` stay. Keep that inbox with `npx -y a2a-exposed@latest deploy`, or ask a human to set it up on https://a2a.exposed.
-
 ## Docs
 
 | | |
@@ -60,7 +56,6 @@ The Worker in `control/` serves `GET /health`, plain feedback when `FEEDBACK_REP
 | [Troubleshooting](docs/troubleshooting.md) | FAQ and common failures |
 | [Upgrading](docs/upgrading.md) | Move an existing inbox forward |
 | [Protocol](docs/protocol.md) | A2A 1.0 and 0.3, OAuth, endpoints |
-| [Control plane](docs/control-plane.md) | Inbox, CLI, MCP, owner pages; hosted dashboard at a2a.exposed |
 
 Changes are listed in [CHANGELOG.md](CHANGELOG.md). Agent workflows live in [`skills/`](skills/a2a-exposed/SKILL.md).
 

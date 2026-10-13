@@ -271,7 +271,7 @@ test("hosted approval reaches a same-zone issuer through CONTROL_SERVICE", async
 				return new Response("missing", { status: 404 });
 			},
 		},
-		// A public fetch of another host on this zone does not reach the control Worker. If it is attempted, answer 522.
+		// A public fetch of another host on this zone does not reach the issuer. If it is attempted, answer 522.
 		outboundService: async (request: Request) => {
 			publicHosts.push(new URL(request.url).hostname);
 			return new Response("origin is unreachable", { status: 522 });
@@ -367,7 +367,7 @@ test("hosted approval reaches a same-zone issuer through CONTROL_SERVICE", async
 	assert.match(await missedPost.text(), /The identity provider could not be reached/);
 });
 
-test("an apex issuer is fetched with that Host, and a control worker that does not answer still returns", async (t) => {
+test("an apex issuer is fetched with that Host, and a binding that does not answer still returns", async (t) => {
 	const issuer = "https://example.com";
 	const tenant = "https://northwind.example.com";
 	const control = `

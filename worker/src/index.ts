@@ -2180,7 +2180,7 @@ async function mcpGrantOf(ctx: TenantContext, header: string | null): Promise<Js
 }
 
 /**
- * Hosted owner RPC. The control plane has already checked that `accountId` owns this tenant.
+ * Hosted owner RPC. The caller has already checked that `accountId` owns this tenant.
  * Only an allowlisted path runs, and the response is withheld when it contains a peer token or a secret.
  * Self-host (`mode` single) is refused here; its owner API stays the bearer check in `handleOwner`.
  */

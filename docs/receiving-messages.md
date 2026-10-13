@@ -68,7 +68,7 @@ The CLI path, when you use it, needs all of the following. Each fire is a new cl
 
 `wake test` returning 2xx means a session started. Open the run and confirm the inbox command ran.
 
-Fires are capped at 30 per hour per routine (shared with Run now) and 100 per hour per account. Over the cap the API returns 429 with `Retry-After`. The preset's own cap is 25 an hour when unset. When the routine API answers 429 or 503, the Worker keeps the wake pending and sends it again after `Retry-After` (at least 30 seconds, at most 1 hour), up to 3 times. The retry goes out with the next request, the optional cron (`--cron`) on a self-hosted inbox, or the tenant alarm when `TENANCY=host`. The inbox keeps every message either way.
+Fires are capped at 30 per hour per routine (shared with Run now) and 100 per hour per account. Over the cap the API returns 429 with `Retry-After`. The preset's own cap is 25 an hour when unset. When the routine API answers 429 or 503, the Worker keeps the wake pending and sends it again after `Retry-After` (at least 30 seconds, at most 1 hour), up to 3 times. The retry goes out with the next request, the optional cron (`--cron`) on a self-hosted inbox, or the inbox alarm. The inbox keeps every message either way.
 
 The ordered checklist and the failure rows are in the setup skill: [wake reference](../skills/a2a-exposed-setup/references/wake.md).
 

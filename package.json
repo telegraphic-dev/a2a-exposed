@@ -1,7 +1,7 @@
 {
 	"name": "@a2a-exposed/control-core",
-	"version": "0.7.0",
-	"description": "Tenants, Cloudflare inbox provisioning, routing, and control-plane migrations for a2a-exposed.",
+	"version": "0.8.0",
+	"description": "Tenants, Cloudflare inbox provisioning, routing, and D1 migrations for a2a-exposed.",
 	"type": "module",
 	"scripts": {
 		"prepare": "node control/scripts/build-core.mjs",

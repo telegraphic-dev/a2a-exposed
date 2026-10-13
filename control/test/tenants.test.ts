@@ -1,11 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createApp } from "../src/app.ts";
 import { createTenant, listTenants } from "../src/tenants/create.ts";
 import { dataPlaneFromEnv, flushOutbox, type DataPlane, type TenantPush } from "../src/tenants/push.ts";
 import { openDb } from "./sql.ts";
-
-const secret = "test-secret-test-secret-test-secret";
 
 function plane() {
 	const directory = new Map<string, { id: string; status: string; region: string; version: number }>();
@@ -25,17 +22,6 @@ function plane() {
 	};
 	return { directory, pushes, data, setFail(next: boolean) { fail = next; } };
 }
-
-test("the tenant HTTP route stays closed on this Worker", async () => {
-	const app = createApp({ AUTH_SECRET: secret, DB: openDb() });
-	const response = await app.request("https://control.example.com/api/v1/tenants", {
-		method: "POST",
-		headers: { "content-type": "application/json" },
-		body: JSON.stringify({ name: "northwind" }),
-	});
-	assert.equal(response.status, 404);
-	assert.deepEqual(await response.json(), { error: "not_found" });
-});
 
 test("create writes the directory and the object, and the token is shown once", async () => {
 	const db = openDb();

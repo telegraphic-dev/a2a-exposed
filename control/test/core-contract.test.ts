@@ -1,5 +1,5 @@
-// The private dashboard imports this entry and nothing under it. A removed route,
-// type, or function fails here, in OSS CI, before a tag.
+// An importer uses this entry and nothing under it. A removed route,
+// type, or function fails here before a tag.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";

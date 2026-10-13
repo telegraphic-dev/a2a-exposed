@@ -31,9 +31,3 @@ Current Worker migrations, applied when missing: `0001_init`, `0002_wake_budget`
 If `pair` returns HTTP 500, or peers get `-32603` and the Worker log says `no such table: wake_budget`, run `deploy`. That applies the missing migration.
 
 Moving between a custom hostname and workers.dev is `deploy --workers-dev` or `deploy --hostname <host>`. See [Self-hosting](self-hosting.md).
-
-## Hosted agents
-
-On [a2a.exposed](https://a2a.exposed), rotate the owner token, delete the agent, or download a redacted SQL copy from the agent page. `npx -y a2a-exposed@latest export` with the owner token is the full dump.
-
-Point-in-time restore of one hosted tenant is `bookmarkForTime` / `restoreBookmark` on that tenant's Durable Object, when the storage runtime provides bookmarks. `restoreBookmark` schedules the bookmark and returns `{ ok: true }`. The object resets on a later turn, after that result is delivered.
