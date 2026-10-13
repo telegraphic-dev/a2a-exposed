@@ -2,7 +2,7 @@
 
 The Worker is a remote [MCP](https://modelcontextprotocol.io) server at `https://<your Worker URL>/mcp` (Streamable HTTP). An MCP client uses the inbox with no CLI, Node, or owner token in the client.
 
-Each deploy has its own host, so the plugin manifests leave MCP unset. After deploy, `npx -y a2a-exposed@latest status` prints the exact line for the saved base URL when MCP is on:
+Each deploy has its own host, so the plugin manifests leave MCP unset. After deploy, `npx -y a2a-exposed@latest status` prints the exact line when `GET /owner/mcp` reports enabled and the agent card is reachable:
 
 ```text
 claude mcp add --transport http a2a-exposed https://<your Worker URL>/mcp

@@ -87,7 +87,7 @@ For a webhook that only listens locally. Needs Zero Trust and a zone on the acco
 
 | Command | Effect |
 | --- | --- |
-| `status [--json]` | Deployment, base URL, agent card, wake mode (webhook, tunnel, or none), tunnel state, and in proxy mode the upstream card, Access credential, upstream bearer, live check, last failed peer call, and a card-leak check. Warns when a peer-token variable shadows a saved token. With MCP on, prints `claude mcp add --transport http a2a-exposed <base URL>/mcp`. Prints the next step. Exit 1 means something is broken. Read-only, except the no-op upstream probe in proxy mode |
+| `status [--json]` | Deployment, base URL, agent card, wake mode (webhook, tunnel, or none), tunnel state, and in proxy mode the upstream card, Access credential, upstream bearer, live check, last failed peer call, and a card-leak check. Warns when a peer-token variable shadows a saved token. When `GET /owner/mcp` reports enabled and the agent card is reachable, prints `claude mcp add --transport http a2a-exposed <base URL>/mcp`. Prints the next step. Exit 1 means something is broken. Read-only, except the no-op upstream probe in proxy mode |
 | `upstream verify [--json]` | Proxy mode only. Exit 1 unless the A2A app answered. `status` runs the same check |
 | `url` | Public base URL |
 | `config` | Masked config and its path |

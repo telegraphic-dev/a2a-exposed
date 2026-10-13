@@ -184,7 +184,7 @@ export async function collect() {
 		upstream: C.get("A2A_UPSTREAM_URL") || null, facade: null, upstreamVerify: null, upstreamVerifyError: "", facadePeerAuth: null,
 		upstreamNoToken: C.get("A2A_UPSTREAM_NO_TOKEN") === "1", localUpstreamToken: fingerprint(process.env.UPSTREAM_TOKEN),
 		peerTokenShadowed: shadowedPeerTokens(),
-		mcp: C.get("A2A_MCP") === "off" ? "off" : "on",
+		mcp: "unknown",
 	};
 	const envBase = (process.env.A2A_BASE_URL || "").replace(/\/$/, "");
 	if (envBase && envBase !== s.baseUrlSaved) s.baseUrlEnv = envBase;
@@ -210,6 +210,11 @@ export async function collect() {
 				catch (e) { s.facade = { mode: "unknown", error: e.message }; }
 				if (s.facade && s.facade.mode === "proxy") Object.assign(s, await upstreamCheck(s.baseUrl));
 			}
+			try {
+				const m = await ownerTry("GET", "/owner/mcp");
+				if (m.status === 200 && m.data && typeof m.data === "object" && typeof m.data.enabled === "boolean")
+					s.mcp = m.data.enabled ? "on" : "off";
+			} catch { /* probe failed: leave mcp unknown so status omits the add line */ }
 		}
 	}
 	const dir = D.workerDir({});
@@ -251,10 +256,9 @@ export async function upstreamCheck(base) {
 	return out;
 }
 
-/** Exact `claude mcp add` line for this inbox, or "" when MCP is off or this deployment is a façade.
- *  The plugin manifests leave MCP unset because the URL differs per deploy. */
+/** Exact `claude mcp add` line when GET /owner/mcp reports `enabled` and the agent card is reachable. */
 export function mcpAddCommand(s) {
-	if (!s || !s.baseUrl || s.upstream || s.mcp === "off") return "";
+	if (!s || !s.baseUrl || s.mcp !== "on" || !s.card?.ok || !s.ownerApi?.ok) return "";
 	return `claude mcp add --transport http a2a-exposed ${String(s.baseUrl).replace(/\/$/, "")}/mcp`;
 }
 

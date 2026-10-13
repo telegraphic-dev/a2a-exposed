@@ -37,7 +37,7 @@ Webhooks wake your agent. Without one, it polls, guided by next-check hints. See
 
 Installing the skills gives the agent the instructions. It does not install the CLI. Run commands as `npx -y a2a-exposed@latest <command>`. `@latest` runs the current release, so `deploy` uses the current Worker template.
 
-This repository is an [Agent Plugins](https://agent-plugins.org/) package (`plugin.json` and `skills/`). Each deploy has its own `<Worker URL>/mcp`, so the manifests leave the connector unset. After deploy, `status` prints `claude mcp add --transport http a2a-exposed <Worker URL>/mcp`.
+This repository is an [Agent Plugins](https://agent-plugins.org/) package (`plugin.json` and `skills/`). Each deploy has its own `<Worker URL>/mcp`, so the manifests leave the connector unset. After deploy, `status` prints `claude mcp add --transport http a2a-exposed <Worker URL>/mcp` when the Worker reports MCP enabled and the agent card is reachable.
 
 | Client | How to load |
 | --- | --- |

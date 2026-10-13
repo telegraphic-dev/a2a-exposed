@@ -50,6 +50,7 @@ cannot take the Worker, name the reason and say "Ask your human to set it up on 
                                 --mcp on|off   remote MCP server at <url>/mcp for Claude and other MCP clients
                                                (default on; each client needs your approval password once).
                                                Plugin manifests leave MCP unset: the URL differs per deploy.
+                                               When GET /owner/mcp reports enabled and the agent card is reachable,
                                                \`status\` prints \`claude mcp add --transport http a2a-exposed <url>/mcp\`
                                 --rotate-owner-token  on init, replace the owner token; other settings come from config.env
                                 --upstream URL  proxy / expose mode: a public façade for an agent that already
@@ -106,8 +107,9 @@ Status
                                 upstream card, Access credential and upstream bearer configured (separately), the
                                 live upstream check, the last failed peer call, card-leak check; warnings for peer
                                 token variables shadowing saved tokens; and the next step to run.
-                                With MCP on, prints \`claude mcp add --transport http a2a-exposed <base URL>/mcp\`.
-                                Proxy mode and --mcp off omit that line.
+                                When GET /owner/mcp reports enabled and the agent card is reachable, prints
+                                \`claude mcp add --transport http a2a-exposed <base URL>/mcp\`.
+                                A failed probe, an unreachable card, or a Worker that reports MCP off leaves that line out.
                                 Read-only; run it after an interruption and continue from "next step". Exit 1 = broken
   upstream verify [--json]      proxy mode: check the façade's whole path, layer by layer: façade peer auth
                                 (unauthenticated call -> 401), then the Worker calls the upstream with its stored
