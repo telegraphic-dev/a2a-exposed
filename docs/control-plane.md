@@ -25,6 +25,16 @@ From `control/`, `npm run deploy` applies `control/migrations/` to the control D
 
 A hosted data plane sets `FEEDBACK_URL` to the control origin (https, no path). `GET /owner/feedback` then returns that URL, plus this Worker's version and connection (`webhook`, `proxy`, or `polling`). With `FEEDBACK_URL` unset, `feedback` and `send_feedback` print a GitHub issue link.
 
+## An existing control deployment
+
+The inbox stays on its Worker. `npx -y a2a-exposed@latest deploy` keeps that Worker, its D1 database, the owner token, and the owner pages `/` and `/device`.
+
+Accounts, sign-in, and the dashboard are [a2a.exposed](https://a2a.exposed). A human signs in there. The hosted app imports `@a2a-exposed/control-core` and uses the same control D1 database. User rows, Cloudflare grants, and tenant rows stay in that database. Set the app's `CONTROL_D1_ID` to the existing database. The library reads those rows: tenant create, list, delete, and rotate, the saved grant, and the provisioning steps. The database is the copy.
+
+An inbox dump is `npx -y a2a-exposed@latest export` with the owner token. `export --sql` prints SQL.
+
+On this Worker, `/health` and plain feedback stay (`FEEDBACK_REPO` and `FEEDBACK_GITHUB_TOKEN`). `/app` is the shell. `/api/v1/tenants` answers `{ "error": "not_found" }`. Tenant calls go through the library, or through the hosted dashboard after the human signs in. `ControlEnv` still carries the account fields (`GITHUB_CLIENT_ID`, `GOOGLE_CLIENT_ID`, Turnstile, mail, the GitHub App, and `FREE_AGENT_LIMIT`) for an app on the library. The hosted deploy sets them there.
+
 ## Multi-tenant inbox settings
 
 The inbox Worker runs as one inbox per deployment, which is what `init` sets up, or as a host that routes many tenants. Every gate is optional. Unset means a single-tenant inbox on D1. `init` leaves these unset.

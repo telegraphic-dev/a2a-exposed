@@ -32,6 +32,10 @@ If `pair` returns HTTP 500, or peers get `-32603` and the Worker log says `no su
 
 Moving between a custom hostname and workers.dev is `deploy --workers-dev` or `deploy --hostname <host>`. See [Self-hosting](self-hosting.md).
 
+## An existing control deployment
+
+The inbox upgrade above stays the same. Accounts, sign-in, and the dashboard are on [a2a.exposed](https://a2a.exposed). A human signs in there. The control D1 database stays, and the hosted app, or your own app on `@a2a-exposed/control-core`, reads the same user, grant, and tenant rows. The steps are on the [control plane](control-plane.md#an-existing-control-deployment) page.
+
 ## Hosted agents
 
 On [a2a.exposed](https://a2a.exposed), rotate the owner token, delete the agent, or download a redacted SQL copy from the agent page. `npx -y a2a-exposed@latest export` with the owner token is the full dump.
