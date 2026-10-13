@@ -67,7 +67,7 @@ function httpsUrl(value: string): string {
 
 const TOKEN_NOTICES: Record<string, string> = {
 	failed: "The owner token was not rotated. The previous token still works.",
-	replaced: "A later rotation replaced this token. It is not shown. Use the token from that rotation.",
+	replaced: "A later rotation replaced this token. Use the token from that rotation.",
 	gone: "This agent is gone.",
 };
 
@@ -171,7 +171,7 @@ export function renderAdvanced(input: {
 			<h3>Owner token</h3>
 			<p>Rotating issues a new token. The previous one stops working immediately.</p>
 			{reauthNote(input.reauthHref ?? "")}
-			{input.ownerToken ? <TokenBlock token={input.ownerToken} lead="Copy this owner token now. It will not be shown again. The previous token no longer works." /> : ""}
+			{input.ownerToken ? <TokenBlock token={input.ownerToken} lead="Copy this owner token now. It will not be shown again." /> : ""}
 			{TOKEN_NOTICES[input.tokenNotice ?? ""] ? <p class="alert" role="alert">{TOKEN_NOTICES[input.tokenNotice ?? ""]}</p> : ""}
 			{gone ? "" : (
 				input.confirmRotate ? (
@@ -191,7 +191,7 @@ export function renderAdvanced(input: {
 				)
 			)}
 			<h2>Export</h2>
-			<p>Download a SQL copy of this agent. Stored token hashes are replaced or left out and do not authenticate. Ciphertext, push tokens, re-pair hashes, OAuth codes, the approval-password hash, password-setup hashes, and OpenID Connect sign-in rows are left out. This file is not a backup. The full dump is <code>npx a2a-exposed export</code> with the owner token.</p>
+			<p>Download a redacted SQL copy of this agent. Stored token hashes are placeholders. The full dump is <code>npx a2a-exposed export</code> with the owner token.</p>
 			{exportProblem ? <p class="alert" role="alert">{exportProblem}</p> : ""}
 			<form method="post" action={action}>
 				<input type="hidden" name="action" value="export" />

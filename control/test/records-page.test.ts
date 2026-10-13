@@ -117,7 +117,7 @@ test("the agent page lists MCP connectors, a read-only log, and downloads a reda
 		const freshMcp = html.slice(html.indexOf("<h2>MCP connectors</h2>"), html.indexOf("<h2>Message log</h2>"));
 		assert.equal(freshMcp.includes("older than 10 minutes"), false);
 		assert.match(html, /<h2>Message log<\/h2>/);
-		assert.match(html, /does not mark a task as seen/);
+		assert.match(html, /A pending wake stays until the inbox is listed/);
 		assert.match(html, /hello &lt;script&gt;alert\(1\)&lt;\/script&gt;/);
 		assert.match(html, /note \[redacted\] and \[redacted\] end/);
 		assert.equal(html.includes(token), false);
@@ -125,7 +125,8 @@ test("the agent page lists MCP connectors, a read-only log, and downloads a reda
 		assert.equal(html.includes("data_json"), false);
 		assert.match(html, /<h2>Export<\/h2>/);
 		assert.match(html, /name="action" value="export"/);
-		assert.match(html, /not a backup/);
+		assert.match(html, /redacted SQL copy/);
+		assert.equal(html.includes("not a backup"), false);
 		const posts = [...html.matchAll(/method="post" action="([^"]+)"/g)].map((match) => match[1]);
 		assert.ok(posts.every((action) => action === "/app/agents/northwind" || action === "/app/sign-out"));
 
@@ -153,7 +154,7 @@ test("the agent page lists MCP connectors, a read-only log, and downloads a reda
 		assert.equal(target.calls.at(-1)?.input.path, "/owner/mcp/mcp-claude");
 		assert.equal(target.calls.at(-1)?.input.actor, undefined);
 		const revokedPage = await (await app.request(revoked.headers.get("location") ?? "", { headers: { cookie } })).text();
-		assert.match(revokedPage, /Revoked\. That connector no longer works\./);
+		assert.match(revokedPage, /Revoked\. That connector is off\./);
 		const decision = lines.find((line) => line.includes("mcp_revoked"));
 		assert.match(decision ?? "", /"decision":"mcp_revoked"/);
 		assert.equal((decision ?? "").includes("mcp-claude"), false);

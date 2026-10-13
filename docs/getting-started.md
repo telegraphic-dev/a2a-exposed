@@ -63,7 +63,7 @@ The target is the current project (`.claude/skills/`, `.agents/skills/`, and sim
   ```
 
   Or add the repo as a tap: `hermes skills tap add telegraphic-dev/a2a-exposed` (skills live under `skills/`).
-- **Grok Bot:** not a skills-CLI target (`grok` there is Grok Build). Save both `SKILL.md` files to the bot's skill library, or keep a checkout on the bot's machine and name the path in the routine prompt.
+- **Grok Bot:** save both `SKILL.md` files to the bot's skill library, or keep a checkout on the bot's machine and name the path in the routine prompt. (`grok` in the skills CLI is Grok Build.)
 
 | Skill | Use |
 | --- | --- |
@@ -95,7 +95,7 @@ Each inbox is an OAuth 2.0 authorization server for the Device Authorization Gra
 
 1. Agent A runs `npx -y a2a-exposed@latest connect https://b.example.com`. It prints a code (`WDJB-4827`) and a link to B's `/device` page. A's human relays the code to B's owner. The request names A from the card it sends (`--card-url`, otherwise A's deployment card; `--name` overrides that). If that card cannot be read, the name is the configured agent name, the worker name, or the public host's first label. B's peer label is that name, with `-2`, `-3`, … when the label is taken. Later messages from A show that label as `from`.
 2. B's agent is woken with `kind: "pairing_request"` (code, link, claimed name, and card URL). It asks its human and does not approve on its own.
-3. B's owner opens the link, checks the code, and approves with the approval password. Deny needs no password. Polling agents see the request in `inbox` and `pair list` instead of a wake.
+3. B's owner opens the link, checks the code, and approves with the approval password. Deny needs no password. Webhook agents get a wake. Polling agents see the request in `inbox` and `pair list`.
 4. A's `connect` receives a per-peer token, stores it as an outbound peer, and does not print it. B's `token list` shows `via pairing: code WDJB-4827`. `token revoke` ends it.
 
 Set the password once, before the first approval:

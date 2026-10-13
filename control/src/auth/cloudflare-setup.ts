@@ -57,9 +57,7 @@ export const OFFLINE_ACCESS = "offline_access";
 /** Shown when this page has not created anything and is not offering to create the inbox. */
 export const SETUP_NOT_PROVISIONED = "Nothing has been created in your Cloudflare account yet.";
 
-export const TUNNEL_CONNECTOR_LATER = "A tunnel needs cloudflared running on a machine you control. This page cannot start that, and that step is not built yet.";
-
-export const ACCESS_NOT_REQUESTED = "This step does not ask for Cloudflare Access. Putting a façade behind Access is not part of this page yet.";
+export const TUNNEL_CONNECTOR_LATER = "Run cloudflared on a machine you control to open the tunnel.";
 
 export const EVERY_PLAN = "This is available on every plan.";
 
@@ -108,13 +106,13 @@ export function setupScopes(choice: SetupChoice, host: SetupHost): ScopeReason[]
 		{
 			id: USER_DETAILS_READ,
 			name: "User Details Read",
-			why: "Confirms which Cloudflare user this is. It is not used to sign in.",
+			why: "Confirms which Cloudflare user this is.",
 			declined: "Without User Details Read, Cloudflare did not confirm the user. Choose the setup again.",
 		},
 		{
 			id: ACCOUNT_SETTINGS_READ,
 			name: "Account Settings Read",
-			why: "Reads the Cloudflare account you pick on the consent screen. The token response does not name that account.",
+			why: "Reads the Cloudflare account you pick on the consent screen.",
 			declined: "Without Account Settings Read, this dashboard cannot see which Cloudflare account you picked, so this setup cannot continue.",
 		},
 		{
@@ -140,19 +138,19 @@ export function setupScopes(choice: SetupChoice, host: SetupHost): ScopeReason[]
 				id: WORKERS_ROUTES_WRITE,
 				name: "Workers Routes Write",
 				why: "Attaches the Worker to a hostname on a domain you already have in Cloudflare.",
-				declined: "Without Workers Routes Write, the Worker cannot be attached to a hostname on your domain. That blocks a setup on your own domain. A workers.dev address does not need it.",
+				declined: "Without Workers Routes Write, the Worker cannot be attached to a hostname on your domain. That blocks a setup on your own domain. A free Cloudflare address continues with its own permissions.",
 			},
 			{
 				id: DNS_WRITE,
 				name: "DNS Write",
-				why: "Creates the DNS record for that hostname. This cannot move a domain onto Cloudflare.",
-				declined: "Without DNS Write, the DNS record for your domain cannot be created. That blocks a setup on your own domain. A workers.dev address does not need it.",
+				why: "Creates the DNS record for that hostname.",
+				declined: "Without DNS Write, the DNS record for your domain cannot be created. That blocks a setup on your own domain. A free Cloudflare address continues with its own permissions.",
 			},
 			{
 				id: ZONE_READ,
 				name: "Zone Read",
 				why: "Lists the domains on the Cloudflare account you pick, so this page can check that your address is on one of them.",
-				declined: "Without Zone Read, the domains on your Cloudflare account cannot be listed. That blocks a setup on your own domain. A workers.dev address does not need it.",
+				declined: "Without Zone Read, the domains on your Cloudflare account cannot be listed. That blocks a setup on your own domain. A free Cloudflare address continues with its own permissions.",
 			},
 		);
 	}
@@ -162,15 +160,15 @@ export function setupScopes(choice: SetupChoice, host: SetupHost): ScopeReason[]
 			name: "Cloudflare Tunnel Write",
 			why: "Creates a tunnel from the façade Worker to your existing agent. You still run cloudflared on a machine you control.",
 			declined: inbox
-				? "Without Cloudflare Tunnel Write, a tunnel cannot be created. That blocks the façade. The inbox does not need a tunnel."
+				? "Without Cloudflare Tunnel Write, a tunnel cannot be created. That blocks the façade. The inbox can still be created."
 				: "Without Cloudflare Tunnel Write, a tunnel cannot be created. That blocks the façade.",
 		});
 	}
 	scopes.push({
 		id: OFFLINE_ACCESS,
 		name: "Refresh token (offline access)",
-		why: "Lets this dashboard continue the setup after you leave this page. The token is stored encrypted. Cloudflare treats it as single-use. How long it lasts is not documented.",
-		declined: "Without a refresh token, this dashboard cannot continue the setup after you leave this page. Nothing has been created in your Cloudflare account.",
+		why: "Lets this dashboard continue the setup after you leave this page. The token is stored encrypted. Cloudflare treats it as single-use.",
+		declined: "Connect again and keep the refresh token to continue after you leave this page. Nothing has been created in your Cloudflare account.",
 	});
 	return scopes;
 }

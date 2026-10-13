@@ -779,7 +779,7 @@ test("a retry does not replace a Worker that only contains the inbox comment", a
 	const puts = () => api.calls.filter((call) => call.method === "PUT" && call.url.includes("/workers/scripts/")).length;
 	const before = puts();
 	const again = await postStep(app, cookie, "action=step&step=upload&name=my-agent");
-	assert.match(await again.text(), /This page does not replace it/);
+	assert.match(await again.text(), /Choose another name/);
 	assert.equal(puts(), before);
 	assert.equal((await readCloudflareInbox(db, userId))?.status, "pending");
 	assert.equal((await readCloudflareInbox(db, userId))?.d1_id, d1Id);
@@ -851,7 +851,7 @@ test("a façade alone does not create Cloudflare resources", async (t) => {
 	const html = await (await app.request(linked.headers.get("location") ?? "", { headers: { cookie } })).text();
 	assert.match(html, new RegExp(SETUP_NOT_PROVISIONED.replace(/[.]/g, "\\.")));
 	assert.match(html, new RegExp(TUNNEL_CONNECTOR_LATER.replace(/[.]/g, "\\.")));
-	assert.match(html, /does not create the tunnel/);
+	assert.equal(html.includes("does not create the tunnel"), false);
 	assert.equal(html.includes("Check the Cloudflare account"), false);
 	assert.equal(html.includes("Create it in Cloudflare"), false);
 });

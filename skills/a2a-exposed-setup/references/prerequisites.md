@@ -57,4 +57,4 @@ npx cf auth create my-bot --no-browser   # device code; approve as the bot accou
 npx -y a2a-exposed@latest init --cf-profile my-bot --agent-name "My Bot" ...
 ```
 
-`--cf-profile` is saved as `CF_PROFILE` in `config.env` and passed as `--profile` to every `cf` call for that deployment. Combine it with a separate `A2A_CONFIG_DIR` when several bots share one machine. Re-authenticate with `npx cf auth create my-bot --no-browser` (same name). `npx cf auth list` shows profiles; `npx cf auth activate my-bot <worker-dir>` binds a profile to a directory instead of using `--cf-profile`.
+`--cf-profile` is saved as `CF_PROFILE` in `config.env` and passed as `--profile` to every `cf` call for that deployment. Combine it with a separate `A2A_CONFIG_DIR` when several bots share one machine. Re-authenticate with `npx cf auth create my-bot --no-browser` (same name). `npx cf auth list` shows profiles. `npx cf auth activate my-bot <worker-dir>` binds a profile to a directory. `--cf-profile` passes that profile on each command.

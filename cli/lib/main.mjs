@@ -143,9 +143,9 @@ Pairing (OAuth 2.0 device flow, RFC 8628: agents connect without pasting tokens 
   pair set-oidc --issuer URL --client-id ID --subjects SUB[,SUB...] [--methods password,oidc] [--secret-stdin]
                           optional OpenID Connect approval on /device and the MCP consent page. The client
                           secret is APPROVAL_OIDC_CLIENT_SECRET in the environment, or one line on stdin with
-                          --secret-stdin. It is not a flag and it is not saved in config.env. The next
-                          \`npx -y a2a-exposed@latest deploy\` uploads that environment variable as a Worker
-                          secret. Leave the issuer unset and approval stays the password page
+                          --secret-stdin. The next \`npx -y a2a-exposed@latest deploy\` uploads that
+                          environment variable as a Worker secret. config.env keeps the issuer and client id.
+                          Leave the issuer unset and approval stays the password page
   pair list [--json]      pending pairing requests (code, claimed name/card, address), the approval mode and
                           when the approval password was set
   pair approve <code>     approve (only with --pairing-approval agent, after your human said yes)
@@ -186,10 +186,10 @@ Control plane account (only when that deployment's login is on)
                                 After sign-in, /app shows the account and its agents. Each agent is listed
                                 by its hostname. A hosted name opens
                                 that agent's page: MCP connectors (revoke needs a recent sign-in), a
-                                message log that does not mark tasks seen, and a SQL download that
-                                replaces a pasted owner token and leaves other credential material out. Peer times are labeled UTC. A pairing
-                                token shows its code. An empty outbound list notes that peers the CLI
-                                added locally are not shown. Sign out is on that
+                                message log of recent history. A pending wake stays until the inbox is listed. The SQL download
+                                is a redacted copy and replaces a pasted owner token. Peer times are labeled UTC. A pairing
+                                token shows its code. An empty outbound list says peers added with the CLI
+                                on your machine stay in that CLI. Sign out is on that
                                 page. Creating an agent shows the owner token once. The agent page rotates
                                 that token after a confirmation and a recent sign-in. The new token is
                                 shown once on that agent's page. The previous one stops working immediately.
@@ -269,7 +269,7 @@ export async function main(argv) {
 	if (name === "--version" || name === "-v") return console.log(VERSION);
 	if (rest.includes("--help") || rest.includes("-h")) return console.log(HELP);
 	if (name === "pair" && rest[0] === "set-oidc" && rest.some((a) => /^--(secret|client-secret)(=|$)/.test(a)))
-		throw new CliError("the OpenID Connect client secret is not a flag: export APPROVAL_OIDC_CLIENT_SECRET or pass --secret-stdin (it is not saved in config.env)");
+		throw new CliError("export APPROVAL_OIDC_CLIENT_SECRET or pass --secret-stdin. The next deploy uploads it as a Worker secret");
 	if (name === "pair" && rest[0] === "set-password") {
 		// only --web [--ttl M] [--json]: the password itself never comes from argv, stdin or the environment
 		const extra = rest.slice(1);

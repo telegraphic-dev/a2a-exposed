@@ -121,7 +121,7 @@ A Worker can't reach a Tailnet or LAN address, so the upstream is published thro
 - `securitySchemes` / `securityRequirements`: the façade's (per-peer `bearer` + device-flow `pairing` with `/oauth/*` URLs on the façade). The upstream's own schemes describe the credential the façade holds, not what callers need.
 - `capabilities`: `extensions` from the upstream; `streaming` and `extendedAgentCard` are `false` (not proxied yet), and `pushNotifications` is `false` (push configs are refused, see below).
 - name, description, version, skills, default modes, provider, `documentationUrl`, `iconUrl`: `--agent-*` / `--provider-*` / `A2A_DOCUMENTATION_URL` settings win, then the upstream card, then defaults. Every string is scrubbed: a private or upstream URL (localhost, RFC 1918, 100.64/10, private IPv6 literals like `[::1]` / `[fd..]` / `[fe80..]` / IPv4-mapped, `*.ts.net`, `*.local`, single-label hosts, plain `http`, URLs that don't parse, the tunnel hostname) becomes `[private URL removed]`, a bare upstream or `*.ts.net` host name `[private host removed]`. `documentationUrl`, `iconUrl` and `provider.url` are dropped instead when private.
-- `signatures` are dropped (they no longer match), and unknown top-level fields are not copied.
+- The rewritten card omits signatures and unknown top-level fields.
 - If the upstream card can't be fetched, the façade serves a card from the settings (1.0 and 0.3 interfaces, still only public URLs) and `status` says why.
 
 The inbox card (no `--upstream`) uses the same scrubbing for `--agent-description`, `--agent-skills`, `--provider-url` and `A2A_DOCUMENTATION_URL`, so a pasted Tailnet link never reaches peers.

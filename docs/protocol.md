@@ -52,7 +52,7 @@ Authenticated with the owner token. The CLI is the supported way to call these. 
 | --- | --- |
 | Inbox | `GET /owner/inbox`, `GET /owner/tasks/<id>`, `GET /owner/history/<contextId>`, `POST /owner/tasks/<id>/working`, `POST /owner/tasks/<id>/reply` |
 | Summary | `GET /owner/summary` (counts only: tasks in each state, pending pairing requests; no message text; does not clear a pending wake) |
-| Log | `GET /owner/log` (recent history, newest first, no `data_json`; does not mark tasks seen) |
+| Log | `GET /owner/log` (recent history, newest first; a pending wake stays until the inbox is listed) |
 | Export | `GET /owner/export` and `GET /owner/export?format=sql` |
 | Feedback discovery | `GET /owner/feedback` |
 | Façade | `GET /owner/facade`, `POST /owner/facade/verify` |
@@ -62,4 +62,4 @@ Authenticated with the owner token. The CLI is the supported way to call these. 
 
 On a hosted tenant, the control plane calls an allowlisted subset through `TenantStore.owner()`. That RPC does not return a peer token or a decrypted secret. `/owner/*` on the tenant host still requires the owner token. A self-hosted inbox has no such RPC.
 
-A hosted dashboard download of SQL is the same tables, then redacted: stored token hashes do not authenticate, and ciphertext, push tokens, re-pair hashes, requester IP addresses and countries, OAuth codes, the approval-password hash, password-setup hashes, and OpenID Connect sign-in rows are left out. A pasted peer token or hosted owner token (`a2aot_`) is replaced. That file is not a backup. `export` with the owner token is the full dump.
+A hosted dashboard download of SQL is a redacted copy of the same tables. Stored token hashes are placeholders. A pasted peer token or hosted owner token (`a2aot_`) is replaced. `export` with the owner token is the full dump.

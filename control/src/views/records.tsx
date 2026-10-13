@@ -1,7 +1,7 @@
 import { hasToken, scrubTokenText } from "./tokens.ts";
 
 const MCP_NOTICES: Record<string, string> = {
-	revoked: "Revoked. That connector no longer works.",
+	revoked: "Revoked. That connector is off.",
 };
 
 const MCP_ERRORS: Record<string, string> = {
@@ -121,7 +121,7 @@ export function renderRecords(input: {
 					<p>{input.mcp.enabled ? "MCP is on." : "MCP is off."}</p>
 					{confirm ? (
 						<div class="confirm">
-							<p>Revoke the connector {confirm.label}? That client will no longer be able to call this agent.</p>
+							<p>Revoke the connector {confirm.label}? That client loses access to this agent.</p>
 							<form method="post" action={action}>
 								<input type="hidden" name="action" value="revoke-mcp" />
 								<input type="hidden" name="label" value={confirm.label} />
@@ -152,7 +152,7 @@ export function renderRecords(input: {
 				</>
 			)}
 			<h2>Message log</h2>
-			<p>Recent history. Reading this log does not mark a task as seen.</p>
+			<p>Recent history. A pending wake stays until the inbox is listed.</p>
 			{input.entries === null ? <p>The message log is not available.</p> : input.entries.length === 0 ? <p>No messages.</p> : (
 				<details class="log-fold">
 					<summary>Latest messages</summary>

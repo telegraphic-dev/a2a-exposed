@@ -972,7 +972,7 @@ async function guardScript(ctx: StepCtx, accountId: string, name: string): Promi
 		return failOrWait(ctx, "upload", found, "Cloudflare stops while checking the name.", "worker");
 	}
 	if (sameTag(ctx.row.script_tag ?? "", found)) return true;
-	return remember(ctx, { step: "upload", state: "fail", text: "A Worker with that name is already in this Cloudflare account. This page does not replace it.", cloudflare: "" });
+	return remember(ctx, { step: "upload", state: "fail", text: "A Worker with that name is already in this Cloudflare account. Choose another name.", cloudflare: "" });
 }
 
 async function runUpload(ctx: StepCtx): Promise<{ wizard: InboxWizard; ownerToken?: string }> {

@@ -297,7 +297,8 @@ test("connecting Cloudflare records the account, and disconnect removes it", asy
 	const html = await accountPage.text();
 	assert.match(html, /In my Cloudflare account/);
 	assert.match(html, /href="\/app\/cloudflare"/);
-	assert.match(html, /Lets Inbox set things up in your Cloudflare account\. It isn&#39;t used to sign in\./);
+	assert.match(html, /Lets Inbox set things up in your Cloudflare account\./);
+	assert.equal(html.includes("used to sign in"), false);
 	assert.equal(html.includes("Continue with Cloudflare"), false);
 	assert.equal(html.includes("Connect Cloudflare"), false);
 	assert.match(accountPage.headers.get("content-security-policy") ?? "", /form-action 'self' https:\/\/dash\.cloudflare\.com/);

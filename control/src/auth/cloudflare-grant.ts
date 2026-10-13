@@ -1,7 +1,6 @@
 // The setup consent stores the latest Cloudflare refresh token encrypted.
-// Wrangler's client treats those refresh tokens as single-use: refreshing again
-// with the old token gets 401 from the token endpoint. The access token is not
-// stored. Lifetimes are not documented.
+// Cloudflare treats that token as single-use: refreshing again with the old
+// token gets 401 from the token endpoint. The stored value is the refresh token.
 
 import type { Sql } from "./invites.ts";
 
