@@ -170,7 +170,7 @@ Outbound (agents you call)
   poll --to <alias|url> <taskId> [--proto 0.3|1.0]
   outbound <taskId>       stored state of a task you sent (incl. pushed updates)
 
-Control plane account (only when that deployment's login is on)
+Control plane account (the hosted dashboard is https://a2a.exposed)
   signup --control-url https://control.example
   login  --control-url https://control.example
                                 device-flow sign-in. Prints a code and a page. Type that code

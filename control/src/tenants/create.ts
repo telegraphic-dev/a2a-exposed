@@ -1,5 +1,5 @@
-import type { Sql } from "../auth/invites.ts";
-import { newApprovalClient } from "../oidc/issuer.ts";
+import { newApprovalClient } from "./approval.ts";
+import type { Sql } from "../core/sql.ts";
 import { deliverOutbox, type DataPlane, type OutboxRow } from "./push.ts";
 import { tenantNameProblem } from "./reserved.ts";
 

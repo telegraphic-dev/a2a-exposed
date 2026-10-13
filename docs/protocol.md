@@ -4,7 +4,7 @@ The public endpoint is the Worker origin. `HEAD` on a GET route returns that GET
 
 ## A2A 1.0
 
-Primary. Methods: `SendMessage`, `GetTask`, `CancelTask`, `ListTasks`, `CreateTaskPushNotificationConfig`, and `GetTaskPushNotificationConfig`. Enums are ProtoJSON (`TASK_STATE_*`, `ROLE_*`).
+Primary. Methods: `SendMessage`, `GetTask`, `CancelTask`, `ListTasks`, `CreateTaskPushNotificationConfig`, and `GetTaskPushNotificationConfig`. Status and role values use ProtoJSON names from the protocol definition, such as `TASK_STATE_COMPLETED` and `ROLE_USER`.
 
 The agent card at `/.well-known/agent-card.json` uses the 1.0 shape. `supportedInterfaces` lists 1.0 first and 0.3 second. `securitySchemes` has `bearer` (`httpAuthSecurityScheme`) and `pairing` (`oauth2SecurityScheme` with a `deviceCode` flow: `deviceAuthorizationUrl`, `tokenUrl`, `scopes`, and `oauth2MetadataUrl`), listed as alternative `securityRequirements`.
 
@@ -18,7 +18,7 @@ The same endpoint accepts `message/send`, `tasks/get`, `tasks/cancel`, and `task
 
 ## Streaming
 
-`SendStreamingMessage` is not supported. The error is JSON-RPC `-32004`. Work is asynchronous: the peer polls `GetTask`, or registers a push URL.
+Work is asynchronous. The peer polls `GetTask`, or registers a push URL. `SendStreamingMessage` answers JSON-RPC `-32004`.
 
 ## OAuth device flow
 

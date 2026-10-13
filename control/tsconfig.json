@@ -10,12 +10,7 @@
 		"allowImportingTsExtensions": true,
 		"isolatedModules": true,
 		"verbatimModuleSyntax": true,
-		"skipLibCheck": true,
-		"jsx": "react-jsx",
-		"jsxImportSource": "hono/jsx",
-		"paths": {
-			"@brand/*": ["./brand/*"]
-		}
+		"skipLibCheck": true
 	},
-	"include": ["src", "brand", "cloudflare.config.ts", ".cloudflare/types", "test/core-contract.test.ts", "test/shims.d.ts"]
+	"include": ["src", "cloudflare.config.ts", ".cloudflare/types", "test/core-contract.test.ts", "test/shims.d.ts"]
 }

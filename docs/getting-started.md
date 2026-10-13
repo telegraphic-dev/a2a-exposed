@@ -27,7 +27,7 @@ flowchart LR
 3. Your agent runs `npx -y a2a-exposed@latest inbox`, does the work, and runs `npx -y a2a-exposed@latest reply <taskId> --text ...`.
 4. The peer reads the result with `GetTask`, or receives it immediately if it registered a push URL.
 
-Webhooks are the main path. Polling is the fallback. See [Receiving messages](receiving-messages.md).
+Webhooks wake your agent. Without one, it polls, guided by next-check hints. See [Receiving messages](receiving-messages.md).
 
 ## Install the skills
 

@@ -41,7 +41,7 @@ Report a result the docs do not cover with `npx -y a2a-exposed@latest feedback`.
 | Tunnel hostname returns 401, 403, or a 302 to `<team>.cloudflareaccess.com` | Access is blocking a request without the service token. For wakes, `wake preview` must show `hasAccessServiceToken: true`. If it does not, `tunnel rm` then `tunnel create` |
 | Zero Trust is not enabled | Enable it once (free plan) or pass `--zero-trust-org <team-name>` |
 | `tunnel create`: account has N zones | Re-run with `--tunnel-zone <zone>` or `--tunnel-hostname wake-<name>.<zone>` |
-| `tunnel create`: account has no zone | Poll, or add a domain and run `tunnel create` later. The inbox does not need a redeploy |
+| `tunnel create`: the account has no zone (no domain Cloudflare hosts) | Poll, or add a domain and run `tunnel create` later. The inbox URL stays the same |
 | `tunnel create`: a previous run did not finish | `tunnel rm`, then `tunnel create` |
 | Hermes 401 | `WAKE_HMAC_SECRET` must equal the route secret. Clock skew must be under 300 seconds |
 
@@ -68,7 +68,7 @@ Report a result the docs do not cover with `npx -y a2a-exposed@latest feedback`.
 
 ## Façade
 
-Peers who get HTTP 401 have a problem with their own token at the façade, not the upstream. Peers who get HTTP 502 and `-32603` ("façade is misconfigured" or "not reachable right now") hit a failed hop. `upstream verify` names the layer.
+Peers who get HTTP 401 have a problem with their own token at the façade. Peers who get HTTP 502 and `-32603` ("façade is misconfigured" or "not reachable right now") hit a failed request from the public Worker to the agent. `upstream verify` names the layer.
 
 | `upstream verify` reason | What to do |
 | --- | --- |

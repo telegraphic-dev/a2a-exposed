@@ -138,7 +138,7 @@ A `PEER_<ALIAS>_TOKEN` value in the environment overrides `config.env`. When the
 
 ## Account and feedback
 
-These talk to a control plane whose login is on. A self-hosted inbox does not need them.
+`signup` and `login` reach the hosted dashboard at [a2a.exposed](https://a2a.exposed). A self-hosted inbox uses the owner token from `init`. The owner pages on that inbox are `/` and `/device`.
 
 | Command | Effect |
 | --- | --- |

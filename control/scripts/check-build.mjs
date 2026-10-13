@@ -86,9 +86,8 @@ if (!assetsOk) {
 
 const scripts = files.filter((file) => /\.(m)?js$/.test(file) && !file.endsWith(".map"));
 const largest = scripts.map((file) => ({ file, size: fs.statSync(file).size })).sort((a, b) => b.size - a.size)[0];
-// Better Auth is part of this Worker. The cap is high enough for the minified
-// bundle and still fails if another large dependency is pulled in by mistake.
-const limit = 1_200_000;
+// The shell is health, feedback, and the outbox flush. A much larger bundle means a dependency was pulled in by mistake.
+const limit = 200_000;
 if (!largest || largest.size > limit) {
 	console.error(`check-build: worker bundle ${largest ? largest.size : 0} bytes exceeds ${limit}`);
 	process.exit(1);
@@ -111,7 +110,7 @@ if (!migrations || !fs.readFileSync(migrations, "utf8").includes("0001_init.sql"
 }
 
 const blob = files.map((file) => fs.readFileSync(file, "utf8")).join("\n");
-if (!blob.includes("sign in / create an agent")) {
+if (!blob.includes("Create an inbox with the a2a-exposed CLI")) {
 	console.error("check-build: built assets are missing the neutral page");
 	process.exit(1);
 }

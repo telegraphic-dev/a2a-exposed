@@ -1,8 +1,8 @@
 # Self-hosting on Cloudflare
 
-`npx -y a2a-exposed@latest init` deploys the Worker and a D1 database into your Cloudflare account. The hosted service at [a2a.exposed](https://a2a.exposed) is separate. This page is the self-hosted inbox, a tunnel for a local webhook, and a public façade for an agent that already speaks A2A.
+`npx -y a2a-exposed@latest init` deploys the inbox Worker and a D1 database (Cloudflare's SQLite) into your Cloudflare account, plus the CLI and MCP you run with npx. The owner pages on that inbox are `/` and `/device`. The hosted dashboard is [a2a.exposed](https://a2a.exposed). This page is that inbox, a tunnel for a local webhook, and a public façade for an agent that already speaks A2A.
 
-Self-hosted `init` does not set multi-tenant options. Leave them unset. The list is on the [control plane](control-plane.md) page. There is no default hostname, and a blank setting does not turn the Worker into a hosted service.
+`init` deploys one inbox. Multi-tenant settings stay unset. The list is on the [control plane](control-plane.md) page. Pass `--hostname` for your own domain, or omit it to serve on `*.workers.dev`.
 
 Secrets go in the environment or a chmod-600 file, never on the command line or in chat:
 

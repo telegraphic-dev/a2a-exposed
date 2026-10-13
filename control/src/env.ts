@@ -1,5 +1,5 @@
 // Bindings the control plane reads. Every one is optional. With none of them set, the Worker
-// serves the neutral shell and static assets and does not call an identity provider.
+// serves health, the feedback API, and static assets.
 import type { PlaneEnv } from "./tenants/push.ts";
 
 export interface ControlEnv extends PlaneEnv {
@@ -13,7 +13,7 @@ export interface ControlEnv extends PlaneEnv {
 	TENANT_DOMAIN?: string;
 	/** `eu` or `fedramp`. Unset: the platform's default placement. */
 	DATA_REGION?: string;
-	DB?: import("./auth/invites.ts").Sql;
+	DB?: import("./core/sql.ts").Sql;
 	AUTH_SECRET?: string;
 	GITHUB_CLIENT_ID?: string;
 	GITHUB_CLIENT_SECRET?: string;
@@ -34,8 +34,8 @@ export interface ControlEnv extends PlaneEnv {
 	/** Same secret as the data-plane Worker. Seals wake secrets. Unset: a new key cannot be saved. */
 	TENANT_SECRETS_KEY?: string;
 	/**
-	 * Fine-grained token with Issues write on FEEDBACK_REPO only. A secret, not a var.
-	 * Fallback when the GitHub App below is unset. Not a GITHUB_* name: that prefix is the sign-in OAuth app.
+	 * Fine-grained token with Issues write on FEEDBACK_REPO. A secret.
+	 * The feedback route files an issue with this token.
 	 */
 	FEEDBACK_GITHUB_TOKEN?: string;
 	/** GitHub App id that files feedback issues. A plain var. With the private key, preferred over the token. */

@@ -1,4 +1,4 @@
-// D1-shaped stand-in over node:sqlite. batch + exec + prepare is how Better Auth detects D1.
+// D1-shaped stand-in over node:sqlite. prepare, batch, and exec match the D1 API the library calls.
 import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import path from "node:path";

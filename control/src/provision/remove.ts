@@ -2,8 +2,8 @@
 // The Worker is deleted only when its provision tag still matches. A resource the user
 // already deleted is treated as done.
 
-import { refreshCloudflareGrant } from "../auth/cloudflare-grant.ts";
-import type { Sql } from "../auth/invites.ts";
+import type { Sql } from "../core/sql.ts";
+import { refreshCloudflareGrant } from "./grant.ts";
 import { deleteCloudflareInbox, readCloudflareInboxById, type InboxRow } from "./inbox-row.ts";
 import {
 	deleteD1,
@@ -171,6 +171,7 @@ export async function runRemovalStep(input: {
 		userId: input.userId,
 		fetchMs: Math.min(input.fetchMs ?? 10_000, 5_000),
 		now,
+		fetchImpl: input.fetchImpl,
 	});
 	if (!refreshed.ok) {
 		await save(input.database, row, { removing: true, passed: [...passed], failed: step, text: "The saved Cloudflare permission expired. Connect Cloudflare again, then try again.", cloudflare: "" }, now);

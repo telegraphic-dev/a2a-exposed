@@ -2,7 +2,6 @@
 // Nothing account-specific, and no hosted hostname, is committed here.
 import { bindings, defineConfig, triggers } from "cf/config";
 import * as entry from "./src/index.ts" with { type: "cf-worker" };
-import { feedbackPlainId } from "./src/feedback-plain.ts";
 import { RUN_WORKER_FIRST } from "./src/routing.ts";
 
 const e: Record<string, string | undefined> = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env ?? {};
@@ -19,46 +18,12 @@ const routeZone = v("CONTROL_ROUTE_ZONE");
 const plain: Record<string, string> = {
 	BRAND_NAME: v("BRAND_NAME"),
 	SITE_URL: v("SITE_URL"),
-	ISSUER: v("ISSUER"),
 	TENANT_DOMAIN: v("TENANT_DOMAIN"),
 	DATA_REGION: v("DATA_REGION"),
-	GITHUB_CLIENT_ID: v("GITHUB_CLIENT_ID"),
-	GOOGLE_CLIENT_ID: v("GOOGLE_CLIENT_ID"),
-	CLOUDFLARE_OAUTH_CLIENT_ID: v("CLOUDFLARE_OAUTH_CLIENT_ID"),
-	MAIL_FROM: v("MAIL_FROM"),
-	TURNSTILE_SITE_KEY: v("TURNSTILE_SITE_KEY"),
-	INVITES_REQUIRED: v("INVITES_REQUIRED") === "1" ? "1" : "",
-	SIGNUP_ALLOWLIST: v("SIGNUP_ALLOWLIST"),
-	FREE_AGENT_LIMIT: /^\d+$/.test(v("FREE_AGENT_LIMIT")) ? v("FREE_AGENT_LIMIT") : "",
 	FEEDBACK_REPO: v("FEEDBACK_REPO"),
-	// Keep a typo. The worker answers 502 for a non-numeric id; blanking it
-	// here would look unset and could file the issue with the personal access token.
-	FEEDBACK_GITHUB_APP_ID: feedbackPlainId(e.FEEDBACK_GITHUB_APP_ID),
-	FEEDBACK_GITHUB_APP_INSTALLATION_ID: feedbackPlainId(e.FEEDBACK_GITHUB_APP_INSTALLATION_ID),
 };
 
-// Secrets stay out of the production config so a deploy does not require them.
-// `cf dev` reads the same names from .dev.vars.
-// The Cloudflare client secret is the exception once its client id is set: the
-// id is a plain var, and `npm run deploy` passes the secret from secrets.env
-// via `cf deploy --secrets-file`. The value is not written here. With the id
-// unset, that file is not required.
-const DEV_SECRETS = [
-	"AUTH_SECRET",
-	"GITHUB_CLIENT_ID",
-	"GITHUB_CLIENT_SECRET",
-	"GOOGLE_CLIENT_ID",
-	"GOOGLE_CLIENT_SECRET",
-	"CLOUDFLARE_OAUTH_CLIENT_ID",
-	"CLOUDFLARE_OAUTH_CLIENT_SECRET",
-	"TURNSTILE_SITE_KEY",
-	"TURNSTILE_SECRET_KEY",
-	"MAIL_FROM",
-	"INVITES_REQUIRED",
-	"SIGNUP_ALLOWLIST",
-	"FEEDBACK_GITHUB_TOKEN",
-	"FEEDBACK_GITHUB_APP_PRIVATE_KEY",
-];
+const DEV_SECRETS = ["FEEDBACK_GITHUB_TOKEN", "TENANT_SECRETS_KEY"];
 
 const envBindings: Record<string, any> = {
 	ASSETS: bindings.assets(),
@@ -66,10 +31,8 @@ const envBindings: Record<string, any> = {
 if (d1Id || d1Name) {
 	envBindings.DB = bindings.d1(d1Id ? { name: d1Name || name, id: d1Id } : { name: d1Name || name });
 }
-if (v("MAIL_FROM")) envBindings.EMAIL = bindings.sendEmail();
 const dataPlane = v("CONTROL_DATA_PLANE");
 const directoryId = v("CONTROL_TENANT_DIRECTORY_ID");
-if (dataPlane && directoryId) DEV_SECRETS.push("TENANT_SECRETS_KEY");
 if (dataPlane) envBindings.TENANT_DO = bindings.durableObject({ worker: dataPlane, exportName: "TenantStore" });
 if (directoryId) envBindings.TENANT_DIRECTORY = bindings.kv({ id: directoryId });
 for (const [key, value] of Object.entries(plain)) if (value) envBindings[key] = bindings.text(value);
@@ -84,8 +47,6 @@ export default defineConfig((ctx) => ({
 	worker: {
 		name,
 		compatibilityDate: "2026-10-06",
-		// Better Auth reads AsyncLocalStorage. The flag is a no-op for the neutral shell.
-		compatibilityFlags: ["nodejs_compat"],
 		entrypoint: entry,
 		...(hostname ? { domains: [hostname] } : {}),
 		workersDev,
@@ -99,15 +60,9 @@ export default defineConfig((ctx) => ({
 		env: ctx.mode === "development"
 			? {
 				...envBindings,
-				...(envBindings.EMAIL ? {} : { EMAIL: bindings.sendEmail() }),
 				...Object.fromEntries(DEV_SECRETS.map((key) => [key, bindings.secret()])),
 			}
-			: {
-				...envBindings,
-				...(v("CLOUDFLARE_OAUTH_CLIENT_ID")
-					? { CLOUDFLARE_OAUTH_CLIENT_SECRET: bindings.secret() }
-					: {}),
-			},
+			: envBindings,
 		...(fetchTriggers.length ? { triggers: fetchTriggers } : {}),
 	},
 }));

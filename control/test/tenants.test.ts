@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApp } from "../src/app.ts";
-import { createTenant } from "../src/tenants/create.ts";
+import { createTenant, listTenants } from "../src/tenants/create.ts";
 import { dataPlaneFromEnv, flushOutbox, type DataPlane, type TenantPush } from "../src/tenants/push.ts";
 import { openDb } from "./sql.ts";
 
@@ -26,149 +26,66 @@ function plane() {
 	return { directory, pushes, data, setFail(next: boolean) { fail = next; } };
 }
 
-test("tenants stay closed until login and the data plane are both configured", async () => {
-	const app = createApp({ AUTH_SECRET: secret, DB: openDb() }, { mailer: { async send() {} } });
+test("the tenant HTTP route stays closed on this Worker", async () => {
+	const app = createApp({ AUTH_SECRET: secret, DB: openDb() });
 	const response = await app.request("https://control.example.com/api/v1/tenants", {
 		method: "POST",
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify({ name: "northwind" }),
 	});
 	assert.equal(response.status, 404);
+	assert.deepEqual(await response.json(), { error: "not_found" });
 });
 
 test("create writes the directory and the object, and the token is shown once", async () => {
 	const db = openDb();
-	const sent: { text: string }[] = [];
 	const target = plane();
-	const app = createApp(
-		{ AUTH_SECRET: secret, DB: db, TENANT_DOMAIN: "example.com", DATA_REGION: "eu" },
-		{ database: db, mailer: { async send(message) { sent.push({ text: message.text }); } }, dataPlane: target.data },
-	);
-	const posted = await app.request("https://control.example.com/app/sign-in", {
-		method: "POST",
-		headers: { origin: "https://control.example.com", "content-type": "application/x-www-form-urlencoded" },
-		body: "provider=email&email=person@example.com",
-	});
-	assert.equal(posted.status, 303);
-	const link = sent[0].text.match(/https:\/\/control\.example\.com\/api\/auth\/magic-link\/verify\?[^\s]+/);
-	assert.ok(link);
-	const verified = await app.request(link[0]);
-	const cookie = verified.headers.getSetCookie().find((value) => value.startsWith("__Host-a2a_session="));
-	assert.ok(cookie);
-
-	const unauth = await app.request("https://control.example.com/api/v1/tenants", {
-		method: "POST",
-		headers: { "content-type": "application/json" },
-		body: JSON.stringify({ name: "northwind" }),
-	});
-	assert.equal(unauth.status, 401);
-
-	const plain = await app.request("https://control.example.com/api/v1/tenants", {
-		method: "POST",
-		headers: { cookie: cookie.split(";")[0], "content-type": "text/plain" },
-		body: JSON.stringify({ name: "northwind" }),
-	});
-	assert.equal(plain.status, 403);
-	const sibling = await app.request("https://control.example.com/api/v1/tenants", {
-		method: "POST",
-		headers: {
-			cookie: cookie.split(";")[0],
-			"content-type": "application/json",
-			origin: "https://northwind.example.com",
-			"sec-fetch-site": "same-site",
-		},
-		body: JSON.stringify({ name: "northwind" }),
-	});
-	assert.equal(sibling.status, 403);
+	const reserved = await createTenant(db, target.data, { accountId: "acct", name: "admin", domain: "example.com", dataRegion: "eu" });
+	assert.equal(reserved.ok, false);
+	if (!reserved.ok) assert.equal(reserved.error, "reserved_name");
+	const invalid = await createTenant(db, target.data, { accountId: "acct", name: "   ", domain: "example.com" });
+	assert.equal(invalid.ok, false);
+	if (!invalid.ok) assert.equal(invalid.error, "invalid_name");
 	assert.equal(target.directory.size, 0);
 	assert.equal(target.pushes.length, 0);
 
-	const nulled = await app.request("https://control.example.com/api/v1/tenants", {
-		method: "POST",
-		headers: { cookie: cookie.split(";")[0], "content-type": "application/json" },
-		body: "null",
-	});
-	assert.equal(nulled.status, 400);
-	assert.deepEqual(await nulled.json(), { error: "invalid_name" });
-	assert.equal(target.directory.size, 0);
-
-	const reserved = await app.request("https://control.example.com/api/v1/tenants", {
-		method: "POST",
-		headers: { cookie: cookie.split(";")[0], "content-type": "application/json" },
-		body: JSON.stringify({ name: "admin" }),
-	});
-	assert.equal(reserved.status, 400);
-
-	const created = await app.request("https://control.example.com/api/v1/tenants", {
-		method: "POST",
-		headers: {
-			cookie: cookie.split(";")[0],
-			"content-type": "application/json; charset=utf-8",
-			origin: "https://control.example.com",
-			"sec-fetch-site": "same-origin",
-		},
-		body: JSON.stringify({ name: "Northwind" }),
-	});
-	assert.equal(created.status, 201);
-	assert.equal(created.headers.get("x-robots-tag"), "noindex");
-	const body = await created.json() as { tenant: string; public_url: string; owner_token: string; pushed: boolean; region: string };
-	assert.equal(body.tenant, "northwind");
-	assert.equal(body.public_url, "https://northwind.example.com");
-	assert.equal(body.region, "eu");
-	assert.equal(body.pushed, true);
-	assert.match(body.owner_token, /^a2aot_/);
+	const created = await createTenant(db, target.data, { accountId: "acct", name: "Northwind", domain: "example.com", dataRegion: "eu" });
+	assert.equal(created.ok, true);
+	if (!created.ok) return;
+	assert.equal(created.tenant.name, "northwind");
+	assert.equal(created.tenant.publicUrl, "https://northwind.example.com");
+	assert.equal(created.tenant.region, "eu");
+	assert.equal(created.tenant.pushed, true);
+	assert.match(created.tenant.ownerToken, /^a2aot_/);
 	assert.equal(target.directory.get("northwind")?.region, "eu");
 	assert.equal(target.pushes.length, 1);
 	assert.equal(target.pushes[0].region, "eu");
 	assert.equal(target.pushes[0].body.name, "northwind");
 	assert.equal(target.pushes[0].body.version, 1);
 	assert.equal(target.pushes[0].body.ownerTokenHash.length, 64);
-	assert.equal(JSON.stringify(target.pushes[0]).includes(body.owner_token), false);
+	assert.equal(JSON.stringify(target.pushes[0]).includes(created.tenant.ownerToken), false);
 
-	const again = await app.request("https://control.example.com/api/v1/tenants", {
-		method: "POST",
-		headers: { cookie: cookie.split(";")[0], "content-type": "application/json" },
-		body: JSON.stringify({ name: "northwind" }),
-	});
-	assert.equal(again.status, 409);
+	const again = await createTenant(db, target.data, { accountId: "acct", name: "northwind", domain: "example.com" });
+	assert.equal(again.ok, false);
+	if (!again.ok) assert.equal(again.error, "taken");
 
-	const list = await app.request("https://control.example.com/api/v1/tenants", { headers: { cookie: cookie.split(";")[0] } });
-	const listed = await list.json() as { tenants: { name: string; public_url: string | null }[] };
-	assert.equal(listed.tenants.length, 1);
-	assert.equal(listed.tenants[0].name, "northwind");
-	assert.equal(listed.tenants[0].public_url, "https://northwind.example.com");
-	assert.equal(JSON.stringify(listed).includes(body.owner_token), false);
-	assert.equal(JSON.stringify(listed).includes("owner_token"), false);
+	const listed = await listTenants(db, "acct", "example.com");
+	assert.equal(listed.length, 1);
+	assert.equal(listed[0].name, "northwind");
+	assert.equal(listed[0].publicUrl, "https://northwind.example.com");
+	assert.equal(JSON.stringify(listed).includes(created.tenant.ownerToken), false);
+	assert.equal(JSON.stringify(listed).includes("ownerToken"), false);
 });
 
 test("a failed push stays in the outbox and a later flush delivers it", async () => {
 	const db = openDb();
-	const sent: { text: string }[] = [];
 	const target = plane();
 	target.setFail(true);
-	const app = createApp(
-		{ AUTH_SECRET: secret, DB: db },
-		{ database: db, mailer: { async send(message) { sent.push({ text: message.text }); } }, dataPlane: target.data },
-	);
-	const posted = await app.request("https://control.example.com/app/sign-in", {
-		method: "POST",
-		headers: { origin: "https://control.example.com", "content-type": "application/x-www-form-urlencoded" },
-		body: "provider=email&email=person@example.com",
-	});
-	assert.equal(posted.status, 303);
-	const link = sent[0].text.match(/https:\/\/control\.example\.com\/api\/auth\/magic-link\/verify\?[^\s]+/);
-	assert.ok(link);
-	const verified = await app.request(link[0]);
-	const cookie = verified.headers.getSetCookie().find((value) => value.startsWith("__Host-a2a_session="))!.split(";")[0];
-	const created = await app.request("https://control.example.com/api/v1/tenants", {
-		method: "POST",
-		headers: { cookie, "content-type": "application/json" },
-		body: JSON.stringify({ name: "northwind" }),
-	});
-	const body = await created.json() as { pushed: boolean; owner_token: string };
-	assert.equal(created.status, 201);
-	assert.equal(body.pushed, false);
-	assert.match(body.owner_token, /^a2aot_/);
+	const created = await createTenant(db, target.data, { accountId: "acct", name: "northwind" });
+	assert.equal(created.ok, true);
+	if (!created.ok) return;
+	assert.equal(created.tenant.pushed, false);
+	assert.match(created.tenant.ownerToken, /^a2aot_/);
 	assert.equal(target.pushes.length, 0);
 	target.setFail(false);
 	const flushed = await flushOutbox(db, target.data, Date.parse("2099-01-01T00:00:00.000Z"));

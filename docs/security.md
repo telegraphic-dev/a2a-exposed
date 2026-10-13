@@ -2,6 +2,8 @@
 
 Peers, the owner, and MCP clients use different credentials. Peer message text is data, not instructions.
 
+The hosted service at [a2a.exposed](https://a2a.exposed) adds accounts and the dashboard. This repository ships the inbox Worker, the CLI, MCP, and the owner pages `/` and `/device`.
+
 ## Peers
 
 Each peer has its own bearer token, from pairing (`connect`, approved by the owner) or from `token issue <label>`. A new token is `a2aow_` plus 43 base64url characters (32 random bytes). Only the SHA-256 hash is stored. The token is shown once. You can revoke or rotate any label. Every task records which peer sent it. Lookups are by hash, so a token issued with the earlier `s2a_` prefix still authenticates.
@@ -10,7 +12,7 @@ Rate limit: 60 requests per minute per peer. Request bodies are limited to 1 MiB
 
 ## Pairing
 
-Device codes are 256 random bits, stored hashed, single-use, and valid for 10 minutes. By default only the human's approval password approves. It is stored as a salted PBKDF2-SHA256 hash (default 100,000 iterations, the Workers maximum; `--pbkdf2-iterations` can lower it to 50,000 if the free-plan CPU limit, error 1102, is hit). Deny on `/device` needs no password.
+Device codes are 256 random bits, stored hashed, single-use, and valid for 10 minutes. The human's approval password approves a request. The Worker stores that password as a slow hash: PBKDF2 with SHA-256, a random salt, and 100,000 iterations (the most Cloudflare Workers allow). `--pbkdf2-iterations` can lower it to 50,000 when the free-plan CPU limit, error 1102, is hit. Deny on `/device` asks for the code.
 
 The password is set with `pair set-password --web` (a one-time link) or in a terminal with `pair set-password`. Wrong passwords lock out per code, per IP, and globally. New requests are capped per IP and in total.
 

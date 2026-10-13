@@ -1,15 +1,7 @@
-// POST /api/feedback files a GitHub issue when FEEDBACK_REPO is set and either the GitHub App
-// (FEEDBACK_GITHUB_APP_ID and FEEDBACK_GITHUB_APP_PRIVATE_KEY) or FEEDBACK_GITHUB_TOKEN is set.
-// Neither credential, or no valid repo, is 404, so a self-hosted control plane is unchanged.
-// The app is used when the id and private key are both set. A set id with a key that is not a PEM,
-// or a non-numeric id with a set key, is 502 and does not fall back to the token.
-// The token is the self-host fallback only when the app id or the private key is unset.
-// None of these names use the GITHUB_* prefix: that prefix is the sign-in OAuth app.
-import { connectingIp, verifyTurnstile, type TurnstileFailure } from "./auth/turnstile.ts";
-import { sameOrigin } from "./auth/origin.ts";
-import type { Sql } from "./auth/invites.ts";
+// POST /api/feedback files a public GitHub issue when FEEDBACK_REPO and FEEDBACK_GITHUB_TOKEN are set.
+// GET /api/feedback returns { repo } so the CLI can name the repository before it sends.
+import type { Sql } from "./core/sql.ts";
 import type { ControlEnv } from "./env.ts";
-import { feedbackAppBroken, feedbackAppReady, feedbackPat, GithubAuthError, GithubCallError, githubAccessToken, githubCall, isGithubRedirect, type GithubStep, type GithubTokenCache } from "./feedback-app.ts";
 
 export const MESSAGE_MAX = 4000;
 export const PER_HOUR = 5;
@@ -24,6 +16,7 @@ const DETAIL_MAX = 2000;
 const ENVIRONMENT_MAX = 120;
 const OS_MAX = 80;
 const NODE_MAX = 32;
+const LOG_MESSAGE_MAX = 200;
 const VERSION_RE = /^[A-Za-z0-9._+();: -]{1,80}$/;
 const NODE_RE = /^[A-Za-z0-9._+-]{1,32}$/;
 const DEPLOYMENTS = ["hosted", "self-hosted"] as const;
@@ -49,7 +42,6 @@ export interface FeedbackDeps {
 	fetch?: typeof fetch;
 	now?: () => number;
 	githubTimeoutMs?: number;
-	githubCache?: GithubTokenCache;
 }
 
 export interface FeedbackInput {
@@ -70,10 +62,11 @@ export interface FeedbackInput {
 	logs: string;
 }
 
-export type FeedbackResult =
-	| { kind: "json"; status: number; body: Record<string, unknown>; headers?: Record<string, string> }
-	| { kind: "redirect"; location: string }
-	| { kind: "html"; html: string; turnstile: boolean };
+export type FeedbackResult = { kind: "json"; status: number; body: Record<string, unknown>; headers?: Record<string, string> };
+
+export function feedbackToken(env: ControlEnv): string {
+	return (env.FEEDBACK_GITHUB_TOKEN ?? "").trim();
+}
 
 export function feedbackRepo(env: ControlEnv): string {
 	const repo = (env.FEEDBACK_REPO ?? "").trim();
@@ -82,14 +75,7 @@ export function feedbackRepo(env: ControlEnv): string {
 }
 
 export function feedbackOn(env: ControlEnv): boolean {
-	return Boolean(feedbackRepo(env) && (feedbackAppReady(env) || feedbackAppBroken(env) || feedbackPat(env)));
-}
-
-export function turnstileOf(env: ControlEnv): { siteKey: string; secret: string } | null {
-	const siteKey = (env.TURNSTILE_SITE_KEY ?? "").trim();
-	const secret = (env.TURNSTILE_SECRET_KEY ?? "").trim();
-	if (!siteKey || !secret) return null;
-	return { siteKey, secret };
+	return Boolean(feedbackRepo(env) && feedbackToken(env));
 }
 
 /** Strip peer, owner, MCP, and setup tokens, URL userinfo, Bearer values, a PEM private key, API keys, and JWTs. The rest of the text stays. */
@@ -271,6 +257,12 @@ function bearerToken(request: Request): string {
 	return match?.[1] ?? "";
 }
 
+function clientAddress(request: Request): string {
+	const value = request.headers.get("cf-connecting-ip")?.trim() ?? "";
+	if (!value || value.length > 64 || !/^[0-9a-fA-F:.]+$/.test(value)) return "unknown";
+	return value;
+}
+
 async function allow(db: Sql | undefined, memory: Map<string, number>, bucket: string, windowStart: number): Promise<boolean> {
 	const key = `${bucket}\0${windowStart}`;
 	if (!db) {
@@ -283,7 +275,6 @@ async function allow(db: Sql | undefined, memory: Map<string, number>, bucket: s
 		memory.set(key, count + 1);
 		return true;
 	}
-	// One statement, so two requests cannot both pass a count check and then both insert.
 	const updated = await db.prepare(
 		`INSERT INTO feedback_rate (bucket, window_start, count) VALUES (?, ?, 1)
 		 ON CONFLICT(bucket, window_start) DO UPDATE SET count = count + 1 WHERE count < ?`,
@@ -322,10 +313,6 @@ function githubIssueUrl(repo: string, value: unknown): string {
 	}
 }
 
-const AUTH_CODE = /^(?:key_parse|jwt_rejected:\d{1,3}|installation:\d{1,3}|token:\d{1,3})$/;
-const LOG_MESSAGE_MAX = 200;
-
-/** Exception name plus a short scrubbed message. Header lines and the private key are removed first. */
 function failureMessage(error: unknown): string {
 	const name = error instanceof Error && error.name ? error.name : "Error";
 	const raw = error instanceof Error ? error.message : typeof error === "string" ? error : "";
@@ -339,40 +326,14 @@ function logFeedbackFailed(source: string, status: number, error: string, step: 
 	console.error(JSON.stringify({ event: "feedback_failed", source, status, error, step, message }));
 }
 
-function githubFailure(error: unknown, source: string): FeedbackResult {
-	const cause = error instanceof GithubCallError ? (error.cause ?? error) : error;
-	const step = error instanceof GithubCallError ? error.step
-		: cause instanceof GithubAuthError ? cause.step
-		: "";
-	const name = cause instanceof Error ? cause.name : "";
-	const timeoutHit = name === "TimeoutError" || name === "AbortError";
-	let status = 0;
-	let reason = "fetch";
-	if (timeoutHit) {
-		reason = "timeout";
-	} else if (cause instanceof GithubAuthError && AUTH_CODE.test(cause.code)) {
-		status = Number.isInteger(cause.status) && cause.status >= 0 && cause.status <= 999 ? cause.status : 0;
-		reason = cause.code;
-	}
-	logFeedbackFailed(source, status, reason, step, failureMessage(cause));
-	return jsonResult(timeoutHit ? 504 : 502, { error: timeoutHit ? "timeout" : "unavailable" });
+function redirected(status: number): boolean {
+	return status >= 300 && status < 400;
 }
 
-async function openIssue(env: ControlEnv, input: FeedbackInput, deps: FeedbackDeps): Promise<FeedbackResult> {
-	const repo = feedbackRepo(env);
-	const timeout = deps.githubTimeoutMs ?? GITHUB_TIMEOUT_MS;
-	const call = deps.fetch ?? fetch;
-	let token = "";
-	let doc: ReturnType<typeof issueDocument>;
-	try {
-		const access = await githubAccessToken(env, repo, deps);
-		token = access.token;
-		doc = issueDocument(input, access.secrets);
-	} catch (error) {
-		return githubFailure(error, input.source);
-	}
-	const post = (step: Extract<GithubStep, "issue" | "issue_retry">, labels: string[]) => githubCall(step, call, `https://api.github.com/repos/${repo}/issues`, {
+async function postIssue(call: typeof fetch, url: string, token: string, timeout: number, body: string): Promise<Response> {
+	return call(url, {
 		method: "POST",
+		redirect: "manual",
 		signal: AbortSignal.timeout(timeout),
 		headers: {
 			authorization: `Bearer ${token}`,
@@ -381,29 +342,41 @@ async function openIssue(env: ControlEnv, input: FeedbackInput, deps: FeedbackDe
 			"user-agent": "a2a-exposed",
 			"x-github-api-version": "2022-11-28",
 		},
-		body: JSON.stringify(labels.length ? { title: doc.title, body: doc.body, labels } : { title: doc.title, body: doc.body }),
+		body,
 	});
+}
+
+async function openIssue(env: ControlEnv, input: FeedbackInput, deps: FeedbackDeps): Promise<FeedbackResult> {
+	const repo = feedbackRepo(env);
+	const token = feedbackToken(env);
+	const timeout = deps.githubTimeoutMs ?? GITHUB_TIMEOUT_MS;
+	const call = deps.fetch ?? fetch;
+	const doc = issueDocument(input, token);
+	const url = `https://api.github.com/repos/${repo}/issues`;
 	let response: Response;
-	let step: Extract<GithubStep, "issue" | "issue_retry"> = "issue";
+	let step = "issue";
 	try {
-		response = await post("issue", doc.labels);
+		response = await postIssue(call, url, token, timeout, JSON.stringify({ title: doc.title, body: doc.body, labels: doc.labels }));
 		if (response.status === 422) {
 			await response.body?.cancel().catch(() => {});
 			step = "issue_retry";
-			response = await post("issue_retry", []);
+			response = await postIssue(call, url, token, timeout, JSON.stringify({ title: doc.title, body: doc.body }));
 		}
 	} catch (error) {
-		return githubFailure(error, input.source);
+		const name = error instanceof Error ? error.name : "";
+		const timeoutHit = name === "TimeoutError" || name === "AbortError";
+		logFeedbackFailed(input.source, 0, timeoutHit ? "timeout" : "fetch", step, failureMessage(error));
+		return jsonResult(timeoutHit ? 504 : 502, { error: timeoutHit ? "timeout" : "unavailable" });
 	}
-	const redirected = isGithubRedirect(response.status);
+	const moved = redirected(response.status);
 	let payload: unknown = null;
-	if (redirected) {
+	if (moved) {
 		await response.body?.cancel().catch(() => {});
 	} else {
 		try { payload = await response.json(); } catch { payload = null; }
 	}
-	const issue = redirected ? "" : githubIssueUrl(repo, asRecord(payload)?.html_url);
-	if (!redirected && response.ok && issue) {
+	const issue = moved ? "" : githubIssueUrl(repo, asRecord(payload)?.html_url);
+	if (!moved && response.ok && issue) {
 		console.error(JSON.stringify({ event: "feedback_filed", source: input.source, status: response.status }));
 		return jsonResult(200, { ok: true, issue_url: issue });
 	}
@@ -417,7 +390,7 @@ async function limited(request: Request, input: FeedbackInput, env: ControlEnv, 
 	let allowed = false;
 	try {
 		const owner = await ownerBucket(env.DB, token);
-		const bucket = owner || `ip:${connectingIp(request) ?? "unknown"}`;
+		const bucket = owner || `ip:${clientAddress(request)}`;
 		allowed = await allow(env.DB, memory, bucket, windowStart);
 	} catch {
 		console.error(JSON.stringify({ event: "feedback_failed", source: input.source, status: 0, error: "rate" }));
@@ -427,46 +400,10 @@ async function limited(request: Request, input: FeedbackInput, env: ControlEnv, 
 	return jsonResult(429, { error: "rate_limit" }, { "retry-after": retryAfter(now) });
 }
 
-function turnstileToken(request: Request, record: Record<string, unknown>): string {
-	const fromJson = field(record, "turnstile");
-	if (fromJson) return fromJson;
-	return field(record, "cf-turnstile-response");
-}
-
-export async function submitFeedback(
-	request: Request,
-	env: ControlEnv,
-	input: FeedbackInput,
-	record: Record<string, unknown>,
-	memory: Map<string, number>,
-	deps: FeedbackDeps,
-): Promise<FeedbackResult> {
-	if (input.source === "web" && !sameOrigin(request)) return jsonResult(403, { error: "forbidden" });
-	const turnstile = turnstileOf(env);
-	if (input.source === "web" && turnstile) {
-		const token = turnstileToken(request, record);
-		if (!token) return jsonResult(400, { error: "turnstile" });
-		const failure: TurnstileFailure | null = await verifyTurnstile(turnstile.secret, token, connectingIp(request));
-		if (failure) return jsonResult(400, { error: "turnstile" });
-	}
-	const now = (deps.now ?? Date.now)();
-	const blocked = await limited(request, input, env, memory, now);
-	if (blocked) return blocked;
-	return openIssue(env, input, deps);
-}
-
 async function readRecord(request: Request): Promise<Record<string, unknown> | "large" | "bad"> {
 	const length = Number(request.headers.get("content-length") || 0);
 	if (Number.isFinite(length) && length > BODY_MAX) return "large";
 	const media = (request.headers.get("content-type") ?? "").split(";")[0]?.trim().toLowerCase();
-	if (media === "application/x-www-form-urlencoded") {
-		const text = await request.text();
-		if (text.length > BODY_MAX) return "large";
-		const form = new URLSearchParams(text);
-		const record: Record<string, unknown> = {};
-		for (const [key, value] of form.entries()) record[key] = value;
-		return record;
-	}
 	if (media !== "application/json") return "bad";
 	const text = await request.text();
 	if (text.length > BODY_MAX) return "large";
@@ -476,16 +413,6 @@ async function readRecord(request: Request): Promise<Record<string, unknown> | "
 	} catch {
 		return "bad";
 	}
-}
-
-function pageError(code: string): string {
-	if (code === "rate_limit") return "rate_limit";
-	if (code === "turnstile") return "turnstile";
-	if (code === "timeout") return "timeout";
-	if (code === "forbidden") return "origin";
-	if (code === "steps_required") return "steps";
-	if (code.startsWith("invalid")) return "invalid";
-	return "unavailable";
 }
 
 export function createFeedback(env: ControlEnv, deps: FeedbackDeps = {}) {
@@ -498,54 +425,12 @@ export function createFeedback(env: ControlEnv, deps: FeedbackDeps = {}) {
 			const record = await readRecord(request);
 			if (record === "large") return jsonResult(413, { error: "invalid_message" });
 			if (record === "bad") return jsonResult(400, { error: "invalid_message" });
-			const media = (request.headers.get("content-type") ?? "").split(";")[0]?.trim().toLowerCase();
-			if (media !== "application/json") return jsonResult(400, { error: "invalid_message" });
 			const input = parseFeedback(record);
 			if (typeof input === "string") return jsonResult(400, { error: input });
-			return submitFeedback(request, env, input, record, memory, deps);
-		},
-		async page(request: Request, render: (input: { turnstileSiteKey?: string; error?: string; sent?: boolean; issueUrl?: string; connection?: string; deployment?: string; repo?: string }) => string): Promise<FeedbackResult> {
-			if (!feedbackOn(env)) return jsonResult(404, { error: "not_found" });
-			const turnstile = turnstileOf(env);
-			const url = new URL(request.url);
-			if (request.method === "GET") {
-				const issue = githubIssueUrl(feedbackRepo(env), url.searchParams.get("issue"));
-				const connection = url.searchParams.get("connection") ?? "";
-				const deployment = url.searchParams.get("deployment") ?? "";
-				return {
-					kind: "html",
-					turnstile: Boolean(turnstile),
-					html: render({
-						turnstileSiteKey: turnstile?.siteKey,
-						error: url.searchParams.get("error") ?? undefined,
-						sent: url.searchParams.get("sent") === "1",
-						issueUrl: issue || undefined,
-						connection: CONNECTIONS.includes(connection as (typeof CONNECTIONS)[number]) ? connection : "",
-						deployment: DEPLOYMENTS.includes(deployment as (typeof DEPLOYMENTS)[number]) ? deployment : "",
-						repo: feedbackRepo(env),
-					}),
-				};
-			}
-			if (request.method !== "POST") return jsonResult(405, { error: "method" });
-			const record = await readRecord(request);
-			const back = (error: string) => {
-				const next = new URL("/app/feedback", request.url);
-				next.searchParams.set("error", pageError(error));
-				return { kind: "redirect" as const, location: next.href };
-			};
-			if (record === "large" || record === "bad") return back("invalid_message");
-			const input = parseFeedback({ ...record, source: "web" });
-			if (typeof input === "string") return back(input);
-			const result = await submitFeedback(request, env, input, record, memory, deps);
-			if (result.kind !== "json") return result;
-			if (result.status === 200 && result.body.ok === true) {
-				const next = new URL("/app/feedback", request.url);
-				next.searchParams.set("sent", "1");
-				if (typeof result.body.issue_url === "string") next.searchParams.set("issue", result.body.issue_url);
-				return { kind: "redirect", location: next.href };
-			}
-			const error = typeof result.body.error === "string" ? result.body.error : "unavailable";
-			return back(error);
+			const now = (deps.now ?? Date.now)();
+			const blocked = await limited(request, input, env, memory, now);
+			if (blocked) return blocked;
+			return openIssue(env, input, deps);
 		},
 	};
 }

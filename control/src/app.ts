@@ -1,67 +1,22 @@
-import { Hono, type Context } from "hono";
-import { CALLBACK_DEADLINE_MS, within } from "./auth/deadline.ts";
-import { connectingIp, verifyTurnstile } from "./auth/turnstile.ts";
-import { signInReturnPath } from "./auth/return.ts";
-import { readCloudflareGrant } from "./auth/cloudflare-grant.ts";
-import { CLOUDFLARE_REAUTH_NOTICE, INBOX_ID, cloudflareIsLinked, finishCloudflareLink, handleCloudflareAccount, handleCloudflareSetup, inboxIdFromPath, resumeCloudflare, sessionIsFresh } from "./auth/cloudflare-link.ts";
-import { describeSetupGrant, inboxCanProvision, parseSetupHost } from "./auth/cloudflare-setup.ts";
-import { enabledProviderOrigins, handleSignIn, PROVIDER_ORIGINS } from "./auth/sign-in.ts";
-import { loadAuth } from "./auth/instance.ts";
-import { signupClosedText, type SignupAllowlist } from "./auth/allowlist.ts";
-import { authBlockers, resolveAuth, type AuthDeps, type AuthOptions } from "./auth/options.ts";
-import { OIDC_COOKIE, authorize, discoveryDocument, exchangeCode, issuerOrigin, readTokenForm, resumeQuery } from "./oidc/issuer.ts";
-import { CF_OWNER_COOKIE, CLOUDFLARE_RESUME_COOKIE, OWNER_COOKIE, bareOwnerToken, hostCookie, readCookie } from "./auth/cookies.ts";
-import { deviceCodeFromCookie, handleDevice } from "./auth/device.ts";
-import { sameOrigin } from "./auth/origin.ts";
-import { accountAgentLimit, configuredFreeAgentLimit, createTenant, listTenants } from "./tenants/create.ts";
-import { dataPlaneFromEnv, type DataPlane } from "./tenants/push.ts";
-import type { ControlEnv } from "./env.ts";
+// Control plane shell: health, plain feedback, and static assets.
+// The hosted dashboard is a separate site. This Worker imports tenants and provisioning only for the outbox flush.
+import { Hono } from "hono";
 import { routes } from "./core/routes.ts";
-import { handleAgent } from "./agents/page.ts";
-import { brandConfig } from "@brand/brand.config.ts";
-import { avatarOrigin, avatarUrl, renderAccount, renderSettings } from "./views/account.tsx";
-import { renderCloudflareSetup } from "./views/cloudflare-setup.tsx";
-import { renderApp, securityHeaders, type AppAccount } from "./views/document.tsx";
-import { inboxCountsOf } from "./views/overview.tsx";
-import { renderSignIn } from "./views/sign-in.tsx";
+import type { ControlEnv } from "./env.ts";
 import { createFeedback, feedbackOn, type FeedbackDeps, type FeedbackResult } from "./feedback.ts";
-import type { InboxMigration, InboxWizard } from "./provision/inbox.ts";
-import { PERMISSION_WAIT } from "./provision/permission-wait.ts";
-import { cloudflareHostname, hashOwnerToken, listCloudflareInboxes, readCloudflareInboxById, type InboxRow } from "./provision/inbox-row.ts";
-import { renderFeedback } from "./views/feedback.tsx";
 
-/**
- * A state-changing tenant call must be JSON. `text/plain` is a CORS-safelisted type, so a page on a
- * sibling host could post it with the SameSite=Lax session cookie and no preflight. A browser Origin
- * or Sec-Fetch-Site from anywhere but this host is rejected. A non-browser client sends neither header.
- */
-/** A 403 from the allowlist is a browser page, except the CLI device-token poll. */
-async function closedSignup(request: Request, response: Response, list: SignupAllowlist | null): Promise<Response> {
-	if (!list || response.status !== 403) return response;
-	if (new URL(request.url).pathname.endsWith("/device/token")) return response;
-	const type = response.headers.get("content-type") ?? "";
-	if (!type.includes("json")) return response;
-	let code = "";
-	try {
-		const body = await response.clone().json() as { code?: unknown };
-		if (typeof body?.code === "string") code = body.code;
-	} catch {
-		return response;
-	}
-	if (code !== "invite") return response;
-	const url = new URL("/app", request.url);
-	url.searchParams.set("error", "invite");
-	return new Response(null, { status: 302, headers: { location: url.href, "cache-control": "no-store" } });
-}
+const SHELL_HEADERS: Record<string, string> = {
+	"content-type": "text/html; charset=utf-8",
+	"content-security-policy": "default-src 'none'; script-src 'none'; style-src 'self'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+	"referrer-policy": "same-origin",
+	"x-content-type-options": "nosniff",
+	"cache-control": "no-store",
+	"x-robots-tag": "noindex",
+};
 
-function allowsTenantWrite(request: Request): boolean {
-	const media = (request.headers.get("content-type") ?? "").split(";")[0]?.trim().toLowerCase();
-	if (media !== "application/json") return false;
-	const origin = request.headers.get("origin");
-	if (origin && origin !== new URL(request.url).origin) return false;
-	const site = (request.headers.get("sec-fetch-site") ?? "").trim().toLowerCase();
-	if (site && site !== "same-origin" && site !== "none") return false;
-	return true;
+function shellHtml(name: string): string {
+	const title = `${name}: control API`;
+	return `<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>${title}</title></head><body><main><h1>${title}</h1><p>Health is at /health. Create an inbox with the a2a-exposed CLI. The owner pages are on that inbox.</p></main></body></html>`;
 }
 
 function acceptQuality(params: string[]): number {
@@ -75,7 +30,6 @@ function acceptQuality(params: string[]): number {
 	return 1;
 }
 
-/** True when some `text/markdown` range has a quality above zero. `q=0` rejects that range. */
 function wantsMarkdown(accept: string | undefined): boolean {
 	if (!accept) return false;
 	return accept.split(",").some((part) => {
@@ -103,65 +57,6 @@ function markdownPath(pathname: string): string | null {
 	return `${pathname}.md`;
 }
 
-function logCallbackFailure(request: Request, error: string): void {
-	const path = new URL(request.url).pathname;
-	const safe = /^[A-Za-z0-9_-]{1,64}$/.test(error) ? error : "unrecognized";
-	console.error(JSON.stringify({ event: "oauth_callback_failed", error: safe, path }));
-}
-
-function callbackError(request: Request, response: Response): string {
-	const location = response.headers.get("location");
-	if (!location) return response.status >= 500 ? "http" : "";
-	try {
-		const url = new URL(location, request.url);
-		if (url.origin !== new URL(request.url).origin || url.pathname !== "/app") return "";
-		return url.searchParams.get("error") ?? "";
-	} catch {
-		return "";
-	}
-}
-
-function turnstileEndpoint(request: Request): boolean {
-	if (request.method !== "POST") return false;
-	const path = new URL(request.url).pathname;
-	return path === "/api/auth/sign-in/social" || path === "/api/auth/sign-in/magic-link";
-}
-
-function callbackGaveUp(request: Request): Response {
-	logCallbackFailure(request, "deadline");
-	const url = new URL("/app", request.url);
-	url.searchParams.set("error", "deadline");
-	return new Response(null, { status: 302, headers: { location: url.href, "cache-control": "no-store" } });
-}
-
-function pageHeaders(turnstile: boolean, options?: AuthOptions | null, imgSrc: string[] = [], scriptSelf = false, linkOrigins: string[] = []): Record<string, string> {
-	return {
-		...securityHeaders({
-			turnstile,
-			formAction: [...(options ? enabledProviderOrigins(options) : []), ...linkOrigins],
-			imgSrc,
-			scriptSelf,
-		}),
-		"cache-control": "no-store",
-	};
-}
-
-/** Signed-in account pages post connect to this host, then the browser follows the redirect to Cloudflare. */
-function accountLinkOrigins(options: AuthOptions | null): string[] {
-	return options?.cloudflare ? [PROVIDER_ORIGINS.cloudflare] : [];
-}
-
-function redirectTo(location: string, cookies: string[] = []): Response {
-	const headers = new Headers({ location, "cache-control": "no-store" });
-	for (const cookie of cookies) headers.append("set-cookie", cookie);
-	return new Response(null, { status: 303, headers });
-}
-
-function formMedia(request: Request): boolean {
-	const media = (request.headers.get("content-type") ?? "").split(";")[0]?.trim().toLowerCase();
-	return media === "application/x-www-form-urlencoded";
-}
-
 function htmlPathFor(pathname: string): string {
 	if (pathname.endsWith(".md")) {
 		const bare = pathname.slice(0, -3);
@@ -170,93 +65,40 @@ function htmlPathFor(pathname: string): string {
 	return pathname;
 }
 
-async function loadInboxScript(env: ControlEnv, request: Request): Promise<string> {
-	if (!env.ASSETS) return "";
-	try {
-		const asset = await env.ASSETS.fetch(new URL("/inbox-worker.js.txt", request.url));
-		if (!asset.ok) return "";
-		const text = await asset.text();
-		return text.length > 5_000_000 ? "" : text;
-	} catch {
-		return "";
+async function presentAsset(pathname: string, asset: Response): Promise<Response> {
+	if (pathname === "/docs" || pathname.startsWith("/docs/")) return asset;
+	const type = asset.headers.get("content-type") ?? "";
+	if (!type.includes("text/html")) return asset;
+	const html = await asset.text();
+	if (!html.includes("applies to a2a-exposed")) {
+		return new Response(html, { status: asset.status, statusText: asset.statusText, headers: asset.headers });
 	}
+	const headers = new Headers(asset.headers);
+	headers.delete("content-length");
+	return new Response(html.replace(/ · applies to a2a-exposed [^<]*/g, ""), {
+		status: asset.status,
+		statusText: asset.statusText,
+		headers,
+	});
 }
 
-async function loadInboxMigrations(env: ControlEnv, request: Request): Promise<InboxMigration[]> {
-	if (!env.ASSETS) return [];
-	try {
-		const asset = await env.ASSETS.fetch(new URL("/inbox-migrations.json", request.url));
-		if (!asset.ok) return [];
-		const parsed: unknown = await asset.json();
-		if (!Array.isArray(parsed) || parsed.length > 50) return [];
-		const migrations: InboxMigration[] = [];
-		for (const row of parsed) {
-			if (!row || typeof row !== "object") return [];
-			const name = (row as { name?: unknown }).name;
-			const sql = (row as { sql?: unknown }).sql;
-			if (typeof name !== "string" || typeof sql !== "string") return [];
-			if (!/^\d{4}_[a-z0-9_]+\.sql$/.test(name) || sql.length > 500_000) return [];
-			migrations.push({ name, sql });
-		}
-		return migrations;
-	} catch {
-		return [];
-	}
+function feedbackResponse(result: FeedbackResult): Response {
+	const headers = new Headers(result.headers);
+	headers.set("content-type", "application/json; charset=utf-8");
+	headers.set("x-robots-tag", "noindex");
+	headers.set("cache-control", "no-store");
+	return new Response(JSON.stringify(result.body), { status: result.status, headers });
 }
 
-export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & { dataPlane?: DataPlane; callbackDeadlineMs?: number; signInDeadlineMs?: number; cloudflareFetchMs?: number; inboxScript?: string; inboxMigrations?: InboxMigration[]; permissionDelaysMs?: number[] } = {}) {
+export function createApp(env: ControlEnv = {}, deps: FeedbackDeps = {}) {
 	const app = new Hono<{ Bindings: ControlEnv }>();
 	const feedback = createFeedback(env, deps);
-	const feedbackLink = feedbackOn(env) ? `<p><a href="/app/feedback">Feedback</a></p>` : undefined;
-	const dashboardScript = `<script src="/dashboard.js"></script>`;
-
-	function notFoundPage(): Response {
-		const html = renderApp(env, `<p>That page is not available.</p><p><a href="/app">Back to your agents</a></p>`, "Not available");
-		return new Response(html, {
-			status: 404,
-			headers: {
-				"content-type": "text/html; charset=utf-8",
-				...securityHeaders(),
-				"cache-control": "no-store",
-				"x-robots-tag": "noindex",
-			},
-		});
-	}
-
-	function accountOf(user: { name?: unknown; email?: unknown; image?: unknown } | null | undefined): { account: AppAccount; imageHosts: string[] } {
-		const image = avatarUrl(typeof user?.image === "string" ? user.image : "");
-		return {
-			account: {
-				name: typeof user?.name === "string" ? user.name : "",
-				email: typeof user?.email === "string" ? user.email : "",
-				...(image ? { image } : {}),
-			},
-			imageHosts: image ? [avatarOrigin(image)] : [],
-		};
-	}
-
-	async function presentAsset(pathname: string, asset: Response): Promise<Response> {
-		if (pathname === "/docs" || pathname.startsWith("/docs/")) return asset;
-		const type = asset.headers.get("content-type") ?? "";
-		if (!type.includes("text/html")) return asset;
-		const html = await asset.text();
-		if (!html.includes("applies to a2a-exposed")) {
-			return new Response(html, { status: asset.status, statusText: asset.statusText, headers: asset.headers });
-		}
-		const headers = new Headers(asset.headers);
-		headers.delete("content-length");
-		return new Response(html.replace(/ · applies to a2a-exposed [^<]*/g, ""), {
-			status: asset.status,
-			statusText: asset.statusText,
-			headers,
-		});
-	}
+	const name = (env.BRAND_NAME ?? "").trim() || "Inbox";
 
 	app.use("*", async (c, next) => {
 		const assetPath = markdownPath(c.req.path);
 		if (!assetPath || !wantsMarkdown(c.req.header("accept")) || !env.ASSETS) return next();
-		const assetUrl = new URL(assetPath, c.req.url);
-		const asset = await env.ASSETS.fetch(assetUrl);
+		const asset = await env.ASSETS.fetch(new URL(assetPath, c.req.url));
 		if (!asset.ok) return next();
 		const headers = new Headers(asset.headers);
 		headers.set("content-type", "text/markdown; charset=utf-8");
@@ -268,622 +110,29 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 		return new Response(asset.body, { status: 200, headers });
 	});
 
-	app.use("/app", async (c, next) => {
-		c.header("x-robots-tag", "noindex");
-		c.header("cache-control", "no-store");
-		await next();
-	});
-	app.use("/app/*", async (c, next) => {
-		c.header("x-robots-tag", "noindex");
-		c.header("cache-control", "no-store");
-		await next();
-	});
-	app.use("/api", async (c, next) => {
-		c.header("x-robots-tag", "noindex");
-		c.header("cache-control", "no-store");
-		await next();
-	});
-	app.use("/api/*", async (c, next) => {
-		c.header("x-robots-tag", "noindex");
-		c.header("cache-control", "no-store");
-		await next();
-	});
-
-	app.get(routes.health, (c) => c.json({ ok: true }, 200, { "cache-control": "no-store" }));
-
-	app.get("/app", async (c) => {
-		const query = resumeQuery(c.req.header("cookie") ?? null);
-		if (query) {
-			const loaded = await loadAuth(env, c.req.raw, deps);
-			const session = loaded ? await loaded.auth.api.getSession({ headers: c.req.raw.headers }) : null;
-			if (session?.user?.id) {
-				c.header("set-cookie", hostCookie(OIDC_COOKIE, "", 0));
-				return c.redirect(new URL(`/api/oidc/authorize${query}`, c.req.url).href, 302);
-			}
-		}
-		const pendingDevice = deviceCodeFromCookie(c.req.header("cookie") ?? null);
-		if (pendingDevice) {
-			const loaded = await loadAuth(env, c.req.raw, deps);
-			const session = loaded ? await loaded.auth.api.getSession({ headers: c.req.raw.headers }) : null;
-			if (session?.user?.id) return c.redirect(new URL(`/app/device?user_code=${pendingDevice}`, c.req.url).href, 302);
-		}
-		const resumeAuth = await loadAuth(env, c.req.raw, deps);
-		let clearResume = false;
-		if (resumeAuth) {
-			const resumed = await resumeCloudflare(c.req.raw, resumeAuth.auth, resumeAuth.options, await provisionDeps(c.req.raw), true);
-			if (resumed?.kind === "response") return resumed.response;
-			if (resumed?.kind === "clear") clearResume = true;
-		}
-		const shell = await renderShell(c.req.raw);
-		if (shell.clearOwner) c.header("set-cookie", hostCookie(OWNER_COOKIE, "", 0));
-		if (clearResume) c.header("set-cookie", hostCookie(CLOUDFLARE_RESUME_COOKIE, "", 0), { append: true });
-		const headers = shell.signedIn
-			? pageHeaders(false, null, shell.imageHosts, true, shell.linkOrigins)
-			: pageHeaders(shell.turnstile, shell.options);
-		return c.html(shell.html, 200, headers);
-	});
-	app.get("/app/device", (c) => devicePage(c));
-	app.post("/app/device", (c) => devicePage(c));
-	app.get("/app/sign-in", async (c) => {
-		const request = c.req.raw;
-		const url = new URL(request.url);
-		const next = signInReturnPath(url.searchParams.get("return") ?? "");
-		const loaded = await loadAuth(env, request, deps);
-		if (!loaded) return notFoundPage();
-		const session = await loaded.auth.api.getSession({ headers: request.headers });
-		if (!next && session?.user?.id) return c.redirect(new URL("/app", request.url).href, 302);
-		const reauth = url.searchParams.get("reauth") === "cloudflare" || url.searchParams.get("error") === "cloudflare_reauth";
-		const body = renderSignIn({
-			providers: [
-				loaded.options.github ? "github" : "",
-				loaded.options.google ? "google" : "",
-			].filter(Boolean),
-			magicLink: Boolean(loaded.options.mailer || loaded.options.emailBinding),
-			invitesRequired: loaded.options.invitesRequired,
-			signupClosed: loaded.options.signupAllowlist !== null,
-			closedMessage: signupClosedText(env),
-			turnstileSiteKey: loaded.options.turnstile?.siteKey,
-			notice: reauth ? CLOUDFLARE_REAUTH_NOTICE : undefined,
-			error: reauth ? undefined : url.searchParams.get("error") ?? undefined,
-			sent: url.searchParams.get("sent") === "1",
-			next,
-		});
-		return c.html(renderApp(env, body), 200, pageHeaders(Boolean(loaded.options.turnstile), loaded.options));
-	});
-	app.get("/app/agents/:name", (c) => handleAgent(c.req.raw, env, deps));
-	app.post("/app/agents/:name", (c) => handleAgent(c.req.raw, env, deps));
-	app.all("/app/feedback", (c) => feedbackPage(c));
-	app.get("/app/cloudflare", (c) => cloudflareSetupPage(c));
-	app.post("/app/cloudflare", (c) => cloudflareSetupPost(c));
-	app.get("/app/cloudflare/:inboxId", (c) => cloudflareSetupPage(c));
-	app.post("/app/cloudflare/:inboxId", (c) => cloudflareSetupPost(c));
-	app.get("/app/settings", (c) => settingsPage(c));
-	app.get("/app/*", async (c) => {
-		const shell = await renderShell(c.req.raw);
-		if (shell.clearOwner) c.header("set-cookie", hostCookie(OWNER_COOKIE, "", 0));
-		const headers = shell.signedIn
-			? pageHeaders(false, null, shell.imageHosts, true, shell.linkOrigins)
-			: pageHeaders(shell.turnstile, shell.options);
-		return c.html(shell.html, 200, headers);
-	});
-	async function settingsPage(c: Context<{ Bindings: ControlEnv }>) {
-		const request = c.req.raw;
-		const loaded = await loadAuth(env, request, deps);
-		if (!loaded) return notFoundPage();
-		const session = await loaded.auth.api.getSession({ headers: request.headers });
-		if (!session?.user?.id) return redirectTo(new URL("/app", request.url).href);
-		const who = accountOf(session.user);
-		const url = new URL(request.url);
-		const body = renderSettings({
-			name: who.account.name,
-			email: who.account.email,
-			brand: brandConfig(env).name,
-			cloudflare: Boolean(loaded.options.cloudflare),
-			cloudflareLinked: await cloudflareIsLinked(loaded.options.database, session.user.id),
-			confirmDisconnect: url.searchParams.get("confirm") === "disconnect",
-			disconnected: url.searchParams.get("disconnected") === "1",
-		});
-		return c.html(
-			renderApp(env, body, "Settings", undefined, { account: who.account }),
-			200,
-			pageHeaders(false, null, who.imageHosts, false, accountLinkOrigins(loaded.options)),
-		);
-	}
-	async function devicePage(c: Context<{ Bindings: ControlEnv }>) {
-		const loaded = await loadAuth(env, c.req.raw, deps);
-		if (!loaded) return notFoundPage();
-		const result = await handleDevice(c.req.raw, loaded.auth, loaded.options, env);
-		if (result.kind === "closed") return notFoundPage();
-		if (result.cookie) c.header("set-cookie", result.cookie);
-		if (result.kind === "redirect") return c.redirect(result.location ?? "/app/device", 303);
-		// Approval posts stay on this host. The sign-in form on this page can still leave for a provider.
-		return c.html(result.html ?? "", 200, pageHeaders(Boolean(result.turnstile), loaded.options));
-	}
-	app.post("/app/account/cloudflare", async (c) => {
-		const request = c.req.raw;
-		const loaded = await loadAuth(env, request, deps);
-		if (!loaded) return notFoundPage();
-		const result = await handleCloudflareAccount(request, loaded.auth, loaded.options);
-		const type = result.headers.get("content-type") ?? "";
-		if (result.status === 404 && type.includes("json")) return notFoundPage();
-		return result;
-	});
-	async function provisionDeps(request: Request) {
-		return {
-			script: deps.inboxScript != null ? deps.inboxScript : await loadInboxScript(env, request),
-			migrations: deps.inboxMigrations ?? await loadInboxMigrations(env, request),
-			fetchMs: deps.cloudflareFetchMs,
-			permissionDelaysMs: deps.permissionDelaysMs,
-		};
-	}
-	function wantsSetupPartial(request: Request): boolean {
-		return request.headers.get("x-setup-partial") === "1";
-	}
-	function partialFromRedirect(response: Response): Response {
-		const location = response.headers.get("location");
-		if (!location || response.status < 300 || response.status >= 400) return response;
-		const headers = new Headers({ "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
-		const cookies = typeof response.headers.getSetCookie === "function" ? response.headers.getSetCookie() : [];
-		for (const cookie of cookies) headers.append("set-cookie", cookie);
-		return new Response(JSON.stringify({ redirect: location }), { status: 200, headers });
-	}
-	async function cloudflareSetupPage(c: Context<{ Bindings: ControlEnv }>, review?: { choice: "inbox" | "facade" | "both"; host: "workers" | "zone" }, extra?: { wizard?: InboxWizard; ownerToken?: string; inboxId?: string; error?: string; name?: string }) {
-		const request = c.req.raw;
-		const loaded = await loadAuth(env, request, deps);
-		if (!loaded) return notFoundPage();
-		if (!loaded.options.cloudflare) return notFoundPage();
-		const session = await loaded.auth.api.getSession({ headers: request.headers });
-		const userId = session?.user?.id ?? "";
-		if (!userId) return redirectTo(new URL("/app", request.url).href);
-		const url = new URL(request.url);
-		const param = c.req.param("inboxId");
-		const wizardInbox = extra?.wizard?.fields.inbox ?? "";
-		const pathInbox = inboxIdFromPath(url.pathname)
-			|| (extra?.inboxId && INBOX_ID.test(extra.inboxId) ? extra.inboxId : "")
-			|| (INBOX_ID.test(wizardInbox) ? wizardInbox : "");
-		if (param !== undefined && !pathInbox) return wantsSetupPartial(request) ? c.json({ error: "not_found" }, 404) : notFoundPage();
-		let clearResume = false;
-		let resumedWizard: InboxWizard | null = null;
-		let resumedOwner = "";
-		let resumedForm: { error: string; name: string } | null = null;
-		const provision = review ? null : await provisionDeps(request);
-		if (!review && provision && !extra?.wizard) {
-			const resumed = await resumeCloudflare(request, loaded.auth, loaded.options, provision);
-			if (resumed?.kind === "response") return wantsSetupPartial(request) ? partialFromRedirect(resumed.response) : resumed.response;
-			if (resumed?.kind === "clear") clearResume = true;
-			if (resumed?.kind === "form") {
-				c.header("set-cookie", resumed.setCookie, { append: true });
-				resumedForm = { error: resumed.error, name: resumed.name };
-			}
-			if (resumed?.kind === "wizard") {
-				c.header("set-cookie", resumed.setCookie, { append: true });
-				resumedWizard = resumed.wizard;
-				resumedOwner = resumed.ownerToken ?? "";
-			}
-		}
-		const grant = review ? null : await readCloudflareGrant(loaded.options.database, userId);
-		const rows = review ? [] : await listCloudflareInboxes(loaded.options.database, userId);
-		let inbox: InboxRow | null = null;
-		if (pathInbox) {
-			inbox = await readCloudflareInboxById(loaded.options.database, userId, pathInbox);
-			if (!inbox) return wantsSetupPartial(request) ? c.json({ error: "not_found" }, 404) : notFoundPage();
-		} else if (!review) {
-			inbox = rows.find((row) => row.status === "pending" || row.status === "working") ?? null;
-		}
-		if (!pathInbox && !review && !extra?.wizard && !resumedWizard && url.searchParams.get("connected") === "1" && grant && inboxCanProvision(grant)) {
-			const open = rows.find((row) => row.status === "pending" || row.status === "working");
-			const host = parseSetupHost(grant.host);
-			if (open) return redirectTo(new URL(`/app/cloudflare/${open.id}`, request.url).href);
-			if (host) {
-				const { createCloudflareAgent } = await import("./provision/inbox.ts");
-				const createdId = await createCloudflareAgent(loaded.options.database, userId, host);
-				return redirectTo(new URL(`/app/cloudflare/${createdId}`, request.url).href);
-			}
-		}
-		const report = grant ? describeSetupGrant(grant) : null;
-		const recent = await sessionIsFresh(loaded.options.database, session, userId);
-		const confirming = Boolean(inbox && url.searchParams.get("remove") === "1" && inbox.status !== "removing");
-		const removing = Boolean(inbox && inbox.status === "removing" && !confirming);
-		let removal: { items: { title: string; detail: string }[]; steps: { id: string; title: string; state: "pass" | "fail" | "pending"; text: string; cloudflare: string }[]; confirming: boolean } | null = null;
-		if (inbox && (confirming || removing)) {
-			const removalMod = await import("./provision/remove.ts");
-			removal = {
-				confirming,
-				items: removalMod.removalItems(inbox),
-				steps: confirming ? [] : removalMod.removalSteps(inbox),
-			};
-		}
-		const inboxPage = report?.inbox && !removal ? await import("./provision/inbox.ts") : null;
-		const showWizard = Boolean(inboxPage && inbox && inbox.status !== "removing");
-		let wizard = extra?.wizard ?? resumedWizard ?? (showWizard && inboxPage ? inboxPage.viewInboxWizard({ grant, inbox }) : null);
-		let steppedOwner = extra?.ownerToken || resumedOwner || "";
-		// A permission wait reloads this page. One try per request, and only while the sign-in is still recent.
-		if (!review && !removal && !extra?.wizard && !resumedWizard && provision && inboxPage && loaded.options.cloudflare && inboxPage.permissionRetryDue(inbox) && recent) {
-			const outcome = await inboxPage.runInboxStep({
-				database: loaded.options.database,
-				secret: loaded.options.secret,
-				clientId: loaded.options.cloudflare.clientId,
-				clientSecret: loaded.options.cloudflare.clientSecret,
-				userId,
-				fields: inboxPage.viewInboxWizard({ grant, inbox }).fields,
-				script: provision.script,
-				migrations: provision.migrations,
-				fetchMs: provision.fetchMs,
-				permissionDelaysMs: provision.permissionDelaysMs,
-			});
-			wizard = outcome.wizard;
-			if (outcome.ownerToken) steppedOwner = outcome.ownerToken;
-		}
-		// A sign-in older than 10 minutes cannot reload the wait. Try again sends them to sign in, then continues this step.
-		if (wizard && !recent && wizard.steps.some((step) => step.text === PERMISSION_WAIT)) {
-			wizard = {
-				...wizard,
-				refreshSeconds: undefined,
-				steps: wizard.steps.map((step) => step.text === PERMISSION_WAIT
-					? { ...step, control: "retry" as const, button: "Try again" }
-					: step),
-			};
-		}
-		const token = bareOwnerToken(readCookie(request.headers.get("cookie"), CF_OWNER_COOKIE));
-		const cookieOwner = token && inbox?.owner_token_hash && inbox.owner_token_hash === await hashOwnerToken(token) ? token : "";
-		if (token) c.header("set-cookie", hostCookie(CF_OWNER_COOKIE, "", 0), { append: true });
-		const ownerToken = steppedOwner || wizard?.ownerToken || cookieOwner;
-		const knownHost = rows.find((row) => row.workers_subdomain)?.workers_subdomain ?? "";
-		const who = accountOf(session?.user);
-		const body = renderCloudflareSetup({
-			brand: brandConfig(env).name,
-			error: resumedForm?.error || extra?.error || url.searchParams.get("error") || undefined,
-			nameValue: resumedForm?.name || extra?.name,
-			another: rows.some((row) => row.status === "ready"),
-			previewHost: knownHost ? `${knownHost}.workers.dev` : "",
-			linked: await cloudflareIsLinked(loaded.options.database, userId),
-			connected: url.searchParams.get("connected") === "1",
-			report,
-			review,
-			createdUrl: inbox?.status === "ready" ? inbox.public_url : null,
-			ownerToken: ownerToken || undefined,
-			wizard,
-			createAgent: Boolean(grant && inboxCanProvision(grant)),
-			inboxId: inbox?.id || wizard?.fields.inbox || pathInbox,
-			removal,
-		});
-		if (clearResume) c.header("set-cookie", hostCookie(CLOUDFLARE_RESUME_COOKIE, "", 0), { append: true });
-		if (wantsSetupPartial(request)) {
-			return c.json({ html: body, ...(wizard?.refreshSeconds && recent ? { refreshSeconds: wizard.refreshSeconds } : {}) }, 200, { "cache-control": "no-store" });
-		}
-		const setupScript = `${feedbackLink ?? ""}<script src="/setup.js"></script>${dashboardScript}`;
-		return c.html(
-			renderApp(env, body, "Set me up on Cloudflare", setupScript, { account: who.account }),
-			200,
-			pageHeaders(false, null, who.imageHosts, true, accountLinkOrigins(loaded.options)),
-		);
-	}
-	async function cloudflareSetupPost(c: Context<{ Bindings: ControlEnv }>) {
-		const request = c.req.raw;
-		const loaded = await loadAuth(env, request, deps);
-		if (!loaded) return notFoundPage();
-		const result = await handleCloudflareSetup(request, loaded.auth, loaded.options, await provisionDeps(request));
-		if (result.kind === "review") return cloudflareSetupPage(c, result);
-		if (result.kind === "wizard") return cloudflareSetupPage(c, undefined, result);
-		if (result.kind === "agent") return cloudflareSetupPage(c, undefined, { inboxId: result.inboxId });
-		if (result.kind === "form") return cloudflareSetupPage(c, undefined, { error: result.error, name: result.name });
-		if (wantsSetupPartial(request)) return partialFromRedirect(result.response);
-		const type = result.response.headers.get("content-type") ?? "";
-		if (result.response.status === 404 && type.includes("json")) return notFoundPage();
-		return result.response;
-	}
-	app.post("/app/sign-out", async (c) => {
-		const request = c.req.raw;
-		if (!sameOrigin(request)) return redirectTo(new URL("/app?error=origin", request.url).href);
-		const loaded = await loadAuth(env, request, deps);
-		if (!loaded) return notFoundPage();
-		const origin = new URL(request.url).origin;
-		const headers = new Headers({ "content-type": "application/json", origin });
-		const cookie = request.headers.get("cookie");
-		if (cookie) headers.set("cookie", cookie);
-		const response = await loaded.auth.handler(new Request(new URL("/api/auth/sign-out", origin), {
-			method: "POST",
-			headers,
-			body: "{}",
-		}));
-		const cleared = typeof response.headers.getSetCookie === "function" ? response.headers.getSetCookie() : [];
-		return redirectTo(new URL("/app", request.url).href, cleared);
-	});
-	app.post("/app/sign-in", async (c) => {
-		const loaded = await loadAuth(env, c.req.raw, deps);
-		if (!loaded) return notFoundPage();
-		return handleSignIn(c.req.raw, loaded.auth, loaded.options, deps.signInDeadlineMs);
-	});
-	app.all("/api/auth/*", async (c) => {
-		let request = c.req.raw;
-		const callbackPath = new URL(request.url).pathname;
-		const loaded = await loadAuth(env, request, deps);
-		if (!loaded) return c.json({ error: "not_found" }, 404);
-		if (loaded.options.turnstile && turnstileEndpoint(request)) {
-			const token = request.headers.get("x-captcha-response") ?? "";
-			if (!token) return c.json({ code: "MISSING_RESPONSE", message: "Missing CAPTCHA response" }, 400);
-			const failure = await verifyTurnstile(loaded.options.turnstile.secret, token, connectingIp(request));
-			if (failure) {
-				console.error(JSON.stringify({ event: "social_sign_in_failed", status: failure.status, code: failure.code, message: failure.message }));
-				const status = failure.status >= 400 && failure.status <= 599 ? failure.status : 403;
-				return c.json({ code: failure.code, message: failure.message }, status as 400);
-			}
-			// The token is single-use. The browser form never reaches this route;
-			// a direct client must not have Better Auth submit the same token again.
-			const headers = new Headers(request.headers);
-			headers.delete("x-captcha-response");
-			request = new Request(request, { headers });
-		}
-		// Cloudflare connects an account. This path never reaches Better Auth.
-		// The same callback deadline aborts a token or profile call that is still running.
-		if (callbackPath === "/api/auth/callback/cloudflare") {
-			const providerAbort = new AbortController();
-			const deadline = deps.callbackDeadlineMs ?? CALLBACK_DEADLINE_MS;
-			return within(
-				deadline,
-				() => finishCloudflareLink(request, loaded.auth, loaded.options, deps.cloudflareFetchMs, providerAbort.signal),
-				() => callbackGaveUp(request),
-				providerAbort,
-			);
-		}
-		const handle = () => loaded.auth.handler(request);
-		const list = loaded.options.signupAllowlist;
-		// A missing OAuth state redirects immediately. This bound is for the token
-		// exchange, which does not time out on its own. A redirect does not call
-		// onAPIError.onError, so the code on that Location is logged here.
-		if (!callbackPath.startsWith("/api/auth/callback/")) return closedSignup(request, await handle(), list);
-		const deadline = deps.callbackDeadlineMs ?? CALLBACK_DEADLINE_MS;
-		const response = await within(deadline, handle, () => callbackGaveUp(request));
-		const shown = await closedSignup(request, response, list);
-		const code = callbackError(request, shown);
-		if (code && code !== "deadline") logCallbackFailure(request, code);
-		return shown;
-	});
+	app.get(routes.health, (c) => c.json({ ok: true }));
 
 	app.all("/api/feedback", async (c) => {
-		const result = await feedback.api(c.req.raw);
-		return feedbackResponse(c, result);
+		if (!feedbackOn(env)) return c.json({ error: "not_found" }, 404, { "x-robots-tag": "noindex" });
+		return feedbackResponse(await feedback.api(c.req.raw));
 	});
-	app.get(routes.tenants, (c) => tenants(c, "GET"));
-	app.post(routes.tenants, (c) => tenants(c, "POST"));
 
-	async function tenants(c: Context<{ Bindings: ControlEnv }>, method: "GET" | "POST") {
-		const request = c.req.raw;
-		const postedForm = method === "POST" && formMedia(request);
-		const plane = deps.dataPlane ?? dataPlaneFromEnv(env);
-		const loaded = await loadAuth(env, request, deps);
-		if (postedForm) {
-			const back = (error?: string) => {
-				const url = new URL("/app", request.url);
-				if (error) url.searchParams.set("error", error);
-				return redirectTo(url.href);
-			};
-			if (!sameOrigin(request)) return back("origin");
-			if (!loaded || !plane) return back("unavailable");
-			const session = await loaded.auth.api.getSession({ headers: request.headers });
-			if (!session?.user?.id) return back();
-			const form = await request.formData();
-			const created = await createTenant(loaded.options.database, plane, {
-				accountId: session.user.id,
-				name: String(form.get("name") ?? ""),
-				domain: env.TENANT_DOMAIN,
-				dataRegion: env.DATA_REGION,
-				issuer: issuerOrigin(env, request),
-				label: env.BRAND_NAME,
-				freeAgentLimit: configuredFreeAgentLimit(env.FREE_AGENT_LIMIT),
-			});
-			if (!created.ok) return back(created.error);
-			return redirectTo(new URL("/app", request.url).href, [hostCookie(OWNER_COOKIE, created.tenant.ownerToken, 120)]);
-		}
-		if (!loaded || !plane) return c.json({ error: "not_found" }, 404);
-		if (method === "POST" && !allowsTenantWrite(request)) return c.json({ error: "forbidden" }, 403);
-		const session = await loaded.auth.api.getSession({ headers: request.headers });
-		const accountId = session?.user?.id;
-		if (!accountId) return c.json({ error: "unauthorized" }, 401);
-		if (method === "GET") {
-			const rows = await listTenants(loaded.options.database, accountId, env.TENANT_DOMAIN);
-			return c.json({
-				tenants: rows.map((row) => ({
-					id: row.id,
-					name: row.name,
-					status: row.status,
-					public_url: row.publicUrl,
-					version: row.version,
-				})),
-			});
-		}
-		let name = "";
-		try {
-			const body = await request.json() as unknown;
-			if (body && typeof body === "object" && !Array.isArray(body)) {
-				const value = (body as { name?: unknown }).name;
-				if (typeof value === "string") name = value;
-			}
-		} catch {
-			return c.json({ error: "invalid_name" }, 400);
-		}
-		const created = await createTenant(loaded.options.database, plane, {
-			accountId, name, domain: env.TENANT_DOMAIN, dataRegion: env.DATA_REGION,
-			issuer: issuerOrigin(env, request), label: env.BRAND_NAME,
-			freeAgentLimit: configuredFreeAgentLimit(env.FREE_AGENT_LIMIT),
-		});
-		if (!created.ok) {
-			const status = created.error === "taken" ? 409 : created.error === "limit" ? 403 : 400;
-			return c.json({ error: created.error }, status);
-		}
-		const tenant = created.tenant;
-		return c.json({
-			tenant: tenant.name,
-			id: tenant.id,
-			status: tenant.status,
-			region: tenant.region,
-			public_url: tenant.publicUrl,
-			owner_token: tenant.ownerToken,
-			version: tenant.version,
-			pushed: tenant.pushed,
-		}, 201);
-	}
-
-	async function renderShell(request: Request): Promise<{
-		html: string;
-		turnstile: boolean;
-		options: AuthOptions | null;
-		signedIn: boolean;
-		imageHosts: string[];
-		clearOwner: boolean;
-		linkOrigins: string[];
-	}> {
-		const loaded = await loadAuth(env, request, deps);
-		const url = new URL(request.url);
-		const turnstile = Boolean(loaded?.options.turnstile);
-		const session = loaded ? await loaded.auth.api.getSession({ headers: request.headers }) : null;
-		if (loaded && session?.user?.id) {
-			const plane = deps.dataPlane ?? dataPlaneFromEnv(env);
-			const agents = await listTenants(loaded.options.database, session.user.id, env.TENANT_DOMAIN);
-			const token = bareOwnerToken(readCookie(request.headers.get("cookie"), OWNER_COOKIE));
-			const who = accountOf(session.user);
-			const agentLimit = await accountAgentLimit(loaded.options.database, session.user.id, configuredFreeAgentLimit(env.FREE_AGENT_LIMIT));
-			const pairing = plane?.owner
-				? await Promise.all(agents.map(async (agent) => {
-					if (agent.status !== "active") return null;
-					try {
-						const result = await plane.owner!(agent.id, agent.region, { accountId: session.user.id, method: "GET", path: "/owner/summary" });
-						if (result.status !== 200) return null;
-						return inboxCountsOf(result.body)?.pairingPending ?? null;
-					} catch {
-						return null;
-					}
-				}))
-				: agents.map(() => null);
-			const cloudflareRows = await listCloudflareInboxes(loaded.options.database, session.user.id);
-			const body = renderAccount({
-				name: who.account.name,
-				email: who.account.email,
-				image: who.account.image,
-				tenantDomain: env.TENANT_DOMAIN,
-				agents: agents.map((agent, index) => ({ ...agent, pairingPending: pairing[index] })),
-				ownerToken: token || undefined,
-				error: url.searchParams.get("error") ?? undefined,
-				canCreate: Boolean(plane),
-				agentLimit,
-				signupClosed: loaded.options.signupAllowlist !== null,
-				closedMessage: signupClosedText(env),
-				deleted: url.searchParams.get("deleted") === "1",
-				brand: brandConfig(env).name,
-				cloudflare: Boolean(loaded.options.cloudflare),
-				cloudflareLinked: await cloudflareIsLinked(loaded.options.database, session.user.id),
-				disconnected: url.searchParams.get("disconnected") === "1",
-				cloudflareAgents: cloudflareRows.map((row) => ({
-					id: row.id,
-					host: cloudflareHostname(row),
-					createdAt: row.created_at,
-					status: row.status,
-					publicUrl: row.public_url,
-				})),
-				forgotCloudflare: url.searchParams.get("forgotCloudflare") === "1",
-				removedCloudflare: url.searchParams.get("removedCloudflare") === "1",
-			});
-			return {
-				html: renderApp(env, body, "Your agents", dashboardScript, { account: who.account }),
-				turnstile,
-				options: loaded.options,
-				signedIn: true,
-				imageHosts: who.imageHosts,
-				clearOwner: Boolean(token),
-				linkOrigins: accountLinkOrigins(loaded.options),
-			};
-		}
-		let body = "";
-		if (loaded) {
-			body = renderSignIn({
-				providers: [
-					loaded.options.github ? "github" : "",
-					loaded.options.google ? "google" : "",
-				].filter(Boolean),
-				magicLink: Boolean(loaded.options.mailer || loaded.options.emailBinding),
-				invitesRequired: loaded.options.invitesRequired,
-				signupClosed: loaded.options.signupAllowlist !== null,
-				closedMessage: signupClosedText(env),
-				turnstileSiteKey: loaded.options.turnstile?.siteKey,
-				error: url.searchParams.get("error") ?? undefined,
-				sent: url.searchParams.get("sent") === "1",
-			});
-		} else {
-			const blockers = authBlockers(env, deps);
-			if (blockers.length) body = renderSignIn({ providers: [], magicLink: false, invitesRequired: false, notice: blockers[0] });
-		}
-		return {
-			html: renderApp(env, body || undefined, undefined, feedbackLink),
-			turnstile,
-			options: loaded?.options ?? null,
-			signedIn: false,
-			imageHosts: [],
-			clearOwner: false,
-			linkOrigins: [],
-		};
-	}
-
-	// Static document. Do not build Better Auth here: that starts a handler bound to this
-	// request's D1, and a handler kept past the response waits on that binding forever.
-	// Login is on when resolveAuth would build one. The same check gates sign-in.
-	app.get("/.well-known/openid-configuration", (c) => {
-		const issuer = issuerOrigin(env, c.req.raw);
-		if (!issuer || !resolveAuth(env, c.req.raw, deps)) return c.json({ error: "not_found" }, 404);
-		return c.json(discoveryDocument(issuer), 200, { "cache-control": "no-store" });
-	});
-	app.get("/api/oidc/authorize", (c) => oidcAuthorize(c));
-	app.post("/api/oidc/token", (c) => oidcToken(c));
-
-	async function oidcAuthorize(c: Context<{ Bindings: ControlEnv }>) {
-		const request = c.req.raw;
-		const issuer = issuerOrigin(env, request);
-		const loaded = issuer ? await loadAuth(env, request, deps) : null;
-		if (!loaded) return c.json({ error: "not_found" }, 404);
-		const session = await loaded.auth.api.getSession({ headers: request.headers });
-		// A GET, not a form. The client's redirect_uri is outside form-action, and this response does not post there.
-		const result = await authorize(loaded.options.database, request, session?.user?.id ? { id: session.user.id } : null);
-		if (result.cookie) c.header("set-cookie", result.cookie);
-		if (result.location) return c.redirect(result.location, 302);
-		return c.json(result.body ?? { error: "invalid_request" }, result.status as 400);
-	}
-
-	async function oidcToken(c: Context<{ Bindings: ControlEnv }>) {
-		const request = c.req.raw;
-		const issuer = issuerOrigin(env, request);
-		const loaded = issuer ? await loadAuth(env, request, deps) : null;
-		if (!loaded) return c.json({ error: "not_found" }, 404);
-		const form = await readTokenForm(request);
-		if (form === "too_large") return c.json({ error: "invalid_request" }, 413);
-		const result = await exchangeCode(loaded.options.database, loaded.auth, issuer, form);
-		return c.json(result.body, result.status as 200);
-	}
-
-	app.all("/api", (c) => c.json({ error: "not_found" }, 404));
-	app.all("/api/*", (c) => c.json({ error: "not_found" }, 404));
+	app.all("/api", (c) => c.json({ error: "not_found" }, 404, { "x-robots-tag": "noindex" }));
+	app.all("/api/*", (c) => c.json({ error: "not_found" }, 404, { "x-robots-tag": "noindex" }));
 	app.all("/.well-known", (c) => c.json({ error: "not_found" }, 404));
 	app.all("/.well-known/*", (c) => c.json({ error: "not_found" }, 404));
 
+	app.all("/app", (c) => c.html(shellHtml(name), 200, SHELL_HEADERS));
+	app.all("/app/*", (c) => c.html(shellHtml(name), 200, SHELL_HEADERS));
+
 	app.all("*", async (c) => {
-		if (!env.ASSETS) return c.notFound();
+		if (!env.ASSETS) return c.html(shellHtml(name), 200, SHELL_HEADERS);
 		const asset = await presentAsset(c.req.path, await env.ASSETS.fetch(c.req.raw));
-		// The same URL can be Markdown. A cache that stored this HTML response must not reuse it for that Accept.
 		if (!markdownPath(c.req.path)) return asset;
 		const headers = new Headers(asset.headers);
 		addVary(headers, "Accept");
 		return new Response(asset.body, { status: asset.status, statusText: asset.statusText, headers });
 	});
-
-	async function feedbackPage(c: Context<{ Bindings: ControlEnv }>) {
-		const result = await feedback.page(c.req.raw, (input) => renderFeedback(input));
-		return feedbackResponse(c, result);
-	}
-
-	function feedbackResponse(c: Context<{ Bindings: ControlEnv }>, result: FeedbackResult) {
-		if (result.kind === "redirect") return c.redirect(result.location, 303);
-		if (result.kind === "html") return c.html(renderApp(env, result.html, "Feedback"), 200, pageHeaders(result.turnstile));
-		if (c.req.path.startsWith("/app") && result.status === 404) return notFoundPage();
-		return c.json(result.body, result.status as 200, result.headers);
-	}
 
 	return app;
 }

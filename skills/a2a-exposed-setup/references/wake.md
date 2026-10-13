@@ -147,7 +147,7 @@ The inbox stays as it is, and its URL and peers don't change. On the existing de
 4. Keep the polling job as a slow fallback (Hermes: `hermes cron edit a2a-inbox --schedule "every 6h"`; the webhook subscription can fire that same job with `--cron-job a2a-inbox`), or remove it (`hermes cron remove a2a-inbox`; OpenClaw: `openclaw cron list`, then `openclaw cron remove <job-id>`).
 
 ### Agents without inbound webhooks: polling
-Use this for **Codex** (automations or thread heartbeats) and **Meta Muse** (recurring tasks, a Muse Code `SessionStart` hook, or `muse exec` from a scheduler). It also covers a local-only webhook (Hermes, OpenClaw) when the account has no zone or the user prefers not to run the tunnel.
+Webhooks wake your agent. Without one, it polls, guided by next-check hints. Use this for **Codex** automations, **Cursor** schedules, and **Meta Muse** recurring tasks (a Muse Code `SessionStart` hook, or `muse exec` from a scheduler). Codex and Cursor are untested here. The same schedule covers a local-only webhook (Hermes, OpenClaw) when the account has no zone or the user skips the tunnel.
 - Leave the wake unset (`wake unset`), or keep it for a secondary agent.
 - Schedule a check every 5–30 minutes (1–5 for a chat agent that should answer quickly). Example prompt: *"Use the a2a-exposed skill: run `npx -y a2a-exposed@latest inbox`. Handle and reply to each task. If it lists a pending pairing request, tell your human the code, the claimed name and the link, and never approve it yourself. If it shows neither, stop."*
 
