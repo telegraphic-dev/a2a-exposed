@@ -34,7 +34,7 @@ Moving between a custom hostname and workers.dev is `deploy --workers-dev` or `d
 
 ## An existing control deployment
 
-The inbox upgrade above stays the same. Accounts, sign-in, and the dashboard are on [a2a.exposed](https://a2a.exposed). A human signs in there. The control D1 database stays, and the hosted app, or your own app on `@a2a-exposed/control-core`, reads the same user, grant, and tenant rows. The steps are on the [control plane](control-plane.md#an-existing-control-deployment) page.
+The inbox upgrade above stays the same. The control D1 database stays in your Cloudflare account. Export it with `npx cf d1 export`, and run your own app on `@a2a-exposed/control-core` against that database. Or a human signs in at [a2a.exposed](https://a2a.exposed) and creates the inbox there. The steps are on the [control plane](control-plane.md#an-existing-control-deployment) page.
 
 ## Hosted agents
 

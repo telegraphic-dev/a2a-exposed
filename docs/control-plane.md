@@ -27,13 +27,21 @@ A hosted data plane sets `FEEDBACK_URL` to the control origin (https, no path). 
 
 ## An existing control deployment
 
-The inbox stays on its Worker. `npx -y a2a-exposed@latest deploy` keeps that Worker, its D1 database, the owner token, and the owner pages `/` and `/device`.
+The inbox stays on its Worker. `npx -y a2a-exposed@latest deploy` keeps that Worker, its D1 database, the owner token, and the owner pages `/` and `/device`. `export` with the owner token prints a JSON dump of that inbox. `export --sql` prints SQL.
 
-Accounts, sign-in, and the dashboard are [a2a.exposed](https://a2a.exposed). A human signs in there. The hosted app imports `@a2a-exposed/control-core` and uses the same control D1 database. User rows, Cloudflare grants, and tenant rows stay in that database. Set the app's `CONTROL_D1_ID` to the existing database. The library reads those rows: tenant create, list, delete, and rotate, the saved grant, and the provisioning steps. The database is the copy.
+Two ways to keep going:
 
-An inbox dump is `npx -y a2a-exposed@latest export` with the owner token. `export --sql` prints SQL.
+1. **Stay in this Cloudflare account.** The control D1 database stays here. User rows, Cloudflare grants, and tenant rows stay in it. Export a copy, then run your own app on `@a2a-exposed/control-core` with `CONTROL_D1_ID` set to that database (same account). The library reads those rows: tenant create, list, delete, and rotate, the saved grant, and the provisioning steps.
 
-On this Worker, `/health` and plain feedback stay (`FEEDBACK_REPO` and `FEEDBACK_GITHUB_TOKEN`). `/app` is the shell. `/api/v1/tenants` answers `{ "error": "not_found" }`. Tenant calls go through the library, or through the hosted dashboard after the human signs in. `ControlEnv` still carries the account fields (`GITHUB_CLIENT_ID`, `GOOGLE_CLIENT_ID`, Turnstile, mail, the GitHub App, and `FREE_AGENT_LIMIT`) for an app on the library. The hosted deploy sets them there.
+   ```bash
+   npx cf d1 export <control-db-name> --remote --output control.sql
+   ```
+
+   Import that file into another D1 database in the same account with `npx cf d1 execute <name> --remote --file control.sql`. `ControlEnv` still carries the account fields (`GITHUB_CLIENT_ID`, `GOOGLE_CLIENT_ID`, Turnstile, mail, the GitHub App, and `FREE_AGENT_LIMIT`) for that app.
+
+2. **Use the hosted dashboard.** A human signs in at [a2a.exposed](https://a2a.exposed) and creates the inbox there. That account is new. The inbox you already run stays on `deploy` until you retire it.
+
+On this Worker, `/health` and plain feedback stay (`FEEDBACK_REPO` and `FEEDBACK_GITHUB_TOKEN`). `/app` is the shell. `/api/v1/tenants` answers `{ "error": "not_found" }`. Tenant calls go through the library in your account, or through the hosted dashboard after the human signs in.
 
 ## Multi-tenant inbox settings
 
