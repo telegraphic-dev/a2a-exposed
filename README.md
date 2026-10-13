@@ -44,6 +44,8 @@ After the skill is in the project, you can ask the agent to set this up. It foll
 
 ## Docs
 
+A control hostname that still serves sign-in, OpenID Connect, the dashboard, and `/api/v1/tenants` from this repository stays on [v0.7.33](https://github.com/telegraphic-dev/a2a-exposed/releases/tag/v0.7.33). [Migrating](docs/upgrading.md#migrating).
+
 | | |
 | --- | --- |
 | [Getting started](docs/getting-started.md) | Skills, Node, first deploy, pairing |
@@ -54,7 +56,7 @@ After the skill is in the project, you can ask the agent to set this up. It foll
 | [Feedback](docs/feedback.md) | Report a bug or an idea |
 | [Security](docs/security.md) | Tokens, pairing, wakes, façade |
 | [Troubleshooting](docs/troubleshooting.md) | FAQ and common failures |
-| [Upgrading](docs/upgrading.md) | Move an existing inbox forward |
+| [Upgrading](docs/upgrading.md) | Move an existing inbox forward, and [migrate](docs/upgrading.md#migrating) a control deployment |
 | [Protocol](docs/protocol.md) | A2A 1.0 and 0.3, OAuth, endpoints |
 | [Control plane](docs/control-plane.md) | Inbox, CLI, MCP, owner pages; hosted dashboard at a2a.exposed |
 

@@ -1,6 +1,6 @@
 # Control plane
 
-Self-hosters run three things from this repository: the inbox Worker, the CLI, and MCP. The owner pages on that inbox are `/` (the agent card in a browser) and `/device` (approve or deny a pairing request). Accounts, sign-in, and the dashboard are the hosted service at [a2a.exposed](https://a2a.exposed).
+Self-hosters run three things from this repository: the inbox Worker, the CLI, and MCP. The owner pages on that inbox are `/` (the agent card in a browser) and `/device` (approve or deny a pairing request). The multi-tenant dashboard is [a2a.exposed](https://a2a.exposed), built on `@a2a-exposed/control-core`. A hostname that still serves sign-in, OpenID Connect, the dashboard, and `/api/v1/tenants` from this repository deploys release [v0.7.33](https://github.com/telegraphic-dev/a2a-exposed/releases/tag/v0.7.33). The steps are in [Migrating](upgrading.md#migrating).
 
 A **tenant** is one hosted agent: a name, an inbox, and the config pushed to it. **D1** is Cloudflare's SQLite database. A **zone** is a domain that account hosts on Cloudflare.
 
@@ -27,21 +27,17 @@ A hosted data plane sets `FEEDBACK_URL` to the control origin (https, no path). 
 
 ## An existing control deployment
 
-The inbox stays on its Worker. `npx -y a2a-exposed@latest deploy` keeps that Worker, its D1 database, the owner token, and the owner pages `/` and `/device`. `export` with the owner token prints a JSON dump of that inbox. `export --sql` prints SQL.
+The steps are in [Migrating](upgrading.md#migrating).
 
-Two ways to keep going:
+The inbox stays on its Worker. `npx -y a2a-exposed@latest deploy` keeps that Worker, its D1 database, the owner token, MCP, and the owner pages `/` and `/device`. `export` with the owner token prints a JSON dump of that inbox. `export --sql` prints SQL.
 
-1. **Stay in this Cloudflare account.** The control D1 database stays here. User rows, Cloudflare grants, and tenant rows stay in it. Export a copy, then run your own app on `@a2a-exposed/control-core` with `CONTROL_D1_ID` set to that database (same account). The library reads those rows: tenant create, list, delete, and rotate, the saved grant, and the provisioning steps.
+A hostname that still serves sign-in, OpenID Connect, the dashboard, and `/api/v1/tenants` from this repository deploys release [v0.7.33](https://github.com/telegraphic-dev/a2a-exposed/releases/tag/v0.7.33).
 
-   ```bash
-   npx cf d1 export <control-db-name> --remote --output control.sql
-   ```
+The control D1 database stays in the same Cloudflare account. User rows, Cloudflare grants, and tenant rows stay in it. `npx cf d1 export <control-db-name> --remote --output control.sql` writes a SQL copy. An app on `@a2a-exposed/control-core` in that account sets `CONTROL_D1_ID` to that database and reads those rows: tenant create, list, delete, and rotate, the saved grant, and the provisioning steps. Import the file into another D1 database in the same account with `npx cf d1 execute <name> --remote --file control.sql`. `ControlEnv` carries the account fields (`GITHUB_CLIENT_ID`, `GOOGLE_CLIENT_ID`, Turnstile, mail, the GitHub App, and `FREE_AGENT_LIMIT`) for that app.
 
-   Import that file into another D1 database in the same account with `npx cf d1 execute <name> --remote --file control.sql`. `ControlEnv` still carries the account fields (`GITHUB_CLIENT_ID`, `GOOGLE_CLIENT_ID`, Turnstile, mail, the GitHub App, and `FREE_AGENT_LIMIT`) for that app.
+The multi-tenant dashboard is [a2a.exposed](https://a2a.exposed), built on `@a2a-exposed/control-core`. A human signs in there and creates the inbox on that account. That account is new. The inbox you already run stays on `deploy`.
 
-2. **Use the hosted dashboard.** A human signs in at [a2a.exposed](https://a2a.exposed) and creates the inbox there. That account is new. The inbox you already run stays on `deploy` until you retire it.
-
-On this Worker, `/health` and plain feedback stay (`FEEDBACK_REPO` and `FEEDBACK_GITHUB_TOKEN`). `/app` is the shell. `/api/v1/tenants` answers `{ "error": "not_found" }`. Tenant calls go through the library in your account, or through the hosted dashboard after the human signs in.
+On the current control Worker, `GET /health` returns `{ ok: true }`. Plain feedback uses `FEEDBACK_REPO` and `FEEDBACK_GITHUB_TOKEN`. `/app` is the static shell. `/api/v1/tenants` and `/.well-known/openid-configuration` answer HTTP 404 `{ "error": "not_found" }`.
 
 ## Multi-tenant inbox settings
 

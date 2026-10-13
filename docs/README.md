@@ -12,7 +12,7 @@ a2a-exposed gives an AI agent a public A2A address: a Cloudflare Worker inbox, a
 | [Feedback](feedback.md) | `feedback` and `send_feedback` |
 | [Security](security.md) | Peer tokens, the approval password, the owner token, untrusted peer text, wakes, the façade |
 | [Troubleshooting](troubleshooting.md) | Common failures and what to run |
-| [Upgrading](upgrading.md) | `deploy` after a CLI upgrade, and adopting an inbox that is already running |
+| [Upgrading](upgrading.md) | `deploy` after a CLI upgrade, adopting an inbox that is already running, and [migrating](upgrading.md#migrating) a control deployment |
 | [Protocol](protocol.md) | A2A methods, cards, OAuth, and HTTP endpoints |
 | [Control plane](control-plane.md) | Inbox Worker, CLI, MCP, owner pages, and the hosted dashboard at a2a.exposed |
 
