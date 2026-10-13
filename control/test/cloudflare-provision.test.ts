@@ -125,6 +125,7 @@ interface ApiOptions {
 	permissionLeft?: { d1?: number; query?: number; upload?: number; account?: number };
 	domains?: { id: string; hostname: string; service: string }[];
 	d1Name?: string;
+	workerNames?: string[];
 }
 
 function cloudflareApi(options: ApiOptions) {
@@ -164,6 +165,10 @@ function cloudflareApi(options: ApiOptions) {
 			return json({ success: true, result: { subdomain: options.subdomain ?? "example" } });
 		}
 		if (url.endsWith("/workers/subdomain") && method === "PUT") return json({ success: true, result: { subdomain: "picked" } });
+		if (/\/workers\/scripts(?:\?|$)/.test(url) && !url.includes("/workers/scripts/") && method === "GET") {
+			const names = options.workerNames ?? [];
+			return json({ success: true, result: names.map((id) => ({ id })), result_info: { total_count: names.length } });
+		}
 		if (url.includes("/workers/scripts/") && url.endsWith("/settings")) {
 			if (!options.scriptExists) return new Response("", { status: 404 });
 			const bindings = options.scriptTag ? [{ type: "plain_text", name: PROVISION_TAG_NAME, text: options.scriptTag }] : [];
@@ -395,7 +400,7 @@ test("a workers.dev inbox walks one step at a time and the owner token is shown 
 	assert.match(accountPage, /my-agent\.example\.workers\.dev/);
 	assert.match(accountPage, /In your Cloudflare/);
 	assert.match(accountPage, new RegExp(`/app/cloudflare/${inbox?.id}`));
-	assert.equal(accountPage.includes("https://my-agent.example.workers.dev"), false);
+	assert.match(accountPage, /data-copy="https:\/\/my-agent\.example\.workers\.dev"/);
 	assert.equal(accountPage.includes(shown), false);
 });
 
@@ -1117,11 +1122,19 @@ test("a finished agent stays, and Create this agent starts another", async (t) =
 	const userId = (await db.prepare('SELECT id FROM "user"').first<{ id: string }>())?.id ?? "";
 	const first = await readCloudflareInbox(db, userId);
 	assert.equal(first?.status, "ready");
+	const missing = await app.request(`${origin}/app/cloudflare`, {
+		method: "POST",
+		headers: { origin, cookie, "content-type": "application/x-www-form-urlencoded" },
+		body: "action=create&choice=inbox&host=workers",
+	});
+	assert.equal(missing.status, 200);
+	assert.match(await missing.text(), /Use a short name/);
+	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM cloudflare_inbox`).first<{ n: number }>())?.n, 1);
 	const before = apiCalls(api.calls).length;
 	const created = await app.request(`${origin}/app/cloudflare`, {
 		method: "POST",
 		headers: { origin, cookie, "content-type": "application/x-www-form-urlencoded" },
-		body: "action=create&choice=inbox&host=workers",
+		body: "action=create&choice=inbox&host=workers&name=second-agent",
 	});
 	assert.equal(created.status, 303);
 	const nextUrl = new URL(created.headers.get("location") ?? "", origin);
@@ -1129,8 +1142,12 @@ test("a finished agent stays, and Create this agent starts another", async (t) =
 	assert.notEqual(nextUrl.pathname, `/app/cloudflare/${first?.id}`);
 	const page = await (await app.request(nextUrl, { headers: { cookie } })).text();
 	assert.match(page, /Check the Cloudflare account/);
+	assert.match(page, /value="second-agent"/);
 	assert.equal(page.includes("https://my-agent.example.workers.dev"), false);
-	assert.equal(apiCalls(api.calls).length, before);
+	const added = apiCalls(api.calls).slice(before);
+	assert.equal(added.length, 1);
+	assert.equal(added[0]?.method, "GET");
+	assert.match(added[0]?.url ?? "", /\/workers\/scripts\?/);
 	const rows = await db.prepare(`SELECT id, status, public_url FROM cloudflare_inbox WHERE "userId" = ? ORDER BY created_at`).bind(userId).all<{ id: string; status: string; public_url: string | null }>();
 	assert.equal(rows.results.length, 2);
 	assert.equal(rows.results[0]?.status, "ready");

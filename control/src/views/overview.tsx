@@ -76,16 +76,23 @@ const DELETE_NOTICES: Record<string, string> = {
 	name: "Type the agent name exactly.",
 };
 
+function reauthNote(href: string) {
+	if (!href) return "";
+	return (
+		<p class="alert" role="status">Your sign-in is older than 10 minutes. <a href={href}>Sign in again</a> before you approve, deny, revoke, rotate, or delete.</p>
+	);
+}
+
+function copyControl(url: string, label: string) {
+	if (!url) return "";
+	return <button type="button" class="button" data-copy={url}>{label}</button>;
+}
+
 export function renderOverview(input: {
 	status: string;
 	publicUrl: string;
 	counts: InboxCounts | null;
 	name: string;
-	ownerToken?: string;
-	confirmRotate?: boolean;
-	tokenNotice?: string;
-	confirmDelete?: boolean;
-	deleteNotice?: string;
 }): string {
 	const url = httpsUrl(input.publicUrl);
 	const card = url ? httpsUrl(new URL("/.well-known/agent-card.json", url).href) : "";
@@ -97,9 +104,17 @@ export function renderOverview(input: {
 				<dt>Status</dt>
 				<dd>{STATUS_LABELS[input.status] ?? "Unknown"}</dd>
 				<dt>URL</dt>
-				<dd>{url ? <a href={url}>{url}</a> : "No public URL is set."}</dd>
+				<dd>
+					{url ? <a href={url}>{url}</a> : "No public URL is set."}
+					{" "}
+					{copyControl(url, "Copy URL")}
+				</dd>
 				<dt>Card</dt>
-				<dd>{card ? <a href={card}>{card}</a> : "No card URL is set."}</dd>
+				<dd>
+					{card ? <a href={card}>{card}</a> : "No card URL is set."}
+					{" "}
+					{copyControl(card, "Copy card URL")}
+				</dd>
 			</dl>
 			<h3>Inbox</h3>
 			{counts ? (
@@ -124,34 +139,87 @@ export function renderOverview(input: {
 					<dd>{counts.pairingPending}</dd>
 				</dl>
 			) : <p>Inbox counts are not available.</p>}
+			{url ? (
+				<>
+					<h3>Connect</h3>
+					<pre class="preview"><code>npx a2a-exposed connect {url}</code></pre>
+				</>
+			) : ""}
+		</section>
+	).toString();
+}
+
+const EXPORT_ERRORS: Record<string, string> = {
+	failed: "The export was not downloaded.",
+};
+
+export function renderAdvanced(input: {
+	name: string;
+	status: string;
+	ownerToken?: string;
+	confirmRotate?: boolean;
+	tokenNotice?: string;
+	exportNotice?: string;
+	reauthHref?: string;
+}): string {
+	const action = `/app/agents/${input.name}`;
+	const exportProblem = EXPORT_ERRORS[input.exportNotice ?? ""] ?? "";
+	const gone = input.tokenNotice === "gone" || input.status === "deleting" || input.status === "deleted";
+	return (
+		<section class="advanced">
+			<h2>Advanced</h2>
 			<h3>Owner token</h3>
 			<p>Rotating issues a new token. The previous one stops working immediately.</p>
+			{reauthNote(input.reauthHref ?? "")}
 			{input.ownerToken ? <TokenBlock token={input.ownerToken} lead="Copy this owner token now. It will not be shown again. The previous token no longer works." /> : ""}
 			{TOKEN_NOTICES[input.tokenNotice ?? ""] ? <p class="alert" role="alert">{TOKEN_NOTICES[input.tokenNotice ?? ""]}</p> : ""}
-			{input.status === "deleting" || input.status === "deleted" ? "" : (
+			{gone ? "" : (
 				input.confirmRotate ? (
 					<div class="confirm">
 						<p>Rotate the owner token? Anything still using the current token, including a CLI, will stop.</p>
-						<form method="post" action={`/app/agents/${input.name}`}>
+						<form method="post" action={action}>
 							<input type="hidden" name="action" value="rotate-token" />
 							<input type="hidden" name="confirm" value="1" />
-							<button class="action" type="submit">Rotate owner token</button>
+							<button class="danger" type="submit">Rotate owner token</button>
 						</form>
 					</div>
 				) : (
-					<form method="post" action={`/app/agents/${input.name}`}>
+					<form method="post" action={action}>
 						<input type="hidden" name="action" value="rotate-token" />
-						<button class="action" type="submit">Rotate owner token</button>
+						<button class="danger" type="submit">Rotate owner token</button>
 					</form>
 				)
 			)}
-			<h3>Delete this agent</h3>
+			<h2>Export</h2>
+			<p>Download a SQL copy of this agent. Stored token hashes are replaced or left out and do not authenticate. Ciphertext, push tokens, re-pair hashes, OAuth codes, the approval-password hash, password-setup hashes, and OpenID Connect sign-in rows are left out. This file is not a backup. The full dump is <code>npx a2a-exposed export</code> with the owner token.</p>
+			{exportProblem ? <p class="alert" role="alert">{exportProblem}</p> : ""}
+			<form method="post" action={action}>
+				<input type="hidden" name="action" value="export" />
+				<button class="button" type="submit">Download SQL</button>
+			</form>
+		</section>
+	).toString();
+}
+
+export function renderDanger(input: {
+	name: string;
+	status: string;
+	confirmDelete?: boolean;
+	deleteNotice?: string;
+	reauthHref?: string;
+}): string {
+	const action = `/app/agents/${input.name}`;
+	if (input.status === "deleting" || input.status === "deleted") return "";
+	return (
+		<section class="danger-zone">
+			<h2>Danger zone</h2>
 			<p>This deletes the agent's inbox data, peers, MCP connectors, and wake settings. Download the redacted export on this page, or run <code>npx a2a-exposed export</code>, first. This cannot be undone.</p>
+			{reauthNote(input.reauthHref ?? "")}
 			{DELETE_NOTICES[input.deleteNotice ?? ""] ? <p class="alert" role="alert">{DELETE_NOTICES[input.deleteNotice ?? ""]}</p> : ""}
 			{input.confirmDelete ? (
 				<div class="confirm">
 					<p>Type <strong>{input.name}</strong> to delete this agent.</p>
-					<form method="post" action={`/app/agents/${input.name}`}>
+					<form method="post" action={action}>
 						<input type="hidden" name="action" value="delete-agent" />
 						<p>
 							<label>
@@ -159,13 +227,13 @@ export function renderOverview(input: {
 								<input name="agent-name" autocomplete="off" />
 							</label>
 						</p>
-						<button class="action" type="submit">Delete this agent</button>
+						<button class="danger" type="submit">Delete this agent</button>
 					</form>
 				</div>
 			) : (
-				<form method="post" action={`/app/agents/${input.name}`}>
+				<form method="post" action={action}>
 					<input type="hidden" name="action" value="delete-agent" />
-					<button class="action" type="submit">Delete this agent</button>
+					<button class="danger" type="submit">Delete this agent</button>
 				</form>
 			)}
 		</section>

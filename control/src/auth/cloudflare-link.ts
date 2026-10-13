@@ -218,10 +218,12 @@ type CloudflareResume =
 	| { userId: string; action: "remove"; inboxId: string }
 	| { userId: string; action: "forget"; inboxId: string };
 
-const INBOX_ID = /^[0-9a-f]{32}$/;
+export const INBOX_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 export function inboxIdFromPath(pathname: string): string {
-	const match = /^\/app\/cloudflare\/([0-9a-f]{32})$/.exec(pathname);
+	let path = pathname;
+	try { path = decodeURIComponent(pathname); } catch { return ""; }
+	const match = /^\/app\/cloudflare\/([A-Za-z0-9_-]{1,64})$/.exec(path);
 	return match?.[1] ?? "";
 }
 
@@ -504,7 +506,40 @@ export type CloudflareSetupPost =
 	| { kind: "response"; response: Response }
 	| { kind: "review"; choice: SetupChoice; host: SetupHost }
 	| { kind: "wizard"; wizard: InboxWizard; ownerToken?: string }
-	| { kind: "agent"; inboxId: string };
+	| { kind: "agent"; inboxId: string }
+	| { kind: "form"; error: string; name: string };
+
+/** `free` when this name is unused here and in the Cloudflare account. A failed list does not create. */
+async function agentNameTaken(options: AuthOptions, userId: string, name: string, fetchMs?: number): Promise<"free" | "taken" | "unchecked"> {
+	const { listTenants } = await import("../tenants/create.ts");
+	const { listCloudflareInboxes } = await import("../provision/inbox-row.ts");
+	const tenants = await listTenants(options.database, userId);
+	if (tenants.some((tenant) => tenant.name === name)) return "taken";
+	const rows = await listCloudflareInboxes(options.database, userId);
+	if (rows.some((row) => row.worker_name === name)) return "taken";
+	const accountId = rows.find((row) => INBOX_ID.test(row.cf_account_id))?.cf_account_id ?? "";
+	if (!accountId || !options.cloudflare) return "unchecked";
+	const { refreshCloudflareGrant } = await import("./cloudflare-grant.ts");
+	const refreshed = await refreshCloudflareGrant({
+		database: options.database,
+		secret: options.secret,
+		clientId: options.cloudflare.clientId,
+		clientSecret: options.cloudflare.clientSecret,
+		userId,
+		fetchMs,
+	});
+	if (!refreshed.ok) return "unchecked";
+	const { listWorkerNames } = await import("../provision/cloudflare-api.ts");
+	const listed = await listWorkerNames({
+		fetchImpl: fetch,
+		token: refreshed.accessToken,
+		accountId,
+		fetchMs: fetchMs ?? 10_000,
+	});
+	if (!listed.ok) return "unchecked";
+	if (listed.names.some((worker) => worker.toLowerCase() === name)) return "taken";
+	return "free";
+}
 
 
 async function runCloudflareProvision(request: Request, options: AuthOptions, userId: string, fields: ProvisionFields, deps: CloudflareProvisionDeps): Promise<Extract<CloudflareSetupPost, { kind: "response" | "wizard" }>> {
@@ -548,17 +583,31 @@ export async function handleCloudflareSetup(request: Request, auth: SessionAuth,
 	}
 	if (action === "create") {
 		if (!choice || !host) return { kind: "response", response: redirect(setupPage(request, "choice")) };
+		const { LABEL_RE } = await import("../provision/names.ts");
+		const name = String(form.get("name") ?? "").trim().toLowerCase();
+		if (!LABEL_RE.test(name)) return { kind: "form", error: "name", name };
 		if (!fresh) {
 			return { kind: "response", response: await reauthResponse(request, auth, options, { userId, action: "create", choice, host }, "/app/cloudflare") };
 		}
 		const grant = await readCloudflareGrant(options.database, userId);
 		if (!grant || !grantCoversInbox(grant, choice, host)) return { kind: "review", choice, host };
+		const taken = await agentNameTaken(options, userId, name, provision?.fetchMs);
+		if (taken !== "free") return { kind: "form", error: taken, name };
 		const { createCloudflareAgent } = await import("../provision/inbox.ts");
 		const inboxId = await createCloudflareAgent(options.database, userId, host);
+		await options.database.prepare(
+			`UPDATE cloudflare_inbox SET step_error = ? WHERE id = ? AND "userId" = ?`,
+		).bind(JSON.stringify({
+			step: "grant",
+			state: "fixable",
+			text: "The name is saved for the inbox step.",
+			cloudflare: "",
+			name,
+		}), inboxId, userId).run();
 		return { kind: "response", response: redirect(agentPath(request, inboxId)) };
 	}
 	if (action === "remove" || action === "forget") {
-		const posted = String(form.get("inbox") ?? "").trim().toLowerCase();
+		const posted = String(form.get("inbox") ?? "").trim();
 		const inboxId = pathInbox || (INBOX_ID.test(posted) ? posted : "");
 		if (!inboxId) return { kind: "response", response: redirect(setupPage(request)) };
 		if (!fresh) {

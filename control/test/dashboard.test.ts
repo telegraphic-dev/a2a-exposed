@@ -65,7 +65,10 @@ test("a signed-in account sees itself, can sign out, and creates two agents", as
 	assert.match(policy, /img-src 'self' https:\/\/avatars\.githubusercontent\.com/);
 	assert.match(policy, /form-action 'self'(?:;|$)/);
 	assert.equal(/form-action[^;]*https:\/\/github\.com/.test(policy), false);
-	assert.match(policy, /script-src 'none'/);
+	assert.match(policy, /script-src 'self'/);
+	assert.match(html, /src="\/dashboard\.js"/);
+	assert.match(html, /0 of 2 hosted · agents in your Cloudflare don&#39;t count/);
+	assert.match(html, /href="\/app\/settings"/);
 
 	await db.prepare('UPDATE "user" SET image = ? WHERE email = ?').bind("https://evil.example/a.png", "person@example.com").run();
 	const blocked = await (await app.request(`${origin}/app`, { headers: { cookie } })).text();
@@ -153,8 +156,7 @@ test("a signed-in account sees itself, can sign out, and creates two agents", as
 	assert.match(formLimited.headers.get("location") ?? "", /error=limit$/);
 	assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM tenants").first<{ n: number }>())?.n, 2);
 	const limited = await (await app.request(`${origin}/app?error=limit`, { headers: { cookie } })).text();
-	assert.match(limited, /This account can have 2 hosted agents/);
-	assert.match(limited, /An agent in your Cloudflare account does not use one of these/);
+	assert.match(limited, /2 of 2 hosted · agents in your Cloudflare don&#39;t count/);
 	assert.equal(limited.includes("Create agent"), false);
 	assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM tenants").first<{ n: number }>())?.n, 2);
 
@@ -166,7 +168,7 @@ test("a signed-in account sees itself, can sign out, and creates two agents", as
 	});
 	assert.equal(raised.status, 201);
 	const raisedPage = await (await app.request(`${origin}/app`, { headers: { cookie } })).text();
-	assert.match(raisedPage, /Create agent/);
+	assert.match(raisedPage, /Create hosted agent/);
 	assert.equal(raisedPage.includes("This account can have 2 agents"), false);
 
 	const signedOut = await app.request(`${origin}/app/sign-out`, {
@@ -269,6 +271,24 @@ test("the agent list uses the full hostname, and a Cloudflare agent does not use
 	assert.equal(html.includes(">Create agent<"), false);
 	assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM tenants").first<{ n: number }>())?.n, 1);
 	assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM cloudflare_inbox").first<{ n: number }>())?.n, 2);
+	const mixedId = "User_ABC123";
+	await db.prepare(
+		`INSERT INTO cloudflare_inbox (id, "userId", cf_account_id, worker_name, d1_name, public_url, host, workers_subdomain, status, created_at, updated_at)
+		 VALUES (?, ?, 'account', 'mixed', 'mixed', 'https://mixed.account-subdomain.workers.dev', 'workers', 'account-subdomain', 'ready', ?, ?)`,
+	).bind(mixedId, userId, stamp, stamp).run();
+	const opened = await app.request(`${origin}/app/cloudflare/${mixedId}`, { headers: { cookie } });
+	assert.equal(opened.status, 200);
+	assert.match(opened.headers.get("content-type") ?? "", /text\/html/);
+	const openedHtml = await opened.text();
+	assert.match(openedHtml, /Back to your agents/);
+	assert.equal(openedHtml.includes('{"error"'), false);
+	const missingPage = await app.request(`${origin}/app/cloudflare/missing-agent`, { headers: { cookie } });
+	assert.equal(missingPage.status, 404);
+	assert.match(missingPage.headers.get("content-type") ?? "", /text\/html/);
+	const missingHtml = await missingPage.text();
+	assert.match(missingHtml, /That page is not available/);
+	assert.match(missingHtml, /Back to your agents/);
+	assert.equal(missingHtml.includes('{"error"'), false);
 
 	const production = createApp(
 		{

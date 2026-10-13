@@ -96,6 +96,36 @@ test("Accept text/markdown serves the static twin and skips the dashboard", asyn
 	assert.deepEqual((missing.headers.get("vary") ?? "").split(",").map((part) => part.trim()), ["Accept"]);
 });
 
+test("non-docs HTML drops the version clause and docs pages keep it", async () => {
+	const clause = "Updated 2026-01-02 · applies to a2a-exposed 0.7.30";
+	const env = {
+		ASSETS: {
+			async fetch(input: Request | URL | string) {
+				const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+				const pathname = new URL(url).pathname;
+				const html = new Response(`<p>${clause}</p>`, {
+					headers: { "content-type": "text/html; charset=utf-8", "content-length": "99" },
+				});
+				if (pathname === "/pricing" || pathname === "/docs" || pathname === "/docs/install") return html;
+				if (pathname === "/logo.svg") return new Response(clause, { headers: { "content-type": "image/svg+xml", "content-length": "40" } });
+				return new Response("missing", { status: 404 });
+			},
+		},
+	};
+	const app = createApp(env);
+	const pricing = await app.request("https://control.example.com/pricing");
+	assert.equal(pricing.status, 200);
+	assert.equal(await pricing.text(), "<p>Updated 2026-01-02</p>");
+	assert.equal(pricing.headers.get("content-length"), null);
+	const docs = await app.request("https://control.example.com/docs/install");
+	assert.equal(await docs.text(), `<p>${clause}</p>`);
+	const index = await app.request("https://control.example.com/docs");
+	assert.equal(await index.text(), `<p>${clause}</p>`);
+	const logo = await app.request("https://control.example.com/logo.svg");
+	assert.equal(await logo.text(), clause);
+	assert.equal(logo.headers.get("content-length"), "40");
+});
+
 test("content requests run the worker first so Accept can select markdown", () => {
 	assert.equal(RUN_WORKER_FIRST, true);
 });

@@ -10,9 +10,10 @@ import { TENANT_NAME } from "../tenants/reserved.ts";
 import { rotateOwnerToken } from "../tenants/rotate.ts";
 import { feedbackOn, inboxConnection } from "../feedback.ts";
 import { configFields, saveWakeSettings, tenantForAccount, wakeSettingsOf } from "../tenants/wake.ts";
+import { avatarOrigin, avatarUrl } from "../views/account.tsx";
 import { renderAgentPage } from "../views/agent.tsx";
-import { renderApp, securityHeaders } from "../views/document.tsx";
-import { inboxCountsOf, renderOverview } from "../views/overview.tsx";
+import { renderApp, securityHeaders, type AppAccount } from "../views/document.tsx";
+import { inboxCountsOf, renderAdvanced, renderDanger, renderOverview } from "../views/overview.tsx";
 import { inboundPeersOf, outboundPeersOf, pendingPairingsOf, renderPeers } from "../views/peers.tsx";
 import { logEntriesOf, mcpConnectorsOf, renderRecords } from "../views/records.tsx";
 import { hasToken, scrubTokenText } from "../views/tokens.ts";
@@ -29,15 +30,25 @@ function redirect(location: string, cookies: string[] = []): Response {
 	return new Response(null, { status: 303, headers });
 }
 
-function page(html: string, status: number, env: ControlEnv, title: string, extra?: { cookies?: string[]; scriptSelf?: boolean }): Response {
+function page(html: string, status: number, env: ControlEnv, title: string, extra?: {
+	cookies?: string[];
+	scriptSelf?: boolean;
+	extraHtml?: string;
+	hideHeading?: boolean;
+	account?: AppAccount;
+	imgSrc?: string[];
+}): Response {
 	const headers = new Headers({
 		"content-type": "text/html; charset=utf-8",
-		...securityHeaders({ scriptSelf: extra?.scriptSelf }),
+		...securityHeaders({ scriptSelf: extra?.scriptSelf, imgSrc: extra?.imgSrc }),
 		"cache-control": "no-store",
 		"x-robots-tag": "noindex",
 	});
 	for (const cookie of extra?.cookies ?? []) headers.append("set-cookie", cookie);
-	return new Response(renderApp(env, html, title), { status, headers });
+	return new Response(renderApp(env, html, title, extra?.extraHtml, {
+		hideHeading: extra?.hideHeading,
+		account: extra?.account,
+	}), { status, headers });
 }
 
 /** Cookie session only. The CLI device token is a bearer session, and that is not a dashboard sign-in. */
@@ -363,19 +374,21 @@ export async function handleAgent(
 	}
 	const url = new URL(request.url);
 	const ownerToken = ownerTokenForAgent(readCookie(request.headers.get("cookie"), OWNER_COOKIE), row.name);
+	const reauthHref = recentSignIn(session) ? "" : `/app/sign-in?return=${encodeURIComponent(`/app/agents/${name}`)}`;
+	const user = session?.user;
+	const image = avatarUrl(typeof user?.image === "string" ? user.image : "");
+	const account: AppAccount = {
+		name: typeof user?.name === "string" ? user.name : "",
+		email: typeof user?.email === "string" ? user.email : "",
+		...(image ? { image } : {}),
+	};
 	const html = renderAgentPage({
 		overviewHtml: renderOverview({
 			status: row.status,
 			publicUrl: publicUrl(env.TENANT_DOMAIN, name),
 			counts,
 			name,
-			ownerToken,
-			confirmRotate: url.searchParams.get("confirm-token") === "1",
-			tokenNotice: url.searchParams.get("token") ?? "",
-			confirmDelete: url.searchParams.get("confirm-delete") === "1",
-			deleteNotice: url.searchParams.get("delete") ?? "",
 		}),
-		reauthHref: recentSignIn(session) ? "" : `/app/sign-in?return=${encodeURIComponent(`/app/agents/${name}`)}`,
 		peersHtml: renderPeers({
 			name,
 			pending,
@@ -383,14 +396,7 @@ export async function handleAgent(
 			outbound,
 			confirmLabel: url.searchParams.get("confirm") ?? "",
 			peer: url.searchParams.get("peer") ?? "",
-		}),
-		recordsHtml: renderRecords({
-			name,
-			mcp,
-			entries,
-			confirmLabel: url.searchParams.get("confirm-mcp") ?? "",
-			mcpNotice: url.searchParams.get("mcp") ?? "",
-			exportNotice: url.searchParams.get("export") ?? "",
+			reauthHref,
 		}),
 		wakeHtml: renderWakeSection({
 			name,
@@ -402,9 +408,37 @@ export async function handleAgent(
 			error: url.searchParams.get("error") ?? "",
 			test: url.searchParams.get("test") ?? "",
 		}),
+		recordsHtml: renderRecords({
+			name,
+			mcp,
+			entries,
+			confirmLabel: url.searchParams.get("confirm-mcp") ?? "",
+			mcpNotice: url.searchParams.get("mcp") ?? "",
+		}),
+		advancedHtml: renderAdvanced({
+			name,
+			status: row.status,
+			ownerToken,
+			confirmRotate: url.searchParams.get("confirm-token") === "1",
+			tokenNotice: url.searchParams.get("token") ?? "",
+			exportNotice: url.searchParams.get("export") ?? "",
+			reauthHref,
+		}),
+		dangerHtml: renderDanger({
+			name,
+			status: row.status,
+			confirmDelete: url.searchParams.get("confirm-delete") === "1",
+			deleteNotice: url.searchParams.get("delete") ?? "",
+			reauthHref,
+		}),
 		feedback,
 	});
 	return page(html, 200, env, name, {
-		...(ownerToken ? { cookies: [hostCookie(OWNER_COOKIE, "", 0)], scriptSelf: true } : {}),
+		extraHtml: `<script src="/dashboard.js"></script>`,
+		hideHeading: true,
+		account,
+		scriptSelf: true,
+		...(image ? { imgSrc: [avatarOrigin(image)] } : {}),
+		...(ownerToken ? { cookies: [hostCookie(OWNER_COOKIE, "", 0)] } : {}),
 	});
 }

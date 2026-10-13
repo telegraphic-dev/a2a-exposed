@@ -3,7 +3,7 @@ import { CALLBACK_DEADLINE_MS, within } from "./auth/deadline.ts";
 import { connectingIp, verifyTurnstile } from "./auth/turnstile.ts";
 import { signInReturnPath } from "./auth/return.ts";
 import { readCloudflareGrant } from "./auth/cloudflare-grant.ts";
-import { CLOUDFLARE_REAUTH_NOTICE, cloudflareIsLinked, finishCloudflareLink, handleCloudflareAccount, handleCloudflareSetup, inboxIdFromPath, resumeCloudflare, sessionIsFresh } from "./auth/cloudflare-link.ts";
+import { CLOUDFLARE_REAUTH_NOTICE, INBOX_ID, cloudflareIsLinked, finishCloudflareLink, handleCloudflareAccount, handleCloudflareSetup, inboxIdFromPath, resumeCloudflare, sessionIsFresh } from "./auth/cloudflare-link.ts";
 import { describeSetupGrant, inboxCanProvision, parseSetupHost } from "./auth/cloudflare-setup.ts";
 import { enabledProviderOrigins, handleSignIn, PROVIDER_ORIGINS } from "./auth/sign-in.ts";
 import { loadAuth } from "./auth/instance.ts";
@@ -18,9 +18,10 @@ import { dataPlaneFromEnv, type DataPlane } from "./tenants/push.ts";
 import type { ControlEnv } from "./env.ts";
 import { handleAgent } from "./agents/page.ts";
 import { brandConfig } from "@brand/brand.config.ts";
-import { avatarOrigin, avatarUrl, renderAccount } from "./views/account.tsx";
+import { avatarOrigin, avatarUrl, renderAccount, renderSettings } from "./views/account.tsx";
 import { renderCloudflareSetup } from "./views/cloudflare-setup.tsx";
-import { renderApp, securityHeaders } from "./views/document.tsx";
+import { renderApp, securityHeaders, type AppAccount } from "./views/document.tsx";
+import { inboxCountsOf } from "./views/overview.tsx";
 import { renderSignIn } from "./views/sign-in.tsx";
 import { createFeedback, feedbackOn, type FeedbackDeps, type FeedbackResult } from "./feedback.ts";
 import type { InboxMigration, InboxWizard } from "./provision/inbox.ts";
@@ -206,6 +207,49 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 	const app = new Hono<{ Bindings: ControlEnv }>();
 	const feedback = createFeedback(env, deps);
 	const feedbackLink = feedbackOn(env) ? `<p><a href="/app/feedback">Feedback</a></p>` : undefined;
+	const dashboardScript = `<script src="/dashboard.js"></script>`;
+
+	function notFoundPage(): Response {
+		const html = renderApp(env, `<p>That page is not available.</p><p><a href="/app">Back to your agents</a></p>`, "Not available");
+		return new Response(html, {
+			status: 404,
+			headers: {
+				"content-type": "text/html; charset=utf-8",
+				...securityHeaders(),
+				"cache-control": "no-store",
+				"x-robots-tag": "noindex",
+			},
+		});
+	}
+
+	function accountOf(user: { name?: unknown; email?: unknown; image?: unknown } | null | undefined): { account: AppAccount; imageHosts: string[] } {
+		const image = avatarUrl(typeof user?.image === "string" ? user.image : "");
+		return {
+			account: {
+				name: typeof user?.name === "string" ? user.name : "",
+				email: typeof user?.email === "string" ? user.email : "",
+				...(image ? { image } : {}),
+			},
+			imageHosts: image ? [avatarOrigin(image)] : [],
+		};
+	}
+
+	async function presentAsset(pathname: string, asset: Response): Promise<Response> {
+		if (pathname === "/docs" || pathname.startsWith("/docs/")) return asset;
+		const type = asset.headers.get("content-type") ?? "";
+		if (!type.includes("text/html")) return asset;
+		const html = await asset.text();
+		if (!html.includes("applies to a2a-exposed")) {
+			return new Response(html, { status: asset.status, statusText: asset.statusText, headers: asset.headers });
+		}
+		const headers = new Headers(asset.headers);
+		headers.delete("content-length");
+		return new Response(html.replace(/ · applies to a2a-exposed [^<]*/g, ""), {
+			status: asset.status,
+			statusText: asset.statusText,
+			headers,
+		});
+	}
 
 	app.use("*", async (c, next) => {
 		const assetPath = markdownPath(c.req.path);
@@ -273,7 +317,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 		if (shell.clearOwner) c.header("set-cookie", hostCookie(OWNER_COOKIE, "", 0));
 		if (clearResume) c.header("set-cookie", hostCookie(CLOUDFLARE_RESUME_COOKIE, "", 0), { append: true });
 		const headers = shell.signedIn
-			? pageHeaders(false, null, shell.imageHosts, shell.clearOwner, shell.linkOrigins)
+			? pageHeaders(false, null, shell.imageHosts, true, shell.linkOrigins)
 			: pageHeaders(shell.turnstile, shell.options);
 		return c.html(shell.html, 200, headers);
 	});
@@ -284,7 +328,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 		const url = new URL(request.url);
 		const next = signInReturnPath(url.searchParams.get("return") ?? "");
 		const loaded = await loadAuth(env, request, deps);
-		if (!loaded) return c.json({ error: "not_found" }, 404);
+		if (!loaded) return notFoundPage();
 		const session = await loaded.auth.api.getSession({ headers: request.headers });
 		if (!next && session?.user?.id) return c.redirect(new URL("/app", request.url).href, 302);
 		const reauth = url.searchParams.get("reauth") === "cloudflare" || url.searchParams.get("error") === "cloudflare_reauth";
@@ -312,19 +356,43 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 	app.post("/app/cloudflare", (c) => cloudflareSetupPost(c));
 	app.get("/app/cloudflare/:inboxId", (c) => cloudflareSetupPage(c));
 	app.post("/app/cloudflare/:inboxId", (c) => cloudflareSetupPost(c));
+	app.get("/app/settings", (c) => settingsPage(c));
 	app.get("/app/*", async (c) => {
 		const shell = await renderShell(c.req.raw);
 		if (shell.clearOwner) c.header("set-cookie", hostCookie(OWNER_COOKIE, "", 0));
 		const headers = shell.signedIn
-			? pageHeaders(false, null, shell.imageHosts, shell.clearOwner, shell.linkOrigins)
+			? pageHeaders(false, null, shell.imageHosts, true, shell.linkOrigins)
 			: pageHeaders(shell.turnstile, shell.options);
 		return c.html(shell.html, 200, headers);
 	});
+	async function settingsPage(c: Context<{ Bindings: ControlEnv }>) {
+		const request = c.req.raw;
+		const loaded = await loadAuth(env, request, deps);
+		if (!loaded) return notFoundPage();
+		const session = await loaded.auth.api.getSession({ headers: request.headers });
+		if (!session?.user?.id) return redirectTo(new URL("/app", request.url).href);
+		const who = accountOf(session.user);
+		const url = new URL(request.url);
+		const body = renderSettings({
+			name: who.account.name,
+			email: who.account.email,
+			brand: brandConfig(env).name,
+			cloudflare: Boolean(loaded.options.cloudflare),
+			cloudflareLinked: await cloudflareIsLinked(loaded.options.database, session.user.id),
+			confirmDisconnect: url.searchParams.get("confirm") === "disconnect",
+			disconnected: url.searchParams.get("disconnected") === "1",
+		});
+		return c.html(
+			renderApp(env, body, "Settings", undefined, { account: who.account }),
+			200,
+			pageHeaders(false, null, who.imageHosts, false, accountLinkOrigins(loaded.options)),
+		);
+	}
 	async function devicePage(c: Context<{ Bindings: ControlEnv }>) {
 		const loaded = await loadAuth(env, c.req.raw, deps);
-		if (!loaded) return c.json({ error: "not_found" }, 404);
+		if (!loaded) return notFoundPage();
 		const result = await handleDevice(c.req.raw, loaded.auth, loaded.options, env);
-		if (result.kind === "closed") return c.json({ error: "not_found" }, 404);
+		if (result.kind === "closed") return notFoundPage();
 		if (result.cookie) c.header("set-cookie", result.cookie);
 		if (result.kind === "redirect") return c.redirect(result.location ?? "/app/device", 303);
 		// Approval posts stay on this host. The sign-in form on this page can still leave for a provider.
@@ -333,8 +401,11 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 	app.post("/app/account/cloudflare", async (c) => {
 		const request = c.req.raw;
 		const loaded = await loadAuth(env, request, deps);
-		if (!loaded) return c.json({ error: "not_found" }, 404);
-		return handleCloudflareAccount(request, loaded.auth, loaded.options);
+		if (!loaded) return notFoundPage();
+		const result = await handleCloudflareAccount(request, loaded.auth, loaded.options);
+		const type = result.headers.get("content-type") ?? "";
+		if (result.status === 404 && type.includes("json")) return notFoundPage();
+		return result;
 	});
 	async function provisionDeps(request: Request) {
 		return {
@@ -355,18 +426,21 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 		for (const cookie of cookies) headers.append("set-cookie", cookie);
 		return new Response(JSON.stringify({ redirect: location }), { status: 200, headers });
 	}
-	async function cloudflareSetupPage(c: Context<{ Bindings: ControlEnv }>, review?: { choice: "inbox" | "facade" | "both"; host: "workers" | "zone" }, extra?: { wizard?: InboxWizard; ownerToken?: string; inboxId?: string }) {
+	async function cloudflareSetupPage(c: Context<{ Bindings: ControlEnv }>, review?: { choice: "inbox" | "facade" | "both"; host: "workers" | "zone" }, extra?: { wizard?: InboxWizard; ownerToken?: string; inboxId?: string; error?: string; name?: string }) {
 		const request = c.req.raw;
 		const loaded = await loadAuth(env, request, deps);
-		if (!loaded) return c.json({ error: "not_found" }, 404);
-		if (!loaded.options.cloudflare) return c.json({ error: "not_found" }, 404);
+		if (!loaded) return notFoundPage();
+		if (!loaded.options.cloudflare) return notFoundPage();
 		const session = await loaded.auth.api.getSession({ headers: request.headers });
 		const userId = session?.user?.id ?? "";
 		if (!userId) return redirectTo(new URL("/app", request.url).href);
 		const url = new URL(request.url);
 		const param = c.req.param("inboxId");
-		const pathInbox = inboxIdFromPath(url.pathname) || (extra?.inboxId && /^[0-9a-f]{32}$/.test(extra.inboxId) ? extra.inboxId : "");
-		if (param !== undefined && !pathInbox) return c.json({ error: "not_found" }, 404);
+		const wizardInbox = extra?.wizard?.fields.inbox ?? "";
+		const pathInbox = inboxIdFromPath(url.pathname)
+			|| (extra?.inboxId && INBOX_ID.test(extra.inboxId) ? extra.inboxId : "")
+			|| (INBOX_ID.test(wizardInbox) ? wizardInbox : "");
+		if (param !== undefined && !pathInbox) return wantsSetupPartial(request) ? c.json({ error: "not_found" }, 404) : notFoundPage();
 		let clearResume = false;
 		let resumedWizard: InboxWizard | null = null;
 		let resumedOwner = "";
@@ -386,7 +460,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 		let inbox: InboxRow | null = null;
 		if (pathInbox) {
 			inbox = await readCloudflareInboxById(loaded.options.database, userId, pathInbox);
-			if (!inbox) return c.json({ error: "not_found" }, 404);
+			if (!inbox) return wantsSetupPartial(request) ? c.json({ error: "not_found" }, 404) : notFoundPage();
 		} else if (!review) {
 			inbox = rows.find((row) => row.status === "pending" || row.status === "working") ?? null;
 		}
@@ -448,9 +522,14 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 		const cookieOwner = token && inbox?.owner_token_hash && inbox.owner_token_hash === await hashOwnerToken(token) ? token : "";
 		if (token) c.header("set-cookie", hostCookie(CF_OWNER_COOKIE, "", 0), { append: true });
 		const ownerToken = steppedOwner || wizard?.ownerToken || cookieOwner;
+		const knownHost = rows.find((row) => row.workers_subdomain)?.workers_subdomain ?? "";
+		const who = accountOf(session?.user);
 		const body = renderCloudflareSetup({
 			brand: brandConfig(env).name,
-			error: url.searchParams.get("error") ?? undefined,
+			error: extra?.error || url.searchParams.get("error") || undefined,
+			nameValue: extra?.name,
+			another: rows.some((row) => row.status === "ready"),
+			previewHost: knownHost ? `${knownHost}.workers.dev` : "",
 			linked: await cloudflareIsLinked(loaded.options.database, userId),
 			connected: url.searchParams.get("connected") === "1",
 			report,
@@ -466,24 +545,32 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 		if (wantsSetupPartial(request)) {
 			return c.json({ html: body, ...(wizard?.refreshSeconds && recent ? { refreshSeconds: wizard.refreshSeconds } : {}) }, 200, { "cache-control": "no-store" });
 		}
-		const setupScript = `${feedbackLink ?? ""}<script src="/setup.js"></script>`;
-		return c.html(renderApp(env, body, "Set me up on Cloudflare", setupScript), 200, pageHeaders(false, null, [], true, accountLinkOrigins(loaded.options)));
+		const setupScript = `${feedbackLink ?? ""}<script src="/setup.js"></script>${dashboardScript}`;
+		return c.html(
+			renderApp(env, body, "Set me up on Cloudflare", setupScript, { account: who.account }),
+			200,
+			pageHeaders(false, null, who.imageHosts, true, accountLinkOrigins(loaded.options)),
+		);
 	}
 	async function cloudflareSetupPost(c: Context<{ Bindings: ControlEnv }>) {
 		const request = c.req.raw;
 		const loaded = await loadAuth(env, request, deps);
-		if (!loaded) return c.json({ error: "not_found" }, 404);
+		if (!loaded) return notFoundPage();
 		const result = await handleCloudflareSetup(request, loaded.auth, loaded.options, await provisionDeps(request));
 		if (result.kind === "review") return cloudflareSetupPage(c, result);
 		if (result.kind === "wizard") return cloudflareSetupPage(c, undefined, result);
 		if (result.kind === "agent") return cloudflareSetupPage(c, undefined, { inboxId: result.inboxId });
-		return wantsSetupPartial(request) ? partialFromRedirect(result.response) : result.response;
+		if (result.kind === "form") return cloudflareSetupPage(c, undefined, { error: result.error, name: result.name });
+		if (wantsSetupPartial(request)) return partialFromRedirect(result.response);
+		const type = result.response.headers.get("content-type") ?? "";
+		if (result.response.status === 404 && type.includes("json")) return notFoundPage();
+		return result.response;
 	}
 	app.post("/app/sign-out", async (c) => {
 		const request = c.req.raw;
 		if (!sameOrigin(request)) return redirectTo(new URL("/app?error=origin", request.url).href);
 		const loaded = await loadAuth(env, request, deps);
-		if (!loaded) return c.json({ error: "not_found" }, 404);
+		if (!loaded) return notFoundPage();
 		const origin = new URL(request.url).origin;
 		const headers = new Headers({ "content-type": "application/json", origin });
 		const cookie = request.headers.get("cookie");
@@ -498,7 +585,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 	});
 	app.post("/app/sign-in", async (c) => {
 		const loaded = await loadAuth(env, c.req.raw, deps);
-		if (!loaded) return c.json({ error: "not_found" }, 404);
+		if (!loaded) return notFoundPage();
 		return handleSignIn(c.req.raw, loaded.auth, loaded.options, deps.signInDeadlineMs);
 	});
 	app.all("/api/auth/*", async (c) => {
@@ -648,13 +735,27 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 			const plane = deps.dataPlane ?? dataPlaneFromEnv(env);
 			const agents = await listTenants(loaded.options.database, session.user.id, env.TENANT_DOMAIN);
 			const token = bareOwnerToken(readCookie(request.headers.get("cookie"), OWNER_COOKIE));
-			const image = avatarUrl(typeof session.user.image === "string" ? session.user.image : "");
+			const who = accountOf(session.user);
 			const agentLimit = await accountAgentLimit(loaded.options.database, session.user.id, configuredFreeAgentLimit(env.FREE_AGENT_LIMIT));
+			const pairing = plane?.owner
+				? await Promise.all(agents.map(async (agent) => {
+					if (agent.status !== "active") return null;
+					try {
+						const result = await plane.owner!(agent.id, agent.region, { accountId: session.user.id, method: "GET", path: "/owner/summary" });
+						if (result.status !== 200) return null;
+						return inboxCountsOf(result.body)?.pairingPending ?? null;
+					} catch {
+						return null;
+					}
+				}))
+				: agents.map(() => null);
+			const cloudflareRows = await listCloudflareInboxes(loaded.options.database, session.user.id);
 			const body = renderAccount({
-				name: session.user.name ?? "",
-				email: session.user.email ?? "",
-				image,
-				agents,
+				name: who.account.name,
+				email: who.account.email,
+				image: who.account.image,
+				tenantDomain: env.TENANT_DOMAIN,
+				agents: agents.map((agent, index) => ({ ...agent, pairingPending: pairing[index] })),
 				ownerToken: token || undefined,
 				error: url.searchParams.get("error") ?? undefined,
 				canCreate: Boolean(plane),
@@ -666,20 +767,22 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 				cloudflare: Boolean(loaded.options.cloudflare),
 				cloudflareLinked: await cloudflareIsLinked(loaded.options.database, session.user.id),
 				disconnected: url.searchParams.get("disconnected") === "1",
-				cloudflareAgents: (await listCloudflareInboxes(loaded.options.database, session.user.id)).map((row) => ({
+				cloudflareAgents: cloudflareRows.map((row) => ({
 					id: row.id,
 					host: cloudflareHostname(row),
 					createdAt: row.created_at,
+					status: row.status,
+					publicUrl: row.public_url,
 				})),
 				forgotCloudflare: url.searchParams.get("forgotCloudflare") === "1",
 				removedCloudflare: url.searchParams.get("removedCloudflare") === "1",
 			});
 			return {
-				html: renderApp(env, body, "Your agents", feedbackLink),
+				html: renderApp(env, body, "Your agents", dashboardScript, { account: who.account }),
 				turnstile,
 				options: loaded.options,
 				signedIn: true,
-				imageHosts: image ? [avatarOrigin(image)] : [],
+				imageHosts: who.imageHosts,
 				clearOwner: Boolean(token),
 				linkOrigins: accountLinkOrigins(loaded.options),
 			};
@@ -756,7 +859,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 
 	app.all("*", async (c) => {
 		if (!env.ASSETS) return c.notFound();
-		const asset = await env.ASSETS.fetch(c.req.raw);
+		const asset = await presentAsset(c.req.path, await env.ASSETS.fetch(c.req.raw));
 		// The same URL can be Markdown. A cache that stored this HTML response must not reuse it for that Accept.
 		if (!markdownPath(c.req.path)) return asset;
 		const headers = new Headers(asset.headers);
@@ -772,6 +875,7 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 	function feedbackResponse(c: Context<{ Bindings: ControlEnv }>, result: FeedbackResult) {
 		if (result.kind === "redirect") return c.redirect(result.location, 303);
 		if (result.kind === "html") return c.html(renderApp(env, result.html, "Feedback"), 200, pageHeaders(result.turnstile));
+		if (c.req.path.startsWith("/app") && result.status === 404) return notFoundPage();
 		return c.json(result.body, result.status as 200, result.headers);
 	}
 

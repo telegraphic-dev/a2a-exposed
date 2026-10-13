@@ -125,7 +125,7 @@ test("the agent page lists MCP connectors, a read-only log, and downloads a reda
 		assert.match(html, /name="action" value="export"/);
 		assert.match(html, /not a backup/);
 		const posts = [...html.matchAll(/method="post" action="([^"]+)"/g)].map((match) => match[1]);
-		assert.ok(posts.every((action) => action === "/app/agents/northwind"));
+		assert.ok(posts.every((action) => action === "/app/agents/northwind" || action === "/app/sign-out"));
 
 		const before = target.calls.length;
 		const cross = await app.request(`${origin}/app/agents/northwind`, {

@@ -182,7 +182,7 @@ test("the agent page approves a claimed pairing, confirms revoke, and lists outb
 		assert.equal(html.includes("ciphertext-secret"), false);
 		assert.equal(html.includes("198.51.100.7"), false);
 		const posts = [...html.matchAll(/method="post" action="([^"]+)"/g)].map((match) => match[1]);
-		assert.ok(posts.every((action) => action === "/app/agents/northwind"));
+		assert.ok(posts.every((action) => action === "/app/agents/northwind" || action === "/app/sign-out"));
 
 		const before = target.calls.length;
 		const cross = await app.request(`${origin}/app/agents/northwind`, {

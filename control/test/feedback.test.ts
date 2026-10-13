@@ -129,7 +129,11 @@ test("unconfigured feedback is 404, including a partial config", async () => {
 	assert.deepEqual(await api.json(), { error: "not_found" });
 	const page = await off.request(`${origin}/app/feedback`);
 	assert.equal(page.status, 404);
-	assert.deepEqual(await page.json(), { error: "not_found" });
+	assert.match(page.headers.get("content-type") ?? "", /text\/html/);
+	const missing = await page.text();
+	assert.match(missing, /That page is not available/);
+	assert.match(missing, /Back to your agents/);
+	assert.equal(missing.includes('{"error"'), false);
 	const shell = await off.request(`${origin}/app`);
 	assert.equal((await shell.text()).includes("/app/feedback"), false);
 

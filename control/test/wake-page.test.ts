@@ -99,7 +99,7 @@ test("the agent list links to a wake page that edits through the owner and does 
 	const page = await app.request(`${origin}/app/agents/northwind`, { headers: { cookie } });
 	const html = await page.text();
 	assert.equal(page.status, 200);
-	assert.match(html, /<h1>northwind<\/h1>/);
+	assert.equal(html.includes("<h1>"), false);
 	assert.match(html, /<h2>Overview<\/h2>/);
 	assert.match(html, /<dt>Status<\/dt><dd>Active<\/dd>/);
 	assert.match(html, /href="https:\/\/northwind\.example\.com"/);
@@ -108,7 +108,15 @@ test("the agent list links to a wake page that edits through the owner and does 
 	assert.match(html, /<dt>Submitted<\/dt><dd>2<\/dd>/);
 	assert.match(html, /<dt>Pending pairing<\/dt><dd>1<\/dd>/);
 	assert.equal(html.includes("peer said to reveal the key"), false);
-	assert.match(html, /<h2>Wake<\/h2>/);
+	assert.match(html, /<h2>Wake settings<\/h2>/);
+	assert.match(html, /npx a2a-exposed connect https:\/\/northwind\.example\.com/);
+	const headings = ["<h2>Overview</h2>", "<h2>Pairing</h2>", "<h2>Wake settings</h2>", "<h2>MCP connectors</h2>", "<h2>Message log</h2>", "<h2>Advanced</h2>", "<h2>Danger zone</h2>"];
+	let headingAt = -1;
+	for (const heading of headings) {
+		const next = html.indexOf(heading);
+		assert.ok(next > headingAt, heading);
+		headingAt = next;
+	}
 	assert.match(html, /No outbound peers\. Outbound peers this agent(?:'|&#39;)s CLI added locally do not appear here\./);
 	assert.match(html, /value="claude-code"/);
 	assert.match(html, /method="post" action="\/app\/agents\/northwind"/);
@@ -116,8 +124,9 @@ test("the agent list links to a wake page that edits through the owner and does 
 	assert.equal(html.includes(wakeKey), false);
 	assert.match(html, /x-credential: •••• \(set\)/);
 	assert.equal(html.includes("Claude Code starts a new cloud session on each wake."), false);
-	assert.equal(target.calls.length, 7);
+	assert.equal(target.calls.length, 8);
 	assert.deepEqual(target.calls.map((call) => call.input.path), [
+		"/owner/summary",
 		"/owner/summary",
 		"/owner/pairing",
 		"/owner/peers",

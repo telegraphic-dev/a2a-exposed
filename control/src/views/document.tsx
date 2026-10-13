@@ -35,6 +35,47 @@ export function securityHeaders(options: { turnstile?: boolean; formAction?: rea
 	};
 }
 
+export interface AppAccount {
+	name: string;
+	email: string;
+	image?: string;
+}
+
+/** Signed-in chrome. Marketing pages keep the brand header. */
+function AppHeader(props: { brand: string; account: AppAccount }) {
+	const image = props.account.image ?? "";
+	return (
+		<header class="app-header">
+			<a class="brand" href="/">
+				<img src="/logo.svg" alt="" width={32} height={32} />
+				<span>{props.brand}</span>
+			</a>
+			<details class="nav-menu">
+				<summary class="nav-toggle">Menu</summary>
+				<nav class="app-nav">
+					<a href="/docs">Docs</a>
+					<a href="/pricing">Pricing</a>
+					<a href="/app/feedback">Feedback</a>
+				</nav>
+			</details>
+			<details class="account-menu">
+				<summary>
+					{image ? <img class="photo" src={image} alt="" /> : <span class="photo" />}
+					<span class="menu-label">Account</span>
+				</summary>
+				<div>
+					{props.account.name ? <p><strong>{props.account.name}</strong></p> : ""}
+					{props.account.email ? <p>{props.account.email}</p> : ""}
+					<p><a href="/app/settings">Settings</a></p>
+					<form method="post" action="/app/sign-out">
+						<p><button type="submit">Sign out</button></p>
+					</form>
+				</div>
+			</details>
+		</header>
+	);
+}
+
 export function renderDocument(input: {
 	env?: { BRAND_NAME?: string };
 	title?: string;
@@ -43,6 +84,8 @@ export function renderDocument(input: {
 	extraHtml?: string;
 	robots: string;
 	aside?: boolean;
+	hideHeading?: boolean;
+	account?: AppAccount;
 }): string {
 	const brand = brandConfig(input.env ?? {});
 	const pageTitle = input.title?.trim()
@@ -63,9 +106,9 @@ export function renderDocument(input: {
 				<link rel="icon" href="/logo.svg" type="image/svg+xml" />
 			</head>
 			<body>
-				<Header name={brand.name} />
+				{input.account ? <AppHeader brand={brand.name} account={input.account} /> : <Header name={brand.name} />}
 				<main>
-					<h1>{heading}</h1>
+					{input.hideHeading ? "" : <h1>{heading}</h1>}
 					{input.aside ? <SignInAside /> : ""}
 					{input.bodyHtml ? raw(input.bodyHtml) : ""}
 					{input.extraHtml ? raw(input.extraHtml) : ""}
@@ -84,7 +127,13 @@ export function renderHome(env?: { BRAND_NAME?: string }): string {
 	});
 }
 
-export function renderApp(env?: { BRAND_NAME?: string }, bodyHtml?: string, title?: string, extraHtml?: string): string {
+export function renderApp(
+	env?: { BRAND_NAME?: string },
+	bodyHtml?: string,
+	title?: string,
+	extraHtml?: string,
+	options?: { hideHeading?: boolean; account?: AppAccount },
+): string {
 	return renderDocument({
 		env,
 		title,
@@ -92,5 +141,7 @@ export function renderApp(env?: { BRAND_NAME?: string }, bodyHtml?: string, titl
 		aside: !bodyHtml,
 		bodyHtml,
 		extraHtml,
+		hideHeading: options?.hideHeading,
+		account: options?.account,
 	});
 }

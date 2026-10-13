@@ -204,6 +204,31 @@ export function resultObject(body: unknown): Record<string, unknown> | null {
 	return result && typeof result === "object" && !Array.isArray(result) ? result as Record<string, unknown> : null;
 }
 
+/**
+ * Worker script names in this account. A short or failed list is not success:
+ * a missing page could hide a name that is already taken.
+ */
+export async function listWorkerNames(input: {
+	fetchImpl: typeof fetch;
+	token: string;
+	accountId: string;
+	fetchMs: number;
+}): Promise<{ ok: true; names: string[] } | { ok: false }> {
+	const read = await cfCall({
+		fetchImpl: input.fetchImpl,
+		token: input.token,
+		method: "GET",
+		path: `/accounts/${input.accountId}/workers/scripts?per_page=100`,
+		fetchMs: input.fetchMs,
+	});
+	if (!read.ok) return { ok: false };
+	const names = resultList(read.body).map((row) => (typeof row.id === "string" ? row.id : "")).filter((name) => name.length > 0 && name.length <= 64);
+	const info = read.body && typeof read.body === "object" ? (read.body as { result_info?: { total_count?: unknown } }).result_info : undefined;
+	const total = typeof info?.total_count === "number" ? info.total_count : names.length;
+	if (total > names.length) return { ok: false };
+	return { ok: true, names };
+}
+
 export function resultList(body: unknown): Record<string, unknown>[] {
 	if (!body || typeof body !== "object") return [];
 	const result = (body as { result?: unknown }).result;
