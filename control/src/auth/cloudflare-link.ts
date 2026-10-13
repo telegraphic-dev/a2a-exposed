@@ -517,8 +517,7 @@ async function agentNameTaken(options: AuthOptions, userId: string, name: string
 	if (tenants.some((tenant) => tenant.name === name)) return "taken";
 	const rows = await listCloudflareInboxes(options.database, userId);
 	if (rows.some((row) => row.worker_name === name)) return "taken";
-	const accountId = rows.find((row) => INBOX_ID.test(row.cf_account_id))?.cf_account_id ?? "";
-	if (!accountId || !options.cloudflare) return "unchecked";
+	if (!options.cloudflare) return "unchecked";
 	const { refreshCloudflareGrant } = await import("./cloudflare-grant.ts");
 	const refreshed = await refreshCloudflareGrant({
 		database: options.database,
@@ -529,7 +528,19 @@ async function agentNameTaken(options: AuthOptions, userId: string, name: string
 		fetchMs,
 	});
 	if (!refreshed.ok) return "unchecked";
-	const { listWorkerNames } = await import("../provision/cloudflare-api.ts");
+	const { listAccounts, listWorkerNames } = await import("../provision/cloudflare-api.ts");
+	let accountId = rows.find((row) => INBOX_ID.test(row.cf_account_id))?.cf_account_id ?? "";
+	if (!accountId) {
+		const accounts = await listAccounts({
+			fetchImpl: fetch,
+			token: refreshed.accessToken,
+			fetchMs: fetchMs ?? 10_000,
+		});
+		if (!Array.isArray(accounts) || accounts.length === 0) return "unchecked";
+		// Several accounts: the wizard asks which one, then checks the name there.
+		if (accounts.length > 1) return "free";
+		accountId = accounts[0]!.id;
+	}
 	const listed = await listWorkerNames({
 		fetchImpl: fetch,
 		token: refreshed.accessToken,
