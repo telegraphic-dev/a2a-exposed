@@ -336,6 +336,35 @@ test("a GitHub redirect is a failure", async () => {
 	}
 });
 
+test("a GitHub issue URL matches the repository without regard to case", async () => {
+	const canonical = "https://github.com/Example-Org/Example-Repo/issues/9";
+	const gh = githubFetch({ html_url: canonical });
+	const app = createApp(env(), { fetch: gh.fetch });
+	const res = await post(app, { message: "hi", source: "cli" });
+	assert.equal(res.status, 200);
+	assert.deepEqual(await res.json(), { ok: true, issue_url: canonical });
+});
+
+test("feedback posts without a database share one limit across Worker requests", async () => {
+	const worker = (await import("../src/index.ts")).default;
+	const previous = globalThis.fetch;
+	const gh = githubFetch();
+	globalThis.fetch = gh.fetch;
+	const ctx = { waitUntil() {}, passThroughOnException() {} } as ExecutionContext;
+	const headers = { "content-type": "application/json", origin, "cf-connecting-ip": "198.51.100.77" };
+	const send = (message: string) => worker.fetch(new Request(`${origin}/api/feedback`, {
+		method: "POST",
+		headers,
+		body: JSON.stringify({ message, source: "cli" }),
+	}), env(), ctx);
+	try {
+		for (let i = 0; i < 5; i++) assert.equal((await send(`n ${i}`)).status, 200, String(i));
+		assert.equal((await send("over")).status, 429);
+	} finally {
+		globalThis.fetch = previous;
+	}
+});
+
 test("a thrown GitHub error logs the step and a scrubbed message", async () => {
 	const token = "ghs_" + "supersecretinstallation";
 	const jwt = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI0MjQyIn0.sigvalue1234567890";

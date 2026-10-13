@@ -42,6 +42,8 @@ export interface FeedbackDeps {
 	fetch?: typeof fetch;
 	now?: () => number;
 	githubTimeoutMs?: number;
+	/** In-memory limit counts. The Worker entry keeps one map for the isolate when D1 is unset. */
+	memory?: Map<string, number>;
 }
 
 export interface FeedbackInput {
@@ -304,8 +306,9 @@ function githubIssueUrl(repo: string, value: unknown): string {
 		const url = new URL(value);
 		if (url.protocol !== "https:" || url.hostname !== "github.com" || url.username || url.password) return "";
 		const prefix = `/${repo}/issues/`;
-		if (!url.pathname.startsWith(prefix)) return "";
-		const number = url.pathname.slice(prefix.length);
+		const path = url.pathname;
+		if (path.length < prefix.length || path.slice(0, prefix.length).toLowerCase() !== prefix.toLowerCase()) return "";
+		const number = path.slice(prefix.length);
 		if (!/^\d+$/.test(number)) return "";
 		return `${url.origin}${url.pathname}`;
 	} catch {
@@ -416,7 +419,7 @@ async function readRecord(request: Request): Promise<Record<string, unknown> | "
 }
 
 export function createFeedback(env: ControlEnv, deps: FeedbackDeps = {}) {
-	const memory = new Map<string, number>();
+	const memory = deps.memory ?? new Map<string, number>();
 	return {
 		async api(request: Request): Promise<FeedbackResult> {
 			if (!feedbackOn(env)) return jsonResult(404, { error: "not_found" });
