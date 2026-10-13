@@ -19,10 +19,11 @@ declare module "node:assert/strict" {
 
 declare module "node:fs" {
 	function readFileSync(path: string, encoding: "utf8"): string;
+	function writeFileSync(path: string, data: string): void;
 	function readdirSync(path: string): string[];
 	function mkdtempSync(prefix: string): string;
 	function rmSync(path: string, options?: { recursive?: boolean; force?: boolean }): void;
-	export { readFileSync, readdirSync, mkdtempSync, rmSync };
+	export { readFileSync, writeFileSync, readdirSync, mkdtempSync, rmSync };
 }
 
 declare module "node:os" {

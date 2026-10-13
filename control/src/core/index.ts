@@ -1,6 +1,7 @@
-// Entry for `@a2a-exposed/control-core`. A control-plane app imports tenants, the
-// Cloudflare provisioning calls, routing, the environment type, and the control
-// D1 migrations from here. The control Worker does not import this module.
+// Source entry for `@a2a-exposed/control-core`. `npm pack` compiles this file to
+// JavaScript and declarations. A control-plane app imports tenants, the Cloudflare
+// provisioning calls, routing, the environment type, and the control D1 migrations
+// from that published module. The control Worker does not import this module.
 
 export {
 	accountAgentLimit,

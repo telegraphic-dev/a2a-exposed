@@ -183,15 +183,24 @@ test("control and inbox migrations match the files on disk", () => {
 });
 
 test("the published package loads the entry and hides deep paths", () => {
-	const packed = spawnSync("npm", ["pack", "--json", "--ignore-scripts"], { cwd: repo, encoding: "utf8" });
+	const manifest = JSON.parse(fs.readFileSync(path.join(repo, "package.json"), "utf8")) as {
+		scripts?: { prepack?: string };
+		exports?: { "."?: { types?: string; default?: string } };
+	};
+	assert.equal(manifest.scripts?.prepack, "node control/scripts/build-core.mjs");
+	assert.equal(manifest.exports?.["."]?.default, "./dist/index.js");
+	assert.equal(manifest.exports?.["."]?.types, "./dist/types/control/src/core/index.d.ts");
+	const packed = spawnSync("npm", ["pack", "--json"], { cwd: repo, encoding: "utf8" });
 	assert.equal(packed.status, 0, packed.stderr);
 	const info = JSON.parse(packed.stdout) as { filename: string; files: { path: string }[] }[];
 	const filename = info[0]?.filename ?? "";
 	const tarball = path.join(repo, filename);
 	const listed = new Set((info[0]?.files ?? []).map((file) => file.path));
-	assert.equal(listed.has("control/src/core/index.ts"), true);
+	assert.equal(listed.has("dist/index.js"), true);
+	assert.equal(listed.has("dist/types/control/src/core/index.d.ts"), true);
 	assert.equal(listed.has("control/migrations/0001_auth.sql"), true);
-	assert.equal(listed.has("worker/migrations/0001_init.sql"), true);
+	assert.equal(listed.has("control/src/core/index.ts"), false);
+	assert.equal(listed.has("control/src/views/account.tsx"), false);
 	const dest = fs.mkdtempSync(path.join(os.tmpdir(), "control-core-"));
 	try {
 		const installed = spawnSync("npm", ["install", "--no-audit", "--no-fund", "--ignore-scripts", tarball], {
@@ -206,16 +215,42 @@ test("the published package loads the entry and hides deep paths", () => {
 			if (typeof core.createTenant !== "function" || typeof core.runInboxStep !== "function") process.exit(4);
 			if (typeof core.runRemovalStep !== "function" || typeof core.cfCall !== "function") process.exit(5);
 			if (!Array.isArray(core.CONTROL_MIGRATIONS) || core.CONTROL_MIGRATIONS[0]?.name !== "0001_auth.sql") process.exit(6);
-			if (!Array.isArray(core.INBOX_MIGRATIONS) || !core.INBOX_MIGRATIONS[0]?.sql.includes("CREATE TABLE")) process.exit(7);
+			if (!String(core.CONTROL_MIGRATIONS[0]?.sql).includes("CREATE TABLE")) process.exit(7);
+			if (!Array.isArray(core.INBOX_MIGRATIONS) || !core.INBOX_MIGRATIONS[0]?.sql.includes("CREATE TABLE")) process.exit(8);
 		`;
-		const ran = spawnSync(process.execPath, [
-			"--import",
-			path.join(repo, "control/test/register-hooks.mjs"),
-			"--input-type=module",
-			"--eval",
-			probe,
-		], { cwd: dest, encoding: "utf8" });
+		const ran = spawnSync(process.execPath, ["--input-type=module", "--eval", probe], { cwd: dest, encoding: "utf8" });
 		assert.equal(ran.status, 0, `${ran.stderr}\n${ran.stdout}`);
+		const consumer = `
+			import { CONTROL_MIGRATIONS, RUN_WORKER_FIRST, createTenant, routes, type ControlEnv } from "@a2a-exposed/control-core";
+			const health: "/health" = routes.health;
+			const tenantsPath: "/api/v1/tenants" = routes.tenants;
+			const workerFirst: true = RUN_WORKER_FIRST;
+			const env: ControlEnv = {};
+			if (CONTROL_MIGRATIONS[0]?.name !== "0001_auth.sql") throw new Error("migrations");
+			void health; void tenantsPath; void workerFirst; void env; void createTenant;
+		`;
+		fs.writeFileSync(path.join(dest, "consumer.mts"), consumer);
+		fs.writeFileSync(path.join(dest, "tsconfig.json"), JSON.stringify({
+			compilerOptions: {
+				target: "es2024",
+				lib: ["es2024", "DOM"],
+				module: "nodenext",
+				moduleResolution: "nodenext",
+				strict: true,
+				noEmit: true,
+				types: [],
+				skipLibCheck: true,
+			},
+			files: ["consumer.mts"],
+		}));
+		const checked = spawnSync(process.execPath, [
+			path.join(repo, "control/node_modules/typescript/bin/tsc"),
+			"-p",
+			path.join(dest, "tsconfig.json"),
+			"--pretty",
+			"false",
+		], { cwd: dest, encoding: "utf8" });
+		assert.equal(checked.status, 0, `${checked.stdout}\n${checked.stderr}`);
 		const denied = spawnSync(process.execPath, [
 			"--input-type=module",
 			"--eval",
@@ -226,5 +261,6 @@ test("the published package loads the entry and hides deep paths", () => {
 	} finally {
 		fs.rmSync(tarball, { force: true });
 		fs.rmSync(dest, { recursive: true, force: true });
+		fs.rmSync(path.join(repo, "dist"), { recursive: true, force: true });
 	}
 });

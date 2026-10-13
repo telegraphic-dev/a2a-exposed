@@ -1,17 +1,22 @@
 {
 	"name": "@a2a-exposed/control-core",
 	"version": "0.7.0",
-	"description": "Tenants, Cloudflare inbox provisioning, routing, and control-plane migrations for a2a-exposed. The entry is control/src/core/index.ts.",
+	"description": "Tenants, Cloudflare inbox provisioning, routing, and control-plane migrations for a2a-exposed.",
 	"type": "module",
+	"scripts": {
+		"prepack": "node control/scripts/build-core.mjs"
+	},
+	"types": "./dist/types/control/src/core/index.d.ts",
 	"exports": {
-		".": "./control/src/core/index.ts"
+		".": {
+			"types": "./dist/types/control/src/core/index.d.ts",
+			"import": "./dist/index.js",
+			"default": "./dist/index.js"
+		}
 	},
 	"files": [
-		"control/src",
-		"control/brand",
+		"dist",
 		"control/migrations",
-		"control/tsconfig.json",
-		"worker/migrations",
 		"LICENSE"
 	],
 	"engines": {

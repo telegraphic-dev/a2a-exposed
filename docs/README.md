@@ -22,4 +22,4 @@ Pushing a `v*` tag runs [`.github/workflows/publish.yml`](../.github/workflows/p
 
 ## For contributors
 
-Repository layout, tests, and how to add a wake preset are in [CONTRIBUTING.md](../CONTRIBUTING.md) and [AGENTS.md](../AGENTS.md). The `a2a-exposed` CLI package does not include `control/`. `@a2a-exposed/control-core` is the repository root; its entry is `control/src/core/index.ts`.
+Repository layout, tests, and how to add a wake preset are in [CONTRIBUTING.md](../CONTRIBUTING.md) and [AGENTS.md](../AGENTS.md). The `a2a-exposed` CLI package does not include `control/`. `@a2a-exposed/control-core` is the repository root. The source entry is `control/src/core/index.ts`, and the published module is compiled JavaScript and declarations.
