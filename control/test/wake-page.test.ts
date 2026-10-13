@@ -117,7 +117,7 @@ test("the agent list links to a wake page that edits through the owner and does 
 		assert.ok(next > headingAt, heading);
 		headingAt = next;
 	}
-	assert.match(html, /No outbound peers\. Outbound peers this agent(?:'|&#39;)s CLI added locally do not appear here\./);
+	assert.match(html, /No outbound peers on this agent\. Peers added with the CLI on your machine stay in that CLI\./);
 	assert.match(html, /value="claude-code"/);
 	assert.match(html, /method="post" action="\/app\/agents\/northwind"/);
 	assert.match(page.headers.get("content-security-policy") ?? "", /form-action 'self'/);

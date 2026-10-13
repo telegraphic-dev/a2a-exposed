@@ -627,7 +627,8 @@ test("TenantStore.owner runs an allowlisted owner call and does not return a pee
 	const sql = (sqlDump.body as { sql?: string }).sql ?? "";
 	assert.match(sql, /note \[redacted\] end/);
 	assert.match(sql, /redacted:ada/);
-	assert.match(sql, /Do not load it onto a live inbox/);
+	assert.match(sql, /Redacted dashboard copy for reading/);
+	assert.equal(sql.includes("not a backup"), false);
 	assert.equal(sql.includes(pasted), false);
 	assert.equal(sql.includes("oauth_codes"), false);
 	assert.equal(sql.includes("oidc_txns"), false);

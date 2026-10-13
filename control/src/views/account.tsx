@@ -102,7 +102,7 @@ function cloudflareStatus(status: string): string {
 
 function usageLine(count: number, limit: number | null): string {
 	if (limit == null) return "";
-	return `${count} of ${limit} hosted · agents in your Cloudflare don't count`;
+	return `${count} of ${limit} hosted · Cloudflare agents stay outside this count`;
 }
 
 function copyButtons(url: string) {
@@ -138,7 +138,7 @@ export function renderAccount(input: {
 	disconnected?: boolean;
 	/** Public address of an inbox created in the user's Cloudflare account. */
 	cloudflareInbox?: string | null;
-	/** Agents that live in the user's Cloudflare account. They do not use a hosted slot. */
+	/** Agents that live in the user's Cloudflare account. They stay outside the hosted agent count. */
 	cloudflareAgents?: { id: string; host: string; createdAt: string; status?: string; publicUrl?: string | null }[];
 	/** Shown after Forget only. */
 	forgotCloudflare?: boolean;
@@ -155,7 +155,7 @@ export function renderAccount(input: {
 	const hostedOpen = input.canCreate && !atLimit;
 	const showNew = hostedOpen || Boolean(input.cloudflare);
 	const empty = input.agents.length === 0 && cloudflareAgents.length === 0;
-	const cloudflareLine = `Lets ${brand} set things up in your Cloudflare account. It isn't used to sign in.`;
+	const cloudflareLine = `Lets ${brand} set things up in your Cloudflare account.`;
 	return (
 		<div class="dashboard">
 			{usage ? <p class={atLimit ? "alert usage" : "usage"} role={atLimit ? "alert" : undefined}>{usage}</p> : ""}
@@ -268,7 +268,7 @@ export function renderSettings(input: {
 			</section>
 			<section>
 				<h2>Cloudflare</h2>
-				<p>Lets {brand} set things up in your Cloudflare account. It isn't used to sign in.</p>
+				<p>Lets {brand} set things up in your Cloudflare account.</p>
 				{input.cloudflare ? (
 					input.cloudflareLinked ? (
 						input.confirmDisconnect ? (

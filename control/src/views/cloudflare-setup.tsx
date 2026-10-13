@@ -1,5 +1,4 @@
 import {
-	ACCESS_NOT_REQUESTED,
 	EVERY_PLAN,
 	SETUP_NOT_PROVISIONED,
 	TUNNEL_CONNECTOR_LATER,
@@ -18,7 +17,7 @@ const ERRORS: Record<string, string> = {
 	auth: "Cloudflare did not finish. Try again.",
 	origin: "That request came from another site.",
 	cancelled: "You cancelled the Cloudflare permissions.",
-	refused: "Cloudflare refused the permissions. This app is not allowed to ask for one of them.",
+	refused: "Cloudflare refused the permissions. Turn those permissions on for this Cloudflare app, then connect again.",
 	provider: "Cloudflare did not finish granting permissions.",
 	name: "Use a short name: lowercase letters, numbers, and hyphens.",
 	hostname: "Use a web address on a domain already in this Cloudflare account, such as agent.example.com.",
@@ -35,7 +34,7 @@ const ERRORS: Record<string, string> = {
 	partial: "Cloudflare did not finish uploading the inbox. The next try continues with the database already created.",
 	blocked: "Cloudflare has not granted every permission this inbox needs.",
 	no_grant: "Choose a setup before creating an inbox.",
-	unchecked: "Cloudflare did not list the Workers in this account, so this name was not used.",
+	unchecked: "The Worker list is unavailable, so this name stays on the form.",
 };
 
 function httpsUrl(value: string | null | undefined): string {
@@ -163,7 +162,7 @@ function choiceForm(prompt: string, createAgent: boolean, previewHost: string, n
 						<span class="choice-title">A free workers.dev address</span>
 						<span class="choice-detail">Recommended.</span>
 						<span class="choice-example">https://my-agent.yourname.workers.dev</span>
-						<span class="choice-hint">This does not ask to list your domains or edit DNS.</span>
+						<span class="choice-hint">Cloudflare provides this address.</span>
 					</span>
 				</label>
 				<label class="choice">
@@ -172,7 +171,7 @@ function choiceForm(prompt: string, createAgent: boolean, previewHost: string, n
 						<span class="choice-title">My own domain</span>
 						<span class="choice-detail">Pick it from the domains already in your Cloudflare account.</span>
 						<span class="choice-example">https://agent.example.com</span>
-						<span class="choice-hint">This step cannot move a domain onto Cloudflare.</span>
+						<span class="choice-hint">Use a domain already on this Cloudflare account.</span>
 					</span>
 				</label>
 			</fieldset>
@@ -308,10 +307,10 @@ export function renderCloudflareSetup(input: {
 	);
 	return (
 		<div class="setup" data-setup-root data-refresh-seconds={refresh || undefined}>
-			<p>{brand} creates a public address for your agent in your Cloudflare account, one step at a time. {EVERY_PLAN} It is not a way to sign in.</p>
+			<p>{brand} creates a public address for your agent in your Cloudflare account, one step at a time. {EVERY_PLAN}</p>
 			{error ? <p class="alert" role="alert">{error}</p> : ""}
 			{input.connected && input.linked && !report ? (
-				<p role="status">Cloudflare is connected for your user profile only. Choose a setup below to grant the permissions that setup needs. Nothing has been created in your Cloudflare account.</p>
+				<p role="status">Cloudflare is connected. Choose a setup below to grant the permissions that setup needs.</p>
 			) : ""}
 			{finished && created ? (
 				<section class="overview">
@@ -323,7 +322,6 @@ export function renderCloudflareSetup(input: {
 					</p>
 					{dashboardLinks(wizard!)}
 					{wizard?.facade ? <p>{TUNNEL_CONNECTOR_LATER}</p> : ""}
-					{wizard?.facade ? <p>{ACCESS_NOT_REQUESTED}</p> : ""}
 					<p><a href="/app/cloudflare">In my Cloudflare account</a></p>
 				</section>
 			) : report && !startingAnother ? (
@@ -355,24 +353,23 @@ export function renderCloudflareSetup(input: {
 						wizard || created ? (
 							<p>A refresh token is saved encrypted, so this page can continue. Cloudflare treats that token as single-use.</p>
 						) : report.facade && !report.inbox ? (
-							<p>A refresh token is saved encrypted. Cloudflare treats that token as single-use. This page does not create the tunnel, so it does not use that token yet.</p>
+							<p>A refresh token is saved encrypted. Cloudflare treats that token as single-use.</p>
 						) : (
-							<p>A refresh token is saved encrypted, so a later step can continue. Cloudflare treats that token as single-use. This page does not use it yet.</p>
+							<p>A refresh token is saved encrypted, so a later step can continue. Cloudflare treats that token as single-use.</p>
 						)
 					) : (
-						<p>No refresh token is saved, so this dashboard cannot continue the setup after you leave this page.</p>
+						<p>No refresh token is saved. Connect again to keep one, so this page can continue after you leave.</p>
 					)}
 					{wizard && input.ownerToken ? <TokenBlock token={input.ownerToken} lead="Copy this owner token now. It will not be shown again." /> : ""}
 					{wizard ? wizardSteps(wizard) : ""}
 					{finished ? dashboardLinks(wizard!) : ""}
 					{report.facade ? <p>{TUNNEL_CONNECTOR_LATER}</p> : ""}
-					{report.facade ? <p>{ACCESS_NOT_REQUESTED}</p> : ""}
 				</div>
 			) : ""}
 			{review ? (
 				<form method="post" action="/app/cloudflare">
 					<p>{setupSummary(review.choice, review.host)}</p>
-					<p>Cloudflare will be asked for these permissions and no others. Required ones stay on. You can turn the others off. If you turn one off, this page says which setup that blocks.</p>
+					<p>Cloudflare will be asked for these permissions. Required ones stay on. You can turn the others off. If you turn one off, this page says which setup that blocks.</p>
 					<ul>
 						{scopes.map((scope) => (
 							<li>
@@ -381,7 +378,6 @@ export function renderCloudflareSetup(input: {
 						))}
 					</ul>
 					{review.choice !== "inbox" ? <p>{TUNNEL_CONNECTOR_LATER}</p> : ""}
-					{review.choice !== "inbox" ? <p>{ACCESS_NOT_REQUESTED}</p> : ""}
 					<input type="hidden" name="action" value="consent" />
 					<input type="hidden" name="choice" value={review.choice} />
 					<input type="hidden" name="host" value={review.host} />

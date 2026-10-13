@@ -142,10 +142,10 @@ Pairing (OAuth 2.0 device flow, RFC 8628: agents connect without pasting tokens 
   pair set-password       the same in a terminal, no echo (the human runs it; never via argv/stdin)
   pair set-oidc --issuer URL --client-id ID --subjects SUB[,SUB...] [--methods password,oidc] [--secret-stdin]
                           optional OpenID Connect approval on /device and the MCP consent page. The client
-                          secret is APPROVAL_OIDC_CLIENT_SECRET in the environment, or one line on stdin with
-                          --secret-stdin. It is not a flag and it is not saved in config.env. The next
-                          \`npx -y a2a-exposed@latest deploy\` uploads that environment variable as a Worker
-                          secret. Leave the issuer unset and approval stays the password page
+                          secret deploy uploads is APPROVAL_OIDC_CLIENT_SECRET in the environment you use for
+                          deploy. --secret-stdin checks one line and discards it, so export the variable
+                          before deploy. config.env keeps the issuer and client id.
+                          Leave the issuer unset and approval stays the password page
   pair list [--json]      pending pairing requests (code, claimed name/card, address), the approval mode and
                           when the approval password was set
   pair approve <code>     approve (only with --pairing-approval agent, after your human said yes)
@@ -186,20 +186,20 @@ Control plane account (only when that deployment's login is on)
                                 After sign-in, /app shows the account and its agents. Each agent is listed
                                 by its hostname. A hosted name opens
                                 that agent's page: MCP connectors (revoke needs a recent sign-in), a
-                                message log that does not mark tasks seen, and a SQL download that
-                                replaces a pasted owner token and leaves other credential material out. Peer times are labeled UTC. A pairing
-                                token shows its code. An empty outbound list notes that peers the CLI
-                                added locally are not shown. Sign out is on that
+                                message log of recent history. Opening this log leaves a pending wake in place until you list the inbox. The SQL download
+                                is a redacted copy and replaces a pasted owner token. Peer times are labeled UTC. A pairing
+                                token shows its code. An empty outbound list says peers added with the CLI
+                                on your machine stay in that CLI. Sign out is on that
                                 page. Creating an agent shows the owner token once. The agent page rotates
                                 that token after a confirmation and a recent sign-in. The new token is
                                 shown once on that agent's page. The previous one stops working immediately.
                                 The token is shown only when the stored hash is still that token. A Copy button sits next to it. Without JavaScript the value still copies.
-                                Deleting an agent asks for its name and a recent sign-in. The account page says how many slots remain. A self-hosted inbox has no such delete.
+                                Deleting an agent asks for its name and a recent sign-in. The account page says how many hosted slots remain. A self-hosted inbox has no such delete.
                                 That page is not stored.
-                                FREE_AGENT_LIMIT=2 caps a free account at 2 hosted agents. An agent in your Cloudflare account does not use one of these. An account's own limit overrides it.
-                                Unset, there is no limit. The database rejects another insert.
+                                FREE_AGENT_LIMIT=2 caps a free account at 2 hosted agents. A Cloudflare agent stays outside that count. An account's own limit overrides it.
+                                Unset, there is no limit. The database rejects another hosted insert.
                                 SIGNUP_ALLOWLIST, when set, admits only those verified emails. Unset, sign-in stays open.
-                                Cloudflare does not match that list. Connect it from the account page after signing in another way.
+                                Sign-in uses GitHub, Google, or email. Connect Cloudflare from the account page after you sign in.
                                 A refusal returns to /app?error=invite and the page says Sign-in is invite-only for now.
                                 The control Worker logs social_sign_in_failed before the
                                 provider page, social_sign_in_timeout when that sign-in does not
@@ -269,7 +269,7 @@ export async function main(argv) {
 	if (name === "--version" || name === "-v") return console.log(VERSION);
 	if (rest.includes("--help") || rest.includes("-h")) return console.log(HELP);
 	if (name === "pair" && rest[0] === "set-oidc" && rest.some((a) => /^--(secret|client-secret)(=|$)/.test(a)))
-		throw new CliError("the OpenID Connect client secret is not a flag: export APPROVAL_OIDC_CLIENT_SECRET or pass --secret-stdin (it is not saved in config.env)");
+		throw new CliError("export APPROVAL_OIDC_CLIENT_SECRET or pass --secret-stdin. --secret-stdin checks the line and discards it. Deploy uploads only the environment variable");
 	if (name === "pair" && rest[0] === "set-password") {
 		// only --web [--ttl M] [--json]: the password itself never comes from argv, stdin or the environment
 		const extra = rest.slice(1);

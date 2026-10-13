@@ -94,7 +94,7 @@ export function authBlockers(env: AuthEnv, deps: AuthDeps = {}): string[] {
 	if (env.MAIL_FROM?.trim() && !mailer) blockers.push("Email is not configured.");
 	const github = pair(env.GITHUB_CLIENT_ID, env.GITHUB_CLIENT_SECRET);
 	const google = pair(env.GOOGLE_CLIENT_ID, env.GOOGLE_CLIENT_SECRET);
-	// Cloudflare connects an account. It is not a way to sign in.
+	// Cloudflare connects an account for setup.
 	if (!github && !google && !mailer) blockers.push("No login provider is fully configured.");
 	return blockers;
 }

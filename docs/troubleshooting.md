@@ -19,7 +19,7 @@ Report a result the docs do not cover with `npx -y a2a-exposed@latest feedback`.
 | Symptom | What to do |
 | --- | --- |
 | `not logged in to Cloudflare` | `npx cf auth login --no-browser`. The code expires after about 5 minutes |
-| `cf auth login` returns HTTP 403 or "Just a moment..." before a code | Datacenter egress, not a wrong account. Do not retry. Export `CLOUDFLARE_API_TOKEN` and, if needed, `CLOUDFLARE_ACCOUNT_ID`. See [Self-hosting](self-hosting.md) |
+| `cf auth login` returns HTTP 403 or "Just a moment..." before a code | Datacenter egress. Stop and export `CLOUDFLARE_API_TOKEN` and, if needed, `CLOUDFLARE_ACCOUNT_ID`. See [Self-hosting](self-hosting.md) |
 | API token error `1001` (Memberships) | Memberships needs the user-scoped resource, not an account or a zone |
 | `tokens verify` succeeds, later `cf` calls are denied by an IP policy | The token filter must allow both the host's IPv4 `/32` and its IPv6 `/128` |
 | Several accounts | `--account-id` (listed by `cf auth whoami`) |

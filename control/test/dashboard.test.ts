@@ -67,7 +67,7 @@ test("a signed-in account sees itself, can sign out, and creates two agents", as
 	assert.equal(/form-action[^;]*https:\/\/github\.com/.test(policy), false);
 	assert.match(policy, /script-src 'self'/);
 	assert.match(html, /src="\/dashboard\.js"/);
-	assert.match(html, /0 of 2 hosted · agents in your Cloudflare don&#39;t count/);
+	assert.match(html, /0 of 2 hosted · Cloudflare agents stay outside this count/);
 	assert.match(html, /href="\/app\/settings"/);
 
 	await db.prepare('UPDATE "user" SET image = ? WHERE email = ?').bind("https://evil.example/a.png", "person@example.com").run();
@@ -156,7 +156,7 @@ test("a signed-in account sees itself, can sign out, and creates two agents", as
 	assert.match(formLimited.headers.get("location") ?? "", /error=limit$/);
 	assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM tenants").first<{ n: number }>())?.n, 2);
 	const limited = await (await app.request(`${origin}/app?error=limit`, { headers: { cookie } })).text();
-	assert.match(limited, /2 of 2 hosted · agents in your Cloudflare don&#39;t count/);
+	assert.match(limited, /2 of 2 hosted · Cloudflare agents stay outside this count/);
 	assert.equal(limited.includes("Create agent"), false);
 	assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM tenants").first<{ n: number }>())?.n, 2);
 

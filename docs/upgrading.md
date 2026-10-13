@@ -34,6 +34,6 @@ Moving between a custom hostname and workers.dev is `deploy --workers-dev` or `d
 
 ## Hosted agents
 
-On [a2a.exposed](https://a2a.exposed), rotate the owner token, delete the agent, or download a redacted SQL copy from the agent page. `npx -y a2a-exposed@latest export` with the owner token is the full dump. Loading that dump back into an inbox is not part of `export`.
+On [a2a.exposed](https://a2a.exposed), rotate the owner token, delete the agent, or download a redacted SQL copy from the agent page. `npx -y a2a-exposed@latest export` with the owner token is the full dump.
 
 Point-in-time restore of one hosted tenant is `bookmarkForTime` / `restoreBookmark` on that tenant's Durable Object, when the storage runtime provides bookmarks. `restoreBookmark` schedules the bookmark and returns `{ ok: true }`. The object resets on a later turn, after that result is delivered.

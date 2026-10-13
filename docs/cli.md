@@ -103,7 +103,7 @@ The owner token authenticates these commands.
 | `reply <taskId> (--text T \| --stdin) [--state completed\|input-required\|rejected\|failed\|working] [--artifact] [--artifact-name N] [--force]` | Reply. Default state is `completed` |
 | `history <contextId> [-n 50] [--json]` | Conversation log |
 | `contexts` | Recent conversations |
-| `export [--sql]` | JSON dump (`GET /owner/export`). `--sql` prints the same tables as SQL. The read is one transaction. Peer-token hashes and encrypted outbound peer tokens are in the dump. The owner token stays a Worker secret. Loading a dump back into an inbox is not part of this command |
+| `export [--sql]` | JSON dump (`GET /owner/export`). `--sql` prints the same tables as SQL. The read is one transaction. Peer-token hashes and encrypted outbound peer tokens are in the dump. The owner token stays a Worker secret |
 
 The download on a hosted agent page is a redacted copy of those tables. See [Control plane](control-plane.md).
 
@@ -113,8 +113,8 @@ The download on a hosted agent page is a redacted copy of those tables. See [Con
 | --- | --- |
 | `connect <url> [--alias A] [--name N] [--card-url URL] [--replace] [--no-wait] [--json]` | Ask another inbox for a token. Prints a code and a link. Stores the token and does not print it. `--no-wait` prints the code and exits; run the same command again to check. An expired code exits 1 and does not request a new one silently. An alias whose token still works is refused unless `--replace` (`--force` is the old flag). A `*.ts.net` or LAN card is informational. A non-https card is left out |
 | `pair set-password --web [--ttl MIN] [--json]` | One-time link (default 15 minutes) where a human sets the approval password. A new link invalidates the previous one |
-| `pair set-password` | The same, in a terminal, no echo. The password is not an argument, not stdin, and not an environment variable |
-| `pair set-oidc --issuer URL --client-id ID --subjects SUB[,SUB...] [--methods password,oidc] [--secret-stdin]` | Optional OpenID Connect on `/device` and the MCP consent page. The client secret is `APPROVAL_OIDC_CLIENT_SECRET` or one line on stdin. It is not saved in `config.env`. The next `deploy` uploads it |
+| `pair set-password` | The same, in a terminal, no echo. The human types the password there |
+| `pair set-oidc --issuer URL --client-id ID --subjects SUB[,SUB...] [--methods password,oidc] [--secret-stdin]` | Optional OpenID Connect on `/device` and the MCP consent page. Deploy uploads `APPROVAL_OIDC_CLIENT_SECRET` only when that variable is set in the environment you use for deploy. `--secret-stdin` checks one line and discards it. `config.env` keeps the issuer and client id |
 | `pair list [--json]` | Pending requests, the approval mode, and when the password was set |
 | `pair approve <code>` | Only when `--pairing-approval agent`, after the human says yes |
 | `pair deny <code>` | Any mode. On `/device`, deny needs no password |

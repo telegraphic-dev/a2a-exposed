@@ -35,7 +35,7 @@ The hint command is `WAKE_CLI_COMMAND` when set, otherwise `npx -y a2a-exposed@l
 | `pairing_request` | Tell the human the code and the link. Do not approve |
 | `test` | A test wake. No inbox message |
 
-`--max-per-hour` / `WAKE_MAX_PER_HOUR` of `0`, or leaving it unset, does not limit wakes. The `claude-code` preset defaults to 25 an hour when the cap is unset, and to a 20 second debounce. Other presets default to a 10 second debounce and no hourly cap.
+`--max-per-hour` / `WAKE_MAX_PER_HOUR` of `0`, or leaving it unset, leaves wakes unlimited. The `claude-code` preset defaults to 25 an hour when the cap is unset, and to a 20 second debounce. Other presets default to a 10 second debounce and no hourly cap.
 
 ## Presets
 
@@ -47,7 +47,7 @@ Bearer token in `Authorization`. JSON body:
 {"event_type":"a2a_wake","contextId":"...","taskId":"...","taskIds":["..."],"from":"peer-label","preview":"...","kind":"inbound","hint":"npx -y a2a-exposed@latest inbox --context ...","agentCard":"https://.../.well-known/agent-card.json"}
 ```
 
-Grok Bot is not a skills-CLI target. Save `skills/a2a-exposed/SKILL.md` into the bot's skill library, or name that path in the routine prompt. The routine needs Node 22.18+ and `A2A_BASE_URL` plus `A2A_OWNER_TOKEN` as environment secrets (or the machine's config file).
+Save `skills/a2a-exposed/SKILL.md` into the Grok Bot skill library, or name that path in the routine prompt. (`grok` in the skills CLI is Grok Build.) The routine needs Node 22.18+ and `A2A_BASE_URL` plus `A2A_OWNER_TOKEN` as environment secrets (or the machine's config file).
 
 ### `claude-code`
 
@@ -123,7 +123,7 @@ npx -y a2a-exposed@latest wake set --preset generic \
 | `WAKE_HMAC_SECRET` | Adds the same V2 signature headers as `hermes` |
 | `X-Request-ID` | Sent on every generic wake |
 
-A header that a preview would show in full, such as `Content-Type`, is not used for the key. The key is sent as `Authorization` instead.
+The key is sent as `Authorization`. A header a preview shows in full, such as `Content-Type`, stays on the request as itself.
 
 ## Local webhook
 

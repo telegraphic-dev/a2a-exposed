@@ -390,7 +390,7 @@ test("pair set-oidc writes non-secrets and refuses a secret argument", async (t)
 	const s = sandbox(t);
 	let r = await s.cli(["pair", "set-oidc", "--issuer", "https://idp.example", "--client-id", "cid", "--subjects", "a@example.com", "--client-secret", "nope"]);
 	assert.equal(r.status, 1);
-	assert.match(r.stderr, /client secret is not a flag/);
+	assert.match(r.stderr, /export APPROVAL_OIDC_CLIENT_SECRET or pass --secret-stdin/);
 	assert.equal(s.config().APPROVAL_OIDC_ISSUER, undefined);
 	assert.equal(JSON.stringify(s.config()).includes("nope"), false);
 

@@ -12,7 +12,6 @@ import {
 import { sessionIsFresh } from "../src/auth/cloudflare-link.ts";
 import { CLOUDFLARE_RESUME_COOKIE, SESSION_COOKIE } from "../src/auth/cookies.ts";
 import {
-	ACCESS_NOT_REQUESTED,
 	D1_WRITE,
 	DNS_WRITE,
 	OFFLINE_ACCESS,
@@ -126,10 +125,11 @@ test("a declined optional scope names the setup it blocks", () => {
 	assert.match(bothZone.blocked.join(" "), /blocks the new inbox and the façade/);
 	assert.match(bothZone.blocked.join(" "), /Without Zone Read/);
 	assert.match(bothZone.blocked.join(" "), /own domain/);
+	assert.match(bothZone.blocked.join(" "), /A free address is set up with the permissions that address needs/);
 	assert.match(bothZone.blocked.join(" "), /Without Cloudflare Tunnel Write/);
 	assert.match(bothZone.blocked.join(" "), /blocks the façade/);
-	assert.match(bothZone.blocked.join(" "), /inbox does not need a tunnel/);
-	assert.match(bothZone.blocked.join(" "), /Without a refresh token/);
+	assert.match(bothZone.blocked.join(" "), /The inbox is created without a tunnel/);
+	assert.match(bothZone.blocked.join(" "), /Connect again and keep the refresh token/);
 	assert.equal(bothZone.lines.find((line) => line.name === "Workers Admin")?.state, "granted");
 	assert.equal(bothZone.needsReconnect, false);
 	assert.equal(bothZone.lines.find((line) => line.name === "D1 Write")?.state, "declined");
@@ -289,7 +289,7 @@ test("the choice page explains a workers.dev inbox, then asks Cloudflare only fo
 	assert.match(html, /Set me up on Cloudflare/);
 	assert.match(html, /one step at a time/);
 	assert.match(html, /available on every plan/);
-	assert.match(html, /not a way to sign in/);
+	assert.equal(html.includes("not a way to sign in"), false);
 	assert.match(html, /What do you want\?/);
 	assert.match(html, /Give my agent a public A2A address/);
 	assert.match(html, /It receives messages, and we wake it by webhook/);
@@ -301,7 +301,8 @@ test("the choice page explains a workers.dev inbox, then asks Cloudflare only fo
 	assert.match(html, /https:\/\/my-agent\.yourname\.workers\.dev/);
 	assert.match(html, /https:\/\/agent\.example\.com/);
 	assert.match(html, /class="choice"/);
-	assert.match(html, /does not ask to list your domains or edit DNS/);
+	assert.match(html, /Cloudflare provides this address/);
+	assert.match(html, /Use a domain already on this Cloudflare account/);
 	assert.equal(html.includes("older than 10 minutes"), false);
 	assert.match(html, /creates a public address for your agent/);
 	assert.equal(html.includes("not created here"), false);
@@ -327,7 +328,7 @@ test("the choice page explains a workers.dev inbox, then asks Cloudflare only fo
 	assert.equal(reviewHtml.includes("Zone Read"), false);
 	assert.equal(reviewHtml.includes("DNS Write"), false);
 	assert.equal(reviewHtml.includes("Cloudflare Tunnel Write"), false);
-	assert.equal(reviewHtml.includes(ACCESS_NOT_REQUESTED), false);
+	assert.equal(reviewHtml.includes("Cloudflare Access"), false);
 	assert.match(review.headers.get("content-security-policy") ?? "", /https:\/\/dash\.cloudflare\.com/);
 
 	const missing = await app.request(`${origin}/app/cloudflare`, {
@@ -506,7 +507,7 @@ test("a façade on your own domain asks for the tunnel and the zone, and a decli
 	assert.match(reviewHtml, /Zone Read/);
 	assert.match(reviewHtml, /DNS Write/);
 	assert.match(reviewHtml, new RegExp(TUNNEL_CONNECTOR_LATER.replace(/[.]/g, "\\.")));
-	assert.match(reviewHtml, /does not ask for Cloudflare Access/);
+	assert.equal(reviewHtml.includes("Cloudflare Access"), false);
 	assert.equal(reviewHtml.includes("access-app.write"), false);
 	const consent = await app.request(`${origin}/app/cloudflare`, {
 		method: "POST",
@@ -690,7 +691,9 @@ test("a Cloudflare error comes back to the setup page in plain language", async 
 	assert.equal(refusedUrl.pathname === "/app", false);
 	const refusedHtml = await (await app.request(refusedUrl, { headers: { cookie } })).text();
 	assert.match(refusedHtml, /Cloudflare refused the permissions/);
-	assert.match(refusedHtml, /not allowed to ask for one of them/);
+	assert.match(refusedHtml, /Turn those permissions on for this Cloudflare app, then connect again/);
+	assert.equal(refusedHtml.includes("Try the setup again"), false);
+	assert.equal(refusedHtml.includes("not allowed to ask"), false);
 	assert.equal(refusedHtml.includes("The provider did not finish sign-in"), false);
 	assert.equal(refusedHtml.includes("super-secret-code"), false);
 	const logged = logs.join("\n");

@@ -254,7 +254,7 @@ export function landingPage(m: LandingModel, nonce: string): string {
 		? `<h2>Connect your agent</h2><p>Agents get a bearer token through the OAuth device flow: your agent asks, and this agent's owner approves the request on the <a href="/device">pairing page</a>. No secrets go through chat. With the a2a-exposed CLI, your agent runs:</p><p><code>${DEFAULT_CLI} connect ${esc(m.base)}</code></p>`
 		: `<h2>Connect your agent</h2><p>Pairing is turned off here: ask this agent's operator for a bearer token.</p>`;
 	return pageShell(m.name, nonce, `${desc}
-<p class="n info">This is an <a href="https://a2a-protocol.org/">A2A (Agent2Agent)</a> endpoint, meant for agents rather than people.${m.proxy ? "" : " Messages land in its owner's inbox, which wakes the agent."}</p>
+<p class="n info">This is an <a href="https://a2a-protocol.org/">A2A (Agent2Agent)</a> endpoint for agents.${m.proxy ? "" : " Messages land in its owner's inbox, which wakes the agent."}</p>
 <table>
 <tr><th>Agent card</th><td><a href="/.well-known/agent-card.json">${esc(card)}</a></td></tr>
 <tr><th>JSON-RPC endpoint</th><td><code>POST ${esc(m.base)}/</code></td></tr>

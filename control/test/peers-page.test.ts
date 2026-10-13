@@ -254,7 +254,7 @@ test("the agent page approves a claimed pairing, confirms revoke, and lists outb
 		assert.equal(target.calls.at(-1)?.input.path, "/owner/peers/ada");
 		assert.equal(target.calls.at(-1)?.input.actor, undefined);
 		const revokedPage = await (await app.request(revoked.headers.get("location") ?? "", { headers: { cookie } })).text();
-		assert.match(revokedPage, /Revoked\. That token no longer works\./);
+		assert.match(revokedPage, /Revoked\. That token is off\./);
 
 		target.failNextApprove();
 		const failed = await app.request(`${origin}/app/agents/northwind`, { method: "POST", headers, body: "action=approve&code=WDJB-4827" });

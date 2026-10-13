@@ -3,7 +3,7 @@ import { hasToken } from "./tokens.ts";
 const NOTICES: Record<string, string> = {
 	approved: "Approved. That agent can collect its token.",
 	denied: "Denied. That agent gets no token.",
-	revoked: "Revoked. That token no longer works.",
+	revoked: "Revoked. That token is off.",
 };
 
 const ERRORS: Record<string, string> = {
@@ -222,7 +222,7 @@ export function renderPeers(input: {
 			<h3>Inbound peers</h3>
 			{confirm ? (
 				<div class="confirm">
-					<p>Revoke the token for {confirm.label}? That peer will no longer be able to send messages.</p>
+					<p>Revoke the token for {confirm.label}? That peer loses access to this agent.</p>
 					<form method="post" action={action}>
 						<input type="hidden" name="action" value="revoke" />
 						<input type="hidden" name="label" value={confirm.label} />
@@ -250,7 +250,7 @@ export function renderPeers(input: {
 				</article>
 			))}
 			<h3>Outbound peers</h3>
-			{input.outbound === null ? <p>Outbound peers are not available.</p> : input.outbound.length === 0 ? <p>No outbound peers. Outbound peers this agent's CLI added locally do not appear here.</p> : (
+			{input.outbound === null ? <p>Outbound peers are not available.</p> : input.outbound.length === 0 ? <p>No outbound peers on this agent. Peers added with the CLI on your machine stay in that CLI.</p> : (
 				<ul>
 					{input.outbound.map((peer) => (
 						<li>

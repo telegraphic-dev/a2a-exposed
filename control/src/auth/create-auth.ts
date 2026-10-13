@@ -17,8 +17,7 @@ import type { Mailer } from "../mail/types.ts";
 // list stays empty: a trusted provider would attach an address that provider
 // did not verify. GitHub links when its primary email is `verified`. Google
 // links when `email_verified` is true. A magic link is verified because the
-// link was received. Cloudflare is not a sign-in provider. A signed-in account
-// connects it from /app, and that callback does not create a session.
+// link was received. A signed-in account connects Cloudflare from /app.
 export const TRUSTED_PROVIDERS: string[] = [];
 
 async function mailerFor(options: AuthOptions): Promise<Mailer | undefined> {
