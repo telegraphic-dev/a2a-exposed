@@ -2,6 +2,12 @@
 
 All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.3.x), Worker template, control core, and skills. Versions follow [semver](https://semver.org); a `v*` tag publishes the CLI and `@a2a-exposed/control-core` to npm (see [Releases](docs/README.md#releases)).
 
+## 0.8.1 - 2026-10-13
+
+`npx -y a2a-exposed@latest deploy` (no new inbox D1 migration).
+
+- **Health and feedback.** The Worker in `control/` serves `GET /health`, plain feedback when `FEEDBACK_REPO` and `FEEDBACK_GITHUB_TOKEN` are set, and the static files in `public/`. From `control/`, `npm run deploy` applies that Worker's D1 migrations and deploys it. Without a database, the hourly feedback limit still counts across requests. A filed issue URL matches the repository name without regard to case, and the response keeps GitHub's URL.
+
 ## 0.8.0 - 2026-10-13
 
 `npx -y a2a-exposed@latest deploy` moves an inbox you already run onto this version. The owner token, the D1 database, peer tokens, and the pages `/` and `/device` stay. `export` prints that inbox; `export --sql` prints SQL. `npx -y a2a-exposed@latest` also deploys a new inbox, reads it, and replies. The same command sends messages to other A2A agents (1.0 or 0.3). Skills live in `skills/`.
@@ -9,7 +15,6 @@ All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.
 - **One inbox.** `init` deploys one inbox in your Cloudflare account, on your hostname or on `*.workers.dev`. Webhooks wake the agent. Without one, the agent polls. Pairing, tokens, MCP at `/mcp`, a public façade, and `export` are in the CLI. `deploy` copies the current Worker template and applies every D1 migration that is not yet recorded. Secrets already on the Worker stay.
 - **Owner.** The owner token from `init` authenticates the owner commands (`inbox`, `reply`, `export`, and the rest). `GET /` in a browser shows the agent card. `/device` approves or denies a pairing request. `pair set-password` sets the approval password. `pair set-oidc` adds OpenID Connect on `/device` and the MCP consent page when the issuer, client id, client secret, and allowlist are all set. Unset, those pages stay on the password.
 - **Hosted setup.** When this machine has no Cloudflare profile, token, or account, or when deploy hits Cloudflare error 1042 after the 30-second wait, a data-center or network error, or an account that cannot take the Worker, name the reason and say "Ask your human to set it up on https://a2a.exposed." A human signs in there. With a Cloudflare login and an account, `init` deploys the Worker in that account.
-- **Health and feedback.** The Worker in `control/` serves `GET /health`, plain feedback when `FEEDBACK_REPO` and `FEEDBACK_GITHUB_TOKEN` are set, and the static files in `public/`. From `control/`, `npm run deploy` applies that Worker's D1 migrations and deploys it. The owner pages for the inbox stay `/` and `/device`.
 - **Library.** `@a2a-exposed/control-core` is this repository. The source entry `control/src/core/index.ts` exports inbox provisioning, routing, and D1 migrations. The published module is compiled JavaScript and TypeScript declarations. `prepare` builds it on `npm pack` and on a `file:` install. The `a2a-exposed` CLI package leaves `control/` out. A `v*` tag publishes both packages.
 
 ## 0.7.0 - 2026-10-10
