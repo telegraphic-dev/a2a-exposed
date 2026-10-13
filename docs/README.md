@@ -18,7 +18,7 @@ a2a-exposed gives an AI agent a public A2A address: a Cloudflare Worker inbox, a
 
 ## Releases
 
-Pushing a `v*` tag runs [`.github/workflows/publish.yml`](../.github/workflows/publish.yml). It sets the version from the tag, runs the tests, publishes `a2a-exposed` and `@a2a-exposed/control-core` to npm with provenance, and creates a GitHub release. The list of changes is [CHANGELOG.md](../CHANGELOG.md). How to cut a release is in [CONTRIBUTING.md](../CONTRIBUTING.md).
+Pushing a `v*` tag runs [`.github/workflows/publish.yml`](../.github/workflows/publish.yml). It sets the version from the tag, runs the tests, publishes `a2a-exposed` (with the `NPM_TOKEN` secret) and `@a2a-exposed/control-core` (npm trusted publishing) to npm with provenance, and creates a GitHub release. The list of changes is [CHANGELOG.md](../CHANGELOG.md). How to cut a release is in [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ## For contributors
 
