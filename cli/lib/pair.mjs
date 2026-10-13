@@ -120,7 +120,7 @@ export async function setOidc(o, extra = []) {
 	}
 	let sawStdin = false;
 	if (o["secret-stdin"]) {
-		if (process.stdin.isTTY) die("--secret-stdin reads the client secret from a pipe. Or export APPROVAL_OIDC_CLIENT_SECRET. The next deploy uploads it as a Worker secret");
+		if (process.stdin.isTTY) die("--secret-stdin reads the client secret from a pipe. Or export APPROVAL_OIDC_CLIENT_SECRET. Deploy uploads that environment variable. A value only on stdin stays out of config.env");
 		const chunks = [];
 		for await (const c of process.stdin) chunks.push(c);
 		const secret = Buffer.concat(chunks).toString("utf8").replace(/\r?\n$/, "");
@@ -129,7 +129,7 @@ export async function setOidc(o, extra = []) {
 		const fromEnv = process.env.APPROVAL_OIDC_CLIENT_SECRET || "";
 		if (fromEnv && fromEnv !== secret) console.error("The secret on stdin differs from APPROVAL_OIDC_CLIENT_SECRET. Deploy uploads the environment variable. Neither value was printed or saved.");
 	} else if (!(process.env.APPROVAL_OIDC_CLIENT_SECRET || "").trim()) {
-		die("export APPROVAL_OIDC_CLIENT_SECRET or pass --secret-stdin. The next deploy uploads it as a Worker secret");
+		die("export APPROVAL_OIDC_CLIENT_SECRET or pass --secret-stdin. Deploy uploads APPROVAL_OIDC_CLIENT_SECRET from the environment. A value only on stdin stays out of config.env");
 	}
 	C.saveConfig({
 		APPROVAL_OIDC_ISSUER: String(o.issuer).trim(),

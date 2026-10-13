@@ -57,7 +57,7 @@ export const OFFLINE_ACCESS = "offline_access";
 /** Shown when this page has not created anything and is not offering to create the inbox. */
 export const SETUP_NOT_PROVISIONED = "Nothing has been created in your Cloudflare account yet.";
 
-export const TUNNEL_CONNECTOR_LATER = "Run cloudflared on a machine you control to open the tunnel.";
+export const TUNNEL_CONNECTOR_LATER = "This page stores the façade choice. Create the tunnel and run cloudflared on a machine you control.";
 
 export const EVERY_PLAN = "This is available on every plan.";
 

@@ -142,9 +142,9 @@ Pairing (OAuth 2.0 device flow, RFC 8628: agents connect without pasting tokens 
   pair set-password       the same in a terminal, no echo (the human runs it; never via argv/stdin)
   pair set-oidc --issuer URL --client-id ID --subjects SUB[,SUB...] [--methods password,oidc] [--secret-stdin]
                           optional OpenID Connect approval on /device and the MCP consent page. The client
-                          secret is APPROVAL_OIDC_CLIENT_SECRET in the environment, or one line on stdin with
-                          --secret-stdin. The next \`npx -y a2a-exposed@latest deploy\` uploads that
-                          environment variable as a Worker secret. config.env keeps the issuer and client id.
+                          secret is APPROVAL_OIDC_CLIENT_SECRET in the environment you use for deploy, or one
+                          line on stdin with --secret-stdin. Stdin is checked and left out of config.env.
+                          Deploy uploads that environment variable as a Worker secret. config.env keeps the issuer and client id.
                           Leave the issuer unset and approval stays the password page
   pair list [--json]      pending pairing requests (code, claimed name/card, address), the approval mode and
                           when the approval password was set
@@ -269,7 +269,7 @@ export async function main(argv) {
 	if (name === "--version" || name === "-v") return console.log(VERSION);
 	if (rest.includes("--help") || rest.includes("-h")) return console.log(HELP);
 	if (name === "pair" && rest[0] === "set-oidc" && rest.some((a) => /^--(secret|client-secret)(=|$)/.test(a)))
-		throw new CliError("export APPROVAL_OIDC_CLIENT_SECRET or pass --secret-stdin. The next deploy uploads it as a Worker secret");
+		throw new CliError("export APPROVAL_OIDC_CLIENT_SECRET or pass --secret-stdin. Deploy uploads APPROVAL_OIDC_CLIENT_SECRET from the environment. A value only on stdin stays out of config.env");
 	if (name === "pair" && rest[0] === "set-password") {
 		// only --web [--ttl M] [--json]: the password itself never comes from argv, stdin or the environment
 		const extra = rest.slice(1);

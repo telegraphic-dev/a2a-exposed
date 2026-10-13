@@ -690,7 +690,8 @@ test("a Cloudflare error comes back to the setup page in plain language", async 
 	assert.equal(refusedUrl.pathname === "/app", false);
 	const refusedHtml = await (await app.request(refusedUrl, { headers: { cookie } })).text();
 	assert.match(refusedHtml, /Cloudflare refused the permissions/);
-	assert.match(refusedHtml, /Cloudflare refused the permissions/);
+	assert.match(refusedHtml, /Turn those permissions on for this Cloudflare app, then connect again/);
+	assert.equal(refusedHtml.includes("Try the setup again"), false);
 	assert.equal(refusedHtml.includes("not allowed to ask"), false);
 	assert.equal(refusedHtml.includes("The provider did not finish sign-in"), false);
 	assert.equal(refusedHtml.includes("super-secret-code"), false);
