@@ -39,7 +39,7 @@ Optional flags:
 | `--workers-dev-subdomain <name>` | Register the account's workers.dev subdomain if it has none |
 | `--pbkdf2-iterations <n>` | Cost of hashing the approval password, 50000 to 100000 (default 100000, the Workers maximum). Lower it only if approving on `/device` fails with Cloudflare error 1102 (CPU limit; see **Pairing security**), then set the password again |
 | `--workers-logs on\|off` | Persisted Cloudflare Workers Logs (searchable in the dashboard under the Worker's **Logs**; query strings redacted). Off by default: only real-time logs (`npx cf workers tail`, if your cf version has it, or the dashboard's live view) |
-| `--worker-dir <dir>` | Where the Worker project (template copy) lives; default `<config dir>/worker`. `--dir` is the old name. Not the config dir: that is the global `--config-dir <dir>` (same as `A2A_CONFIG_DIR`) |
+| `--worker-dir <dir>` | Where the Worker project (template copy) lives. Default `<config dir>/worker`. The config directory is the global `--config-dir <dir>` (same as `A2A_CONFIG_DIR`) |
 | `--cron` | Adds a one-minute cron flush. Needs a workers.dev subdomain on the account (works with workers.dev deployments); not required, because pending wakes are also flushed on every request |
 
 To redeploy later (after an upgrade or settings change), run `npx -y a2a-exposed@latest deploy`. Existing secrets persist.

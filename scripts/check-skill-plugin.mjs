@@ -1,6 +1,8 @@
 #!/usr/bin/env node
-// Fail when plugin version, description, or keywords drift, when skill metadata
-// is nested, or when a skill description still carries the hosted-inbox sentence.
+// Fail when plugin version, description, or keywords drift, when a skill
+// description still carries the hosted-inbox sentence, or when a copied skill
+// links at docs/ with a relative path. Nested Hermes and OpenClaw metadata is
+// checked by scripts/check-skill-metadata.py.
 import fs from "node:fs";
 import path from "node:path";
 
@@ -55,69 +57,57 @@ function field(fm, key) {
 	return m ? m[1].trim().replace(/^["']|["']$/g, "") : "";
 }
 
-function flatMetadata(fm, rel) {
-	const lines = fm.split("\n");
-	const start = lines.findIndex((l) => l === "metadata:");
-	if (start < 0) {
-		fail(`${rel} has no metadata`);
-		return {};
-	}
-	const map = {};
-	for (let i = start + 1; i < lines.length; i++) {
-		const line = lines[i];
-		if (line.trim() === "") continue;
-		if (!line.startsWith("  ")) break;
-		if (line.startsWith("   ") || line.startsWith("\t")) {
-			fail(`${rel} metadata is nested: ${line.trim()}`);
-			continue;
-		}
-		const m = line.match(/^  ([^:]+):\s*(.*)$/);
-		if (!m) {
-			fail(`${rel} metadata line is not a string: ${line}`);
-			continue;
-		}
-		let value = m[2].trim();
-		if (/^[>|[{]/.test(value)) fail(`${rel} metadata.${m[1]} is not a single string`);
-		if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1);
-		map[m[1].trim()] = value;
-	}
-	return map;
+function versionOf(fm, rel) {
+	const m = fm.match(/^\s*version:\s*"?([^"\n]+)"?\s*$/m);
+	if (!m) fail(`${rel} metadata.version is missing`);
+	return m ? m[1].trim() : "";
 }
 
 const hosted = /Ask your human to set it up on https:\/\/a2a\.exposed/;
+const untestedNames = /\b(Codex|Cursor|Grok Build|n8n|Zapier|Make)\b/;
 const skills = ["skills/a2a-exposed/SKILL.md", "skills/a2a-exposed-setup/SKILL.md"];
-const metas = {};
 for (const rel of skills) {
 	const text = read(rel);
 	const fm = frontmatter(text, rel);
 	const description = field(fm, "description");
 	if (!description) fail(`${rel} description is empty`);
 	if (hosted.test(description)) fail(`${rel} description still carries the hosted-inbox sentence`);
-	const meta = flatMetadata(fm, rel);
-	metas[rel] = meta;
-	if (meta.version !== cliVersion) fail(`${rel} metadata.version ${meta.version} != ${cliVersion}`);
+	if (versionOf(fm, rel) !== cliVersion) fail(`${rel} metadata.version != ${cliVersion}`);
 	const body = text.replace(/^---\n[\s\S]*?\n---/, "");
 	if (rel.endsWith("a2a-exposed-setup/SKILL.md")) {
+		if (untestedNames.test(description)) fail("setup description must not name untested clients");
 		if (!body.includes("https://a2a.exposed")) fail("setup skill body must name the hosted inbox");
+		if (!body.includes("https://a2a.exposed/pricing")) fail("setup skill body must link pricing");
 		if (!body.includes("1042")) fail("setup skill body must name Cloudflare error 1042");
 		if (!hosted.test(body)) fail("setup skill body must keep the hosted fallback sentence");
+		if (!/open to everyone/.test(body)) fail("setup skill body must say the hosted inbox is open to everyone");
 	}
 }
-
-const day = metas["skills/a2a-exposed/SKILL.md"]["hermes.related_skills"] || "";
-const setup = metas["skills/a2a-exposed-setup/SKILL.md"]["hermes.related_skills"] || "";
-const parts = (s) => s.split(",").map((x) => x.trim()).filter(Boolean);
-if (!parts(day).includes("a2a-exposed-setup")) fail("a2a-exposed hermes.related_skills must include a2a-exposed-setup");
-if (!parts(setup).includes("a2a-exposed")) fail("setup hermes.related_skills must include a2a-exposed");
-if (!parts(day).includes("cloudflare") || !parts(setup).includes("cloudflare")) fail("both skills must list cloudflare in hermes.related_skills");
-if (!parts(setup).includes("mise")) fail("setup hermes.related_skills must include mise");
 
 const dayDesc = field(frontmatter(read("skills/a2a-exposed/SKILL.md"), "skills/a2a-exposed/SKILL.md"), "description");
 const setupDesc = field(frontmatter(read("skills/a2a-exposed-setup/SKILL.md"), "skills/a2a-exposed-setup/SKILL.md"), "description");
 if (dayDesc === setupDesc) fail("skill descriptions must differ");
 if (!/wake|inbox|reply|pair/i.test(dayDesc)) fail("day-to-day description needs its operate triggers");
 if (!/deploy|façade|facade/i.test(setupDesc)) fail("setup description needs its deploy triggers");
-if (!/untested/i.test(setupDesc)) fail("setup description must mark untested platforms");
+
+function walk(dir) {
+	const out = [];
+	for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+		const p = path.join(dir, ent.name);
+		if (ent.isDirectory()) out.push(...walk(p));
+		else if (ent.name.endsWith(".md")) out.push(p);
+	}
+	return out;
+}
+for (const file of walk(path.join(root, "skills"))) {
+	const rel = path.relative(root, file);
+	if (/\]\(\.\.\/(?:\.\.\/)*docs\//.test(read(rel))) fail(`${rel} links to docs/ with a relative path`);
+}
+for (const rel of ["README.md", "docs/getting-started.md"]) {
+	if (/free during beta/i.test(read(rel))) fail(`${rel} must not put plan details in the repo`);
+	if (!read(rel).includes("https://a2a.exposed/pricing")) fail(`${rel} must link pricing`);
+	if (!read(rel).includes("open to everyone")) fail(`${rel} must say the hosted inbox is open to everyone`);
+}
 
 if (process.exitCode) process.exit(process.exitCode);
 console.log(`check-skill-plugin: version ${cliVersion} matches across manifests and skills`);

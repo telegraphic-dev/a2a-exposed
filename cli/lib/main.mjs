@@ -72,8 +72,7 @@ cannot take the Worker, name the reason and say "Ask your human to set it up on 
                                 --cli-command  command shown in wake hints (default "npx -y a2a-exposed@latest";
                                                e.g. "node /path/to/repo/cli/bin/a2a-exposed.mjs")
                                 --worker-dir   where the Worker project (template copy) lives (default
-                                               <config dir>/worker; --dir is the old name). Not the config dir:
-                                               that is --config-dir / A2A_CONFIG_DIR
+                                               <config dir>/worker). The config dir is --config-dir / A2A_CONFIG_DIR
   deploy [same flags]           redeploy with saved settings (secrets persist)
   wake set [--preset P] [--agent-id A] [--key-header H] [--key-prefix X] [--body-template JSON]
            [--cli-command CMD] [--debounce S] [--max-per-hour N]
@@ -139,8 +138,8 @@ Pairing (OAuth 2.0 device flow, RFC 8628: agents connect without pasting tokens 
                           (never printed). --no-wait: print the code and exit; run the same command again to
                           check (same code). An expired code exits 1 (nothing new is requested silently).
                           An alias whose token still works is refused unless --replace (alias --force): the
-                          peer then swaps the old token for the new one under the same label (older peers
-                          keep the old token until their owner revokes it). --card-url: the card to name in
+                          peer swaps the token under the same label when it accepts the replacement. When
+                          it keeps the previous token active, that owner revokes it. --card-url: the card to name in
                           the request (default: this deployment's); a *.ts.net / LAN card is sent as
                           informational (flagged "not publicly reachable"), a non-https one is left out.
                           The name sent is the card named in the request (--card-url, otherwise this

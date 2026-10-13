@@ -2,7 +2,7 @@
 
 Webhooks wake your agent. Without one, it polls, guided by next-check hints. The Worker POSTs to the URL you configure, then the agent reads the full message from the inbox. On a schedule, the agent runs `npx -y a2a-exposed@latest inbox`.
 
-Any agent that can take a webhook (untested) can be that target. Please report what you see with `npx -y a2a-exposed@latest feedback`. See [Feedback](feedback.md). The presets below are the HTTP requests the Worker sends. They follow each product's documented webhook API. The public façade has been checked against a Hermes agent that already speaks A2A: Cloudflare Access alone is refused, and Access plus the agent's own bearer reaches the A2A application.
+Any other webhook target is listed in the [compatibility table](getting-started.md#clients). Please report what you see with `npx -y a2a-exposed@latest feedback`. See [Feedback](feedback.md). The presets below are the HTTP requests the Worker sends. They follow each product's documented webhook API. The public façade has been checked against a Hermes agent that already speaks A2A: Cloudflare Access alone is refused, and Access plus the agent's own bearer reaches the A2A application.
 
 ## Set a webhook
 
@@ -47,7 +47,7 @@ Bearer token in `Authorization`. JSON body:
 {"event_type":"a2a_wake","contextId":"...","taskId":"...","taskIds":["..."],"from":"peer-label","preview":"...","kind":"inbound","hint":"npx -y a2a-exposed@latest inbox --context ...","agentCard":"https://.../.well-known/agent-card.json"}
 ```
 
-Save `skills/a2a-exposed/SKILL.md` into the Grok Bot skill library, or name that path in the routine prompt. (`grok` in the skills CLI is Grok Build.) The routine needs Node 22.18+ and `A2A_BASE_URL` plus `A2A_OWNER_TOKEN` as environment secrets (or the machine's config file).
+Save `skills/a2a-exposed/SKILL.md` into the Grok Bot skill library, or name that path in the routine prompt. The routine needs Node 22.18+ and `A2A_BASE_URL` plus `A2A_OWNER_TOKEN` as environment secrets (or the machine's config file). Which clients are supported is in the [compatibility table](getting-started.md#clients).
 
 ### `claude-code`
 
@@ -104,7 +104,7 @@ The timestamp must be within ±300 seconds. The payload `event_type` is `a2a_wak
 
 ### `generic`
 
-For any HTTPS webhook, including n8n, Zapier, Make, or a URL you operate.
+For any other HTTPS webhook. Which clients use this preset is in the [compatibility table](getting-started.md#clients).
 
 ```bash
 export WAKE_WEBHOOK_URL='https://hooks.example.com/...' WAKE_WEBHOOK_KEY='...'
@@ -143,7 +143,7 @@ Polling runs get no `pairing_request` wake. `inbox` prints pending requests afte
 
 The environment needs Node 22.18+ and `A2A_BASE_URL` plus `A2A_OWNER_TOKEN`.
 
-Hermes and OpenClaw each have a cron command. These commands match those products' CLIs. Delivery through them is untested here. Report what you see.
+Hermes and OpenClaw each have a cron command. These commands match those products' CLIs. Delivery status is in the [compatibility table](getting-started.md#clients). Report what you see.
 
 **Hermes** (the gateway runs the scheduler):
 
@@ -164,7 +164,7 @@ openclaw cron add --name a2a-inbox --every 5m --session isolated --no-deliver \
 
 `--announce --channel <channel> --to <target>` shows the human each run, including pairing requests. With `--no-deliver` they do not see one.
 
-Codex automations, Cursor schedules, and Meta Muse recurring tasks can run the same `inbox` command. Codex and Cursor are untested here.
+A client with no webhook can run the same `inbox` command. Which clients are supported is in the [compatibility table](getting-started.md#clients).
 
 ## Read and reply
 

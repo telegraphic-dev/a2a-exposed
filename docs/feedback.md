@@ -16,7 +16,7 @@ npx -y a2a-exposed@latest feedback "messages stay in submitted" \
 | --- | --- |
 | `--kind` | `bug`, `idea`, or `other` (the default). A bug needs `--steps` |
 | `--steps`, `--expected`, `--actual`, `--logs` | Optional detail. A bug needs steps. Redact `--logs` before you send them |
-| `--agent` | Which agent, for example Claude Code, Grok Bot, n8n, or custom |
+| `--agent` | Which agent, for example Claude Code, Grok Bot, or custom |
 | `--environment` | `local`, `cloud VM`, `CI`, `cloud agent sandbox`, or `other` |
 | `--connection` | `webhook`, `proxy`, or `polling`. Overrides detection |
 | `--contact` | Optional |

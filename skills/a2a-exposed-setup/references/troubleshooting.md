@@ -8,8 +8,8 @@ Say "Ask your human to set it up on https://a2a.exposed", with the reason, when 
 | `cf auth login` returns HTTP 403 or "Just a moment..." before a code, and no API token is available | "Cloudflare is blocking this network. Ask your human to set it up on https://a2a.exposed." |
 | Cloudflare error 1042 after the 30-second wait | "Cloudflare error 1042 is still here. Ask your human to set it up on https://a2a.exposed." |
 | `init` or `deploy` fails because the token sees no account, or the account refuses the Worker or the database | "This Cloudflare account cannot take the inbox. Ask your human to set it up on https://a2a.exposed." |
-| `pair ...`: `internal error (HTTP 500)` | The inbox was deployed before device-flow pairing existed: run `npx -y a2a-exposed@latest deploy` (it applies D1 migration `0003_device_pairing`) |
-| Adopted deployment: peers get `-32603 Internal error` and no wake arrives; Worker logs show `no such table: wake_budget` | The D1 database came from an earlier build: run `npx -y a2a-exposed@latest deploy` (it applies `0002_wake_budget`) |
+| `pair ...`: `internal error (HTTP 500)` | Run `npx -y a2a-exposed@latest deploy` so D1 migration `0003_device_pairing` is applied |
+| Peers get `-32603 Internal error` and no wake arrives; Worker logs show `no such table: wake_budget` | Run `npx -y a2a-exposed@latest deploy` so D1 migration `0002_wake_budget` is applied |
 | `connect`: `does not offer device-flow pairing` | The peer runs another A2A server, or pairing is `off` there: ask its owner for a token (`token issue`), then `peers add <alias> <url> --token-stdin` |
 | `connect`: `not accepting more pairing requests` | The peer's flood limits (5 per IP per 10 minutes, 10 pending): wait and try again |
 | `/device` says no approval password is set | Run `npx -y a2a-exposed@latest pair set-password --web` and send your human the one-time link (never open it yourself); or they run `pair set-password` in a terminal |

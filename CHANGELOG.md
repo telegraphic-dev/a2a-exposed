@@ -4,10 +4,10 @@ All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.
 
 ## Unreleased
 
-- **Help.** `--help` lists `init --rotate-owner-token` and `--version`. CI checks that every a2a-exposed flag named in `skills/` appears in `--help`.
+- **Help.** `--help` lists `init --rotate-owner-token` and `--version`. `--worker-dir` and `connect --replace` are described in the present tense. CI checks that every a2a-exposed flag named in `skills/` appears in `--help`.
 - **status.** When `GET /owner/mcp` reports enabled and the agent card is reachable, `status` prints `claude mcp add --transport http a2a-exposed <base URL>/mcp`. A failed probe or an unreachable card leaves that line out. Plugin manifests leave MCP unset because that URL differs per deploy.
-- **Skills.** The two skill descriptions use different triggers. The hosted inbox at https://a2a.exposed stays in the setup skill for a machine with no Cloudflare login and for Cloudflare error 1042, a data-center or network error, or an account-level deploy failure. Codex, Cursor, Grok Build, n8n, Zapier, and other generic webhooks are untested. The day-to-day troubleshooting and token tables live under `skills/a2a-exposed/references/`. `metadata` is a flat map of strings.
-- **Plugins.** The Claude marketplace entry carries the same version as `plugin.json`. The Cursor manifest sets `logo` and `skills`. `extensions.com.openai.onboardingSkill` is the Codex field for the setup skill. CI checks version, description, and keyword drift, and runs the Claude plugin validator, the Agent Plugins schema, and the Cursor plugin schema.
+- **Skills.** The two skill descriptions use different triggers. The hosted inbox at https://a2a.exposed stays in the setup skill for a machine with no Cloudflare login and for Cloudflare error 1042, a data-center or network error, or an account-level deploy failure. Pricing is at https://a2a.exposed/pricing. Each client is named once, in the compatibility table in `docs/getting-started.md`. The day-to-day troubleshooting and token tables live under `skills/a2a-exposed/references/`. `metadata.hermes` and `metadata.openclaw` stay nested, with `envVars` and boolean `required` / `sensitive`.
+- **Plugins.** The Claude marketplace entry carries the same version as `plugin.json`. The Cursor manifest sets `logo` and `skills`. `extensions.com.openai.onboardingSkill` points at the setup skill. CI checks version, description, and keyword drift, parses skill metadata, and runs the Claude plugin validator (`@anthropic-ai/claude-code@2.1.296`), the Agent Plugins schema 1.0.0, and the Cursor plugin schema at `5229aad`.
 
 ## 0.8.1 - 2026-10-13
 

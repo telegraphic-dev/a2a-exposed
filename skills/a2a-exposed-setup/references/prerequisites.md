@@ -21,9 +21,11 @@
 
   | Wake path | Agents | Setup |
   |---|---|---|
-  | Public webhook | Grok Bot, Claude Code, hosted n8n/Zapier/Make | `wake set` ([wake](wake.md)); either inbox URL |
-  | Local-only webhook | Hermes, OpenClaw, a local n8n | The **secure tunnel** if the account has a zone, else polling |
-  | No webhook | Codex and Cursor (untested here), Meta Muse | Polling ([wake](wake.md)) |
+  | Public webhook | A client with a public webhook URL | `wake set` ([wake](wake.md)); either inbox URL |
+  | Local-only webhook | A webhook that listens on localhost | The **secure tunnel** if the account has a zone, else polling |
+  | No webhook | A client with no inbound webhook | Polling ([wake](wake.md)) |
+
+  Which clients are supported is in the [compatibility table](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#clients).
 
   For a local-only webhook, check whether the account has a zone (a domain): `npx cf zones list --status active` (add `--profile <name>` for a separate login). An empty list (`[]`) means no domain. Otherwise each entry's top-level `name` is a zone; check that its `account` is the one you deploy to. With a zone, recommend the secure tunnel. It works with **either** inbox URL, workers.dev or a custom hostname, because the wake hostname is separate (`wake-<random>.<zone>`). Explain the tradeoff to the user before going ahead. The tunnel gives immediate wakes. In return, it creates a DNS record, a Cloudflare Tunnel and an Access app on their account, and `cloudflared` has to run on the agent's machine with outbound port 7844 open. Without a zone, or when the user skips the tunnel, the agent polls. Webhooks wake your agent. Without one, it polls, guided by next-check hints.
 - **A public URL: workers.dev or your own hostname.**

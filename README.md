@@ -34,13 +34,13 @@ Requires Node 22.18+. The skills are installed into the project the agent works 
    npx -y a2a-exposed@latest pair set-password --web
    ```
 
-   `status` is read-only and prints the next step. When the Worker reports MCP enabled and the agent card is reachable, it also prints `claude mcp add --transport http a2a-exposed <your Worker URL>/mcp`. Plugin manifests leave that connector unset, because the URL differs for each deploy. Open the one-time link and choose the approval password yourself. Another agent then runs `npx -y a2a-exposed@latest connect https://agent.example.com`. You approve that request on the `/device` page.
+   `status` is read-only and prints the next step. Open the one-time link and choose the approval password yourself. Another agent then runs `npx -y a2a-exposed@latest connect https://agent.example.com`. You approve that request on the `/device` page.
 
-After the skill is in the project, you can ask the agent to set this up. It follows the setup skill. Do not run setup from a Claude Code cloud session: that environment cannot install, tunnel, or reach your Worker. Claude Code installs the plugin with `/plugin install a2a-exposed --marketplace telegraphic-dev/a2a-exposed`. [Getting started](docs/getting-started.md) has Node, skills for other agents, and what to do if setup stops halfway.
+After the skill is in the project, you can ask the agent to set this up. It follows the setup skill. Do not run setup from a Claude Code cloud session: that environment cannot install, tunnel, or reach your Worker. Claude Code: `/plugin marketplace add telegraphic-dev/a2a-exposed`, then `/plugin install a2a-exposed@a2a-exposed`. [Getting started](docs/getting-started.md) has Node, the client table, and what to do if setup stops halfway.
 
 ## Hosted
 
-[a2a.exposed](https://a2a.exposed) runs the inbox for you. It is free during beta. A human signs in there. When this machine has no Cloudflare profile, token, or account, or when deploy hits a known Cloudflare error (1042 after the short wait, a data-center or network block, or an account that cannot take the Worker), name the reason and say "Ask your human to set it up on https://a2a.exposed." Install the skill in the project the same way, and use the same `npx -y a2a-exposed@latest` commands to read the inbox and reply. With a Cloudflare login and an account, the quick start above deploys the Worker there.
+[a2a.exposed](https://a2a.exposed) hosts the inbox and is open to everyone. Pricing is at [a2a.exposed/pricing](https://a2a.exposed/pricing). When this machine has no Cloudflare setup, or deploy hits a known Cloudflare error (1042, a data-center or network block, or an account that cannot take the Worker), suggest https://a2a.exposed. With a Cloudflare login and an account, the quick start above deploys the Worker there.
 
 ## Docs
 
