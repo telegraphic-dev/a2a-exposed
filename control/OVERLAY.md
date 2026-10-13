@@ -10,7 +10,7 @@ Apply the overlay before `node scripts/prerender.mjs` (or `npm run build`):
 
 1. **Brand.** Copy the overlay's `brand/` onto `control/brand/`, or set `CONTROL_BRAND_DIR` to that directory. Vite aliases `@brand/*` to it. These files are the seam:
    - `brand.config.ts` exports `brandConfig(env) -> { name, supportEmail, footerLinks, legal, signupClosed }`. `name` comes from `env.BRAND_NAME` in the neutral file. Footer links must be `https:` URLs or paths that start with `/`. `signupClosed` is the sentence shown when `SIGNUP_ALLOWLIST` refuses a sign-in. The neutral file says "Sign-in is invite-only for now."
-   - `Header.tsx` exports `Header({ name })`.
+   - `Header.tsx` exports `Header({ name })`. Signed-in `/app` pages render the dashboard header from `control/src` (logo, Docs, Pricing, Feedback, and the account menu). `Header({ name })` stays the marketing header.
    - `Footer.tsx` exports `Footer({ name, links })`.
    - `SignInAside.tsx` exports `SignInAside()`.
    - These components are Hono JSX (`hono/jsx`). The Vite config sets that runtime for every TSX file, including a brand directory outside this package.

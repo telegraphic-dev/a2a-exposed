@@ -163,6 +163,13 @@ export function outboundPeersOf(body: unknown): OutboundPeer[] | null {
 	return out;
 }
 
+function reauthNote(href: string) {
+	if (!href) return "";
+	return (
+		<p class="alert" role="status">Your sign-in is older than 10 minutes. <a href={href}>Sign in again</a> before you approve, deny, revoke, rotate, or delete.</p>
+	);
+}
+
 export function renderPeers(input: {
 	name: string;
 	pending: PendingPairing[] | null;
@@ -170,6 +177,7 @@ export function renderPeers(input: {
 	outbound: OutboundPeer[] | null;
 	confirmLabel: string;
 	peer: string;
+	reauthHref?: string;
 }): string {
 	const action = `/app/agents/${input.name}`;
 	const note = NOTICES[input.peer] ?? "";
@@ -178,6 +186,7 @@ export function renderPeers(input: {
 	return (
 		<section class="peers">
 			<h2>Pairing</h2>
+			{reauthNote(input.reauthHref ?? "")}
 			{note ? <p class="alert" role="status">{note}</p> : ""}
 			{problem ? <p class="alert" role="alert">{problem}</p> : ""}
 			<p>The name, alias, and card URL are claimed by the requester.</p>
@@ -200,12 +209,12 @@ export function renderPeers(input: {
 						<form method="post" action={action}>
 							<input type="hidden" name="action" value="approve" />
 							<input type="hidden" name="code" value={row.code} />
-							<button class="action" type="submit">Approve</button>
+							<button class="button" type="submit">Approve</button>
 						</form>
 						<form method="post" action={action}>
 							<input type="hidden" name="action" value="deny" />
 							<input type="hidden" name="code" value={row.code} />
-							<button class="action deny" type="submit">Deny</button>
+							<button class="deny" type="submit">Deny</button>
 						</form>
 					</div>
 				</article>
@@ -218,7 +227,7 @@ export function renderPeers(input: {
 						<input type="hidden" name="action" value="revoke" />
 						<input type="hidden" name="label" value={confirm.label} />
 						<input type="hidden" name="confirm" value="1" />
-						<button class="action" type="submit">Revoke token</button>
+						<button class="danger" type="submit">Revoke token</button>
 					</form>
 				</div>
 			) : ""}
@@ -236,7 +245,7 @@ export function renderPeers(input: {
 					<form method="post" action={action}>
 						<input type="hidden" name="action" value="revoke" />
 						<input type="hidden" name="label" value={peer.label} />
-						<button class="action deny" type="submit">Revoke</button>
+						<button class="danger" type="submit">Revoke</button>
 					</form>
 				</article>
 			))}

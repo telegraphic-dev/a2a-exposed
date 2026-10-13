@@ -125,6 +125,7 @@ interface ApiOptions {
 	permissionLeft?: { d1?: number; query?: number; upload?: number; account?: number };
 	domains?: { id: string; hostname: string; service: string }[];
 	d1Name?: string;
+	workerNames?: string[];
 }
 
 function cloudflareApi(options: ApiOptions) {
@@ -164,6 +165,10 @@ function cloudflareApi(options: ApiOptions) {
 			return json({ success: true, result: { subdomain: options.subdomain ?? "example" } });
 		}
 		if (url.endsWith("/workers/subdomain") && method === "PUT") return json({ success: true, result: { subdomain: "picked" } });
+		if (/\/workers\/scripts(?:\?|$)/.test(url) && !url.includes("/workers/scripts/") && method === "GET") {
+			const names = options.workerNames ?? [];
+			return json({ success: true, result: names.map((id) => ({ id })), result_info: { total_count: names.length } });
+		}
 		if (url.includes("/workers/scripts/") && url.endsWith("/settings")) {
 			if (!options.scriptExists) return new Response("", { status: 404 });
 			const bindings = options.scriptTag ? [{ type: "plain_text", name: PROVISION_TAG_NAME, text: options.scriptTag }] : [];
@@ -395,7 +400,7 @@ test("a workers.dev inbox walks one step at a time and the owner token is shown 
 	assert.match(accountPage, /my-agent\.example\.workers\.dev/);
 	assert.match(accountPage, /In your Cloudflare/);
 	assert.match(accountPage, new RegExp(`/app/cloudflare/${inbox?.id}`));
-	assert.equal(accountPage.includes("https://my-agent.example.workers.dev"), false);
+	assert.match(accountPage, /data-copy="https:\/\/my-agent\.example\.workers\.dev"/);
 	assert.equal(accountPage.includes(shown), false);
 });
 
@@ -1105,6 +1110,138 @@ test("your own domain lists the domains in the account", async (t) => {
 	assert.equal(api.calls.some((call) => call.method === "POST" && call.url.endsWith("/d1/database")), false);
 });
 
+test("the first Cloudflare agent is named from the connected account", async (t) => {
+	t.after(githubFetch(consentScope("inbox", "workers")));
+	const db = openDb();
+	const app = appFor(db);
+	const cookie = await signIn(app);
+	await consentInbox(app, cookie);
+	const options: ApiOptions = {};
+	const api = cloudflareApi(options);
+	t.after(api.restore);
+	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM cloudflare_inbox`).first<{ n: number }>())?.n, 0);
+	options.permissionLeft = { account: 1 };
+	const blocked = await app.request(`${origin}/app/cloudflare`, {
+		method: "POST",
+		headers: { origin, cookie, "content-type": "application/x-www-form-urlencoded" },
+		body: "action=create&choice=inbox&host=workers&name=first-agent",
+	});
+	assert.equal(blocked.status, 200);
+	assert.match(await blocked.text(), /this name was not used/);
+	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM cloudflare_inbox`).first<{ n: number }>())?.n, 0);
+	options.permissionLeft = {};
+	options.workerNames = ["taken-name"];
+	const taken = await app.request(`${origin}/app/cloudflare`, {
+		method: "POST",
+		headers: { origin, cookie, "content-type": "application/x-www-form-urlencoded" },
+		body: "action=create&choice=inbox&host=workers&name=taken-name",
+	});
+	assert.equal(taken.status, 200);
+	assert.match(await taken.text(), /already in this Cloudflare account/);
+	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM cloudflare_inbox`).first<{ n: number }>())?.n, 0);
+	const before = apiCalls(api.calls).length;
+	const created = await app.request(`${origin}/app/cloudflare`, {
+		method: "POST",
+		headers: { origin, cookie, "content-type": "application/x-www-form-urlencoded" },
+		body: "action=create&choice=inbox&host=workers&name=first-agent",
+	});
+	assert.equal(created.status, 303);
+	const nextUrl = new URL(created.headers.get("location") ?? "", origin);
+	assert.match(nextUrl.pathname, /^\/app\/cloudflare\/[0-9a-f]{32}$/);
+	const added = apiCalls(api.calls).slice(before);
+	assert.ok(added.some((call) => call.method === "GET" && call.url.endsWith("/accounts?per_page=50")));
+	assert.ok(added.some((call) => call.method === "GET" && /\/workers\/scripts\?/.test(call.url)));
+	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM cloudflare_inbox`).first<{ n: number }>())?.n, 1);
+	const page = await (await app.request(nextUrl, { headers: { cookie } })).text();
+	assert.match(page, /value="first-agent"/);
+	assert.match(page, /Check the Cloudflare account/);
+});
+
+test("a stale create keeps the typed name and checks it again after sign-in", async (t) => {
+	t.after(githubFetch(consentScope("inbox", "workers")));
+	const db = openDb();
+	const app = appFor(db);
+	const cookie = await signIn(app);
+	await consentInbox(app, cookie);
+	await staleSession(db);
+	const api = cloudflareApi({});
+	t.after(api.restore);
+	const posted = await app.request(`${origin}/app/cloudflare`, {
+		method: "POST",
+		headers: { origin, cookie, "content-type": "application/x-www-form-urlencoded" },
+		body: "action=create&choice=inbox&host=workers&name=kept-name",
+	});
+	assert.equal(posted.status, 303);
+	assert.equal(new URL(posted.headers.get("location") ?? "", origin).pathname, "/app/sign-in");
+	assert.equal(api.calls.length, 0);
+	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM cloudflare_inbox`).first<{ n: number }>())?.n, 0);
+	const resume = posted.headers.getSetCookie().find((value) => value.startsWith("__Host-a2a_cf_resume="))?.split(";")[0] ?? "";
+	assert.ok(resume);
+	const fresh = await signIn(app);
+	const before = apiCalls(api.calls).length;
+	const continued = await app.request(`${origin}/app/cloudflare`, { headers: { cookie: `${fresh}; ${resume}` } });
+	assert.equal(continued.status, 303);
+	const nextUrl = new URL(continued.headers.get("location") ?? "", origin);
+	assert.match(nextUrl.pathname, /^\/app\/cloudflare\/[0-9a-f]{32}$/);
+	const added = apiCalls(api.calls).slice(before);
+	assert.ok(added.some((call) => call.method === "GET" && call.url.endsWith("/accounts?per_page=50")));
+	assert.ok(added.some((call) => call.method === "GET" && /\/workers\/scripts\?/.test(call.url)));
+	const page = await (await app.request(nextUrl, { headers: { cookie: fresh } })).text();
+	assert.match(page, /value="kept-name"/);
+	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM cloudflare_inbox`).first<{ n: number }>())?.n, 1);
+});
+
+test("a stale create refuses a taken name after sign-in", async (t) => {
+	t.after(githubFetch(consentScope("inbox", "workers")));
+	const db = openDb();
+	const app = appFor(db);
+	const cookie = await signIn(app);
+	await consentInbox(app, cookie);
+	await staleSession(db);
+	const api = cloudflareApi({ workerNames: ["kept-name"] });
+	t.after(api.restore);
+	const posted = await app.request(`${origin}/app/cloudflare`, {
+		method: "POST",
+		headers: { origin, cookie, "content-type": "application/x-www-form-urlencoded" },
+		body: "action=create&choice=inbox&host=workers&name=kept-name",
+	});
+	assert.equal(posted.status, 303);
+	assert.equal(api.calls.length, 0);
+	const resume = posted.headers.getSetCookie().find((value) => value.startsWith("__Host-a2a_cf_resume="))?.split(";")[0] ?? "";
+	const fresh = await signIn(app);
+	const continued = await app.request(`${origin}/app/cloudflare`, { headers: { cookie: `${fresh}; ${resume}` } });
+	assert.equal(continued.status, 200);
+	const html = await continued.text();
+	assert.match(html, /already in this Cloudflare account/);
+	assert.match(html, /value="kept-name"/);
+	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM cloudflare_inbox`).first<{ n: number }>())?.n, 0);
+	assert.ok(continued.headers.getSetCookie().some((value) => value.startsWith("__Host-a2a_cf_resume=") && value.includes("Max-Age=0")));
+});
+
+test("several Cloudflare accounts defer the Worker list until one is chosen", async (t) => {
+	t.after(githubFetch(consentScope("inbox", "workers")));
+	const db = openDb();
+	const app = appFor(db);
+	const cookie = await signIn(app);
+	await consentInbox(app, cookie);
+	const otherId = "c".repeat(32);
+	const api = cloudflareApi({
+		accounts: [{ id: accountId, name: "Example account" }, { id: otherId, name: "Other account" }],
+		workerNames: ["picked-name"],
+	});
+	t.after(api.restore);
+	const created = await app.request(`${origin}/app/cloudflare`, {
+		method: "POST",
+		headers: { origin, cookie, "content-type": "application/x-www-form-urlencoded" },
+		body: "action=create&choice=inbox&host=workers&name=picked-name",
+	});
+	assert.equal(created.status, 303);
+	const added = apiCalls(api.calls);
+	assert.equal(added.some((call) => /\/workers\/scripts\?/.test(call.url)), false);
+	assert.ok(added.some((call) => call.method === "GET" && call.url.endsWith("/accounts?per_page=50")));
+	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM cloudflare_inbox`).first<{ n: number }>())?.n, 1);
+});
+
 test("a finished agent stays, and Create this agent starts another", async (t) => {
 	t.after(githubFetch(consentScope("inbox", "workers")));
 	const db = openDb();
@@ -1117,11 +1254,19 @@ test("a finished agent stays, and Create this agent starts another", async (t) =
 	const userId = (await db.prepare('SELECT id FROM "user"').first<{ id: string }>())?.id ?? "";
 	const first = await readCloudflareInbox(db, userId);
 	assert.equal(first?.status, "ready");
+	const missing = await app.request(`${origin}/app/cloudflare`, {
+		method: "POST",
+		headers: { origin, cookie, "content-type": "application/x-www-form-urlencoded" },
+		body: "action=create&choice=inbox&host=workers",
+	});
+	assert.equal(missing.status, 200);
+	assert.match(await missing.text(), /Use a short name/);
+	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM cloudflare_inbox`).first<{ n: number }>())?.n, 1);
 	const before = apiCalls(api.calls).length;
 	const created = await app.request(`${origin}/app/cloudflare`, {
 		method: "POST",
 		headers: { origin, cookie, "content-type": "application/x-www-form-urlencoded" },
-		body: "action=create&choice=inbox&host=workers",
+		body: "action=create&choice=inbox&host=workers&name=second-agent",
 	});
 	assert.equal(created.status, 303);
 	const nextUrl = new URL(created.headers.get("location") ?? "", origin);
@@ -1129,8 +1274,12 @@ test("a finished agent stays, and Create this agent starts another", async (t) =
 	assert.notEqual(nextUrl.pathname, `/app/cloudflare/${first?.id}`);
 	const page = await (await app.request(nextUrl, { headers: { cookie } })).text();
 	assert.match(page, /Check the Cloudflare account/);
+	assert.match(page, /value="second-agent"/);
 	assert.equal(page.includes("https://my-agent.example.workers.dev"), false);
-	assert.equal(apiCalls(api.calls).length, before);
+	const added = apiCalls(api.calls).slice(before);
+	assert.equal(added.length, 2);
+	assert.ok(added.some((call) => call.method === "GET" && call.url.endsWith("/accounts?per_page=50")));
+	assert.ok(added.some((call) => call.method === "GET" && /\/workers\/scripts\?/.test(call.url)));
 	const rows = await db.prepare(`SELECT id, status, public_url FROM cloudflare_inbox WHERE "userId" = ? ORDER BY created_at`).bind(userId).all<{ id: string; status: string; public_url: string | null }>();
 	assert.equal(rows.results.length, 2);
 	assert.equal(rows.results[0]?.status, "ready");

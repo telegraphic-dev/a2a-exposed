@@ -212,16 +212,18 @@ export function cloudflareLinkState(request: Request): boolean {
 type CloudflareResume =
 	| { userId: string; action: "disconnect" }
 	| { userId: string; action: "consent"; choice: SetupChoice; host: SetupHost }
-	| { userId: string; action: "create"; choice: SetupChoice; host: SetupHost }
+	| { userId: string; action: "create"; choice: SetupChoice; host: SetupHost; name: string }
 	| { userId: string; action: "finish"; state: string; code: string }
 	| { userId: string; action: "provision"; fields: ProvisionFields }
 	| { userId: string; action: "remove"; inboxId: string }
 	| { userId: string; action: "forget"; inboxId: string };
 
-const INBOX_ID = /^[0-9a-f]{32}$/;
+export const INBOX_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 export function inboxIdFromPath(pathname: string): string {
-	const match = /^\/app\/cloudflare\/([0-9a-f]{32})$/.exec(pathname);
+	let path = pathname;
+	try { path = decodeURIComponent(pathname); } catch { return ""; }
+	const match = /^\/app\/cloudflare\/([A-Za-z0-9_-]{1,64})$/.exec(path);
 	return match?.[1] ?? "";
 }
 
@@ -287,7 +289,7 @@ function withCookie(response: Response, cookie: string): Response {
 }
 
 async function resumeOf(value: string): Promise<CloudflareResume | null> {
-	let saved: { userId?: unknown; action?: unknown; choice?: unknown; host?: unknown; state?: unknown; code?: unknown; fields?: unknown; inboxId?: unknown };
+	let saved: { userId?: unknown; action?: unknown; choice?: unknown; host?: unknown; name?: unknown; state?: unknown; code?: unknown; fields?: unknown; inboxId?: unknown };
 	try {
 		saved = JSON.parse(value) as typeof saved;
 	} catch {
@@ -296,11 +298,18 @@ async function resumeOf(value: string): Promise<CloudflareResume | null> {
 	const userId = typeof saved.userId === "string" ? saved.userId : "";
 	if (!userId || userId.length > 128) return null;
 	if (saved.action === "disconnect") return { userId, action: "disconnect" };
-	if (saved.action === "consent" || saved.action === "create") {
+	if (saved.action === "consent") {
 		const choice = parseSetupChoice(saved.choice);
 		const host = parseSetupHost(saved.host);
 		if (!choice || !host) return null;
-		return { userId, action: saved.action, choice, host };
+		return { userId, action: "consent", choice, host };
+	}
+	if (saved.action === "create") {
+		const choice = parseSetupChoice(saved.choice);
+		const host = parseSetupHost(saved.host);
+		const name = typeof saved.name === "string" ? saved.name.trim().toLowerCase().slice(0, 63) : "";
+		if (!choice || !host) return null;
+		return { userId, action: "create", choice, host, name };
 	}
 	if (saved.action === "remove" || saved.action === "forget") {
 		const inboxId = typeof saved.inboxId === "string" ? saved.inboxId : "";
@@ -325,6 +334,7 @@ async function resumeOf(value: string): Promise<CloudflareResume | null> {
 export type CloudflareResumeResult =
 	| { kind: "response"; response: Response }
 	| { kind: "clear" }
+	| { kind: "form"; error: string; name: string; setCookie: string }
 	| { kind: "wizard"; wizard: InboxWizard; ownerToken?: string; setCookie: string };
 
 async function latestResumeForUser(db: Sql, userId: string): Promise<{ identifier: string; resume: CloudflareResume } | null> {
@@ -350,14 +360,32 @@ function accountFlag(request: Request, flag: "removedCloudflare" | "forgotCloudf
 	return url.href;
 }
 
-async function resumeCreate(request: Request, options: AuthOptions, userId: string, choice: SetupChoice, host: SetupHost, clear: string): Promise<CloudflareResumeResult> {
+async function resumeCreate(request: Request, options: AuthOptions, userId: string, choice: SetupChoice, host: SetupHost, name: string, clear: string, fetchMs?: number): Promise<CloudflareResumeResult> {
 	const grant = await readCloudflareGrant(options.database, userId);
 	if (!grant || !grantCoversInbox(grant, choice, host)) {
 		return { kind: "response", response: redirect(setupPage(request), [clear]) };
 	}
+	const { LABEL_RE } = await import("../provision/names.ts");
+	if (!LABEL_RE.test(name)) return { kind: "form", error: "name", name, setCookie: clear };
+	const taken = await agentNameTaken(options, userId, name, fetchMs);
+	if (taken !== "free") return { kind: "form", error: taken, name, setCookie: clear };
+	const inboxId = await saveNamedInbox(options, userId, host, name);
+	return { kind: "response", response: redirect(agentPath(request, inboxId), [clear]) };
+}
+
+async function saveNamedInbox(options: AuthOptions, userId: string, host: SetupHost, name: string): Promise<string> {
 	const { createCloudflareAgent } = await import("../provision/inbox.ts");
 	const inboxId = await createCloudflareAgent(options.database, userId, host);
-	return { kind: "response", response: redirect(agentPath(request, inboxId), [clear]) };
+	await options.database.prepare(
+		`UPDATE cloudflare_inbox SET step_error = ? WHERE id = ? AND "userId" = ?`,
+	).bind(JSON.stringify({
+		step: "grant",
+		state: "fixable",
+		text: "The name is saved for the inbox step.",
+		cloudflare: "",
+		name,
+	}), inboxId, userId).run();
+	return inboxId;
 }
 
 async function resumeRemoval(request: Request, options: AuthOptions, userId: string, inboxId: string, clear: string, fetchMs?: number): Promise<CloudflareResumeResult> {
@@ -425,7 +453,7 @@ export async function resumeCloudflare(request: Request, auth: SessionAuth, opti
 		const started = await startCloudflareOAuth(request, options, userId, resume.choice, resume.host);
 		return { kind: "response", response: withCookie(started, clear) };
 	}
-	if (resume.action === "create") return resumeCreate(request, options, userId, resume.choice, resume.host, clear);
+	if (resume.action === "create") return resumeCreate(request, options, userId, resume.choice, resume.host, resume.name, clear, provision?.fetchMs);
 	if (resume.action === "forget") {
 		const { deleteCloudflareInbox } = await import("../provision/inbox-row.ts");
 		await deleteCloudflareInbox(options.database, userId, resume.inboxId);
@@ -504,7 +532,48 @@ export type CloudflareSetupPost =
 	| { kind: "response"; response: Response }
 	| { kind: "review"; choice: SetupChoice; host: SetupHost }
 	| { kind: "wizard"; wizard: InboxWizard; ownerToken?: string }
-	| { kind: "agent"; inboxId: string };
+	| { kind: "agent"; inboxId: string }
+	| { kind: "form"; error: string; name: string };
+
+/** `free` when this name is unused here. Worker names are listed only when the connection has one Cloudflare account. A failed list does not create. */
+async function agentNameTaken(options: AuthOptions, userId: string, name: string, fetchMs?: number): Promise<"free" | "taken" | "unchecked"> {
+	const { listTenants } = await import("../tenants/create.ts");
+	const { listCloudflareInboxes } = await import("../provision/inbox-row.ts");
+	const tenants = await listTenants(options.database, userId);
+	if (tenants.some((tenant) => tenant.name === name)) return "taken";
+	const rows = await listCloudflareInboxes(options.database, userId);
+	if (!options.cloudflare) return "unchecked";
+	const { refreshCloudflareGrant } = await import("./cloudflare-grant.ts");
+	const refreshed = await refreshCloudflareGrant({
+		database: options.database,
+		secret: options.secret,
+		clientId: options.cloudflare.clientId,
+		clientSecret: options.cloudflare.clientSecret,
+		userId,
+		fetchMs,
+	});
+	if (!refreshed.ok) return "unchecked";
+	const { listAccounts, listWorkerNames } = await import("../provision/cloudflare-api.ts");
+	const accounts = await listAccounts({
+		fetchImpl: fetch,
+		token: refreshed.accessToken,
+		fetchMs: fetchMs ?? 10_000,
+	});
+	if (!Array.isArray(accounts) || accounts.length === 0) return "unchecked";
+	// Several accounts: the wizard asks which one, then checks the name there.
+	if (accounts.length > 1) return "free";
+	const accountId = accounts[0]!.id;
+	if (rows.some((row) => row.worker_name === name && row.cf_account_id === accountId)) return "taken";
+	const listed = await listWorkerNames({
+		fetchImpl: fetch,
+		token: refreshed.accessToken,
+		accountId,
+		fetchMs: fetchMs ?? 10_000,
+	});
+	if (!listed.ok) return "unchecked";
+	if (listed.names.some((worker) => worker.toLowerCase() === name)) return "taken";
+	return "free";
+}
 
 
 async function runCloudflareProvision(request: Request, options: AuthOptions, userId: string, fields: ProvisionFields, deps: CloudflareProvisionDeps): Promise<Extract<CloudflareSetupPost, { kind: "response" | "wizard" }>> {
@@ -548,17 +617,21 @@ export async function handleCloudflareSetup(request: Request, auth: SessionAuth,
 	}
 	if (action === "create") {
 		if (!choice || !host) return { kind: "response", response: redirect(setupPage(request, "choice")) };
+		const { LABEL_RE } = await import("../provision/names.ts");
+		const name = String(form.get("name") ?? "").trim().toLowerCase();
+		if (!LABEL_RE.test(name)) return { kind: "form", error: "name", name };
 		if (!fresh) {
-			return { kind: "response", response: await reauthResponse(request, auth, options, { userId, action: "create", choice, host }, "/app/cloudflare") };
+			return { kind: "response", response: await reauthResponse(request, auth, options, { userId, action: "create", choice, host, name }, "/app/cloudflare") };
 		}
 		const grant = await readCloudflareGrant(options.database, userId);
 		if (!grant || !grantCoversInbox(grant, choice, host)) return { kind: "review", choice, host };
-		const { createCloudflareAgent } = await import("../provision/inbox.ts");
-		const inboxId = await createCloudflareAgent(options.database, userId, host);
+		const taken = await agentNameTaken(options, userId, name, provision?.fetchMs);
+		if (taken !== "free") return { kind: "form", error: taken, name };
+		const inboxId = await saveNamedInbox(options, userId, host, name);
 		return { kind: "response", response: redirect(agentPath(request, inboxId)) };
 	}
 	if (action === "remove" || action === "forget") {
-		const posted = String(form.get("inbox") ?? "").trim().toLowerCase();
+		const posted = String(form.get("inbox") ?? "").trim();
 		const inboxId = pathInbox || (INBOX_ID.test(posted) ? posted : "");
 		if (!inboxId) return { kind: "response", response: redirect(setupPage(request)) };
 		if (!fresh) {

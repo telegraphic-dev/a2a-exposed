@@ -418,7 +418,7 @@ test("connecting Cloudflare records the account, and disconnect removes it", asy
 	assert.equal(new URL(again.headers.get("location") ?? "").origin, "https://dash.cloudflare.com");
 	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM "account" WHERE "providerId" = 'cloudflare'`).first<{ n: number }>())?.n, 1);
 
-	const home = await app.request(`${origin}/app`, { headers: { cookie: liveSession } });
+	const home = await app.request(`${origin}/app/settings`, { headers: { cookie: liveSession } });
 	const homeHtml = await home.text();
 	assert.match(homeHtml, /mona@example.com/);
 	assert.match(homeHtml, /Disconnect Cloudflare/);
@@ -441,7 +441,8 @@ test("connecting Cloudflare records the account, and disconnect removes it", asy
 	const mismatchSession = mismatchIn.headers.getSetCookie().find((value) => value.startsWith(`${SESSION_COOKIE}=`))!.split(";")[0];
 	const mismatch = await app.request(`${origin}/app`, { headers: { cookie: `${mismatchSession}; ${disconnectResume}` } });
 	assert.equal(mismatch.status, 200);
-	assert.match(await mismatch.text(), /Disconnect Cloudflare/);
+	const mismatchSettings = await app.request(`${origin}/app/settings`, { headers: { cookie: mismatchSession } });
+	assert.match(await mismatchSettings.text(), /Disconnect Cloudflare/);
 	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM "account" WHERE "providerId" = 'cloudflare'`).first<{ n: number }>())?.n, 1);
 	await db.prepare('UPDATE "session" SET "createdAt" = ?').bind(staleAt).run();
 	const staleDisconnectAgain = await app.request(`${origin}/app/account/cloudflare`, {

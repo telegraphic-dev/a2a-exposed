@@ -119,15 +119,16 @@ export async function createTenant(
 	};
 }
 
-export async function listTenants(db: Sql, accountId: string, domain?: string): Promise<{ id: string; name: string; status: string; publicUrl: string | null; version: number; createdAt: string }[]> {
+export async function listTenants(db: Sql, accountId: string, domain?: string): Promise<{ id: string; name: string; status: string; region: string; publicUrl: string | null; version: number; createdAt: string }[]> {
 	const listed = await db.prepare(
-		"SELECT id, name, status, config_version, created_at FROM tenants WHERE owner_account_id = ? ORDER BY created_at",
-	).bind(accountId).all<{ id: string; name: string; status: string; config_version: number; created_at: string }>();
+		"SELECT id, name, status, region, config_version, created_at FROM tenants WHERE owner_account_id = ? ORDER BY created_at",
+	).bind(accountId).all<{ id: string; name: string; status: string; region: string; config_version: number; created_at: string }>();
 	const host = (domain || "").trim().toLowerCase().replace(/^\.+|\.+$/g, "");
 	return listed.results.map((row) => ({
 		id: row.id,
 		name: row.name,
 		status: row.status,
+		region: row.region,
 		version: row.config_version,
 		createdAt: row.created_at,
 		publicUrl: host ? `https://${row.name}.${host}` : null,

@@ -35,6 +35,7 @@ const ERRORS: Record<string, string> = {
 	partial: "Cloudflare did not finish uploading the inbox. The next try continues with the database already created.",
 	blocked: "Cloudflare has not granted every permission this inbox needs.",
 	no_grant: "Choose a setup before creating an inbox.",
+	unchecked: "Cloudflare did not list the Workers in this account, so this name was not used.",
 };
 
 function httpsUrl(value: string | null | undefined): string {
@@ -137,10 +138,23 @@ function savedChoice(report: SetupReport): SetupChoice {
 	return "inbox";
 }
 
-function choiceForm(prompt: string, createAgent: boolean) {
+function choiceForm(prompt: string, createAgent: boolean, previewHost: string, name = "") {
 	return (
 		<form method="post" action="/app/cloudflare" data-setup="1">
 			{prompt ? <p>{prompt}</p> : ""}
+			{createAgent ? (
+				<p>
+					<label>
+						Name
+						<input name="name" value={name} data-cf-name autocomplete="off" required />
+					</label>
+					{previewHost ? (
+						<span class="host-preview">https://<span data-cf-label>{name || "name"}</span>.{previewHost}</span>
+					) : (
+						<span class="choice-hint">The address appears after this account has a workers.dev name.</span>
+					)}
+				</p>
+			) : ""}
 			<fieldset class="choices">
 				<legend>Which web address?</legend>
 				<label class="choice">
@@ -254,6 +268,12 @@ export function renderCloudflareSetup(input: {
 	wizard?: InboxWizard | null;
 	/** The saved grant can create another inbox without asking again. */
 	createAgent?: boolean;
+	/** A finished agent already exists, so this page is starting another one. */
+	another?: boolean;
+	/** workers.dev suffix already known for this account, such as example.workers.dev. */
+	previewHost?: string;
+	/** Name to show again after a validation error. */
+	nameValue?: string;
 	/** This agent's id, when the page is that agent. */
 	inboxId?: string;
 	/** Confirmation or progress for Remove from my Cloudflare. */
@@ -277,6 +297,15 @@ export function renderCloudflareSetup(input: {
 	const refresh = wizard?.refreshSeconds && !input.removal ? String(wizard.refreshSeconds) : "";
 	const removal = input.removal;
 	const inboxId = input.inboxId || wizard?.fields.inbox || "";
+	const previewHost = input.previewHost ?? "";
+	const nameValue = input.nameValue ?? "";
+	const startingAnother = Boolean(input.another && !wizard && !review && !removal);
+	const choices = choiceForm(
+		startingAnother ? "Name this agent." : report ? "To ask for a different setup, choose again." : "",
+		Boolean(input.createAgent),
+		previewHost,
+		nameValue,
+	);
 	return (
 		<div class="setup" data-setup-root data-refresh-seconds={refresh || undefined}>
 			<p>{brand} creates a public address for your agent in your Cloudflare account, one step at a time. {EVERY_PLAN} It is not a way to sign in.</p>
@@ -284,7 +313,20 @@ export function renderCloudflareSetup(input: {
 			{input.connected && input.linked && !report ? (
 				<p role="status">Cloudflare is connected for your user profile only. Choose a setup below to grant the permissions that setup needs. Nothing has been created in your Cloudflare account.</p>
 			) : ""}
-			{report ? (
+			{finished && created ? (
+				<section class="overview">
+					<h2>Overview</h2>
+					<p role="status">The inbox answers at <a href={created}>{created}</a>. Other agents find it at {created}/.well-known/agent-card.json. A new address can take a few minutes to answer.</p>
+					<p class="card-actions">
+						<button type="button" class="button" data-copy={created}>Copy URL</button>
+						<button type="button" class="button" data-copy={`${created}/.well-known/agent-card.json`}>Copy card URL</button>
+					</p>
+					{dashboardLinks(wizard!)}
+					{wizard?.facade ? <p>{TUNNEL_CONNECTOR_LATER}</p> : ""}
+					{wizard?.facade ? <p>{ACCESS_NOT_REQUESTED}</p> : ""}
+					<p><a href="/app/cloudflare">In my Cloudflare account</a></p>
+				</section>
+			) : report && !startingAnother ? (
 				<div>
 					<p role="status">{report.summary} Cloudflare answered.</p>
 					<ul>
@@ -323,10 +365,6 @@ export function renderCloudflareSetup(input: {
 					{wizard && input.ownerToken ? <TokenBlock token={input.ownerToken} lead="Copy this owner token now. It will not be shown again." /> : ""}
 					{wizard ? wizardSteps(wizard) : ""}
 					{finished ? dashboardLinks(wizard!) : ""}
-					{finished && inboxId ? (
-						<p><a href={`/app/cloudflare/${inboxId}?remove=1`}>Remove from my Cloudflare</a></p>
-					) : ""}
-					{finished ? <p><a href="/app/cloudflare">In my Cloudflare account</a></p> : ""}
 					{report.facade ? <p>{TUNNEL_CONNECTOR_LATER}</p> : ""}
 					{report.facade ? <p>{ACCESS_NOT_REQUESTED}</p> : ""}
 				</div>
@@ -356,15 +394,21 @@ export function renderCloudflareSetup(input: {
 			) : holdChoices ? (
 				<details class="restart">
 					<summary>Start a different setup</summary>
-					{choiceForm("", Boolean(input.createAgent))}
+					{choices}
 				</details>
 			) : finished || removal ? (
 				""
 			) : (
-				choiceForm(report ? "To ask for a different setup, choose again." : "", Boolean(input.createAgent))
+				choices
 			)}
+			{finished && !removal && inboxId ? (
+				<section class="danger-zone">
+					<h2>Danger zone</h2>
+					<p><a href={`/app/cloudflare/${inboxId}?remove=1`}>Remove from my Cloudflare</a></p>
+				</section>
+			) : ""}
 			{removal ? (
-				<div class="confirm">
+				<div class="danger-zone confirm">
 					{removal.confirming ? (
 						<>
 							<p>Remove from my Cloudflare deletes only what this setup created:</p>
@@ -378,12 +422,12 @@ export function renderCloudflareSetup(input: {
 							<p>Anything else in your Cloudflare account stays.</p>
 							<form method="post" action={inboxId ? `/app/cloudflare/${inboxId}` : "/app/cloudflare"} data-setup="1">
 								<input type="hidden" name="action" value="remove" />
-								<p><button class="action" type="submit">Remove from my Cloudflare</button></p>
+								<p><button class="danger" type="submit">Remove from my Cloudflare</button></p>
 							</form>
 							<form method="post" action={inboxId ? `/app/cloudflare/${inboxId}` : "/app/cloudflare"}>
 								<input type="hidden" name="action" value="forget" />
 								<p>Forget only drops this agent from the dashboard. The Worker, database, and address stay in Cloudflare.</p>
-								<p><button class="action" type="submit">Forget only</button></p>
+								<p><button class="danger" type="submit">Forget only</button></p>
 							</form>
 							<p><a href={inboxId ? `/app/cloudflare/${inboxId}` : "/app"}>Keep this agent</a></p>
 						</>

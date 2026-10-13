@@ -10,10 +10,6 @@ const MCP_ERRORS: Record<string, string> = {
 	missing: "That connector is not active.",
 };
 
-const EXPORT_ERRORS: Record<string, string> = {
-	failed: "The export was not downloaded.",
-};
-
 const LABEL = /^[A-Za-z0-9_-]{1,64}$/;
 const SETUP_RE = /(?:\?|&)t=[A-Za-z0-9_-]{16,}/;
 
@@ -95,22 +91,29 @@ export function logEntriesOf(body: unknown): LogEntry[] | null {
 	return out;
 }
 
+function reauthNote(href: string) {
+	if (!href) return "";
+	return (
+		<p class="alert" role="status">Your sign-in is older than 10 minutes. <a href={href}>Sign in again</a> before you approve, deny, revoke, rotate, or delete.</p>
+	);
+}
+
 export function renderRecords(input: {
 	name: string;
 	mcp: { enabled: boolean; connectors: McpConnector[] } | null;
 	entries: LogEntry[] | null;
 	confirmLabel: string;
 	mcpNotice: string;
-	exportNotice: string;
+	reauthHref?: string;
 }): string {
 	const action = `/app/agents/${input.name}`;
 	const note = MCP_NOTICES[input.mcpNotice] ?? "";
 	const problem = MCP_ERRORS[input.mcpNotice] ?? "";
-	const exportProblem = EXPORT_ERRORS[input.exportNotice] ?? "";
 	const confirm = input.mcp?.connectors.find((row) => row.label === input.confirmLabel) ?? null;
 	return (
 		<section class="records">
 			<h2>MCP connectors</h2>
+			{reauthNote(input.reauthHref ?? "")}
 			{note ? <p class="alert" role="status">{note}</p> : ""}
 			{problem ? <p class="alert" role="alert">{problem}</p> : ""}
 			{input.mcp === null ? <p>MCP connectors are not available.</p> : (
@@ -123,7 +126,7 @@ export function renderRecords(input: {
 								<input type="hidden" name="action" value="revoke-mcp" />
 								<input type="hidden" name="label" value={confirm.label} />
 								<input type="hidden" name="confirm" value="1" />
-								<button class="action" type="submit">Revoke connector</button>
+								<button class="danger" type="submit">Revoke connector</button>
 							</form>
 						</div>
 					) : ""}
@@ -142,7 +145,7 @@ export function renderRecords(input: {
 							<form method="post" action={action}>
 								<input type="hidden" name="action" value="revoke-mcp" />
 								<input type="hidden" name="label" value={row.label} />
-								<button class="action deny" type="submit">Revoke</button>
+								<button class="danger" type="submit">Revoke</button>
 							</form>
 						</article>
 					))}
@@ -151,28 +154,24 @@ export function renderRecords(input: {
 			<h2>Message log</h2>
 			<p>Recent history. Reading this log does not mark a task as seen.</p>
 			{input.entries === null ? <p>The message log is not available.</p> : input.entries.length === 0 ? <p>No messages.</p> : (
-				<ul class="log">
-					{input.entries.map((row) => (
-						<li>
-							{row.ts ? <time datetime={row.ts.datetime}>{row.ts.text}</time> : ""}
-							{" "}
-							{row.dir ? <code>{row.dir}</code> : ""}
-							{" "}
-							{row.peer ? <span>{row.peer}</span> : ""}
-							{" "}
-							{row.event || row.state ? <span>{[row.event, row.state].filter(Boolean).join(" ")}</span> : ""}
-							{row.text ? <p>{row.text}</p> : ""}
-						</li>
-					))}
-				</ul>
+				<details class="log-fold">
+					<summary>Latest messages</summary>
+					<ul class="log">
+						{input.entries.slice(0, 5).map((row) => (
+							<li>
+								{row.ts ? <time datetime={row.ts.datetime}>{row.ts.text}</time> : ""}
+								{" "}
+								{row.dir ? <code>{row.dir}</code> : ""}
+								{" "}
+								{row.peer ? <span>{row.peer}</span> : ""}
+								{" "}
+								{row.event || row.state ? <span>{[row.event, row.state].filter(Boolean).join(" ")}</span> : ""}
+								{row.text ? <p>{row.text}</p> : ""}
+							</li>
+						))}
+					</ul>
+				</details>
 			)}
-			<h2>Export</h2>
-			<p>Download a SQL copy of this agent. Stored token hashes are replaced or left out and do not authenticate. Ciphertext, push tokens, re-pair hashes, OAuth codes, the approval-password hash, password-setup hashes, and OpenID Connect sign-in rows are left out. This file is not a backup. The full dump is <code>npx a2a-exposed export</code> with the owner token.</p>
-			{exportProblem ? <p class="alert" role="alert">{exportProblem}</p> : ""}
-			<form method="post" action={action}>
-				<input type="hidden" name="action" value="export" />
-				<button class="action" type="submit">Download SQL</button>
-			</form>
 		</section>
 	).toString();
 }

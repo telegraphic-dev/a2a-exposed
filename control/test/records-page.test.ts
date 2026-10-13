@@ -114,6 +114,8 @@ test("the agent page lists MCP connectors, a read-only log, and downloads a reda
 		assert.equal(html.includes("hash-should-not-render"), false);
 		assert.equal(html.includes("refresh-should-not-render"), false);
 		assert.match(html, /name="action" value="revoke-mcp"/);
+		const freshMcp = html.slice(html.indexOf("<h2>MCP connectors</h2>"), html.indexOf("<h2>Message log</h2>"));
+		assert.equal(freshMcp.includes("older than 10 minutes"), false);
 		assert.match(html, /<h2>Message log<\/h2>/);
 		assert.match(html, /does not mark a task as seen/);
 		assert.match(html, /hello &lt;script&gt;alert\(1\)&lt;\/script&gt;/);
@@ -125,7 +127,7 @@ test("the agent page lists MCP connectors, a read-only log, and downloads a reda
 		assert.match(html, /name="action" value="export"/);
 		assert.match(html, /not a backup/);
 		const posts = [...html.matchAll(/method="post" action="([^"]+)"/g)].map((match) => match[1]);
-		assert.ok(posts.every((action) => action === "/app/agents/northwind"));
+		assert.ok(posts.every((action) => action === "/app/agents/northwind" || action === "/app/sign-out"));
 
 		const before = target.calls.length;
 		const cross = await app.request(`${origin}/app/agents/northwind`, {
@@ -189,6 +191,10 @@ test("the agent page lists MCP connectors, a read-only log, and downloads a reda
 		const stored = typeof session!.createdAt === "number" ? staleAt.getTime() : staleAt.toISOString();
 		await db.prepare("UPDATE session SET createdAt = ? WHERE id = ?").bind(stored, session!.id).run();
 		target.setExport({ exportedAt: "2026-10-11T00:00:00.000Z", sql });
+		const stalePage = await (await app.request(`${origin}/app/agents/northwind`, { headers: { cookie } })).text();
+		const staleMcp = stalePage.slice(stalePage.indexOf("<h2>MCP connectors</h2>"), stalePage.indexOf("<h2>Message log</h2>"));
+		assert.match(staleMcp, /Your sign-in is older than 10 minutes/);
+		assert.match(staleMcp, /name="action" value="revoke-mcp"/);
 		const staleExport = await app.request(`${origin}/app/agents/northwind`, { method: "POST", headers, body: "action=export" });
 		assert.equal(staleExport.status, 200);
 		assert.equal(await staleExport.text(), sql);

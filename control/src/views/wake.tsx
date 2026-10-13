@@ -84,7 +84,7 @@ export function renderWakeSection(input: {
 	const action = `/app/agents/${input.name}`;
 	return (
 		<section class="wake">
-			<h2>Wake</h2>
+			<h2>Wake settings</h2>
 			{input.notice === "saved" ? <p role="status">Wake settings saved.</p> : ""}
 			{tested ? <p role="status">{tested}</p> : ""}
 			{error ? <p class="alert" role="alert">{error}</p> : ""}

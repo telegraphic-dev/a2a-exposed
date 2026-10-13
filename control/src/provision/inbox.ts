@@ -281,7 +281,7 @@ export function fieldsFromForm(form: FormData): ProvisionFields {
 		subdomain: text("subdomain", 80).toLowerCase(),
 		account: text("account", 80),
 		step: text("step", 32),
-		inbox: text("inbox", 64).toLowerCase(),
+		inbox: text("inbox", 64),
 		zone: text("zone", 64),
 	};
 }
