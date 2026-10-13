@@ -414,6 +414,7 @@ export async function handleAgent(
 			entries,
 			confirmLabel: url.searchParams.get("confirm-mcp") ?? "",
 			mcpNotice: url.searchParams.get("mcp") ?? "",
+			reauthHref,
 		}),
 		advancedHtml: renderAdvanced({
 			name,

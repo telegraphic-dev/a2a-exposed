@@ -91,12 +91,20 @@ export function logEntriesOf(body: unknown): LogEntry[] | null {
 	return out;
 }
 
+function reauthNote(href: string) {
+	if (!href) return "";
+	return (
+		<p class="alert" role="status">Your sign-in is older than 10 minutes. <a href={href}>Sign in again</a> before you approve, deny, revoke, rotate, or delete.</p>
+	);
+}
+
 export function renderRecords(input: {
 	name: string;
 	mcp: { enabled: boolean; connectors: McpConnector[] } | null;
 	entries: LogEntry[] | null;
 	confirmLabel: string;
 	mcpNotice: string;
+	reauthHref?: string;
 }): string {
 	const action = `/app/agents/${input.name}`;
 	const note = MCP_NOTICES[input.mcpNotice] ?? "";
@@ -105,6 +113,7 @@ export function renderRecords(input: {
 	return (
 		<section class="records">
 			<h2>MCP connectors</h2>
+			{reauthNote(input.reauthHref ?? "")}
 			{note ? <p class="alert" role="status">{note}</p> : ""}
 			{problem ? <p class="alert" role="alert">{problem}</p> : ""}
 			{input.mcp === null ? <p>MCP connectors are not available.</p> : (

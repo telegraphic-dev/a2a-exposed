@@ -444,11 +444,16 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 		let clearResume = false;
 		let resumedWizard: InboxWizard | null = null;
 		let resumedOwner = "";
+		let resumedForm: { error: string; name: string } | null = null;
 		const provision = review ? null : await provisionDeps(request);
 		if (!review && provision && !extra?.wizard) {
 			const resumed = await resumeCloudflare(request, loaded.auth, loaded.options, provision);
 			if (resumed?.kind === "response") return wantsSetupPartial(request) ? partialFromRedirect(resumed.response) : resumed.response;
 			if (resumed?.kind === "clear") clearResume = true;
+			if (resumed?.kind === "form") {
+				c.header("set-cookie", resumed.setCookie, { append: true });
+				resumedForm = { error: resumed.error, name: resumed.name };
+			}
 			if (resumed?.kind === "wizard") {
 				c.header("set-cookie", resumed.setCookie, { append: true });
 				resumedWizard = resumed.wizard;
@@ -526,8 +531,8 @@ export function createApp(env: ControlEnv = {}, deps: AuthDeps & FeedbackDeps & 
 		const who = accountOf(session?.user);
 		const body = renderCloudflareSetup({
 			brand: brandConfig(env).name,
-			error: extra?.error || url.searchParams.get("error") || undefined,
-			nameValue: extra?.name,
+			error: resumedForm?.error || extra?.error || url.searchParams.get("error") || undefined,
+			nameValue: resumedForm?.name || extra?.name,
 			another: rows.some((row) => row.status === "ready"),
 			previewHost: knownHost ? `${knownHost}.workers.dev` : "",
 			linked: await cloudflareIsLinked(loaded.options.database, userId),
