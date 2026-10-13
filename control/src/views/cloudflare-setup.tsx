@@ -34,7 +34,7 @@ const ERRORS: Record<string, string> = {
 	partial: "Cloudflare did not finish uploading the inbox. The next try continues with the database already created.",
 	blocked: "Cloudflare has not granted every permission this inbox needs.",
 	no_grant: "Choose a setup before creating an inbox.",
-	unchecked: "Cloudflare did not list the Workers in this account, so this name was not used.",
+	unchecked: "The Worker list is unavailable, so this name stays on the form.",
 };
 
 function httpsUrl(value: string | null | undefined): string {

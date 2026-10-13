@@ -1127,7 +1127,7 @@ test("the first Cloudflare agent is named from the connected account", async (t)
 		body: "action=create&choice=inbox&host=workers&name=first-agent",
 	});
 	assert.equal(blocked.status, 200);
-	assert.match(await blocked.text(), /this name was not used/);
+	assert.match(await blocked.text(), /this name stays on the form/);
 	assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM cloudflare_inbox`).first<{ n: number }>())?.n, 0);
 	options.permissionLeft = {};
 	options.workerNames = ["taken-name"];
