@@ -22,8 +22,8 @@ test("health is ok and the shell names no hosted service", async () => {
 	assert.match(page.headers.get("content-security-policy") ?? "", /form-action 'self';/);
 	assert.equal(page.headers.get("referrer-policy"), "same-origin");
 	const html = await page.text();
-	assert.match(html, /Inbox: sign in \/ create an agent/);
-	assert.match(html, /No login provider is configured/);
+	assert.match(html, /Inbox: control API/);
+	assert.match(html, /Create an inbox with the a2a-exposed CLI/);
 	assert.doesNotMatch(html, /<script/i);
 	assert.equal(html.includes(["a2a", "exposed"].join(".")), false);
 
@@ -35,7 +35,7 @@ test("health is ok and the shell names no hosted service", async () => {
 test("BRAND_NAME is the only name on the page", async () => {
 	const app = createApp({ BRAND_NAME: "Northwind" });
 	const html = await (await app.request("https://control.example.com/app")).text();
-	assert.match(html, /Northwind: sign in \/ create an agent/);
+	assert.match(html, /Northwind: control API/);
 	assert.equal(html.includes(">Inbox<"), false);
 });
 
@@ -82,7 +82,7 @@ test("Accept text/markdown serves the static twin and skips the dashboard", asyn
 
 	const appPage = await app.request("https://control.example.com/app", { headers: { accept: "text/markdown" } });
 	assert.match(appPage.headers.get("content-type") ?? "", /text\/html/);
-	assert.match(await appPage.text(), /No login provider is configured/);
+	assert.match(await appPage.text(), /Create an inbox with the a2a-exposed CLI/);
 
 	const html = await app.request("https://control.example.com/guide");
 	assert.equal(html.status, 200);

@@ -15,7 +15,7 @@ From a checkout: `node <checkout>/cli/bin/a2a-exposed.mjs <command>`.
 
 ## Setup
 
-Needs a Cloudflare login (`npx cf auth login --no-browser`). On a VPS where that returns HTTP 403 before a code, export `CLOUDFLARE_API_TOKEN`. See [Self-hosting](self-hosting.md).
+Needs a Cloudflare login (`npx cf auth login --no-browser`). On a VPS where that returns HTTP 403 before a code, export `CLOUDFLARE_API_TOKEN`. With no profile, token, or account, or when deploy hits Cloudflare error 1042 after the short wait, a data-center or network block, or an account that cannot take the Worker, name the reason and say "Ask your human to set it up on https://a2a.exposed." A human signs in there. See [Self-hosting](self-hosting.md).
 
 ### `init` and `deploy`
 
@@ -138,7 +138,7 @@ A `PEER_<ALIAS>_TOKEN` value in the environment overrides `config.env`. When the
 
 ## Account and feedback
 
-These talk to a control plane whose login is on. A self-hosted inbox does not need them.
+`signup` and `login` reach the hosted dashboard at [a2a.exposed](https://a2a.exposed). A self-hosted inbox uses the owner token from `init`. The owner pages on that inbox are `/` and `/device`.
 
 | Command | Effect |
 | --- | --- |

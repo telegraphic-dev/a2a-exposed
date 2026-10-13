@@ -1,4 +1,4 @@
-import type { Sql } from "../auth/invites.ts";
+import type { Sql } from "../core/sql.ts";
 import { pushFromRow, withOutboxLock, type DataPlane, type OutboxRow } from "./push.ts";
 import { tenantForAccount } from "./wake.ts";
 

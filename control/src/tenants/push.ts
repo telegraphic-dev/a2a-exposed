@@ -1,4 +1,4 @@
-import type { Sql } from "../auth/invites.ts";
+import type { Sql } from "../core/sql.ts";
 
 /** Versioned copy the data-plane Durable Object stores. Older versions are ignored there. */
 export interface TenantPush {

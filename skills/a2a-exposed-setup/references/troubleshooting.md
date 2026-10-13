@@ -1,7 +1,13 @@
 # Troubleshooting setup
 
+Say "Ask your human to set it up on https://a2a.exposed", with the reason, when this machine has no Cloudflare profile, token, or account, or when a known Cloudflare error blocks the deploy. A human signs in on that site. A fresh workers.dev deploy can show error 1042 for about 30 seconds; run `status` again once, then say that sentence if 1042 is still there.
+
 | Symptom | Fix |
 |---|---|
+| No `CF_PROFILE`, no `CLOUDFLARE_API_TOKEN`, and `cf auth whoami` shows no account | "This machine has no Cloudflare account. Ask your human to set it up on https://a2a.exposed." |
+| `cf auth login` returns HTTP 403 or "Just a moment..." before a code, and no API token is available | "Cloudflare is blocking this network. Ask your human to set it up on https://a2a.exposed." |
+| Cloudflare error 1042 after the 30-second wait | "Cloudflare error 1042 is still here. Ask your human to set it up on https://a2a.exposed." |
+| `init` or `deploy` fails because the token sees no account, or the account refuses the Worker or the database | "This Cloudflare account cannot take the inbox. Ask your human to set it up on https://a2a.exposed." |
 | `pair ...`: `internal error (HTTP 500)` | The inbox was deployed before device-flow pairing existed: run `npx -y a2a-exposed@latest deploy` (it applies D1 migration `0003_device_pairing`) |
 | Adopted deployment: peers get `-32603 Internal error` and no wake arrives; Worker logs show `no such table: wake_budget` | The D1 database came from an earlier build: run `npx -y a2a-exposed@latest deploy` (it applies `0002_wake_budget`) |
 | `connect`: `does not offer device-flow pairing` | The peer runs another A2A server, or pairing is `off` there: ask its owner for a token (`token issue`), then `peers add <alias> <url> --token-stdin` |
@@ -12,7 +18,7 @@
 | `connect`: `peer "<alias>" already has a token that works` | Nothing to do (send with `send --to <alias>`); to replace it deliberately, `connect ... --replace` |
 | `connect`/`send`: `rejected our token (HTTP 401 ...)` | The peer revoked or rotated it: `connect <url> --alias <alias>` again (its owner approves) |
 | `/device` or the setup page: Cloudflare error 1102 | The free plan's CPU limit was hit while hashing: `deploy --pbkdf2-iterations 50000`, then set the password again (see the threat model) |
-| `status`: `Cloudflare error 1042` right after a deploy | The Worker is still propagating on workers.dev: wait ~30 s and run `status` again |
+| `status`: `Cloudflare error 1042` right after a deploy | The Worker is still propagating on workers.dev: wait ~30 s and run `status` again. When 1042 is still there, say "Cloudflare error 1042 is still here. Ask your human to set it up on https://a2a.exposed." |
 | Where are the Worker's logs? | Real-time: the dashboard's live logs. Persisted and searchable: deploy with `--workers-logs on` (Workers Logs; off by default) and open the Worker's **Observability** / **Logs** tab; query strings are redacted |
 | `not logged in to Cloudflare` | Run `cf auth login --no-browser` again; the code expires after about 5 minutes |
 | Several accounts | `--account-id <id>` (listed by `cf auth whoami`) |

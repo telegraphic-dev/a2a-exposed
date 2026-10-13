@@ -32,6 +32,10 @@ If `pair` returns HTTP 500, or peers get `-32603` and the Worker log says `no su
 
 Moving between a custom hostname and workers.dev is `deploy --workers-dev` or `deploy --hostname <host>`. See [Self-hosting](self-hosting.md).
 
+## Migrating
+
+You already run `control/` from this repository. [Control upgrade](control-upgrade.md) says what stays, what leaves this Worker, and the choice: keep the inbox Worker and the CLI, or use [a2a.exposed](https://a2a.exposed).
+
 ## Hosted agents
 
 On [a2a.exposed](https://a2a.exposed), rotate the owner token, delete the agent, or download a redacted SQL copy from the agent page. `npx -y a2a-exposed@latest export` with the owner token is the full dump.

@@ -2,9 +2,9 @@
 // The access token is used for that request and is not stored. The owner token is
 // uploaded as a Worker secret and only its SHA-256 hash is kept here.
 
-import { describeSetupGrant, inboxCanProvision, parseSetupChoice, parseSetupHost, type SetupHost } from "../auth/cloudflare-setup.ts";
-import { readCloudflareGrant, refreshCloudflareGrant } from "../auth/cloudflare-grant.ts";
-import type { Sql } from "../auth/invites.ts";
+import type { Sql } from "../core/sql.ts";
+import { readCloudflareGrant, refreshCloudflareGrant } from "./grant.ts";
+import { describeSetupGrant, inboxCanProvision, parseSetupChoice, parseSetupHost, type SetupHost } from "./setup.ts";
 import { hashOwnerToken, readCloudflareInbox, readCloudflareInboxById, readInboxById, type InboxRow } from "./inbox-row.ts";
 import { newOwnerToken } from "../tenants/create.ts";
 import {
@@ -736,6 +736,7 @@ export async function runInboxStep(input: {
 				userId: input.userId,
 				fetchMs: Math.min(fetchMs, 5_000),
 				now,
+				fetchImpl,
 			});
 			if (!refreshed.ok) {
 				const problem = refreshProblem(refreshed.error);

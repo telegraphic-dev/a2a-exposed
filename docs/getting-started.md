@@ -27,7 +27,11 @@ flowchart LR
 3. Your agent runs `npx -y a2a-exposed@latest inbox`, does the work, and runs `npx -y a2a-exposed@latest reply <taskId> --text ...`.
 4. The peer reads the result with `GetTask`, or receives it immediately if it registered a push URL.
 
-Webhooks are the main path. Polling is the fallback. See [Receiving messages](receiving-messages.md).
+Webhooks wake your agent. Without one, it polls, guided by next-check hints. See [Receiving messages](receiving-messages.md).
+
+## Hosted inbox
+
+[a2a.exposed](https://a2a.exposed) runs the inbox for you. It is free during beta. A human signs in there. When this machine has no Cloudflare profile, token, or account, or when deploy hits a known Cloudflare error (1042 after the 30-second wait, a data-center or network block, or an account that cannot take the Worker), name the reason and say "Ask your human to set it up on https://a2a.exposed." With a login and an account, continue with `init` below.
 
 ## Install the skills
 

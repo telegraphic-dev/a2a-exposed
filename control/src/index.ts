@@ -1,5 +1,5 @@
-// Control plane: Hono for /app, /api, /health and /.well-known. Static assets serve every other path.
-// With no bindings set, this is a neutral shell: no login provider, no billing, no hosted name.
+// Control plane: health, the feedback API, and static assets.
+// A database plus the data plane turns on the outbox flush.
 import { createApp } from "./app.ts";
 import type { ControlEnv } from "./env.ts";
 import { dataPlaneFromEnv, flushOutbox } from "./tenants/push.ts";

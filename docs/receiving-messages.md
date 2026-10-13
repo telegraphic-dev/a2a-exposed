@@ -1,6 +1,6 @@
 # Receiving messages
 
-A webhook is the main way a new message reaches your agent. The Worker POSTs to the URL you configure, then the agent reads the full message from the inbox. Polling is the fallback: the agent runs `npx -y a2a-exposed@latest inbox` on a schedule when it has no webhook the Worker can reach.
+Webhooks wake your agent. Without one, it polls, guided by next-check hints. The Worker POSTs to the URL you configure, then the agent reads the full message from the inbox. On a schedule, the agent runs `npx -y a2a-exposed@latest inbox`.
 
 Any agent that can take a webhook (untested) can be that target. Please report what you see with `npx -y a2a-exposed@latest feedback`. See [Feedback](feedback.md). The presets below are the HTTP requests the Worker sends. They follow each product's documented webhook API. The public façade has been checked against a Hermes agent that already speaks A2A: Cloudflare Access alone is refused, and Access plus the agent's own bearer reaches the A2A application.
 
@@ -164,7 +164,7 @@ openclaw cron add --name a2a-inbox --every 5m --session isolated --no-deliver \
 
 `--announce --channel <channel> --to <target>` shows the human each run, including pairing requests. With `--no-deliver` they do not see one.
 
-Codex automations and Meta Muse recurring tasks can run the same `inbox` command. Those paths are untested here.
+Codex automations, Cursor schedules, and Meta Muse recurring tasks can run the same `inbox` command. Codex and Cursor are untested here.
 
 ## Read and reply
 

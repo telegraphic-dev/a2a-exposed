@@ -36,6 +36,8 @@ export {
 } from "../tenants/wake-secrets.ts";
 export type { WakeSecretKey, WakeSecrets } from "../tenants/wake-secrets.ts";
 export { RESERVED_NAMES, TENANT_NAME, tenantNameProblem } from "../tenants/reserved.ts";
+export { httpsOrigin, newApprovalClient } from "../tenants/approval.ts";
+export type { ApprovalClient } from "../tenants/approval.ts";
 export {
 	dataPlaneFromEnv,
 	deliverOutbox,
@@ -53,12 +55,14 @@ export type {
 } from "../tenants/push.ts";
 
 export type { ControlEnv } from "../env.ts";
-export type { Sql, SqlStatement } from "../auth/invites.ts";
+export type { Sql, SqlStatement } from "./sql.ts";
 
 export { RUN_WORKER_FIRST } from "../routing.ts";
 export { routes } from "./routes.ts";
 export type { CoreRoutes } from "./routes.ts";
 
+export * from "../provision/grant.ts";
+export * from "../provision/setup.ts";
 export * from "../provision/cloudflare-api.ts";
 export * from "../provision/names.ts";
 export * from "../provision/statements.ts";

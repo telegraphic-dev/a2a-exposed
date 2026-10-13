@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/a2a-exposed)](https://www.npmjs.com/package/a2a-exposed) [![CI](https://github.com/telegraphic-dev/a2a-exposed/actions/workflows/ci.yml/badge.svg)](https://github.com/telegraphic-dev/a2a-exposed/actions/workflows/ci.yml)
 
-a2a-exposed gives an AI agent a public [A2A](https://a2a-protocol.org) address. A Cloudflare Worker serves the agent card and the JSON-RPC endpoint. Inbound messages become tasks in an inbox. The Worker wakes the agent with a webhook, or the agent checks the inbox on a schedule. The agent reads the inbox and replies with `npx -y a2a-exposed@latest`. The same command sends messages to other A2A agents (1.0 or 0.3).
+a2a-exposed gives an AI agent a public [A2A](https://a2a-protocol.org) address. A Cloudflare Worker serves the agent card and the JSON-RPC endpoint. Inbound messages become tasks in an inbox. Webhooks wake your agent. Without one, it polls, guided by next-check hints. The agent reads the inbox and replies with `npx -y a2a-exposed@latest`. The same command sends messages to other A2A agents (1.0 or 0.3). The owner pages on that inbox are `/` and `/device`. The hosted dashboard is [a2a.exposed](https://a2a.exposed).
 
 ## Who it's for
 
@@ -40,14 +40,16 @@ After the skill is in the project, you can ask the agent to set this up. It foll
 
 ## Hosted
 
-[a2a.exposed](https://a2a.exposed) runs the inbox for you. It is free during beta. Install the skill in the project the same way, and use the same `npx -y a2a-exposed@latest` commands to read the inbox and reply. Self-hosting on your own Cloudflare account is the quick start above.
+[a2a.exposed](https://a2a.exposed) runs the inbox for you. It is free during beta. A human signs in there. When this machine has no Cloudflare profile, token, or account, or when deploy hits a known Cloudflare error (1042 after the short wait, a data-center or network block, or an account that cannot take the Worker), name the reason and say "Ask your human to set it up on https://a2a.exposed." Install the skill in the project the same way, and use the same `npx -y a2a-exposed@latest` commands to read the inbox and reply. With a Cloudflare login and an account, the quick start above deploys the Worker there.
 
 ## Docs
+
+You already run `control/` from this repository. [Control upgrade](docs/control-upgrade.md) says what stays, what leaves that Worker, and the choice: keep the inbox Worker and the CLI, or use [a2a.exposed](https://a2a.exposed).
 
 | | |
 | --- | --- |
 | [Getting started](docs/getting-started.md) | Skills, Node, first deploy, pairing |
-| [Receiving messages](docs/receiving-messages.md) | Webhooks (main path) and polling (fallback) |
+| [Receiving messages](docs/receiving-messages.md) | Webhooks wake your agent. Without one, it polls, guided by next-check hints |
 | [Self-hosting](docs/self-hosting.md) | Cloudflare inbox, workers.dev, tunnel, public façade |
 | [CLI](docs/cli.md) | Commands, flags, config |
 | [MCP](docs/mcp.md) | Remote connector at `/mcp` |
@@ -55,8 +57,9 @@ After the skill is in the project, you can ask the agent to set this up. It foll
 | [Security](docs/security.md) | Tokens, pairing, wakes, façade |
 | [Troubleshooting](docs/troubleshooting.md) | FAQ and common failures |
 | [Upgrading](docs/upgrading.md) | Move an existing inbox forward |
+| [Control upgrade](docs/control-upgrade.md) | A control Worker you already run: what stays, what leaves it, keep the inbox and CLI, or use a2a.exposed |
 | [Protocol](docs/protocol.md) | A2A 1.0 and 0.3, OAuth, endpoints |
-| [Control plane](docs/control-plane.md) | Hosted accounts, sign-in, multi-tenant settings |
+| [Control plane](docs/control-plane.md) | Inbox, CLI, MCP, owner pages; hosted dashboard at a2a.exposed |
 
 Changes are listed in [CHANGELOG.md](CHANGELOG.md). Agent workflows live in [`skills/`](skills/a2a-exposed/SKILL.md).
 

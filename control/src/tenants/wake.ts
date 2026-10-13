@@ -1,4 +1,4 @@
-import type { Sql } from "../auth/invites.ts";
+import type { Sql } from "../core/sql.ts";
 import { TENANT_NAME } from "./reserved.ts";
 import { deliverOutbox, type DataPlane, type OutboxRow } from "./push.ts";
 import { WAKE_SECRET_KEYS, openWakeSecrets, sealWakeSecrets, type WakeSecrets } from "./wake-secrets.ts";

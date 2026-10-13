@@ -1,7 +1,7 @@
 // The inbox rows the account page reads. The setup wizard lives in inbox.ts and is
 // loaded only when that page runs, so this file stays in the main Worker bundle.
 
-import type { Sql } from "../auth/invites.ts";
+import type { Sql } from "../core/sql.ts";
 
 export interface InboxRow {
 	id: string;

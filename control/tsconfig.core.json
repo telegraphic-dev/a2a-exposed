@@ -13,11 +13,6 @@
 		"rewriteRelativeImportExtensions": true,
 		"verbatimModuleSyntax": true,
 		"skipLibCheck": true,
-		"jsx": "react-jsx",
-		"jsxImportSource": "hono/jsx",
-		"paths": {
-			"@brand/*": ["./brand/*"]
-		},
 		"outDir": "../dist/types",
 		"rootDir": ".."
 	},

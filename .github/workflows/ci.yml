@@ -115,21 +115,6 @@ jobs:
           npm run build
           node scripts/check-build.mjs
 
-      - name: Control - overlay fixture build
-        working-directory: control
-        run: |
-          rm -rf /tmp/control-overlay
-          CONTROL_BRAND_DIR="$PWD/test/fixtures/overlay/brand" \
-          CONTROL_CONTENT_DIR="$PWD/test/fixtures/overlay/content" \
-          node scripts/prerender.mjs \
-            --overlay-public test/fixtures/overlay/public \
-            --out /tmp/control-overlay \
-            --site https://control.example.com
-          CONTROL_BRAND_DIR="$PWD/test/fixtures/overlay/brand" \
-          CONTROL_PUBLIC_DIR=/tmp/control-overlay \
-          npx cf build
-          node scripts/check-build.mjs --expect 'data-overlay="fixture"'
-
       - name: Control - route shape
         working-directory: control
         env:

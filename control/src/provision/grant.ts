@@ -2,7 +2,7 @@
 // Cloudflare treats that token as single-use: refreshing again with the old
 // token gets 401 from the token endpoint. The stored value is the refresh token.
 
-import type { Sql } from "./invites.ts";
+import type { Sql } from "../core/sql.ts";
 
 const TOKEN = "https://dash.cloudflare.com/oauth2/token";
 const INFO = "cloudflare-refresh v1";
@@ -174,13 +174,13 @@ type TokenRead =
 	| { kind: "deadline" }
 	| { kind: "failed" };
 
-async function postRefresh(body: URLSearchParams, fetchMs: number): Promise<TokenRead> {
+async function postRefresh(body: URLSearchParams, fetchMs: number, fetchImpl: typeof fetch): Promise<TokenRead> {
 	const timeout = AbortSignal.timeout(fetchMs);
 	let rejectDeadline: (error: unknown) => void = () => {};
 	const deadline = new Promise<never>((_, reject) => { rejectDeadline = reject; });
 	const timer = setTimeout(() => rejectDeadline(new DOMException("The operation was aborted", "TimeoutError")), fetchMs);
 	try {
-		const request = fetch(TOKEN, {
+		const request = fetchImpl(TOKEN, {
 			method: "POST",
 			headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
 			body,
@@ -231,6 +231,7 @@ export async function refreshCloudflareGrant(input: {
 	userId: string;
 	fetchMs?: number;
 	now?: number;
+	fetchImpl?: typeof fetch;
 }): Promise<RefreshResult> {
 	const now = input.now ?? Date.now();
 	const row = await readCloudflareGrant(input.database, input.userId);
@@ -248,7 +249,7 @@ export async function refreshCloudflareGrant(input: {
 			refresh_token: token,
 			client_id: input.clientId,
 			client_secret: input.clientSecret,
-		}), input.fetchMs ?? 5_000);
+		}), input.fetchMs ?? 5_000, input.fetchImpl ?? fetch);
 		if (read.kind === "deadline") return { ok: false, error: "uncertain" };
 		if (read.kind === "rejected") {
 			await clearRefresh(input.database, input.userId, now);
