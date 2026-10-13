@@ -97,8 +97,8 @@ jobs:
             import fs from "node:fs";
             const version = process.env.VERSION;
             const text = fs.readFileSync("package.json", "utf8");
+            if (!/"version": "[^"]+"/.test(text)) throw new Error("version field missing");
             const next = text.replace(/"version": "[^"]+"/, `"version": "${version}"`);
-            if (next === text) throw new Error("version field missing");
             fs.writeFileSync("package.json", next);
           '
           if npm view "@a2a-exposed/control-core@$VERSION" version >/dev/null 2>&1; then
