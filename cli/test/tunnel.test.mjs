@@ -166,12 +166,16 @@ async function tunnelEnv(t, { preset = "openclaw-wake", hostname = "agent.exampl
 	fs.mkdirSync(bin, { recursive: true });
 	fs.writeFileSync(path.join(bin, "cf"), STUB, { mode: 0o755 });
 	// Worker stand-in: the agent card, and a wake preview that reports the URL fingerprint the Worker holds
-	let workerUrl = "", preview = {}, cardStatus = 200, cardUrl = "";
+	let workerUrl = "", preview = {}, cardStatus = 200, cardUrl = "", mcp = { status: 200, enabled: true };
 	const srv = http.createServer((req, res) => {
 		res.setHeader("content-type", "application/json");
 		if (req.url.startsWith("/.well-known/agent-card.json")) {
 			res.statusCode = cardStatus;
 			return res.end(JSON.stringify(cardStatus === 200 ? { name: "Tun Test", supportedInterfaces: [{ url: cardUrl || `http://${req.headers.host}/`, protocolVersion: "1.0" }, { url: `http://${req.headers.host}/`, protocolVersion: "0.3" }] } : { error: "not found" }));
+		}
+		if (req.url === "/owner/mcp") {
+			res.statusCode = mcp.status;
+			return res.end(JSON.stringify(mcp.status === 200 ? { enabled: mcp.enabled, grants: [] } : { error: "not found" }));
 		}
 		const fp = workerUrl ? createHash("sha256").update(workerUrl).digest("hex").slice(0, 12) : null;
 		res.end(JSON.stringify({ preset, configured: !!workerUrl, hasKey: true, hasAccessServiceToken: true, fingerprints: { url: fp }, ...preview }));
@@ -196,7 +200,8 @@ async function tunnelEnv(t, { preset = "openclaw-wake", hostname = "agent.exampl
 	const calls = () => { try { return fs.readFileSync(path.join(dir, "calls.jsonl"), "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } };
 	const config = () => parseEnv(fs.readFileSync(path.join(cfg, "config.env"), "utf8"));
 	const setConfig = (upd) => fs.writeFileSync(path.join(cfg, "config.env"), Object.entries({ ...config(), ...upd }).filter(([, v]) => v != null).map(([k, v]) => `${k}=${v}`).join("\n") + "\n", { mode: 0o600 });
-	return { dir, cfg, cli, calls, config, setConfig, setWorkerUrl: (u) => (workerUrl = u), setPreview: (p) => (preview = p), setCardStatus: (c) => (cardStatus = c), setCardUrl: (u) => (cardUrl = u) };
+	return { dir, cfg, cli, calls, config, setConfig, setWorkerUrl: (u) => (workerUrl = u), setPreview: (p) => (preview = p), setCardStatus: (c) => (cardStatus = c), setCardUrl: (u) => (cardUrl = u),
+		setMcp: (v) => { mcp = v === null ? { status: 404, enabled: false } : { status: 200, enabled: !!v }; } };
 }
 
 test("tunnel create: Access app + token before tunnel/DNS, secrets uploaded, token in a chmod-600 file, not printed", async (t) => {
@@ -434,13 +439,29 @@ test("status on a workers.dev inbox with no wake: card OK, polling expected, tun
 	assert.match(r.stdout, /^tunnel: +none$/m);
 	assert.match(r.stdout, /^next step: +no wake webhook, so the agent must check the inbox on a schedule/m);
 	assert.match(r.stdout, /^also: +optional: for immediate wakes to a local-only webhook, run `npx -y a2a-exposed@latest tunnel create` \(it uses the account's zone example\.com; no redeploy needed\)/m);
+	assert.match(r.stdout, /^mcp: +claude mcp add --transport http a2a-exposed http:\/\/127\.0\.0\.1:\d+\/mcp$/m);
 	assert.ok(!s.calls().some((c) => !/^(zones list)/.test(c.cmd)), "read-only: only zones list");
 	const j = JSON.parse((await s.cli(["status", "--json"])).stdout);
 	assert.equal(j.ok, true);
 	assert.deepEqual(j.zones, ["example.com"]);
 	assert.equal(j.card.name, "Tun Test");
 	assert.equal(j.hasOwnerToken, true);
+	assert.equal(j.mcp, "on");
+	assert.match(j.mcpAdd, /^claude mcp add --transport http a2a-exposed http:\/\/127\.0\.0\.1:\d+\/mcp$/);
 	assert.ok(!Object.values(j).includes("owner"), "the owner token itself is never printed");
+	s.setMcp(false);
+	r = await s.cli(["status"]);
+	assert.equal(r.status, 0, r.stderr);
+	assert.ok(!/^mcp:/m.test(r.stdout), "Worker reports MCP off");
+	s.setMcp(null);
+	r = await s.cli(["status"]);
+	assert.ok(!/^mcp:/m.test(r.stdout), "probe failed");
+	s.setMcp(true);
+	s.setCardStatus(404);
+	r = await s.cli(["status"]);
+	assert.equal(r.status, 1);
+	assert.ok(!/^mcp:/m.test(r.stdout), "unreachable card");
+	s.setCardStatus(200);
 
 	// the card must send peers to the base URL (a hand-edited or local URL is flagged)
 	s.setCardUrl("http://hermes.example.ts.net:8644/");

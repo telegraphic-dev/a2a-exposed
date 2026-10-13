@@ -1,7 +1,7 @@
 // `status`: the next-step logic (pure, no network).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { nextStep, wakeLine } from "../lib/status.mjs";
+import { mcpAddCommand, nextStep, wakeLine } from "../lib/status.mjs";
 import { cardUrlProblem } from "../lib/a2a.mjs";
 
 const healthy = (over = {}) => ({
@@ -9,6 +9,19 @@ const healthy = (over = {}) => ({
 	card: { ok: true, name: "A", versions: ["1.0", "0.3"] }, ownerApi: { ok: true },
 	wake: { preset: "grok-bot", configured: true, hasKey: true, hasHmacSecret: false, hasAccessServiceToken: false, urlFingerprint: "abc" },
 	tunnel: null, zones: null, ...over,
+});
+
+test("mcpAddCommand follows the live Worker and the agent card", () => {
+	const live = (over = {}) => ({
+		baseUrl: "https://agent.example.com", mcp: "on", card: { ok: true }, ownerApi: { ok: true }, ...over,
+	});
+	assert.equal(mcpAddCommand(live({ baseUrl: "https://agent.example.com/" })),
+		"claude mcp add --transport http a2a-exposed https://agent.example.com/mcp");
+	assert.equal(mcpAddCommand(live({ mcp: "off" })), "");
+	assert.equal(mcpAddCommand(live({ mcp: "unknown" })), "");
+	assert.equal(mcpAddCommand(live({ card: { ok: false, error: "HTTP 404" } })), "");
+	assert.equal(mcpAddCommand(live({ ownerApi: { ok: false, error: "HTTP 401" } })), "");
+	assert.equal(mcpAddCommand(live({ baseUrl: "" })), "");
 });
 
 test("nextStep: the first missing piece, in setup order", () => {

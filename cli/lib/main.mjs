@@ -17,17 +17,20 @@ const HELP = `a2a-exposed ${VERSION} - public A2A endpoint for any AI agent (Clo
 
 Usage: npx -y a2a-exposed@latest <command> [options]
        (optional speed-up: npm i -g a2a-exposed, then a2a-exposed <command>)
+       --version, -v                 print the version
+       --help, -h                    print this help
 
 Setup (needs Node 22.18+, e.g. \`mise exec node@22 -- npx -y a2a-exposed@latest ...\`, and a Cloudflare login:
 npx cf auth login --no-browser; on a VPS where it fails with HTTP 403 before showing a code, export
-CLOUDFLARE_API_TOKEN instead: setup skill, Troubleshooting. With no Cloudflare profile, token, or account,
-or when deploy hits error 1042 after the short wait, a data-center or network block, or an account that
-cannot take the Worker, name the reason and say "Ask your human to set it up on https://a2a.exposed")
+CLOUDFLARE_API_TOKEN instead: setup skill, Troubleshooting. a2a.exposed hosts the inbox and is open to everyone
+(https://a2a.exposed/pricing). When to use it, and the sentence to say:
+https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#hosted-inbox)
   init [--hostname <host> | --workers-dev [--workers-dev-subdomain NAME]]
        [--agent-name N] [--agent-description D] [--agent-skills JSON]
        [--provider-organization O --provider-url U] [--preset P] [--worker-name W] [--d1-name D]
        [--account-id ID] [--cf-profile NAME] [--cli-command CMD] [--debounce S] [--max-per-hour N]
        [--pairing-approval human|agent|off] [--pbkdf2-iterations N] [--workers-logs on|off] [--mcp on|off] [--cron]
+       [--rotate-owner-token]
        [--upstream URL [--upstream-card-url URL] [--upstream-token-stdin | --no-upstream-token]] [--worker-dir DIR]
                                 deploy the Worker + D1 to your account; wake secrets are read from
                                 env WAKE_WEBHOOK_URL / WAKE_WEBHOOK_KEY / WAKE_HMAC_SECRET (never argv)
@@ -45,7 +48,11 @@ cannot take the Worker, name the reason and say "Ask your human to set it up on 
                                                the Workers maximum; lower only if /device hits error 1102)
                                 --workers-logs on|off  persisted Cloudflare Workers Logs (query strings redacted)
                                 --mcp on|off   remote MCP server at <url>/mcp for Claude and other MCP clients
-                                               (default on; each client needs your approval password once)
+                                               (default on; each client needs your approval password once).
+                                               Plugin manifests leave MCP unset: the URL differs per deploy.
+                                               When GET /owner/mcp reports enabled and the agent card is reachable,
+                                               \`status\` prints \`claude mcp add --transport http a2a-exposed <url>/mcp\`
+                                --rotate-owner-token  on init, replace the owner token; other settings come from config.env
                                 --upstream URL  proxy / expose mode: a public façade for an agent that already
                                                speaks A2A (JSON-RPC) on a private network. URL is its endpoint on
                                                a Cloudflare Tunnel hostname behind Access (never a Tailnet/LAN
@@ -65,8 +72,7 @@ cannot take the Worker, name the reason and say "Ask your human to set it up on 
                                 --cli-command  command shown in wake hints (default "npx -y a2a-exposed@latest";
                                                e.g. "node /path/to/repo/cli/bin/a2a-exposed.mjs")
                                 --worker-dir   where the Worker project (template copy) lives (default
-                                               <config dir>/worker; --dir is the old name). Not the config dir:
-                                               that is --config-dir / A2A_CONFIG_DIR
+                                               <config dir>/worker). The config dir is --config-dir / A2A_CONFIG_DIR
   deploy [same flags]           redeploy with saved settings (secrets persist)
   wake set [--preset P] [--agent-id A] [--key-header H] [--key-prefix X] [--body-template JSON]
            [--cli-command CMD] [--debounce S] [--max-per-hour N]
@@ -100,6 +106,9 @@ Status
                                 upstream card, Access credential and upstream bearer configured (separately), the
                                 live upstream check, the last failed peer call, card-leak check; warnings for peer
                                 token variables shadowing saved tokens; and the next step to run.
+                                When GET /owner/mcp reports enabled and the agent card is reachable, prints
+                                \`claude mcp add --transport http a2a-exposed <base URL>/mcp\`.
+                                A failed probe, an unreachable card, or a Worker that reports MCP off leaves that line out.
                                 Read-only; run it after an interruption and continue from "next step". Exit 1 = broken
   upstream verify [--json]      proxy mode: check the façade's whole path, layer by layer: façade peer auth
                                 (unauthenticated call -> 401), then the Worker calls the upstream with its stored
@@ -129,8 +138,8 @@ Pairing (OAuth 2.0 device flow, RFC 8628: agents connect without pasting tokens 
                           (never printed). --no-wait: print the code and exit; run the same command again to
                           check (same code). An expired code exits 1 (nothing new is requested silently).
                           An alias whose token still works is refused unless --replace (alias --force): the
-                          peer then swaps the old token for the new one under the same label (older peers
-                          keep the old token until their owner revokes it). --card-url: the card to name in
+                          peer swaps the token under the same label when it accepts the replacement. When
+                          it keeps the previous token active, that owner revokes it. --card-url: the card to name in
                           the request (default: this deployment's); a *.ts.net / LAN card is sent as
                           informational (flagged "not publicly reachable"), a non-https one is left out.
                           The name sent is the card named in the request (--card-url, otherwise this

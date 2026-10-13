@@ -62,20 +62,21 @@ jobs:
       - name: Skills - agentskills validate
         run: |
           python3 -m venv .skills-ref-venv
-          .skills-ref-venv/bin/pip install -q "skills-ref @ git+https://github.com/agentskills/agentskills.git#subdirectory=skills-ref"
+          .skills-ref-venv/bin/pip install -q "skills-ref @ git+https://github.com/agentskills/agentskills.git@69ef37e9424c0a7ea9dd2293b559e43ec8176379#subdirectory=skills-ref"
           .skills-ref-venv/bin/skills-ref validate skills/a2a-exposed
           .skills-ref-venv/bin/skills-ref validate skills/a2a-exposed-setup
 
       - name: Plugin - agent-plugins schema
         run: |
-          .skills-ref-venv/bin/pip install -q jsonschema
-          .skills-ref-venv/bin/python - <<'PY'
-          import json, urllib.request, jsonschema
-          from pathlib import Path
-          schema = json.loads(urllib.request.urlopen("https://agent-plugins.org/schemas/1.0.0/plugin.schema.json").read())
-          jsonschema.Draft202012Validator(schema).validate(json.loads(Path("plugin.json").read_text()))
-          print("plugin.json: valid")
-          PY
+          .skills-ref-venv/bin/pip install -q jsonschema pyyaml
+          .skills-ref-venv/bin/python scripts/check-plugin-schemas.py
+          .skills-ref-venv/bin/python scripts/check-skill-metadata.py
+
+      - name: Plugins - version and metadata drift
+        run: node scripts/check-skill-plugin.mjs
+
+      - name: Plugin - claude plugin validate
+        run: npx --yes @anthropic-ai/claude-code@2.1.296 plugin validate . --strict
       - name: CLI - npm pack (dry run)
         working-directory: cli
         run: |

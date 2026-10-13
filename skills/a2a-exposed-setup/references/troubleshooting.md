@@ -1,15 +1,15 @@
 # Troubleshooting setup
 
-Say "Ask your human to set it up on https://a2a.exposed", with the reason, when this machine has no Cloudflare profile, token, or account, or when a known Cloudflare error blocks the deploy. A human signs in on that site. A fresh workers.dev deploy can show error 1042 for about 30 seconds; run `status` again once, then say that sentence if 1042 is still there.
+Name the reason, then use the sentence in [Getting started](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#hosted-inbox), when this machine has no Cloudflare profile, token, or account, or when a known Cloudflare error blocks the deploy. A fresh workers.dev deploy can show error 1042 for about 30 seconds; run `status` again once, then use that sentence if 1042 is still there.
 
 | Symptom | Fix |
 |---|---|
-| No `CF_PROFILE`, no `CLOUDFLARE_API_TOKEN`, and `cf auth whoami` shows no account | "This machine has no Cloudflare account. Ask your human to set it up on https://a2a.exposed." |
-| `cf auth login` returns HTTP 403 or "Just a moment..." before a code, and no API token is available | "Cloudflare is blocking this network. Ask your human to set it up on https://a2a.exposed." |
-| Cloudflare error 1042 after the 30-second wait | "Cloudflare error 1042 is still here. Ask your human to set it up on https://a2a.exposed." |
-| `init` or `deploy` fails because the token sees no account, or the account refuses the Worker or the database | "This Cloudflare account cannot take the inbox. Ask your human to set it up on https://a2a.exposed." |
-| `pair ...`: `internal error (HTTP 500)` | The inbox was deployed before device-flow pairing existed: run `npx -y a2a-exposed@latest deploy` (it applies D1 migration `0003_device_pairing`) |
-| Adopted deployment: peers get `-32603 Internal error` and no wake arrives; Worker logs show `no such table: wake_budget` | The D1 database came from an earlier build: run `npx -y a2a-exposed@latest deploy` (it applies `0002_wake_budget`) |
+| No `CF_PROFILE`, no `CLOUDFLARE_API_TOKEN`, and `cf auth whoami` shows no account | This machine has no Cloudflare account. Use the sentence in Getting started, linked above |
+| `cf auth login` returns HTTP 403 or "Just a moment..." before a code, and no API token is available | Cloudflare is blocking this network. Use the sentence in Getting started, linked above |
+| Cloudflare error 1042 after the 30-second wait | Cloudflare error 1042 is still here. Use the sentence in Getting started, linked above |
+| `init` or `deploy` fails because the token sees no account, or the account refuses the Worker or the database | This Cloudflare account cannot take the inbox. Use the sentence in Getting started, linked above |
+| `pair ...`: `internal error (HTTP 500)` | Run `npx -y a2a-exposed@latest deploy` so D1 migration `0003_device_pairing` is applied |
+| Peers get `-32603 Internal error` and no wake arrives; Worker logs show `no such table: wake_budget` | Run `npx -y a2a-exposed@latest deploy` so D1 migration `0002_wake_budget` is applied |
 | `connect`: `does not offer device-flow pairing` | The peer runs another A2A server, or pairing is `off` there: ask its owner for a token (`token issue`), then `peers add <alias> <url> --token-stdin` |
 | `connect`: `not accepting more pairing requests` | The peer's flood limits (5 per IP per 10 minutes, 10 pending): wait and try again |
 | `/device` says no approval password is set | Run `npx -y a2a-exposed@latest pair set-password --web` and send your human the one-time link (never open it yourself); or they run `pair set-password` in a terminal |
@@ -18,7 +18,7 @@ Say "Ask your human to set it up on https://a2a.exposed", with the reason, when 
 | `connect`: `peer "<alias>" already has a token that works` | Nothing to do (send with `send --to <alias>`); to replace it deliberately, `connect ... --replace` |
 | `connect`/`send`: `rejected our token (HTTP 401 ...)` | The peer revoked or rotated it: `connect <url> --alias <alias>` again (its owner approves) |
 | `/device` or the setup page: Cloudflare error 1102 | The free plan's CPU limit was hit while hashing: `deploy --pbkdf2-iterations 50000`, then set the password again (see the threat model) |
-| `status`: `Cloudflare error 1042` right after a deploy | The Worker is still propagating on workers.dev: wait ~30 s and run `status` again. When 1042 is still there, say "Cloudflare error 1042 is still here. Ask your human to set it up on https://a2a.exposed." |
+| `status`: `Cloudflare error 1042` right after a deploy | The Worker is still propagating on workers.dev: wait ~30 s and run `status` again. When 1042 is still there, name that and use the sentence in Getting started, linked above |
 | Where are the Worker's logs? | Real-time: the dashboard's live logs. Persisted and searchable: deploy with `--workers-logs on` (Workers Logs; off by default) and open the Worker's **Observability** / **Logs** tab; query strings are redacted |
 | `not logged in to Cloudflare` | Run `cf auth login --no-browser` again; the code expires after about 5 minutes |
 | Several accounts | `--account-id <id>` (listed by `cf auth whoami`) |
@@ -31,7 +31,7 @@ Say "Ask your human to set it up on https://a2a.exposed", with the reason, when 
 | `You need to register a workers.dev subdomain` | The account has no workers.dev subdomain: rerun `init --workers-dev-subdomain <name>`, or create it in the dashboard (Workers & Pages) |
 | `wake test` says no wake webhook configured | Export `WAKE_WEBHOOK_URL` (and key/HMAC secret) and run `wake set` first, or use polling |
 | `wake test` returns 401/403 | Wrong key or header; compare fingerprints from `wake preview` with `wake fingerprint` |
-| Hosted `wake test` returns `TLS Handshake Failed`, and the inspector shows no request | `public-https` opens the socket to the checked address and runs TLS in the Worker so the ClientHello names the host. webhook.site and httpbin.org work. A Cloudflare address such as `*.workers.dev` is refused. The agent page says "TLS handshake failed." |
+| `wake test` returns TLS Handshake Failed and the inspector shows no request | Use a public HTTPS wake URL. webhook.site and httpbin.org accept a test. A `*.workers.dev` target is refused. |
 | `wake test` returns 404 | Wrong URL or route name |
 | `wake test` returns a network error | The target isn't publicly reachable (local-only webhook? use `tunnel create`) |
 | `wake test` / `tunnel status`: `530 (Cloudflare error 1033)` | The tunnel has no running connector: start `cloudflared tunnel run --token-file ...` on the agent's machine and check that **outbound port 7844** (TCP and UDP) to Cloudflare is allowed |

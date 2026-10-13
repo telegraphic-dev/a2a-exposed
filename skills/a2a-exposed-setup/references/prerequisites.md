@@ -11,7 +11,7 @@
   - **Official installer or binaries:** [nodejs.org/en/download](https://nodejs.org/en/download) (a tarball unpacked under `~/.local/opt`, with its `bin/` put first on `PATH`, needs no root).
 
   Then `node --version` must print v22.18.0 or newer. The CLI's version error prints the same list.
-- **Cloudflare login, device-code flow.** Check this before `init`. A login is a saved `CF_PROFILE`, a `CLOUDFLARE_API_TOKEN`, or `npx cf auth whoami` with `"authenticated": true` and at least one account. When the profile, the token, and the account are all missing, say "This machine has no Cloudflare account. Ask your human to set it up on https://a2a.exposed." A human signs in on that site. Use the same sentence, with the reason, when Cloudflare error 1042 remains after the 30-second wait, when Cloudflare returns a data-center or network error, or when the deploy fails because the account is missing or refuses the Worker or the database. With a login and an account, continue here. No global `cf` is required: `npx cf` works, and the login is stored per user (`~/.config/cloudflare`), so every `cf` binary sees it.
+- **Cloudflare login, device-code flow.** Check this before `init`. A login is a saved `CF_PROFILE`, a `CLOUDFLARE_API_TOKEN`, or `npx cf auth whoami` with `"authenticated": true` and at least one account. When the profile, the token, and the account are all missing, or when Cloudflare error 1042 remains after the 30-second wait, when Cloudflare returns a data-center or network error, or when the deploy fails because the account is missing or refuses the Worker or the database, name the reason and use the sentence in [Getting started](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#hosted-inbox). With a login and an account, continue here. No global `cf` is required: `npx cf` works, and the login is stored per user (`~/.config/cloudflare`), so every `cf` binary sees it.
   ```bash
   npx cf auth login --no-browser     # npx fetches Cloudflare's cf CLI; no global install
   ```
@@ -21,9 +21,11 @@
 
   | Wake path | Agents | Setup |
   |---|---|---|
-  | Public webhook | Grok Bot, Claude Code, hosted n8n/Zapier/Make | `wake set` ([wake](wake.md)); either inbox URL |
-  | Local-only webhook | Hermes, OpenClaw, a local n8n | The **secure tunnel** if the account has a zone, else polling |
-  | No webhook | Codex and Cursor (untested here), Meta Muse | Polling ([wake](wake.md)) |
+  | Public webhook | A client with a public webhook URL | `wake set` ([wake](wake.md)); either inbox URL |
+  | Local-only webhook | A webhook that listens on localhost | The **secure tunnel** if the account has a zone, else polling |
+  | No webhook | A client with no inbound webhook | Polling ([wake](wake.md)) |
+
+  Which clients are supported is in the [compatibility table](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#clients).
 
   For a local-only webhook, check whether the account has a zone (a domain): `npx cf zones list --status active` (add `--profile <name>` for a separate login). An empty list (`[]`) means no domain. Otherwise each entry's top-level `name` is a zone; check that its `account` is the one you deploy to. With a zone, recommend the secure tunnel. It works with **either** inbox URL, workers.dev or a custom hostname, because the wake hostname is separate (`wake-<random>.<zone>`). Explain the tradeoff to the user before going ahead. The tunnel gives immediate wakes. In return, it creates a DNS record, a Cloudflare Tunnel and an Access app on their account, and `cloudflared` has to run on the agent's machine with outbound port 7844 open. Without a zone, or when the user skips the tunnel, the agent polls. Webhooks wake your agent. Without one, it polls, guided by next-check hints.
 - **A public URL: workers.dev or your own hostname.**

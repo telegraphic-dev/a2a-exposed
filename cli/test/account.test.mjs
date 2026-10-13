@@ -73,7 +73,7 @@ test("login stores the session and does not print it", async () => {
 	}
 });
 
-test("help covers the inbox and the Cloudflare fallback", async () => {
+test("help covers the inbox and the hosted option", async () => {
 	const child = spawn(process.execPath, [BIN, "--help"], {
 		env: { ...process.env, A2A_NO_UPDATE_CHECK: "1" },
 	});
@@ -81,7 +81,10 @@ test("help covers the inbox and the Cloudflare fallback", async () => {
 	child.stdout.on("data", (chunk) => { stdout += chunk; });
 	const status = await new Promise((resolve) => child.on("close", resolve));
 	assert.equal(status, 0);
-	assert.match(stdout, /Ask your human to set it up on https:\/\/a2a\.exposed/);
+	assert.match(stdout, /https:\/\/github.com\/telegraphic-dev\/a2a-exposed\/blob\/main\/docs\/getting-started.md#hosted-inbox/);
+	assert.match(stdout, /open to everyone/);
+	assert.match(stdout, /https:\/\/a2a\.exposed\/pricing/);
+	assert.equal(/Ask your human to set it up on https:\/\/a2a\.exposed/.test(stdout), false);
 	assert.match(stdout, /pair set-password/);
 	assert.equal(stdout.includes("control plane"), false);
 	assert.equal(stdout.includes("hosted dashboard"), false);

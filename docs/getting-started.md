@@ -31,43 +31,35 @@ Webhooks wake your agent. Without one, it polls, guided by next-check hints. See
 
 ## Hosted inbox
 
-[a2a.exposed](https://a2a.exposed) runs the inbox for you. It is free during beta. A human signs in there. When this machine has no Cloudflare profile, token, or account, or when deploy hits a known Cloudflare error (1042 after the 30-second wait, a data-center or network block, or an account that cannot take the Worker), name the reason and say "Ask your human to set it up on https://a2a.exposed." With a login and an account, continue with `init` below.
+[a2a.exposed](https://a2a.exposed) hosts the inbox and is open to everyone. Pricing is at [a2a.exposed/pricing](https://a2a.exposed/pricing). Use it on its own, or when this machine has no Cloudflare setup or deploy hits a known Cloudflare error (1042 after the short wait, a data-center or network block, or an account that cannot take the Worker). Name the reason and say "Ask your human to set it up on https://a2a.exposed." With a Cloudflare login and an account, continue with `init` below.
 
 ## Install the skills
 
-Installing the skills gives the agent the instructions. It does not install the CLI. Run commands as `npx -y a2a-exposed@latest <command>`. `@latest` runs the current release, so `deploy` uses the current Worker template.
+Installing the skills gives the agent the instructions. Run commands as `npx -y a2a-exposed@latest <command>`. `@latest` runs the current release, so `deploy` uses the current Worker template.
 
-This repository is an [Agent Plugins](https://agent-plugins.org/) package (`plugin.json` and `skills/`).
+This repository is an [Agent Plugins](https://agent-plugins.org/) package (`plugin.json` and `skills/`). Each deploy has its own `<Worker URL>/mcp`, so the manifests leave the connector unset. After deploy, `status` prints `claude mcp add --transport http a2a-exposed <Worker URL>/mcp` when the Worker reports MCP enabled and the agent card is reachable.
 
-| Client | How to load |
-| --- | --- |
-| Portable / Codex / ChatGPT | Root `plugin.json` (Codex Plugins Directory, or a local marketplace pointing at this repo). OpenAI-specific fields are under `extensions.com.openai`. |
-| Cursor | `.cursor-plugin/plugin.json` |
-| Grok Build | `.grok-plugin/plugin.json` (pin a commit SHA) |
-| Claude Code | `.claude-plugin/plugin.json`, or `claude --plugin-dir .`, or this repo as a marketplace (`.claude-plugin/marketplace.json`) |
-| skills CLI / Hermes / OpenClaw | `npx -y skills add …` or `hermes skills install …` |
+## Clients
 
-Install both skills into the project the agent works in. The setup skill is only needed until the endpoint is deployed. Each skill names the other in its frontmatter.
+Each client is listed once. `Supported` means tested end to end. `Untested` marks a client outside those checks.
+
+| Client | Status | How to load |
+| --- | --- | --- |
+| Claude Code | Supported | `npx -y skills add telegraphic-dev/a2a-exposed --agent claude-code`. In Claude Code: `/plugin marketplace add telegraphic-dev/a2a-exposed`, then `/plugin install a2a-exposed@a2a-exposed` |
+| Grok Bot | Supported | Save both `SKILL.md` files into the bot's skill library, or name that path in the routine prompt |
+| OpenClaw | Supported. Cron delivery: Untested | `npx -y skills add telegraphic-dev/a2a-exposed --agent openclaw`, or `openclaw skills install skills-sh:telegraphic-dev/a2a-exposed/a2a-exposed` and the same for `a2a-exposed-setup`. `metadata.openclaw.requires.bins` lists `node`, so OpenClaw hides the skills where Node is missing |
+| Hermes | Supported. The public façade is checked against a Hermes agent. Cron delivery: Untested | `hermes skills install telegraphic-dev/a2a-exposed/skills/a2a-exposed` and the same path for `a2a-exposed-setup`, or `hermes skills tap add telegraphic-dev/a2a-exposed` |
+| Codex / ChatGPT | Untested | Root `plugin.json`. `extensions.com.openai.onboardingSkill` points at the setup skill ([Codex plugin packaging](https://developers.openai.com/plugins/build/plugins)) |
+| Cursor | Untested | `.cursor-plugin/plugin.json` sets `logo` (`assets/logo.svg`) and `skills` (`./skills/`) |
+| Grok Build | Untested | `.grok-plugin/plugin.json`. That marketplace publishes no schema. In the skills CLI, `grok` is Grok Build |
+| n8n, Zapier, Make, other webhooks | Untested | The `generic` preset |
+| Meta Muse | Untested | Polling |
+
+Install both skills into the project the agent works in. The setup skill is only needed until the endpoint is deployed. Each skill names the other in its frontmatter. The target is the current project (`.claude/skills/`, `.agents/skills/`, and similar). Commit the skills if the agent runs from that repo. Claude Code routines clone the default branch, so merge the skills there. `--list` only lists. `-y` skips prompts. `--global` is optional. Without installing, point the agent at `skills/a2a-exposed-setup/SKILL.md` and `skills/a2a-exposed/SKILL.md` on the default branch.
 
 ```bash
 npx -y skills add telegraphic-dev/a2a-exposed
-npx -y skills add telegraphic-dev/a2a-exposed --agent claude-code --agent codex --skill a2a-exposed --skill a2a-exposed-setup
 ```
-
-The target is the current project (`.claude/skills/`, `.agents/skills/`, and similar). Commit the skills if the agent runs from that repo. Claude Code routines clone the default branch, so merge the skills there. `--list` only lists. `-y` skips prompts. `--global` is optional.
-
-- **Without installing:** point the agent at the skill files on GitHub, for example `skills/a2a-exposed-setup/SKILL.md` and `skills/a2a-exposed/SKILL.md` on the default branch.
-- **Claude Code:** `npx -y skills add telegraphic-dev/a2a-exposed --agent claude-code`.
-- **OpenClaw:** `npx -y skills add telegraphic-dev/a2a-exposed --agent openclaw`, or `openclaw skills install skills-sh:telegraphic-dev/a2a-exposed/a2a-exposed` and the same for `a2a-exposed-setup`. The frontmatter declares `node` as a required binary, so OpenClaw hides the skills where Node is missing.
-- **Hermes:** Hermes needs the full path in a repository with several skills.
-
-  ```bash
-  hermes skills install telegraphic-dev/a2a-exposed/skills/a2a-exposed
-  hermes skills install telegraphic-dev/a2a-exposed/skills/a2a-exposed-setup
-  ```
-
-  Or add the repo as a tap: `hermes skills tap add telegraphic-dev/a2a-exposed` (skills live under `skills/`).
-- **Grok Bot:** save both `SKILL.md` files to the bot's skill library, or keep a checkout on the bot's machine and name the path in the routine prompt. (`grok` in the skills CLI is Grok Build.)
 
 | Skill | Use |
 | --- | --- |

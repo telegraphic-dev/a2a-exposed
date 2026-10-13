@@ -184,6 +184,7 @@ export async function collect() {
 		upstream: C.get("A2A_UPSTREAM_URL") || null, facade: null, upstreamVerify: null, upstreamVerifyError: "", facadePeerAuth: null,
 		upstreamNoToken: C.get("A2A_UPSTREAM_NO_TOKEN") === "1", localUpstreamToken: fingerprint(process.env.UPSTREAM_TOKEN),
 		peerTokenShadowed: shadowedPeerTokens(),
+		mcp: "unknown",
 	};
 	const envBase = (process.env.A2A_BASE_URL || "").replace(/\/$/, "");
 	if (envBase && envBase !== s.baseUrlSaved) s.baseUrlEnv = envBase;
@@ -209,6 +210,11 @@ export async function collect() {
 				catch (e) { s.facade = { mode: "unknown", error: e.message }; }
 				if (s.facade && s.facade.mode === "proxy") Object.assign(s, await upstreamCheck(s.baseUrl));
 			}
+			try {
+				const m = await ownerTry("GET", "/owner/mcp");
+				if (m.status === 200 && m.data && typeof m.data === "object" && typeof m.data.enabled === "boolean")
+					s.mcp = m.data.enabled ? "on" : "off";
+			} catch { /* probe failed: leave mcp unknown so status omits the add line */ }
 		}
 	}
 	const dir = D.workerDir({});
@@ -250,6 +256,12 @@ export async function upstreamCheck(base) {
 	return out;
 }
 
+/** Exact `claude mcp add` line when GET /owner/mcp reports `enabled` and the agent card is reachable. */
+export function mcpAddCommand(s) {
+	if (!s || !s.baseUrl || s.mcp !== "on" || !s.card?.ok || !s.ownerApi?.ok) return "";
+	return `claude mcp add --transport http a2a-exposed ${String(s.baseUrl).replace(/\/$/, "")}/mcp`;
+}
+
 /** `upstream verify`: the façade's whole path, layer by layer; exit 1 unless the upstream app answered. */
 export async function upstreamVerify(o) {
 	if (!C.get("A2A_UPSTREAM_URL")) die(`not a façade: ${C.CONFIG_FILE} has no A2A_UPSTREAM_URL (proxy mode: \`${CLI} deploy --upstream <tunnel URL>\`). For an inbox, check wakes with \`${CLI} wake test\``);
@@ -270,7 +282,8 @@ export async function upstreamVerify(o) {
 export async function status(o) {
 	const s = await collect();
 	const next = nextStep(s);
-	if (o.json) console.log(JSON.stringify({ ...s, nextStep: next.text, also: next.also, ok: next.ok }, null, 2));
+	const mcpAdd = mcpAddCommand(s);
+	if (o.json) console.log(JSON.stringify({ ...s, mcpAdd, nextStep: next.text, also: next.also, ok: next.ok }, null, 2));
 	else {
 		const rows = [
 			["config", s.configFile],
@@ -305,6 +318,7 @@ export async function status(o) {
 			if (pg) rows.push(["pairing", pg.mode === "off" ? "off (token issue only)"
 				: `${pg.mode} approval; approval password ${pg.passwordSet ? `set${pg.passwordSetAt ? ` ${pg.passwordSetAt}` : ""}${pg.passwordSetVia ? ` (via ${pg.passwordSetVia})` : ""}` : `NOT SET${pg.setupLinkExpiresAt ? ` (a setup link is open until ${pg.setupLinkExpiresAt})` : ""}`}${pg.oidcIssuer ? `; OpenID Connect (${pg.oidcIssuer})` : ""}${pg.pending ? `; ${pg.pending} pending request(s): ${CLI} pair list` : ""}`]);
 		}
+		if (mcpAdd) rows.push(["mcp", mcpAdd]);
 		rows.push(["next step", next.text]);
 		for (const a of next.also || []) rows.push(["also", a]);
 		const w = Math.max(12, ...rows.map(([k]) => k.length + 2));

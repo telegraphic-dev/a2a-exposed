@@ -1,6 +1,6 @@
 ---
 name: a2a-exposed-setup
-description: Use when the user wants to give this agent a public A2A (Agent2Agent) endpoint, deploy or redeploy the a2a-exposed Cloudflare Worker, connect a wake webhook (Grok Bot, Claude Code, OpenClaw, Hermes, n8n/Zapier/generic), set up scheduled inbox polling, or securely expose an agent that already speaks A2A on a Tailnet, LAN or localhost through a public façade. When this machine has no Cloudflare login or account, or Cloudflare returns error 1042, a data-center or network error, or an account-level deploy failure, say "Ask your human to set it up on https://a2a.exposed", with the reason.
+description: Use when deploying, redeploying, or configuring the a2a-exposed Cloudflare Worker, a wake webhook, polling, or a public façade for an agent that already speaks A2A.
 license: MIT
 compatibility: Requires Node 22.18+; runs the a2a-exposed CLI with npx -y a2a-exposed@latest (no global install). Cloudflare account for deploy.
 metadata:
@@ -82,82 +82,26 @@ metadata:
 
 # a2a-exposed: setup
 
-Deploys a Cloudflare Worker that gives this agent a public A2A endpoint with a D1 inbox. The Worker then wakes the agent through a webhook, or the agent checks the inbox on a schedule. Day-to-day use is covered by the **a2a-exposed** skill.
+Deploys a Cloudflare Worker that gives this agent a public A2A endpoint with a D1 inbox. The Worker wakes the agent through a webhook, or the agent checks the inbox on a schedule. Day-to-day use is the **a2a-exposed** skill.
 
-**In a Claude Code cloud session (a routine run or claude.ai/code)? Stop: don't run setup there.** Installs are blocked as untrusted code, a tunnel is refused as an ingress risk, the session has no Cloudflare credentials, and the network allowlist blocks the Worker. Tell the user to run this setup on their laptop or from another agent with a shell, then add `<Worker URL>/mcp` as a connector at claude.ai/settings/connectors; the routine only uses the inbox through the connector ([references/wake.md](references/wake.md), Claude Code).
+Run every command as `npx -y a2a-exposed@latest <cmd>` (Node 22.18+; [references/prerequisites.md](references/prerequisites.md)). `@latest` deploys the current Worker template. Config is `~/.config/a2a-exposed/config.env` (chmod 600). A second bot uses its own `A2A_CONFIG_DIR`.
 
-Installing this skill gives the agent the workflow documentation. It does **not** install the CLI, and nothing needs installing: every command runs as `npx -y a2a-exposed@latest <cmd>` (Node 22.18+; no Node 22 yet? see [references/prerequisites.md](references/prerequisites.md)):
+Do not run setup in a Claude Code cloud session. Run it on a machine with a shell, then add `<Worker URL>/mcp` at claude.ai/settings/connectors. See [references/wake.md](references/wake.md).
 
-```bash
-npx -y a2a-exposed@latest --version
-```
+[a2a.exposed](https://a2a.exposed) hosts the inbox and is open to everyone. Pricing is at https://a2a.exposed/pricing. When to suggest it, and the sentence to say, is in [Getting started](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#hosted-inbox).
 
-`@latest` always runs the newest release, so `deploy` uses the current Worker template (a pinned or older copy would redeploy an older Worker over a newer one). Don't `npm i -g` inside an agent sandbox: global installs are often blocked there as untrusted code. A global install is an optional speed-up on the user's own machine (`npm i -g a2a-exposed@latest`, then `a2a-exposed <cmd>`); it never upgrades itself (re-run that install), and the CLI prints a one-line notice on stderr when a newer version is out (checked at most once a day in the background; `A2A_NO_UPDATE_CHECK=1` or `DO_NOT_TRACK=1` turns it off). After an upgrade, `deploy` so the Worker gets the new template and D1 migrations.
+Never paste secrets into chat or onto the command line. Ask the user before anything billable, and before changing DNS on a zone that already serves something. The inbox URL is the deployment's public base URL. A webhook URL goes only in `WAKE_WEBHOOK_URL`. Check the endpoint with `status`, not curl. A private A2A card goes to [references/deploy.md](references/deploy.md).
 
-Config lives in `~/.config/a2a-exposed/config.env` (chmod 600). Environment variables always override the file. Development from a checkout: `node <checkout>/cli/bin/a2a-exposed.mjs <command>`, and pass the same path as `--cli-command` on `init` if the wake hint should use it (default wake hint is `npx -y a2a-exposed@latest`).
-
-All commands use the CLI as `npx -y a2a-exposed@latest <cmd>`.
-
-The hosted inbox is [https://a2a.exposed](https://a2a.exposed) (free during beta). A human signs in there. Check Cloudflare first, in the decision below. With a login and an account, this skill deploys a Worker in that account.
-
-**Config location and several bots on one machine.** The config directory is `~/.config/a2a-exposed` (or `$XDG_CONFIG_HOME/a2a-exposed`). It holds one deployment: `config.env` (base URL, owner token, deploy settings, stored peer tokens), `peers.json`, and `worker/` (the deployable Worker project). For a second bot on the same machine, set a different `A2A_CONFIG_DIR` for **every** command of that bot (e.g. `export A2A_CONFIG_DIR=~/.config/a2a-exposed-bot2`) and give it its own `--hostname`, `--worker-name`, and optionally `--d1-name`. `npx -y a2a-exposed@latest config` prints which file is in use.
-
-**Installing these skills.** `npx -y skills add telegraphic-dev/a2a-exposed` installs into the current project (e.g. `.claude/skills/`, `.agents/skills/`); run it in the repo or folder the agent works from. Nothing global is needed (`-g` for user-level is optional), and an agent can also read the skills straight from GitHub (`https://github.com/telegraphic-dev/a2a-exposed/blob/main/skills/<name>/SKILL.md`). `--agent <id...>` picks agents (`claude-code`, `codex`, `openclaw`, `hermes-agent`, `cursor`, ...), `--skill <name...>` picks skills, `-y` skips prompts. For Grok Bot, save the `SKILL.md` files to its skill library or reference their path in the routine prompt (`grok` in the skills CLI is Grok Build).
-
-**Rules:** never paste secrets (owner token, peer tokens, webhook URL/key) into chat or onto the command line. Put them in the environment (`export WAKE_WEBHOOK_URL=...`) or a chmod-600 file loaded with `set -a; . ./wake.secrets.env; set +a`, and pass peer tokens on stdin. Ask the user before creating anything billable, and before changing DNS on a zone that already serves something.
-
-**Interrupted? Resume with `status`.** `npx -y a2a-exposed@latest status` is read-only. It prints the deployment and base URL, fetches the agent card itself, and shows the wake mode (webhook, tunnel, or none, which means polling) and the tunnel state. It ends with a `next step:` line: do that step and run `status` again. Every setup step is safe to re-run. `init`, `deploy` and `wake set` reuse the saved D1 database, owner token and settings. When a tunnel exists, `tunnel create` creates nothing new. It re-uploads any Worker secrets that are missing, so export the webhook's own `WAKE_WEBHOOK_KEY` or `WAKE_HMAC_SECRET` again first, as on the first run. A missing connector token file (`tunnel-token` in the config dir) is downloaded again. If an earlier run stopped halfway, it tells you to run `tunnel rm` first.
-
-**Agent already speaks A2A, but its card is on a Tailnet, LAN, localhost or plain http?** Peers can't reach that card (pairing requests only carry public https cards), so don't advertise it: go straight to "Already have A2A on a Tailnet or LAN" in [references/deploy.md](references/deploy.md).
-
-**The inbox URL is the deployment's.** The agent card always advertises the inbox's public base URL (the custom hostname or the workers.dev URL). The agent's own webhook URL, whether local, Tailnet or tunnel, goes only in `WAKE_WEBHOOK_URL`. Never put it in `A2A_BASE_URL`, and don't edit the card. `status` flags a card that points anywhere else.
-
-**Don't curl the endpoint.** Check it with `status` (or `url`), not a raw `curl` of the agent card. Some agent sandboxes (Hermes) flag `.dev` URLs in shell commands, such as `*.workers.dev`, and hold the command for user approval. If that approval times out, setup stops halfway.
+`status` is read-only and ends with `next step:`. Clients are in the [compatibility table](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#clients).
 
 ## Workflow
 
-1. **Hosted or your Cloudflare account.** Check Cloudflare before `init`.
-   - A login is a saved `CF_PROFILE`, a `CLOUDFLARE_API_TOKEN`, or `npx cf auth whoami` with `"authenticated": true` and at least one account.
-   - When the profile, the token, and the account are all missing, say "This machine has no Cloudflare account. Ask your human to set it up on https://a2a.exposed." A human signs in on that site.
-   - When `init` or `deploy` hits a known Cloudflare problem, name it and use the same sentence. Cloudflare error 1042 that remains after the 30-second wait: "Cloudflare error 1042 is still here. Ask your human to set it up on https://a2a.exposed." A data-center or network error (HTTP 403 or "Just a moment..." on login before a code, or API calls that fail from this network): "Cloudflare is blocking this network. Ask your human to set it up on https://a2a.exposed." A deploy that fails for account reasons (the token sees no account, or the account refuses the Worker or the database): "This Cloudflare account cannot take the inbox. Ask your human to set it up on https://a2a.exposed."
-   - A fresh deploy can show error 1042 for about 30 seconds while workers.dev updates. Run `status` again once. When 1042 is still there, say "Cloudflare error 1042 is still here. Ask your human to set it up on https://a2a.exposed."
-   - When the login is present, continue and deploy the Worker in that account.
-2. **Prerequisites** — Node 22.18+, Cloudflare login, decide how wakes reach the agent. Read [references/prerequisites.md](references/prerequisites.md).
-3. **Deploy** — `init` / `deploy`, hostname or workers.dev, optional public façade for a private A2A agent. Read [references/deploy.md](references/deploy.md) (includes "Already have A2A on a Tailnet or LAN").
-4. **Owner token** — saved by `init`; see **Owner token** below.
-5. **Wake** — pick a preset (Grok Bot, Claude Code, OpenClaw, Hermes, generic) or polling. Read [references/wake.md](references/wake.md).
-6. **Pairing** — approval password and device-flow `connect`. Optional OpenID Connect (`npx -y a2a-exposed@latest pair set-oidc`) can approve the same pages; those pages then allow that issuer origin in `form-action`. Leave it unset and nothing changes. The pages use the neutral theme unless `WORKER_THEME` is set when the Worker is built. Read [references/pairing.md](references/pairing.md).
-7. **Loopback test** — see **Loopback test** below.
-8. **Teardown** — [references/teardown.md](references/teardown.md). **Troubleshooting** — [references/troubleshooting.md](references/troubleshooting.md).
+1. **Hosted inbox or your Cloudflare account.** A login is a saved `CF_PROFILE`, a `CLOUDFLARE_API_TOKEN`, or `npx cf auth whoami` with an account. With a login, deploy in that account. With no login, or when deploy hits a known Cloudflare error, follow [references/troubleshooting.md](references/troubleshooting.md).
+2. **Prerequisites** — [references/prerequisites.md](references/prerequisites.md).
+3. **Deploy** — [references/deploy.md](references/deploy.md), including the loopback test and a private A2A agent.
+4. **Owner token** — `init` stores it in `config.env`. Rotate with `npx -y a2a-exposed@latest init --rotate-owner-token`. Cloud routines get `A2A_BASE_URL` and `A2A_OWNER_TOKEN` as environment secrets, or use the MCP connector ([references/wake.md](references/wake.md)).
+5. **Wake** — [references/wake.md](references/wake.md).
+6. **Pairing** — [references/pairing.md](references/pairing.md).
+7. **Teardown** — [references/teardown.md](references/teardown.md).
 
-Day-to-day inbox / reply / outbound use is the **a2a-exposed** skill ([../a2a-exposed/SKILL.md](../a2a-exposed/SKILL.md)).
-
-## Owner token
-
-- `init` stores it in `config.env`. Keep that file private.
-- To rotate: `npx -y a2a-exposed@latest init --rotate-owner-token` (hostname and other settings come from `config.env`).
-- Hosted agents (cloud routines and similar) have no access to the local config file. Give them `A2A_BASE_URL` and `A2A_OWNER_TOKEN` as environment secrets in their own settings, never in a prompt. Claude Code routines: prefer the MCP connector (add `<Worker URL>/mcp` at claude.ai/settings/connectors, approve with the approval password; routines get it with no token in the environment). Otherwise set both on the routine's cloud environment, since every fire is a new session ([wake](references/wake.md#claude-code-claude-code) has both paths).
-
-## Loopback test (end to end)
-
-```bash
-npx -y a2a-exposed@latest token issue self-test | npx -y a2a-exposed@latest peers add self "$(npx -y a2a-exposed@latest url)" --token-stdin
-npx -y a2a-exposed@latest send --to self --text "loopback test"        # TASK_STATE_SUBMITTED (A2A 1.0)
-npx -y a2a-exposed@latest inbox                                         # the task appears; a wake should fire
-npx -y a2a-exposed@latest reply <taskId> --text "pong"
-npx -y a2a-exposed@latest poll --to self <taskId>                       # TASK_STATE_COMPLETED, artifact "pong"
-npx -y a2a-exposed@latest token revoke self-test && npx -y a2a-exposed@latest peers rm self
-```
-
-`send`/`poll` print the peer's task exactly as returned (1.0: `TASK_STATE_*`, `ROLE_*`; with `--proto 0.3`: lowercase states, `user`/`agent`) and a one-line state summary on stderr. `peers rm self` also deletes the `PEER_SELF_TOKEN` it stored, so the cleanup leaves no token behind.
-
-## More detail
-
-| Topic | File |
-| --- | --- |
-| Prerequisites, Node 22, companion skills, Cloudflare profile | [references/prerequisites.md](references/prerequisites.md) |
-| Deploy, adopt existing Worker, public façade / tunnel+Access | [references/deploy.md](references/deploy.md) |
-| Wake presets, tunnel for local webhooks, polling | [references/wake.md](references/wake.md) |
-| Device-flow pairing and threat model | [references/pairing.md](references/pairing.md) |
-| Remove an inbox | [references/teardown.md](references/teardown.md) |
-| Setup troubleshooting table | [references/troubleshooting.md](references/troubleshooting.md) |
+Day-to-day use is [../a2a-exposed/SKILL.md](../a2a-exposed/SKILL.md).

@@ -37,7 +37,7 @@ Uses a **routine** with an **API trigger** (Pro, Max, Team, Enterprise). Sources
 
 **Every fire starts a brand-new cloud session.** It has only what the routine gives it: the routine's repositories (cloned from their **default branch**), its cloud environment (variables, network access, setup script) and its connectors. Nothing from the session you set things up in carries over, including `~/.config/a2a-exposed/config.env`. Run `init` / `deploy` from a terminal you control (laptop or server), not from a routine run; this preset needs no tunnel.
 
-**Recommended: the inbox as a connector.** The Worker is a remote MCP server at `<Worker URL>/mcp` (on by default; see [MCP](../../../docs/mcp.md)). Routines include your connectors, and connector traffic doesn't go through the cloud environment's network allowlist, so the session needs no CLI, Node, environment variables or owner token:
+**Recommended: the inbox as a connector.** The Worker is a remote MCP server at `<Worker URL>/mcp` (on by default; see [MCP](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/mcp.md)). Routines include your connectors, and connector traffic doesn't go through the cloud environment's network allowlist, so the session needs no CLI, Node, environment variables or owner token:
 1. Set the approval password if you haven't: `npx -y a2a-exposed@latest pair set-password --web` (open the one-time link it prints).
 2. At **claude.ai/settings/connectors** → **Add custom connector**, enter `https://agent.example.com/mcp` (your Worker URL + `/mcp`). The inbox's consent page opens: check that it returns to `claude.ai` and approve with the approval password. It now shows in `npx -y a2a-exposed@latest token list` as `mcp-claude`.
 3. Create the routine and API trigger (step 1 below) and keep the connector enabled on the routine (Connectors section of the routine).
@@ -102,7 +102,7 @@ Source: https://hermes-agent.nousresearch.com/docs/user-guide/messaging/webhooks
 
 ### Local-only webhooks (Hermes, OpenClaw): secure tunnel
 
-For a webhook server that only listens locally (OpenClaw gateway on `127.0.0.1:18789`, Hermes on `:8644`, a local n8n), `tunnel create` publishes **only the wake path** through a named Cloudflare Tunnel and locks it with Cloudflare Access:
+For a webhook server that only listens locally (OpenClaw gateway on `127.0.0.1:18789`, Hermes on `:8644`, or another local webhook), `tunnel create` publishes **only the wake path** through a named Cloudflare Tunnel and locks it with Cloudflare Access:
 
 - a hostname `wake-<words>-<hex>.<zone>` on any zone of the account (choose with `--tunnel-zone` or `--tunnel-hostname`), proxied CNAME to the tunnel; the tunnel routes only the wake path to your origin (other paths: 404);
 - a self-hosted **Access application** on that hostname with exactly **one policy: Service Auth (`non_identity`) for one new service token**, no email/everyone rules, 15-minute sessions; `cloudflared` also verifies the Access token itself;
@@ -147,7 +147,7 @@ The inbox stays as it is, and its URL and peers don't change. On the existing de
 4. Keep the polling job as a slow fallback (Hermes: `hermes cron edit a2a-inbox --schedule "every 6h"`; the webhook subscription can fire that same job with `--cron-job a2a-inbox`), or remove it (`hermes cron remove a2a-inbox`; OpenClaw: `openclaw cron list`, then `openclaw cron remove <job-id>`).
 
 ### Agents without inbound webhooks: polling
-Webhooks wake your agent. Without one, it polls, guided by next-check hints. Use this for **Codex** automations, **Cursor** schedules, and **Meta Muse** recurring tasks (a Muse Code `SessionStart` hook, or `muse exec` from a scheduler). Codex and Cursor are untested here. The same schedule covers a local-only webhook (Hermes, OpenClaw) when the account has no zone or the user skips the tunnel.
+Webhooks wake your agent. Without one, it polls, guided by next-check hints. Use this when the client has no inbound webhook. Which clients are supported is in the [compatibility table](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#clients). The same schedule covers a local-only webhook (Hermes, OpenClaw) when the account has no zone or the user skips the tunnel.
 - Leave the wake unset (`wake unset`), or keep it for a secondary agent.
 - Schedule a check every 5–30 minutes (1–5 for a chat agent that should answer quickly). Example prompt: *"Use the a2a-exposed skill: run `npx -y a2a-exposed@latest inbox`. Handle and reply to each task. If it lists a pending pairing request, tell your human the code, the claimed name and the link, and never approve it yourself. If it shows neither, stop."*
 
@@ -180,7 +180,7 @@ openclaw cron add --name a2a-inbox --every 5m --session isolated --no-deliver \
 
 Swap `--no-deliver` for `--announce --channel <channel> --to <target>` so that your human sees each run's summary, including pairing requests (with `--no-deliver` they would never see one). Manage the job with `openclaw cron list` and `openclaw cron remove <job-id>`.
 
-### Generic webhook: n8n, Zapier, Make, custom (`generic`)
+### Generic webhook (`generic`)
 ```bash
 export WAKE_WEBHOOK_URL='https://hooks.example.com/...'  WAKE_WEBHOOK_KEY='...'
 npx -y a2a-exposed@latest wake set --preset generic \

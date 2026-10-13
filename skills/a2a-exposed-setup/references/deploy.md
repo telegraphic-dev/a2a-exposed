@@ -39,7 +39,7 @@ Optional flags:
 | `--workers-dev-subdomain <name>` | Register the account's workers.dev subdomain if it has none |
 | `--pbkdf2-iterations <n>` | Cost of hashing the approval password, 50000 to 100000 (default 100000, the Workers maximum). Lower it only if approving on `/device` fails with Cloudflare error 1102 (CPU limit; see **Pairing security**), then set the password again |
 | `--workers-logs on\|off` | Persisted Cloudflare Workers Logs (searchable in the dashboard under the Worker's **Logs**; query strings redacted). Off by default: only real-time logs (`npx cf workers tail`, if your cf version has it, or the dashboard's live view) |
-| `--worker-dir <dir>` | Where the Worker project (template copy) lives; default `<config dir>/worker`. `--dir` is the old name. Not the config dir: that is the global `--config-dir <dir>` (same as `A2A_CONFIG_DIR`) |
+| `--worker-dir <dir>` | Where the Worker project (template copy) lives. Default `<config dir>/worker`. The config directory is the global `--config-dir <dir>` (same as `A2A_CONFIG_DIR`) |
 | `--cron` | Adds a one-minute cron flush. Needs a workers.dev subdomain on the account (works with workers.dev deployments); not required, because pending wakes are also flushed on every request |
 
 To redeploy later (after an upgrade or settings change), run `npx -y a2a-exposed@latest deploy`. Existing secrets persist.
@@ -51,6 +51,19 @@ npx -y a2a-exposed@latest status     # agent card: OK: "<agent name>" (A2A 1.0, 
 ```
 
 The card name should match `--agent-name`, and the versions should list 1.0 first, then 0.3. `status` fetches the card itself, so no `curl` is needed. A new workers.dev subdomain or custom domain can take a few minutes; if the card check fails, run `status` again. `status` names Cloudflare errors (1042 right after a deploy means the Worker is still propagating: retry in 30 s). `/.well-known/agent-card.json` is the A2A 1.0 card (with 0.3 interfaces listed); `/.well-known/agent.json` serves the same agent as an A2A 0.3-shaped card (`url`, `protocolVersion`, `preferredTransport`) for 0.3 clients.
+
+### Loopback test
+
+```bash
+npx -y a2a-exposed@latest token issue self-test | npx -y a2a-exposed@latest peers add self "$(npx -y a2a-exposed@latest url)" --token-stdin
+npx -y a2a-exposed@latest send --to self --text "loopback test"        # TASK_STATE_SUBMITTED (A2A 1.0)
+npx -y a2a-exposed@latest inbox                                         # the task appears; a wake should fire
+npx -y a2a-exposed@latest reply <taskId> --text "pong"
+npx -y a2a-exposed@latest poll --to self <taskId>                       # TASK_STATE_COMPLETED, artifact "pong"
+npx -y a2a-exposed@latest token revoke self-test && npx -y a2a-exposed@latest peers rm self
+```
+
+`send` and `poll` print the peer's task as returned and a one-line state summary on stderr. `peers rm self` also deletes the `PEER_SELF_TOKEN` it stored.
 
 ### Adopting an existing deployment (same Worker, D1 and hostname)
 
