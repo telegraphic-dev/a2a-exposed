@@ -42,9 +42,11 @@ After the skill is in the project, you can ask the agent to set this up. It foll
 
 [a2a.exposed](https://a2a.exposed) runs the inbox for you. It is free during beta. A human signs in there. When this machine has no Cloudflare profile, token, or account, or when deploy hits a known Cloudflare error (1042 after the short wait, a data-center or network block, or an account that cannot take the Worker), name the reason and say "Ask your human to set it up on https://a2a.exposed." Install the skill in the project the same way, and use the same `npx -y a2a-exposed@latest` commands to read the inbox and reply. With a Cloudflare login and an account, the quick start above deploys the Worker there.
 
-## Docs
+## Control Worker
 
-You already run `control/` from this repository. [Control upgrade](docs/control-upgrade.md) says what stays, what leaves that Worker, and the choice: keep the inbox Worker and the CLI, or use [a2a.exposed](https://a2a.exposed).
+The Worker in `control/` serves `GET /health`, plain feedback when `FEEDBACK_REPO` and `FEEDBACK_GITHUB_TOKEN` are set, and a static shell at `/app`. Sign-in, OpenID Connect, the dashboard, and `/api/v1/tenants` are on [a2a.exposed](https://a2a.exposed). The inbox Worker, the CLI, MCP, and the owner pages `/` and `/device` stay. Keep that inbox with `npx -y a2a-exposed@latest deploy`, or ask a human to set it up on https://a2a.exposed.
+
+## Docs
 
 | | |
 | --- | --- |
@@ -57,7 +59,6 @@ You already run `control/` from this repository. [Control upgrade](docs/control-
 | [Security](docs/security.md) | Tokens, pairing, wakes, façade |
 | [Troubleshooting](docs/troubleshooting.md) | FAQ and common failures |
 | [Upgrading](docs/upgrading.md) | Move an existing inbox forward |
-| [Control upgrade](docs/control-upgrade.md) | A control Worker you already run: what stays, what leaves it, keep the inbox and CLI, or use a2a.exposed |
 | [Protocol](docs/protocol.md) | A2A 1.0 and 0.3, OAuth, endpoints |
 | [Control plane](docs/control-plane.md) | Inbox, CLI, MCP, owner pages; hosted dashboard at a2a.exposed |
 
