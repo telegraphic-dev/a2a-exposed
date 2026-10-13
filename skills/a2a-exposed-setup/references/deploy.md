@@ -52,6 +52,19 @@ npx -y a2a-exposed@latest status     # agent card: OK: "<agent name>" (A2A 1.0, 
 
 The card name should match `--agent-name`, and the versions should list 1.0 first, then 0.3. `status` fetches the card itself, so no `curl` is needed. A new workers.dev subdomain or custom domain can take a few minutes; if the card check fails, run `status` again. `status` names Cloudflare errors (1042 right after a deploy means the Worker is still propagating: retry in 30 s). `/.well-known/agent-card.json` is the A2A 1.0 card (with 0.3 interfaces listed); `/.well-known/agent.json` serves the same agent as an A2A 0.3-shaped card (`url`, `protocolVersion`, `preferredTransport`) for 0.3 clients.
 
+### Loopback test
+
+```bash
+npx -y a2a-exposed@latest token issue self-test | npx -y a2a-exposed@latest peers add self "$(npx -y a2a-exposed@latest url)" --token-stdin
+npx -y a2a-exposed@latest send --to self --text "loopback test"        # TASK_STATE_SUBMITTED (A2A 1.0)
+npx -y a2a-exposed@latest inbox                                         # the task appears; a wake should fire
+npx -y a2a-exposed@latest reply <taskId> --text "pong"
+npx -y a2a-exposed@latest poll --to self <taskId>                       # TASK_STATE_COMPLETED, artifact "pong"
+npx -y a2a-exposed@latest token revoke self-test && npx -y a2a-exposed@latest peers rm self
+```
+
+`send` and `poll` print the peer's task as returned and a one-line state summary on stderr. `peers rm self` also deletes the `PEER_SELF_TOKEN` it stored.
+
 ### Adopting an existing deployment (same Worker, D1 and hostname)
 
 There is no `adopt` command yet. To move a Worker that runs an earlier build of this code (same D1 schema, e.g. the s2a2a prototype) onto the CLI without losing data, peers or wake secrets:

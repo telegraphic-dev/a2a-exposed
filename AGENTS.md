@@ -26,7 +26,7 @@ cd ../cli && npm test && npm pack --dry-run
 cd ../control && npm ci && npm test && npx cf workers types && npx tsc --noEmit && npm run build && node scripts/check-build.mjs
 cd .. && npx -y skills add ./ --list
 # Agent Skills + Agent Plugins (same as CI):
-python3 -m venv .skills-ref-venv && .skills-ref-venv/bin/pip install -q "skills-ref @ git+https://github.com/agentskills/agentskills.git#subdirectory=skills-ref" jsonschema
+python3 -m venv .skills-ref-venv && .skills-ref-venv/bin/pip install -q "skills-ref @ git+https://github.com/agentskills/agentskills.git@69ef37e9424c0a7ea9dd2293b559e43ec8176379#subdirectory=skills-ref" jsonschema
 .skills-ref-venv/bin/skills-ref validate skills/a2a-exposed
 .skills-ref-venv/bin/skills-ref validate skills/a2a-exposed-setup
 .skills-ref-venv/bin/pip install -q pyyaml

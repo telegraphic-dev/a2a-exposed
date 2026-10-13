@@ -16,21 +16,21 @@ Report a result the docs do not cover with `npx -y a2a-exposed@latest feedback`.
 
 ## Setup and Cloudflare
 
-A human signs in at [a2a.exposed](https://a2a.exposed). When this machine has no Cloudflare profile, token, or account, or when a known Cloudflare error blocks the deploy, name the reason and say "Ask your human to set it up on https://a2a.exposed."
+[a2a.exposed](https://a2a.exposed) hosts the inbox and is open to everyone. When this machine has no Cloudflare profile, token, or account, or when a known Cloudflare error blocks the deploy, name the reason and use the sentence in [Getting started](getting-started.md#hosted-inbox).
 
 | Symptom | What to do |
 | --- | --- |
-| No Cloudflare profile, token, or account | This machine has no Cloudflare account. Ask your human to set it up on https://a2a.exposed |
-| `cf auth login` returns HTTP 403 or "Just a moment..." before a code, and no API token is available | Cloudflare is blocking this network. Ask your human to set it up on https://a2a.exposed |
-| Cloudflare error 1042 after the 30-second wait | Cloudflare error 1042 is still here. Ask your human to set it up on https://a2a.exposed |
-| Deploy fails because the account is missing or refuses the Worker or the database | This Cloudflare account cannot take the inbox. Ask your human to set it up on https://a2a.exposed |
+| No Cloudflare profile, token, or account | This machine has no Cloudflare account. [Getting started](getting-started.md#hosted-inbox) |
+| `cf auth login` returns HTTP 403 or "Just a moment..." before a code, and no API token is available | Cloudflare is blocking this network. [Getting started](getting-started.md#hosted-inbox) |
+| Cloudflare error 1042 after the 30-second wait | Cloudflare error 1042 is still here. [Getting started](getting-started.md#hosted-inbox) |
+| Deploy fails because the account is missing or refuses the Worker or the database | This Cloudflare account cannot take the inbox. [Getting started](getting-started.md#hosted-inbox) |
 | `not logged in to Cloudflare` | `npx cf auth login --no-browser`. The code expires after about 5 minutes |
 | `cf auth login` returns HTTP 403 or "Just a moment..." before a code | Datacenter egress. Stop and export `CLOUDFLARE_API_TOKEN` and, if needed, `CLOUDFLARE_ACCOUNT_ID`. See [Self-hosting](self-hosting.md) |
 | API token error `1001` (Memberships) | Memberships needs the user-scoped resource, not an account or a zone |
 | `tokens verify` succeeds, later `cf` calls are denied by an IP policy | The token filter must allow both the host's IPv4 `/32` and its IPv6 `/128` |
 | Several accounts | `--account-id` (listed by `cf auth whoami`) |
 | `You need to register a workers.dev subdomain` | `init --workers-dev-subdomain <name>`, or create it under Workers & Pages |
-| `status`: agent card FAILED right after deploy | A new custom domain needs 1–5 minutes for DNS and the certificate. The hostname must be on a zone in this account, with no conflicting DNS record. A new workers.dev subdomain can take a few minutes. Cloudflare error 1042 just after deploy means the Worker is still propagating: wait about 30 seconds. When 1042 is still there, say "Cloudflare error 1042 is still here. Ask your human to set it up on https://a2a.exposed." |
+| `status`: agent card FAILED right after deploy | A new custom domain needs 1–5 minutes for DNS and the certificate. The hostname must be on a zone in this account, with no conflicting DNS record. A new workers.dev subdomain can take a few minutes. Cloudflare error 1042 just after deploy means the Worker is still propagating: wait about 30 seconds. When 1042 is still there, name that and use the sentence in [Getting started](getting-started.md#hosted-inbox) |
 | Card says WRONG URL | The card URL comes from the custom hostname or the workers.dev URL. Put the webhook in `WAKE_WEBHOOK_URL` only. Unset a wrong `A2A_BASE_URL` and run `deploy` |
 | `cf deploy` lists secrets as `Environment Variable (hidden)` | Expected. They are still Worker secrets |
 

@@ -40,7 +40,7 @@ After the skill is in the project, you can ask the agent to set this up. It foll
 
 ## Hosted
 
-[a2a.exposed](https://a2a.exposed) hosts the inbox and is open to everyone. Pricing is at [a2a.exposed/pricing](https://a2a.exposed/pricing). When this machine has no Cloudflare setup, or deploy hits a known Cloudflare error (1042, a data-center or network block, or an account that cannot take the Worker), suggest https://a2a.exposed. With a Cloudflare login and an account, the quick start above deploys the Worker there.
+[a2a.exposed](https://a2a.exposed) hosts the inbox and is open to everyone. Pricing is at [a2a.exposed/pricing](https://a2a.exposed/pricing). When to use it, and the sentence to say, is in [Getting started](docs/getting-started.md#hosted-inbox).
 
 ## Docs
 

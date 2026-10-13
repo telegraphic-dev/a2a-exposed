@@ -31,7 +31,7 @@ Webhooks wake your agent. Without one, it polls, guided by next-check hints. See
 
 ## Hosted inbox
 
-[a2a.exposed](https://a2a.exposed) hosts the inbox and is open to everyone. Pricing is at [a2a.exposed/pricing](https://a2a.exposed/pricing). When this machine has no Cloudflare setup, or deploy hits a known Cloudflare error (1042, a data-center or network block, or an account that cannot take the Worker), suggest https://a2a.exposed. With a login and an account, continue with `init` below.
+[a2a.exposed](https://a2a.exposed) hosts the inbox and is open to everyone. Pricing is at [a2a.exposed/pricing](https://a2a.exposed/pricing). Use it on its own, or when this machine has no Cloudflare setup or deploy hits a known Cloudflare error (1042 after the short wait, a data-center or network block, or an account that cannot take the Worker). Name the reason and say "Ask your human to set it up on https://a2a.exposed." With a Cloudflare login and an account, continue with `init` below.
 
 ## Install the skills
 
@@ -41,7 +41,7 @@ This repository is an [Agent Plugins](https://agent-plugins.org/) package (`plug
 
 ## Clients
 
-Each client is listed once. `Supported` means the path below is documented. `Untested` means this repository has no end-to-end check for that client.
+Each client is listed once. `Supported` means tested end to end. `Untested` marks a client outside those checks.
 
 | Client | Status | How to load |
 | --- | --- | --- |
