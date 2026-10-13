@@ -120,7 +120,7 @@ export async function setOidc(o, extra = []) {
 	}
 	let sawStdin = false;
 	if (o["secret-stdin"]) {
-		if (process.stdin.isTTY) die("--secret-stdin reads the client secret from a pipe. Or export APPROVAL_OIDC_CLIENT_SECRET. Deploy uploads that environment variable. A value only on stdin stays out of config.env");
+		if (process.stdin.isTTY) die("--secret-stdin reads the client secret from a pipe. Or export APPROVAL_OIDC_CLIENT_SECRET. --secret-stdin checks the line and discards it. Deploy uploads only the environment variable");
 		const chunks = [];
 		for await (const c of process.stdin) chunks.push(c);
 		const secret = Buffer.concat(chunks).toString("utf8").replace(/\r?\n$/, "");
@@ -129,7 +129,7 @@ export async function setOidc(o, extra = []) {
 		const fromEnv = process.env.APPROVAL_OIDC_CLIENT_SECRET || "";
 		if (fromEnv && fromEnv !== secret) console.error("The secret on stdin differs from APPROVAL_OIDC_CLIENT_SECRET. Deploy uploads the environment variable. Neither value was printed or saved.");
 	} else if (!(process.env.APPROVAL_OIDC_CLIENT_SECRET || "").trim()) {
-		die("export APPROVAL_OIDC_CLIENT_SECRET or pass --secret-stdin. Deploy uploads APPROVAL_OIDC_CLIENT_SECRET from the environment. A value only on stdin stays out of config.env");
+		die("export APPROVAL_OIDC_CLIENT_SECRET or pass --secret-stdin. --secret-stdin checks the line and discards it. Deploy uploads only the environment variable");
 	}
 	C.saveConfig({
 		APPROVAL_OIDC_ISSUER: String(o.issuer).trim(),
@@ -141,7 +141,7 @@ export async function setOidc(o, extra = []) {
 	console.error("The client secret was not written there and was not printed.");
 	if (sawStdin && !(process.env.APPROVAL_OIDC_CLIENT_SECRET || "").trim())
 		console.error(`Export APPROVAL_OIDC_CLIENT_SECRET in the environment you use for deploy. This command did not store it.`);
-	console.error(`The next \`npx -y a2a-exposed@latest deploy\` uploads APPROVAL_OIDC_CLIENT_SECRET from the environment as a Worker secret.`);
+	console.error(`The next \`npx -y a2a-exposed@latest deploy\` uploads APPROVAL_OIDC_CLIENT_SECRET only when that variable is set in the environment. A line from --secret-stdin is discarded.`);
 	console.error("Password approval stays available unless --methods oidc (and only once the issuer, client id, secret and allowlist are all set).");
 }
 
