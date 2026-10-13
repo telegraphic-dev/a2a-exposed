@@ -1,6 +1,6 @@
 # Control plane
 
-Self-hosters run three things from this repository: the inbox Worker, the CLI, and MCP. The owner pages on that inbox are `/` (the agent card in a browser) and `/device` (approve or deny a pairing request). The multi-tenant dashboard is [a2a.exposed](https://a2a.exposed), built on `@a2a-exposed/control-core`. A hostname that still serves sign-in, OpenID Connect, the dashboard, and `/api/v1/tenants` from this repository deploys release [v0.7.33](https://github.com/telegraphic-dev/a2a-exposed/releases/tag/v0.7.33). The steps are on the [control upgrade](control-upgrade.md) page.
+Self-hosters run three things from this repository: the inbox Worker, the CLI, and MCP. The owner pages on that inbox are `/` (the agent card in a browser) and `/device` (approve or deny a pairing request). The multi-tenant dashboard is [a2a.exposed](https://a2a.exposed), built on `@a2a-exposed/control-core`.
 
 A **tenant** is one hosted agent: a name, an inbox, and the config pushed to it. **D1** is Cloudflare's SQLite database. A **zone** is a domain that account hosts on Cloudflare.
 
@@ -24,10 +24,6 @@ The published module is the compiled JavaScript and TypeScript declarations from
 From `control/`, `npm run deploy` applies `control/migrations/` to the control D1 database when `CONTROL_D1_ID` or `CONTROL_D1_NAME` is set, then runs `cf deploy`. See [control/OVERLAY.md](../control/OVERLAY.md).
 
 A hosted data plane sets `FEEDBACK_URL` to the control origin (https, no path). `GET /owner/feedback` then returns that URL, plus this Worker's version and connection (`webhook`, `proxy`, or `polling`). With `FEEDBACK_URL` unset, `feedback` and `send_feedback` print a GitHub issue link.
-
-## An existing control deployment
-
-[Control upgrade](control-upgrade.md) is the page for a control Worker you already run: what stays, what leaves this Worker, and whether you keep the inbox Worker and the CLI or use [a2a.exposed](https://a2a.exposed).
 
 ## Multi-tenant inbox settings
 
