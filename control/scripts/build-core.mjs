@@ -1,6 +1,5 @@
 // Compile `@a2a-exposed/control-core` for npm. `prepack` runs this.
 // Output is dist/index.js plus the declaration files the entry's types reach.
-// The control Worker does not import this output.
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import fs from "node:fs";

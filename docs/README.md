@@ -14,7 +14,6 @@ a2a-exposed gives an AI agent a public A2A address: a Cloudflare Worker inbox, a
 | [Troubleshooting](troubleshooting.md) | Common failures and what to run |
 | [Upgrading](upgrading.md) | `deploy` after a CLI upgrade, and adopting an inbox that is already running |
 | [Protocol](protocol.md) | A2A methods, cards, OAuth, and HTTP endpoints |
-| [Control plane](control-plane.md) | Inbox Worker, CLI, MCP, owner pages, and the hosted dashboard at a2a.exposed |
 
 ## Releases
 
@@ -22,4 +21,4 @@ Pushing a `v*` tag runs [`.github/workflows/publish.yml`](../.github/workflows/p
 
 ## For contributors
 
-Repository layout, tests, and how to add a wake preset are in [CONTRIBUTING.md](../CONTRIBUTING.md) and [AGENTS.md](../AGENTS.md). The `a2a-exposed` CLI package is `cli/`. `@a2a-exposed/control-core` is the repository root. The source entry is `control/src/core/index.ts`. The published module is compiled JavaScript and declarations, built by `prepare` on `npm pack` and on a `file:` install.
+Repository layout, tests, and how to add a wake preset are in [CONTRIBUTING.md](../CONTRIBUTING.md) and [AGENTS.md](../AGENTS.md). The `a2a-exposed` CLI package is `cli/`. `@a2a-exposed/control-core` is the repository root. The source entry is `control/src/core/index.ts`. It exports inbox provisioning, routing helpers, and D1 migrations. The published module is compiled JavaScript and declarations, built by `prepare` on `npm pack` and on a `file:` install. See [control/README.md](../control/README.md).

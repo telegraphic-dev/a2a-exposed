@@ -20,7 +20,7 @@ body:
     attributes:
       label: a2a-exposed version
       description: Optional. The CLI version, and the inbox Worker version if you know it.
-      placeholder: 0.7.0 (worker 0.7.0)
+      placeholder: 0.8.0 (worker 0.8.0)
     validations:
       required: false
   - type: input

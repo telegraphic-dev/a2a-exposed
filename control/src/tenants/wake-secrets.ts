@@ -1,5 +1,5 @@
-// Wake secrets sealed for one hosted tenant. The control plane writes `secrets_enc`; the tenant
-// object decrypts it when it builds the tenant context. Self-host does not use this.
+// Wake secrets sealed for one inbox record. The writer stores `secrets_enc`; the inbox
+// object decrypts it when it builds the context. A single-inbox deploy does not use this.
 // Keep worker/src/wake-secrets.ts in step with this file.
 
 const INFO = "tenant-wake-secrets v1";

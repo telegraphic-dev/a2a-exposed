@@ -1,6 +1,4 @@
-// Paths the control app registers for the tenant API and the health check.
-// The Worker imports this file. It does not import ./index.ts, so the provisioning
-// modules and the migration SQL stay out of the Worker bundle.
+// Paths for the health check and the tenant API.
 
 export const routes = {
 	health: "/health",

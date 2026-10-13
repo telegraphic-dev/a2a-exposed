@@ -60,6 +60,4 @@ Authenticated with the owner token. The CLI is the supported way to call these. 
 | Peers | `GET /owner/peers`, `GET /owner/outbound-peers` |
 | MCP revoke | `DELETE /owner/mcp/<label>` |
 
-On a hosted tenant, the control plane calls an allowlisted subset through `TenantStore.owner()`. That RPC does not return a peer token or a decrypted secret. `/owner/*` on the tenant host still requires the owner token. A self-hosted inbox has no such RPC.
-
-A hosted dashboard download of SQL is a redacted copy of the same tables. Stored token hashes are placeholders. A pasted peer token or hosted owner token (`a2aot_`) is replaced. `export` with the owner token is the full dump.
+`/owner/*` requires the owner token. `export` with that token prints the inbox. `export --sql` prints the same tables as SQL.

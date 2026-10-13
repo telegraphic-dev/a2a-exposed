@@ -1,4 +1,4 @@
-// Control-plane sign-in (RFC 8628). The CLI is a public client (`a2a-cli`).
+// Device-flow sign-in (RFC 8628). The CLI is a public client (`a2a-cli`).
 // The session token is written to config.env and is never printed.
 import * as C from "./config.mjs";
 import { CLI, die } from "./a2a.mjs";
@@ -6,7 +6,7 @@ import { CLI, die } from "./a2a.mjs";
 export const CLI_CLIENT_ID = "a2a-cli";
 export const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 
-/** https origin with no userinfo, or "" when the value cannot be a control plane. */
+/** https origin with no userinfo, or "" when the value has a path, query, or userinfo. */
 export function controlOrigin(value) {
 	const raw = String(value || "").trim();
 	if (!raw) return "";

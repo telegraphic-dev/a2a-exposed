@@ -108,7 +108,7 @@ async function wakeBudgetOk(ctx: TenantContext): Promise<boolean> {
 
 const wakeWriteHooks = new WeakMap<object, () => Promise<void>>();
 
-/** A hosted tenant registers this so a wake row updates that tenant's alarm in the same turn as the write. */
+/** A caller registers this so a wake row updates the alarm in the same turn as the write. */
 export function onWakeWrite(ectx: object, fn: () => Promise<void>): void {
 	wakeWriteHooks.set(ectx, fn);
 }
@@ -204,7 +204,7 @@ async function wake(ctx: TenantContext, ectx: ExecutionContext, contextId: strin
 	await noteWakeWrite(ectx);
 	const delay = Math.max(0, (cur?.last_sent_ms || now) + deb - now) + 100;
 	// waitUntil can outlive the response by ~30s. Longer windows are flushed by a later request, the optional
-	// self-host cron, or the hosted tenant's alarm (set above).
+	// single-inbox cron, or the registered alarm (set above).
 	if (delay <= 25000) ectx.waitUntil(new Promise((res) => setTimeout(res, delay)).then(() => flushWake(ctx, ectx, contextId)));
 }
 
@@ -255,7 +255,7 @@ async function minMs(ctx: TenantContext, sql: string, shift: (t: number) => numb
 
 /**
  * When the next flush or housekeeping delete becomes due, or null when nothing is waiting.
- * A hosted tenant sets its alarm to this time. Self-host keeps the minute cron and does not call this.
+ * Per-inbox storage sets its alarm to this time. A single inbox keeps the minute cron and does not call this.
  */
 export async function nextCronAt(ctx: TenantContext, now = Date.now()): Promise<number | null> {
 	const times: number[] = [];
@@ -2180,7 +2180,7 @@ async function mcpGrantOf(ctx: TenantContext, header: string | null): Promise<Js
 }
 
 /**
- * Hosted owner RPC. The control plane has already checked that `accountId` owns this tenant.
+ * Hosted owner RPC. The caller has already checked that `accountId` owns this tenant.
  * Only an allowlisted path runs, and the response is withheld when it contains a peer token or a secret.
  * Self-host (`mode` single) is refused here; its owner API stays the bearer check in `handleOwner`.
  */

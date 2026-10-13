@@ -1,5 +1,5 @@
-// Cloudflare REST calls for "Set me up on Cloudflare". The control Worker cannot run `cf`.
-// These are the same resources `cf deploy` creates for an inbox: account, D1, migrations,
+// Cloudflare REST calls that create an inbox in an account. These calls do not run `cf`.
+// They create the same resources `cf deploy` creates for an inbox: account, D1, migrations,
 // the Worker script, workers.dev, or a custom hostname. The access token is a header only.
 
 const API = "https://api.cloudflare.com/client/v4";

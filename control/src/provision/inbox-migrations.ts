@@ -1,7 +1,6 @@
 // The self-host inbox schema. Keep this list equal to worker/src/migrations.ts.
-// `cf d1 migrations apply` records each file name in d1_migrations; this page does the same over the HTTP API.
-// Tests import this module. The control Worker build does not: `npm run build` writes the same files to
-// public/inbox-migrations.json and the page reads that asset.
+// `cf d1 migrations apply` records each file name in d1_migrations. The same statements
+// run over the Cloudflare HTTP API. Tests import this module.
 import type { InboxMigration } from "./inbox.ts";
 import m0001 from "../../../worker/migrations/0001_init.sql?raw";
 import m0002 from "../../../worker/migrations/0002_wake_budget.sql?raw";

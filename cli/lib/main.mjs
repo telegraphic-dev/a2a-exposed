@@ -172,41 +172,11 @@ Outbound (agents you call)
   poll --to <alias|url> <taskId> [--proto 0.3|1.0]
   outbound <taskId>       stored state of a task you sent (incl. pushed updates)
 
-Control plane account (the hosted dashboard is https://a2a.exposed)
-  signup --control-url https://control.example
-  login  --control-url https://control.example
-                                device-flow sign-in. Prints a code and a page. Type that code
-                                on the page; the link alone does not approve. The session is saved
-                                as CONTROL_TOKEN in config.env and is not printed. signup and login
-                                are the same flow; signup is how the first account is created.
-                                --json prints the control origin and email, not the token.
-                                A browser sign-in that does not complete returns to /app?error=<code>.
-                                The page allows each enabled provider origin in form-action, so the
-                                browser can follow the redirect. Buttons say Continue with that
-                                provider. Until the check finishes they stay muted and the page says
-                                Waiting for the check…. A reused token says The check expired. Please try again.
-                                After sign-in, /app shows the account and its agents. Each agent is listed
-                                by its hostname. A hosted name opens
-                                that agent's page: MCP connectors (revoke needs a recent sign-in), a
-                                message log of recent history. Opening this log leaves a pending wake in place until you list the inbox. The SQL download
-                                is a redacted copy and replaces a pasted owner token. Peer times are labeled UTC. A pairing
-                                token shows its code. An empty outbound list says peers added with the CLI
-                                on your machine stay in that CLI. Sign out is on that
-                                page. Creating an agent shows the owner token once. The agent page rotates
-                                that token after a confirmation and a recent sign-in. The new token is
-                                shown once on that agent's page. The previous one stops working immediately.
-                                The token is shown only when the stored hash is still that token. A Copy button sits next to it. Without JavaScript the value still copies.
-                                Deleting an agent asks for its name and a recent sign-in. The account page says how many hosted slots remain. A self-hosted inbox has no such delete.
-                                That page is not stored.
-                                FREE_AGENT_LIMIT=2 caps a free account at 2 hosted agents. A Cloudflare agent stays outside that count. An account's own limit overrides it.
-                                Unset, there is no limit. The database rejects another hosted insert.
-                                SIGNUP_ALLOWLIST, when set, admits only those verified emails. Unset, sign-in stays open.
-                                Sign-in uses GitHub, Google, or email. Connect Cloudflare from the account page after you sign in.
-                                A refusal returns to /app?error=invite and the page says Sign-in is invite-only for now.
-                                The control Worker logs social_sign_in_failed before the
-                                provider page, social_sign_in_timeout when that sign-in does not
-                                return, and oauth_callback_failed when the provider sends the browser
-                                back
+Owner
+  One inbox. The owner token from init authenticates inbox, reply, export, and the other owner
+  commands. GET / in a browser shows the agent card. /device approves or denies a pairing request.
+  pair set-password sets the approval password. pair set-oidc adds OpenID Connect on /device and
+  the MCP consent page when the issuer, client id, client secret, and allowlist are all set.
 
 Feedback
   feedback "message" [--kind bug|idea|other] [--contact x]
@@ -215,15 +185,15 @@ Feedback
             [--connection webhook|proxy|polling] [--yes]
                                 report a bug or an idea. A bug needs --steps.
                                 The report is a public GitHub issue. The warning names
-                                the repository before it sends. A hosted inbox uses the
-                                control plane's FEEDBACK_REPO. Otherwise the link opens
+                                the repository before it sends. A hosted inbox names
+                                that repository. Otherwise the link opens
                                 the form on telegraphic-dev/a2a-exposed. Do not include
                                 confidential information: secrets, tokens, owner or pairing
                                 tokens, private URLs or hostnames, message contents, or
                                 personal data. Prints that warning and asks before sending,
                                 unless --yes is set. Off a terminal, --yes is required.
-                                Posts to the control plane when this inbox is hosted and that
-                                plane accepts feedback. Otherwise prints a link to the bug
+                                Posts when this inbox names a feedback URL.
+                                Otherwise prints a link to the bug
                                 report form and does not open a browser. The CLI adds its
                                 version, the inbox Worker version when the inbox reports it,
                                 the OS, the Node version, the connection (webhook, proxy, or

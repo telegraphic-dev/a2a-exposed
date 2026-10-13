@@ -25,7 +25,7 @@ npx -y a2a-exposed@latest feedback "messages stay in submitted" \
 
 Every report includes the a2a-exposed version, the connection, and the deployment, under the same headings as the GitHub bug report form (`a2a-exposed version`, `Connection type`, `Deployment`). A missing value is `unknown`.
 
-- **Version.** The CLI version, and the inbox Worker version when `GET /owner/feedback` reports one, for example `0.7.0 (worker 0.7.0)`.
+- **Version.** The CLI version, and the inbox Worker version when `GET /owner/feedback` reports one, for example `0.8.0 (worker 0.8.0)`.
 - **Connection.** `webhook`, `proxy` (a façade, `--upstream`), or `polling`. The inbox report wins. Without one, the CLI uses `A2A_UPSTREAM_URL`, then `WAKE_WEBHOOK_URL`, then polling.
 - **Deployment.** `hosted` when the inbox reports hosted. `self-hosted` when the inbox reports self-hosted, or when this machine has no inbox config.
 
@@ -33,14 +33,12 @@ The OS, the Node version, `--environment`, and `--logs` are included when they a
 
 ## Where it goes
 
-When this inbox is hosted and its control plane accepts feedback, the command posts the message there. The filed issue uses the labels of the matching form: `bug` and `feedback` for a bug, `enhancement` and `feedback` for an idea, and `feedback` otherwise. A report from the CLI or from MCP also gets `from-agent`.
+When the inbox reports a feedback URL, the command posts the message there. The filed issue uses the labels of the matching form: `bug` and `feedback` for a bug, `enhancement` and `feedback` for an idea, and `feedback` otherwise. A report from the CLI or from MCP also gets `from-agent`.
 
-Otherwise the command prints a link to the bug report form (`template=bug_report.yml`, fields filled in) on `telegraphic-dev/a2a-exposed`. A hosted inbox uses the control plane's `FEEDBACK_REPO`. `GET /api/feedback` returns `{ repo }` when `FEEDBACK_REPO` and `FEEDBACK_GITHUB_TOKEN` are set.
+Otherwise the command prints a link to the bug report form (`template=bug_report.yml`, fields filled in) on `telegraphic-dev/a2a-exposed`. The inbox names the repository that receives a filed report.
 
-## MCP and the web form
+## MCP
 
 The MCP tool `send_feedback` takes the same fields. An approved connector calls it. Its description says the issue is public. The result names the repository in the issue URL. On a self-hosted inbox the form is on `telegraphic-dev/a2a-exposed`. A bug needs steps. Version, connection, and deployment are filled by the inbox when the tool call omits them.
-
-`POST /api/feedback` files the issue with `FEEDBACK_GITHUB_TOKEN` (Issues write on `FEEDBACK_REPO`). `GET /api/feedback` returns `{ repo }`. GitHub answers are sent with `redirect: "manual"`. A redirect or a failed call answers 502. A call that stops answers 504. A missing label is retried once with the labels omitted.
 
 Blank GitHub issues are off. The forms under `.github/ISSUE_TEMPLATE/` are the issue templates, and they carry the same public-issue warning.

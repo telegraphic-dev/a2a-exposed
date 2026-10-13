@@ -2,26 +2,19 @@
 	"name": "a2a-exposed-control",
 	"private": true,
 	"type": "module",
-	"description": "Control plane for a2a-exposed: the control-core library and a Worker for health, feedback, and static assets.",
+	"description": "Sources and tests for @a2a-exposed/control-core.",
 	"license": "MIT",
 	"scripts": {
-		"build": "node scripts/bundle-inbox.mjs && cf build",
-		"deploy": "node scripts/bundle-inbox.mjs && node scripts/apply-migrations.mjs && node scripts/deploy.mjs",
 		"test": "node --import ./test/register-hooks.mjs --test --test-concurrency=1 test/*.test.ts && vitest run",
-		"typecheck": "cf workers types && tsc --noEmit",
-		"check-build": "node scripts/check-build.mjs"
+		"typecheck": "tsc --noEmit"
 	},
 	"engines": {
 		"node": ">=22.18"
 	},
-	"dependencies": {
-		"hono": "4.13.13"
-	},
 	"devDependencies": {
-		"@cloudflare/vite-plugin": "beta",
 		"@cloudflare/vitest-plugin": "^1.4.0",
+		"@cloudflare/workers-types": "^5.20261013.1",
 		"@msw/cloudflare": "^0.2.0",
-		"cf": "^1.0.0-beta.13",
 		"esbuild": "^0.28.1",
 		"msw": "^3.0.3",
 		"typescript": "^7.0.2",

@@ -105,8 +105,6 @@ The owner token authenticates these commands.
 | `contexts` | Recent conversations |
 | `export [--sql]` | JSON dump (`GET /owner/export`). `--sql` prints the same tables as SQL. The read is one transaction. Peer-token hashes and encrypted outbound peer tokens are in the dump. The owner token stays a Worker secret |
 
-The download on a hosted agent page is a redacted copy of those tables. See [Control plane](control-plane.md).
-
 ## Pairing
 
 | Command | Effect |
@@ -136,14 +134,11 @@ The download on a hosted agent page is a redacted copy of those tables. See [Con
 
 A `PEER_<ALIAS>_TOKEN` value in the environment overrides `config.env`. When they differ, `connect`, `send`, `poll`, `peers`, and `status` warn. The values are not shown.
 
-## Account and feedback
+## Owner
 
-`signup` and `login` reach the hosted dashboard at [a2a.exposed](https://a2a.exposed). A self-hosted inbox uses the owner token from `init`. The owner pages on that inbox are `/` and `/device`.
+One inbox has one owner token, saved by `init` in `config.env`. That token authenticates the owner commands. `GET /` in a browser shows the agent card. `/device` approves or denies a pairing request with the approval password. `pair set-password` sets that password. `pair set-oidc` adds OpenID Connect on `/device` and the MCP consent page when the issuer, client id, client secret, and allowlist are all set.
 
-| Command | Effect |
-| --- | --- |
-| `signup --control-url https://control.example` | Device-flow sign-in. Same flow as `login`. `signup` is how the first account is created |
-| `login --control-url https://control.example` | Prints a code and a page. Typing the code on the page approves. The session is `CONTROL_TOKEN` in `config.env` and is not printed. `--json` prints the control origin and email, not the token |
+## Feedback
 
 `feedback` is documented in [Feedback](feedback.md).
 
@@ -171,6 +166,5 @@ A `PEER_<ALIAS>_TOKEN` value in the environment overrides `config.env`. When the
 | `UPSTREAM_ACCESS_CLIENT_ID` / `UPSTREAM_ACCESS_CLIENT_SECRET` | Façade only. Access service token for the upstream tunnel |
 | `PEER_<ALIAS>_TOKEN` | Outbound peer token. Overrides the saved value |
 | `APPROVAL_OIDC_CLIENT_SECRET` | OpenID Connect client secret. Not written to `config.env` |
-| `CONTROL_URL` / `CONTROL_TOKEN` | Control-plane origin and CLI session |
 
-Deploy-time Worker settings for a manual `cf deploy` are listed in `worker/deploy.env.example`. Multi-tenant variables are on the [control plane](control-plane.md) page. A self-hosted inbox leaves them unset.
+Deploy-time Worker settings for a manual `cf deploy` are listed in `worker/deploy.env.example`.

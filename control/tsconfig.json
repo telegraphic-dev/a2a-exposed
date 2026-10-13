@@ -4,7 +4,7 @@
 		"lib": ["es2024"],
 		"module": "preserve",
 		"moduleResolution": "bundler",
-		"types": [],
+		"types": ["@cloudflare/workers-types"],
 		"strict": true,
 		"noEmit": true,
 		"allowImportingTsExtensions": true,
@@ -12,5 +12,5 @@
 		"verbatimModuleSyntax": true,
 		"skipLibCheck": true
 	},
-	"include": ["src", "cloudflare.config.ts", ".cloudflare/types", "test/core-contract.test.ts", "test/shims.d.ts"]
+	"include": ["src", "test/core-contract.test.ts", "test/shims.d.ts"]
 }

@@ -1,12 +1,12 @@
-// Hosted owner RPC allowlist. The control plane calls TenantStore.owner() after it has checked that
-// the account owns the tenant. This list is the only paths that call may run, and it is stricter than
+// Hosted owner RPC allowlist. The caller has checked that the account owns the tenant.
+// This list is the only paths that call may run, and it is stricter than
 // the owner HTTP API: routes that mint a peer token, return a setup secret, or accept a plaintext peer
 // token are not here. GET /owner/export is here only because runOwnerRpc redacts it first. Self-host never calls this.
 
 import { ID_RE } from "./a2a.ts";
 import { credentialIsMasked, previewHeaderPlain } from "./wake.ts";
 
-/** Control-plane account id. Slashes and dots are refused so the value cannot be a path. */
+/** Account id. Slashes and dots are refused so the value cannot be a path. */
 export const ACCOUNT_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 const LABEL = /^[A-Za-z0-9_-]{1,32}$/;
@@ -42,7 +42,7 @@ export interface OwnerRpcRequest {
 	/** Refused. The owner HTTP API is where a body is accepted. */
 	body?: unknown;
 	/**
-	 * Dashboard approve or deny after the control plane has checked a recent sign-in.
+	 * Approve or deny after a recent sign-in.
 	 * Any other value is refused. Absent keeps the owner HTTP API's actor (`agent` or `owner`).
 	 */
 	actor?: "human";

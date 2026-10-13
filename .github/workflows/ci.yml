@@ -83,7 +83,7 @@ jobs:
           grep -q "worker/cloudflare.config.ts" pack.txt || { echo "::error::Worker template missing from the package"; exit 1; }
           if grep -q "control/" pack.txt; then echo "::error::control/ must stay out of the npm package"; exit 1; fi
 
-  control:
+  library:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -94,36 +94,18 @@ jobs:
           cache: npm
           cache-dependency-path: control/package-lock.json
 
-      - name: Control - install
+      - name: Library - install
         working-directory: control
         run: npm ci --no-audit --no-fund
 
       # Node tests, plus Vitest inside Miniflare with the Cloudflare API mocked.
-      - name: Control - tests
+      - name: Library - tests
         working-directory: control
         run: npm test
 
-      - name: Control - typecheck
+      - name: Library - typecheck
         working-directory: control
-        run: |
-          npx cf workers types
-          npx tsc --noEmit
-
-      - name: Control - neutral build
-        working-directory: control
-        run: |
-          npm run build
-          node scripts/check-build.mjs
-
-      - name: Control - route shape
-        working-directory: control
-        env:
-          CONTROL_HOSTNAME: control.example.com
-          CONTROL_ROUTE: example.com/*
-          CONTROL_ROUTE_ZONE: example.com
-        run: |
-          npx cf build
-          node scripts/check-build.mjs --routes
+        run: npx tsc --noEmit
 
   # The existing Worker suite against real D1 and a SQLite Durable Object (workerd via Miniflare).
   # The node:sqlite run stays in the job above. migrations.test.ts uses d1On and does not follow STORAGE_BACKEND.

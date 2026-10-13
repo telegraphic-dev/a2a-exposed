@@ -8,7 +8,7 @@ History of each release is in [CHANGELOG.md](../CHANGELOG.md). This page is how 
 npx -y a2a-exposed@latest deploy
 ```
 
-`deploy` copies the current Worker template and applies every D1 migration that is not yet recorded in `d1_migrations`, in numeric order. Secrets already on the Worker stay. With a global install, run `npm i -g a2a-exposed@latest` first. A global copy does not upgrade itself.
+`deploy` copies the current Worker template and applies every D1 migration that is not yet recorded in `d1_migrations`, in numeric order. Secrets already on the Worker stay, including the owner token. The pages `/` and `/device` stay. `export` prints the inbox; `export --sql` prints SQL. With a global install, run `npm i -g a2a-exposed@latest` first. A global copy does not upgrade itself.
 
 The CLI prints a one-line notice when a newer version is on npm, at most once a day. `A2A_NO_UPDATE_CHECK=1` or `DO_NOT_TRACK=1` turns it off.
 
@@ -31,9 +31,3 @@ Current Worker migrations, applied when missing: `0001_init`, `0002_wake_budget`
 If `pair` returns HTTP 500, or peers get `-32603` and the Worker log says `no such table: wake_budget`, run `deploy`. That applies the missing migration.
 
 Moving between a custom hostname and workers.dev is `deploy --workers-dev` or `deploy --hostname <host>`. See [Self-hosting](self-hosting.md).
-
-## Hosted agents
-
-On [a2a.exposed](https://a2a.exposed), rotate the owner token, delete the agent, or download a redacted SQL copy from the agent page. `npx -y a2a-exposed@latest export` with the owner token is the full dump.
-
-Point-in-time restore of one hosted tenant is `bookmarkForTime` / `restoreBookmark` on that tenant's Durable Object, when the storage runtime provides bookmarks. `restoreBookmark` schedules the bookmark and returns `{ ok: true }`. The object resets on a later turn, after that result is delivered.

@@ -1,11 +1,10 @@
-// Bindings the control plane reads. Every one is optional. With none of them set, the Worker
-// serves health, the feedback API, and static assets.
+// Bindings an app reads. Every one is optional.
 import type { PlaneEnv } from "./tenants/push.ts";
 
 export interface ControlEnv extends PlaneEnv {
 	ASSETS?: { fetch(input: Request | URL | string, init?: RequestInit): Promise<Response> };
 	BRAND_NAME?: string;
-	/** Public origin of this control plane, https, no path. Unset: sitemap is omitted. */
+	/** Public origin, https, no path. Unset: a sitemap is omitted. */
 	SITE_URL?: string;
 	/** OIDC issuer origin. Unset until a provider is configured. */
 	ISSUER?: string;

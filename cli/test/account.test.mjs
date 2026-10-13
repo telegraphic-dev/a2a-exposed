@@ -73,7 +73,7 @@ test("login stores the session and does not print it", async () => {
 	}
 });
 
-test("login help names the callback error", async () => {
+test("help covers the inbox and the Cloudflare fallback", async () => {
 	const child = spawn(process.execPath, [BIN, "--help"], {
 		env: { ...process.env, A2A_NO_UPDATE_CHECK: "1" },
 	});
@@ -81,34 +81,12 @@ test("login help names the callback error", async () => {
 	child.stdout.on("data", (chunk) => { stdout += chunk; });
 	const status = await new Promise((resolve) => child.on("close", resolve));
 	assert.equal(status, 0);
-	assert.match(stdout, /\/app\?error=<code>/);
-	assert.match(stdout, /oauth_callback_failed/);
-	assert.match(stdout, /social_sign_in_failed/);
-	assert.match(stdout, /social_sign_in_timeout/);
-	assert.match(stdout, /form-action/);
-	assert.match(stdout, /Continue with/);
-	assert.match(stdout, /Waiting for the check/);
-	assert.match(stdout, /The check expired\. Please try again/);
-	assert.match(stdout, /MCP connectors/);
-	assert.match(stdout, /Opening this log leaves a pending wake in place until you list the inbox/);
-	assert.match(stdout, /SQL download/);
-	assert.match(stdout, /pasted owner token/);
-	assert.match(stdout, /labeled UTC/);
-	assert.match(stdout, /token shows its code/);
-	assert.match(stdout, /stay in that CLI/);
-	assert.match(stdout, /owner token once/);
-	assert.match(stdout, /rotates/);
-	assert.match(stdout, /previous one stops working immediately/);
-	assert.match(stdout, /not stored/);
-	assert.match(stdout, /FREE_AGENT_LIMIT=2/);
-	assert.match(stdout, /2 hosted agents/);
-	assert.match(stdout, /stays outside that count/);
-	assert.match(stdout, /listed\s+by its hostname/);
-	assert.match(stdout, /own limit overrides it/);
-	assert.match(stdout, /no limit/);
-	assert.match(stdout, /rejects another hosted insert/);
-	assert.match(stdout, /SIGNUP_ALLOWLIST/);
-	assert.match(stdout, /\/app\?error=invite/);
+	assert.match(stdout, /Ask your human to set it up on https:\/\/a2a\.exposed/);
+	assert.match(stdout, /pair set-password/);
+	assert.equal(stdout.includes("control plane"), false);
+	assert.equal(stdout.includes("hosted dashboard"), false);
+	assert.equal(stdout.includes("signup"), false);
+	assert.equal(stdout.includes("social_sign_in_failed"), false);
 });
 
 test("login refuses a control URL that is not https", async () => {
