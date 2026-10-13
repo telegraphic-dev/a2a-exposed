@@ -31,7 +31,7 @@ Webhooks wake your agent. Without one, it polls, guided by next-check hints. See
 
 ## Hosted inbox
 
-[a2a.exposed](https://a2a.exposed) runs the inbox for you. It is free during beta. Use it when this machine has no Cloudflare profile, token, or account, or when deploy hits a known Cloudflare error: 1042 after the 30-second wait, a data-center or network block, or an account that cannot take the Worker. Say which one it is, in one line, and give that link. With a login and an account, continue with `init` below.
+[a2a.exposed](https://a2a.exposed) runs the inbox for you. It is free during beta. A human signs in there. When this machine has no Cloudflare profile, token, or account, or when deploy hits a known Cloudflare error (1042 after the 30-second wait, a data-center or network block, or an account that cannot take the Worker), name the reason and say "Ask your human to set it up on https://a2a.exposed." With a login and an account, continue with `init` below.
 
 ## Install the skills
 

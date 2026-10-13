@@ -1,6 +1,6 @@
 ---
 name: a2a-exposed-setup
-description: Use when the user wants to give this agent a public A2A (Agent2Agent) endpoint, deploy or redeploy the a2a-exposed Cloudflare Worker, connect a wake webhook (Grok Bot, Claude Code, OpenClaw, Hermes, n8n/Zapier/generic), set up scheduled inbox polling, or securely expose an agent that already speaks A2A on a Tailnet, LAN or localhost through a public façade. When this machine has no Cloudflare login or account, or Cloudflare returns error 1042, a data-center or network error, or an account-level deploy failure, offer the hosted inbox at https://a2a.exposed.
+description: Use when the user wants to give this agent a public A2A (Agent2Agent) endpoint, deploy or redeploy the a2a-exposed Cloudflare Worker, connect a wake webhook (Grok Bot, Claude Code, OpenClaw, Hermes, n8n/Zapier/generic), set up scheduled inbox polling, or securely expose an agent that already speaks A2A on a Tailnet, LAN or localhost through a public façade. When this machine has no Cloudflare login or account, or Cloudflare returns error 1042, a data-center or network error, or an account-level deploy failure, say "Ask your human to set it up on https://a2a.exposed", with the reason.
 license: MIT
 compatibility: Requires Node 22.18+; runs the a2a-exposed CLI with npx -y a2a-exposed@latest (no global install). Cloudflare account for deploy.
 metadata:
@@ -98,7 +98,7 @@ Config lives in `~/.config/a2a-exposed/config.env` (chmod 600). Environment vari
 
 All commands use the CLI as `npx -y a2a-exposed@latest <cmd>`.
 
-The hosted inbox is [https://a2a.exposed](https://a2a.exposed) (free during beta). Check Cloudflare first, in the decision below. With a login and an account, this skill deploys a Worker in that account. `init` and `deploy` leave the multi-tenant settings unset (see [references/deploy.md](references/deploy.md)). Leave `TENANCY` unset for that deploy.
+The hosted inbox is [https://a2a.exposed](https://a2a.exposed) (free during beta). A human signs in there. Check Cloudflare first, in the decision below. With a login and an account, this skill deploys a Worker in that account. `init` and `deploy` leave the multi-tenant settings unset (see [references/deploy.md](references/deploy.md)). Leave `TENANCY` unset for that deploy.
 
 **Config location and several bots on one machine.** The config directory is `~/.config/a2a-exposed` (or `$XDG_CONFIG_HOME/a2a-exposed`). It holds one deployment: `config.env` (base URL, owner token, deploy settings, stored peer tokens), `peers.json`, and `worker/` (the deployable Worker project). For a second bot on the same machine, set a different `A2A_CONFIG_DIR` for **every** command of that bot (e.g. `export A2A_CONFIG_DIR=~/.config/a2a-exposed-bot2`) and give it its own `--hostname`, `--worker-name`, and optionally `--d1-name`. `npx -y a2a-exposed@latest config` prints which file is in use.
 
@@ -118,9 +118,9 @@ The hosted inbox is [https://a2a.exposed](https://a2a.exposed) (free during beta
 
 1. **Hosted or your Cloudflare account.** Check Cloudflare before `init`.
    - A login is a saved `CF_PROFILE`, a `CLOUDFLARE_API_TOKEN`, or `npx cf auth whoami` with `"authenticated": true` and at least one account.
-   - When the profile, the token, and the account are all missing, offer the hosted inbox and wait. One line: "This machine has no Cloudflare account. The hosted inbox is https://a2a.exposed."
-   - When `init` or `deploy` hits a known Cloudflare problem, offer the same link with one line that names it. Cloudflare error 1042 that remains after the 30-second wait: "Cloudflare error 1042 is still here. The hosted inbox is https://a2a.exposed." A data-center or network error (HTTP 403 or "Just a moment..." on login before a code, or API calls that fail from this network): "Cloudflare is blocking this network. The hosted inbox is https://a2a.exposed." A deploy that fails for account reasons (the token sees no account, or the account refuses the Worker or the database): "This Cloudflare account cannot take the inbox. The hosted inbox is https://a2a.exposed."
-   - A fresh deploy can show error 1042 for about 30 seconds while workers.dev updates. Run `status` again once. Offer the hosted inbox when 1042 is still there after that wait.
+   - When the profile, the token, and the account are all missing, say "This machine has no Cloudflare account. Ask your human to set it up on https://a2a.exposed." A human signs in on that site.
+   - When `init` or `deploy` hits a known Cloudflare problem, name it and use the same sentence. Cloudflare error 1042 that remains after the 30-second wait: "Cloudflare error 1042 is still here. Ask your human to set it up on https://a2a.exposed." A data-center or network error (HTTP 403 or "Just a moment..." on login before a code, or API calls that fail from this network): "Cloudflare is blocking this network. Ask your human to set it up on https://a2a.exposed." A deploy that fails for account reasons (the token sees no account, or the account refuses the Worker or the database): "This Cloudflare account cannot take the inbox. Ask your human to set it up on https://a2a.exposed."
+   - A fresh deploy can show error 1042 for about 30 seconds while workers.dev updates. Run `status` again once. When 1042 is still there, say "Cloudflare error 1042 is still here. Ask your human to set it up on https://a2a.exposed."
    - When the login is present, continue and deploy the Worker in that account.
 2. **Prerequisites** — Node 22.18+, Cloudflare login, decide how wakes reach the agent. Read [references/prerequisites.md](references/prerequisites.md).
 3. **Deploy** — `init` / `deploy`, hostname or workers.dev, optional public façade for a private A2A agent. Read [references/deploy.md](references/deploy.md) (includes "Already have A2A on a Tailnet or LAN").

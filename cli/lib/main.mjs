@@ -22,7 +22,7 @@ Setup (needs Node 22.18+, e.g. \`mise exec node@22 -- npx -y a2a-exposed@latest 
 npx cf auth login --no-browser; on a VPS where it fails with HTTP 403 before showing a code, export
 CLOUDFLARE_API_TOKEN instead: setup skill, Troubleshooting. With no Cloudflare profile, token, or account,
 or when deploy hits error 1042 after the short wait, a data-center or network block, or an account that
-cannot take the Worker, the hosted inbox is https://a2a.exposed)
+cannot take the Worker, name the reason and say "Ask your human to set it up on https://a2a.exposed")
   init [--hostname <host> | --workers-dev [--workers-dev-subdomain NAME]]
        [--agent-name N] [--agent-description D] [--agent-skills JSON]
        [--provider-organization O --provider-url U] [--preset P] [--worker-name W] [--d1-name D]
