@@ -34,58 +34,7 @@ Moving between a custom hostname and workers.dev is `deploy --workers-dev` or `d
 
 ## Migrating
 
-Self-hosters run the inbox Worker, the CLI, and MCP. The owner pages on that inbox are `/` and `/device`.
-
-The multi-tenant dashboard is [a2a.exposed](https://a2a.exposed), built on `@a2a-exposed/control-core`. A human signs in there and creates the inbox on that account.
-
-### Stay on the dashboard in this repository
-
-Release [v0.7.33](https://github.com/telegraphic-dev/a2a-exposed/releases/tag/v0.7.33) serves sign-in, OpenID Connect, the dashboard pages, and `/api/v1/tenants` from `control/`. A hostname that still serves those routes deploys that tag:
-
-```bash
-git fetch --tags
-git checkout v0.7.33
-cd control && npm ci && npm run deploy
-```
-
-The CLI for that release is `npx -y a2a-exposed@0.7.33`. The inbox CLI and the control Worker are separate deploys. `npx -y a2a-exposed@latest deploy` updates the inbox Worker. The control hostname stays on the tag deployed from `control/`.
-
-### Keep the control database in this Cloudflare account
-
-The control D1 database stays in the same Cloudflare account. User rows, Cloudflare grants, and tenant rows stay in it. Note a bookmark, then write a SQL copy:
-
-```bash
-npx cf d1 time-travel get-bookmark <control-db-id>
-npx cf d1 export <control-db-name> --remote --output control.sql
-```
-
-An app you run imports `@a2a-exposed/control-core` and sets `CONTROL_D1_ID` to that database, in the same account. The library reads those rows: tenant create, list, delete, rotate, and the saved grant. Import the SQL file into another D1 database in that account with `npx cf d1 execute <name> --remote --file control.sql`.
-
-The inbox stays on its Worker. `npx -y a2a-exposed@latest deploy` keeps that Worker, its D1 database, the owner token, MCP, and `/` and `/device`. An inbox dump is `npx -y a2a-exposed@latest export` with the owner token. `export --sql` prints SQL.
-
-### Use the hosted dashboard
-
-A human signs in at [a2a.exposed](https://a2a.exposed) and creates the inbox there. That account is new. The inbox you already run stays on `deploy`.
-
-### What the current control Worker serves
-
-Deploying the current `control/` directory publishes this Worker on that hostname:
-
-| Path | What it serves |
-| --- | --- |
-| `GET /health` | `{ ok: true }` |
-| `/api/feedback` | A public GitHub issue when `FEEDBACK_REPO` and `FEEDBACK_GITHUB_TOKEN` are set |
-| `/app` and `/app/*` | A static shell. It names `/health`, the CLI, and the inbox owner pages |
-| `/api/v1/tenants` | HTTP 404 `{ "error": "not_found" }` |
-| `/.well-known/openid-configuration` | HTTP 404 `{ "error": "not_found" }` |
-
-The control D1 rows stay in the database in the same account. Library details are on the [control plane](control-plane.md#an-existing-control-deployment) page.
-
-### What changed
-
-The control Worker in this repository serves `/health`, plain feedback, and the static shell at `/app`. Sign-in, OpenID Connect, the dashboard, and `/api/v1/tenants` are on [a2a.exposed](https://a2a.exposed).
-
-The inbox Worker, the CLI, MCP, and the owner pages `/` and `/device` stay. `deploy` keeps the inbox D1 database, the owner token, and the wake secrets already on that Worker. The control D1 database keeps its user rows, Cloudflare grants, and tenant rows in the same Cloudflare account.
+You already run `control/` from this repository. [Control upgrade](control-upgrade.md) says what stays, what leaves this Worker, and the choice: keep the inbox Worker and the CLI, or use [a2a.exposed](https://a2a.exposed).
 
 ## Hosted agents
 

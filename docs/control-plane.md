@@ -1,6 +1,6 @@
 # Control plane
 
-Self-hosters run three things from this repository: the inbox Worker, the CLI, and MCP. The owner pages on that inbox are `/` (the agent card in a browser) and `/device` (approve or deny a pairing request). The multi-tenant dashboard is [a2a.exposed](https://a2a.exposed), built on `@a2a-exposed/control-core`. A hostname that still serves sign-in, OpenID Connect, the dashboard, and `/api/v1/tenants` from this repository deploys release [v0.7.33](https://github.com/telegraphic-dev/a2a-exposed/releases/tag/v0.7.33). The steps are in [Migrating](upgrading.md#migrating).
+Self-hosters run three things from this repository: the inbox Worker, the CLI, and MCP. The owner pages on that inbox are `/` (the agent card in a browser) and `/device` (approve or deny a pairing request). The multi-tenant dashboard is [a2a.exposed](https://a2a.exposed), built on `@a2a-exposed/control-core`. A hostname that still serves sign-in, OpenID Connect, the dashboard, and `/api/v1/tenants` from this repository deploys release [v0.7.33](https://github.com/telegraphic-dev/a2a-exposed/releases/tag/v0.7.33). The steps are on the [control upgrade](control-upgrade.md) page.
 
 A **tenant** is one hosted agent: a name, an inbox, and the config pushed to it. **D1** is Cloudflare's SQLite database. A **zone** is a domain that account hosts on Cloudflare.
 
@@ -27,17 +27,7 @@ A hosted data plane sets `FEEDBACK_URL` to the control origin (https, no path). 
 
 ## An existing control deployment
 
-The steps are in [Migrating](upgrading.md#migrating).
-
-The inbox stays on its Worker. `npx -y a2a-exposed@latest deploy` keeps that Worker, its D1 database, the owner token, MCP, and the owner pages `/` and `/device`. `export` with the owner token prints a JSON dump of that inbox. `export --sql` prints SQL.
-
-A hostname that still serves sign-in, OpenID Connect, the dashboard, and `/api/v1/tenants` from this repository deploys release [v0.7.33](https://github.com/telegraphic-dev/a2a-exposed/releases/tag/v0.7.33).
-
-The control D1 database stays in the same Cloudflare account. User rows, Cloudflare grants, and tenant rows stay in it. `npx cf d1 export <control-db-name> --remote --output control.sql` writes a SQL copy. An app on `@a2a-exposed/control-core` in that account sets `CONTROL_D1_ID` to that database and reads those rows: tenant create, list, delete, and rotate, the saved grant, and the provisioning steps. Import the file into another D1 database in the same account with `npx cf d1 execute <name> --remote --file control.sql`. `ControlEnv` carries the account fields (`GITHUB_CLIENT_ID`, `GOOGLE_CLIENT_ID`, Turnstile, mail, the GitHub App, and `FREE_AGENT_LIMIT`) for that app.
-
-The multi-tenant dashboard is [a2a.exposed](https://a2a.exposed), built on `@a2a-exposed/control-core`. A human signs in there and creates the inbox on that account. That account is new. The inbox you already run stays on `deploy`.
-
-On the current control Worker, `GET /health` returns `{ ok: true }`. Plain feedback uses `FEEDBACK_REPO` and `FEEDBACK_GITHUB_TOKEN`. `/app` is the static shell. `/api/v1/tenants` and `/.well-known/openid-configuration` answer HTTP 404 `{ "error": "not_found" }`.
+[Control upgrade](control-upgrade.md) is the page for a control Worker you already run: what stays, what leaves this Worker, and whether you keep the inbox Worker and the CLI or use [a2a.exposed](https://a2a.exposed).
 
 ## Multi-tenant inbox settings
 
