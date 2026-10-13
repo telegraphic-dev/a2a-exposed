@@ -17,5 +17,5 @@
 			"@brand/*": ["./brand/*"]
 		}
 	},
-	"include": ["src", "brand", "cloudflare.config.ts", ".cloudflare/types"]
+	"include": ["src", "brand", "cloudflare.config.ts", ".cloudflare/types", "test/core-contract.test.ts", "test/shims.d.ts"]
 }

@@ -1,3 +1,4 @@
+import { routes } from "../core/routes.ts";
 import { SIGNUP_CLOSED } from "../auth/allowlist.ts";
 import { CLOUDFLARE_UNLINKED } from "../auth/cloudflare-link.ts";
 import { REAUTH_MESSAGE } from "../auth/recent.ts";
@@ -172,7 +173,7 @@ export function renderAccount(input: {
 						{hostedOpen ? (
 							<section>
 								<h2>Hosted by {brand}</h2>
-								<form id="hosted-form" method="post" action="/api/v1/tenants">
+								<form id="hosted-form" method="post" action={routes.tenants}>
 									<p>
 										<label>
 											Name

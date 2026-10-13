@@ -1,6 +1,8 @@
 # Control plane
 
-`control/` is a second Worker. Hono serves `/app`, `/api`, `/health`, and `/.well-known`. Workers static assets serve everything else. The npm package does not include it. A self-hosted inbox from `npx -y a2a-exposed@latest init` does not need this Worker.
+`control/` is a second Worker. Hono serves `/app`, `/api`, `/health`, and `/.well-known`. Workers static assets serve everything else. The `a2a-exposed` CLI package does not include it. A self-hosted inbox from `npx -y a2a-exposed@latest init` does not need this Worker.
+
+`@a2a-exposed/control-core` is this repository. Its entry, `control/src/core/index.ts`, exports tenant create, list, delete, and rotate, wake settings, the data-plane push, the Cloudflare provisioning calls, `RUN_WORKER_FIRST`, the `ControlEnv` type, and the control D1 migrations (`CONTROL_MIGRATIONS`, and `control/migrations/` inside the package). `GET /health` and `GET`/`POST /api/v1/tenants` are `routes.health` and `routes.tenants`. The control Worker does not import that entry. A checkout of a tag is the package: depend on the repository root. A `v*` tag publishes the same package to npm.
 
 From `control/`, `npm run deploy` applies `control/migrations/` to the control D1 database and then runs `cf deploy`. With `CONTROL_D1_ID` and `CONTROL_D1_NAME` both unset, that step is skipped. A failed migration does not deploy.
 
