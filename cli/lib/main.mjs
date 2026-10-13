@@ -172,6 +172,12 @@ Outbound (agents you call)
   poll --to <alias|url> <taskId> [--proto 0.3|1.0]
   outbound <taskId>       stored state of a task you sent (incl. pushed updates)
 
+Owner
+  One inbox. The owner token from init authenticates inbox, reply, export, and the other owner
+  commands. GET / in a browser shows the agent card. /device approves or denies a pairing request.
+  pair set-password sets the approval password. pair set-oidc adds OpenID Connect on /device and
+  the MCP consent page when the issuer, client id, client secret, and allowlist are all set.
+
 Feedback
   feedback "message" [--kind bug|idea|other] [--contact x]
             [--steps S] [--expected S] [--actual S] [--logs S] [--agent A]

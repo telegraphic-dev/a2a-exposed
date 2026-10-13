@@ -46,10 +46,7 @@ const plain: Record<string, string> = {
 	// Access (never a Tailnet / LAN URL: the Worker can't reach those, and they never appear in the public card)
 	UPSTREAM_URL: v("A2A_UPSTREAM_URL"),
 	UPSTREAM_CARD_URL: v("A2A_UPSTREAM_CARD_URL"), // default <upstream origin>/.well-known/agent-card.json
-	// Optional gates. Empty values are omitted, so a self-host deploy is unchanged.
-	// TENANCY=host switches the entrypoint to src/hosted.ts and adds TENANT_DO + TENANT_DIRECTORY below.
-	// QUOTAS, USAGE_SINK, SIGNUP_URL and BRANDING are parsed and reserved.
-	// FEEDBACK_URL is an https origin. Only a hosted tenant posts feedback there. Unset on a self-hosted inbox.
+	// Optional gates. Empty values are omitted, so a deploy of one inbox is unchanged.
 	// WAKE_TARGET_POLICY=public-https refuses a wake that is not public https. The socket opens to an address from that check, and TLS names the hostname (see wake-target.ts).
 	// APPROVAL_OIDC_* turn on OpenID Connect approval when issuer, client id, secret and allowlist are all set.
 	TENANCY: v("TENANCY"),

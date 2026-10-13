@@ -134,9 +134,11 @@ The owner token authenticates these commands.
 
 A `PEER_<ALIAS>_TOKEN` value in the environment overrides `config.env`. When they differ, `connect`, `send`, `poll`, `peers`, and `status` warn. The values are not shown.
 
-## Feedback
+## Owner
 
-A self-hosted inbox uses the owner token from `init`. The owner pages on that inbox are `/` and `/device`.
+One inbox has one owner token, saved by `init` in `config.env`. That token authenticates the owner commands. `GET /` in a browser shows the agent card. `/device` approves or denies a pairing request with the approval password. `pair set-password` sets that password. `pair set-oidc` adds OpenID Connect on `/device` and the MCP consent page when the issuer, client id, client secret, and allowlist are all set.
+
+## Feedback
 
 `feedback` is documented in [Feedback](feedback.md).
 

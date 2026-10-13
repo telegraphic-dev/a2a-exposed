@@ -141,7 +141,7 @@ Polling agents: no wake announces a pairing request; `inbox` and `pair list` sho
 
 ## Other commands
 
-- A self-hosted inbox uses the owner token from `init`. The owner pages on that inbox are `/` and `/device`.
+- One inbox has one owner token, from `init`. `GET /` in a browser shows the agent card. `/device` approves or denies a pairing request. `pair set-password` sets the approval password. `pair set-oidc` adds OpenID Connect on `/device` and the MCP consent page when the issuer, client id, client secret, and allowlist are all set.
 - `npx -y a2a-exposed@latest contexts` lists recent conversations.
 - `npx -y a2a-exposed@latest export` prints a JSON dump of the inbox (peer-token hashes are in the dump; outbound peer tokens are ciphertext under this deployment's sealing key; the owner token stays a Worker secret). `export --sql` prints SQL.
 - `npx -y a2a-exposed@latest status` checks the setup: the agent card (fetched by the CLI; it must advertise the inbox's own base URL, never the agent's local or Tailnet webhook URL), the wake mode (webhook, tunnel, or none, meaning polling), the tunnel state, and a `next step:` line. Use it rather than `curl`: some agent sandboxes (Hermes) flag `.dev` URLs in shell commands and wait for user approval.

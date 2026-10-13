@@ -9,7 +9,7 @@ It is on by default for an inbox. It does nothing until you approve a client wit
 1. Set the approval password if you have not: `npx -y a2a-exposed@latest pair set-password --web`.
 2. Add the connector. In Claude, Settings → Connectors → Add custom connector, URL `https://agent.example.com/mcp`. In Claude Code, `claude mcp add --transport http a2a-exposed https://agent.example.com/mcp`.
 3. The browser opens the inbox's consent page. It shows the client's claimed name, the host it returns to, and, when the client is identified by a metadata document, the host that publishes that document. Approve with the approval password. Deny needs no password.
-4. Optional, for sending: `npx -y a2a-exposed@latest peers sync` uploads outbound peers (URL and token). They are encrypted on the Worker with a key derived from the owner token. On a hosted tenant that key is derived from a separate secret and the tenant id. Re-run `peers sync` after `connect`, a token change, or an owner-token rotation. Rotating the owner token makes the ciphertext unreadable until the next sync.
+4. Optional, for sending: `npx -y a2a-exposed@latest peers sync` uploads outbound peers (URL and token). They are encrypted on the Worker with a key derived from the owner token. Re-run `peers sync` after `connect`, a token change, or an owner-token rotation. Rotating the owner token makes the ciphertext unreadable until the next sync.
 
 Each approved client appears in `token list` as `mcp-<client>`. `token revoke mcp-<client>` ends it.
 

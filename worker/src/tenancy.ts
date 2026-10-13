@@ -1,15 +1,14 @@
-// Tenant context for the data-plane Worker.
+// Context for one inbox.
 //
-// Self-host (TENANCY unset, the default): one implicit tenant, config and OWNER_TOKEN taken from the Worker env.
+// Default (TENANCY unset): one inbox. Config and OWNER_TOKEN come from the Worker env.
 // Handlers receive this object instead of reading env.* themselves. With every gate unset, owner checks and the
 // outbound peer-token key are the same operations as before (existing ciphertext still decrypts).
 //
-// Hosted (a TenantContext built with a pushed tenant overlay): owner auth is a constant-time compare against
-// owner_token_hash, and the peer-token key is derived from TENANT_SECRETS_KEY and the tenant id. The Worker
-// fetch path does not build that overlay; the hosted router does, and only when TENANCY=host and TENANT_DO are
-// both set. Settings below are parsed either way. Nothing here turns on quotas, metering, wake policy, branding
-// those stay reserved until a later change reads ctx.gates. Approval OIDC is enforced by the approval pages when
-// the issuer, client id, client secret and an allowlist are all set (approval-oidc.ts).
+// When a pushed config is set, and only when TENANCY is "host" and TENANT_DO is bound, owner auth compares a
+// token hash and the peer-token key is derived from TENANT_SECRETS_KEY and the inbox id. The fetch path does not
+// build that overlay. Settings below are parsed either way. Some of them stay unused until a caller reads
+// ctx.gates. OpenID Connect approval is enforced by the approval pages when the issuer, client id, client secret,
+// and an allowlist are all set (approval-oidc.ts).
 
 import * as A from "./a2a.ts";
 
@@ -46,9 +45,9 @@ export type ConfigKey = (typeof CONFIG_KEYS)[number];
 export type ConfigFields = { [K in ConfigKey]?: string };
 
 /**
- * Non-secret platform defaults a hosted tenant inherits when its pushed config omits them.
- * Wake secrets, upstream secrets and OWNER_TOKEN are never inherited. In hosted mode the secret wake
- * fields come from decrypting `secrets_enc` (see the tenant object). A plaintext copy in the pushed
+ * Non-secret defaults used when a pushed config omits them.
+ * Wake secrets, upstream secrets, and OWNER_TOKEN are never copied. Secret wake
+ * fields come from decrypting `secrets_enc`. A plaintext copy in the pushed
  * config is used only when that ciphertext is absent.
  */
 const HOSTED_PLATFORM_DEFAULTS: readonly ConfigKey[] = ["MAX_BODY", "RATE_PER_MIN", "PBKDF2_ITERATIONS", "MCP", "PAIRING_APPROVAL"];
@@ -86,17 +85,17 @@ export interface WorkerBindings extends ConfigFields {
 	TENANT_DO?: DoNamespace;
 	/** unset | eu | fedramp. Applied as a DO jurisdiction when the hosted router addresses a tenant. */
 	DATA_REGION?: string;
-	/** "on" reserves quota enforcement (not applied yet). */
+	/** Parsed and unused by this Worker. */
 	QUOTAS?: string;
-	/** "d1" reserves usage metering (not applied yet). */
+	/** Parsed and unused by this Worker. */
 	USAGE_SINK?: string;
 	/** "public-https" refuses non-https, private, and metadata wake targets. Anything else is unset. */
 	WAKE_TARGET_POLICY?: string;
-	/** https URL shown later on the landing page and over-quota errors. Parsed, not rendered yet. */
+	/** https URL. Parsed and unused by this Worker. */
 	SIGNUP_URL?: string;
-	/** https origin, no path. A hosted tenant posts feedback there. Ignored on a self-hosted inbox. */
+	/** https origin, no path. Posts go there when this deploy sets the URL. */
 	FEEDBACK_URL?: string;
-	/** "hosted" reserves footer / plan badge. Parsed, not rendered yet. */
+	/** Parsed string. Not rendered by this Worker. */
 	BRANDING?: string;
 	APPROVAL_OIDC_ISSUER?: string;
 	APPROVAL_OIDC_CLIENT_ID?: string;
@@ -145,15 +144,15 @@ export interface ApprovalOidcGate {
 	methods: string[];
 	/** True only when the setting listed at least one of password or oidc. Unset is false. */
 	methodsSpecified: boolean;
-	/** Short button label from hosted approval config, or "". */
+	/** Short button label from the pushed approval config, or "". */
 	label: string;
 }
 
 export interface FeatureGates {
 	tenancy: TenancyMode;
 	/**
-	 * True only when TENANCY is exactly "host" and TENANT_DO is bound. That is the switch for per-tenant storage.
-	 * Any other combination, including TENANCY=host alone, keeps the self-host path on env.DB.
+	 * True only when TENANCY is exactly "host" and TENANT_DO is bound. That switches storage off env.DB.
+	 * Any other combination, including TENANCY=host alone, keeps the single-inbox path on env.DB.
 	 */
 	hostedStorage: boolean;
 	quotas: boolean;
@@ -252,7 +251,7 @@ function subjectsOf(v: unknown): string[] {
 	return list.map((s) => s.trim()).filter(Boolean).slice(0, 100);
 }
 
-/** Approval gate from a hosted tenant's pushed `approval` object (camelCase). The client secret is returned beside the gate. */
+/** Approval gate from a pushed `approval` object (camelCase). The client secret is returned beside the gate. */
 export function approvalFromRecord(raw: Record<string, unknown> | undefined): { gate: ApprovalOidcGate; clientSecret: string; publicRecord: Record<string, unknown> } {
 	const { methods, specified } = recognizedMethods(Array.isArray(raw?.methods) ? raw!.methods.map((s) => String(s)) : typeof raw?.methods === "string" ? csv(raw.methods) : []);
 	const clientSecret = typeof raw?.clientSecret === "string" ? raw.clientSecret.trim() : "";

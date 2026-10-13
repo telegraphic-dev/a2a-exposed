@@ -1,4 +1,4 @@
-// Feedback from an owner-only MCP tool. A hosted tenant posts to the feedback URL.
+// Feedback from an owner-only MCP tool. When a feedback URL is set, the owner posts there.
 // Any other deploy returns a prefilled GitHub issue URL and does not call out.
 import { reachesControl } from "./approval-oidc.ts";
 import { scrubSecretText } from "./export.ts";

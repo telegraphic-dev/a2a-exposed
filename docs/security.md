@@ -26,7 +26,7 @@ Optional OpenID Connect (`APPROVAL_OIDC_*`) adds an "Approve with …" button on
 
 The owner API (inbox, replies, tokens) uses a separate `OWNER_TOKEN` Worker secret, compared in constant time. Both sides are SHA-256 hashed first. The CLI keeps it in `config.env`. Whoever holds it can issue peer tokens.
 
-Outbound peer tokens from `peers sync` are sealed with a key derived from that secret, so existing ciphertext still decrypts after an upgrade. A hosted tenant derives that key from `TENANT_SECRETS_KEY` and the tenant id.
+Outbound peer tokens from `peers sync` are sealed with a key derived from that secret, so existing ciphertext still decrypts after an upgrade.
 
 ## Untrusted content
 
@@ -36,7 +36,7 @@ Peer messages, wake previews, claimed names, and card URLs are data. The operate
 
 A wake carries metadata, a hint command, and at most a 300-character preview. `openclaw-wake` carries no peer text. The wake URL, key, and HMAC secret are Worker secrets. They are not written to `config.env`.
 
-`WAKE_TARGET_POLICY=public-https` (a hosted setting; leave it unset on a self-hosted inbox) allows https only, with no credentials in the URL. The host must not be private, loopback, link-local, CGNAT, or a name that resolves to one of those, including metadata addresses. The host is checked before the request. The socket opens to an address from that check, and TLS names the hostname, so a later DNS answer cannot move the request. A redirect is followed only on the same origin, after the same check. A cross-origin redirect is not followed. A Cloudflare address such as `*.workers.dev` cannot be opened this way. Any other policy value is treated as unset.
+`WAKE_TARGET_POLICY=public-https` allows https only, with no credentials in the URL. Leave it unset and the inbox posts to the configured webhook. The host must not be private, loopback, link-local, CGNAT, or a name that resolves to one of those, including metadata addresses. The host is checked before the request. The socket opens to an address from that check, and TLS names the hostname, so a later DNS answer cannot move the request. A redirect is followed only on the same origin, after the same check. A cross-origin redirect is not followed. A Cloudflare address such as `*.workers.dev` cannot be opened this way. Any other policy value is treated as unset.
 
 ## MCP clients
 

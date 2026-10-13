@@ -1,17 +1,16 @@
-// Hosted entrypoint. Used only when the deploy sets TENANCY=host (see cloudflare.config.ts).
+// Optional entrypoint. Used only when the deploy sets TENANCY=host (see cloudflare.config.ts).
 // With that set and a TENANT_DO binding, `<name>.<TENANT_DOMAIN>` is looked up in the KV directory and forwarded
-// to that tenant's SQLite Durable Object. The object runs the same inbox as self-host (`dispatch` in index.ts)
-// against its own database. Anything else — TENANCY unset, or no TENANT_DO binding — calls the self-host fetch
+// to that name's SQLite Durable Object. The object runs the same inbox as a single deploy (`dispatch` in index.ts)
+// against its own database. Anything else — TENANCY unset, or no TENANT_DO binding — calls the single-inbox fetch
 // handler on env.DB.
 //
-// Tenant config is a versioned row pushed into the object (`pushConfig`). It does not travel on the request.
+// Config is a versioned row pushed into the object (`pushConfig`). It does not travel on the request.
 // An object with no row answers 404 and does not create application tables.
 //
-// Hosted wake debounce and the cron's housekeeping run from this object's alarm. The Worker minute cron stays a no-op
-// while TENANCY=host, so there is no shared database to flush. Self-host still uses its minute cron.
+// Wake debounce and housekeeping run from this object's alarm. The Worker minute cron stays a no-op
+// while TENANCY=host, so there is no shared database to flush. A single inbox still uses its minute cron.
 // The daily backup cron runs only when BACKUP_BUCKET is bound, and it returns before any flush.
-// Usage push is not in this change. Approval OIDC, when configured (self-host settings, or the pushed tenant
-// `approval` object), uses the same pages as self-host.
+// OpenID Connect approval, when the issuer, client id, client secret, and allowlist are set, uses the same pages.
 import { DurableObject } from "cloudflare:workers";
 import worker, { cronFlush, dispatch, nextCronAt, onWakeWrite, runOwnerRpc } from "./index.ts";
 import { accountIdOf, type OwnerRpcRequest, type OwnerRpcResult } from "./owner-rpc.ts";

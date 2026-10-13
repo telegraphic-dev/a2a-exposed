@@ -1,6 +1,6 @@
 // D1-shaped database over a Durable Object's SQLite (`ctx.storage.sql`).
 // Handlers keep calling prepare().bind().first()/all()/run() and batch(). Self-host keeps the real D1 binding;
-// a hosted tenant uses this adapter on its own object. `migrateDo` matches `cf d1 migrations apply`: the same
+// a per-inbox Durable Object uses this adapter on its own object. `migrateDo` matches `cf d1 migrations apply`: the same
 // `d1_migrations` table, unrecorded files in numeric order, one transaction per file.
 
 /** The slice of the Workers `SqlStorage` API this adapter uses. Tests can implement it over node:sqlite. */
