@@ -98,6 +98,7 @@ jobs:
         working-directory: control
         run: npm ci --no-audit --no-fund
 
+      # Node tests, plus Vitest inside Miniflare with the Cloudflare API mocked.
       - name: Control - tests
         working-directory: control
         run: npm test

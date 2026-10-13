@@ -64,9 +64,7 @@ jobs:
           npm run build
           node scripts/check-build.mjs
 
-      # Auth: npm trusted publishing (OIDC) once it is configured for this package on npmjs.com;
-      # otherwise the NPM_TOKEN secret (needed for the very first publish if it isn't done by hand).
-      # prepack bundles ../worker into the package (scripts/sync-worker.mjs).
+      # CLI package. Auth is the NPM_TOKEN secret. prepack bundles ../worker (scripts/sync-worker.mjs).
       - name: Publish to npm
         working-directory: cli
         env:
@@ -83,11 +81,18 @@ jobs:
 
       # prepare compiles dist/index.js and dist/types using control/node_modules.
       # A file: install runs prepare. npm pack and npm publish run prepare and prepack.
+      # Trusted publishing (OIDC). This step does not use NPM_TOKEN.
+      # setup-node's user npmrc has an _authToken line for the CLI publish. An empty
+      # token there stops npm from exchanging the Actions OIDC token, so this step
+      # uses a registry-only npmrc and unsets NODE_AUTH_TOKEN.
       - name: Publish control-core
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
+          unset NODE_AUTH_TOKEN
+          NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/npmrc-control-core"
+          printf '%s\n' 'registry=https://registry.npmjs.org/' > "$NPM_CONFIG_USERCONFIG"
+          export NPM_CONFIG_USERCONFIG
           node --input-type=module -e '
             import fs from "node:fs";
             const version = process.env.VERSION;
