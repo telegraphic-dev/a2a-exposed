@@ -70,6 +70,16 @@ import {
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, "../..");
+const probe = `
+	const core = await import("@a2a-exposed/control-core");
+	if (core.RUN_WORKER_FIRST !== true) process.exit(2);
+	if (core.routes.tenants !== "/api/v1/tenants" || core.routes.health !== "/health") process.exit(3);
+	if (typeof core.createTenant !== "function" || typeof core.runInboxStep !== "function") process.exit(4);
+	if (typeof core.runRemovalStep !== "function" || typeof core.cfCall !== "function") process.exit(5);
+	if (!Array.isArray(core.CONTROL_MIGRATIONS) || core.CONTROL_MIGRATIONS[0]?.name !== "0001_auth.sql") process.exit(6);
+	if (!String(core.CONTROL_MIGRATIONS[0]?.sql).includes("CREATE TABLE")) process.exit(7);
+	if (!Array.isArray(core.INBOX_MIGRATIONS) || !core.INBOX_MIGRATIONS[0]?.sql.includes("CREATE TABLE")) process.exit(8);
+`;
 
 const health: "/health" = routes.health;
 const tenantsPath: "/api/v1/tenants" = routes.tenants;
@@ -184,12 +194,26 @@ test("control and inbox migrations match the files on disk", () => {
 
 test("the published package loads the entry and hides deep paths", () => {
 	const manifest = JSON.parse(fs.readFileSync(path.join(repo, "package.json"), "utf8")) as {
-		scripts?: { prepack?: string };
+		scripts?: { prepare?: string; prepack?: string };
 		exports?: { "."?: { types?: string; default?: string } };
 	};
+	assert.equal(manifest.scripts?.prepare, "node control/scripts/build-core.mjs");
 	assert.equal(manifest.scripts?.prepack, "node control/scripts/build-core.mjs");
 	assert.equal(manifest.exports?.["."]?.default, "./dist/index.js");
 	assert.equal(manifest.exports?.["."]?.types, "./dist/types/control/src/core/index.d.ts");
+	fs.rmSync(path.join(repo, "dist"), { recursive: true, force: true });
+	const linked = fs.mkdtempSync(path.join(os.tmpdir(), "control-core-file-"));
+	try {
+		const fromFile = spawnSync("npm", ["install", "--no-audit", "--no-fund", `file:${repo}`], {
+			cwd: linked,
+			encoding: "utf8",
+		});
+		assert.equal(fromFile.status, 0, `${fromFile.stderr}\n${fromFile.stdout}`);
+		const loaded = spawnSync(process.execPath, ["--input-type=module", "--eval", probe], { cwd: linked, encoding: "utf8" });
+		assert.equal(loaded.status, 0, `${loaded.stderr}\n${loaded.stdout}`);
+	} finally {
+		fs.rmSync(linked, { recursive: true, force: true });
+	}
 	const packed = spawnSync("npm", ["pack", "--json"], { cwd: repo, encoding: "utf8" });
 	assert.equal(packed.status, 0, packed.stderr);
 	const info = JSON.parse(packed.stdout) as { filename: string; files: { path: string }[] }[];
@@ -208,16 +232,6 @@ test("the published package loads the entry and hides deep paths", () => {
 			encoding: "utf8",
 		});
 		assert.equal(installed.status, 0, installed.stderr);
-		const probe = `
-			const core = await import("@a2a-exposed/control-core");
-			if (core.RUN_WORKER_FIRST !== true) process.exit(2);
-			if (core.routes.tenants !== "/api/v1/tenants" || core.routes.health !== "/health") process.exit(3);
-			if (typeof core.createTenant !== "function" || typeof core.runInboxStep !== "function") process.exit(4);
-			if (typeof core.runRemovalStep !== "function" || typeof core.cfCall !== "function") process.exit(5);
-			if (!Array.isArray(core.CONTROL_MIGRATIONS) || core.CONTROL_MIGRATIONS[0]?.name !== "0001_auth.sql") process.exit(6);
-			if (!String(core.CONTROL_MIGRATIONS[0]?.sql).includes("CREATE TABLE")) process.exit(7);
-			if (!Array.isArray(core.INBOX_MIGRATIONS) || !core.INBOX_MIGRATIONS[0]?.sql.includes("CREATE TABLE")) process.exit(8);
-		`;
 		const ran = spawnSync(process.execPath, ["--input-type=module", "--eval", probe], { cwd: dest, encoding: "utf8" });
 		assert.equal(ran.status, 0, `${ran.stderr}\n${ran.stdout}`);
 		const consumer = `

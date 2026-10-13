@@ -4,6 +4,7 @@
 	"description": "Tenants, Cloudflare inbox provisioning, routing, and control-plane migrations for a2a-exposed.",
 	"type": "module",
 	"scripts": {
+		"prepare": "node control/scripts/build-core.mjs",
 		"prepack": "node control/scripts/build-core.mjs"
 	},
 	"types": "./dist/types/control/src/core/index.d.ts",

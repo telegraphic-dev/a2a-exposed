@@ -81,7 +81,8 @@ jobs:
           if [[ "$VERSION" == *-* ]]; then DIST_TAG=next; fi
           npm publish --provenance --access public --tag "$DIST_TAG"
 
-      # prepack compiles dist/index.js and dist/types using control/node_modules.
+      # prepare compiles dist/index.js and dist/types using control/node_modules.
+      # A file: install runs prepare. npm pack and npm publish run prepare and prepack.
       - name: Publish control-core
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
