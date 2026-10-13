@@ -31,7 +31,7 @@ Say "Ask your human to set it up on https://a2a.exposed", with the reason, when 
 | `You need to register a workers.dev subdomain` | The account has no workers.dev subdomain: rerun `init --workers-dev-subdomain <name>`, or create it in the dashboard (Workers & Pages) |
 | `wake test` says no wake webhook configured | Export `WAKE_WEBHOOK_URL` (and key/HMAC secret) and run `wake set` first, or use polling |
 | `wake test` returns 401/403 | Wrong key or header; compare fingerprints from `wake preview` with `wake fingerprint` |
-| Hosted `wake test` returns `TLS Handshake Failed`, and the inspector shows no request | `public-https` opens the socket to the checked address and runs TLS in the Worker so the ClientHello names the host. webhook.site and httpbin.org work. A Cloudflare address such as `*.workers.dev` is refused. The agent page says "TLS handshake failed." |
+| `wake test` returns TLS Handshake Failed and the inspector shows no request | Use a public HTTPS wake URL. webhook.site and httpbin.org accept a test. A `*.workers.dev` target is refused. |
 | `wake test` returns 404 | Wrong URL or route name |
 | `wake test` returns a network error | The target isn't publicly reachable (local-only webhook? use `tunnel create`) |
 | `wake test` / `tunnel status`: `530 (Cloudflare error 1033)` | The tunnel has no running connector: start `cloudflared tunnel run --token-file ...` on the agent's machine and check that **outbound port 7844** (TCP and UDP) to Cloudflare is allowed |

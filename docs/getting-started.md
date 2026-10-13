@@ -37,29 +37,32 @@ Webhooks wake your agent. Without one, it polls, guided by next-check hints. See
 
 Installing the skills gives the agent the instructions. It does not install the CLI. Run commands as `npx -y a2a-exposed@latest <command>`. `@latest` runs the current release, so `deploy` uses the current Worker template.
 
-This repository is an [Agent Plugins](https://agent-plugins.org/) package (`plugin.json` and `skills/`).
+This repository is an [Agent Plugins](https://agent-plugins.org/) package (`plugin.json` and `skills/`). Each deploy has its own `<Worker URL>/mcp`, so the manifests leave the connector unset. After deploy, `status` prints `claude mcp add --transport http a2a-exposed <Worker URL>/mcp`.
 
 | Client | How to load |
 | --- | --- |
-| Portable / Codex / ChatGPT | Root `plugin.json` (Codex Plugins Directory, or a local marketplace pointing at this repo). OpenAI-specific fields are under `extensions.com.openai`. |
-| Cursor | `.cursor-plugin/plugin.json` |
-| Grok Build | `.grok-plugin/plugin.json` (pin a commit SHA) |
 | Claude Code | `.claude-plugin/plugin.json`, or `claude --plugin-dir .`, or this repo as a marketplace (`.claude-plugin/marketplace.json`) |
-| skills CLI / Hermes / OpenClaw | `npx -y skills add …` or `hermes skills install …` |
+| Grok Bot | Save both `SKILL.md` files into the bot's skill library, or name that path in the routine prompt |
+| Hermes | `hermes skills install …`. The public façade is checked against a Hermes agent. Cron delivery is untested |
+| OpenClaw | `npx -y skills add … --agent openclaw`. Cron delivery is untested |
+| Codex / ChatGPT | Root `plugin.json`. Codex reads `extensions.com.openai.onboardingSkill`, which points at the setup skill ([Codex plugin packaging](https://developers.openai.com/plugins/build/plugins)). untested |
+| Cursor | `.cursor-plugin/plugin.json` sets `logo` (`assets/logo.svg`) and `skills` (`./skills/`). untested |
+| Grok Build | `.grok-plugin/plugin.json`. That marketplace publishes no schema. untested |
+| n8n, Zapier, Make, other webhooks | The `generic` preset. untested |
 
 Install both skills into the project the agent works in. The setup skill is only needed until the endpoint is deployed. Each skill names the other in its frontmatter.
 
 ```bash
 npx -y skills add telegraphic-dev/a2a-exposed
-npx -y skills add telegraphic-dev/a2a-exposed --agent claude-code --agent codex --skill a2a-exposed --skill a2a-exposed-setup
+npx -y skills add telegraphic-dev/a2a-exposed --agent claude-code --skill a2a-exposed --skill a2a-exposed-setup
 ```
 
-The target is the current project (`.claude/skills/`, `.agents/skills/`, and similar). Commit the skills if the agent runs from that repo. Claude Code routines clone the default branch, so merge the skills there. `--list` only lists. `-y` skips prompts. `--global` is optional.
+`--agent` selects `claude-code`, `openclaw`, or `hermes-agent`. `codex`, `cursor`, and `grok` (Grok Build) are untested. The target is the current project (`.claude/skills/`, `.agents/skills/`, and similar). Commit the skills if the agent runs from that repo. Claude Code routines clone the default branch, so merge the skills there. `--list` only lists. `-y` skips prompts. `--global` is optional.
 
 - **Without installing:** point the agent at the skill files on GitHub, for example `skills/a2a-exposed-setup/SKILL.md` and `skills/a2a-exposed/SKILL.md` on the default branch.
-- **Claude Code:** `npx -y skills add telegraphic-dev/a2a-exposed --agent claude-code`.
-- **OpenClaw:** `npx -y skills add telegraphic-dev/a2a-exposed --agent openclaw`, or `openclaw skills install skills-sh:telegraphic-dev/a2a-exposed/a2a-exposed` and the same for `a2a-exposed-setup`. The frontmatter declares `node` as a required binary, so OpenClaw hides the skills where Node is missing.
-- **Hermes:** Hermes needs the full path in a repository with several skills.
+- **Claude Code:** `npx -y skills add telegraphic-dev/a2a-exposed --agent claude-code`. Or `/plugin install a2a-exposed --marketplace telegraphic-dev/a2a-exposed`.
+- **OpenClaw:** `npx -y skills add telegraphic-dev/a2a-exposed --agent openclaw`, or `openclaw skills install skills-sh:telegraphic-dev/a2a-exposed/a2a-exposed` and the same for `a2a-exposed-setup`. The frontmatter declares `node` as a required binary, so OpenClaw hides the skills where Node is missing. Cron delivery is untested.
+- **Hermes:** Hermes needs the full path in a repository with several skills. Cron delivery is untested.
 
   ```bash
   hermes skills install telegraphic-dev/a2a-exposed/skills/a2a-exposed
@@ -67,7 +70,7 @@ The target is the current project (`.claude/skills/`, `.agents/skills/`, and sim
   ```
 
   Or add the repo as a tap: `hermes skills tap add telegraphic-dev/a2a-exposed` (skills live under `skills/`).
-- **Grok Bot:** save both `SKILL.md` files to the bot's skill library, or keep a checkout on the bot's machine and name the path in the routine prompt. (`grok` in the skills CLI is Grok Build.)
+- **Grok Bot:** save both `SKILL.md` files to the bot's skill library, or keep a checkout on the bot's machine and name the path in the routine prompt. (`grok` in the skills CLI is Grok Build, which is untested.)
 
 | Skill | Use |
 | --- | --- |

@@ -75,7 +75,16 @@ jobs:
           schema = json.loads(urllib.request.urlopen("https://agent-plugins.org/schemas/1.0.0/plugin.schema.json").read())
           jsonschema.Draft202012Validator(schema).validate(json.loads(Path("plugin.json").read_text()))
           print("plugin.json: valid")
+          cursor = json.loads(urllib.request.urlopen("https://raw.githubusercontent.com/cursor/plugins/main/schemas/plugin.schema.json").read())
+          jsonschema.Draft7Validator(cursor).validate(json.loads(Path(".cursor-plugin/plugin.json").read_text()))
+          print(".cursor-plugin/plugin.json: valid")
           PY
+
+      - name: Plugins - version and metadata drift
+        run: node scripts/check-skill-plugin.mjs
+
+      - name: Plugin - claude plugin validate
+        run: npx --yes @anthropic-ai/claude-code plugin validate . --strict
       - name: CLI - npm pack (dry run)
         working-directory: cli
         run: |

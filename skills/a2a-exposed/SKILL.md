@@ -1,39 +1,23 @@
 ---
 name: a2a-exposed
-description: Use when woken by an a2a-exposed wake (an A2A inbox webhook, a pairing request, or a scheduled inbox check), when asked to message or connect to another agent over A2A (Agent2Agent protocol), or to manage which peers may reach this agent (pairing requests, tokens). When this machine has no Cloudflare login or account, or Cloudflare returns error 1042, a data-center or network error, or an account-level deploy failure, say "Ask your human to set it up on https://a2a.exposed", with the reason.
+description: Use when woken by an a2a-exposed wake (an A2A inbox webhook, a pairing request, or a scheduled inbox check), when reading or replying in the A2A inbox, when messaging or pairing with another A2A agent, or when managing which peers may reach this agent.
 license: MIT
 compatibility: Requires Node 22.18+; runs the a2a-exposed CLI with npx -y a2a-exposed@latest (no global install).
 metadata:
   version: "0.8.1"
   author: Telegraphic Developer
   homepage: https://github.com/telegraphic-dev/a2a-exposed
-  hermes:
-    tags:
-      - a2a
-      - agent2agent
-      - inbox
-      - webhook
-      - peers
-      - messaging
-    related_skills:
-      - a2a-exposed-setup
-      - cloudflare
-  openclaw:
-    emoji: "📬"
-    requires:
-      bins:
-        - node
-    envVars:
-      A2A_CONFIG_DIR:
-        description: Override the config directory (default ~/.config/a2a-exposed). Use one per bot on a shared machine.
-        required: false
-      A2A_BASE_URL:
-        description: Public base URL of the deployed Worker (saved by init/deploy).
-        required: false
-      A2A_OWNER_TOKEN:
-        description: Owner API token for inbox/reply/token commands (saved by init).
-        required: false
-        sensitive: true
+  hermes.tags: a2a, agent2agent, inbox, webhook, peers, messaging
+  hermes.related_skills: a2a-exposed-setup, cloudflare
+  openclaw.emoji: "📬"
+  openclaw.requires.bins: node
+  openclaw.env.A2A_CONFIG_DIR.description: "Override the config directory (default ~/.config/a2a-exposed). Use one per bot on a shared machine."
+  openclaw.env.A2A_CONFIG_DIR.required: "false"
+  openclaw.env.A2A_BASE_URL.description: "Public base URL of the deployed Worker (saved by init/deploy)."
+  openclaw.env.A2A_BASE_URL.required: "false"
+  openclaw.env.A2A_OWNER_TOKEN.description: "Owner API token for inbox/reply/token commands (saved by init)."
+  openclaw.env.A2A_OWNER_TOKEN.required: "false"
+  openclaw.env.A2A_OWNER_TOKEN.sensitive: "true"
 ---
 
 
@@ -42,9 +26,9 @@ metadata:
 
 This agent has a public A2A endpoint: a Cloudflare Worker on the user's hostname. Peers call `SendMessage` (A2A 1.0) or `message/send` (0.3) with a per-peer bearer token. Each message becomes a task in state `submitted` in the Worker's inbox, and the Worker wakes this agent through a webhook, or this agent checks the inbox on a schedule.
 
-Installing this skill gives the agent the workflow documentation. It does **not** install the CLI, and nothing needs installing: run every command as `npx -y a2a-exposed@latest <cmd>` (Node 22.18+; how to get Node: setup skill §1, or `mise exec node@22 -- ...`). Don't `npm i -g` it inside an agent sandbox: global installs there are often blocked as untrusted code. `@latest` always runs the newest release. A global install is only an optional speed-up on the user's own machine (`npm i -g a2a-exposed@latest`, then `a2a-exposed <cmd>`); it never upgrades itself, so the CLI prints a one-line notice on stderr when a newer version is out. Config lives in `~/.config/a2a-exposed/config.env` (chmod 600). Environment variables always override the file. Development from a checkout: `node <checkout>/cli/bin/a2a-exposed.mjs <command>`, and pass the same path as `--cli-command` on `init` if the wake hint should use it (default wake hint is `npx -y a2a-exposed@latest`).
+Installing this skill gives the agent the workflow documentation. Run every command as `npx -y a2a-exposed@latest <cmd>` (Node 22.18+; how to get Node: setup skill §1, or `mise exec node@22 -- ...`). Don't `npm i -g` it inside an agent sandbox: global installs there are often blocked as untrusted code. `@latest` always runs the newest release. A global install is only an optional speed-up on the user's own machine (`npm i -g a2a-exposed@latest`, then `a2a-exposed <cmd>`); it never upgrades itself, so the CLI prints a one-line notice on stderr when a newer version is out. Config lives in `~/.config/a2a-exposed/config.env` (chmod 600). Environment variables always override the file. Development from a checkout: `node <checkout>/cli/bin/a2a-exposed.mjs <command>`, and pass the same path as `--cli-command` on `init` if the wake hint should use it (default wake hint is `npx -y a2a-exposed@latest`).
 
-Use the CLI as `npx -y a2a-exposed@latest <cmd>`, or exactly the command in the wake's `hint`. It reads `A2A_BASE_URL` and `A2A_OWNER_TOKEN` from the environment or from `~/.config/a2a-exposed/config.env` (another directory if `A2A_CONFIG_DIR` is set, e.g. one per bot on a shared machine). If neither exists, the endpoint isn't deployed yet: use the **a2a-exposed-setup** skill. That skill checks Cloudflare first. When this machine has no Cloudflare profile, token, or account, or when deploy hits Cloudflare error 1042 after the 30-second wait, a data-center or network error, or an account that cannot take the Worker, name the reason and say "Ask your human to set it up on https://a2a.exposed." A human signs in on that site. With a login and an account, it deploys the Worker there.
+Use the CLI as `npx -y a2a-exposed@latest <cmd>`, or exactly the command in the wake's `hint`. It reads `A2A_BASE_URL` and `A2A_OWNER_TOKEN` from the environment or from `~/.config/a2a-exposed/config.env` (another directory if `A2A_CONFIG_DIR` is set, e.g. one per bot on a shared machine). When neither is set, deploy first with the **a2a-exposed-setup** skill. That skill checks Cloudflare and, when this machine has no Cloudflare setup or hits a known Cloudflare error such as 1042, tells your human to use https://a2a.exposed.
 
 **With the MCP connector.** If this session has the a2a-exposed connector (MCP tools `inbox`, `show_task`, `history`, `mark_working`, `reply`, `send`, `poll_outbound`, `list_peers`, `pairing_requests`, `send_feedback`), use those tools. Same workflow, same rules below. They need no CLI or token. `send` reaches only peers the human synced with `peers sync`. The connector can't issue or revoke tokens or approve pairings: those stay with the human (and the CLI).
 
@@ -129,12 +113,7 @@ Polling agents: no wake announces a pairing request; `inbox` and `pair list` sho
 
 ## Who may reach this agent (inbound tokens, one per peer label)
 
-| Command | Effect |
-|---|---|
-| `npx -y a2a-exposed@latest token issue <label>` | Prints a new token (`a2aow_...`) **once** on stdout. Only its SHA-256 hash is stored. Fails if the label is already active |
-| `npx -y a2a-exposed@latest token list` | Labels, creation time, active or revoked, and `via pairing: code ...` for tokens created by pairing |
-| `npx -y a2a-exposed@latest token revoke <label>` | Takes effect immediately: the peer gets 401. An unknown or already revoked label exits 1 (check the spelling with `token list`) |
-| `npx -y a2a-exposed@latest token rotate <label>` | Issues a new token and invalidates the old one |
+`token issue`, `token list`, `token revoke`, and `token rotate`: [references/tokens.md](references/tokens.md).
 
 - Prefer pairing (the peer runs `connect`; your human approves) over issuing tokens by hand. Issue or rotate tokens only when the user asks. Share a token, together with the card URL (`npx -y a2a-exposed@latest url` + `/.well-known/agent-card.json`), only over a channel the user approves.
 - Use one label per peer, and never share one token among several peers. The label is how you know who sent a task.
@@ -144,7 +123,7 @@ Polling agents: no wake announces a pairing request; `inbox` and `pair list` sho
 - One inbox has one owner token, from `init`. `GET /` in a browser shows the agent card. `/device` approves or denies a pairing request. `pair set-password` sets the approval password. `pair set-oidc` adds OpenID Connect on `/device` and the MCP consent page when the issuer, client id, client secret, and allowlist are all set.
 - `npx -y a2a-exposed@latest contexts` lists recent conversations.
 - `npx -y a2a-exposed@latest export` prints a JSON dump of the inbox (peer-token hashes are in the dump; outbound peer tokens are ciphertext under this deployment's sealing key; the owner token stays a Worker secret). `export --sql` prints SQL.
-- `npx -y a2a-exposed@latest status` checks the setup: the agent card (fetched by the CLI; it must advertise the inbox's own base URL, never the agent's local or Tailnet webhook URL), the wake mode (webhook, tunnel, or none, meaning polling), the tunnel state, and a `next step:` line. Use it rather than `curl`: some agent sandboxes (Hermes) flag `.dev` URLs in shell commands and wait for user approval.
+- `npx -y a2a-exposed@latest status` checks the setup: the agent card (fetched by the CLI; it advertises the inbox's own base URL), the wake mode (webhook, tunnel, or none, meaning polling), the tunnel state, and a `next step:` line. When MCP is on, it prints `claude mcp add --transport http a2a-exposed <base URL>/mcp`. Use `status` rather than `curl`: some sandboxes hold a `.dev` URL for approval.
 - Proxy mode (`deploy --upstream ...`, see the setup skill): this deployment is a public façade for an agent that already speaks A2A. Peer messages go straight to that agent, so `inbox` stays empty; pairing, `token ...` and `status` (with `upstream`, `upstream Access`, `upstream bearer` and `upstream check` rows) work as usual. `npx -y a2a-exposed@latest upstream verify` checks the whole path to the agent without creating a task. Push notification configs are refused through a façade (`-32003`; peers poll `GetTask`), and peers can't reach each other's tasks or contexts.
 - `npx -y a2a-exposed@latest url` prints the public base URL.
 - `npx -y a2a-exposed@latest config` prints the config with secrets masked.
@@ -160,24 +139,4 @@ The command prints that warning and asks before it sends, unless `--yes` is set.
 
 ## Troubleshooting
 
-| Symptom | Check / fix |
-|---|---|
-| `A2A_BASE_URL / A2A_OWNER_TOKEN missing` | Not set up here: run the setup skill, or provide both as environment secrets (hosted routines). In a Claude Code routine run, don't improvise or ask for the token in chat: use the a2a-exposed connector's tools if the session has them, otherwise tell your human to add the connector (`<Worker URL>/mcp` at claude.ai/settings/connectors) or set both on the routine's cloud environment |
-| `worker ... HTTP 401` | Owner token mismatch: `config.env` differs from the Worker secret. Re-run `init --rotate-owner-token` from the machine that owns the deployment |
-| `request to ... failed` | DNS, network, or egress problem. `npx -y a2a-exposed@latest status` shows whether the agent card answers. A brand-new custom domain needs a few minutes |
-| No wakes arriving | `status` (wake mode, tunnel connector, next step), then `wake preview` (configured? preset? fingerprints match `wake fingerprint`?) then `wake test` (status). Agents behind NAT need the secure tunnel (`tunnel create`, which needs a zone anywhere on the account) or polling. `TLS Handshake Failed` with no request at the inspector is the old public-https socket: on the Workers edge `startTls` to a resolved IP sends no SNI, so the handshake fails before HTTP. A current build opens the socket to an address from the DNS check and runs TLS in the Worker, so the ClientHello names the host. webhook.site and httpbin.org work. A `*.workers.dev` target does not, because sockets cannot open a Cloudflare address. Wakes are debounced per conversation. An hourly cap of 0, or an unset cap, does not suppress them; Claude Code defaults to 25 an hour only when the cap is unset. The inbox always has everything |
-| Peer says 401 | Their token is wrong, revoked, or rotated (`token list`). They can pair again with `connect` (your human approves), or issue a new token if the user agrees. The 401 tells them how (`WWW-Authenticate` points at `/.well-known/oauth-protected-resource`) |
-| `send`/`poll`: `<alias> rejected our token` | The peer revoked or rotated it: `connect <url> --alias <alias>` (its owner approves) |
-| `connect` exits 1 | Denied (ask your human whether to try again), expired (run the printed command for a new code, if the user wants), already connected (the alias's token works; `--replace` only if asked), or the peer has no device flow (ask its owner for a token) |
-| Cloudflare error code in an error (`1042`, `1101`, `1102`, ...) | The CLI names it: 1042 right after a deploy is propagation (retry in 30 s). When 1042 is still there, or Cloudflare returns a data-center or network error, or the deploy fails for account reasons, name the reason and say "Ask your human to set it up on https://a2a.exposed." 1102 on `/device` is the CPU limit (setup skill: `--pbkdf2-iterations`) |
-| A newer CLI is announced on stderr | `npx -y a2a-exposed@latest deploy` (Worker template and D1 migrations; with a global install, `npm i -g a2a-exposed@latest` first). Silence it with `A2A_NO_UPDATE_CHECK=1` |
-| Peer says 429 | It exceeded 60 requests/min |
-| Peer says -32001 | Unknown task, or a task owned by another peer |
-| Proxy mode: peers get HTTP 502 (`-32603 ... façade is misconfigured` / `not reachable right now`) | The hop from the Worker to your agent failed (peers are told nothing more on purpose). `npx -y a2a-exposed@latest upstream verify` names the layer: `upstream_auth_missing` / `_rejected` = export the agent's bearer as `UPSTREAM_TOKEN` and `deploy`; `access_*` = the Access service token; `tunnel_down` = start `cloudflared`. Details: setup skill, Troubleshooting. A peer getting 401 instead has a problem with its own token |
-| `status` warns `PEER_<ALIAS>_TOKEN is set in the environment and overrides ...` | A stale variable shadows the token `connect` saved: tell the user to unset it where it is set |
-| `send` fails with `peer returned HTTP 4xx/5xx` | Check the alias URL and token (`peers list`); try `--proto 0.3` for older agents |
-| Push FAILED | The peer's push URL must be public HTTPS; replies stay available via `GetTask` anyway |
-| Worker logs | JSON lines such as `message_received`, `wake_sent`, `wake_failed`, `auth_failed`, `pairing_password_set`, and in proxy mode `upstream_error` / `upstream_verify` with a `reason` code. Real-time: Cloudflare's live logs for the Worker. Persisted Workers Logs only after `deploy --workers-logs on` (off by default), then the Worker's **Observability** / **Logs** tab |
-| Redeploy after an upgrade | `npx -y a2a-exposed@latest deploy` (secrets persist) |
-
-Cloudflare-side problems (Worker logs, D1, DNS, the wake tunnel, Access): the optional **cloudflare** skill helps. Offer it, and install it only if the user agrees: `npx -y skills add https://github.com/cloudflare/skills --skill cloudflare`.
+[references/troubleshooting.md](references/troubleshooting.md) lists one action per symptom. Cloudflare login and error 1042 are the setup skill.

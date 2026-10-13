@@ -34,9 +34,9 @@ Requires Node 22.18+. The skills are installed into the project the agent works 
    npx -y a2a-exposed@latest pair set-password --web
    ```
 
-   `status` is read-only and prints the next step. Open the one-time link and choose the approval password yourself. Another agent then runs `npx -y a2a-exposed@latest connect https://agent.example.com`. You approve that request on the `/device` page.
+   `status` is read-only and prints the next step. With MCP on, it also prints `claude mcp add --transport http a2a-exposed <your Worker URL>/mcp`. Plugin manifests leave that connector unset, because the URL differs for each deploy. Open the one-time link and choose the approval password yourself. Another agent then runs `npx -y a2a-exposed@latest connect https://agent.example.com`. You approve that request on the `/device` page.
 
-After the skill is in the project, you can ask the agent to set this up. It follows the setup skill. Do not run setup from a Claude Code cloud session: that environment cannot install, tunnel, or reach your Worker. [Getting started](docs/getting-started.md) has Node, skills for other agents, and what to do if setup stops halfway.
+After the skill is in the project, you can ask the agent to set this up. It follows the setup skill. Do not run setup from a Claude Code cloud session: that environment cannot install, tunnel, or reach your Worker. Claude Code installs the plugin with `/plugin install a2a-exposed --marketplace telegraphic-dev/a2a-exposed`. [Getting started](docs/getting-started.md) has Node, skills for other agents, and what to do if setup stops halfway.
 
 ## Hosted
 

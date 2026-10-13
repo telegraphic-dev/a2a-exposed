@@ -17,6 +17,8 @@ const HELP = `a2a-exposed ${VERSION} - public A2A endpoint for any AI agent (Clo
 
 Usage: npx -y a2a-exposed@latest <command> [options]
        (optional speed-up: npm i -g a2a-exposed, then a2a-exposed <command>)
+       --version, -v                 print the version
+       --help, -h                    print this help
 
 Setup (needs Node 22.18+, e.g. \`mise exec node@22 -- npx -y a2a-exposed@latest ...\`, and a Cloudflare login:
 npx cf auth login --no-browser; on a VPS where it fails with HTTP 403 before showing a code, export
@@ -28,6 +30,7 @@ cannot take the Worker, name the reason and say "Ask your human to set it up on 
        [--provider-organization O --provider-url U] [--preset P] [--worker-name W] [--d1-name D]
        [--account-id ID] [--cf-profile NAME] [--cli-command CMD] [--debounce S] [--max-per-hour N]
        [--pairing-approval human|agent|off] [--pbkdf2-iterations N] [--workers-logs on|off] [--mcp on|off] [--cron]
+       [--rotate-owner-token]
        [--upstream URL [--upstream-card-url URL] [--upstream-token-stdin | --no-upstream-token]] [--worker-dir DIR]
                                 deploy the Worker + D1 to your account; wake secrets are read from
                                 env WAKE_WEBHOOK_URL / WAKE_WEBHOOK_KEY / WAKE_HMAC_SECRET (never argv)
@@ -45,7 +48,10 @@ cannot take the Worker, name the reason and say "Ask your human to set it up on 
                                                the Workers maximum; lower only if /device hits error 1102)
                                 --workers-logs on|off  persisted Cloudflare Workers Logs (query strings redacted)
                                 --mcp on|off   remote MCP server at <url>/mcp for Claude and other MCP clients
-                                               (default on; each client needs your approval password once)
+                                               (default on; each client needs your approval password once).
+                                               Plugin manifests leave MCP unset: the URL differs per deploy.
+                                               \`status\` prints \`claude mcp add --transport http a2a-exposed <url>/mcp\`
+                                --rotate-owner-token  on init, replace the owner token; other settings come from config.env
                                 --upstream URL  proxy / expose mode: a public façade for an agent that already
                                                speaks A2A (JSON-RPC) on a private network. URL is its endpoint on
                                                a Cloudflare Tunnel hostname behind Access (never a Tailnet/LAN
@@ -100,6 +106,8 @@ Status
                                 upstream card, Access credential and upstream bearer configured (separately), the
                                 live upstream check, the last failed peer call, card-leak check; warnings for peer
                                 token variables shadowing saved tokens; and the next step to run.
+                                With MCP on, prints \`claude mcp add --transport http a2a-exposed <base URL>/mcp\`.
+                                Proxy mode and --mcp off omit that line.
                                 Read-only; run it after an interruption and continue from "next step". Exit 1 = broken
   upstream verify [--json]      proxy mode: check the façade's whole path, layer by layer: façade peer auth
                                 (unauthenticated call -> 401), then the Worker calls the upstream with its stored

@@ -1,7 +1,7 @@
 // `status`: the next-step logic (pure, no network).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { nextStep, wakeLine } from "../lib/status.mjs";
+import { mcpAddCommand, nextStep, wakeLine } from "../lib/status.mjs";
 import { cardUrlProblem } from "../lib/a2a.mjs";
 
 const healthy = (over = {}) => ({
@@ -9,6 +9,14 @@ const healthy = (over = {}) => ({
 	card: { ok: true, name: "A", versions: ["1.0", "0.3"] }, ownerApi: { ok: true },
 	wake: { preset: "grok-bot", configured: true, hasKey: true, hasHmacSecret: false, hasAccessServiceToken: false, urlFingerprint: "abc" },
 	tunnel: null, zones: null, ...over,
+});
+
+test("mcpAddCommand is the exact claude mcp add line for this inbox", () => {
+	assert.equal(mcpAddCommand({ baseUrl: "https://agent.example.com/", mcp: "on" }),
+		"claude mcp add --transport http a2a-exposed https://agent.example.com/mcp");
+	assert.equal(mcpAddCommand({ baseUrl: "https://agent.example.com", mcp: "off" }), "");
+	assert.equal(mcpAddCommand({ baseUrl: "https://agent.example.com", upstream: "https://up.example.com", mcp: "on" }), "");
+	assert.equal(mcpAddCommand({ mcp: "on" }), "");
 });
 
 test("nextStep: the first missing piece, in setup order", () => {

@@ -2,6 +2,12 @@
 
 The Worker is a remote [MCP](https://modelcontextprotocol.io) server at `https://<your Worker URL>/mcp` (Streamable HTTP). An MCP client uses the inbox with no CLI, Node, or owner token in the client.
 
+Each deploy has its own host, so the plugin manifests leave MCP unset. After deploy, `npx -y a2a-exposed@latest status` prints the exact line for the saved base URL when MCP is on:
+
+```text
+claude mcp add --transport http a2a-exposed https://<your Worker URL>/mcp
+```
+
 It is on by default for an inbox. It does nothing until you approve a client with the approval password. `--mcp off` on `init` or `deploy` turns it off. Proxy mode has none. `GET /health` includes `"mcp": true` when it is on.
 
 ## Add a client

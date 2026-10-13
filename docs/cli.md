@@ -4,6 +4,7 @@ Node 22.18+, zero dependencies. Nothing needs a global install:
 
 ```bash
 npx -y a2a-exposed@latest --help
+npx -y a2a-exposed@latest --version
 npx -y a2a-exposed@latest <command>
 ```
 
@@ -29,7 +30,7 @@ init [--hostname <host> | --workers-dev [--workers-dev-subdomain NAME]]
      [--account-id ID] [--cf-profile NAME] [--cli-command CMD]
      [--debounce S] [--max-per-hour N]
      [--pairing-approval human|agent|off] [--pbkdf2-iterations N]
-     [--workers-logs on|off] [--mcp on|off] [--cron]
+     [--workers-logs on|off] [--mcp on|off] [--cron] [--rotate-owner-token]
      [--upstream URL [--upstream-card-url URL] [--upstream-token-stdin | --no-upstream-token]]
      [--worker-dir DIR] [--tunnel]
 ```
@@ -86,7 +87,7 @@ For a webhook that only listens locally. Needs Zero Trust and a zone on the acco
 
 | Command | Effect |
 | --- | --- |
-| `status [--json]` | Deployment, base URL, agent card, wake mode (webhook, tunnel, or none), tunnel state, and in proxy mode the upstream card, Access credential, upstream bearer, live check, last failed peer call, and a card-leak check. Warns when a peer-token variable shadows a saved token. Prints the next step. Exit 1 means something is broken. Read-only, except the no-op upstream probe in proxy mode |
+| `status [--json]` | Deployment, base URL, agent card, wake mode (webhook, tunnel, or none), tunnel state, and in proxy mode the upstream card, Access credential, upstream bearer, live check, last failed peer call, and a card-leak check. Warns when a peer-token variable shadows a saved token. With MCP on, prints `claude mcp add --transport http a2a-exposed <base URL>/mcp`. Prints the next step. Exit 1 means something is broken. Read-only, except the no-op upstream probe in proxy mode |
 | `upstream verify [--json]` | Proxy mode only. Exit 1 unless the A2A app answered. `status` runs the same check |
 | `url` | Public base URL |
 | `config` | Masked config and its path |

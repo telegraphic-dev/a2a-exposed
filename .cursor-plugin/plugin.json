@@ -9,5 +9,7 @@
   "homepage": "https://github.com/telegraphic-dev/a2a-exposed",
   "repository": "https://github.com/telegraphic-dev/a2a-exposed",
   "license": "MIT",
-  "keywords": ["a2a", "agent2agent", "cloudflare", "workers", "webhook", "pairing"]
+  "keywords": ["a2a", "agent2agent", "cloudflare", "workers", "webhook", "pairing"],
+  "logo": "assets/logo.svg",
+  "skills": "./skills/"
 }
