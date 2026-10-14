@@ -204,7 +204,7 @@ function applyFlags(o) {
 	if (o["workers-dev-subdomain"] !== undefined && !WD.LABEL_RE.test(o["workers-dev-subdomain"]))
 		die("--workers-dev-subdomain must be lowercase letters, digits and hyphens (a DNS label)");
 	if (upd.PAIRING_APPROVAL !== undefined && !PAIRING_MODES.includes(upd.PAIRING_APPROVAL))
-		die(`--pairing-approval must be one of ${PAIRING_MODES.join(" | ")} (human: approval password on the /device page; agent: also \`pair approve\`; off: no device-flow pairing)`);
+		die(`--pairing-approval must be one of ${PAIRING_MODES.join(" | ")} (human: the owner token via \`pair approve\`, or the approval password on the /device page; agent: the agent runs \`pair approve\` after the human says yes; off: no device-flow pairing)`);
 	if (upd.A2A_PBKDF2_ITERATIONS !== undefined) {
 		const n = Number(upd.A2A_PBKDF2_ITERATIONS);
 		if (!Number.isInteger(n) || n < 50000 || n > 100000)

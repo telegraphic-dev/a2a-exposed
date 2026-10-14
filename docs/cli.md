@@ -115,7 +115,7 @@ The owner token authenticates these commands.
 | `pair set-password` | The same, in a terminal, no echo. The human types the password there |
 | `pair set-oidc --issuer URL --client-id ID --subjects SUB[,SUB...] [--methods password,oidc] [--secret-stdin]` | Optional OpenID Connect on `/device` and the MCP consent page. Deploy uploads `APPROVAL_OIDC_CLIENT_SECRET` only when that variable is set in the environment you use for deploy. `--secret-stdin` checks one line and discards it. `config.env` keeps the issuer and client id |
 | `pair list [--json]` | Pending requests, the approval mode, and when the password was set |
-| `pair approve <code>` | Only when `--pairing-approval agent`, after the human says yes |
+| `pair approve <code>` | Approves with the owner token. In human mode the decision is the owner's. In agent mode, run it only after the human says yes |
 | `pair deny <code>` | Any mode. On `/device`, deny needs no password |
 
 ## Tokens and outbound peers

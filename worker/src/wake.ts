@@ -80,7 +80,7 @@ export function wakePayload(ev: WakeEvent, cli: string): Record<string, unknown>
 export function pairingInstructions(p: PairingInfo, cli: string): string {
 	return p.approval === "human"
 		? `Ask your human; never approve on your own. Show them the code ${p.userCode} and give them this link: ${p.verificationUriComplete} . ` +
-			`They approve or deny there with their approval password, after checking the code with the other agent's owner. Details: \`${cli} pair list\`.`
+			`They approve there with their approval password, or with \`${cli} pair approve ${p.userCode}\` (the owner token), after checking the code with the other agent's owner. Deny with \`${cli} pair deny ${p.userCode}\`. Details: \`${cli} pair list\`.`
 		: `Ask your human; never approve on your own. Show them the code ${p.userCode}, who is asking, and the link ${p.verificationUriComplete} . ` +
 			`Only if they say yes, run \`${cli} pair approve ${p.userCode}\`; if they say no (or don't answer), \`${cli} pair deny ${p.userCode}\`.`;
 }

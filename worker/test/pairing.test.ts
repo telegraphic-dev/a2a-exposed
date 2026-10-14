@@ -2,8 +2,9 @@
 // wake webhook captured. Run: npm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import worker from "../src/index.ts";
+import worker, { runOwnerRpc } from "../src/index.ts";
 import { DASHBOARD_ACTOR_HEADER } from "../src/owner-rpc.ts";
+import { resolveTenant } from "../src/tenancy.ts";
 import * as P from "../src/pairing.ts";
 import { wakeSummary, renderWake, type WakeEvent } from "../src/wake.ts";
 import { d1 } from "./d1.ts";
@@ -244,7 +245,7 @@ test("PAIRING_APPROVAL=off: no pairing scheme, endpoints 404, plain 401", async 
 	assert.equal(a.status, 404);
 });
 
-test("human approval: pending, slow_down, page approve with the password, single-use token, owner approve refused", async (t) => {
+test("human approval: pending, slow_down, page approve with the password, single-use token", async (t) => {
 	const s = setup(); t.after(s.restore);
 	const st = await s.start({ client_name: 'Barry <script>alert(1)</script>', client_id: "barry", agent_card_url: "https://barry.example.org/.well-known/agent-card.json" });
 	assert.equal(st.status, 200);
@@ -281,13 +282,6 @@ test("human approval: pending, slow_down, page approve with the password, single
 	advance(16);
 	assert.equal((await s.poll(d.device_code)).data.error, "authorization_pending");
 
-	// human mode: the owner API (the agent) cannot approve, and the dashboard header does not change that
-	const oa = await s.owner("POST", `/owner/pairing/${d.user_code}/approve`);
-	assert.equal(oa.status, 403);
-	assert.match(oa.data.error, /approval mode is human: the owner approves on https:\/\/agent\.example\.com\/device\?user_code=/);
-	const spoofed = await s.call("POST", `/owner/pairing/${d.user_code}/approve`, { headers: { authorization: "Bearer owner-secret", [DASHBOARD_ACTOR_HEADER]: "human" } });
-	assert.equal(spoofed.status, 403);
-	assert.match(spoofed.data.error, /approval mode is human/);
 	const list = await s.owner("GET", "/owner/pairing");
 	assert.deepEqual([list.data.mode, list.data.passwordSet, list.data.pending.length, list.data.pending[0].userCode], ["human", false, 1, d.user_code]);
 
@@ -349,6 +343,54 @@ test("human approval: pending, slow_down, page approve with the password, single
 	// revocation works as for any token
 	await s.owner("DELETE", `/owner/peers/${peers[0].label}`);
 	assert.equal((await s.call("POST", "/", { json: { jsonrpc: "2.0", id: 1, method: "GetTask", params: { id: "x" } }, headers: { authorization: `Bearer ${p.data.access_token}` } })).status, 401);
+});
+
+test("human mode: the owner token approves and denies; the device poll returns the token; agent and anonymous calls are refused", async (t) => {
+	const lines: string[] = [];
+	const orig = console.log;
+	console.log = (...args: unknown[]) => { lines.push(args.map((part) => String(part)).join(" ")); orig(...args); };
+	t.after(() => { console.log = orig; });
+	const s = setup(); t.after(s.restore);
+	const st = await s.start({ client_name: "Barry Bot", client_id: "barry" }, "203.0.113.70");
+	assert.equal(st.status, 200, JSON.stringify(st.data));
+	const d = st.data;
+	const anon = await s.call("POST", `/owner/pairing/${d.user_code}/approve`);
+	assert.equal(anon.status, 401);
+	const peerTok = "a2aow_" + "c".repeat(43);
+	const agent = await s.call("POST", `/owner/pairing/${d.user_code}/approve`, { headers: { authorization: `Bearer ${peerTok}`, [DASHBOARD_ACTOR_HEADER]: "human" } });
+	assert.equal(agent.status, 401);
+	const headerOnly = await s.call("POST", `/owner/pairing/${d.user_code}/approve`, { headers: { [DASHBOARD_ACTOR_HEADER]: "human" } });
+	assert.equal(headerOnly.status, 401);
+	const rpc = await runOwnerRpc(resolveTenant(s.env), { waitUntil() {}, passThroughOnException() {} }, {
+		accountId: "acct_owner", method: "POST", path: `/owner/pairing/${d.user_code}/approve`, actor: "human",
+	});
+	assert.equal(rpc.status, 404);
+	assert.equal((await s.owner("GET", "/owner/pairing")).data.pending.length, 1, "an in-process host call does not approve a self-hosted Worker");
+
+	const approved = await s.call("POST", `/owner/pairing/${d.user_code}/approve`, {
+		headers: { authorization: "Bearer owner-secret", [DASHBOARD_ACTOR_HEADER]: "human" },
+	});
+	assert.equal(approved.status, 200, JSON.stringify(approved.data));
+	assert.equal(approved.data.decision, "approved");
+	const decided = s.DB.db.prepare("SELECT decided_by, status FROM device_requests WHERE user_code = ?").get(d.user_code.replace("-", "")) as { decided_by: string; status: string };
+	assert.equal(decided.decided_by, "owner");
+	assert.equal(decided.status, "approved");
+	const logged = lines.find((line) => line.includes('"event":"pairing_approved"')) ?? "";
+	assert.match(logged, /"by":"owner"/);
+	assert.equal(logged.includes('"by":"human"'), false);
+	const polled = await s.poll(d.device_code);
+	assert.equal(polled.status, 200, JSON.stringify(polled.data));
+	assert.match(polled.data.access_token, /^a2aow_[A-Za-z0-9_-]{43}$/);
+	assert.equal(polled.data.token_type, "Bearer");
+	assert.equal(polled.data.peer_label, "Barry-Bot");
+
+	const deny = (await s.start(undefined, "203.0.113.71")).data;
+	const denied = await s.owner("POST", `/owner/pairing/${deny.user_code}/deny`);
+	assert.equal(denied.status, 200, JSON.stringify(denied.data));
+	assert.equal(denied.data.decision, "denied");
+	const denyRow = s.DB.db.prepare("SELECT decided_by FROM device_requests WHERE user_code = ?").get(deny.user_code.replace("-", "")) as { decided_by: string };
+	assert.equal(denyRow.decided_by, "owner");
+	assert.equal((await s.poll(deny.device_code)).data.error, "access_denied");
 });
 
 test("a pairing label comes from the client name, a second one is suffixed, and inbox from uses it", async (t) => {

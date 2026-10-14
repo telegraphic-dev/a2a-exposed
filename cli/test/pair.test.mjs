@@ -359,15 +359,17 @@ test("connect against the real Worker (agent approval): pair list, pair approve,
 	assert.match(r.stderr, /no pairing request with that code/);
 });
 
-test("human approval mode: pair approve is refused and points to the /device page", async (t) => {
+test("human approval mode: the owner token approves and the peer collects the token", async (t) => {
 	const w = await realWorker(t);
 	const ownerSide = sandbox(t, { A2A_BASE_URL: w.url, A2A_OWNER_TOKEN: "owner-tok", A2A_D1_ID: "d1", A2A_WORKER_NAME: "server", A2A_WORKER_DIR: "/nonexistent" });
-	const client = sandbox(t);
+	const client = sandbox(t, { A2A_AGENT_NAME: "Client Bot", A2A_BASE_URL: "https://client.example.com" });
 	const code = JSON.parse((await client.cli(["connect", w.url, "--no-wait", "--json"])).stdout.split("\n")[0]).user_code;
-	const r = await ownerSide.cli(["pair", "approve", code]);
-	assert.equal(r.status, 1);
-	assert.match(r.stderr, new RegExp(`approval mode is human: the owner approves on http://127\\.0\\.0\\.1:\\d+/device\\?user_code=${code} with the approval password`));
-	assert.match(r.stderr, /`pair approve` works only after `npx -y a2a-exposed@latest deploy --pairing-approval agent`/);
+	const list = await ownerSide.cli(["pair", "list"]);
+	assert.match(list.stdout, /^approval: human \(the owner approves with the owner token, or on http:\/\/127\.0\.0\.1:\d+\/device with the approval password\)/m);
+	const anon = await fetch(`${w.url}/owner/pairing/${code}/approve`, { method: "POST" });
+	assert.equal(anon.status, 401);
+	const peer = await fetch(`${w.url}/owner/pairing/${code}/approve`, { method: "POST", headers: { authorization: "Bearer a2aow_" + "c".repeat(43) } });
+	assert.equal(peer.status, 401);
 	const st = await ownerSide.cli(["status", "--json"], { extraEnv: { A2A_VERIFY_TRIES: "0" } });
 	const j = JSON.parse(st.stdout);
 	assert.equal(j.pairing.mode, "human");
@@ -377,6 +379,14 @@ test("human approval mode: pair approve is refused and points to the /device pag
 	const txt = await ownerSide.cli(["status"]);
 	assert.match(txt.stdout, /^pairing: +human approval; approval password NOT SET; 1 pending request\(s\): npx -y a2a-exposed@latest pair list$/m);
 	assert.match(txt.stdout, /^also: +peers can't connect yet: run `npx -y a2a-exposed@latest pair set-password --web`/m);
+	const r = await ownerSide.cli(["pair", "approve", code]);
+	assert.equal(r.status, 0, r.stderr);
+	assert.match(r.stdout, new RegExp(`^approved ${code}`));
+	const done = await client.cli(["connect", w.url, "--no-wait", "--json"]);
+	assert.equal(done.status, 0, done.stderr + done.stdout);
+	const lines = done.stdout.trim().split("\n").map((l) => JSON.parse(l));
+	assert.equal(lines[lines.length - 1].status, "connected");
+	assert.match(client.config().PEER_SERVER_INBOX_TOKEN, /^a2aow_/);
 });
 
 test("init --pairing-approval only takes human, agent or off", async (t) => {

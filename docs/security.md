@@ -12,7 +12,7 @@ Rate limit: 60 requests per minute per peer. Request bodies are limited to 1 MiB
 
 ## Pairing
 
-Device codes are 256 random bits, stored hashed, single-use, and valid for 10 minutes. The human's approval password approves a request. The Worker stores that password as a slow hash: PBKDF2 with SHA-256, a random salt, and 100,000 iterations (the most Cloudflare Workers allow). `--pbkdf2-iterations` can lower it to 50,000 when the free-plan CPU limit, error 1102, is hit. Deny on `/device` asks for the code.
+Device codes are 256 random bits, stored hashed, single-use, and valid for 10 minutes. The owner approves a request with the owner token or with the approval password on `/device`. The Worker stores that password as a slow hash: PBKDF2 with SHA-256, a random salt, and 100,000 iterations (the most Cloudflare Workers allow). `--pbkdf2-iterations` can lower it to 50,000 when the free-plan CPU limit, error 1102, is hit. Deny on `/device` asks for the code. `pair deny` with the owner token also denies.
 
 The password is set with `pair set-password --web` (a one-time link) or in a terminal with `pair set-password`. Wrong passwords lock out per code, per IP, and globally. New requests are capped per IP and in total.
 
@@ -24,7 +24,7 @@ Optional OpenID Connect (`APPROVAL_OIDC_*`) adds an "Approve with …" button on
 
 ## Owner
 
-The owner API (inbox, replies, tokens) uses a separate `OWNER_TOKEN` Worker secret, compared in constant time. Both sides are SHA-256 hashed first. The CLI keeps it in `config.env`. Whoever holds it can issue peer tokens.
+The owner API (inbox, replies, tokens, pairing decisions) uses a separate `OWNER_TOKEN` Worker secret, compared in constant time. Both sides are SHA-256 hashed first. The CLI keeps it in `config.env`. Whoever holds it can issue peer tokens and can approve or deny a pairing request. In human mode that decision is recorded as the owner. A call with no token, or with a peer token, is refused.
 
 Outbound peer tokens from `peers sync` are sealed with a key derived from that secret, so existing ciphertext still decrypts after an upgrade.
 
