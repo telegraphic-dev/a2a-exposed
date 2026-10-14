@@ -708,16 +708,49 @@ test("TenantStore.owner runs an allowlisted owner call and does not return a pee
 	assert.equal(pending.some((row) => row.userCode === code && row.clientName === "Barry Bot" && row.clientId === "barry-alias" && row.agentCardUrl === "https://barry.example/.well-known/agent-card.json"), true);
 	const refused = await stub.owner({ accountId: "acct_carol", method: "POST", path: `/owner/pairing/${code}/approve` });
 	assert.equal(refused.status, 403);
-	const httpSpoof = await mf.dispatchFetch(`https://carol.example.com/owner/pairing/${code}/approve`, {
+	assert.match(String((refused.body as { error?: string }).error || ""), /this call cannot approve/);
+	const httpNoAuth = await mf.dispatchFetch(`https://carol.example.com/owner/pairing/${code}/approve`, {
 		method: "POST",
-		headers: { authorization: "Bearer owner-carol", "content-type": "application/json", "x-a2a-dashboard-actor": "human" },
+		headers: { "content-type": "application/json", "x-a2a-dashboard-actor": "human" },
 	});
-	assert.equal(httpSpoof.status, 403);
+	assert.equal(httpNoAuth.status, 401);
+	const httpPeer = await mf.dispatchFetch(`https://carol.example.com/owner/pairing/${code}/approve`, {
+		method: "POST",
+		headers: { authorization: "Bearer a2aow_" + "b".repeat(43), "content-type": "application/json", "x-a2a-dashboard-actor": "human" },
+	});
+	assert.equal(httpPeer.status, 401);
 	const approved = await stub.owner({ accountId: "acct_carol", method: "POST", path: `/owner/pairing/${code}/approve`, actor: "human" });
 	assert.equal(approved.status, 200);
 	assert.equal((approved.body as { decision?: string }).decision, "approved");
 	assert.equal(await saw('"event":"pairing_approved"'), true);
 	assert.equal(lines.some((line) => line.includes('"event":"pairing_approved"') && line.includes('"by":"human"')), true);
+
+	const ownerHttpStart = await mf.dispatchFetch("https://carol.example.com/oauth/device_authorization", {
+		method: "POST",
+		headers: { "content-type": "application/x-www-form-urlencoded", "cf-connecting-ip": "198.51.100.24" },
+		body: "client_name=Owner+Http&client_id=owner-http",
+	});
+	const ownerHttpDevice = await ownerHttpStart.json() as { user_code?: string; device_code?: string };
+	assert.equal(ownerHttpStart.status, 200, JSON.stringify(ownerHttpDevice));
+	const ownerHttpAt = lines.length;
+	const ownerHttp = await mf.dispatchFetch(`https://carol.example.com/owner/pairing/${ownerHttpDevice.user_code}/approve`, {
+		method: "POST",
+		headers: { authorization: "Bearer owner-carol", "content-type": "application/json", "x-a2a-dashboard-actor": "human" },
+	});
+	const ownerHttpBody = await ownerHttp.json() as { decision?: string; error?: string };
+	assert.equal(ownerHttp.status, 200, JSON.stringify(ownerHttpBody));
+	assert.equal(ownerHttpBody.decision, "approved");
+	const ownerHttpLine = lines.slice(ownerHttpAt).find((line) => line.includes('"event":"pairing_approved"')) ?? "";
+	assert.match(ownerHttpLine, /"by":"owner"/);
+	assert.equal(ownerHttpLine.includes('"by":"human"'), false);
+	const ownerHttpPoll = await mf.dispatchFetch("https://carol.example.com/oauth/token", {
+		method: "POST",
+		headers: { "content-type": "application/x-www-form-urlencoded", "cf-connecting-ip": "198.51.100.25" },
+		body: `grant_type=${encodeURIComponent("urn:ietf:params:oauth:grant-type:device_code")}&device_code=${encodeURIComponent(ownerHttpDevice.device_code || "")}`,
+	});
+	const ownerHttpToken = await ownerHttpPoll.json() as { access_token?: string; error?: string };
+	assert.equal(ownerHttpPoll.status, 200, JSON.stringify(ownerHttpToken));
+	assert.match(ownerHttpToken.access_token || "", /^a2aow_/);
 
 	const deniedStart = await mf.dispatchFetch("https://carol.example.com/oauth/device_authorization", {
 		method: "POST",
@@ -816,4 +849,78 @@ test("TenantStore.deleteStorage wipes the object and a second call succeeds", as
 	const stayed = await stub.storageStatus();
 	assert.equal(stayed.configured, false);
 	assert.deepEqual(stayed.tables, []);
+});
+
+test("self-host workerd: human mode owner token approves, the device poll returns the token, and agent calls are refused", async (t) => {
+	const base = "https://agent.example.com";
+	const mf = await start({
+		bindings: { PUBLIC_URL: base, OWNER_TOKEN: "owner-secret", PAIRING_APPROVAL: "human", AGENT_NAME: "Test Inbox" },
+		durableObjects: { TENANT_DO: { className: "TenantStore", useSQLite: true } },
+	});
+	t.after(() => mf.dispose());
+	await mf.ready;
+	await migrateD1(mf);
+	const grant = "urn:ietf:params:oauth:grant-type:device_code";
+	const startDevice = async (ip: string, name: string) => {
+		const res = await mf.dispatchFetch(base + "/oauth/device_authorization", {
+			method: "POST",
+			headers: { "content-type": "application/x-www-form-urlencoded", "cf-connecting-ip": ip },
+			body: `client_name=${encodeURIComponent(name)}&client_id=barry`,
+		});
+		const data = await res.json() as { user_code?: string; device_code?: string; error?: string };
+		assert.equal(res.status, 200, JSON.stringify(data));
+		return data;
+	};
+	const device = await startDevice("198.51.100.40", "Barry Bot");
+	const code = device.user_code || "";
+	const anon = await mf.dispatchFetch(`${base}/owner/pairing/${code}/approve`, {
+		method: "POST",
+		headers: { "x-a2a-dashboard-actor": "human" },
+	});
+	assert.equal(anon.status, 401);
+	const peer = await mf.dispatchFetch(`${base}/owner/pairing/${code}/approve`, {
+		method: "POST",
+		headers: { authorization: "Bearer a2aow_" + "c".repeat(43), "x-a2a-dashboard-actor": "human" },
+	});
+	assert.equal(peer.status, 401);
+	const approved = await mf.dispatchFetch(`${base}/owner/pairing/${code}/approve`, {
+		method: "POST",
+		headers: { authorization: "Bearer owner-secret", "content-type": "application/json", "x-a2a-dashboard-actor": "human" },
+	});
+	const approvedBody = await approved.json() as { decision?: string; error?: string };
+	assert.equal(approved.status, 200, JSON.stringify(approvedBody));
+	assert.equal(approvedBody.decision, "approved");
+	const row = await (await mf.getD1Database("DB")).prepare("SELECT decided_by, status FROM device_requests WHERE user_code = ?")
+		.bind(code.replace("-", "")).first<{ decided_by: string; status: string }>();
+	assert.equal(row?.decided_by, "owner");
+	assert.equal(row?.status, "approved");
+	const polled = await mf.dispatchFetch(base + "/oauth/token", {
+		method: "POST",
+		headers: { "content-type": "application/x-www-form-urlencoded", "cf-connecting-ip": "198.51.100.41" },
+		body: `grant_type=${encodeURIComponent(grant)}&device_code=${encodeURIComponent(device.device_code || "")}`,
+	});
+	const token = await polled.json() as { access_token?: string; token_type?: string; peer_label?: string; error?: string };
+	assert.equal(polled.status, 200, JSON.stringify(token));
+	assert.match(token.access_token || "", /^a2aow_/);
+	assert.equal(token.token_type, "Bearer");
+	assert.equal(token.peer_label, "Barry-Bot");
+
+	const second = await startDevice("198.51.100.42", "Deny Bot");
+	const denied = await mf.dispatchFetch(`${base}/owner/pairing/${second.user_code}/deny`, {
+		method: "POST",
+		headers: { authorization: "Bearer owner-secret", "content-type": "application/json" },
+	});
+	const deniedBody = await denied.json() as { decision?: string; error?: string };
+	assert.equal(denied.status, 200, JSON.stringify(deniedBody));
+	assert.equal(deniedBody.decision, "denied");
+	const denyRow = await (await mf.getD1Database("DB")).prepare("SELECT decided_by FROM device_requests WHERE user_code = ?")
+		.bind((second.user_code || "").replace("-", "")).first<{ decided_by: string }>();
+	assert.equal(denyRow?.decided_by, "owner");
+	const deniedPoll = await mf.dispatchFetch(base + "/oauth/token", {
+		method: "POST",
+		headers: { "content-type": "application/x-www-form-urlencoded", "cf-connecting-ip": "198.51.100.43" },
+		body: `grant_type=${encodeURIComponent(grant)}&device_code=${encodeURIComponent(second.device_code || "")}`,
+	});
+	const deniedToken = await deniedPoll.json() as { error?: string };
+	assert.equal(deniedToken.error, "access_denied");
 });

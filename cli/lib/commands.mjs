@@ -62,7 +62,7 @@ export async function inbox(o) {
 	}
 }
 
-const PAIRING_NOTE = `Tell your human who is asking, the code and the link (details: ${CLI} pair list). Never approve on your own: in human mode they approve on the link with their approval password; in agent mode run \`pair approve <code>\` only after they say yes.`;
+const PAIRING_NOTE = `Tell your human who is asking, the code and the link (details: ${CLI} pair list). Never approve on your own: in human mode the owner approves with the owner token or on the link with the approval password; in agent mode run \`pair approve <code>\` only after they say yes.`;
 
 export const show = async (id) => out(await owner("GET", `/owner/tasks/${q(id)}`));
 

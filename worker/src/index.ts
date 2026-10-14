@@ -355,7 +355,7 @@ function securitySchemes(ctx: TenantContext): Json {
 		description: "Get a bearer token without exchanging secrets in chat: OAuth 2.0 Device Authorization Grant (RFC 8628). " +
 			"POST client_name (your agent's name) and agent_card_url (your card) form-encoded to deviceAuthorizationUrl; show the user_code and " +
 			"verification_uri_complete to your human, who confirms the code with this agent's owner; poll tokenUrl with grant_type=" + P.DEVICE_GRANT +
-			" every `interval` seconds. The owner approves every request" + (pairingMode(ctx) === "human" ? " on the verification page." : ".") +
+			" every `interval` seconds. The owner approves every request" + (pairingMode(ctx) === "human" ? " with the owner token or on the verification page." : ".") +
 			" The access_token is a per-peer token for Authorization: Bearer (no refresh token; the owner can revoke it).",
 		flows: { deviceCode: { deviceAuthorizationUrl: u.device, tokenUrl: u.token, scopes: { a2a: "Send messages to this agent and read the tasks you created" } } },
 		oauth2MetadataUrl: u.metadata,
@@ -1716,11 +1716,16 @@ async function ownerPairing(req: Request, ctx: TenantContext, m: string, seg: st
 		if (!code) return json({ error: "not a valid code (it looks like WDJB-4827)" }, 400);
 		const approve = seg[1] === "approve";
 		// The header is set only by runOwnerRpc for actor "human". A network request is not trusted, so the same
-		// header on /owner/* does not approve and does not change who is logged.
+		// header on /owner/* does not change who is logged.
+		// handleOwner already returned 401 unless this request presented the owner token or is an in-process call.
+		// The owner token approves and denies in human mode, and decide records that as the owner. An in-process
+		// call that is not the human actor is the agent path: human mode still refuses its approve.
 		const dashboardHuman = trusted && req.headers.get(DASHBOARD_ACTOR_HEADER) === "human";
-		if (approve && mode !== "agent" && !dashboardHuman)
-			return json({ error: `approval mode is human: the owner approves on ${oauthUrls(ctx).page}?user_code=${P.formatUserCode(code)} with the approval password. \`pair approve\` works only after \`${cliCommand(ctx)} deploy --pairing-approval agent\`, and only if your human wants the agent to approve. \`pair deny\` works in every mode.` }, 403);
-		const d = await decide(ctx, code, approve, dashboardHuman ? "human" : approve ? "agent" : "owner");
+		const ownerAuthed = !trusted;
+		if (approve && mode !== "agent" && !dashboardHuman && !ownerAuthed)
+			return json({ error: `approval mode is human: this call cannot approve. The owner approves with the owner token, or on ${oauthUrls(ctx).page}?user_code=${P.formatUserCode(code)} with the approval password.` }, 403);
+		const by = dashboardHuman ? "human" : approve && mode === "agent" ? "agent" : "owner";
+		const d = await decide(ctx, code, approve, by);
 		if (!d.ok) return json({ error: d.error }, 409);
 		return json({ ok: true, decision: approve ? "approved" : "denied", userCode: P.formatUserCode(code), label: d.label || null,
 			clientName: d.request.client_name || d.request.client_id || null, replaced: !!d.replaced });

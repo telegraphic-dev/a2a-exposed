@@ -42,8 +42,9 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
                                                (npx cf auth create NAME --no-browser); saved, used by every cf call
                                 --d1-name      D1 database to create or reuse (default: worker name)
                                 --pairing-approval  who approves device-flow pairing requests (default human:
-                                               approval password on the /device page; agent: also \`pair approve\`;
-                                               off: no pairing endpoints, \`token issue\` only)
+                                               the owner token via \`pair approve\`, or the approval password
+                                               on the /device page; agent: the agent runs \`pair approve\` after
+                                               the human says yes; off: no pairing endpoints, \`token issue\` only)
                                 --pbkdf2-iterations  approval-password hashing cost, 50000-100000 (default 100000,
                                                the Workers maximum; lower only if /device hits error 1102)
                                 --workers-logs on|off  persisted Cloudflare Workers Logs (query strings redacted)
@@ -159,7 +160,8 @@ Pairing (OAuth 2.0 device flow, RFC 8628: agents connect without pasting tokens 
                           Leave the issuer unset and approval stays the password page
   pair list [--json]      pending pairing requests (code, claimed name/card, address), the approval mode and
                           when the approval password was set
-  pair approve <code>     approve (only with --pairing-approval agent, after your human said yes)
+  pair approve <code>     approve with the owner token (human mode records the owner; in agent
+                          mode, run it only after your human said yes)
   pair deny <code>        deny (any mode; on the /device page deny needs no password)
 
 Inbound peer tokens (one per peer label; paired agents get one too)

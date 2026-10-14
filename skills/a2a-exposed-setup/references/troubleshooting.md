@@ -14,7 +14,7 @@ Name the reason, then use the sentence in [Getting started](https://github.com/t
 | `connect`: `not accepting more pairing requests` | The peer's flood limits (5 per IP per 10 minutes, 10 pending): wait and try again |
 | `/device` says no approval password is set | Run `npx -y a2a-exposed@latest pair set-password --web` and send your human the one-time link (never open it yourself); or they run `pair set-password` in a terminal |
 | Setup link says "invalid, expired or already used" | Links last 15 minutes, work once and are replaced by a newer link: run `pair set-password --web` again |
-| `pair approve`: `approval mode is human` | By design: your human approves on the `/device` link. Use `deploy --pairing-approval agent` only if the user wants the agent to approve after asking in chat |
+| `pair approve` is unauthorized | The owner token does not match the Worker. A missing token, or a peer token, cannot approve. In human mode the owner token approves and the peer collects its token on the next poll |
 | `connect`: `peer "<alias>" already has a token that works` | Nothing to do (send with `send --to <alias>`); to replace it deliberately, `connect ... --replace` |
 | `connect`/`send`: `rejected our token (HTTP 401 ...)` | The peer revoked or rotated it: `connect <url> --alias <alias>` again (its owner approves) |
 | `/device` or the setup page: Cloudflare error 1102 | The free plan's CPU limit was hit while hashing: `deploy --pbkdf2-iterations 50000`, then set the password again (see the threat model) |

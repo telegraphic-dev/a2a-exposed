@@ -153,7 +153,7 @@ export async function list(o) {
 	if (o.json) return console.log(JSON.stringify(d, null, 2));
 	const how = d.mode === "off" ? "off (device-flow pairing disabled; `token issue` only)"
 		: d.mode === "agent" ? `agent (\`${CLI} pair approve <code>\` after your human says yes, or the ${d.verificationUri} page)`
-		: `human (your human approves on ${d.verificationUri} with the approval password)`;
+		: `human (the owner approves with the owner token, or on ${d.verificationUri} with the approval password)`;
 	console.log(`approval: ${how}`);
 	if (d.mode !== "off") {
 		console.log(`approval password: ${d.passwordSet ? `set${d.passwordSetAt ? ` ${d.passwordSetAt}` : ""}${d.passwordSetVia ? ` (via ${d.passwordSetVia})` : ""}`

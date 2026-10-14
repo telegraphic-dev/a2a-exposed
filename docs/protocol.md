@@ -56,7 +56,7 @@ Authenticated with the owner token. The CLI is the supported way to call these. 
 | Export | `GET /owner/export` and `GET /owner/export?format=sql` |
 | Feedback discovery | `GET /owner/feedback` |
 | Façade | `GET /owner/facade`, `POST /owner/facade/verify` |
-| Pairing | `GET /owner/pairing`, password set, `POST /owner/pairing/<code>/approve` and `deny` |
+| Pairing | `GET /owner/pairing`, password set, `POST /owner/pairing/<code>/approve` and `deny`. In human mode the owner token approves or denies and the decision is recorded as the owner. The peer collects its token from `POST /oauth/token`. A missing token or a peer token is refused |
 | Peers | `GET /owner/peers`, `GET /owner/outbound-peers` |
 | MCP revoke | `DELETE /owner/mcp/<label>` |
 

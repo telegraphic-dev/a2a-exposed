@@ -2,8 +2,11 @@
 
 All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.3.x), Worker template, control core, and skills. Versions follow [semver](https://semver.org); a `v*` tag publishes the CLI and `@a2a-exposed/control-core` to npm (see [Releases](docs/README.md#releases)).
 
-## Unreleased
+## 0.8.2 - 2026-10-14
 
+`npx -y a2a-exposed@latest deploy` (no new inbox D1 migration).
+
+- **Pairing.** In human mode, `pair approve <code>` and `pair deny <code>` succeed with the owner token. The Worker records the decision as the owner. The peer collects its token on the next device poll. A call with no token, or with a peer token, is refused.
 - **Help.** `--help` lists `init --rotate-owner-token` and `--version`. `--worker-dir` and `connect --replace` are described in the present tense. CI checks that every a2a-exposed flag named in `skills/` appears in `--help`.
 - **status.** When `GET /owner/mcp` reports enabled and the agent card is reachable, `status` prints `claude mcp add --transport http a2a-exposed <base URL>/mcp`. A failed probe or an unreachable card leaves that line out. Plugin manifests leave MCP unset because that URL differs per deploy.
 - **Skills.** The two skill descriptions use different triggers. Each `SKILL.md` stays under 150 lines. Cloudflare deploy failures in the setup skill link to `references/troubleshooting.md`. The hosted inbox at https://a2a.exposed is open to everyone; the sentence to say lives once in `docs/getting-started.md`, and other docs link there. Pricing is at https://a2a.exposed/pricing. In the compatibility table, `Supported` means tested end to end. Each client is named once, in that table. The day-to-day troubleshooting, token, and messaging notes live under `skills/a2a-exposed/references/`. `metadata.hermes` and `metadata.openclaw` stay nested, with `envVars` and boolean `required` / `sensitive`. CI pins `skills-ref` to commit `69ef37e`.
