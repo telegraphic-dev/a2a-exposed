@@ -7,11 +7,17 @@ import {
 	bareProbeNote, withPermissionHint,
 } from "../lib/tunnel.mjs";
 
-test("randomLabel: wake-<word>-<word>-<hex4>", () => {
+test("randomLabel: wake-<word>-<word>-<hex4>, and the two words differ", () => {
 	let i = 0;
 	const seq = [0, 1, 0xab]; // first two pick WORDS[0]/WORDS[1], then hex
 	assert.equal(randomLabel(() => seq[i++]), "wake-amber-brisk-00ab");
+	i = 0;
+	const same = [3, 3, 4, 0x10]; // second draw repeats, so a third draw picks the other word
+	assert.equal(randomLabel(() => same[i++]), "wake-delta-ember-0010");
 	assert.match(randomLabel(), /^wake-[a-z]+-[a-z]+-[0-9a-f]{4}$/);
+	const label = randomLabel();
+	const words = label.split("-");
+	assert.notEqual(words[1], words[2]);
 });
 
 test("zoneFor: longest matching suffix", () => {
@@ -415,7 +421,7 @@ test("init --workers-dev --tunnel deploys the inbox on workers.dev, then creates
 	const r2 = await m.cli(["init", "--workers-dev", "--tunnel", "--skip-install"], { A2A_VERIFY_TRIES: "0" });
 	assert.equal(r2.status, 1);
 	assert.match(r2.stderr, /--tunnel-zone <zone>/);
-	assert.match(r2.stderr, /the inbox is deployed and works/);
+	assert.match(r2.stderr, /the A2A endpoint is deployed and works/);
 	assert.ok(m.calls().some((c) => c.cmd.startsWith("deploy")));
 });
 
@@ -485,9 +491,9 @@ test("status on a workers.dev inbox with no wake: card OK, polling expected, tun
 	assert.equal(r.status, 0, r.stderr);
 	assert.match(r.stdout, /^agent card: +OK: "Tun Test" \(A2A 1\.0, 0\.3\)$/m);
 	assert.match(r.stdout, /^base URL: +http:\/\/127\.0\.0\.1:\d+ \(workers\.dev\)$/m);
-	assert.match(r.stdout, /^wake: +none: no WAKE_WEBHOOK_URL on the Worker, so the agent is expected to poll the inbox/m);
+	assert.match(r.stdout, /^wake: +none: no WAKE_WEBHOOK_URL on the Worker, so the agent is expected to poll the A2A endpoint/m);
 	assert.match(r.stdout, /^tunnel: +none$/m);
-	assert.match(r.stdout, /^next step: +no wake webhook, so the agent must check the inbox on a schedule/m);
+	assert.match(r.stdout, /^next step: +no wake webhook, so the agent must check the A2A endpoint on a schedule/m);
 	assert.match(r.stdout, /^also: +optional: for immediate wakes to a local-only webhook, run `npx -y a2a-exposed@latest tunnel create` \(it uses the account's zone example\.com; no redeploy needed\)/m);
 	assert.match(r.stdout, /^mcp: +claude mcp add --transport http a2a-exposed http:\/\/127\.0\.0\.1:\d+\/mcp$/m);
 	assert.ok(!s.calls().some((c) => !/^(zones list)/.test(c.cmd)), "read-only: only zones list");
@@ -553,6 +559,9 @@ test("status follows a tunnel through: no connector -> start cloudflared; connec
 	r = await s.cli(["status"], { STUB_CONNS: "0", STUB_TUNNEL_STATUS: "inactive" });
 	assert.match(r.stdout, /never connected, 0 connector connection/);
 	assert.match(r.stdout, /^next step: +the tunnel has never connected:/m);
+	const raw = await s.cli(["status", "--json"], { STUB_CONNS: "0", STUB_TUNNEL_STATUS: "inactive" });
+	assert.equal(raw.status, 1);
+	assert.equal(JSON.parse(raw.stdout).tunnel.state, "never connected");
 	r = await s.cli(["status"], { STUB_CONNS: "1" });
 	assert.equal(r.status, 0, r.stdout);
 	assert.match(r.stdout, /^wake: +webhook \(preset openclaw-wake, through the tunnel\); auth: bearer\/API key \+ Access service token/m);
@@ -618,6 +627,7 @@ test("uninstall removes the tunnel, the Worker, and the D1 database", async (t) 
 	assert.match(r.stderr, /removed D1 database d1/);
 	assert.match(r.stderr, /owner token and WAKE_\* values stay/);
 	assert.match(r.stderr, /later init reuses the owner token/);
+	assert.doesNotMatch(r.stderr, /Wakes are off until you set a new WAKE_WEBHOOK_URL/);
 	const cmds = s.calls().slice(before).map((c) => c.cmd);
 	const wi = cmds.findIndex((c) => c.startsWith("workers delete tuntest"));
 	const ti = cmds.findIndex((c) => c.startsWith("dns records delete") || c.startsWith("tunnels delete"));
@@ -655,6 +665,9 @@ test("uninstall stops before D1 when the Worker delete fails", async (t) => {
 	const r = await s.cli(["uninstall", "--yes"], { STUB_FAIL: "workers delete" });
 	assert.equal(r.status, 1);
 	assert.match(r.stderr, /cf workers delete tuntest failed/);
+	assert.match(r.stderr, /Removed: nothing/);
+	assert.match(r.stderr, /Not removed: D1 d1 \(untouched\); Worker tuntest/);
+	assert.match(r.stderr, /The Worker is still there, so the D1 database was left in place\. A rerun is safe/);
 	assert.ok(!s.calls().some((c) => c.cmd.startsWith("d1 delete")));
 	assert.equal(s.config().A2A_WORKER_NAME, "tuntest");
 	assert.equal(s.config().A2A_D1_ID, "d1");
@@ -682,6 +695,7 @@ test("tunnel rm treats a missing Worker (10007) as already gone and a rerun find
 	assert.match(r.stderr, /Worker for wake-gone\.example\.com is already gone; its secrets went with it/);
 	assert.doesNotMatch(r.stderr, /removed Worker secrets/);
 	assert.match(r.stderr, /tunnel removed/);
+	assert.match(r.stderr, /Wakes are off until you set a new WAKE_WEBHOOK_URL/);
 	assert.ok(!Object.keys(s.config()).some((k) => k.startsWith("A2A_TUNNEL_")));
 	const again = await s.cli(["tunnel", "rm"], { STUB_WORKER_MISSING: "1" });
 	assert.equal(again.status, 0, again.stderr);
@@ -753,6 +767,16 @@ test("uninstall and tunnel --help are command-specific; unknown flags name the f
 	const bad = await s.cli(["tunnel", "create", "--nope"]);
 	assert.equal(bad.status, 1);
 	assert.match(bad.stderr, /unknown flag --nope\. Run `npx -y a2a-exposed@latest tunnel --help`/);
+	s.setConfig({
+		A2A_TUNNEL_HOSTNAME: "wake-test.example.com", A2A_TUNNEL_ID: "tun1", A2A_TUNNEL_ZONE_ID: "z1", A2A_TUNNEL_DNS_ID: "dns1",
+	});
+	for (const sub of ["create", "status", "rm"]) {
+		const extra = await s.cli(["tunnel", sub, "extra"]);
+		assert.equal(extra.status, 1, extra.stderr);
+		assert.match(extra.stderr, new RegExp(`tunnel ${sub} takes no arguments \\(extra\\)`));
+	}
+	assert.equal(s.calls().length, 0);
+	assert.equal(s.config().A2A_TUNNEL_ID, "tun1");
 });
 
 test("config prints A2A_TUNNEL_TOKEN_FILE as a path", async (t) => {
@@ -771,7 +795,8 @@ test("tunnel create warns when a wake URL is already set, and a DNS auth error n
 	const w = await warn.cli(["tunnel", "create", "--tunnel-hostname", "wake-test.example.com"]);
 	assert.equal(w.status, 0, w.stderr);
 	assert.match(w.stderr, /warning: the Worker already has a wake URL/);
-	assert.match(w.stderr, /tunnel rm/);
+	assert.match(w.stderr, /does not put the previous wake URL back/);
+	assert.doesNotMatch(w.stderr, /Undo that tunnel/);
 
 	const s = await tunnelEnv(t, { stub: { STUB_FAIL: "dns records list", STUB_FAIL_MSG: "[10000] Authentication error" } });
 	const r = await s.cli(["tunnel", "create", "--tunnel-hostname", "wake-test.example.com"]);
@@ -788,13 +813,14 @@ test("uninstall names the permission and what is left when Cloudflare refuses th
 	assert.equal(w.status, 1);
 	assert.match(w.stderr, /The API token needs Workers Scripts: Edit/);
 	assert.match(w.stderr, /uninstall --yes/);
-	assert.match(w.stderr, /A Cloudflare 10000 on the Worker delete still removes the other objects\. A rerun is safe/);
-	assert.match(w.stderr, /Removed: D1 database d1/);
+	assert.match(w.stderr, /The Worker is still there, so the D1 database was left in place\. A rerun is safe/);
+	assert.doesNotMatch(w.stderr, /still removes the other objects/);
+	assert.match(w.stderr, /Removed: nothing/);
 	assert.doesNotMatch(w.stderr, /Removed: removed/);
-	assert.match(w.stderr, /Not removed: Worker tuntest/);
-	assert.ok(worker.calls().some((c) => c.cmd.startsWith("d1 delete")));
+	assert.match(w.stderr, /Not removed: D1 d1 \(untouched\); Worker tuntest/);
+	assert.ok(!worker.calls().some((c) => c.cmd.startsWith("d1 delete")));
 	assert.equal(worker.config().A2A_WORKER_NAME, "tuntest");
-	assert.equal(worker.config().A2A_D1_ID, undefined);
+	assert.equal(worker.config().A2A_D1_ID, "d1");
 
 	const tun = await tunnelEnv(t);
 	tun.setConfig({
@@ -805,10 +831,14 @@ test("uninstall names the permission and what is left when Cloudflare refuses th
 	assert.equal(both.status, 1);
 	assert.ok(!tun.calls().some((c) => c.cmd.startsWith("workers secrets bulk")), "a Worker 10000 skips the secrets upload");
 	assert.ok(tun.calls().some((c) => c.cmd.startsWith("dns records delete")));
-	assert.ok(tun.calls().some((c) => c.cmd.startsWith("d1 delete")));
-	assert.match(both.stderr, /Removed: wake tunnel; D1 database d1/);
-	assert.match(both.stderr, /Not removed: Worker tuntest/);
-	assert.match(both.stderr, /A Cloudflare 10000 on the Worker delete still removes the other objects/);
+	assert.ok(!tun.calls().some((c) => c.cmd.startsWith("d1 delete")));
+	assert.match(both.stderr, /Removed: wake tunnel/);
+	assert.doesNotMatch(both.stderr, /Removed: wake tunnel; D1/);
+	assert.match(both.stderr, /Not removed: D1 d1 \(untouched\); Worker tuntest/);
+	assert.match(both.stderr, /The Worker is still there, so the D1 database was left in place/);
+	assert.doesNotMatch(both.stderr, /Wakes are off until you set a new WAKE_WEBHOOK_URL/);
+	assert.equal(tun.config().A2A_D1_ID, "d1");
+	assert.equal(tun.config().A2A_WORKER_NAME, "tuntest");
 
 	const d1 = await tunnelEnv(t);
 	const r = await d1.cli(["uninstall", "--yes"], { STUB_FAIL: "d1 delete", STUB_FAIL_MSG: "[7403] Unauthorized" });
@@ -834,6 +864,11 @@ test("uninstall DNS delete failure says uninstall --yes once", async (t) => {
 	assert.doesNotMatch(r.stderr, /tunnel rm/);
 	assert.match(r.stderr, /Removed: Worker tuntest/);
 	assert.doesNotMatch(r.stderr, /Removed: removed/);
+	const notRemoved = (r.stderr.match(/Not removed: .*/) || [""])[0];
+	assert.match(notRemoved, /DNS record wake-test\.example\.com/);
+	assert.doesNotMatch(notRemoved, /wake tunnel/);
+	assert.ok(!s.calls().some((c) => c.cmd.startsWith("d1 delete")));
+	assert.equal(s.config().A2A_D1_ID, "d1");
 });
 
 test("tunnel status JSON reads inactive as never connected", async (t) => {

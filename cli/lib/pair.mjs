@@ -11,7 +11,7 @@ import { baseUrl, peerToken, warnPeerTokenEnv } from "./commands.mjs";
 export const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 export const PBKDF2_ITERATIONS = 100000; // default (the Workers runtime's maximum); the Worker advertises its own setting
 export const MIN_PASSWORD_LENGTH = 12;
-const MIGRATION_HINT = `(if this inbox was deployed before device-flow pairing existed, run \`${CLI} deploy\` first: it applies the new D1 migration)`;
+const MIGRATION_HINT = `(if this A2A endpoint was deployed before device-flow pairing existed, run \`${CLI} deploy\` first: it applies the new D1 migration)`;
 
 /** Owner API call that returns { status, data } instead of dying, so errors can be explained. */
 async function ownerCall(method, p, body) {
@@ -70,7 +70,7 @@ async function passwordLink(o) {
 	}
 	const r = await ownerCall("POST", "/owner/pairing/password-link", ttlSeconds ? { ttlSeconds } : {});
 	if (r.status === 404)
-		die(`this inbox's Worker predates \`pair set-password --web\`: run \`${CLI} deploy\` first, or let your human run \`${CLI} pair set-password\` in a terminal`);
+		die(`this A2A endpoint's Worker predates \`pair set-password --web\`: run \`${CLI} deploy\` first, or let your human run \`${CLI} pair set-password\` in a terminal`);
 	if (r.status !== 200) die(`could not create a setup link: ${ownerError(r)}`);
 	const d = r.data, mins = Math.round(d.expiresIn / 60);
 	const tell = `Send this link to your human, privately (it lets whoever opens it ${d.passwordSet ? "change" : "set"} the approval password). They open it and type the password themselves. Never open the link, fill in the page, or ask for the password yourself. Creating a new link invalidates this one.`;
@@ -258,7 +258,7 @@ export function cardUrlToSend(flag, own, quiet = false) {
 	if (flag) {
 		let u;
 		try { u = new URL(flag); } catch { die(`--card-url must be a URL (your agent card, e.g. https://agent.example.com/.well-known/agent-card.json)`); }
-		if (u.protocol !== "https:" || u.username || u.password) { note(`note: --card-url ${u.origin} is not a plain https URL, so it is left out of the pairing request (inboxes accept only public https cards). Peers can't call an agent there: to be reachable, expose it through a public façade (setup skill: "Already have A2A on a Tailnet or LAN") and pass the façade's card`); return ""; }
+		if (u.protocol !== "https:" || u.username || u.password) { note(`note: --card-url ${u.origin} is not a plain https URL, so it is left out of the pairing request (A2A endpoints accept only public https cards). Peers can't call an agent there: to be reachable, expose it through a public façade (setup skill: "Already have A2A on a Tailnet or LAN") and pass the façade's card`); return ""; }
 		if (u.href.length > 300) { note("note: --card-url is longer than 300 characters, so it is left out of the pairing request"); return ""; }
 		if (isPrivateHost(u.hostname)) note(`note: ${u.hostname} is on a private network: the peer's owner sees the card as informational ("not publicly reachable"). Expose your agent through a public façade for others to reach it (setup skill: "Already have A2A on a Tailnet or LAN").`);
 		return u.href;
@@ -360,7 +360,7 @@ A different agent at the same URL? Pass another --alias.`);
 			const why = r.data.error_description || r.data.error || `HTTP ${r.status}`;
 			const privateCard = !!sentCard && (() => { try { return isPrivateHost(new URL(sentCard).hostname); } catch { return false; } })();
 			die(r.status === 429 ? `${peerName} is not accepting more pairing requests right now: ${why}` : r.status === 404 ? `${peerName} has device-flow pairing disabled (${why}); ask its owner for a token`
-				: `pairing request to ${peerName} failed: ${why}${privateCard && r.status === 400 ? `. The card URL sent (${new URL(sentCard).host}) is not publicly reachable, and inboxes may accept only public https cards: retry with --card-url set to a public card, or expose your agent through a public façade first (setup skill: "Already have A2A on a Tailnet or LAN")` : ""}`);
+				: `pairing request to ${peerName} failed: ${why}${privateCard && r.status === 400 ? `. The card URL sent (${new URL(sentCard).host}) is not publicly reachable, and A2A endpoints may accept only public https cards: retry with --card-url set to a public card, or expose your agent through a public façade first (setup skill: "Already have A2A on a Tailnet or LAN")` : ""}`);
 		}
 		st = { base, alias, device: ep.device, token: ep.token, deviceCode: r.data.device_code, userCode: r.data.user_code,
 			verificationUri: r.data.verification_uri || "", verificationUriComplete: r.data.verification_uri_complete || r.data.verification_uri || "",

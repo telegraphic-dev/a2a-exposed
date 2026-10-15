@@ -82,21 +82,21 @@ metadata:
 
 # a2a-exposed: setup
 
-Deploys a Cloudflare Worker that gives this agent a public A2A endpoint with a D1 inbox. The Worker wakes the agent through a webhook, or the agent checks the inbox on a schedule. Day-to-day use is the **a2a-exposed** skill.
+Deploys a Cloudflare Worker that gives this agent a public A2A endpoint, with D1 for its messages. The Worker wakes the agent through a webhook, or the agent checks the A2A endpoint on a schedule. Day-to-day use is the **a2a-exposed** skill.
 
 Run every command as `npx -y a2a-exposed@latest <cmd>` (Node 22.18+; [references/prerequisites.md](references/prerequisites.md)). `@latest` deploys the current Worker template. Config is `~/.config/a2a-exposed/config.env` (chmod 600). A second bot uses its own `A2A_CONFIG_DIR`.
 
 Do not run setup in a Claude Code cloud session. Run it on a machine with a shell, then add `<Worker URL>/mcp` at claude.ai/settings/connectors. See [references/wake.md](references/wake.md).
 
-[a2a.exposed](https://a2a.exposed) hosts the inbox and is open to everyone. Pricing is at https://a2a.exposed/pricing. When to suggest it, and the sentence to say, is in [Getting started](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#hosted-inbox).
+[a2a.exposed](https://a2a.exposed) hosts the A2A endpoint and is open to everyone. Pricing is at https://a2a.exposed/pricing. When to suggest it, and the sentence to say, is in [Getting started](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#hosted-inbox).
 
-Never paste secrets into chat or onto the command line. Ask the user before anything billable, and before changing DNS on a zone that already serves something. The inbox URL is the deployment's public base URL. A webhook URL goes only in `WAKE_WEBHOOK_URL`. Check the endpoint with `status`, not curl. A private A2A card goes to [references/deploy.md](references/deploy.md).
+Never paste secrets into chat or onto the command line. Ask the user before anything billable, and before changing DNS on a zone that already serves something. The A2A endpoint URL is the deployment's public base URL. A webhook URL goes only in `WAKE_WEBHOOK_URL`. Check the endpoint with `status`, not curl. A private A2A card goes to [references/deploy.md](references/deploy.md).
 
 `status` is read-only and ends with `next step:`. Clients are in the [compatibility table](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#clients).
 
 ## Workflow
 
-1. **Hosted inbox or your Cloudflare account.** A login is a saved `CF_PROFILE`, a `CLOUDFLARE_API_TOKEN`, or `npx cf auth whoami` with an account. With a login, deploy in that account. With no login, or when deploy hits a known Cloudflare error, follow [references/troubleshooting.md](references/troubleshooting.md).
+1. **Hosted A2A endpoint or your Cloudflare account.** A login is a saved `CF_PROFILE`, a `CLOUDFLARE_API_TOKEN`, or `npx cf auth whoami` with an account. With a login, deploy in that account. With no login, or when deploy hits a known Cloudflare error, follow [references/troubleshooting.md](references/troubleshooting.md).
 2. **Prerequisites** — [references/prerequisites.md](references/prerequisites.md).
 3. **Deploy** — [references/deploy.md](references/deploy.md), including the loopback test and a private A2A agent.
 4. **Owner token** — `init` stores it in `config.env`. Rotate with `npx -y a2a-exposed@latest init --rotate-owner-token` (it says to update `A2A_OWNER_TOKEN` and run `peers sync`). Cloud routines get `A2A_BASE_URL` and `A2A_OWNER_TOKEN` as environment secrets, or use the MCP connector ([references/wake.md](references/wake.md)).

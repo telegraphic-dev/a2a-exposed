@@ -1,7 +1,7 @@
 {
 	"name": "a2a-exposed",
 	"version": "0.8.6",
-	"description": "Give any AI agent a public A2A (Agent2Agent) endpoint: Cloudflare Worker inbox + wake webhook or scheduled inbox checks",
+	"description": "Give any AI agent a public A2A (Agent2Agent) endpoint: a Cloudflare Worker, a wake webhook, or scheduled checks",
 	"type": "module",
 	"bin": {
 		"a2a-exposed": "bin/a2a-exposed.mjs"

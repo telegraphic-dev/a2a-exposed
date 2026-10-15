@@ -51,21 +51,28 @@ export async function confirmUninstall(yes, input = process.stdin, output = proc
 
 const kept = () => `Config directory kept at ${C.CONFIG_DIR}. The owner token and WAKE_* values stay in config.env. A later init reuses the owner token. Peer tokens stay in this directory too. Remove the directory to delete them.`;
 
-/** [10000] / [7403], and a D1 failure after the Worker is gone, say how to continue. */
-function removalError(err, { removed, left, workerGone }) {
+/** A tunnel failure names the DNS record when that is the only object left. */
+function tunnelLeft(err) {
+	const msg = err instanceof Error ? err.message : String(err);
+	const names = msg.split("\n").slice(1).map((l) => l.trim().split(":")[0].trim()).filter(Boolean);
+	if (names.length && names.every((n) => n.startsWith("DNS record"))) return names.join("; ");
+	return "wake tunnel";
+}
+
+/** [10000] / [7403], a Worker that is still there, a DNS failure, and a D1 failure after the Worker is gone, say how to continue. */
+function removalError(err, { removed, left, workerGone, workerStill }) {
 	const msg = err instanceof Error ? err.message : String(err);
 	const code = /\[(10000|7403)\]/.test(msg);
 	const d1Failed = /cf d1 delete/i.test(msg);
 	const dnsFailed = /DNS record/i.test(msg);
-	const workerPerm = /\[10000\]/.test(msg) && /cf workers delete/i.test(msg);
-	if (!code && !(d1Failed && workerGone) && !dnsFailed) throw err instanceof CliError ? err : new CliError(msg);
+	if (!code && !(d1Failed && workerGone) && !dnsFailed && !workerStill) throw err instanceof CliError ? err : new CliError(msg);
 	const lines = [msg];
 	if (!/uninstall --yes/.test(msg))
 		lines.push(`Run \`${CLI} uninstall --yes\` again. A rerun continues from what is left.`);
 	lines.push(`Removed: ${removed.length ? removed.join("; ") : "nothing"}.`);
 	lines.push(`Not removed: ${left.length ? left.join("; ") : "nothing"}.`);
 	if (d1Failed && workerGone) lines.push("The Worker is already gone. A rerun removes the D1 database.");
-	if (workerPerm) lines.push("A Cloudflare 10000 on the Worker delete still removes the other objects. A rerun is safe.");
+	if (workerStill) lines.push("The Worker is still there, so the D1 database was left in place. A rerun is safe.");
 	throw new CliError(lines.join("\n"));
 }
 
@@ -98,19 +105,24 @@ export async function uninstall(o) {
 		} catch (e) { workerError = e; }
 	}
 	// A 10000 on the Worker delete is the same missing Workers Scripts permission the secrets
-	// upload would hit. Skip that upload and keep going: the tunnel and the D1 database still go.
+	// upload would hit. Skip that upload so the tunnel can still be removed. The Worker is
+	// still there, so the D1 database stays until a later run deletes the Worker.
 	const workerAuth = workerError && /\[10000\]/.test(workerError.message || "") && /cf workers delete/i.test(workerError.message || "");
 	let tunnelError = null;
 	if (tunnelish) {
 		try {
-			await T.remove(o, { allowMissingProject: true, skipSecrets: workerGone || workerAuth, rerun: `${CLI} uninstall --yes` });
+			await T.remove(o, { allowMissingProject: true, skipSecrets: workerGone || workerAuth, quiet: !!name, rerun: `${CLI} uninstall --yes` });
 			removed.push("wake tunnel");
 		} catch (e) { tunnelError = e; }
 	} else step("no tunnel to remove");
-	// Other Worker failures stop before D1. A 10000 does not, even when the tunnel step failed.
-	if (!workerAuth && (tunnelError || workerError)) {
-		const left = [d1 && `D1 ${d1Label} (untouched)`, workerError && name && `Worker ${name}`, tunnelError && "wake tunnel"].filter(Boolean);
-		removalError(workerError || tunnelError, { removed, left, workerGone });
+	if (workerError) {
+		const left = [d1 && `D1 ${d1Label} (untouched)`, name && `Worker ${name}`, tunnelError && tunnelLeft(tunnelError)].filter(Boolean);
+		const err = tunnelError ? new CliError(`${workerError.message}\n${tunnelError.message}`) : workerError;
+		removalError(err, { removed, left, workerGone: false, workerStill: true });
+	}
+	if (tunnelError) {
+		const left = [d1 && `D1 ${d1Label} (untouched)`, tunnelLeft(tunnelError)].filter(Boolean);
+		removalError(tunnelError, { removed, left, workerGone });
 	}
 
 	if (d1) {

@@ -43,7 +43,9 @@ This repository is an [Agent Plugins](https://agent-plugins.org/) package (`plug
 
 ## Clients
 
-Each client is listed once. `Supported` means tested end to end. `Untested` marks a client outside those checks.
+Each client is listed once. The status column is `tested end to end` or `untested`.
+
+Grok Bot is tested end to end. Claude Code, OpenClaw, and Hermes are untested.
 
 | Client | Status | How to load |
 | --- | --- | --- |
@@ -66,7 +68,7 @@ npx -y skills add telegraphic-dev/a2a-exposed
 | Skill | Use |
 | --- | --- |
 | [`a2a-exposed-setup`](../skills/a2a-exposed-setup/SKILL.md) | Deploy: Cloudflare login, D1, hostname or workers.dev, owner token, wake, pairing |
-| [`a2a-exposed`](../skills/a2a-exposed/SKILL.md) | Day to day: wakes, inbox, reply, other agents, peer tokens |
+| [`a2a-exposed`](../skills/a2a-exposed/SKILL.md) | Day to day: wakes, `inbox`, reply, other agents, peer tokens |
 
 ## Deploy
 
@@ -102,7 +104,7 @@ Set the password once, before the first approval:
 npx -y a2a-exposed@latest pair set-password --web
 ```
 
-That prints a one-time link (default 15 minutes, single use). `--ttl` sets the lifetime from 1 to 60 minutes. You open it and choose the password (12 to 1024 characters). The agent does not open the link or type the password. `pair set-password` without `--web` reads the password in a terminal, with no echo. A human runs that.
+That prints a one-time link (default 15 minutes, single use). `--ttl` sets the lifetime from 1 to 60 minutes. You open the link and type the password (12 to 1024 characters). `pair set-password` without `--web` reads the password in a terminal, with no echo. You run that.
 
 In human mode the owner token (`pair approve <code>`) approves, and the decision is recorded as the owner. The peer collects its token on the next poll. A call with no token, or with a peer token, is refused. `--pairing-approval agent` records the approval as the agent and is the mode where the agent runs `pair approve <code>` after the human says yes in chat. `off` disables pairing (`token issue` only). `connect --replace` swaps the token under the same label.
 

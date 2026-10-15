@@ -1,6 +1,6 @@
 # Upgrading
 
-History of each release is in [CHANGELOG.md](../CHANGELOG.md). This page is how to move a running inbox onto the current CLI.
+History of each release is in [CHANGELOG.md](../CHANGELOG.md). This page is how to move a running A2A endpoint onto the current CLI.
 
 ## After a new CLI
 
@@ -8,7 +8,7 @@ History of each release is in [CHANGELOG.md](../CHANGELOG.md). This page is how 
 npx -y a2a-exposed@latest deploy
 ```
 
-`deploy` copies the current Worker template and applies every D1 migration that is not yet recorded in `d1_migrations`, in numeric order. Secrets already on the Worker stay, including the owner token. The pages `/` and `/device` stay. `export` prints the inbox; `export --sql` prints SQL. With a global install, run `npm i -g a2a-exposed@latest` first. A global copy does not upgrade itself.
+`deploy` copies the current Worker template and applies every D1 migration that is not yet recorded in `d1_migrations`, in numeric order. Secrets already on the Worker stay, including the owner token. The pages `/` and `/device` stay. `export` prints the A2A endpoint; `export --sql` prints SQL. With a global install, run `npm i -g a2a-exposed@latest` first. A global copy does not upgrade itself.
 
 The CLI prints a one-line notice when a newer version is on npm, at most once a day. `A2A_NO_UPDATE_CHECK=1` or `DO_NOT_TRACK=1` turns it off.
 
@@ -16,7 +16,7 @@ The config directory is `~/.config/a2a-exposed`, or `$XDG_CONFIG_HOME/a2a-expose
 
 New peer tokens use the `a2aow_` prefix. A token issued with the `s2a_` prefix still authenticates: only the hash is stored.
 
-## An inbox deployed before this CLI
+## An A2A endpoint deployed before this CLI
 
 There is no `adopt` command. To keep an existing Worker, its D1 data, peer tokens, and wake secrets:
 

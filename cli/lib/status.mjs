@@ -29,7 +29,7 @@ export async function checkCard(base) {
 export function wakeLine(s) {
 	if (!s.wake) return "unknown (owner API not reachable)";
 	const w = s.wake;
-	if (!w.configured) return "none: no WAKE_WEBHOOK_URL on the Worker, so the agent is expected to poll the inbox";
+	if (!w.configured) return "none: no WAKE_WEBHOOK_URL on the Worker, so the agent is expected to poll the A2A endpoint";
 	const auth = [w.hasKey && "bearer/API key", w.hasHmacSecret && "HMAC signature", w.hasAccessServiceToken && "Access service token"].filter(Boolean);
 	return `webhook (preset ${w.preset}${s.tunnel ? ", through the tunnel" : ""}); auth: ${auth.join(" + ") || "none"}; URL fingerprint ${w.urlFingerprint || "-"}`;
 }
@@ -119,11 +119,11 @@ function nextStepCore(s) {
 	const done = (text, also = []) => ({ ok: true, text, also });
 	if (!s.deployed) return fail(`nothing is deployed from ${s.configFile}. Another deployment? Set A2A_CONFIG_DIR.`);
 	if (s.baseUrlEnv)
-		return fail(`A2A_BASE_URL is exported as ${s.baseUrlEnv}, but ${s.configFile} has ${s.baseUrlSaved || "(none)"}: CLI commands (and push URLs sent to peers) use the exported value. Unset A2A_BASE_URL (the inbox URL is always the deployment's own)`);
+		return fail(`A2A_BASE_URL is exported as ${s.baseUrlEnv}, but ${s.configFile} has ${s.baseUrlSaved || "(none)"}: CLI commands (and push URLs sent to peers) use the exported value. Unset A2A_BASE_URL (the A2A endpoint URL is always the deployment's own)`);
 	if (!s.baseUrl || !s.hasOwnerToken)
 		return fail(`the deployment is incomplete (no ${!s.baseUrl ? "base URL" : "owner token"} saved): re-run \`${CLI} init\` with the same flags (safe: it reuses the D1 database and the owner token)`);
 	if (!s.card.ok && s.card.cfError === 1042)
-		return fail(`the Worker is still propagating (Cloudflare error 1042, normal for up to ~30 s after a first deploy): run \`${CLI} status\` again in 30 seconds. Still 1042 after a few minutes? Run \`${CLI} deploy\``);
+		return fail(`the Worker is still propagating (Cloudflare error 1042, normal for up to 30 seconds after a first deploy): run \`${CLI} status\` again in 30 seconds. Still 1042 after a few minutes? Run \`${CLI} deploy\``);
 	if (!s.card.ok)
 		return fail(`the agent card is not reachable (${s.card.error}). A new workers.dev subdomain or custom domain can take a few minutes: run \`${CLI} status\` again. Still failing? Run \`${CLI} deploy\``);
 	if (s.card.urlProblem)
@@ -192,7 +192,7 @@ function nextStepCore(s) {
 		also.push(`${s.pairing.pending} pending pairing request(s): \`${CLI} pair list\`, then tell your human (never approve on your own)`);
 	const done2 = (text, extra = []) => done(text, [...extra, ...also]);
 	if (!s.wake.configured) {
-		const poll = "the agent must check the inbox on a schedule (setup skill: polling; Hermes and OpenClaw have copy-paste commands there)";
+		const poll = "the agent must check the A2A endpoint on a schedule (Hermes and OpenClaw have copy-paste commands in the setup references)";
 		if (s.wake.preset && !LOCAL_PRESETS.includes(s.wake.preset) && s.wake.preset !== "generic")
 			return done2(`no wake webhook: export WAKE_WEBHOOK_URL and WAKE_WEBHOOK_KEY, then run \`${CLI} wake set --preset ${s.wake.preset}\`; or ${poll}`);
 		const z = s.zones;
@@ -300,7 +300,7 @@ export function mcpAddCommand(s) {
 
 /** `upstream verify`: the façade's whole path, layer by layer; exit 1 unless the upstream app answered. */
 export async function upstreamVerify(o) {
-	if (!C.get("A2A_UPSTREAM_URL")) die(`not a façade: ${C.CONFIG_FILE} has no A2A_UPSTREAM_URL (proxy mode: \`${CLI} deploy --upstream <tunnel URL>\`). For an inbox, check wakes with \`${CLI} wake test\``);
+	if (!C.get("A2A_UPSTREAM_URL")) die(`not a façade: ${C.CONFIG_FILE} has no A2A_UPSTREAM_URL (proxy mode: \`${CLI} deploy --upstream <tunnel URL>\`). For an A2A endpoint, check wakes with \`${CLI} wake test\``);
 	const base = baseUrl();
 	if (!base || !C.get("A2A_OWNER_TOKEN")) die(`A2A_BASE_URL / A2A_OWNER_TOKEN missing (run \`${CLI} init\` or edit ${C.CONFIG_FILE})`);
 	const r = await upstreamCheck(base);
@@ -319,7 +319,11 @@ export async function status(o) {
 	const s = await collect();
 	const next = nextStep(s);
 	const mcpAdd = mcpAddCommand(s);
-	if (o.json) console.log(JSON.stringify({ ...s, mcpAdd, nextStep: next.text, also: next.also, ok: next.ok }, null, 2));
+	if (o.json) {
+		const out = { ...s, mcpAdd, nextStep: next.text, also: next.also, ok: next.ok };
+		if (out.tunnel && out.tunnel.state != null) out.tunnel = { ...out.tunnel, state: tunnelStateLabel(out.tunnel.state) };
+		console.log(JSON.stringify(out, null, 2));
+	}
 	else {
 		const rows = [
 			["config", s.configFile],

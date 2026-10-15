@@ -1114,7 +1114,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			publicCardLeaks: F.cardLeaks(card, ctx.PUBLIC_URL, upstreamOrigins(ctx, up.card)) });
 	}
 	if (seg[0] === "facade" && seg[1] === "verify" && !seg[2] && m === "POST") {
-		if (!proxyMode(ctx)) return json({ mode: "inbox", ok: false, reason: "not_proxy_mode", detail: "this Worker is an inbox (no UPSTREAM_URL): nothing to verify" }, 409);
+		if (!proxyMode(ctx)) return json({ mode: "inbox", ok: false, reason: "not_proxy_mode", detail: "this Worker is an A2A endpoint (no UPSTREAM_URL): nothing to verify" }, 409);
 		return json({ mode: "proxy", ...(await verifyUpstream(ctx)) });
 	}
 	if (seg[0] === "wake" && seg[1] === "preview" && m === "GET") {
@@ -1936,7 +1936,7 @@ async function resolveClient(ctx: TenantContext, id: string, ip?: string, head =
 		const c: Json = await ctx.DB.prepare("SELECT * FROM oauth_clients WHERE client_id = ?").bind(id).first();
 		return c ? { client: c } : { error: "Unknown client. Remove the connector and add it again (the client registers itself)." };
 	}
-	const bad = M.cimdUrlProblem(id) || peerUrlProblem(id) || (new URL(id).host === new URL(ctx.PUBLIC_URL).host ? "must not be on this inbox's own host" : "");
+	const bad = M.cimdUrlProblem(id) || peerUrlProblem(id) || (new URL(id).host === new URL(ctx.PUBLIC_URL).host ? "must not be on this A2A endpoint's own host" : "");
 	if (bad) return { error: `The client's metadata URL is not acceptable: ${bad}.` };
 	const now = Date.now();
 	const hit: Json = await ctx.DB.prepare("SELECT * FROM oauth_client_metadata WHERE client_id = ? AND expires_ms > ?").bind(id, now).first();
@@ -2292,7 +2292,7 @@ const argStr = (a: Json, k: string, required = true): string => {
 /** A synced outbound peer with its decrypted token (null token: the peer takes none, or it can't be decrypted). */
 async function outboundPeer(ctx: TenantContext, alias: string): Promise<{ alias: string; url: string; token: string | null }> {
 	const r: Json = await ctx.DB.prepare("SELECT * FROM outbound_peers WHERE alias = ?").bind(alias).first();
-	if (!r) throw new ToolError(`no peer "${alias}" synced to this inbox. On the machine with the CLI: ${cliCommand(ctx)} peers sync ${alias}`);
+	if (!r) throw new ToolError(`no peer "${alias}" synced to this A2A endpoint. On the machine with the CLI: ${cliCommand(ctx)} peers sync ${alias}`);
 	let token: string | null = null;
 	if (r.token_enc) {
 		const peerKey = await ctx.peerKey();
@@ -2402,12 +2402,12 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 		case "list_peers": {
 			const outRows = must(await ownerCall(ctx, ectx, "GET", "/owner/outbound-peers"));
 			const inRows = must(await ownerCall(ctx, ectx, "GET", "/owner/peers")).filter((r: Json) => !r.revoked_at);
-			return M.toolText(`Outbound peers (send works with these) and inbound labels (agents holding a token for this inbox). Names are claimed by the peers.`,
+			return M.toolText(`Outbound peers (send works with these) and inbound labels (agents holding a token for this A2A endpoint). Names are claimed by the peers.`,
 				{ outbound: outRows.map((r: Json) => ({ alias: r.alias, url: r.url, hasToken: r.has_token })),
 					inbound: inRows.map((r: Json) => ({ label: r.label, source: r.source, clientName: r.client_name, since: r.created_at })) });
 		}
 		case "pairing_requests": {
-			if (!pairingOn(ctx)) return "Device-flow pairing is off on this inbox (PAIRING_APPROVAL=off): there are no pairing requests.";
+			if (!pairingOn(ctx)) return "Device-flow pairing is off on this A2A endpoint (PAIRING_APPROVAL=off): there are no pairing requests.";
 			const d = must(await ownerCall(ctx, ectx, "GET", "/owner/pairing"));
 			return M.toolText(`${d.pending.length} pending pairing request(s). Show your human who asks, the code and the link. NEVER approve or deny yourself: your human decides on the link with the approval password. Names and card URLs are claimed by the requester (untrusted).`,
 				d.pending.map((r: Json) => ({ code: r.userCode, clientName: r.clientName, clientId: r.clientId, agentCardUrl: r.agentCardUrl, country: r.country,

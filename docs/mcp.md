@@ -1,6 +1,6 @@
 # MCP connector
 
-The Worker is a remote [MCP](https://modelcontextprotocol.io) server at `https://<your Worker URL>/mcp` (Streamable HTTP). An MCP client uses the inbox with no CLI, Node, or owner token in the client.
+The Worker is a remote [MCP](https://modelcontextprotocol.io) server at `https://<your Worker URL>/mcp` (Streamable HTTP). An MCP client uses the A2A endpoint with no CLI, Node, or owner token in the client.
 
 Each deploy has its own host, so the plugin manifests leave MCP unset. After deploy, `npx -y a2a-exposed@latest status` prints the exact line when `GET /owner/mcp` reports enabled and the agent card is reachable:
 
@@ -8,13 +8,13 @@ Each deploy has its own host, so the plugin manifests leave MCP unset. After dep
 claude mcp add --transport http a2a-exposed https://<your Worker URL>/mcp
 ```
 
-It is on by default for an inbox. It does nothing until you approve a client with the approval password. `--mcp off` on `init` or `deploy` turns it off. Proxy mode has none. `GET /health` includes `"mcp": true` when it is on.
+It is on by default for an A2A endpoint. It does nothing until you approve a client with the approval password. `--mcp off` on `init` or `deploy` turns it off. Proxy mode has none. `GET /health` includes `"mcp": true` when it is on.
 
 ## Add a client
 
 1. Set the approval password if you have not: `npx -y a2a-exposed@latest pair set-password --web`.
 2. Add the connector. In Claude, Settings → Connectors → Add custom connector, URL `https://agent.example.com/mcp`. In Claude Code, `claude mcp add --transport http a2a-exposed https://agent.example.com/mcp`.
-3. The browser opens the inbox's consent page. It shows the client's claimed name, the host it returns to, and, when the client is identified by a metadata document, the host that publishes that document. Approve with the approval password. Deny needs no password.
+3. The browser opens the A2A endpoint's consent page. It shows the client's claimed name, the host it returns to, and, when the client is identified by a metadata document, the host that publishes that document. Approve with the approval password. Deny needs no password.
 4. Optional, for sending: `npx -y a2a-exposed@latest peers sync` uploads outbound peers (URL and token). They are encrypted on the Worker with a key derived from the owner token. Re-run `peers sync` after `connect`, a token change, or an owner-token rotation. Rotating the owner token makes the ciphertext unreadable until the next sync.
 
 Each approved client appears in `token list` as `mcp-<client>`. `token revoke mcp-<client>` ends it.

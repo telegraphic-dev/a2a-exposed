@@ -2,7 +2,7 @@
 
 `npx -y a2a-exposed@latest init` deploys the A2A endpoint Worker and a D1 database (Cloudflare's SQLite) into your Cloudflare account, plus the CLI and MCP you run with npx. The owner pages on that A2A endpoint are `/` and `/device`. [a2a.exposed](https://a2a.exposed) hosts the A2A endpoint and is open to everyone. When to use it, and the sentence to say, is in [Getting started](getting-started.md#hosted-inbox). With a Cloudflare login and an account, this page is that A2A endpoint, a tunnel for a local webhook, and a public façade for an agent that already speaks A2A.
 
-Grok Bot is tested end to end. Claude Code, OpenClaw, and Hermes are untested. The client table is in [Getting started](getting-started.md#clients).
+The client table is in [Getting started](getting-started.md#clients).
 
 `init` deploys one A2A endpoint. Pass `--hostname` for your own domain, or omit it to serve on `*.workers.dev`.
 
@@ -155,7 +155,7 @@ While you are still building the façade, a private agent can connect outward: `
 
 `config` prints the config directory and the saved `A2A_WORKER_NAME`, `A2A_D1_ID`, `A2A_D1_NAME`, `A2A_TUNNEL_TOKEN_FILE` (the path), `A2A_TUNNEL_SECRETS_AT` (the value), and `CF_PROFILE`.
 
-`uninstall` prints the plan, then removes the Worker, then the wake tunnel when the config has one (the same objects as `tunnel rm`, except Worker secrets when the Worker is already gone), then the D1 database. It prints one line per step, including when that object is already gone. It asks first. Off a terminal, pass `--yes`. `--dry-run` prints the plan and changes nothing. A Cloudflare 10000 on the Worker delete still removes the tunnel and the D1 database, and a rerun is safe. Any other failed Worker delete leaves the D1 database in place so you can run it again. An empty config exits 1.
+`uninstall` prints the plan, then removes the Worker, then the wake tunnel when the config has one (the same objects as `tunnel rm`, except Worker secrets when the Worker is already gone), then the D1 database. It prints one line per step, including when that object is already gone. It asks first. Off a terminal, pass `--yes`. `--dry-run` prints the plan and changes nothing. A failed Worker delete, including Cloudflare error 10000, leaves the D1 database in place while the Worker still exists. The tunnel is still removed when that step succeeds. A 10000 skips the Worker secrets upload. The summary says what was removed, what was not, and that a rerun is safe. An empty config exits 1.
 
 ```bash
 npx -y a2a-exposed@latest uninstall --yes
@@ -178,6 +178,7 @@ In the Cloudflare dashboard, open the sections for Tunnels, Access applications,
 
 ```bash
 npx cf tunnels list
+npx cf tunnels connections cleanup <tunnel-id> --force
 npx cf tunnels delete <tunnel-id> --force
 npx cf zero-trust access applications list
 npx cf zero-trust access applications delete <app-id> --force

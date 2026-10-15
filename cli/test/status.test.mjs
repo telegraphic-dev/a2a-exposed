@@ -104,7 +104,7 @@ test("nextStep: no wake webhook means polling, with the tunnel offered when the 
 	const noWake = (preset, zones) => nextStep(healthy({ wake: { preset, configured: false }, zones }));
 	const full = (r) => [r.text, ...r.also].join(" | "); // optional hints are separate "also" lines
 	for (const p of ["hermes", "openclaw-wake", "openclaw-agent"]) assert.equal(noWake(p, ["example.com"]).ok, true);
-	assert.match(full(noWake("hermes", ["example.com"])), /check the inbox on a schedule.*`npx -y a2a-exposed@latest tunnel create` \(it uses the account's zone example\.com; no redeploy needed\)/);
+	assert.match(full(noWake("hermes", ["example.com"])), /check the A2A endpoint on a schedule.*`npx -y a2a-exposed@latest tunnel create` \(it uses the account's zone example\.com; no redeploy needed\)/);
 	assert.match(full(noWake("hermes", ["a.com", "b.org"])), /--tunnel-zone <zone>` with one of: a\.com, b\.org/);
 	assert.match(full(noWake("hermes", [])), /no domain \(zone\), so the secure tunnel is not available/);
 	assert.match(full(noWake("hermes", null)), /needs a zone on the account/);
@@ -114,7 +114,7 @@ test("nextStep: no wake webhook means polling, with the tunnel offered when the 
 
 test("wakeLine: mode and auth, never secret values", () => {
 	assert.match(wakeLine({ wake: null }), /unknown/);
-	assert.match(wakeLine({ wake: { preset: "hermes", configured: false } }), /^none: .*poll the inbox$/);
+	assert.match(wakeLine({ wake: { preset: "hermes", configured: false } }), /^none: .*poll the A2A endpoint$/);
 	assert.doesNotMatch(wakeLine({ wake: { preset: "generic", configured: false } }), /preset/, "no wake: no preset to talk about");
 	assert.equal(wakeLine({ wake: { preset: "hermes", configured: true, hasHmacSecret: true, hasAccessServiceToken: true, urlFingerprint: "abc123" }, tunnel: {} }),
 		"webhook (preset hermes, through the tunnel); auth: HMAC signature + Access service token; URL fingerprint abc123");

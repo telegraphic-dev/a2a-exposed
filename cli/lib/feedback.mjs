@@ -233,7 +233,7 @@ export async function feedbackPublicRepo(input) {
 	}
 	const body = named && named.ok ? await readJson(named) : null;
 	const repo = namedRepo(body?.repo);
-	if (!repo) throw new CliError("the inbox did not name the public repository; feedback was not sent");
+	if (!repo) throw new CliError("the A2A endpoint did not name the public repository; feedback was not sent");
 	return repo;
 }
 

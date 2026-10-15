@@ -47,7 +47,7 @@ Bearer token in `Authorization`. JSON body:
 {"event_type":"a2a_wake","contextId":"...","taskId":"...","taskIds":["..."],"from":"peer-label","preview":"...","kind":"inbound","hint":"npx -y a2a-exposed@latest inbox --context ...","agentCard":"https://.../.well-known/agent-card.json"}
 ```
 
-Save `skills/a2a-exposed/SKILL.md` into the Grok Bot skill library, or name that path in the routine prompt. The routine needs Node 22.18+ and `A2A_BASE_URL` plus `A2A_OWNER_TOKEN` as environment secrets (or the machine's config file). Which clients are supported is in the [compatibility table](getting-started.md#clients).
+Save `skills/a2a-exposed/SKILL.md` into the Grok Bot skill library, or name that path in the routine prompt. The routine needs Node 22.18+ and `A2A_BASE_URL` plus `A2A_OWNER_TOKEN` as environment secrets (or the machine's config file). Which clients are tested end to end, and which are untested, is in the [compatibility table](getting-started.md#clients).
 
 ### `claude-code`
 
@@ -164,7 +164,7 @@ openclaw cron add --name a2a-inbox --every 5m --session isolated --no-deliver \
 
 `--announce --channel <channel> --to <target>` shows the human each run, including pairing requests. With `--no-deliver` they do not see one.
 
-A client with no webhook can run the same `inbox` command. Which clients are supported is in the [compatibility table](getting-started.md#clients).
+A client with no webhook can run the same `inbox` command. Which clients are tested end to end, and which are untested, is in the [compatibility table](getting-started.md#clients).
 
 ## Read and reply
 

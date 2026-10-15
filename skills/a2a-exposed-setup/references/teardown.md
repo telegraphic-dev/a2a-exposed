@@ -1,4 +1,4 @@
-# Teardown (remove an inbox)
+# Teardown (remove an A2A endpoint)
 
 `npx -y a2a-exposed@latest config` shows the config directory and the saved `A2A_WORKER_NAME`, `A2A_D1_ID`, `A2A_D1_NAME`, `A2A_TUNNEL_TOKEN_FILE` (the path), and `CF_PROFILE`.
 
@@ -9,7 +9,7 @@ npx -y a2a-exposed@latest uninstall --yes
 rm -rf <config dir>                        # owner token, WAKE_* values, stored peer tokens, the Worker project
 ```
 
-`uninstall` removes the Worker, then the wake tunnel when the config has one (same objects as `tunnel rm`, one line each; Worker secrets are skipped once the Worker is gone), then the D1 database. A missing object is already gone. The config directory stays until you remove it. The owner token and `WAKE_*` values stay in `config.env`. A later `init` reuses the owner token.
+`uninstall` removes the Worker, then the wake tunnel when the config has one (same objects as `tunnel rm`, one line each; Worker secrets are skipped once the Worker is gone), then the D1 database. A failed Worker delete, including Cloudflare error 10000, leaves the D1 database in place while the Worker still exists. The tunnel is still removed when that step succeeds. A 10000 skips the Worker secrets upload. The summary says what was removed, what was not, and that a rerun is safe. A missing object is already gone. The config directory stays until you remove it. The owner token and `WAKE_*` values stay in `config.env`. A later `init` reuses the owner token.
 
 Stop `cloudflared` afterwards (`cloudflared service uninstall` when it runs as a service). After you delete the Worker, check that Worker's custom domains and routes, and the zone's DNS, and remove a custom domain that is still listed. `tunnel rm` deletes the wake hostname's DNS record. The account's workers.dev subdomain stays. A Zero Trust organization created with `--zero-trust-org` is permanent. Peers lose access immediately.
 
@@ -26,6 +26,7 @@ In the Cloudflare dashboard, open the sections for Tunnels, Access applications,
 
 ```bash
 npx cf tunnels list
+npx cf tunnels connections cleanup <tunnel-id> --force
 npx cf tunnels delete <tunnel-id> --force
 npx cf zero-trust access applications list
 npx cf zero-trust access applications delete <app-id> --force

@@ -50,9 +50,9 @@ Authenticated with the owner token. The CLI is the supported way to call these. 
 
 | | |
 | --- | --- |
-| Inbox | `GET /owner/inbox`, `GET /owner/tasks/<id>`, `GET /owner/history/<contextId>`, `POST /owner/tasks/<id>/working`, `POST /owner/tasks/<id>/reply` |
+| A2A endpoint | `GET /owner/inbox`, `GET /owner/tasks/<id>`, `GET /owner/history/<contextId>`, `POST /owner/tasks/<id>/working`, `POST /owner/tasks/<id>/reply` |
 | Summary | `GET /owner/summary` (counts only: tasks in each state, pending pairing requests; no message text; does not clear a pending wake) |
-| Log | `GET /owner/log` (recent history, newest first; opening this log leaves a pending wake in place until you list the inbox) |
+| Log | `GET /owner/log` (recent history, newest first; opening this log leaves a pending wake in place until you list the A2A endpoint) |
 | Export | `GET /owner/export` and `GET /owner/export?format=sql` |
 | Feedback discovery | `GET /owner/feedback` |
 | Façade | `GET /owner/facade`, `POST /owner/facade/verify` |
@@ -60,4 +60,4 @@ Authenticated with the owner token. The CLI is the supported way to call these. 
 | Peers | `GET /owner/peers`, `GET /owner/outbound-peers` |
 | MCP revoke | `DELETE /owner/mcp/<label>` |
 
-`/owner/*` requires the owner token. `export` with that token prints the inbox. `export --sql` prints the same tables as SQL.
+`/owner/*` requires the owner token. `export` with that token prints the A2A endpoint. `export --sql` prints the same tables as SQL.

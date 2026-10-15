@@ -363,7 +363,7 @@ test("send_feedback returns a GitHub issue link and strips tokens", async (t) =>
 	assert.match(listed.description, /public GitHub issue on telegraphic-dev\/a2a-exposed/);
 	assert.match(listed.description, /Redact before sending/);
 	assert.match(listed.description, /exact commands/);
-	assert.match(listed.description, /filled by the inbox/);
+	assert.match(listed.description, /filled by the A2A endpoint/);
 	assert.match(listed.inputSchema.properties.steps.description, /Remove tokens and secrets/);
 	assert.match(listed.inputSchema.properties.environment.description, /cloud agent sandbox/);
 	assert.match(listed.inputSchema.properties.connection.description, /webhook, proxy, or polling/);

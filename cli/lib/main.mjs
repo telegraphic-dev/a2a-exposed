@@ -55,14 +55,14 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
                                                When GET /owner/mcp reports enabled and the agent card is reachable,
                                                \`status\` prints \`claude mcp add --transport http a2a-exposed <url>/mcp\`
                                 --rotate-owner-token  on init, replace the owner token; other settings come from config.env.
-                                               Then update A2A_OWNER_TOKEN wherever this inbox is called, and run \`peers sync\`
+                                               Then update A2A_OWNER_TOKEN wherever this A2A endpoint is called, and run \`peers sync\`
                                 --upstream URL  proxy / expose mode: a public façade for an agent that already
                                                speaks A2A (JSON-RPC) on a private network. URL is its endpoint on
                                                a Cloudflare Tunnel hostname behind Access (never a Tailnet/LAN
                                                address). The card is the upstream's, rewritten to this public
                                                URL; paired peers' calls are forwarded with env UPSTREAM_TOKEN and
                                                UPSTREAM_ACCESS_CLIENT_ID / _SECRET (never argv). --upstream none
-                                               switches back to the inbox
+                                               switches back to the A2A endpoint
                                 --upstream-card-url  the upstream's card (default <upstream origin>/.well-known/
                                                agent-card.json); must be on the --upstream origin (it is
                                                fetched with the upstream credentials)
@@ -94,12 +94,12 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
   wake unset                    remove wake secrets (fall back to polling)
 
 Tunnel (local-only webhooks: OpenClaw gateway, Hermes, ...; needs Zero Trust/Access and a Cloudflare zone
-anywhere on the account: the inbox itself can be on workers.dev or a custom hostname)
+anywhere on the account: the A2A endpoint itself can be on workers.dev or a custom hostname)
   tunnel create [--tunnel-zone Z | --tunnel-hostname H] [--tunnel-origin URL] [--tunnel-path /p] [--show-token]
                 [--zero-trust-org TEAM]
                                 named Cloudflare Tunnel + proxied DNS + Access app that admits ONE service token;
                                 the Worker sends that token (CF-Access-Client-Id/Secret) on every wake.
-                                Wake hostname: wake-<word>-<word>-<4 hex>.<zone>, on the inbox hostname's zone, else the
+                                Wake hostname: wake-<word>-<word>-<4 hex>.<zone>, on the A2A endpoint hostname's zone, else the
                                 account's only zone; with several zones pass --tunnel-zone. A finished tunnel
                                 creates nothing when you run it again. A partial tunnel stops and asks for tunnel rm.
                                 The tunnel, the Access app, and the service token are named "a2a-exposed wake <worker>".
@@ -161,14 +161,14 @@ Inbox (owner side)
         [--artifact] [--artifact-name N] [--force]
   history <contextId> [-n 50] [--json]     conversation log
   contexts                                 recent conversations
-  export [--sql]                       JSON dump of this inbox on stdout (peer-token hashes and
+  export [--sql]                       JSON dump of this A2A endpoint on stdout (peer-token hashes and
                                        encrypted peer tokens are in the dump; the owner token stays
                                        a Worker secret). --sql prints the same tables as SQL
 
 Pairing (OAuth 2.0 device flow, RFC 8628: agents connect without pasting tokens into chat)
   connect <base-or-card-url> [--alias A] [--name N] [--card-url URL] [--replace] [--no-wait] [--json]
-                          ask another inbox for a token: prints a code + link for your human (the code lasts
-                          10 minutes; they confirm the code with that inbox's owner), waits for approval, stores
+                          ask another A2A endpoint for a token: prints a code + link for your human (the code lasts
+                          10 minutes; they confirm the code with that A2A endpoint's owner), waits for approval, stores
                           the token as outbound peer A
                           (never printed). --no-wait: print the code and exit; run the same command again to
                           check (same code). An expired code exits 1 (nothing new is requested silently).
@@ -180,7 +180,7 @@ Pairing (OAuth 2.0 device flow, RFC 8628: agents connect without pasting tokens 
                           The name sent is the card named in the request (--card-url, otherwise this
                           deployment's). --name overrides it. If that card can't be read, the name is the
                           configured agent name, the worker name, or the public host's first label. The
-                          other inbox labels the token from that name and adds -2, -3, … when it is taken
+                          other A2A endpoint labels the token from that name and adds -2, -3, … when it is taken
   pair set-password --web [--ttl MIN] [--json]
                           one-time link (default 15 min, --ttl 1 to 60, single use) where your human sets or
                           changes the approval password on a web page. Send it to them privately; never open
@@ -218,7 +218,7 @@ Outbound (agents you call)
   outbound <taskId>       stored state of a task you sent (incl. pushed updates)
 
 Owner
-  One inbox. The owner token from init authenticates inbox, reply, export, and the other owner
+  One A2A endpoint. The owner token from init authenticates inbox, reply, export, and the other owner
   commands. GET / in a browser shows the agent card. /device approves or denies a pairing request.
   pair set-password sets the approval password. pair set-oidc adds OpenID Connect on /device and
   the MCP consent page when the issuer, client id, client secret, and allowlist are all set.
@@ -230,24 +230,24 @@ Feedback
             [--connection webhook|proxy|polling] [--yes]
                                 report a bug or an idea. A bug needs --steps.
                                 The report is a public GitHub issue. The warning names
-                                the repository before it sends. A hosted inbox names
+                                the repository before it sends. A hosted A2A endpoint names
                                 that repository. Otherwise the link opens
                                 the form on telegraphic-dev/a2a-exposed. Do not include
                                 confidential information: secrets, tokens, owner or pairing
                                 tokens, private URLs or hostnames, message contents, or
                                 personal data. Prints that warning and asks before sending,
                                 unless --yes is set. Off a terminal, --yes is required.
-                                Posts when this inbox names a feedback URL.
+                                Posts when this A2A endpoint names a feedback URL.
                                 Otherwise prints a link to the bug
                                 report form and does not open a browser. The CLI adds its
-                                version, the inbox Worker version when the inbox reports it,
+                                version, the A2A endpoint Worker version when the A2A endpoint reports it,
                                 the OS, the Node version, the connection (webhook, proxy, or
                                 polling), and hosted or self-hosted. --connection overrides
                                 that detection. Remove tokens from the message and from --logs.
 
 Presets: grok-bot | claude-code | openclaw-wake | openclaw-agent | hermes | generic
-         Grok Bot (grok-bot) is tested end to end. Claude Code, OpenClaw, and Hermes are untested.
-         The client table: https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#clients
+         Which clients are tested end to end is in the client table:
+         https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#clients
 Config: ${C.CONFIG_FILE}  (override dir with --config-dir DIR or A2A_CONFIG_DIR; env vars override file values)
 Update notice: at most a daily background check of the npm registry; off with A2A_NO_UPDATE_CHECK=1 (or DO_NOT_TRACK=1)`;
 
@@ -362,10 +362,14 @@ export async function main(argv) {
 			await dep.init(o);
 			if (!o.tunnel) return;
 			try { return await tun.create(o); } catch (e) {
-				if (e instanceof CliError) e.message += `\n(the inbox is deployed and works; fix the above, then run \`${CLI} tunnel create\`, or check \`${CLI} status\`)`;
+				if (e instanceof CliError) e.message += `\n(the A2A endpoint is deployed and works; fix the above, then run \`${CLI} tunnel create\`, or check \`${CLI} status\`)`;
 				throw e;
 			}
-		case "tunnel": return tun.tunnel(need(p[0], "tunnel create|status|rm"), o);
+		case "tunnel": {
+			const sub = need(p[0], "tunnel create|status|rm");
+			if (p.length > 1) throw new CliError(`tunnel ${sub} takes no arguments (${p.slice(1).join(" ")}). Run \`${CLI} tunnel --help\`.`);
+			return tun.tunnel(sub, o);
+		}
 		case "uninstall":
 			if (p.length) throw new CliError(`uninstall takes no arguments (${p.join(" ")}). Run \`${CLI} uninstall --help\`.`);
 			return un.uninstall(o);

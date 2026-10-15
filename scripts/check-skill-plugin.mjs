@@ -112,7 +112,8 @@ for (const rel of ["README.md", "docs/getting-started.md"]) {
 	if (!read(rel).includes("open to everyone")) fail(`${rel} must say the hosted inbox is open to everyone`);
 }
 const gettingStarted = read("docs/getting-started.md");
-if (!gettingStarted.includes("`Supported` means tested end to end.")) fail("compatibility legend must say Supported means tested end to end");
+if (!gettingStarted.includes("The status column is `tested end to end` or `untested`.")) fail("compatibility legend must name tested end to end and untested");
+const testedSentence = "Grok Bot is tested end to end. Claude Code, OpenClaw, and Hermes are untested.";
 const sentenceFiles = [
 	"README.md",
 	"cli/lib/main.mjs",
@@ -120,11 +121,16 @@ const sentenceFiles = [
 	...walk(path.join(root, "skills")).map((file) => path.relative(root, file)),
 ];
 for (const rel of sentenceFiles) {
-	const hits = read(rel).match(new RegExp(hosted.source, "g")) || [];
+	const text = read(rel);
+	const hits = text.match(new RegExp(hosted.source, "g")) || [];
 	if (rel === "docs/getting-started.md") {
 		if (hits.length !== 1) fail(`getting-started must state the hosted sentence once (found ${hits.length})`);
+		if ((text.match(new RegExp(testedSentence.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) || []).length !== 1)
+			fail("the tested-platforms sentence lives once, in docs/getting-started.md");
 	} else if (hits.length) {
 		fail(`${rel} repeats the hosted sentence; link to docs/getting-started.md#hosted-inbox`);
+	} else if (text.includes(testedSentence)) {
+		fail(`${rel} repeats the tested-platforms sentence; it lives in docs/getting-started.md`);
 	}
 }
 

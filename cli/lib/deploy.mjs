@@ -15,7 +15,7 @@ const PKG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 /** Each Claude Code routine fire is a new cloud session: a 2xx only means a session started. */
 export const CLAUDE_CODE_NOTE = [
 	"note (claude-code): each fire starts a NEW cloud session, which sees only what the routine provides.",
-	"  Simplest: add this inbox as a connector at claude.ai/settings/connectors (URL: <your Worker URL>/mcp, approve with",
+	"  Simplest: add this A2A endpoint as a connector at claude.ai/settings/connectors (URL: <your Worker URL>/mcp, approve with",
 	"  your approval password) and keep it enabled on the routine; the session then uses its tools, no CLI or token needed.",
 	"  Without the connector (CLI fallback), check that",
 	"  - the repo with the committed skills (.claude/skills/) is a routine source and the skills are on its default branch,",
@@ -471,7 +471,7 @@ export async function init(o) {
 	console.log(base);
 	reportSwitch(switched);
 	proxyNote(secrets);
-	if (rotated) console.error(`owner token replaced. Update A2A_OWNER_TOKEN wherever this inbox is called, then run \`${CLI} peers sync\` so uploaded peers stay readable.`);
+	if (rotated) console.error(`owner token replaced. Update A2A_OWNER_TOKEN wherever this A2A endpoint is called, then run \`${CLI} peers sync\` so uploaded peers stay readable.`);
 	console.error(`config saved to ${C.CONFIG_FILE} (chmod 600). Next: ${CLI} status (shows the next setup step)`);
 	printStar();
 }

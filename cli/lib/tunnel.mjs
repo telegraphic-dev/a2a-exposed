@@ -40,8 +40,11 @@ export const TUNNEL_KEYS = [
 const WORDS = ["amber", "brisk", "cedar", "delta", "ember", "fable", "gale", "harbor", "iris", "jade", "kelp", "lumen", "maple",
 	"nova", "onyx", "pebble", "quill", "raven", "sable", "tidal", "umber", "velvet", "willow", "zephyr", "otter", "lark", "fjord", "heron"];
 export function randomLabel(rand = crypto.randomInt) {
-	const w = () => WORDS[rand(WORDS.length)];
-	return `wake-${w()}-${w()}-${rand(0x10000).toString(16).padStart(4, "0")}`;
+	const a = rand(WORDS.length);
+	let b = rand(WORDS.length);
+	if (b === a) b = rand(WORDS.length);
+	if (b === a) b = (a + 1) % WORDS.length;
+	return `wake-${WORDS[a]}-${WORDS[b]}-${rand(0x10000).toString(16).padStart(4, "0")}`;
 }
 
 export const HOST_RE = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
@@ -62,8 +65,8 @@ export function noZoneHelp(zones) {
 		inactive.length
 			? `no active domain (zone) on this Cloudflare account (not active yet: ${inactive.map((z) => `${z.name} [${z.status}]`).join(", ")}).`
 			: "this Cloudflare account has no domain (zone).",
-		"The wake tunnel needs a zone anywhere on the account for its hostname and Access app (whether the inbox is on workers.dev or a custom hostname).",
-		"Without one, use scheduled polling: the inbox works as it is (setup skill: \"Agents without inbound webhooks: polling\").",
+		"The wake tunnel needs a zone anywhere on the account for its hostname and Access app (whether the A2A endpoint is on workers.dev or a custom hostname).",
+		"Without one, use scheduled polling. The A2A endpoint works as it is. Agents without inbound webhooks poll.",
 		`To use the tunnel later, add a domain to the account and run \`${CLI} tunnel create\` (no redeploy needed).`,
 	].join("\n");
 }
@@ -212,7 +215,7 @@ const ACCESS_HELP = (acct) => [
 	"  - dashboard: https://one.dash.cloudflare.com/ -> pick a team name and the Free plan (up to 50 users), then re-run",
 	"  - or let the CLI create the organization: re-run with --zero-trust-org <team-name>  (gives <team-name>.cloudflareaccess.com)",
 	`  account: ${acct || "(see cf auth whoami)"}`,
-	"No tunnel? Use scheduled polling instead (setup skill: \"Agents without inbound webhooks: polling\").",
+	"No tunnel? Use scheduled polling instead. Agents without inbound webhooks poll.",
 ].join("\n");
 
 function accessOrg(dir, o) {
@@ -290,7 +293,7 @@ export async function create(o) {
 	try {
 		const preview = await owner("GET", "/owner/wake/preview");
 		if (preview && preview.configured)
-			console.error(`warning: the Worker already has a wake URL. tunnel create replaces it with the tunnel hostname. Undo that tunnel with \`${CLI} tunnel rm\`.`);
+			console.error(`warning: the Worker already has a wake URL. tunnel create replaces it with the tunnel hostname. \`${CLI} tunnel rm\` removes that tunnel. It does not put the previous wake URL back.`);
 	} catch { /* Worker unreachable: the upload below reports it */ }
 
 	step("finding a zone for the wake hostname");
