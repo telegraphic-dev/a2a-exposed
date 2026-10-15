@@ -796,6 +796,20 @@ test("uninstall names the permission and what is left when Cloudflare refuses th
 	assert.equal(worker.config().A2A_WORKER_NAME, "tuntest");
 	assert.equal(worker.config().A2A_D1_ID, undefined);
 
+	const tun = await tunnelEnv(t);
+	tun.setConfig({
+		A2A_TUNNEL_HOSTNAME: "wake-test.example.com", A2A_TUNNEL_ID: "tun1", A2A_TUNNEL_ZONE_ID: "z1", A2A_TUNNEL_DNS_ID: "dns1",
+		A2A_TUNNEL_ACCESS_APP_ID: "app1", A2A_TUNNEL_ACCESS_TOKEN_ID: "st1",
+	});
+	const both = await tun.cli(["uninstall", "--yes"], { STUB_FAIL: "workers", STUB_FAIL_MSG: "[10000] Authentication error" });
+	assert.equal(both.status, 1);
+	assert.ok(!tun.calls().some((c) => c.cmd.startsWith("workers secrets bulk")), "a Worker 10000 skips the secrets upload");
+	assert.ok(tun.calls().some((c) => c.cmd.startsWith("dns records delete")));
+	assert.ok(tun.calls().some((c) => c.cmd.startsWith("d1 delete")));
+	assert.match(both.stderr, /Removed: wake tunnel; D1 database d1/);
+	assert.match(both.stderr, /Not removed: Worker tuntest/);
+	assert.match(both.stderr, /A Cloudflare 10000 on the Worker delete still removes the other objects/);
+
 	const d1 = await tunnelEnv(t);
 	const r = await d1.cli(["uninstall", "--yes"], { STUB_FAIL: "d1 delete", STUB_FAIL_MSG: "[7403] Unauthorized" });
 	assert.equal(r.status, 1);

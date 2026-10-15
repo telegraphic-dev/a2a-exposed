@@ -97,17 +97,18 @@ export async function uninstall(o) {
 			removed.push(line);
 		} catch (e) { workerError = e; }
 	}
+	// A 10000 on the Worker delete is the same missing Workers Scripts permission the secrets
+	// upload would hit. Skip that upload and keep going: the tunnel and the D1 database still go.
+	const workerAuth = workerError && /\[10000\]/.test(workerError.message || "") && /cf workers delete/i.test(workerError.message || "");
 	let tunnelError = null;
 	if (tunnelish) {
 		try {
-			await T.remove(o, { allowMissingProject: true, skipSecrets: workerGone, rerun: `${CLI} uninstall --yes` });
+			await T.remove(o, { allowMissingProject: true, skipSecrets: workerGone || workerAuth, rerun: `${CLI} uninstall --yes` });
 			removed.push("wake tunnel");
 		} catch (e) { tunnelError = e; }
 	} else step("no tunnel to remove");
-	// A 10000 on the Worker delete is an auth failure, not proof the other objects should stay.
-	// Remove the tunnel and the D1 database, then report the Worker. Other Worker failures stop first.
-	const workerAuth = workerError && /\[10000\]/.test(workerError.message || "") && /cf workers delete/i.test(workerError.message || "");
-	if (tunnelError || (workerError && !workerAuth)) {
+	// Other Worker failures stop before D1. A 10000 does not, even when the tunnel step failed.
+	if (!workerAuth && (tunnelError || workerError)) {
 		const left = [d1 && `D1 ${d1Label} (untouched)`, workerError && name && `Worker ${name}`, tunnelError && "wake tunnel"].filter(Boolean);
 		removalError(workerError || tunnelError, { removed, left, workerGone });
 	}
@@ -123,7 +124,11 @@ export async function uninstall(o) {
 			removalError(e, { removed, left: [`D1 ${C.get("A2A_D1_NAME") || d1} (untouched)`, workerError && name && `Worker ${name}`].filter(Boolean), workerGone });
 		}
 	} else step("no D1 database id saved");
-	if (workerError) removalError(workerError, { removed, left: [name && `Worker ${name}`].filter(Boolean), workerGone });
+	if (workerError || tunnelError) {
+		const err = workerError && tunnelError ? new CliError(`${workerError.message}\n${tunnelError.message}`) : (workerError || tunnelError);
+		const left = [workerError && name && `Worker ${name}`, tunnelError && "wake tunnel"].filter(Boolean);
+		removalError(err, { removed, left, workerGone });
+	}
 	C.saveConfig({
 		A2A_WORKER_NAME: null, A2A_D1_ID: null, A2A_D1_NAME: null, A2A_BASE_URL: null, A2A_HOSTNAME: null,
 		A2A_WORKER_DIR: null, A2A_WORKERS_DEV_SUBDOMAIN: null,
