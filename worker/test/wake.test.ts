@@ -173,5 +173,8 @@ test("cloudflareErrorHint explains tunnel / Access failures", () => {
 	assert.match(cloudflareErrorHint(530, '<script>a={event:"feedback clicked",properties:{errorCode: 1033 }}</script>'), /1033/);
 	assert.match(cloudflareErrorHint(403, "Forbidden. You don't have access. cloudflareaccess.com"), /Cloudflare Access/);
 	assert.equal(cloudflareErrorHint(500, "boom"), "");
+	assert.match(cloudflareErrorHint(530, "error code: 1016"), /webhook host failed to resolve/);
+	assert.doesNotMatch(cloudflareErrorHint(530, "error code: 1016"), /tunnel hostname/);
+	assert.match(cloudflareErrorHint(530, "error code: 1016", { tunnel: true }), /tunnel hostname has no matching DNS record/);
 });
 

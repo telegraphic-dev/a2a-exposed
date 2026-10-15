@@ -68,8 +68,8 @@ Wake secrets are read from `WAKE_WEBHOOK_URL`, `WAKE_WEBHOOK_KEY`, and `WAKE_HMA
 | Command | Effect |
 | --- | --- |
 | `wake set` | Save wake settings, upload secrets from the environment, redeploy. Flags: `--preset`, `--agent-id`, `--key-header`, `--key-prefix`, `--body-template`, `--cli-command`, `--debounce`, `--max-per-hour` |
-| `wake preview` | Rendered request with credentials masked, plus SHA-256 fingerprints. Compared with local env values when those are exported |
-| `wake fingerprint` | Fingerprints of `WAKE_*` in the local environment |
+| `wake preview` | Rendered request with credentials masked, plus SHA-256 fingerprints. Export `WAKE_WEBHOOK_URL`, `WAKE_WEBHOOK_KEY`, and `WAKE_HMAC_SECRET` in this shell. `match` means the exported value is the one on the Worker. `DIFFERENT` means they differ: the variable is absent from this shell, or the upload is still propagating (about 15 to 40 seconds after `wake set`, `wake unset`, or `tunnel create`). Wait about 30 seconds and run it again |
+| `wake fingerprint` | Fingerprints of `WAKE_*` exported in this shell |
 | `wake test` | Send a test wake and print the HTTP status |
 | `wake unset` | Remove wake secrets. The agent polls |
 
@@ -79,15 +79,16 @@ For a webhook that only listens locally. Needs Zero Trust and a zone on the acco
 
 | Command | Effect |
 | --- | --- |
-| `tunnel create` | Named tunnel, proxied DNS, and an Access app that admits one service token. Flags: `--tunnel-zone`, `--tunnel-hostname`, `--tunnel-origin`, `--tunnel-path`, `--show-token`, `--zero-trust-org` |
+| `tunnel create` | Named tunnel, proxied DNS, and an Access app that admits one service token. The tunnel, the Access app, and the service token are named `a2a-exposed wake <worker>`. The DNS host is `wake-<word>-<word>-<hex>.<zone>` unless `--tunnel-hostname` is set. Export `WAKE_WEBHOOK_KEY` (hermes: `WAKE_HMAC_SECRET`). The connector machine needs [cloudflared](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/). Flags: `--tunnel-zone`, `--tunnel-hostname`, `--tunnel-origin`, `--tunnel-path`, `--show-token`, `--zero-trust-org`. Secrets show up in about 15 to 40 seconds |
 | `tunnel status` | Tunnel, Access, and Worker state, plus probes |
-| `tunnel rm` | Delete the tunnel, DNS, Access app, service token, and Worker wake secrets for that tunnel. If the tunnel is already gone, the saved ids are cleared. Removing the Worker and D1 database is in [Self-hosting](self-hosting.md#remove-an-inbox) |
+| `tunnel rm` | Prints each removed object: DNS record, tunnel, Access app, and service token (named `a2a-exposed wake <worker>`), plus Worker secrets `WAKE_ACCESS_CLIENT_ID`, `WAKE_ACCESS_CLIENT_SECRET`, `WAKE_WEBHOOK_KEY`, and `WAKE_HMAC_SECRET`. `WAKE_WEBHOOK_URL` goes too when it is this tunnel's. If the tunnel is already gone, the saved ids are cleared |
+| `uninstall [--yes]` | Remove the wake tunnel (when one is saved), the Worker, and the D1 database. One line per step. Asks first; off a terminal, pass `--yes`. The config directory stays. See [Self-hosting](self-hosting.md#remove-an-inbox) |
 
 ### `status`, `upstream`, `url`, `config`
 
 | Command | Effect |
 | --- | --- |
-| `status [--json]` | Deployment, base URL, agent card, wake mode (webhook, tunnel, or none), tunnel state, and in proxy mode the upstream card, Access credential, upstream bearer, live check, last failed peer call, and a card-leak check. Warns when a peer-token variable shadows a saved token. When `GET /owner/mcp` reports enabled and the agent card is reachable, prints `claude mcp add --transport http a2a-exposed <base URL>/mcp`. Prints the next step. Exit 1 means something is broken. Read-only, except the no-op upstream probe in proxy mode |
+| `status [--json]` | Deployment, base URL, agent card, wake mode (webhook, tunnel, or none), tunnel state, and in proxy mode the upstream card, Access credential, upstream bearer, live check, last failed peer call, and a card-leak check. Warns when a peer-token variable shadows a saved token. When `GET /owner/mcp` reports enabled and the agent card is reachable, prints `claude mcp add --transport http a2a-exposed <base URL>/mcp`. Prints the next step. Exit 1 means something is broken. Right after `tunnel create`, for about 15 to 40 seconds, while the connector reports 0 connections, the next step says to wait about 30 seconds and the exit code stays 0. Wake settings from `wake set` and `wake unset` take the same 15 to 40 seconds to show up in `wake preview`. Read-only, except the no-op upstream probe in proxy mode |
 | `upstream verify [--json]` | Proxy mode only. Exit 1 unless the A2A app answered. `status` runs the same check |
 | `url` | Public base URL |
 | `config` | Masked config and its path |
@@ -110,8 +111,8 @@ The owner token authenticates these commands.
 
 | Command | Effect |
 | --- | --- |
-| `connect <url> [--alias A] [--name N] [--card-url URL] [--replace] [--no-wait] [--json]` | Ask another inbox for a token. Prints a code and a link. Stores the token and does not print it. `--no-wait` prints the code and exits; run the same command again to check. An expired code exits 1 and does not request a new one silently. An alias whose token still works is refused unless `--replace` (`--force` is the old flag). A `*.ts.net` or LAN card is informational. A non-https card is left out |
-| `pair set-password --web [--ttl MIN] [--json]` | One-time link (default 15 minutes) where a human sets the approval password. A new link invalidates the previous one |
+| `connect <url> [--alias A] [--name N] [--card-url URL] [--replace] [--no-wait] [--json]` | Ask another inbox for a token. Prints a code and a link. The code lasts 10 minutes. Stores the token and does not print it. `--no-wait` prints the code and exits; run the same command again to check. An expired code exits 1 and does not request a new one silently. An alias whose token still works is refused unless `--replace` (`--force` is the old flag). A `*.ts.net` or LAN card is informational. A non-https card is left out |
+| `pair set-password --web [--ttl MIN] [--json]` | One-time link where a human sets the approval password. `--ttl` is 1 to 60 minutes (default 15). A new link invalidates the previous one |
 | `pair set-password` | The same, in a terminal, no echo. The human types the password there |
 | `pair set-oidc --issuer URL --client-id ID --subjects SUB[,SUB...] [--methods password,oidc] [--secret-stdin]` | Optional OpenID Connect on `/device` and the MCP consent page. Deploy uploads `APPROVAL_OIDC_CLIENT_SECRET` only when that variable is set in the environment you use for deploy. `--secret-stdin` checks one line and discards it. `config.env` keeps the issuer and client id |
 | `pair list [--json]` | Pending requests, the approval mode, and when the password was set |

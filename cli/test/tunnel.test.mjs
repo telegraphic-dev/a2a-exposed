@@ -89,6 +89,7 @@ test("request builders: tunnel, DNS, Access app (service-token-only), secrets pa
 
 test("connectorInstructions: token only with --show-token; --token-file preferred", () => {
 	const quiet = connectorInstructions("/tmp/tok");
+	assert.match(quiet, /Install cloudflared on the agent's machine/);
 	assert.match(quiet, /cloudflared tunnel run --token-file \/tmp\/tok/);
 	assert.match(quiet, /cloudflared service install "\$\(cat \/tmp\/tok\)"/);
 	assert.ok(!quiet.includes("eyJ")); // no literal token
@@ -147,6 +148,8 @@ if ((has("tunnels connections cleanup") || has("tunnels delete")) && !a.includes
 if (process.env.STUB_TUNNEL_GONE && (has("tunnels get") || has("tunnels connections cleanup") || has("tunnels delete")))
 	fail("[1003] Tunnel not found");
 if (has("tunnels get")) out({ id: "tun1", status: process.env.STUB_CONNS === "0" ? "down" : "healthy", connections: process.env.STUB_CONNS === "0" ? [] : [{ id: "c1" }] });
+if (has("workers delete") && process.env.STUB_WORKER_GONE) fail("[7000] Worker not found");
+if (has("d1 delete") && process.env.STUB_D1_GONE) fail("[7404] D1 database not found");
 // what init needs (init --workers-dev --tunnel)
 if (has("auth whoami")) out({ authenticated: true, accounts: [{ id: "acc1", name: "Test" }] });
 if (has("d1 list")) out([{ name: "tuntest", uuid: "d1" }]);
@@ -252,7 +255,12 @@ test("tunnel create: Access app + token before tunnel/DNS, secrets uploaded, tok
 	const rmCalls = s.calls().slice(before);
 	const rmCmds = rmCalls.map((c) => c.cmd);
 	const ri = (p) => rmCmds.findIndex((c) => c.startsWith(p));
-	assert.deepEqual(rmCalls[ri("workers secrets bulk")].file, { secrets: { WAKE_ACCESS_CLIENT_ID: null, WAKE_ACCESS_CLIENT_SECRET: null, WAKE_WEBHOOK_URL: null } });
+	assert.deepEqual(rmCalls[ri("workers secrets bulk")].file, { secrets: { WAKE_ACCESS_CLIENT_ID: null, WAKE_ACCESS_CLIENT_SECRET: null, WAKE_WEBHOOK_KEY: null, WAKE_HMAC_SECRET: null, WAKE_WEBHOOK_URL: null } });
+	assert.match(rm.stderr, /removed Worker secrets for wake-test\.example\.com \(WAKE_ACCESS_CLIENT_ID, WAKE_ACCESS_CLIENT_SECRET, WAKE_WEBHOOK_KEY, WAKE_HMAC_SECRET, WAKE_WEBHOOK_URL\)/);
+	assert.match(rm.stderr, /removed DNS record wake-test\.example\.com/);
+	assert.match(rm.stderr, /removed tunnel "a2a-exposed wake tuntest"/);
+	assert.match(rm.stderr, /removed Access application "a2a-exposed wake tuntest"/);
+	assert.match(rm.stderr, /removed Access service token "a2a-exposed wake tuntest"/);
 	assert.ok(ri("workers secrets bulk") < ri("dns records delete dns1"));
 	assert.ok(ri("dns records delete dns1") < ri("zero-trust access applications delete app1"), "DNS goes before its Access app");
 	assert.ok(ri("tunnels delete tun1") >= 0 && ri("zero-trust access service-tokens delete st1") >= 0);
@@ -545,6 +553,79 @@ test("status follows a tunnel through: no connector -> start cloudflared; connec
 	assert.equal(r.status, 1);
 	assert.match(r.stdout, /INCOMPLETE/);
 	assert.match(r.stdout, /a previous `tunnel create` did not finish: run `npx -y a2a-exposed@latest tunnel rm`, then `npx -y a2a-exposed@latest tunnel create`/);
+});
+
+test("status after the first tunnel create waits while secrets propagate and the connector is down", async (t) => {
+	const s = await tunnelEnv(t, { stub: { STUB_CONNS: "0" } });
+	const c = await s.cli(["tunnel", "create", "--tunnel-hostname", "wake-test.example.com"]);
+	assert.equal(c.status, 0, c.stderr);
+	assert.ok(Number(s.config().A2A_TUNNEL_SECRETS_AT) > Date.now() - 60_000);
+	let r = await s.cli(["status"]);
+	assert.equal(r.status, 0, r.stdout + r.stderr);
+	assert.match(r.stdout, /Worker wake secrets are still propagating/);
+	assert.match(r.stdout, /Wait about 30 seconds/);
+	s.setConfig({ A2A_TUNNEL_SECRETS_AT: "1" });
+	r = await s.cli(["status"]);
+	assert.equal(r.status, 1);
+	assert.match(r.stdout, /run `npx -y a2a-exposed@latest tunnel create` again/);
+});
+
+test("uninstall removes the tunnel, the Worker, and the D1 database", async (t) => {
+	const s = await tunnelEnv(t);
+	assert.equal((await s.cli(["tunnel", "create", "--tunnel-hostname", "wake-test.example.com"])).status, 0);
+	s.setWorkerUrl("https://wake-test.example.com/hooks/wake");
+	const refused = await s.cli(["uninstall"]);
+	assert.equal(refused.status, 1);
+	assert.match(refused.stderr, /Pass --yes/);
+	assert.ok(!s.calls().some((c) => c.cmd.startsWith("workers delete")), "no delete before confirmation");
+	assert.equal(s.config().A2A_WORKER_NAME, "tuntest");
+
+	const before = s.calls().length;
+	const r = await s.cli(["uninstall", "--yes"]);
+	assert.equal(r.status, 0, r.stderr);
+	assert.match(r.stderr, /removed tunnel "a2a-exposed wake tuntest"/);
+	assert.match(r.stderr, /removed Worker tuntest/);
+	assert.match(r.stderr, /removed D1 database d1/);
+	assert.match(r.stderr, /config directory kept at/);
+	const cmds = s.calls().slice(before).map((c) => c.cmd);
+	const wi = cmds.findIndex((c) => c.startsWith("workers delete tuntest"));
+	const di = cmds.findIndex((c) => c.startsWith("d1 delete d1"));
+	assert.ok(wi > 0 && di > wi, "tunnel rm runs, then the Worker, then D1");
+	assert.match(cmds[wi], /--force/);
+	assert.match(cmds[di], /--force/);
+	assert.equal(s.config().A2A_OWNER_TOKEN, "owner");
+	assert.equal(s.config().A2A_WORKER_NAME, undefined);
+	assert.equal(s.config().A2A_D1_ID, undefined);
+	assert.equal(s.config().A2A_BASE_URL, undefined);
+	assert.ok(!Object.keys(s.config()).some((k) => k.startsWith("A2A_TUNNEL_")));
+
+	const again = await s.cli(["uninstall", "--yes"]);
+	assert.equal(again.status, 0, again.stderr);
+	assert.match(again.stderr, /no tunnel to remove/);
+	assert.match(again.stderr, /no Worker name saved/);
+	assert.match(again.stderr, /no D1 database id saved/);
+});
+
+test("uninstall treats a missing Worker and D1 database as already gone", async (t) => {
+	const s = await tunnelEnv(t);
+	const r = await s.cli(["uninstall", "--yes"], { STUB_WORKER_GONE: "1", STUB_D1_GONE: "1" });
+	assert.equal(r.status, 0, r.stderr);
+	assert.match(r.stderr, /no tunnel to remove/);
+	assert.match(r.stderr, /Worker tuntest is already gone/);
+	assert.match(r.stderr, /D1 database d1 is already gone/);
+	assert.equal(s.config().A2A_WORKER_NAME, undefined);
+	assert.equal(s.config().A2A_D1_ID, undefined);
+	assert.equal(s.config().A2A_OWNER_TOKEN, "owner");
+});
+
+test("uninstall stops before D1 when the Worker delete fails", async (t) => {
+	const s = await tunnelEnv(t);
+	const r = await s.cli(["uninstall", "--yes"], { STUB_FAIL: "workers delete" });
+	assert.equal(r.status, 1);
+	assert.match(r.stderr, /cf workers delete tuntest failed/);
+	assert.ok(!s.calls().some((c) => c.cmd.startsWith("d1 delete")));
+	assert.equal(s.config().A2A_WORKER_NAME, "tuntest");
+	assert.equal(s.config().A2A_D1_ID, "d1");
 });
 
 test("tunnel create --zero-trust-org creates the organization when Access is off", async (t) => {

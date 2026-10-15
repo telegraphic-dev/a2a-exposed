@@ -6,6 +6,7 @@
 // A Cloudflare zone on the account is required on purpose (no quick tunnels, no unprotected hostnames). Any zone
 // on the account works: the inbox itself can stay on workers.dev or on another hostname.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -32,7 +33,7 @@ export const SERVICE_TOKEN_DURATION = "8760h"; // 1 year (Cloudflare's default);
 export const TUNNEL_KEYS = [
 	"A2A_TUNNEL_HOSTNAME", "A2A_TUNNEL_ORIGIN", "A2A_TUNNEL_PATH", "A2A_TUNNEL_ZONE_ID", "A2A_TUNNEL_ID", "A2A_TUNNEL_DNS_ID",
 	"A2A_TUNNEL_ACCESS_APP_ID", "A2A_TUNNEL_ACCESS_TOKEN_ID", "A2A_TUNNEL_ACCESS_CLIENT_ID", "A2A_TUNNEL_ACCESS_CLIENT_SECRET",
-	"A2A_TUNNEL_TOKEN_FILE",
+	"A2A_TUNNEL_TOKEN_FILE", "A2A_TUNNEL_SECRETS_AT",
 ];
 
 // ------------------------------------------------------------------ pure helpers (unit-tested)
@@ -147,7 +148,8 @@ export function secretsPatch(map) {
 export function connectorInstructions(tokenFile, token = "") {
 	const t = token || `"$(cat ${tokenFile})"`;
 	return [
-		"Run the connector on the agent's machine (outbound TCP/UDP 7844 to Cloudflare must be allowed):",
+		"Install cloudflared on the agent's machine: https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/",
+		"Run the connector there (outbound TCP/UDP 7844 to Cloudflare must be allowed):",
 		`  cloudflared tunnel run --token-file ${tokenFile}        # cloudflared 2025.4+`,
 		`  cloudflared tunnel run --token ${t}`,
 		`  sudo cloudflared service install ${t}   # as a system service (starts on boot)`,
@@ -214,11 +216,28 @@ export function listZones(dir) {
 }
 
 // ------------------------------------------------------------------ commands
+/** A working directory for `cf`. A project with `node_modules` keeps its own cache. Otherwise `.cloudflare/cache`
+ *  in that directory (or a temp directory, when the project is gone) is where `cf` writes its account cache. */
+export function cfWorkDir(preferred) {
+	if (preferred && fs.existsSync(path.join(preferred, "node_modules"))) return preferred;
+	const base = preferred && fs.existsSync(preferred) ? preferred : fs.mkdtempSync(path.join(os.tmpdir(), "a2a-cf-"));
+	fs.mkdirSync(path.join(base, ".cloudflare", "cache"), { recursive: true });
+	return base;
+}
+
 function needDeployment(o) {
 	if (!C.get("A2A_D1_ID") || !C.get("A2A_WORKER_NAME")) die(`no saved deployment; run \`${CLI} init\` first`);
 	const dir = D.workerDir(o);
 	if (!fs.existsSync(dir)) die(`worker project not found at ${dir}; run \`${CLI} deploy\` once`);
-	return dir;
+	return cfWorkDir(dir);
+}
+
+/** `cf` cwd for `tunnel rm` / `uninstall`. A missing Worker project uses a temp directory with a writable cache. */
+function cfDirForRemove(o, { allowMissingProject = false } = {}) {
+	if (!C.get("A2A_D1_ID") || !C.get("A2A_WORKER_NAME")) die(`no saved deployment; run \`${CLI} init\` first`);
+	const dir = D.workerDir(o);
+	if (!fs.existsSync(dir) && !allowMissingProject) die(`worker project not found at ${dir}; run \`${CLI} deploy\` once`);
+	return cfWorkDir(dir);
 }
 
 /** Checks that need no Cloudflare calls (also used by `init --tunnel` before anything is deployed). */
@@ -293,7 +312,7 @@ export async function create(o) {
 		console.log(url);
 		console.error(`\ntunnel ready: wakes go to ${url} -> ${origin}${wpath} on the agent's machine`);
 		console.error(connectorInstructions(tokenFile, o["show-token"] ? token : ""));
-		console.error(`\nThen (Worker secrets apply within ~15 s): ${CLI} tunnel status   and   ${CLI} wake test`);
+		console.error(`\nThen (Worker secrets apply within about 15 to 40 seconds): ${CLI} tunnel status   and   ${CLI} wake test`);
 		if (!process.env.WAKE_WEBHOOK_KEY && !process.env.WAKE_HMAC_SECRET && preset !== "generic")
 			console.error(`note: no WAKE_WEBHOOK_KEY / WAKE_HMAC_SECRET in the environment; keep the ${preset} webhook's own auth too (export it and run \`wake set\`)`);
 	} catch (e) {
@@ -363,8 +382,10 @@ async function resume(dir, o) {
 	console.error(`Then: ${CLI} tunnel status   and   ${CLI} wake test`);
 }
 
-function putSecrets(dir, worker, map) {
-	return D.withSecretsFile(secretsPatch(map), (file) => cfCall(dir, ["workers", "secrets", "bulk", "--worker", worker], { file }));
+async function putSecrets(dir, worker, map) {
+	const r = await D.withSecretsFile(secretsPatch(map), (file) => cfCall(dir, ["workers", "secrets", "bulk", "--worker", worker], { file }));
+	if (Object.values(map).some((v) => v != null)) C.saveConfig({ A2A_TUNNEL_SECRETS_AT: String(Date.now()) });
+	return r;
 }
 
 export async function status(o) {
@@ -406,9 +427,10 @@ export async function status(o) {
 	if (!/^HTTP 40[13]/.test(info.probe.withoutToken)) console.error("WARNING: the bare request was not blocked by Access; check the Access application");
 }
 
-export async function remove(o, { quiet = false } = {}) {
-	const dir = needDeployment(o);
+export async function remove(o, { quiet = false, allowMissingProject = false } = {}) {
+	const dir = cfDirForRemove(o, { allowMissingProject });
 	const worker = D.workerName();
+	const label = `a2a-exposed wake ${worker}`;
 	const failures = [];
 	const attempt = async (what, key, fn) => {
 		if (key && !C.get(key)) return;
@@ -417,25 +439,27 @@ export async function remove(o, { quiet = false } = {}) {
 	};
 	const host = C.get("A2A_TUNNEL_HOSTNAME");
 	// 1. Worker secrets first, so no wake is sent to a half-removed hostname. WAKE_WEBHOOK_URL only if it is ours.
-	if (host) await attempt("Worker wake secrets (Access token, tunnel URL)", null, async () => {
-		const patch = { WAKE_ACCESS_CLIENT_ID: null, WAKE_ACCESS_CLIENT_SECRET: null };
+	if (host) {
+		const names = ["WAKE_ACCESS_CLIENT_ID", "WAKE_ACCESS_CLIENT_SECRET", "WAKE_WEBHOOK_KEY", "WAKE_HMAC_SECRET"];
 		let ours = false;
 		try { const p = await owner("GET", "/owner/wake/preview"); ours = p.fingerprints?.url === fingerprint(wakeUrl(host, C.get("A2A_TUNNEL_PATH") || "/")); }
 		catch { /* Worker unreachable: leave the URL */ }
-		if (ours) patch.WAKE_WEBHOOK_URL = null;
-		await putSecrets(dir, worker, patch);
-	});
+		if (ours) names.push("WAKE_WEBHOOK_URL");
+		await attempt(`Worker secrets for ${host} (${names.join(", ")})`, null, async () => {
+			await putSecrets(dir, worker, Object.fromEntries(names.map((k) => [k, null])));
+		});
+	}
 	// 2. DNS before Access, so the hostname never resolves without its Access app
-	await attempt("DNS record", "A2A_TUNNEL_DNS_ID", () => cfCall(dir, ["dns", "records", "delete", C.get("A2A_TUNNEL_DNS_ID"), "-z", C.get("A2A_TUNNEL_ZONE_ID"), "--force"], { allowNotFound: true }));
-	await attempt("tunnel", "A2A_TUNNEL_ID", () => {
+	await attempt(`DNS record ${host || C.get("A2A_TUNNEL_DNS_ID")}`, "A2A_TUNNEL_DNS_ID", () => cfCall(dir, ["dns", "records", "delete", C.get("A2A_TUNNEL_DNS_ID"), "-z", C.get("A2A_TUNNEL_ZONE_ID"), "--force"], { allowNotFound: true }));
+	await attempt(`tunnel "${label}"`, "A2A_TUNNEL_ID", () => {
 		const id = C.get("A2A_TUNNEL_ID");
 		// Already deleted (a previous rm stopped on the confirm prompt, or it was removed by hand): clear the saved id.
 		if (!cfCall(dir, ["tunnels", "get", id], { allowNotFound: true })) return;
 		cfCall(dir, ["tunnels", "connections", "cleanup", id, "--force"], { allowNotFound: true });
 		cfCall(dir, ["tunnels", "delete", id, "--force"], { allowNotFound: true });
 	});
-	await attempt("Access application (and its policy)", "A2A_TUNNEL_ACCESS_APP_ID", () => cfCall(dir, ["zero-trust", "access", "applications", "delete", C.get("A2A_TUNNEL_ACCESS_APP_ID"), "--force"], { allowNotFound: true }));
-	await attempt("Access service token", "A2A_TUNNEL_ACCESS_TOKEN_ID", () => {
+	await attempt(`Access application "${label}"`, "A2A_TUNNEL_ACCESS_APP_ID", () => cfCall(dir, ["zero-trust", "access", "applications", "delete", C.get("A2A_TUNNEL_ACCESS_APP_ID"), "--force"], { allowNotFound: true }));
+	await attempt(`Access service token "${label}"`, "A2A_TUNNEL_ACCESS_TOKEN_ID", () => {
 		cfCall(dir, ["zero-trust", "access", "service-tokens", "delete", C.get("A2A_TUNNEL_ACCESS_TOKEN_ID"), "--force"], { allowNotFound: true });
 		C.saveConfig({ A2A_TUNNEL_ACCESS_CLIENT_ID: null, A2A_TUNNEL_ACCESS_CLIENT_SECRET: null });
 	});

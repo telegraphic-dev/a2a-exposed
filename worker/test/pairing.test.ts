@@ -290,6 +290,9 @@ test("human approval: pending, slow_down, page approve with the password, single
 	assert.equal(g.status, 200);
 	assert.ok(!g.text.includes("<script>") && g.text.includes("Barry &lt;script&gt;"));
 	assert.ok(g.text.includes("https://barry.example.org/.well-known/agent-card.json") && g.text.includes("198.51.100.7"));
+	assert.match(g.text, /198\.51\.100\.7 \(IP address of the machine that asked to connect\)/);
+	assert.match(g.text, /token revoke Barry-script-alert-1-scr/);
+	assert.ok(!g.text.includes("&lt;label&gt;"));
 	assert.match(g.headers.get("content-security-policy")!, /^default-src 'none'; style-src 'nonce-[A-Za-z0-9_-]+'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'$/);
 	assert.equal(g.headers.get("cache-control"), "no-store");
 	assert.equal(g.headers.get("x-frame-options"), "DENY");
@@ -660,6 +663,9 @@ test("password setup link: one-time page sets the password (hashed on the Worker
 	assert.ok(!/<script|src=/i.test(get.text), "no scripts or external assets");
 	assert.match(get.text, /name="password" type="password" autocomplete="new-password" required minlength="12"/);
 	assert.match(get.text, /name="password2"/);
+	assert.match(get.text, /Repeat the password/);
+	assert.match(get.text, /Use 12 to 1024 characters/);
+	assert.match(get.text, /passphrase of several unrelated words/);
 	assert.match(get.text, /expires in 15 min/);
 	assert.equal(post.status, 200, post.text);
 	assert.match(post.text, /Approval password set \(\d{4}-\d\d-\d\dT[^)]+\)/);

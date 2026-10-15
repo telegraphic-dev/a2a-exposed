@@ -68,6 +68,20 @@ test("nextStep: tunnel states", () => {
 	assert.match(step({}, { ...wake, hasAccessServiceToken: false }).text, /re-uploads them/);
 	assert.equal(step({ connections: 0 }).ok, false);
 	assert.match(step({ connections: 0 }).text, /cloudflared tunnel run --token-file \/cfg\/tunnel-token.*7844/);
+	const fresh = Date.now();
+	const waiting = step({ workerUrlMatches: false, connections: 0, secretsAt: fresh });
+	assert.equal(waiting.ok, true);
+	assert.match(waiting.text, /still propagating \(about 15 to 40 seconds after tunnel create\)/);
+	assert.match(waiting.text, /Wait about 30 seconds/);
+	const unknown = step({ workerUrlMatches: false, connections: null, secretsAt: fresh });
+	assert.equal(unknown.ok, true);
+	assert.match(unknown.text, /still propagating/);
+	const stale = step({ workerUrlMatches: false, connections: 0, secretsAt: fresh - 120_000 });
+	assert.equal(stale.ok, false);
+	assert.match(stale.text, /tunnel create` again/);
+	const connected = step({ workerUrlMatches: false, connections: 1, secretsAt: fresh });
+	assert.equal(connected.ok, false);
+	assert.match(connected.text, /tunnel create` again/);
 	assert.match(step({ connections: null }).text, /setup is complete/, "unknown connector state is not an error");
 	assert.match(step({}).text, /setup is complete/);
 	// a local preset needs its own webhook auth next to the Access token

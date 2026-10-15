@@ -6,7 +6,7 @@
 // context is the single self-host tenant and behaviour matches a Worker that read env.* directly.
 import * as A from "./a2a.ts";
 import * as F from "./facade.ts";
-import { renderWake, redact, cloudflareErrorHint, defaultDebounceSeconds, defaultMaxPerHour, type WakeConfig, type WakeEvent } from "./wake.ts";
+import { renderWake, redact, cloudflareErrorHint, wakeUrlIsTunnelHost, defaultDebounceSeconds, defaultMaxPerHour, type WakeConfig, type WakeEvent } from "./wake.ts";
 import { fetchCheckedWake } from "./wake-target.ts";
 import * as P from "./pairing.ts";
 import * as M from "./mcp.ts";
@@ -142,7 +142,9 @@ async function sendWake(ctx: TenantContext, ectx: ExecutionContext, payload: Jso
 			r = await doFetch(ctx, ectx, req.url, { method: "POST", headers: req.headers, body: req.body });
 		}
 		// explain Cloudflare edge errors (tunnel connector down, Access block) without echoing the body
-		const hint = r.ok ? "" : cloudflareErrorHint(r.status, (await r.text().catch(() => "")).slice(0, 4096));
+		const hint = r.ok ? "" : cloudflareErrorHint(r.status, (await r.text().catch(() => "")).slice(0, 4096), {
+			tunnel: !!(ctx.WAKE_ACCESS_CLIENT_ID && ctx.WAKE_ACCESS_CLIENT_SECRET) || wakeUrlIsTunnelHost(req.url),
+		});
 		log("wake_sent", { preset: preset(ctx), contextId: ev.contextId, taskId: ev.taskId, status: r.status, ...(hint ? { hint } : {}) });
 		if (r.status === 429 || r.status === 503) await requeueWake(ctx, ectx, payload, r.headers.get("retry-after"));
 		return { status: r.status, info: `HTTP ${r.status}${hint ? ` (${hint})` : ""}` };
@@ -440,7 +442,7 @@ async function fetchUpstreamCard(ctx: TenantContext, fresh = false): Promise<{ c
 			cardFailures.delete(url);
 			return { card, status: 200, url };
 		}
-		const hint = cloudflareErrorHint(r.status, text.slice(0, 4096));
+		const hint = cloudflareErrorHint(r.status, text.slice(0, 4096), { tunnel: true });
 		log("upstream_card_failed", { status: r.status, ...(hint ? { hint } : {}) });
 		return fail(r.status, `HTTP ${r.status}${hint ? ` (${hint})` : ""}`);
 	} catch (e) {
@@ -1385,6 +1387,16 @@ const pageRequest = (r: Json): P.PageRequest => ({ userCode: r.user_code, client
 	agentCardUrl: r.agent_card_url || "", ip: r.ip || "", country: r.country || "", createdMs: r.created_ms, expiresMs: r.expires_ms,
 	replacesLabel: r.replaces_label || undefined });
 
+/** The label approval will assign: the live token being replaced, otherwise the next free label. */
+async function withTokenLabel(ctx: TenantContext, r: Json): Promise<P.PageRequest> {
+	const base = pageRequest(r);
+	if (r.replaces_label && r.replaces_hash) {
+		const live = await ctx.DB.prepare("SELECT 1 FROM peers WHERE label = ? AND token_hash = ? AND revoked_at IS NULL").bind(r.replaces_label, r.replaces_hash).first();
+		if (live) return { ...base, tokenLabel: String(r.replaces_label) };
+	}
+	return { ...base, tokenLabel: await freeLabel(ctx, P.labelBase(r.client_name || "", r.client_id || "")) };
+}
+
 /** Optional page fields. Omitted when they would not change today's HTML. */
 function approvalPageBits(ctx: TenantContext): { oidc?: { label: string }; passwordEnabled?: boolean } {
 	const p = O.approvalPolicy(ctx.gates.approvalOidc);
@@ -1442,7 +1454,7 @@ async function devicePage(req: Request, ctx: TenantContext, url: URL, head = fal
 		}
 		const code = P.normUserCode(raw);
 		const r = code ? await pendingRequest(ctx, code) : null;
-		if (r && r.status === "pending" && Date.now() < r.expires_ms) model.request = pageRequest(r);
+		if (r && r.status === "pending" && Date.now() < r.expires_ms) model.request = await withTokenLabel(ctx, r);
 		else {
 			model.askCode = true;
 			model.codeValue = raw || "";
@@ -1549,14 +1561,14 @@ async function deviceOidcCallback(req: Request, ctx: TenantContext, url: URL, he
 		if (!seen.ok) {
 			if (seen.userCode) {
 				const pending = await pendingRequest(ctx, seen.userCode);
-				if (pending && pending.status === "pending" && Date.now() < pending.expires_ms) model.request = pageRequest(pending);
+				if (pending && pending.status === "pending" && Date.now() < pending.expires_ms) model.request = await withTokenLabel(ctx, pending);
 			}
 			model.notice = { kind: "error", text: seen.error };
 			return send(400);
 		}
 		const pending = seen.userCode ? await pendingRequest(ctx, seen.userCode) : null;
 		if (pending && pending.status === "pending" && Date.now() < pending.expires_ms) {
-			model.request = pageRequest(pending);
+			model.request = await withTokenLabel(ctx, pending);
 			return send(200);
 		}
 		model.notice = { kind: "error", text: "Nothing was approved." };
@@ -1567,7 +1579,7 @@ async function deviceOidcCallback(req: Request, ctx: TenantContext, url: URL, he
 		log("oidc_rejected", { kind: "device", reason: done.reason });
 		if (done.userCode) {
 			const pending = await pendingRequest(ctx, done.userCode);
-			if (pending && pending.status === "pending" && Date.now() < pending.expires_ms) model.request = pageRequest(pending);
+			if (pending && pending.status === "pending" && Date.now() < pending.expires_ms) model.request = await withTokenLabel(ctx, pending);
 		}
 		model.notice = { kind: "error", text: done.error };
 		return send(400);

@@ -236,12 +236,20 @@ export function cloudflareErrorCode(body: string): string {
 	return m ? m[1] || m[2] || m[3] || m[4] : "";
 }
 
-/** Short explanation of a Cloudflare edge error page (e.g. "error code: 1033"), for wake test output. */
-export function cloudflareErrorHint(status: number, body: string): string {
+/** True when the wake URL's host is a Cloudflare Tunnel hostname (`*.cfargotunnel.com`). */
+export function wakeUrlIsTunnelHost(url: string): boolean {
+	try { return /\.cfargotunnel\.com$/i.test(new URL(url).hostname); } catch { return false; }
+}
+
+/** Short explanation of a Cloudflare edge error page (e.g. "error code: 1033"), for wake test output.
+ *  `tunnel` selects the 1016 wording: a tunnel hostname's DNS record, or a webhook host that failed to resolve. */
+export function cloudflareErrorHint(status: number, body: string, opts?: { tunnel?: boolean }): string {
 	const code = cloudflareErrorCode(body);
 	const known: Record<string, string> = {
 		"1033": "Cloudflare Tunnel has no running connector (start cloudflared on the agent's machine)",
-		"1016": "origin DNS error (the tunnel hostname has no matching DNS record)",
+		"1016": opts?.tunnel
+			? "origin DNS error (the tunnel hostname has no matching DNS record)"
+			: "origin DNS error (the webhook host failed to resolve)",
 		"1010": "blocked by a Cloudflare security rule",
 	};
 	if (code) return `Cloudflare error ${code}${known[code] ? ": " + known[code] : ""}`;

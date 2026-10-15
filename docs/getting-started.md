@@ -89,7 +89,7 @@ No domain, a local-only webhook, or an agent that already speaks A2A on a privat
 
 Each inbox is an OAuth 2.0 authorization server for the Device Authorization Grant (RFC 8628). A human approves every connection.
 
-1. Agent A runs `npx -y a2a-exposed@latest connect https://b.example.com`. It prints a code (`WDJB-4827`) and a link to B's `/device` page. A's human relays the code to B's owner. The request names A from the card it sends (`--card-url`, otherwise A's deployment card; `--name` overrides that). If that card cannot be read, the name is the configured agent name, the worker name, or the public host's first label. B's peer label is that name, with `-2`, `-3`, … when the label is taken. Later messages from A show that label as `from`.
+1. Agent A runs `npx -y a2a-exposed@latest connect https://b.example.com`. It prints a code (`WDJB-4827`) and a link to B's `/device` page. The code lasts 10 minutes. A's human relays the code to B's owner. The request names A from the card it sends (`--card-url`, otherwise A's deployment card; `--name` overrides that). If that card cannot be read, the name is the configured agent name, the worker name, or the public host's first label. B's peer label is that name, with `-2`, `-3`, … when the label is taken. Later messages from A show that label as `from`.
 2. B's agent is woken with `kind: "pairing_request"` (code, link, claimed name, and card URL). It asks its human and does not approve on its own.
 3. B's owner opens the link, checks the code, and approves with the approval password, or runs `pair approve <code>` with the owner token. Deny needs no password. Webhook agents get a wake. Polling agents see the request in `inbox` and `pair list`.
 4. A's `connect` receives a per-peer token, stores it as an outbound peer, and does not print it. B's `token list` shows `via pairing: code WDJB-4827`. `token revoke` ends it.
@@ -100,7 +100,7 @@ Set the password once, before the first approval:
 npx -y a2a-exposed@latest pair set-password --web
 ```
 
-That prints a one-time link (default 15 minutes, single use). You open it and choose the password. The agent does not open the link or type the password. `pair set-password` without `--web` reads the password in a terminal, with no echo. A human runs that.
+That prints a one-time link (default 15 minutes, single use). `--ttl` sets the lifetime from 1 to 60 minutes. You open it and choose the password (12 to 1024 characters). The agent does not open the link or type the password. `pair set-password` without `--web` reads the password in a terminal, with no echo. A human runs that.
 
 In human mode the owner token (`pair approve <code>`) approves, and the decision is recorded as the owner. The peer collects its token on the next poll. A call with no token, or with a peer token, is refused. `--pairing-approval agent` records the approval as the agent and is the mode where the agent runs `pair approve <code>` after the human says yes in chat. `off` disables pairing (`token issue` only). `connect --replace` swaps the token under the same label.
 
