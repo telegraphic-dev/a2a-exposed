@@ -111,8 +111,8 @@ export function wakeSummary(ev: WakeEvent, cli: string, withPreview = true): str
 		ev.kind === "outbound_update"
 			? `A2A: peer "${ev.from}" sent an update on a task you sent (context ${ev.contextId}, task ${ev.taskId}).`
 			: ev.kind === "test"
-				? `A2A: test wake from your a2a-exposed inbox (no real message).`
-				: `A2A inbox: ${n > 1 ? n + " new messages" : "new message"} from peer "${ev.from}" (context ${ev.contextId}, task ${ev.taskId}).`;
+				? `A2A: test wake from your A2A endpoint (no real message).`
+				: `A2A endpoint: ${n > 1 ? n + " new messages" : "new message"} from peer "${ev.from}" (context ${ev.contextId}, task ${ev.taskId}).`;
 	const lines = [
 		head,
 		`Use the a2a-exposed skill: run \`${hintFor(ev, cli)}\`, handle the request, then reply with \`${cli} reply <taskId> ...\`.`,
@@ -197,7 +197,7 @@ export async function renderWake(cfg: WakeConfig, ev: WakeEvent, opts: { nowMs?:
 		case "openclaw-agent":
 			bearer();
 			headers["idempotency-key"] = requestId;
-			body = JSON.stringify({ message: wakeSummary(ev, cli), name: "A2A inbox", agentId: cfg.agentId || "main", sessionMode: "isolated", deliver: false });
+			body = JSON.stringify({ message: wakeSummary(ev, cli), name: "A2A endpoint", agentId: cfg.agentId || "main", sessionMode: "isolated", deliver: false });
 			break;
 		case "hermes":
 			headers["x-request-id"] = requestId;

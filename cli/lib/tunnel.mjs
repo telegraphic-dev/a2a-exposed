@@ -88,12 +88,12 @@ export function pickTunnelHostname({ tunnelHostname, tunnelZone, inboxHost, zone
 		return { hostname: `${label()}.${zone.name}`, zone, note: `wake hostname on the zone ${zone.name} (--tunnel-zone)` };
 	}
 	const own = inboxHost ? zoneFor(inboxHost, usable) : null;
-	if (own) return { hostname: `${label()}.${own.name}`, zone: own, note: `wake hostname on ${own.name}, the zone of the inbox hostname` };
+	if (own) return { hostname: `${label()}.${own.name}`, zone: own, note: `wake hostname on ${own.name}, the zone of the A2A endpoint hostname` };
 	if (usable.length === 1)
-		return { hostname: `${label()}.${usable[0].name}`, zone: usable[0], note: `the account has one zone, ${usable[0].name}: the wake hostname goes there (the inbox URL is unchanged)` };
+		return { hostname: `${label()}.${usable[0].name}`, zone: usable[0], note: `the account has one zone, ${usable[0].name}: the wake hostname goes there (the A2A endpoint URL is unchanged)` };
 	if (!usable.length) die(noZoneHelp(zones));
 	return die([
-		`this Cloudflare account has ${usable.length} zones; choose one for the wake hostname (the inbox URL is unchanged):`,
+		`this Cloudflare account has ${usable.length} zones; choose one for the wake hostname (the A2A endpoint URL is unchanged):`,
 		zoneList(usable),
 		"Re-run with --tunnel-zone <zone>  (or --tunnel-hostname wake-<name>.<zone>).",
 	].join("\n"));
@@ -179,7 +179,8 @@ export function cfPermission(args) {
 export function withPermissionHint(args, msg) {
 	if (!/\[(10000|7403)\]/.test(msg) || /The API token needs/.test(msg)) return msg;
 	const perm = cfPermission(args);
-	return perm ? `${msg} The API token needs ${perm}.` : msg;
+	const text = String(msg || "").trim().replace(/[.]+$/, "");
+	return perm ? `${text}. The API token needs ${perm}.` : `${text}.`;
 }
 
 /** True when `cf` reports that this Worker does not exist (code 10007). */
@@ -250,7 +251,7 @@ export function cfWorkDir(preferred) {
 }
 
 function needDeployment(o) {
-	if (!C.get("A2A_D1_ID") || !C.get("A2A_WORKER_NAME")) die(`no saved deployment; run \`${CLI} init\` first`);
+	if (!C.get("A2A_D1_ID") || !C.get("A2A_WORKER_NAME")) die(`nothing is deployed from ${C.CONFIG_FILE}. Another deployment? Set A2A_CONFIG_DIR.`);
 	const dir = D.workerDir(o);
 	if (!fs.existsSync(dir)) die(`worker project not found at ${dir}; run \`${CLI} deploy\` once`);
 	return cfWorkDir(dir);
@@ -258,7 +259,7 @@ function needDeployment(o) {
 
 /** `cf` cwd for `tunnel rm` / `uninstall`. A missing Worker project uses a temp directory with a writable cache. */
 function cfDirForRemove(o, { allowMissingProject = false } = {}) {
-	if (!C.get("A2A_D1_ID") || !C.get("A2A_WORKER_NAME")) die(`no saved deployment; run \`${CLI} init\` first`);
+	if (!C.get("A2A_D1_ID") || !C.get("A2A_WORKER_NAME")) die(`nothing is deployed from ${C.CONFIG_FILE}. Another deployment? Set A2A_CONFIG_DIR.`);
 	const dir = D.workerDir(o);
 	if (!fs.existsSync(dir) && !allowMissingProject) die(`worker project not found at ${dir}; run \`${CLI} deploy\` once`);
 	return cfWorkDir(dir);
@@ -430,7 +431,7 @@ export async function status(o) {
 	const tid = C.get("A2A_TUNNEL_ID");
 	if (tid) {
 		const t = cfCall(dir, ["tunnels", "get", tid], { allowNotFound: true });
-		info.tunnel = t ? { id: tid, status: t.status, connections: (t.connections || []).length } : "missing";
+		info.tunnel = t ? { id: tid, status: t.status === "inactive" ? "never connected" : t.status, connections: (t.connections || []).length } : "missing";
 	}
 	const app = C.get("A2A_TUNNEL_ACCESS_APP_ID");
 	if (app) {
@@ -465,12 +466,12 @@ export async function status(o) {
 /** What `tunnel status` prints about the request that carries no service token. A network error is DNS, not a missed Access block. */
 export function bareProbeNote(withoutToken) {
 	const bare = withoutToken || "";
-	if (/^network error:/.test(bare)) return "DNS may still be propagating; retry in 30 s";
+	if (/^network error:/.test(bare)) return "DNS may still be propagating; retry in 30 seconds";
 	if (!/^HTTP 40[13]/.test(bare)) return "WARNING: the bare request was not blocked by Access; check the Access application";
 	return "";
 }
 
-export async function remove(o, { quiet = false, allowMissingProject = false, skipSecrets = false, secretNames = undefined } = {}) {
+export async function remove(o, { quiet = false, allowMissingProject = false, skipSecrets = false, secretNames = undefined, rerun = "" } = {}) {
 	if (!TUNNEL_KEYS.some((k) => C.get(k))) {
 		if (!quiet) console.error("nothing to remove");
 		return;
@@ -519,7 +520,7 @@ export async function remove(o, { quiet = false, allowMissingProject = false, sk
 		C.saveConfig({ A2A_TUNNEL_ACCESS_CLIENT_ID: null, A2A_TUNNEL_ACCESS_CLIENT_SECRET: null });
 	});
 	await attempt("tunnel token file", "A2A_TUNNEL_TOKEN_FILE", () => fs.rmSync(C.get("A2A_TUNNEL_TOKEN_FILE"), { force: true }));
-	if (failures.length) die(`some parts could not be removed (ids kept in ${C.CONFIG_FILE}; re-run \`tunnel rm\`):\n  ${failures.join("\n  ")}`);
+	if (failures.length) die(`some parts could not be removed (ids kept in ${C.CONFIG_FILE}; re-run ${rerun || "`tunnel rm`"}):\n  ${failures.join("\n  ")}`);
 	C.saveConfig(Object.fromEntries(TUNNEL_KEYS.map((k) => [k, null])));
 	if (!quiet) console.error("tunnel removed. Stop cloudflared on the agent's machine (and `cloudflared service uninstall` if installed). Wakes are off until you set a new WAKE_WEBHOOK_URL (or use polling).");
 }

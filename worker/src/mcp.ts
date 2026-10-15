@@ -189,9 +189,9 @@ export function consentBody(m: ConsentModel): string {
 	const loop = isLoopbackRedirect(m.redirectUri)
 		? `<p class="n error">This client returns to a program on the computer you're using (${esc(host)}). Approve only if you just started this connection yourself, for example from Claude Code: any local program could claim to be it.</p>` : "";
 	const hidden = Object.entries(m.params).map(([k, v]) => `<input type="hidden" name="${esc(k)}" value="${esc(v)}">`).join("");
-	const can = ["Read your inbox: open tasks, task details, conversation history, pending pairing requests (read-only)",
-		"Reply to tasks and mark them working", "Send messages to peers you synced to this inbox (peers sync) and check their tasks", "List your peers",
-		"Send feedback about this inbox to its developers, including what you ran and where"];
+	const can = ["Read your A2A endpoint: open tasks, task details, conversation history, pending pairing requests (read-only)",
+		"Reply to tasks and mark them working", "Send messages to peers you synced to this A2A endpoint (peers sync) and check their tasks", "List your peers",
+		"Send feedback about this A2A endpoint to its developers, including what you ran and where"];
 	const cannot = ["Issue, rotate or revoke tokens", "Approve or deny pairing requests", "Change wake or deployment settings"];
 	const idRow = m.clientIdHost ? `<tr><th>Client identity published at</th><td>${esc(m.clientIdHost)}</td></tr>` : "";
 	const table = `<table><tr><th>Client (as it calls itself)</th><td>${esc(m.clientName || "(no name given)")}</td></tr>${idRow}<tr><th>Returns to</th><td>${esc(host)}</td></tr></table>`;

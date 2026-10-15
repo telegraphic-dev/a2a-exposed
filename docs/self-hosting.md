@@ -1,8 +1,10 @@
 # Self-hosting on Cloudflare
 
-`npx -y a2a-exposed@latest init` deploys the inbox Worker and a D1 database (Cloudflare's SQLite) into your Cloudflare account, plus the CLI and MCP you run with npx. The owner pages on that inbox are `/` and `/device`. [a2a.exposed](https://a2a.exposed) hosts the inbox and is open to everyone. When to use it, and the sentence to say, is in [Getting started](getting-started.md#hosted-inbox). With a Cloudflare login and an account, this page is that inbox, a tunnel for a local webhook, and a public façade for an agent that already speaks A2A.
+`npx -y a2a-exposed@latest init` deploys the A2A endpoint Worker and a D1 database (Cloudflare's SQLite) into your Cloudflare account, plus the CLI and MCP you run with npx. The owner pages on that A2A endpoint are `/` and `/device`. [a2a.exposed](https://a2a.exposed) hosts the A2A endpoint and is open to everyone. When to use it, and the sentence to say, is in [Getting started](getting-started.md#hosted-inbox). With a Cloudflare login and an account, this page is that A2A endpoint, a tunnel for a local webhook, and a public façade for an agent that already speaks A2A.
 
-`init` deploys one inbox. Pass `--hostname` for your own domain, or omit it to serve on `*.workers.dev`.
+Grok Bot is tested end to end. Claude Code, OpenClaw, and Hermes are untested. The client table is in [Getting started](getting-started.md#clients).
+
+`init` deploys one A2A endpoint. Pass `--hostname` for your own domain, or omit it to serve on `*.workers.dev`.
 
 Secrets go in the environment or a chmod-600 file, never on the command line or in chat:
 
@@ -20,7 +22,7 @@ On some datacenter and VPS addresses, `cf auth login` hits a Cloudflare managed 
 
 | Deploy | Token permissions |
 | --- | --- |
-| `--workers-dev` or a workers.dev inbox | Account → Workers Scripts: Edit. Account → D1: Edit. Account → Account Settings: Read. User → Memberships: Read, so `init` can find the account. Without Memberships, set `CLOUDFLARE_ACCOUNT_ID` or `--account-id` |
+| `--workers-dev` or a workers.dev A2A endpoint | Account → Workers Scripts: Edit. Account → D1: Edit. Account → Account Settings: Read. User → Memberships: Read, so `init` can find the account. Without Memberships, set `CLOUDFLARE_ACCOUNT_ID` or `--account-id` |
 | Custom hostname, or `--tunnel` | Those, plus Zone → DNS: Edit (can be limited to that zone). Account → Cloudflare Tunnel: Edit. Account → Access: Apps and Policies: Edit. Account → Access: Service Tokens: Edit |
 
 Workers, D1, Tunnel, and Access are account-scoped. Only DNS can be limited to one zone.
@@ -43,7 +45,7 @@ npx -y a2a-exposed@latest init --hostname agent.example.com --agent-name "My Age
 
 Leave out `--hostname` and the Worker is served at `https://<worker-name>.<account-subdomain>.workers.dev`. This works on the Workers free plan. `init` saves the URL.
 
-Each account has one workers.dev subdomain. If yours has none yet, `init` stops. Pass `--workers-dev-subdomain <name>`, or open Workers & Pages in the dashboard once, or `PUT /accounts/<account-id>/workers/subdomain` with `{"subdomain":"<name>"}`.
+Each account has one workers.dev subdomain. If yours has none yet, `init` stops. Pass `--workers-dev-subdomain <name>`, or open the Workers section of the dashboard once, or `PUT /accounts/<account-id>/workers/subdomain` with `{"subdomain":"<name>"}`.
 
 `deploy --workers-dev` moves a custom-hostname deployment to workers.dev. `deploy --hostname <host>` moves it back. The old URL stops serving: its agent card redirects to the new one (301), and everything else returns 410. Peers update their URL.
 
@@ -51,7 +53,7 @@ The agent card always advertises this public base URL. The agent's webhook URL, 
 
 `--cron` adds a one-minute flush of pending wakes. It needs a workers.dev subdomain on the account. Pending wakes are also flushed on every request, so the cron is optional.
 
-`init` is safe to re-run. It reuses the saved D1 database, owner token, and settings. To rotate the owner token: `npx -y a2a-exposed@latest init --rotate-owner-token`. That prints the follow-up: update `A2A_OWNER_TOKEN` wherever this inbox is called, then `peers sync` so uploaded peers stay readable.
+`init` is safe to re-run. It reuses the saved D1 database, owner token, and settings. To rotate the owner token: `npx -y a2a-exposed@latest init --rotate-owner-token`. That prints the follow-up: update `A2A_OWNER_TOKEN` wherever this A2A endpoint is called, then `peers sync` so uploaded peers stay readable.
 
 Hosted agents (cloud routines and similar) cannot read the local config file. Give them `A2A_BASE_URL` and `A2A_OWNER_TOKEN` as environment secrets, or add the [MCP connector](mcp.md) so the session has no owner token.
 
@@ -59,11 +61,11 @@ Hosted agents (cloud routines and similar) cannot read the local config file. Gi
 
 If the agent's webhook only listens locally, `tunnel create` publishes the wake path through a named Cloudflare Tunnel. A Cloudflare Access application on that hostname admits only one service token, held by the Worker. The Worker sends `CF-Access-Client-Id` and `CF-Access-Client-Secret` on every wake, next to the preset's own auth. Keep the agent's own auth enabled.
 
-It needs Cloudflare Zero Trust (the free plan is enough) and a zone somewhere on the account. The inbox itself can be on workers.dev or a custom hostname. With one zone, `tunnel create` picks `wake-<word>-<word>-<4 hex>.<zone>` and says so. With several, pass `--tunnel-zone <zone>`. With no zone, poll the inbox instead.
+It needs Cloudflare Zero Trust (the free plan is enough) and a zone somewhere on the account. The A2A endpoint itself can be on workers.dev or a custom hostname. With one zone, `tunnel create` picks `wake-<word>-<word>-<4 hex>.<zone>` and says so. With several, pass `--tunnel-zone <zone>`. With no zone, poll the A2A endpoint instead.
 
 Enable Zero Trust once at <https://one.dash.cloudflare.com/>, or pass `--zero-trust-org <team-name>` to create the organization (`<team-name>.cloudflareaccess.com`). That flag creates DNS, a tunnel, and Access objects. The Zero Trust organization is permanent.
 
-`tunnel create` names three objects `a2a-exposed wake <worker>`: the tunnel, the Access application, and the service token. The Access policy is `a2a-exposed wake: service token only`. The DNS host is `wake-<word>-<word>-<4 hex>.<zone>` unless you pass `--tunnel-hostname`. Grok Bot is tested end to end. Claude Code, OpenClaw, and Hermes are untested. The client table is in [Getting started](getting-started.md#clients).
+`tunnel create` names three objects `a2a-exposed wake <worker>`: the tunnel, the Access application, and the service token. The Access policy is `a2a-exposed wake: service token only`. The DNS host is `wake-<word>-<word>-<4 hex>.<zone>` unless you pass `--tunnel-hostname`.
 
 Install [cloudflared](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/) on the machine that runs the connector. `tunnel create` prints the `cloudflared tunnel run` command.
 
@@ -84,7 +86,7 @@ The connector token is written to `<config dir>/tunnel-token` (chmod 600) and is
 cloudflared tunnel run --token-file ~/.config/a2a-exposed/tunnel-token
 ```
 
-Copy the token file to that machine if `init` ran elsewhere. Worker secrets show up in about 15 to 40 seconds. Wait about 30 seconds, then check again. For about a minute after `tunnel create`, while the connector reports 0 connections, `status` prints "waiting for the connector to connect" and exits 0. After that minute, 0 connections means start cloudflared. A tunnel status of `inactive` means the connector has never connected.
+Copy the token file to that machine if `init` ran elsewhere. Worker secrets show up in about 15 to 40 seconds. Wait about 30 seconds, then check again. For about a minute after `tunnel create`, while the connector reports 0 connections, `status` prints `waiting for the connector to connect`, tells you to start `cloudflared tunnel run --token-file …` now, and exits 0. After that minute, 0 connections is broken. A tunnel status of `inactive` means the connector has never connected.
 
 - `status` shows connector connections and the next step.
 - `tunnel status` checks the Access policy and two probes: a request without the token must be blocked (401/403); with the token, `530` (Cloudflare error 1033) means the connector is not running.
@@ -95,13 +97,13 @@ Copy the token file to that machine if `init` ran elsewhere. Worker secrets show
 
 Already have an Access-protected URL? Export `WAKE_ACCESS_CLIENT_ID` and `WAKE_ACCESS_CLIENT_SECRET` with `WAKE_WEBHOOK_URL`, then `wake set`. The Worker sends the same headers.
 
-`init ... --tunnel` deploys the inbox and then creates the tunnel. If the tunnel step fails, the inbox is already deployed. Fix the error and run `tunnel create`, or read `status`.
+`init ... --tunnel` deploys the A2A endpoint and then creates the tunnel. If the tunnel step fails, the A2A endpoint is already deployed. Fix the error and run `tunnel create`, or read `status`.
 
 <a id="public-facade"></a>
 
 ## Public façade
 
-Use this when the agent already serves A2A JSON-RPC (1.0 or 0.3) on a private address (a Tailnet name such as `*.ts.net`, a LAN address, or localhost). The Worker becomes a public façade. Peer calls are checked, then forwarded. The inbox stays empty.
+Use this when the agent already serves A2A JSON-RPC (1.0 or 0.3) on a private address (a Tailnet name such as `*.ts.net`, a LAN address, or localhost). The Worker becomes a public façade. Peer calls are checked, then forwarded. The A2A endpoint stays empty.
 
 ```mermaid
 flowchart LR
@@ -126,7 +128,7 @@ The Worker cannot reach a private address. Publish the agent on a Cloudflare Tun
 
    The Access service token gets the Worker through the tunnel. `UPSTREAM_TOKEN` is the bearer the agent itself checks. `init` and `deploy` read the upstream card. Unless that card declares no bearer auth, `UPSTREAM_TOKEN` is required: exported, piped with `--upstream-token-stdin`, or typed at a hidden prompt on a terminal. A non-interactive run without it exits 1 and says what to do. `--no-upstream-token` skips the check when the agent accepts calls with no bearer.
 
-   `--upstream-card-url` defaults to `<upstream origin>/.well-known/agent-card.json` and must be on the `--upstream` origin. The Worker sends the upstream credentials on that fetch. Another origin is refused. `deploy --upstream none` switches back to the inbox.
+   `--upstream-card-url` defaults to `<upstream origin>/.well-known/agent-card.json` and must be on the `--upstream` origin. The Worker sends the upstream credentials on that fetch. Another origin is refused. `deploy --upstream none` switches back to the A2A endpoint.
 
 3. Pairing stays on the façade. Messages go to the upstream, so `inbox` stays empty. A wake webhook is optional and only announces pairing requests.
 
@@ -139,7 +141,7 @@ It reports Access (credentials missing or refused), the agent's bearer (missing 
 
 ### Card rewrite
 
-Interfaces point at the façade's public URL. Security schemes and OAuth URLs are the façade's. Name, skills, and version come from the upstream card, unless `--agent-*` or `--provider-*` overrides them. A public https `A2A_DOCUMENTATION_URL` in `config.env` is the documentation link on the card. Private, Tailnet, LAN, localhost, and tunnel-hostname URLs are removed. `signatures` are dropped. The inbox card (no `--upstream`) scrubs the same fields on the description, skills, provider URL, and documentation URL.
+Interfaces point at the façade's public URL. Security schemes and OAuth URLs are the façade's. Name, skills, and version come from the upstream card, unless `--agent-*` or `--provider-*` overrides them. A public https `A2A_DOCUMENTATION_URL` in `config.env` is the documentation link on the card. Private, Tailnet, LAN, localhost, and tunnel-hostname URLs are removed. `signatures` are dropped. The A2A endpoint card (no `--upstream`) scrubs the same fields on the description, skills, provider URL, and documentation URL.
 
 The façade forwards `SendMessage`, `GetTask`, and `CancelTask` (1.0 and 0.3). Another peer's task returns `-32001`. An unknown or unrecorded context returns `-32602`. `ListTasks` returns `-32004`. Push notification config calls return `-32003`. Peers poll `GetTask`. Streaming returns `-32004`. The card advertises only the JSON-RPC versions the upstream card lists.
 
@@ -147,9 +149,11 @@ The façade holds one upstream identity and passes the peer label in `X-A2A-Peer
 
 While you are still building the façade, a private agent can connect outward: `connect https://b.example.com --card-url https://agent.example.ts.net/.well-known/agent-card.json`. A private https card is sent as informational. The other owner's `/device` page flags it as not publicly reachable. A non-https card is left out. Replies come back with `poll` until the façade is up.
 
-## Remove an inbox
+<a id="remove-an-inbox"></a>
 
-`config` prints the config directory and the saved `A2A_WORKER_NAME`, `A2A_D1_ID`, `A2A_D1_NAME`, `A2A_TUNNEL_TOKEN_FILE` (the path), and `CF_PROFILE`.
+## Remove an A2A endpoint
+
+`config` prints the config directory and the saved `A2A_WORKER_NAME`, `A2A_D1_ID`, `A2A_D1_NAME`, `A2A_TUNNEL_TOKEN_FILE` (the path), `A2A_TUNNEL_SECRETS_AT` (the value), and `CF_PROFILE`.
 
 `uninstall` prints the plan, then removes the Worker, then the wake tunnel when the config has one (the same objects as `tunnel rm`, except Worker secrets when the Worker is already gone), then the D1 database. It prints one line per step, including when that object is already gone. It asks first. Off a terminal, pass `--yes`. `--dry-run` prints the plan and changes nothing. A failed Worker delete leaves the D1 database in place so you can run it again. An empty config exits 1.
 
@@ -157,7 +161,7 @@ While you are still building the façade, a private agent can connect outward: `
 npx -y a2a-exposed@latest uninstall --yes
 ```
 
-Stop `cloudflared` afterwards (`cloudflared service uninstall` when it runs as a service). After you delete the Worker, open the dashboard and check Workers & Pages → the Worker → Settings → Domains & Routes, and the zone's DNS, and remove a custom domain that is still listed. `tunnel rm` deletes the wake hostname's DNS record. The account's workers.dev subdomain stays. A Zero Trust organization created with `--zero-trust-org` is permanent.
+Stop `cloudflared` afterwards (`cloudflared service uninstall` when it runs as a service). After you delete the Worker, open the dashboard and check that Worker's custom domains and routes, and the zone's DNS, and remove a custom domain that is still listed. `tunnel rm` deletes the wake hostname's DNS record. The account's workers.dev subdomain stays. A Zero Trust organization created with `--zero-trust-org` is permanent.
 
 The config directory stays. It still holds the owner token, `WAKE_*` values, peer tokens, and the Worker project (`~/.config/a2a-exposed`, or `A2A_CONFIG_DIR`). A later `init` reuses the owner token. Remove that directory when those should go too.
 
@@ -170,7 +174,7 @@ npx cf d1 delete <A2A_D1_ID> --force
 
 When the config is gone, remove the tunnel, the Access application, the service token, and the DNS record from the dashboard or with `cf`. The names are `a2a-exposed wake <worker>`.
 
-Dashboard: Zero Trust → Networks → Tunnels; Zero Trust → Access → Applications; Zero Trust → Access → Service credentials; the zone → DNS → Records. Also check Workers & Pages → Domains & Routes.
+In the Cloudflare dashboard, open the sections for Tunnels, Access applications, Access service tokens, and the zone's DNS records. Also check that Worker's custom domains and routes.
 
 ```bash
 npx cf tunnels list

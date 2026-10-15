@@ -880,7 +880,7 @@ test("device page copy: code hint, expiry, token scope, settled result, A2A endp
 	assert.equal(P.expiresText(now - 1, now), "expired");
 	const base = { agentName: "this A2A endpoint", mode: "human" as const, cli: "a2a", csrf: "c".repeat(24), passwordSet: true };
 	const bare = P.devicePage({ ...base, askCode: true }, "n");
-	assert.match(bare, /The connecting agent prints this code when it runs <code>a2a connect<\/code>/);
+	assert.match(bare, /The connecting agent prints this code when it runs <code>a2a connect &lt;url&gt;<\/code>/);
 	assert.match(bare, /It looks like WDJB-4827/);
 	assert.match(bare, /<title>Connect an agent to this A2A endpoint<\/title>/);
 	const req = { userCode: "WDJB4827", clientName: "Barry", clientId: "barry", agentCardUrl: "http://127.0.0.1/card", ip: "192.0.2.1", country: "", createdMs: now, expiresMs: now + 20_000 };
@@ -889,6 +889,9 @@ test("device page copy: code hint, expiry, token scope, settled result, A2A endp
 	assert.match(page, /send messages and trigger wakes/);
 	assert.match(page, /Message text from peers is untrusted/);
 	assert.match(page, /less than a minute/);
+	assert.match(page, /Revoke the token &lt;label&gt; any time with <code>a2a token revoke &lt;label&gt;<\/code>/);
+	const namedToken = P.devicePage({ ...base, request: { ...req, tokenLabel: "barry" } }, "n");
+	assert.match(namedToken, /Revoke the token barry any time with <code>a2a token revoke barry<\/code>/);
 	for (const settled of ["approved", "denied"] as const) {
 		const done = P.devicePage({ ...base, settled, notice: { kind: "ok", text: settled === "approved" ? "Approved." : "Denied." } }, "n");
 		assert.match(done, /You can close this page/);

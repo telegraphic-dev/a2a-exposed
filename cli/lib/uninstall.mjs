@@ -22,7 +22,15 @@ export function uninstallPlan() {
 	if (T.TUNNEL_KEYS.some((k) => C.get(k))) {
 		const host = C.get("A2A_TUNNEL_HOSTNAME");
 		const id = C.get("A2A_TUNNEL_ID");
+		const worker = C.get("A2A_WORKER_NAME");
+		const label = worker ? `a2a-exposed wake ${worker}` : "(none saved)";
 		lines.push(`Wake: ${[host, id && `tunnel ${id}`].filter(Boolean).join(", ") || "(tunnel saved)"}`);
+		const app = C.get("A2A_TUNNEL_ACCESS_APP_ID");
+		const token = C.get("A2A_TUNNEL_ACCESS_TOKEN_ID");
+		const dns = C.get("A2A_TUNNEL_DNS_ID");
+		lines.push(`Access application: ${app ? `${label} (${app})` : "(none saved)"}`);
+		lines.push(`Service token: ${token ? `${label} (${token})` : "(none saved)"}`);
+		lines.push(`DNS record: ${[host, dns && `id ${dns}`].filter(Boolean).join(", ") || "(none saved)"}`);
 	}
 	lines.push("Removal is permanent. It takes the messages and the paired peers with it.");
 	return lines.join("\n");
@@ -34,7 +42,7 @@ export async function confirmUninstall(yes, input = process.stdin, output = proc
 	if (!input.isTTY) throw new CliError("uninstall removes the Worker, the D1 database, and the wake tunnel. Pass --yes.");
 	const rl = readline.createInterface({ input, output });
 	try {
-		const answer = (await rl.question("Remove them? [y/N] ")).trim().toLowerCase();
+		const answer = (await rl.question("Remove the Worker, D1 database and wake tunnel listed above? [y/N] ")).trim().toLowerCase();
 		if (answer !== "y" && answer !== "yes") throw new CliError("uninstall cancelled");
 	} finally {
 		rl.close();
@@ -48,14 +56,16 @@ function removalError(err, { removed, left, workerGone }) {
 	const msg = err instanceof Error ? err.message : String(err);
 	const code = /\[(10000|7403)\]/.test(msg);
 	const d1Failed = /cf d1 delete/i.test(msg);
-	if (!code && !(d1Failed && workerGone)) throw err instanceof CliError ? err : new CliError(msg);
-	const lines = [
-		msg,
-		`Run \`${CLI} uninstall --yes\` again. A rerun continues from what is left.`,
-		`Removed: ${removed.length ? removed.join("; ") : "nothing"}.`,
-		`Not removed: ${left.length ? left.join("; ") : "nothing"}.`,
-	];
+	const dnsFailed = /DNS record/i.test(msg);
+	const workerPerm = /\[10000\]/.test(msg) && /cf workers delete/i.test(msg);
+	if (!code && !(d1Failed && workerGone) && !dnsFailed) throw err instanceof CliError ? err : new CliError(msg);
+	const lines = [msg];
+	if (!/uninstall --yes/.test(msg))
+		lines.push(`Run \`${CLI} uninstall --yes\` again. A rerun continues from what is left.`);
+	lines.push(`Removed: ${removed.length ? removed.join("; ") : "nothing"}.`);
+	lines.push(`Not removed: ${left.length ? left.join("; ") : "nothing"}.`);
 	if (d1Failed && workerGone) lines.push("The Worker is already gone. A rerun removes the D1 database.");
+	if (workerPerm) lines.push("A Cloudflare 10000 on the Worker delete still removes the other objects. A rerun is safe.");
 	throw new CliError(lines.join("\n"));
 }
 
@@ -64,7 +74,10 @@ export async function uninstall(o) {
 	if (!deploymentSaved())
 		throw new CliError(`nothing is deployed from ${C.CONFIG_DIR}. Another deployment? Set A2A_CONFIG_DIR.`);
 	console.error(uninstallPlan());
-	if (o["dry-run"]) return;
+	if (o["dry-run"]) {
+		console.error("Nothing was changed.");
+		return;
+	}
 	await confirmUninstall(Boolean(o.yes));
 
 	const name = C.get("A2A_WORKER_NAME");
@@ -79,15 +92,15 @@ export async function uninstall(o) {
 		try {
 			const r = T.cfCall(dir, ["workers", "delete", name, "--force"], { allowNotFound: true });
 			workerGone = true;
-			const line = r === null ? `Worker ${name} is already gone` : `removed Worker ${name}`;
-			step(line);
+			const line = r === null ? `Worker ${name} is already gone` : `Worker ${name}`;
+			step(r === null ? line : `removed ${line}`);
 			removed.push(line);
 		} catch (e) { workerError = e; }
 	}
 	let tunnelError = null;
 	if (tunnelish) {
 		try {
-			await T.remove(o, { allowMissingProject: true, skipSecrets: workerGone });
+			await T.remove(o, { allowMissingProject: true, skipSecrets: workerGone, rerun: `${CLI} uninstall --yes` });
 			removed.push("wake tunnel");
 		} catch (e) { tunnelError = e; }
 	} else step("no tunnel to remove");
@@ -99,8 +112,8 @@ export async function uninstall(o) {
 	if (d1) {
 		try {
 			const r = T.cfCall(dir, ["d1", "delete", d1, "--force"], { allowNotFound: true });
-			const line = r === null ? `D1 database ${d1} is already gone` : `removed D1 database ${d1}`;
-			step(line);
+			const line = r === null ? `D1 database ${d1} is already gone` : `D1 database ${d1}`;
+			step(r === null ? line : `removed ${line}`);
 			removed.push(line);
 		} catch (e) {
 			removalError(e, { removed, left: [`D1 ${C.get("A2A_D1_NAME") || d1} (untouched)`], workerGone });

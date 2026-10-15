@@ -31,7 +31,7 @@ export function noSubdomainHelp(accountId) {
 	return [
 		"this Cloudflare account has no workers.dev subdomain yet. Create one (once per account), then re-run:",
 		`  - let the CLI do it:   re-run with --workers-dev-subdomain <name>   (gives https://<worker>.<name>.workers.dev)`,
-		`  - or in the dashboard: ${onboardingUrl(accountId)}  (the first visit to Workers & Pages asks for it)`,
+		`  - or in the dashboard: ${onboardingUrl(accountId)}  (the first visit to the Workers section asks for it)`,
 		`  - or the API:          PUT /accounts/<account-id>/workers/subdomain  {"subdomain":"<name>"}`,
 		`  docs: ${DOCS}`,
 	].join("\n");

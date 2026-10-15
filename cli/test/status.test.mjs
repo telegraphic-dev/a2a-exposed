@@ -27,7 +27,7 @@ test("mcpAddCommand follows the live Worker and the agent card", () => {
 test("nextStep: the first missing piece, in setup order", () => {
 	const step = (over) => nextStep(healthy(over));
 	assert.equal(step({ deployed: false }).ok, false);
-	assert.match(step({ deployed: false }).text, /nothing is deployed from \/cfg\/config\.env: run `npx -y a2a-exposed@latest init/);
+	assert.match(step({ deployed: false }).text, /nothing is deployed from \/cfg\/config\.env\. Another deployment\? Set A2A_CONFIG_DIR\./);
 	assert.match(step({ baseUrl: "" }).text, /no base URL saved\): re-run `npx -y a2a-exposed@latest init` with the same flags \(safe/);
 	assert.match(step({ hasOwnerToken: false }).text, /no owner token saved/);
 	assert.match(step({ card: { ok: false, error: "HTTP 404" } }).text, /agent card is not reachable \(HTTP 404\)/);
@@ -71,6 +71,7 @@ test("nextStep: tunnel states", () => {
 	const connecting = step({ connections: 0, secretsAt: Date.now() });
 	assert.equal(connecting.ok, true);
 	assert.match(connecting.text, /waiting for the connector to connect/);
+	assert.match(connecting.text, /Start `cloudflared tunnel run --token-file \/cfg\/tunnel-token` on the agent's machine now, then run `npx -y a2a-exposed@latest status` again/);
 	const aged = step({ connections: 0, secretsAt: 1, state: "inactive" });
 	assert.equal(aged.ok, false);
 	assert.match(aged.text, /never connected/);
@@ -80,6 +81,7 @@ test("nextStep: tunnel states", () => {
 	assert.equal(waiting.ok, true);
 	assert.match(waiting.text, /still propagating \(about 15 to 40 seconds after tunnel create\)/);
 	assert.match(waiting.text, /Wait about 30 seconds/);
+	assert.match(waiting.text, /Start `cloudflared tunnel run --token-file \/cfg\/tunnel-token` on the agent's machine now/);
 	const unknown = step({ workerUrlMatches: false, connections: null, secretsAt: fresh });
 	assert.equal(unknown.ok, true);
 	assert.match(unknown.text, /still propagating/);

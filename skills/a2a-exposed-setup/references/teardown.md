@@ -11,7 +11,7 @@ rm -rf <config dir>                        # owner token, WAKE_* values, stored 
 
 `uninstall` removes the Worker, then the wake tunnel when the config has one (same objects as `tunnel rm`, one line each; Worker secrets are skipped once the Worker is gone), then the D1 database. A missing object is already gone. The config directory stays until you remove it. The owner token and `WAKE_*` values stay in `config.env`. A later `init` reuses the owner token.
 
-Stop `cloudflared` afterwards (`cloudflared service uninstall` when it runs as a service). After you delete the Worker, check Workers & Pages → Settings → Domains & Routes, and the zone's DNS, and remove a custom domain that is still listed. `tunnel rm` deletes the wake hostname's DNS record. The account's workers.dev subdomain stays. A Zero Trust organization created with `--zero-trust-org` is permanent. Peers lose access immediately.
+Stop `cloudflared` afterwards (`cloudflared service uninstall` when it runs as a service). After you delete the Worker, check that Worker's custom domains and routes, and the zone's DNS, and remove a custom domain that is still listed. `tunnel rm` deletes the wake hostname's DNS record. The account's workers.dev subdomain stays. A Zero Trust organization created with `--zero-trust-org` is permanent. Peers lose access immediately.
 
 To call `cf` yourself, run it from `<config dir>/worker`, or create a writable cache first (`mkdir -p .cloudflare/cache`). Otherwise `cf` exits with `EACCES: mkdir '.../node_modules/.cache/cloudflare'`. Add `--profile <name>` for a named login.
 
@@ -22,7 +22,7 @@ npx cf d1 delete <A2A_D1_ID> --force
 
 When the config is gone, the tunnel, Access application, service token, and DNS record are still named `a2a-exposed wake <worker>`.
 
-Dashboard: Zero Trust → Networks → Tunnels; Zero Trust → Access → Applications; Zero Trust → Access → Service credentials; the zone → DNS → Records. Also check Workers & Pages → Domains & Routes.
+In the Cloudflare dashboard, open the sections for Tunnels, Access applications, Access service tokens, and the zone's DNS records. Also check that Worker's custom domains and routes.
 
 ```bash
 npx cf tunnels list

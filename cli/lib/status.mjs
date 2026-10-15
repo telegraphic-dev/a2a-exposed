@@ -117,7 +117,7 @@ export function nextStep(s) {
 function nextStepCore(s) {
 	const fail = (text) => ({ ok: false, text, also: [] });
 	const done = (text, also = []) => ({ ok: true, text, also });
-	if (!s.deployed) return fail(`nothing is deployed from ${s.configFile}: run \`${CLI} init ...\` (setup skill, section 2). Another bot's deployment? Set A2A_CONFIG_DIR.`);
+	if (!s.deployed) return fail(`nothing is deployed from ${s.configFile}. Another deployment? Set A2A_CONFIG_DIR.`);
 	if (s.baseUrlEnv)
 		return fail(`A2A_BASE_URL is exported as ${s.baseUrlEnv}, but ${s.configFile} has ${s.baseUrlSaved || "(none)"}: CLI commands (and push URLs sent to peers) use the exported value. Unset A2A_BASE_URL (the inbox URL is always the deployment's own)`);
 	if (!s.baseUrl || !s.hasOwnerToken)
@@ -175,11 +175,11 @@ function nextStepCore(s) {
 	const now = typeof s.now === "number" ? s.now : Date.now();
 	if (t && !(s.wake.hasAccessServiceToken && t.workerUrlMatches)) {
 		if (secretsPropagating(t, now) && (t.connections === 0 || t.connections == null))
-			return done(`Worker wake secrets are still propagating (about 15 to 40 seconds after tunnel create). Wait about 30 seconds and run \`${CLI} status\` again.`);
+			return done(`Worker wake secrets are still propagating (about 15 to 40 seconds after tunnel create). Wait about 30 seconds. Start \`cloudflared tunnel run --token-file ${t.tokenFile}\` on the agent's machine now, then run \`${CLI} status\` again.`);
 		return fail(`the Worker does not have the tunnel's wake secrets: ${needsAgentSecret ? `export ${agentSecret} and ` : ""}run \`${CLI} tunnel create\` again (it re-uploads them; nothing new is created)`);
 	}
 	if (t && connectorConnecting(t, now))
-		return done(`waiting for the connector to connect. The tunnel was created in the last minute. Run \`${CLI} status\` again. After that, 0 connections means start cloudflared on the agent's machine.`);
+		return done(`waiting for the connector to connect. Start \`cloudflared tunnel run --token-file ${t.tokenFile}\` on the agent's machine now, then run \`${CLI} status\` again.`);
 	if (t && t.connections === 0)
 		return fail(`the tunnel has ${t.state === "inactive" ? "never connected" : "no running connector"}: on the agent's machine run \`cloudflared tunnel run --token-file ${t.tokenFile}\` (outbound port 7844 must be open), then \`${CLI} wake test\``);
 	if (s.wake.configured && needsAgentSecret)

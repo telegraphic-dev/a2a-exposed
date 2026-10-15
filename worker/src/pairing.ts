@@ -216,9 +216,10 @@ export function devicePage(m: PageModel, nonce: string): string {
 		["Expires", expiresText(r.expiresMs)],
 		...(r.replacesLabel ? [["Replaces", `the active token "${r.replacesLabel}" (the requester proved it holds it); approving issues a new token under the same label and the old one stops working`]] : []),
 	] : [];
-	const revoke = r?.tokenLabel ? `${m.cli} token revoke ${r.tokenLabel}` : `${m.cli} token revoke`;
+	const tokenLabel = r?.tokenLabel || "<label>";
+	const revoke = `${m.cli} token revoke ${tokenLabel}`;
 	const details = r ? `<table>${rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join("")}</table>
-<p class="w">Approve only if you expected this request and the code matches the one you were given. The name, alias and card URL are claimed by the requester. Approving gives it a token that can send messages and trigger wakes. Message text from peers is untrusted. Revoke the token any time with <code>${esc(revoke)}</code>.</p>` : "";
+<p class="w">Approve only if you expected this request and the code matches the one you were given. The name, alias and card URL are claimed by the requester. Approving gives it a token that can send messages and trigger wakes. Message text from peers is untrusted. Revoke the token ${esc(tokenLabel)} any time with <code>${esc(revoke)}</code>.</p>` : "";
 	const noPassword = `<p class="n info">No approval password is set yet. Easiest: ask your agent to run <code>${esc(m.cli)} pair set-password --web</code> and send you the one-time link, then set the password on that page. Or run <code>${esc(m.cli)} pair set-password</code> yourself in a terminal on the owner's machine. Then reload this page. You can deny without a password.</p>`;
 	const denyOnly = `<form method="post" action="/device">
 <input type="hidden" name="csrf" value="${esc(m.csrf)}"><input type="hidden" name="user_code" value="${esc(r ? formatUserCode(r.userCode) : "")}">
@@ -235,7 +236,7 @@ export function devicePage(m: PageModel, nonce: string): string {
 <input type="hidden" name="csrf" value="${esc(m.csrf)}"><input type="hidden" name="user_code" value="${esc(formatUserCode(r.userCode))}">
 <div class="b"><button name="decision" value="oidc" type="submit">Approve with ${esc(m.oidc.label)}</button></div>
 </form>` : "";
-	const ask = m.askCode ? `<p class="w">The connecting agent prints this code when it runs <code>${esc(m.cli)} connect</code>. It looks like WDJB-4827.</p><form method="get" action="/device"><label for="uc">Code</label><input id="uc" name="user_code" value="${esc(m.codeValue || "")}" placeholder="WDJB-4827" autocomplete="off" autocapitalize="characters" required maxlength="16" autofocus><div class="b"><button type="submit">Continue</button></div></form>` : "";
+	const ask = m.askCode ? `<p class="w">The connecting agent prints this code when it runs <code>${esc(`${m.cli} connect <url>`)}</code>. It looks like WDJB-4827.</p><form method="get" action="/device"><label for="uc">Code</label><input id="uc" name="user_code" value="${esc(m.codeValue || "")}" placeholder="WDJB-4827" autocomplete="off" autocapitalize="characters" required maxlength="16" autofocus><div class="b"><button type="submit">Continue</button></div></form>` : "";
 	return pageShell(`Connect an agent to ${m.agentName}`, nonce, `${notice}${details}${form}${oidcForm}${ask}`);
 }
 

@@ -14,7 +14,7 @@ import * as un from "./uninstall.mjs";
 
 const VERSION = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 
-const HELP = `a2a-exposed ${VERSION} - public A2A endpoint for any AI agent (Cloudflare Worker inbox + wake webhook)
+const HELP = `a2a-exposed ${VERSION} - public A2A endpoint for any AI agent (Cloudflare Worker + wake webhook)
 
 Usage: npx -y a2a-exposed@latest <command> [options]
        (optional speed-up: npm i -g a2a-exposed, then a2a-exposed <command>)
@@ -23,7 +23,7 @@ Usage: npx -y a2a-exposed@latest <command> [options]
 
 Setup (needs Node 22.18+, e.g. \`mise exec node@22 -- npx -y a2a-exposed@latest ...\`, and a Cloudflare login:
 npx cf auth login --no-browser; on a VPS where it fails with HTTP 403 before showing a code, export
-CLOUDFLARE_API_TOKEN instead: setup skill, Troubleshooting. a2a.exposed hosts the inbox and is open to everyone
+CLOUDFLARE_API_TOKEN instead: setup skill, Troubleshooting. a2a.exposed hosts the A2A endpoint and is open to everyone
 (https://a2a.exposed/pricing). When to use it, and the sentence to say:
 https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#hosted-inbox)
   init [--hostname <host> | --workers-dev [--workers-dev-subdomain NAME]]
@@ -111,7 +111,7 @@ anywhere on the account: the inbox itself can be on workers.dev or a custom host
                                 (pass --tunnel-path /webhooks/<name>). Token -> <config dir>/tunnel-token (chmod 600).
                                 Worker secrets show up in about 15 to 40 seconds. Wait about 30 seconds and check again
   tunnel status                 tunnel/Access/Worker state + probes (bare request blocked? connector up?)
-                                A network error says DNS may still be propagating; retry in 30 s
+                                A network error says DNS may still be propagating; retry in 30 seconds
   tunnel rm                     delete the DNS record, the tunnel, the Access app, and the service token
                                 (each printed by name), plus Worker secrets WAKE_ACCESS_CLIENT_ID,
                                 WAKE_ACCESS_CLIENT_SECRET, WAKE_WEBHOOK_KEY, and WAKE_HMAC_SECRET. The wake URL
@@ -262,7 +262,7 @@ const HELP_TUNNEL = `tunnel create|status|rm
                                 asks for tunnel rm. Prints the Access application name and ids, then how to undo it
                                 with tunnel rm. Worker secrets show up in about 15 to 40 seconds. Wait about 30 seconds.
   tunnel status                 Tunnel, Access, and Worker state, plus two probes.
-                                A network error says DNS may still be propagating; retry in 30 s.
+                                A network error says DNS may still be propagating; retry in 30 seconds.
                                 Warns about Access only when the bare request returns an HTTP status other than 401 or 403.
   tunnel rm                     Delete the DNS record, the tunnel, the Access app, and the service token, plus the
                                 Worker secrets this tunnel uploaded. A missing Worker (Cloudflare 10007) is already gone.
@@ -385,7 +385,8 @@ export async function main(argv) {
 		case "config": {
 			const f = C.fileConfig();
 			console.log(`# ${C.CONFIG_FILE}`);
-			for (const [k, v] of Object.entries(f)) console.log(`${k}=${/TOKEN|KEY|SECRET/.test(k) && k !== "A2A_TUNNEL_TOKEN_FILE" ? "(set)" : v}`);
+			const showValue = (k) => k === "A2A_TUNNEL_TOKEN_FILE" || k === "A2A_TUNNEL_SECRETS_AT";
+			for (const [k, v] of Object.entries(f)) console.log(`${k}=${/TOKEN|KEY|SECRET/.test(k) && !showValue(k) ? "(set)" : v}`);
 			return;
 		}
 		case "inbox": return cmd.inbox(o);

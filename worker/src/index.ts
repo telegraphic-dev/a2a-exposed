@@ -1262,7 +1262,7 @@ async function deviceAuthorization(req: Request, ctx: TenantContext, ectx: Execu
 	const pending: Json = await ctx.DB.prepare("SELECT COUNT(*) AS n FROM device_requests WHERE status = 'pending' AND expires_ms > ?").bind(now).first();
 	if ((pending?.n ?? 0) >= P.LIMITS.maxPending || (await bump(ctx, "dev:global", 3600)) > P.LIMITS.perHour) {
 		log("pairing_rate_limited", { ip, scope: "global" });
-		return oauthError("slow_down", "this inbox has too many pairing requests waiting; try again later", 429, retry);
+		return oauthError("slow_down", "this A2A endpoint has too many pairing requests waiting; try again later", 429, retry);
 	}
 	const deviceCode = P.newDeviceCode();
 	let userCode = "";
@@ -1775,7 +1775,7 @@ async function landing(req: Request, ctx: TenantContext, url: URL): Promise<Resp
 function mcpResourceMetadata(ctx: TenantContext): Json {
 	const u = oauthUrls(ctx);
 	return { resource: u.mcp, authorization_servers: [u.issuer], bearer_methods_supported: ["header"], scopes_supported: [M.SCOPE],
-		resource_name: `${ctx.AGENT_NAME || "A2A inbox"} (MCP)`, resource_documentation: "https://github.com/telegraphic-dev/a2a-exposed#mcp-connector" };
+		resource_name: `${ctx.AGENT_NAME || "A2A endpoint"} (MCP)`, resource_documentation: "https://github.com/telegraphic-dev/a2a-exposed#mcp-connector" };
 }
 
 /** Why an outbound peer URL is refused (empty: fine). https only, no private / internal hosts. */
@@ -2443,8 +2443,8 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 const rpcResult = (id: Json, result: Json) => json({ jsonrpc: "2.0", id, result });
 const rpcError = (id: Json, code: number, message: string, status = 200, data?: Json) =>
 	json({ jsonrpc: "2.0", id: id ?? null, error: { code, message, ...(data !== undefined ? { data } : {}) } }, status);
-const serverInfo = (ctx: TenantContext) => ({ name: "a2a-exposed", title: `${ctx.AGENT_NAME || "A2A inbox"}`, version: "1" });
-const mcpInstructions = `This is your A2A inbox: other agents send you tasks here. Check inbox, read each task, answer with reply. ${M.RULES}`;
+const serverInfo = (ctx: TenantContext) => ({ name: "a2a-exposed", title: `${ctx.AGENT_NAME || "A2A endpoint"}`, version: "1" });
+const mcpInstructions = `This is your A2A endpoint: other agents send you tasks here. Check inbox, read each task, answer with reply. ${M.RULES}`;
 const unsupportedVersion = (id: Json, requested: string) =>
 	rpcError(id, M.ERR.UNSUPPORTED_VERSION, "Unsupported protocol version", 400, { supported: M.PROTOCOL_VERSIONS, requested });
 
@@ -2585,7 +2585,7 @@ async function handle(req: Request, ctx: TenantContext, ectx: ExecutionContext, 
 		if (req.method === "GET" && path === "/.well-known/agent.json")
 			return json(agentCard03(ctx, await agentCard(ctx)), 200, { "access-control-allow-origin": "*", "cache-control": cardCacheControl(ctx) });
 		if (req.method === "GET" && path === "/health") return json({ ok: true, publicUrl: ctx.PUBLIC_URL, mode: proxyMode(ctx) ? "proxy" : "inbox", mcp: mcpOn(ctx) });
-		if (path === "/mcp") return mcpOn(ctx) ? await handleMcp(req, ctx, ectx, url) : json({ error: "not_found", error_description: "the MCP server is turned off on this inbox (MCP=off)" }, 404);
+		if (path === "/mcp") return mcpOn(ctx) ? await handleMcp(req, ctx, ectx, url) : json({ error: "not_found", error_description: "the MCP server is turned off on this A2A endpoint (MCP=off)" }, 404);
 		if (mcpOn(ctx)) {
 			if (req.method === "GET" && path === "/.well-known/oauth-protected-resource/mcp") return json(mcpResourceMetadata(ctx), 200, { "access-control-allow-origin": "*" });
 			if (req.method === "GET" && path === "/.well-known/oauth-authorization-server") return json(oauthMetadata(ctx), 200, { "access-control-allow-origin": "*" });
@@ -2597,7 +2597,7 @@ async function handle(req: Request, ctx: TenantContext, ectx: ExecutionContext, 
 			if (path === "/device/setup" && (req.method === "GET" || req.method === "POST")) return await setupPage(req, ctx, url, head);
 		}
 		if (path === "/.well-known/oauth-authorization-server" || path === "/.well-known/oauth-protected-resource" || path.startsWith("/oauth/") || path === "/device" || path === "/device/setup" || path === "/device/oidc/callback") {
-			if (!pairingOn(ctx)) return json({ error: "not_found", error_description: "device-flow pairing is disabled on this inbox (PAIRING_APPROVAL=off); ask its operator for a token" }, 404);
+			if (!pairingOn(ctx)) return json({ error: "not_found", error_description: "device-flow pairing is disabled on this A2A endpoint (PAIRING_APPROVAL=off); ask its operator for a token" }, 404);
 			if (req.method === "GET" && path === "/.well-known/oauth-authorization-server") return json(oauthMetadata(ctx), 200, { "access-control-allow-origin": "*" });
 			if (req.method === "GET" && path === "/.well-known/oauth-protected-resource") return json(protectedResourceMetadata(ctx), 200, { "access-control-allow-origin": "*" });
 			if (req.method === "POST" && path === "/oauth/device_authorization") return await deviceAuthorization(req, ctx, ectx);

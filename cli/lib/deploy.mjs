@@ -257,7 +257,7 @@ function reportSwitch(sw) {
 	console.error(`\nnote: the public URL moved${sw.from ? ` from ${sw.from}` : ""} to ${to || "workers.dev"}.`);
 	if (sw.fromHost) {
 		console.error(`  ${sw.fromHost} no longer serves this agent: its agent card redirects (301) to the new one and every other request gets 410 Gone.`);
-		console.error(`  Cloudflare keeps the old custom domain attached to the Worker; to detach it completely, remove ${sw.fromHost} under Workers & Pages -> ${workerName()} -> Settings -> Domains & Routes.`);
+		console.error(`  Cloudflare keeps the old custom domain attached to the Worker; to detach it completely, remove ${sw.fromHost} from that Worker's custom domains and routes in the dashboard.`);
 	} else console.error("  The workers.dev URL is switched off by this deploy.");
 	console.error(`  Peers must update their URL for this agent: ${card} (A2A_BASE_URL in ${C.CONFIG_FILE} is updated).`);
 	if (C.get("A2A_TUNNEL_ID")) console.error("  The wake tunnel is unaffected (it has its own hostname and zone).");

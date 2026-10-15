@@ -110,7 +110,7 @@ A Worker can't reach a Tailnet or LAN address, so the upstream is published thro
    cloudflared tunnel run agent-upstream
    ```
 
-   In Zero Trust: **Access → Service credentials**, create a service token (copy the client id and secret once); **Access → Applications**, add a self-hosted app on `agent-upstream.example.com` with exactly **one policy: Service Auth** for that token (no email or everyone rules). Check that a bare `GET https://agent-upstream.example.com/.well-known/agent-card.json` is refused (401/403 or a redirect to `<team>.cloudflareaccess.com`).
+   In the Cloudflare dashboard, open the Access service tokens section and create a service token (copy the client id and secret once). Open the Access applications section and add a self-hosted app on `agent-upstream.example.com` with exactly **one policy: Service Auth** for that token (no email or everyone rules). Check that a bare `GET https://agent-upstream.example.com/.well-known/agent-card.json` is refused (401/403 or a redirect to `<team>.cloudflareaccess.com`).
 
 2. **Deploy the façade** (new or existing deployment). Credentials come from the environment only, never argv:
 
