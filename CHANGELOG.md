@@ -2,7 +2,9 @@
 
 All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.3.x), Worker template, control core, and skills. Versions follow [semver](https://semver.org); a `v*` tag publishes the CLI and `@a2a-exposed/control-core` to npm (see [Releases](docs/README.md#releases)).
 
-## Unreleased
+## 0.8.5 - 2026-10-15
+
+`npx -y a2a-exposed@latest deploy` (no new inbox D1 migration).
 
 - **uninstall.** `npx -y a2a-exposed@latest uninstall` removes the wake tunnel (when the config has one), the Worker, and the D1 database, and prints one line per step. Off a terminal, pass `--yes`. The config directory stays. [Self-hosting](docs/self-hosting.md#remove-an-inbox) is the removal page. Manual `cf workers delete` and `cf d1 delete` run from `<config dir>/worker`, or after `mkdir -p .cloudflare/cache`, so `cf` can write its account cache.
 - **Tunnel.** `tunnel create` names the tunnel, the Access app, and the service token `a2a-exposed wake <worker>`, and the DNS host `wake-<word>-<word>-<hex>.<zone>`. `tunnel rm` prints each removed object and deletes `WAKE_WEBHOOK_KEY` and `WAKE_HMAC_SECRET` from the Worker. The connector machine needs cloudflared. Worker secrets, `wake preview`, and `status` settle in about 15 to 40 seconds; wait about 30 seconds and check again. Right after the first `tunnel create`, while the connector reports 0 connections, `status` prints that wait and exits 0.
