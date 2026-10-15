@@ -155,7 +155,7 @@ While you are still building the façade, a private agent can connect outward: `
 
 `config` prints the config directory and the saved `A2A_WORKER_NAME`, `A2A_D1_ID`, `A2A_D1_NAME`, `A2A_TUNNEL_TOKEN_FILE` (the path), `A2A_TUNNEL_SECRETS_AT` (the value), and `CF_PROFILE`.
 
-`uninstall` prints the plan, then removes the Worker, then the wake tunnel when the config has one (the same objects as `tunnel rm`, except Worker secrets when the Worker is already gone), then the D1 database. It prints one line per step, including when that object is already gone. It asks first. Off a terminal, pass `--yes`. `--dry-run` prints the plan and changes nothing. A failed Worker delete leaves the D1 database in place so you can run it again. An empty config exits 1.
+`uninstall` prints the plan, then removes the Worker, then the wake tunnel when the config has one (the same objects as `tunnel rm`, except Worker secrets when the Worker is already gone), then the D1 database. It prints one line per step, including when that object is already gone. It asks first. Off a terminal, pass `--yes`. `--dry-run` prints the plan and changes nothing. A Cloudflare 10000 on the Worker delete still removes the tunnel and the D1 database, and a rerun is safe. Any other failed Worker delete leaves the D1 database in place so you can run it again. An empty config exits 1.
 
 ```bash
 npx -y a2a-exposed@latest uninstall --yes

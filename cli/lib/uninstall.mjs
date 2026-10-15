@@ -104,7 +104,10 @@ export async function uninstall(o) {
 			removed.push("wake tunnel");
 		} catch (e) { tunnelError = e; }
 	} else step("no tunnel to remove");
-	if (workerError || tunnelError) {
+	// A 10000 on the Worker delete is an auth failure, not proof the other objects should stay.
+	// Remove the tunnel and the D1 database, then report the Worker. Other Worker failures stop first.
+	const workerAuth = workerError && /\[10000\]/.test(workerError.message || "") && /cf workers delete/i.test(workerError.message || "");
+	if (tunnelError || (workerError && !workerAuth)) {
 		const left = [d1 && `D1 ${d1Label} (untouched)`, workerError && name && `Worker ${name}`, tunnelError && "wake tunnel"].filter(Boolean);
 		removalError(workerError || tunnelError, { removed, left, workerGone });
 	}
@@ -115,10 +118,12 @@ export async function uninstall(o) {
 			const line = r === null ? `D1 database ${d1} is already gone` : `D1 database ${d1}`;
 			step(r === null ? line : `removed ${line}`);
 			removed.push(line);
+			C.saveConfig({ A2A_D1_ID: null, A2A_D1_NAME: null });
 		} catch (e) {
-			removalError(e, { removed, left: [`D1 ${C.get("A2A_D1_NAME") || d1} (untouched)`], workerGone });
+			removalError(e, { removed, left: [`D1 ${C.get("A2A_D1_NAME") || d1} (untouched)`, workerError && name && `Worker ${name}`].filter(Boolean), workerGone });
 		}
 	} else step("no D1 database id saved");
+	if (workerError) removalError(workerError, { removed, left: [name && `Worker ${name}`].filter(Boolean), workerGone });
 	C.saveConfig({
 		A2A_WORKER_NAME: null, A2A_D1_ID: null, A2A_D1_NAME: null, A2A_BASE_URL: null, A2A_HOSTNAME: null,
 		A2A_WORKER_DIR: null, A2A_WORKERS_DEV_SUBDOMAIN: null,

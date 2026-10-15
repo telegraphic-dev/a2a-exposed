@@ -789,12 +789,12 @@ test("uninstall names the permission and what is left when Cloudflare refuses th
 	assert.match(w.stderr, /The API token needs Workers Scripts: Edit/);
 	assert.match(w.stderr, /uninstall --yes/);
 	assert.match(w.stderr, /A Cloudflare 10000 on the Worker delete still removes the other objects\. A rerun is safe/);
-	assert.match(w.stderr, /Removed: nothing/);
+	assert.match(w.stderr, /Removed: D1 database d1/);
 	assert.doesNotMatch(w.stderr, /Removed: removed/);
-	assert.match(w.stderr, /D1 d1 \(untouched\)/);
-	assert.match(w.stderr, /Not removed: D1 d1 \(untouched\); Worker tuntest/);
-	assert.ok(!worker.calls().some((c) => c.cmd.startsWith("d1 delete")));
+	assert.match(w.stderr, /Not removed: Worker tuntest/);
+	assert.ok(worker.calls().some((c) => c.cmd.startsWith("d1 delete")));
 	assert.equal(worker.config().A2A_WORKER_NAME, "tuntest");
+	assert.equal(worker.config().A2A_D1_ID, undefined);
 
 	const d1 = await tunnelEnv(t);
 	const r = await d1.cli(["uninstall", "--yes"], { STUB_FAIL: "d1 delete", STUB_FAIL_MSG: "[7403] Unauthorized" });
