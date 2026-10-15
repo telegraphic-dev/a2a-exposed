@@ -8,6 +8,8 @@ One present-tense action per symptom. Cloudflare login, error 1042, and the host
 | `worker ... HTTP 401` | The owner token in `config.env` differs from the Worker secret. Run `init --rotate-owner-token` from the machine that owns the deployment. |
 | `request to ... failed` | DNS, network, or egress. Run `status`. A new custom domain takes a few minutes. |
 | No wakes arriving | Run `status`, then `wake preview`, then `wake test`. An agent behind NAT uses `tunnel create` (a zone on the account) or polling. |
+| `wake preview` says DIFFERENT | Export `WAKE_WEBHOOK_URL`, `WAKE_WEBHOOK_KEY`, and `WAKE_HMAC_SECRET` in this shell. A fresh upload takes about 15 to 40 seconds. Wait about 30 seconds and run `wake preview` again. |
+| `wake test` says Cloudflare error 1016 on a public webhook | That webhook host failed to resolve. Check `WAKE_WEBHOOK_URL`. A tunnel wake names the tunnel hostname's DNS record. |
 | `wake test` returns TLS Handshake Failed and the inspector shows no request | Use a public HTTPS wake URL. webhook.site and httpbin.org accept a test. A `*.workers.dev` target is refused. |
 | Peer says 401 | That peer token is wrong, revoked, or rotated. They pair again with `connect`, or you issue a new token when the user agrees. |
 | `send` / `poll`: `<alias> rejected our token` | The peer revoked or rotated the token. Run `connect <url> --alias <alias>`. |

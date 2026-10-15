@@ -39,11 +39,15 @@ Report a result the docs do not cover with `npx -y a2a-exposed@latest feedback`.
 | Symptom | What to do |
 | --- | --- |
 | `wake test`: no webhook configured | Export `WAKE_WEBHOOK_URL` (and the key or HMAC secret) and run `wake set`, or poll |
+| `wake preview` says DIFFERENT right after `wake set` | Export the same `WAKE_*` variables in this shell. A value that was just uploaded can take 15 to 40 seconds. Wait about 30 seconds and run `wake preview` again |
 | `wake test` returns 401 or 403 | Wrong key or header. Compare `wake preview` fingerprints with `wake fingerprint` |
+| `wake test` on a public webhook says Cloudflare error 1016 | The webhook host failed to resolve. Check `WAKE_WEBHOOK_URL`. The tunnel-hostname wording appears when the wake uses a tunnel (`*.cfargotunnel.com`, or Access service-token secrets on the Worker) |
 | `wake test` returns 404 | Wrong URL or route |
 | `wake test` returns a network error | The target is not publicly reachable. Use `tunnel create`, or poll |
 | Hosted test says TLS handshake failed, and the inspector shows no request | A `*.workers.dev` target cannot be opened: sockets refuse Cloudflare addresses. A private or metadata address is refused before anything is sent. webhook.site and httpbin.org answer on a current build. The agent page names the failure and does not print the error text |
-| `530` or Cloudflare error 1033 | The tunnel has no running connector. Start `cloudflared tunnel run --token-file ...`. Outbound port 7844 (TCP and UDP) must be allowed |
+| `530` or Cloudflare error 1033 | The tunnel has no running connector. Install [cloudflared](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/), then start `cloudflared tunnel run --token-file ...`. Outbound port 7844 (TCP and UDP) must be allowed |
+| `status` right after `tunnel create` | For about 15 to 40 seconds, while the connector reports 0 connections, the next step says to wait about 30 seconds and `status` exits 0. After that, 0 connections means start `cloudflared` |
+| `cf workers delete` or `cf d1 delete`: `EACCES` mkdir `node_modules/.cache/cloudflare` | Run them from `<config dir>/worker`, or `mkdir -p .cloudflare/cache` in the current directory first. `uninstall --yes` is the one-command path. See [Self-hosting](self-hosting.md#remove-an-inbox) |
 | Tunnel hostname returns 401, 403, or a 302 to `<team>.cloudflareaccess.com` | Access is blocking a request without the service token. For wakes, `wake preview` must show `hasAccessServiceToken: true`. If it does not, `tunnel rm` then `tunnel create` |
 | Zero Trust is not enabled | Enable it once (free plan) or pass `--zero-trust-org <team-name>` |
 | `tunnel create`: account has N zones | Re-run with `--tunnel-zone <zone>` or `--tunnel-hostname wake-<name>.<zone>` |
@@ -59,7 +63,8 @@ Report a result the docs do not cover with `npx -y a2a-exposed@latest feedback`.
 | `connect`: does not offer device-flow pairing | That peer has pairing off, or it is not this inbox. Ask its owner for a token and use `peers add ... --token-stdin` |
 | `connect`: not accepting more pairing requests | Flood limits: 5 new requests per IP per 10 minutes, 10 pending, and 30 new requests per hour. Wait and retry |
 | `/device` says no approval password | `pair set-password --web`, and open the link yourself. Or run `pair set-password` in a terminal |
-| Setup link is invalid, expired, or already used | Links last 15 minutes, work once, and a newer link replaces the old one |
+| Setup link is invalid, expired, or already used | Links last 15 minutes by default (`--ttl` 1 to 60), work once, and a newer link replaces the old one |
+| `connect` says the code expired | The pairing code lasts 10 minutes. Run `connect` again for a new code, after asking your human |
 | `pair approve` is unauthorized | The owner token does not match the Worker. A missing token, or a peer token, cannot approve. In human mode the owner token approves |
 | `connect`: peer already has a token that works | Send with `send --to <alias>`. To replace it, `connect ... --replace` |
 | `rejected our token` (HTTP 401) | The peer revoked or rotated it. `connect <url> --alias <alias>` again |

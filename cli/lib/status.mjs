@@ -77,6 +77,17 @@ export function shadowedPeerTokens() {
 	return [...new Set(Object.values(C.loadPeers()).map((p) => p && p.token_env).filter(Boolean))].filter((k) => C.envOverridesFile(k));
 }
 
+/** How long after `tunnel create` uploads secrets `status` treats a missing Worker preview as propagation. */
+export const SECRET_PROPAGATION_MS = 60_000;
+
+/** True while the tunnel's Worker secrets were uploaded recently and may still be invisible to `wake preview`. */
+export function secretsPropagating(tunnel, now = Date.now()) {
+	const at = Number(tunnel && tunnel.secretsAt);
+	if (!Number.isFinite(at) || at <= 0) return false;
+	const age = now - at;
+	return age >= 0 && age < SECRET_PROPAGATION_MS;
+}
+
 /** The single most useful next step for a status snapshot (pure; unit-tested). `also`: optional extra hints, printed
  *  as separate lines (so the next step stays one short instruction). */
 export function nextStep(s) {
@@ -143,8 +154,12 @@ function nextStepCore(s) {
 		return fail(`the tunnel's connector token file (${t.tokenFile}) is missing or empty: run \`${CLI} tunnel create\` again (it downloads the token again; nothing new is created)`);
 	const agentSecret = s.wake.preset === "hermes" ? "WAKE_HMAC_SECRET" : "WAKE_WEBHOOK_KEY";
 	const needsAgentSecret = LOCAL_PRESETS.includes(s.wake.preset) && !s.wake.hasKey && !s.wake.hasHmacSecret;
-	if (t && !(s.wake.hasAccessServiceToken && t.workerUrlMatches))
+	const now = typeof s.now === "number" ? s.now : Date.now();
+	if (t && !(s.wake.hasAccessServiceToken && t.workerUrlMatches)) {
+		if (secretsPropagating(t, now) && (t.connections === 0 || t.connections == null))
+			return done(`Worker wake secrets are still propagating (about 15 to 40 seconds after tunnel create). Wait about 30 seconds and run \`${CLI} status\` again.`);
 		return fail(`the Worker does not have the tunnel's wake secrets: ${needsAgentSecret ? `export ${agentSecret} and ` : ""}run \`${CLI} tunnel create\` again (it re-uploads them; nothing new is created)`);
+	}
 	if (t && t.connections === 0)
 		return fail(`the tunnel has no running connector: on the agent's machine run \`cloudflared tunnel run --token-file ${t.tokenFile}\` (outbound port 7844 must be open), then \`${CLI} wake test\``);
 	if (s.wake.configured && needsAgentSecret)
@@ -223,7 +238,8 @@ export async function collect() {
 	if (host || C.get("A2A_TUNNEL_ID")) {
 		const url = T.wakeUrl(host || "?", C.get("A2A_TUNNEL_PATH") || "/");
 		s.tunnel = { hostname: host, wakeUrl: url, origin: C.get("A2A_TUNNEL_ORIGIN"), complete: T.tunnelComplete(), tokenFileOk: T.tokenFileOk(),
-			tokenFile: C.get("A2A_TUNNEL_TOKEN_FILE") || "<config dir>/tunnel-token", workerUrlMatches: s.wake?.urlFingerprint === fingerprint(url), connections: null };
+			tokenFile: C.get("A2A_TUNNEL_TOKEN_FILE") || "<config dir>/tunnel-token", workerUrlMatches: s.wake?.urlFingerprint === fingerprint(url),
+			secretsAt: Number(C.get("A2A_TUNNEL_SECRETS_AT")) || 0, connections: null };
 		if (haveCf && C.get("A2A_TUNNEL_ID")) {
 			try {
 				const t = T.cfCall(dir, ["tunnels", "get", C.get("A2A_TUNNEL_ID")], { allowNotFound: true });

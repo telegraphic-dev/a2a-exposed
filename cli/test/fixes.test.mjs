@@ -410,7 +410,7 @@ test("every command the CLI tells people to run uses the one npx form (no bare `
 	const SUB = "init|deploy|status|wake|pair|connect|token|peers|inbox|reply|send|upstream|tunnel|show|history|poll|url|config|mark-working|unsync|sync";
 	const bare = new RegExp(`(?<![\\w/@.-])a2a-exposed (?:${SUB})\\b`);
 	// Cloudflare resource names (tunnel / Access labels), not commands
-	const allowed = [/a2a-exposed wake: service token only/, /`a2a-exposed wake \$\{worker\}`/, /# a2a-exposed config \(contains secrets/];
+	const allowed = [/a2a-exposed wake: service token only/, /`a2a-exposed wake \$\{worker\}`/, /a2a-exposed wake <worker>/, /# a2a-exposed config \(contains secrets/];
 	const found = [];
 	for (const f of fs.readdirSync(lib).filter((x) => x.endsWith(".mjs"))) {
 		fs.readFileSync(new URL(f, lib), "utf8").split("\n").forEach((line, i) => {

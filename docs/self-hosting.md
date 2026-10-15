@@ -63,7 +63,11 @@ It needs Cloudflare Zero Trust (the free plan is enough) and a zone somewhere on
 
 Enable Zero Trust once at <https://one.dash.cloudflare.com/>, or pass `--zero-trust-org <team-name>` to create the organization (`<team-name>.cloudflareaccess.com`). Ask before you run it: it creates DNS, a tunnel, and Access objects, and the Zero Trust organization is permanent.
 
-If `WAKE_WEBHOOK_URL` is already set, run `wake unset` before `tunnel create`. `tunnel create` sets the wake URL to the tunnel hostname.
+`tunnel create` names three objects `a2a-exposed wake <worker>`: the tunnel, the Access application, and the service token. The Access policy is `a2a-exposed wake: service token only`. The DNS host is `wake-<word>-<word>-<hex>.<zone>` unless you pass `--tunnel-hostname`.
+
+Install [cloudflared](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/) on the machine that runs the connector. `tunnel create` prints the `cloudflared tunnel run` command.
+
+If `WAKE_WEBHOOK_URL` is already set, run `wake unset` before `tunnel create`. `tunnel create` sets the wake URL to the tunnel hostname. Export `WAKE_WEBHOOK_KEY` (or `WAKE_HMAC_SECRET` for hermes) in that shell: `tunnel create` uploads it with the Access secrets.
 
 ```bash
 export WAKE_WEBHOOK_KEY='...'          # or WAKE_HMAC_SECRET for hermes. tunnel create sets WAKE_WEBHOOK_URL
@@ -80,14 +84,14 @@ The connector token is written to `<config dir>/tunnel-token` (chmod 600) and is
 cloudflared tunnel run --token-file ~/.config/a2a-exposed/tunnel-token
 ```
 
-Copy the token file to that machine if `init` ran elsewhere. Then:
+Copy the token file to that machine if `init` ran elsewhere. Worker secrets, DNS, and the connector show up in about 15 to 40 seconds. Wait about 30 seconds, then check again. Right after the first `tunnel create`, while the connector reports 0 connections, `status` prints that wait and exits 0.
 
 - `status` shows connector connections and the next step.
 - `tunnel status` checks the Access policy and two probes: a request without the token must be blocked (401/403); with the token, `530` (Cloudflare error 1033) means the connector is not running.
-- `wake preview` shows `hasAccessServiceToken: true`.
+- `wake preview` shows `hasAccessServiceToken: true`. Export `WAKE_WEBHOOK_URL`, `WAKE_WEBHOOK_KEY`, and `WAKE_HMAC_SECRET` in that shell so the fingerprints can match.
 - `wake test` sends a wake through Access and the tunnel.
 
-`tunnel rm` deletes the Worker's Access secrets (and the wake URL when it is the tunnel's), the DNS record, the tunnel, the Access app, the service token, and the local token file. Stop `cloudflared` afterwards. The service token expires after a year: `tunnel rm`, then `tunnel create`. While a tunnel exists, `deploy` and `wake set` refuse a different `WAKE_WEBHOOK_URL`.
+`tunnel rm` prints one line for each object it removes: the Worker secrets (`WAKE_ACCESS_CLIENT_ID`, `WAKE_ACCESS_CLIENT_SECRET`, `WAKE_WEBHOOK_KEY`, `WAKE_HMAC_SECRET`, and `WAKE_WEBHOOK_URL` when that URL is the tunnel's), the DNS record for the wake host, the tunnel `a2a-exposed wake <worker>`, the Access application of that name, the service token of that name, and the local token file. Stop `cloudflared` afterwards. The service token expires after a year: `tunnel rm`, then `tunnel create`. While a tunnel exists, `deploy` and `wake set` refuse a different `WAKE_WEBHOOK_URL`.
 
 Already have an Access-protected URL? Export `WAKE_ACCESS_CLIENT_ID` and `WAKE_ACCESS_CLIENT_SECRET` with `WAKE_WEBHOOK_URL`, then `wake set`. The Worker sends the same headers.
 
@@ -149,16 +153,22 @@ There is no MCP server in proxy mode.
 
 Ask before you delete an inbox. `config` prints the config directory and the saved `A2A_WORKER_NAME`, `A2A_D1_ID`, `A2A_D1_NAME`, and `CF_PROFILE`.
 
-`tunnel rm`, when a wake tunnel exists, removes the Worker's Access secrets (and the wake URL when it is the tunnel's), the DNS record, the tunnel, the Access application, the service token, and the local token file. If the tunnel is already gone, it clears the saved ids and finishes. Stop `cloudflared` afterwards (`cloudflared service uninstall` when it runs as a service).
-
-Then delete the Worker and the D1 database. `--force` confirms the delete when the shell is non-interactive. Add `--profile <CF_PROFILE>` when the login is a named profile:
+`uninstall` removes the wake tunnel when the config has one (the same steps as `tunnel rm`), then the Worker, then the D1 database, using the saved name and database id. It prints one line per step, including when that object is already gone. It asks first. Off a terminal, pass `--yes`. A failed Worker delete leaves the D1 database in place so you can run it again.
 
 ```bash
-npx -y a2a-exposed@latest tunnel rm
+npx -y a2a-exposed@latest uninstall --yes
+```
+
+Stop `cloudflared` afterwards (`cloudflared service uninstall` when it runs as a service). Deleting the Worker also removes its custom domain and that domain's DNS record. The account's workers.dev subdomain stays. A Zero Trust organization created with `--zero-trust-org` is permanent.
+
+The config directory stays. It still holds the owner token, peer tokens, and the Worker project (`~/.config/a2a-exposed`, or `A2A_CONFIG_DIR`). Remove that directory when those should go too.
+
+To delete the Worker and the database with `cf` yourself, run the commands from `<config dir>/worker` (that directory has `node_modules`, where `cf` writes its account cache). From any other directory, create the cache directory first:
+
+```bash
+mkdir -p .cloudflare/cache
 npx cf workers delete <A2A_WORKER_NAME> --force
 npx cf d1 delete <A2A_D1_ID> --force
 ```
 
-Deleting the Worker also removes its custom domain and that domain's DNS record. The account's workers.dev subdomain stays. A Zero Trust organization created with `--zero-trust-org` is permanent.
-
-The config directory holds the owner token, peer tokens, and the Worker project (`~/.config/a2a-exposed`, or `A2A_CONFIG_DIR`). Remove that directory when those should go too.
+Without that directory, `cf` walks up to a `node_modules` folder and exits with `EACCES: mkdir '.../node_modules/.cache/cloudflare'`. Add `--profile <CF_PROFILE>` when the login is a named profile. `uninstall` creates `.cloudflare/cache` when the Worker project has no `node_modules`.

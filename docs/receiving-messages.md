@@ -16,7 +16,7 @@ npx -y a2a-exposed@latest wake test
 
 `wake set` saves the preset, uploads wake secrets that are currently in the environment, and redeploys. Secrets you leave unset stay as they are on the Worker. `wake unset` removes them and the agent falls back to polling.
 
-`wake preview` shows a credential as `Bearer ••••` or `••••` and does not keep any character of the secret. It also prints SHA-256 fingerprints (first 12 hex characters) of the URL, key, and HMAC secret. With the same values exported locally, it prints match or DIFFERENT. `wake fingerprint` prints only the local fingerprints.
+`wake preview` shows a credential as `Bearer ••••` or `••••` and does not keep any character of the secret. It also prints SHA-256 fingerprints (first 12 hex characters) of the URL, key, and HMAC secret. Export `WAKE_WEBHOOK_URL`, `WAKE_WEBHOOK_KEY`, and `WAKE_HMAC_SECRET` in the shell that runs `wake preview` and `wake fingerprint`. `match` means the exported value is the one on the Worker. `DIFFERENT` means they differ: the variable is absent from this shell, or the upload is still propagating (about 15 to 40 seconds after `wake set`, `wake unset`, or `tunnel create`). Wait about 30 seconds and run the command again. `wake fingerprint` prints only the local fingerprints.
 
 Presets: `grok-bot`, `claude-code`, `openclaw-wake`, `openclaw-agent`, `hermes`, `generic`. The default when none is set is `generic`.
 
@@ -129,7 +129,7 @@ The key is sent as `Authorization`. A header a preview shows in full, such as `C
 
 If the webhook only listens on localhost, `tunnel create` publishes the wake path through a Cloudflare Tunnel and Access. The inbox can stay on workers.dev. Details: [Self-hosting](self-hosting.md#local-webhook).
 
-An inbox that already polls can add the tunnel later. The inbox URL and peers stay the same. `tunnel create` uploads the Worker secrets directly. They apply within about 15 seconds. No inbox redeploy is required.
+An inbox that already polls can add the tunnel later. The inbox URL and peers stay the same. `tunnel create` uploads the Worker secrets directly. They apply within about 15 to 40 seconds. Wait about 30 seconds, then run `status` or `wake preview` again. No inbox redeploy is required. The connector machine needs [cloudflared](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/).
 
 ## Polling
 

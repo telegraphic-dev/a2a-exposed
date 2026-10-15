@@ -104,8 +104,8 @@ Source: https://hermes-agent.nousresearch.com/docs/user-guide/messaging/webhooks
 
 For a webhook server that only listens locally (OpenClaw gateway on `127.0.0.1:18789`, Hermes on `:8644`, or another local webhook), `tunnel create` publishes **only the wake path** through a named Cloudflare Tunnel and locks it with Cloudflare Access:
 
-- a hostname `wake-<words>-<hex>.<zone>` on any zone of the account (choose with `--tunnel-zone` or `--tunnel-hostname`), proxied CNAME to the tunnel; the tunnel routes only the wake path to your origin (other paths: 404);
-- a self-hosted **Access application** on that hostname with exactly **one policy: Service Auth (`non_identity`) for one new service token**, no email/everyone rules, 15-minute sessions; `cloudflared` also verifies the Access token itself;
+- a hostname `wake-<words>-<hex>.<zone>` on any zone of the account (choose with `--tunnel-zone` or `--tunnel-hostname`), proxied CNAME to the tunnel; the tunnel, the Access app, and the service token are all named `a2a-exposed wake <worker>`; the tunnel routes only the wake path to your origin (other paths: 404);
+- a self-hosted **Access application** on that hostname with exactly **one policy: Service Auth (`non_identity`) for one new service token** (policy name `a2a-exposed wake: service token only`), 15-minute sessions; `cloudflared` also verifies the Access token itself;
 - the Worker stores the service token (`WAKE_ACCESS_CLIENT_ID` / `WAKE_ACCESS_CLIENT_SECRET`) and sends `CF-Access-Client-Id` / `CF-Access-Client-Secret` on every wake, **in addition** to the preset's own bearer token or HMAC signature. Keep that agent-side auth enabled.
 
 Requirements: a **Cloudflare zone anywhere on the account**, for the wake hostname and its Access app. The inbox URL doesn't matter: a workers.dev inbox works the same as a custom hostname. `tunnel create` uses the inbox hostname's zone, or else the account's only zone, and says which it picked. With several zones it stops and lists them: re-run with `--tunnel-zone <zone>` (or `--tunnel-hostname wake-<name>.<zone>`). If the account has no zone, it says so, and polling is the option. **Cloudflare Zero Trust** must be enabled (one-time: <https://one.dash.cloudflare.com/>, pick a team name and the Free plan), or pass `--zero-trust-org <team-name>` to create the organization (`<team-name>.cloudflareaccess.com`). Ask the user before running it: it creates DNS, a tunnel, and Access objects, and the Zero Trust organization is permanent. If `WAKE_WEBHOOK_URL` is already set, run `wake unset` before `tunnel create`. `tunnel create` sets the wake URL to the tunnel hostname.
@@ -119,7 +119,7 @@ npx -y a2a-exposed@latest tunnel create                    # openclaw-*: origin 
 # or in one go: npx -y a2a-exposed@latest init --workers-dev ... --preset openclaw-wake --tunnel    (or --hostname agent.example.com)
 ```
 
-It prints the wake URL and the connector command. The tunnel token is written to `<config dir>/tunnel-token` (chmod 600) and is **not printed** unless you pass `--show-token`. On the agent's machine (cloudflared installed; **outbound port 7844** to Cloudflare must be open):
+It prints the wake URL and the connector command. Install [cloudflared](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/) on the agent's machine before you run the connector. The tunnel token is written to `<config dir>/tunnel-token` (chmod 600) and is **not printed** unless you pass `--show-token`. On that machine, **outbound port 7844** to Cloudflare must be open. Export `WAKE_WEBHOOK_KEY` (or `WAKE_HMAC_SECRET` for Hermes) in the shell that runs `tunnel create` so the Worker receives it. `tunnel rm` removes that secret along with `WAKE_HMAC_SECRET`. Worker secrets show up in about 15 to 40 seconds: wait about 30 seconds, then check. Right after the first `tunnel create`, while the connector reports 0 connections, `status` prints that wait and exits 0.
 
 ```bash
 cloudflared tunnel run --token-file ~/.config/a2a-exposed/tunnel-token     # cloudflared 2025.4+
@@ -133,7 +133,7 @@ Copy the token file to the agent's machine if `init` ran elsewhere; treat it lik
 - `npx -y a2a-exposed@latest wake preview`: `hasAccessServiceToken: true`, masked `CF-Access-*` headers and their fingerprints.
 - `npx -y a2a-exposed@latest wake test`: a real wake through Access and the tunnel.
 
-`tunnel rm` deletes the Worker's Access secrets (and the wake URL if it is the tunnel's), the DNS record, the tunnel, the Access app with its policy, the service token, and the local token file. Stop `cloudflared` (`cloudflared service uninstall`) afterwards. The service token expires after a year: rotate with `tunnel rm` + `tunnel create`. While a tunnel exists, `deploy`/`wake set` refuse a different `WAKE_WEBHOOK_URL`.
+`tunnel rm` prints one line per object: Worker secrets (`WAKE_ACCESS_CLIENT_ID`, `WAKE_ACCESS_CLIENT_SECRET`, `WAKE_WEBHOOK_KEY`, `WAKE_HMAC_SECRET`, and the wake URL when it is the tunnel's), the DNS record, the tunnel `a2a-exposed wake <worker>`, the Access app of that name, the service token of that name, and the local token file. Stop `cloudflared` (`cloudflared service uninstall`) afterwards. The service token expires after a year: rotate with `tunnel rm` + `tunnel create`. While a tunnel exists, `deploy`/`wake set` refuse a different `WAKE_WEBHOOK_URL`. Removing the Worker and the D1 database is `uninstall` ([teardown](teardown.md)).
 
 Already have your own Access-protected URL? Export `WAKE_ACCESS_CLIENT_ID` / `WAKE_ACCESS_CLIENT_SECRET` with `WAKE_WEBHOOK_URL` and run `wake set`; the Worker sends the same headers.
 
@@ -142,7 +142,7 @@ Already have your own Access-protected URL? Export `WAKE_ACCESS_CLIENT_ID` / `WA
 The inbox stays as it is, and its URL and peers don't change. On the existing deployment:
 
 1. Set up the agent side: the Hermes webhook subscription or the OpenClaw hooks token, as described above. Export its secret: `WAKE_HMAC_SECRET` for Hermes, `WAKE_WEBHOOK_KEY` for OpenClaw.
-2. Run `npx -y a2a-exposed@latest tunnel create` (Hermes: add `--tunnel-path /webhooks/<name>`; several zones: add `--tunnel-zone <zone>`). The inbox needs no redeploy: `tunnel create` uploads the Worker secrets directly, and they apply within about 15 s.
+2. Run `npx -y a2a-exposed@latest tunnel create` (Hermes: add `--tunnel-path /webhooks/<name>`; several zones: add `--tunnel-zone <zone>`). The inbox needs no redeploy: `tunnel create` uploads the Worker secrets directly, and they apply within about 15 to 40 seconds. Wait about 30 seconds, then run `status`.
 3. Start `cloudflared`, then run `npx -y a2a-exposed@latest status` and `npx -y a2a-exposed@latest wake test`.
 4. Keep the polling job as a slow fallback (Hermes: `hermes cron edit a2a-inbox --schedule "every 6h"`; the webhook subscription can fire that same job with `--cron-job a2a-inbox`), or remove it (`hermes cron remove a2a-inbox`; OpenClaw: `openclaw cron list`, then `openclaw cron remove <job-id>`).
 

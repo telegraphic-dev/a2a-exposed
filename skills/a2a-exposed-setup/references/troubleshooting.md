@@ -19,6 +19,9 @@ Name the reason, then use the sentence in [Getting started](https://github.com/t
 | `connect`/`send`: `rejected our token (HTTP 401 ...)` | The peer revoked or rotated it: `connect <url> --alias <alias>` again (its owner approves) |
 | `/device` or the setup page: Cloudflare error 1102 | The free plan's CPU limit was hit while hashing: `deploy --pbkdf2-iterations 50000`, then set the password again (see the threat model) |
 | `status`: `Cloudflare error 1042` right after a deploy | The Worker is still propagating on workers.dev: wait ~30 s and run `status` again. When 1042 is still there, name that and use the sentence in Getting started, linked above |
+| `wake preview` / `status` right after `wake set`, `wake unset`, or `tunnel create` | Changes show up in about 15 to 40 seconds. Wait about 30 seconds and run the command again. Export `WAKE_*` in that shell: `DIFFERENT` also means the variable is absent here. Right after the first `tunnel create`, with 0 connector connections, `status` prints the wait and exits 0 |
+| `cf workers delete` / `cf d1 delete`: `EACCES` mkdir `node_modules/.cache/cloudflare` | Run `uninstall --yes`, or run the `cf` commands from `<config dir>/worker`, or `mkdir -p .cloudflare/cache` in the current directory first. See [teardown](teardown.md) |
+| `tunnel create` then the connector | Install [cloudflared](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/) on the agent's machine. `tunnel create` prints `cloudflared tunnel run` |
 | Where are the Worker's logs? | Real-time: the dashboard's live logs. Persisted and searchable: deploy with `--workers-logs on` (Workers Logs; off by default) and open the Worker's **Observability** / **Logs** tab; query strings are redacted |
 | `not logged in to Cloudflare` | Run `cf auth login --no-browser` again; the code expires after about 5 minutes |
 | Several accounts | `--account-id <id>` (listed by `cf auth whoami`) |

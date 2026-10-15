@@ -10,6 +10,7 @@ import * as pair from "./pair.mjs";
 import * as account from "./account.mjs";
 import * as upd from "./update.mjs";
 import * as fb from "./feedback.mjs";
+import * as un from "./uninstall.mjs";
 
 const VERSION = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 
@@ -83,8 +84,12 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
                                                which defaults to 25 when this is unset
   wake preview                  rendered wake request (a credential is Bearer •••• or ••••, none of the secret)
                                 + sha256 fingerprints of the uploaded URL/key/HMAC secret; compared with
-                                local env values if exported
-  wake fingerprint              fingerprints (first 12 hex of sha256) of WAKE_* in the local environment
+                                local env values when WAKE_WEBHOOK_URL, WAKE_WEBHOOK_KEY, and WAKE_HMAC_SECRET
+                                are exported in this shell. match: the exported value is the one on the Worker.
+                                DIFFERENT: they differ (absent from this shell, or still propagating, about
+                                15 to 40 seconds after wake set, wake unset, or tunnel create). Wait about
+                                30 seconds and run it again
+  wake fingerprint              fingerprints (first 12 hex of sha256) of WAKE_* exported in this shell
   wake test                     send a test wake now and print the HTTP status
   wake unset                    remove wake secrets (fall back to polling)
 
@@ -96,10 +101,24 @@ anywhere on the account: the inbox itself can be on workers.dev or a custom host
                                 the Worker sends that token (CF-Access-Client-Id/Secret) on every wake.
                                 Wake hostname: wake-<random>.<zone>, on the inbox hostname's zone, else the account's
                                 only zone; with several zones pass --tunnel-zone. Safe to re-run (no duplicates).
+                                The tunnel, the Access app, and the service token are named "a2a-exposed wake <worker>".
+                                The DNS host is wake-<words>-<hex>.<zone> unless --tunnel-hostname is set.
+                                Export WAKE_WEBHOOK_KEY (hermes: WAKE_HMAC_SECRET) so tunnel create uploads it.
+                                The connector machine needs cloudflared installed
+                                (https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/).
                                 Defaults: openclaw-* -> http://127.0.0.1:18789 /hooks/wake|agent, hermes -> :8644
-                                (pass --tunnel-path /webhooks/<name>). Token -> <config dir>/tunnel-token (chmod 600)
+                                (pass --tunnel-path /webhooks/<name>). Token -> <config dir>/tunnel-token (chmod 600).
+                                Worker secrets show up in about 15 to 40 seconds
   tunnel status                 tunnel/Access/Worker state + probes (bare request blocked? connector up?)
-  tunnel rm                     delete Worker wake secrets, DNS record, tunnel, Access app + service token
+  tunnel rm                     delete the DNS record, the tunnel, the Access app, and the service token
+                                (each printed by name), plus Worker secrets WAKE_ACCESS_CLIENT_ID,
+                                WAKE_ACCESS_CLIENT_SECRET, WAKE_WEBHOOK_KEY, and WAKE_HMAC_SECRET. The wake URL
+                                goes too when it is this tunnel's. Prints one line per object removed
+  uninstall [--yes]             remove the wake tunnel (when the config has one), the Worker, and the D1 database.
+                                One line per step, including when that object is already gone. Asks first;
+                                off a terminal, pass --yes. The config directory stays (owner token and peer
+                                tokens): remove that directory to delete them. cf runs from the Worker project
+                                when it has node_modules, otherwise from a directory with .cloudflare/cache
   init ... --tunnel             init, then tunnel create (also with --workers-dev)
 
 Status
@@ -111,7 +130,9 @@ Status
                                 When GET /owner/mcp reports enabled and the agent card is reachable, prints
                                 \`claude mcp add --transport http a2a-exposed <base URL>/mcp\`.
                                 A failed probe, an unreachable card, or a Worker that reports MCP off leaves that line out.
-                                Read-only; run it after an interruption and continue from "next step". Exit 1 = broken
+                                Read-only; run it after an interruption and continue from "next step". Exit 1 = broken.
+                                Right after tunnel create, for about 15 to 40 seconds, while the connector
+                                reports 0 connections, status prints a wait-about-30-seconds line and exits 0
   upstream verify [--json]      proxy mode: check the façade's whole path, layer by layer: façade peer auth
                                 (unauthenticated call -> 401), then the Worker calls the upstream with its stored
                                 secrets (never sent to the CLI) using a JSON-RPC method that doesn't exist (no task
@@ -135,8 +156,9 @@ Inbox (owner side)
 
 Pairing (OAuth 2.0 device flow, RFC 8628: agents connect without pasting tokens into chat)
   connect <base-or-card-url> [--alias A] [--name N] [--card-url URL] [--replace] [--no-wait] [--json]
-                          ask another inbox for a token: prints a code + link for your human (who confirms the
-                          code with that inbox's owner), waits for approval, stores the token as outbound peer A
+                          ask another inbox for a token: prints a code + link for your human (the code lasts
+                          10 minutes; they confirm the code with that inbox's owner), waits for approval, stores
+                          the token as outbound peer A
                           (never printed). --no-wait: print the code and exit; run the same command again to
                           check (same code). An expired code exits 1 (nothing new is requested silently).
                           An alias whose token still works is refused unless --replace (alias --force): the
@@ -149,9 +171,9 @@ Pairing (OAuth 2.0 device flow, RFC 8628: agents connect without pasting tokens 
                           configured agent name, the worker name, or the public host's first label. The
                           other inbox labels the token from that name and adds -2, -3, … when it is taken
   pair set-password --web [--ttl MIN] [--json]
-                          one-time link (default 15 min, single use) where your human sets or changes the
-                          approval password on a web page. Send it to them privately; never open or fill it
-                          yourself. A new link invalidates the previous one
+                          one-time link (default 15 min, --ttl 1 to 60, single use) where your human sets or
+                          changes the approval password on a web page. Send it to them privately; never open
+                          or fill it yourself. A new link invalidates the previous one
   pair set-password       the same in a terminal, no echo (the human runs it; never via argv/stdin)
   pair set-oidc --issuer URL --client-id ID --subjects SUB[,SUB...] [--methods password,oidc] [--secret-stdin]
                           optional OpenID Connect approval on /device and the MCP consent page. The client
@@ -239,6 +261,7 @@ const SPEC = {
 	login: { "control-url": S, json: B },
 	pair: { json: B, web: B, ttl: S, issuer: S, "client-id": S, subjects: S, methods: S, "secret-stdin": B },
 	feedback: { kind: S, contact: S, steps: S, expected: S, actual: S, logs: S, agent: S, environment: S, connection: S, yes: B },
+	uninstall: { yes: B, dir: S, "worker-dir": S },
 };
 const STATES = ["completed", "input-required", "failed", "rejected", "working"];
 
@@ -274,6 +297,7 @@ export async function main(argv) {
 				throw e;
 			}
 		case "tunnel": return tun.tunnel(need(p[0], "tunnel create|status|rm"), o);
+		case "uninstall": return un.uninstall(o);
 		case "deploy": return dep.deploy(o);
 		case "status": return st.status(o);
 		case "upstream": {

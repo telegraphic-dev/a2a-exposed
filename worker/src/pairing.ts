@@ -173,7 +173,7 @@ export async function verifyPassword(password: string, rec: PasswordRecord): Pro
 // ------------------------------------------------------------------ /device page (no scripts, no external assets)
 export const esc = (s: unknown) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
-export type PageRequest = { userCode: string; clientName: string; clientId: string; agentCardUrl: string; ip: string; country: string; createdMs: number; expiresMs: number; replacesLabel?: string };
+export type PageRequest = { userCode: string; clientName: string; clientId: string; agentCardUrl: string; ip: string; country: string; createdMs: number; expiresMs: number; replacesLabel?: string; tokenLabel?: string };
 export type PageModel = {
 	agentName: string;
 	mode: Mode;
@@ -197,13 +197,14 @@ export function devicePage(m: PageModel, nonce: string): string {
 		["Agent (as it calls itself)", r.clientName || r.clientId || "(no name given)"],
 		...(r.clientId && r.clientName && r.clientId !== r.clientName ? [["Alias (claimed)", r.clientId]] : []),
 		["Agent card (claimed)", r.agentCardUrl ? r.agentCardUrl + (cardIsPrivate(r.agentCardUrl) ? " (private network address, e.g. a Tailnet: not publicly reachable, so this inbox can't check it; informational only)" : "") : "(none given)"],
-		["Requested from", [r.ip || "unknown address", r.country].filter(Boolean).join(", ")],
+		["Requested from", `${[r.ip || "unknown address", r.country].filter(Boolean).join(", ")} (IP address of the machine that asked to connect)`],
 		["Expires", `${Math.max(0, Math.round((r.expiresMs - Date.now()) / 60000))} min`],
 		...(r.replacesLabel ? [["Replaces", `the active token "${r.replacesLabel}" (the requester proved it holds it); approving issues a new token under the same label and the old one stops working`]] : []),
 	] : [];
 	const notice = m.notice ? `<p class="n ${m.notice.kind}">${esc(m.notice.text)}</p>` : "";
+	const revoke = r?.tokenLabel ? `${m.cli} token revoke ${r.tokenLabel}` : `${m.cli} token revoke`;
 	const details = r ? `<table>${rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join("")}</table>
-<p class="w">Approve only if you expected this request and the code matches the one you were given. The name, alias and card URL are claimed by the requester. Approving gives it a token to send messages to this inbox; revoke it any time with <code>${esc(m.cli)} token revoke &lt;label&gt;</code>.</p>` : "";
+<p class="w">Approve only if you expected this request and the code matches the one you were given. The name, alias and card URL are claimed by the requester. Approving gives it a token to send messages to this inbox; revoke it any time with <code>${esc(revoke)}</code>.</p>` : "";
 	const noPassword = `<p class="n info">No approval password is set yet. Easiest: ask your agent to run <code>${esc(m.cli)} pair set-password --web</code> and send you the one-time link, then set the password on that page. Or run <code>${esc(m.cli)} pair set-password</code> yourself in a terminal on the owner's machine. Then reload this page. You can deny without a password.</p>`;
 	const denyOnly = `<form method="post" action="/device">
 <input type="hidden" name="csrf" value="${esc(m.csrf)}"><input type="hidden" name="user_code" value="${esc(r ? formatUserCode(r.userCode) : "")}">
@@ -294,11 +295,11 @@ export function setupPage(m: SetupModel, nonce: string): string {
 		? `<p>An approval password is already set (since ${esc(m.passwordSetAt)}). Saving here replaces it.</p>`
 		: `<p>Choose the password you will use to approve agents that ask to connect to this inbox.</p>`;
 	return pageShell(`Approval password for ${m.agentName}`, nonce, `${notice}${intro}
-<p class="w">Only you should know it: don't share it with your agent or anyone else. At least ${MIN_PASSWORD_LENGTH} characters; a passphrase of a few words works well. This one-time link expires in ${mins} min.</p>
+<p class="w">Only you should know it: don't share it with your agent or anyone else. Use ${MIN_PASSWORD_LENGTH} to 1024 characters. A passphrase of several unrelated words is stronger than one short word. This one-time link expires in ${mins} min.</p>
 <form method="post" action="/device/setup">
 <input type="hidden" name="csrf" value="${esc(m.csrf)}"><input type="hidden" name="t" value="${esc(m.token)}">
 <label for="pw1">New approval password</label><input id="pw1" name="password" type="password" autocomplete="new-password" required minlength="${MIN_PASSWORD_LENGTH}" maxlength="1024" autofocus>
-<label for="pw2">Repeat it</label><input id="pw2" name="password2" type="password" autocomplete="new-password" required minlength="${MIN_PASSWORD_LENGTH}" maxlength="1024">
+<label for="pw2">Repeat the password</label><input id="pw2" name="password2" type="password" autocomplete="new-password" required minlength="${MIN_PASSWORD_LENGTH}" maxlength="1024">
 <div class="b"><button type="submit">Set approval password</button></div>
 </form>`);
 }
