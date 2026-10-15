@@ -14,6 +14,7 @@ import m0011 from "../../migrations/0011_cloudflare_inbox.sql?raw";
 import m0012 from "../../migrations/0012_cloudflare_inbox_tag.sql?raw";
 import m0013 from "../../migrations/0013_cloudflare_inbox_wizard.sql?raw";
 import m0014 from "../../migrations/0014_cloudflare_inbox_agent.sql?raw";
+import m0015 from "../../migrations/0015_cloudflare_grant_access.sql?raw";
 
 export interface ControlMigration {
 	name: string;
@@ -38,4 +39,5 @@ export const CONTROL_MIGRATIONS: readonly ControlMigration[] = [
 	{ name: "0012_cloudflare_inbox_tag.sql", sql: m0012 },
 	{ name: "0013_cloudflare_inbox_wizard.sql", sql: m0013 },
 	{ name: "0014_cloudflare_inbox_agent.sql", sql: m0014 },
+	{ name: "0015_cloudflare_grant_access.sql", sql: m0015 },
 ];
