@@ -80,6 +80,24 @@ export function shadowedPeerTokens() {
 /** How long after `tunnel create` uploads secrets `status` treats a missing Worker preview as propagation. */
 export const SECRET_PROPAGATION_MS = 60_000;
 
+/** How long after `tunnel create` a connector with 0 connections is still "connecting", not broken. */
+export const CONNECTOR_WAIT_MS = 60_000;
+
+/** Cloudflare tunnel status `inactive` means the connector has never connected. */
+export function tunnelStateLabel(state) {
+	if (state === "inactive") return "never connected";
+	return state || "?";
+}
+
+/** True for about a minute after `tunnel create` while the connector reports 0 connections. */
+export function connectorConnecting(tunnel, now = Date.now()) {
+	if (!tunnel || tunnel.connections !== 0) return false;
+	const at = Number(tunnel.secretsAt);
+	if (!Number.isFinite(at) || at <= 0) return false;
+	const age = now - at;
+	return age >= 0 && age < CONNECTOR_WAIT_MS;
+}
+
 /** True while the tunnel's Worker secrets were uploaded recently and may still be invisible to `wake preview`. */
 export function secretsPropagating(tunnel, now = Date.now()) {
 	const at = Number(tunnel && tunnel.secretsAt);
@@ -160,8 +178,10 @@ function nextStepCore(s) {
 			return done(`Worker wake secrets are still propagating (about 15 to 40 seconds after tunnel create). Wait about 30 seconds and run \`${CLI} status\` again.`);
 		return fail(`the Worker does not have the tunnel's wake secrets: ${needsAgentSecret ? `export ${agentSecret} and ` : ""}run \`${CLI} tunnel create\` again (it re-uploads them; nothing new is created)`);
 	}
+	if (t && connectorConnecting(t, now))
+		return done(`waiting for the connector to connect. The tunnel was created in the last minute. Run \`${CLI} status\` again. After that, 0 connections means start cloudflared on the agent's machine.`);
 	if (t && t.connections === 0)
-		return fail(`the tunnel has no running connector: on the agent's machine run \`cloudflared tunnel run --token-file ${t.tokenFile}\` (outbound port 7844 must be open), then \`${CLI} wake test\``);
+		return fail(`the tunnel has ${t.state === "inactive" ? "never connected" : "no running connector"}: on the agent's machine run \`cloudflared tunnel run --token-file ${t.tokenFile}\` (outbound port 7844 must be open), then \`${CLI} wake test\``);
 	if (s.wake.configured && needsAgentSecret)
 		return fail(`the Worker sends no webhook auth, so the ${s.wake.preset} webhook will reject wakes: export ${agentSecret} (${s.wake.preset === "hermes" ? "the route secret" : "the hooks token"}), then run \`${CLI} ${t ? "tunnel create" : "wake set"}\``);
 	// not broken, but peers can't pair until the human sets the approval password
@@ -328,7 +348,7 @@ export async function status(o) {
 			rows.push(["wake", wakeLine(s)]);
 			const t = s.tunnel;
 			rows.push(["tunnel", !t ? "none" : `${t.wakeUrl} -> ${t.origin || "?"}; ${!t.complete ? "INCOMPLETE" : t.tokenFileOk ? "set up" : "set up, but the connector token file is MISSING"}` +
-				(t.connections != null ? `; ${t.state || "?"}, ${t.connections} connector connection(s)` : t.error ? `; state unknown (${t.error})` : "")]);
+				(t.connections != null ? `; ${tunnelStateLabel(t.state)}, ${t.connections} connector connection(s)` : t.error ? `; state unknown (${t.error})` : "")]);
 			if (s.zones) rows.push(["zones", s.zones.length ? s.zones.join(", ") : "none on this account"]);
 			const pg = s.pairing;
 			if (pg) rows.push(["pairing", pg.mode === "off" ? "off (token issue only)"

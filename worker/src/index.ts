@@ -1439,7 +1439,7 @@ async function devicePage(req: Request, ctx: TenantContext, url: URL, head = fal
 	const fresh = !/^[A-Za-z0-9_-]{24}$/.test(csrf);
 	if (fresh) csrf = P.randomB64();
 	const pw = await approvalPassword(ctx);
-	const model: P.PageModel = { agentName: ctx.AGENT_NAME || "this A2A inbox", mode: pairingMode(ctx), cli: cliCommand(ctx), csrf, passwordSet: !!pw, ...approvalPageBits(ctx) };
+	const model: P.PageModel = { agentName: ctx.AGENT_NAME || "this A2A endpoint", mode: pairingMode(ctx), cli: cliCommand(ctx), csrf, passwordSet: !!pw, ...approvalPageBits(ctx) };
 	const send = (status = 200) => {
 		const h: Record<string, string> = P.pageHeaders(nonce, oidcFormOrigins(ctx));
 		h["set-cookie"] = `${csrfName}=${csrf}; Path=/device; Secure; HttpOnly; SameSite=Strict; Max-Age=3600`;
@@ -1489,6 +1489,7 @@ async function devicePage(req: Request, ctx: TenantContext, url: URL, head = fal
 		if (!r0 || r0.status !== "pending" || Date.now() >= r0.expires_ms) { await show(form.user_code); return send(404); }
 		const d0 = await decide(ctx, code, false, "page");
 		if (!d0.ok) { await show(null, { kind: "error", text: d0.error! }); return send(409); }
+		model.settled = "denied";
 		model.notice = { kind: "ok", text: `Denied. ${r0.client_name || r0.client_id || "the agent"} gets no token.` };
 		return send();
 	}
@@ -1536,6 +1537,7 @@ async function devicePage(req: Request, ctx: TenantContext, url: URL, head = fal
 	const d = await decide(ctx, code, true, "human");
 	if (!d.ok) { await show(null, { kind: "error", text: d.error! }); return send(409); }
 	const who = r.client_name || r.client_id || "the agent";
+	model.settled = "approved";
 	model.notice = { kind: "ok", text: `Approved. ${who} can now collect its token (label "${d.label}"${d.replaced ? ", replacing its old token" : ""}). Revoke it any time: ${cliCommand(ctx)} token revoke ${d.label}` };
 	return send();
 }
@@ -1544,7 +1546,7 @@ async function devicePage(req: Request, ctx: TenantContext, url: URL, head = fal
 async function deviceOidcCallback(req: Request, ctx: TenantContext, url: URL, head = false): Promise<Response> {
 	const nonce = P.randomB64();
 	const pw = await approvalPassword(ctx);
-	const model: P.PageModel = { agentName: ctx.AGENT_NAME || "this A2A inbox", mode: pairingMode(ctx), cli: cliCommand(ctx), csrf: P.randomB64(), passwordSet: !!pw, ...approvalPageBits(ctx) };
+	const model: P.PageModel = { agentName: ctx.AGENT_NAME || "this A2A endpoint", mode: pairingMode(ctx), cli: cliCommand(ctx), csrf: P.randomB64(), passwordSet: !!pw, ...approvalPageBits(ctx) };
 	const send = (status = 200) => {
 		const h: Record<string, string> = P.pageHeaders(nonce, oidcFormOrigins(ctx));
 		h["set-cookie"] = `a2a_device_csrf=${model.csrf}; Path=/device; Secure; HttpOnly; SameSite=Strict; Max-Age=3600`;
@@ -1587,6 +1589,7 @@ async function deviceOidcCallback(req: Request, ctx: TenantContext, url: URL, he
 	const d = await decide(ctx, done.userCode || "", true, "oidc");
 	if (!d.ok) { model.notice = { kind: "error", text: d.error! }; return send(409); }
 	const who = d.request.client_name || d.request.client_id || "the agent";
+	model.settled = "approved";
 	model.notice = { kind: "ok", text: `Approved. ${who} can now collect its token (label "${d.label}"${d.replaced ? ", replacing its old token" : ""}). Revoke it any time: ${cliCommand(ctx)} token revoke ${d.label}` };
 	log("oidc_approved", { kind: "device" });
 	return send();
@@ -1617,7 +1620,7 @@ async function setupPage(req: Request, ctx: TenantContext, url: URL, head = fals
 	const fresh = !/^[A-Za-z0-9_-]{24}$/.test(csrf);
 	if (fresh) csrf = P.randomB64();
 	const pw = await approvalPassword(ctx);
-	const model: P.SetupModel = { agentName: ctx.AGENT_NAME || "this A2A inbox", cli: cliCommand(ctx), csrf, passwordSetAt: pw?.setAt };
+	const model: P.SetupModel = { agentName: ctx.AGENT_NAME || "this A2A endpoint", cli: cliCommand(ctx), csrf, passwordSetAt: pw?.setAt };
 	const send = (status = 200) => {
 		const h: Record<string, string> = P.pageHeaders(nonce);
 		h["set-cookie"] = `${csrfName}=${csrf}; Path=/device; Secure; HttpOnly; SameSite=Strict; Max-Age=3600`;
@@ -2032,7 +2035,7 @@ async function authorizePage(req: Request, ctx: TenantContext, url: URL, head = 
 	if (c.fatal) return page(400, `<p class="n error">${P.esc(c.fatal)}</p>`);
 	if (c.error) return redirectWith(ctx, c.redirect!, { error: c.error, error_description: c.description!, state: c.params.state });
 	const origin = new URL(c.redirect!).origin;
-	const show = (status: number, notice?: M.ConsentModel["notice"]) => page(status, M.consentBody({ agentName: ctx.AGENT_NAME || "this A2A inbox", cli: cliCommand(ctx),
+	const show = (status: number, notice?: M.ConsentModel["notice"]) => page(status, M.consentBody({ agentName: ctx.AGENT_NAME || "this A2A endpoint", cli: cliCommand(ctx),
 		csrf, clientName: c.client!.client_name || "", clientIdHost: c.client!.cimd ? new URL(c.client!.client_id).host : undefined,
 		redirectUri: c.redirect!, params: c.params, passwordSet: !!pw, ...approvalPageBits(ctx), notice }), [origin, ...oidcFormOrigins(ctx)]);
 	if (req.method === "GET") return show(200);
@@ -2080,7 +2083,7 @@ async function authorizePage(req: Request, ctx: TenantContext, url: URL, head = 
 async function issueMcpCode(ctx: TenantContext, clientName: string, redirect: string, params: Record<string, string>, ip: string, via = ""): Promise<{ ok: true; response: Response } | { ok: false; error: string }> {
 	const active: Json = await ctx.DB.prepare("SELECT COUNT(*) AS n FROM mcp_grants WHERE revoked_at IS NULL").first();
 	if ((active?.n ?? 0) >= M.LIMITS.maxGrants)
-		return { ok: false, error: `This inbox already has ${M.LIMITS.maxGrants} MCP connectors. Revoke one first: ${cliCommand(ctx)} token list, then token revoke <label>.` };
+		return { ok: false, error: M.mcpLimitMessage(M.LIMITS.maxGrants, cliCommand(ctx)) };
 	const code = A.randomToken("a2amcpc_"), now = Date.now();
 	await ctx.DB.prepare("INSERT INTO oauth_codes (code_hash, client_id, redirect_uri, code_challenge, scope, resource, created_ms, expires_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
 		.bind(await A.sha256(code), params.client_id, redirect, params.code_challenge, params.scope, params.resource || oauthUrls(ctx).mcp, now, now + M.CODE_TTL_S * 1000).run();

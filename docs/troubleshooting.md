@@ -46,7 +46,7 @@ Report a result the docs do not cover with `npx -y a2a-exposed@latest feedback`.
 | `wake test` returns a network error | The target is not publicly reachable. Use `tunnel create`, or poll |
 | Hosted test says TLS handshake failed, and the inspector shows no request | A `*.workers.dev` target cannot be opened: sockets refuse Cloudflare addresses. A private or metadata address is refused before anything is sent. webhook.site and httpbin.org answer on a current build. The agent page names the failure and does not print the error text |
 | `530` or Cloudflare error 1033 | The tunnel has no running connector. Install [cloudflared](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/), then start `cloudflared tunnel run --token-file ...`. Outbound port 7844 (TCP and UDP) must be allowed |
-| `status` right after `tunnel create` | For about 15 to 40 seconds, while the connector reports 0 connections, the next step says to wait about 30 seconds and `status` exits 0. After that, 0 connections means start `cloudflared` |
+| `status` right after `tunnel create` | For about a minute, while the connector reports 0 connections, the next step says `waiting for the connector to connect` and `status` exits 0. After that minute, 0 connections means start `cloudflared`. A tunnel status of `inactive` means the connector has never connected. Worker secrets show up in about 15 to 40 seconds. Wait about 30 seconds and check `wake preview` again |
 | `cf workers delete` or `cf d1 delete`: `EACCES` mkdir `node_modules/.cache/cloudflare` | Run them from `<config dir>/worker`, or `mkdir -p .cloudflare/cache` in the current directory first. `uninstall --yes` is the one-command path. See [Self-hosting](self-hosting.md#remove-an-inbox) |
 | Tunnel hostname returns 401, 403, or a 302 to `<team>.cloudflareaccess.com` | Access is blocking a request without the service token. For wakes, `wake preview` must show `hasAccessServiceToken: true`. If it does not, `tunnel rm` then `tunnel create` |
 | Zero Trust is not enabled | Enable it once (free plan) or pass `--zero-trust-org <team-name>` |
@@ -59,7 +59,7 @@ Report a result the docs do not cover with `npx -y a2a-exposed@latest feedback`.
 
 | Symptom | What to do |
 | --- | --- |
-| `pair` returns HTTP 500 | The inbox predates device-flow pairing. Run `deploy` (migration `0003_device_pairing`) |
+| `pair` returns HTTP 500 | Run `deploy`, then try the pairing command again |
 | `connect`: does not offer device-flow pairing | That peer has pairing off, or it is not this inbox. Ask its owner for a token and use `peers add ... --token-stdin` |
 | `connect`: not accepting more pairing requests | Flood limits: 5 new requests per IP per 10 minutes, 10 pending, and 30 new requests per hour. Wait and retry |
 | `/device` says no approval password | `pair set-password --web`, and open the link yourself. Or run `pair set-password` in a terminal |

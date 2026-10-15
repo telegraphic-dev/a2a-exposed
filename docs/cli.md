@@ -79,19 +79,24 @@ For a webhook that only listens locally. Needs Zero Trust and a zone on the acco
 
 | Command | Effect |
 | --- | --- |
-| `tunnel create` | Named tunnel, proxied DNS, and an Access app that admits one service token. The tunnel, the Access app, and the service token are named `a2a-exposed wake <worker>`. The DNS host is `wake-<word>-<word>-<hex>.<zone>` unless `--tunnel-hostname` is set. Export `WAKE_WEBHOOK_KEY` (hermes: `WAKE_HMAC_SECRET`). The connector machine needs [cloudflared](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/). Flags: `--tunnel-zone`, `--tunnel-hostname`, `--tunnel-origin`, `--tunnel-path`, `--show-token`, `--zero-trust-org`. Secrets show up in about 15 to 40 seconds |
-| `tunnel status` | Tunnel, Access, and Worker state, plus probes |
-| `tunnel rm` | Prints each removed object: DNS record, tunnel, Access app, and service token (named `a2a-exposed wake <worker>`), plus Worker secrets `WAKE_ACCESS_CLIENT_ID`, `WAKE_ACCESS_CLIENT_SECRET`, `WAKE_WEBHOOK_KEY`, and `WAKE_HMAC_SECRET`. `WAKE_WEBHOOK_URL` goes too when it is this tunnel's. If the tunnel is already gone, the saved ids are cleared |
-| `uninstall [--yes]` | Remove the wake tunnel (when one is saved), the Worker, and the D1 database. One line per step. Asks first; off a terminal, pass `--yes`. The config directory stays. See [Self-hosting](self-hosting.md#remove-an-inbox) |
+| `tunnel create` | Named tunnel, proxied DNS, and an Access app that admits one service token. The tunnel, the Access app, and the service token are named `a2a-exposed wake <worker>`. The DNS host is `wake-<word>-<word>-<4 hex>.<zone>` unless `--tunnel-hostname` is set. A finished tunnel creates nothing when you run it again. A partial tunnel stops and asks for `tunnel rm`. Prints the Access application name and ids, and `tunnel rm` as the undo. Export `WAKE_WEBHOOK_KEY` (hermes: `WAKE_HMAC_SECRET`). The connector machine needs [cloudflared](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/). Flags: `--tunnel-zone`, `--tunnel-hostname`, `--tunnel-origin`, `--tunnel-path`, `--show-token`, `--zero-trust-org`, `--dir`, `--worker-dir`. Secrets show up in about 15 to 40 seconds. Wait about 30 seconds and check again |
+| `tunnel status` | Tunnel, Access, and Worker state, plus probes. A network error says DNS may still be propagating; retry in 30 s. The Access warning appears only for an HTTP response other than 401 or 403 |
+| `tunnel rm` | Prints each removed object: DNS record, tunnel, Access app, and service token (named `a2a-exposed wake <worker>`), plus Worker secrets `WAKE_ACCESS_CLIENT_ID`, `WAKE_ACCESS_CLIENT_SECRET`, `WAKE_WEBHOOK_KEY`, and `WAKE_HMAC_SECRET`. `WAKE_WEBHOOK_URL` goes too when it is this tunnel's. If the tunnel is already gone, the saved ids are cleared. With nothing saved, prints `nothing to remove`. A missing Worker (Cloudflare error 10007) is already gone |
 
 ### `status`, `upstream`, `url`, `config`
 
 | Command | Effect |
 | --- | --- |
-| `status [--json]` | Deployment, base URL, agent card, wake mode (webhook, tunnel, or none), tunnel state, and in proxy mode the upstream card, Access credential, upstream bearer, live check, last failed peer call, and a card-leak check. Warns when a peer-token variable shadows a saved token. When `GET /owner/mcp` reports enabled and the agent card is reachable, prints `claude mcp add --transport http a2a-exposed <base URL>/mcp`. Prints the next step. Exit 1 means something is broken. Right after `tunnel create`, for about 15 to 40 seconds, while the connector reports 0 connections, the next step says to wait about 30 seconds and the exit code stays 0. Wake settings from `wake set` and `wake unset` take the same 15 to 40 seconds to show up in `wake preview`. Read-only, except the no-op upstream probe in proxy mode |
+| `status [--json]` | Deployment, base URL, agent card, wake mode (webhook, tunnel, or none), tunnel state, and in proxy mode the upstream card, Access credential, upstream bearer, live check, last failed peer call, and a card-leak check. Warns when a peer-token variable shadows a saved token. When `GET /owner/mcp` reports enabled and the agent card is reachable, prints `claude mcp add --transport http a2a-exposed <base URL>/mcp`. Prints the next step. Exit 1 means something is broken. For about a minute after `tunnel create`, while the connector reports 0 connections, the next step says `waiting for the connector to connect` and the exit code stays 0. After that, 0 connections is broken. A tunnel status of `inactive` reads as `never connected`. Wake settings from `wake set`, `wake unset`, and `tunnel create` show up in `wake preview` in about 15 to 40 seconds. Wait about 30 seconds and check again. Read-only, except the no-op upstream probe in proxy mode |
 | `upstream verify [--json]` | Proxy mode only. Exit 1 unless the A2A app answered. `status` runs the same check |
 | `url` | Public base URL |
-| `config` | Masked config and its path |
+| `config` | Masked config and its path. `A2A_TUNNEL_TOKEN_FILE` is printed as its path |
+
+## Remove
+
+| Command | Effect |
+| --- | --- |
+| `uninstall [--yes] [--dry-run] [--dir DIR \| --worker-dir DIR]` | Remove the Worker, the wake tunnel when one is saved, and the D1 database. Prints the plan first. `--dry-run` prints the plan and changes nothing. Asks first; off a terminal, pass `--yes`. An empty config exits 1. The config directory stays: the owner token and `WAKE_*` values stay, and a later `init` reuses the owner token. `--dir` and `--worker-dir` are the Worker project directory (default `<config dir>/worker`). See [Self-hosting](self-hosting.md#remove-an-inbox) |
 
 ## Inbox
 
@@ -111,7 +116,7 @@ The owner token authenticates these commands.
 
 | Command | Effect |
 | --- | --- |
-| `connect <url> [--alias A] [--name N] [--card-url URL] [--replace] [--no-wait] [--json]` | Ask another inbox for a token. Prints a code and a link. The code lasts 10 minutes. Stores the token and does not print it. `--no-wait` prints the code and exits; run the same command again to check. An expired code exits 1 and does not request a new one silently. An alias whose token still works is refused unless `--replace` (`--force` is the old flag). A `*.ts.net` or LAN card is informational. A non-https card is left out |
+| `connect <url> [--alias A] [--name N] [--card-url URL] [--replace] [--no-wait] [--json]` | Ask another inbox for a token. Prints a code and a link. The code lasts 10 minutes. Stores the token and does not print it. `--no-wait` prints the code and exits; run the same command again to check. An expired code exits 1 and does not request a new one silently. An alias whose token still works is refused unless `--replace`. A `*.ts.net` or LAN card is informational. A non-https card is left out |
 | `pair set-password --web [--ttl MIN] [--json]` | One-time link where a human sets the approval password. `--ttl` is 1 to 60 minutes (default 15). A new link invalidates the previous one |
 | `pair set-password` | The same, in a terminal, no echo. The human types the password there |
 | `pair set-oidc --issuer URL --client-id ID --subjects SUB[,SUB...] [--methods password,oidc] [--secret-stdin]` | Optional OpenID Connect on `/device` and the MCP consent page. Deploy uploads `APPROVAL_OIDC_CLIENT_SECRET` only when that variable is set in the environment you use for deploy. `--secret-stdin` checks one line and discards it. `config.env` keeps the issuer and client id |

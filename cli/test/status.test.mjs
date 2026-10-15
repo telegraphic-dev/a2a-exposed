@@ -68,6 +68,13 @@ test("nextStep: tunnel states", () => {
 	assert.match(step({}, { ...wake, hasAccessServiceToken: false }).text, /re-uploads them/);
 	assert.equal(step({ connections: 0 }).ok, false);
 	assert.match(step({ connections: 0 }).text, /cloudflared tunnel run --token-file \/cfg\/tunnel-token.*7844/);
+	const connecting = step({ connections: 0, secretsAt: Date.now() });
+	assert.equal(connecting.ok, true);
+	assert.match(connecting.text, /waiting for the connector to connect/);
+	const aged = step({ connections: 0, secretsAt: 1, state: "inactive" });
+	assert.equal(aged.ok, false);
+	assert.match(aged.text, /never connected/);
+	assert.match(step({ connections: 0, state: "down" }).text, /no running connector/);
 	const fresh = Date.now();
 	const waiting = step({ workerUrlMatches: false, connections: 0, secretsAt: fresh });
 	assert.equal(waiting.ok, true);

@@ -106,6 +106,11 @@ export const ACCESS_PREFIX = "a2amcp_";
 export const REFRESH_PREFIX = "a2amcpr_";
 export const LIMITS = { registrationsPerIpPerHour: 10, maxClients: 100, maxGrants: 20 };
 
+/** Shown when another MCP connector would pass the grant cap. */
+export function mcpLimitMessage(max: number, cli: string): string {
+	return `This A2A endpoint already has ${max} MCP connectors. Revoke one first: ${cli} token list, then token revoke <label>.`;
+}
+
 /** MCP is on unless MCP=off, and only for an inbox (a façade has no inbox to expose). */
 export function mcpEnabled(v: string | undefined, proxy: boolean): boolean {
 	return !proxy && String(v || "").trim().toLowerCase() !== "off";
@@ -202,7 +207,7 @@ export function consentBody(m: ConsentModel): string {
 		: `<form method="post" action="/oauth/authorize"><input type="hidden" name="csrf" value="${esc(m.csrf)}">${hidden}<div class="b"><button name="decision" value="deny" type="submit" class="d">Deny</button></div></form>`;
 	const oidcForm = m.oidc ? `<form method="post" action="/oauth/authorize"><input type="hidden" name="csrf" value="${esc(m.csrf)}">${hidden}
 <div class="b"><button name="decision" value="oidc" type="submit">Continue with ${esc(m.oidc.label)}</button></div></form>` : "";
-	return `${notice}<p>An MCP client asks to use the inbox of <b>${esc(m.agentName)}</b> as a connector.</p>${table}${loop}${scope}
+	return `${notice}<p>An MCP client asks to use the A2A endpoint of <b>${esc(m.agentName)}</b> as a connector.</p>${table}${loop}${scope}
 <p class="w">Approve only if you are adding this connector right now. The name above is claimed by the client. Revoke access any time: <code>${esc(m.cli)} token list</code>, then <code>${esc(m.cli)} token revoke &lt;label&gt;</code>.</p>${form}${oidcForm}`;
 }
 

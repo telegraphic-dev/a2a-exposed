@@ -164,6 +164,30 @@ export function cloudflareErrorCode(body) {
 	return m ? m[1] || m[2] || m[3] || m[4] : "";
 }
 
+/** API token permission named in `[10000]` and `[7403]` errors, from the `cf` command. */
+export function cfPermission(args) {
+	const head = args[0];
+	if (head === "workers") return "Workers Scripts: Edit";
+	if (head === "d1") return "D1: Edit";
+	if (head === "dns") return "Zone DNS: Edit";
+	if (head === "zero-trust") return "Access: Edit";
+	if (head === "tunnels") return "Cloudflare Tunnel: Edit";
+	return "";
+}
+
+/** Append the token permission when Cloudflare returns code 10000 or 7403. */
+export function withPermissionHint(args, msg) {
+	if (!/\[(10000|7403)\]/.test(msg) || /The API token needs/.test(msg)) return msg;
+	const perm = cfPermission(args);
+	return perm ? `${msg} The API token needs ${perm}.` : msg;
+}
+
+/** True when `cf` reports that this Worker does not exist (code 10007). */
+export function workerMissingError(err) {
+	const msg = err instanceof Error ? err.message : String(err || "");
+	return /\[10007\]/.test(msg) || /this worker does not exist/i.test(msg);
+}
+
 // ------------------------------------------------------------------ cf calls (JSON in, JSON out, errors captured)
 export function cfCall(dir, args, { body, file, allowNotFound = false } = {}) {
 	const full = [...args];
@@ -175,7 +199,7 @@ export function cfCall(dir, args, { body, file, allowNotFound = false } = {}) {
 		const err = (r.stderr || r.stdout || "").replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
 		if (allowNotFound && /404|not found|does not exist|could not be found/i.test(err)) return null;
 		const msg = (err.match(/\[\d+\][^\n]*/g) || [err.trim().split("\n").slice(-3).join(" ")]).join("; ");
-		throw new CliError(`cf ${args.slice(0, 3).join(" ")} failed: ${msg.slice(0, 400)}`);
+		throw new CliError(`cf ${args.slice(0, 3).join(" ")} failed: ${withPermissionHint(args, msg.slice(0, 400))}`);
 	}
 	const out = (r.stdout || "").trim();
 	if (!out) return {};
@@ -262,6 +286,11 @@ export async function create(o) {
 	if (tunnelStarted()) return resume(dir, o);
 	const { preset, origin, wpath } = preflight(o);
 	const worker = D.workerName();
+	try {
+		const preview = await owner("GET", "/owner/wake/preview");
+		if (preview && preview.configured)
+			console.error(`warning: the Worker already has a wake URL. tunnel create replaces it with the tunnel hostname. Undo that tunnel with \`${CLI} tunnel rm\`.`);
+	} catch { /* Worker unreachable: the upload below reports it */ }
 
 	step("finding a zone for the wake hostname");
 	const { hostname, zone, note } = pickTunnelHostname({
@@ -278,6 +307,8 @@ export async function create(o) {
 	const label = `a2a-exposed wake ${worker}`;
 	const save = (u) => C.saveConfig(u);
 	save({ A2A_TUNNEL_HOSTNAME: hostname, A2A_TUNNEL_ORIGIN: origin, A2A_TUNNEL_PATH: wpath, A2A_TUNNEL_ZONE_ID: zone.id });
+	/** Secret names this run uploaded. Rollback deletes only these. */
+	let createdSecrets = [];
 	try {
 		step(`Access service token "${label}"`);
 		const st = cfCall(dir, ["zero-trust", "access", "service-tokens", "create"], { body: serviceTokenBody(label) });
@@ -308,16 +339,19 @@ export async function create(o) {
 		const secrets = { WAKE_WEBHOOK_URL: url, WAKE_ACCESS_CLIENT_ID: st.client_id, WAKE_ACCESS_CLIENT_SECRET: st.client_secret };
 		for (const k of ["WAKE_WEBHOOK_KEY", "WAKE_HMAC_SECRET"]) if (process.env[k]) secrets[k] = process.env[k];
 		await putSecrets(dir, worker, secrets);
+		createdSecrets = Object.keys(secrets);
 
 		console.log(url);
-		console.error(`\ntunnel ready: wakes go to ${url} -> ${origin}${wpath} on the agent's machine`);
+		console.error(`\nAccess application "${label}" (id ${app.id}); service token id ${st.id}; tunnel id ${tun.id}.`);
+		console.error(`tunnel ready: wakes go to ${url} -> ${origin}${wpath} on the agent's machine`);
 		console.error(connectorInstructions(tokenFile, o["show-token"] ? token : ""));
-		console.error(`\nThen (Worker secrets apply within about 15 to 40 seconds): ${CLI} tunnel status   and   ${CLI} wake test`);
+		console.error(`\nTo undo this, run \`${CLI} tunnel rm\`.`);
+		console.error(`Then (Worker secrets apply within about 15 to 40 seconds; wait about 30 seconds): ${CLI} tunnel status   and   ${CLI} wake test`);
 		if (!process.env.WAKE_WEBHOOK_KEY && !process.env.WAKE_HMAC_SECRET && preset !== "generic")
 			console.error(`note: no WAKE_WEBHOOK_KEY / WAKE_HMAC_SECRET in the environment; keep the ${preset} webhook's own auth too (export it and run \`wake set\`)`);
 	} catch (e) {
-		console.error(`error: ${e.message}\n==> rolling back what was created`);
-		await remove(o, { quiet: true }).catch((r) => console.error(`rollback incomplete: ${r.message}; re-run \`${CLI} tunnel rm\``));
+		console.error("==> rolling back what was created");
+		await remove(o, { quiet: true, secretNames: createdSecrets }).catch((r) => console.error(`rollback incomplete: ${r.message}; re-run \`${CLI} tunnel rm\``));
 		throw e;
 	}
 }
@@ -424,10 +458,23 @@ export async function status(o) {
 	console.log(JSON.stringify(info, null, 2));
 	const w = info.probe.withServiceToken || "";
 	if (/1033/.test(w)) console.error("connector not running: start cloudflared on the agent's machine (tunnel create printed the command)");
-	if (!/^HTTP 40[13]/.test(info.probe.withoutToken)) console.error("WARNING: the bare request was not blocked by Access; check the Access application");
+	const note = bareProbeNote(info.probe.withoutToken);
+	if (note) console.error(note);
 }
 
-export async function remove(o, { quiet = false, allowMissingProject = false } = {}) {
+/** What `tunnel status` prints about the request that carries no service token. A network error is DNS, not a missed Access block. */
+export function bareProbeNote(withoutToken) {
+	const bare = withoutToken || "";
+	if (/^network error:/.test(bare)) return "DNS may still be propagating; retry in 30 s";
+	if (!/^HTTP 40[13]/.test(bare)) return "WARNING: the bare request was not blocked by Access; check the Access application";
+	return "";
+}
+
+export async function remove(o, { quiet = false, allowMissingProject = false, skipSecrets = false, secretNames = undefined } = {}) {
+	if (!TUNNEL_KEYS.some((k) => C.get(k))) {
+		if (!quiet) console.error("nothing to remove");
+		return;
+	}
 	const dir = cfDirForRemove(o, { allowMissingProject });
 	const worker = D.workerName();
 	const label = `a2a-exposed wake ${worker}`;
@@ -439,15 +486,23 @@ export async function remove(o, { quiet = false, allowMissingProject = false } =
 	};
 	const host = C.get("A2A_TUNNEL_HOSTNAME");
 	// 1. Worker secrets first, so no wake is sent to a half-removed hostname. WAKE_WEBHOOK_URL only if it is ours.
-	if (host) {
-		const names = ["WAKE_ACCESS_CLIENT_ID", "WAKE_ACCESS_CLIENT_SECRET", "WAKE_WEBHOOK_KEY", "WAKE_HMAC_SECRET"];
-		let ours = false;
-		try { const p = await owner("GET", "/owner/wake/preview"); ours = p.fingerprints?.url === fingerprint(wakeUrl(host, C.get("A2A_TUNNEL_PATH") || "/")); }
-		catch { /* Worker unreachable: leave the URL */ }
-		if (ours) names.push("WAKE_WEBHOOK_URL");
-		await attempt(`Worker secrets for ${host} (${names.join(", ")})`, null, async () => {
+	// secretNames lists what this run created (rollback). Omitted: the usual tunnel-rm set. skipSecrets: the Worker is already gone.
+	const explicitSecrets = secretNames !== undefined;
+	const names = explicitSecrets ? [...secretNames] : ["WAKE_ACCESS_CLIENT_ID", "WAKE_ACCESS_CLIENT_SECRET", "WAKE_WEBHOOK_KEY", "WAKE_HMAC_SECRET"];
+	if (host && !skipSecrets && names.length) {
+		if (!explicitSecrets) {
+			let ours = false;
+			try { const p = await owner("GET", "/owner/wake/preview"); ours = p.fingerprints?.url === fingerprint(wakeUrl(host, C.get("A2A_TUNNEL_PATH") || "/")); }
+			catch { /* Worker unreachable: leave the URL */ }
+			if (ours && !names.includes("WAKE_WEBHOOK_URL")) names.push("WAKE_WEBHOOK_URL");
+		}
+		try {
 			await putSecrets(dir, worker, Object.fromEntries(names.map((k) => [k, null])));
-		});
+			step(`removed Worker secrets for ${host} (${names.join(", ")})`);
+		} catch (e) {
+			if (workerMissingError(e)) step(`Worker for ${host} is already gone; its secrets went with it`);
+			else failures.push(`Worker secrets for ${host} (${names.join(", ")}): ${e.message}`);
+		}
 	}
 	// 2. DNS before Access, so the hostname never resolves without its Access app
 	await attempt(`DNS record ${host || C.get("A2A_TUNNEL_DNS_ID")}`, "A2A_TUNNEL_DNS_ID", () => cfCall(dir, ["dns", "records", "delete", C.get("A2A_TUNNEL_DNS_ID"), "-z", C.get("A2A_TUNNEL_ZONE_ID"), "--force"], { allowNotFound: true }));

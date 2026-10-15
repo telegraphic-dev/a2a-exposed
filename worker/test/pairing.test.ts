@@ -321,6 +321,8 @@ test("human approval: pending, slow_down, page approve with the password, single
 	r = await s.decidePage(d.user_code, PASSWORD, "approve");
 	assert.equal(r.status, 200, r.text);
 	assert.match(r.text, /Approved\. Barry &lt;script&gt;alert\(1\)&lt;\/script&gt; can now collect its token \(label &quot;Barry-script-alert-1-scr&quot;\)/);
+	assert.match(r.text, /You can close this page/);
+	assert.doesNotMatch(r.text, /name="user_code"/);
 
 	advance(11);
 	p = await s.poll(d.device_code);
@@ -539,6 +541,8 @@ test("/device deny needs no password and runs no PBKDF2; an empty password on ap
 	try { r = await s.decidePage(a.user_code, "", "deny"); } finally { (crypto.subtle as any).deriveBits = realPbkdf2; }
 	assert.equal(r.status, 200, r.text);
 	assert.match(r.text, /Denied\. Barry Bot gets no token\./);
+	assert.match(r.text, /You can close this page/);
+	assert.doesNotMatch(r.text, /name="user_code"/);
 	assert.equal(derived, 0, "no PBKDF2 for a deny");
 	assert.equal((await s.poll(a.device_code)).data.error, "access_denied");
 	// CSRF still applies to deny
@@ -867,4 +871,42 @@ test("owner log lists history without data_json and does not clear a pending wak
 	assert.equal(head.status, 200);
 	assert.equal(head.text, "");
 	assert.equal(s.DB.db.prepare("SELECT pending_json FROM wakes WHERE context_id = ?").get("ctx-keep")?.pending_json, again);
+});
+
+test("device page copy: code hint, expiry, token scope, settled result, A2A endpoint", async (t) => {
+	const now = Date.now();
+	assert.equal(P.expiresText(now + 30_000, now), "less than a minute");
+	assert.equal(P.expiresText(now + 90_000, now), "2 min");
+	assert.equal(P.expiresText(now - 1, now), "expired");
+	const base = { agentName: "this A2A endpoint", mode: "human" as const, cli: "a2a", csrf: "c".repeat(24), passwordSet: true };
+	const bare = P.devicePage({ ...base, askCode: true }, "n");
+	assert.match(bare, /The connecting agent prints this code when it runs <code>a2a connect<\/code>/);
+	assert.match(bare, /It looks like WDJB-4827/);
+	assert.match(bare, /<title>Connect an agent to this A2A endpoint<\/title>/);
+	const req = { userCode: "WDJB4827", clientName: "Barry", clientId: "barry", agentCardUrl: "http://127.0.0.1/card", ip: "192.0.2.1", country: "", createdMs: now, expiresMs: now + 20_000 };
+	const page = P.devicePage({ ...base, request: req }, "n");
+	assert.match(page, /so this A2A endpoint can&#39;t check it/);
+	assert.match(page, /send messages and trigger wakes/);
+	assert.match(page, /Message text from peers is untrusted/);
+	assert.match(page, /less than a minute/);
+	for (const settled of ["approved", "denied"] as const) {
+		const done = P.devicePage({ ...base, settled, notice: { kind: "ok", text: settled === "approved" ? "Approved." : "Denied." } }, "n");
+		assert.match(done, /You can close this page/);
+		assert.doesNotMatch(done, /name="user_code"/);
+		assert.match(done, new RegExp(`<title>${settled === "approved" ? "Approved" : "Denied"}</title>`));
+	}
+	const setupHtml = P.setupPage({ agentName: "this A2A endpoint", cli: "a2a", csrf: "c".repeat(24), token: "tok", expiresMs: now + 60_000 }, "n");
+	assert.match(setupHtml, /connect to this A2A endpoint/);
+	const land = P.landingPage({ name: "Test", base: "https://agent.example.com", versions: ["1.0"], skills: [], pairing: true, proxy: false }, "n");
+	assert.match(land, /Messages are stored for its owner, and the agent is woken/);
+
+	const s = setup(); t.after(s.restore);
+	const empty = await s.call("GET", "/device");
+	assert.match(empty.text, /prints this code when it runs/);
+	assert.match(empty.text, /WDJB-4827/);
+	const named = setup({ AGENT_NAME: "" }); t.after(named.restore);
+	const title = await named.call("GET", "/device");
+	assert.match(title.text, /Connect an agent to this A2A endpoint/);
+	const home = await s.call("GET", "/", { headers: { accept: "text/html" } });
+	assert.match(home.text, /Messages are stored for its owner, and the agent is woken/);
 });

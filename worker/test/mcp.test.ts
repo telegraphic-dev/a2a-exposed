@@ -220,6 +220,7 @@ test("authorization: consent page, CSP allows the redirect origin, password requ
 	await s.owner("PUT", "/owner/pairing/password", await passwordRecord());
 	c = await s.consent(q, "wrong password");
 	assert.equal(c.page.status, 200);
+	assert.match(c.page.text, /use the A2A endpoint of/);
 	assert.match(c.page.text, /Claude/);
 	assert.match(c.page.text, /claude\.ai/, "shows where it returns to");
 	assert.match(c.page.text, /Approve or deny pairing requests/, "lists what it can't do");
@@ -726,6 +727,11 @@ test("Client ID Metadata Documents: unsafe URLs and bad documents are refused (n
 	for (let i = 0; i < 30; i++) await page(`https://client.example.org/none-${i}.json`, "192.0.2.77");
 	const limited = await page("https://client.example.org/none-x.json", "192.0.2.77");
 	assert.match(limited.text, /Too many client metadata lookups/);
+});
+
+test("mcpLimitMessage names the A2A endpoint and the revoke command", () => {
+	assert.equal(M.mcpLimitMessage(20, "npx -y a2a-exposed@latest"),
+		"This A2A endpoint already has 20 MCP connectors. Revoke one first: npx -y a2a-exposed@latest token list, then token revoke <label>.");
 });
 
 test("isPublicIp: only global unicast addresses pass", () => {

@@ -1,6 +1,6 @@
 # Getting started
 
-You need Node 22.18+ (`node -v`). `init` and `deploy` stop on older Node, because Cloudflare's `cf` CLI needs it. On Node 20, npx and `npx -y skills add` only warn with `EBADENGINE` and still run, so a successful install does not mean Node is new enough.
+You need Node 22.18+ (`node -v`). `init` and `deploy` stop on older Node, because Cloudflare's `cf` CLI needs it.
 
 Get Node 22 with [mise](https://github.com/telegraphic-dev/mise-skill) (`mise exec node@22 -- ...` or `mise use node@22`), nvm, fnm, or the [official installer](https://nodejs.org/en/download). The setup skill offers the `mise` skill and the Cloudflare skill only if you agree. Neither is required:
 
@@ -45,10 +45,10 @@ Each client is listed once. `Supported` means tested end to end. `Untested` mark
 
 | Client | Status | How to load |
 | --- | --- | --- |
-| Claude Code | Supported | `npx -y skills add telegraphic-dev/a2a-exposed --agent claude-code`. In Claude Code: `/plugin marketplace add telegraphic-dev/a2a-exposed`, then `/plugin install a2a-exposed@a2a-exposed` |
+| Claude Code | Untested | `npx -y skills add telegraphic-dev/a2a-exposed --agent claude-code`. In Claude Code: `/plugin marketplace add telegraphic-dev/a2a-exposed`, then `/plugin install a2a-exposed@a2a-exposed` |
 | Grok Bot | Supported | Save both `SKILL.md` files into the bot's skill library, or name that path in the routine prompt |
-| OpenClaw | Supported. Cron delivery: Untested | `npx -y skills add telegraphic-dev/a2a-exposed --agent openclaw`, or `openclaw skills install skills-sh:telegraphic-dev/a2a-exposed/a2a-exposed` and the same for `a2a-exposed-setup`. `metadata.openclaw.requires.bins` lists `node`, so OpenClaw hides the skills where Node is missing |
-| Hermes | Supported. The public façade is checked against a Hermes agent. Cron delivery: Untested | `hermes skills install telegraphic-dev/a2a-exposed/skills/a2a-exposed` and the same path for `a2a-exposed-setup`, or `hermes skills tap add telegraphic-dev/a2a-exposed` |
+| OpenClaw | Untested | `npx -y skills add telegraphic-dev/a2a-exposed --agent openclaw`, or `openclaw skills install skills-sh:telegraphic-dev/a2a-exposed/a2a-exposed` and the same for `a2a-exposed-setup`. `metadata.openclaw.requires.bins` lists `node`, so OpenClaw hides the skills where Node is missing |
+| Hermes | Untested | `hermes skills install telegraphic-dev/a2a-exposed/skills/a2a-exposed` and the same path for `a2a-exposed-setup`, or `hermes skills tap add telegraphic-dev/a2a-exposed` |
 | Codex / ChatGPT | Untested | Root `plugin.json`. `extensions.com.openai.onboardingSkill` points at the setup skill ([Codex plugin packaging](https://developers.openai.com/plugins/build/plugins)) |
 | Cursor | Untested | `.cursor-plugin/plugin.json` sets `logo` (`assets/logo.svg`) and `skills` (`./skills/`) |
 | Grok Build | Untested | `.grok-plugin/plugin.json`. That marketplace publishes no schema. In the skills CLI, `grok` is Grok Build |
