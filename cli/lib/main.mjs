@@ -14,7 +14,7 @@ import * as un from "./uninstall.mjs";
 
 const VERSION = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 
-const HELP = `a2a-exposed ${VERSION} - public A2A endpoint for any AI agent (Cloudflare Worker inbox + wake webhook)
+const HELP = `a2a-exposed ${VERSION} - public A2A endpoint for any AI agent (Cloudflare Worker + wake webhook)
 
 Usage: npx -y a2a-exposed@latest <command> [options]
        (optional speed-up: npm i -g a2a-exposed, then a2a-exposed <command>)
@@ -23,7 +23,7 @@ Usage: npx -y a2a-exposed@latest <command> [options]
 
 Setup (needs Node 22.18+, e.g. \`mise exec node@22 -- npx -y a2a-exposed@latest ...\`, and a Cloudflare login:
 npx cf auth login --no-browser; on a VPS where it fails with HTTP 403 before showing a code, export
-CLOUDFLARE_API_TOKEN instead: setup skill, Troubleshooting. a2a.exposed hosts the inbox and is open to everyone
+CLOUDFLARE_API_TOKEN instead: setup skill, Troubleshooting. a2a.exposed hosts the A2A endpoint and is open to everyone
 (https://a2a.exposed/pricing). When to use it, and the sentence to say:
 https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#hosted-inbox)
   init [--hostname <host> | --workers-dev [--workers-dev-subdomain NAME]]
@@ -55,14 +55,14 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
                                                When GET /owner/mcp reports enabled and the agent card is reachable,
                                                \`status\` prints \`claude mcp add --transport http a2a-exposed <url>/mcp\`
                                 --rotate-owner-token  on init, replace the owner token; other settings come from config.env.
-                                               Then update A2A_OWNER_TOKEN wherever this inbox is called, and run \`peers sync\`
+                                               Then update A2A_OWNER_TOKEN wherever this A2A endpoint is called, and run \`peers sync\`
                                 --upstream URL  proxy / expose mode: a public façade for an agent that already
                                                speaks A2A (JSON-RPC) on a private network. URL is its endpoint on
                                                a Cloudflare Tunnel hostname behind Access (never a Tailnet/LAN
                                                address). The card is the upstream's, rewritten to this public
                                                URL; paired peers' calls are forwarded with env UPSTREAM_TOKEN and
                                                UPSTREAM_ACCESS_CLIENT_ID / _SECRET (never argv). --upstream none
-                                               switches back to the inbox
+                                               switches back to the A2A endpoint
                                 --upstream-card-url  the upstream's card (default <upstream origin>/.well-known/
                                                agent-card.json); must be on the --upstream origin (it is
                                                fetched with the upstream credentials)
@@ -94,32 +94,40 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
   wake unset                    remove wake secrets (fall back to polling)
 
 Tunnel (local-only webhooks: OpenClaw gateway, Hermes, ...; needs Zero Trust/Access and a Cloudflare zone
-anywhere on the account: the inbox itself can be on workers.dev or a custom hostname)
+anywhere on the account: the A2A endpoint itself can be on workers.dev or a custom hostname)
   tunnel create [--tunnel-zone Z | --tunnel-hostname H] [--tunnel-origin URL] [--tunnel-path /p] [--show-token]
                 [--zero-trust-org TEAM]
                                 named Cloudflare Tunnel + proxied DNS + Access app that admits ONE service token;
                                 the Worker sends that token (CF-Access-Client-Id/Secret) on every wake.
-                                Wake hostname: wake-<random>.<zone>, on the inbox hostname's zone, else the account's
-                                only zone; with several zones pass --tunnel-zone. Safe to re-run (no duplicates).
+                                Wake hostname: wake-<word>-<word>-<4 hex>.<zone>, on the A2A endpoint hostname's zone, else the
+                                account's only zone; with several zones pass --tunnel-zone. A finished tunnel
+                                creates nothing when you run it again. A partial tunnel stops and asks for tunnel rm.
                                 The tunnel, the Access app, and the service token are named "a2a-exposed wake <worker>".
-                                The DNS host is wake-<words>-<hex>.<zone> unless --tunnel-hostname is set.
+                                The DNS host is wake-<word>-<word>-<4 hex>.<zone> unless --tunnel-hostname is set.
                                 Export WAKE_WEBHOOK_KEY (hermes: WAKE_HMAC_SECRET) so tunnel create uploads it.
                                 The connector machine needs cloudflared installed
                                 (https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/).
                                 Defaults: openclaw-* -> http://127.0.0.1:18789 /hooks/wake|agent, hermes -> :8644
                                 (pass --tunnel-path /webhooks/<name>). Token -> <config dir>/tunnel-token (chmod 600).
-                                Worker secrets show up in about 15 to 40 seconds
+                                Worker secrets show up in about 15 to 40 seconds. Wait about 30 seconds and check again
   tunnel status                 tunnel/Access/Worker state + probes (bare request blocked? connector up?)
+                                A network error says DNS may still be propagating; retry in 30 seconds
   tunnel rm                     delete the DNS record, the tunnel, the Access app, and the service token
                                 (each printed by name), plus Worker secrets WAKE_ACCESS_CLIENT_ID,
                                 WAKE_ACCESS_CLIENT_SECRET, WAKE_WEBHOOK_KEY, and WAKE_HMAC_SECRET. The wake URL
-                                goes too when it is this tunnel's. Prints one line per object removed
-  uninstall [--yes]             remove the wake tunnel (when the config has one), the Worker, and the D1 database.
-                                One line per step, including when that object is already gone. Asks first;
-                                off a terminal, pass --yes. The config directory stays (owner token and peer
-                                tokens): remove that directory to delete them. cf runs from the Worker project
-                                when it has node_modules, otherwise from a directory with .cloudflare/cache
+                                goes too when it is this tunnel's. Prints one line per object removed.
+                                With nothing saved, prints "nothing to remove"
   init ... --tunnel             init, then tunnel create (also with --workers-dev)
+
+Remove
+  uninstall [--yes] [--dry-run] [--dir DIR | --worker-dir DIR]
+                                remove the Worker, the wake tunnel (when the config has one), and the D1 database.
+                                Prints the plan first (Worker, D1, account, and the wake hostname when a tunnel
+                                is saved). Removal is permanent and takes the messages and paired peers with it.
+                                --dry-run prints the plan and changes nothing. Asks first; off a terminal, pass --yes.
+                                An empty config exits 1. The config directory stays: the owner token and WAKE_* values
+                                stay, and a later init reuses the owner token. Remove that directory to delete them.
+                                --dir and --worker-dir are the Worker project directory (default <config dir>/worker)
 
 Status
   status [--json]               deployment, base URL, agent card check (fetched by the CLI: no curl needed), wake
@@ -131,8 +139,11 @@ Status
                                 \`claude mcp add --transport http a2a-exposed <base URL>/mcp\`.
                                 A failed probe, an unreachable card, or a Worker that reports MCP off leaves that line out.
                                 Read-only; run it after an interruption and continue from "next step". Exit 1 = broken.
-                                Right after tunnel create, for about 15 to 40 seconds, while the connector
-                                reports 0 connections, status prints a wait-about-30-seconds line and exits 0
+                                For about a minute after tunnel create, while the connector reports 0 connections,
+                                status prints "waiting for the connector to connect" and exits 0. After that,
+                                0 connections is broken. A tunnel status of inactive is "never connected".
+                                Worker secrets from tunnel create, wake set, and wake unset show up in about
+                                15 to 40 seconds. Wait about 30 seconds and check again
   upstream verify [--json]      proxy mode: check the façade's whole path, layer by layer: façade peer auth
                                 (unauthenticated call -> 401), then the Worker calls the upstream with its stored
                                 secrets (never sent to the CLI) using a JSON-RPC method that doesn't exist (no task
@@ -150,14 +161,14 @@ Inbox (owner side)
         [--artifact] [--artifact-name N] [--force]
   history <contextId> [-n 50] [--json]     conversation log
   contexts                                 recent conversations
-  export [--sql]                       JSON dump of this inbox on stdout (peer-token hashes and
+  export [--sql]                       JSON dump of this A2A endpoint on stdout (peer-token hashes and
                                        encrypted peer tokens are in the dump; the owner token stays
                                        a Worker secret). --sql prints the same tables as SQL
 
 Pairing (OAuth 2.0 device flow, RFC 8628: agents connect without pasting tokens into chat)
   connect <base-or-card-url> [--alias A] [--name N] [--card-url URL] [--replace] [--no-wait] [--json]
-                          ask another inbox for a token: prints a code + link for your human (the code lasts
-                          10 minutes; they confirm the code with that inbox's owner), waits for approval, stores
+                          ask another A2A endpoint for a token: prints a code + link for your human (the code lasts
+                          10 minutes; they confirm the code with that A2A endpoint's owner), waits for approval, stores
                           the token as outbound peer A
                           (never printed). --no-wait: print the code and exit; run the same command again to
                           check (same code). An expired code exits 1 (nothing new is requested silently).
@@ -169,7 +180,7 @@ Pairing (OAuth 2.0 device flow, RFC 8628: agents connect without pasting tokens 
                           The name sent is the card named in the request (--card-url, otherwise this
                           deployment's). --name overrides it. If that card can't be read, the name is the
                           configured agent name, the worker name, or the public host's first label. The
-                          other inbox labels the token from that name and adds -2, -3, … when it is taken
+                          other A2A endpoint labels the token from that name and adds -2, -3, … when it is taken
   pair set-password --web [--ttl MIN] [--json]
                           one-time link (default 15 min, --ttl 1 to 60, single use) where your human sets or
                           changes the approval password on a web page. Send it to them privately; never open
@@ -207,7 +218,7 @@ Outbound (agents you call)
   outbound <taskId>       stored state of a task you sent (incl. pushed updates)
 
 Owner
-  One inbox. The owner token from init authenticates inbox, reply, export, and the other owner
+  One A2A endpoint. The owner token from init authenticates inbox, reply, export, and the other owner
   commands. GET / in a browser shows the agent card. /device approves or denies a pairing request.
   pair set-password sets the approval password. pair set-oidc adds OpenID Connect on /device and
   the MCP consent page when the issuer, client id, client secret, and allowlist are all set.
@@ -219,24 +230,60 @@ Feedback
             [--connection webhook|proxy|polling] [--yes]
                                 report a bug or an idea. A bug needs --steps.
                                 The report is a public GitHub issue. The warning names
-                                the repository before it sends. A hosted inbox names
+                                the repository before it sends. A hosted A2A endpoint names
                                 that repository. Otherwise the link opens
                                 the form on telegraphic-dev/a2a-exposed. Do not include
                                 confidential information: secrets, tokens, owner or pairing
                                 tokens, private URLs or hostnames, message contents, or
                                 personal data. Prints that warning and asks before sending,
                                 unless --yes is set. Off a terminal, --yes is required.
-                                Posts when this inbox names a feedback URL.
+                                Posts when this A2A endpoint names a feedback URL.
                                 Otherwise prints a link to the bug
                                 report form and does not open a browser. The CLI adds its
-                                version, the inbox Worker version when the inbox reports it,
+                                version, the A2A endpoint Worker version when the A2A endpoint reports it,
                                 the OS, the Node version, the connection (webhook, proxy, or
                                 polling), and hosted or self-hosted. --connection overrides
                                 that detection. Remove tokens from the message and from --logs.
 
 Presets: grok-bot | claude-code | openclaw-wake | openclaw-agent | hermes | generic
+         Which clients are tested end to end is in the client table:
+         https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#clients
 Config: ${C.CONFIG_FILE}  (override dir with --config-dir DIR or A2A_CONFIG_DIR; env vars override file values)
 Update notice: at most a daily background check of the npm registry; off with A2A_NO_UPDATE_CHECK=1 (or DO_NOT_TRACK=1)`;
+
+const HELP_TUNNEL = `tunnel create|status|rm
+
+  tunnel create [--tunnel-zone Z | --tunnel-hostname H] [--tunnel-origin URL] [--tunnel-path /p]
+                [--show-token] [--zero-trust-org TEAM] [--dir DIR | --worker-dir DIR]
+                                Named Cloudflare Tunnel, proxied DNS, and an Access app that admits one service token.
+                                The tunnel, the Access app, and the service token are named "a2a-exposed wake <worker>".
+                                The DNS host is wake-<word>-<word>-<4 hex>.<zone> unless --tunnel-hostname is set.
+                                A finished tunnel creates nothing when you run it again. A partial tunnel stops and
+                                asks for tunnel rm. Prints the Access application name and ids, then how to undo it
+                                with tunnel rm. Worker secrets show up in about 15 to 40 seconds. Wait about 30 seconds.
+  tunnel status                 Tunnel, Access, and Worker state, plus two probes.
+                                A network error says DNS may still be propagating; retry in 30 seconds.
+                                Warns about Access only when the bare request returns an HTTP status other than 401 or 403.
+  tunnel rm                     Delete the DNS record, the tunnel, the Access app, and the service token, plus the
+                                Worker secrets this tunnel uploaded. A missing Worker (Cloudflare 10007) is already gone.
+                                With nothing saved, prints "nothing to remove".
+
+--dir and --worker-dir are the Worker project directory (default <config dir>/worker).`;
+
+const HELP_UNINSTALL = `uninstall [--yes] [--dry-run] [--dir DIR | --worker-dir DIR]
+
+Remove the Worker, the wake tunnel when the config has one, and the D1 database.
+Prints the plan first: Worker name, D1 name and id, account, and the wake hostname
+when a tunnel is saved. Removal is permanent and takes the messages and paired peers with it.
+
+  --yes        skip the prompt (required off a terminal)
+  --dry-run    print the plan and change nothing
+  --dir        Worker project directory (same as --worker-dir)
+  --worker-dir Worker project directory (default <config dir>/worker)
+
+An empty config exits 1: nothing is deployed from that directory. Set A2A_CONFIG_DIR for another deployment.
+The config directory stays. The owner token and WAKE_* values stay in config.env. A later init reuses the owner token.
+Takes no other arguments.`;
 
 const S = { type: "string" }, B = { type: "boolean" };
 const tunnelOpts = { "tunnel-hostname": S, "tunnel-zone": S, "tunnel-origin": S, "tunnel-path": S, "show-token": B, "zero-trust-org": S, dir: S, "worker-dir": S };
@@ -261,7 +308,7 @@ const SPEC = {
 	login: { "control-url": S, json: B },
 	pair: { json: B, web: B, ttl: S, issuer: S, "client-id": S, subjects: S, methods: S, "secret-stdin": B },
 	feedback: { kind: S, contact: S, steps: S, expected: S, actual: S, logs: S, agent: S, environment: S, connection: S, yes: B },
-	uninstall: { yes: B, dir: S, "worker-dir": S },
+	uninstall: { yes: B, "dry-run": B, dir: S, "worker-dir": S },
 };
 const STATES = ["completed", "input-required", "failed", "rejected", "working"];
 
@@ -274,18 +321,40 @@ export async function main(argv) {
 	const [name, ...rest] = argv;
 	if (!name || name === "help" || name === "--help" || name === "-h") return console.log(HELP);
 	if (name === "--version" || name === "-v") return console.log(VERSION);
-	if (rest.includes("--help") || rest.includes("-h")) return console.log(HELP);
+	if (rest.includes("--help") || rest.includes("-h")) {
+		if (name === "uninstall") return console.log(HELP_UNINSTALL);
+		if (name === "tunnel") return console.log(HELP_TUNNEL);
+		return console.log(HELP);
+	}
 	if (name === "pair" && rest[0] === "set-oidc" && rest.some((a) => /^--(secret|client-secret)(=|$)/.test(a)))
 		throw new CliError("export APPROVAL_OIDC_CLIENT_SECRET or pass --secret-stdin. --secret-stdin checks the line and discards it. Deploy uploads only the environment variable");
 	if (name === "pair" && rest[0] === "set-password") {
 		// only --web [--ttl M] [--json]: the password itself never comes from argv, stdin or the environment
 		const extra = rest.slice(1);
+		const ttlAt = extra.findIndex((a) => a === "--ttl" || a.startsWith("--ttl="));
+		if (ttlAt >= 0) {
+			const raw = extra[ttlAt].startsWith("--ttl=") ? extra[ttlAt].slice("--ttl=".length) : extra[ttlAt + 1];
+			if (raw === undefined || String(raw).startsWith("--") || !/^\d+$/.test(String(raw)))
+				throw new CliError("--ttl is the link lifetime in minutes, 1 to 60 (default 15)");
+		}
 		const ok = extra.includes("--web") && extra.every((a, i) => ["--web", "--json", "--ttl"].includes(a) || /^--ttl=\d+$/.test(a) || (extra[i - 1] === "--ttl" && /^\d+$/.test(a)));
 		if (extra.length && !ok)
 			throw new CliError("`pair set-password` takes no password argument: it reads the password from the terminal, without echo (never from argv, stdin or the environment). For a one-time web link instead: `pair set-password --web [--ttl MIN] [--json]`");
 	}
 	upd.check(VERSION);
-	const { values: o, positionals: p } = parseArgs({ args: rest, options: SPEC[name] || {}, allowPositionals: true, strict: true });
+	let parsed;
+	try {
+		parsed = parseArgs({ args: rest, options: SPEC[name] || {}, allowPositionals: true, strict: true });
+	} catch (e) {
+		if (e && e.code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") {
+			const flag = (String(e.message).match(/'([^']+)'/) || [])[1] || "that flag";
+			if (flag === "-y") throw new CliError("unknown flag -y. To skip a prompt, pass --yes.");
+			throw new CliError(`unknown flag ${flag}. Run \`${CLI} ${name} --help\` for this command's flags.`);
+		}
+		if (e && String(e.code || "").startsWith("ERR_PARSE_ARGS")) throw new CliError(String(e.message));
+		throw e;
+	}
+	const { values: o, positionals: p } = parsed;
 	if (o["worker-dir"] !== undefined) o.dir = o["worker-dir"];
 	switch (name) {
 		case "init":
@@ -293,11 +362,17 @@ export async function main(argv) {
 			await dep.init(o);
 			if (!o.tunnel) return;
 			try { return await tun.create(o); } catch (e) {
-				if (e instanceof CliError) e.message += `\n(the inbox is deployed and works; fix the above, then run \`${CLI} tunnel create\`, or check \`${CLI} status\`)`;
+				if (e instanceof CliError) e.message += `\n(the A2A endpoint is deployed and works; fix the above, then run \`${CLI} tunnel create\`, or check \`${CLI} status\`)`;
 				throw e;
 			}
-		case "tunnel": return tun.tunnel(need(p[0], "tunnel create|status|rm"), o);
-		case "uninstall": return un.uninstall(o);
+		case "tunnel": {
+			const sub = need(p[0], "tunnel create|status|rm");
+			if (p.length > 1) throw new CliError(`tunnel ${sub} takes no arguments (${p.slice(1).join(" ")}). Run \`${CLI} tunnel --help\`.`);
+			return tun.tunnel(sub, o);
+		}
+		case "uninstall":
+			if (p.length) throw new CliError(`uninstall takes no arguments (${p.join(" ")}). Run \`${CLI} uninstall --help\`.`);
+			return un.uninstall(o);
 		case "deploy": return dep.deploy(o);
 		case "status": return st.status(o);
 		case "upstream": {
@@ -314,7 +389,8 @@ export async function main(argv) {
 		case "config": {
 			const f = C.fileConfig();
 			console.log(`# ${C.CONFIG_FILE}`);
-			for (const [k, v] of Object.entries(f)) console.log(`${k}=${/TOKEN|KEY|SECRET/.test(k) ? "(set)" : v}`);
+			const showValue = (k) => k === "A2A_TUNNEL_TOKEN_FILE" || k === "A2A_TUNNEL_SECRETS_AT";
+			for (const [k, v] of Object.entries(f)) console.log(`${k}=${/TOKEN|KEY|SECRET/.test(k) && !showValue(k) ? "(set)" : v}`);
 			return;
 		}
 		case "inbox": return cmd.inbox(o);

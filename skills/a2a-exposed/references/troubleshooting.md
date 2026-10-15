@@ -1,6 +1,6 @@
-# Troubleshooting the inbox
+# Troubleshooting the A2A endpoint
 
-One present-tense action per symptom. Cloudflare login, error 1042, and the hosted inbox are in the setup skill: [setup troubleshooting](../../a2a-exposed-setup/references/troubleshooting.md).
+One present-tense action per symptom. Cloudflare login, error 1042, and the hosted A2A endpoint are in the setup skill: [setup troubleshooting](../../a2a-exposed-setup/references/troubleshooting.md).
 
 | Symptom | Action |
 | --- | --- |

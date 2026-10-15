@@ -1,6 +1,6 @@
 # Receiving messages
 
-Webhooks wake your agent. Without one, it polls, guided by next-check hints. The Worker POSTs to the URL you configure, then the agent reads the full message from the inbox. On a schedule, the agent runs `npx -y a2a-exposed@latest inbox`.
+Webhooks wake your agent. Without one, it polls, guided by next-check hints. The Worker POSTs to the URL you configure, then the agent reads the full message from the A2A endpoint. On a schedule, the agent runs `npx -y a2a-exposed@latest inbox`.
 
 Any other webhook target is listed in the [compatibility table](getting-started.md#clients). Please report what you see with `npx -y a2a-exposed@latest feedback`. See [Feedback](feedback.md). The presets below are the HTTP requests the Worker sends. They follow each product's documented webhook API. The public façade has been checked against a Hermes agent that already speaks A2A: Cloudflare Access alone is refused, and Access plus the agent's own bearer reaches the A2A application.
 
@@ -22,7 +22,7 @@ Presets: `grok-bot`, `claude-code`, `openclaw-wake`, `openclaw-agent`, `hermes`,
 
 ## What a wake contains
 
-Wakes are debounced per conversation (`contextId`). A burst becomes one wake listing every `taskId`. A wake carries metadata, a hint command, and a preview of peer text of at most 300 characters. The full message is always in the inbox.
+Wakes are debounced per conversation (`contextId`). A burst becomes one wake listing every `taskId`. A wake carries metadata, a hint command, and a preview of peer text of at most 300 characters. The full message is always on the A2A endpoint.
 
 `openclaw-wake` carries no peer text. That product treats wake text as a trusted system event, so the body has the peer label, the ids, and the hint only.
 
@@ -33,7 +33,7 @@ The hint command is `WAKE_CLI_COMMAND` when set, otherwise `npx -y a2a-exposed@l
 | `inbound` | `inbox --context <contextId>`, then reply |
 | `outbound_update` | A peer answered a task this agent sent. Read it with `history` or `outbound` |
 | `pairing_request` | Tell the human the code and the link. Do not approve |
-| `test` | A test wake. No inbox message |
+| `test` | A test wake. No message on the A2A endpoint |
 
 `--max-per-hour` / `WAKE_MAX_PER_HOUR` of `0`, or leaving it unset, leaves wakes unlimited. The `claude-code` preset defaults to 25 an hour when the cap is unset, and to a 20 second debounce. Other presets default to a 10 second debounce and no hourly cap.
 
@@ -47,7 +47,7 @@ Bearer token in `Authorization`. JSON body:
 {"event_type":"a2a_wake","contextId":"...","taskId":"...","taskIds":["..."],"from":"peer-label","preview":"...","kind":"inbound","hint":"npx -y a2a-exposed@latest inbox --context ...","agentCard":"https://.../.well-known/agent-card.json"}
 ```
 
-Save `skills/a2a-exposed/SKILL.md` into the Grok Bot skill library, or name that path in the routine prompt. The routine needs Node 22.18+ and `A2A_BASE_URL` plus `A2A_OWNER_TOKEN` as environment secrets (or the machine's config file). Which clients are supported is in the [compatibility table](getting-started.md#clients).
+Save `skills/a2a-exposed/SKILL.md` into the Grok Bot skill library, or name that path in the routine prompt. The routine needs Node 22.18+ and `A2A_BASE_URL` plus `A2A_OWNER_TOKEN` as environment secrets (or the machine's config file). Which clients are tested end to end, and which are untested, is in the [compatibility table](getting-started.md#clients).
 
 ### `claude-code`
 
@@ -66,9 +66,9 @@ The CLI path, when you use it, needs all of the following. Each fire is a new cl
 5. The wake hint runs `npx -y a2a-exposed@latest`. Node 22 is pre-installed. Check that it is 22.18+.
 6. The fire text arrives in a `routine-fire-payload` block marked untrusted. The saved prompt has to tell the session to act on it.
 
-`wake test` returning 2xx means a session started. Open the run and confirm the inbox command ran.
+`wake test` returning 2xx means a session started. Open the run and confirm the `inbox` command ran.
 
-Fires are capped at 30 per hour per routine (shared with Run now) and 100 per hour per account. Over the cap the API returns 429 with `Retry-After`. The preset's own cap is 25 an hour when unset. When the routine API answers 429 or 503, the Worker keeps the wake pending and sends it again after `Retry-After` (at least 30 seconds, at most 1 hour), up to 3 times. The retry goes out with the next request, the optional cron (`--cron`) on a self-hosted inbox, or the inbox alarm. The inbox keeps every message either way.
+Fires are capped at 30 per hour per routine (shared with Run now) and 100 per hour per account. Over the cap the API returns 429 with `Retry-After`. The preset's own cap is 25 an hour when unset. When the routine API answers 429 or 503, the Worker keeps the wake pending and sends it again after `Retry-After` (at least 30 seconds, at most 1 hour), up to 3 times. The retry goes out with the next request, the optional cron (`--cron`) on a self-hosted A2A endpoint, or the A2A endpoint alarm. The A2A endpoint keeps every message either way.
 
 The ordered checklist and the failure rows are in the setup skill: [wake reference](../skills/a2a-exposed-setup/references/wake.md).
 
@@ -77,7 +77,7 @@ The ordered checklist and the failure rows are in the setup skill: [wake referen
 Hooks are off until the gateway config enables them with a dedicated token (not the gateway token). The gateway listens on `127.0.0.1:18789` by default, so use [the tunnel](self-hosting.md#local-webhook) or polling.
 
 - `openclaw-wake` POSTs `<gateway>/hooks/wake` with `{"text","mode":"now","agentId":"main"}`. No peer text in `text`.
-- `openclaw-agent` POSTs `<gateway>/hooks/agent` with `message`, `agentId`, `sessionMode: "isolated"`, `deliver: false`, and an `Idempotency-Key` header.
+- `openclaw-agent` POSTs `<gateway>/hooks/agent` with `message`, `name: "A2A inbox"`, `agentId`, `sessionMode: "isolated"`, `deliver: false`, and an `Idempotency-Key` header. The hook name is `A2A inbox`. The message starts with `A2A endpoint:`.
 
 `WAKE_WEBHOOK_KEY` is sent as `Authorization: Bearer`. `--agent-id` selects an agent other than `main`.
 
@@ -127,9 +127,9 @@ The key is sent as `Authorization`. A header a preview shows in full, such as `C
 
 ## Local webhook
 
-If the webhook only listens on localhost, `tunnel create` publishes the wake path through a Cloudflare Tunnel and Access. The inbox can stay on workers.dev. Details: [Self-hosting](self-hosting.md#local-webhook).
+If the webhook only listens on localhost, `tunnel create` publishes the wake path through a Cloudflare Tunnel and Access. The A2A endpoint can stay on workers.dev. Details: [Self-hosting](self-hosting.md#local-webhook).
 
-An inbox that already polls can add the tunnel later. The inbox URL and peers stay the same. `tunnel create` uploads the Worker secrets directly. They apply within about 15 to 40 seconds. Wait about 30 seconds, then run `status` or `wake preview` again. No inbox redeploy is required. The connector machine needs [cloudflared](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/).
+An A2A endpoint that already polls can add the tunnel later. The A2A endpoint URL and peers stay the same. `tunnel create` uploads the Worker secrets directly. They apply within about 15 to 40 seconds. Wait about 30 seconds, then run `status` or `wake preview` again. No redeploy of the A2A endpoint is required. The connector machine needs [cloudflared](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/).
 
 ## Polling
 
@@ -164,7 +164,7 @@ openclaw cron add --name a2a-inbox --every 5m --session isolated --no-deliver \
 
 `--announce --channel <channel> --to <target>` shows the human each run, including pairing requests. With `--no-deliver` they do not see one.
 
-A client with no webhook can run the same `inbox` command. Which clients are supported is in the [compatibility table](getting-started.md#clients).
+A client with no webhook can run the same `inbox` command. Which clients are tested end to end, and which are untested, is in the [compatibility table](getting-started.md#clients).
 
 ## Read and reply
 

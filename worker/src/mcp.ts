@@ -106,6 +106,11 @@ export const ACCESS_PREFIX = "a2amcp_";
 export const REFRESH_PREFIX = "a2amcpr_";
 export const LIMITS = { registrationsPerIpPerHour: 10, maxClients: 100, maxGrants: 20 };
 
+/** Shown when another MCP connector would pass the grant cap. */
+export function mcpLimitMessage(max: number, cli: string): string {
+	return `This A2A endpoint already has ${max} MCP connectors. Revoke one first: ${cli} token list, then token revoke <label>.`;
+}
+
 /** MCP is on unless MCP=off, and only for an inbox (a façade has no inbox to expose). */
 export function mcpEnabled(v: string | undefined, proxy: boolean): boolean {
 	return !proxy && String(v || "").trim().toLowerCase() !== "off";
@@ -184,9 +189,9 @@ export function consentBody(m: ConsentModel): string {
 	const loop = isLoopbackRedirect(m.redirectUri)
 		? `<p class="n error">This client returns to a program on the computer you're using (${esc(host)}). Approve only if you just started this connection yourself, for example from Claude Code: any local program could claim to be it.</p>` : "";
 	const hidden = Object.entries(m.params).map(([k, v]) => `<input type="hidden" name="${esc(k)}" value="${esc(v)}">`).join("");
-	const can = ["Read your inbox: open tasks, task details, conversation history, pending pairing requests (read-only)",
-		"Reply to tasks and mark them working", "Send messages to peers you synced to this inbox (peers sync) and check their tasks", "List your peers",
-		"Send feedback about this inbox to its developers, including what you ran and where"];
+	const can = ["Read your A2A endpoint: open tasks, task details, conversation history, pending pairing requests (read-only)",
+		"Reply to tasks and mark them working", "Send messages to peers you synced to this A2A endpoint (peers sync) and check their tasks", "List your peers",
+		"Send feedback about this A2A endpoint to its developers, including what you ran and where"];
 	const cannot = ["Issue, rotate or revoke tokens", "Approve or deny pairing requests", "Change wake or deployment settings"];
 	const idRow = m.clientIdHost ? `<tr><th>Client identity published at</th><td>${esc(m.clientIdHost)}</td></tr>` : "";
 	const table = `<table><tr><th>Client (as it calls itself)</th><td>${esc(m.clientName || "(no name given)")}</td></tr>${idRow}<tr><th>Returns to</th><td>${esc(host)}</td></tr></table>`;
@@ -202,7 +207,7 @@ export function consentBody(m: ConsentModel): string {
 		: `<form method="post" action="/oauth/authorize"><input type="hidden" name="csrf" value="${esc(m.csrf)}">${hidden}<div class="b"><button name="decision" value="deny" type="submit" class="d">Deny</button></div></form>`;
 	const oidcForm = m.oidc ? `<form method="post" action="/oauth/authorize"><input type="hidden" name="csrf" value="${esc(m.csrf)}">${hidden}
 <div class="b"><button name="decision" value="oidc" type="submit">Continue with ${esc(m.oidc.label)}</button></div></form>` : "";
-	return `${notice}<p>An MCP client asks to use the inbox of <b>${esc(m.agentName)}</b> as a connector.</p>${table}${loop}${scope}
+	return `${notice}<p>An MCP client asks to use the A2A endpoint of <b>${esc(m.agentName)}</b> as a connector.</p>${table}${loop}${scope}
 <p class="w">Approve only if you are adding this connector right now. The name above is claimed by the client. Revoke access any time: <code>${esc(m.cli)} token list</code>, then <code>${esc(m.cli)} token revoke &lt;label&gt;</code>.</p>${form}${oidcForm}`;
 }
 
@@ -259,11 +264,11 @@ const ro = { readOnlyHint: true, destructiveHint: false, openWorldHint: false };
 
 export const TOOLS: { name: string; title: string; description: string; inputSchema: Schema; annotations: Schema }[] = [
 	{ name: "inbox", title: "Inbox", annotations: ro,
-		description: `Open tasks other agents sent to this inbox (state submitted or working), oldest first, plus pending pairing requests. Handle each task, then answer it with reply. ${RULES}`,
+		description: `Open tasks other agents sent to this A2A endpoint (state submitted or working), oldest first, plus pending pairing requests. Handle each task, then answer it with reply. ${RULES}`,
 		inputSchema: { type: "object", properties: { contextId: str("Only this conversation"), all: { type: "boolean", description: "Include finished tasks (up to 200)" } }, additionalProperties: false } },
 	{ name: "show_task", title: "Show task", annotations: ro,
 		description: `One inbound task with its full message history and artifacts. ${RULES}`,
-		inputSchema: { type: "object", properties: { taskId: str("Task id from inbox") }, required: ["taskId"], additionalProperties: false } },
+		inputSchema: { type: "object", properties: { taskId: str("Task id from the A2A endpoint") }, required: ["taskId"], additionalProperties: false } },
 	{ name: "history", title: "Conversation history", annotations: ro,
 		description: `The log of one conversation (both directions), oldest first. ${RULES}`,
 		inputSchema: { type: "object", properties: { contextId: str("Conversation (context) id"), n: { type: "integer", minimum: 1, maximum: 1000, description: "Entries (default 50)" } }, required: ["contextId"], additionalProperties: false } },
@@ -275,16 +280,16 @@ export const TOOLS: { name: string; title: string; description: string; inputSch
 		inputSchema: { type: "object", properties: { taskId: str("Task id"), text: str("Reply text"),
 			state: str("New task state", { enum: ["completed", "input-required", "working", "failed", "rejected"] }) }, required: ["taskId", "text"], additionalProperties: false } },
 	{ name: "send", title: "Send to peer", annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
-		description: `Send a message to a peer agent (alias from list_peers; only peers synced to this inbox with \`peers sync\`). Pass contextId to continue a conversation, taskId to answer a peer's input-required task. Returns the peer's task; check it later with poll_outbound. Ask your human before sending anything consequential or private. ${RULES}`,
+		description: `Send a message to a peer agent (alias from list_peers; only peers synced to this A2A endpoint with \`peers sync\`). Pass contextId to continue a conversation, taskId to answer a peer's input-required task. Returns the peer's task; check it later with poll_outbound. Ask your human before sending anything consequential or private. ${RULES}`,
 		inputSchema: { type: "object", properties: { to: str("Peer alias"), text: str("Message text"), contextId: str("Continue this conversation"), taskId: str("Continue this peer task") }, required: ["to", "text"], additionalProperties: false } },
 	{ name: "poll_outbound", title: "Check a sent task", annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 		description: `Fetch the current state of a task you sent to a peer (from send) and record it in the history. ${RULES}`,
 		inputSchema: { type: "object", properties: { taskId: str("Task id returned by send") }, required: ["taskId"], additionalProperties: false } },
 	{ name: "list_peers", title: "List peers", annotations: ro,
-		description: "Peers you can send to (outbound, synced with `peers sync`) and the labels of agents holding a token for this inbox (inbound; who can message you). Token values are never shown.",
+		description: "Peers you can send to (outbound, synced with `peers sync`) and the labels of agents holding a token for this A2A endpoint (inbound; who can message you). Token values are never shown.",
 		inputSchema: { type: "object", properties: {}, additionalProperties: false } },
 	{ name: "pairing_requests", title: "Pending pairing requests", annotations: ro,
-		description: "Agents asking to connect to this inbox (read-only). Show your human who is asking, the code and the link; NEVER approve or deny on your own: your human decides on the /device link with their approval password. The names and card URLs are claimed by the requester (untrusted).",
+		description: "Agents asking to connect to this A2A endpoint (read-only). Show your human who is asking, the code and the link; NEVER approve or deny on your own: your human decides on the /device link with their approval password. The names and card URLs are claimed by the requester (untrusted).",
 		inputSchema: { type: "object", properties: {}, additionalProperties: false } },
 	{ name: "send_feedback", title: "Send feedback", annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
 		description: feedbackToolDescription(ISSUE_REPO),
@@ -299,11 +304,11 @@ export const TOOLS: { name: string; title: string; description: string; inputSch
 			environment: str("Where you run: local, cloud VM, CI, cloud agent sandbox, or other", { enum: ["local", "cloud VM", "CI", "cloud agent sandbox", "other"] }),
 			os: str("Operating system, if you know it"),
 			node: str("Node.js version, if you know it"),
-			connection: str("How this inbox reaches the agent: webhook, proxy, or polling. Omit this and the inbox fills it.", { enum: ["webhook", "proxy", "polling"] }),
-			deployment: str("hosted or self-hosted. Omit this and the inbox fills it.", { enum: ["hosted", "self-hosted"] }),
-			mode: str("Same as deployment: hosted, self-hosted, or self-host. Omit this and the inbox fills it.", { enum: ["hosted", "self-hosted", "self-host"] }),
+			connection: str("How this A2A endpoint reaches the agent: webhook, proxy, or polling. Omit this and the A2A endpoint fills it.", { enum: ["webhook", "proxy", "polling"] }),
+			deployment: str("hosted or self-hosted. Omit this and the A2A endpoint fills it.", { enum: ["hosted", "self-hosted"] }),
+			mode: str("Same as deployment: hosted, self-hosted, or self-host. Omit this and the A2A endpoint fills it.", { enum: ["hosted", "self-hosted", "self-host"] }),
 			contact: str("Optional email or handle. Do not include a token."),
-			version: str("a2a-exposed version. Omit this and the inbox adds its Worker version."),
+			version: str("a2a-exposed version. Omit this and the A2A endpoint adds its Worker version."),
 		}, required: ["message"], additionalProperties: false } },
 ];
 

@@ -289,7 +289,7 @@ test("init --rotate-owner-token says what to update next", async (t) => {
 	const r = await s.cli(["init", "--skip-install", "--rotate-owner-token", "--dir", path.join(s.dir, "worker")]);
 	assert.equal(r.status, 0, r.stderr);
 	assert.ok(s.config().A2A_OWNER_TOKEN && s.config().A2A_OWNER_TOKEN !== old);
-	assert.match(r.stderr, /owner token replaced\. Update A2A_OWNER_TOKEN wherever this inbox is called, then run `npx -y a2a-exposed@latest peers sync`/);
+	assert.match(r.stderr, /owner token replaced\. Update A2A_OWNER_TOKEN wherever this A2A endpoint is called, then run `npx -y a2a-exposed@latest peers sync`/);
 	assert.ok(!r.stderr.includes(old) && !r.stderr.includes(s.config().A2A_OWNER_TOKEN));
 });
 

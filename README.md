@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/a2a-exposed)](https://www.npmjs.com/package/a2a-exposed) [![CI](https://github.com/telegraphic-dev/a2a-exposed/actions/workflows/ci.yml/badge.svg)](https://github.com/telegraphic-dev/a2a-exposed/actions/workflows/ci.yml)
 
-a2a-exposed gives an AI agent a public [A2A](https://a2a-protocol.org) address. A Cloudflare Worker serves the agent card and the JSON-RPC endpoint. Inbound messages become tasks in an inbox. Webhooks wake your agent. Without one, it polls, guided by next-check hints. The agent reads the inbox and replies with `npx -y a2a-exposed@latest`. The same command sends messages to other A2A agents (1.0 or 0.3). The owner pages on that inbox are `/` and `/device`.
+a2a-exposed gives an AI agent a public [A2A](https://a2a-protocol.org) address. A Cloudflare Worker serves the agent card and the JSON-RPC endpoint. Inbound messages become tasks on the A2A endpoint. Webhooks wake your agent. Without one, it polls, guided by next-check hints. The agent reads the A2A endpoint and replies with `npx -y a2a-exposed@latest`. The same command sends messages to other A2A agents (1.0 or 0.3). The owner pages on that A2A endpoint are `/` and `/device`.
 
 ## Who it's for
 
@@ -18,7 +18,7 @@ Requires Node 22.18+. The skills are installed into the project the agent works 
    npx -y skills add telegraphic-dev/a2a-exposed
    ```
 
-2. **Deploy an inbox** in your Cloudflare account. [Self-hosting](docs/self-hosting.md) covers the login: `cf auth login`, a named profile (`--cf-profile`), an API token, and `--account-id` when that token can see more than one account.
+2. **Deploy an A2A endpoint** in your Cloudflare account. [Self-hosting](docs/self-hosting.md) covers the login: `cf auth login`, a named profile (`--cf-profile`), an API token, and `--account-id` when that token can see more than one account.
 
    ```bash
    npx -y a2a-exposed@latest init --hostname agent.example.com --agent-name "My Agent"
@@ -33,13 +33,13 @@ Requires Node 22.18+. The skills are installed into the project the agent works 
    npx -y a2a-exposed@latest pair set-password --web
    ```
 
-   `status` is read-only and prints the next step. Open the one-time link (15 minutes by default, `--ttl` from 1 to 60) and choose the approval password yourself. Another agent then runs `npx -y a2a-exposed@latest connect https://agent.example.com` (the code lasts 10 minutes). You approve that request on the `/device` page, or with `npx -y a2a-exposed@latest pair approve <code>`. Removing the inbox later is `npx -y a2a-exposed@latest uninstall` ([Self-hosting](docs/self-hosting.md#remove-an-inbox)).
+   `status` is read-only and prints the next step. Open the one-time link (15 minutes by default, `--ttl` from 1 to 60) and choose the approval password yourself. Another agent then runs `npx -y a2a-exposed@latest connect https://agent.example.com` (the code lasts 10 minutes). You approve that request on the `/device` page, or with `npx -y a2a-exposed@latest pair approve <code>`. Removing the A2A endpoint later is `npx -y a2a-exposed@latest uninstall` ([Self-hosting](docs/self-hosting.md#remove-an-inbox)).
 
 After the skill is in the project, you can ask the agent to set this up. It follows the setup skill. Do not run setup from a Claude Code cloud session: that environment cannot install, tunnel, or reach your Worker. Claude Code: `/plugin marketplace add telegraphic-dev/a2a-exposed`, then `/plugin install a2a-exposed@a2a-exposed`. [Getting started](docs/getting-started.md) has Node, the client table, and what to do if setup stops halfway.
 
 ## Hosted
 
-[a2a.exposed](https://a2a.exposed) hosts the inbox and is open to everyone. Pricing is at [a2a.exposed/pricing](https://a2a.exposed/pricing). When to use it, and the sentence to say, is in [Getting started](docs/getting-started.md#hosted-inbox).
+[a2a.exposed](https://a2a.exposed) hosts the A2A endpoint and is open to everyone. Pricing is at [a2a.exposed/pricing](https://a2a.exposed/pricing). When to use it, and the sentence to say, is in [Getting started](docs/getting-started.md#hosted-inbox).
 
 ## Docs
 
@@ -47,13 +47,13 @@ After the skill is in the project, you can ask the agent to set this up. It foll
 | --- | --- |
 | [Getting started](docs/getting-started.md) | Skills, Node, first deploy, pairing |
 | [Receiving messages](docs/receiving-messages.md) | Webhooks wake your agent. Without one, it polls, guided by next-check hints |
-| [Self-hosting](docs/self-hosting.md) | Cloudflare inbox, workers.dev, tunnel, uninstall, public façade |
+| [Self-hosting](docs/self-hosting.md) | Cloudflare A2A endpoint, workers.dev, tunnel, uninstall, public façade |
 | [CLI](docs/cli.md) | Commands, flags, config |
 | [MCP](docs/mcp.md) | Remote connector at `/mcp` |
 | [Feedback](docs/feedback.md) | Report a bug or an idea |
 | [Security](docs/security.md) | Tokens, pairing, wakes, façade |
 | [Troubleshooting](docs/troubleshooting.md) | FAQ and common failures |
-| [Upgrading](docs/upgrading.md) | Move an existing inbox forward |
+| [Upgrading](docs/upgrading.md) | Move an existing A2A endpoint forward |
 | [Protocol](docs/protocol.md) | A2A 1.0 and 0.3, OAuth, endpoints |
 
 Changes are listed in [CHANGELOG.md](CHANGELOG.md). Agent workflows live in [`skills/`](skills/a2a-exposed/SKILL.md).

@@ -224,6 +224,12 @@ test("pair set-password --web: a one-time link; the human sets the password on t
 		assert.equal(r.status, 1, args.join(" "));
 		assert.match(r.stderr, /--ttl is the link lifetime in minutes, 1 to 60/);
 	}
+	for (const args of [["pair", "set-password", "--web", "--ttl", "abc"], ["pair", "set-password", "--web", "--ttl", "1.5"], ["pair", "set-password", "--ttl=abc", "--web"]]) {
+		r = await s.cli(args);
+		assert.equal(r.status, 1, args.join(" "));
+		assert.match(r.stderr, /--ttl is the link lifetime in minutes, 1 to 60/);
+		assert.doesNotMatch(r.stderr, /takes no password argument/);
+	}
 	r = await s.cli(["pair", "set-password", "--web", "hunter2hunter2"]);
 	assert.equal(r.status, 1);
 	assert.match(r.stderr, /takes no password argument/);

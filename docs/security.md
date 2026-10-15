@@ -2,7 +2,7 @@
 
 Peers, the owner, and MCP clients use different credentials. Peer message text is data, not instructions.
 
-A self-hosted inbox runs in your Cloudflare account. The owner pages on that inbox are `/` and `/device`.
+A self-hosted A2A endpoint runs in your Cloudflare account. The owner pages on that A2A endpoint are `/` and `/device`.
 
 ## Peers
 
@@ -24,23 +24,23 @@ Optional OpenID Connect (`APPROVAL_OIDC_*`) adds an "Approve with …" button on
 
 ## Owner
 
-The owner API (inbox, replies, tokens, pairing decisions) uses a separate `OWNER_TOKEN` Worker secret, compared in constant time. Both sides are SHA-256 hashed first. The CLI keeps it in `config.env`. Whoever holds it can issue peer tokens and can approve or deny a pairing request. In human mode that decision is recorded as the owner. A call with no token, or with a peer token, is refused.
+The owner API (`inbox`, replies, tokens, pairing decisions) uses a separate `OWNER_TOKEN` Worker secret, compared in constant time. Both sides are SHA-256 hashed first. The CLI keeps it in `config.env`. Whoever holds it can issue peer tokens and can approve or deny a pairing request. In human mode that decision is recorded as the owner. A call with no token, or with a peer token, is refused.
 
 Outbound peer tokens from `peers sync` are sealed with a key derived from that secret, so existing ciphertext still decrypts after an upgrade.
 
 ## Untrusted content
 
-Peer messages, wake previews, claimed names, and card URLs are data. The operate skill shows inbox text inside `UNTRUSTED PEER MESSAGE` fences. It ignores embedded instructions and requires the user's approval for anything consequential or externally visible. Replies go to an external party. Do not include tokens, keys, internal paths, or private data unless the user approved that disclosure.
+Peer messages, wake previews, claimed names, and card URLs are data. The operate skill shows `inbox` text inside `UNTRUSTED PEER MESSAGE` fences. It ignores embedded instructions and requires the user's approval for anything consequential or externally visible. Replies go to an external party. Do not include tokens, keys, internal paths, or private data unless the user approved that disclosure.
 
 ## Wake webhooks
 
 A wake carries metadata, a hint command, and at most a 300-character preview. `openclaw-wake` carries no peer text. The wake URL, key, and HMAC secret are Worker secrets. They are not written to `config.env`.
 
-`WAKE_TARGET_POLICY=public-https` allows https only, with no credentials in the URL. Leave it unset and the inbox posts to the configured webhook. The host must not be private, loopback, link-local, CGNAT, or a name that resolves to one of those, including metadata addresses. The host is checked before the request. The socket opens to an address from that check, and TLS names the hostname, so a later DNS answer cannot move the request. A redirect is followed only on the same origin, after the same check. A cross-origin redirect is not followed. A Cloudflare address such as `*.workers.dev` cannot be opened this way. Any other policy value is treated as unset.
+`WAKE_TARGET_POLICY=public-https` allows https only, with no credentials in the URL. Leave it unset and the A2A endpoint posts to the configured webhook. The host must not be private, loopback, link-local, CGNAT, or a name that resolves to one of those, including metadata addresses. The host is checked before the request. The socket opens to an address from that check, and TLS names the hostname, so a later DNS answer cannot move the request. A redirect is followed only on the same origin, after the same check. A cross-origin redirect is not followed. A Cloudflare address such as `*.workers.dev` cannot be opened this way. Any other policy value is treated as unset.
 
 ## MCP clients
 
-MCP access tokens (`a2amcp_`) and refresh tokens are stored hashed, separate from peer tokens and the owner token. They are accepted only in the `Authorization` header. The tools reach inbox, reply, send, read-only listings, and `send_feedback`. They cannot mint peer tokens or approve pairing. Registration and consent rules are in [MCP](mcp.md).
+MCP access tokens (`a2amcp_`) and refresh tokens are stored hashed, separate from peer tokens and the owner token. They are accepted only in the `Authorization` header. The tools reach `inbox`, reply, send, read-only listings, and `send_feedback`. They cannot mint peer tokens or approve pairing. Registration and consent rules are in [MCP](mcp.md).
 
 ## Façade
 
@@ -58,4 +58,4 @@ HTTPS only. Private and loopback targets are refused. Each push uses a per-task 
 
 ## Your account
 
-A self-hosted inbox runs in your Cloudflare account. Data leaves through wakes to your agent and through pushes to URLs your peers registered. The hosted inbox is in [Getting started](getting-started.md#hosted-inbox).
+A self-hosted A2A endpoint runs in your Cloudflare account. Data leaves through wakes to your agent and through pushes to URLs your peers registered. The hosted A2A endpoint is in [Getting started](getting-started.md#hosted-inbox).

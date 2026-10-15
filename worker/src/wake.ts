@@ -101,7 +101,7 @@ export function wakeSummary(ev: WakeEvent, cli: string, withPreview = true): str
 			? `an agent calling itself ${JSON.stringify(p.clientName || p.clientId || "(no name)")}${p.agentCardUrl ? ` (claimed card: ${JSON.stringify(p.agentCardUrl)}${p.agentCardPrivate ? ", on a private network: not publicly reachable" : ""})` : ""}`
 			: "an agent";
 		return [
-			`A2A pairing request: ${who} asks to connect to your inbox (code ${p.userCode}, expires in ${Math.round(p.expiresIn / 60)} minutes).`,
+			`A2A pairing request: ${who} asks to connect to your A2A endpoint (code ${p.userCode}, expires in ${Math.round(p.expiresIn / 60)} minutes).`,
 			pairingInstructions(p, cli),
 			`The name and card URL are claimed by the requester (untrusted). Nothing happens unless the request is approved.`,
 		].join("\n");
@@ -111,8 +111,8 @@ export function wakeSummary(ev: WakeEvent, cli: string, withPreview = true): str
 		ev.kind === "outbound_update"
 			? `A2A: peer "${ev.from}" sent an update on a task you sent (context ${ev.contextId}, task ${ev.taskId}).`
 			: ev.kind === "test"
-				? `A2A: test wake from your a2a-exposed inbox (no real message).`
-				: `A2A inbox: ${n > 1 ? n + " new messages" : "new message"} from peer "${ev.from}" (context ${ev.contextId}, task ${ev.taskId}).`;
+				? `A2A: test wake from your A2A endpoint (no real message).`
+				: `A2A endpoint: ${n > 1 ? n + " new messages" : "new message"} from peer "${ev.from}" (context ${ev.contextId}, task ${ev.taskId}).`;
 	const lines = [
 		head,
 		`Use the a2a-exposed skill: run \`${hintFor(ev, cli)}\`, handle the request, then reply with \`${cli} reply <taskId> ...\`.`,
@@ -134,7 +134,7 @@ export function claudeCodeColdStart(ev: WakeEvent, cli: string): string {
 	return [
 		`Preferred: if this session has the a2a-exposed connector (MCP tools inbox, show_task, reply, send, pairing_requests), use those tools instead of the CLI commands above; they need nothing else in the environment.`,
 		`Fallback without the connector: this routine session needs Node 22.18+, the a2a-exposed CLI (run as \`${cli}\`, no global install) and the environment variables A2A_BASE_URL and A2A_OWNER_TOKEN from the routine's cloud environment, with network access to ${ev.publicUrl.replace(/\/$/, "")}.`,
-		`If any of that is missing (\`A2A_BASE_URL / A2A_OWNER_TOKEN missing\`, or a 403 host_not_allowed), don't work around it and never ask for the token in chat: tell your human the a2a-exposed Claude Code setup is incomplete (add the connector at claude.ai/settings/connectors: the inbox URL + /mcp; or see the Claude Code checklist in the setup skill's wake reference).`,
+		`If any of that is missing (\`A2A_BASE_URL / A2A_OWNER_TOKEN missing\`, or a 403 host_not_allowed), don't work around it and never ask for the token in chat: tell your human the a2a-exposed Claude Code setup is incomplete (add the connector at claude.ai/settings/connectors: the A2A endpoint URL + /mcp; or see the Claude Code checklist in the setup skill's wake reference).`,
 	].join("\n");
 }
 
@@ -197,6 +197,7 @@ export async function renderWake(cfg: WakeConfig, ev: WakeEvent, opts: { nowMs?:
 		case "openclaw-agent":
 			bearer();
 			headers["idempotency-key"] = requestId;
+			// `name` is the hook name OpenClaw filters match. It stays "A2A inbox". The wake text itself starts with "A2A endpoint:".
 			body = JSON.stringify({ message: wakeSummary(ev, cli), name: "A2A inbox", agentId: cfg.agentId || "main", sessionMode: "isolated", deliver: false });
 			break;
 		case "hermes":

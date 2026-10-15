@@ -173,6 +173,14 @@ export async function verifyPassword(password: string, rec: PasswordRecord): Pro
 // ------------------------------------------------------------------ /device page (no scripts, no external assets)
 export const esc = (s: unknown) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
+/** "Expires" cell. A live code with under a minute left says so, instead of "0 min". */
+export function expiresText(expiresMs: number, now = Date.now()): string {
+	const left = expiresMs - now;
+	if (left <= 0) return "expired";
+	if (left < 60_000) return "less than a minute";
+	return `${Math.round(left / 60000)} min`;
+}
+
 export type PageRequest = { userCode: string; clientName: string; clientId: string; agentCardUrl: string; ip: string; country: string; createdMs: number; expiresMs: number; replacesLabel?: string; tokenLabel?: string };
 export type PageModel = {
 	agentName: string;
@@ -188,23 +196,30 @@ export type PageModel = {
 	oidc?: { label: string };
 	/** False hides the password field. Absent means the password field is shown as before. */
 	passwordEnabled?: boolean;
+	/** Set after Approve or Deny: the page shows that result and no code form. */
+	settled?: "approved" | "denied";
 };
 
 export function devicePage(m: PageModel, nonce: string): string {
+	const notice = m.notice ? `<p class="n ${m.notice.kind}">${esc(m.notice.text)}</p>` : "";
+	if (m.settled) {
+		const title = m.settled === "approved" ? "Approved" : "Denied";
+		return pageShell(title, nonce, `${notice}<p>You can close this page.</p>`);
+	}
 	const r = m.request;
 	const rows = r ? [
 		["Code", formatUserCode(r.userCode)],
 		["Agent (as it calls itself)", r.clientName || r.clientId || "(no name given)"],
 		...(r.clientId && r.clientName && r.clientId !== r.clientName ? [["Alias (claimed)", r.clientId]] : []),
-		["Agent card (claimed)", r.agentCardUrl ? r.agentCardUrl + (cardIsPrivate(r.agentCardUrl) ? " (private network address, e.g. a Tailnet: not publicly reachable, so this inbox can't check it; informational only)" : "") : "(none given)"],
+		["Agent card (claimed)", r.agentCardUrl ? r.agentCardUrl + (cardIsPrivate(r.agentCardUrl) ? " (private network address, e.g. a Tailnet: not publicly reachable, so this A2A endpoint can't check it; informational only)" : "") : "(none given)"],
 		["Requested from", `${[r.ip || "unknown address", r.country].filter(Boolean).join(", ")} (IP address of the machine that asked to connect)`],
-		["Expires", `${Math.max(0, Math.round((r.expiresMs - Date.now()) / 60000))} min`],
+		["Expires", expiresText(r.expiresMs)],
 		...(r.replacesLabel ? [["Replaces", `the active token "${r.replacesLabel}" (the requester proved it holds it); approving issues a new token under the same label and the old one stops working`]] : []),
 	] : [];
-	const notice = m.notice ? `<p class="n ${m.notice.kind}">${esc(m.notice.text)}</p>` : "";
-	const revoke = r?.tokenLabel ? `${m.cli} token revoke ${r.tokenLabel}` : `${m.cli} token revoke`;
+	const tokenLabel = r?.tokenLabel || "<label>";
+	const revoke = `${m.cli} token revoke ${tokenLabel}`;
 	const details = r ? `<table>${rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join("")}</table>
-<p class="w">Approve only if you expected this request and the code matches the one you were given. The name, alias and card URL are claimed by the requester. Approving gives it a token to send messages to this inbox; revoke it any time with <code>${esc(revoke)}</code>.</p>` : "";
+<p class="w">Approve only if you expected this request and the code matches the one you were given. The name, alias and card URL are claimed by the requester. Approving gives it a token that can send messages and trigger wakes. Message text from peers is untrusted. Revoke the token ${esc(tokenLabel)} any time with <code>${esc(revoke)}</code>.</p>` : "";
 	const noPassword = `<p class="n info">No approval password is set yet. Easiest: ask your agent to run <code>${esc(m.cli)} pair set-password --web</code> and send you the one-time link, then set the password on that page. Or run <code>${esc(m.cli)} pair set-password</code> yourself in a terminal on the owner's machine. Then reload this page. You can deny without a password.</p>`;
 	const denyOnly = `<form method="post" action="/device">
 <input type="hidden" name="csrf" value="${esc(m.csrf)}"><input type="hidden" name="user_code" value="${esc(r ? formatUserCode(r.userCode) : "")}">
@@ -221,7 +236,7 @@ export function devicePage(m: PageModel, nonce: string): string {
 <input type="hidden" name="csrf" value="${esc(m.csrf)}"><input type="hidden" name="user_code" value="${esc(formatUserCode(r.userCode))}">
 <div class="b"><button name="decision" value="oidc" type="submit">Approve with ${esc(m.oidc.label)}</button></div>
 </form>` : "";
-	const ask = m.askCode ? `<form method="get" action="/device"><label for="uc">Code</label><input id="uc" name="user_code" value="${esc(m.codeValue || "")}" placeholder="WDJB-4827" autocomplete="off" autocapitalize="characters" required maxlength="16" autofocus><div class="b"><button type="submit">Continue</button></div></form>` : "";
+	const ask = m.askCode ? `<p class="w">The connecting agent prints this code when it runs <code>${esc(`${m.cli} connect <url>`)}</code>. It looks like WDJB-4827.</p><form method="get" action="/device"><label for="uc">Code</label><input id="uc" name="user_code" value="${esc(m.codeValue || "")}" placeholder="WDJB-4827" autocomplete="off" autocapitalize="characters" required maxlength="16" autofocus><div class="b"><button type="submit">Continue</button></div></form>` : "";
 	return pageShell(`Connect an agent to ${m.agentName}`, nonce, `${notice}${details}${form}${oidcForm}${ask}`);
 }
 
@@ -255,7 +270,7 @@ export function landingPage(m: LandingModel, nonce: string): string {
 		? `<h2>Connect your agent</h2><p>Agents get a bearer token through the OAuth device flow: your agent asks, and this agent's owner approves the request on the <a href="/device">pairing page</a>. No secrets go through chat. With the a2a-exposed CLI, your agent runs:</p><p><code>${DEFAULT_CLI} connect ${esc(m.base)}</code></p>`
 		: `<h2>Connect your agent</h2><p>Pairing is turned off here: ask this agent's operator for a bearer token.</p>`;
 	return pageShell(m.name, nonce, `${desc}
-<p class="n info">This is an <a href="https://a2a-protocol.org/">A2A (Agent2Agent)</a> endpoint for agents.${m.proxy ? "" : " Messages land in its owner's inbox, which wakes the agent."}</p>
+<p class="n info">This is an <a href="https://a2a-protocol.org/">A2A (Agent2Agent)</a> endpoint for agents.${m.proxy ? "" : " Messages are stored for its owner, and the agent is woken."}</p>
 <table>
 <tr><th>Agent card</th><td><a href="/.well-known/agent-card.json">${esc(card)}</a></td></tr>
 <tr><th>JSON-RPC endpoint</th><td><code>POST ${esc(m.base)}/</code></td></tr>
@@ -293,7 +308,7 @@ export function setupPage(m: SetupModel, nonce: string): string {
 	const mins = m.expiresMs ? Math.max(1, Math.round((m.expiresMs - Date.now()) / 60000)) : 0;
 	const intro = m.passwordSetAt
 		? `<p>An approval password is already set (since ${esc(m.passwordSetAt)}). Saving here replaces it.</p>`
-		: `<p>Choose the password you will use to approve agents that ask to connect to this inbox.</p>`;
+		: `<p>Choose the password you will use to approve agents that ask to connect to this A2A endpoint.</p>`;
 	return pageShell(`Approval password for ${m.agentName}`, nonce, `${notice}${intro}
 <p class="w">Only you should know it: don't share it with your agent or anyone else. Use ${MIN_PASSWORD_LENGTH} to 1024 characters. A passphrase of several unrelated words is stronger than one short word. This one-time link expires in ${mins} min.</p>
 <form method="post" action="/device/setup">

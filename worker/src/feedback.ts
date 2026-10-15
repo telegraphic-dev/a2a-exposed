@@ -41,7 +41,7 @@ export function feedbackToolDescription(repo: string): string {
 	const note = REPO_RE.test(repo) && !repo.includes("..")
 		? publicIssueNote(repo)
 		: "This report is filed as a public GitHub issue on this deployment's configured feedback repository. The result names that repository. Do not include confidential information: secrets, tokens, owner or pairing tokens, private URLs or hostnames, message contents, or personal data.";
-	return `${note} Redact before sending. Report a bug or an idea about this inbox to its developers. A bug requires reproduction steps. Include exact commands, error output with tokens and secrets removed, which agent you are, and where you run (local, cloud VM, CI, cloud agent sandbox, or other). Version, connection (webhook, proxy, or polling), and deployment (hosted or self-hosted) are filled by the inbox when you omit them. When this deployment does not file the report, the result is a link to the bug report form. You do not open a browser.`;
+	return `${note} Redact before sending. Report a bug or an idea about this A2A endpoint to its developers. A bug requires reproduction steps. Include exact commands, error output with tokens and secrets removed, which agent you are, and where you run (local, cloud VM, CI, cloud agent sandbox, or other). Version, connection (webhook, proxy, or polling), and deployment (hosted or self-hosted) are filled by the A2A endpoint when you omit them. When this deployment does not file the report, the result is a link to the bug report form. You do not open a browser.`;
 }
 /** Inbox build. The same value as `version` in cli/package.json. */
 export const WORKER_VERSION = VERSION;

@@ -374,5 +374,5 @@ test("connect --card-url: a non-public card points at proxy mode", (t) => {
 	console.error = (m) => lines.push(String(m));
 	t.after(() => { console.error = orig; });
 	assert.equal(cardUrlToSend("http://100.101.102.103:8080/.well-known/agent-card.json", "https://inbox.example.com"), "");
-	assert.match(lines.join("\n"), /inboxes accept only public https cards\)\. Peers can't call an agent there: to be reachable, expose it through a public façade/);
+	assert.match(lines.join("\n"), /A2A endpoints accept only public https cards\)\. Peers can't call an agent there: to be reachable, expose it through a public façade/);
 });

@@ -2,6 +2,7 @@
 // calls only), so an agent that was interrupted can resume from the printed next step. The CLI fetches the agent card
 // itself, so agents need no curl (some agent sandboxes flag *.dev URLs in shell commands).
 import fs from "node:fs";
+import path from "node:path";
 import * as C from "./config.mjs";
 import { CLI, cardUrlProblem, cfErrorCode, describeHttp, die, fingerprint, httpJson } from "./a2a.mjs";
 import { baseUrl, owner, ownerTry } from "./commands.mjs";
@@ -29,7 +30,7 @@ export async function checkCard(base) {
 export function wakeLine(s) {
 	if (!s.wake) return "unknown (owner API not reachable)";
 	const w = s.wake;
-	if (!w.configured) return "none: no WAKE_WEBHOOK_URL on the Worker, so the agent is expected to poll the inbox";
+	if (!w.configured) return "none: no WAKE_WEBHOOK_URL on the Worker, so the agent is expected to poll the A2A endpoint";
 	const auth = [w.hasKey && "bearer/API key", w.hasHmacSecret && "HMAC signature", w.hasAccessServiceToken && "Access service token"].filter(Boolean);
 	return `webhook (preset ${w.preset}${s.tunnel ? ", through the tunnel" : ""}); auth: ${auth.join(" + ") || "none"}; URL fingerprint ${w.urlFingerprint || "-"}`;
 }
@@ -80,6 +81,24 @@ export function shadowedPeerTokens() {
 /** How long after `tunnel create` uploads secrets `status` treats a missing Worker preview as propagation. */
 export const SECRET_PROPAGATION_MS = 60_000;
 
+/** How long after `tunnel create` a connector with 0 connections is still "connecting", not broken. */
+export const CONNECTOR_WAIT_MS = 60_000;
+
+/** Cloudflare tunnel status `inactive` means the connector has never connected. */
+export function tunnelStateLabel(state) {
+	if (state === "inactive") return "never connected";
+	return state || "?";
+}
+
+/** True for about a minute after `tunnel create` while the connector reports 0 connections. */
+export function connectorConnecting(tunnel, now = Date.now()) {
+	if (!tunnel || tunnel.connections !== 0) return false;
+	const at = Number(tunnel.secretsAt);
+	if (!Number.isFinite(at) || at <= 0) return false;
+	const age = now - at;
+	return age >= 0 && age < CONNECTOR_WAIT_MS;
+}
+
 /** True while the tunnel's Worker secrets were uploaded recently and may still be invisible to `wake preview`. */
 export function secretsPropagating(tunnel, now = Date.now()) {
 	const at = Number(tunnel && tunnel.secretsAt);
@@ -99,13 +118,13 @@ export function nextStep(s) {
 function nextStepCore(s) {
 	const fail = (text) => ({ ok: false, text, also: [] });
 	const done = (text, also = []) => ({ ok: true, text, also });
-	if (!s.deployed) return fail(`nothing is deployed from ${s.configFile}: run \`${CLI} init ...\` (setup skill, section 2). Another bot's deployment? Set A2A_CONFIG_DIR.`);
+	if (!s.deployed) return fail(`nothing is deployed from ${path.dirname(s.configFile)}. Another deployment? Set A2A_CONFIG_DIR.`);
 	if (s.baseUrlEnv)
-		return fail(`A2A_BASE_URL is exported as ${s.baseUrlEnv}, but ${s.configFile} has ${s.baseUrlSaved || "(none)"}: CLI commands (and push URLs sent to peers) use the exported value. Unset A2A_BASE_URL (the inbox URL is always the deployment's own)`);
+		return fail(`A2A_BASE_URL is exported as ${s.baseUrlEnv}, but ${s.configFile} has ${s.baseUrlSaved || "(none)"}: CLI commands (and push URLs sent to peers) use the exported value. Unset A2A_BASE_URL (the A2A endpoint URL is always the deployment's own)`);
 	if (!s.baseUrl || !s.hasOwnerToken)
 		return fail(`the deployment is incomplete (no ${!s.baseUrl ? "base URL" : "owner token"} saved): re-run \`${CLI} init\` with the same flags (safe: it reuses the D1 database and the owner token)`);
 	if (!s.card.ok && s.card.cfError === 1042)
-		return fail(`the Worker is still propagating (Cloudflare error 1042, normal for up to ~30 s after a first deploy): run \`${CLI} status\` again in 30 seconds. Still 1042 after a few minutes? Run \`${CLI} deploy\``);
+		return fail(`the Worker is still propagating (Cloudflare error 1042, normal for up to 30 seconds after a first deploy): run \`${CLI} status\` again in 30 seconds. Still 1042 after a few minutes? Run \`${CLI} deploy\``);
 	if (!s.card.ok)
 		return fail(`the agent card is not reachable (${s.card.error}). A new workers.dev subdomain or custom domain can take a few minutes: run \`${CLI} status\` again. Still failing? Run \`${CLI} deploy\``);
 	if (s.card.urlProblem)
@@ -157,11 +176,13 @@ function nextStepCore(s) {
 	const now = typeof s.now === "number" ? s.now : Date.now();
 	if (t && !(s.wake.hasAccessServiceToken && t.workerUrlMatches)) {
 		if (secretsPropagating(t, now) && (t.connections === 0 || t.connections == null))
-			return done(`Worker wake secrets are still propagating (about 15 to 40 seconds after tunnel create). Wait about 30 seconds and run \`${CLI} status\` again.`);
+			return done(`Worker wake secrets are still propagating (about 15 to 40 seconds after tunnel create). Wait about 30 seconds. Start \`cloudflared tunnel run --token-file ${t.tokenFile}\` on the agent's machine now, then run \`${CLI} status\` again.`);
 		return fail(`the Worker does not have the tunnel's wake secrets: ${needsAgentSecret ? `export ${agentSecret} and ` : ""}run \`${CLI} tunnel create\` again (it re-uploads them; nothing new is created)`);
 	}
+	if (t && connectorConnecting(t, now))
+		return done(`waiting for the connector to connect. Start \`cloudflared tunnel run --token-file ${t.tokenFile}\` on the agent's machine now, then run \`${CLI} status\` again.`);
 	if (t && t.connections === 0)
-		return fail(`the tunnel has no running connector: on the agent's machine run \`cloudflared tunnel run --token-file ${t.tokenFile}\` (outbound port 7844 must be open), then \`${CLI} wake test\``);
+		return fail(`the tunnel has ${t.state === "inactive" ? "never connected" : "no running connector"}: on the agent's machine run \`cloudflared tunnel run --token-file ${t.tokenFile}\` (outbound port 7844 must be open), then \`${CLI} wake test\``);
 	if (s.wake.configured && needsAgentSecret)
 		return fail(`the Worker sends no webhook auth, so the ${s.wake.preset} webhook will reject wakes: export ${agentSecret} (${s.wake.preset === "hermes" ? "the route secret" : "the hooks token"}), then run \`${CLI} ${t ? "tunnel create" : "wake set"}\``);
 	// not broken, but peers can't pair until the human sets the approval password
@@ -172,7 +193,7 @@ function nextStepCore(s) {
 		also.push(`${s.pairing.pending} pending pairing request(s): \`${CLI} pair list\`, then tell your human (never approve on your own)`);
 	const done2 = (text, extra = []) => done(text, [...extra, ...also]);
 	if (!s.wake.configured) {
-		const poll = "the agent must check the inbox on a schedule (setup skill: polling; Hermes and OpenClaw have copy-paste commands there)";
+		const poll = "the agent must check the A2A endpoint on a schedule (Hermes and OpenClaw have copy-paste commands in the setup references)";
 		if (s.wake.preset && !LOCAL_PRESETS.includes(s.wake.preset) && s.wake.preset !== "generic")
 			return done2(`no wake webhook: export WAKE_WEBHOOK_URL and WAKE_WEBHOOK_KEY, then run \`${CLI} wake set --preset ${s.wake.preset}\`; or ${poll}`);
 		const z = s.zones;
@@ -280,7 +301,7 @@ export function mcpAddCommand(s) {
 
 /** `upstream verify`: the façade's whole path, layer by layer; exit 1 unless the upstream app answered. */
 export async function upstreamVerify(o) {
-	if (!C.get("A2A_UPSTREAM_URL")) die(`not a façade: ${C.CONFIG_FILE} has no A2A_UPSTREAM_URL (proxy mode: \`${CLI} deploy --upstream <tunnel URL>\`). For an inbox, check wakes with \`${CLI} wake test\``);
+	if (!C.get("A2A_UPSTREAM_URL")) die(`not a façade: ${C.CONFIG_FILE} has no A2A_UPSTREAM_URL (proxy mode: \`${CLI} deploy --upstream <tunnel URL>\`). For an A2A endpoint, check wakes with \`${CLI} wake test\``);
 	const base = baseUrl();
 	if (!base || !C.get("A2A_OWNER_TOKEN")) die(`A2A_BASE_URL / A2A_OWNER_TOKEN missing (run \`${CLI} init\` or edit ${C.CONFIG_FILE})`);
 	const r = await upstreamCheck(base);
@@ -299,7 +320,11 @@ export async function status(o) {
 	const s = await collect();
 	const next = nextStep(s);
 	const mcpAdd = mcpAddCommand(s);
-	if (o.json) console.log(JSON.stringify({ ...s, mcpAdd, nextStep: next.text, also: next.also, ok: next.ok }, null, 2));
+	if (o.json) {
+		const out = { ...s, mcpAdd, nextStep: next.text, also: next.also, ok: next.ok };
+		if (out.tunnel && out.tunnel.state != null) out.tunnel = { ...out.tunnel, state: tunnelStateLabel(out.tunnel.state) };
+		console.log(JSON.stringify(out, null, 2));
+	}
 	else {
 		const rows = [
 			["config", s.configFile],
@@ -328,7 +353,7 @@ export async function status(o) {
 			rows.push(["wake", wakeLine(s)]);
 			const t = s.tunnel;
 			rows.push(["tunnel", !t ? "none" : `${t.wakeUrl} -> ${t.origin || "?"}; ${!t.complete ? "INCOMPLETE" : t.tokenFileOk ? "set up" : "set up, but the connector token file is MISSING"}` +
-				(t.connections != null ? `; ${t.state || "?"}, ${t.connections} connector connection(s)` : t.error ? `; state unknown (${t.error})` : "")]);
+				(t.connections != null ? `; ${tunnelStateLabel(t.state)}, ${t.connections} connector connection(s)` : t.error ? `; state unknown (${t.error})` : "")]);
 			if (s.zones) rows.push(["zones", s.zones.length ? s.zones.join(", ") : "none on this account"]);
 			const pg = s.pairing;
 			if (pg) rows.push(["pairing", pg.mode === "off" ? "off (token issue only)"

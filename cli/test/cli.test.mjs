@@ -147,12 +147,12 @@ test("plainState reads 1.0 and 0.3 task states", () => {
 	assert.ok(!plainState(null));
 });
 
-test("status without a deployment names the config file and points at init (exit 1)", (t) => {
+test("status without a deployment names the config directory and points at init (exit 1)", (t) => {
 	const s = sandbox(); t.after(s.done);
 	const r = s.cli(["status"]);
 	assert.equal(r.status, 1);
 	assert.match(r.stdout, /^deployment: +none$/m);
-	assert.match(r.stdout, new RegExp(`^next step: +nothing is deployed from ${s.dir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/config\\.env: run \`npx -y a2a-exposed@latest init \\.\\.\\.\``, "m"));
+	assert.match(r.stdout, new RegExp(`^next step: +nothing is deployed from ${s.dir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\. Another deployment\\? Set A2A_CONFIG_DIR\\.`, "m"));
 	const j = JSON.parse(s.cli(["status", "--json"]).stdout);
 	assert.equal(j.ok, false);
 	assert.equal(j.deployed, false);

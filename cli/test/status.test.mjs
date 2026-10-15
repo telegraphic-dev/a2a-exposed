@@ -27,7 +27,7 @@ test("mcpAddCommand follows the live Worker and the agent card", () => {
 test("nextStep: the first missing piece, in setup order", () => {
 	const step = (over) => nextStep(healthy(over));
 	assert.equal(step({ deployed: false }).ok, false);
-	assert.match(step({ deployed: false }).text, /nothing is deployed from \/cfg\/config\.env: run `npx -y a2a-exposed@latest init/);
+	assert.match(step({ deployed: false }).text, /nothing is deployed from \/cfg\. Another deployment\? Set A2A_CONFIG_DIR\./);
 	assert.match(step({ baseUrl: "" }).text, /no base URL saved\): re-run `npx -y a2a-exposed@latest init` with the same flags \(safe/);
 	assert.match(step({ hasOwnerToken: false }).text, /no owner token saved/);
 	assert.match(step({ card: { ok: false, error: "HTTP 404" } }).text, /agent card is not reachable \(HTTP 404\)/);
@@ -68,11 +68,20 @@ test("nextStep: tunnel states", () => {
 	assert.match(step({}, { ...wake, hasAccessServiceToken: false }).text, /re-uploads them/);
 	assert.equal(step({ connections: 0 }).ok, false);
 	assert.match(step({ connections: 0 }).text, /cloudflared tunnel run --token-file \/cfg\/tunnel-token.*7844/);
+	const connecting = step({ connections: 0, secretsAt: Date.now() });
+	assert.equal(connecting.ok, true);
+	assert.match(connecting.text, /waiting for the connector to connect/);
+	assert.match(connecting.text, /Start `cloudflared tunnel run --token-file \/cfg\/tunnel-token` on the agent's machine now, then run `npx -y a2a-exposed@latest status` again/);
+	const aged = step({ connections: 0, secretsAt: 1, state: "inactive" });
+	assert.equal(aged.ok, false);
+	assert.match(aged.text, /never connected/);
+	assert.match(step({ connections: 0, state: "down" }).text, /no running connector/);
 	const fresh = Date.now();
 	const waiting = step({ workerUrlMatches: false, connections: 0, secretsAt: fresh });
 	assert.equal(waiting.ok, true);
 	assert.match(waiting.text, /still propagating \(about 15 to 40 seconds after tunnel create\)/);
 	assert.match(waiting.text, /Wait about 30 seconds/);
+	assert.match(waiting.text, /Start `cloudflared tunnel run --token-file \/cfg\/tunnel-token` on the agent's machine now/);
 	const unknown = step({ workerUrlMatches: false, connections: null, secretsAt: fresh });
 	assert.equal(unknown.ok, true);
 	assert.match(unknown.text, /still propagating/);
@@ -95,7 +104,7 @@ test("nextStep: no wake webhook means polling, with the tunnel offered when the 
 	const noWake = (preset, zones) => nextStep(healthy({ wake: { preset, configured: false }, zones }));
 	const full = (r) => [r.text, ...r.also].join(" | "); // optional hints are separate "also" lines
 	for (const p of ["hermes", "openclaw-wake", "openclaw-agent"]) assert.equal(noWake(p, ["example.com"]).ok, true);
-	assert.match(full(noWake("hermes", ["example.com"])), /check the inbox on a schedule.*`npx -y a2a-exposed@latest tunnel create` \(it uses the account's zone example\.com; no redeploy needed\)/);
+	assert.match(full(noWake("hermes", ["example.com"])), /check the A2A endpoint on a schedule.*`npx -y a2a-exposed@latest tunnel create` \(it uses the account's zone example\.com; no redeploy needed\)/);
 	assert.match(full(noWake("hermes", ["a.com", "b.org"])), /--tunnel-zone <zone>` with one of: a\.com, b\.org/);
 	assert.match(full(noWake("hermes", [])), /no domain \(zone\), so the secure tunnel is not available/);
 	assert.match(full(noWake("hermes", null)), /needs a zone on the account/);
@@ -105,7 +114,7 @@ test("nextStep: no wake webhook means polling, with the tunnel offered when the 
 
 test("wakeLine: mode and auth, never secret values", () => {
 	assert.match(wakeLine({ wake: null }), /unknown/);
-	assert.match(wakeLine({ wake: { preset: "hermes", configured: false } }), /^none: .*poll the inbox$/);
+	assert.match(wakeLine({ wake: { preset: "hermes", configured: false } }), /^none: .*poll the A2A endpoint$/);
 	assert.doesNotMatch(wakeLine({ wake: { preset: "generic", configured: false } }), /preset/, "no wake: no preset to talk about");
 	assert.equal(wakeLine({ wake: { preset: "hermes", configured: true, hasHmacSecret: true, hasAccessServiceToken: true, urlFingerprint: "abc123" }, tunnel: {} }),
 		"webhook (preset hermes, through the tunnel); auth: HMAC signature + Access service token; URL fingerprint abc123");
