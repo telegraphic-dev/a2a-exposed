@@ -51,7 +51,7 @@ The agent card always advertises this public base URL. The agent's webhook URL, 
 
 `--cron` adds a one-minute flush of pending wakes. It needs a workers.dev subdomain on the account. Pending wakes are also flushed on every request, so the cron is optional.
 
-`init` is safe to re-run. It reuses the saved D1 database, owner token, and settings. To rotate the owner token: `npx -y a2a-exposed@latest init --rotate-owner-token`.
+`init` is safe to re-run. It reuses the saved D1 database, owner token, and settings. To rotate the owner token: `npx -y a2a-exposed@latest init --rotate-owner-token`. That prints the follow-up: update `A2A_OWNER_TOKEN` wherever this inbox is called, then `peers sync` so uploaded peers stay readable.
 
 Hosted agents (cloud routines and similar) cannot read the local config file. Give them `A2A_BASE_URL` and `A2A_OWNER_TOKEN` as environment secrets, or add the [MCP connector](mcp.md) so the session has no owner token.
 
@@ -61,10 +61,12 @@ If the agent's webhook only listens locally, `tunnel create` publishes the wake 
 
 It needs Cloudflare Zero Trust (the free plan is enough) and a zone somewhere on the account. The inbox itself can be on workers.dev or a custom hostname. With one zone, `tunnel create` picks `wake-<random>.<zone>` and says so. With several, pass `--tunnel-zone <zone>`. With no zone, poll the inbox instead. There is no trycloudflare quick-tunnel mode.
 
-Enable Zero Trust once at <https://one.dash.cloudflare.com/>, or pass `--zero-trust-org <team-name>` to create the organization. Ask before you run it: it creates DNS, a tunnel, and Access objects.
+Enable Zero Trust once at <https://one.dash.cloudflare.com/>, or pass `--zero-trust-org <team-name>` to create the organization (`<team-name>.cloudflareaccess.com`). Ask before you run it: it creates DNS, a tunnel, and Access objects, and the Zero Trust organization is permanent.
+
+If `WAKE_WEBHOOK_URL` is already set, run `wake unset` before `tunnel create`. `tunnel create` sets the wake URL to the tunnel hostname.
 
 ```bash
-export WAKE_WEBHOOK_KEY='...'          # or WAKE_HMAC_SECRET for hermes. Do not set WAKE_WEBHOOK_URL
+export WAKE_WEBHOOK_KEY='...'          # or WAKE_HMAC_SECRET for hermes. tunnel create sets WAKE_WEBHOOK_URL
 npx -y a2a-exposed@latest tunnel create
 # hermes:  --tunnel-path /webhooks/<name>     (origin defaults to 127.0.0.1:8644)
 # generic: --tunnel-origin http://127.0.0.1:5678 --tunnel-path /webhook/a2a
@@ -142,3 +144,21 @@ The façade holds one upstream identity and passes the peer label in `X-A2A-Peer
 While you are still building the façade, a private agent can connect outward: `connect https://b.example.com --card-url https://agent.example.ts.net/.well-known/agent-card.json`. A private https card is sent as informational. The other owner's `/device` page flags it as not publicly reachable. A non-https card is left out. Replies come back with `poll` until the façade is up.
 
 There is no MCP server in proxy mode.
+
+## Remove an inbox
+
+Ask before you delete an inbox. `config` prints the config directory and the saved `A2A_WORKER_NAME`, `A2A_D1_ID`, `A2A_D1_NAME`, and `CF_PROFILE`.
+
+`tunnel rm`, when a wake tunnel exists, removes the Worker's Access secrets (and the wake URL when it is the tunnel's), the DNS record, the tunnel, the Access application, the service token, and the local token file. If the tunnel is already gone, it clears the saved ids and finishes. Stop `cloudflared` afterwards (`cloudflared service uninstall` when it runs as a service).
+
+Then delete the Worker and the D1 database. `--force` confirms the delete when the shell is non-interactive. Add `--profile <CF_PROFILE>` when the login is a named profile:
+
+```bash
+npx -y a2a-exposed@latest tunnel rm
+npx cf workers delete <A2A_WORKER_NAME> --force
+npx cf d1 delete <A2A_D1_ID> --force
+```
+
+Deleting the Worker also removes its custom domain and that domain's DNS record. The account's workers.dev subdomain stays. A Zero Trust organization created with `--zero-trust-org` is permanent.
+
+The config directory holds the owner token, peer tokens, and the Worker project (`~/.config/a2a-exposed`, or `A2A_CONFIG_DIR`). Remove that directory when those should go too.

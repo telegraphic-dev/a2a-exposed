@@ -142,6 +142,10 @@ if (has("zones list") && process.env.STUB_MANY_ZONES) { // 50 zones on page 1, o
 	out(page === 1 ? Array.from({ length: 50 }, (_, i) => ({ id: "m" + i, name: "zone" + i + ".example", status: "active" })) : page === 2 ? [{ id: "last", name: "last.example", status: "active" }] : []);
 }
 if (has("zones list")) out(process.env.STUB_ZONES ? JSON.parse(process.env.STUB_ZONES) : [{ id: "z1", name: "example.com", status: "active" }]);
+if ((has("tunnels connections cleanup") || has("tunnels delete")) && !a.includes("--force"))
+	fail("? This operation removes Cloudflare Tunnel connections. Continue? (non-interactive; pass --force to confirm) Aborted.");
+if (process.env.STUB_TUNNEL_GONE && (has("tunnels get") || has("tunnels connections cleanup") || has("tunnels delete")))
+	fail("[1003] Tunnel not found");
 if (has("tunnels get")) out({ id: "tun1", status: process.env.STUB_CONNS === "0" ? "down" : "healthy", connections: process.env.STUB_CONNS === "0" ? [] : [{ id: "c1" }] });
 // what init needs (init --workers-dev --tunnel)
 if (has("auth whoami")) out({ authenticated: true, accounts: [{ id: "acc1", name: "Test" }] });
@@ -252,8 +256,27 @@ test("tunnel create: Access app + token before tunnel/DNS, secrets uploaded, tok
 	assert.ok(ri("workers secrets bulk") < ri("dns records delete dns1"));
 	assert.ok(ri("dns records delete dns1") < ri("zero-trust access applications delete app1"), "DNS goes before its Access app");
 	assert.ok(ri("tunnels delete tun1") >= 0 && ri("zero-trust access service-tokens delete st1") >= 0);
+	assert.match(rmCmds.find((c) => c.startsWith("tunnels connections cleanup")), /--force/);
+	assert.match(rmCmds.find((c) => c.startsWith("tunnels delete tun1")), /--force/);
 	assert.ok(!fs.existsSync(tokFile));
 	assert.ok(!Object.keys(s.config()).some((k) => k.startsWith("A2A_TUNNEL_")));
+});
+
+test("tunnel rm clears saved ids when the tunnel is already gone", async (t) => {
+	const s = await tunnelEnv(t);
+	s.setConfig({
+		A2A_TUNNEL_HOSTNAME: "wake-test.example.com", A2A_TUNNEL_ID: "tun-gone", A2A_TUNNEL_ORIGIN: "http://127.0.0.1:18789",
+		A2A_TUNNEL_PATH: "/hooks/wake", A2A_TUNNEL_ZONE_ID: "z1", A2A_TUNNEL_DNS_ID: "dns-gone",
+	});
+	const r = await s.cli(["tunnel", "rm"], { STUB_TUNNEL_GONE: "1" });
+	assert.equal(r.status, 0, r.stderr);
+	assert.match(r.stderr, /tunnel removed/);
+	assert.ok(!/could not be removed|pass --force/.test(r.stderr));
+	assert.ok(!Object.keys(s.config()).some((k) => k.startsWith("A2A_TUNNEL_")));
+	assert.ok(s.calls().some((c) => c.cmd.startsWith("tunnels get tun-gone")));
+	assert.ok(!s.calls().some((c) => c.cmd.startsWith("tunnels connections cleanup")), "a missing tunnel needs no cleanup");
+	const again = await s.cli(["tunnel", "create", "--tunnel-hostname", "wake-test.example.com"]);
+	assert.equal(again.status, 0, again.stderr);
 });
 
 test("tunnel create rolls back when a step fails", async (t) => {

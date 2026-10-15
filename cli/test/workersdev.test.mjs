@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseEnv } from "../lib/config.mjs";
 import { baseUrlFor, compactPrompt, needsSubdomain, noSubdomainHelp, parseWorkersDevSubdomain, LABEL_RE, REGISTRATION_STEPS, UNAVAILABLE_RE } from "../lib/workersdev.mjs";
+import { migrationStderr, withoutWranglerConfigMention } from "../lib/deploy.mjs";
 
 const BIN = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "bin", "a2a-exposed.mjs");
 
@@ -60,7 +61,18 @@ echo "$1 $2 profile=$prof sub=\${A2A_WORKERS_DEV_SUBDOMAIN:-} host=\${A2A_HOSTNA
 case "$1 $2" in
   "auth whoami") echo '{"authenticated":true,"accounts":[{"id":"acc123","name":"Test"}]}';;
   "d1 list") echo '[{"name":"wdtest","uuid":"d1-uuid"}]';;
-  "d1 migrations") echo '[]';;
+  "d1 migrations")
+    echo '[]'
+    printf '%s\n' '? About to apply 1 migration(s)' 'Your database may not be available to serve requests during the migration, continue?' '  Using fallback value in non-interactive context: yes' >&2
+    ;;
+  "workers secrets")
+    name=""; prev=""
+    for a in "$@"; do [ "$prev" = delete ] && name=$a; prev=$a; done
+    echo "workers secrets delete $name" >> "$log"
+    if [ "$name" = "WAKE_WEBHOOK_URL" ]; then exit 0; fi
+    printf "APIError: [10056] Binding '%s' not found\n" "$name" >&2
+    exit 1
+    ;;
   "deploy --message")
     sub=$(cat "$STUB_DIR/subdomain" 2>/dev/null)
     if [ -z "$sub" ]; then
@@ -83,6 +95,7 @@ case "$1 $2" in
         echo "✘ [ERROR] You need to register a workers.dev subdomain before publishing to workers.dev" >&2; exit 1
       fi
     fi
+    if [ -n "\${A2A_RETIRED_HOSTNAMES:-}" ]; then printf '%s\n' "Because 'preview_urls' is not in your Wrangler config file, Preview URLs will be enabled." >&2; fi
     printf 'Uploaded %s\\nDeployed %s triggers\\n  \\033[36mhttps://%s.%s.workers.dev\\033[0m\\n' "$A2A_WORKER_NAME" "$A2A_WORKER_NAME" "$A2A_WORKER_NAME" "$sub";;
 esac
 `;
@@ -115,6 +128,7 @@ test("init without --hostname: learns the existing subdomain from cf, saves the 
 	assert.equal(r.status, 0, r.stderr);
 	assert.equal(r.stdout.trim(), "https://wdtest.acme.workers.dev");
 	assert.match(r.stderr, /Like it\? Star us: https:\/\/github\.com\/telegraphic-dev\/a2a-exposed/);
+	assert.ok(!/Using fallback value in non-interactive context/.test(r.stderr), r.stderr);
 	assert.equal(r.stdout.includes("Like it?"), false);
 	const c = s.config();
 	assert.equal(c.A2A_BASE_URL, "https://wdtest.acme.workers.dev");
@@ -220,6 +234,8 @@ test("deploy --workers-dev moves a custom-domain deployment to workers.dev; the 
 	assert.match(r.stderr, /agent\.example\.com no longer serves this agent.*410 Gone/s);
 	assert.match(r.stderr, /Peers must update their URL for this agent: https:\/\/wdtest\.acme\.workers\.dev\/\.well-known\/agent-card\.json/);
 	assert.match(r.stderr, /wake tunnel is unaffected/);
+	assert.equal(withoutWranglerConfigMention(r.stderr), r.stderr);
+	assert.ok(!/Wrangler config file|Wrangler file/i.test(r.stderr), r.stderr);
 	// deploys after the switch: workers.dev (no custom domain), retired hostname passed to the Worker; the
 	// subdomain was learned on the first one and baked in by one more deploy
 	const deploys = s.calls().filter((l) => l.startsWith("deploy")).slice(1);
@@ -248,6 +264,33 @@ test("deploy --hostname moves a workers.dev deployment back to a custom domain",
 	assert.equal(s.config().A2A_RETIRED_HOSTNAMES, "agent.example.com");
 	assert.equal((await s.cli(["deploy", "--skip-install", "--hostname", "agent.example.com"])).status, 0);
 	assert.ok(!s.config().A2A_RETIRED_HOSTNAMES);
+});
+
+test("migrationStderr drops the non-interactive confirm line", () => {
+	const raw = "? About to apply 1 migration(s)\nYour database may not be available to serve requests during the migration, continue?\n  Using fallback value in non-interactive context: yes\n[1000] real failure\n";
+	assert.equal(migrationStderr(raw), "[1000] real failure");
+	assert.equal(withoutWranglerConfigMention("keep\nedit your Wrangler config file\n"), "keep\n");
+});
+
+test("wake unset treats a missing secret as already unset and prints one line", async (t) => {
+	const s = stubEnv(t, { subdomain: "acme" });
+	assert.equal((await s.init()).status, 0);
+	const r = await s.cli(["wake", "unset"]);
+	assert.equal(r.status, 0, r.stderr);
+	assert.match(r.stderr, /wake secrets removed \(wake is now a no-op; use polling\)/);
+	assert.ok(!/APIError|not found|10056/.test(r.stderr), r.stderr);
+	assert.equal(r.stderr.trim().split("\n").filter((l) => /wake secrets|APIError|not found/.test(l)).length, 1);
+});
+
+test("init --rotate-owner-token says what to update next", async (t) => {
+	const s = stubEnv(t, { subdomain: "acme" });
+	assert.equal((await s.init()).status, 0);
+	const old = s.config().A2A_OWNER_TOKEN;
+	const r = await s.cli(["init", "--skip-install", "--rotate-owner-token", "--dir", path.join(s.dir, "worker")]);
+	assert.equal(r.status, 0, r.stderr);
+	assert.ok(s.config().A2A_OWNER_TOKEN && s.config().A2A_OWNER_TOKEN !== old);
+	assert.match(r.stderr, /owner token replaced\. Update A2A_OWNER_TOKEN wherever this inbox is called, then run `npx -y a2a-exposed@latest peers sync`/);
+	assert.ok(!r.stderr.includes(old) && !r.stderr.includes(s.config().A2A_OWNER_TOKEN));
 });
 
 test("--workers-dev and --hostname together are rejected", async (t) => {

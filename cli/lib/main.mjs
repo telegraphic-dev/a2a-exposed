@@ -53,7 +53,8 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
                                                Plugin manifests leave MCP unset: the URL differs per deploy.
                                                When GET /owner/mcp reports enabled and the agent card is reachable,
                                                \`status\` prints \`claude mcp add --transport http a2a-exposed <url>/mcp\`
-                                --rotate-owner-token  on init, replace the owner token; other settings come from config.env
+                                --rotate-owner-token  on init, replace the owner token; other settings come from config.env.
+                                               Then update A2A_OWNER_TOKEN wherever this inbox is called, and run \`peers sync\`
                                 --upstream URL  proxy / expose mode: a public façade for an agent that already
                                                speaks A2A (JSON-RPC) on a private network. URL is its endpoint on
                                                a Cloudflare Tunnel hostname behind Access (never a Tailnet/LAN
