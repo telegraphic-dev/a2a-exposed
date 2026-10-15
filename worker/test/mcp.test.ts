@@ -231,7 +231,7 @@ test("authorization: consent page, CSP allows the redirect origin, password requ
 	c = await s.consent(q, "", "deny");
 	assert.equal(c.post.status, 302);
 	const den = new URL(c.post.headers.get("location")!);
-	assert.deepEqual([den.origin + den.pathname, den.searchParams.get("error"), den.searchParams.get("state"), den.searchParams.get("iss")], [CLAUDE_CB, "access_denied", "xyz", BASE]);
+	assert.deepEqual([den.origin + den.pathname, den.searchParams.get("error"), den.searchParams.get("error_description"), den.searchParams.get("state"), den.searchParams.get("iss")], [CLAUDE_CB, "access_denied", "the agent owner denied access", "xyz", BASE]);
 	// CSRF: a POST without the cookie is refused
 	const forged = await s.call("POST", "/oauth/authorize", { form: { ...q, csrf: "x".repeat(24), password: PASSWORD, decision: "approve" }, headers: { origin: BASE } });
 	assert.equal(forged.status, 403);

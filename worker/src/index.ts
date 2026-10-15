@@ -1312,7 +1312,7 @@ async function tokenEndpoint(req: Request, ctx: TenantContext): Promise<Response
 	if (now >= r.expires_ms) return oauthError("expired_token", "the device_code expired; start again");
 	if (r.status === "denied") {
 		await ctx.DB.prepare("DELETE FROM device_requests WHERE device_hash = ?").bind(hash).run();
-		return oauthError("access_denied", "the inbox owner denied this request");
+		return oauthError("access_denied", "the agent owner denied this request");
 	}
 	if (r.status === "pending") {
 		// RFC 8628 §3.5: polling faster than the interval -> slow_down, and the interval grows by 5 s for good
@@ -1321,7 +1321,7 @@ async function tokenEndpoint(req: Request, ctx: TenantContext): Promise<Response
 			return oauthError("slow_down", `polling too fast; wait at least ${r.interval_s + 5} seconds between requests`);
 		}
 		await ctx.DB.prepare("UPDATE device_requests SET last_poll_ms = ? WHERE device_hash = ?").bind(now, hash).run();
-		return oauthError("authorization_pending", "waiting for the inbox owner to approve");
+		return oauthError("authorization_pending", "waiting for the agent owner to approve");
 	}
 	// approved: single use. Only the request that flips the row gets the token; the row is then deleted.
 	const claimed = await ctx.DB.prepare("UPDATE device_requests SET status = 'redeemed' WHERE device_hash = ? AND status = 'approved'").bind(hash).run();
@@ -2029,7 +2029,7 @@ async function authorizePage(req: Request, ctx: TenantContext, url: URL, head = 
 		return show(403, { kind: "error", text: "This form expired or came from another site. Start connecting again from your MCP client." });
 	if (form.decision === "deny") {
 		log("mcp_authorization_denied", { ip, clientName: c.client!.client_name });
-		return redirectWith(ctx, c.redirect!, { error: "access_denied", error_description: "the inbox owner denied access", state: c.params.state });
+		return redirectWith(ctx, c.redirect!, { error: "access_denied", error_description: "the agent owner denied access", state: c.params.state });
 	}
 	if (form.decision === "oidc") {
 		const started = await O.startOidc(ctx, {
