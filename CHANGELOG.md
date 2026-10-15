@@ -4,6 +4,10 @@ All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.
 
 ## Unreleased
 
+## 0.8.6 - 2026-10-15
+
+`npx -y a2a-exposed@latest deploy` (no new inbox D1 migration).
+
 - **Library.** A Worker or D1 removal that receives Cloudflare code 10000 or 7403 waits for the new permission to apply, for up to 90 seconds after consent, and returns status `waiting` with "Waiting for Cloudflare to apply the new permission…". Retries in that window keep the access token from the one refresh for that step. `runRemovalStep` accepts `consentedAt` or `secondsSinceConsent`, an optional `refreshAccess` hook, and an optional `onEvent` callback. With `refreshAccess` omitted, the step refreshes the stored grant once. A `refreshAccess` hook that throws is recorded as a removal failure. A token response that carries `refresh_token` replaces the stored refresh token. A token response that omits `refresh_token` leaves the stored refresh token in place. The refresh request omits `scope`. A response that omits `scope` leaves the stored scopes in place. Migration `0015_cloudflare_grant_access.sql` adds that sealed access token on the control-core library's own storage (`control/migrations/`). The inbox Worker's D1 (`worker/migrations/`) is unchanged, which keeps the "no new inbox D1 migration" note.
 
 ## 0.8.5 - 2026-10-15
