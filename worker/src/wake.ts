@@ -101,7 +101,7 @@ export function wakeSummary(ev: WakeEvent, cli: string, withPreview = true): str
 			? `an agent calling itself ${JSON.stringify(p.clientName || p.clientId || "(no name)")}${p.agentCardUrl ? ` (claimed card: ${JSON.stringify(p.agentCardUrl)}${p.agentCardPrivate ? ", on a private network: not publicly reachable" : ""})` : ""}`
 			: "an agent";
 		return [
-			`A2A pairing request: ${who} asks to connect to your inbox (code ${p.userCode}, expires in ${Math.round(p.expiresIn / 60)} minutes).`,
+			`A2A pairing request: ${who} asks to connect to your A2A endpoint (code ${p.userCode}, expires in ${Math.round(p.expiresIn / 60)} minutes).`,
 			pairingInstructions(p, cli),
 			`The name and card URL are claimed by the requester (untrusted). Nothing happens unless the request is approved.`,
 		].join("\n");

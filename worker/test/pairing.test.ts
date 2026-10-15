@@ -512,7 +512,7 @@ test("pairing wakes: summary for each preset; requester text only where previews
 	const ev: WakeEvent = { contextId: "pairing", taskId: "none", taskIds: [], from: "Barry", preview: "", kind: "pairing_request", publicUrl: BASE,
 		pairing: { userCode: "WDJB-2345", verificationUriComplete: `${BASE}/device?user_code=WDJB-2345`, approval: "human", clientName: "Barry", clientId: "barry", agentCardUrl: "https://barry.example.org/card", expiresIn: 600 } };
 	const sum = wakeSummary(ev, "npx -y a2a-exposed@latest");
-	assert.match(sum, /^A2A pairing request: an agent calling itself "Barry" \(claimed card: "https:\/\/barry\.example\.org\/card"\) asks to connect to your inbox \(code WDJB-2345, expires in 10 minutes\)\./);
+	assert.match(sum, /^A2A pairing request: an agent calling itself "Barry" \(claimed card: "https:\/\/barry\.example\.org\/card"\) asks to connect to your A2A endpoint \(code WDJB-2345, expires in 10 minutes\)\./);
 	assert.match(sum, /never approve on your own\. Show them the code WDJB-2345 and give them this link: https:\/\/agent\.example\.com\/device\?user_code=WDJB-2345/);
 	const agentSum = wakeSummary({ ...ev, pairing: { ...ev.pairing!, approval: "agent" } }, "a2a");
 	assert.match(agentSum, /Only if they say yes, run `a2a pair approve WDJB-2345`; if they say no \(or don't answer\), `a2a pair deny WDJB-2345`/);
