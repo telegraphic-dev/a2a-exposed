@@ -343,26 +343,30 @@ type Obtained =
 async function obtainAccess(input: ObtainInput, row: InboxRow, step: RemovalId, rotationsBefore: number, continuing: boolean, windowMs: number): Promise<Obtained> {
 	if (input.refreshAccess) {
 		await writeHeldAccess(input.database, input.userId, null);
-		const refreshed = await input.refreshAccess({
-			database: input.database,
-			secret: input.secret,
-			clientId: input.clientId,
-			clientSecret: input.clientSecret,
-			userId: input.userId,
-			fetchMs: input.fetchMs,
-			now: input.now,
-			fetchImpl: input.fetchImpl,
-		});
-		if (!refreshed.ok) {
-			return { ok: false, error: refreshed.error, rotations: rotationsBefore, lock: refreshed.lock ?? (refreshed.error === "busy" ? "busy" : "hook") };
+		try {
+			const refreshed = await input.refreshAccess({
+				database: input.database,
+				secret: input.secret,
+				clientId: input.clientId,
+				clientSecret: input.clientSecret,
+				userId: input.userId,
+				fetchMs: input.fetchMs,
+				now: input.now,
+				fetchImpl: input.fetchImpl,
+			});
+			if (!refreshed.ok) {
+				return { ok: false, error: refreshed.error, rotations: rotationsBefore, lock: refreshed.lock ?? (refreshed.error === "busy" ? "busy" : "hook") };
+			}
+			const rotated = refreshed.rotated !== false;
+			return {
+				ok: true,
+				accessToken: refreshed.accessToken,
+				rotations: rotationsBefore + (rotated ? 1 : 0),
+				lock: refreshed.lock ?? "hook",
+			};
+		} catch {
+			return { ok: false, error: "failed", rotations: rotationsBefore, lock: "hook" };
 		}
-		const rotated = refreshed.rotated !== false;
-		return {
-			ok: true,
-			accessToken: refreshed.accessToken,
-			rotations: rotationsBefore + (rotated ? 1 : 0),
-			lock: refreshed.lock ?? "hook",
-		};
 	}
 	if (typeof input.accessToken === "string" && input.accessToken) {
 		await writeHeldAccess(input.database, input.userId, null);

@@ -1096,6 +1096,41 @@ test("a busy refresh lock is a removal failure and does not call the Cloudflare 
 	assert.equal(showsSecret(events), false);
 });
 
+test("a throwing refreshAccess hook is a removal failure and does not call Cloudflare", async (t) => {
+	const db = openDb();
+	const userId = await seed(db, "inbox", "workers");
+	const api = cloudflareApi({});
+	t.after(api.restore);
+	await walk(db, userId, "verify");
+	const row = await readCloudflareInbox(db, userId);
+	const removal = removalApi({});
+	const events: RemovalEvent[] = [];
+	const failed = await runRemovalStep({
+		database: db,
+		secret,
+		clientId: "cf-id",
+		clientSecret: "cf-secret",
+		userId,
+		inboxId: row!.id,
+		fetchMs: 1_000,
+		fetchImpl: removal.fetchImpl,
+		refreshAccess: async () => {
+			throw new Error("cache refresh failed cf_access_SECRET");
+		},
+		onEvent: (event) => events.push(event),
+	});
+	assert.equal(failed.status, "fail");
+	assert.match(failed.row?.step_error ?? "", /Connect Cloudflare again/);
+	assert.equal((failed.row?.step_error ?? "").includes("cf_access_SECRET"), false);
+	assert.equal(removal.tokens.length, 0);
+	assert.equal(removal.calls.length, 0);
+	assert.equal(events[0]?.event, "removal_step_failed");
+	assert.equal(events[0]?.lock, "hook");
+	assert.equal(events[0]?.status, 0);
+	assert.equal(events[0]?.code, null);
+	assert.equal(showsSecret(events), false);
+});
+
 test("removal keeps the stored refresh token when the token response omits it", async (t) => {
 	const db = openDb();
 	const userId = await seed(db, "inbox", "workers");
