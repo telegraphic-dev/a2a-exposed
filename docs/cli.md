@@ -59,7 +59,7 @@ init [--hostname <host> | --workers-dev [--workers-dev-subdomain NAME]]
 | `--no-upstream-token` | The upstream checks no bearer. Saved |
 | `--worker-dir` | Where the Worker project copy lives. Default `<config dir>/worker`. `--dir` is the same flag |
 | `--tunnel` | On `init` only: deploy, then `tunnel create` |
-| `--rotate-owner-token` | On `init`: replace the owner token. Other settings come from `config.env` |
+| `--rotate-owner-token` | On `init`: replace the owner token. Other settings come from `config.env`. Then update `A2A_OWNER_TOKEN` wherever this inbox is called, and run `peers sync` |
 
 Wake secrets are read from `WAKE_WEBHOOK_URL`, `WAKE_WEBHOOK_KEY`, and `WAKE_HMAC_SECRET`. They are never arguments.
 
@@ -81,7 +81,7 @@ For a webhook that only listens locally. Needs Zero Trust and a zone on the acco
 | --- | --- |
 | `tunnel create` | Named tunnel, proxied DNS, and an Access app that admits one service token. Flags: `--tunnel-zone`, `--tunnel-hostname`, `--tunnel-origin`, `--tunnel-path`, `--show-token`, `--zero-trust-org` |
 | `tunnel status` | Tunnel, Access, and Worker state, plus probes |
-| `tunnel rm` | Delete the tunnel, DNS, Access app, service token, and Worker wake secrets for that tunnel |
+| `tunnel rm` | Delete the tunnel, DNS, Access app, service token, and Worker wake secrets for that tunnel. If the tunnel is already gone, the saved ids are cleared. Removing the Worker and D1 database is in [Self-hosting](self-hosting.md#remove-an-inbox) |
 
 ### `status`, `upstream`, `url`, `config`
 

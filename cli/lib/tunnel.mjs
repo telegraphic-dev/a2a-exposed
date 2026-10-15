@@ -428,8 +428,11 @@ export async function remove(o, { quiet = false } = {}) {
 	// 2. DNS before Access, so the hostname never resolves without its Access app
 	await attempt("DNS record", "A2A_TUNNEL_DNS_ID", () => cfCall(dir, ["dns", "records", "delete", C.get("A2A_TUNNEL_DNS_ID"), "-z", C.get("A2A_TUNNEL_ZONE_ID"), "--force"], { allowNotFound: true }));
 	await attempt("tunnel", "A2A_TUNNEL_ID", () => {
-		cfCall(dir, ["tunnels", "connections", "cleanup", C.get("A2A_TUNNEL_ID")], { allowNotFound: true });
-		cfCall(dir, ["tunnels", "delete", C.get("A2A_TUNNEL_ID"), "--force"], { allowNotFound: true });
+		const id = C.get("A2A_TUNNEL_ID");
+		// Already deleted (a previous rm stopped on the confirm prompt, or it was removed by hand): clear the saved id.
+		if (!cfCall(dir, ["tunnels", "get", id], { allowNotFound: true })) return;
+		cfCall(dir, ["tunnels", "connections", "cleanup", id, "--force"], { allowNotFound: true });
+		cfCall(dir, ["tunnels", "delete", id, "--force"], { allowNotFound: true });
 	});
 	await attempt("Access application (and its policy)", "A2A_TUNNEL_ACCESS_APP_ID", () => cfCall(dir, ["zero-trust", "access", "applications", "delete", C.get("A2A_TUNNEL_ACCESS_APP_ID"), "--force"], { allowNotFound: true }));
 	await attempt("Access service token", "A2A_TUNNEL_ACCESS_TOKEN_ID", () => {

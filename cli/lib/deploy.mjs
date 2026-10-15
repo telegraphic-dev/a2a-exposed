@@ -103,10 +103,13 @@ function syncTemplate(dir) {
 	fs.cpSync(src, dir, { recursive: true, force: true, filter: (p) => !skip.has(path.basename(p)) });
 }
 
-function run(cmd, args, { cwd, env, capture = false, allowFail = false } = {}) {
-	const r = spawnSync(cmd, args, { cwd, env: env || process.env, stdio: ["ignore", capture ? "pipe" : "inherit", "inherit"], encoding: "utf8" });
+function run(cmd, args, { cwd, env, capture = false, captureStderr = false, allowFail = false } = {}) {
+	const r = spawnSync(cmd, args, { cwd, env: env || process.env, stdio: ["ignore", capture ? "pipe" : "inherit", capture && captureStderr ? "pipe" : "inherit"], encoding: "utf8" });
 	if (r.error) die(`${cmd}: ${r.error.message}`);
-	if (r.status !== 0 && !allowFail) die(`${cmd} ${args[0] || ""} ${args[1] || ""} failed (exit ${r.status})`);
+	if (r.status !== 0 && !allowFail) {
+		if (captureStderr && r.stderr) process.stderr.write(r.stderr.endsWith("\n") ? r.stderr : r.stderr + "\n");
+		die(`${cmd} ${args[0] || ""} ${args[1] || ""} failed (exit ${r.status})`);
+	}
 	return r;
 }
 
@@ -298,26 +301,61 @@ async function verifyDeployedCard(base) {
 	console.error(`warning: agent card not reachable yet at ${base} (${r.lastError || "no answer"}); ${C.get("A2A_HOSTNAME") ? "a new custom domain" : "a new workers.dev deployment or subdomain"} can take a few minutes. Check again with: ${CLI} status`);
 }
 
+/** Drop cf's non-interactive confirm line. The migrations still apply; the question is answered yes. */
+export function migrationStderr(text) {
+	return String(text || "").split(/\r?\n/).filter((line) => {
+		const t = line.trim();
+		if (!t) return false;
+		if (/Using fallback value in non-interactive context/i.test(t)) return false;
+		if (/^\? About to apply \d+ migration/.test(t)) return false;
+		if (/may not be available to serve requests during the migration, continue\?/.test(t)) return false;
+		return true;
+	}).join("\n");
+}
+
 /** Apply D1 migrations quietly: cf prints a bare JSON array (often `[]`) when stdout is not a TTY. */
 function applyMigrations(dir, env) {
 	step("applying D1 migrations");
-	const r = runCf(dir, ["d1", "migrations", "apply", C.get("A2A_D1_ID"), "--dir", "migrations"], { env, capture: true });
+	const r = runCf(dir, ["d1", "migrations", "apply", C.get("A2A_D1_ID"), "--dir", "migrations"], { env, capture: true, captureStderr: true, allowFail: true });
+	const err = migrationStderr(r.stderr);
+	if (err) console.error(err);
+	if (r.status !== 0) die(`cf d1 migrations failed (exit ${r.status})`);
 	let applied = null;
 	try { applied = JSON.parse(r.stdout); } catch { /* not JSON: show as is */ }
 	if (Array.isArray(applied)) console.error(applied.length ? `    applied: ${applied.map((m) => m.name || m.id || JSON.stringify(m)).join(", ")}` : "    (none pending)");
 	else if (r.stdout.trim()) console.error(r.stdout.trim());
 }
 
+/** cf deploy sometimes names a Wrangler file. This project configures the Worker in cloudflare.config.ts. */
+export function withoutWranglerConfigMention(text) {
+	return String(text || "").split(/\n/).filter((line) => !/Wrangler config file|Wrangler file/i.test(line)).join("\n");
+}
+
 /** Run a command, streaming its output to stderr while collecting it. */
 function runTee(cmd, args, { cwd, env }) {
 	return new Promise((resolve, reject) => {
 		const ch = spawn(cmd, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
-		let out = "";
-		const on = (d) => { process.stderr.write(d); out += d; };
-		ch.stdout.on("data", on);
-		ch.stderr.on("data", on);
+		let out = "", pending = "";
+		const take = (d) => {
+			pending += d;
+			const lines = pending.split("\n");
+			pending = lines.pop();
+			for (const line of lines) {
+				if (withoutWranglerConfigMention(line) !== line) continue;
+				process.stderr.write(line + "\n");
+				out += line + "\n";
+			}
+		};
+		ch.stdout.on("data", take);
+		ch.stderr.on("data", take);
 		ch.on("error", reject);
-		ch.on("close", (code) => resolve({ status: code ?? 1, out }));
+		ch.on("close", (code) => {
+			if (pending && withoutWranglerConfigMention(pending) === pending) {
+				process.stderr.write(pending);
+				out += pending;
+			}
+			resolve({ status: code ?? 1, out });
+		});
 	});
 }
 
@@ -421,6 +459,7 @@ export async function init(o) {
 	applyMigrations(dir, env);
 
 	let ownerToken = C.fileConfig().A2A_OWNER_TOKEN;
+	const rotated = !!(ownerToken && o["rotate-owner-token"]);
 	if (!ownerToken || o["rotate-owner-token"]) ownerToken = randomToken(32);
 	C.saveConfig({ A2A_OWNER_TOKEN: ownerToken, A2A_BASE_URL: publicBase() || undefined });
 
@@ -432,6 +471,7 @@ export async function init(o) {
 	console.log(base);
 	reportSwitch(switched);
 	proxyNote(secrets);
+	if (rotated) console.error(`owner token replaced. Update A2A_OWNER_TOKEN wherever this inbox is called, then run \`${CLI} peers sync\` so uploaded peers stay readable.`);
 	console.error(`config saved to ${C.CONFIG_FILE} (chmod 600). Next: ${CLI} status (shows the next setup step)`);
 	printStar();
 }
@@ -594,7 +634,16 @@ export async function wake(sub, o) {
 	if (sub === "unset") {
 		const dir = workerDir(o), name = workerName();
 		const env = cfEnv();
-		for (const k of WAKE_SECRETS) runCf(dir, ["workers", "secrets", "delete", k, "--worker", name, "--force"], { env, allowFail: true });
+		const problems = [];
+		for (const k of WAKE_SECRETS) {
+			const r = runCf(dir, ["workers", "secrets", "delete", k, "--worker", name, "--force"], { env, allowFail: true, capture: true, captureStderr: true });
+			if (r.status === 0) continue;
+			const err = `${r.stderr || ""}\n${r.stdout || ""}`;
+			if (/404|not found|does not exist|could not be found/i.test(err)) continue; // already unset
+			const line = (err.match(/\[\d+\][^\n]*/) || [err.trim().split("\n").filter(Boolean).pop() || "cf failed"])[0];
+			problems.push(`${k}: ${line.slice(0, 300)}`);
+		}
+		if (problems.length) die(`could not remove wake secrets:\n  ${problems.join("\n  ")}`);
 		return console.error("wake secrets removed (wake is now a no-op; use polling)");
 	}
 	die("usage: wake set|unset|test|preview|fingerprint");

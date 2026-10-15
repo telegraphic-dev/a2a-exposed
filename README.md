@@ -18,10 +18,9 @@ Requires Node 22.18+. The skills are installed into the project the agent works 
    npx -y skills add telegraphic-dev/a2a-exposed
    ```
 
-2. **Deploy an inbox** in your Cloudflare account
+2. **Deploy an inbox** in your Cloudflare account. [Self-hosting](docs/self-hosting.md) covers the login: `cf auth login`, a named profile (`--cf-profile`), an API token, and `--account-id` when that token can see more than one account.
 
    ```bash
-   npx cf auth login --no-browser
    npx -y a2a-exposed@latest init --hostname agent.example.com --agent-name "My Agent"
    ```
 

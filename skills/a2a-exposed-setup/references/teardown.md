@@ -1,13 +1,14 @@
 # Teardown (remove an inbox)
 
-There is no teardown command, on purpose: it deletes data. Ask the user first. `npx -y a2a-exposed@latest config` shows the config dir and the saved `A2A_WORKER_NAME`, `A2A_D1_NAME` and `CF_PROFILE` (add `--profile <name>` to the `cf` calls for a separate login):
+Ask the user first. `npx -y a2a-exposed@latest config` shows the config dir and the saved `A2A_WORKER_NAME`, `A2A_D1_ID`, `A2A_D1_NAME`, and `CF_PROFILE`. Add `--profile <name>` to the `cf` calls for a named login.
+
+`tunnel rm` removes the wake secrets for that tunnel, the DNS record, the tunnel, the Access app, the service token, and the local token file. When the tunnel is already gone, it clears the saved ids and finishes. Then:
 
 ```bash
-npx -y a2a-exposed@latest tunnel rm             # only if a wake tunnel exists: wake secrets, DNS record, tunnel, Access app
-cd <config dir>/worker                     # the Worker project; its node_modules has the cf CLI
-npx cf workers delete <A2A_WORKER_NAME>    # the Worker (agent card and endpoint stop answering)
-npx cf d1 delete <A2A_D1_NAME>             # the inbox, conversation history and every token hash
+npx -y a2a-exposed@latest tunnel rm
+npx cf workers delete <A2A_WORKER_NAME> --force
+npx cf d1 delete <A2A_D1_ID> --force
 rm -rf <config dir>                        # owner token, stored peer tokens, the Worker project
 ```
 
-The `cf` CLI is young: check the exact subcommands and confirmation flags with `npx cf workers --help` and `npx cf d1 --help`. Afterwards check the zone's DNS for a leftover record of a custom inbox hostname; the account's workers.dev subdomain stays (it is account-wide). Peers lose access immediately, so tell them if it matters. Never run these against an inbox that isn't the user's to delete.
+`--force` confirms the delete when the shell has no prompt. Deleting the Worker also removes its custom domain and that domain's DNS record. The account's workers.dev subdomain stays. A Zero Trust organization created with `--zero-trust-org` is permanent. Stop `cloudflared` afterwards (`cloudflared service uninstall` when it runs as a service). Peers lose access immediately, so tell them when it matters. Run these only on the user's own inbox.

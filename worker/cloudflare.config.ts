@@ -11,7 +11,7 @@ const v = (k: string) => (e[k] ?? "").trim();
 const name = v("A2A_WORKER_NAME") || "a2a-exposed";
 const hostname = v("A2A_HOSTNAME"); // e.g. agent.example.com (on a zone in your account)
 // No hostname: serve on <name>.<account subdomain>.workers.dev instead of a custom domain (and the other way round:
-// with a hostname, the workers.dev route is switched off).
+// with a hostname, the workers.dev route is switched off). Preview URLs follow that same switch.
 const workersDev = !hostname;
 const wdSubdomain = v("A2A_WORKERS_DEV_SUBDOMAIN"); // the account's workers.dev subdomain, once known
 // Public base URL for the agent card, derived only from where the Worker is served (no override: a local webhook,
@@ -112,6 +112,7 @@ export default defineConfig((ctx) => ({
 		...(hosted ? { exports: { TenantStore: exports.durableObject({ storage: "sqlite" }) } } : {}),
 		...(hostname ? { domains: [hostname] } : {}),
 		workersDev,
+		previewUrls: workersDev,
 		// Optional persisted Workers Logs (A2A_WORKERS_LOGS=1, `init|deploy --workers-logs`): the JSON event lines plus
 		// invocation logs with CPU time. Query strings are redacted, so one-time setup links never reach the logs.
 		...(v("A2A_WORKERS_LOGS") === "1" ? { observability: { enabled: true, redactQueryString: true, logs: { enabled: true, invocationLogs: true } } } : {}),
