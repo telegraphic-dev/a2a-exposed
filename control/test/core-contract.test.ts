@@ -42,6 +42,10 @@ import {
 	openCloudflareRefresh,
 	openWakeSecrets,
 	permissionRetryDue,
+	REMOVAL_PERMISSION_DELAYS_MS,
+	REMOVAL_PERMISSION_WINDOW_MS,
+	refreshTokenAfterResponse,
+	removalRetryDue,
 	pushFromRow,
 	readCloudflareInbox,
 	readCloudflareInboxById,
@@ -135,6 +139,13 @@ test("the entry re-exports tenants, provisioning, routing, env, and migrations",
 	assert.equal(PROVISION_TAG_NAME, "A2A_PROVISION_TAG");
 	assert.equal(PERMISSION_TRIES, 4);
 	assert.deepEqual(PERMISSION_DELAYS_MS, [2_000, 4_000, 8_000]);
+	assert.equal(REMOVAL_PERMISSION_WINDOW_MS, 90_000);
+	assert.deepEqual(REMOVAL_PERMISSION_DELAYS_MS, [2_000, 4_000, 8_000, 16_000, 30_000, 30_000]);
+	assert.equal(REMOVAL_PERMISSION_DELAYS_MS.reduce((sum, delay) => sum + delay, 0), 90_000);
+	assert.equal(removalRetryDue(null), false);
+	assert.equal(refreshTokenAfterResponse(undefined, "previous"), "previous");
+	assert.equal(refreshTokenAfterResponse("", "previous"), "previous");
+	assert.equal(refreshTokenAfterResponse("next", "previous"), "next");
 	assert.deepEqual(WIZARD_STEPS, ["grant", "account", "address", "name", "database", "migrations", "upload", "verify"]);
 	assert.deepEqual(WAKE_PRESETS, ["grok-bot", "claude-code", "openclaw-wake", "openclaw-agent", "hermes", "generic"]);
 	assert.equal(CONTROL_MIGRATIONS_DIR, "control/migrations");
@@ -169,6 +180,8 @@ test("the entry re-exports tenants, provisioning, routing, env, and migrations",
 		openCloudflareRefresh,
 		openWakeSecrets,
 		permissionRetryDue,
+		refreshTokenAfterResponse,
+		removalRetryDue,
 		pushFromRow,
 		readCloudflareInbox,
 		readCloudflareInboxById,

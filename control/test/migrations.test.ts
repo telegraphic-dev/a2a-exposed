@@ -138,3 +138,16 @@ test("0014 keeps an existing inbox and allows a second one", () => {
 	).run("b".repeat(32), later, later);
 	assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM cloudflare_inbox WHERE "userId" = 'user-a'`).get()?.n, 2);
 });
+
+test("0015 adds removal_access on a grant that already exists", () => {
+	const db = new DatabaseSync(":memory:");
+	apply(db, files.filter((name) => name < "0015_cloudflare_grant_access.sql"));
+	insertUser(db, "user-a", "a@example.com");
+	db.prepare(
+		`INSERT INTO cloudflare_grant ("userId", "accountId", choice, host, requested_scope, created_at, updated_at) VALUES ('user-a', 'cf-user', 'inbox', 'workers', 'user-details.read', ?, ?)`,
+	).run(earlier, earlier);
+	apply(db, ["0015_cloudflare_grant_access.sql"]);
+	assert.equal(db.prepare(`SELECT removal_access FROM cloudflare_grant WHERE "userId" = 'user-a'`).get()?.removal_access, null);
+	db.prepare(`UPDATE cloudflare_grant SET removal_access = ? WHERE "userId" = 'user-a'`).run("sealed");
+	assert.equal(db.prepare(`SELECT removal_access FROM cloudflare_grant WHERE "userId" = 'user-a'`).get()?.removal_access, "sealed");
+});

@@ -1,6 +1,9 @@
 // The setup consent stores the latest Cloudflare refresh token encrypted.
 // Cloudflare treats that token as single-use: refreshing again with the old
 // token gets 401 from the token endpoint. The stored value is the refresh token.
+// A response that carries refresh_token replaces it. A response that omits
+// refresh_token leaves the stored token in place. The refresh request omits
+// scope. A response that omits scope leaves the stored scopes in place.
 
 import type { Sql } from "../core/sql.ts";
 
@@ -79,6 +82,15 @@ export async function openCloudflareRefresh(secret: string, userId: string, seal
 	} catch {
 		return null;
 	}
+}
+
+/**
+ * Refresh token to keep after a token response.
+ * A non-empty `refresh_token` replaces `previous`. An empty one leaves `previous` in place.
+ */
+export function refreshTokenAfterResponse(responseToken: unknown, previous: string | null): string | null {
+	if (typeof responseToken === "string" && responseToken.length > 0) return responseToken;
+	return previous && previous.length > 0 ? previous : null;
 }
 
 function expiresAt(expiresIn: unknown, now: number): string | null {
@@ -264,18 +276,19 @@ export async function refreshCloudflareGrant(input: {
 		} : null;
 		const accessToken = typeof body?.access_token === "string" ? body.access_token : "";
 		if (!accessToken) return { ok: false, error: "failed" };
-		const next = typeof body?.refresh_token === "string" ? body.refresh_token : "";
-		const sealed = next ? await sealCloudflareRefresh(input.secret, input.userId, next) : null;
+		const next = refreshTokenAfterResponse(body?.refresh_token, null);
+		const sealed = next ? await sealCloudflareRefresh(input.secret, input.userId, next) : current?.refresh_enc ?? null;
 		if (next && !sealed) {
 			await clearRefresh(input.database, input.userId, now);
 			return { ok: false, error: "unreadable" };
 		}
-		const scope = typeof body?.scope === "string" ? body.scope : current?.requested_scope ?? "";
+		const reportedScope = typeof body?.scope === "string" ? body.scope : null;
+		const scope = reportedScope ?? current?.granted_scope ?? current?.requested_scope ?? "";
 		await input.database.prepare(
 			`UPDATE cloudflare_grant SET refresh_enc = ?, granted_scope = COALESCE(?, granted_scope), access_expires_at = ?, updated_at = ? WHERE "userId" = ?`,
 		).bind(
 			sealed,
-			typeof body?.scope === "string" ? body.scope : null,
+			reportedScope,
 			expiresAt(body?.expires_in, now),
 			new Date(now).toISOString(),
 			input.userId,
