@@ -197,7 +197,8 @@ export async function renderWake(cfg: WakeConfig, ev: WakeEvent, opts: { nowMs?:
 		case "openclaw-agent":
 			bearer();
 			headers["idempotency-key"] = requestId;
-			body = JSON.stringify({ message: wakeSummary(ev, cli), name: "A2A endpoint", agentId: cfg.agentId || "main", sessionMode: "isolated", deliver: false });
+			// `name` is the hook name OpenClaw filters match. It stays "A2A inbox". The wake text itself starts with "A2A endpoint:".
+			body = JSON.stringify({ message: wakeSummary(ev, cli), name: "A2A inbox", agentId: cfg.agentId || "main", sessionMode: "isolated", deliver: false });
 			break;
 		case "hermes":
 			headers["x-request-id"] = requestId;

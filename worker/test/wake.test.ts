@@ -61,6 +61,8 @@ test("openclaw-agent: isolated, deliver false, idempotency key", async () => {
 	const r = (await renderWake({ preset: "openclaw-agent", url: "https://gw/hooks/agent", key: "h" }, ev, { requestId: "rid-1" }))!;
 	const b = JSON.parse(r.body);
 	assert.equal(b.sessionMode, "isolated"); assert.equal(b.deliver, false); assert.equal(b.agentId, "main");
+	assert.equal(b.name, "A2A inbox");
+	assert.match(b.message, /^A2A endpoint:/);
 	assert.equal(r.headers["idempotency-key"], "rid-1");
 	assert.ok(b.message.includes("peer-a"));
 });

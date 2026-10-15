@@ -76,7 +76,7 @@ Source: https://docs.openclaw.ai/automation/cron-jobs/webhooks
 2. **Reachability:** the gateway listens on `127.0.0.1:18789` by default, so the Worker can't reach it directly. Use the **secure tunnel** below (recommended), another HTTPS reverse proxy, or skip the webhook and use polling.
 3. Pick a preset:
    - **`openclaw-wake`** POSTs `<gateway>/hooks/wake` with `{"text": ..., "mode": "now", "agentId": "main"}`. This wakes the main session. OpenClaw treats wake text as a trusted system event, so this preset sends **no peer text**: only the peer label, ids, and the hint.
-   - **`openclaw-agent`** POSTs `<gateway>/hooks/agent` with `{"message": ..., "agentId": "main", "sessionMode": "isolated", "deliver": false}` plus an `Idempotency-Key` header. Each wake is an isolated run.
+   - **`openclaw-agent`** POSTs `<gateway>/hooks/agent` with `{"message": ..., "name": "A2A inbox", "agentId": "main", "sessionMode": "isolated", "deliver": false}` plus an `Idempotency-Key` header. Each wake is an isolated run. The hook name stays `A2A inbox` so an existing filter still matches. The message starts with `A2A endpoint:`.
 4. Set `WAKE_WEBHOOK_URL=https://<public gateway>/hooks/wake` (or `/hooks/agent`) and `WAKE_WEBHOOK_KEY=<hooks token>`. The Worker sends it as `Authorization: Bearer`. Use `--agent-id` for an agent other than `main`.
 
 ### Hermes Agent (`hermes`)

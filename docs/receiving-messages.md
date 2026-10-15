@@ -77,7 +77,7 @@ The ordered checklist and the failure rows are in the setup skill: [wake referen
 Hooks are off until the gateway config enables them with a dedicated token (not the gateway token). The gateway listens on `127.0.0.1:18789` by default, so use [the tunnel](self-hosting.md#local-webhook) or polling.
 
 - `openclaw-wake` POSTs `<gateway>/hooks/wake` with `{"text","mode":"now","agentId":"main"}`. No peer text in `text`.
-- `openclaw-agent` POSTs `<gateway>/hooks/agent` with `message`, `agentId`, `sessionMode: "isolated"`, `deliver: false`, and an `Idempotency-Key` header.
+- `openclaw-agent` POSTs `<gateway>/hooks/agent` with `message`, `name: "A2A inbox"`, `agentId`, `sessionMode: "isolated"`, `deliver: false`, and an `Idempotency-Key` header. The hook name stays `A2A inbox` so an existing filter still matches. The message starts with `A2A endpoint:`.
 
 `WAKE_WEBHOOK_KEY` is sent as `Authorization: Bearer`. `--agent-id` selects an agent other than `main`.
 
