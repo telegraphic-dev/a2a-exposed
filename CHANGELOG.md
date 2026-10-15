@@ -2,7 +2,9 @@
 
 All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.3.x), Worker template, control core, and skills. Versions follow [semver](https://semver.org); a `v*` tag publishes the CLI and `@a2a-exposed/control-core` to npm (see [Releases](docs/README.md#releases)).
 
-## Unreleased
+## 0.8.4 - 2026-10-15
+
+`npx -y a2a-exposed@latest deploy` (no new inbox D1 migration).
 
 - **Tunnel remove.** `tunnel rm` passes `--force` to `cf tunnels connections cleanup` and `cf tunnels delete`. When the tunnel is already gone, the command clears the saved ids and succeeds, so a later `tunnel create` can run.
 - **Remove an inbox.** [Self-hosting](docs/self-hosting.md#remove-an-inbox) lists what `tunnel rm` removes, then `cf workers delete` and `cf d1 delete`. `--zero-trust-org` creates a permanent Zero Trust organization. When `WAKE_WEBHOOK_URL` is already set, run `wake unset` before `tunnel create`.
