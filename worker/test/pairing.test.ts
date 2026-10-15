@@ -271,7 +271,7 @@ test("human approval: pending, slow_down, page approve with the password, single
 	assert.match(w.pairing.instructions, /never approve on your own[\s\S]*give them this link/);
 
 	let p = await s.poll(d.device_code);
-	assert.deepEqual([p.status, p.data.error], [400, "authorization_pending"]);
+	assert.deepEqual([p.status, p.data.error, p.data.error_description], [400, "authorization_pending", "waiting for the agent owner to approve"]);
 	p = await s.poll(d.device_code);
 	assert.deepEqual([p.status, p.data.error], [400, "slow_down"], "polled again at once");
 	assert.match(p.data.error_description, /at least 10 seconds/);
@@ -390,7 +390,8 @@ test("human mode: the owner token approves and denies; the device poll returns t
 	assert.equal(denied.data.decision, "denied");
 	const denyRow = s.DB.db.prepare("SELECT decided_by FROM device_requests WHERE user_code = ?").get(deny.user_code.replace("-", "")) as { decided_by: string };
 	assert.equal(denyRow.decided_by, "owner");
-	assert.equal((await s.poll(deny.device_code)).data.error, "access_denied");
+	const deniedPoll = await s.poll(deny.device_code);
+	assert.deepEqual([deniedPoll.data.error, deniedPoll.data.error_description], ["access_denied", "the agent owner denied this request"]);
 });
 
 test("a pairing label comes from the client name, a second one is suffixed, and inbox from uses it", async (t) => {
