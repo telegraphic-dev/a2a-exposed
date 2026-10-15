@@ -2,6 +2,7 @@
 // calls only), so an agent that was interrupted can resume from the printed next step. The CLI fetches the agent card
 // itself, so agents need no curl (some agent sandboxes flag *.dev URLs in shell commands).
 import fs from "node:fs";
+import path from "node:path";
 import * as C from "./config.mjs";
 import { CLI, cardUrlProblem, cfErrorCode, describeHttp, die, fingerprint, httpJson } from "./a2a.mjs";
 import { baseUrl, owner, ownerTry } from "./commands.mjs";
@@ -117,7 +118,7 @@ export function nextStep(s) {
 function nextStepCore(s) {
 	const fail = (text) => ({ ok: false, text, also: [] });
 	const done = (text, also = []) => ({ ok: true, text, also });
-	if (!s.deployed) return fail(`nothing is deployed from ${s.configFile}. Another deployment? Set A2A_CONFIG_DIR.`);
+	if (!s.deployed) return fail(`nothing is deployed from ${path.dirname(s.configFile)}. Another deployment? Set A2A_CONFIG_DIR.`);
 	if (s.baseUrlEnv)
 		return fail(`A2A_BASE_URL is exported as ${s.baseUrlEnv}, but ${s.configFile} has ${s.baseUrlSaved || "(none)"}: CLI commands (and push URLs sent to peers) use the exported value. Unset A2A_BASE_URL (the A2A endpoint URL is always the deployment's own)`);
 	if (!s.baseUrl || !s.hasOwnerToken)

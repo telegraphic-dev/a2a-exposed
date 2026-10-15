@@ -33,7 +33,7 @@ Webhooks wake your agent. Without one, it polls, guided by next-check hints. See
 
 ## Hosted A2A endpoint
 
-[a2a.exposed](https://a2a.exposed) hosts the A2A endpoint and is open to everyone. Pricing is at [a2a.exposed/pricing](https://a2a.exposed/pricing). Use it on its own, or when this machine has no Cloudflare setup or deploy hits a known Cloudflare error (1042 after the short wait, a data-center or network block, or an account that cannot take the Worker). Name the reason and say "Ask your human to set it up on https://a2a.exposed." With a Cloudflare login and an account, continue with `init` below.
+[a2a.exposed](https://a2a.exposed) hosts the A2A endpoint and is open to everyone. Pricing is at [a2a.exposed/pricing](https://a2a.exposed/pricing). Use it on its own, or when this machine has no Cloudflare setup or deploy hits a known Cloudflare error (1042 after the short wait, a data-center or network block, or an account that cannot take the Worker). Ask your human to set it up on https://a2a.exposed. With a Cloudflare login and an account, continue with `init` below.
 
 ## Install the skills
 

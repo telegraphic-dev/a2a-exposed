@@ -254,7 +254,7 @@ export function cfWorkDir(preferred) {
 }
 
 function needDeployment(o) {
-	if (!C.get("A2A_D1_ID") || !C.get("A2A_WORKER_NAME")) die(`nothing is deployed from ${C.CONFIG_FILE}. Another deployment? Set A2A_CONFIG_DIR.`);
+	if (!C.get("A2A_D1_ID") || !C.get("A2A_WORKER_NAME")) die(`nothing is deployed from ${C.CONFIG_DIR}. Another deployment? Set A2A_CONFIG_DIR.`);
 	const dir = D.workerDir(o);
 	if (!fs.existsSync(dir)) die(`worker project not found at ${dir}; run \`${CLI} deploy\` once`);
 	return cfWorkDir(dir);
@@ -262,7 +262,7 @@ function needDeployment(o) {
 
 /** `cf` cwd for `tunnel rm` / `uninstall`. A missing Worker project uses a temp directory with a writable cache. */
 function cfDirForRemove(o, { allowMissingProject = false } = {}) {
-	if (!C.get("A2A_D1_ID") || !C.get("A2A_WORKER_NAME")) die(`nothing is deployed from ${C.CONFIG_FILE}. Another deployment? Set A2A_CONFIG_DIR.`);
+	if (!C.get("A2A_D1_ID") || !C.get("A2A_WORKER_NAME")) die(`nothing is deployed from ${C.CONFIG_DIR}. Another deployment? Set A2A_CONFIG_DIR.`);
 	const dir = D.workerDir(o);
 	if (!fs.existsSync(dir) && !allowMissingProject) die(`worker project not found at ${dir}; run \`${CLI} deploy\` once`);
 	return cfWorkDir(dir);
@@ -483,9 +483,10 @@ export async function remove(o, { quiet = false, allowMissingProject = false, sk
 	const worker = D.workerName();
 	const label = `a2a-exposed wake ${worker}`;
 	const failures = [];
+	const removedParts = [];
 	const attempt = async (what, key, fn) => {
 		if (key && !C.get(key)) return;
-		try { await fn(); if (key) C.saveConfig({ [key]: null }); step(`removed ${what}`); }
+		try { await fn(); if (key) C.saveConfig({ [key]: null }); step(`removed ${what}`); removedParts.push(what); }
 		catch (e) { failures.push(`${what}: ${e.message}`); }
 	};
 	const host = C.get("A2A_TUNNEL_HOSTNAME");
@@ -502,7 +503,9 @@ export async function remove(o, { quiet = false, allowMissingProject = false, sk
 		}
 		try {
 			await putSecrets(dir, worker, Object.fromEntries(names.map((k) => [k, null])));
-			step(`removed Worker secrets for ${host} (${names.join(", ")})`);
+			const secretsWhat = `Worker secrets for ${host} (${names.join(", ")})`;
+			step(`removed ${secretsWhat}`);
+			removedParts.push(secretsWhat);
 		} catch (e) {
 			if (workerMissingError(e)) step(`Worker for ${host} is already gone; its secrets went with it`);
 			else failures.push(`Worker secrets for ${host} (${names.join(", ")}): ${e.message}`);
@@ -523,7 +526,11 @@ export async function remove(o, { quiet = false, allowMissingProject = false, sk
 		C.saveConfig({ A2A_TUNNEL_ACCESS_CLIENT_ID: null, A2A_TUNNEL_ACCESS_CLIENT_SECRET: null });
 	});
 	await attempt("tunnel token file", "A2A_TUNNEL_TOKEN_FILE", () => fs.rmSync(C.get("A2A_TUNNEL_TOKEN_FILE"), { force: true }));
-	if (failures.length) die(`some parts could not be removed (ids kept in ${C.CONFIG_FILE}; re-run ${rerun || "`tunnel rm`"}):\n  ${failures.join("\n  ")}`);
+	if (failures.length) {
+		const err = new CliError(`some parts could not be removed (ids kept in ${C.CONFIG_FILE}; re-run ${rerun || "`tunnel rm`"}):\n  ${failures.join("\n  ")}`);
+		err.removed = removedParts;
+		throw err;
+	}
 	C.saveConfig(Object.fromEntries(TUNNEL_KEYS.map((k) => [k, null])));
 	if (!quiet) console.error("tunnel removed. Stop cloudflared on the agent's machine (and `cloudflared service uninstall` if installed). Wakes are off until you set a new WAKE_WEBHOOK_URL (or use polling).");
 }

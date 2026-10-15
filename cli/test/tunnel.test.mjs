@@ -851,24 +851,51 @@ test("uninstall names the permission and what is left when Cloudflare refuses th
 	assert.equal(d1.config().A2A_WORKER_NAME, "tuntest", "config stays until the whole removal finishes");
 });
 
-test("uninstall DNS delete failure says uninstall --yes once", async (t) => {
+test("uninstall DNS delete failure lists what this run removed and says uninstall --yes once", async (t) => {
 	const s = await tunnelEnv(t);
+	const tokenFile = path.join(s.cfg, "tunnel-token");
+	fs.writeFileSync(tokenFile, "token\n", { mode: 0o600 });
 	s.setConfig({
 		A2A_TUNNEL_HOSTNAME: "wake-test.example.com", A2A_TUNNEL_ID: "tun1", A2A_TUNNEL_ZONE_ID: "z1", A2A_TUNNEL_DNS_ID: "dns1",
-		A2A_TUNNEL_ACCESS_APP_ID: "app1", A2A_TUNNEL_ACCESS_TOKEN_ID: "st1",
+		A2A_TUNNEL_ACCESS_APP_ID: "app1", A2A_TUNNEL_ACCESS_TOKEN_ID: "st1", A2A_TUNNEL_TOKEN_FILE: tokenFile,
 	});
 	const r = await s.cli(["uninstall", "--yes"], { STUB_FAIL: "dns records delete", STUB_FAIL_MSG: "[10000] Authentication error" });
 	assert.equal(r.status, 1);
 	assert.match(r.stderr, /The API token needs Zone DNS: Edit/);
 	assert.equal((r.stderr.match(/uninstall --yes/g) || []).length, 1);
 	assert.doesNotMatch(r.stderr, /tunnel rm/);
-	assert.match(r.stderr, /Removed: Worker tuntest/);
-	assert.doesNotMatch(r.stderr, /Removed: removed/);
+	const removed = (r.stderr.match(/Removed: .*/) || [""])[0];
+	assert.match(removed, /Worker tuntest; tunnel "a2a-exposed wake tuntest"; Access application "a2a-exposed wake tuntest"; Access service token "a2a-exposed wake tuntest"; tunnel token file/);
+	assert.doesNotMatch(removed, /Removed: removed|wake tunnel|DNS record/);
 	const notRemoved = (r.stderr.match(/Not removed: .*/) || [""])[0];
-	assert.match(notRemoved, /DNS record wake-test\.example\.com/);
-	assert.doesNotMatch(notRemoved, /wake tunnel/);
+	assert.match(notRemoved, /D1 d1; DNS record wake-test\.example\.com/);
+	assert.doesNotMatch(notRemoved, /untouched|wake tunnel/);
 	assert.ok(!s.calls().some((c) => c.cmd.startsWith("d1 delete")));
 	assert.equal(s.config().A2A_D1_ID, "d1");
+	assert.equal(s.config().A2A_TUNNEL_DNS_ID, "dns1");
+	assert.equal(s.config().A2A_TUNNEL_ID, undefined);
+	assert.equal(s.config().A2A_TUNNEL_TOKEN_FILE, undefined);
+	assert.equal(fs.existsSync(tokenFile), false);
+
+	const gone = await tunnelEnv(t);
+	gone.setConfig({
+		A2A_TUNNEL_HOSTNAME: "wake-test.example.com", A2A_TUNNEL_ID: "tun1", A2A_TUNNEL_ZONE_ID: "z1", A2A_TUNNEL_DNS_ID: "dns1",
+		A2A_TUNNEL_ACCESS_APP_ID: "app1", A2A_TUNNEL_ACCESS_TOKEN_ID: "st1",
+	});
+	const g = await gone.cli(["uninstall", "--yes"], { STUB_WORKER_MISSING: "1", STUB_FAIL: "dns records delete", STUB_FAIL_MSG: "[10000] Authentication error" });
+	assert.equal(g.status, 1);
+	assert.match(g.stderr, /Removed: Worker tuntest is already gone; tunnel "a2a-exposed wake tuntest"/);
+	assert.match(g.stderr, /Not removed: D1 d1 \(untouched because the Worker delete did not happen in this run\); DNS record wake-test\.example\.com/);
+	assert.ok(!gone.calls().some((c) => c.cmd.startsWith("d1 delete")));
+	assert.equal(gone.config().A2A_D1_ID, "d1");
+});
+
+test("tunnel status with nothing deployed names the config directory", async (t) => {
+	const s = await tunnelEnv(t);
+	s.setConfig({ A2A_WORKER_NAME: null, A2A_D1_ID: null });
+	const r = await s.cli(["tunnel", "status"]);
+	assert.equal(r.status, 1);
+	assert.match(r.stderr, new RegExp(`nothing is deployed from ${s.cfg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\. Another deployment\\? Set A2A_CONFIG_DIR`));
 });
 
 test("tunnel status JSON reads inactive as never connected", async (t) => {

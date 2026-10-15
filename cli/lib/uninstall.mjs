@@ -94,11 +94,13 @@ export async function uninstall(o) {
 	const removed = [];
 	const dir = name || d1 || tunnelish ? T.cfWorkDir(D.workerDir(o)) : "";
 	let workerGone = !name;
+	let workerDeletedThisRun = false;
 	let workerError = null;
 	if (name) {
 		try {
 			const r = T.cfCall(dir, ["workers", "delete", name, "--force"], { allowNotFound: true });
 			workerGone = true;
+			workerDeletedThisRun = r !== null;
 			const line = r === null ? `Worker ${name} is already gone` : `Worker ${name}`;
 			step(r === null ? line : `removed ${line}`);
 			removed.push(line);
@@ -113,7 +115,10 @@ export async function uninstall(o) {
 		try {
 			await T.remove(o, { allowMissingProject: true, skipSecrets: workerGone || workerAuth, quiet: !!name, rerun: `${CLI} uninstall --yes` });
 			removed.push("wake tunnel");
-		} catch (e) { tunnelError = e; }
+		} catch (e) {
+			tunnelError = e;
+			if (Array.isArray(e.removed)) removed.push(...e.removed);
+		}
 	} else step("no tunnel to remove");
 	if (workerError) {
 		const left = [d1 && `D1 ${d1Label} (untouched)`, name && `Worker ${name}`, tunnelError && tunnelLeft(tunnelError)].filter(Boolean);
@@ -121,7 +126,11 @@ export async function uninstall(o) {
 		removalError(err, { removed, left, workerGone: false, workerStill: true });
 	}
 	if (tunnelError) {
-		const left = [d1 && `D1 ${d1Label} (untouched)`, tunnelLeft(tunnelError)].filter(Boolean);
+		// The Worker delete did not happen in this run only when this call did not delete it (already gone, or no Worker name).
+		const d1Left = d1 && (workerDeletedThisRun
+			? `D1 ${d1Label}`
+			: `D1 ${d1Label} (untouched because the Worker delete did not happen in this run)`);
+		const left = [d1Left, tunnelLeft(tunnelError)].filter(Boolean);
 		removalError(tunnelError, { removed, left, workerGone });
 	}
 

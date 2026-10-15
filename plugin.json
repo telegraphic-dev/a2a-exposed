@@ -27,7 +27,7 @@
         "websiteURL": "https://github.com/telegraphic-dev/a2a-exposed",
         "defaultPrompt": [
           "Deploy an a2a-exposed Worker for this agent.",
-          "Handle an a2a-exposed wake or an inbox check.",
+          "Handle an a2a-exposed wake or an A2A endpoint check.",
           "Connect this agent to another A2A peer."
         ]
       },
