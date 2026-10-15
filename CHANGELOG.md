@@ -2,9 +2,9 @@
 
 All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.3.x), Worker template, control core, and skills. Versions follow [semver](https://semver.org); a `v*` tag publishes the CLI and `@a2a-exposed/control-core` to npm (see [Releases](docs/README.md#releases)).
 
-## Unreleased
+## 0.8.3 - 2026-10-15
 
-`npx -y a2a-exposed@latest deploy`.
+`npx -y a2a-exposed@latest deploy` (no new inbox D1 migration).
 
 - **OAuth.** A device-code poll that is still waiting reports `waiting for the agent owner to approve`. A denied device-code poll reports `the agent owner denied this request`. A denied MCP consent redirect reports `the agent owner denied access`.
 
