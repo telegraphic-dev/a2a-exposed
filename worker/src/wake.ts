@@ -23,6 +23,8 @@ export type PairingInfo = {
 	agentCardUrl: string;
 	agentCardPrivate?: boolean; // the claimed card is on a private network (Tailnet, LAN): informational, not reachable
 	expiresIn: number;
+	/** Dashboard page for this agent. Present only when MANAGE_URL is an https URL. */
+	manageUrl?: string;
 	replacesLabel?: string; // re-pairing: the requester proved it holds this active token; approval replaces it
 };
 
@@ -78,11 +80,14 @@ export function wakePayload(ev: WakeEvent, cli: string): Record<string, unknown>
 
 /** What the woken agent must do with a pairing request: ask its human, never approve on its own. */
 export function pairingInstructions(p: PairingInfo, cli: string): string {
+	const dash = p.manageUrl ? ` The dashboard page for this request is ${p.manageUrl}.` : "";
 	return p.approval === "human"
 		? `Ask your human; never approve on your own. Show them the code ${p.userCode} and give them this link: ${p.verificationUriComplete} . ` +
-			`They approve there with their approval password, or with \`${cli} pair approve ${p.userCode}\` (the owner token), after checking the code with the other agent's owner. Deny with \`${cli} pair deny ${p.userCode}\`. Details: \`${cli} pair list\`.`
+			`They approve there with their approval password, or with \`${cli} pair approve ${p.userCode}\` (the owner token), after checking the code with the other agent's owner. Deny with \`${cli} pair deny ${p.userCode}\`. Details: \`${cli} pair list\`.` +
+			dash
 		: `Ask your human; never approve on your own. Show them the code ${p.userCode}, who is asking, and the link ${p.verificationUriComplete} . ` +
-			`Only if they say yes, run \`${cli} pair approve ${p.userCode}\`; if they say no (or don't answer), \`${cli} pair deny ${p.userCode}\`.`;
+			`Only if they say yes, run \`${cli} pair approve ${p.userCode}\`; if they say no (or don't answer), \`${cli} pair deny ${p.userCode}\`.` +
+			dash;
 }
 
 function hintFor(ev: WakeEvent, cli: string): string {

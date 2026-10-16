@@ -55,7 +55,7 @@ async function mockServer(t, { script = [], card = true, metadata = false } = {}
 			return metadata ? send(200, { issuer: base, device_authorization_endpoint: base + "/oauth/device_authorization", token_endpoint: base + "/oauth/token", grant_types_supported: [GRANT] }) : send(404, {});
 		if (req.url === "/oauth/device_authorization") {
 			seen.device.push({ type: req.headers["content-type"], params: Object.fromEntries(new URLSearchParams(body)) });
-			return send(200, { device_code: "dev-code-secret", user_code: "WDJB-4827", verification_uri: base + "/device", verification_uri_complete: base + "/device?user_code=WDJB-4827", expires_in: 600, interval: 1 });
+			return send(200, { device_code: "dev-code-secret", user_code: "WDJB-4827", verification_uri: base + "/device", verification_uri_complete: base + "/device?user_code=WDJB-4827", expires_in: 3600, interval: 1 });
 		}
 		if (req.url === "/oauth/token") {
 			seen.token.push({ at: Date.now(), params: Object.fromEntries(new URLSearchParams(body)) });
@@ -114,7 +114,7 @@ test("connect --card-url names the request with that card, not the deployment ca
 		[broken]: { status: 0 },
 		"https://facade.example.com/.well-known/agent-card.json": { status: 200, body: { name: "deployment-card" } },
 		[peer]: { status: 200, body: { name: "Peer Inbox", supportedInterfaces: [{ url: "https://peer.example/", protocolBinding: "JSONRPC", protocolVersion: "1.0" }], securitySchemes: { pairing: { oauth2SecurityScheme: { flows: { deviceCode: { deviceAuthorizationUrl: "https://peer.example/oauth/device_authorization", tokenUrl: "https://peer.example/oauth/token", scopes: {} } } } } } } },
-		"https://peer.example/oauth/device_authorization": { status: 200, body: { device_code: "dev-code-secret", user_code: "WDJB-4827", verification_uri: "https://peer.example/device", verification_uri_complete: "https://peer.example/device?user_code=WDJB-4827", expires_in: 600, interval: 5 } },
+		"https://peer.example/oauth/device_authorization": { status: 200, body: { device_code: "dev-code-secret", user_code: "WDJB-4827", verification_uri: "https://peer.example/device", verification_uri_complete: "https://peer.example/device?user_code=WDJB-4827", expires_in: 3600, interval: 5 } },
 	}));
 	const stub = { NODE_OPTIONS: `--import ${path.join(HERE, "fetch-stub.mjs")}`, A2A_TEST_FETCH_ROUTES: routes, A2A_TEST_FETCH_LOG: log };
 	const posted = () => fs.readFileSync(log, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((x) => x.url.endsWith("/oauth/device_authorization")).map((x) => Object.fromEntries(new URLSearchParams(x.body)));
@@ -147,7 +147,7 @@ test("connect: shows the code and link, honours interval and slow_down, stores t
 	const s = sandbox(t, { A2A_AGENT_NAME: "Client Bot", A2A_WORKER_NAME: "client-bot", A2A_BASE_URL: "https://client.example.com" });
 	const r = await s.cli(["connect", m.url, "--alias", "peer1"]);
 	assert.equal(r.status, 0, r.stderr);
-	assert.match(r.stderr, /Pairing with Peer Inbox \(http:\/\/127\.0\.0\.1:\d+\):\n  code: WDJB-4827\n  link: http:\/\/127\.0\.0\.1:\d+\/device\?user_code=WDJB-4827\nShow this code and link to your human\. They confirm the code with the owner of Peer Inbox, who approves it on that page \(expires in 10 minutes\)\./);
+	assert.match(r.stderr, /Pairing with Peer Inbox \(http:\/\/127\.0\.0\.1:\d+\):\n  code: WDJB-4827\n  link: http:\/\/127\.0\.0\.1:\d+\/device\?user_code=WDJB-4827\nShow this code and link to your human\. They confirm the code with the owner of Peer Inbox, who approves it on that page \(expires in 60 minutes\)\./);
 	assert.match(r.stderr, /connected: peer "peer1" -> http:\/\/127\.0\.0\.1:\d+; token stored in .*config\.env as PEER_PEER1_TOKEN \(not printed\)\./);
 	assert.ok(!(r.stdout + r.stderr).includes("a2aow_paired-secret") && !(r.stdout + r.stderr).includes("dev-code-secret"));
 	assert.equal(s.config().PEER_PEER1_TOKEN, "a2aow_paired-secret");

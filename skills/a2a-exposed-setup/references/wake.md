@@ -151,7 +151,7 @@ Webhooks wake your agent. Without one, it polls, guided by next-check hints. Use
 - Leave the wake unset (`wake unset`), or keep it for a secondary agent.
 - Schedule a check every 5–30 minutes (1–5 for a chat agent that should answer quickly). Example prompt: *"Use the a2a-exposed skill: run `npx -y a2a-exposed@latest inbox`. Handle and reply to each task. If it lists a pending pairing request, tell your human the code, the claimed name and the link, and never approve it yourself. If it shows neither, stop."*
 
-  **Polling agents get no `pairing_request` wake**, so pairing requests reach them only through the A2A endpoint: `inbox` prints them after the tasks (`pair list` shows the same with the approval mode). Make sure the scheduled run is able to tell the human (Hermes: `--deliver origin` or `telegram`; OpenClaw: `--announce`), or a request just sits there until it expires after 10 minutes.
+  **Polling agents get no `pairing_request` wake**, so pairing requests reach them only through the A2A endpoint: `inbox` prints them after the tasks (`pair list` shows the same with the approval mode). Make sure the scheduled run is able to tell the human (Hermes: `--deliver origin` or `telegram`; OpenClaw: `--announce`), or a request just sits there until it expires after 60 minutes.
 - Session-start hooks can run `npx -y a2a-exposed@latest inbox` so new messages show up when a session opens.
 - The environment needs Node 22 plus `A2A_BASE_URL` and `A2A_OWNER_TOKEN`, either in the environment or in `~/.config/a2a-exposed/config.env`.
 - For other products, put the schedule or hook wherever that product's docs say. The command and prompt above are all that's needed.

@@ -8,7 +8,7 @@ import { pageStyle } from "./theme.ts";
 export const DEFAULT_CLI = "npx -y a2a-exposed@latest";
 
 export const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
-export const EXPIRES_S = 600; // device / user code lifetime
+export const EXPIRES_S = 3600; // device / user code lifetime (60 minutes)
 export const INTERVAL_S = 5; // minimum polling interval (slow_down adds 5 s each time)
 export const LIMITS = {
 	maxPending: 10, // outstanding (unexpired, undecided) requests, globally: caps approval prompts
@@ -173,12 +173,33 @@ export async function verifyPassword(password: string, rec: PasswordRecord): Pro
 // ------------------------------------------------------------------ /device page (no scripts, no external assets)
 export const esc = (s: unknown) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
-/** "Expires" cell. A live code with under a minute left says so, instead of "0 min". */
-export function expiresText(expiresMs: number, now = Date.now()): string {
+/** "Expires" cell. Clock time in the visitor's time zone, then how long is left. An unknown zone uses UTC. */
+export function expiresText(expiresMs: number, now = Date.now(), timeZone?: string): string {
 	const left = expiresMs - now;
 	if (left <= 0) return "expired";
-	if (left < 60_000) return "less than a minute";
-	return `${Math.round(left / 60000)} min`;
+	const relative = left < 60_000 ? "less than a minute" : `${Math.round(left / 60000)} min`;
+	const { zone, suffix } = clockZone(timeZone);
+	return `${clockTime(expiresMs, zone)}${suffix} (${relative})`;
+}
+
+function clockZone(timeZone: string | undefined): { zone: string; suffix: string } {
+	const zone = (timeZone || "").trim();
+	if (!zone || zone.toUpperCase() === "UTC" || zone === "Etc/UTC" || zone === "Etc/GMT") return { zone: "UTC", suffix: " UTC" };
+	try {
+		new Intl.DateTimeFormat("en-GB", { timeZone: zone }).format(0);
+		return { zone, suffix: "" };
+	} catch {
+		return { zone: "UTC", suffix: " UTC" };
+	}
+}
+
+function clockTime(ms: number, timeZone: string): string {
+	const parts = new Intl.DateTimeFormat("en-GB", {
+		hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone,
+	}).formatToParts(new Date(ms));
+	const hour = parts.find((part) => part.type === "hour")?.value ?? "00";
+	const minute = parts.find((part) => part.type === "minute")?.value ?? "00";
+	return `${hour}:${minute}`;
 }
 
 export type PageRequest = { userCode: string; clientName: string; clientId: string; agentCardUrl: string; ip: string; country: string; createdMs: number; expiresMs: number; replacesLabel?: string; tokenLabel?: string };
@@ -196,6 +217,8 @@ export type PageModel = {
 	oidc?: { label: string };
 	/** False hides the password field. Absent means the password field is shown as before. */
 	passwordEnabled?: boolean;
+	/** IANA time zone from the request, when Cloudflare provides one. The expiry clock uses it. */
+	timeZone?: string;
 	/** Set after Approve or Deny: the page shows that result and no code form. */
 	settled?: "approved" | "denied";
 };
@@ -213,7 +236,7 @@ export function devicePage(m: PageModel, nonce: string): string {
 		...(r.clientId && r.clientName && r.clientId !== r.clientName ? [["Alias (claimed)", r.clientId]] : []),
 		["Agent card (claimed)", r.agentCardUrl ? r.agentCardUrl + (cardIsPrivate(r.agentCardUrl) ? " (private network address, e.g. a Tailnet: not publicly reachable, so this A2A endpoint can't check it; informational only)" : "") : "(none given)"],
 		["Requested from", `${[r.ip || "unknown address", r.country].filter(Boolean).join(", ")} (IP address of the machine that asked to connect)`],
-		["Expires", expiresText(r.expiresMs)],
+		["Expires", expiresText(r.expiresMs, Date.now(), m.timeZone)],
 		...(r.replacesLabel ? [["Replaces", `the active token "${r.replacesLabel}" (the requester proved it holds it); approving issues a new token under the same label and the old one stops working`]] : []),
 	] : [];
 	const tokenLabel = r?.tokenLabel || "<label>";

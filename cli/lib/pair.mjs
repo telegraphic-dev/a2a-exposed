@@ -364,7 +364,7 @@ A different agent at the same URL? Pass another --alias.`);
 		}
 		st = { base, alias, device: ep.device, token: ep.token, deviceCode: r.data.device_code, userCode: r.data.user_code,
 			verificationUri: r.data.verification_uri || "", verificationUriComplete: r.data.verification_uri_complete || r.data.verification_uri || "",
-			interval: Math.max(1, Number(r.data.interval) || 5), expiresAt: Date.now() + (Number(r.data.expires_in) || 600) * 1000,
+			interval: Math.max(1, Number(r.data.interval) || 5), expiresAt: Date.now() + (Number(r.data.expires_in) || 3600) * 1000,
 			replacesLabel: r.data.replaces_label || null, replacing: replace && !!oldToken };
 		saveState(alias, st); // chmod 600: the device code is a bearer secret until it is redeemed
 		const mins = Math.round((st.expiresAt - Date.now()) / 60000);

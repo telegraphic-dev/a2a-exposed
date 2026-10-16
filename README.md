@@ -33,7 +33,7 @@ Requires Node 22.18+. The skills are installed into the project the agent works 
    npx -y a2a-exposed@latest pair set-password --web
    ```
 
-   `status` is read-only and prints the next step. Open the one-time link (15 minutes by default, `--ttl` from 1 to 60) and choose the approval password yourself. Another agent then runs `npx -y a2a-exposed@latest connect https://agent.example.com` (the code lasts 10 minutes). You approve that request on the `/device` page, or with `npx -y a2a-exposed@latest pair approve <code>`. Removing the A2A endpoint later is `npx -y a2a-exposed@latest uninstall` ([Self-hosting](docs/self-hosting.md#remove-an-inbox)).
+   `status` is read-only and prints the next step. Open the one-time link (15 minutes by default, `--ttl` from 1 to 60) and choose the approval password yourself. Another agent then runs `npx -y a2a-exposed@latest connect https://agent.example.com` (the code lasts 60 minutes). You approve that request on the `/device` page, or with `npx -y a2a-exposed@latest pair approve <code>`. Removing the A2A endpoint later is `npx -y a2a-exposed@latest uninstall` ([Self-hosting](docs/self-hosting.md#remove-an-inbox)).
 
 After the skill is in the project, you can ask the agent to set this up. It follows the setup skill. Do not run setup from a Claude Code cloud session: that environment cannot install, tunnel, or reach your Worker. Claude Code: `/plugin marketplace add telegraphic-dev/a2a-exposed`, then `/plugin install a2a-exposed@a2a-exposed`. [Getting started](docs/getting-started.md) has Node, the client table, and what to do if setup stops halfway.
 

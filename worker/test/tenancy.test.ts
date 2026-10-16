@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import worker from "../src/index.ts";
 import { sha256 } from "../src/a2a.ts";
 import { openPeerToken, openPeerTokenWithKey, sealPeerToken, sealPeerTokenWithKey } from "../src/mcp.ts";
-import { hostedTenantContext, namespaceForRegion, parseGates, resolveTenant, type WorkerBindings } from "../src/tenancy.ts";
+import { hostedTenantContext, namespaceForRegion, parseGates, publicManageUrl, resolveTenant, type WorkerBindings } from "../src/tenancy.ts";
 import { d1 } from "./d1.ts";
 
 const dummy = { prepare() { throw new Error("storage should not be touched"); } } as any;
@@ -14,6 +14,26 @@ const BASE = "https://agent.example.com";
 function selfEnv(over: Record<string, unknown> = {}): WorkerBindings {
 	return { DB: dummy, PUBLIC_URL: BASE, OWNER_TOKEN: "owner-secret", ...over } as WorkerBindings;
 }
+
+test("publicManageUrl keeps an https dashboard page and drops anything else", () => {
+	const page = "https://example.com/app/agents/test#pairing";
+	assert.equal(publicManageUrl(page), page);
+	assert.equal(publicManageUrl(`  ${page}  `), page);
+	assert.equal(publicManageUrl(""), "");
+	assert.equal(publicManageUrl(undefined), "");
+	assert.equal(publicManageUrl("http://example.com/app"), "");
+	assert.equal(publicManageUrl("https://user:pw@example.com/app"), "");
+	assert.equal(resolveTenant(selfEnv({ MANAGE_URL: page })).MANAGE_URL, page);
+	assert.equal(resolveTenant(selfEnv()).MANAGE_URL, undefined);
+	const hosted = hostedTenantContext(selfEnv({ TENANCY: "host", MANAGE_URL: "https://platform.example/other" }), {
+		id: "ten_a", db: dummy, publicUrl: BASE, config: { MANAGE_URL: page },
+	});
+	assert.equal(hosted.MANAGE_URL, page);
+	const hostedUnset = hostedTenantContext(selfEnv({ TENANCY: "host", MANAGE_URL: page }), {
+		id: "ten_a", db: dummy, publicUrl: BASE,
+	});
+	assert.equal(hostedUnset.MANAGE_URL, undefined);
+});
 
 test("gates: unset is single-tenant and every reserved gate is off", () => {
 	const g = parseGates({ DB: dummy } as WorkerBindings).gates;

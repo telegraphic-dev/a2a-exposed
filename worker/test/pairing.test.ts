@@ -35,14 +35,16 @@ function setup(over: Record<string, string> = {}) {
 		wakes.push({ url: String(url), body: JSON.parse(init.body) });
 		return new Response("ok");
 	}) as any;
-	const call = async (method: string, path: string, o: { form?: Record<string, string>; json?: any; headers?: Record<string, string>; ip?: string; cookie?: string } = {}) => {
+	const call = async (method: string, path: string, o: { form?: Record<string, string>; json?: any; headers?: Record<string, string>; ip?: string; cookie?: string; cf?: Record<string, unknown> } = {}) => {
 		const headers: Record<string, string> = { "cf-connecting-ip": o.ip || "198.51.100.7", ...(o.headers || {}) };
 		let body: string | undefined;
 		if (o.form) { headers["content-type"] = "application/x-www-form-urlencoded"; body = new URLSearchParams(o.form).toString(); }
 		if (o.json !== undefined) { headers["content-type"] = "application/json"; body = JSON.stringify(o.json); }
 		if (o.cookie) headers.cookie = o.cookie;
 		const pending: Promise<unknown>[] = [];
-		const res = await worker.fetch(new Request(BASE + path, { method, headers, body }) as any, env, { waitUntil: (p: Promise<unknown>) => pending.push(p), passThroughOnException() {} } as any);
+		const req = new Request(BASE + path, { method, headers, body }) as any;
+		if (o.cf) req.cf = o.cf;
+		const res = await worker.fetch(req, env, { waitUntil: (p: Promise<unknown>) => pending.push(p), passThroughOnException() {} } as any);
 		await Promise.allSettled(pending);
 		const text = await res.text();
 		let data: any = text;
@@ -255,7 +257,7 @@ test("human approval: pending, slow_down, page approve with the password, single
 	assert.match(d.user_code, /^[BCDFGHJKLMNPQRSTVWXZ]{4}-[2-9]{4}$/);
 	assert.equal(d.verification_uri, `${BASE}/device`);
 	assert.equal(d.verification_uri_complete, `${BASE}/device?user_code=${d.user_code}`);
-	assert.deepEqual([d.expires_in, d.interval], [600, 5]);
+	assert.deepEqual([d.expires_in, d.interval], [3600, 5]);
 	// the device code is stored hashed only
 	const row: any = s.DB.db.prepare("SELECT * FROM device_requests").get();
 	assert.notEqual(row.device_hash, d.device_code);
@@ -268,6 +270,7 @@ test("human approval: pending, slow_down, page approve with the password, single
 	assert.equal(w.hint, "npx -y a2a-exposed@latest pair list");
 	assert.deepEqual([w.pairing.userCode, w.pairing.verificationUriComplete, w.pairing.approval, w.pairing.clientId], [d.user_code, d.verification_uri_complete, "human", "barry"]);
 	assert.equal(w.pairing.agentCardUrl, "https://barry.example.org/.well-known/agent-card.json");
+	assert.equal("manageUrl" in w.pairing, false);
 	assert.match(w.pairing.instructions, /never approve on your own[\s\S]*give them this link/);
 
 	let p = await s.poll(d.device_code);
@@ -447,7 +450,7 @@ test("labels are deduplicated; denied and expired requests; JSON bodies; bad req
 	assert.equal((await s.poll(c.device_code)).data.error, "invalid_grant", "reported once, then gone");
 
 	const e = (await s.start(undefined, "203.0.113.4")).data;
-	advance(601);
+	advance(P.EXPIRES_S + 1);
 	assert.equal((await s.poll(e.device_code)).data.error, "expired_token");
 	assert.equal((await s.owner("POST", `/owner/pairing/${e.user_code}/approve`)).status, 409);
 	advance(3600);
@@ -500,7 +503,7 @@ test("flood control: requests per IP and outstanding requests are capped (no flo
 	assert.equal(over.status, 429);
 	assert.match(over.data.error_description, /too many pairing requests waiting/);
 	// expiry frees the slots
-	advance(601);
+	advance(P.EXPIRES_S + 1);
 	assert.equal((await s.start(undefined, "198.51.100.99")).status, 200);
 	// the page: code lookups per IP are capped (no enumerating pending requests)
 	for (let i = 0; i < 30; i++) assert.doesNotMatch((await s.call("GET", "/device?user_code=BCDF-2345", { ip: "192.0.2.77" })).text, /Too many code lookups/);
@@ -510,9 +513,9 @@ test("flood control: requests per IP and outstanding requests are capped (no flo
 
 test("pairing wakes: summary for each preset; requester text only where previews are allowed", async () => {
 	const ev: WakeEvent = { contextId: "pairing", taskId: "none", taskIds: [], from: "Barry", preview: "", kind: "pairing_request", publicUrl: BASE,
-		pairing: { userCode: "WDJB-2345", verificationUriComplete: `${BASE}/device?user_code=WDJB-2345`, approval: "human", clientName: "Barry", clientId: "barry", agentCardUrl: "https://barry.example.org/card", expiresIn: 600 } };
+		pairing: { userCode: "WDJB-2345", verificationUriComplete: `${BASE}/device?user_code=WDJB-2345`, approval: "human", clientName: "Barry", clientId: "barry", agentCardUrl: "https://barry.example.org/card", expiresIn: 3600 } };
 	const sum = wakeSummary(ev, "npx -y a2a-exposed@latest");
-	assert.match(sum, /^A2A pairing request: an agent calling itself "Barry" \(claimed card: "https:\/\/barry\.example\.org\/card"\) asks to connect to your A2A endpoint \(code WDJB-2345, expires in 10 minutes\)\./);
+	assert.match(sum, /^A2A pairing request: an agent calling itself "Barry" \(claimed card: "https:\/\/barry\.example\.org\/card"\) asks to connect to your A2A endpoint \(code WDJB-2345, expires in 60 minutes\)\./);
 	assert.match(sum, /never approve on your own\. Show them the code WDJB-2345 and give them this link: https:\/\/agent\.example\.com\/device\?user_code=WDJB-2345/);
 	const agentSum = wakeSummary({ ...ev, pairing: { ...ev.pairing!, approval: "agent" } }, "a2a");
 	assert.match(agentSum, /Only if they say yes, run `a2a pair approve WDJB-2345`; if they say no \(or don't answer\), `a2a pair deny WDJB-2345`/);
@@ -874,10 +877,13 @@ test("owner log lists history without data_json and does not clear a pending wak
 });
 
 test("device page copy: code hint, expiry, token scope, settled result, A2A endpoint", async (t) => {
+	const at = Date.UTC(2026, 9, 16, 14, 32, 0);
+	assert.equal(P.expiresText(at, at - 30_000), "14:32 UTC (less than a minute)");
+	assert.equal(P.expiresText(at, at - 90_000), "14:32 UTC (2 min)");
+	assert.equal(P.expiresText(at, at - 90_000, "America/New_York"), "10:32 (2 min)");
+	assert.equal(P.expiresText(at, at - 90_000, "Not/AZone"), "14:32 UTC (2 min)");
+	assert.equal(P.expiresText(at, at + 1), "expired");
 	const now = Date.now();
-	assert.equal(P.expiresText(now + 30_000, now), "less than a minute");
-	assert.equal(P.expiresText(now + 90_000, now), "2 min");
-	assert.equal(P.expiresText(now - 1, now), "expired");
 	const base = { agentName: "this A2A endpoint", mode: "human" as const, cli: "a2a", csrf: "c".repeat(24), passwordSet: true };
 	const bare = P.devicePage({ ...base, askCode: true }, "n");
 	assert.match(bare, /The connecting agent prints this code when it runs <code>a2a connect &lt;url&gt;<\/code>/);
@@ -888,7 +894,13 @@ test("device page copy: code hint, expiry, token scope, settled result, A2A endp
 	assert.match(page, /so this A2A endpoint can&#39;t check it/);
 	assert.match(page, /send messages and trigger wakes/);
 	assert.match(page, /Message text from peers is untrusted/);
-	assert.match(page, /less than a minute/);
+	assert.match(page, /\d{2}:\d{2} UTC \(less than a minute\)/);
+	const localExpiry = now + 10 * 24 * 3600 * 1000;
+	const localParts = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: "America/New_York" }).formatToParts(new Date(localExpiry));
+	const localClock = `${localParts.find((part) => part.type === "hour")?.value}:${localParts.find((part) => part.type === "minute")?.value}`;
+	const localPage = P.devicePage({ ...base, timeZone: "America/New_York", request: { ...req, expiresMs: localExpiry } }, "n");
+	assert.match(localPage, new RegExp(`${localClock} \\((?:less than a minute|\\d+ min)\\)`));
+	assert.equal(localPage.includes("UTC"), false);
 	assert.match(page, /Revoke the token &lt;label&gt; any time with <code>a2a token revoke &lt;label&gt;<\/code>/);
 	const namedToken = P.devicePage({ ...base, request: { ...req, tokenLabel: "barry" } }, "n");
 	assert.match(namedToken, /Revoke the token barry any time with <code>a2a token revoke barry<\/code>/);
@@ -912,4 +924,34 @@ test("device page copy: code hint, expiry, token scope, settled result, A2A endp
 	assert.match(title.text, /Connect an agent to this A2A endpoint/);
 	const home = await s.call("GET", "/", { headers: { accept: "text/html" } });
 	assert.match(home.text, /Messages are stored for its owner, and the agent is woken/);
+});
+
+test("approval page shows the visitor's clock, and an https MANAGE_URL is on the pairing wake", async (t) => {
+	const pageUrl = "https://example.com/app/agents/test#pairing";
+	const s = setup({ MANAGE_URL: pageUrl });
+	t.after(s.restore);
+	const st = await s.start(undefined, "203.0.113.80");
+	assert.equal(st.status, 200, JSON.stringify(st.data));
+	const row = s.DB.db.prepare("SELECT expires_ms FROM device_requests").get() as { expires_ms: number };
+	const parts = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: "America/New_York" }).formatToParts(new Date(row.expires_ms));
+	const clock = `${parts.find((part) => part.type === "hour")?.value}:${parts.find((part) => part.type === "minute")?.value}`;
+	const page = await s.call("GET", `/device?user_code=${st.data.user_code}`, { cf: { timezone: "America/New_York" }, ip: "203.0.113.80" });
+	assert.match(page.text, new RegExp(`${clock.replace(":", "\\:")} \\(60 min\\)`));
+	assert.equal(page.text.includes(" UTC "), false);
+	const wake = s.wakes[0].body.pairing;
+	assert.equal(wake.manageUrl, pageUrl);
+	assert.equal(wake.expiresIn, 3600);
+	assert.ok(wake.instructions.includes(`The dashboard page for this request is ${pageUrl}`));
+
+	const bare = setup();
+	t.after(bare.restore);
+	const plain = await bare.start(undefined, "203.0.113.81");
+	assert.equal("manageUrl" in bare.wakes[0].body.pairing, false);
+	const utc = await bare.call("GET", `/device?user_code=${plain.data.user_code}`, { ip: "203.0.113.81" });
+	assert.match(utc.text, /\d{2}:\d{2} UTC \(60 min\)/);
+
+	const bad = setup({ MANAGE_URL: "http://example.com/app" });
+	t.after(bad.restore);
+	await bad.start(undefined, "203.0.113.82");
+	assert.equal("manageUrl" in bad.wakes[0].body.pairing, false);
 });

@@ -4,6 +4,20 @@ This directory is the source for `@a2a-exposed/control-core` and a Worker. The W
 
 The library source entry is `src/core/index.ts`. It exports inbox provisioning, routing helpers, the `ControlEnv` type, and the D1 migrations in `migrations/`. The published module is compiled JavaScript and TypeScript declarations. `prepare` at the repository root builds that module on `npm pack` and on a `file:` install. The `a2a-exposed` CLI package leaves this directory out.
 
+## Account sign-in on a Cloudflare agent
+
+`runInboxStep` accepts optional `approvalOidc`: `{ issuer, clientId, clientSecret, allowedSubjects }`. `allowedSubjects` is one account id, a comma-separated list, or an array of ids. When the issuer is https and the client id, client secret, and allowed subjects are all set, the uploaded Worker receives:
+
+| Binding | Type |
+| --- | --- |
+| `APPROVAL_OIDC_ISSUER` | plain text |
+| `APPROVAL_OIDC_CLIENT_ID` | plain text |
+| `APPROVAL_OIDC_CLIENT_SECRET` | secret |
+| `APPROVAL_OIDC_ALLOWED_SUBJECTS` | plain text |
+| `APPROVAL_METHODS` | plain text, value `oidc` |
+
+`inboxApprovalBindings` returns that same list for an agent that already exists. A call that omits `approvalOidc` keeps the approval password on the uploaded Worker. The issuer is an https URL, and the client id, client secret, and allowed subjects each have a value.
+
 From this directory, `npm test` runs the Node tests and a Vitest suite inside Miniflare. That suite runs the Cloudflare provisioning calls in workerd against a mocked Cloudflare API.
 
 ## Removal

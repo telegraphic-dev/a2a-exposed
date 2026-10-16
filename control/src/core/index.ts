@@ -77,11 +77,13 @@ export {
 	dashboardLinks,
 	fieldsFromForm,
 	permissionRetryDue,
+	inboxApprovalBindings,
 	resumeFields,
 	runInboxStep,
 	viewInboxWizard,
 } from "../provision/inbox.ts";
 export type {
+	ApprovalOidcInput,
 	InboxMigration,
 	InboxWizard,
 	ProvisionFields,

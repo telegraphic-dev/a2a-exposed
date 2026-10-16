@@ -168,7 +168,7 @@ Inbox (owner side)
 Pairing (OAuth 2.0 device flow, RFC 8628: agents connect without pasting tokens into chat)
   connect <base-or-card-url> [--alias A] [--name N] [--card-url URL] [--replace] [--no-wait] [--json]
                           ask another A2A endpoint for a token: prints a code + link for your human (the code lasts
-                          10 minutes; they confirm the code with that A2A endpoint's owner), waits for approval, stores
+                          60 minutes; they confirm the code with that A2A endpoint's owner), waits for approval, stores
                           the token as outbound peer A
                           (never printed). --no-wait: print the code and exit; run the same command again to
                           check (same code). An expired code exits 1 (nothing new is requested silently).

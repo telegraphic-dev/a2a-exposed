@@ -39,6 +39,8 @@ export const CONFIG_KEYS = [
 	"PAIRING_APPROVAL", "PBKDF2_ITERATIONS",
 	"UPSTREAM_URL", "UPSTREAM_CARD_URL", "UPSTREAM_TOKEN", "UPSTREAM_ACCESS_CLIENT_ID", "UPSTREAM_ACCESS_CLIENT_SECRET",
 	"MCP",
+	/** Optional https URL of this agent's dashboard page. Omitted from pairing output when unset or not https. */
+	"MANAGE_URL",
 ] as const;
 
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
@@ -205,6 +207,19 @@ export async function derivePeerKey(ikm: string, info = PEER_KEY_INFO): Promise<
 	);
 }
 
+/** https dashboard URL with no userinfo, at most 500 characters. Any other value returns "". */
+export function publicManageUrl(value: string | undefined): string {
+	const s = (value || "").trim();
+	if (!s || s.length > 500) return "";
+	try {
+		const u = new URL(s);
+		if (u.protocol !== "https:" || u.username || u.password) return "";
+		return s;
+	} catch {
+		return "";
+	}
+}
+
 function csv(v: string | undefined): string[] {
 	return (v || "").split(",").map((s) => s.trim()).filter(Boolean);
 }
@@ -367,6 +382,7 @@ export class TenantContext implements ConfigFields {
 	readonly UPSTREAM_ACCESS_CLIENT_ID?: string;
 	readonly UPSTREAM_ACCESS_CLIENT_SECRET?: string;
 	readonly MCP?: string;
+	readonly MANAGE_URL?: string;
 
 	/** Self-host only. Never set on a hosted context, so a platform OWNER_TOKEN cannot unlock a tenant. */
 	readonly #ownerToken?: string;
