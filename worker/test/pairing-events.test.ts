@@ -101,6 +101,10 @@ function env(over: Record<string, string> = {}) {
 
 async function start(bindings: Record<string, string>, fetchImpl: typeof fetch) {
 	const pending: Promise<unknown>[] = [];
+	const bindingsEnv = env(bindings);
+	// Durable Object storage applies migrations on the first query. Run that query before the timed request
+	// so the race covers the pairing response.
+	await bindingsEnv.DB.prepare("SELECT 1").first();
 	const previous = globalThis.fetch;
 	globalThis.fetch = fetchImpl;
 	const req = new Request(BASE + "/oauth/device_authorization", {
@@ -109,7 +113,7 @@ async function start(bindings: Record<string, string>, fetchImpl: typeof fetch) 
 		body: new URLSearchParams({ client_name: "Barry Bot", client_id: "barry", agent_card_url: "https://barry.example.org/card" }).toString(),
 	});
 	(req as { cf?: unknown }).cf = { country: "DE" };
-	const response = worker.fetch(req, env(bindings) as WorkerBindings, { waitUntil: (p: Promise<unknown>) => pending.push(p), passThroughOnException() {} } as ExecutionContext);
+	const response = worker.fetch(req, bindingsEnv as WorkerBindings, { waitUntil: (p: Promise<unknown>) => pending.push(p), passThroughOnException() {} } as ExecutionContext);
 	return {
 		response, pending, restore: () => { globalThis.fetch = previous; },
 	};
@@ -129,14 +133,20 @@ test("the response returns before the event post, and the payload carries the op
 		await gate;
 		return new Response("ok");
 	}) as typeof fetch);
-	t.after(() => { release(); run.restore(); });
+	t.after(async () => {
+		release();
+		await run.response.catch(() => {});
+		await Promise.allSettled(run.pending);
+		run.restore();
+	});
 	const res = await Promise.race([
 		run.response,
 		new Promise<Response>((_resolve, reject) => setTimeout(() => reject(new Error("the pairing response waited for the event post")), 500)),
 	]);
+	assert.equal(started, false);
 	assert.equal(res.status, 200);
 	const data = await res.json() as { user_code: string };
-	const deadline = Date.now() + 500;
+	const deadline = Date.now() + 2000;
 	while (!started && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
 	assert.equal(started, true);
 	release();
@@ -166,6 +176,7 @@ test("the response returns before the event post, and the payload carries the op
 
 test("a hosted tenant posts with the control plane's EVENT_URL and EVENT_SECRET", async () => {
 	const DB = d1(new URL("../migrations/", import.meta.url));
+	await DB.prepare("SELECT 1").first();
 	const ctx = hostedTenantContext({ DB, TENANCY: "host", EVENT_URL: "https://platform.example/other", EVENT_SECRET: "platform" } as WorkerBindings, {
 		id: "ten_north", db: DB, publicUrl: "https://northwind.example.com",
 		config: { EVENT_URL, EVENT_SECRET: SECRET },

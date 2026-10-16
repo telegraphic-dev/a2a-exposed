@@ -1305,7 +1305,7 @@ async function deviceAuthorization(req: Request, ctx: TenantContext, ectx: Execu
 				...(manage ? { manageUrl: manage } : {}),
 				...(replaces ? { replacesLabel: replaces.label } : {}) } });
 	})());
-	await publishPairingEvent(ctx, ectx, { type: "pairing_requested", requestId: deviceHash, code: shown, name: clientName, alias: clientId,
+	publishPairingEvent(ctx, ectx, { type: "pairing_requested", requestId: deviceHash, code: shown, name: clientName, alias: clientId,
 		ip, country, createdAt: new Date(now).toISOString(), expiresAt: new Date(now + P.EXPIRES_S * 1000).toISOString() });
 	return json({ device_code: deviceCode, user_code: shown, verification_uri: u.page, verification_uri_complete: complete,
 		expires_in: P.EXPIRES_S, interval: P.INTERVAL_S, ...(replaces ? { replaces_label: replaces.label } : {}) }, 200, { pragma: "no-cache" });
@@ -1392,7 +1392,7 @@ async function decide(ctx: TenantContext, ectx: ExecutionContext, code: string, 
 		.bind(approve ? "approved" : "denied", label, Date.now(), by, r.device_hash).run();
 	if (u.meta.changes !== 1) return { ok: false, error: "that request was decided meanwhile" };
 	log(approve ? "pairing_approved" : "pairing_denied", { userCode: P.formatUserCode(code), by, label, ...(replacing ? { replaces: label } : {}) });
-	await publishPairingEvent(ctx, ectx, { type: "pairing_decided", requestId: String(r.device_hash), code: P.formatUserCode(code),
+	publishPairingEvent(ctx, ectx, { type: "pairing_decided", requestId: String(r.device_hash), code: P.formatUserCode(code),
 		name: r.client_name || "", alias: r.client_id || "", ip: r.ip || "", country: r.country || "",
 		createdAt: new Date(r.created_ms).toISOString(), expiresAt: new Date(r.expires_ms).toISOString(),
 		decision: approve ? "approved" : "denied" });
@@ -1400,10 +1400,10 @@ async function decide(ctx: TenantContext, ectx: ExecutionContext, code: string, 
 }
 
 /**
- * Count open requests and hand the post to waitUntil. The HTTP response returns before the EVENT_URL post.
- * A missing URL or secret leaves the request as it was.
+ * Hand the open-count query and the EVENT_URL post to waitUntil.
+ * The HTTP response returns before either of them runs. A missing URL or secret leaves the request as it was.
  */
-async function publishPairingEvent(ctx: TenantContext, ectx: ExecutionContext, event: {
+function publishPairingEvent(ctx: TenantContext, ectx: ExecutionContext, event: {
 	type: "pairing_requested" | "pairing_decided";
 	requestId: string;
 	code: string;
@@ -1414,14 +1414,19 @@ async function publishPairingEvent(ctx: TenantContext, ectx: ExecutionContext, e
 	createdAt: string;
 	expiresAt: string;
 	decision?: "approved" | "denied";
-}): Promise<void> {
+}): void {
 	const target = pairingEventTarget(ctx.EVENT_URL, ctx.EVENT_SECRET);
 	if (!target) return;
+	const agent = pairingAgent(ctx.PUBLIC_URL, ctx.id);
 	try {
-		const row: Json = await ctx.DB.prepare("SELECT COUNT(*) AS n FROM device_requests WHERE status = 'pending' AND expires_ms > ?").bind(Date.now()).first();
-		ectx.waitUntil(postPairingEvent(target, {
-			...event, agent: pairingAgent(ctx.PUBLIC_URL, ctx.id), pending: Number(row?.n ?? 0),
-		}));
+		ectx.waitUntil((async () => {
+			try {
+				const row: Json = await ctx.DB.prepare("SELECT COUNT(*) AS n FROM device_requests WHERE status = 'pending' AND expires_ms > ?").bind(Date.now()).first();
+				await postPairingEvent(target, { ...event, agent, pending: Number(row?.n ?? 0) });
+			} catch (error) {
+				log("pairing_event_failed", { type: event.type, error: String(error).slice(0, 200) });
+			}
+		})());
 	} catch (error) {
 		log("pairing_event_failed", { type: event.type, error: String(error).slice(0, 200) });
 	}
