@@ -2,7 +2,9 @@
 
 All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.3.x), Worker template, control core, and skills. Versions follow [semver](https://semver.org); a `v*` tag publishes the CLI and `@a2a-exposed/control-core` to npm (see [Releases](docs/README.md#releases)).
 
-## Unreleased
+## 0.8.10 - 2026-10-16
+
+`npx -y a2a-exposed@latest deploy` (no new migration). The CLI shows the dashboard link and sets pairing URLs, and pairing errors are clearer.
 
 - **Dashboard link.** `pair list` and `inbox` print the dashboard URL when `MANAGE_URL` is set. `status` prints it on the pairing line. `GET /owner/pairing` includes `manageUrl` for that URL.
 - **Deploy flags.** `init` and `deploy` take `--manage-url` and `--event-url` (`none` clears the saved value). `--event-secret-stdin` uploads `EVENT_SECRET` on that deploy. The secret stays out of `config.env` and out of the command output. An `EVENT_SECRET` argument is refused.
