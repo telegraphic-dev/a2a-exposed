@@ -271,6 +271,28 @@ test("inbox shows pending pairing requests to polling agents (text and --json)",
 	assert.doesNotMatch(r.stdout, /pairing/);
 });
 
+test("pair list and inbox print manageUrl when the Worker has MANAGE_URL", async (t) => {
+	const page = "https://example.com/app/agents/server#pairing";
+	const w = await realWorker(t, { MANAGE_URL: page });
+	const ownerSide = sandbox(t, { A2A_BASE_URL: w.url, A2A_OWNER_TOKEN: "owner-tok", A2A_D1_ID: "d1", A2A_WORKER_NAME: "server" });
+	const client = sandbox(t, { A2A_AGENT_NAME: "Client Bot" });
+	const code = jsonLines((await client.cli(["connect", w.url, "--no-wait", "--json"])).stdout)[0].user_code;
+	const list = await ownerSide.cli(["pair", "list"]);
+	assert.equal(list.status, 0, list.stderr);
+	assert.match(list.stdout, new RegExp(`^dashboard: ${page.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"));
+	assert.match(list.stdout, /approval password: NOT SET\. Your human can approve on the dashboard/);
+	const json = JSON.parse((await ownerSide.cli(["pair", "list", "--json"])).stdout);
+	assert.equal(json.manageUrl, page);
+	const inbox = await ownerSide.cli(["inbox"]);
+	assert.match(inbox.stdout, new RegExp(`dashboard: ${page.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+	assert.match(inbox.stdout, new RegExp(`link: ${w.url.replace(/\./g, "\\.")}/device\\?user_code=${code}`));
+	const note = JSON.parse((await ownerSide.cli(["inbox", "--json"])).stderr.trim());
+	assert.equal(note.manageUrl, page);
+	assert.equal(note.requests[0].userCode, code);
+	const st = await ownerSide.cli(["status"], { extraEnv: { A2A_VERIFY_TRIES: "0" } });
+	assert.match(st.stdout, new RegExp(`dashboard ${page.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+});
+
 // ------------------------------------------------------------------ F12: token revoke
 test("token revoke: unknown or already revoked labels exit 1; rotate of an unknown label exits 1", async (t) => {
 	const w = await realWorker(t);

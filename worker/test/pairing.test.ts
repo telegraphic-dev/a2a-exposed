@@ -452,7 +452,20 @@ test("labels are deduplicated; denied and expired requests; JSON bodies; bad req
 	const e = (await s.start(undefined, "203.0.113.4")).data;
 	advance(P.EXPIRES_S + 1);
 	assert.equal((await s.poll(e.device_code)).data.error, "expired_token");
-	assert.equal((await s.owner("POST", `/owner/pairing/${e.user_code}/approve`)).status, 409);
+	const expired = await s.owner("POST", `/owner/pairing/${e.user_code}/approve`);
+	assert.equal(expired.status, 409);
+	assert.match(expired.data.error, /Not found\. The code expired\. Ask the other agent to run connect again\./);
+	const expiredPage = await s.call("GET", `/device?user_code=${e.user_code}`);
+	assert.equal(expiredPage.status, 404);
+	assert.match(expiredPage.text, /Not found\. The code expired\. Ask the other agent to run connect again\./);
+	const unknown = await s.owner("POST", "/owner/pairing/BCDF-2345/deny");
+	assert.equal(unknown.status, 409);
+	assert.match(unknown.data.error, /Not found\. Ask the other agent to run connect again\./);
+	const unknownPage = await s.call("GET", "/device?user_code=BCDF-2345");
+	assert.equal(unknownPage.status, 404);
+	assert.match(unknownPage.text, /Not found\. Ask the other agent to run connect again\./);
+	assert.equal((await s.call("GET", "/device")).status, 200, "the empty code form stays 200");
+	assert.equal((await s.call("GET", "/device?user_code=AEIO-0000")).status, 200, "a code that is not the WDJB-4827 shape stays 200");
 	advance(3600);
 	assert.equal((await s.poll(e.device_code)).data.error, "expired_token", "still expired_token an hour later (RFC 8628), not invalid_grant");
 	advance(86400);
@@ -940,6 +953,7 @@ test("approval page shows the visitor's clock, and an https MANAGE_URL is on the
 	assert.equal(page.text.includes(" UTC "), false);
 	const wake = s.wakes[0].body.pairing;
 	assert.equal(wake.manageUrl, pageUrl);
+	assert.equal((await s.owner("GET", "/owner/pairing")).data.manageUrl, pageUrl);
 	assert.equal(wake.expiresIn, 3600);
 	assert.ok(wake.instructions.includes(`The dashboard page for this request is ${pageUrl}`));
 
@@ -947,6 +961,7 @@ test("approval page shows the visitor's clock, and an https MANAGE_URL is on the
 	t.after(bare.restore);
 	const plain = await bare.start(undefined, "203.0.113.81");
 	assert.equal("manageUrl" in bare.wakes[0].body.pairing, false);
+	assert.equal("manageUrl" in (await bare.owner("GET", "/owner/pairing")).data, false);
 	const utc = await bare.call("GET", `/device?user_code=${plain.data.user_code}`, { ip: "203.0.113.81" });
 	assert.match(utc.text, /\d{2}:\d{2} UTC \(60 min\)/);
 

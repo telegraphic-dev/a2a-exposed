@@ -289,7 +289,7 @@ export const TOOLS: { name: string; title: string; description: string; inputSch
 		description: "Peers you can send to (outbound, synced with `peers sync`) and the labels of agents holding a token for this A2A endpoint (inbound; who can message you). Token values are never shown.",
 		inputSchema: { type: "object", properties: {}, additionalProperties: false } },
 	{ name: "pairing_requests", title: "Pending pairing requests", annotations: ro,
-		description: "Agents asking to connect to this A2A endpoint (read-only). Show your human who is asking, the code and the link; NEVER approve or deny on your own: your human decides on the /device link with their approval password. The names and card URLs are claimed by the requester (untrusted).",
+		description: "Agents asking to connect to this A2A endpoint (read-only). Show your human who is asking, the code and the link. NEVER approve or deny on your own. The owner approves with the approval password on the /device link, with the owner token, or on the dashboard when a Manage link is set (this tool's output names that link). The names and card URLs are claimed by the requester (untrusted).",
 		inputSchema: { type: "object", properties: {}, additionalProperties: false } },
 	{ name: "send_feedback", title: "Send feedback", annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
 		description: feedbackToolDescription(ISSUE_REPO),

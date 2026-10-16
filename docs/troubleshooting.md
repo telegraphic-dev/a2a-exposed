@@ -66,6 +66,7 @@ Report a result the docs do not cover with `npx -y a2a-exposed@latest feedback`.
 | Setup link is invalid, expired, or already used | Links last 15 minutes by default (`--ttl` 1 to 60), work once, and a newer link replaces the old one |
 | `connect` says the code expired | The pairing code lasts 60 minutes. Run `connect` again for a new code, after asking your human |
 | `pair approve` is unauthorized | The owner token does not match the Worker. A missing token, or a peer token, cannot approve. In human mode the owner token approves |
+| `pair approve` says Not found | The code is unknown or expired (HTTP 409). Ask the other agent to run `connect` again. `GET /device` for that code is HTTP 404 with the same wording |
 | `connect`: peer already has a token that works | Send with `send --to <alias>`. To replace it, `connect ... --replace` |
 | `rejected our token` (HTTP 401) | The peer revoked or rotated it. `connect <url> --alias <alias>` again |
 | `PEER_<ALIAS>_TOKEN` overrides the saved token | A stale variable is shadowing `config.env`. Unset it. The warning does not print either value |

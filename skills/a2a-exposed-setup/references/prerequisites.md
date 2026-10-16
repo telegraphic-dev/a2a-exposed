@@ -16,7 +16,7 @@
   npx cf auth login --no-browser     # npx fetches Cloudflare's cf CLI; no global install
   ```
   It prints a URL (`https://dash.cloudflare.com/oauth2/device/verify`) and a code. Give both to the user and ask them to approve. The code expires in about 5 minutes. Check with `npx cf auth whoami` (or `cf auth whoami`): it must show `"authenticated": true`. CI can use `CLOUDFLARE_API_TOKEN` instead. If the login fails with `OAuth error: HTTP 403 Forbidden` (or a "Just a moment..." page) **before any code is shown**, that is Cloudflare's bot mitigation for datacenter / VPS IPs: don't retry, use an API token (Troubleshooting: API token).
-  `init`/`deploy`/`wake set` run `npm install` in the Worker folder (`<config dir>/worker`) and use the `cf` from its `node_modules/.bin`; a global `cf` only saves typing `npx` for the login.
+  `init` checks that login before it runs `npm install` in the Worker folder (`<config dir>/worker`). `deploy` and `wake set` install there too, and later `cf` calls use `node_modules/.bin`; a global `cf` only saves typing `npx` for the login.
 - **First decide how wakes will reach the agent.** This shapes the rest of the setup, so settle it before choosing the A2A endpoint URL:
 
   | Wake path | Agents | Setup |

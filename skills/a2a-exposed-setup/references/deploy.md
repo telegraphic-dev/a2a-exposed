@@ -16,8 +16,8 @@ npx -y a2a-exposed@latest init \
 
 `init` is non-interactive and idempotent. It:
 
-1. Checks Node and the cf login, and resolves the account. If the login can see several accounts, pass `--account-id`.
-2. Copies the Worker template to `<config dir>/worker` and runs `npm install` there (this provides the local `cf`).
+1. Checks Node, then the Cloudflare login, and resolves the account, before it installs packages. If the login can see several accounts, pass `--account-id`. A failed login leaves the Worker packages uninstalled.
+2. Copies the Worker template to `<config dir>/worker` and, after that login check, runs `npm install` there (this provides the local `cf`).
 3. Creates the D1 database (`--d1-name`, default: the Worker name `a2a-exposed`), or reuses an existing one with that name, and applies migrations.
 4. Generates the **owner token** and uploads it with any wake secrets via a temporary chmod-600 secrets file, which is deleted afterwards.
 5. Deploys with the custom domain (or to workers.dev, redeploying once so the card advertises the learned URL), saves `A2A_BASE_URL` and `A2A_OWNER_TOKEN`, and checks the agent card. Right after a first deploy the workers.dev edge can answer Cloudflare error 1042 ("no Worker for this host") for up to ~30 s, sometimes after one good answer, so `init` waits until the card is served twice in a row and says when it is still propagating.
@@ -41,6 +41,9 @@ Optional flags:
 | `--workers-logs on\|off` | Persisted Cloudflare Workers Logs (searchable in the dashboard under the Worker's **Logs**; query strings redacted). Off by default: only real-time logs (`npx cf workers tail`, if your cf version has it, or the dashboard's live view) |
 | `--worker-dir <dir>` | Where the Worker project (template copy) lives. Default `<config dir>/worker`. The config directory is the global `--config-dir <dir>` (same as `A2A_CONFIG_DIR`) |
 | `--cron` | Adds a one-minute cron flush. Needs a workers.dev subdomain on the account (works with workers.dev deployments); not required, because pending wakes are also flushed on every request |
+| `--manage-url <url>` | https dashboard page, saved as `MANAGE_URL`. `none` clears it. A pairing wake, `pair list`, and `inbox` print it |
+| `--event-url <url>` | https pairing-event URL, saved as `EVENT_URL`. `none` clears it |
+| `--event-secret-stdin` | Read `EVENT_SECRET` from stdin and upload it on this deploy. The value stays out of `config.env` and out of the command output |
 
 To redeploy later (after an upgrade or settings change), run `npx -y a2a-exposed@latest deploy`. Existing secrets persist.
 
@@ -147,4 +150,4 @@ The A2A endpoint card (no `--upstream`) uses the same scrubbing for `--agent-des
 
 ## Optional settings
 
-`APPROVAL_OIDC_*` turns on OpenID Connect approval on `/device` and the MCP consent page when the issuer, client id, client secret, and allowlist are all set. Unset, those pages stay on the password. `npx -y a2a-exposed@latest pair set-oidc` writes the non-secret settings. The client secret is `APPROVAL_OIDC_CLIENT_SECRET` in the environment (or `--secret-stdin`) and is uploaded on the next `deploy`, and is not stored in `config.env`. `A2A_BACKUP_BUCKET=1` adds a daily R2 snapshot of the A2A endpoint, kept 30 days. Leave it unset and the deploy has no backup bucket and no extra cron. `MANAGE_URL` is an optional https URL of this agent's dashboard page. A pairing wake and the MCP inbox line include it as `manageUrl`. `EVENT_URL` plus `EVENT_SECRET` post a signed pairing event when a request is created, approved, or denied. Names and values are listed in `worker/deploy.env.example`.
+`APPROVAL_OIDC_*` turns on OpenID Connect approval on `/device` and the MCP consent page when the issuer, client id, client secret, and allowlist are all set. Unset, those pages stay on the password. `npx -y a2a-exposed@latest pair set-oidc` writes the non-secret settings. The client secret is `APPROVAL_OIDC_CLIENT_SECRET` in the environment (or `--secret-stdin`) and is uploaded on the next `deploy`, and is not stored in `config.env`. `A2A_BACKUP_BUCKET=1` adds a daily R2 snapshot of the A2A endpoint, kept 30 days. Leave it unset and the deploy has no backup bucket and no extra cron. `npx -y a2a-exposed@latest init --manage-url https://example.com/app/agents/name#pairing` saves `MANAGE_URL` (https, no user name or password; `none` clears it). A pairing wake, the MCP inbox line, `pair list`, and `inbox` include that page as `manageUrl`. `--event-url` saves `EVENT_URL` the same way. With `EVENT_SECRET` set, the A2A endpoint posts a signed pairing event when a request is created, approved, or denied. Pass `--event-secret-stdin` or export `EVENT_SECRET`. The secret is uploaded on that deploy, stays out of `config.env`, and stays out of the command output. Names are also listed in `worker/deploy.env.example`.

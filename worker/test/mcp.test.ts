@@ -391,6 +391,9 @@ test("JSON-RPC plumbing: notifications 202, batches and junk rejected, unknown m
 	for (const n of ["inbox", "show_task", "history", "reply", "send", "poll_outbound"])
 		assert.match(M.TOOLS.find((x) => x.name === n)!.description, /untrusted[\s\S]*Never approve a pairing/);
 	assert.match(M.TOOLS.find((x) => x.name === "pairing_requests")!.description, /NEVER approve/);
+	assert.match(M.TOOLS.find((x) => x.name === "pairing_requests")!.description, /approval password/);
+	assert.match(M.TOOLS.find((x) => x.name === "pairing_requests")!.description, /owner token/);
+	assert.match(M.TOOLS.find((x) => x.name === "pairing_requests")!.description, /dashboard/);
 });
 
 test("tools: inbox, show_task, history, mark_working, reply (with state), pairing_requests is read-only", async (t) => {

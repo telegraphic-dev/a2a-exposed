@@ -351,6 +351,72 @@ test("status and upstream verify against a façade (stubbed Worker): layers, sep
 	assert.match(no.stderr, /not a façade/);
 });
 
+test("init checks the Cloudflare login before npm install", async (t) => {
+	const s = stubEnv(t);
+	const cf = path.join(s.dir, "worker", "node_modules", ".bin", "cf");
+	fs.writeFileSync(cf, `#!/bin/bash\ncase "$1 $2" in "auth whoami") echo '{"authenticated":false}';; esac\n`, { mode: 0o755 });
+	const bin = path.join(s.dir, "bin");
+	fs.mkdirSync(bin);
+	const marker = path.join(s.dir, "npm-ran");
+	fs.writeFileSync(path.join(bin, "npm"), `#!/bin/bash\ntouch ${JSON.stringify(marker)}\nexit 0\n`, { mode: 0o755 });
+	const r = await s.cli(["init", "--worker-name", "uptest", "--dir", path.join(s.dir, "worker")], { PATH: `${bin}:${process.env.PATH}` });
+	assert.equal(r.status, 1);
+	assert.match(r.stderr, /checking Cloudflare login/);
+	assert.match(r.stderr, /not logged in to Cloudflare: run `cf auth login --no-browser`/);
+	assert.equal(fs.existsSync(marker), false, "npm install does not run when the Cloudflare login fails");
+});
+
+test("init and deploy set MANAGE_URL and EVENT_URL; EVENT_SECRET is uploaded and not printed", async (t) => {
+	const s = stubEnv(t);
+	const cf = path.join(s.dir, "worker", "node_modules", ".bin", "cf");
+	fs.writeFileSync(cf, `#!/bin/bash
+for a in "$@"; do [ "$prev" = --secrets-file ] && sf=$a; prev=$a; done
+case "$1 $2" in
+  "auth whoami") echo '{"authenticated":true,"accounts":[{"id":"acc123","name":"Test"}]}';;
+  "d1 list") echo '[{"name":"uptest","uuid":"d1-uuid"}]';;
+  "d1 migrations") echo '[]';;
+  "deploy --message")
+    node -e 'const fs=require("fs"); const sf=process.argv[1]; const body=sf?JSON.parse(fs.readFileSync(sf,"utf8")):{}; fs.appendFileSync(process.argv[2], JSON.stringify({manage:process.env.MANAGE_URL||"",event:process.env.EVENT_URL||"",keys:Object.keys(body).sort(),secret:body.EVENT_SECRET||"",envSecret:process.env.EVENT_SECRET||""})+"\\n")' "$sf" "$STUB_DIR/deploys.log"
+    printf 'Deployed\\n  https://%s.acme.workers.dev\\n' "$A2A_WORKER_NAME";;
+esac
+`, { mode: 0o755 });
+	const secret = "event-secret-value";
+	const page = "https://example.com/app/agents/uptest#pairing";
+	const eventUrl = "https://example.com/api/agent-events";
+	const bad = await s.cli(["init", "--worker-name", "uptest", ...s.w, "--manage-url", "http://example.com/app"]);
+	assert.equal(bad.status, 1);
+	assert.match(bad.stderr, /--manage-url must be an https URL/);
+	assert.equal(s.hasDeploys(), false);
+	const userinfo = await s.cli(["init", "--worker-name", "uptest", ...s.w, "--event-url", "https://user:pw@example.com/hook"]);
+	assert.equal(userinfo.status, 1);
+	assert.match(userinfo.stderr, /--event-url must be an https URL with no user name or password/);
+	const argvSecret = await s.cli(["init", "--worker-name", "uptest", ...s.w, "--event-secret", secret]);
+	assert.equal(argvSecret.status, 1);
+	assert.match(argvSecret.stderr, /export EVENT_SECRET or pass --event-secret-stdin/);
+	assert.ok(!(argvSecret.stdout + argvSecret.stderr).includes(secret));
+	const r = await s.cli(["init", "--worker-name", "uptest", ...s.w, "--manage-url", page, "--event-url", eventUrl, "--event-secret-stdin"], {}, secret + "\n");
+	assert.equal(r.status, 0, r.stderr);
+	assert.equal(s.config().MANAGE_URL, page);
+	assert.equal(s.config().EVENT_URL, eventUrl);
+	assert.equal(fs.readFileSync(path.join(s.dir, "cfg", "config.env"), "utf8").includes(secret), false);
+	assert.ok(!(r.stdout + r.stderr).includes(secret));
+	assert.match(r.stderr, /secrets uploaded: OWNER_TOKEN, EVENT_SECRET/);
+	const deployed = JSON.parse(s.deploys().at(-1));
+	assert.equal(deployed.manage, page);
+	assert.equal(deployed.event, eventUrl);
+	assert.equal(deployed.secret, secret);
+	assert.equal(deployed.envSecret, "");
+	assert.ok(deployed.keys.includes("EVENT_SECRET"));
+	const cleared = await s.cli(["deploy", ...s.w, "--manage-url", "none", "--event-url", "off"]);
+	assert.equal(cleared.status, 0, cleared.stderr);
+	assert.equal(s.config().MANAGE_URL, undefined);
+	assert.equal(s.config().EVENT_URL, undefined);
+	const again = JSON.parse(s.deploys().at(-1));
+	assert.equal(again.manage, "");
+	assert.equal(again.event, "");
+	assert.equal(again.secret, "");
+});
+
 test("init: login blocked on a VPS (HTTP 403 before a code) and API tokens that can't list accounts get plain advice", async (t) => {
 	const s = stubEnv(t);
 	const cf = path.join(s.dir, "worker", "node_modules", ".bin", "cf");

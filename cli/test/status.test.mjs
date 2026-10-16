@@ -27,7 +27,7 @@ test("mcpAddCommand follows the live Worker and the agent card", () => {
 test("nextStep: the first missing piece, in setup order", () => {
 	const step = (over) => nextStep(healthy(over));
 	assert.equal(step({ deployed: false }).ok, false);
-	assert.match(step({ deployed: false }).text, /nothing is deployed from \/cfg\. Another deployment\? Set A2A_CONFIG_DIR\./);
+	assert.match(step({ deployed: false }).text, /nothing is deployed from \/cfg\. Run `npx -y a2a-exposed@latest init` \(see the quick start\)\. Another deployment\? Set A2A_CONFIG_DIR\./);
 	assert.match(step({ baseUrl: "" }).text, /no base URL saved\): re-run `npx -y a2a-exposed@latest init` with the same flags \(safe/);
 	assert.match(step({ hasOwnerToken: false }).text, /no owner token saved/);
 	assert.match(step({ card: { ok: false, error: "HTTP 404" } }).text, /agent card is not reachable \(HTTP 404\)/);

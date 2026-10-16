@@ -156,10 +156,13 @@ export async function list(o) {
 		: `human (the owner approves with the owner token, or on ${d.verificationUri} with the approval password)`;
 	console.log(`approval: ${how}`);
 	if (d.mode !== "off") {
+		const setPassword = `run \`${CLI} pair set-password --web\` and send your human the one-time link (or they run \`${CLI} pair set-password\` in a terminal)`;
 		console.log(`approval password: ${d.passwordSet ? `set${d.passwordSetAt ? ` ${d.passwordSetAt}` : ""}${d.passwordSetVia ? ` (via ${d.passwordSetVia})` : ""}`
-			: `NOT SET: run \`${CLI} pair set-password --web\` and send your human the one-time link (or they run \`${CLI} pair set-password\` in a terminal)`}`);
+			: d.manageUrl ? `NOT SET. Your human can approve on the dashboard (${d.manageUrl}). To use the /device page, ${setPassword}`
+			: `NOT SET: ${setPassword}`}`);
 		if (d.oidcIssuer) console.log(`OpenID Connect: ${(d.approvalMethods || []).join(" and ")} (${d.oidcIssuer})`);
 		if (d.setupLinkExpiresAt) console.log(`setup link: one is open until ${d.setupLinkExpiresAt} (a new \`pair set-password --web\` replaces it)`);
+		if (d.manageUrl) console.log(`dashboard: ${d.manageUrl}`);
 	}
 	if (!d.pending.length) return console.log("(no pending pairing requests)");
 	for (const p of d.pending) {

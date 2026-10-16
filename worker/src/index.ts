@@ -1379,12 +1379,15 @@ async function freeLabel(ctx: TenantContext, base: string): Promise<string> {
 const pendingRequest = async (ctx: TenantContext, code: string): Promise<Json | null> =>
 	ctx.DB.prepare("SELECT * FROM device_requests WHERE user_code = ?").bind(code).first();
 
+const PAIRING_NOT_FOUND = "Not found. Ask the other agent to run connect again.";
+const PAIRING_EXPIRED = "Not found. The code expired. Ask the other agent to run connect again.";
+
 /** Approve or deny a pending request. Returns the label (approve) or an error message. */
 async function decide(ctx: TenantContext, ectx: ExecutionContext, code: string, approve: boolean, by: string): Promise<{ ok: boolean; label?: string; error?: string; request?: Json; replaced?: boolean }> {
 	const r = await pendingRequest(ctx, code);
-	if (!r) return { ok: false, error: "no pairing request with that code" };
+	if (!r) return { ok: false, error: PAIRING_NOT_FOUND };
 	if (r.status !== "pending") return { ok: false, error: `that request was already ${r.status === "denied" ? "denied" : "approved"}` };
-	if (Date.now() >= r.expires_ms) return { ok: false, error: "that request has expired" };
+	if (Date.now() >= r.expires_ms) return { ok: false, error: PAIRING_EXPIRED };
 	const replacing = approve && r.replaces_label && r.replaces_hash
 		? !!(await ctx.DB.prepare("SELECT 1 FROM peers WHERE label = ? AND token_hash = ? AND revoked_at IS NULL").bind(r.replaces_label, r.replaces_hash).first()) : false;
 	const label = !approve ? null : replacing ? r.replaces_label : await freeLabel(ctx, P.labelBase(r.client_name || "", r.client_id || ""));
@@ -1494,8 +1497,11 @@ async function devicePage(req: Request, ctx: TenantContext, ectx: ExecutionConte
 		h["set-cookie"] = `${csrfName}=${csrf}; Path=/device; Secure; HttpOnly; SameSite=Strict; Max-Age=3600`;
 		return new Response(P.devicePage(model, nonce), { status, headers: h });
 	};
+	// An unknown or expired code is 404. The empty form and a code that is not the WDJB-4827 shape stay 200.
+	let lookupStatus = 200;
 	const show = async (raw: string | null, notice?: P.PageModel["notice"]) => {
 		model.notice = notice;
+		lookupStatus = 200;
 		if (raw && await overLimit(ctx, `look:ip:${ip || "?"}`, P.LIMITS.lookupsWindowS, P.LIMITS.lookupsPerIp, head)) {
 			model.askCode = true;
 			model.notice = { kind: "error", text: "Too many code lookups from this address. Try again in a few minutes." };
@@ -1507,14 +1513,18 @@ async function devicePage(req: Request, ctx: TenantContext, ectx: ExecutionConte
 		else {
 			model.askCode = true;
 			model.codeValue = raw || "";
-			if (raw && !notice) model.notice = { kind: "error", text: !code ? "That is not a valid code (it looks like WDJB-4827)." :
-				!r ? "No pairing request with that code (it may have expired or been used)." :
-				r.status !== "pending" ? `That request was already ${r.status === "denied" ? "denied" : "approved"}.` : "That request has expired." };
+			if (raw && !notice) {
+				let text = "That is not a valid code (it looks like WDJB-4827).";
+				if (code && !r) { lookupStatus = 404; text = PAIRING_NOT_FOUND; }
+				else if (r && r.status !== "pending") text = `That request was already ${r.status === "denied" ? "denied" : "approved"}.`;
+				else if (code && r) { lookupStatus = 404; text = PAIRING_EXPIRED; }
+				model.notice = { kind: "error", text };
+			}
 		}
 	};
 	if (req.method === "GET") {
 		await show(url.searchParams.get("user_code"));
-		return send();
+		return send(lookupStatus);
 	}
 	// POST: same-origin form only (Origin check + double-submit cookie); the approval password is the real gate
 	const origin = req.headers.get("origin");
@@ -1739,10 +1749,12 @@ async function ownerPairing(req: Request, ctx: TenantContext, ectx: ExecutionCon
 		// with pairing off, leftover requests can't be approved or redeemed (every pairing endpoint is 404): don't list them
 		const pending = mode === "off" ? [] : (rows.results as Json[]);
 		const policy = O.approvalPolicy(ctx.gates.approvalOidc);
+		const manage = dashboardUrl(ctx);
 		return json({ mode, passwordSet: !!pw, passwordSetAt: pw?.setAt || null, passwordSetVia: pw ? pw.setVia || "terminal" : null,
 			passwordIterations: pw?.iterations || null, pbkdf2Iterations: P.pbkdf2Iterations(ctx.PBKDF2_ITERATIONS),
 			approvalMethods: [...(policy.password ? ["password"] : []), ...(policy.oidc ? ["oidc"] : [])],
 			oidcIssuer: policy.oidc ? O.issuerHost(ctx.gates.approvalOidc.issuer) : null,
+			...(manage ? { manageUrl: manage } : {}),
 			setupLinkExpiresAt: linkLive ? new Date(setup!.rec.expiresMs).toISOString() : null, verificationUri: oauthUrls(ctx).page,
 			pending: pending.map((r) => ({ userCode: P.formatUserCode(r.user_code), clientName: r.client_name, clientId: r.client_id,
 				agentCardUrl: r.agent_card_url, ip: r.ip, country: r.country, createdAt: new Date(r.created_ms).toISOString(),
