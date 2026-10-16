@@ -1,6 +1,6 @@
 {
 	"name": "@a2a-exposed/control-core",
-	"version": "0.8.8",
+	"version": "0.8.9",
 	"description": "A2A endpoint provisioning, routing, and D1 migrations for a2a-exposed.",
 	"type": "module",
 	"scripts": {
