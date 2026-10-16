@@ -430,16 +430,30 @@ async function deployAndLearn(dir, secrets, o) {
 	}
 }
 
+/**
+ * whoami before npm install. A previous install has node_modules/.bin/cf.
+ * A fresh init does not: `npx cf auth login` does not put `cf` on PATH, so this check uses `npx --yes cf`.
+ */
+function cfLoginJson(dir) {
+	const local = path.join(dir, "node_modules", ".bin", "cf");
+	const args = cfArgs(["auth", "whoami"]);
+	const r = fs.existsSync(local)
+		? run(local, args, { cwd: dir, capture: true })
+		: run("npx", ["--yes", "cf", ...args], { cwd: dir, capture: true });
+	try { return JSON.parse(r.stdout); } catch { die("unexpected output from cf auth whoami"); }
+}
+
 /** Cloudflare login, before init installs packages. Dies with the same advice as a later cf failure. */
 function requireCfLogin(dir) {
 	const prof = cfProfile();
-	step(`checking Cloudflare login (cf auth whoami${prof ? ` --profile ${prof}` : ""})`);
-	const who = cfJson(dir, ["auth", "whoami"]);
+	const local = fs.existsSync(path.join(dir, "node_modules", ".bin", "cf"));
+	step(`checking Cloudflare login (${local ? "cf" : "npx --yes cf"} auth whoami${prof ? ` --profile ${prof}` : ""})`);
+	const who = cfLoginJson(dir);
 	if (!who.authenticated) die((process.env.CLOUDFLARE_API_TOKEN
 		? "CLOUDFLARE_API_TOKEN is set but cf does not accept it (expired, revoked, or IP-restricted: an IP filter must allow both this host's IPv4 /32 and IPv6 /128). Check the token (setup skill, Troubleshooting: API token), then re-run init"
 		: prof
 		? `cf profile "${prof}" is not logged in: run \`npx cf auth create ${prof} --no-browser\`, open the printed URL, enter the code, then re-run init`
-		: "not logged in to Cloudflare: run `cf auth login --no-browser`, open the printed URL, enter the code, then re-run init") + `\n${LOGIN_403_HELP}`);
+		: "not logged in to Cloudflare: run `npx cf auth login --no-browser`, open the printed URL, enter the code, then re-run init") + `\n${LOGIN_403_HELP}`);
 	const accts = who.accounts || [];
 	if (!C.get("CLOUDFLARE_ACCOUNT_ID")) {
 		if (!accts.length && process.env.CLOUDFLARE_API_TOKEN)

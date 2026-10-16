@@ -362,8 +362,35 @@ test("init checks the Cloudflare login before npm install", async (t) => {
 	const r = await s.cli(["init", "--worker-name", "uptest", "--dir", path.join(s.dir, "worker")], { PATH: `${bin}:${process.env.PATH}` });
 	assert.equal(r.status, 1);
 	assert.match(r.stderr, /checking Cloudflare login/);
-	assert.match(r.stderr, /not logged in to Cloudflare: run `cf auth login --no-browser`/);
+	assert.match(r.stderr, /not logged in to Cloudflare: run `npx cf auth login --no-browser`/);
 	assert.equal(fs.existsSync(marker), false, "npm install does not run when the Cloudflare login fails");
+});
+
+test("fresh init checks the login with npx cf before npm install, with no global cf", async (t) => {
+	const s = stubEnv(t);
+	fs.rmSync(path.join(s.dir, "worker", "node_modules"), { recursive: true, force: true });
+	const bin = path.join(s.dir, "bin");
+	fs.mkdirSync(bin);
+	const log = path.join(s.dir, "npx.log");
+	const marker = path.join(s.dir, "npm-ran");
+	fs.writeFileSync(path.join(bin, "npx"), `#!/bin/bash
+printf '%s\\n' "$*" >> ${JSON.stringify(log)}
+if [ "$1" = "--yes" ] && [ "$2" = "cf" ] && [ "$3" = "auth" ] && [ "$4" = "whoami" ]; then
+  echo '{"authenticated":false}'
+  exit 0
+fi
+echo "unexpected npx: $*" >&2
+exit 1
+`, { mode: 0o755 });
+	fs.writeFileSync(path.join(bin, "npm"), `#!/bin/bash\ntouch ${JSON.stringify(marker)}\nexit 0\n`, { mode: 0o755 });
+	fs.writeFileSync(path.join(bin, "cf"), `#!/bin/bash\necho SHOULD-NOT-RUN-GLOBAL-CF >&2\nexit 1\n`, { mode: 0o755 });
+	const r = await s.cli(["init", "--worker-name", "uptest", "--dir", path.join(s.dir, "worker")], { PATH: `${bin}:${process.env.PATH}` });
+	assert.equal(r.status, 1);
+	assert.match(r.stderr, /checking Cloudflare login \(npx --yes cf auth whoami\)/);
+	assert.match(r.stderr, /not logged in to Cloudflare: run `npx cf auth login --no-browser`/);
+	assert.equal(fs.existsSync(marker), false, "npm install does not run when the login fails");
+	assert.match(fs.readFileSync(log, "utf8"), /^--yes cf auth whoami$/m);
+	assert.doesNotMatch(r.stderr, /SHOULD-NOT-RUN-GLOBAL-CF|ENOENT/);
 });
 
 test("init and deploy set MANAGE_URL and EVENT_URL; EVENT_SECRET is uploaded and not printed", async (t) => {
@@ -423,7 +450,7 @@ test("init: login blocked on a VPS (HTTP 403 before a code) and API tokens that 
 	fs.writeFileSync(cf, `#!/bin/bash\ncase "$1 $2" in "auth whoami") echo "$WHOAMI";; esac\n`, { mode: 0o755 });
 	const r = await s.cli(["init", "--worker-name", "uptest", ...s.w], { WHOAMI: '{"authenticated":false}' });
 	assert.equal(r.status, 1);
-	assert.match(r.stderr, /not logged in to Cloudflare: run `cf auth login --no-browser`/);
+	assert.match(r.stderr, /not logged in to Cloudflare: run `npx cf auth login --no-browser`/);
 	assert.match(r.stderr, /"OAuth error: HTTP 403 Forbidden"[^\n]*BEFORE any code is shown, that is Cloudflare's bot mitigation for datacenter \/ VPS IPs[^\n]*don't retry[^\n]*CLOUDFLARE_API_TOKEN/);
 	const tok = await s.cli(["init", "--worker-name", "uptest", ...s.w], { WHOAMI: '{"authenticated":false}', CLOUDFLARE_API_TOKEN: "cf-token-value" });
 	assert.equal(tok.status, 1);

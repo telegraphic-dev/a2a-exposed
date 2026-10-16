@@ -6,7 +6,7 @@ All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.
 
 - **Dashboard link.** `pair list` and `inbox` print the dashboard URL when `MANAGE_URL` is set. `status` prints it on the pairing line. `GET /owner/pairing` includes `manageUrl` for that URL.
 - **Deploy flags.** `init` and `deploy` take `--manage-url` and `--event-url` (`none` clears the saved value). `--event-secret-stdin` uploads `EVENT_SECRET` on that deploy. The secret stays out of `config.env` and out of the command output. An `EVENT_SECRET` argument is refused.
-- **First run.** `status` with nothing deployed says to run `init`. `init` checks the Cloudflare login before it installs packages.
+- **First run.** `status` with nothing deployed says to run `init`. `init` checks the Cloudflare login before it installs packages. A fresh init runs `npx --yes cf auth whoami` for that check. A later init uses the `cf` in the Worker folder.
 - **Pairing errors.** An unknown or expired code on the owner API stays HTTP 409 and says to run `connect` again. `GET /device` for that code is HTTP 404 with the same wording. The empty `/device` form stays HTTP 200.
 - **MCP.** The `pairing_requests` tool description names the approval password, the owner token, and the dashboard link.
 
