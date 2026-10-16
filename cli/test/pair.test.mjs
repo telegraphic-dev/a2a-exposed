@@ -356,7 +356,7 @@ test("connect against the real Worker (agent approval): pair list, pair approve,
 	assert.match(r.stderr, /denied the pairing request/);
 	r = await ownerSide.cli(["pair", "approve", "BCDF-2345"]);
 	assert.equal(r.status, 1);
-	assert.match(r.stderr, /no pairing request with that code/);
+	assert.match(r.stderr, /Not found\. Ask the other agent to run connect again\./);
 });
 
 test("human approval mode: the owner token approves and the peer collects the token", async (t) => {

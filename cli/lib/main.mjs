@@ -31,6 +31,7 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
        [--provider-organization O --provider-url U] [--preset P] [--worker-name W] [--d1-name D]
        [--account-id ID] [--cf-profile NAME] [--cli-command CMD] [--debounce S] [--max-per-hour N]
        [--pairing-approval human|agent|off] [--pbkdf2-iterations N] [--workers-logs on|off] [--mcp on|off] [--cron]
+       [--manage-url URL] [--event-url URL] [--event-secret-stdin]
        [--rotate-owner-token]
        [--upstream URL [--upstream-card-url URL] [--upstream-token-stdin | --no-upstream-token]] [--worker-dir DIR]
                                 deploy the Worker + D1 to your account; wake secrets are read from
@@ -54,6 +55,16 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
                                                Plugin manifests leave MCP unset: the URL differs per deploy.
                                                When GET /owner/mcp reports enabled and the agent card is reachable,
                                                \`status\` prints \`claude mcp add --transport http a2a-exposed <url>/mcp\`
+                                --manage-url   https URL of this agent's dashboard page (MANAGE_URL). A pairing
+                                               wake, the MCP inbox line, \`pair list\`, and \`inbox\` include it
+                                               when it is set. \`none\` clears it. No user name or password in the URL
+                                --event-url    https URL that receives a signed pairing event when a request is
+                                               created, approved, or denied (EVENT_URL). \`none\` clears it.
+                                               The post also needs EVENT_SECRET
+                                --event-secret-stdin
+                                               read EVENT_SECRET from stdin (hidden prompt on a terminal).
+                                               Uploaded on this deploy. Not an argument, not printed, and not
+                                               saved in config.env. Or export EVENT_SECRET
                                 --rotate-owner-token  on init, replace the owner token; other settings come from config.env.
                                                Then update A2A_OWNER_TOKEN wherever this A2A endpoint is called, and run \`peers sync\`
                                 --upstream URL  proxy / expose mode: a public façade for an agent that already
@@ -154,7 +165,8 @@ Status
 
 Inbox (owner side)
   inbox [--context C] [--all] [--json]     unhandled inbound tasks (peer text is UNTRUSTED), then pending pairing
-                                           requests (tell your human; --json: tasks on stdout, requests on stderr)
+                                           requests (tell your human; the dashboard URL when MANAGE_URL is set;
+                                           --json: tasks on stdout, requests on stderr)
   show <taskId>                            full task JSON
   working <taskId>                         mark task working
   reply <taskId> (--text T | --stdin) [--state completed|input-required|rejected|failed|working]
@@ -192,8 +204,9 @@ Pairing (OAuth 2.0 device flow, RFC 8628: agents connect without pasting tokens 
                           deploy. --secret-stdin checks one line and discards it, so export the variable
                           before deploy. config.env keeps the issuer and client id.
                           Leave the issuer unset and approval stays the password page
-  pair list [--json]      pending pairing requests (code, claimed name/card, address), the approval mode and
-                          when the approval password was set
+  pair list [--json]      pending pairing requests (code, claimed name/card, address), the approval mode,
+                          when the approval password was set, and the dashboard URL (manageUrl) when
+                          MANAGE_URL is set
   pair approve <code>     approve with the owner token (human mode records the owner; in agent
                           mode, run it only after your human said yes)
   pair deny <code>        deny (any mode; on the /device page deny needs no password)
@@ -289,7 +302,7 @@ const S = { type: "string" }, B = { type: "boolean" };
 const tunnelOpts = { "tunnel-hostname": S, "tunnel-zone": S, "tunnel-origin": S, "tunnel-path": S, "show-token": B, "zero-trust-org": S, dir: S, "worker-dir": S };
 const deployOpts = {
 	...Object.fromEntries(dep.DEPLOY_FLAGS.map((f) => [f, S])), dir: S, "worker-dir": S, cron: B, "skip-install": B, "rotate-owner-token": B,
-	"workers-dev": B, "workers-dev-subdomain": S, "upstream-token-stdin": B, "no-upstream-token": B,
+	"workers-dev": B, "workers-dev-subdomain": S, "upstream-token-stdin": B, "no-upstream-token": B, "event-secret-stdin": B,
 };
 const SPEC = {
 	init: { ...deployOpts, ...tunnelOpts, tunnel: B }, deploy: deployOpts, wake: deployOpts, tunnel: tunnelOpts,
@@ -326,6 +339,8 @@ export async function main(argv) {
 		if (name === "tunnel") return console.log(HELP_TUNNEL);
 		return console.log(HELP);
 	}
+	if ((name === "init" || name === "deploy" || name === "wake") && rest.some((a) => /^--event-secret(=|$)/.test(a)))
+		throw new CliError("export EVENT_SECRET or pass --event-secret-stdin. The secret is not an argument. It is not printed and it is not saved in config.env");
 	if (name === "pair" && rest[0] === "set-oidc" && rest.some((a) => /^--(secret|client-secret)(=|$)/.test(a)))
 		throw new CliError("export APPROVAL_OIDC_CLIENT_SECRET or pass --secret-stdin. --secret-stdin checks the line and discards it. Deploy uploads only the environment variable");
 	if (name === "pair" && rest[0] === "set-password") {

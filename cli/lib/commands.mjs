@@ -37,12 +37,19 @@ export async function inbox(o) {
 	// pending pairing requests: polling agents get no pairing wake, so the inbox shows them too (not with --context:
 	// that is one conversation). An older Worker without pairing: nothing to show.
 	let pairing = [];
+	let manageUrl = "";
 	if (!o.context) {
-		try { const r = await ownerTry("GET", "/owner/pairing"); if (r.status === 200 && r.data && Array.isArray(r.data.pending)) pairing = r.data.pending.map((p) => ({ ...p, approval: r.data.mode })); } catch { /* unreachable: the inbox call above already worked */ }
+		try {
+			const r = await ownerTry("GET", "/owner/pairing");
+			if (r.status === 200 && r.data && Array.isArray(r.data.pending)) {
+				pairing = r.data.pending.map((p) => ({ ...p, approval: r.data.mode }));
+				if (typeof r.data.manageUrl === "string") manageUrl = r.data.manageUrl;
+			}
+		} catch { /* unreachable: the inbox call above already worked */ }
 	}
 	if (o.json) {
 		out(rows); // unchanged shape (an array of tasks); pairing requests go to stderr as one JSON line
-		if (pairing.length) console.error(JSON.stringify({ pendingPairingRequests: pairing.length, requests: pairing.map(({ userCode, clientName, clientId, verificationUriComplete, expiresAt, approval }) => ({ userCode, clientName: clientName || clientId || null, verificationUriComplete, expiresAt, approval })), instructions: PAIRING_NOTE }));
+		if (pairing.length) console.error(JSON.stringify({ pendingPairingRequests: pairing.length, ...(manageUrl ? { manageUrl } : {}), requests: pairing.map(({ userCode, clientName, clientId, verificationUriComplete, expiresAt, approval }) => ({ userCode, clientName: clientName || clientId || null, verificationUriComplete, expiresAt, approval })), instructions: PAIRING_NOTE }));
 		return;
 	}
 	if (!rows.length) console.log(pairing.length || o.context ? "(no unhandled tasks)" : "(no unhandled tasks, no pending pairing requests)");
@@ -58,6 +65,7 @@ export async function inbox(o) {
 			console.log(`--- code ${p.userCode}  ${JSON.stringify(p.clientName || p.clientId || "(no name)")} (claimed, untrusted)  expires ${p.expiresAt}${p.replacesLabel ? `  replaces token "${p.replacesLabel}"` : ""}`);
 			console.log(`    link: ${p.verificationUriComplete}`);
 		}
+		if (manageUrl) console.log(`    dashboard: ${manageUrl}`);
 		console.log(PAIRING_NOTE);
 	}
 }

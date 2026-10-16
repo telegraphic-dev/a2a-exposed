@@ -47,6 +47,7 @@ const DEPLOY_KEYS = [
 	"A2A_WORKERS_DEV_SUBDOMAIN", "A2A_RETIRED_HOSTNAMES", "PAIRING_APPROVAL", "A2A_PBKDF2_ITERATIONS", "A2A_WORKERS_LOGS", "A2A_MCP",
 	"A2A_UPSTREAM_URL", "A2A_UPSTREAM_CARD_URL",
 	"APPROVAL_OIDC_ISSUER", "APPROVAL_OIDC_CLIENT_ID", "APPROVAL_OIDC_ALLOWED_SUBJECTS", "APPROVAL_METHODS",
+	"MANAGE_URL", "EVENT_URL",
 ];
 // init/deploy flag -> config key
 const FLAG_KEYS = {
@@ -57,6 +58,7 @@ const FLAG_KEYS = {
 	"body-template": "WAKE_BODY_TEMPLATE", "cli-command": "WAKE_CLI_COMMAND", debounce: "WAKE_DEBOUNCE_SECONDS", "max-per-hour": "WAKE_MAX_PER_HOUR",
 	"pairing-approval": "PAIRING_APPROVAL", "pbkdf2-iterations": "A2A_PBKDF2_ITERATIONS", "workers-logs": "A2A_WORKERS_LOGS", mcp: "A2A_MCP",
 	upstream: "A2A_UPSTREAM_URL", "upstream-card-url": "A2A_UPSTREAM_CARD_URL",
+	"manage-url": "MANAGE_URL", "event-url": "EVENT_URL",
 };
 export const PAIRING_MODES = ["human", "agent", "off"];
 export const DEPLOY_FLAGS = Object.keys(FLAG_KEYS);
@@ -243,11 +245,38 @@ function applyFlags(o) {
 		if (why) die(`--upstream-card-url ${card} ${why}` + (upd.A2A_UPSTREAM_CARD_URL === undefined
 			? ` (it is the saved A2A_UPSTREAM_CARD_URL; pass --upstream-card-url <URL on that origin>, or --upstream-card-url none for <upstream origin>/.well-known/agent-card.json)` : ""));
 	}
+	if (upd.MANAGE_URL !== undefined) upd.MANAGE_URL = httpsBinding("manage-url", upd.MANAGE_URL, 500);
+	if (upd.EVENT_URL !== undefined) upd.EVENT_URL = httpsBinding("event-url", upd.EVENT_URL, 2000);
 	if (upd.A2A_AGENT_SKILLS) {
 		try { if (!Array.isArray(JSON.parse(upd.A2A_AGENT_SKILLS))) throw 0; } catch { die("--agent-skills must be a JSON array of A2A AgentSkill objects"); }
 	}
 	C.saveConfig(upd);
 	return switched;
+}
+
+/** https URL with no userinfo, or null for none/off. The saved value is the trimmed URL, so a fragment stays. */
+function httpsBinding(flag, value, max) {
+	const raw = String(value).trim();
+	if (["", "none", "off"].includes(raw.toLowerCase())) return null;
+	if (raw.length > max) die(`--${flag} must be an https URL of at most ${max} characters`);
+	let u;
+	try { u = new URL(raw); } catch { die(`--${flag} must be an https URL`); }
+	if (u.protocol !== "https:" || u.username || u.password) die(`--${flag} must be an https URL with no user name or password`);
+	return raw;
+}
+
+/**
+ * EVENT_SECRET from --event-secret-stdin. Uploaded on this deploy.
+ * The value is not printed and is not written to config.env.
+ */
+export async function eventSecretFromStdin(o) {
+	if (!o["event-secret-stdin"]) return {};
+	if (o["upstream-token-stdin"]) die("--event-secret-stdin reads stdin, so it cannot be combined with --upstream-token-stdin");
+	const raw = (process.stdin.isTTY ? await readHidden("EVENT_SECRET (not shown): ") : fs.readFileSync(0, "utf8")).replace(/\r?\n$/, "");
+	if (!raw || /[\u0000-\u001f]/.test(raw) || raw.length > 512) die("--event-secret-stdin: the secret must be a single non-empty line, at most 512 characters");
+	const fromEnv = process.env.EVENT_SECRET || "";
+	if (fromEnv && fromEnv !== raw) console.error("The secret on stdin differs from EVENT_SECRET. This deploy uploads the stdin value. Neither value was printed or saved in config.env.");
+	return { EVENT_SECRET: raw };
 }
 
 /** After a deploy that moved the public URL: what stops serving and what peers must update. */
@@ -401,6 +430,42 @@ async function deployAndLearn(dir, secrets, o) {
 	}
 }
 
+/**
+ * whoami before npm install. A previous install has node_modules/.bin/cf.
+ * A fresh init does not: `npx cf auth login` does not put `cf` on PATH, so this check uses `npx --yes cf`.
+ */
+function cfLoginJson(dir) {
+	const local = path.join(dir, "node_modules", ".bin", "cf");
+	const args = cfArgs(["auth", "whoami"]);
+	const r = fs.existsSync(local)
+		? run(local, args, { cwd: dir, capture: true })
+		: run("npx", ["--yes", "cf", ...args], { cwd: dir, capture: true });
+	try { return JSON.parse(r.stdout); } catch { die("unexpected output from cf auth whoami"); }
+}
+
+/** Cloudflare login, before init installs packages. Dies with the same advice as a later cf failure. */
+function requireCfLogin(dir) {
+	const prof = cfProfile();
+	const local = fs.existsSync(path.join(dir, "node_modules", ".bin", "cf"));
+	step(`checking Cloudflare login (${local ? "cf" : "npx --yes cf"} auth whoami${prof ? ` --profile ${prof}` : ""})`);
+	const who = cfLoginJson(dir);
+	if (!who.authenticated) die((process.env.CLOUDFLARE_API_TOKEN
+		? "CLOUDFLARE_API_TOKEN is set but cf does not accept it (expired, revoked, or IP-restricted: an IP filter must allow both this host's IPv4 /32 and IPv6 /128). Check the token (setup skill, Troubleshooting: API token), then re-run init"
+		: prof
+		? `cf profile "${prof}" is not logged in: run \`npx cf auth create ${prof} --no-browser\`, open the printed URL, enter the code, then re-run init`
+		: "not logged in to Cloudflare: run `npx cf auth login --no-browser`, open the printed URL, enter the code, then re-run init") + `\n${LOGIN_403_HELP}`);
+	const accts = who.accounts || [];
+	if (!C.get("CLOUDFLARE_ACCOUNT_ID")) {
+		if (!accts.length && process.env.CLOUDFLARE_API_TOKEN)
+			die("the API token can't list accounts: add the permission User -> Memberships -> Read (or pass --account-id <id> / export CLOUDFLARE_ACCOUNT_ID; the id is in the dashboard URL)");
+		if (accts.length !== 1) die(`${accts.length} accounts available; pass --account-id <id>:\n` + accts.map((a) => `  ${a.id}  ${a.name}`).join("\n"));
+		C.saveConfig({ CLOUDFLARE_ACCOUNT_ID: accts[0].id });
+	} else if (accts.length && !accts.some((a) => a.id === C.get("CLOUDFLARE_ACCOUNT_ID"))) {
+		die(`account ${C.get("CLOUDFLARE_ACCOUNT_ID")} is not visible to the cf login${prof ? ` (profile "${prof}")` : ""}; pass --cf-profile for the right login or --account-id for one of:\n` + accts.map((a) => `  ${a.id}  ${a.name}`).join("\n"));
+	}
+	step(`Cloudflare account: ${accts.find((a) => a.id === C.get("CLOUDFLARE_ACCOUNT_ID"))?.name || C.get("CLOUDFLARE_ACCOUNT_ID")}${prof ? ` (cf profile ${prof})` : ""}`);
+}
+
 /** The deployment's public URL as saved by init/deploy (an exported A2A_BASE_URL does not change it; warned about). */
 function deployedBase() {
 	const base = (C.fileConfig().A2A_BASE_URL || publicBase()).replace(/\/$/, "");
@@ -424,26 +489,8 @@ export async function init(o) {
 
 	step(`worker project -> ${dir}`);
 	syncTemplate(dir);
+	requireCfLogin(dir);
 	if (!o["skip-install"]) run("npm", ["install", "--no-audit", "--no-fund", "--loglevel=error"], { cwd: dir });
-
-	const prof = cfProfile();
-	step(`checking Cloudflare login (cf auth whoami${prof ? ` --profile ${prof}` : ""})`);
-	const who = cfJson(dir, ["auth", "whoami"]);
-	if (!who.authenticated) die((process.env.CLOUDFLARE_API_TOKEN
-		? "CLOUDFLARE_API_TOKEN is set but cf does not accept it (expired, revoked, or IP-restricted: an IP filter must allow both this host's IPv4 /32 and IPv6 /128). Check the token (setup skill, Troubleshooting: API token), then re-run init"
-		: prof
-		? `cf profile "${prof}" is not logged in: run \`npx cf auth create ${prof} --no-browser\`, open the printed URL, enter the code, then re-run init`
-		: "not logged in to Cloudflare: run `cf auth login --no-browser`, open the printed URL, enter the code, then re-run init") + `\n${LOGIN_403_HELP}`);
-	const accts = who.accounts || [];
-	if (!C.get("CLOUDFLARE_ACCOUNT_ID")) {
-		if (!accts.length && process.env.CLOUDFLARE_API_TOKEN)
-			die("the API token can't list accounts: add the permission User -> Memberships -> Read (or pass --account-id <id> / export CLOUDFLARE_ACCOUNT_ID; the id is in the dashboard URL)");
-		if (accts.length !== 1) die(`${accts.length} accounts available; pass --account-id <id>:\n` + accts.map((a) => `  ${a.id}  ${a.name}`).join("\n"));
-		C.saveConfig({ CLOUDFLARE_ACCOUNT_ID: accts[0].id });
-	} else if (accts.length && !accts.some((a) => a.id === C.get("CLOUDFLARE_ACCOUNT_ID"))) {
-		die(`account ${C.get("CLOUDFLARE_ACCOUNT_ID")} is not visible to the cf login${prof ? ` (profile "${prof}")` : ""}; pass --cf-profile for the right login or --account-id for one of:\n` + accts.map((a) => `  ${a.id}  ${a.name}`).join("\n"));
-	}
-	step(`Cloudflare account: ${accts.find((a) => a.id === C.get("CLOUDFLARE_ACCOUNT_ID"))?.name || C.get("CLOUDFLARE_ACCOUNT_ID")}${prof ? ` (cf profile ${prof})` : ""}`);
 	const env = cfEnv();
 
 	const dbName = C.get("A2A_D1_NAME") || C.get("A2A_WORKER_NAME");
@@ -464,7 +511,7 @@ export async function init(o) {
 	if (!ownerToken || o["rotate-owner-token"]) ownerToken = randomToken(32);
 	C.saveConfig({ A2A_OWNER_TOKEN: ownerToken, A2A_BASE_URL: publicBase() || undefined });
 
-	const secrets = { OWNER_TOKEN: ownerToken, ...deploySecretsFromEnv(), ...upstreamSecrets };
+	const secrets = { OWNER_TOKEN: ownerToken, ...deploySecretsFromEnv(), ...upstreamSecrets, ...await eventSecretFromStdin(o) };
 	step(`deploying (secrets uploaded: ${Object.keys(secrets).join(", ")})`);
 	await deployAndLearn(dir, secrets, o);
 	const base = deployedBase();
@@ -570,7 +617,7 @@ export async function deploy(o) {
 	if (!o["skip-install"]) run("npm", ["install", "--no-audit", "--no-fund", "--loglevel=error"], { cwd: dir });
 	const env = cfEnv();
 	applyMigrations(dir, env);
-	const secrets = { ...deploySecretsFromEnv(), ...upstreamSecrets };
+	const secrets = { ...deploySecretsFromEnv(), ...upstreamSecrets, ...await eventSecretFromStdin(o) };
 	if (Object.keys(secrets).length && C.get("A2A_OWNER_TOKEN")) secrets.OWNER_TOKEN = C.get("A2A_OWNER_TOKEN");
 	step(Object.keys(secrets).length ? `deploying (secrets uploaded: ${Object.keys(secrets).join(", ")})` : "deploying (existing secrets kept)");
 	await deployAndLearn(dir, secrets, o);

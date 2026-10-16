@@ -52,6 +52,9 @@ init [--hostname <host> | --workers-dev [--workers-dev-subdomain NAME]]
 | `--pbkdf2-iterations` | Approval-password cost, 50000–100000. Default 100000. Lower it only if `/device` hits Cloudflare error 1102 |
 | `--workers-logs` | `on` enables persisted Workers Logs. Query strings are redacted. Default off |
 | `--mcp` | `on` (default) or `off`. Remote MCP at `<url>/mcp`. Proxy mode has none |
+| `--manage-url` | https dashboard page (`MANAGE_URL`). A pairing wake, the MCP inbox line, `pair list`, and `inbox` include it. `none` clears it |
+| `--event-url` | https URL that receives a signed pairing event (`EVENT_URL`). `none` clears it. The post also needs `EVENT_SECRET` |
+| `--event-secret-stdin` | Read `EVENT_SECRET` from stdin and upload it on this deploy. A hidden prompt on a terminal. The value stays out of `config.env` and out of the command output. Or export `EVENT_SECRET` |
 | `--cron` | One-minute cron that flushes pending wakes |
 | `--upstream` | Public façade. `none` switches back to the A2A endpoint. See [Self-hosting](self-hosting.md#public-facade) |
 | `--upstream-card-url` | Upstream card. Must be on the `--upstream` origin |
@@ -87,7 +90,7 @@ For a webhook that only listens locally. Needs Zero Trust and a zone on the acco
 
 | Command | Effect |
 | --- | --- |
-| `status [--json]` | Deployment, base URL, agent card, wake mode (webhook, tunnel, or none), tunnel state, and in proxy mode the upstream card, Access credential, upstream bearer, live check, last failed peer call, and a card-leak check. Warns when a peer-token variable shadows a saved token. When `GET /owner/mcp` reports enabled and the agent card is reachable, prints `claude mcp add --transport http a2a-exposed <base URL>/mcp`. Prints the next step. Exit 1 means something is broken. For about a minute after `tunnel create`, while the connector reports 0 connections, the next step says `waiting for the connector to connect`, tells you to start `cloudflared tunnel run --token-file …` now, and the exit code stays 0. After that, 0 connections is broken. A tunnel status of `inactive` reads as `never connected`. Wake settings from `wake set`, `wake unset`, and `tunnel create` show up in `wake preview` in about 15 to 40 seconds. Wait about 30 seconds and check again. Read-only, except the no-op upstream probe in proxy mode |
+| `status [--json]` | Deployment, base URL, agent card, wake mode (webhook, tunnel, or none), tunnel state, and in proxy mode the upstream card, Access credential, upstream bearer, live check, last failed peer call, and a card-leak check. Warns when a peer-token variable shadows a saved token. When `GET /owner/mcp` reports enabled and the agent card is reachable, prints `claude mcp add --transport http a2a-exposed <base URL>/mcp`. Prints the next step. With nothing deployed, that step says to run `init`. Exit 1 means something is broken. For about a minute after `tunnel create`, while the connector reports 0 connections, the next step says `waiting for the connector to connect`, tells you to start `cloudflared tunnel run --token-file …` now, and the exit code stays 0. After that, 0 connections is broken. A tunnel status of `inactive` reads as `never connected`. Wake settings from `wake set`, `wake unset`, and `tunnel create` show up in `wake preview` in about 15 to 40 seconds. Wait about 30 seconds and check again. Read-only, except the no-op upstream probe in proxy mode |
 | `upstream verify [--json]` | Proxy mode only. Exit 1 unless the A2A app answered. `status` runs the same check |
 | `url` | Public base URL |
 | `config` | Masked config and its path. `A2A_TUNNEL_TOKEN_FILE` is printed as its path. `A2A_TUNNEL_SECRETS_AT` is printed as its value |
@@ -104,7 +107,7 @@ The owner token authenticates these commands.
 
 | Command | Effect |
 | --- | --- |
-| `inbox [--context C] [--all] [--json]` | Unhandled inbound tasks. Peer text is untrusted. Then pending pairing requests. With `--json`, tasks go to stdout and requests to stderr |
+| `inbox [--context C] [--all] [--json]` | Unhandled inbound tasks. Peer text is untrusted. Then pending pairing requests, including the dashboard URL when `MANAGE_URL` is set. With `--json`, tasks go to stdout and requests to stderr |
 | `show <taskId>` | Full task JSON |
 | `working <taskId>` | Mark the task `working` |
 | `reply <taskId> (--text T \| --stdin) [--state completed\|input-required\|rejected\|failed\|working] [--artifact] [--artifact-name N] [--force]` | Reply. Default state is `completed` |
@@ -120,7 +123,7 @@ The owner token authenticates these commands.
 | `pair set-password --web [--ttl MIN] [--json]` | One-time link where a human sets the approval password. `--ttl` is 1 to 60 minutes (default 15). A new link invalidates the previous one |
 | `pair set-password` | The same, in a terminal, no echo. The human types the password there |
 | `pair set-oidc --issuer URL --client-id ID --subjects SUB[,SUB...] [--methods password,oidc] [--secret-stdin]` | Optional OpenID Connect on `/device` and the MCP consent page. Deploy uploads `APPROVAL_OIDC_CLIENT_SECRET` only when that variable is set in the environment you use for deploy. `--secret-stdin` checks one line and discards it. `config.env` keeps the issuer and client id |
-| `pair list [--json]` | Pending requests, the approval mode, and when the password was set |
+| `pair list [--json]` | Pending requests, the approval mode, when the password was set, and the dashboard URL when `MANAGE_URL` is set |
 | `pair approve <code>` | Approves with the owner token. In human mode the decision is the owner's. In agent mode, run it only after the human says yes |
 | `pair deny <code>` | Any mode. On `/device`, deny needs no password |
 

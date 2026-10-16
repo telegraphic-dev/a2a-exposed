@@ -152,7 +152,7 @@ test("status without a deployment names the config directory and points at init 
 	const r = s.cli(["status"]);
 	assert.equal(r.status, 1);
 	assert.match(r.stdout, /^deployment: +none$/m);
-	assert.match(r.stdout, new RegExp(`^next step: +nothing is deployed from ${s.dir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\. Another deployment\\? Set A2A_CONFIG_DIR\\.`, "m"));
+	assert.match(r.stdout, new RegExp(`^next step: +nothing is deployed from ${s.dir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\. Run \`npx -y a2a-exposed@latest init\` \\(see the quick start\\)\\. Another deployment\\? Set A2A_CONFIG_DIR\\.`, "m"));
 	const j = JSON.parse(s.cli(["status", "--json"]).stdout);
 	assert.equal(j.ok, false);
 	assert.equal(j.deployed, false);

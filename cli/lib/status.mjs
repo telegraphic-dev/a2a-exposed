@@ -118,7 +118,7 @@ export function nextStep(s) {
 function nextStepCore(s) {
 	const fail = (text) => ({ ok: false, text, also: [] });
 	const done = (text, also = []) => ({ ok: true, text, also });
-	if (!s.deployed) return fail(`nothing is deployed from ${path.dirname(s.configFile)}. Another deployment? Set A2A_CONFIG_DIR.`);
+	if (!s.deployed) return fail(`nothing is deployed from ${path.dirname(s.configFile)}. Run \`${CLI} init\` (see the quick start). Another deployment? Set A2A_CONFIG_DIR.`);
 	if (s.baseUrlEnv)
 		return fail(`A2A_BASE_URL is exported as ${s.baseUrlEnv}, but ${s.configFile} has ${s.baseUrlSaved || "(none)"}: CLI commands (and push URLs sent to peers) use the exported value. Unset A2A_BASE_URL (the A2A endpoint URL is always the deployment's own)`);
 	if (!s.baseUrl || !s.hasOwnerToken)
@@ -239,7 +239,8 @@ export async function collect() {
 				if (pr && typeof pr === "object" && ["human", "agent", "off"].includes(pr.mode))
 					s.pairing = { mode: pr.mode, passwordSet: !!pr.passwordSet, passwordSetAt: pr.passwordSetAt || null, passwordSetVia: pr.passwordSetVia || null,
 						setupLinkExpiresAt: pr.setupLinkExpiresAt || null, pending: (pr.pending || []).length,
-						...(typeof pr.oidcIssuer === "string" && pr.oidcIssuer ? { oidcIssuer: pr.oidcIssuer } : {}) };
+						...(typeof pr.oidcIssuer === "string" && pr.oidcIssuer ? { oidcIssuer: pr.oidcIssuer } : {}),
+						...(typeof pr.manageUrl === "string" && pr.manageUrl ? { manageUrl: pr.manageUrl } : {}) };
 			} catch { /* older Worker (no pairing yet): leave unknown */ }
 			if (s.upstream) {
 				try { s.facade = await owner("GET", "/owner/facade"); }
@@ -357,7 +358,7 @@ export async function status(o) {
 			if (s.zones) rows.push(["zones", s.zones.length ? s.zones.join(", ") : "none on this account"]);
 			const pg = s.pairing;
 			if (pg) rows.push(["pairing", pg.mode === "off" ? "off (token issue only)"
-				: `${pg.mode} approval; approval password ${pg.passwordSet ? `set${pg.passwordSetAt ? ` ${pg.passwordSetAt}` : ""}${pg.passwordSetVia ? ` (via ${pg.passwordSetVia})` : ""}` : `NOT SET${pg.setupLinkExpiresAt ? ` (a setup link is open until ${pg.setupLinkExpiresAt})` : ""}`}${pg.oidcIssuer ? `; OpenID Connect (${pg.oidcIssuer})` : ""}${pg.pending ? `; ${pg.pending} pending request(s): ${CLI} pair list` : ""}`]);
+				: `${pg.mode} approval; approval password ${pg.passwordSet ? `set${pg.passwordSetAt ? ` ${pg.passwordSetAt}` : ""}${pg.passwordSetVia ? ` (via ${pg.passwordSetVia})` : ""}` : `NOT SET${pg.setupLinkExpiresAt ? ` (a setup link is open until ${pg.setupLinkExpiresAt})` : ""}`}${pg.oidcIssuer ? `; OpenID Connect (${pg.oidcIssuer})` : ""}${pg.manageUrl ? `; dashboard ${pg.manageUrl}` : ""}${pg.pending ? `; ${pg.pending} pending request(s): ${CLI} pair list` : ""}`]);
 		}
 		if (mcpAdd) rows.push(["mcp", mcpAdd]);
 		rows.push(["next step", next.text]);
