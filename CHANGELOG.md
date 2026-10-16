@@ -2,7 +2,9 @@
 
 All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.3.x), Worker template, control core, and skills. Versions follow [semver](https://semver.org); a `v*` tag publishes the CLI and `@a2a-exposed/control-core` to npm (see [Releases](docs/README.md#releases)).
 
-## Unreleased
+## 0.8.8 - 2026-10-16
+
+`npx -y a2a-exposed@latest deploy` (no new migration). Pairing requests stay open 60 minutes, Cloudflare agents can turn on account sign-in for approvals, and wake messages can carry a Manage link via `MANAGE_URL`.
 
 - **Pairing.** A pairing code lasts 60 minutes. The `/device` approval page shows the expiry as a clock time in the visitor's time zone, then the minutes left. An unknown time zone shows UTC.
 - **Dashboard link.** Set `MANAGE_URL` to an https URL and the `pairing_request` wake and the MCP inbox line for a pending request include `manageUrl`.
