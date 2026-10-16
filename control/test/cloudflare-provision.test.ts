@@ -14,6 +14,7 @@ import {
 	permissionRetryDue,
 	readCloudflareInbox,
 	inboxApprovalBindings,
+	inboxEventBindings,
 	runInboxStep,
 	type InboxWizard,
 	type ProvisionFields,
@@ -193,7 +194,7 @@ async function runStep(
 	userId: string,
 	step: string,
 	extra: Partial<ProvisionFields> = {},
-	opts: { delays?: number[]; now?: number; approvalOidc?: Parameters<typeof inboxApprovalBindings>[0] } = {},
+	opts: { delays?: number[]; now?: number; approvalOidc?: Parameters<typeof inboxApprovalBindings>[0]; eventUrl?: string; eventSecret?: string } = {},
 ) {
 	return runInboxStep({
 		database: db,
@@ -208,6 +209,8 @@ async function runStep(
 		now: opts.now,
 		permissionDelaysMs: opts.delays ?? [0, 0, 0],
 		approvalOidc: opts.approvalOidc,
+		eventUrl: opts.eventUrl,
+		eventSecret: opts.eventSecret,
 	});
 }
 
@@ -284,6 +287,8 @@ test("a workers.dev inbox walks one step at a time and the owner token is shown 
 	assert.ok(upload?.body.includes(stubScript));
 	assert.equal(upload?.body.includes("APPROVAL_OIDC"), false);
 	assert.equal(upload?.body.includes("APPROVAL_METHODS"), false);
+	assert.equal(upload?.body.includes("EVENT_URL"), false);
+	assert.equal(upload?.body.includes("EVENT_SECRET"), false);
 });
 
 test("approvalOidc writes account sign-in bindings, and a partial input keeps the password", async (t) => {
@@ -325,6 +330,31 @@ test("approvalOidc writes account sign-in bindings, and a partial input keeps th
 	assert.ok(upload?.body.includes('"text":"acct_1,acct_2"'));
 	assert.ok(upload?.body.includes('"name":"APPROVAL_METHODS","text":"oidc"'));
 	assert.ok(upload?.body.includes('"name":"PAIRING_APPROVAL","text":"human"'));
+});
+
+test("eventUrl and eventSecret write pairing event bindings, and a partial input writes neither", async (t) => {
+	const url = "https://example.com/api/agent-events";
+	const secret = "event-secret";
+	assert.deepEqual(inboxEventBindings(url, secret), [
+		{ type: "plain_text", name: "EVENT_URL", text: url },
+		{ type: "secret_text", name: "EVENT_SECRET", text: secret },
+	]);
+	assert.equal(inboxEventBindings(undefined, secret), null);
+	assert.equal(inboxEventBindings(url, ""), null);
+	assert.equal(inboxEventBindings("http://example.com/api", secret), null);
+
+	const db = openDb();
+	const userId = await seed(db, "inbox", "workers");
+	const api = cloudflareApi({});
+	t.after(api.restore);
+	await walk(db, userId, "migrations");
+	const uploaded = await runStep(db, userId, "upload", {}, { eventUrl: `  ${url}  `, eventSecret: secret });
+	assert.equal(stepState(uploaded.wizard, "upload"), "pass", stepText(uploaded.wizard, "upload"));
+	const upload = api.calls.find((call) => call.method === "PUT" && call.url.includes("/workers/scripts/my-agent"));
+	assert.ok(upload?.body.includes('"name":"EVENT_URL"'));
+	assert.ok(upload?.body.includes(`"text":"${url}"`));
+	assert.ok(upload?.body.includes('"type":"secret_text","name":"EVENT_SECRET","text":"event-secret"'));
+	assert.equal(upload?.body.includes("APPROVAL_OIDC"), false);
 });
 
 test("a later step does not run before the earlier ones", async (t) => {

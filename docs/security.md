@@ -12,7 +12,7 @@ Rate limit: 60 requests per minute per peer. Request bodies are limited to 1 MiB
 
 ## Pairing
 
-Device codes are 256 random bits, stored hashed, single-use, and valid for 60 minutes. The approval page shows the expiry as a clock time in the visitor's time zone, then the minutes left. The owner approves a request with the owner token or with the approval password on `/device`. The Worker stores that password as a slow hash: PBKDF2 with SHA-256, a random salt, and 100,000 iterations (the most Cloudflare Workers allow). `--pbkdf2-iterations` can lower it to 50,000 when the free-plan CPU limit, error 1102, is hit. Deny on `/device` asks for the code. `pair deny` with the owner token also denies.
+Device codes are 256 random bits, stored hashed, single-use, and valid for 60 minutes. When `EVENT_URL` and `EVENT_SECRET` are set, the A2A endpoint posts a signed notice of each new request and of each approval or denial. The signature is an HMAC of the timestamp and the raw body. See [Protocol](protocol.md#pairing-events). The approval page shows the expiry as a clock time in the visitor's time zone, then the minutes left. The owner approves a request with the owner token or with the approval password on `/device`. The Worker stores that password as a slow hash: PBKDF2 with SHA-256, a random salt, and 100,000 iterations (the most Cloudflare Workers allow). `--pbkdf2-iterations` can lower it to 50,000 when the free-plan CPU limit, error 1102, is hit. Deny on `/device` asks for the code. `pair deny` with the owner token also denies.
 
 The password is set with `pair set-password --web` (a one-time link) or in a terminal with `pair set-password`. Wrong passwords lock out per code, per IP, and globally. New requests are capped per IP and in total.
 

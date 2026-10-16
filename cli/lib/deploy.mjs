@@ -34,7 +34,8 @@ export const WAKE_SECRETS = ["WAKE_WEBHOOK_URL", "WAKE_WEBHOOK_KEY", "WAKE_HMAC_
 export const UPSTREAM_SECRETS = ["UPSTREAM_TOKEN", "UPSTREAM_ACCESS_CLIENT_ID", "UPSTREAM_ACCESS_CLIENT_SECRET"];
 /** OpenID Connect client secret for approval. Environment only; never config.env. */
 export const OIDC_SECRETS = ["APPROVAL_OIDC_CLIENT_SECRET"];
-const DEPLOY_SECRETS = [...WAKE_SECRETS, ...UPSTREAM_SECRETS, ...OIDC_SECRETS];
+export const EVENT_SECRETS = ["EVENT_SECRET"];
+const DEPLOY_SECRETS = [...WAKE_SECRETS, ...UPSTREAM_SECRETS, ...OIDC_SECRETS, ...EVENT_SECRETS];
 
 // Non-secret deploy settings persisted in config.env and passed to cloudflare.config.ts as env vars.
 const DEPLOY_KEYS = [
@@ -171,7 +172,7 @@ export function wakeSecretsFromEnv() {
 /** Secrets init/deploy upload when exported: the wake secrets plus, for proxy mode, the upstream credentials. */
 export function deploySecretsFromEnv() {
 	const s = wakeSecretsFromEnv();
-	for (const k of [...UPSTREAM_SECRETS, ...OIDC_SECRETS]) if (process.env[k]) s[k] = process.env[k];
+	for (const k of [...UPSTREAM_SECRETS, ...OIDC_SECRETS, ...EVENT_SECRETS]) if (process.env[k]) s[k] = process.env[k];
 	return s;
 }
 

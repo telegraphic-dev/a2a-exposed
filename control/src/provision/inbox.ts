@@ -2,6 +2,7 @@
 // The access token is used for that request and is not stored. The owner token is
 // uploaded as a Worker secret and only its SHA-256 hash is kept here.
 
+import { eventSecretText, httpsEventUrl } from "../tenants/events.ts";
 import type { Sql } from "../core/sql.ts";
 import { readCloudflareGrant, refreshCloudflareGrant } from "./grant.ts";
 import { describeSetupGrant, inboxCanProvision, parseSetupChoice, parseSetupHost, type SetupHost } from "./setup.ts";
@@ -271,8 +272,23 @@ export function inboxApprovalBindings(input: ApprovalOidcInput | undefined): Scr
 	];
 }
 
-function scriptMetadata(input: { d1Id: string; publicUrl: string; workerName: string; ownerToken: string; scriptTag: string; approvalOidc?: ApprovalOidcInput }) {
+/**
+ * Bindings for a signed pairing event. Null unless the URL is https and the secret has a value,
+ * so a partial pair leaves the upload unchanged.
+ */
+export function inboxEventBindings(eventUrl?: string, eventSecret?: string): ScriptBinding[] | null {
+	const url = httpsEventUrl(eventUrl);
+	const secret = eventSecretText(eventSecret);
+	if (!url || !secret) return null;
+	return [
+		{ type: "plain_text", name: "EVENT_URL", text: url },
+		{ type: "secret_text", name: "EVENT_SECRET", text: secret },
+	];
+}
+
+function scriptMetadata(input: { d1Id: string; publicUrl: string; workerName: string; ownerToken: string; scriptTag: string; approvalOidc?: ApprovalOidcInput; eventUrl?: string; eventSecret?: string }) {
 	const approval = inboxApprovalBindings(input.approvalOidc);
+	const events = inboxEventBindings(input.eventUrl, input.eventSecret);
 	return {
 		main_module: "index.js",
 		compatibility_date: INBOX_COMPATIBILITY_DATE,
@@ -285,6 +301,7 @@ function scriptMetadata(input: { d1Id: string; publicUrl: string; workerName: st
 			{ type: "plain_text", name: PROVISION_TAG_NAME, text: input.scriptTag },
 			{ type: "secret_text", name: "OWNER_TOKEN", text: input.ownerToken },
 			...(approval ?? []),
+			...(events ?? []),
 		],
 	};
 }
@@ -638,6 +655,8 @@ interface StepCtx {
 	grant: { choice: string; host: string; granted_scope: string | null; refresh_enc: string | null };
 	permissionDelaysMs: number[];
 	approvalOidc?: ApprovalOidcInput;
+	eventUrl?: string;
+	eventSecret?: string;
 }
 
 async function wizardNow(ctx: StepCtx, overlay?: StoredStepNote | null): Promise<InboxWizard> {
@@ -742,6 +761,9 @@ export async function runInboxStep(input: {
 	 * Omit it and the agent stays on the approval password.
 	 */
 	approvalOidc?: ApprovalOidcInput;
+	/** https URL and secret for pairing events. Both are required; a partial pair writes no EVENT_* binding. */
+	eventUrl?: string;
+	eventSecret?: string;
 }): Promise<{ wizard: InboxWizard; ownerToken?: string }> {
 	const now = input.now ?? Date.now();
 	const fetchMs = input.fetchMs ?? 10_000;
@@ -793,6 +815,8 @@ export async function runInboxStep(input: {
 		grant,
 		permissionDelaysMs: input.permissionDelaysMs ?? PERMISSION_DELAYS_MS,
 		approvalOidc: input.approvalOidc,
+		eventUrl: input.eventUrl,
+		eventSecret: input.eventSecret,
 	};
 	try {
 		if (next !== "verify") {
@@ -1082,7 +1106,7 @@ async function runUpload(ctx: StepCtx): Promise<{ wizard: InboxWizard; ownerToke
 		accountId,
 		name: workerName,
 		script: ctx.script,
-		metadata: scriptMetadata({ d1Id: databaseId, publicUrl, workerName, ownerToken, scriptTag, approvalOidc: ctx.approvalOidc }),
+		metadata: scriptMetadata({ d1Id: databaseId, publicUrl, workerName, ownerToken, scriptTag, approvalOidc: ctx.approvalOidc, eventUrl: ctx.eventUrl, eventSecret: ctx.eventSecret }),
 	});
 	if (uploaded !== true) {
 		return { wizard: await failOrWait(ctx, "upload", uploaded, "Cloudflare stops while uploading the inbox.", "upload") };

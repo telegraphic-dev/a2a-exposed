@@ -20,7 +20,7 @@ import { bookmarkForTime as readBookmark, exportRows, restoreBookmark as applyBo
 import { hostedDailyBackup } from "./backup.ts";
 import { lookupDirectory, pinDirectoryRegion, tenantNameFromHost, tenantRegion, TENANT_NAME, type DirectoryEntry } from "./directory.ts";
 import { hostedTenantContext, namespaceForRegion, parseGates, type WorkerBindings } from "./tenancy.ts";
-import { WAKE_SECRET_KEYS, openWakeSecrets } from "./wake-secrets.ts";
+import { WAKE_SECRET_KEYS, omitSealedSecrets, openWakeSecrets } from "./wake-secrets.ts";
 
 export { clearDirectoryCache, directoryKey, lookupDirectory, parseDirectoryEntry, pinDirectoryRegion, tenantNameFromHost, tenantRegion, TENANT_NAME } from "./directory.ts";
 export type { DirectoryEntry };
@@ -279,19 +279,20 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 				await this.#enqueueArm(false);
 				return { version: current.version, applied: false };
 			}
-			const config = requireObject(body.config, "config");
 			const limits = requireObject(body.limits, "limits");
 			const approval = requireObject(body.approval, "approval");
+			const secretsEnc = body.secretsEnc ?? null;
+			const storedConfig = omitSealedSecrets(requireObject(body.config, "config"), secretsEnc);
 			const next: StoredConfig = {
 				version: body.version,
 				tenantId: body.tenantId,
 				name: body.name,
 				status: body.status,
-				config: stringRecord(config),
+				config: stringRecord(storedConfig),
 				limits,
 				approval,
 				ownerTokenHash: body.ownerTokenHash ? body.ownerTokenHash.toLowerCase() : null,
-				secretsEnc: body.secretsEnc ?? null,
+				secretsEnc,
 			};
 			const now = new Date().toISOString();
 			this.#tx(() => {
@@ -304,7 +305,7 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 					   config_json = excluded.config_json, limits_json = excluded.limits_json, approval_json = excluded.approval_json,
 					   owner_token_hash = excluded.owner_token_hash, secrets_enc = excluded.secrets_enc, updated_at = excluded.updated_at`,
 					next.version, next.tenantId, next.name, next.status,
-					JSON.stringify(config), JSON.stringify(limits), JSON.stringify(approval),
+					JSON.stringify(storedConfig), JSON.stringify(limits), JSON.stringify(approval),
 					next.ownerTokenHash, next.secretsEnc, now,
 				);
 			});

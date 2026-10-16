@@ -1,7 +1,9 @@
 import { newApprovalClient } from "./approval.ts";
+import { pairingEventConfig } from "./events.ts";
 import type { Sql } from "../core/sql.ts";
 import { deliverOutbox, type DataPlane, type OutboxRow } from "./push.ts";
 import { tenantNameProblem } from "./reserved.ts";
+import { sealWakeSecrets } from "./wake-secrets.ts";
 
 export interface CreatedTenant {
 	id: string;
@@ -56,7 +58,15 @@ export function newOwnerToken(): string {
 export async function createTenant(
 	db: Sql,
 	plane: DataPlane,
-	input: { accountId: string; name: string; domain?: string; dataRegion?: string; issuer?: string; label?: string; freeAgentLimit?: number | null },
+	input: {
+		accountId: string; name: string; domain?: string; dataRegion?: string; issuer?: string; label?: string;
+		freeAgentLimit?: number | null;
+		/**
+		 * https URL and secret for pairing events, plus the key that seals the secret.
+		 * A partial pair, or a secret that cannot be sealed, is left out of the tenant.
+		 */
+		eventUrl?: string; eventSecret?: string; secretsKey?: string;
+	},
 ): Promise<CreateResult> {
 	const name = input.name.trim().toLowerCase();
 	const problem = tenantNameProblem(name);
@@ -69,7 +79,11 @@ export async function createTenant(
 	const hash = await sha256(token);
 	const now = new Date().toISOString();
 	const region = regionOf(input.dataRegion);
-	const config = { AGENT_NAME: name };
+	const events = input.eventUrl && input.eventSecret ? pairingEventConfig(input.eventUrl, input.eventSecret) : null;
+	const sealedEvents = events ? await sealWakeSecrets((input.secretsKey || "").trim(), id, { EVENT_SECRET: events.EVENT_SECRET }) : null;
+	const config: Record<string, string> = { AGENT_NAME: name };
+	if (events && sealedEvents) config.EVENT_URL = events.EVENT_URL;
+	const secretsEnc = sealedEvents;
 	const version = 1;
 	const domain = (input.domain || "").trim().toLowerCase().replace(/^\.+|\.+$/g, "");
 	const publicUrl = domain ? `https://${name}.${domain}` : null;
@@ -87,8 +101,8 @@ export async function createTenant(
 				`INSERT INTO tenants (
 				   id, name, owner_account_id, status, region, config_json, limits_json, approval_json,
 				   owner_token_hash, secrets_enc, config_version, created_at, updated_at
-				 ) VALUES (?, ?, ?, 'active', ?, ?, '{}', ?, ?, NULL, ?, ?, ?)`,
-			).bind(id, name, input.accountId, region, JSON.stringify(config), JSON.stringify(approval), hash, version, now, now),
+				 ) VALUES (?, ?, ?, 'active', ?, ?, '{}', ?, ?, ?, ?, ?, ?)`,
+			).bind(id, name, input.accountId, region, JSON.stringify(config), JSON.stringify(approval), hash, secretsEnc, version, now, now),
 			...(client ? [db.prepare(
 				"INSERT INTO oauth_client (id, secret_hash, owner_account_id, redirect_uris, created_at) VALUES (?, ?, ?, ?, ?)",
 			).bind(client.clientId, client.secretHash, input.accountId, JSON.stringify(client.redirectUris), now)] : []),
@@ -103,7 +117,7 @@ export async function createTenant(
 	const row: OutboxRow = {
 		id, name, status: "active", region,
 		config_json: JSON.stringify(config), limits_json: "{}", approval_json: JSON.stringify(approval),
-		owner_token_hash: hash, secrets_enc: null, version, created_at: now,
+		owner_token_hash: hash, secrets_enc: secretsEnc, version, created_at: now,
 	};
 	let pushed = false;
 	try { pushed = await deliverOutbox(db, plane, row); }
