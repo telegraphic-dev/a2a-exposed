@@ -2,7 +2,9 @@
 
 All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.3.x), Worker template, control core, and skills. Versions follow [semver](https://semver.org); a `v*` tag publishes the CLI and `@a2a-exposed/control-core` to npm (see [Releases](docs/README.md#releases)).
 
-## Unreleased
+## 0.8.9 - 2026-10-16
+
+`npx -y a2a-exposed@latest deploy` (no new migration).
 
 - **Pairing events.** When `EVENT_URL` is https and `EVENT_SECRET` is set, the A2A endpoint POSTs a signed JSON event after a pairing request is created and after it is approved or denied. The body includes `pending`, the number of requests still open. `x-a2a-signature` is `sha256=` plus the HMAC-SHA256 of the unix timestamp, a period, and the raw body. `verifyEventSignature` checks that signature and a 5-minute timestamp window. `runInboxStep` accepts `eventUrl` and `eventSecret` and writes `EVENT_URL` and `EVENT_SECRET`. On a hosted agent, `createTenant` stores `EVENT_URL` in the tenant config and seals `EVENT_SECRET` in `secrets_enc`. The agent decrypts that blob when it handles a request.
 

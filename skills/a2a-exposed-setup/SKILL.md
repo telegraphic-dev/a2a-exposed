@@ -4,7 +4,7 @@ description: Use when deploying, redeploying, or configuring the a2a-exposed Clo
 license: MIT
 compatibility: Requires Node 22.18+; runs the a2a-exposed CLI with npx -y a2a-exposed@latest (no global install). Cloudflare account for deploy.
 metadata:
-  version: "0.8.8"
+  version: "0.8.9"
   author: Telegraphic Developer
   homepage: https://github.com/telegraphic-dev/a2a-exposed
   hermes:
