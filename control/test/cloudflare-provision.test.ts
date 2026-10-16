@@ -13,6 +13,7 @@ import {
 	hashOwnerToken,
 	permissionRetryDue,
 	readCloudflareInbox,
+	inboxApprovalBindings,
 	runInboxStep,
 	type InboxWizard,
 	type ProvisionFields,
@@ -192,7 +193,7 @@ async function runStep(
 	userId: string,
 	step: string,
 	extra: Partial<ProvisionFields> = {},
-	opts: { delays?: number[]; now?: number } = {},
+	opts: { delays?: number[]; now?: number; approvalOidc?: Parameters<typeof inboxApprovalBindings>[0] } = {},
 ) {
 	return runInboxStep({
 		database: db,
@@ -206,6 +207,7 @@ async function runStep(
 		fetchMs: 1_000,
 		now: opts.now,
 		permissionDelaysMs: opts.delays ?? [0, 0, 0],
+		approvalOidc: opts.approvalOidc,
 	});
 }
 
@@ -280,6 +282,49 @@ test("a workers.dev inbox walks one step at a time and the owner token is shown 
 	const upload = api.calls.find((call) => call.method === "PUT" && call.url.includes("/workers/scripts/my-agent"));
 	assert.ok(upload?.body.includes(ownerToken));
 	assert.ok(upload?.body.includes(stubScript));
+	assert.equal(upload?.body.includes("APPROVAL_OIDC"), false);
+	assert.equal(upload?.body.includes("APPROVAL_METHODS"), false);
+});
+
+test("approvalOidc writes account sign-in bindings, and a partial input keeps the password", async (t) => {
+	const oidc = {
+		issuer: "https://example.com",
+		clientId: "client-1",
+		clientSecret: "super-secret",
+		allowedSubjects: ["acct_1", " acct_2 "],
+	};
+	const bindings = inboxApprovalBindings(oidc);
+	assert.deepEqual(bindings, [
+		{ type: "plain_text", name: "APPROVAL_OIDC_ISSUER", text: "https://example.com" },
+		{ type: "plain_text", name: "APPROVAL_OIDC_CLIENT_ID", text: "client-1" },
+		{ type: "secret_text", name: "APPROVAL_OIDC_CLIENT_SECRET", text: "super-secret" },
+		{ type: "plain_text", name: "APPROVAL_OIDC_ALLOWED_SUBJECTS", text: "acct_1,acct_2" },
+		{ type: "plain_text", name: "APPROVAL_METHODS", text: "oidc" },
+	]);
+	assert.equal(inboxApprovalBindings(undefined), null);
+	assert.equal(inboxApprovalBindings({ ...oidc, clientSecret: "" }), null);
+	assert.equal(inboxApprovalBindings({ ...oidc, issuer: "http://example.com" }), null);
+	const listed = inboxApprovalBindings({ ...oidc, allowedSubjects: "acct_9" });
+	const subject = listed?.find((binding) => binding.name === "APPROVAL_OIDC_ALLOWED_SUBJECTS");
+	assert.equal(subject && "text" in subject ? subject.text : "", "acct_9");
+
+	const db = openDb();
+	const userId = await seed(db, "inbox", "workers");
+	const api = cloudflareApi({});
+	t.after(api.restore);
+	await walk(db, userId, "migrations");
+	const uploaded = await runStep(db, userId, "upload", {}, { approvalOidc: oidc });
+	assert.equal(stepState(uploaded.wizard, "upload"), "pass", stepText(uploaded.wizard, "upload"));
+	const upload = api.calls.find((call) => call.method === "PUT" && call.url.includes("/workers/scripts/my-agent"));
+	assert.ok(upload?.body.includes('"name":"APPROVAL_OIDC_ISSUER"'));
+	assert.ok(upload?.body.includes('"text":"https://example.com"'));
+	assert.ok(upload?.body.includes('"name":"APPROVAL_OIDC_CLIENT_ID"'));
+	assert.ok(upload?.body.includes('"text":"client-1"'));
+	assert.ok(upload?.body.includes('"type":"secret_text","name":"APPROVAL_OIDC_CLIENT_SECRET","text":"super-secret"'));
+	assert.ok(upload?.body.includes('"name":"APPROVAL_OIDC_ALLOWED_SUBJECTS"'));
+	assert.ok(upload?.body.includes('"text":"acct_1,acct_2"'));
+	assert.ok(upload?.body.includes('"name":"APPROVAL_METHODS","text":"oidc"'));
+	assert.ok(upload?.body.includes('"name":"PAIRING_APPROVAL","text":"human"'));
 });
 
 test("a later step does not run before the earlier ones", async (t) => {

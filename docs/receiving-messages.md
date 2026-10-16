@@ -32,7 +32,7 @@ The hint command is `WAKE_CLI_COMMAND` when set, otherwise `npx -y a2a-exposed@l
 | --- | --- |
 | `inbound` | `inbox --context <contextId>`, then reply |
 | `outbound_update` | A peer answered a task this agent sent. Read it with `history` or `outbound` |
-| `pairing_request` | Tell the human the code and the link. Do not approve |
+| `pairing_request` | Tell the human the code, the link, and `pairing.manageUrl` when the wake includes it. The code lasts 60 minutes. Leave approval to the human |
 | `test` | A test wake. No message on the A2A endpoint |
 
 `--max-per-hour` / `WAKE_MAX_PER_HOUR` of `0`, or leaving it unset, leaves wakes unlimited. The `claude-code` preset defaults to 25 an hour when the cap is unset, and to a 20 second debounce. Other presets default to a 10 second debounce and no hourly cap.
@@ -139,7 +139,7 @@ Leave the wake unset (`wake unset`), or keep a webhook for a second agent. Sched
 Use the a2a-exposed skill: run `npx -y a2a-exposed@latest inbox`. Handle and reply to each task. If it lists a pending pairing request, tell your human the code, the claimed name and the link, and never approve it yourself. If it shows neither, stop.
 ```
 
-Polling runs get no `pairing_request` wake. `inbox` prints pending requests after the tasks. `pair list` shows the same list. The scheduled run has to be able to tell the human, or the request sits until it expires (10 minutes).
+Polling runs get no `pairing_request` wake. `inbox` prints pending requests after the tasks. `pair list` shows the same list. The scheduled run has to be able to tell the human, or the request sits until it expires (60 minutes). When `MANAGE_URL` is an https URL, that inbox line includes the dashboard page.
 
 The environment needs Node 22.18+ and `A2A_BASE_URL` plus `A2A_OWNER_TOKEN`.
 

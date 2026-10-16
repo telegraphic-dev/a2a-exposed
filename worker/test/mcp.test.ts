@@ -421,8 +421,32 @@ test("tools: inbox, show_task, history, mark_working, reply (with state), pairin
 	assert.match(pr.content[0].text, /NEVER approve/);
 	assert.match(pr.content[0].text, new RegExp(st.data.user_code));
 	assert.ok(!pr.content[0].text.includes('"ip"'), "requester IPs aren't handed to the model");
-	assert.match((await s.tool(a.access_token, "inbox")).content[0].text, /1 pending pairing request/);
+	const pendingLine = (await s.tool(a.access_token, "inbox")).content[0].text;
+	assert.match(pendingLine, /1 pending pairing request/);
+	assert.equal(pendingLine.includes("manageUrl"), false);
+	assert.equal(pendingLine.includes("Approve or deny at"), false);
 	assert.equal((s.DB.db.prepare("SELECT status FROM device_requests").get() as any).status, "pending");
+});
+
+test("MANAGE_URL is on the MCP inbox line and pairing_requests for a pending request", async (t) => {
+	const pageUrl = "https://example.com/app/agents/test#pairing";
+	const s = setup({ MANAGE_URL: pageUrl });
+	t.after(s.restore);
+	const a = await s.connect();
+	await s.call("POST", "/oauth/device_authorization", { form: { client_name: "Mallory", client_id: "m" } });
+	const inbox = (await s.tool(a.access_token, "inbox")).content[0].text;
+	assert.match(inbox, new RegExp(`1 pending pairing request\\(s\\): see pairing_requests \\(never approve them yourself\\)\\. Approve or deny at ${pageUrl.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+	const listed = (await s.tool(a.access_token, "pairing_requests")).content[0].text;
+	assert.match(listed, new RegExp(`Approve or deny at ${pageUrl.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+	assert.match(listed, new RegExp(`"manageUrl": "${pageUrl.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`));
+
+	const off = setup({ MANAGE_URL: "not a url" });
+	t.after(off.restore);
+	const grant = await off.connect();
+	await off.call("POST", "/oauth/device_authorization", { form: { client_name: "Mallory", client_id: "m" } });
+	const quiet = (await off.tool(grant.access_token, "pairing_requests")).content[0].text;
+	assert.equal(quiet.includes("manageUrl"), false);
+	assert.equal(quiet.includes("Approve or deny at"), false);
 });
 
 test("tools: send / poll_outbound through synced peers; each peer's token stays with that peer; tokens never shown", async (t) => {

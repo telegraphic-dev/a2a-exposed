@@ -2,6 +2,12 @@
 
 All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.3.x), Worker template, control core, and skills. Versions follow [semver](https://semver.org); a `v*` tag publishes the CLI and `@a2a-exposed/control-core` to npm (see [Releases](docs/README.md#releases)).
 
+## Unreleased
+
+- **Pairing.** A pairing code lasts 60 minutes. The `/device` approval page shows the expiry as a clock time in the visitor's time zone, then the minutes left. An unknown time zone shows UTC.
+- **Dashboard link.** Set `MANAGE_URL` to an https URL and the `pairing_request` wake and the MCP inbox line for a pending request include `manageUrl`.
+- **Cloudflare provisioning.** `runInboxStep` accepts `approvalOidc` (`issuer`, `clientId`, `clientSecret`, `allowedSubjects`). With an https issuer and those fields set, the uploaded Worker receives `APPROVAL_OIDC_ISSUER`, `APPROVAL_OIDC_CLIENT_ID`, `APPROVAL_OIDC_CLIENT_SECRET` (a secret), `APPROVAL_OIDC_ALLOWED_SUBJECTS`, and `APPROVAL_METHODS=oidc`. `inboxApprovalBindings` returns that list. A call that omits `approvalOidc` keeps the approval password.
+
 ## 0.8.7 - 2026-10-15
 
 `npx -y a2a-exposed@latest deploy` (no new migration: neither the inbox D1 in `worker/migrations/` nor the control-core storage in `control/migrations/` changed).

@@ -213,7 +213,66 @@ async function releaseWorking(db: Sql, inboxId: string, now: number): Promise<vo
 	if (row?.status === "working") await patchInbox(db, inboxId, now, { status: "pending" });
 }
 
-function scriptMetadata(input: { d1Id: string; publicUrl: string; workerName: string; ownerToken: string; scriptTag: string }) {
+/** Account sign-in for a Cloudflare agent. The dashboard creates the client and passes these four fields. */
+export type ApprovalOidcInput = {
+	issuer: string;
+	clientId: string;
+	clientSecret: string;
+	allowedSubjects: string | readonly string[];
+};
+
+type ScriptBinding =
+	| { type: "d1"; name: string; id: string }
+	| { type: "plain_text"; name: string; text: string }
+	| { type: "secret_text"; name: string; text: string };
+
+function httpsIssuer(value: string): string {
+	const raw = value.trim();
+	if (!raw || raw.length > 300) return "";
+	try {
+		const url = new URL(raw);
+		if (url.protocol !== "https:" || url.username || url.password) return "";
+		return raw;
+	} catch {
+		return "";
+	}
+}
+
+function plainCredential(value: string, max: number): string {
+	const text = value.trim();
+	if (!text || text.length > max || /[\u0000-\u001f]/.test(text)) return "";
+	return text;
+}
+
+function subjectsText(value: string | readonly string[]): string {
+	const list = typeof value === "string" ? value.split(",") : value;
+	const subjects = list.map((item) => item.trim()).filter((item) => item && !/[\u0000-\u001f]/.test(item));
+	const text = subjects.join(",");
+	return text && text.length <= 2000 ? text : "";
+}
+
+/**
+ * Worker bindings for account sign-in. Returns the list when the issuer is https and every field
+ * has a value. Otherwise returns null and the upload keeps the approval password.
+ */
+export function inboxApprovalBindings(input: ApprovalOidcInput | undefined): ScriptBinding[] | null {
+	if (!input) return null;
+	const issuer = httpsIssuer(input.issuer);
+	const clientId = plainCredential(input.clientId, 200);
+	const clientSecret = plainCredential(input.clientSecret, 512);
+	const allowed = subjectsText(input.allowedSubjects);
+	if (!issuer || !clientId || !clientSecret || !allowed) return null;
+	return [
+		{ type: "plain_text", name: "APPROVAL_OIDC_ISSUER", text: issuer },
+		{ type: "plain_text", name: "APPROVAL_OIDC_CLIENT_ID", text: clientId },
+		{ type: "secret_text", name: "APPROVAL_OIDC_CLIENT_SECRET", text: clientSecret },
+		{ type: "plain_text", name: "APPROVAL_OIDC_ALLOWED_SUBJECTS", text: allowed },
+		{ type: "plain_text", name: "APPROVAL_METHODS", text: "oidc" },
+	];
+}
+
+function scriptMetadata(input: { d1Id: string; publicUrl: string; workerName: string; ownerToken: string; scriptTag: string; approvalOidc?: ApprovalOidcInput }) {
+	const approval = inboxApprovalBindings(input.approvalOidc);
 	return {
 		main_module: "index.js",
 		compatibility_date: INBOX_COMPATIBILITY_DATE,
@@ -225,6 +284,7 @@ function scriptMetadata(input: { d1Id: string; publicUrl: string; workerName: st
 			{ type: "plain_text", name: "WAKE_PRESET", text: "generic" },
 			{ type: "plain_text", name: PROVISION_TAG_NAME, text: input.scriptTag },
 			{ type: "secret_text", name: "OWNER_TOKEN", text: input.ownerToken },
+			...(approval ?? []),
 		],
 	};
 }
@@ -577,6 +637,7 @@ interface StepCtx {
 	migrations: InboxMigration[];
 	grant: { choice: string; host: string; granted_scope: string | null; refresh_enc: string | null };
 	permissionDelaysMs: number[];
+	approvalOidc?: ApprovalOidcInput;
 }
 
 async function wizardNow(ctx: StepCtx, overlay?: StoredStepNote | null): Promise<InboxWizard> {
@@ -675,6 +736,12 @@ export async function runInboxStep(input: {
 	fetchImpl?: typeof fetch;
 	/** Pauses after a permission error. Tests pass zeros. Production waits about 15 seconds across 4 tries. */
 	permissionDelaysMs?: number[];
+	/**
+	 * Account sign-in for this Cloudflare agent. When issuer, client id, client secret, and allowed
+	 * subjects are all set, the upload writes the APPROVAL_OIDC_* bindings and APPROVAL_METHODS=oidc.
+	 * Omit it and the agent stays on the approval password.
+	 */
+	approvalOidc?: ApprovalOidcInput;
 }): Promise<{ wizard: InboxWizard; ownerToken?: string }> {
 	const now = input.now ?? Date.now();
 	const fetchMs = input.fetchMs ?? 10_000;
@@ -725,6 +792,7 @@ export async function runInboxStep(input: {
 		migrations: input.migrations,
 		grant,
 		permissionDelaysMs: input.permissionDelaysMs ?? PERMISSION_DELAYS_MS,
+		approvalOidc: input.approvalOidc,
 	};
 	try {
 		if (next !== "verify") {
@@ -1014,7 +1082,7 @@ async function runUpload(ctx: StepCtx): Promise<{ wizard: InboxWizard; ownerToke
 		accountId,
 		name: workerName,
 		script: ctx.script,
-		metadata: scriptMetadata({ d1Id: databaseId, publicUrl, workerName, ownerToken, scriptTag }),
+		metadata: scriptMetadata({ d1Id: databaseId, publicUrl, workerName, ownerToken, scriptTag, approvalOidc: ctx.approvalOidc }),
 	});
 	if (uploaded !== true) {
 		return { wizard: await failOrWait(ctx, "upload", uploaded, "Cloudflare stops while uploading the inbox.", "upload") };

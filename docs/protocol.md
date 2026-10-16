@@ -26,7 +26,8 @@ Work is asynchronous. The peer polls `GetTask`, or registers a push URL. `SendSt
 | --- | --- |
 | Device authorization | `POST /oauth/device_authorization` |
 | Token | `POST /oauth/token` (form-encoded; JSON is accepted) |
-| Approval page | `/device` |
+| Approval page | `/device` (expiry is a local clock time, then the minutes left) |
+| Code lifetime | 60 minutes |
 | Metadata | `/.well-known/oauth-authorization-server` (RFC 8414) |
 | Protected resource | `/.well-known/oauth-protected-resource` |
 

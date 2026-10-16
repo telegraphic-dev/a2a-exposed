@@ -62,6 +62,8 @@ const plain: Record<string, string> = {
 	APPROVAL_OIDC_CLIENT_ID: v("APPROVAL_OIDC_CLIENT_ID"),
 	APPROVAL_OIDC_ALLOWED_SUBJECTS: v("APPROVAL_OIDC_ALLOWED_SUBJECTS"),
 	APPROVAL_METHODS: v("APPROVAL_METHODS"),
+	// Optional https URL of this agent's dashboard page. A pairing wake and the MCP inbox line include it as manageUrl.
+	MANAGE_URL: v("MANAGE_URL"),
 };
 const hosted = v("TENANCY") === "host";
 // Daily R2 snapshots. Unset: no binding and no extra cron, so a self-host deploy stays the single-tenant Worker.
