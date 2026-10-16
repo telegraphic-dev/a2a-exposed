@@ -18,6 +18,14 @@ The library source entry is `src/core/index.ts`. It exports inbox provisioning, 
 
 `inboxApprovalBindings` returns that same list for an agent that already exists. A call that omits `approvalOidc` keeps the approval password on the uploaded Worker. The issuer is an https URL, and the client id, client secret, and allowed subjects each have a value.
 
+## Pairing events
+
+`runInboxStep` accepts optional `eventUrl` and `eventSecret`. When the URL is https and the secret has a value, the uploaded Worker receives `EVENT_URL` (plain text) and `EVENT_SECRET` (a secret). `inboxEventBindings` returns that list. A call that omits either value writes neither binding.
+
+A hosted agent reads the same two fields from the tenant config. `createTenant` accepts optional `eventUrl` and `eventSecret` and stores them when both are usable. `pairingEventConfig` returns `{ EVENT_URL, EVENT_SECRET }` for a config the control plane already updates.
+
+The A2A endpoint POSTs `{ type, agent, requestId, code, name, alias, ip, country, createdAt, expiresAt, pending, decision? }` to `EVENT_URL`. `type` is `pairing_requested` or `pairing_decided`. `decision` is `approved` or `denied`. `x-a2a-timestamp` is unix seconds. `x-a2a-signature` is `sha256=` plus the HMAC-SHA256 of the timestamp, a period, and the raw body. `verifyEventSignature(body, headers, secret)` accepts that request when the timestamp is within 5 minutes. The contract is also in [Protocol](../docs/protocol.md#pairing-events).
+
 From this directory, `npm test` runs the Node tests and a Vitest suite inside Miniflare. That suite runs the Cloudflare provisioning calls in workerd against a mocked Cloudflare API.
 
 ## Removal

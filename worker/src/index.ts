@@ -11,6 +11,7 @@ import { fetchCheckedWake } from "./wake-target.ts";
 import * as P from "./pairing.ts";
 import * as M from "./mcp.ts";
 import { accountIdOf, DASHBOARD_ACTOR_HEADER, matchOwnerRpc, ownerResponseLeaks, scrubOwnerClaims, type OwnerRpcRequest, type OwnerRpcResult } from "./owner-rpc.ts";
+import { pairingAgent, pairingEventTarget, postPairingEvent } from "./pairing-events.ts";
 import { publicManageUrl, resolveTenant, type TenantContext, type WorkerBindings } from "./tenancy.ts";
 import { exportRows, redactExport, REDACTED_SQL_SKIP, scrubSecretText, toSql } from "./export.ts";
 import { backupDatabase, DAILY_CRON } from "./backup.ts";
@@ -1058,7 +1059,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			return json({ revoked: true, label });
 		}
 	}
-	if (seg[0] === "pairing") return await ownerPairing(req, ctx, m, seg.slice(1), body, trusted);
+	if (seg[0] === "pairing") return await ownerPairing(req, ctx, ectx, m, seg.slice(1), body, trusted);
 	if (seg[0] === "mcp" && !seg[1] && m === "GET") {
 		const rows = await ctx.DB.prepare("SELECT label, client_id, client_name, redirect_host, scope, created_at, last_used_at, revoked_at, refresh_expires_ms FROM mcp_grants ORDER BY created_at").all();
 		return json({ enabled: mcpOn(ctx), url: oauthUrls(ctx).mcp, grants: (rows.results as Json[]).map((r) => ({ ...r, refresh_expires_ms: undefined,
@@ -1270,13 +1271,15 @@ async function deviceAuthorization(req: Request, ctx: TenantContext, ectx: Execu
 		return oauthError("slow_down", "this A2A endpoint has too many pairing requests waiting; try again later", 429, retry);
 	}
 	const deviceCode = P.newDeviceCode();
+	const deviceHash = await A.sha256(deviceCode);
+	const country = clientCountry(req);
 	let userCode = "";
 	for (let i = 0; i < 5 && !userCode; i++) {
 		const c = P.newUserCode();
 		const r = await ctx.DB.prepare(
 			`INSERT INTO device_requests (device_hash, user_code, client_id, client_name, agent_card_url, ip, country, status, created_ms, expires_ms, interval_s)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?) ON CONFLICT DO NOTHING`,
-		).bind(await A.sha256(deviceCode), c, clientId || null, clientName || null, cardUrl || null, ip || null, clientCountry(req) || null,
+		).bind(deviceHash, c, clientId || null, clientName || null, cardUrl || null, ip || null, country || null,
 			now, now + P.EXPIRES_S * 1000, P.INTERVAL_S).run();
 		if (r.meta.changes === 1) userCode = c;
 	}
@@ -1302,6 +1305,8 @@ async function deviceAuthorization(req: Request, ctx: TenantContext, ectx: Execu
 				...(manage ? { manageUrl: manage } : {}),
 				...(replaces ? { replacesLabel: replaces.label } : {}) } });
 	})());
+	await publishPairingEvent(ctx, ectx, { type: "pairing_requested", requestId: deviceHash, code: shown, name: clientName, alias: clientId,
+		ip, country, createdAt: new Date(now).toISOString(), expiresAt: new Date(now + P.EXPIRES_S * 1000).toISOString() });
 	return json({ device_code: deviceCode, user_code: shown, verification_uri: u.page, verification_uri_complete: complete,
 		expires_in: P.EXPIRES_S, interval: P.INTERVAL_S, ...(replaces ? { replaces_label: replaces.label } : {}) }, 200, { pragma: "no-cache" });
 }
@@ -1375,7 +1380,7 @@ const pendingRequest = async (ctx: TenantContext, code: string): Promise<Json | 
 	ctx.DB.prepare("SELECT * FROM device_requests WHERE user_code = ?").bind(code).first();
 
 /** Approve or deny a pending request. Returns the label (approve) or an error message. */
-async function decide(ctx: TenantContext, code: string, approve: boolean, by: string): Promise<{ ok: boolean; label?: string; error?: string; request?: Json; replaced?: boolean }> {
+async function decide(ctx: TenantContext, ectx: ExecutionContext, code: string, approve: boolean, by: string): Promise<{ ok: boolean; label?: string; error?: string; request?: Json; replaced?: boolean }> {
 	const r = await pendingRequest(ctx, code);
 	if (!r) return { ok: false, error: "no pairing request with that code" };
 	if (r.status !== "pending") return { ok: false, error: `that request was already ${r.status === "denied" ? "denied" : "approved"}` };
@@ -1387,7 +1392,39 @@ async function decide(ctx: TenantContext, code: string, approve: boolean, by: st
 		.bind(approve ? "approved" : "denied", label, Date.now(), by, r.device_hash).run();
 	if (u.meta.changes !== 1) return { ok: false, error: "that request was decided meanwhile" };
 	log(approve ? "pairing_approved" : "pairing_denied", { userCode: P.formatUserCode(code), by, label, ...(replacing ? { replaces: label } : {}) });
+	await publishPairingEvent(ctx, ectx, { type: "pairing_decided", requestId: String(r.device_hash), code: P.formatUserCode(code),
+		name: r.client_name || "", alias: r.client_id || "", ip: r.ip || "", country: r.country || "",
+		createdAt: new Date(r.created_ms).toISOString(), expiresAt: new Date(r.expires_ms).toISOString(),
+		decision: approve ? "approved" : "denied" });
 	return { ok: true, label: label || undefined, request: r, replaced: replacing };
+}
+
+/**
+ * Count open requests and hand the post to waitUntil. The HTTP response returns before the EVENT_URL post.
+ * A missing URL or secret leaves the request as it was.
+ */
+async function publishPairingEvent(ctx: TenantContext, ectx: ExecutionContext, event: {
+	type: "pairing_requested" | "pairing_decided";
+	requestId: string;
+	code: string;
+	name: string;
+	alias: string;
+	ip: string;
+	country: string;
+	createdAt: string;
+	expiresAt: string;
+	decision?: "approved" | "denied";
+}): Promise<void> {
+	const target = pairingEventTarget(ctx.EVENT_URL, ctx.EVENT_SECRET);
+	if (!target) return;
+	try {
+		const row: Json = await ctx.DB.prepare("SELECT COUNT(*) AS n FROM device_requests WHERE status = 'pending' AND expires_ms > ?").bind(Date.now()).first();
+		ectx.waitUntil(postPairingEvent(target, {
+			...event, agent: pairingAgent(ctx.PUBLIC_URL, ctx.id), pending: Number(row?.n ?? 0),
+		}));
+	} catch (error) {
+		log("pairing_event_failed", { type: event.type, error: String(error).slice(0, 200) });
+	}
 }
 
 const pageRequest = (r: Json): P.PageRequest => ({ userCode: r.user_code, clientName: r.client_name || "", clientId: r.client_id || "",
@@ -1439,7 +1476,7 @@ function cookie(req: Request, name: string): string {
 }
 
 /** GET/POST /device: the owner approves or denies a request with the approval password (no scripts, strict CSP). */
-async function devicePage(req: Request, ctx: TenantContext, url: URL, head = false): Promise<Response> {
+async function devicePage(req: Request, ctx: TenantContext, ectx: ExecutionContext, url: URL, head = false): Promise<Response> {
 	const nonce = P.randomB64(), ip = clientIp(req);
 	const csrfName = "a2a_device_csrf";
 	let csrf = cookie(req, csrfName);
@@ -1494,7 +1531,7 @@ async function devicePage(req: Request, ctx: TenantContext, url: URL, head = fal
 		}
 		const r0 = await pendingRequest(ctx, code);
 		if (!r0 || r0.status !== "pending" || Date.now() >= r0.expires_ms) { await show(form.user_code); return send(404); }
-		const d0 = await decide(ctx, code, false, "page");
+		const d0 = await decide(ctx, ectx, code, false, "page");
 		if (!d0.ok) { await show(null, { kind: "error", text: d0.error! }); return send(409); }
 		model.settled = "denied";
 		model.notice = { kind: "ok", text: `Denied. ${r0.client_name || r0.client_id || "the agent"} gets no token.` };
@@ -1534,14 +1571,14 @@ async function devicePage(req: Request, ctx: TenantContext, url: URL, head = fal
 		const left = P.LIMITS.wrongPerCode - (res?.failed_attempts ?? P.LIMITS.wrongPerCode);
 		log("pairing_wrong_password", { ip, userCode: P.formatUserCode(code), left });
 		if (left <= 0) {
-			await decide(ctx, code, false, "lockout");
+			await decide(ctx, ectx, code, false, "lockout");
 			await show(null, { kind: "error", text: "Wrong password. Too many wrong attempts for this code: the request was denied." });
 			return send(403);
 		}
 		await show(form.user_code, { kind: "error", text: `Wrong password. ${left} attempt${left === 1 ? "" : "s"} left for this code.` });
 		return send(403);
 	}
-	const d = await decide(ctx, code, true, "human");
+	const d = await decide(ctx, ectx, code, true, "human");
 	if (!d.ok) { await show(null, { kind: "error", text: d.error! }); return send(409); }
 	const who = r.client_name || r.client_id || "the agent";
 	model.settled = "approved";
@@ -1550,7 +1587,7 @@ async function devicePage(req: Request, ctx: TenantContext, url: URL, head = fal
 }
 
 /** GET /device/oidc/callback: the identity provider returns here. State is the CSRF; the cookie is not re-checked. */
-async function deviceOidcCallback(req: Request, ctx: TenantContext, url: URL, head = false): Promise<Response> {
+async function deviceOidcCallback(req: Request, ctx: TenantContext, ectx: ExecutionContext, url: URL, head = false): Promise<Response> {
 	const nonce = P.randomB64();
 	const pw = await approvalPassword(ctx);
 	const model: P.PageModel = { agentName: ctx.AGENT_NAME || "this A2A endpoint", mode: pairingMode(ctx), cli: cliCommand(ctx), csrf: P.randomB64(), passwordSet: !!pw, timeZone: clientTimeZone(req), ...approvalPageBits(ctx) };
@@ -1593,7 +1630,7 @@ async function deviceOidcCallback(req: Request, ctx: TenantContext, url: URL, he
 		model.notice = { kind: "error", text: done.error };
 		return send(400);
 	}
-	const d = await decide(ctx, done.userCode || "", true, "oidc");
+	const d = await decide(ctx, ectx, done.userCode || "", true, "oidc");
 	if (!d.ok) { model.notice = { kind: "error", text: d.error! }; return send(409); }
 	const who = d.request.client_name || d.request.client_id || "the agent";
 	model.settled = "approved";
@@ -1686,7 +1723,7 @@ async function setupPage(req: Request, ctx: TenantContext, url: URL, head = fals
 }
 
 /** Owner API: /owner/pairing (list, mode), /owner/pairing/password (set), /owner/pairing/<code>/approve|deny. */
-async function ownerPairing(req: Request, ctx: TenantContext, m: string, seg: string[], body: () => Promise<Json>, trusted = false): Promise<Response> {
+async function ownerPairing(req: Request, ctx: TenantContext, ectx: ExecutionContext, m: string, seg: string[], body: () => Promise<Json>, trusted = false): Promise<Response> {
 	const mode = pairingMode(ctx);
 	if (!seg[0] && m === "GET") {
 		const now = Date.now();
@@ -1747,7 +1784,7 @@ async function ownerPairing(req: Request, ctx: TenantContext, m: string, seg: st
 		if (approve && mode !== "agent" && !dashboardHuman && !ownerAuthed)
 			return json({ error: `approval mode is human: this call cannot approve. The owner approves with the owner token, or on ${oauthUrls(ctx).page}?user_code=${P.formatUserCode(code)} with the approval password.` }, 403);
 		const by = dashboardHuman ? "human" : approve && mode === "agent" ? "agent" : "owner";
-		const d = await decide(ctx, code, approve, by);
+		const d = await decide(ctx, ectx, code, approve, by);
 		if (!d.ok) return json({ error: d.error }, 409);
 		return json({ ok: true, decision: approve ? "approved" : "denied", userCode: P.formatUserCode(code), label: d.label || null,
 			clientName: d.request.client_name || d.request.client_id || null, replaced: !!d.replaced });
@@ -2611,8 +2648,8 @@ async function handle(req: Request, ctx: TenantContext, ectx: ExecutionContext, 
 			if (req.method === "GET" && path === "/.well-known/oauth-protected-resource") return json(protectedResourceMetadata(ctx), 200, { "access-control-allow-origin": "*" });
 			if (req.method === "POST" && path === "/oauth/device_authorization") return await deviceAuthorization(req, ctx, ectx);
 			if (req.method === "POST" && path === "/oauth/token") return await tokenEndpoint(req, ctx);
-			if (path === "/device" && (req.method === "GET" || req.method === "POST")) return await devicePage(req, ctx, url, head);
-			if (req.method === "GET" && path === "/device/oidc/callback") return await deviceOidcCallback(req, ctx, url, head);
+			if (path === "/device" && (req.method === "GET" || req.method === "POST")) return await devicePage(req, ctx, ectx, url, head);
+			if (req.method === "GET" && path === "/device/oidc/callback") return await deviceOidcCallback(req, ctx, ectx, url, head);
 			if (path === "/device/setup" && (req.method === "GET" || req.method === "POST")) return await setupPage(req, ctx, url, head);
 			return json({ error: "not found" }, 404);
 		}

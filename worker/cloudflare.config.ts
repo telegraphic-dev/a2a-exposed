@@ -64,6 +64,8 @@ const plain: Record<string, string> = {
 	APPROVAL_METHODS: v("APPROVAL_METHODS"),
 	// Optional https URL of this agent's dashboard page. A pairing wake and the MCP inbox line include it as manageUrl.
 	MANAGE_URL: v("MANAGE_URL"),
+	// Optional https URL for a signed pairing event. EVENT_SECRET is uploaded as a secret. Both are required for a post.
+	EVENT_URL: v("EVENT_URL"),
 };
 const hosted = v("TENANCY") === "host";
 // Daily R2 snapshots. Unset: no binding and no extra cron, so a self-host deploy stays the single-tenant Worker.
@@ -103,7 +105,8 @@ for (const [k, val] of Object.entries(plain)) if (val !== "" || (k === "WAKE_KEY
 const SECRETS = ["OWNER_TOKEN", "WAKE_WEBHOOK_URL", "WAKE_WEBHOOK_KEY", "WAKE_HMAC_SECRET", "UPSTREAM_TOKEN", "UPSTREAM_ACCESS_CLIENT_ID", "UPSTREAM_ACCESS_CLIENT_SECRET",
 	// Declared for `cf dev` only when a deploy asks for them, so a self-host .dev.vars without these still starts.
 	...(v("TENANCY") === "host" ? ["TENANT_SECRETS_KEY"] : []),
-	...(v("TENANCY") === "host" || v("APPROVAL_OIDC_ISSUER") ? ["APPROVAL_OIDC_CLIENT_SECRET"] : [])];
+	...(v("TENANCY") === "host" || v("APPROVAL_OIDC_ISSUER") ? ["APPROVAL_OIDC_CLIENT_SECRET"] : []),
+	...(v("EVENT_URL") ? ["EVENT_SECRET"] : [])];
 
 export default defineConfig((ctx) => ({
 	...(v("CLOUDFLARE_ACCOUNT_ID") ? { accountId: v("CLOUDFLARE_ACCOUNT_ID") } : {}),

@@ -50,6 +50,8 @@ test("create writes the directory and the object, and the token is shown once", 
 	assert.equal(target.pushes[0].body.version, 1);
 	assert.equal(target.pushes[0].body.ownerTokenHash.length, 64);
 	assert.equal(JSON.stringify(target.pushes[0]).includes(created.tenant.ownerToken), false);
+	assert.equal(target.pushes[0].body.config.EVENT_URL, undefined);
+	assert.equal(target.pushes[0].body.config.EVENT_SECRET, undefined);
 
 	const again = await createTenant(db, target.data, { accountId: "acct", name: "northwind", domain: "example.com" });
 	assert.equal(again.ok, false);
@@ -61,6 +63,21 @@ test("create writes the directory and the object, and the token is shown once", 
 	assert.equal(listed[0].publicUrl, "https://northwind.example.com");
 	assert.equal(JSON.stringify(listed).includes(created.tenant.ownerToken), false);
 	assert.equal(JSON.stringify(listed).includes("ownerToken"), false);
+});
+
+test("create stores pairing event settings when the control plane passes both", async () => {
+	const db = openDb();
+	const target = plane();
+	const url = "https://example.com/api/agent-events";
+	const created = await createTenant(db, target.data, { accountId: "acct", name: "northwind", eventUrl: url, eventSecret: "event-secret" });
+	assert.equal(created.ok, true);
+	assert.equal(target.pushes[0].body.config.EVENT_URL, url);
+	assert.equal(target.pushes[0].body.config.EVENT_SECRET, "event-secret");
+	assert.equal(target.pushes[0].body.config.AGENT_NAME, "northwind");
+	const partial = await createTenant(db, target.data, { accountId: "acct", name: "partial1", eventUrl: "http://example.com/api", eventSecret: "event-secret" });
+	assert.equal(partial.ok, true);
+	assert.equal(target.pushes[1].body.config.EVENT_URL, undefined);
+	assert.equal(target.pushes[1].body.config.EVENT_SECRET, undefined);
 });
 
 test("a failed push stays in the outbox and a later flush delivers it", async () => {

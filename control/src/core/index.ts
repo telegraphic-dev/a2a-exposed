@@ -78,10 +78,18 @@ export {
 	fieldsFromForm,
 	permissionRetryDue,
 	inboxApprovalBindings,
+	inboxEventBindings,
 	resumeFields,
 	runInboxStep,
 	viewInboxWizard,
 } from "../provision/inbox.ts";
+export {
+	EVENT_REPLAY_WINDOW_S,
+	eventSecretText,
+	httpsEventUrl,
+	pairingEventConfig,
+	verifyEventSignature,
+} from "../tenants/events.ts";
 export type {
 	ApprovalOidcInput,
 	InboxMigration,

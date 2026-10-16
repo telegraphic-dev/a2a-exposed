@@ -33,6 +33,27 @@ Work is asynchronous. The peer polls `GetTask`, or registers a push URL. `SendSt
 
 MCP adds `/oauth/authorize`, `/oauth/register`, `/oauth/revoke`, and `/.well-known/oauth-protected-resource/mcp`. See [MCP](mcp.md).
 
+## Pairing events
+
+When `EVENT_URL` is an https URL and `EVENT_SECRET` is set, the A2A endpoint POSTs a JSON event to that URL after a pairing request is created and after it is approved or denied. The post runs after the HTTP response. Each attempt waits 3 seconds, and one retry follows a timeout or a failed post. The post stays on `EVENT_URL`.
+
+| Field | Meaning |
+| --- | --- |
+| `type` | `pairing_requested` or `pairing_decided` |
+| `agent` | Public host of this A2A endpoint. A tenant id when that host is absent |
+| `requestId` | Stable id of the request |
+| `code` | The code a person reads, such as `WDJB-4827` |
+| `name` | Claimed name |
+| `alias` | Claimed alias |
+| `ip` | Address of the machine that asked |
+| `country` | Country code, when the request carries one |
+| `createdAt` | When the request was created |
+| `expiresAt` | When the code expires |
+| `pending` | How many pairing requests are still open |
+| `decision` | `approved` or `denied`, on `pairing_decided` |
+
+`x-a2a-timestamp` is the unix time in seconds. `x-a2a-signature` is `sha256=` plus the HMAC-SHA256, in hex, of that timestamp, a period, and the raw body, keyed with `EVENT_SECRET`. `verifyEventSignature` from `@a2a-exposed/control-core` accepts the raw body when the timestamp is within 5 minutes and the signature matches. A hosted agent uses the `EVENT_URL` and `EVENT_SECRET` in the config the control plane pushes. A Cloudflare agent receives them as Worker bindings when provisioning is given `eventUrl` and `eventSecret`.
+
 ## Landing page
 
 `GET /` with `Accept: text/html` returns a small HTML page: agent name, description, skills, a note that this is an A2A endpoint, and links to the agent card and `/device`. No scripts, no external assets, a strict content security policy.

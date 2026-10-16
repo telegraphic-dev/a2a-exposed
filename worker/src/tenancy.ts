@@ -41,6 +41,10 @@ export const CONFIG_KEYS = [
 	"MCP",
 	/** Optional https URL of this agent's dashboard page. Omitted from pairing output when unset or not https. */
 	"MANAGE_URL",
+	/** Optional https URL that receives a signed pairing event. Omitted from the post when the secret is absent. */
+	"EVENT_URL",
+	/** HMAC key for that post. A Worker secret on a self-hosted agent, and a tenant config field when the control plane sets it. */
+	"EVENT_SECRET",
 ] as const;
 
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
@@ -383,6 +387,8 @@ export class TenantContext implements ConfigFields {
 	readonly UPSTREAM_ACCESS_CLIENT_SECRET?: string;
 	readonly MCP?: string;
 	readonly MANAGE_URL?: string;
+	readonly EVENT_URL?: string;
+	readonly EVENT_SECRET?: string;
 
 	/** Self-host only. Never set on a hosted context, so a platform OWNER_TOKEN cannot unlock a tenant. */
 	readonly #ownerToken?: string;

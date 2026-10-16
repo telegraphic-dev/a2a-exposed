@@ -1,4 +1,5 @@
 import { newApprovalClient } from "./approval.ts";
+import { pairingEventConfig } from "./events.ts";
 import type { Sql } from "../core/sql.ts";
 import { deliverOutbox, type DataPlane, type OutboxRow } from "./push.ts";
 import { tenantNameProblem } from "./reserved.ts";
@@ -56,7 +57,12 @@ export function newOwnerToken(): string {
 export async function createTenant(
 	db: Sql,
 	plane: DataPlane,
-	input: { accountId: string; name: string; domain?: string; dataRegion?: string; issuer?: string; label?: string; freeAgentLimit?: number | null },
+	input: {
+		accountId: string; name: string; domain?: string; dataRegion?: string; issuer?: string; label?: string;
+		freeAgentLimit?: number | null;
+		/** https URL and secret for pairing events. A partial or unusable pair is left out of the tenant config. */
+		eventUrl?: string; eventSecret?: string;
+	},
 ): Promise<CreateResult> {
 	const name = input.name.trim().toLowerCase();
 	const problem = tenantNameProblem(name);
@@ -69,7 +75,8 @@ export async function createTenant(
 	const hash = await sha256(token);
 	const now = new Date().toISOString();
 	const region = regionOf(input.dataRegion);
-	const config = { AGENT_NAME: name };
+	const events = input.eventUrl && input.eventSecret ? pairingEventConfig(input.eventUrl, input.eventSecret) : null;
+	const config = { AGENT_NAME: name, ...(events ?? {}) };
 	const version = 1;
 	const domain = (input.domain || "").trim().toLowerCase().replace(/^\.+|\.+$/g, "");
 	const publicUrl = domain ? `https://${name}.${domain}` : null;

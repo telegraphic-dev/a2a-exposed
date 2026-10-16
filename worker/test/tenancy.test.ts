@@ -35,6 +35,21 @@ test("publicManageUrl keeps an https dashboard page and drops anything else", ()
 	assert.equal(hostedUnset.MANAGE_URL, undefined);
 });
 
+test("EVENT_URL and EVENT_SECRET come from the tenant config on a hosted agent", () => {
+	const url = "https://example.com/api/agent-events";
+	assert.equal(resolveTenant(selfEnv({ EVENT_URL: url, EVENT_SECRET: "event-secret" })).EVENT_SECRET, "event-secret");
+	const hosted = hostedTenantContext(selfEnv({ TENANCY: "host", EVENT_URL: "https://platform.example/other", EVENT_SECRET: "platform" }), {
+		id: "ten_a", db: dummy, publicUrl: BASE, config: { EVENT_URL: url, EVENT_SECRET: "tenant-secret" },
+	});
+	assert.equal(hosted.EVENT_URL, url);
+	assert.equal(hosted.EVENT_SECRET, "tenant-secret");
+	const hostedUnset = hostedTenantContext(selfEnv({ TENANCY: "host", EVENT_URL: url, EVENT_SECRET: "platform" }), {
+		id: "ten_a", db: dummy, publicUrl: BASE,
+	});
+	assert.equal(hostedUnset.EVENT_URL, undefined);
+	assert.equal(hostedUnset.EVENT_SECRET, undefined);
+});
+
 test("gates: unset is single-tenant and every reserved gate is off", () => {
 	const g = parseGates({ DB: dummy } as WorkerBindings).gates;
 	assert.equal(g.tenancy, "single");
