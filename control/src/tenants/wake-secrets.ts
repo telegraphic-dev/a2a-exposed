@@ -5,12 +5,13 @@
 const INFO = "tenant-wake-secrets v1";
 const SALT = "a2a-exposed";
 
-/** Secret wake fields. Anything else in the blob is ignored. */
+/** Sealed secret fields. Anything else in the blob is ignored. */
 export const WAKE_SECRET_KEYS = [
 	"WAKE_WEBHOOK_KEY",
 	"WAKE_HMAC_SECRET",
 	"WAKE_ACCESS_CLIENT_ID",
 	"WAKE_ACCESS_CLIENT_SECRET",
+	"EVENT_SECRET",
 ] as const;
 
 export type WakeSecretKey = (typeof WAKE_SECRET_KEYS)[number];
@@ -49,6 +50,17 @@ async function derive(ikm: string, tenantId: string): Promise<CryptoKey | null> 
 		{ name: "HKDF", hash: "SHA-256", salt: new TextEncoder().encode(SALT), info: new TextEncoder().encode(`${INFO}\0${tenantId}`) },
 		base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"],
 	);
+}
+
+/**
+ * Config written next to a sealed blob. The sealed fields stay in `secrets_enc`.
+ * With no ciphertext, the config is returned unchanged.
+ */
+export function omitSealedSecrets<T extends Record<string, unknown>>(config: T, secretsEnc: string | null | undefined): T {
+	if (typeof secretsEnc !== "string" || secretsEnc === "") return config;
+	const stored = { ...config };
+	for (const key of WAKE_SECRET_KEYS) delete stored[key];
+	return stored;
 }
 
 function payloadOf(secrets: WakeSecrets): Record<string, string> | null {

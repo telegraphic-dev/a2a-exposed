@@ -6,6 +6,7 @@ import worker from "../src/index.ts";
 import { sha256 } from "../src/a2a.ts";
 import { openPeerToken, openPeerTokenWithKey, sealPeerToken, sealPeerTokenWithKey } from "../src/mcp.ts";
 import { hostedTenantContext, namespaceForRegion, parseGates, publicManageUrl, resolveTenant, type WorkerBindings } from "../src/tenancy.ts";
+import { openWakeSecrets, sealWakeSecrets, WAKE_SECRET_KEYS } from "../src/wake-secrets.ts";
 import { d1 } from "./d1.ts";
 
 const dummy = { prepare() { throw new Error("storage should not be touched"); } } as any;
@@ -35,11 +36,21 @@ test("publicManageUrl keeps an https dashboard page and drops anything else", ()
 	assert.equal(hostedUnset.MANAGE_URL, undefined);
 });
 
-test("EVENT_URL and EVENT_SECRET come from the tenant config on a hosted agent", () => {
+test("EVENT_URL and EVENT_SECRET come from the tenant on a hosted agent", async () => {
 	const url = "https://example.com/api/agent-events";
 	assert.equal(resolveTenant(selfEnv({ EVENT_URL: url, EVENT_SECRET: "event-secret" })).EVENT_SECRET, "event-secret");
+	const sealed = await sealWakeSecrets("platform-secret", "ten_a", { EVENT_SECRET: "tenant-secret" });
+	assert.ok(sealed);
+	assert.equal(sealed.includes("tenant-secret"), false);
+	const opened = await openWakeSecrets("platform-secret", "ten_a", sealed);
+	const config: Record<string, string> = { EVENT_URL: url, EVENT_SECRET: "plaintext-copy" };
+	for (const name of WAKE_SECRET_KEYS) {
+		const value = opened?.[name];
+		if (value) config[name] = value;
+		else delete config[name];
+	}
 	const hosted = hostedTenantContext(selfEnv({ TENANCY: "host", EVENT_URL: "https://platform.example/other", EVENT_SECRET: "platform" }), {
-		id: "ten_a", db: dummy, publicUrl: BASE, config: { EVENT_URL: url, EVENT_SECRET: "tenant-secret" },
+		id: "ten_a", db: dummy, publicUrl: BASE, config,
 	});
 	assert.equal(hosted.EVENT_URL, url);
 	assert.equal(hosted.EVENT_SECRET, "tenant-secret");

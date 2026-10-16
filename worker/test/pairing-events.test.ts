@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import worker, { dispatch } from "../src/index.ts";
 import { hostedTenantContext, type WorkerBindings } from "../src/tenancy.ts";
 import { postPairingEvent, type PairingEvent } from "../src/pairing-events.ts";
+import { openWakeSecrets, sealWakeSecrets, WAKE_SECRET_KEYS } from "../src/wake-secrets.ts";
 import { EVENT_REPLAY_WINDOW_S, verifyEventSignature } from "../../control/src/tenants/events.ts";
 import { d1 } from "./d1.ts";
 
@@ -177,9 +178,19 @@ test("the response returns before the event post, and the payload carries the op
 test("a hosted tenant posts with the control plane's EVENT_URL and EVENT_SECRET", async () => {
 	const DB = d1(new URL("../migrations/", import.meta.url));
 	await DB.prepare("SELECT 1").first();
+	const sealed = await sealWakeSecrets("platform-secret", "ten_north", { EVENT_SECRET: SECRET });
+	assert.ok(sealed);
+	assert.equal(sealed.includes(SECRET), false);
+	const opened = await openWakeSecrets("platform-secret", "ten_north", sealed);
+	const config: Record<string, string> = { EVENT_URL, EVENT_SECRET: "plaintext-copy" };
+	for (const name of WAKE_SECRET_KEYS) {
+		const value = opened?.[name];
+		if (value) config[name] = value;
+		else delete config[name];
+	}
 	const ctx = hostedTenantContext({ DB, TENANCY: "host", EVENT_URL: "https://platform.example/other", EVENT_SECRET: "platform" } as WorkerBindings, {
 		id: "ten_north", db: DB, publicUrl: "https://northwind.example.com",
-		config: { EVENT_URL, EVENT_SECRET: SECRET },
+		config,
 	});
 	assert.equal(ctx.mode, "host");
 	assert.equal(ctx.EVENT_URL, EVENT_URL);

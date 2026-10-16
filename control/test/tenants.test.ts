@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createTenant, listTenants } from "../src/tenants/create.ts";
 import { dataPlaneFromEnv, flushOutbox, type DataPlane, type TenantPush } from "../src/tenants/push.ts";
+import { openWakeSecrets } from "../src/tenants/wake-secrets.ts";
 import { openDb } from "./sql.ts";
 
 function plane() {
@@ -65,19 +66,41 @@ test("create writes the directory and the object, and the token is shown once", 
 	assert.equal(JSON.stringify(listed).includes("ownerToken"), false);
 });
 
-test("create stores pairing event settings when the control plane passes both", async () => {
+test("create seals the pairing event secret and stores the URL in config", async () => {
 	const db = openDb();
 	const target = plane();
 	const url = "https://example.com/api/agent-events";
-	const created = await createTenant(db, target.data, { accountId: "acct", name: "northwind", eventUrl: url, eventSecret: "event-secret" });
+	const secret = "event-secret";
+	const secretsKey = "platform-secret";
+	const created = await createTenant(db, target.data, { accountId: "acct", name: "northwind", eventUrl: url, eventSecret: secret, secretsKey });
 	assert.equal(created.ok, true);
+	if (!created.ok) return;
 	assert.equal(target.pushes[0].body.config.EVENT_URL, url);
-	assert.equal(target.pushes[0].body.config.EVENT_SECRET, "event-secret");
+	assert.equal(target.pushes[0].body.config.EVENT_SECRET, undefined);
 	assert.equal(target.pushes[0].body.config.AGENT_NAME, "northwind");
-	const partial = await createTenant(db, target.data, { accountId: "acct", name: "partial1", eventUrl: "http://example.com/api", eventSecret: "event-secret" });
+	assert.equal(JSON.stringify(target.pushes[0].body.config).includes(secret), false);
+	const sealed = target.pushes[0].body.secretsEnc;
+	assert.equal(typeof sealed, "string");
+	assert.equal(sealed?.includes(secret), false);
+	assert.deepEqual(await openWakeSecrets(secretsKey, created.tenant.id, sealed), { EVENT_SECRET: secret });
+	const row = await db.prepare("SELECT config_json, secrets_enc FROM tenants WHERE id = ?").bind(created.tenant.id).first<{ config_json: string; secrets_enc: string | null }>();
+	assert.equal(row?.config_json.includes(secret), false);
+	assert.equal(row?.config_json.includes(url), true);
+	assert.equal(row?.secrets_enc, sealed);
+
+	const partial = await createTenant(db, target.data, { accountId: "acct", name: "partial1", eventUrl: "http://example.com/api", eventSecret: secret, secretsKey });
 	assert.equal(partial.ok, true);
 	assert.equal(target.pushes[1].body.config.EVENT_URL, undefined);
 	assert.equal(target.pushes[1].body.config.EVENT_SECRET, undefined);
+	assert.equal(target.pushes[1].body.secretsEnc, null);
+
+	const open = await createTenant(db, target.data, { accountId: "acct", name: "opensecret", eventUrl: url, eventSecret: secret });
+	assert.equal(open.ok, true);
+	assert.equal(target.pushes[2].body.config.EVENT_URL, undefined);
+	assert.equal(target.pushes[2].body.secretsEnc, null);
+	const left = await db.prepare("SELECT config_json, secrets_enc FROM tenants WHERE name = ?").bind("opensecret").first<{ config_json: string; secrets_enc: string | null }>();
+	assert.equal(left?.config_json.includes(secret), false);
+	assert.equal(left?.secrets_enc, null);
 });
 
 test("a failed push stays in the outbox and a later flush delivers it", async () => {

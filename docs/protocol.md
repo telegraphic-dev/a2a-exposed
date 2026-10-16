@@ -52,7 +52,7 @@ When `EVENT_URL` is an https URL and `EVENT_SECRET` is set, the A2A endpoint POS
 | `pending` | How many pairing requests are still open |
 | `decision` | `approved` or `denied`, on `pairing_decided` |
 
-`x-a2a-timestamp` is the unix time in seconds. `x-a2a-signature` is `sha256=` plus the HMAC-SHA256, in hex, of that timestamp, a period, and the raw body, keyed with `EVENT_SECRET`. `verifyEventSignature` from `@a2a-exposed/control-core` accepts the raw body when the timestamp is within 5 minutes and the signature matches. A hosted agent uses the `EVENT_URL` and `EVENT_SECRET` in the config the control plane pushes. A Cloudflare agent receives them as Worker bindings when provisioning is given `eventUrl` and `eventSecret`.
+`x-a2a-timestamp` is the unix time in seconds. `x-a2a-signature` is `sha256=` plus the HMAC-SHA256, in hex, of that timestamp, a period, and the raw body, keyed with `EVENT_SECRET`. `verifyEventSignature` from `@a2a-exposed/control-core` accepts the raw body when the timestamp is within 5 minutes and the signature matches. A hosted agent takes `EVENT_URL` from the tenant config and `EVENT_SECRET` from the sealed secrets stored for that agent. A Cloudflare agent receives them as Worker bindings when provisioning is given `eventUrl` and `eventSecret`.
 
 ## Landing page
 

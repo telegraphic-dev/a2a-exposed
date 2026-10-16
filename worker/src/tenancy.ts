@@ -43,7 +43,7 @@ export const CONFIG_KEYS = [
 	"MANAGE_URL",
 	/** Optional https URL that receives a signed pairing event. Omitted from the post when the secret is absent. */
 	"EVENT_URL",
-	/** HMAC key for that post. A Worker secret on a self-hosted agent, and a tenant config field when the control plane sets it. */
+	/** HMAC key for that post. A Worker secret on a self-hosted agent. On a hosted agent the sealed secrets blob supplies it. */
 	"EVENT_SECRET",
 ] as const;
 

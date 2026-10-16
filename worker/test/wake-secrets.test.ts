@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { MAX_WAKE_SEALED, MAX_WAKE_VALUE, openWakeSecrets, sealWakeSecrets, WAKE_SECRET_KEYS } from "../src/wake-secrets.ts";
+import { MAX_WAKE_SEALED, MAX_WAKE_VALUE, omitSealedSecrets, openWakeSecrets, sealWakeSecrets, WAKE_SECRET_KEYS } from "../src/wake-secrets.ts";
 
 const key = "platform-secret";
 const tenant = "ten_a";
@@ -30,7 +30,7 @@ test("a wake secret blob keeps only the known fields", async () => {
 	assert.equal(await sealWakeSecrets(key, tenant, { WAKE_WEBHOOK_KEY: "x".repeat(4097) }), null);
 });
 
-test("four maximum-length wake secrets round-trip", async () => {
+test("every maximum-length sealed secret round-trips", async () => {
 	const value = "x".repeat(MAX_WAKE_VALUE);
 	const secrets = Object.fromEntries(WAKE_SECRET_KEYS.map((name) => [name, value]));
 	const sealed = await sealWakeSecrets(key, tenant, secrets);
@@ -46,4 +46,17 @@ test("four maximum-length wake secrets round-trip", async () => {
 	assert.ok(sealedWorst);
 	assert.ok(sealedWorst!.length <= MAX_WAKE_SEALED);
 	assert.deepEqual(await openWakeSecrets(key, tenant, sealedWorst), worst);
+});
+
+test("a sealed blob's fields are left out of the stored config", () => {
+	const url = "https://example.com/api/agent-events";
+	const stored = omitSealedSecrets({
+		AGENT_NAME: "northwind", EVENT_URL: url, EVENT_SECRET: "event-secret", WAKE_WEBHOOK_KEY: "hook-key",
+	}, "v1.iv.ct");
+	assert.equal(stored.EVENT_URL, url);
+	assert.equal(stored.AGENT_NAME, "northwind");
+	assert.equal("EVENT_SECRET" in stored, false);
+	assert.equal("WAKE_WEBHOOK_KEY" in stored, false);
+	assert.equal(omitSealedSecrets({ EVENT_SECRET: "event-secret" }, null).EVENT_SECRET, "event-secret");
+	assert.equal(omitSealedSecrets({ EVENT_SECRET: "event-secret" }, "").EVENT_SECRET, "event-secret");
 });
