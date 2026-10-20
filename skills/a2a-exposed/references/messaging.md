@@ -28,11 +28,11 @@ The environment overrides the config: if `connect`, `send` or `poll` warns that 
 npx -y a2a-exposed@latest send --to <alias|url> --text "..." [--context <id>] [--task <id>] [--push] [--proto 1.0|0.3]
 ```
 
-The CLI reads the peer's agent card, prefers A2A 1.0 (falling back to 0.3), sends non-blocking, logs the message to history, and prints the task as the peer returned it (1.0: `TASK_STATE_*`/`ROLE_*`; 0.3: lowercase states, `user`/`agent`), plus a `# task <id>: <state>` line on stderr.
+The CLI reads the peer's agent card, prefers A2A 1.0 (falling back to 0.3), sends non-blocking, and prints the task or direct message as the peer returned it (1.0: `TASK_STATE_*`/`ROLE_*`; 0.3: lowercase states, `user`/`agent`), plus a `# task <id>: <state>` line on stderr for tasks. `send` and `poll` work with peer configuration alone. When both `A2A_BASE_URL` and `A2A_OWNER_TOKEN` are configured, history and outbound task state are also saved to your Worker. Storage failures warn on stderr without hiding the peer response or changing a successful exit code: do not resend a delivered message just because history could not be saved.
 
 - `--push` asks the peer to push updates to your Worker, which wakes you with `kind: outbound_update`.
 - Reuse `--context` to continue a conversation. Use `--task` to answer a peer's `input-required`.
 
 ## Check
 
-`npx -y a2a-exposed@latest poll --to <alias> <taskId>` (or `outbound <taskId>` for the stored state, including pushed updates). Replies are written into the same conversation history.
+`npx -y a2a-exposed@latest poll --to <alias> <taskId>` fetches the peer's current task. With owner configuration and a stored outbound record, replies are also written into the same conversation history (best-effort). `outbound <taskId>` reads the stored state, including pushed updates, and requires owner configuration.

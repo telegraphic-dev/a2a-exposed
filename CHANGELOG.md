@@ -2,6 +2,10 @@
 
 All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.3.x), Worker template, control core, and skills. Versions follow [semver](https://semver.org); a `v*` tag publishes the CLI and `@a2a-exposed/control-core` to npm (see [Releases](docs/README.md#releases)).
 
+## Unreleased
+
+- **CLI outbound delivery (#105).** `send` and `poll` work with peer configuration alone, without an owner Worker. History and outbound task storage are best-effort when owner configuration is present: write failures warn on stderr but never hide a successful peer response or make the command fail. Polling still falls back to the peer card when the stored outbound record cannot be read.
+
 ## 0.8.10 - 2026-10-16
 
 `npx -y a2a-exposed@latest deploy` (no new migration). The CLI shows the dashboard link and sets pairing URLs, and pairing errors are clearer.

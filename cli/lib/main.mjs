@@ -228,6 +228,8 @@ Outbound (agents you call)
                           differs between the two, connect/send/poll/peers/status warn (values never shown)
   send --to <alias|url> [--text T | stdin] [--context C] [--task T] [--push] [--proto 0.3|1.0]
   poll --to <alias|url> <taskId> [--proto 0.3|1.0]
+                          send/poll need only peer config; owner history/task storage is optional.
+                          Storage failures warn on stderr; the peer response still prints and exits 0
   outbound <taskId>       stored state of a task you sent (incl. pushed updates)
 
 Owner

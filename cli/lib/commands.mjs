@@ -253,9 +253,18 @@ export function peers(sub, args, o) {
 	}
 }
 
+const ownerConfigured = () => !!(baseUrl() && C.get("A2A_OWNER_TOKEN"));
+
+// Outbound delivery works with just a peer token. Worker persistence is optional:
+// never turn a successful peer response into an error (and invite a duplicate send).
+async function persistOutbound(method, path, body, action) {
+	if (!ownerConfigured()) return;
+	try { await owner(method, path, body); }
+	catch { console.error(`warning: could not ${action} to the worker`); }
+}
+
 async function logHistory(ctx, entry) {
-	try { await owner("POST", "/owner/history", { contextId: ctx, ...entry }); }
-	catch { console.error("warning: could not log history to the worker"); }
+	await persistOutbound("POST", "/owner/history", { contextId: ctx, ...entry }, "log history");
 }
 
 export async function send(o) {
@@ -282,10 +291,10 @@ export async function send(o) {
 	const isTask = obj && typeof obj === "object" && "status" in obj;
 	const ctx = (obj && obj.contextId) || o.context || newId();
 	const tid = isTask ? obj.id : null;
-	await logHistory(ctx, { dir: "out", peer: alias, taskId: tid, role: "user", text, data: { messageId: msg.messageId, endpoint: url, protocol: version } });
-	if (tid) await owner("POST", "/owner/outbound", { taskId: tid, contextId: ctx, peer: alias, endpoint: url, protocol: version, pushToken, task: obj });
-	else if (obj && obj.parts) await logHistory(ctx, { dir: "in", peer: alias, role: "agent", event: "direct_message", text: textOf(obj) });
 	out(obj);
+	await logHistory(ctx, { dir: "out", peer: alias, taskId: tid, role: "user", text, data: { messageId: msg.messageId, endpoint: url, protocol: version } });
+	if (tid) await persistOutbound("POST", "/owner/outbound", { taskId: tid, contextId: ctx, peer: alias, endpoint: url, protocol: version, pushToken, task: obj }, "save outbound task");
+	else if (obj && obj.parts) await logHistory(ctx, { dir: "in", peer: alias, role: "agent", event: "direct_message", text: textOf(obj) });
 	if (tid) console.error(`# task ${tid}: ${plainState(obj)}  (check: ${CLI} poll --to ${alias} ${tid})`);
 }
 
@@ -294,17 +303,19 @@ export async function poll(taskId, o) {
 	const [alias, base, tok] = resolvePeer(o.to);
 	const tid = checkId(taskId, "taskId");
 	let rec = {};
-	try { rec = await owner("GET", `/owner/outbound/${q(tid)}`); } catch { rec = {}; }
+	if (ownerConfigured()) {
+		try { rec = await owner("GET", `/owner/outbound/${q(tid)}`); } catch { rec = {}; }
+	}
 	const [url, version] = rec.endpoint ? [rec.endpoint, rec.protocol || "0.3"] : pickEndpoint(base, await fetchCard(base), o.proto);
 	const res = await rpc(url, version, tok, "tasks/get", "GetTask", { id: tid }, { alias: C.loadPeers()[alias] ? alias : null, base });
+	out(res);
 	if (rec.endpoint) {
-		await owner("PUT", `/owner/outbound/${q(tid)}`, { task: res });
+		await persistOutbound("PUT", `/owner/outbound/${q(tid)}`, { task: res }, "update outbound task");
 		let txt = textOf((res.status || {}).message || {});
 		const arts = (res.artifacts || []).map((x) => textOf(x)).join("\n");
 		if (arts && arts !== txt) txt = (txt ? txt + "\n" : "") + arts;
 		await logHistory(rec.contextId, { dir: "in", peer: alias, taskId: tid, event: "poll", state: plainState(res), text: txt });
 	}
-	out(res);
 	console.error(`# task ${tid}: ${plainState(res)}`);
 }
 
