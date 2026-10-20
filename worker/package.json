@@ -9,6 +9,7 @@
 		"deploy": "cf deploy",
 		"pretest": "node scripts/stamp-version.mjs",
 		"test": "node --import ./test/register-hooks.mjs --test test/*.test.ts",
+		"test:coverage": "node scripts/stamp-version.mjs && node --import ./test/register-hooks.mjs --experimental-test-coverage --test-coverage-include=src/** --test-reporter=spec --test-reporter=lcov --test-reporter-destination=stdout --test-reporter-destination=../coverage/worker.lcov --test test/*.test.ts",
 		"typecheck": "cf workers types && tsc"
 	},
 	"engines": {

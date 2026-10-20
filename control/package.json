@@ -8,6 +8,7 @@
 		"build": "node scripts/bundle-inbox.mjs && cf build",
 		"deploy": "node scripts/bundle-inbox.mjs && node scripts/apply-migrations.mjs && node scripts/deploy.mjs",
 		"test": "node --import ./test/register-hooks.mjs --test --test-concurrency=1 test/*.test.ts && vitest run",
+		"test:coverage": "node --import ./test/register-hooks.mjs --experimental-test-coverage --test-coverage-include=src/** --test-reporter=spec --test-reporter=lcov --test-reporter-destination=stdout --test-reporter-destination=../coverage/control-node.lcov --test --test-concurrency=1 test/*.test.ts && vitest run",
 		"typecheck": "cf workers types && tsc --noEmit",
 		"check-build": "node scripts/check-build.mjs"
 	},

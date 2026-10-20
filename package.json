@@ -4,6 +4,9 @@
 	"description": "A2A endpoint provisioning, routing, and D1 migrations for a2a-exposed.",
 	"type": "module",
 	"scripts": {
+		"lint": "node scripts/check-repo.mjs lint",
+		"format:check": "node scripts/check-repo.mjs format",
+		"test:checks": "node --test scripts/check-repo.test.mjs",
 		"prepare": "node control/scripts/build-core.mjs",
 		"prepack": "node control/scripts/build-core.mjs"
 	},

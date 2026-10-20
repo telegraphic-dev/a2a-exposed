@@ -18,6 +18,20 @@ Guide for coding agents (and humans) changing this repository. User-facing docs 
 
 ## Checks (what CI runs)
 
+At the repository root, run `npm run lint`, `npm run format:check`, and
+`npm run test:checks` (Node and Python only; no install). Lint checks JavaScript
+and Python syntax, JSON parsing, and immutable Action references. Format checks
+tracked text files for trailing whitespace, LF endings, and a final newline; it
+does not impose a new indentation style. TypeScript checking remains in the
+component jobs below.
+
+CI runs `npm run test:coverage` instead of `npm test` in `worker/`, `cli/`,
+and `control/`, and publishes source-only LCOV artifacts for 14 days. For local
+coverage runs, create `coverage/` at the repository root first. These reports
+cover the Node tests (not subprocess execution, Vitest/workerd, or the storage
+matrix); control still runs its Vitest suite without coverage. Coverage is
+informational, with no blanket percentage threshold.
+
 Run with any real `WAKE_*`, `A2A_*`, `CF_*`, `CLOUDFLARE_*` variables unset: the CLI tests use a throwaway `A2A_CONFIG_DIR` and a stub `cf`.
 
 ```bash
