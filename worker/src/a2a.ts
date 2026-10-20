@@ -202,11 +202,13 @@ export function timingSafeEqualStr(a: string, b: string): boolean {
 	return r === 0;
 }
 
-/** Push URLs must be https and not obvious private/loopback literals. */
+/** Syntactic push check only. Delivery must also resolve and pin (fetchCheckedPush). */
 export function pushUrlAllowed(url: string): [boolean, string] {
 	let u: URL;
 	try { u = new URL(url); } catch { return [false, "bad url"]; }
 	if (u.protocol !== "https:") return [false, "https required"];
+	if (u.username || u.password) return [false, "URL credentials not allowed"];
+	if (isPrivateHost(u.hostname)) return [false, "private host not allowed"];
 	const h = u.hostname.replace(/^\[|\]$/g, "");
 	if (/^(localhost|.*\.local|.*\.internal)$/i.test(h)) return [false, "private host not allowed"];
 	if (/^\d+\.\d+\.\d+\.\d+$/.test(h) && /^(10\.|127\.|0\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(h))

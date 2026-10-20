@@ -2,6 +2,10 @@
 
 All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.3.x), Worker template, control core, and skills. Versions follow [semver](https://semver.org); a `v*` tag publishes the CLI and `@a2a-exposed/control-core` to npm (see [Releases](docs/README.md#releases)).
 
+## Unreleased
+
+- **Push callback security.** Resolve and validate all callback A/AAAA addresses at delivery, then pin the socket to the checked public IP using the existing hostname-verified TLS wake transport. DNS failures, private/reserved answers and all redirects fail closed. No unpinned fetch fallback; Cloudflare-proxied and `workers.dev` callbacks cannot be reached through Workers TCP sockets (poll `GetTask` instead). Reject URL credentials and keep transport error details out of push results/history. Wake behavior is unchanged. No migration.
+
 ## 0.8.10 - 2026-10-16
 
 `npx -y a2a-exposed@latest deploy` (no new migration). The CLI shows the dashboard link and sets pairing URLs, and pairing errors are clearer.

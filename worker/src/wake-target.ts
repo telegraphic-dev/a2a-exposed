@@ -207,6 +207,31 @@ function bodyBytes(body: BodyInit | null | undefined): Uint8Array {
 }
 
 /**
+ * Peer-controlled push callback: always resolve and pin, never follow a redirect.
+ * No local dispatch or platform fetch fallback: either would bypass the pinned connection.
+ * Uses the same address classification and TLS transport as public-https wakes.
+ */
+export async function fetchCheckedPush(
+	url: string,
+	init: RequestInit,
+	deps: Pick<WakeDeps, "lookup" | "connect" | "deliver"> = {},
+): Promise<{ response: Response } | { refused: string }> {
+	const checked = await checkedWakeAddresses(url, deps.lookup ?? lookupAddresses);
+	if ("refused" in checked) return checked;
+	const target = { ip: checked.ips[0]!, hostname: checked.hostname };
+	const nextInit: RequestInit = { ...init, redirect: "manual" };
+	const deliver = deps.deliver ?? wakeNet.deliver;
+	const response = deliver
+		? await deliver(url, nextInit, target)
+		: await deliverPinned(url, nextInit, target, deps.connect ?? wakeNet.connect ?? await runtimeConnect());
+	if (response.status >= 300 && response.status < 400) {
+		await response.body?.cancel().catch(() => {});
+		return { refused: "redirects are not allowed" };
+	}
+	return { response };
+}
+
+/**
  * POST (or whatever `init` says) to `url` after the public-https check.
  * The socket opens to an address from that check. TLS uses the hostname.
  * A redirect is followed only when it stays on the same origin, and that hop is checked again.

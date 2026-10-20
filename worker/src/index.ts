@@ -7,7 +7,7 @@
 import * as A from "./a2a.ts";
 import * as F from "./facade.ts";
 import { renderWake, redact, cloudflareErrorHint, wakeUrlIsTunnelHost, defaultDebounceSeconds, defaultMaxPerHour, type WakeConfig, type WakeEvent } from "./wake.ts";
-import { fetchCheckedWake } from "./wake-target.ts";
+import { fetchCheckedPush, fetchCheckedWake } from "./wake-target.ts";
 import * as P from "./pairing.ts";
 import * as M from "./mcp.ts";
 import { accountIdOf, DASHBOARD_ACTOR_HEADER, matchOwnerRpc, ownerResponseLeaks, scrubOwnerClaims, type OwnerRpcRequest, type OwnerRpcResult } from "./owner-rpc.ts";
@@ -852,10 +852,13 @@ async function sendPush(ctx: TenantContext, ectx: ExecutionContext, task: Json, 
 	if (scheme && auth.credentials) headers["authorization"] = `${scheme} ${auth.credentials}`;
 	const body = v1 ? { task: A.publicTask(task, "1.0") } : A.publicTask(task, "0.3");
 	try {
-		const r = await doFetch(ctx, ectx, cfg.url, { method: "POST", headers, body: JSON.stringify(body) });
+		const checked = await fetchCheckedPush(cfg.url, { method: "POST", headers, body: JSON.stringify(body) });
+		if ("refused" in checked) return [false, `push refused: ${checked.refused}`];
+		const r = checked.response;
 		return [r.status >= 200 && r.status < 300, `HTTP ${r.status}`];
-	} catch (e) {
-		return [false, String(e).slice(0, 200)];
+	} catch {
+		// Transport exceptions may contain request URLs or credentials; never persist/return them.
+		return [false, "push delivery failed"];
 	}
 }
 
