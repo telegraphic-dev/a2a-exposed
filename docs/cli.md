@@ -144,7 +144,7 @@ The owner token authenticates these commands.
 
 A `PEER_<ALIAS>_TOKEN` value in the environment overrides `config.env`. When they differ, `connect`, `send`, `poll`, `peers`, and `status` warn. The values are not shown.
 
-`send` and `poll` work with just the peer configuration; your own `A2A_BASE_URL` and `A2A_OWNER_TOKEN` are not required. When both are configured, the CLI also saves history and outbound task state to your Worker. These writes are best-effort: failures warn on stderr without hiding the peer response on stdout or changing a successful exit code. Do not resend a delivered message because its history could not be saved. `--push` still requires your Worker's `A2A_BASE_URL`; `history` and `outbound` require owner configuration.
+`send` without `--push` and `poll` work with just the peer configuration; your own `A2A_BASE_URL` and `A2A_OWNER_TOKEN` are not required. When both are configured, the CLI also saves history and outbound task state to your Worker. These writes are best-effort: failures warn on stderr without hiding the peer response on stdout or changing a successful exit code. Do not resend a delivered message because its history could not be saved. `--push` requires both your Worker's `A2A_BASE_URL` and `A2A_OWNER_TOKEN`; missing or partial owner configuration fails before contacting the peer. The Worker needs the saved outbound task token to authenticate push updates. If saving it fails after delivery, the CLI explicitly warns that push updates cannot authenticate: use `poll --to <alias|url> <taskId>` instead, not another send. `history` and `outbound` require owner configuration.
 
 ## Owner
 

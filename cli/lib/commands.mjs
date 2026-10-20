@@ -255,12 +255,12 @@ export function peers(sub, args, o) {
 
 const ownerConfigured = () => !!(baseUrl() && C.get("A2A_OWNER_TOKEN"));
 
-// Outbound delivery works with just a peer token. Worker persistence is optional:
-// never turn a successful peer response into an error (and invite a duplicate send).
+// Outbound delivery works with just a peer token unless --push is requested.
+// Persistence failures must not hide successful delivery (and invite a duplicate send).
 async function persistOutbound(method, path, body, action) {
-	if (!ownerConfigured()) return;
-	try { await owner(method, path, body); }
-	catch { console.error(`warning: could not ${action} to the worker`); }
+	if (!ownerConfigured()) return false;
+	try { await owner(method, path, body); return true; }
+	catch { console.error(`warning: could not ${action} to the worker`); return false; }
 }
 
 async function logHistory(ctx, entry) {
@@ -269,6 +269,8 @@ async function logHistory(ctx, entry) {
 
 export async function send(o) {
 	if (!o.to) die("--to required");
+	// The callback authenticates against the token saved through the owner API.
+	if (o.push && !ownerConfigured()) die("--push needs A2A_BASE_URL and A2A_OWNER_TOKEN (your Worker); configure both or omit --push and poll instead");
 	const [alias, base, tok] = resolvePeer(o.to);
 	const card = await fetchCard(base);
 	const [url, version] = pickEndpoint(base, card, o.proto);
@@ -281,7 +283,6 @@ export async function send(o) {
 	const conf = v1 ? { returnImmediately: true } : { blocking: false };
 	let pushToken = null;
 	if (o.push) {
-		if (!baseUrl()) die("--push needs A2A_BASE_URL (your Worker)");
 		pushToken = randomToken(24);
 		conf[v1 ? "taskPushNotificationConfig" : "pushNotificationConfig"] = { url: baseUrl() + "/push", token: pushToken };
 	}
@@ -293,7 +294,10 @@ export async function send(o) {
 	const tid = isTask ? obj.id : null;
 	out(obj);
 	await logHistory(ctx, { dir: "out", peer: alias, taskId: tid, role: "user", text, data: { messageId: msg.messageId, endpoint: url, protocol: version } });
-	if (tid) await persistOutbound("POST", "/owner/outbound", { taskId: tid, contextId: ctx, peer: alias, endpoint: url, protocol: version, pushToken, task: obj }, "save outbound task");
+	if (tid) {
+		const saved = await persistOutbound("POST", "/owner/outbound", { taskId: tid, contextId: ctx, peer: alias, endpoint: url, protocol: version, pushToken, task: obj }, "save outbound task");
+		if (o.push && !saved) console.error(`warning: push updates cannot authenticate because the outbound task token could not be saved; use ${CLI} poll --to ${alias} ${tid} instead; the message was delivered, do not resend`);
+	}
 	else if (obj && obj.parts) await logHistory(ctx, { dir: "in", peer: alias, role: "agent", event: "direct_message", text: textOf(obj) });
 	if (tid) console.error(`# task ${tid}: ${plainState(obj)}  (check: ${CLI} poll --to ${alias} ${tid})`);
 }

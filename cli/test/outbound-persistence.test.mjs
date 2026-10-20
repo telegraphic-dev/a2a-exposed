@@ -22,6 +22,7 @@ async function setup(t, { result = task, owner = "none", fail = "", peerFailure 
 		res.setHeader("content-type", "application/json");
 		const reply = (status, obj) => { res.writeHead(status); res.end(JSON.stringify(obj)); };
 		if (req.url.startsWith("/owner/")) {
+			if (fail === req.url) return reply(503, { error: "storage unavailable" });
 			if (fail === "network" || fail === `${req.method}-network`) return req.socket.destroy();
 			if (fail === req.method || fail === "all") return reply(503, { error: "storage unavailable" });
 			if (req.method === "GET") return reply(200, { endpoint: `${url}/rpc`, protocol: "0.3", contextId: "peer-context" });
@@ -75,6 +76,58 @@ for (const owner of ["none", "base-only", "token-only"]) {
 		assert.equal(s.requests.filter((r) => r.path.startsWith("/owner/")).length, 0);
 	});
 }
+
+for (const owner of ["none", "base-only", "token-only"]) {
+	test(`push send rejects ${owner} owner config before contacting peer`, async (t) => {
+		const s = await setup(t, { owner });
+		const r = await s.cli(["send", "--to", "paired", "--text", "hello", "--push"]);
+		assert.equal(r.status, 1);
+		assert.equal(r.stdout, "");
+		assert.match(r.stderr, /--push needs A2A_BASE_URL and A2A_OWNER_TOKEN/);
+		assert.equal(s.requests.length, 0, "reject before peer discovery or delivery");
+	});
+}
+
+for (const fail of ["all", "network", "/owner/outbound"]) {
+	test(`push send preserves delivery and warns authentication is unavailable (${fail})`, async (t) => {
+		const s = await setup(t, { owner: "full", fail });
+		const r = await s.cli(["send", "--to", "paired", "--text", "hello", "--push"]);
+		assert.equal(r.status, 0, r.stderr);
+		assert.deepEqual(JSON.parse(r.stdout), task);
+		assert.match(r.stderr, /push updates cannot authenticate/);
+		assert.match(r.stderr, /poll --to paired peer-task/);
+		assert.match(r.stderr, /do not resend/);
+		assert.doesNotMatch(r.stderr, /owner-test-token|paired-test-token/);
+		const sends = s.requests.filter((r) => r.path === "/rpc");
+		assert.equal(sends.length, 1);
+		assert.doesNotMatch(r.stderr, new RegExp(sends[0].body.params.configuration.pushNotificationConfig.token));
+	});
+}
+
+test("configured push send registers callback and persists its matching token", async (t) => {
+	const s = await setup(t, { owner: "full" });
+	const r = await s.cli(["send", "--to", "paired", "--text", "hello", "--push"]);
+	assert.equal(r.status, 0, r.stderr);
+	assert.deepEqual(JSON.parse(r.stdout), task);
+	assert.doesNotMatch(r.stderr, /warning:/);
+	const push = s.requests.find((r) => r.path === "/rpc").body.params.configuration.pushNotificationConfig;
+	assert.ok(push.token);
+	const saved = s.requests.find((r) => r.path === "/owner/outbound");
+	assert.equal(saved.auth, "Bearer owner-test-token");
+	assert.equal(saved.body.pushToken, push.token);
+	assert.deepEqual(saved.body.task, task);
+	assert.equal(push.url, new URL("/push", saved.body.endpoint).href);
+});
+
+test("push send can authenticate updates when only history persistence fails", async (t) => {
+	const s = await setup(t, { owner: "full", fail: "/owner/history" });
+	const r = await s.cli(["send", "--to", "paired", "--text", "hello", "--push"]);
+	assert.equal(r.status, 0, r.stderr);
+	assert.deepEqual(JSON.parse(r.stdout), task);
+	assert.match(r.stderr, /warning: could not log history/);
+	assert.doesNotMatch(r.stderr, /push updates cannot authenticate/);
+	assert.ok(s.requests.find((r) => r.path === "/owner/outbound").body.pushToken);
+});
 
 for (const fail of ["all", "network"]) {
 	for (const [kind, result] of [["task", task], ["message", message]]) {
