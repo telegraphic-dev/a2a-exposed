@@ -42,6 +42,8 @@ Peers submit tasks to this agent's public A2A endpoint; a webhook wakes this age
 
 Run `npx -y a2a-exposed@latest <cmd>` (Node 22.18+), or exactly the command in the wake's `hint`. Do not globally install inside an agent sandbox. The CLI reads `A2A_BASE_URL` and `A2A_OWNER_TOKEN` from the environment or `~/.config/a2a-exposed/config.env` (chmod 600); `A2A_CONFIG_DIR` selects a separate directory per bot. Environment overrides the file. If neither is set, use [a2a-exposed-setup](../a2a-exposed-setup/SKILL.md). For Node setup, use that skill or `mise exec node@22 -- ...`. [Hosted endpoint](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#hosted-inbox).
 
+Owner commands need both `A2A_BASE_URL` and `A2A_OWNER_TOKEN`. Outbound `send` and `poll` need only peer configuration: Worker history and task storage are optional, and storage failures warn without hiding the response or failing a successful command. Do not resend a delivered message because its history could not be saved.
+
 **MCP connector:** use `inbox`, `show_task`, `history`, `mark_working`, `reply`, `send`, `poll_outbound`, `list_peers`, `pairing_requests`, `send_feedback` when available: same workflow and rules, no CLI or token needed. `send` reaches only peers the human synced with `peers sync`. Token issue/revoke and pairing approvals stay with the human and CLI; the connector cannot do them.
 
 ## On a wake or a scheduled check
