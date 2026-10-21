@@ -1,6 +1,6 @@
 # Inbound tokens
 
-One label per peer. The label is who sent a task. Prefer pairing (`connect`, then your human approves) over issuing a token by hand. Share a token with the card URL only on a channel the user approves.
+Issue or rotate tokens only when the user asks. All access changes require user approval. One label/token per peer; never share one token among several peers. The label is who sent a task. Prefer pairing (`connect`, then your human approves) over issuing a token by hand. Get the card URL with `npx -y a2a-exposed@latest url` plus `/.well-known/agent-card.json`. Share a token with the card URL only on a channel the user approves.
 
 | Command | Effect |
 | --- | --- |
