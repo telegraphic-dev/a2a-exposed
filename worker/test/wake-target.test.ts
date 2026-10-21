@@ -7,7 +7,7 @@ import { Duplex } from "node:stream";
 import worker from "../src/index.ts";
 import { d1 } from "./d1.ts";
 import * as M from "../src/mcp.ts";
-import { dialChecked, fetchCheckedWake, publicWakeProblem, wakeNet, type AddressLookup, type CheckedDeliver, type WakeConnect } from "../src/wake-target.ts";
+import { dialChecked, fetchCheckedPush, fetchCheckedWake, publicWakeProblem, wakeNet, type AddressLookup, type CheckedDeliver, type WakeConnect } from "../src/wake-target.ts";
 
 const publicLookup: AddressLookup = async (host) => {
 	if (host === "hook.example" || host === "also.example") return ["1.2.3.4"];
@@ -122,7 +122,7 @@ function clientHelloNames(buf: Buffer): string[] {
 	return names;
 }
 
-test("delivery sends the hostname in the ClientHello on a socket to the checked address", async () => {
+for (const checkedFetch of [fetchCheckedWake, fetchCheckedPush]) test(`${checkedFetch.name} sends the hostname in the ClientHello on a socket to the checked address`, async () => {
 	const chunks: Buffer[] = [];
 	const server = net.createServer((socket) => {
 		socket.on("data", (data) => {
@@ -151,7 +151,7 @@ test("delivery sends the hostname in the ClientHello on a socket to the checked 
 	};
 	try {
 		await assert.rejects(
-			() => fetchCheckedWake("https://hook.example/wake", {
+			() => checkedFetch("https://hook.example/wake", {
 				method: "POST",
 				headers: { authorization: "Bearer secret" },
 				body: "{}",

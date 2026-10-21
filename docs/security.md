@@ -54,7 +54,13 @@ Whoever holds the owner token can still issue peer tokens. Whoever controls the 
 
 ## Push notifications
 
-HTTPS only. Private and loopback targets are refused. Each push uses a per-task token, stored hashed.
+Peer-registered callbacks always use HTTPS, with no URL credentials, independently of `WAKE_TARGET_POLICY`. At delivery time the Worker resolves A and AAAA through DNS-over-HTTPS and refuses the whole answer if any address is private or reserved (including loopback, link-local metadata, CGNAT and IPv4-mapped private IPv6). Failed or empty lookups fail closed. Registration's URL check alone is not the delivery check.
+
+Delivery reuses the public-https wake transport: a raw socket opens to the checked IP, while `tunnelfetch` performs TLS with the callback hostname for SNI and certificate verification. There is no second hostname fetch or unpinned fallback. Every 3xx response is a failure, including same-origin redirects and responses without `Location`; callback tokens and authorization headers are never forwarded to another hop. Transport exception details are not returned or written to push history.
+
+**Platform limitation:** Workers [block raw TCP sockets to Cloudflare IP ranges](https://developers.cloudflare.com/workers/runtime-apis/tcp-sockets/#considerations), including `*.workers.dev` and Cloudflare-proxied callback hosts, and prohibit TCP loops back to the calling Worker. These callbacks fail closed rather than falling back to ordinary fetch. Use a public HTTPS callback reachable by outbound TCP without a Cloudflare proxy, or poll `GetTask`. This limitation is not removed by a public DNS answer. Wake policy and wake redirect behavior are unchanged.
+
+Incoming notifications at `/push` require a per-task token whose hash is stored locally. Peer-registered outgoing callback tokens and authentication credentials are retained for delivery; they are not included in public task payloads or owner task previews.
 
 ## Your account
 
