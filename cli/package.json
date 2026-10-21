@@ -15,7 +15,8 @@
 	],
 	"scripts": {
 		"prepack": "node scripts/sync-worker.mjs && node -e \"require('fs').copyFileSync('../LICENSE','LICENSE')\"",
-		"test": "node --test test/*.test.mjs"
+		"test": "node --test test/*.test.mjs",
+		"test:coverage": "node --experimental-test-coverage --test-coverage-include=lib/** --test-reporter=spec --test-reporter=lcov --test-reporter-destination=stdout --test-reporter-destination=../coverage/cli.lcov --test test/*.test.mjs"
 	},
 	"engines": {
 		"node": ">=22.18"

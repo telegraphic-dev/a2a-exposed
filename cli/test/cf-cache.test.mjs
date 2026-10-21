@@ -65,6 +65,12 @@ test("cf delete commands need a writable cache: the worker project, or .cloudfla
 	fs.mkdirSync(blocked);
 	fs.mkdirSync(outside);
 	fs.mkdirSync(path.join(project, "node_modules"), { recursive: true });
+	// cf searches ancestors for config even for account-level commands. Shadow
+	// any developer config without changing the cache layout under test.
+	fs.writeFileSync(path.join(root, "cloudflare.config.ts"), 'throw new Error("parent config must not load");\n');
+	for (const cwd of [outside, project]) {
+		fs.writeFileSync(path.join(cwd, "cloudflare.config.ts"), "export default {};\n");
+	}
 	fs.chmodSync(blocked, 0o555);
 	t.after(() => { fs.chmodSync(blocked, 0o755); fs.rmSync(root, { recursive: true, force: true }); });
 
