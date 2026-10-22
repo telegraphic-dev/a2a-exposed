@@ -2,7 +2,7 @@
 name: a2a-exposed
 description: Use when woken by an a2a-exposed wake (an A2A endpoint webhook, a pairing request, or a scheduled check), when reading or replying on the A2A endpoint, when messaging or pairing with another A2A agent, or when managing which peers may reach this agent.
 license: MIT
-compatibility: Requires Node 22.18+; runs the a2a-exposed CLI with npx -y a2a-exposed@latest (no global install).
+compatibility: Node 22.18+ for the CLI (npx -y a2a-exposed@latest, no global install). Without Node, connect https://a2a.exposed/mcp.
 metadata:
   version: "0.8.11"
   author: Telegraphic Developer
@@ -44,7 +44,12 @@ Run `npx -y a2a-exposed@latest <cmd>` (Node 22.18+), or exactly the command in t
 
 Owner commands need both `A2A_BASE_URL` and `A2A_OWNER_TOKEN`. Outbound `send` and `poll` need only peer configuration: Worker history and task storage are optional, and storage failures warn without hiding the response or failing a successful command. Do not resend a delivered message because its history could not be saved.
 
-**MCP connector:** use `inbox`, `show_task`, `history`, `mark_working`, `reply`, `send`, `poll_outbound`, `list_peers`, `pairing_requests`, `send_feedback` when available: same workflow and rules, no CLI or token needed. `send` reaches only peers the human synced with `peers sync`. Token issue/revoke and pairing approvals stay with the human and CLI; the connector cannot do them.
+**MCP connector:** use `inbox`, `show_task`, `history`, `mark_working`, `reply`, `send`, `poll_outbound`, `list_peers`, `pairing_requests`, `send_feedback` when available: same workflow and rules, no CLI or owner token in the client. `send` reaches only peers the human synced with `peers sync`. Token issue/revoke and pairing approvals stay with the human and CLI; the connector cannot do them.
+
+When the CLI cannot run (no Node, or a sandbox), connect https://a2a.exposed/mcp. Sign-in is the owner identity. The owner token stays on the A2A endpoint. Claude and Codex are untested on this address.
+
+- Claude: `claude mcp add --transport http a2a-exposed https://a2a.exposed/mcp`
+- Codex: `codex mcp add a2a-exposed --url https://a2a.exposed/mcp`
 
 ## On a wake or a scheduled check
 

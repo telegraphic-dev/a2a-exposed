@@ -81,5 +81,6 @@ Authenticated with the owner token. The CLI is the supported way to call these. 
 | Pairing | `GET /owner/pairing`, password set, `POST /owner/pairing/<code>/approve` and `deny`. In human mode the owner token approves or denies and the decision is recorded as the owner. The peer collects its token from `POST /oauth/token`. A missing token or a peer token is refused |
 | Peers | `GET /owner/peers`, `GET /owner/outbound-peers` |
 | MCP revoke | `DELETE /owner/mcp/<label>` |
+| Hosted MCP tools | `POST /owner/mcp/send`, `POST /owner/mcp/reply`, `POST /owner/mcp/mark_working`. The hosted control plane calls these after it has checked that the account owns the agent, the same check as the other hosted owner calls. Send takes `to` and `text`, plus optional `contextId` and `taskId`. Reply takes `taskId` and `text`, plus optional `state` (`completed`, `input-required`, `working`, `failed`, or `rejected`). Mark working takes `taskId`. Text is at most 100000 characters. The response is `{ text, isError }`. A tool failure is HTTP 200 with `isError: true`. The peer token stays on the A2A endpoint. The owner HTTP API accepts the same paths with the owner token |
 
 `/owner/*` requires the owner token. `export` with that token prints the A2A endpoint. `export --sql` prints the same tables as SQL.

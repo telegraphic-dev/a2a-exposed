@@ -492,6 +492,43 @@ test("tools: send / poll_outbound through synced peers; each peer's token stays 
 	assert.equal((await s.owner("GET", "/owner/outbound-peers")).data.length, 1);
 });
 
+test("POST /owner/mcp/send, reply, and mark_working use the owner token", async (t) => {
+	const s = setup(); t.after(s.restore);
+	const a = await s.connect();
+	await s.owner("PUT", "/owner/outbound-peers/alpha", { url: "https://alpha.example.org", token: "tok-alpha" });
+	const noAuth = await s.call("POST", "/owner/mcp/send", { json: { to: "alpha", text: "hi" } });
+	assert.equal(noAuth.status, 401);
+	const mcpTok = await s.call("POST", "/owner/mcp/send", { json: { to: "alpha", text: "hi" }, headers: { authorization: `Bearer ${a.access_token}` } });
+	assert.equal(mcpTok.status, 401);
+	const peerTok = "a2aow_" + "c".repeat(43);
+	const peer = await s.call("POST", "/owner/mcp/send", { json: { to: "alpha", text: "hi" }, headers: { authorization: `Bearer ${peerTok}` } });
+	assert.equal(peer.status, 401);
+	assert.equal(s.peerCalls.length, 0, "a refused caller does not send");
+	const extra = await s.owner("POST", "/owner/mcp/send", { to: "alpha", text: "hi", token: "tok-alpha" });
+	assert.equal(extra.status, 400);
+	assert.equal(s.peerCalls.length, 0, "a token field is not a send");
+	const sent = await s.owner("POST", "/owner/mcp/send", { to: "alpha", text: "status?", contextId: "ctx-owner" });
+	assert.equal(sent.status, 200, sent.text);
+	assert.equal(sent.data.isError, false);
+	assert.match(sent.data.text, /task pt-alpha/);
+	assert.equal(sent.text.includes("tok-alpha"), false);
+	assert.equal(s.peerCalls.at(-1)!.auth, "Bearer tok-alpha");
+	assert.equal(s.peerCalls.at(-1)!.body.params.message.contextId, "ctx-owner");
+
+	const inbound = await s.inbound("barry", "please reply");
+	const taskId = inbound.task.id as string;
+	const working = await s.owner("POST", "/owner/mcp/mark_working", { taskId });
+	assert.equal(working.status, 200, working.text);
+	assert.equal(working.data.isError, false);
+	assert.match(working.data.text, new RegExp(`Task ${taskId} is now working`));
+	const replied = await s.owner("POST", "/owner/mcp/reply", { taskId, text: "done", state: "completed" });
+	assert.equal(replied.status, 200, replied.text);
+	assert.equal(replied.data.isError, false);
+	assert.equal((await s.owner("GET", `/owner/tasks/${taskId}`)).data.status.state, "completed");
+	const mcpReply = await s.call("POST", "/owner/mcp/reply", { json: { taskId, text: "no" }, headers: { authorization: `Bearer ${a.access_token}` } });
+	assert.equal(mcpReply.status, 401);
+});
+
 test("peer token encryption round-trips and is bound to the alias", async () => {
 	const sealed = await M.sealPeerToken("owner", "alpha", "secret");
 	assert.equal(await M.openPeerToken("owner", "alpha", sealed), "secret");

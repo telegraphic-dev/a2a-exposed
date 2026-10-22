@@ -10,7 +10,7 @@ import { renderWake, redact, cloudflareErrorHint, wakeUrlIsTunnelHost, defaultDe
 import { fetchCheckedWake } from "./wake-target.ts";
 import * as P from "./pairing.ts";
 import * as M from "./mcp.ts";
-import { accountIdOf, DASHBOARD_ACTOR_HEADER, matchOwnerRpc, ownerResponseLeaks, scrubOwnerClaims, type OwnerRpcRequest, type OwnerRpcResult } from "./owner-rpc.ts";
+import { accountIdOf, DASHBOARD_ACTOR_HEADER, matchOwnerRpc, ownerResponseLeaks, ownerRpcBody, scrubOwnerClaims, type OwnerRpcRequest, type OwnerRpcResult } from "./owner-rpc.ts";
 import { pairingAgent, pairingEventTarget, postPairingEvent } from "./pairing-events.ts";
 import { publicManageUrl, resolveTenant, type TenantContext, type WorkerBindings } from "./tenancy.ts";
 import { exportRows, redactExport, REDACTED_SQL_SKIP, scrubSecretText, toSql } from "./export.ts";
@@ -1060,6 +1060,17 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 		}
 	}
 	if (seg[0] === "pairing") return await ownerPairing(req, ctx, ectx, m, seg.slice(1), body, trusted);
+	if (seg[0] === "mcp" && seg[1] && !seg[2] && m === "POST" && (seg[1] === "send" || seg[1] === "reply" || seg[1] === "mark_working")) {
+		const checked = ownerRpcBody(`POST /owner/mcp/${seg[1]}`, await body());
+		if (!checked.ok) return json({ error: checked.error }, 400);
+		try {
+			const text = await runTool(ctx, ectx, seg[1], checked.value);
+			return json({ text, isError: false });
+		} catch (e: any) {
+			if (e instanceof ToolError) return json({ text: `Error: ${e.message}`, isError: true });
+			throw e;
+		}
+	}
 	if (seg[0] === "mcp" && !seg[1] && m === "GET") {
 		const rows = await ctx.DB.prepare("SELECT label, client_id, client_name, redirect_host, scope, created_at, last_used_at, revoked_at, refresh_expires_ms FROM mcp_grants ORDER BY created_at").all();
 		return json({ enabled: mcpOn(ctx), url: oauthUrls(ctx).mcp, grants: (rows.results as Json[]).map((r) => ({ ...r, refresh_expires_ms: undefined,
@@ -2282,7 +2293,8 @@ export async function runOwnerRpc(ctx: TenantContext, ectx: ExecutionContext, in
 	}
 	const matched = matchOwnerRpc(raw?.method, raw?.path, raw?.query);
 	if (!matched.ok) return refuse(matched.reason === "query" ? 400 : 404, matched.reason === "query" ? "query is not allowed" : "not found", matched.reason);
-	if (raw?.body !== undefined && raw.body !== null) return refuse(400, "this call takes no body", "body");
+	const parsedBody = ownerRpcBody(matched.route.name, raw?.body);
+	if (!parsedBody.ok) return refuse(400, parsedBody.error, "body");
 	const actor = (raw as { actor?: unknown } | null)?.actor;
 	if (actor !== undefined && actor !== "human") return refuse(400, "actor is invalid", "actor");
 	const pairingDecision = matched.route.name === "POST /owner/pairing/:code/approve" || matched.route.name === "POST /owner/pairing/:code/deny";
@@ -2297,7 +2309,11 @@ export async function runOwnerRpc(ctx: TenantContext, ectx: ExecutionContext, in
 	const url = new URL(origin + matched.route.path + search);
 	const headers = new Headers({ "content-type": "application/json" });
 	if (actor === "human") headers.set(DASHBOARD_ACTOR_HEADER, "human");
-	const req = new Request(url, { method: matched.route.method, headers });
+	const req = new Request(url, {
+		method: matched.route.method,
+		headers,
+		body: parsedBody.value === undefined ? undefined : JSON.stringify(parsedBody.value),
+	});
 	let res: Response;
 	try { res = await handleOwner(req, ctx, ectx, url.pathname, url, true); }
 	catch (e: any) {
