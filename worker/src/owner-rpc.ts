@@ -1,7 +1,9 @@
 // Hosted owner RPC allowlist. The caller has checked that the account owns the tenant.
 // This list is the only paths that call may run, and it is stricter than
 // the owner HTTP API: routes that mint a peer token, return a setup secret, or accept a plaintext peer
-// token are not here. GET /owner/export is here only because runOwnerRpc redacts it first. Self-host never calls this.
+// token are not here. GET /owner/export is here only because runOwnerRpc redacts it first.
+// POST /owner/mcp/send, reply, and mark_working take a checked argument object. A peer token is not one of those arguments.
+// Self-host never calls this.
 
 import { ID_RE } from "./a2a.ts";
 import { credentialIsMasked, previewHeaderPlain } from "./wake.ts";
@@ -39,7 +41,10 @@ export interface OwnerRpcRequest {
 	path: string;
 	/** Allowlisted query parameters only. */
 	query?: Record<string, string>;
-	/** Refused. The owner HTTP API is where a body is accepted. */
+	/**
+	 * Tool arguments for `POST /owner/mcp/send`, `POST /owner/mcp/reply`, and `POST /owner/mcp/mark_working`.
+	 * Any other call refuses a body.
+	 */
 	body?: unknown;
 	/**
 	 * Approve or deny after a recent sign-in.
@@ -141,6 +146,9 @@ const ROUTES: RouteDef[] = [
 	{ method: "POST", name: "POST /owner/pairing/:code/deny", take: (s) => s.length === 4 && s[1] === "pairing" && USER_CODE.test(s[2]!) && s[3] === "deny", search: noQuery, path: (s) => `/owner/pairing/${s[2]}/deny` },
 	{ method: "GET", name: "GET /owner/mcp", take: (s) => s.length === 2 && s[1] === "mcp", search: noQuery, path: () => "/owner/mcp" },
 	{ method: "DELETE", name: "DELETE /owner/mcp/:label", take: (s) => s.length === 3 && s[1] === "mcp" && MCP_LABEL.test(s[2]!), search: noQuery, path: (s) => `/owner/mcp/${s[2]}` },
+	{ method: "POST", name: "POST /owner/mcp/send", take: (s) => s.length === 3 && s[1] === "mcp" && s[2] === "send", search: noQuery, path: () => "/owner/mcp/send" },
+	{ method: "POST", name: "POST /owner/mcp/reply", take: (s) => s.length === 3 && s[1] === "mcp" && s[2] === "reply", search: noQuery, path: () => "/owner/mcp/reply" },
+	{ method: "POST", name: "POST /owner/mcp/mark_working", take: (s) => s.length === 3 && s[1] === "mcp" && s[2] === "mark_working", search: noQuery, path: () => "/owner/mcp/mark_working" },
 	{ method: "GET", name: "GET /owner/outbound-peers", take: (s) => s.length === 2 && s[1] === "outbound-peers", search: noQuery, path: () => "/owner/outbound-peers" },
 	{ method: "DELETE", name: "DELETE /owner/outbound-peers/:alias", take: (s) => s.length === 3 && s[1] === "outbound-peers" && ALIAS.test(s[2]!) && s[2] !== "." && s[2] !== "..", search: noQuery, path: (s) => `/owner/outbound-peers/${s[2]}` },
 	{ method: "GET", name: "GET /owner/facade", take: (s) => s.length === 2 && s[1] === "facade", search: noQuery, path: () => "/owner/facade" },
@@ -164,6 +172,63 @@ export function matchOwnerRpc(method: unknown, path: unknown, query: unknown): O
 	const search = def.search(q);
 	if (search === null) return { ok: false, reason: "query" };
 	return { ok: true, route: { method, path: def.path(seg), search, name: def.name } };
+}
+
+/** Send text cap. The owner HTTP body limit is 1 MiB; this keeps one argument inside that. */
+const TEXT_MAX = 100_000;
+const REPLY_STATES = new Set(["completed", "input-required", "working", "failed", "rejected"]);
+
+const MCP_ARGS: Record<string, { required: readonly string[]; optional: readonly string[] }> = {
+	"POST /owner/mcp/send": { required: ["to", "text"], optional: ["contextId", "taskId"] },
+	"POST /owner/mcp/reply": { required: ["taskId", "text"], optional: ["state"] },
+	"POST /owner/mcp/mark_working": { required: ["taskId"], optional: [] },
+};
+
+function mcpArgOk(key: string, value: string): string | null {
+	if (key === "to") return ALIAS.test(value) ? null : "to is invalid";
+	if (key === "text") {
+		if (!value.trim()) return "text is required";
+		if (value.length > TEXT_MAX) return "text is too long";
+		return null;
+	}
+	if (key === "taskId" || key === "contextId") return idOk(value) ? null : `${key} is invalid`;
+	if (key === "state") return REPLY_STATES.has(value) ? null : "state is invalid";
+	return "body is not allowed";
+}
+
+/**
+ * Body allowed on this owner RPC route.
+ * MCP send, reply, and mark_working receive a flat object of tool arguments.
+ * Every other route accepts only an absent body.
+ */
+export function ownerRpcBody(routeName: string, body: unknown): { ok: true; value?: Record<string, string> } | { ok: false; error: string } {
+	const spec = MCP_ARGS[routeName];
+	if (!spec) {
+		if (body !== undefined && body !== null) return { ok: false, error: "this call takes no body" };
+		return { ok: true };
+	}
+	if (body == null || typeof body !== "object" || Array.isArray(body)) return { ok: false, error: "body must be an object" };
+	const allowed = new Set([...spec.required, ...spec.optional]);
+	const keys = Object.keys(body);
+	if (keys.length > allowed.size || keys.some((key) => !allowed.has(key))) return { ok: false, error: "body is not allowed" };
+	const value: Record<string, string> = {};
+	for (const key of spec.required) {
+		const item = (body as Record<string, unknown>)[key];
+		if (item == null || item === "") return { ok: false, error: `${key} is required` };
+		if (typeof item !== "string") return { ok: false, error: `${key} is invalid` };
+		const why = mcpArgOk(key, item);
+		if (why) return { ok: false, error: why };
+		value[key] = item;
+	}
+	for (const key of spec.optional) {
+		if (!Object.prototype.hasOwnProperty.call(body, key)) continue;
+		const item = (body as Record<string, unknown>)[key];
+		if (typeof item !== "string" || !item) return { ok: false, error: `${key} is invalid` };
+		const why = mcpArgOk(key, item);
+		if (why) return { ok: false, error: why };
+		value[key] = item;
+	}
+	return { ok: true, value };
 }
 
 function stringLeaks(value: string, key: string | null): boolean {

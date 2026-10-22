@@ -1,7 +1,7 @@
 // Owner RPC allowlist and response filter. No Durable Object: the hosted test calls TenantStore.owner.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { accountIdOf, matchOwnerRpc, ownerResponseLeaks, scrubOwnerClaims } from "../src/owner-rpc.ts";
+import { accountIdOf, matchOwnerRpc, ownerResponseLeaks, ownerRpcBody, scrubOwnerClaims } from "../src/owner-rpc.ts";
 
 test("owner RPC allowlist is the management reads and the calls that do not return a secret", () => {
 	const ok = (method: string, path: string, query?: Record<string, string>) => {
@@ -22,6 +22,9 @@ test("owner RPC allowlist is the management reads and the calls that do not retu
 	assert.equal(ok("POST", "/owner/pairing/wdjb4827/deny")?.name, "POST /owner/pairing/:code/deny");
 	assert.equal(ok("GET", "/owner/mcp")?.name, "GET /owner/mcp");
 	assert.equal(ok("DELETE", "/owner/mcp/mcp-claude")?.path, "/owner/mcp/mcp-claude");
+	assert.equal(ok("POST", "/owner/mcp/send")?.name, "POST /owner/mcp/send");
+	assert.equal(ok("POST", "/owner/mcp/reply")?.path, "/owner/mcp/reply");
+	assert.equal(ok("POST", "/owner/mcp/mark_working")?.name, "POST /owner/mcp/mark_working");
 	assert.equal(ok("GET", "/owner/outbound-peers")?.name, "GET /owner/outbound-peers");
 	assert.equal(ok("DELETE", "/owner/outbound-peers/ada.bot")?.path, "/owner/outbound-peers/ada.bot");
 	assert.equal(ok("GET", "/owner/facade")?.name, "GET /owner/facade");
@@ -44,6 +47,9 @@ test("owner RPC allowlist is the management reads and the calls that do not retu
 	assert.deepEqual(refused("GET", "/owner/log", { n: "10" }), { ok: false, reason: "query" });
 	assert.deepEqual(refused("POST", "/owner/purge"), { ok: false, reason: "path" });
 	assert.deepEqual(refused("POST", "/owner/tasks/task-1/reply"), { ok: false, reason: "path" });
+	assert.deepEqual(refused("POST", "/owner/mcp/send", { to: "alpha" }), { ok: false, reason: "query" });
+	assert.deepEqual(refused("POST", "/owner/mcp/poll_outbound"), { ok: false, reason: "path" });
+	assert.deepEqual(refused("PUT", "/owner/mcp/send"), { ok: false, reason: "path" });
 	assert.deepEqual(refused("POST", "/owner/history"), { ok: false, reason: "path" });
 	assert.deepEqual(refused("GET", "/owner/peers/../export"), { ok: false, reason: "path" });
 	assert.deepEqual(refused("GET", "/owner/%2e%2e/peers"), { ok: false, reason: "path" });
@@ -56,6 +62,41 @@ test("owner RPC allowlist is the management reads and the calls that do not retu
 	assert.equal(accountIdOf("acct_carol"), "acct_carol");
 	assert.equal(accountIdOf("../acct"), null);
 	assert.equal(accountIdOf(""), null);
+});
+
+test("owner RPC accepts a tool-argument body only on send, reply, and mark_working", () => {
+	const absent = ownerRpcBody("GET /owner/peers", undefined);
+	assert.equal(absent.ok, true);
+	assert.equal(absent.ok && absent.value, undefined);
+	assert.equal(ownerRpcBody("GET /owner/peers", null).ok, true);
+	assert.deepEqual(ownerRpcBody("GET /owner/peers", { label: "bob" }), { ok: false, error: "this call takes no body" });
+	assert.deepEqual(ownerRpcBody("POST /owner/wake/test", {}), { ok: false, error: "this call takes no body" });
+
+	const sent = ownerRpcBody("POST /owner/mcp/send", { to: "alpha", text: "status?", contextId: "ctx-1" });
+	assert.deepEqual(sent, { ok: true, value: { to: "alpha", text: "status?", contextId: "ctx-1" } });
+	assert.deepEqual(ownerRpcBody("POST /owner/mcp/send", { to: "alpha", text: "status?", taskId: "task-1" }), {
+		ok: true, value: { to: "alpha", text: "status?", taskId: "task-1" },
+	});
+	assert.deepEqual(ownerRpcBody("POST /owner/mcp/reply", { taskId: "task-1", text: "done", state: "input-required" }), {
+		ok: true, value: { taskId: "task-1", text: "done", state: "input-required" },
+	});
+	assert.deepEqual(ownerRpcBody("POST /owner/mcp/mark_working", { taskId: "task-1" }), { ok: true, value: { taskId: "task-1" } });
+
+	assert.equal(ownerRpcBody("POST /owner/mcp/send", undefined).ok, false);
+	assert.equal(ownerRpcBody("POST /owner/mcp/send", null).ok, false);
+	assert.equal(ownerRpcBody("POST /owner/mcp/send", []).ok, false);
+	assert.equal(ownerRpcBody("POST /owner/mcp/send", "hi").ok, false);
+	assert.deepEqual(ownerRpcBody("POST /owner/mcp/send", {}), { ok: false, error: "to is required" });
+	assert.deepEqual(ownerRpcBody("POST /owner/mcp/send", { to: "alpha" }), { ok: false, error: "text is required" });
+	assert.deepEqual(ownerRpcBody("POST /owner/mcp/send", { to: "https://alpha.example", text: "hi" }), { ok: false, error: "to is invalid" });
+	assert.deepEqual(ownerRpcBody("POST /owner/mcp/send", { to: "alpha", text: "   " }), { ok: false, error: "text is required" });
+	assert.deepEqual(ownerRpcBody("POST /owner/mcp/send", { to: "alpha", text: "x".repeat(100_001) }), { ok: false, error: "text is too long" });
+	assert.deepEqual(ownerRpcBody("POST /owner/mcp/send", { to: "alpha", text: "hi", token: "tok-alpha" }), { ok: false, error: "body is not allowed" });
+	assert.deepEqual(ownerRpcBody("POST /owner/mcp/send", { to: "alpha", text: "hi", url: "https://evil.example" }), { ok: false, error: "body is not allowed" });
+	assert.deepEqual(ownerRpcBody("POST /owner/mcp/reply", { taskId: "task-1", text: "done", state: "canceled" }), { ok: false, error: "state is invalid" });
+	assert.deepEqual(ownerRpcBody("POST /owner/mcp/reply", { taskId: "task-1", text: "done", force: true }), { ok: false, error: "body is not allowed" });
+	assert.deepEqual(ownerRpcBody("POST /owner/mcp/mark_working", { taskId: ".." }), { ok: false, error: "taskId is invalid" });
+	assert.deepEqual(ownerRpcBody("POST /owner/mcp/mark_working", { taskId: "task-1", text: "no" }), { ok: false, error: "body is not allowed" });
 });
 
 test("owner RPC withholds peer tokens and decrypted secrets", () => {

@@ -42,6 +42,8 @@ A wake carries metadata, a hint command, and at most a 300-character preview. `o
 
 MCP access tokens (`a2amcp_`) and refresh tokens are stored hashed, separate from peer tokens and the owner token. They are accepted only in the `Authorization` header. The tools reach `inbox`, reply, send, read-only listings, and `send_feedback`. They cannot mint peer tokens or approve pairing. Registration and consent rules are in [MCP](mcp.md).
 
+The hosted connector at https://a2a.exposed/mcp signs in as the owner. The owner token stays on the A2A endpoint. Send, reply, and mark working from that connector run as an owner call on the A2A endpoint. The peer token stays there. Claude and Codex are untested on this address.
+
 ## Façade
 
 The upstream sits behind two locks: Cloudflare Access (only the Worker's service token passes the tunnel hostname) and the agent's own `UPSTREAM_TOKEN`. Peers never see or send the upstream credential. They cannot reach each other's tasks or contexts. They cannot make the upstream call out: push configs are refused (`-32003`).

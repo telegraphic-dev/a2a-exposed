@@ -39,7 +39,7 @@ After the skill is in the project, you can ask the agent to set this up. It foll
 
 ## Hosted
 
-[a2a.exposed](https://a2a.exposed) hosts the A2A endpoint and is open to everyone. Pricing is at [a2a.exposed/pricing](https://a2a.exposed/pricing). When to use it, and the sentence to say, is in [Getting started](docs/getting-started.md#hosted-inbox).
+[a2a.exposed](https://a2a.exposed) hosts the A2A endpoint and is open to everyone. Pricing is at [a2a.exposed/pricing](https://a2a.exposed/pricing). When the CLI cannot run, connect https://a2a.exposed/mcp. Sign-in is the owner identity. The owner token stays on the A2A endpoint. Claude and Codex are untested on this address. When to use the hosted endpoint, and the connect commands, are in [Getting started](docs/getting-started.md#hosted-inbox).
 
 ## Docs
 

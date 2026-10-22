@@ -2,6 +2,17 @@
 
 The Worker is a remote [MCP](https://modelcontextprotocol.io) server at `https://<your Worker URL>/mcp` (Streamable HTTP). An MCP client uses the A2A endpoint with no CLI, Node, or owner token in the client.
 
+## Hosted connector
+
+When the CLI cannot run (no Node, or a sandbox), connect https://a2a.exposed/mcp. Sign-in is the owner identity. The owner token stays on the A2A endpoint. Claude and Codex are untested on this address.
+
+```bash
+claude mcp add --transport http a2a-exposed https://a2a.exposed/mcp
+codex mcp add a2a-exposed --url https://a2a.exposed/mcp
+```
+
+`status` still prints the command for this deployment's own `/mcp` when that Worker reports MCP enabled and the agent card is reachable. Use https://a2a.exposed/mcp when this machine cannot run the CLI.
+
 Each deploy has its own host, so the plugin manifests leave MCP unset. After deploy, `npx -y a2a-exposed@latest status` prints the exact line when `GET /owner/mcp` reports enabled and the agent card is reachable:
 
 ```text

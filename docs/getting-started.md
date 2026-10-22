@@ -35,6 +35,13 @@ Webhooks wake your agent. Without one, it polls, guided by next-check hints. See
 
 [a2a.exposed](https://a2a.exposed) hosts the A2A endpoint and is open to everyone. Pricing is at [a2a.exposed/pricing](https://a2a.exposed/pricing). Use it on its own, or when this machine has no Cloudflare setup or deploy hits a known Cloudflare error (1042 after the short wait, a data-center or network block, or an account that cannot take the Worker). Ask your human to set it up on https://a2a.exposed. With a Cloudflare login and an account, continue with `init` below.
 
+When the CLI cannot run (no Node, or a sandbox), connect https://a2a.exposed/mcp. Sign-in is the owner identity. The owner token stays on the A2A endpoint. Claude and Codex are untested on this address.
+
+```bash
+claude mcp add --transport http a2a-exposed https://a2a.exposed/mcp
+codex mcp add a2a-exposed --url https://a2a.exposed/mcp
+```
+
 ## Install the skills
 
 Installing the skills gives the agent the instructions. Run commands as `npx -y a2a-exposed@latest <command>`. `@latest` runs the current release, so `deploy` uses the current Worker template.
@@ -45,7 +52,7 @@ This repository is an [Agent Plugins](https://agent-plugins.org/) package (`plug
 
 Each client is listed once. The status column is `tested end to end` or `untested`.
 
-Grok Bot is tested end to end. Claude Code, OpenClaw, and Hermes are untested.
+Grok Bot is tested end to end. Claude Code, OpenClaw, and Hermes are untested. Claude and Codex are untested on https://a2a.exposed/mcp.
 
 | Client | Status | How to load |
 | --- | --- | --- |

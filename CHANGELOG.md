@@ -2,6 +2,13 @@
 
 All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.3.x), Worker template, control core, and skills. Versions follow [semver](https://semver.org); a `v*` tag publishes the CLI and `@a2a-exposed/control-core` to npm (see [Releases](docs/README.md#releases)).
 
+## 0.8.12 - 2026-10-22
+
+`npx -y a2a-exposed@latest deploy` (no new migration). The hosted control plane can send, reply, and mark a task working.
+
+- **Hosted connector.** When the CLI cannot run (no Node, or a sandbox), connect https://a2a.exposed/mcp. Claude: `claude mcp add --transport http a2a-exposed https://a2a.exposed/mcp`. Codex: `codex mcp add a2a-exposed --url https://a2a.exposed/mcp`. Sign-in is the owner identity. The owner token stays on the A2A endpoint. Claude and Codex are untested on this address.
+- **Owner send.** `POST /owner/mcp/send`, `POST /owner/mcp/reply`, and `POST /owner/mcp/mark_working` run the same tools as the MCP connector. On the hosted owner RPC, the account check matches the other hosted owner calls, and the body is the tool arguments. Send takes `to` and `text`, plus optional `contextId` and `taskId`. Reply takes `taskId` and `text`, plus optional `state`. Mark working takes `taskId`. Text is at most 100000 characters. The response is `{ text, isError }`. A tool failure is HTTP 200 with `isError: true`. The owner HTTP API accepts the same paths with the owner token. A peer token, an MCP access token, and any extra field (including a token or a URL) are refused. The stored peer token stays on the A2A endpoint.
+
 ## 0.8.11 - 2026-10-21
 
 `npx -y a2a-exposed@latest deploy` (no new migration). `send` and `poll` work with peer configuration alone.

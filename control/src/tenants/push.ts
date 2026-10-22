@@ -27,6 +27,11 @@ export interface OwnerCall {
 	path: string;
 	/** Allowlisted query parameters only. */
 	query?: Record<string, string>;
+	/**
+	 * Tool arguments for `POST /owner/mcp/send`, `POST /owner/mcp/reply`, and `POST /owner/mcp/mark_working`.
+	 * Any other call refuses a body.
+	 */
+	body?: unknown;
 	/** Approve or deny after a recent sign-in. */
 	actor?: "human";
 }
