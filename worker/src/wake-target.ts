@@ -87,7 +87,7 @@ export async function lookupAddresses(host: string, signal?: AbortSignal): Promi
 /**
  * Why this URL must not be requested under public-https. Empty means it may be requested.
  * Names are resolved. Every returned address must be a public unicast address: private, loopback,
- * link-local (including metadata), CGNAT, multicast, and documentation ranges are refused.
+ * link-local (including metadata), CGNAT, multicast, benchmarking, Teredo, 6to4, and documentation ranges are refused.
  * A lookup that cannot be completed is refused.
  */
 export async function publicWakeProblem(url: string, lookup: AddressLookup = lookupAddresses): Promise<string> {

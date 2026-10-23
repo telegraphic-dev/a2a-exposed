@@ -80,8 +80,58 @@ export function cimdDocument(id: string, doc: any): { client_name: string; redir
 }
 export const CIMD = { maxBytes: 5120, timeoutMs: 5000, defaultTtlS: 3600, minTtlS: 60, maxTtlS: 86400, fetchesPerIpPerHour: 30, dohUrl: "https://cloudflare-dns.com/dns-query" };
 
-/** True for an IP address that is fine to fetch from: not private, loopback, link-local, CGNAT, unspecified, benchmark,
- *  documentation, multicast or reserved (IPv4 or IPv6, including IPv4-mapped / NAT64 forms). Not an IP: false. */
+/** More-specific allocations inside 2001::/23 whose IANA "Globally Reachable" flag is True (footnote 1). */
+const V6_REACHABLE = ["2001:1::1/128", "2001:1::2/128", "2001:1::3/128", "2001:3::/32", "2001:4:112::/48", "2001:20::/28", "2001:30::/28"];
+/** Blocks inside 2000::/3 that are not globally reachable. 2001::/23 covers Teredo, benchmarking, and deprecated ORCHID. */
+const V6_UNREACHABLE = ["2001::/23", "2001:db8::/32", "2002::/16", "3fff::/20"];
+
+/** Sixteen bytes, or null when `h` is not one IPv6 address (dotted tail allowed). */
+function ipv6Bytes(h: string): Uint8Array | null {
+	let s = h;
+	const tail = /^(.*:)(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(s);
+	if (tail) {
+		const o = tail.slice(2).map(Number);
+		if (o.some((n) => n > 255)) return null;
+		s = `${tail[1]}${((o[0] << 8) | o[1]).toString(16)}:${((o[2] << 8) | o[3]).toString(16)}`;
+	}
+	if (s.includes(":::") || (s.includes("::") && s.indexOf("::") !== s.lastIndexOf("::"))) return null;
+	const compressed = s.includes("::");
+	const [head, rest] = compressed ? s.split("::") : [s, ""];
+	const left = head ? head.split(":") : [];
+	const right = compressed && rest ? rest.split(":") : [];
+	if (!compressed && left.length !== 8) return null;
+	if (compressed && left.length + right.length > 7) return null;
+	const groups = compressed ? [...left, ...Array(8 - left.length - right.length).fill("0"), ...right] : left;
+	if (groups.length !== 8 || groups.some((g) => !/^[0-9a-f]{1,4}$/.test(g))) return null;
+	const out = new Uint8Array(16);
+	groups.forEach((g, i) => {
+		const n = parseInt(g, 16);
+		out[i * 2] = n >> 8;
+		out[i * 2 + 1] = n & 0xff;
+	});
+	return out;
+}
+
+/** True when `addr` is inside `block` (`addr/bits`). */
+function v6Prefix(addr: Uint8Array, block: string): boolean {
+	const slash = block.lastIndexOf("/");
+	const net = ipv6Bytes(block.slice(0, slash));
+	const bits = Number(block.slice(slash + 1));
+	if (!net || !Number.isInteger(bits) || bits < 0 || bits > 128) return false;
+	let left = bits;
+	for (let i = 0; i < 16 && left > 0; i++) {
+		const take = Math.min(8, left);
+		const mask = take === 8 ? 0xff : (0xff << (8 - take)) & 0xff;
+		if ((addr[i] & mask) !== (net[i] & mask)) return false;
+		left -= take;
+	}
+	return true;
+}
+
+/** True for an IP address that is fine to fetch from: a public IPv4 address, or a parsed IPv6 address in global
+ *  unicast (2000::/3) outside the IANA special-purpose blocks that are not globally reachable. Not an IP: false.
+ *  Private, loopback, link-local, CGNAT, and unspecified addresses are refused, including IPv4 embedded in IPv6.
+ *  IPv4-mapped and NAT64 sit outside 2000::/3, so they are refused too. */
 export function isPublicIp(ip: string): boolean {
 	const h = ip.toLowerCase().replace(/^\[|\]$/g, "");
 	const v4 = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
@@ -92,11 +142,12 @@ export function isPublicIp(ip: string): boolean {
 		return !(a >= 224 || (a === 192 && b === 0 && (c === 0 || c === 2)) || (a === 198 && (b === 18 || b === 19)) ||
 			(a === 198 && b === 51 && c === 100) || (a === 203 && b === 0 && c === 113) || (a === 192 && b === 88 && c === 99));
 	}
-	if (!h.includes(":") || !/^[0-9a-f:.]+$/.test(h)) return false;
+	if (!h.includes(":")) return false;
 	if (isPrivateHost(h)) return false;
-	// only global unicast (2000::/3); within it, documentation and 6to4/Teredo (embed arbitrary IPv4) are refused
-	if (!/^[23][0-9a-f]{0,3}:/.test(h)) return false;
-	return !/^(2001:db8:|2001:0?db8:|2002:|2001:0{0,4}:|3fff:)/.test(h);
+	const bytes = ipv6Bytes(h);
+	if (!bytes || (bytes[0] & 0xe0) !== 0x20) return false;
+	if (V6_REACHABLE.some((b) => v6Prefix(bytes, b))) return true;
+	return !V6_UNREACHABLE.some((b) => v6Prefix(bytes, b));
 }
 
 export const ACCESS_TTL_S = 3600;
