@@ -434,13 +434,39 @@ async function deployAndLearn(dir, secrets, o) {
  * whoami before npm install. A previous install has node_modules/.bin/cf.
  * A fresh init does not: `npx cf auth login` does not put `cf` on PATH, so this check uses `npx --yes cf`.
  */
-function cfLoginJson(dir) {
+function cfSpawn(dir, args, { allowFail = false } = {}) {
 	const local = path.join(dir, "node_modules", ".bin", "cf");
-	const args = cfArgs(["auth", "whoami"]);
-	const r = fs.existsSync(local)
-		? run(local, args, { cwd: dir, capture: true })
-		: run("npx", ["--yes", "cf", ...args], { cwd: dir, capture: true });
+	const full = cfArgs(args);
+	return fs.existsSync(local)
+		? run(local, full, { cwd: dir, capture: true, allowFail })
+		: run("npx", ["--yes", "cf", ...full], { cwd: dir, capture: true, allowFail });
+}
+
+function cfLoginJson(dir) {
+	const r = cfSpawn(dir, ["auth", "whoami"]);
 	try { return JSON.parse(r.stdout); } catch { die("unexpected output from cf auth whoami"); }
+}
+
+function normalizeAccounts(raw) {
+	const list = Array.isArray(raw) ? raw : (raw && typeof raw === "object" && Array.isArray(raw.result) ? raw.result : []);
+	return list.filter((a) => a && typeof a.id === "string" && a.id).map((a) => ({ id: a.id, name: typeof a.name === "string" && a.name ? a.name : a.id }));
+}
+
+/** `cf accounts list` (GET /accounts). whoami intersects memberships and can return [] for a logged-in profile. */
+function accountsFromList(dir) {
+	const all = [];
+	const seen = new Set();
+	for (let page = 1; page <= 20; page++) {
+		const r = cfSpawn(dir, ["accounts", "list", "--page", String(page), "--per-page", "50"], { allowFail: true });
+		if (!r || r.status !== 0) return page === 1 ? [] : all;
+		let data;
+		try { data = JSON.parse(r.stdout); } catch { return page === 1 ? [] : all; }
+		if (data && typeof data === "object" && !Array.isArray(data) && Array.isArray(data.result)) data = data.result;
+		if (!Array.isArray(data)) return page === 1 ? [] : all;
+		for (const a of normalizeAccounts(data)) if (!seen.has(a.id)) { seen.add(a.id); all.push(a); }
+		if (data.length < 50) break;
+	}
+	return all;
 }
 
 /** Cloudflare login, before init installs packages. Dies with the same advice as a later cf failure. */
@@ -454,7 +480,8 @@ function requireCfLogin(dir) {
 		: prof
 		? `cf profile "${prof}" is not logged in: run \`npx cf auth create ${prof} --no-browser\`, open the printed URL, enter the code, then re-run init`
 		: "not logged in to Cloudflare: run `npx cf auth login --no-browser`, open the printed URL, enter the code, then re-run init") + `\n${LOGIN_403_HELP}`);
-	const accts = who.accounts || [];
+	let accts = normalizeAccounts(who.accounts);
+	if (!accts.length && prof) accts = accountsFromList(dir);
 	if (!C.get("CLOUDFLARE_ACCOUNT_ID")) {
 		if (!accts.length && process.env.CLOUDFLARE_API_TOKEN)
 			die("the API token can't list accounts: add the permission User -> Memberships -> Read (or pass --account-id <id> / export CLOUDFLARE_ACCOUNT_ID; the id is in the dashboard URL)");

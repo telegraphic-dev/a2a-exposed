@@ -59,7 +59,11 @@ prof=""; for a in "$@"; do [ "$prev" = --profile ] && prof=$a; prev=$a; done
 echo "$1 $2 profile=$prof sub=\${A2A_WORKERS_DEV_SUBDOMAIN:-} host=\${A2A_HOSTNAME:-} retired=\${A2A_RETIRED_HOSTNAMES:-}" >> "$log"
 [ "$1" = deploy ] && echo "public=\${A2A_PUBLIC_URL:-}\${PUBLIC_URL:-}" >> "$STUB_DIR/deploy-env.log"
 case "$1 $2" in
-  "auth whoami") echo '{"authenticated":true,"accounts":[{"id":"acc123","name":"Test"}]}';;
+  "auth whoami")
+    if [ -n "$prof" ] && [ -n "\${STUB_PROFILE_WHOAMI:-}" ]; then printf '%s\\n' "$STUB_PROFILE_WHOAMI"
+    else echo '{"authenticated":true,"accounts":[{"id":"acc123","name":"Test"}]}'; fi
+    ;;
+  "accounts list") printf '%s\\n' "\${STUB_ACCOUNTS_LIST:-[]}";;
   "d1 list") echo '[{"name":"wdtest","uuid":"d1-uuid"}]';;
   "d1 migrations")
     echo '[]'
@@ -209,12 +213,50 @@ test("--cf-profile is saved and passed as --profile to every cf call", async (t)
 	const lines = s.calls();
 	assert.ok(lines.every((l) => l.includes("profile=bot-acct")), lines.join("\n"));
 	assert.ok(lines.some((l) => l.startsWith("auth whoami")));
+	assert.ok(!lines.some((l) => l.startsWith("accounts list")), "whoami already listed the account");
 	assert.ok(lines.some((l) => l.startsWith("d1 list")));
 	assert.ok(lines.some((l) => l.startsWith("deploy")));
 	// a later deploy without the flag still uses the saved profile
 	const r2 = await s.cli(["deploy", "--skip-install"]);
 	assert.equal(r2.status, 0, r2.stderr);
 	assert.ok(s.calls().filter((l) => l.startsWith("deploy")).every((l) => l.includes("profile=bot-acct")));
+});
+
+test("init --cf-profile reads cf accounts list when whoami lists none", async (t) => {
+	const s = stubEnv(t, { subdomain: "acme" });
+	const r = await s.cli(
+		["init", "--worker-name", "wdtest", "--skip-install", "--dir", path.join(s.dir, "worker"), "--cf-profile", "bot-acct"],
+		{ STUB_PROFILE_WHOAMI: '{"authenticated":true,"accounts":[]}', STUB_ACCOUNTS_LIST: '{"result":[{"id":"acc999","name":"Bot Co"}]}' },
+	);
+	assert.equal(r.status, 0, r.stderr);
+	assert.equal(s.config().CLOUDFLARE_ACCOUNT_ID, "acc999");
+	assert.ok(s.calls().some((l) => l.startsWith("accounts list") && l.includes("profile=bot-acct")), s.calls().join("\n"));
+	assert.doesNotMatch(r.stderr, /0 accounts/);
+	assert.match(r.stderr, /Bot Co/);
+});
+
+test("init --cf-profile with several accounts from cf accounts list still requires --account-id", async (t) => {
+	const s = stubEnv(t, { subdomain: "acme" });
+	const r = await s.cli(
+		["init", "--worker-name", "wdtest", "--skip-install", "--dir", path.join(s.dir, "worker"), "--cf-profile", "bot-acct"],
+		{ STUB_PROFILE_WHOAMI: '{"authenticated":true,"accounts":[]}', STUB_ACCOUNTS_LIST: '[{"id":"acc1","name":"One"},{"id":"acc2","name":"Two"}]' },
+	);
+	assert.equal(r.status, 1);
+	assert.match(r.stderr, /2 accounts available/);
+	assert.match(r.stderr, /acc1/);
+	assert.match(r.stderr, /acc2/);
+	assert.ok(!s.config().CLOUDFLARE_ACCOUNT_ID);
+});
+
+test("init --cf-profile with an empty accounts list reports 0 accounts", async (t) => {
+	const s = stubEnv(t, { subdomain: "acme" });
+	const r = await s.cli(
+		["init", "--worker-name", "wdtest", "--skip-install", "--dir", path.join(s.dir, "worker"), "--cf-profile", "bot-acct"],
+		{ STUB_PROFILE_WHOAMI: '{"authenticated":true,"accounts":[]}', STUB_ACCOUNTS_LIST: "[]" },
+	);
+	assert.equal(r.status, 1);
+	assert.match(r.stderr, /0 accounts available/);
+	assert.ok(s.calls().some((l) => l.startsWith("accounts list")));
 });
 
 // ------------------------------------------------------------------ switching between a custom domain and workers.dev

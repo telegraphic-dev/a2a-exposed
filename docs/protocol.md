@@ -12,7 +12,11 @@ A hosted card is cached for 60 seconds (`cache-control: public, max-age=60`). A 
 
 ## A2A 0.3
 
-The same endpoint accepts `message/send`, `tasks/get`, `tasks/cancel`, and `tasks/pushNotificationConfig/set` and `get`. The version is chosen by the `A2A-Version` header or the method name.
+The same endpoint accepts `message/send`, `tasks/get`, `tasks/cancel`, and `tasks/pushNotificationConfig/set` and `get`.
+
+`A2A-Version` selects the response shape. A header of `0.3` or `1.0` (a patch such as `1.0.1` or `0.3.0` is ignored) wins over the method name, so `SendMessage` with `A2A-Version: 0.3` answers in the 0.3 shape and `message/send` with `A2A-Version: 1.0` answers in the 1.0 shape. When the header is absent, the query parameter `A2A-Version` is used the same way. When both are absent, the method name selects the shape: `SendMessage` is 1.0 and `message/send` is 0.3, so a 0.3 client that omits the header still receives a 0.3 task. An unsupported value such as `2.0` is JSON-RPC `-32009`, including when the method is unknown.
+
+`GetExtendedAgentCard` and `agent/getAuthenticatedExtendedCard` return `-32007` (the extended agent card is not configured). The served card advertises `extendedAgentCard: false`.
 
 `/.well-known/agent.json` serves an A2A 0.3-shaped card (`url`, `protocolVersion`, `preferredTransport`) for 0.3 clients.
 
@@ -64,7 +68,7 @@ Anything else (`curl`, agents, `Accept: application/json`, `?format=json`) gets 
 
 ## Proxy mode
 
-Forwards `SendMessage`, `GetTask`, and `CancelTask` (1.0 and 0.3). Another peer's task returns `-32001`. An unknown or unrecorded context returns `-32602`. `ListTasks` returns `-32004`. Push notification config calls return `-32003`. Streaming returns `-32004`. The extended card is not proxied. The card advertises only the JSON-RPC versions the upstream card lists.
+Forwards `SendMessage`, `GetTask`, and `CancelTask` (1.0 and 0.3). Another peer's task returns `-32001`. An unknown or unrecorded context returns `-32602`. `ListTasks` returns `-32004`. Push notification config calls return `-32003`. Streaming returns `-32004`. `GetExtendedAgentCard` and `agent/getAuthenticatedExtendedCard` return `-32007` on the façade. A declared `A2A-Version` (header, or the query parameter when the header is absent; a patch is ignored) is forwarded to the upstream as the `A2A-Version` header. A call with neither stays headerless, so the upstream still chooses from the method name. The card advertises only the JSON-RPC versions the upstream card lists.
 
 ## Owner API
 
