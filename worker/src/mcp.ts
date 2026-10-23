@@ -323,6 +323,7 @@ export const TOOLS: { name: string; title: string; description: string; inputSch
 		description: `Open tasks other agents sent to this A2A endpoint (state submitted or working), oldest first, one page at a time, plus a reply to a message you sent (kind "outbound") until this inbox lists it, plus pending pairing requests. When the result says more tasks are waiting, call inbox again with the cursor before you stop. Handle each inbound task, then answer it with reply. A reply to a message you sent: read it with history, and continue that conversation with send. ${RULES}`,
 		inputSchema: { type: "object", properties: {
 			contextId: str("Only this conversation"),
+			from: str("Only this peer (the wake's from). The same context id can be a different peer's conversation"),
 			all: { type: "boolean", description: "Include finished tasks on this page" },
 			cursor: str("Cursor from the previous inbox page, when more tasks are waiting"),
 			limit: { type: "integer", minimum: 1, maximum: INBOX_MAX, description: `Tasks in this page (default ${INBOX_PAGE}, at most ${INBOX_MAX})` },
@@ -332,7 +333,7 @@ export const TOOLS: { name: string; title: string; description: string; inputSch
 		inputSchema: { type: "object", properties: { taskId: str("Task id from the A2A endpoint") }, required: ["taskId"], additionalProperties: false } },
 	{ name: "history", title: "Conversation history", annotations: ro,
 		description: `The log of one conversation (both directions), oldest first. ${RULES}`,
-		inputSchema: { type: "object", properties: { contextId: str("Conversation (context) id"), n: { type: "integer", minimum: 1, maximum: 1000, description: "Entries (default 50)" } }, required: ["contextId"], additionalProperties: false } },
+		inputSchema: { type: "object", properties: { contextId: str("Conversation (context) id"), from: str("Only this peer (the wake's from)"), n: { type: "integer", minimum: 1, maximum: 1000, description: "Entries (default 50)" } }, required: ["contextId"], additionalProperties: false } },
 	{ name: "mark_working", title: "Mark task working", annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 		description: "Tell the peer you are working on a task (state working; the peer is notified if it asked for push updates). Use for anything that takes more than a moment.",
 		inputSchema: { type: "object", properties: { taskId: str("Task id") }, required: ["taskId"], additionalProperties: false } },

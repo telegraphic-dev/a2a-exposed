@@ -105,25 +105,31 @@ function noQuery(q: Record<string, string>): string | null {
 }
 
 function inboxQuery(q: Record<string, string>): string | null {
-	for (const k of Object.keys(q)) if (k !== "context" && k !== "all" && k !== "limit" && k !== "cursor") return null;
+	for (const k of Object.keys(q)) if (k !== "context" && k !== "all" && k !== "limit" && k !== "cursor" && k !== "from") return null;
 	if (q.context !== undefined && !idOk(q.context)) return null;
 	if (q.all !== undefined && q.all !== "1") return null;
 	if (q.limit !== undefined && (!/^[1-9]\d{0,2}$/.test(q.limit) || Number(q.limit) > 200)) return null;
 	if (q.cursor !== undefined && !/^[A-Za-z0-9_-]{1,256}$/.test(q.cursor)) return null;
+	if (q.from !== undefined && !/^[A-Za-z0-9_.-]{1,64}$/.test(q.from)) return null;
 	const sp = new URLSearchParams();
 	if (q.context) sp.set("context", q.context);
 	if (q.all) sp.set("all", "1");
 	if (q.limit) sp.set("limit", q.limit);
 	if (q.cursor) sp.set("cursor", q.cursor);
+	if (q.from) sp.set("from", q.from);
 	const s = sp.toString();
 	return s ? `?${s}` : "";
 }
 
 function historyQuery(q: Record<string, string>): string | null {
-	for (const k of Object.keys(q)) if (k !== "n") return null;
-	if (q.n === undefined) return "";
-	if (!/^[1-9][0-9]{0,3}$/.test(q.n) || Number(q.n) > 1000) return null;
-	return `?n=${q.n}`;
+	for (const k of Object.keys(q)) if (k !== "n" && k !== "from") return null;
+	if (q.n !== undefined && (!/^[1-9][0-9]{0,3}$/.test(q.n) || Number(q.n) > 1000)) return null;
+	if (q.from !== undefined && !/^[A-Za-z0-9_.-]{1,64}$/.test(q.from)) return null;
+	const sp = new URLSearchParams();
+	if (q.n) sp.set("n", q.n);
+	if (q.from) sp.set("from", q.from);
+	const s = sp.toString();
+	return s ? `?${s}` : "";
 }
 
 /** `format=sql` is the only export query. The RPC still calls the JSON handler and redacts before building SQL. */

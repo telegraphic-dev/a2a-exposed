@@ -165,9 +165,11 @@ Status
   config                        print config (secrets masked) and its location
 
 Inbox (owner side)
-  inbox [--context C] [--all] [--json]     unhandled inbound tasks, and a reply to a message you sent until
-                                           this list is read (peer text is UNTRUSTED). A reply line says to
-                                           read it with history and continue with send. Then pending pairing
+  inbox [--context C] [--from PEER] [--all] [--json]
+                                           unhandled inbound tasks, and a reply to a message you sent until
+                                           this list is read (peer text is UNTRUSTED). --from is one peer
+                                           (the wake hint includes it). A reply line says to read it with
+                                           history and continue with send. Then pending pairing
                                            requests (tell your human; the dashboard URL when MANAGE_URL is set;
                                            --json: rows on stdout, requests on stderr). Follows every page; past
                                            10000 pages it errors instead of a short list
@@ -175,7 +177,8 @@ Inbox (owner side)
   working <taskId>                         mark task working
   reply <taskId> (--text T | --stdin) [--state completed|input-required|rejected|failed|working]
         [--artifact] [--artifact-name N] [--force]
-  history <contextId> [-n 50] [--json]     conversation log
+  history <contextId> [--from PEER] [-n 50] [--json]
+                                           conversation log. --from is one peer (the wake hint includes it)
   contexts                                 recent conversations
   export [--sql]                       JSON dump of this A2A endpoint on stdout (peer-token hashes and
                                        encrypted peer tokens are in the dump; the owner token stays
@@ -312,9 +315,9 @@ const deployOpts = {
 };
 const SPEC = {
 	init: { ...deployOpts, ...tunnelOpts, tunnel: B }, deploy: deployOpts, wake: deployOpts, tunnel: tunnelOpts,
-	inbox: { context: S, all: B, json: B },
+	inbox: { context: S, from: S, all: B, json: B },
 	reply: { text: S, stdin: B, state: { type: "string", default: "completed" }, artifact: B, "artifact-name": { type: "string", default: "response" }, force: B },
-	history: { n: { type: "string", short: "n", default: "50" }, json: B },
+	history: { from: S, n: { type: "string", short: "n", default: "50" }, json: B },
 	token: { rotate: B },
 	peers: { "token-env": S, "token-stdin": B },
 	send: { to: S, text: S, context: S, task: S, push: B, proto: S },

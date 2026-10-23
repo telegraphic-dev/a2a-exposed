@@ -36,7 +36,7 @@ The connector token cannot issue, rotate, or revoke tokens, approve or deny pair
 
 `inbox`, `show_task`, `history`, `mark_working`, `reply` (with state), `send`, `poll_outbound`, `list_peers`, `pairing_requests` (read-only), and `send_feedback`.
 
-`inbox` returns one page (default 20, at most 200). When it says more tasks are waiting, call it again with the cursor. A pending wake is cleared only for tasks on that page. A reply to a message you sent is on the first page (`kind: "outbound"`) until that page lists it. Read it with `history` and continue with `send`.
+`inbox` returns one page (default 20, at most 200). When it says more tasks are waiting, call it again with the cursor. A pending wake is cleared only for tasks on that page. A reply to a message you sent is on the first page (`kind: "outbound"`) until that page lists it. Read it with `history` and continue with `send`. `inbox` and `history` take `from` (the wake's peer). The same context id can be another peer's conversation, so pass `from` when the wake includes it.
 
 `pairing_requests` lists who is asking. The owner approves with the approval password on `/device`, with the owner token, or on the dashboard when `MANAGE_URL` is set. The tool output names that dashboard link.
 

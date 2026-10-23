@@ -19,7 +19,7 @@ test("grok-bot: bearer + JSON payload", async () => {
 	const b = JSON.parse(r.body);
 	assert.deepEqual([b.contextId, b.taskId, b.from, b.kind], ["ctx-1", "t-2", "peer-a", "inbound"]);
 	assert.deepEqual(b.taskIds, ["t-1", "t-2"]);
-	assert.match(b.hint, /inbox --context ctx-1/);
+	assert.match(b.hint, /inbox --context ctx-1 --from peer-a/);
 });
 
 test("claude-code: anthropic-version + text body", async () => {
@@ -106,7 +106,7 @@ test("redact masks credentials", async () => {
 });
 
 test("summary for outbound updates points at history", () => {
-	assert.match(wakeSummary({ ...ev, kind: "outbound_update" }, "a2a"), /a2a history ctx-1/);
+	assert.match(wakeSummary({ ...ev, kind: "outbound_update" }, "a2a"), /a2a history ctx-1 --from peer-a/);
 });
 
 test("generic custom key header is rendered with prefix and redacted in previews", async () => {

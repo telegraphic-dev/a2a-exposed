@@ -67,17 +67,12 @@ function histStmt(ctx: TenantContext, contextId: string, e: Json) {
 		e.event ?? null, e.text ?? null, e.data !== undefined ? JSON.stringify(e.data) : null);
 }
 
-/** Claim an unused context for this peer. `conversation_owners.context_id` is unique, and the insert does nothing
- *  when another peer already holds it or already has a task, history row, or outbound task on that id. */
+/** Claim this peer's conversation. The primary key is (context_id, peer): another peer's row is a
+ *  different conversation and is not read or replaced. The insert does nothing when this peer already holds the id. */
 function claimContextStmt(ctx: TenantContext, contextId: string, peer: string, ts: string) {
 	return ctx.DB.prepare(
-		`INSERT INTO conversation_owners (context_id, peer, created_at)
-		 SELECT ?1, ?2, ?3
-		 WHERE NOT EXISTS (SELECT 1 FROM conversation_owners WHERE context_id = ?1 AND peer != ?2)
-		   AND NOT EXISTS (SELECT 1 FROM tasks WHERE context_id = ?1 AND peer IS NOT NULL AND peer != '' AND peer != ?2)
-		   AND NOT EXISTS (SELECT 1 FROM history WHERE context_id = ?1 AND peer IS NOT NULL AND peer != '' AND peer != ?2)
-		   AND NOT EXISTS (SELECT 1 FROM outbound WHERE context_id = ?1 AND peer IS NOT NULL AND peer != '' AND peer != ?2)
-		 ON CONFLICT(context_id) DO NOTHING`,
+		`INSERT INTO conversation_owners (context_id, peer, created_at) VALUES (?1, ?2, ?3)
+		 ON CONFLICT(context_id, peer) DO NOTHING`,
 	).bind(contextId, peer, ts);
 }
 
@@ -86,9 +81,9 @@ function saveTaskIfOwnerStmt(ctx: TenantContext, t: Json) {
 	return ctx.DB.prepare(
 		`INSERT INTO tasks (id, context_id, peer, state, protocol, created_at, updated_at, status_json, artifacts_json, metadata_json, push_configs_json)
 		 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11
-		 WHERE (SELECT peer FROM conversation_owners WHERE context_id = ?2) = ?3
+		 WHERE EXISTS (SELECT 1 FROM conversation_owners WHERE context_id = ?2 AND peer = ?3)
 		 ON CONFLICT(id) DO UPDATE SET state=?4, updated_at=?7, status_json=?8, artifacts_json=?9, metadata_json=?10, push_configs_json=?11
-		 WHERE (SELECT peer FROM conversation_owners WHERE context_id = ?2) = ?3`,
+		 WHERE EXISTS (SELECT 1 FROM conversation_owners WHERE context_id = ?2 AND peer = ?3)`,
 	).bind(t.id, t.contextId, t._peer, t.status.state, t._protocol, t._createdAt, A.nowIso(), JSON.stringify(t.status),
 		JSON.stringify(t.artifacts || []), t.metadata ? JSON.stringify(t.metadata) : null, JSON.stringify(t._push || []));
 }
@@ -97,7 +92,7 @@ function msgIfOwnerStmt(ctx: TenantContext, t: Json, m: Json) {
 	return ctx.DB.prepare(
 		`INSERT INTO messages (message_id, task_id, context_id, role, ts, message_json)
 		 SELECT ?1, ?2, ?3, ?4, ?5, ?6
-		 WHERE (SELECT peer FROM conversation_owners WHERE context_id = ?3) = ?7`,
+		 WHERE EXISTS (SELECT 1 FROM conversation_owners WHERE context_id = ?3 AND peer = ?7)`,
 	).bind(m.messageId, t.id, t.contextId, m.role, A.nowIso(), JSON.stringify(m), t._peer);
 }
 
@@ -105,7 +100,7 @@ function histIfOwnerStmt(ctx: TenantContext, contextId: string, e: Json, owner: 
 	return ctx.DB.prepare(
 		`INSERT INTO history (context_id, ts, dir, peer, task_id, role, state, event, text, data_json)
 		 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10
-		 WHERE (SELECT peer FROM conversation_owners WHERE context_id = ?1) = ?11`,
+		 WHERE EXISTS (SELECT 1 FROM conversation_owners WHERE context_id = ?1 AND peer = ?11)`,
 	).bind(contextId, e.ts || A.nowIso(), e.dir || "local", e.peer ?? null, e.taskId ?? null, e.role ?? null, e.state ?? null,
 		e.event ?? null, e.text ?? null, e.data !== undefined ? JSON.stringify(e.data) : null, owner);
 }
@@ -635,15 +630,15 @@ function protectedResourceMetadata(ctx: TenantContext): Json {
 const V1: Record<string, string> = {
 	SendMessage: "send", GetTask: "get", CancelTask: "cancel", CreateTaskPushNotificationConfig: "pushset",
 	SetTaskPushNotificationConfig: "pushset", GetTaskPushNotificationConfig: "pushget", ListTasks: "list",
+	ListTaskPushNotificationConfig: "pushlist", ListTaskPushNotificationConfigs: "pushlist",
+	DeleteTaskPushNotificationConfig: "pushdel",
 	SendStreamingMessage: "stream", SubscribeToTask: "stream",
 };
 const V03: Record<string, string> = {
 	"message/send": "send", "tasks/get": "get", "tasks/cancel": "cancel", "tasks/pushNotificationConfig/set": "pushset",
-	"tasks/pushNotificationConfig/get": "pushget", "message/stream": "stream", "tasks/resubscribe": "stream",
+	"tasks/pushNotificationConfig/get": "pushget", "tasks/pushNotificationConfig/list": "pushlist",
+	"tasks/pushNotificationConfig/delete": "pushdel", "message/stream": "stream", "tasks/resubscribe": "stream",
 };
-// Methods only the façade forwards (the inbox has one push config per task and no delete).
-const PROXY_V1: Record<string, string> = { ListTaskPushNotificationConfig: "pushlist", DeleteTaskPushNotificationConfig: "pushdel" };
-const PROXY_V03: Record<string, string> = { "tasks/pushNotificationConfig/list": "pushlist", "tasks/pushNotificationConfig/delete": "pushdel" };
 const EXTENDED_CARD_METHODS = new Set(["GetExtendedAgentCard", "agent/getAuthenticatedExtendedCard"]);
 
 /** Header, else query `A2A-Version`. A patch (`1.0.1`, `0.3.0`) is ignored. Empty means the method name chooses the
@@ -659,11 +654,9 @@ function declaredA2AVersion(req: Request): { raw: string; version: string | null
 	return { raw, version: null };
 }
 
-function rpcOperation(method: string, proxy: boolean): { op: string; version: string } | null {
+function rpcOperation(method: string): { op: string; version: string } | null {
 	if (V1[method]) return { op: V1[method], version: "1.0" };
 	if (V03[method]) return { op: V03[method], version: "0.3" };
-	if (proxy && PROXY_V1[method]) return { op: PROXY_V1[method], version: "1.0" };
-	if (proxy && PROXY_V03[method]) return { op: PROXY_V03[method], version: "0.3" };
 	return null;
 }
 
@@ -710,10 +703,11 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
 	}
 	const contextId = task ? task.contextId : msg.contextId ? A.checkId(msg.contextId, "contextId") : A.newId();
 	const ts = A.nowIso();
-	// A client-provided id nobody owns is still this peer's new conversation (single-peer and outbound send
-	// keep passing one). An id another peer already has is not. A2A forbids minting a replacement id when the
-	// client id is refused, so this is the same error the façade returns for an unknown context, not a new id.
-	// The claim and the first task are one batch: a second peer cannot pass a read and then write its own task.
+	// A2A lets an agent accept a client-supplied contextId and forbids minting a replacement when it will not.
+	// This inbox accepts the id for the caller. A peer that already has it continues that conversation. An id
+	// this agent has never seen, and an id another peer already has, are the same for the caller: a new
+	// conversation of their own. The other peer's tasks, history, and wake are not read or written. The claim
+	// and the first task are one batch, so the task is stored only when this peer's owner row is present.
 	const creating = !task;
 	if (!task) task = { id: A.newId(), contextId, status: { state: "submitted", timestamp: ts }, artifacts: [], history: [], _peer: label, _protocol: version, _createdAt: ts, _push: [] };
 	msg.contextId = contextId; msg.taskId = task.id;
@@ -728,11 +722,9 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
 			saveTaskIfOwnerStmt(ctx, task),
 			msgIfOwnerStmt(ctx, task, msg),
 			histIfOwnerStmt(ctx, contextId, { dir: "in", peer: label, taskId: task.id, role: "user", text: preview, data: { messageId: msg.messageId } }, label),
-			ctx.DB.prepare("SELECT peer FROM conversation_owners WHERE context_id = ?").bind(contextId),
 		]);
-		const owner = (stored[4]?.results?.[0] as Json | undefined)?.peer;
 		const wrote = stored[1]?.meta?.changes ?? 0;
-		if (owner !== label || wrote < 1) throw new RpcError(-32602, UNKNOWN_CONTEXT);
+		if (wrote < 1) throw new RpcError(-32602, UNKNOWN_CONTEXT);
 	} else {
 		await ctx.DB.batch([
 			saveTaskStmt(ctx, task), msgStmt(ctx, task, msg),
@@ -774,22 +766,104 @@ const rpcPushGet: Rpc = async (p, label, version, ctx) => {
 	throw new RpcError(-32001, "Push notification config not found");
 };
 
+/** Config id for list/delete. 1.0 sends `{ taskId, id }`. 0.3 sends `{ id: taskId, pushNotificationConfigId }`. */
+function pushConfigId(p: Json): string | undefined {
+	const id = p.pushNotificationConfigId || (p.taskId ? p.id : undefined);
+	return typeof id === "string" && id ? id : undefined;
+}
+
+/** Cursor over this task's configs. The token is an index, not a config id, url, or token. */
+function pushListStart(raw: unknown): number {
+	if (raw === undefined || raw === null || raw === "") return 0;
+	if (typeof raw !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(raw)) throw new RpcError(-32602, "Invalid params: pageToken");
+	let text = "";
+	try { text = b64urlDecode(raw); } catch { throw new RpcError(-32602, "Invalid params: pageToken"); }
+	const m = /^cfg\n(\d{1,6})$/.exec(text);
+	if (!m) throw new RpcError(-32602, "Invalid params: pageToken");
+	return Number(m[1]);
+}
+
+const rpcPushList: Rpc = async (p, label, version, ctx) => {
+	const t = await ownedTask(ctx, p.taskId || p.id, label);
+	const all = (t._push || []).map((c: Json) => pubCfg(t.id, c, version));
+	if (!version.startsWith("1")) return all;
+	const size = Math.min(Math.max(Number(p.pageSize) || 50, 1), 100);
+	const start = pushListStart(p.pageToken);
+	const configs = all.slice(start, start + size);
+	const next = start + configs.length;
+	return { configs, nextPageToken: next < all.length ? b64url(`cfg\n${next}`) : "" };
+};
+
+const rpcPushDel: Rpc = async (p, label, version, ctx) => {
+	const t = await ownedTask(ctx, p.taskId || p.id, label);
+	const id = pushConfigId(p);
+	if (!id) throw new RpcError(-32602, "Invalid params: push notification config id");
+	const kept = (t._push || []).filter((c: Json) => c.id !== id);
+	if (kept.length !== (t._push || []).length) {
+		t._push = kept;
+		await saveTaskStmt(ctx, t).run();
+	}
+	// Idempotent: a missing config on this peer's task is the same as a config already removed.
+	return version.startsWith("1") ? {} : null;
+};
+
+/** Keyset cursor for ListTasks, newest update first. Empty means the first page. A bad token is rejected
+ *  without echoing it. The query still filters by the caller, so the cursor cannot select another peer's tasks. */
+function listCursor(raw: unknown): { updatedAt: string; id: string } | null {
+	if (raw === undefined || raw === null || raw === "") return null;
+	if (typeof raw !== "string" || !/^[A-Za-z0-9_-]{1,256}$/.test(raw)) throw new RpcError(-32602, "Invalid params: pageToken");
+	let text = "";
+	try { text = b64urlDecode(raw); } catch { throw new RpcError(-32602, "Invalid params: pageToken"); }
+	const nl = text.indexOf("\n");
+	if (nl <= 0) throw new RpcError(-32602, "Invalid params: pageToken");
+	const updatedAt = text.slice(0, nl);
+	const id = text.slice(nl + 1);
+	if (!INBOX_STAMP.test(updatedAt) || !A.ID_RE.test(id) || id.includes("\n")) throw new RpcError(-32602, "Invalid params: pageToken");
+	return { updatedAt, id };
+}
+
 const rpcList: Rpc = async (p, label, version, ctx) => {
 	const size = Math.min(Math.max(Number(p.pageSize) || 50, 1), 100);
-	const where = p.contextId ? "peer = ? AND context_id = ?" : "peer = ?";
-	const args = p.contextId ? [label, p.contextId] : [label];
-	const total: Json = await ctx.DB.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE ${where}`).bind(...args).first();
-	const rows = await ctx.DB.prepare(`SELECT id FROM tasks WHERE ${where} ORDER BY updated_at DESC LIMIT ?`).bind(...args, size).all();
+	const cursor = listCursor(p.pageToken);
+	const where = ["peer = ?"];
+	const args: Json[] = [label];
+	if (p.contextId !== undefined && p.contextId !== "") {
+		if (typeof p.contextId !== "string" || !A.ID_RE.test(p.contextId)) throw new RpcError(-32602, "Invalid params: invalid contextId");
+		where.push("context_id = ?");
+		args.push(p.contextId);
+	}
+	const whereSql = where.join(" AND ");
+	const total: Json = await ctx.DB.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE ${whereSql}`).bind(...args).first();
+	const pageWhere = [...where];
+	const pageArgs = [...args];
+	if (cursor) {
+		pageWhere.push("(updated_at < ? OR (updated_at = ? AND id < ?))");
+		pageArgs.push(cursor.updatedAt, cursor.updatedAt, cursor.id);
+	}
+	const rows = await ctx.DB.prepare(
+		`SELECT id, updated_at FROM tasks WHERE ${pageWhere.join(" AND ")} ORDER BY updated_at DESC, id DESC LIMIT ?`,
+	).bind(...pageArgs, size + 1).all();
+	const found = (rows.results || []) as Json[];
+	const page = found.slice(0, size);
 	const tasks = [];
-	for (const r of rows.results as Json[]) {
+	for (const r of page) {
 		const t = A.publicTask(await loadTask(ctx, r.id), version, p.historyLength ?? 0);
 		if (!p.includeArtifacts) delete t.artifacts;
 		tasks.push(t);
 	}
-	return { tasks, nextPageToken: "", pageSize: size, totalSize: total?.n ?? tasks.length };
+	let nextPageToken = "";
+	if (found.length > size && page.length) {
+		const updatedAt = String(page[page.length - 1].updated_at);
+		const id = String(page[page.length - 1].id);
+		if (INBOX_STAMP.test(updatedAt) && A.ID_RE.test(id)) nextPageToken = b64url(`${updatedAt}\n${id}`);
+	}
+	return { tasks, nextPageToken, pageSize: size, totalSize: total?.n ?? tasks.length };
 };
 
-const HANDLERS: Record<string, Rpc> = { send: rpcSend, get: rpcGet, cancel: rpcCancel, pushset: rpcPushSet, pushget: rpcPushGet, list: rpcList };
+const HANDLERS: Record<string, Rpc> = {
+	send: rpcSend, get: rpcGet, cancel: rpcCancel, pushset: rpcPushSet, pushget: rpcPushGet,
+	pushlist: rpcPushList, pushdel: rpcPushDel, list: rpcList,
+};
 
 /** 401 for A2A calls. Unless pairing is off, the error says how to get a token (device flow), so a generic agent can follow it.
  *  The JSON-RPC id is echoed when the request body parses (JSON-RPC 2.0); WWW-Authenticate points to RFC 9728 metadata. */
@@ -836,7 +910,7 @@ async function handleRpc(req: Request, ctx: TenantContext, ectx: ExecutionContex
 	const declared = declaredA2AVersion(req);
 	if (declared.raw && !declared.version) return err(-32009, `A2A version ${declared.raw} not supported (supported: 0.3, 1.0)`);
 	if (EXTENDED_CARD_METHODS.has(method)) return err(-32007, "Extended agent card is not configured");
-	const found = rpcOperation(method, proxy);
+	const found = rpcOperation(method);
 	if (!found) return err(-32601, "Method not found");
 	const version = declared.version || found.version;
 	const op = found.op;
@@ -1088,6 +1162,8 @@ async function handlePush(req: Request, ctx: TenantContext, ectx: ExecutionConte
 
 // ------------------------------------------------------------------ owner API (local CLI)
 const INBOX_STAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/;
+/** Inbound labels and outbound aliases. Used to scope a conversation read to one peer. */
+const PEER_FILTER = /^[A-Za-z0-9_.-]{1,64}$/;
 
 function inboxLimit(raw: string | null): number {
 	if (raw === null) return M.INBOX_MAX;
@@ -1274,6 +1350,8 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 	}
 	if (seg[0] === "inbox" && m === "GET") {
 		const contextFilter = url.searchParams.get("context");
+		const fromFilter = url.searchParams.get("from");
+		if (fromFilter !== null && !PEER_FILTER.test(fromFilter)) throw new HttpError(400, "from is invalid");
 		const all = url.searchParams.get("all") === "1";
 		const limit = inboxLimit(url.searchParams.get("limit"));
 		const cursor = inboxCursor(url.searchParams.get("cursor"));
@@ -1281,6 +1359,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 		const args: Json[] = [];
 		if (!all) q += " AND state IN ('submitted','working')";
 		if (contextFilter) { A.checkId(contextFilter, "contextId"); q += " AND context_id = ?"; args.push(contextFilter); }
+		if (fromFilter) { q += " AND peer = ?"; args.push(fromFilter); }
 		if (cursor) { q += " AND (updated_at > ? OR (updated_at = ? AND id > ?))"; args.push(cursor.updatedAt, cursor.updatedAt, cursor.id); }
 		q += " ORDER BY updated_at, id LIMIT ?";
 		args.push(limit + 1);
@@ -1302,6 +1381,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			const oargs: Json[] = [];
 			if (!all) oq += " AND updates_seen = 0";
 			if (contextFilter) { oq += " AND context_id = ?"; oargs.push(contextFilter); }
+			if (fromFilter) { oq += " AND peer = ?"; oargs.push(fromFilter); }
 			oq += " ORDER BY sent_at LIMIT ?";
 			oargs.push(limit);
 			const replies = await ctx.DB.prepare(oq).bind(...oargs).all();
@@ -1369,9 +1449,22 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 	}
 	if (seg[0] === "history" && seg[1] && m === "GET") {
 		const n = Math.min(Number(url.searchParams.get("n") || "50"), 1000);
-		// Rows for this conversation: this context, and a peer that owns it (a task or an outbound task).
-		// A null peer is a local note. When nothing owns the id yet, the rows that name it are the conversation.
-		const rows = await ctx.DB.prepare(`SELECT * FROM (
+		const fromFilter = url.searchParams.get("from");
+		if (fromFilter !== null && !PEER_FILTER.test(fromFilter)) return json({ error: "from is invalid" }, 400);
+		// Without `from`, rows for every peer that owns this context id (a task or an outbound task), plus local notes.
+		// With `from`, one peer's rows only, so another peer's conversation is not in this read.
+		const rows = await ctx.DB.prepare(fromFilter ? `SELECT * FROM (
+			SELECT * FROM history WHERE context_id = ? AND (
+				peer = ?
+				OR (
+					(peer IS NULL OR peer = '')
+					AND (
+						task_id IN (SELECT id FROM tasks WHERE context_id = ? AND peer = ?)
+						OR task_id IN (SELECT task_id FROM outbound WHERE context_id = ? AND peer = ?)
+					)
+				)
+			) ORDER BY seq DESC LIMIT ?
+		) ORDER BY seq` : `SELECT * FROM (
 			SELECT * FROM history WHERE context_id = ? AND (
 				peer IS NULL OR peer = ''
 				OR peer IN (SELECT peer FROM tasks WHERE context_id = ? AND peer IS NOT NULL AND peer != '')
@@ -1381,7 +1474,9 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 					AND NOT EXISTS (SELECT 1 FROM outbound WHERE context_id = ?)
 				)
 			) ORDER BY seq DESC LIMIT ?
-		) ORDER BY seq`).bind(seg[1], seg[1], seg[1], seg[1], seg[1], n).all();
+		) ORDER BY seq`).bind(...(fromFilter
+			? [seg[1], fromFilter, seg[1], fromFilter, seg[1], fromFilter, n]
+			: [seg[1], seg[1], seg[1], seg[1], seg[1], n])).all();
 		return json((rows.results as Json[]).map((r) => ({ ...r, data: r.data_json ? JSON.parse(r.data_json) : undefined, data_json: undefined })));
 	}
 	if (seg[0] === "history" && !seg[1] && m === "POST") {
@@ -2823,6 +2918,11 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 		case "inbox": {
 			const qs = new URLSearchParams();
 			if (a.contextId !== undefined) qs.set("context", A.checkId(argStr(a, "contextId"), "contextId"));
+			if (a.from !== undefined) {
+				const from = argStr(a, "from");
+				if (!PEER_FILTER.test(from)) throw new ToolError("from is invalid");
+				qs.set("from", from);
+			}
 			if (a.all === true) qs.set("all", "1");
 			if (a.cursor !== undefined) {
 				const cursor = argStr(a, "cursor");
@@ -2850,7 +2950,13 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 		case "history": {
 			const n = a.n === undefined ? 50 : Number(a.n);
 			if (!Number.isInteger(n) || n < 1 || n > 1000) throw new ToolError("n must be 1-1000");
-			return M.toolText(`History, oldest first. ${UNTRUSTED}`, must(await ownerCall(ctx, ectx, "GET", `/owner/history/${enc(A.checkId(argStr(a, "contextId"), "contextId"))}?n=${n}`)));
+			let histPath = `/owner/history/${enc(A.checkId(argStr(a, "contextId"), "contextId"))}?n=${n}`;
+			if (a.from !== undefined) {
+				const from = argStr(a, "from");
+				if (!PEER_FILTER.test(from)) throw new ToolError("from is invalid");
+				histPath += `&from=${enc(from)}`;
+			}
+			return M.toolText(`History, oldest first. ${UNTRUSTED}`, must(await ownerCall(ctx, ectx, "GET", histPath)));
 		}
 		case "mark_working": {
 			const r = must(await ownerCall(ctx, ectx, "POST", `/owner/tasks/${enc(A.checkId(argStr(a, "taskId"), "taskId"))}/working`));

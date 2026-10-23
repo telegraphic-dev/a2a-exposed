@@ -326,7 +326,9 @@ test("proxy mode: peers sharing the upstream identity can't touch each other's t
 	for (const [method, params] of [
 		["GetTask", { id: taskId }], ["CancelTask", { id: taskId }], ["tasks/get", { id: taskId }],
 		["GetTaskPushNotificationConfig", { taskId, id: "x" }], ["ListTaskPushNotificationConfig", { taskId }],
-		["DeleteTaskPushNotificationConfig", { taskId, id: "x" }], ["GetTask", { id: "never-seen" }],
+		["ListTaskPushNotificationConfigs", { taskId }], ["DeleteTaskPushNotificationConfig", { taskId, id: "x" }],
+		["tasks/pushNotificationConfig/list", { id: taskId }], ["tasks/pushNotificationConfig/delete", { id: taskId, pushNotificationConfigId: "x" }],
+		["GetTask", { id: "never-seen" }],
 	] as const) {
 		const x = await s.rpc(b, method, params);
 		assert.equal(x.data.error?.code, -32001, `${method}: ${JSON.stringify(x.data)}`);
@@ -390,7 +392,9 @@ test("proxy mode: push configs never reach the upstream (it would call them from
 		["CreateTaskPushNotificationConfig", { taskId, url: "https://hooks.example.org/b" }],
 		["tasks/pushNotificationConfig/set", { taskId, pushNotificationConfig: { url: "https://hooks.example.org/b" } }],
 		["GetTaskPushNotificationConfig", { taskId, id: "x" }], ["ListTaskPushNotificationConfig", { taskId }],
-		["DeleteTaskPushNotificationConfig", { taskId, id: "x" }], ["tasks/pushNotificationConfig/get", { id: taskId }],
+		["ListTaskPushNotificationConfigs", { taskId }], ["DeleteTaskPushNotificationConfig", { taskId, id: "x" }],
+		["tasks/pushNotificationConfig/list", { id: taskId }], ["tasks/pushNotificationConfig/delete", { id: taskId, pushNotificationConfigId: "x" }],
+		["tasks/pushNotificationConfig/get", { id: taskId }],
 	] as const) {
 		const r = await s.rpc(a, method, params);
 		assert.equal(r.data.error?.code, -32003, method);

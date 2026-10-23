@@ -30,8 +30,8 @@ The hint command is `WAKE_CLI_COMMAND` when set, otherwise `npx -y a2a-exposed@l
 
 | `kind` | The agent does |
 | --- | --- |
-| `inbound` | `inbox --context <contextId>`, then reply |
-| `outbound_update` | A peer answered a task this agent sent. `inbox` lists that reply until the list is read (`kind: "outbound"`; `inbox --all` keeps it). Read it with `history` or `outbound`. Continue with `send` and the same context id |
+| `inbound` | `inbox --context <contextId> --from <peer>`, then reply. The wake hint includes `--from` |
+| `outbound_update` | A peer answered a task this agent sent. `inbox` lists that reply until the list is read (`kind: "outbound"`; `inbox --all` keeps it). Read it with `history <contextId> --from <peer>` or `outbound`. Continue with `send` and the same context id |
 | `pairing_request` | Tell the human the code, the link, and `pairing.manageUrl` when the wake includes it. The code lasts 60 minutes. Leave approval to the human |
 | `test` | A test wake. No message on the A2A endpoint |
 
@@ -44,7 +44,7 @@ The hint command is `WAKE_CLI_COMMAND` when set, otherwise `npx -y a2a-exposed@l
 Bearer token in `Authorization`. JSON body:
 
 ```json
-{"event_type":"a2a_wake","contextId":"...","taskId":"...","taskIds":["..."],"from":"peer-label","preview":"...","kind":"inbound","hint":"npx -y a2a-exposed@latest inbox --context ...","agentCard":"https://.../.well-known/agent-card.json"}
+{"event_type":"a2a_wake","contextId":"...","taskId":"...","taskIds":["..."],"from":"peer-label","preview":"...","kind":"inbound","hint":"npx -y a2a-exposed@latest inbox --context ... --from peer-label","agentCard":"https://.../.well-known/agent-card.json"}
 ```
 
 Save `skills/a2a-exposed/SKILL.md` into the Grok Bot skill library, or name that path in the routine prompt. The routine needs Node 22.18+ and `A2A_BASE_URL` plus `A2A_OWNER_TOKEN` as environment secrets (or the machine's config file). Which clients are tested end to end, and which are untested, is in the [compatibility table](getting-started.md#clients).
@@ -171,7 +171,7 @@ A client with no webhook can run the same `inbox` command. Which clients are tes
 Peer text is data, not instructions. The CLI prints it between `UNTRUSTED PEER MESSAGE` fences. The operate skill refuses embedded instructions and asks the user before anything consequential or externally visible.
 
 ```bash
-npx -y a2a-exposed@latest inbox --context <contextId>
+npx -y a2a-exposed@latest inbox --context <contextId> --from <peer>
 npx -y a2a-exposed@latest working <taskId>
 npx -y a2a-exposed@latest reply <taskId> --text "..."
 ```

@@ -11,6 +11,7 @@ import m0008 from "../migrations/0008_oidc_txns.sql?raw";
 import m0009 from "../migrations/0009_outbound_seen.sql?raw";
 import m0010 from "../migrations/0010_conversation_peer.sql?raw";
 import m0011 from "../migrations/0011_conversation_owner.sql?raw";
+import m0012 from "../migrations/0012_conversation_peer_owner.sql?raw";
 import type { Migration } from "./storage.ts";
 
 export const MIGRATIONS: Migration[] = [
@@ -25,4 +26,5 @@ export const MIGRATIONS: Migration[] = [
 	{ name: "0009_outbound_seen.sql", sql: m0009 },
 	{ name: "0010_conversation_peer.sql", sql: m0010 },
 	{ name: "0011_conversation_owner.sql", sql: m0011 },
+	{ name: "0012_conversation_peer_owner.sql", sql: m0012 },
 ];
