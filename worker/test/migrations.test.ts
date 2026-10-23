@@ -67,15 +67,15 @@ test("fresh database: every migration applies in order; a second run applies not
 test("database from the 0002 fix (0001-0003 recorded): only 0004 and later apply; pending requests keep working", () => {
 	const db = existingDb([sql("0001_init.sql"), sql("0002_wake_budget.sql"), sql("0003_device_pairing.sql")], ["0001_init.sql", "0002_wake_budget.sql", "0003_device_pairing.sql"]);
 	db.prepare("INSERT INTO device_requests (device_hash, user_code, status, created_ms, expires_ms, interval_s) VALUES ('h', 'WDJB4827', 'pending', 1, 2, 5)").run();
-	assert.deepEqual(applyMigrations(db), ["0004_pairing_replace.sql", "0005_facade_owners.sql", "0006_mcp.sql", "0007_cimd.sql", "0008_oidc_txns.sql", "0009_outbound_seen.sql", "0010_conversation_peer.sql", "0011_conversation_owner.sql"]);
+	assert.deepEqual(applyMigrations(db), ["0004_pairing_replace.sql", "0005_facade_owners.sql", "0006_mcp.sql", "0007_cimd.sql", "0008_oidc_txns.sql", "0009_outbound_seen.sql", "0010_conversation_peer.sql", "0011_conversation_owner.sql", "0012_conversation_peer_owner.sql"]);
 	assert.equal((db.prepare("SELECT replaces_label FROM device_requests WHERE device_hash = 'h'").get() as any).replaces_label, null);
 });
 
 test("database from v0.2.0 (0001 and 0003 recorded): 0002 applies as a no-op and keeps the data", () => {
 	const db = existingDb([sql("0001_init.sql"), sql("0003_device_pairing.sql")], ["0001_init.sql", "0003_device_pairing.sql"]);
 	db.prepare("INSERT INTO wake_budget (hour, count) VALUES (1, 7)").run();
-	assert.deepEqual(applyMigrations(db), ["0002_wake_budget.sql", "0004_pairing_replace.sql", "0005_facade_owners.sql", "0006_mcp.sql", "0007_cimd.sql", "0008_oidc_txns.sql", "0009_outbound_seen.sql", "0010_conversation_peer.sql", "0011_conversation_owner.sql"]);
-	assert.deepEqual(recorded(db), ["0001_init.sql", "0003_device_pairing.sql", "0002_wake_budget.sql", "0004_pairing_replace.sql", "0005_facade_owners.sql", "0006_mcp.sql", "0007_cimd.sql", "0008_oidc_txns.sql", "0009_outbound_seen.sql", "0010_conversation_peer.sql", "0011_conversation_owner.sql"]);
+	assert.deepEqual(applyMigrations(db), ["0002_wake_budget.sql", "0004_pairing_replace.sql", "0005_facade_owners.sql", "0006_mcp.sql", "0007_cimd.sql", "0008_oidc_txns.sql", "0009_outbound_seen.sql", "0010_conversation_peer.sql", "0011_conversation_owner.sql", "0012_conversation_peer_owner.sql"]);
+	assert.deepEqual(recorded(db), ["0001_init.sql", "0003_device_pairing.sql", "0002_wake_budget.sql", "0004_pairing_replace.sql", "0005_facade_owners.sql", "0006_mcp.sql", "0007_cimd.sql", "0008_oidc_txns.sql", "0009_outbound_seen.sql", "0010_conversation_peer.sql", "0011_conversation_owner.sql", "0012_conversation_peer_owner.sql"]);
 	assert.equal((db.prepare("SELECT count FROM wake_budget WHERE hour = 1").get() as any).count, 7);
 });
 
@@ -107,7 +107,7 @@ test("database from an earlier build without wake_budget (0001 and 0003 recorded
 		assert.equal(before.data.error?.code, -32603, JSON.stringify(before.data));
 		assert.equal(wakes.length, 0);
 
-		assert.deepEqual(applyMigrations(db), ["0002_wake_budget.sql", "0004_pairing_replace.sql", "0005_facade_owners.sql", "0006_mcp.sql", "0007_cimd.sql", "0008_oidc_txns.sql", "0009_outbound_seen.sql", "0010_conversation_peer.sql", "0011_conversation_owner.sql"]);
+		assert.deepEqual(applyMigrations(db), ["0002_wake_budget.sql", "0004_pairing_replace.sql", "0005_facade_owners.sql", "0006_mcp.sql", "0007_cimd.sql", "0008_oidc_txns.sql", "0009_outbound_seen.sql", "0010_conversation_peer.sql", "0011_conversation_owner.sql", "0012_conversation_peer_owner.sql"]);
 		assert.deepEqual(columns(db, "wake_budget"), ["hour", "count"]);
 		assert.deepEqual(applyMigrations(db), []);
 
@@ -141,7 +141,7 @@ test("0010 keys an existing wake by the peer in its payload and allows a second 
 });
 
 test("0011 keeps one owner per context from the earliest task, then history, then outbound", () => {
-	const prior = [...FILES].sort(byNumber).filter((f) => f !== "0011_conversation_owner.sql");
+	const prior = [...FILES].sort(byNumber).filter((f) => f !== "0011_conversation_owner.sql" && f !== "0012_conversation_peer_owner.sql");
 	const db = existingDb(prior.map(sql), prior);
 	const task = `INSERT INTO tasks (id, context_id, peer, state, protocol, created_at, updated_at, status_json, artifacts_json, push_configs_json)
 		VALUES (?, ?, ?, 'submitted', '0.3', ?, ?, '{}', '[]', '[]')`;
@@ -149,11 +149,23 @@ test("0011 keeps one owner per context from the earliest task, then history, the
 	db.prepare(task).run("t-ada", "ctx-y", "ada", "2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z");
 	db.prepare("INSERT INTO history (context_id, ts, dir, peer, text) VALUES ('ctx-h', '2026-01-01T00:00:00.000Z', 'local', 'ada', 'note')").run();
 	db.prepare("INSERT INTO outbound (task_id, context_id, peer, sent_at) VALUES ('o1', 'ctx-o', 'alias', '2026-01-01T00:00:00.000Z')").run();
-	assert.deepEqual(applyMigrations(db), ["0011_conversation_owner.sql"]);
+	assert.deepEqual(applyMigrations(db, ["0011_conversation_owner.sql"]), ["0011_conversation_owner.sql"]);
 	const owner = (id: string) => (db.prepare("SELECT peer FROM conversation_owners WHERE context_id = ?").get(id) as { peer: string }).peer;
 	assert.equal(owner("ctx-y"), "ada");
 	assert.equal((db.prepare("SELECT COUNT(*) AS n FROM conversation_owners WHERE context_id = 'ctx-y'").get() as { n: number }).n, 1);
 	assert.equal(owner("ctx-h"), "ada");
 	assert.equal(owner("ctx-o"), "alias");
 	assert.throws(() => db.prepare("INSERT INTO conversation_owners (context_id, peer, created_at) VALUES ('ctx-y', 'bob', 'later')").run());
+});
+
+test("0012 lets each peer own the same context id and keeps the first row", () => {
+	const prior = [...FILES].sort(byNumber).filter((f) => f !== "0012_conversation_peer_owner.sql");
+	const db = existingDb(prior.map(sql), prior);
+	db.prepare("INSERT INTO conversation_owners (context_id, peer, created_at) VALUES ('ctx-y', 'ada', '2026-01-01T00:00:00.000Z')").run();
+	assert.throws(() => db.prepare("INSERT INTO conversation_owners (context_id, peer, created_at) VALUES ('ctx-y', 'bob', 'later')").run());
+	assert.deepEqual(applyMigrations(db), ["0012_conversation_peer_owner.sql"]);
+	assert.equal((db.prepare("SELECT created_at FROM conversation_owners WHERE context_id = 'ctx-y' AND peer = 'ada'").get() as { created_at: string }).created_at, "2026-01-01T00:00:00.000Z");
+	db.prepare("INSERT INTO conversation_owners (context_id, peer, created_at) VALUES ('ctx-y', 'bob', 'later')").run();
+	const peers = db.prepare("SELECT peer FROM conversation_owners WHERE context_id = 'ctx-y' ORDER BY peer").all() as { peer: string }[];
+	assert.deepEqual(peers.map((r) => r.peer), ["ada", "bob"]);
 });

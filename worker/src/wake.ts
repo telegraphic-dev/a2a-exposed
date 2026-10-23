@@ -92,9 +92,11 @@ export function pairingInstructions(p: PairingInfo, cli: string): string {
 
 function hintFor(ev: WakeEvent, cli: string): string {
 	if (ev.kind === "pairing_request") return `${cli} pair list`;
+	// `--from` keeps the read on this peer. The same context id can be another peer's separate conversation.
+	const from = /^[A-Za-z0-9_.-]{1,64}$/.test(ev.from) ? ` --from ${ev.from}` : "";
 	return ev.kind === "outbound_update"
-		? `${cli} history ${ev.contextId}`
-		: `${cli} inbox --context ${ev.contextId}`;
+		? `${cli} history ${ev.contextId}${from}`
+		: `${cli} inbox --context ${ev.contextId}${from}`;
 }
 
 /** Human/agent-readable wake text. `withPreview=false` keeps peer-authored text out entirely. */

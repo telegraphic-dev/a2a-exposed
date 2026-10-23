@@ -6,7 +6,7 @@ A self-hosted A2A endpoint runs in your Cloudflare account. The owner pages on t
 
 ## Peers
 
-Each peer has its own bearer token, from pairing (`connect`, approved by the owner) or from `token issue <label>`. A new token is `a2aow_` plus 43 base64url characters (32 random bytes). Only the SHA-256 hash is stored. The token is shown once. You can revoke or rotate any label. Every task records which peer sent it. Lookups are by hash, so a token issued with the earlier `s2a_` prefix still authenticates.
+Each peer has its own bearer token, from pairing (`connect`, approved by the owner) or from `token issue <label>`. A new token is `a2aow_` plus 43 base64url characters (32 random bytes). Only the SHA-256 hash is stored. The token is shown once. You can revoke or rotate any label. Every task records which peer sent it. The same context id is a separate conversation for each peer. A caller cannot tell a fresh id from one another peer holds: both start that caller's own conversation, and the other peer's tasks, history, and wake stay on that peer. Lookups are by hash, so a token issued with the earlier `s2a_` prefix still authenticates.
 
 Rate limit: 60 requests per minute per peer. Request bodies are limited to 1 MiB.
 

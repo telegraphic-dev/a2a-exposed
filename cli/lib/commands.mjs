@@ -55,6 +55,7 @@ async function inboxRows(o) {
 	return followInbox(async (cursor) => {
 		const qs = [];
 		if (o.context) qs.push("context=" + q(o.context));
+		if (o.from) qs.push("from=" + q(o.from));
 		if (o.all) qs.push("all=1");
 		if (cursor) qs.push("cursor=" + q(cursor));
 		const path = "/owner/inbox" + (qs.length ? "?" + qs.join("&") : "");
@@ -125,7 +126,9 @@ export async function reply(id, o) {
 }
 
 export async function history(ctx, o) {
-	const rows = await owner("GET", `/owner/history/${q(ctx)}?n=${Number(o.n || 50)}`);
+	const qs = new URLSearchParams({ n: String(Number(o.n || 50)) });
+	if (o.from) qs.set("from", o.from);
+	const rows = await owner("GET", `/owner/history/${q(ctx)}?${qs}`);
 	if (o.json) return out(rows);
 	for (const e of rows) {
 		const tag = [e.event, e.state || e.role].filter(Boolean).join("/");
