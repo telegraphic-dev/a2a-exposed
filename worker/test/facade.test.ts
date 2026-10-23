@@ -309,7 +309,14 @@ test("proxy mode: peers sharing the upstream identity can't touch each other's t
 	// ListTasks would list every peer's tasks; streaming is not proxied yet
 	assert.equal((await s.rpc(a, "ListTasks", {})).data.error?.code, -32004);
 	assert.equal((await s.rpc(a, "SendStreamingMessage", { message: { role: "ROLE_USER", parts: [{ text: "x" }] } })).data.error?.code, -32004);
-	assert.equal((await s.rpc(a, "GetExtendedAgentCard", {})).data.error?.code, -32601);
+	const nCard = s.calls.filter((c) => c.url === UPSTREAM).length;
+	const ext = await s.rpc(a, "GetExtendedAgentCard", {});
+	assert.equal(ext.status, 200);
+	assert.equal(ext.data.error?.code, -32007);
+	assert.equal(ext.data.error?.message, "Extended agent card is not configured");
+	const ext03 = await s.call("POST", "/", { token: a, json: { jsonrpc: "2.0", id: 1, method: "agent/getAuthenticatedExtendedCard", params: {} }, headers: { "a2a-version": "0.3" } });
+	assert.equal(ext03.data.error?.code, -32007);
+	assert.equal(s.calls.filter((c) => c.url === UPSTREAM).length, nCard, "the extended card stays on the façade");
 });
 
 test("proxy mode: push configs never reach the upstream (it would call them from inside the private network)", async (t) => {

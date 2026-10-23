@@ -16,7 +16,7 @@ npx -y a2a-exposed@latest init \
 
 `init` is non-interactive and idempotent. It:
 
-1. Checks Node, then the Cloudflare login, and resolves the account, before it installs packages. A fresh init runs `npx --yes cf auth whoami` for that check (`npx cf auth login` does not install a global `cf`). A later init uses `node_modules/.bin/cf`. If the login can see several accounts, pass `--account-id`. A failed login leaves the Worker packages uninstalled.
+1. Checks Node, then the Cloudflare login, and resolves the account, before it installs packages. A fresh init runs `npx --yes cf auth whoami` for that check (`npx cf auth login` does not install a global `cf`). A later init uses `node_modules/.bin/cf`. With `--cf-profile`, an empty whoami account list is filled from `cf accounts list` on that same `cf`. If the login can see several accounts, pass `--account-id`. A failed login leaves the Worker packages uninstalled.
 2. Copies the Worker template to `<config dir>/worker` and, after that login check, runs `npm install` there (this provides the local `cf`).
 3. Creates the D1 database (`--d1-name`, default: the Worker name `a2a-exposed`), or reuses an existing one with that name, and applies migrations.
 4. Generates the **owner token** and uploads it with any wake secrets via a temporary chmod-600 secrets file, which is deleted afterwards.

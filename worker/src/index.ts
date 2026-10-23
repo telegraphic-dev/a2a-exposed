@@ -569,6 +569,31 @@ const V03: Record<string, string> = {
 	"message/send": "send", "tasks/get": "get", "tasks/cancel": "cancel", "tasks/pushNotificationConfig/set": "pushset",
 	"tasks/pushNotificationConfig/get": "pushget", "message/stream": "stream", "tasks/resubscribe": "stream",
 };
+// Methods only the façade forwards (the inbox has one push config per task and no delete).
+const PROXY_V1: Record<string, string> = { ListTaskPushNotificationConfig: "pushlist", DeleteTaskPushNotificationConfig: "pushdel" };
+const PROXY_V03: Record<string, string> = { "tasks/pushNotificationConfig/list": "pushlist", "tasks/pushNotificationConfig/delete": "pushdel" };
+const EXTENDED_CARD_METHODS = new Set(["GetExtendedAgentCard", "agent/getAuthenticatedExtendedCard"]);
+
+/** Header, else query `A2A-Version`. A patch (`1.0.1`, `0.3.0`) is ignored. Empty means the method name chooses the
+ *  shape, so a 0.3 client that omits the header stays on 0.3 and a headerless `SendMessage` stays 1.0. */
+function declaredA2AVersion(req: Request): { raw: string; version: string | null } {
+	let raw = (req.headers.get("a2a-version") || "").trim();
+	if (!raw) {
+		try { raw = (new URL(req.url).searchParams.get("A2A-Version") || "").trim(); } catch { raw = ""; }
+	}
+	if (!raw) return { raw: "", version: null };
+	if (/^(1\.0(\.\d+)?|1)$/.test(raw)) return { raw, version: "1.0" };
+	if (/^0\.3(\.\d+)?$/.test(raw)) return { raw, version: "0.3" };
+	return { raw, version: null };
+}
+
+function rpcOperation(method: string, proxy: boolean): { op: string; version: string } | null {
+	if (V1[method]) return { op: V1[method], version: "1.0" };
+	if (V03[method]) return { op: V03[method], version: "0.3" };
+	if (proxy && PROXY_V1[method]) return { op: PROXY_V1[method], version: "1.0" };
+	if (proxy && PROXY_V03[method]) return { op: PROXY_V03[method], version: "0.3" };
+	return null;
+}
 
 async function ownedTask(ctx: TenantContext, id: unknown, label: string): Promise<Json> {
 	if (typeof id !== "string" || !A.ID_RE.test(id)) throw new RpcError(-32001, "Task not found");
@@ -713,15 +738,14 @@ async function handleRpc(req: Request, ctx: TenantContext, ectx: ExecutionContex
 	const err = (code: number, message: string) => json({ jsonrpc: "2.0", id: rid, error: { code, message } });
 	if (!rq || typeof rq !== "object" || rq.jsonrpc !== "2.0" || typeof rq.method !== "string") return err(-32600, "Invalid Request");
 	const method: string = rq.method;
-	let op: string, version: string;
 	const proxy = proxyMode(ctx);
-	if (V1[method]) { op = V1[method]; version = "1.0"; }
-	else if (V03[method]) { op = V03[method]; version = "0.3"; }
-	else if (proxy && PROXY_V1[method]) { op = PROXY_V1[method]; version = "1.0"; }
-	else if (proxy && PROXY_V03[method]) { op = PROXY_V03[method]; version = "0.3"; }
-	else return err(-32601, "Method not found");
-	const hv = (req.headers.get("a2a-version") || "").trim();
-	if (hv && !/^(0\.3|1|1\.0)(\.\d+)?$/.test(hv)) return err(-32009, `A2A version ${hv} not supported (supported: 0.3, 1.0)`);
+	const declared = declaredA2AVersion(req);
+	if (declared.raw && !declared.version) return err(-32009, `A2A version ${declared.raw} not supported (supported: 0.3, 1.0)`);
+	if (EXTENDED_CARD_METHODS.has(method)) return err(-32007, "Extended agent card is not configured");
+	const found = rpcOperation(method, proxy);
+	if (!found) return err(-32601, "Method not found");
+	const version = declared.version || found.version;
+	const op = found.op;
 	if (op === "stream") return err(-32004, proxy ? "Streaming is not supported through this façade yet" : "Streaming is not supported");
 	const params = rq.params ?? {};
 	if (typeof params !== "object" || Array.isArray(params)) return err(-32602, "Invalid params");
@@ -795,10 +819,6 @@ async function verifyUpstream(ctx: TenantContext): Promise<Json> {
 	log("upstream_verify", { reason: verdict.reason, status: verdict.status, ...(verdict.rpcErrorCode !== undefined ? { code: verdict.rpcErrorCode } : {}) });
 	return { ok: verdict.reason === "reachable", ...verdict, sent, method: VERIFY_METHOD, upstreamWantsBearer: F.upstreamAuth(up.card).bearer };
 }
-
-// Methods only the façade forwards (the inbox has one push config per task and no delete).
-const PROXY_V1: Record<string, string> = { ListTaskPushNotificationConfig: "pushlist", DeleteTaskPushNotificationConfig: "pushdel" };
-const PROXY_V03: Record<string, string> = { "tasks/pushNotificationConfig/list": "pushlist", "tasks/pushNotificationConfig/delete": "pushdel" };
 
 async function ownerOf(ctx: TenantContext, kind: "task" | "context", id: string): Promise<string | null> {
 	const r: Json = await ctx.DB.prepare("SELECT peer FROM facade_owners WHERE kind = ? AND id = ?").bind(kind, id).first();

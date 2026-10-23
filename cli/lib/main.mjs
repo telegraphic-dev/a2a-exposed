@@ -41,7 +41,8 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
                                                --hostname H moves it back); the old URL answers 301/410
                                 --workers-dev-subdomain  create the account's workers.dev subdomain if missing
                                 --cf-profile   cf auth profile for a separate Cloudflare login
-                                               (npx cf auth create NAME --no-browser); saved, used by every cf call
+                                               (npx cf auth create NAME --no-browser); saved, used by every cf call.
+                                               When whoami lists no accounts, init reads cf accounts list
                                 --d1-name      D1 database to create or reuse (default: worker name)
                                 --pairing-approval  who approves device-flow pairing requests (default human:
                                                the owner token via \`pair approve\`, or the approval password
