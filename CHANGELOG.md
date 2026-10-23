@@ -2,6 +2,12 @@
 
 All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.3.x), Worker template, control core, and skills. Versions follow [semver](https://semver.org); a `v*` tag publishes the CLI and `@a2a-exposed/control-core` to npm (see [Releases](docs/README.md#releases)).
 
+## Unreleased
+
+`npx -y a2a-exposed@latest deploy` (applies migration `0009_outbound_seen`: an outbound reply stays in the inbox until that list is read).
+
+- **Outbound replies (#129).** The hosted owner RPC accepts `PUT /owner/outbound-peers/<alias>` with `{ url, token }`. The token is sealed in the owner handler and is not logged or returned. Connector `send` mints a push token, points the peer at this A2A endpoint's `POST /push`, and stores only the hash on the outbound task. The peer's reply is recorded in that conversation's history and listed in the inbox until the inbox is read. A follow-up keeps the same conversation id. A call to another tenant on this deployment's domain uses the tenant directory and an internal Durable Object fetch. A public peer stays a public HTTPS call. Self-hosted Workers and the CLI are unchanged: `peers sync` still uses the owner token, and CLI `send` still registers a push only with `--push`.
+
 ## 0.8.12 - 2026-10-22
 
 `npx -y a2a-exposed@latest deploy` (no new migration). The hosted control plane can send, reply, and mark a task working.

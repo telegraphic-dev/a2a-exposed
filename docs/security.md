@@ -26,7 +26,7 @@ Optional OpenID Connect (`APPROVAL_OIDC_*`) adds an "Approve with …" button on
 
 The owner API (`inbox`, replies, tokens, pairing decisions) uses a separate `OWNER_TOKEN` Worker secret, compared in constant time. Both sides are SHA-256 hashed first. The CLI keeps it in `config.env`. Whoever holds it can issue peer tokens and can approve or deny a pairing request. In human mode that decision is recorded as the owner. A call with no token, or with a peer token, is refused.
 
-Outbound peer tokens from `peers sync` are sealed with a key derived from that secret, so existing ciphertext still decrypts after an upgrade.
+Outbound peer tokens from `peers sync` are sealed with a key derived from that secret, so existing ciphertext still decrypts after an upgrade. The hosted owner RPC accepts the same upload (`PUT /owner/outbound-peers/<alias>`). The token is sealed in the owner handler and is not logged or returned. A call to another tenant on this deployment's domain stays inside the deployment. A peer on any other host is a public HTTPS call.
 
 ## Untrusted content
 
@@ -56,7 +56,7 @@ Whoever holds the owner token can still issue peer tokens. Whoever controls the 
 
 ## Push notifications
 
-HTTPS only. Private and loopback targets are refused. Each push uses a per-task token, stored hashed.
+HTTPS only. Private and loopback targets are refused. Each push uses a per-task token, stored hashed. A connector `send` mints that token, points the peer at `POST /push`, and stores only the hash. The plaintext token is not returned. The CLI still does this only with `--push`.
 
 ## Your account
 

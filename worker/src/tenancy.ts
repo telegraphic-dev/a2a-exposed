@@ -399,6 +399,10 @@ export class TenantContext implements ConfigFields {
 	readonly #approvalClientSecret?: string;
 	/** Service binding for the issuer. Not a secret. Absent on a self-host deploy. */
 	readonly #controlService?: ControlFetcher;
+	/** Hosted name directory. Absent on a self-host deploy, so same-zone calls stay on public fetch. */
+	readonly #tenantDirectory?: KvNamespace;
+	/** Hosted Durable Object namespace. Absent on a self-host deploy. */
+	readonly #tenantNamespace?: DoNamespace;
 	#peerKey: Promise<CryptoKey | null> | null = null;
 
 	constructor(init: {
@@ -406,6 +410,7 @@ export class TenantContext implements ConfigFields {
 		gates: FeatureGates; limits: Record<string, unknown>; approval: Record<string, unknown>;
 		config: ConfigFields; ownerToken?: string; ownerTokenHash?: string; secretsKey?: string;
 		approvalClientSecret?: string; controlService?: ControlFetcher;
+		tenantDirectory?: KvNamespace; tenantNamespace?: DoNamespace;
 	}) {
 		this.id = init.id;
 		this.mode = init.mode;
@@ -420,6 +425,8 @@ export class TenantContext implements ConfigFields {
 		this.#secretsKey = init.secretsKey;
 		this.#approvalClientSecret = init.approvalClientSecret;
 		this.#controlService = init.controlService;
+		this.#tenantDirectory = init.tenantDirectory;
+		this.#tenantNamespace = init.tenantNamespace;
 		Object.assign(this, init.config);
 	}
 
@@ -431,6 +438,16 @@ export class TenantContext implements ConfigFields {
 	/** Issuer service binding, or undefined when this deploy has none. */
 	controlService(): ControlFetcher | undefined {
 		return this.#controlService;
+	}
+
+	/** Name directory for other tenants on this deployment. Undefined on a self-host deploy. */
+	tenantDirectory(): KvNamespace | undefined {
+		return this.#tenantDirectory;
+	}
+
+	/** Durable Object namespace for other tenants on this deployment. Undefined on a self-host deploy. */
+	tenantNamespace(): DoNamespace | undefined {
+		return this.#tenantNamespace;
 	}
 
 	/**
@@ -514,5 +531,7 @@ export function hostedTenantContext(env: WorkerBindings, overlay: HostedOverlay)
 		config, ownerTokenHash: hash || undefined, secretsKey: parsed.secretsKey,
 		approvalClientSecret: approval.clientSecret,
 		controlService: env.CONTROL_SERVICE,
+		tenantDirectory: env.TENANT_DIRECTORY,
+		tenantNamespace: env.TENANT_DO,
 	});
 }

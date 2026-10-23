@@ -8,6 +8,7 @@ import m0005 from "../migrations/0005_facade_owners.sql?raw";
 import m0006 from "../migrations/0006_mcp.sql?raw";
 import m0007 from "../migrations/0007_cimd.sql?raw";
 import m0008 from "../migrations/0008_oidc_txns.sql?raw";
+import m0009 from "../migrations/0009_outbound_seen.sql?raw";
 import type { Migration } from "./storage.ts";
 
 export const MIGRATIONS: Migration[] = [
@@ -19,4 +20,5 @@ export const MIGRATIONS: Migration[] = [
 	{ name: "0006_mcp.sql", sql: m0006 },
 	{ name: "0007_cimd.sql", sql: m0007 },
 	{ name: "0008_oidc_txns.sql", sql: m0008 },
+	{ name: "0009_outbound_seen.sql", sql: m0009 },
 ];
