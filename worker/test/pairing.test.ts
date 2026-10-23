@@ -863,9 +863,10 @@ test("owner log lists history without data_json and does not clear a pending wak
 	});
 	assert.equal(sent.status, 200, JSON.stringify(sent.data));
 	const taskId = sent.data.result.id;
+	const contextId = sent.data.result.contextId;
 	const pending = JSON.stringify({ taskIds: [taskId] });
 	const now = Date.now();
-	s.DB.db.prepare("INSERT INTO wakes (context_id, last_sent_ms, pending_json, pending_since_ms) VALUES (?, ?, ?, ?)").run("ctx-keep", now, pending, now);
+	s.DB.db.prepare("UPDATE wakes SET last_sent_ms = ?, pending_json = ?, pending_since_ms = ? WHERE context_id = ?").run(now, pending, now, contextId);
 	const secret = JSON.stringify({ token: pasted, messageId: "m-log" });
 	s.DB.db.prepare("UPDATE history SET text = ?, data_json = ? WHERE dir = 'in'").run(`hello ${pasted} and ${owner} there`, secret);
 	const log = await s.owner("GET", "/owner/log");
@@ -877,16 +878,16 @@ test("owner log lists history without data_json and does not clear a pending wak
 	assert.equal(text.includes(secret), false);
 	assert.equal(text.includes("data_json"), false);
 	assert.equal(text.includes('"data"'), false);
-	assert.equal(s.DB.db.prepare("SELECT pending_json FROM wakes WHERE context_id = ?").get("ctx-keep")?.pending_json, pending);
+	assert.equal(s.DB.db.prepare("SELECT pending_json FROM wakes WHERE context_id = ?").get(contextId)?.pending_json, pending);
 	const inbox = await s.owner("GET", "/owner/inbox");
 	assert.equal(inbox.status, 200);
-	assert.equal(s.DB.db.prepare("SELECT pending_json FROM wakes WHERE context_id = ?").get("ctx-keep")?.pending_json, null);
+	assert.equal(s.DB.db.prepare("SELECT pending_json FROM wakes WHERE context_id = ?").get(contextId)?.pending_json, null);
 	const again = JSON.stringify({ taskIds: [taskId] });
-	s.DB.db.prepare("UPDATE wakes SET pending_json = ?, pending_since_ms = ? WHERE context_id = ?").run(again, Date.now(), "ctx-keep");
+	s.DB.db.prepare("UPDATE wakes SET pending_json = ?, pending_since_ms = ? WHERE context_id = ?").run(again, Date.now(), contextId);
 	const head = await s.owner("HEAD", "/owner/inbox");
 	assert.equal(head.status, 200);
 	assert.equal(head.text, "");
-	assert.equal(s.DB.db.prepare("SELECT pending_json FROM wakes WHERE context_id = ?").get("ctx-keep")?.pending_json, again);
+	assert.equal(s.DB.db.prepare("SELECT pending_json FROM wakes WHERE context_id = ?").get(contextId)?.pending_json, again);
 });
 
 test("device page copy: code hint, expiry, token scope, settled result, A2A endpoint", async (t) => {

@@ -821,3 +821,51 @@ test("parseHttpResponse: status, headers, content-length and chunked bodies; mal
 		"HTTP/1.1 200 OK\r\nno colon\r\n\r\n", "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n10\r\nshort", "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\n"])
 		assert.equal(typeof M.parseHttpResponse(enc(bad)), "string", JSON.stringify(bad));
 });
+
+test("inbox tool clears wakes only for the page it returns, and a later call can fetch the rest", async (t) => {
+	const s = setup({ WAKE_DEBOUNCE_SECONDS: "3600" });
+	t.after(s.restore);
+	const a = await s.connect();
+	const n = M.INBOX_PAGE + 1;
+	const db = s.DB.db;
+	const now = Date.now();
+	const atOf = (i: number) => new Date(Date.UTC(2026, 0, 1) + i * 1000).toISOString();
+	const task = db.prepare(`INSERT INTO tasks (id, context_id, peer, state, protocol, created_at, updated_at, status_json, artifacts_json, push_configs_json)
+		VALUES (?, ?, 'ada', 'submitted', '0.3', ?, ?, ?, '[]', '[]')`);
+	const msg = db.prepare(`INSERT INTO messages (message_id, task_id, context_id, role, ts, message_json) VALUES (?, ?, ?, 'user', ?, ?)`);
+	const wake = db.prepare(`INSERT INTO wakes (context_id, last_sent_ms, pending_json, pending_since_ms) VALUES (?, ?, ?, ?)`);
+	for (let i = 0; i < n; i++) {
+		const id = `task-${String(i).padStart(4, "0")}`;
+		const contextId = `ctx-${String(i).padStart(4, "0")}`;
+		const at = atOf(i);
+		task.run(id, contextId, at, at, JSON.stringify({ state: "submitted", timestamp: at }));
+		msg.run(`m-${id}`, id, contextId, at, JSON.stringify({ kind: "message", role: "user", messageId: `m-${id}`, parts: [{ kind: "text", text: `hello ${id}` }] }));
+		wake.run(contextId, now, JSON.stringify({ contextId, taskId: id, taskIds: [id], from: "ada", preview: id, kind: "inbound" }), now);
+	}
+	const page = (text: string) => JSON.parse(text.slice(text.indexOf("\n") + 1)) as { taskId: string }[];
+	const wakeOf = (contextId: string) => (db.prepare("SELECT pending_json FROM wakes WHERE context_id = ?").get(contextId) as { pending_json: string | null }).pending_json;
+
+	const first = await s.tool(a.access_token, "inbox");
+	assert.equal(first.isError, false);
+	const text = first.content[0].text;
+	assert.match(text, new RegExp(`^${M.INBOX_PAGE} task\\(s\\) waiting\\.`));
+	assert.match(text, /More tasks are waiting; call inbox again with cursor [A-Za-z0-9_-]+\./);
+	const rows = page(text);
+	assert.equal(rows.length, M.INBOX_PAGE);
+	assert.equal(rows.some((r) => r.taskId === "task-0020"), false);
+	assert.equal(wakeOf("ctx-0000"), null);
+	const kept = wakeOf("ctx-0020");
+	assert.ok(kept);
+
+	const again = await s.tool(a.access_token, "inbox");
+	assert.equal(page(again.content[0].text).some((r) => r.taskId === "task-0020"), false);
+	assert.equal(wakeOf("ctx-0020"), kept, "a later call of the first page leaves the unseen wake");
+
+	const cursor = /cursor ([A-Za-z0-9_-]+)/.exec(text)?.[1];
+	assert.ok(cursor);
+	const second = await s.tool(a.access_token, "inbox", { cursor });
+	assert.equal(second.isError, false);
+	assert.deepEqual(page(second.content[0].text).map((r) => r.taskId), ["task-0020"]);
+	assert.equal(second.content[0].text.includes("More tasks are waiting"), false);
+	assert.equal(wakeOf("ctx-0020"), null);
+});

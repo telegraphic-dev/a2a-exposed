@@ -907,6 +907,79 @@ async function handlePush(req: Request, ctx: TenantContext, ectx: ExecutionConte
 }
 
 // ------------------------------------------------------------------ owner API (local CLI)
+const INBOX_STAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/;
+
+function inboxLimit(raw: string | null): number {
+	if (raw === null) return M.INBOX_MAX;
+	if (!/^[1-9]\d{0,2}$/.test(raw) || Number(raw) > M.INBOX_MAX) throw new HttpError(400, "limit must be 1-200");
+	return Number(raw);
+}
+
+function b64url(s: string): string {
+	return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function b64urlDecode(s: string): string {
+	const pad = s.length % 4 === 0 ? "" : "=".repeat(4 - (s.length % 4));
+	return atob(s.replace(/-/g, "+").replace(/_/g, "/") + pad);
+}
+
+/** Keyset cursor for GET /owner/inbox. null when the query omits it. */
+function inboxCursor(raw: string | null): { updatedAt: string; id: string } | null {
+	if (raw === null) return null;
+	if (!/^[A-Za-z0-9_-]{1,256}$/.test(raw)) throw new HttpError(400, "cursor is invalid");
+	let text = "";
+	try { text = b64urlDecode(raw); } catch { throw new HttpError(400, "cursor is invalid"); }
+	const nl = text.indexOf("\n");
+	if (nl <= 0) throw new HttpError(400, "cursor is invalid");
+	const updatedAt = text.slice(0, nl);
+	const id = text.slice(nl + 1);
+	if (!INBOX_STAMP.test(updatedAt) || !A.ID_RE.test(id)) throw new HttpError(400, "cursor is invalid");
+	return { updatedAt, id };
+}
+
+function inboxCursorToken(updatedAt: string, id: string): string {
+	return b64url(`${updatedAt}\n${id}`);
+}
+
+function wakeTaskIds(payload: Json): string[] {
+	const raw: unknown[] = Array.isArray(payload?.taskIds) ? payload.taskIds : [];
+	const listed: string[] = [];
+	for (const id of raw) if (typeof id === "string" && id) listed.push(id);
+	const ids = listed.length ? listed : (typeof payload?.taskId === "string" && payload.taskId ? [payload.taskId] : []);
+	return [...new Set(ids)];
+}
+
+/** Drop these task ids from the inbound wake for that conversation. A wake for another conversation, or an
+ *  outbound update that reuses the task id, stays pending. A wake that still names other tasks stays pending. */
+async function ackPendingWakes(ctx: TenantContext, seen: { taskId: string; contextId: string }[], kind = "inbound"): Promise<void> {
+	const byContext = new Map<string, Set<string>>();
+	for (const row of seen) {
+		if (!row.taskId || !row.contextId) continue;
+		const ids = byContext.get(row.contextId) ?? new Set<string>();
+		ids.add(row.taskId);
+		byContext.set(row.contextId, ids);
+	}
+	for (const [contextId, seenIds] of byContext) {
+		const row: Json = await ctx.DB.prepare("SELECT pending_json FROM wakes WHERE context_id = ?").bind(contextId).first();
+		if (typeof row?.pending_json !== "string") continue;
+		let payload: Json;
+		try { payload = JSON.parse(row.pending_json); } catch { continue; }
+		const wakeKind = typeof payload?.kind === "string" && payload.kind ? payload.kind : "inbound";
+		if (wakeKind !== kind) continue;
+		if (typeof payload?.contextId === "string" && payload.contextId !== contextId) continue;
+		const ids = wakeTaskIds(payload);
+		if (!ids.some((id) => seenIds.has(id))) continue;
+		const kept = ids.filter((id) => !seenIds.has(id));
+		if (!kept.length) {
+			await ctx.DB.prepare("UPDATE wakes SET pending_json = NULL, pending_since_ms = NULL WHERE context_id = ? AND pending_json = ?").bind(contextId, row.pending_json).run();
+			continue;
+		}
+		const next = { ...payload, taskIds: kept, taskId: kept[kept.length - 1] };
+		await ctx.DB.prepare("UPDATE wakes SET pending_json = ? WHERE context_id = ? AND pending_json = ?").bind(JSON.stringify(next), contextId, row.pending_json).run();
+	}
+}
+
 function ownerTaskView(t: Json): Json {
 	const { _push, _peer, _protocol, _createdAt, ...rest } = t;
 	return {
@@ -915,7 +988,7 @@ function ownerTaskView(t: Json): Json {
 	};
 }
 
-async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionContext, path: string, url: URL, trusted = false, head = false): Promise<Response> {
+async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionContext, path: string, url: URL, trusted = false, head = false, deferAck = false): Promise<Response> {
 	// trusted: an in-process call. MCP tools use ownerCall (paths fixed in the tool code). The hosted
 	// owner() RPC uses runOwnerRpc, which has its own allowlist. A request from the network is never trusted.
 	if (!trusted && !(await isOwner(ctx, req.headers.get("authorization")))) return json({ error: "unauthorized" }, 401);
@@ -946,30 +1019,37 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 	if (seg[0] === "inbox" && m === "GET") {
 		const contextFilter = url.searchParams.get("context");
 		const all = url.searchParams.get("all") === "1";
-		let q = "SELECT id FROM tasks WHERE 1=1";
+		const limit = inboxLimit(url.searchParams.get("limit"));
+		const cursor = inboxCursor(url.searchParams.get("cursor"));
+		let q = "SELECT id, updated_at FROM tasks WHERE 1=1";
 		const args: Json[] = [];
 		if (!all) q += " AND state IN ('submitted','working')";
-		if (contextFilter) { q += " AND context_id = ?"; args.push(contextFilter); }
-		q += " ORDER BY updated_at LIMIT 200";
+		if (contextFilter) { A.checkId(contextFilter, "contextId"); q += " AND context_id = ?"; args.push(contextFilter); }
+		if (cursor) { q += " AND (updated_at > ? OR (updated_at = ? AND id > ?))"; args.push(cursor.updatedAt, cursor.updatedAt, cursor.id); }
+		q += " ORDER BY updated_at, id LIMIT ?";
+		args.push(limit + 1);
 		const rows = await ctx.DB.prepare(q).bind(...args).all();
+		const found = rows.results as Json[];
+		const page = found.slice(0, limit);
 		const out = [];
-		for (const r of rows.results as Json[]) {
+		for (const r of page) {
 			const t = await loadTask(ctx, r.id);
 			const lastUser = [...t.history].reverse().find((x: Json) => x.role === "user") || {};
 			out.push({ taskId: t.id, contextId: t.contextId, from: t._peer, state: t.status.state, updated: t.status.timestamp, text: A.textOf(lastUser) });
 		}
-		// the owner has now seen these tasks: drop pending wakes that only cover them.
-		// HEAD returns the same status and headers and does not mark the inbox seen.
-		if (!head) {
-			const seen = new Set(out.map((o) => o.taskId));
-			const pend = await ctx.DB.prepare("SELECT context_id, pending_json FROM wakes WHERE pending_json IS NOT NULL").all();
-			for (const p of pend.results as Json[]) {
-				const ids: string[] = JSON.parse(p.pending_json).taskIds || [];
-				if (ids.length && ids.every((i) => seen.has(i)))
-					await ctx.DB.prepare("UPDATE wakes SET pending_json = NULL, pending_since_ms = NULL WHERE context_id = ? AND pending_json = ?").bind(p.context_id, p.pending_json).run();
-			}
+		// Clear a pending wake only for tasks in this page. Ids the caller did not get stay pending,
+		// including when one wake names tasks on this page and tasks on a later page.
+		// HEAD does not mark the inbox seen. The hosted owner RPC defers the clear until it has
+		// decided to return this body (a withheld response leaves the wakes pending).
+		if (!head && !deferAck) await ackPendingWakes(ctx, out.flatMap((o) => typeof o.taskId === "string" && typeof o.contextId === "string" ? [{ taskId: o.taskId, contextId: o.contextId }] : []));
+		const headers: Record<string, string> = {};
+		if (found.length > limit && page.length) {
+			const last = page[page.length - 1];
+			const updatedAt = String(last.updated_at);
+			const id = String(last.id);
+			if (INBOX_STAMP.test(updatedAt) && A.ID_RE.test(id)) headers["x-a2a-next-cursor"] = inboxCursorToken(updatedAt, id);
 		}
-		return json(out);
+		return json(out, 200, headers);
 	}
 	if (seg[0] === "tasks" && seg[1]) {
 		const t = await loadTask(ctx, A.checkId(seg[1], "taskId"));
@@ -979,6 +1059,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			if (A.TERMINAL.has(t.status.state)) return json({ error: `task is already ${t.status.state}` }, 409);
 			t.status = { state: "working", timestamp: A.nowIso() };
 			await ctx.DB.batch([saveTaskStmt(ctx, t), histStmt(ctx, t.contextId, { dir: "local", taskId: t.id, event: "state", state: "working" })]);
+			await ackPendingWakes(ctx, [{ taskId: t.id, contextId: t.contextId }]);
 			return json({ task: ownerTaskView(t), push: await notifyPeer(ctx, ectx, t) });
 		}
 		if (seg[2] === "reply" && m === "POST") {
@@ -993,6 +1074,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			t.status = { state, timestamp: A.nowIso(), message: msg };
 			await ctx.DB.batch([saveTaskStmt(ctx, t), msgStmt(ctx, t, msg),
 				histStmt(ctx, t.contextId, { dir: "out", peer: t._peer, taskId: t.id, role: "agent", state, text: b.text })]);
+			await ackPendingWakes(ctx, [{ taskId: t.id, contextId: t.contextId }]);
 			return json({ task: ownerTaskView(t), push: await notifyPeer(ctx, ectx, t) });
 		}
 	}
@@ -2315,7 +2397,8 @@ export async function runOwnerRpc(ctx: TenantContext, ectx: ExecutionContext, in
 		body: parsedBody.value === undefined ? undefined : JSON.stringify(parsedBody.value),
 	});
 	let res: Response;
-	try { res = await handleOwner(req, ctx, ectx, url.pathname, url, true); }
+	// deferAck: do not clear inbox wakes until this response is actually returned.
+	try { res = await handleOwner(req, ctx, ectx, url.pathname, url, true, false, true); }
 	catch (e: any) {
 		const status = e instanceof HttpError ? e.status : 400;
 		const error = String(e?.message || "bad request").slice(0, 200);
@@ -2340,18 +2423,28 @@ export async function runOwnerRpc(ctx: TenantContext, ectx: ExecutionContext, in
 		}
 	}
 	if (data === null || ownerResponseLeaks(data)) return refuse(500, "response withheld", "secret");
+	if (matched.route.path === "/owner/inbox" && res.ok && Array.isArray(data)) {
+		const seen = data.flatMap((row) => {
+			if (!row || typeof row !== "object") return [];
+			const taskId = (row as { taskId?: unknown }).taskId;
+			const contextId = (row as { contextId?: unknown }).contextId;
+			return typeof taskId === "string" && typeof contextId === "string" ? [{ taskId, contextId }] : [];
+		});
+		await ackPendingWakes(ctx, seen);
+	}
 	log("owner_rpc", { tenant, accountId, method: matched.route.method, route: matched.route.name, status: res.status });
-	return { status: res.status, body: data };
+	const nextCursor = res.headers.get("x-a2a-next-cursor") || "";
+	return nextCursor ? { status: res.status, body: data, nextCursor } : { status: res.status, body: data };
 }
 
 /** Call an owner API route in-process (MCP tools only; the paths are fixed in the tool code). */
-async function ownerCall(ctx: TenantContext, ectx: ExecutionContext, method: string, path: string, body?: Json): Promise<{ status: number; data: Json }> {
+async function ownerCall(ctx: TenantContext, ectx: ExecutionContext, method: string, path: string, body?: Json): Promise<{ status: number; data: Json; headers: Headers }> {
 	const url = new URL(ctx.PUBLIC_URL.replace(/\/$/, "") + path);
 	const req = new Request(url, { method, headers: { "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
 	let res: Response;
 	try { res = await handleOwner(req, ctx, ectx, url.pathname, url, true); }
-	catch (e: any) { return { status: e instanceof HttpError ? e.status : 400, data: { error: e.message } }; }
-	return { status: res.status, data: await res.json().catch(() => null) };
+	catch (e: any) { return { status: e instanceof HttpError ? e.status : 400, data: { error: e.message }, headers: new Headers() }; }
+	return { status: res.status, data: await res.json().catch(() => null), headers: res.headers };
 }
 
 class ToolError extends Error {}
@@ -2419,10 +2512,25 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 			const qs = new URLSearchParams();
 			if (a.contextId !== undefined) qs.set("context", A.checkId(argStr(a, "contextId"), "contextId"));
 			if (a.all === true) qs.set("all", "1");
-			const tasks = must(await ownerCall(ctx, ectx, "GET", `/owner/inbox${qs.size ? `?${qs}` : ""}`));
+			if (a.cursor !== undefined) {
+				const cursor = argStr(a, "cursor");
+				if (!/^[A-Za-z0-9_-]{1,256}$/.test(cursor)) throw new ToolError("cursor is invalid");
+				qs.set("cursor", cursor);
+			}
+			let limit = M.INBOX_PAGE;
+			if (a.limit !== undefined) {
+				const n = Number(a.limit);
+				if (!Number.isInteger(n) || n < 1 || n > M.INBOX_MAX) throw new ToolError("limit must be 1-200");
+				limit = n;
+			}
+			qs.set("limit", String(limit));
+			const listed = await ownerCall(ctx, ectx, "GET", `/owner/inbox?${qs}`);
+			const tasks = must(listed);
+			const next = listed.headers.get("x-a2a-next-cursor") || "";
 			const pairing = pairingOn(ctx) ? must(await ownerCall(ctx, ectx, "GET", "/owner/pairing")).pending.length : 0;
 			const manage = pairing ? dashboardUrl(ctx) : "";
-			const head = `${tasks.length} task(s)${a.all ? "" : " waiting"}${pairing ? `; ${pairing} pending pairing request(s): see pairing_requests (never approve them yourself)${manage ? `. Approve or deny at ${manage}` : ""}` : ""}. ${UNTRUSTED}`;
+			const more = next ? ` More tasks are waiting; call inbox again with cursor ${next}.` : "";
+			const head = `${tasks.length} task(s)${a.all ? "" : " waiting"}${pairing ? `; ${pairing} pending pairing request(s): see pairing_requests (never approve them yourself)${manage ? `. Approve or deny at ${manage}` : ""}` : ""}.${more} ${UNTRUSTED}`;
 			return M.toolText(head, tasks);
 		}
 		case "show_task":
