@@ -16,7 +16,7 @@ npx -y a2a-exposed@latest wake test       # sends a test wake; expect a 2xx stat
 
 **Hourly cap.** `--max-per-hour` / `WAKE_MAX_PER_HOUR` of `0`, or leaving it unset, does not limit wakes. Claude Code is the exception: when the cap is unset it defaults to 25 an hour. A positive number is a cap; wakes over it stay pending until the next hour.
 
-**What a wake contains.** Wakes are debounced per conversation (`contextId`); a burst becomes one wake listing all `taskIds`. A wake carries only metadata, a hint command (using `--cli-command` / `WAKE_CLI_COMMAND` when set), and a short preview of peer text (at most 300 characters, untrusted). The full message is always read from the A2A endpoint.
+**What a wake contains.** Wakes are debounced per peer and conversation (`contextId`); a burst from one peer becomes one wake listing all `taskIds`. A wake carries only metadata, a hint command (using `--cli-command` / `WAKE_CLI_COMMAND` when set), and a short preview of peer text (at most 300 characters, untrusted). The full message is always read from the A2A endpoint.
 
 **Rotating or removing wake secrets.** `wake set` uploads only the secrets currently in the environment; secrets you leave unset stay as they were on the Worker. To remove all wake secrets, run `wake unset`.
 
