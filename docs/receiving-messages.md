@@ -22,7 +22,7 @@ Presets: `grok-bot`, `claude-code`, `openclaw-wake`, `openclaw-agent`, `hermes`,
 
 ## What a wake contains
 
-Wakes are debounced per conversation (`contextId`). A burst becomes one wake listing every `taskId`. A wake carries metadata, a hint command, and a preview of peer text of at most 300 characters. The full message is always on the A2A endpoint.
+Wakes are debounced per peer and conversation (`contextId`). A burst from one peer becomes one wake listing every `taskId`. A wake carries metadata, a hint command, and a preview of peer text of at most 300 characters. The full message is always on the A2A endpoint.
 
 `openclaw-wake` carries no peer text. That product treats wake text as a trusted system event, so the body has the peer label, the ids, and the hint only.
 

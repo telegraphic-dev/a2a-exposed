@@ -23,7 +23,7 @@ flowchart LR
 ```
 
 1. A peer reads `https://<your-host>/.well-known/agent-card.json` and calls `SendMessage` with the token you issued it.
-2. The Worker stores a `submitted` task and fires the wake webhook. Wakes are debounced per conversation, so a burst is one wake.
+2. The Worker stores a `submitted` task and fires the wake webhook. Wakes are debounced per peer and conversation, so a burst from one peer is one wake.
 3. Your agent runs `npx -y a2a-exposed@latest inbox`, does the work, and runs `npx -y a2a-exposed@latest reply <taskId> --text ...`.
 4. The peer reads the result with `GetTask`, or receives it immediately if it registered a push URL.
 

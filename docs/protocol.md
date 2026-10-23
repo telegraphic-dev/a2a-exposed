@@ -20,6 +20,12 @@ The same endpoint accepts `message/send`, `tasks/get`, `tasks/cancel`, and `task
 
 `/.well-known/agent.json` serves an A2A 0.3-shaped card (`url`, `protocolVersion`, `preferredTransport`) for 0.3 clients.
 
+## Conversations
+
+A `contextId` is one peer's conversation. `message/send` without a `taskId` continues it when this peer already has that id. An id that no task, history row, or outbound task uses is accepted and kept, including an id the caller chose. Omitting `contextId` starts a conversation; a follow-up uses the id in the response.
+
+An id that already belongs to a different peer is rejected with JSON-RPC `-32602` and `Invalid params: unknown contextId (omit contextId to start a new conversation, then use the one returned)`. That is a uniform error: the body does not say whether the id is in use, and the response does not include a new id. The inbox records one owner per context id and writes that row in the same transaction as the first task. A second peer's insert does not replace the owner, and no task is stored for them. History for a conversation is the rows for peers that own it (a task or an outbound task), plus local notes. A wake is stored and debounced by peer and `contextId`. The façade's own context check is unchanged.
+
 ## Streaming
 
 Work is asynchronous. The peer polls `GetTask`, or registers a push URL. `SendStreamingMessage` answers JSON-RPC `-32004`.

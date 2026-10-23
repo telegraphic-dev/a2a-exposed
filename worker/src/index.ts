@@ -67,6 +67,49 @@ function histStmt(ctx: TenantContext, contextId: string, e: Json) {
 		e.event ?? null, e.text ?? null, e.data !== undefined ? JSON.stringify(e.data) : null);
 }
 
+/** Claim an unused context for this peer. `conversation_owners.context_id` is unique, and the insert does nothing
+ *  when another peer already holds it or already has a task, history row, or outbound task on that id. */
+function claimContextStmt(ctx: TenantContext, contextId: string, peer: string, ts: string) {
+	return ctx.DB.prepare(
+		`INSERT INTO conversation_owners (context_id, peer, created_at)
+		 SELECT ?1, ?2, ?3
+		 WHERE NOT EXISTS (SELECT 1 FROM conversation_owners WHERE context_id = ?1 AND peer != ?2)
+		   AND NOT EXISTS (SELECT 1 FROM tasks WHERE context_id = ?1 AND peer IS NOT NULL AND peer != '' AND peer != ?2)
+		   AND NOT EXISTS (SELECT 1 FROM history WHERE context_id = ?1 AND peer IS NOT NULL AND peer != '' AND peer != ?2)
+		   AND NOT EXISTS (SELECT 1 FROM outbound WHERE context_id = ?1 AND peer IS NOT NULL AND peer != '' AND peer != ?2)
+		 ON CONFLICT(context_id) DO NOTHING`,
+	).bind(contextId, peer, ts);
+}
+
+/** A new task is stored only when this peer owns the context. Runs in the same batch as `claimContextStmt`. */
+function saveTaskIfOwnerStmt(ctx: TenantContext, t: Json) {
+	return ctx.DB.prepare(
+		`INSERT INTO tasks (id, context_id, peer, state, protocol, created_at, updated_at, status_json, artifacts_json, metadata_json, push_configs_json)
+		 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11
+		 WHERE (SELECT peer FROM conversation_owners WHERE context_id = ?2) = ?3
+		 ON CONFLICT(id) DO UPDATE SET state=?4, updated_at=?7, status_json=?8, artifacts_json=?9, metadata_json=?10, push_configs_json=?11
+		 WHERE (SELECT peer FROM conversation_owners WHERE context_id = ?2) = ?3`,
+	).bind(t.id, t.contextId, t._peer, t.status.state, t._protocol, t._createdAt, A.nowIso(), JSON.stringify(t.status),
+		JSON.stringify(t.artifacts || []), t.metadata ? JSON.stringify(t.metadata) : null, JSON.stringify(t._push || []));
+}
+
+function msgIfOwnerStmt(ctx: TenantContext, t: Json, m: Json) {
+	return ctx.DB.prepare(
+		`INSERT INTO messages (message_id, task_id, context_id, role, ts, message_json)
+		 SELECT ?1, ?2, ?3, ?4, ?5, ?6
+		 WHERE (SELECT peer FROM conversation_owners WHERE context_id = ?3) = ?7`,
+	).bind(m.messageId, t.id, t.contextId, m.role, A.nowIso(), JSON.stringify(m), t._peer);
+}
+
+function histIfOwnerStmt(ctx: TenantContext, contextId: string, e: Json, owner: string) {
+	return ctx.DB.prepare(
+		`INSERT INTO history (context_id, ts, dir, peer, task_id, role, state, event, text, data_json)
+		 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10
+		 WHERE (SELECT peer FROM conversation_owners WHERE context_id = ?1) = ?11`,
+	).bind(contextId, e.ts || A.nowIso(), e.dir || "local", e.peer ?? null, e.taskId ?? null, e.role ?? null, e.state ?? null,
+		e.event ?? null, e.text ?? null, e.data !== undefined ? JSON.stringify(e.data) : null, owner);
+}
+
 // ------------------------------------------------------------------ self-aware fetch (a Worker cannot reliably fetch its own custom domain)
 /**
  * Another tenant on this deployment's domain. A public fetch of that hostname returns 522, so the call
@@ -118,7 +161,7 @@ async function doFetch(ctx: TenantContext, ectx: ExecutionContext, url: string, 
 	return fetch(url, { ...init, signal: AbortSignal.timeout(15000) });
 }
 
-// ------------------------------------------------------------------ wake webhook (presets), debounced per context via D1
+// ------------------------------------------------------------------ wake webhook (presets), debounced per peer and context via D1
 const preset = (ctx: TenantContext) => (ctx.WAKE_PRESET || "generic").trim();
 
 function wakeConfig(ctx: TenantContext): WakeConfig {
@@ -207,6 +250,21 @@ const WAKE_RETRIES = 3;
  *  flush it once Retry-After (30 s - 1 h) has passed, on the next request to the Worker or the optional cron. At most
  *  WAKE_RETRIES times per wake; a newer message for the conversation merges in and starts over. Pairing and test wakes
  *  are not retried (a pairing code lasts 60 minutes). */
+function pendingWakePeer(pending: string | null | undefined): string {
+	if (!pending) return "";
+	try {
+		const from = JSON.parse(pending)?.from;
+		return typeof from === "string" ? from : "";
+	} catch { return ""; }
+}
+
+/** The wake row for this peer's conversation. A row stored before peer was part of the key has peer ''. */
+async function loadWake(ctx: TenantContext, contextId: string, peer: string): Promise<Json | null> {
+	const exact: Json = await ctx.DB.prepare("SELECT * FROM wakes WHERE context_id = ? AND peer = ?").bind(contextId, peer).first();
+	if (exact || !peer) return exact;
+	return ctx.DB.prepare("SELECT * FROM wakes WHERE context_id = ? AND peer = ''").bind(contextId).first();
+}
+
 async function requeueWake(ctx: TenantContext, ectx: ExecutionContext, payload: Json, retryAfter: string | null) {
 	if (payload.kind !== "inbound") return;
 	const attempts = (Number(payload.attempts) || 0) + 1;
@@ -214,16 +272,18 @@ async function requeueWake(ctx: TenantContext, ectx: ExecutionContext, payload: 
 	const secs = Number(retryAfter);
 	const waitMs = Math.min(3600, Math.max(30, Number.isFinite(secs) && secs > 0 ? secs : 60)) * 1000;
 	const now = Date.now(), contextId = payload.contextId;
-	const cur: Json = await ctx.DB.prepare("SELECT * FROM wakes WHERE context_id = ?").bind(contextId).first();
+	const peer = typeof payload.from === "string" ? payload.from : "";
+	const cur: Json = await loadWake(ctx, contextId, peer);
 	const prev = cur?.pending_json ? JSON.parse(cur.pending_json) : null;
 	const merged = { ...payload, attempts, taskIds: [...new Set([...(prev?.taskIds || []), ...(payload.taskIds || [])])] };
 	// flushWake and nextCronAt wait until last_sent_ms + debounce. Store Retry-After minus that debounce so the
 	// deadline is Retry-After itself, including when the debounce is longer than Retry-After. Do not keep the
 	// previous last_sent_ms: that clock is the send we just made, and keeping it would wait out the debounce.
 	const due = now + waitMs - debounceMs(ctx);
-	await ctx.DB.prepare(`INSERT INTO wakes (context_id, last_sent_ms, pending_json, pending_since_ms) VALUES (?, ?, ?, ?)
-		ON CONFLICT(context_id) DO UPDATE SET pending_json = excluded.pending_json, last_sent_ms = excluded.last_sent_ms,
-		pending_since_ms = COALESCE(wakes.pending_since_ms, excluded.pending_since_ms)`).bind(contextId, due, JSON.stringify(merged), now).run();
+	const rowPeer = cur && (cur.peer === peer || cur.peer === "" || cur.peer == null) ? (cur.peer ?? "") : peer;
+	await ctx.DB.prepare(`INSERT INTO wakes (context_id, peer, last_sent_ms, pending_json, pending_since_ms) VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(context_id, peer) DO UPDATE SET pending_json = excluded.pending_json, last_sent_ms = excluded.last_sent_ms,
+		pending_since_ms = COALESCE(wakes.pending_since_ms, excluded.pending_since_ms)`).bind(contextId, rowPeer === "" ? peer : rowPeer, due, JSON.stringify(merged), now).run();
 	log("wake_requeued", { contextId, retryInS: Math.round(waitMs / 1000), attempt: attempts });
 	// The row exists now. A hosted alarm has to be set from this turn: the request that started sendWake may already have returned.
 	await noteWakeWrite(ectx);
@@ -232,33 +292,45 @@ async function requeueWake(ctx: TenantContext, ectx: ExecutionContext, payload: 
 async function wake(ctx: TenantContext, ectx: ExecutionContext, contextId: string, taskId: string, from: string, preview: string, kind = "inbound") {
 	const payload: Json = { contextId, taskId, taskIds: [taskId], from, preview: preview.slice(0, 300), kind };
 	const now = Date.now(), deb = debounceMs(ctx);
-	const row: Json = await ctx.DB.prepare("SELECT * FROM wakes WHERE context_id = ?").bind(contextId).first();
+	let row: Json = await loadWake(ctx, contextId, from);
+	// A pre-peer row (peer '') is this conversation when it names this peer, or names nobody yet.
+	// Another peer's legacy row stays put; this peer gets its own row.
+	if (row && row.peer === "" && from) {
+		const named = pendingWakePeer(row.pending_json);
+		if (!named || named === from) {
+			const moved = await ctx.DB.prepare("UPDATE wakes SET peer = ? WHERE context_id = ? AND peer = ''").bind(from, contextId).run();
+			if (changed(moved) === 1) row = { ...row, peer: from };
+			else row = await ctx.DB.prepare("SELECT * FROM wakes WHERE context_id = ? AND peer = ?").bind(contextId, from).first();
+		} else row = null;
+	}
+	const peer = row?.peer ?? from;
 	let claimed = false;
 	if (!row) {
-		const r = await ctx.DB.prepare("INSERT INTO wakes (context_id, last_sent_ms) VALUES (?, ?) ON CONFLICT DO NOTHING").bind(contextId, now).run();
+		const r = await ctx.DB.prepare("INSERT INTO wakes (context_id, peer, last_sent_ms) VALUES (?, ?, ?) ON CONFLICT DO NOTHING").bind(contextId, peer, now).run();
 		claimed = r.meta.changes === 1;
 	} else if (!row.pending_json && now - row.last_sent_ms >= deb) {
-		const r = await ctx.DB.prepare("UPDATE wakes SET last_sent_ms = ? WHERE context_id = ? AND last_sent_ms = ? AND pending_json IS NULL")
-			.bind(now, contextId, row.last_sent_ms).run();
+		const r = await ctx.DB.prepare("UPDATE wakes SET last_sent_ms = ? WHERE context_id = ? AND peer = ? AND last_sent_ms = ? AND pending_json IS NULL")
+			.bind(now, contextId, peer, row.last_sent_ms).run();
 		claimed = r.meta.changes === 1;
 	}
 	if (claimed && (await wakeBudgetOk(ctx))) { ectx.waitUntil(sendWake(ctx, ectx, payload)); return; }
 	// debounce window (or hourly cap reached): merge into the pending wake and flush it later
-	const cur: Json = await ctx.DB.prepare("SELECT * FROM wakes WHERE context_id = ?").bind(contextId).first();
+	const cur: Json = await loadWake(ctx, contextId, from);
+	const curPeer = cur?.peer ?? peer;
 	const prev = cur?.pending_json ? JSON.parse(cur.pending_json) : null;
 	payload.taskIds = [...new Set([...(prev?.taskIds || []), taskId])];
-	await ctx.DB.prepare("UPDATE wakes SET pending_json = ?, pending_since_ms = COALESCE(pending_since_ms, ?) WHERE context_id = ?")
-		.bind(JSON.stringify(payload), now, contextId).run();
+	await ctx.DB.prepare("UPDATE wakes SET pending_json = ?, pending_since_ms = COALESCE(pending_since_ms, ?) WHERE context_id = ? AND peer = ?")
+		.bind(JSON.stringify(payload), now, contextId, curPeer).run();
 	// The pending row exists now. A hosted alarm is set in this turn, including when the delay is too long for waitUntil.
 	await noteWakeWrite(ectx);
 	const delay = Math.max(0, (cur?.last_sent_ms || now) + deb - now) + 100;
 	// waitUntil can outlive the response by ~30s. Longer windows are flushed by a later request, the optional
 	// single-inbox cron, or the registered alarm (set above).
-	if (delay <= 25000) ectx.waitUntil(new Promise((res) => setTimeout(res, delay)).then(() => flushWake(ctx, ectx, contextId)));
+	if (delay <= 25000) ectx.waitUntil(new Promise((res) => setTimeout(res, delay)).then(() => flushWake(ctx, ectx, contextId, curPeer)));
 }
 
-async function flushWake(ctx: TenantContext, ectx: ExecutionContext, contextId: string) {
-	const row: Json = await ctx.DB.prepare("SELECT * FROM wakes WHERE context_id = ?").bind(contextId).first();
+async function flushWake(ctx: TenantContext, ectx: ExecutionContext, contextId: string, peer: string) {
+	const row: Json = await ctx.DB.prepare("SELECT * FROM wakes WHERE context_id = ? AND peer = ?").bind(contextId, peer).first();
 	if (!row || !row.pending_json) return;
 	const now = Date.now();
 	if (now - row.last_sent_ms < debounceMs(ctx)) return;
@@ -268,16 +340,16 @@ async function flushWake(ctx: TenantContext, ectx: ExecutionContext, contextId: 
 		if ((b?.count ?? 0) >= maxPerHour(ctx)) return; // keep pending until the next hour
 	}
 	const r = await ctx.DB.prepare(
-		"UPDATE wakes SET pending_json = NULL, pending_since_ms = NULL, last_sent_ms = ? WHERE context_id = ? AND last_sent_ms = ? AND pending_json IS NOT NULL",
-	).bind(now, contextId, row.last_sent_ms).run();
+		"UPDATE wakes SET pending_json = NULL, pending_since_ms = NULL, last_sent_ms = ? WHERE context_id = ? AND peer = ? AND last_sent_ms = ? AND pending_json IS NOT NULL",
+	).bind(now, contextId, peer, row.last_sent_ms).run();
 	if (r.meta.changes === 1 && (await wakeBudgetOk(ctx))) await sendWake(ctx, ectx, JSON.parse(row.pending_json));
 }
 
 /** Flush every pending wake whose debounce window has passed (called opportunistically and from cron). */
 async function flushDue(ctx: TenantContext, ectx: ExecutionContext) {
-	const rows = await ctx.DB.prepare("SELECT context_id FROM wakes WHERE pending_json IS NOT NULL AND last_sent_ms <= ? LIMIT 20")
+	const rows = await ctx.DB.prepare("SELECT context_id, peer FROM wakes WHERE pending_json IS NOT NULL AND last_sent_ms <= ? LIMIT 20")
 		.bind(Date.now() - debounceMs(ctx)).all();
-	for (const r of rows.results as Json[]) await flushWake(ctx, ectx, r.context_id);
+	for (const r of rows.results as Json[]) await flushWake(ctx, ectx, r.context_id, typeof r.peer === "string" ? r.peer : "");
 }
 
 /**
@@ -602,6 +674,10 @@ async function ownedTask(ctx: TenantContext, id: unknown, label: string): Promis
 	return t;
 }
 
+/** A contextId this caller does not get to use. The same sentence is returned for an id the façade has no
+ *  record of. It does not say whether the id exists, or which peer holds it. */
+const UNKNOWN_CONTEXT = "Invalid params: unknown contextId (omit contextId to start a new conversation, then use the one returned)";
+
 function normPushCfg(cfg: Json, version: string): Json {
 	if (!cfg || typeof cfg !== "object" || typeof cfg.url !== "string") throw new RpcError(-32602, "push notification config needs url");
 	const out: Json = { id: typeof cfg.id === "string" && cfg.id ? cfg.id.slice(0, 128) : A.newId(), url: cfg.url, _version: version };
@@ -634,6 +710,11 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
 	}
 	const contextId = task ? task.contextId : msg.contextId ? A.checkId(msg.contextId, "contextId") : A.newId();
 	const ts = A.nowIso();
+	// A client-provided id nobody owns is still this peer's new conversation (single-peer and outbound send
+	// keep passing one). An id another peer already has is not. A2A forbids minting a replacement id when the
+	// client id is refused, so this is the same error the façade returns for an unknown context, not a new id.
+	// The claim and the first task are one batch: a second peer cannot pass a read and then write its own task.
+	const creating = !task;
 	if (!task) task = { id: A.newId(), contextId, status: { state: "submitted", timestamp: ts }, artifacts: [], history: [], _peer: label, _protocol: version, _createdAt: ts, _push: [] };
 	msg.contextId = contextId; msg.taskId = task.id;
 	task.history.push(msg);
@@ -641,10 +722,23 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
 	if (pushCfg) task._push = [...task._push.filter((c: Json) => c.id !== pushCfg.id), pushCfg];
 	if (params.metadata && typeof params.metadata === "object") task.metadata = { ...(task.metadata || {}), ...params.metadata };
 	const preview = A.textOf(msg);
-	await ctx.DB.batch([
-		saveTaskStmt(ctx, task), msgStmt(ctx, task, msg),
-		histStmt(ctx, contextId, { dir: "in", peer: label, taskId: task.id, role: "user", text: preview, data: { messageId: msg.messageId } }),
-	]);
+	if (creating) {
+		const stored = await ctx.DB.batch([
+			claimContextStmt(ctx, contextId, label, ts),
+			saveTaskIfOwnerStmt(ctx, task),
+			msgIfOwnerStmt(ctx, task, msg),
+			histIfOwnerStmt(ctx, contextId, { dir: "in", peer: label, taskId: task.id, role: "user", text: preview, data: { messageId: msg.messageId } }, label),
+			ctx.DB.prepare("SELECT peer FROM conversation_owners WHERE context_id = ?").bind(contextId),
+		]);
+		const owner = (stored[4]?.results?.[0] as Json | undefined)?.peer;
+		const wrote = stored[1]?.meta?.changes ?? 0;
+		if (owner !== label || wrote < 1) throw new RpcError(-32602, UNKNOWN_CONTEXT);
+	} else {
+		await ctx.DB.batch([
+			saveTaskStmt(ctx, task), msgStmt(ctx, task, msg),
+			histStmt(ctx, contextId, { dir: "in", peer: label, taskId: task.id, role: "user", text: preview, data: { messageId: msg.messageId } }),
+		]);
+	}
 	log("message_received", { peer: label, contextId, taskId: task.id, chars: preview.length, version });
 	await wake(ctx, ectx, contextId, task.id, label, preview);
 	const pt = A.publicTask(task, version, conf.historyLength);
@@ -857,7 +951,7 @@ async function proxyRpc(req: Request, ctx: TenantContext, c: { raw: string; rid:
 			// may still be a live upstream context (another peer's, or one opened outside the façade), and the façade can't
 			// tell, so client-chosen context ids are refused; omit contextId to start a conversation and reuse the returned one.
 			if ((await ownerOf(ctx, "context", m.contextId)) !== c.label)
-				return err(-32602, "Invalid params: unknown contextId (omit contextId to start a new conversation, then use the one returned)");
+				return err(-32602, UNKNOWN_CONTEXT);
 		}
 	} else {
 		const tid = F.taskIdOf(c.op, c.params);
@@ -1120,22 +1214,25 @@ async function ackPendingWakes(ctx: TenantContext, seen: { taskId: string; conte
 		byContext.set(row.contextId, ids);
 	}
 	for (const [contextId, seenIds] of byContext) {
-		const row: Json = await ctx.DB.prepare("SELECT pending_json FROM wakes WHERE context_id = ?").bind(contextId).first();
-		if (typeof row?.pending_json !== "string") continue;
-		let payload: Json;
-		try { payload = JSON.parse(row.pending_json); } catch { continue; }
-		const wakeKind = typeof payload?.kind === "string" && payload.kind ? payload.kind : "inbound";
-		if (wakeKind !== kind) continue;
-		if (typeof payload?.contextId === "string" && payload.contextId !== contextId) continue;
-		const ids = wakeTaskIds(payload);
-		if (!ids.some((id) => seenIds.has(id))) continue;
-		const kept = ids.filter((id) => !seenIds.has(id));
-		if (!kept.length) {
-			await ctx.DB.prepare("UPDATE wakes SET pending_json = NULL, pending_since_ms = NULL WHERE context_id = ? AND pending_json = ?").bind(contextId, row.pending_json).run();
-			continue;
+		const rows = await ctx.DB.prepare("SELECT peer, pending_json FROM wakes WHERE context_id = ? AND pending_json IS NOT NULL").bind(contextId).all();
+		for (const row of (rows.results || []) as Json[]) {
+			if (typeof row?.pending_json !== "string") continue;
+			let payload: Json;
+			try { payload = JSON.parse(row.pending_json); } catch { continue; }
+			const wakeKind = typeof payload?.kind === "string" && payload.kind ? payload.kind : "inbound";
+			if (wakeKind !== kind) continue;
+			if (typeof payload?.contextId === "string" && payload.contextId !== contextId) continue;
+			const ids = wakeTaskIds(payload);
+			if (!ids.some((id) => seenIds.has(id))) continue;
+			const kept = ids.filter((id) => !seenIds.has(id));
+			const peer = typeof row.peer === "string" ? row.peer : "";
+			if (!kept.length) {
+				await ctx.DB.prepare("UPDATE wakes SET pending_json = NULL, pending_since_ms = NULL WHERE context_id = ? AND peer = ? AND pending_json = ?").bind(contextId, peer, row.pending_json).run();
+				continue;
+			}
+			const next = { ...payload, taskIds: kept, taskId: kept[kept.length - 1] };
+			await ctx.DB.prepare("UPDATE wakes SET pending_json = ? WHERE context_id = ? AND peer = ? AND pending_json = ?").bind(JSON.stringify(next), contextId, peer, row.pending_json).run();
 		}
-		const next = { ...payload, taskIds: kept, taskId: kept[kept.length - 1] };
-		await ctx.DB.prepare("UPDATE wakes SET pending_json = ? WHERE context_id = ? AND pending_json = ?").bind(JSON.stringify(next), contextId, row.pending_json).run();
 	}
 }
 
@@ -1272,7 +1369,19 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 	}
 	if (seg[0] === "history" && seg[1] && m === "GET") {
 		const n = Math.min(Number(url.searchParams.get("n") || "50"), 1000);
-		const rows = await ctx.DB.prepare("SELECT * FROM (SELECT * FROM history WHERE context_id = ? ORDER BY seq DESC LIMIT ?) ORDER BY seq").bind(seg[1], n).all();
+		// Rows for this conversation: this context, and a peer that owns it (a task or an outbound task).
+		// A null peer is a local note. When nothing owns the id yet, the rows that name it are the conversation.
+		const rows = await ctx.DB.prepare(`SELECT * FROM (
+			SELECT * FROM history WHERE context_id = ? AND (
+				peer IS NULL OR peer = ''
+				OR peer IN (SELECT peer FROM tasks WHERE context_id = ? AND peer IS NOT NULL AND peer != '')
+				OR peer IN (SELECT peer FROM outbound WHERE context_id = ? AND peer IS NOT NULL AND peer != '')
+				OR (
+					NOT EXISTS (SELECT 1 FROM tasks WHERE context_id = ?)
+					AND NOT EXISTS (SELECT 1 FROM outbound WHERE context_id = ?)
+				)
+			) ORDER BY seq DESC LIMIT ?
+		) ORDER BY seq`).bind(seg[1], seg[1], seg[1], seg[1], seg[1], n).all();
 		return json((rows.results as Json[]).map((r) => ({ ...r, data: r.data_json ? JSON.parse(r.data_json) : undefined, data_json: undefined })));
 	}
 	if (seg[0] === "history" && !seg[1] && m === "POST") {
@@ -1434,6 +1543,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 				ctx.DB.prepare("DELETE FROM history WHERE context_id = ?").bind(c),
 				ctx.DB.prepare("DELETE FROM outbound WHERE context_id = ?").bind(c),
 				ctx.DB.prepare("DELETE FROM wakes WHERE context_id = ?").bind(c),
+				ctx.DB.prepare("DELETE FROM conversation_owners WHERE context_id = ?").bind(c),
 			]);
 			n += res.reduce((s, r) => s + (r.meta.changes || 0), 0);
 		}
