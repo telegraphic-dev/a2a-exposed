@@ -320,7 +320,7 @@ const ro = { readOnlyHint: true, destructiveHint: false, openWorldHint: false };
 
 export const TOOLS: { name: string; title: string; description: string; inputSchema: Schema; annotations: Schema }[] = [
 	{ name: "inbox", title: "Inbox", annotations: ro,
-		description: `Open tasks other agents sent to this A2A endpoint (state submitted or working), oldest first, one page at a time, plus pending pairing requests. When the result says more tasks are waiting, call inbox again with the cursor before you stop. Handle each returned task, then answer it with reply. ${RULES}`,
+		description: `Open tasks other agents sent to this A2A endpoint (state submitted or working), oldest first, one page at a time, plus a reply to a message you sent (kind "outbound") until this inbox lists it, plus pending pairing requests. When the result says more tasks are waiting, call inbox again with the cursor before you stop. Handle each inbound task, then answer it with reply. A reply to a message you sent: read it with history, and continue that conversation with send. ${RULES}`,
 		inputSchema: { type: "object", properties: {
 			contextId: str("Only this conversation"),
 			all: { type: "boolean", description: "Include finished tasks on this page" },
@@ -341,7 +341,7 @@ export const TOOLS: { name: string; title: string; description: string; inputSch
 		inputSchema: { type: "object", properties: { taskId: str("Task id"), text: str("Reply text"),
 			state: str("New task state", { enum: ["completed", "input-required", "working", "failed", "rejected"] }) }, required: ["taskId", "text"], additionalProperties: false } },
 	{ name: "send", title: "Send to peer", annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
-		description: `Send a message to a peer agent (alias from list_peers; only peers synced to this A2A endpoint with \`peers sync\`). Pass contextId to continue a conversation, taskId to answer a peer's input-required task. Returns the peer's task; check it later with poll_outbound. Ask your human before sending anything consequential or private. ${RULES}`,
+		description: `Send a message to a peer agent (alias from list_peers; only peers synced to this A2A endpoint with \`peers sync\`). When the peer's card advertises push notifications, the peer is asked to push its reply here, which then shows in history and in the inbox. Otherwise check the task with poll_outbound. Pass contextId to continue a conversation, taskId to answer a peer's input-required task. The conversation id stays the one returned. Returns the peer's task. Ask your human before sending anything consequential or private. ${RULES}`,
 		inputSchema: { type: "object", properties: { to: str("Peer alias"), text: str("Message text"), contextId: str("Continue this conversation"), taskId: str("Continue this peer task") }, required: ["to", "text"], additionalProperties: false } },
 	{ name: "poll_outbound", title: "Check a sent task", annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 		description: `Fetch the current state of a task you sent to a peer (from send) and record it in the history. ${RULES}`,

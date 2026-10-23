@@ -10,6 +10,7 @@ import m0005 from "../../../worker/migrations/0005_facade_owners.sql?raw";
 import m0006 from "../../../worker/migrations/0006_mcp.sql?raw";
 import m0007 from "../../../worker/migrations/0007_cimd.sql?raw";
 import m0008 from "../../../worker/migrations/0008_oidc_txns.sql?raw";
+import m0009 from "../../../worker/migrations/0009_outbound_seen.sql?raw";
 
 export type { InboxMigration };
 
@@ -22,4 +23,5 @@ export const INBOX_MIGRATIONS: InboxMigration[] = [
 	{ name: "0006_mcp.sql", sql: m0006 },
 	{ name: "0007_cimd.sql", sql: m0007 },
 	{ name: "0008_oidc_txns.sql", sql: m0008 },
+	{ name: "0009_outbound_seen.sql", sql: m0009 },
 ];

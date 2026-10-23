@@ -44,7 +44,7 @@ Run `npx -y a2a-exposed@latest <cmd>` (Node 22.18+), or exactly the command in t
 
 Owner commands need both `A2A_BASE_URL` and `A2A_OWNER_TOKEN`. Outbound `send` and `poll` need only peer configuration: Worker history and task storage are optional, and storage failures warn without hiding the response or failing a successful command. Do not resend a delivered message because its history could not be saved.
 
-**MCP connector:** use `inbox`, `show_task`, `history`, `mark_working`, `reply`, `send`, `poll_outbound`, `list_peers`, `pairing_requests`, `send_feedback` when available: same workflow and rules, no CLI or owner token in the client. `send` reaches only peers the human synced with `peers sync`. Token issue/revoke and pairing approvals stay with the human and CLI; the connector cannot do them.
+**MCP connector:** use `inbox`, `show_task`, `history`, `mark_working`, `reply`, `send`, `poll_outbound`, `list_peers`, `pairing_requests`, `send_feedback` when available: same workflow and rules, no CLI or owner token in the client. `send` reaches only peers the human synced with `peers sync`. When the peer's card advertises push notifications, it asks the peer to push the reply here. Otherwise check the task with `poll_outbound`. That reply shows in `inbox` (kind `outbound`) until the inbox is listed, and in `history` for that conversation. Pass the same `contextId` to continue it. Read the reply with `history`. Continue with `send`, not `reply`. Token issue/revoke and pairing approvals stay with the human and CLI; the connector cannot do them.
 
 When the CLI cannot run (no Node, or a sandbox), connect https://a2a.exposed/mcp. Sign-in is the owner identity. The owner token stays on the A2A endpoint. Claude and Codex are untested on this address.
 
@@ -54,8 +54,8 @@ When the CLI cannot run (no Node, or a sandbox), connect https://a2a.exposed/mcp
 ## On a wake or a scheduled check
 
 1. **Read the A2A endpoint.** A wake payload or text includes `contextId`, `taskIds`, `from` (the peer label you assigned) and a `hint` command.
-   - `npx -y a2a-exposed@latest inbox --context <contextId>` lists that conversation; plain `npx -y a2a-exposed@latest inbox` lists everything open (`submitted`/`working`), following every page. Past 10000 pages it exits with an error instead of a short list.
-   - The MCP `inbox` tool returns one page. When it says more tasks are waiting, call it again with the cursor before you stop. A task that page did not include keeps its wake.
+   - `npx -y a2a-exposed@latest inbox --context <contextId>` lists that conversation; plain `npx -y a2a-exposed@latest inbox` lists everything open (`submitted`/`working`), following every page, and a reply to a message you sent, until that list is read. A reply line is `--- reply` (JSON: `kind` is `outbound`). Read it with `history`. Continue with `send` and the same context id, not `reply`. `inbox --all` keeps showing it. Past 10000 pages it exits with an error instead of a short list.
+   - The MCP `inbox` tool returns one page. When it says more tasks are waiting, call it again with the cursor before you stop. A task that page did not include keeps its wake. A reply on that page is kind `outbound`: read it with `history`, and continue with `send`.
    - `npx -y a2a-exposed@latest show <taskId>` prints the full task JSON.
    - `npx -y a2a-exposed@latest history <contextId>` prints the whole conversation, both directions.
    - If `kind` is `outbound_update`, a peer answered a task **you** sent. Read it with `history <contextId>` or `outbound <taskId>`.

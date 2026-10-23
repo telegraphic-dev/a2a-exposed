@@ -31,7 +31,7 @@ The hint command is `WAKE_CLI_COMMAND` when set, otherwise `npx -y a2a-exposed@l
 | `kind` | The agent does |
 | --- | --- |
 | `inbound` | `inbox --context <contextId>`, then reply |
-| `outbound_update` | A peer answered a task this agent sent. Read it with `history` or `outbound` |
+| `outbound_update` | A peer answered a task this agent sent. `inbox` lists that reply until the list is read (`kind: "outbound"`; `inbox --all` keeps it). Read it with `history` or `outbound`. Continue with `send` and the same context id |
 | `pairing_request` | Tell the human the code, the link, and `pairing.manageUrl` when the wake includes it. The code lasts 60 minutes. Leave approval to the human |
 | `test` | A test wake. No message on the A2A endpoint |
 

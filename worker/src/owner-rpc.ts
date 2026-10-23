@@ -1,7 +1,9 @@
 // Hosted owner RPC allowlist. The caller has checked that the account owns the tenant.
 // This list is the only paths that call may run, and it is stricter than
-// the owner HTTP API: routes that mint a peer token, return a setup secret, or accept a plaintext peer
-// token are not here. GET /owner/export is here only because runOwnerRpc redacts it first.
+// the owner HTTP API: routes that mint a peer token or return a setup secret are not here.
+// PUT /owner/outbound-peers/:alias is the one call that accepts a peer token. handleOwner seals it.
+// The response is { ok, alias, hasToken } and the token is not logged.
+// GET /owner/export is here only because runOwnerRpc redacts it first.
 // POST /owner/mcp/send, reply, and mark_working take a checked argument object. A peer token is not one of those arguments.
 // Self-host never calls this.
 
@@ -42,8 +44,8 @@ export interface OwnerRpcRequest {
 	/** Allowlisted query parameters only. */
 	query?: Record<string, string>;
 	/**
-	 * Tool arguments for `POST /owner/mcp/send`, `POST /owner/mcp/reply`, and `POST /owner/mcp/mark_working`.
-	 * Any other call refuses a body.
+	 * Tool arguments for `POST /owner/mcp/send`, `POST /owner/mcp/reply`, and `POST /owner/mcp/mark_working`,
+	 * or `{ url, token }` for `PUT /owner/outbound-peers/:alias`. Any other call refuses a body.
 	 */
 	body?: unknown;
 	/**
@@ -61,7 +63,7 @@ export interface OwnerRpcResult {
 }
 
 export interface OwnerRoute {
-	method: "GET" | "POST" | "DELETE";
+	method: "GET" | "POST" | "DELETE" | "PUT";
 	path: string;
 	search: string;
 	/** Log name. Ids and codes are not included. */
@@ -133,7 +135,7 @@ function exportQuery(q: Record<string, string>): string | null {
 }
 
 interface RouteDef {
-	method: "GET" | "POST" | "DELETE";
+	method: "GET" | "POST" | "DELETE" | "PUT";
 	name: string;
 	take: (seg: string[]) => boolean;
 	search: (q: Record<string, string>) => string | null;
@@ -157,6 +159,7 @@ const ROUTES: RouteDef[] = [
 	{ method: "POST", name: "POST /owner/mcp/reply", take: (s) => s.length === 3 && s[1] === "mcp" && s[2] === "reply", search: noQuery, path: () => "/owner/mcp/reply" },
 	{ method: "POST", name: "POST /owner/mcp/mark_working", take: (s) => s.length === 3 && s[1] === "mcp" && s[2] === "mark_working", search: noQuery, path: () => "/owner/mcp/mark_working" },
 	{ method: "GET", name: "GET /owner/outbound-peers", take: (s) => s.length === 2 && s[1] === "outbound-peers", search: noQuery, path: () => "/owner/outbound-peers" },
+	{ method: "PUT", name: "PUT /owner/outbound-peers/:alias", take: (s) => s.length === 3 && s[1] === "outbound-peers" && ALIAS.test(s[2]!) && s[2] !== "." && s[2] !== "..", search: noQuery, path: (s) => `/owner/outbound-peers/${s[2]}` },
 	{ method: "DELETE", name: "DELETE /owner/outbound-peers/:alias", take: (s) => s.length === 3 && s[1] === "outbound-peers" && ALIAS.test(s[2]!) && s[2] !== "." && s[2] !== "..", search: noQuery, path: (s) => `/owner/outbound-peers/${s[2]}` },
 	{ method: "GET", name: "GET /owner/facade", take: (s) => s.length === 2 && s[1] === "facade", search: noQuery, path: () => "/owner/facade" },
 	{ method: "POST", name: "POST /owner/facade/verify", take: (s) => s.length === 3 && s[1] === "facade" && s[2] === "verify", search: noQuery, path: () => "/owner/facade/verify" },
@@ -169,7 +172,7 @@ const ROUTES: RouteDef[] = [
 
 /** Method + path (+ query) on the owner RPC allowlist, or why it is not. */
 export function matchOwnerRpc(method: unknown, path: unknown, query: unknown): OwnerMatch {
-	if (method !== "GET" && method !== "POST" && method !== "DELETE") return { ok: false, reason: "path" };
+	if (method !== "GET" && method !== "POST" && method !== "DELETE" && method !== "PUT") return { ok: false, reason: "path" };
 	const seg = segments(path);
 	if (!seg) return { ok: false, reason: "path" };
 	const def = ROUTES.find((r) => r.method === method && r.take(seg));
@@ -203,12 +206,34 @@ function mcpArgOk(key: string, value: string): string | null {
 	return "body is not allowed";
 }
 
+const PEER_URL_MAX = 2048;
+const PEER_TOKEN_MAX = 4096;
+
+/** `{ url, token }` for a synced outbound peer. `token` may be omitted when the peer takes none. No other keys. */
+function outboundPeerBody(body: unknown): { ok: true; value: Record<string, string> } | { ok: false; error: string } {
+	if (body == null || typeof body !== "object" || Array.isArray(body)) return { ok: false, error: "body must be an object" };
+	const keys = Object.keys(body);
+	if (keys.length > 2 || keys.some((key) => key !== "url" && key !== "token")) return { ok: false, error: "body is not allowed" };
+	const url = (body as Record<string, unknown>).url;
+	if (typeof url !== "string" || !url.trim()) return { ok: false, error: "url is required" };
+	if (url.length > PEER_URL_MAX) return { ok: false, error: "url is invalid" };
+	const value: Record<string, string> = { url };
+	if (Object.prototype.hasOwnProperty.call(body, "token")) {
+		const token = (body as Record<string, unknown>).token;
+		if (typeof token !== "string" || !token || token.length > PEER_TOKEN_MAX) return { ok: false, error: "token is invalid" };
+		value.token = token;
+	}
+	return { ok: true, value };
+}
+
 /**
  * Body allowed on this owner RPC route.
  * MCP send, reply, and mark_working receive a flat object of tool arguments.
+ * PUT /owner/outbound-peers/:alias receives `{ url, token }`. The token is sealed before any log line.
  * Every other route accepts only an absent body.
  */
 export function ownerRpcBody(routeName: string, body: unknown): { ok: true; value?: Record<string, string> } | { ok: false; error: string } {
+	if (routeName === "PUT /owner/outbound-peers/:alias") return outboundPeerBody(body);
 	const spec = MCP_ARGS[routeName];
 	if (!spec) {
 		if (body !== undefined && body !== null) return { ok: false, error: "this call takes no body" };
