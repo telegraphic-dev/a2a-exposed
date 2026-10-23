@@ -87,6 +87,8 @@ test("another peer's contextId is refused without joining that conversation", as
 	assert.equal((db.prepare("SELECT COUNT(*) AS n FROM wakes WHERE context_id = 'ctx-y' AND peer = 'bob'").get() as { n: number }).n, 0);
 	assert.equal((db.prepare("SELECT COUNT(*) AS n FROM messages WHERE context_id = 'ctx-y' AND message_json LIKE '%x-inject%'").get() as { n: number }).n, 0);
 
+	assert.equal((db.prepare("SELECT peer FROM conversation_owners WHERE context_id = 'ctx-y'").get() as { peer: string }).peer, "ada");
+
 	const follow = await s.send(ada, "y-three", "ctx-y");
 	assert.equal(follow.status, 200, follow.text);
 	assert.equal(follow.data.result.contextId, "ctx-y");
@@ -110,4 +112,60 @@ test("another peer's contextId is refused without joining that conversation", as
 	assert.deepEqual(((await history()).data as { text: string }[]).map((r) => r.text), ["y-one", "y-two", "y-three"]);
 	assert.equal(JSON.parse(wake().pending_json).from, "ada");
 	assert.equal(JSON.parse(wake().pending_json).preview, "y-three");
+	assert.equal((db.prepare("SELECT peer FROM conversation_owners WHERE context_id = 'ctx-x'").get() as { peer: string }).peer, "bob");
+	assert.equal((db.prepare("SELECT COUNT(*) AS n FROM conversation_owners WHERE context_id = 'ctx-y'").get() as { n: number }).n, 1);
+});
+
+test("two peers cannot both claim one unused contextId", async (t) => {
+	const s = setup();
+	t.after(s.restore);
+	const ada = (await s.owner("POST", "/owner/peers", { label: "ada" })).data.token as string;
+	const bob = (await s.owner("POST", "/owner/peers", { label: "bob" })).data.token as string;
+	let arrived = 0;
+	let openGate = () => {};
+	const gate = new Promise<void>((resolve) => { openGate = resolve; });
+	const orig = s.DB.batch.bind(s.DB);
+	s.DB.batch = async (stmts: { __sql?: string }[]) => {
+		const claim = stmts.some((st) => typeof st.__sql === "string" && st.__sql.includes("INSERT INTO conversation_owners"));
+		if (!claim || arrived >= 2) return orig(stmts);
+		arrived++;
+		if (arrived === 2) openGate();
+		await gate;
+		return orig(stmts);
+	};
+	const [left, right] = await Promise.all([
+		s.send(ada, "from-ada", "ctx-race"),
+		s.send(bob, "from-bob", "ctx-race"),
+	]);
+	assert.equal(arrived, 2);
+	const ok = [left, right].filter((r) => r.status === 200 && !r.data.error);
+	const denied = [left, right].filter((r) => r.data?.error);
+	assert.equal(ok.length, 1, JSON.stringify([left.data, right.data]));
+	assert.equal(denied.length, 1);
+	assert.deepEqual(denied[0].data.error, { code: -32602, message: UNKNOWN });
+	assert.equal(ok[0].data.result.contextId, "ctx-race");
+	const body = JSON.stringify(denied[0].data);
+	for (const secret of ["ada", "bob", "ctx-race", "from-ada", "from-bob", "exists", ada, bob]) assert.equal(body.includes(secret), false, secret);
+
+	const db = s.DB.db;
+	const owners = db.prepare("SELECT peer FROM conversation_owners WHERE context_id = 'ctx-race'").all() as { peer: string }[];
+	assert.equal(owners.length, 1);
+	const winner = owners[0].peer;
+	const loser = winner === "ada" ? "bob" : "ada";
+	assert.equal(winner === "ada" || winner === "bob", true);
+	assert.equal((db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE context_id = 'ctx-race'").get() as { n: number }).n, 1);
+	assert.equal((db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE context_id = 'ctx-race' AND peer = ?").get(loser) as { n: number }).n, 0);
+	assert.equal((db.prepare("SELECT COUNT(*) AS n FROM history WHERE context_id = 'ctx-race' AND peer = ?").get(loser) as { n: number }).n, 0);
+	assert.equal((db.prepare("SELECT COUNT(*) AS n FROM messages WHERE context_id = 'ctx-race' AND message_json LIKE ?").get(`%from-${loser}%`) as { n: number }).n, 0);
+	assert.equal((db.prepare("SELECT COUNT(*) AS n FROM wakes WHERE context_id = 'ctx-race' AND peer = ?").get(loser) as { n: number }).n, 0);
+
+	const follow = await s.send(winner === "ada" ? ada : bob, "follow", "ctx-race");
+	assert.equal(follow.status, 200, follow.text);
+	assert.equal(follow.data.result.contextId, "ctx-race");
+	const hist = await s.owner("GET", "/owner/history/ctx-race");
+	assert.deepEqual((hist.data as { text: string; peer: string }[]).map((r) => r.text), [winner === "ada" ? "from-ada" : "from-bob", "follow"]);
+	assert.equal((hist.data as { peer: string }[]).every((r) => r.peer === winner), true);
+	const again = await s.send(loser === "ada" ? ada : bob, "still-no", "ctx-race");
+	assert.deepEqual(again.data.error, { code: -32602, message: UNKNOWN });
+	assert.equal((db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE context_id = 'ctx-race' AND peer = ?").get(loser) as { n: number }).n, 0);
 });

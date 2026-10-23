@@ -67,6 +67,49 @@ function histStmt(ctx: TenantContext, contextId: string, e: Json) {
 		e.event ?? null, e.text ?? null, e.data !== undefined ? JSON.stringify(e.data) : null);
 }
 
+/** Claim an unused context for this peer. `conversation_owners.context_id` is unique, and the insert does nothing
+ *  when another peer already holds it or already has a task, history row, or outbound task on that id. */
+function claimContextStmt(ctx: TenantContext, contextId: string, peer: string, ts: string) {
+	return ctx.DB.prepare(
+		`INSERT INTO conversation_owners (context_id, peer, created_at)
+		 SELECT ?1, ?2, ?3
+		 WHERE NOT EXISTS (SELECT 1 FROM conversation_owners WHERE context_id = ?1 AND peer != ?2)
+		   AND NOT EXISTS (SELECT 1 FROM tasks WHERE context_id = ?1 AND peer IS NOT NULL AND peer != '' AND peer != ?2)
+		   AND NOT EXISTS (SELECT 1 FROM history WHERE context_id = ?1 AND peer IS NOT NULL AND peer != '' AND peer != ?2)
+		   AND NOT EXISTS (SELECT 1 FROM outbound WHERE context_id = ?1 AND peer IS NOT NULL AND peer != '' AND peer != ?2)
+		 ON CONFLICT(context_id) DO NOTHING`,
+	).bind(contextId, peer, ts);
+}
+
+/** A new task is stored only when this peer owns the context. Runs in the same batch as `claimContextStmt`. */
+function saveTaskIfOwnerStmt(ctx: TenantContext, t: Json) {
+	return ctx.DB.prepare(
+		`INSERT INTO tasks (id, context_id, peer, state, protocol, created_at, updated_at, status_json, artifacts_json, metadata_json, push_configs_json)
+		 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11
+		 WHERE (SELECT peer FROM conversation_owners WHERE context_id = ?2) = ?3
+		 ON CONFLICT(id) DO UPDATE SET state=?4, updated_at=?7, status_json=?8, artifacts_json=?9, metadata_json=?10, push_configs_json=?11
+		 WHERE (SELECT peer FROM conversation_owners WHERE context_id = ?2) = ?3`,
+	).bind(t.id, t.contextId, t._peer, t.status.state, t._protocol, t._createdAt, A.nowIso(), JSON.stringify(t.status),
+		JSON.stringify(t.artifacts || []), t.metadata ? JSON.stringify(t.metadata) : null, JSON.stringify(t._push || []));
+}
+
+function msgIfOwnerStmt(ctx: TenantContext, t: Json, m: Json) {
+	return ctx.DB.prepare(
+		`INSERT INTO messages (message_id, task_id, context_id, role, ts, message_json)
+		 SELECT ?1, ?2, ?3, ?4, ?5, ?6
+		 WHERE (SELECT peer FROM conversation_owners WHERE context_id = ?3) = ?7`,
+	).bind(m.messageId, t.id, t.contextId, m.role, A.nowIso(), JSON.stringify(m), t._peer);
+}
+
+function histIfOwnerStmt(ctx: TenantContext, contextId: string, e: Json, owner: string) {
+	return ctx.DB.prepare(
+		`INSERT INTO history (context_id, ts, dir, peer, task_id, role, state, event, text, data_json)
+		 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10
+		 WHERE (SELECT peer FROM conversation_owners WHERE context_id = ?1) = ?11`,
+	).bind(contextId, e.ts || A.nowIso(), e.dir || "local", e.peer ?? null, e.taskId ?? null, e.role ?? null, e.state ?? null,
+		e.event ?? null, e.text ?? null, e.data !== undefined ? JSON.stringify(e.data) : null, owner);
+}
+
 // ------------------------------------------------------------------ self-aware fetch (a Worker cannot reliably fetch its own custom domain)
 /**
  * Another tenant on this deployment's domain. A public fetch of that hostname returns 522, so the call
@@ -606,17 +649,6 @@ async function ownedTask(ctx: TenantContext, id: unknown, label: string): Promis
 	return t;
 }
 
-/** Peers that already have this conversation: an inbound task, a history row, or an outbound task.
- *  An empty list is an id nobody owns. The caller may open that conversation. */
-async function contextPeers(ctx: TenantContext, contextId: string): Promise<string[]> {
-	const rows = await ctx.DB.prepare(
-		`SELECT peer FROM tasks WHERE context_id = ? AND peer IS NOT NULL AND peer != ''
-		 UNION SELECT peer FROM history WHERE context_id = ? AND peer IS NOT NULL AND peer != ''
-		 UNION SELECT peer FROM outbound WHERE context_id = ? AND peer IS NOT NULL AND peer != ''`,
-	).bind(contextId, contextId, contextId).all();
-	return ((rows.results || []) as Json[]).map((r) => String(r.peer));
-}
-
 /** A contextId this caller does not get to use. The same sentence is returned for an id the façade has no
  *  record of. It does not say whether the id exists, or which peer holds it. */
 const UNKNOWN_CONTEXT = "Invalid params: unknown contextId (omit contextId to start a new conversation, then use the one returned)";
@@ -652,14 +684,12 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
 		if (msg.contextId && msg.contextId !== task.contextId) throw new RpcError(-32602, "contextId does not match task");
 	}
 	const contextId = task ? task.contextId : msg.contextId ? A.checkId(msg.contextId, "contextId") : A.newId();
+	const ts = A.nowIso();
 	// A client-provided id nobody owns is still this peer's new conversation (single-peer and outbound send
 	// keep passing one). An id another peer already has is not. A2A forbids minting a replacement id when the
 	// client id is refused, so this is the same error the façade returns for an unknown context, not a new id.
-	if (!task && msg.contextId) {
-		const peers = await contextPeers(ctx, contextId);
-		if (peers.length && !peers.includes(label)) throw new RpcError(-32602, UNKNOWN_CONTEXT);
-	}
-	const ts = A.nowIso();
+	// The claim and the first task are one batch: a second peer cannot pass a read and then write its own task.
+	const creating = !task;
 	if (!task) task = { id: A.newId(), contextId, status: { state: "submitted", timestamp: ts }, artifacts: [], history: [], _peer: label, _protocol: version, _createdAt: ts, _push: [] };
 	msg.contextId = contextId; msg.taskId = task.id;
 	task.history.push(msg);
@@ -667,10 +697,23 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
 	if (pushCfg) task._push = [...task._push.filter((c: Json) => c.id !== pushCfg.id), pushCfg];
 	if (params.metadata && typeof params.metadata === "object") task.metadata = { ...(task.metadata || {}), ...params.metadata };
 	const preview = A.textOf(msg);
-	await ctx.DB.batch([
-		saveTaskStmt(ctx, task), msgStmt(ctx, task, msg),
-		histStmt(ctx, contextId, { dir: "in", peer: label, taskId: task.id, role: "user", text: preview, data: { messageId: msg.messageId } }),
-	]);
+	if (creating) {
+		const stored = await ctx.DB.batch([
+			claimContextStmt(ctx, contextId, label, ts),
+			saveTaskIfOwnerStmt(ctx, task),
+			msgIfOwnerStmt(ctx, task, msg),
+			histIfOwnerStmt(ctx, contextId, { dir: "in", peer: label, taskId: task.id, role: "user", text: preview, data: { messageId: msg.messageId } }, label),
+			ctx.DB.prepare("SELECT peer FROM conversation_owners WHERE context_id = ?").bind(contextId),
+		]);
+		const owner = (stored[4]?.results?.[0] as Json | undefined)?.peer;
+		const wrote = stored[1]?.meta?.changes ?? 0;
+		if (owner !== label || wrote < 1) throw new RpcError(-32602, UNKNOWN_CONTEXT);
+	} else {
+		await ctx.DB.batch([
+			saveTaskStmt(ctx, task), msgStmt(ctx, task, msg),
+			histStmt(ctx, contextId, { dir: "in", peer: label, taskId: task.id, role: "user", text: preview, data: { messageId: msg.messageId } }),
+		]);
+	}
 	log("message_received", { peer: label, contextId, taskId: task.id, chars: preview.length, version });
 	await wake(ctx, ectx, contextId, task.id, label, preview);
 	const pt = A.publicTask(task, version, conf.historyLength);
@@ -1479,6 +1522,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 				ctx.DB.prepare("DELETE FROM history WHERE context_id = ?").bind(c),
 				ctx.DB.prepare("DELETE FROM outbound WHERE context_id = ?").bind(c),
 				ctx.DB.prepare("DELETE FROM wakes WHERE context_id = ?").bind(c),
+				ctx.DB.prepare("DELETE FROM conversation_owners WHERE context_id = ?").bind(c),
 			]);
 			n += res.reduce((s, r) => s + (r.meta.changes || 0), 0);
 		}
