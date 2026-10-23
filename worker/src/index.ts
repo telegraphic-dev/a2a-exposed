@@ -943,27 +943,40 @@ function inboxCursorToken(updatedAt: string, id: string): string {
 }
 
 function wakeTaskIds(payload: Json): string[] {
-	const listed = Array.isArray(payload?.taskIds) ? payload.taskIds.filter((i: unknown) => typeof i === "string" && i) : [];
+	const raw: unknown[] = Array.isArray(payload?.taskIds) ? payload.taskIds : [];
+	const listed: string[] = [];
+	for (const id of raw) if (typeof id === "string" && id) listed.push(id);
 	const ids = listed.length ? listed : (typeof payload?.taskId === "string" && payload.taskId ? [payload.taskId] : []);
 	return [...new Set(ids)];
 }
 
-/** Drop these task ids from pending wakes. A wake that still names other tasks stays pending. */
-async function ackPendingWakes(ctx: TenantContext, seenIds: Set<string>): Promise<void> {
-	if (!seenIds.size) return;
-	const pend = await ctx.DB.prepare("SELECT context_id, pending_json FROM wakes WHERE pending_json IS NOT NULL").all();
-	for (const p of pend.results as Json[]) {
+/** Drop these task ids from the inbound wake for that conversation. A wake for another conversation, or an
+ *  outbound update that reuses the task id, stays pending. A wake that still names other tasks stays pending. */
+async function ackPendingWakes(ctx: TenantContext, seen: { taskId: string; contextId: string }[], kind = "inbound"): Promise<void> {
+	const byContext = new Map<string, Set<string>>();
+	for (const row of seen) {
+		if (!row.taskId || !row.contextId) continue;
+		const ids = byContext.get(row.contextId) ?? new Set<string>();
+		ids.add(row.taskId);
+		byContext.set(row.contextId, ids);
+	}
+	for (const [contextId, seenIds] of byContext) {
+		const row: Json = await ctx.DB.prepare("SELECT pending_json FROM wakes WHERE context_id = ?").bind(contextId).first();
+		if (typeof row?.pending_json !== "string") continue;
 		let payload: Json;
-		try { payload = JSON.parse(p.pending_json); } catch { continue; }
+		try { payload = JSON.parse(row.pending_json); } catch { continue; }
+		const wakeKind = typeof payload?.kind === "string" && payload.kind ? payload.kind : "inbound";
+		if (wakeKind !== kind) continue;
+		if (typeof payload?.contextId === "string" && payload.contextId !== contextId) continue;
 		const ids = wakeTaskIds(payload);
-		if (!ids.length || !ids.some((i) => seenIds.has(i))) continue;
-		const kept = ids.filter((i) => !seenIds.has(i));
+		if (!ids.some((id) => seenIds.has(id))) continue;
+		const kept = ids.filter((id) => !seenIds.has(id));
 		if (!kept.length) {
-			await ctx.DB.prepare("UPDATE wakes SET pending_json = NULL, pending_since_ms = NULL WHERE context_id = ? AND pending_json = ?").bind(p.context_id, p.pending_json).run();
+			await ctx.DB.prepare("UPDATE wakes SET pending_json = NULL, pending_since_ms = NULL WHERE context_id = ? AND pending_json = ?").bind(contextId, row.pending_json).run();
 			continue;
 		}
 		const next = { ...payload, taskIds: kept, taskId: kept[kept.length - 1] };
-		await ctx.DB.prepare("UPDATE wakes SET pending_json = ? WHERE context_id = ? AND pending_json = ?").bind(JSON.stringify(next), p.context_id, p.pending_json).run();
+		await ctx.DB.prepare("UPDATE wakes SET pending_json = ? WHERE context_id = ? AND pending_json = ?").bind(JSON.stringify(next), contextId, row.pending_json).run();
 	}
 }
 
@@ -1028,7 +1041,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 		// including when one wake names tasks on this page and tasks on a later page.
 		// HEAD does not mark the inbox seen. The hosted owner RPC defers the clear until it has
 		// decided to return this body (a withheld response leaves the wakes pending).
-		if (!head && !deferAck) await ackPendingWakes(ctx, new Set(out.map((o) => o.taskId)));
+		if (!head && !deferAck) await ackPendingWakes(ctx, out.flatMap((o) => typeof o.taskId === "string" && typeof o.contextId === "string" ? [{ taskId: o.taskId, contextId: o.contextId }] : []));
 		const headers: Record<string, string> = {};
 		if (found.length > limit && page.length) {
 			const last = page[page.length - 1];
@@ -1046,7 +1059,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			if (A.TERMINAL.has(t.status.state)) return json({ error: `task is already ${t.status.state}` }, 409);
 			t.status = { state: "working", timestamp: A.nowIso() };
 			await ctx.DB.batch([saveTaskStmt(ctx, t), histStmt(ctx, t.contextId, { dir: "local", taskId: t.id, event: "state", state: "working" })]);
-			await ackPendingWakes(ctx, new Set([t.id]));
+			await ackPendingWakes(ctx, [{ taskId: t.id, contextId: t.contextId }]);
 			return json({ task: ownerTaskView(t), push: await notifyPeer(ctx, ectx, t) });
 		}
 		if (seg[2] === "reply" && m === "POST") {
@@ -1061,7 +1074,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			t.status = { state, timestamp: A.nowIso(), message: msg };
 			await ctx.DB.batch([saveTaskStmt(ctx, t), msgStmt(ctx, t, msg),
 				histStmt(ctx, t.contextId, { dir: "out", peer: t._peer, taskId: t.id, role: "agent", state, text: b.text })]);
-			await ackPendingWakes(ctx, new Set([t.id]));
+			await ackPendingWakes(ctx, [{ taskId: t.id, contextId: t.contextId }]);
 			return json({ task: ownerTaskView(t), push: await notifyPeer(ctx, ectx, t) });
 		}
 	}
@@ -2411,8 +2424,13 @@ export async function runOwnerRpc(ctx: TenantContext, ectx: ExecutionContext, in
 	}
 	if (data === null || ownerResponseLeaks(data)) return refuse(500, "response withheld", "secret");
 	if (matched.route.path === "/owner/inbox" && res.ok && Array.isArray(data)) {
-		const ids = data.flatMap((row) => row && typeof row === "object" && typeof (row as { taskId?: unknown }).taskId === "string" ? [(row as { taskId: string }).taskId] : []);
-		await ackPendingWakes(ctx, new Set(ids));
+		const seen = data.flatMap((row) => {
+			if (!row || typeof row !== "object") return [];
+			const taskId = (row as { taskId?: unknown }).taskId;
+			const contextId = (row as { contextId?: unknown }).contextId;
+			return typeof taskId === "string" && typeof contextId === "string" ? [{ taskId, contextId }] : [];
+		});
+		await ackPendingWakes(ctx, seen);
 	}
 	log("owner_rpc", { tenant, accountId, method: matched.route.method, route: matched.route.name, status: res.status });
 	const nextCursor = res.headers.get("x-a2a-next-cursor") || "";

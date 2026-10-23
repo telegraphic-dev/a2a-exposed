@@ -166,7 +166,8 @@ Status
 Inbox (owner side)
   inbox [--context C] [--all] [--json]     unhandled inbound tasks (peer text is UNTRUSTED), then pending pairing
                                            requests (tell your human; the dashboard URL when MANAGE_URL is set;
-                                           --json: tasks on stdout, requests on stderr)
+                                           --json: tasks on stdout, requests on stderr). Follows every page; past
+                                           10000 pages it errors instead of a short list
   show <taskId>                            full task JSON
   working <taskId>                         mark task working
   reply <taskId> (--text T | --stdin) [--state completed|input-required|rejected|failed|working]

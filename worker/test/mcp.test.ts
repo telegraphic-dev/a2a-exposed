@@ -834,7 +834,6 @@ test("inbox tool clears wakes only for the page it returns, and a later call can
 		VALUES (?, ?, 'ada', 'submitted', '0.3', ?, ?, ?, '[]', '[]')`);
 	const msg = db.prepare(`INSERT INTO messages (message_id, task_id, context_id, role, ts, message_json) VALUES (?, ?, ?, 'user', ?, ?)`);
 	const wake = db.prepare(`INSERT INTO wakes (context_id, last_sent_ms, pending_json, pending_since_ms) VALUES (?, ?, ?, ?)`);
-	db.exec("BEGIN");
 	for (let i = 0; i < n; i++) {
 		const id = `task-${String(i).padStart(4, "0")}`;
 		const contextId = `ctx-${String(i).padStart(4, "0")}`;
@@ -843,7 +842,6 @@ test("inbox tool clears wakes only for the page it returns, and a later call can
 		msg.run(`m-${id}`, id, contextId, at, JSON.stringify({ kind: "message", role: "user", messageId: `m-${id}`, parts: [{ kind: "text", text: `hello ${id}` }] }));
 		wake.run(contextId, now, JSON.stringify({ contextId, taskId: id, taskIds: [id], from: "ada", preview: id, kind: "inbound" }), now);
 	}
-	db.exec("COMMIT");
 	const page = (text: string) => JSON.parse(text.slice(text.indexOf("\n") + 1)) as { taskId: string }[];
 	const wakeOf = (contextId: string) => (db.prepare("SELECT pending_json FROM wakes WHERE context_id = ?").get(contextId) as { pending_json: string | null }).pending_json;
 

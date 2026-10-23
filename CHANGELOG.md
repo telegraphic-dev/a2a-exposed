@@ -4,7 +4,7 @@ All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.
 
 ## Unreleased
 
-- **Inbox pages.** `GET /owner/inbox` returns one page of tasks, oldest first (default 200, `limit` 1–200). The next page's cursor is the `x-a2a-next-cursor` header. A pending wake is cleared only for tasks in that response. Tasks that are not in the response keep their pending wake. Marking a task working, or replying, clears the pending wake for that task. `inbox` follows the cursor and still lists every open task. The MCP `inbox` tool returns one page (default 20) and says when to call it again with the cursor.
+- **Inbox pages.** `GET /owner/inbox` returns one page of tasks, oldest first (default 200, `limit` 1–200). The next page's cursor is the `x-a2a-next-cursor` header. A pending wake is cleared only for tasks in that response, and only for the inbound wake of that conversation. Tasks that are not in the response keep their pending wake. An outbound update that reuses the task id keeps its pending wake. Marking a task working, or replying, clears the inbound wake for that task and that conversation. `inbox` follows every page. Past 10000 pages it exits with an error instead of a short list. The MCP `inbox` tool returns one page (default 20) and says when to call it again with the cursor.
 
 ## 0.8.12 - 2026-10-22
 

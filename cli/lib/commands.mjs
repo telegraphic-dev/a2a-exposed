@@ -29,11 +29,30 @@ function printPush(res) {
 const readStdin = () => fs.readFileSync(0, "utf8");
 
 // ---------------------------------------------------------------- inbound side
-/** Every open page. Each response clears wakes only for the tasks it returns, so this follows the cursor. */
-async function inboxRows(o) {
+/** Safety ceiling for `inbox`. Past this the command errors instead of returning a short list. */
+export const INBOX_MAX_PAGES = 10000;
+
+/** Follow inbox cursors until they end. A repeated cursor stops. Past maxPages the command errors. */
+export async function followInbox(load, maxPages = INBOX_MAX_PAGES) {
 	const rows = [];
 	let cursor = "";
-	for (let page = 0; page < 100; page++) {
+	const seen = new Set();
+	for (let page = 0; ; page++) {
+		if (page >= maxPages) die(`inbox is longer than ${maxPages} pages; refusing to print a partial list`);
+		if (cursor && seen.has(cursor)) die(`inbox cursor repeated after ${rows.length} tasks; refusing to print a partial list`);
+		if (cursor) seen.add(cursor);
+		const got = await load(cursor);
+		if (!Array.isArray(got.rows)) die("inbox response is not a list");
+		rows.push(...got.rows);
+		const next = got.cursor || "";
+		if (!next || next === cursor) return rows;
+		cursor = next;
+	}
+}
+
+/** Every open page. Each response clears wakes only for the tasks it returns, so this follows the cursor. */
+async function inboxRows(o) {
+	return followInbox(async (cursor) => {
 		const qs = [];
 		if (o.context) qs.push("context=" + q(o.context));
 		if (o.all) qs.push("all=1");
@@ -42,12 +61,8 @@ async function inboxRows(o) {
 		const r = await ownerTry("GET", path);
 		if (r.status < 200 || r.status >= 300) die(`worker GET ${path} -> ${describeHttp(r.status, r.data)}`);
 		if (!Array.isArray(r.data)) die(`worker GET ${path} -> inbox response is not a list`);
-		rows.push(...r.data);
-		const next = r.headers?.get("x-a2a-next-cursor") || "";
-		if (!next || next === cursor) return rows;
-		cursor = next;
-	}
-	return rows;
+		return { rows: r.data, cursor: r.headers?.get("x-a2a-next-cursor") || "" };
+	});
 }
 
 export async function inbox(o) {

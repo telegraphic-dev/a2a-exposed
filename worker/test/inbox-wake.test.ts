@@ -42,7 +42,6 @@ function seed(db: any, n: number, opt: { context?: string; oneWake?: boolean; pr
 	const msg = db.prepare(`INSERT INTO messages (message_id, task_id, context_id, role, ts, message_json) VALUES (?, ?, ?, 'user', ?, ?)`);
 	const wake = db.prepare(`INSERT INTO wakes (context_id, last_sent_ms, pending_json, pending_since_ms) VALUES (?, ?, ?, ?)`);
 	const now = Date.now();
-	db.exec("BEGIN");
 	for (let i = 0; i < n; i++) {
 		const id = `${opt.prefix ?? "task"}-${String(i).padStart(4, "0")}`;
 		const contextId = opt.context ?? `ctx-${String(i).padStart(4, "0")}`;
@@ -58,7 +57,6 @@ function seed(db: any, n: number, opt: { context?: string; oneWake?: boolean; pr
 	if (opt.oneWake && opt.context) {
 		wake.run(opt.context, now, JSON.stringify({ contextId: opt.context, taskId: ids[ids.length - 1], taskIds: ids, from: "ada", preview: "batch", kind: "inbound" }), now);
 	}
-	db.exec("COMMIT");
 	return ids;
 }
 
@@ -175,6 +173,31 @@ test("mark working and reply clear that task and leave the rest of the wake pend
 	const reply = await s.call("POST", `/owner/tasks/${ids[1]}/reply`, { text: "done" });
 	assert.equal(reply.status, 200, JSON.stringify(reply.data));
 	assert.equal(pending(s.DB.db, "ctx-act"), null);
+});
+
+test("an outbound wake that reuses the task id stays pending", async (t) => {
+	const s = setup();
+	t.after(s.restore);
+	const [id] = seed(s.DB.db, 1, { context: "ctx-in" });
+	const outbound = JSON.stringify({ contextId: "ctx-out", taskId: id, taskIds: [id], from: "ada", preview: "update", kind: "outbound_update" });
+	s.DB.db.prepare("INSERT INTO wakes (context_id, last_sent_ms, pending_json, pending_since_ms) VALUES (?, ?, ?, ?)").run("ctx-out", Date.now(), outbound, Date.now());
+	const working = await s.call("POST", `/owner/tasks/${id}/working`, {});
+	assert.equal(working.status, 200, JSON.stringify(working.data));
+	assert.equal(pending(s.DB.db, "ctx-in"), null);
+	assert.equal(pending(s.DB.db, "ctx-out"), outbound, "another conversation's outbound update keeps its wake");
+
+	const [id2] = seed(s.DB.db, 1, { context: "ctx-same", prefix: "same" });
+	const same = JSON.stringify({ contextId: "ctx-same", taskId: id2, taskIds: [id2, "out-only"], from: "ada", preview: "update", kind: "outbound_update" });
+	s.DB.db.prepare("UPDATE wakes SET pending_json = ? WHERE context_id = ?").run(same, "ctx-same");
+	const listed = await s.call("GET", qs({ context: "ctx-same" }));
+	assert.deepEqual(listed.data.map((r: { taskId: string }) => r.taskId), [id2]);
+	assert.equal(pending(s.DB.db, "ctx-same"), same, "listing the task does not clear an outbound_update wake");
+	const marked = await s.call("POST", `/owner/tasks/${id2}/working`, {});
+	assert.equal(marked.status, 200, JSON.stringify(marked.data));
+	assert.equal(pending(s.DB.db, "ctx-same"), same, "mark working does not clear an outbound_update wake on that conversation");
+	const reply = await s.call("POST", `/owner/tasks/${id2}/reply`, { text: "done" });
+	assert.equal(reply.status, 200, JSON.stringify(reply.data));
+	assert.equal(pending(s.DB.db, "ctx-same"), same, "reply does not clear an outbound_update wake on that conversation");
 });
 
 test("hosted owner RPC pages, and a withheld inbox does not clear wakes", async (t) => {
