@@ -915,17 +915,25 @@ async function notifyPeer(ctx: TenantContext, ectx: ExecutionContext, t: Json): 
 	return results;
 }
 
-/** State and text of one pushed task, in the internal shape history and the inbox store. */
+/** State and text of one pushed task, in the internal shape history and the inbox store.
+ *  A full task or a status update carries both. A message and an artifact update carry text and no task state. */
 function pushUpdateView(body: Json): { state: string | null; text: string } {
-	const inner = body && typeof body === "object" ? body.task || body.statusUpdate || body.artifactUpdate || body.message || body : null;
-	const t = inner && typeof inner === "object" && "status" in inner ? A.taskFromAny(inner) : null;
-	const state = t?.status?.state ?? null;
-	let text = A.textOf(t?.status?.message || {});
-	if (t?.artifacts?.length) {
-		const at = t.artifacts.map((x: Json) => A.textOf(x)).join("\n");
-		if (at && at !== text) text = text ? `${text}\n${at}` : at;
-	}
-	return { state, text };
+	if (!body || typeof body !== "object") return { state: null, text: "" };
+	const inner: Json = body.task || body.statusUpdate || body.artifactUpdate || body.message || body;
+	if (!inner || typeof inner !== "object") return { state: null, text: "" };
+	const statusHolder = inner.status && typeof inner.status === "object" ? inner : null;
+	const t = statusHolder ? A.taskFromAny(statusHolder) : null;
+	const state = t?.status?.state ?? (typeof inner.state === "string" ? inner.state : null);
+	const chunks: string[] = [];
+	const add = (s: string) => { if (s && !chunks.includes(s)) chunks.push(s); };
+	if (t) add(A.textOf(t.status?.message || {}));
+	if (t?.artifacts?.length) add(t.artifacts.map((x: Json) => A.textOf(x)).filter(Boolean).join("\n"));
+	const message = inner.kind === "message" || Array.isArray(inner.parts) ? inner
+		: (inner.message && typeof inner.message === "object" ? inner.message : null);
+	if (message) add(A.textOf(message));
+	const artifact = inner.artifact && typeof inner.artifact === "object" ? inner.artifact : null;
+	if (artifact) add(A.textOf(artifact));
+	return { state, text: chunks.filter(Boolean).join("\n") };
 }
 
 async function handlePush(req: Request, ctx: TenantContext, ectx: ExecutionContext): Promise<Response> {
@@ -940,8 +948,9 @@ async function handlePush(req: Request, ctx: TenantContext, ectx: ExecutionConte
 	let given = req.headers.get("x-a2a-notification-token") || "";
 	const a = req.headers.get("authorization") || "";
 	if (!given && /^bearer /i.test(a)) given = a.slice(7).trim();
-	const rec: Json = await ctx.DB.prepare("SELECT * FROM outbound WHERE task_id = ?").bind(taskId).first();
-	if (!rec || !rec.push_token_hash || !given || !A.timingSafeEqualStr(rec.push_token_hash, await A.sha256(given))) {
+	const givenHash = given ? await A.sha256(given) : "";
+	const rec = await outboundForPush(ctx, taskId, givenHash);
+	if (!rec) {
 		log("push_rejected", { taskId });
 		return json({ error: "unauthorized" }, 401);
 	}
@@ -963,6 +972,152 @@ async function handlePush(req: Request, ctx: TenantContext, ectx: ExecutionConte
 }
 
 // ------------------------------------------------------------------ owner API (local CLI)
+const INBOX_STAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/;
+
+function inboxLimit(raw: string | null): number {
+	if (raw === null) return M.INBOX_MAX;
+	if (!/^[1-9]\d{0,2}$/.test(raw) || Number(raw) > M.INBOX_MAX) throw new HttpError(400, "limit must be 1-200");
+	return Number(raw);
+}
+
+function b64url(s: string): string {
+	return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function b64urlDecode(s: string): string {
+	const pad = s.length % 4 === 0 ? "" : "=".repeat(4 - (s.length % 4));
+	return atob(s.replace(/-/g, "+").replace(/_/g, "/") + pad);
+}
+
+/** Keyset cursor for GET /owner/inbox. null when the query omits it. */
+function inboxCursor(raw: string | null): { updatedAt: string; id: string } | null {
+	if (raw === null) return null;
+	if (!/^[A-Za-z0-9_-]{1,256}$/.test(raw)) throw new HttpError(400, "cursor is invalid");
+	let text = "";
+	try { text = b64urlDecode(raw); } catch { throw new HttpError(400, "cursor is invalid"); }
+	const nl = text.indexOf("\n");
+	if (nl <= 0) throw new HttpError(400, "cursor is invalid");
+	const updatedAt = text.slice(0, nl);
+	const id = text.slice(nl + 1);
+	if (!INBOX_STAMP.test(updatedAt) || !A.ID_RE.test(id)) throw new HttpError(400, "cursor is invalid");
+	return { updatedAt, id };
+}
+
+function inboxCursorToken(updatedAt: string, id: string): string {
+	return b64url(`${updatedAt}\n${id}`);
+}
+
+function wakeTaskIds(payload: Json): string[] {
+	const raw: unknown[] = Array.isArray(payload?.taskIds) ? payload.taskIds : [];
+	const listed: string[] = [];
+	for (const id of raw) if (typeof id === "string" && id) listed.push(id);
+	const ids = listed.length ? listed : (typeof payload?.taskId === "string" && payload.taskId ? [payload.taskId] : []);
+	return [...new Set(ids)];
+}
+
+/** A connector send stores its push hash under this id until the peer returns a task id. */
+const PENDING_TASK_PREFIX = "pend.";
+
+function changed(res: { meta?: { changes?: number } } | null | undefined): number {
+	return Number(res?.meta?.changes ?? 0);
+}
+
+/** The outbound row this push may update. A callback that arrives before SendMessage returns matches the
+ *  pending row by token hash and claims the peer's task id. A row already stored under that id must
+ *  present the same hash. */
+async function outboundForPush(ctx: TenantContext, taskId: string, givenHash: string): Promise<Json | null> {
+	if (!givenHash) return null;
+	const rec: Json = await ctx.DB.prepare("SELECT * FROM outbound WHERE task_id = ?").bind(taskId).first();
+	if (rec) return rec.push_token_hash && A.timingSafeEqualStr(rec.push_token_hash, givenHash) ? rec : null;
+	const pending: Json = await ctx.DB.prepare("SELECT * FROM outbound WHERE push_token_hash = ? AND task_id LIKE 'pend.%'").bind(givenHash).first();
+	if (!pending?.push_token_hash || !A.timingSafeEqualStr(pending.push_token_hash, givenHash)) return null;
+	try {
+		const renamed = await ctx.DB.prepare("UPDATE outbound SET task_id = ? WHERE task_id = ? AND push_token_hash = ?")
+			.bind(taskId, pending.task_id, givenHash).run();
+		if (changed(renamed) === 1) return { ...pending, task_id: taskId };
+	} catch { /* the send path already stored this task id */ }
+	const now: Json = await ctx.DB.prepare("SELECT * FROM outbound WHERE task_id = ?").bind(taskId).first();
+	return now?.push_token_hash && A.timingSafeEqualStr(now.push_token_hash, givenHash) ? now : null;
+}
+
+/** Move a pending push row onto the peer's task id without dropping an update that already arrived. */
+async function adoptOutboundTask(ctx: TenantContext, pendingId: string, taskId: string, contextId: string, peer: string, endpoint: string, protocol: string, task: Json): Promise<boolean> {
+	const taskJson = task ? JSON.stringify(task) : null;
+	const fill = "context_id = ?, peer = ?, endpoint = ?, protocol = ?, task_json = COALESCE(?, task_json)";
+	try {
+		const moved = await ctx.DB.prepare(`UPDATE outbound SET task_id = ?, ${fill} WHERE task_id = ?`)
+			.bind(taskId, contextId, peer, endpoint, protocol, taskJson, pendingId).run();
+		if (changed(moved) === 1) return true;
+	} catch { /* the real task id is already stored */ }
+	const pending: Json = await ctx.DB.prepare("SELECT push_token_hash, updates_json, updates_seen FROM outbound WHERE task_id = ?").bind(pendingId).first();
+	const existing: Json = await ctx.DB.prepare("SELECT updates_json, updates_seen FROM outbound WHERE task_id = ?").bind(taskId).first();
+	if (!existing) return false;
+	// The callback already claimed this task id. Fill in the send metadata and leave the update it stored.
+	if (!pending) {
+		await ctx.DB.prepare(`UPDATE outbound SET ${fill} WHERE task_id = ?`)
+			.bind(contextId, peer, endpoint, protocol, taskJson, taskId).run();
+		return true;
+	}
+	let updates = existing.updates_json;
+	let seen = existing.updates_seen;
+	if (pending.updates_json && pending.updates_json !== "[]" && (!updates || updates === "[]")) {
+		updates = pending.updates_json;
+		seen = pending.updates_seen;
+	}
+	await ctx.DB.prepare(
+		`UPDATE outbound SET ${fill}, push_token_hash = COALESCE(?, push_token_hash), updates_json = ?, updates_seen = ? WHERE task_id = ?`,
+	).bind(contextId, peer, endpoint, protocol, taskJson, pending.push_token_hash ?? null, updates ?? "[]", seen ?? 0, taskId).run();
+	await ctx.DB.prepare("DELETE FROM outbound WHERE task_id = ?").bind(pendingId).run();
+	return true;
+}
+
+type ReplySnap = { taskId: string; contextId: string; updatesJson: string };
+
+/** Snapshots a deferred inbox response will mark seen, once that response is actually returned. */
+const deferredReplies = new WeakMap<Response, ReplySnap[]>();
+
+/** Mark these replies seen only when the stored update is still the one this response returned.
+ *  A push that landed after the read replaced updates_json, so it stays unseen and keeps its wake. */
+async function ackOutboundReplies(ctx: TenantContext, snaps: ReplySnap[]): Promise<void> {
+	const acked: { taskId: string; contextId: string }[] = [];
+	for (const snap of snaps) {
+		const res = await ctx.DB.prepare("UPDATE outbound SET updates_seen = 1 WHERE task_id = ? AND updates_json = ?")
+			.bind(snap.taskId, snap.updatesJson).run();
+		if (changed(res) === 1) acked.push({ taskId: snap.taskId, contextId: snap.contextId });
+	}
+	if (acked.length) await ackPendingWakes(ctx, acked, "outbound_update");
+}
+
+/** Drop these task ids from the inbound wake for that conversation. A wake for another conversation, or an
+ *  outbound update that reuses the task id, stays pending. A wake that still names other tasks stays pending. */
+async function ackPendingWakes(ctx: TenantContext, seen: { taskId: string; contextId: string }[], kind = "inbound"): Promise<void> {
+	const byContext = new Map<string, Set<string>>();
+	for (const row of seen) {
+		if (!row.taskId || !row.contextId) continue;
+		const ids = byContext.get(row.contextId) ?? new Set<string>();
+		ids.add(row.taskId);
+		byContext.set(row.contextId, ids);
+	}
+	for (const [contextId, seenIds] of byContext) {
+		const row: Json = await ctx.DB.prepare("SELECT pending_json FROM wakes WHERE context_id = ?").bind(contextId).first();
+		if (typeof row?.pending_json !== "string") continue;
+		let payload: Json;
+		try { payload = JSON.parse(row.pending_json); } catch { continue; }
+		const wakeKind = typeof payload?.kind === "string" && payload.kind ? payload.kind : "inbound";
+		if (wakeKind !== kind) continue;
+		if (typeof payload?.contextId === "string" && payload.contextId !== contextId) continue;
+		const ids = wakeTaskIds(payload);
+		if (!ids.some((id) => seenIds.has(id))) continue;
+		const kept = ids.filter((id) => !seenIds.has(id));
+		if (!kept.length) {
+			await ctx.DB.prepare("UPDATE wakes SET pending_json = NULL, pending_since_ms = NULL WHERE context_id = ? AND pending_json = ?").bind(contextId, row.pending_json).run();
+			continue;
+		}
+		const next = { ...payload, taskIds: kept, taskId: kept[kept.length - 1] };
+		await ctx.DB.prepare("UPDATE wakes SET pending_json = ? WHERE context_id = ? AND pending_json = ?").bind(JSON.stringify(next), contextId, row.pending_json).run();
+	}
+}
+
 function ownerTaskView(t: Json): Json {
 	const { _push, _peer, _protocol, _createdAt, ...rest } = t;
 	return {
@@ -971,7 +1126,7 @@ function ownerTaskView(t: Json): Json {
 	};
 }
 
-async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionContext, path: string, url: URL, trusted = false, head = false): Promise<Response> {
+async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionContext, path: string, url: URL, trusted = false, head = false, deferAck = false): Promise<Response> {
 	// trusted: an in-process call. MCP tools use ownerCall (paths fixed in the tool code). The hosted
 	// owner() RPC uses runOwnerRpc, which has its own allowlist. A request from the network is never trusted.
 	if (!trusted && !(await isOwner(ctx, req.headers.get("authorization")))) return json({ error: "unauthorized" }, 401);
@@ -1002,53 +1157,70 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 	if (seg[0] === "inbox" && m === "GET") {
 		const contextFilter = url.searchParams.get("context");
 		const all = url.searchParams.get("all") === "1";
-		let q = "SELECT id FROM tasks WHERE 1=1";
+		const limit = inboxLimit(url.searchParams.get("limit"));
+		const cursor = inboxCursor(url.searchParams.get("cursor"));
+		let q = "SELECT id, updated_at FROM tasks WHERE 1=1";
 		const args: Json[] = [];
 		if (!all) q += " AND state IN ('submitted','working')";
-		if (contextFilter) { q += " AND context_id = ?"; args.push(contextFilter); }
-		q += " ORDER BY updated_at LIMIT 200";
+		if (contextFilter) { A.checkId(contextFilter, "contextId"); q += " AND context_id = ?"; args.push(contextFilter); }
+		if (cursor) { q += " AND (updated_at > ? OR (updated_at = ? AND id > ?))"; args.push(cursor.updatedAt, cursor.updatedAt, cursor.id); }
+		q += " ORDER BY updated_at, id LIMIT ?";
+		args.push(limit + 1);
 		const rows = await ctx.DB.prepare(q).bind(...args).all();
+		const found = rows.results as Json[];
+		const page = found.slice(0, limit);
 		const out = [];
-		for (const r of rows.results as Json[]) {
+		for (const r of page) {
 			const t = await loadTask(ctx, r.id);
 			const lastUser = [...t.history].reverse().find((x: Json) => x.role === "user") || {};
 			out.push({ taskId: t.id, contextId: t.contextId, from: t._peer, state: t.status.state, updated: t.status.timestamp, text: A.textOf(lastUser) });
 		}
-		// A reply to a message this agent sent. It stays in the default inbox until a non-HEAD list reads it.
-		// all=1 keeps showing it afterwards, the same way a finished inbound task stays.
-		let oq = "SELECT task_id, context_id, peer, updates_json FROM outbound WHERE updates_json != '[]'";
-		const oargs: Json[] = [];
-		if (!all) oq += " AND updates_seen = 0";
-		if (contextFilter) { oq += " AND context_id = ?"; oargs.push(contextFilter); }
-		oq += " ORDER BY sent_at LIMIT 200";
-		const replies = await ctx.DB.prepare(oq).bind(...oargs).all();
-		const replyIds: string[] = [];
-		for (const r of replies.results as Json[]) {
-			let updates: Json[] = [];
-			try { updates = JSON.parse(r.updates_json || "[]"); } catch { updates = []; }
-			const last = updates[updates.length - 1];
-			if (!last || typeof last !== "object") continue;
-			const view = pushUpdateView(last.payload);
-			replyIds.push(r.task_id);
-			out.push({
-				taskId: r.task_id, contextId: r.context_id, from: r.peer, state: view.state,
-				updated: typeof last.receivedAt === "string" ? last.receivedAt : null, text: view.text, kind: "outbound",
-			});
-		}
-		// the owner has now seen these tasks: drop pending wakes that only cover them.
-		// HEAD returns the same status and headers and does not mark the inbox seen.
-		if (!head) {
-			const seen = new Set(out.map((o) => o.taskId));
-			const pend = await ctx.DB.prepare("SELECT context_id, pending_json FROM wakes WHERE pending_json IS NOT NULL").all();
-			for (const p of pend.results as Json[]) {
-				const ids: string[] = JSON.parse(p.pending_json).taskIds || [];
-				if (ids.length && ids.every((i) => seen.has(i)))
-					await ctx.DB.prepare("UPDATE wakes SET pending_json = NULL, pending_since_ms = NULL WHERE context_id = ? AND pending_json = ?").bind(p.context_id, p.pending_json).run();
+		// A reply to a message this agent sent. The first page carries it, up to the same limit, so a later
+		// page does not repeat it and the inbound cursor stays the inbound page. It stays in the default
+		// inbox until a non-HEAD list reads that exact update. all=1 keeps showing it afterwards.
+		const replySnaps: ReplySnap[] = [];
+		if (!cursor) {
+			let oq = "SELECT task_id, context_id, peer, updates_json FROM outbound WHERE updates_json != '[]'";
+			const oargs: Json[] = [];
+			if (!all) oq += " AND updates_seen = 0";
+			if (contextFilter) { oq += " AND context_id = ?"; oargs.push(contextFilter); }
+			oq += " ORDER BY sent_at LIMIT ?";
+			oargs.push(limit);
+			const replies = await ctx.DB.prepare(oq).bind(...oargs).all();
+			for (const r of replies.results as Json[]) {
+				let updates: Json[] = [];
+				try { updates = JSON.parse(r.updates_json || "[]"); } catch { updates = []; }
+				const last = updates[updates.length - 1];
+				if (!last || typeof last !== "object") continue;
+				const view = pushUpdateView(last.payload);
+				const updatesJson = typeof r.updates_json === "string" ? r.updates_json : JSON.stringify(r.updates_json ?? []);
+				replySnaps.push({ taskId: String(r.task_id), contextId: String(r.context_id), updatesJson });
+				out.push({
+					taskId: r.task_id, contextId: r.context_id, from: r.peer, state: view.state,
+					updated: typeof last.receivedAt === "string" ? last.receivedAt : null, text: view.text, kind: "outbound",
+				});
 			}
-			for (const id of replyIds)
-				await ctx.DB.prepare("UPDATE outbound SET updates_seen = 1 WHERE task_id = ?").bind(id).run();
 		}
-		return json(out);
+		// Clear a pending wake only for tasks in this page. Ids the caller did not get stay pending,
+		// including when one wake names tasks on this page and tasks on a later page.
+		// A reply is marked seen only when its stored update still equals the snapshot in this response.
+		// HEAD does not mark the inbox seen. The hosted owner RPC defers both clears until it has
+		// decided to return this body (a withheld response leaves the wakes pending).
+		const inboundSeen = out.flatMap((o) => o.kind === "outbound" ? [] : (typeof o.taskId === "string" && typeof o.contextId === "string" ? [{ taskId: o.taskId, contextId: o.contextId }] : []));
+		const headers: Record<string, string> = {};
+		if (found.length > limit && page.length) {
+			const last = page[page.length - 1];
+			const updatedAt = String(last.updated_at);
+			const id = String(last.id);
+			if (INBOX_STAMP.test(updatedAt) && A.ID_RE.test(id)) headers["x-a2a-next-cursor"] = inboxCursorToken(updatedAt, id);
+		}
+		const res = json(out, 200, headers);
+		if (!head && deferAck) deferredReplies.set(res, replySnaps);
+		if (!head && !deferAck) {
+			await ackPendingWakes(ctx, inboundSeen);
+			await ackOutboundReplies(ctx, replySnaps);
+		}
+		return res;
 	}
 	if (seg[0] === "tasks" && seg[1]) {
 		const t = await loadTask(ctx, A.checkId(seg[1], "taskId"));
@@ -1058,6 +1230,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			if (A.TERMINAL.has(t.status.state)) return json({ error: `task is already ${t.status.state}` }, 409);
 			t.status = { state: "working", timestamp: A.nowIso() };
 			await ctx.DB.batch([saveTaskStmt(ctx, t), histStmt(ctx, t.contextId, { dir: "local", taskId: t.id, event: "state", state: "working" })]);
+			await ackPendingWakes(ctx, [{ taskId: t.id, contextId: t.contextId }]);
 			return json({ task: ownerTaskView(t), push: await notifyPeer(ctx, ectx, t) });
 		}
 		if (seg[2] === "reply" && m === "POST") {
@@ -1072,6 +1245,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			t.status = { state, timestamp: A.nowIso(), message: msg };
 			await ctx.DB.batch([saveTaskStmt(ctx, t), msgStmt(ctx, t, msg),
 				histStmt(ctx, t.contextId, { dir: "out", peer: t._peer, taskId: t.id, role: "agent", state, text: b.text })]);
+			await ackPendingWakes(ctx, [{ taskId: t.id, contextId: t.contextId }]);
 			return json({ task: ownerTaskView(t), push: await notifyPeer(ctx, ectx, t) });
 		}
 	}
@@ -2394,7 +2568,8 @@ export async function runOwnerRpc(ctx: TenantContext, ectx: ExecutionContext, in
 		body: parsedBody.value === undefined ? undefined : JSON.stringify(parsedBody.value),
 	});
 	let res: Response;
-	try { res = await handleOwner(req, ctx, ectx, url.pathname, url, true); }
+	// deferAck: do not clear inbox wakes until this response is actually returned.
+	try { res = await handleOwner(req, ctx, ectx, url.pathname, url, true, false, true); }
 	catch (e: any) {
 		const status = e instanceof HttpError ? e.status : 400;
 		const error = String(e?.message || "bad request").slice(0, 200);
@@ -2419,18 +2594,30 @@ export async function runOwnerRpc(ctx: TenantContext, ectx: ExecutionContext, in
 		}
 	}
 	if (data === null || ownerResponseLeaks(data)) return refuse(500, "response withheld", "secret");
+	if (matched.route.path === "/owner/inbox" && res.ok && Array.isArray(data)) {
+		const seen = data.flatMap((row) => {
+			if (!row || typeof row !== "object") return [];
+			if ((row as { kind?: unknown }).kind === "outbound") return [];
+			const taskId = (row as { taskId?: unknown }).taskId;
+			const contextId = (row as { contextId?: unknown }).contextId;
+			return typeof taskId === "string" && typeof contextId === "string" ? [{ taskId, contextId }] : [];
+		});
+		await ackPendingWakes(ctx, seen);
+		await ackOutboundReplies(ctx, deferredReplies.get(res) || []);
+	}
 	log("owner_rpc", { tenant, accountId, method: matched.route.method, route: matched.route.name, status: res.status });
-	return { status: res.status, body: data };
+	const nextCursor = res.headers.get("x-a2a-next-cursor") || "";
+	return nextCursor ? { status: res.status, body: data, nextCursor } : { status: res.status, body: data };
 }
 
 /** Call an owner API route in-process (MCP tools only; the paths are fixed in the tool code). */
-async function ownerCall(ctx: TenantContext, ectx: ExecutionContext, method: string, path: string, body?: Json): Promise<{ status: number; data: Json }> {
+async function ownerCall(ctx: TenantContext, ectx: ExecutionContext, method: string, path: string, body?: Json): Promise<{ status: number; data: Json; headers: Headers }> {
 	const url = new URL(ctx.PUBLIC_URL.replace(/\/$/, "") + path);
 	const req = new Request(url, { method, headers: { "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
 	let res: Response;
 	try { res = await handleOwner(req, ctx, ectx, url.pathname, url, true); }
-	catch (e: any) { return { status: e instanceof HttpError ? e.status : 400, data: { error: e.message } }; }
-	return { status: res.status, data: await res.json().catch(() => null) };
+	catch (e: any) { return { status: e instanceof HttpError ? e.status : 400, data: { error: e.message }, headers: new Headers() }; }
+	return { status: res.status, data: await res.json().catch(() => null), headers: res.headers };
 }
 
 class ToolError extends Error {}
@@ -2506,10 +2693,25 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 			const qs = new URLSearchParams();
 			if (a.contextId !== undefined) qs.set("context", A.checkId(argStr(a, "contextId"), "contextId"));
 			if (a.all === true) qs.set("all", "1");
-			const tasks = must(await ownerCall(ctx, ectx, "GET", `/owner/inbox${qs.size ? `?${qs}` : ""}`));
+			if (a.cursor !== undefined) {
+				const cursor = argStr(a, "cursor");
+				if (!/^[A-Za-z0-9_-]{1,256}$/.test(cursor)) throw new ToolError("cursor is invalid");
+				qs.set("cursor", cursor);
+			}
+			let limit = M.INBOX_PAGE;
+			if (a.limit !== undefined) {
+				const n = Number(a.limit);
+				if (!Number.isInteger(n) || n < 1 || n > M.INBOX_MAX) throw new ToolError("limit must be 1-200");
+				limit = n;
+			}
+			qs.set("limit", String(limit));
+			const listed = await ownerCall(ctx, ectx, "GET", `/owner/inbox?${qs}`);
+			const tasks = must(listed);
+			const next = listed.headers.get("x-a2a-next-cursor") || "";
 			const pairing = pairingOn(ctx) ? must(await ownerCall(ctx, ectx, "GET", "/owner/pairing")).pending.length : 0;
 			const manage = pairing ? dashboardUrl(ctx) : "";
-			const head = `${tasks.length} task(s)${a.all ? "" : " waiting"}${pairing ? `; ${pairing} pending pairing request(s): see pairing_requests (never approve them yourself)${manage ? `. Approve or deny at ${manage}` : ""}` : ""}. ${UNTRUSTED}`;
+			const more = next ? ` More tasks are waiting; call inbox again with cursor ${next}.` : "";
+			const head = `${tasks.length} task(s)${a.all ? "" : " waiting"}${pairing ? `; ${pairing} pending pairing request(s): see pairing_requests (never approve them yourself)${manage ? `. Approve or deny at ${manage}` : ""}` : ""}.${more} ${UNTRUSTED}`;
 			return M.toolText(head, tasks);
 		}
 		case "show_task":
@@ -2536,28 +2738,56 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 			const v1 = version.startsWith("1");
 			const msg: Json = { messageId: A.newId(), role: v1 ? "ROLE_USER" : "user", parts: v1 ? [{ text }] : [{ kind: "text", text }] };
 			if (!v1) msg.kind = "message";
-			if (a.contextId) msg.contextId = A.checkId(argStr(a, "contextId"), "contextId");
+			const callerContext = a.contextId ? A.checkId(argStr(a, "contextId"), "contextId") : "";
+			if (callerContext) msg.contextId = callerContext;
 			if (a.taskId) msg.taskId = A.checkId(argStr(a, "taskId"), "taskId");
-			// The peer pushes its reply to this A2A endpoint. Only the hash is stored, and the token is not returned.
-			const pushToken = newPushToken();
-			const pushUrl = ctx.PUBLIC_URL.replace(/\/$/, "") + "/push";
-			const pushCfg = { url: pushUrl, token: pushToken };
-			const configuration = v1
-				? { returnImmediately: true, taskPushNotificationConfig: pushCfg }
-				: { blocking: false, pushNotificationConfig: pushCfg };
-			const res = await peerRpc(ctx, ectx, peer, endpoint, version, "message/send", "SendMessage", { message: msg, configuration });
+			// A conforming peer rejects SendMessage when push is attached and the card does not advertise it.
+			const caps = card && typeof card === "object" ? card.capabilities : null;
+			const pushOn = !!(caps && typeof caps === "object" && caps.pushNotifications === true);
+			const configuration: Json = v1 ? { returnImmediately: true } : { blocking: false };
+			// The hash is stored before the call, under a pending id, so a callback that races the response authenticates.
+			// Only the hash is stored, and the token is not returned.
+			const pushToken = pushOn ? newPushToken() : null;
+			const pendingContext = callerContext || A.newId();
+			let pendingId: string | null = null;
+			if (pushToken) {
+				pendingId = PENDING_TASK_PREFIX + msg.messageId;
+				const pushCfg = { url: ctx.PUBLIC_URL.replace(/\/$/, "") + "/push", token: pushToken };
+				if (v1) configuration.taskPushNotificationConfig = pushCfg;
+				else configuration.pushNotificationConfig = pushCfg;
+				try {
+					await ctx.DB.prepare(
+						`INSERT INTO outbound (task_id, context_id, peer, endpoint, protocol, push_token_hash, sent_at, updates_json, updates_seen)
+						 VALUES (?, ?, ?, ?, ?, ?, ?, '[]', 0)`,
+					).bind(pendingId, pendingContext, peer.alias, endpoint, version, await A.sha256(pushToken), A.nowIso()).run();
+				} catch {
+					throw new ToolError("the outbound task could not be saved, so the reply cannot be authenticated. Nothing was sent.");
+				}
+			}
+			let res: Json;
+			try {
+				res = await peerRpc(ctx, ectx, peer, endpoint, version, "message/send", "SendMessage", { message: msg, configuration });
+			} catch (e) {
+				if (pendingId) await ctx.DB.prepare("DELETE FROM outbound WHERE task_id = ? AND updates_json = '[]'").bind(pendingId).run();
+				throw e;
+			}
 			const obj = res && typeof res === "object" && ("task" in res || "message" in res) ? res.task || res.message : res;
 			const isTask = obj && typeof obj === "object" && "status" in obj;
-			const sentContext = (obj && obj.contextId) || msg.contextId || A.newId();
-			const tid = isTask ? String(obj.id) : null;
+			const sentContext = (obj && obj.contextId) || callerContext || pendingContext;
+			const tid = isTask && obj.id ? String(obj.id) : null;
+			if (!callerContext && sentContext !== pendingContext)
+				await ctx.DB.prepare("UPDATE history SET context_id = ? WHERE context_id = ?").bind(sentContext, pendingContext).run();
+			let adopted = false;
+			if (pendingId && tid) adopted = await adoptOutboundTask(ctx, pendingId, tid, sentContext, peer.alias, endpoint, version, obj);
+			else if (pendingId) await ctx.DB.prepare("DELETE FROM outbound WHERE task_id = ? AND updates_json = '[]'").bind(pendingId).run();
 			await ownerCall(ctx, ectx, "POST", "/owner/history", { contextId: sentContext, dir: "out", peer: peer.alias, taskId: tid, role: "user", text,
 				data: { messageId: msg.messageId, endpoint, protocol: version, via: "mcp" } });
-			let pushSaved = true;
+			let pushSaved = !pushToken || adopted;
 			if (tid) {
-				const saved = await ownerCall(ctx, ectx, "POST", "/owner/outbound", { taskId: tid, contextId: sentContext, peer: peer.alias, endpoint, protocol: version, pushToken, task: obj });
-				pushSaved = saved.status < 300;
+				const saved = await ownerCall(ctx, ectx, "POST", "/owner/outbound", { taskId: tid, contextId: sentContext, peer: peer.alias, endpoint, protocol: version, ...(pushToken ? { pushToken } : {}), task: obj });
+				pushSaved = pushSaved || saved.status < 300;
 			} else if (obj && obj.parts) await ownerCall(ctx, ectx, "POST", "/owner/history", { contextId: sentContext, dir: "in", peer: peer.alias, role: "agent", event: "direct_message", text: A.textOf(obj) });
-			const warn = tid && !pushSaved ? " The reply cannot be authenticated until the outbound task is saved; use poll_outbound." : "";
+			const warn = pushToken && tid && !pushSaved ? " The reply cannot be authenticated until the outbound task is saved; use poll_outbound." : "";
 			return M.toolText(tid ? `Sent to ${peer.alias}: task ${tid} (${M.plainState(obj)}), context ${sentContext}. Check it later with poll_outbound.${warn} ${UNTRUSTED}`
 				: `Sent to ${peer.alias}; it answered directly (context ${sentContext}). ${UNTRUSTED}`, obj);
 		}

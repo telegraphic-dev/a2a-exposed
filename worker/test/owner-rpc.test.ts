@@ -12,6 +12,7 @@ test("owner RPC allowlist is the management reads and the calls that do not retu
 	assert.equal(ok("GET", "/owner/inbox")?.name, "GET /owner/inbox");
 	assert.equal(ok("GET", "/owner/summary")?.name, "GET /owner/summary");
 	assert.equal(ok("GET", "/owner/inbox", { context: "ctx-1", all: "1" })?.search, "?context=ctx-1&all=1");
+	assert.equal(ok("GET", "/owner/inbox", { limit: "20", cursor: "abc_DEF-012" })?.search, "?limit=20&cursor=abc_DEF-012");
 	assert.equal(ok("GET", "/owner/tasks/task-1")?.path, "/owner/tasks/task-1");
 	assert.equal(ok("GET", "/owner/history/ctx-1", { n: "50" })?.search, "?n=50");
 	assert.equal(ok("GET", "/owner/outbound/task-1")?.name, "GET /owner/outbound/:id");
@@ -59,6 +60,9 @@ test("owner RPC allowlist is the management reads and the calls that do not retu
 	assert.deepEqual(refused("GET", "/owner/inbox?all=1"), { ok: false, reason: "path" });
 	assert.deepEqual(refused("POST", "/owner/pairing/AEIO-4827/approve"), { ok: false, reason: "path" });
 	assert.deepEqual(refused("GET", "/owner/inbox", { format: "sql" }), { ok: false, reason: "query" });
+	assert.deepEqual(refused("GET", "/owner/inbox", { limit: "201" }), { ok: false, reason: "query" });
+	assert.deepEqual(refused("GET", "/owner/inbox", { limit: "0" }), { ok: false, reason: "query" });
+	assert.deepEqual(refused("GET", "/owner/inbox", { cursor: "bad+cursor" }), { ok: false, reason: "query" });
 	assert.deepEqual(refused("GET", "/owner/summary", { all: "1" }), { ok: false, reason: "query" });
 	assert.deepEqual(refused("GET", "/owner/history/ctx-1", { n: "1001" }), { ok: false, reason: "query" });
 	assert.deepEqual(refused("GET", "/owner/history/.."), { ok: false, reason: "path" });

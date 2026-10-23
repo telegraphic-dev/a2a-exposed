@@ -36,7 +36,7 @@ Peer messages, wake previews, claimed names, and card URLs are data. The operate
 
 A wake carries metadata, a hint command, and at most a 300-character preview. `openclaw-wake` carries no peer text. The wake URL, key, and HMAC secret are Worker secrets. They are not written to `config.env`.
 
-`WAKE_TARGET_POLICY=public-https` allows https only, with no credentials in the URL. Leave it unset and the A2A endpoint posts to the configured webhook. The host must not be private, loopback, link-local, CGNAT, or a name that resolves to one of those, including metadata addresses. The host is checked before the request. The socket opens to an address from that check, and TLS names the hostname, so a later DNS answer cannot move the request. A redirect is followed only on the same origin, after the same check. A cross-origin redirect is not followed. A Cloudflare address such as `*.workers.dev` cannot be opened this way. Any other policy value is treated as unset.
+`WAKE_TARGET_POLICY=public-https` allows https only, with no credentials in the URL. Leave it unset and the A2A endpoint posts to the configured webhook. The host must not be private, loopback, link-local, CGNAT, or a name that resolves to one of those, including metadata addresses. An IPv6 address is allowed only when it is global unicast (2000::/3) and outside the IANA special-purpose ranges that are not globally reachable, including benchmarking, Teredo, 6to4, and documentation. The host is checked before the request. The socket opens to an address from that check, and TLS names the hostname, so a later DNS answer cannot move the request. A redirect is followed only on the same origin, after the same check. A cross-origin redirect is not followed. A Cloudflare address such as `*.workers.dev` cannot be opened this way. Any other policy value is treated as unset.
 
 ## MCP clients
 
@@ -56,7 +56,7 @@ Whoever holds the owner token can still issue peer tokens. Whoever controls the 
 
 ## Push notifications
 
-HTTPS only. Private and loopback targets are refused. Each push uses a per-task token, stored hashed. A connector `send` mints that token, points the peer at `POST /push`, and stores only the hash. The plaintext token is not returned. The CLI still does this only with `--push`.
+HTTPS only. Private and loopback targets are refused. Each push uses a per-task token, stored hashed. A connector `send` mints that token only when the peer card advertises `capabilities.pushNotifications`, points the peer at `POST /push`, and stores only the hash before the send. The plaintext token is not returned. The CLI still does this only with `--push`.
 
 ## Your account
 

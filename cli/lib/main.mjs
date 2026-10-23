@@ -168,7 +168,8 @@ Inbox (owner side)
                                            this list is read (peer text is UNTRUSTED). A reply line says to
                                            read it with history and continue with send. Then pending pairing
                                            requests (tell your human; the dashboard URL when MANAGE_URL is set;
-                                           --json: rows on stdout, requests on stderr)
+                                           --json: rows on stdout, requests on stderr). Follows every page; past
+                                           10000 pages it errors instead of a short list
   show <taskId>                            full task JSON
   working <taskId>                         mark task working
   reply <taskId> (--text T | --stdin) [--state completed|input-required|rejected|failed|working]

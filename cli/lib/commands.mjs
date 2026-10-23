@@ -15,7 +15,7 @@ export async function owner(method, path, body, timeout) {
 	return data;
 }
 
-/** Owner API call that returns { status, data } instead of dying, so callers can explain errors themselves. */
+/** Owner API call that returns { status, data, headers } instead of dying, so callers can explain errors themselves. */
 export async function ownerTry(method, path, body, timeout) {
 	const base = baseUrl(), tok = C.get("A2A_OWNER_TOKEN");
 	if (!base || !tok) die(`A2A_BASE_URL / A2A_OWNER_TOKEN missing (run \`${CLI} init\` or edit ${C.CONFIG_FILE})`);
@@ -29,11 +29,44 @@ function printPush(res) {
 const readStdin = () => fs.readFileSync(0, "utf8");
 
 // ---------------------------------------------------------------- inbound side
+/** Safety ceiling for `inbox`. Past this the command errors instead of returning a short list. */
+export const INBOX_MAX_PAGES = 10000;
+
+/** Follow inbox cursors until they end. A repeated cursor stops. Past maxPages the command errors. */
+export async function followInbox(load, maxPages = INBOX_MAX_PAGES) {
+	const rows = [];
+	let cursor = "";
+	const seen = new Set();
+	for (let page = 0; ; page++) {
+		if (page >= maxPages) die(`inbox is longer than ${maxPages} pages; refusing to print a partial list`);
+		if (cursor && seen.has(cursor)) die(`inbox cursor repeated after ${rows.length} tasks; refusing to print a partial list`);
+		if (cursor) seen.add(cursor);
+		const got = await load(cursor);
+		if (!Array.isArray(got.rows)) die("inbox response is not a list");
+		rows.push(...got.rows);
+		const next = got.cursor || "";
+		if (!next || next === cursor) return rows;
+		cursor = next;
+	}
+}
+
+/** Every open page. Each response clears wakes only for the tasks it returns, so this follows the cursor. */
+async function inboxRows(o) {
+	return followInbox(async (cursor) => {
+		const qs = [];
+		if (o.context) qs.push("context=" + q(o.context));
+		if (o.all) qs.push("all=1");
+		if (cursor) qs.push("cursor=" + q(cursor));
+		const path = "/owner/inbox" + (qs.length ? "?" + qs.join("&") : "");
+		const r = await ownerTry("GET", path);
+		if (r.status < 200 || r.status >= 300) die(`worker GET ${path} -> ${describeHttp(r.status, r.data)}`);
+		if (!Array.isArray(r.data)) die(`worker GET ${path} -> inbox response is not a list`);
+		return { rows: r.data, cursor: r.headers?.get("x-a2a-next-cursor") || "" };
+	});
+}
+
 export async function inbox(o) {
-	const qs = [];
-	if (o.context) qs.push("context=" + q(o.context));
-	if (o.all) qs.push("all=1");
-	const rows = await owner("GET", "/owner/inbox" + (qs.length ? "?" + qs.join("&") : ""));
+	const rows = await inboxRows(o);
 	// pending pairing requests: polling agents get no pairing wake, so the inbox shows them too (not with --context:
 	// that is one conversation). An older Worker without pairing: nothing to show.
 	let pairing = [];
