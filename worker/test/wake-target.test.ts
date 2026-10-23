@@ -15,6 +15,7 @@ const publicLookup: AddressLookup = async (host) => {
 	if (host === "v6.example") return ["2606:4700:4700::1111"];
 	if (host === "split.example") return ["1.2.3.4", "10.0.0.1"];
 	if (host === "meta.example") return ["169.254.169.254"];
+	if (host === "bench.example") return ["2001:2::1"];
 	if (host === "missing.example") return [];
 	return null;
 };
@@ -32,6 +33,9 @@ test("public-https refuses private, metadata, and non-https URLs before any requ
 		"https://169.254.169.254/latest/meta-data",
 		"https://[::1]/wake",
 		"https://[fe80::1]/wake",
+		"https://[2001:2::1]/wake",
+		"https://[2001::1]/wake",
+		"https://[3fff::1]/wake",
 		"https://localhost/wake",
 		"https://metadata.google.internal/wake",
 		"https://agent.ts.net/wake",
@@ -42,10 +46,14 @@ test("public-https refuses private, metadata, and non-https URLs before any requ
 		const why = await publicWakeProblem(url, publicLookup);
 		assert.notEqual(why, "", url);
 	}
+	assert.equal(await publicWakeProblem("https://[2001:2::1]/wake", publicLookup), "private or reserved address");
+	assert.equal(await publicWakeProblem("https://[2001::1]/wake", publicLookup), "private or reserved address");
+	assert.equal(await publicWakeProblem("https://[3fff::1]/wake", publicLookup), "private or reserved address");
 	assert.equal(await publicWakeProblem("https://hook.example/wake", publicLookup), "");
 	assert.equal(await publicWakeProblem("https://1.2.3.4/wake", publicLookup), "");
 	assert.equal(await publicWakeProblem("https://split.example/wake", publicLookup), "resolves to a private or reserved address");
 	assert.equal(await publicWakeProblem("https://meta.example/wake", publicLookup), "resolves to a private or reserved address");
+	assert.equal(await publicWakeProblem("https://bench.example/wake", publicLookup), "resolves to a private or reserved address");
 	assert.equal(await publicWakeProblem("https://missing.example/wake", publicLookup), "the host has no address");
 	assert.equal(await publicWakeProblem("https://unknown.example/wake", publicLookup), "its address could not be checked");
 });
