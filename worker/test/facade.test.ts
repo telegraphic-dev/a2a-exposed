@@ -268,6 +268,54 @@ test("proxy mode: JSON-RPC is forwarded with the façade's credential, never the
 	assert.equal((s.DB.db.prepare("SELECT COUNT(*) AS n FROM tasks").get() as any).n, 0);
 });
 
+test("proxy mode: a declared A2A-Version query is forwarded as the header; a headerless call stays headerless", async (t) => {
+	let n = 0;
+	const s = setup({ UPSTREAM_URL: UPSTREAM, UPSTREAM_CARD_URL: "https://agent-upstream.example.net/card-ver.json" }, async (url, init) => {
+		if (url.endsWith(".json")) return Response.json(tailnetCard());
+		const rq = JSON.parse(init.body);
+		const hv = init.headers?.["a2a-version"];
+		const v1 = hv ? hv.startsWith("1") : !String(rq.method).includes("/");
+		const id = `up-task-${++n}`, contextId = `up-ctx-${n}`;
+		const result = v1
+			? { task: { id, contextId, status: { state: "TASK_STATE_SUBMITTED" }, history: [{ role: "ROLE_USER", parts: [{ text: "hi" }] }] } }
+			: { kind: "task", id, contextId, status: { state: "submitted" }, history: [{ kind: "message", role: "user", parts: [{ kind: "text", text: "hi" }] }] };
+		return Response.json({ jsonrpc: "2.0", id: rq.id, result });
+	});
+	t.after(s.restore);
+	const tok = await s.issue("ada");
+	const msg = { message: { role: "user", messageId: "m-ver", parts: [{ kind: "text", text: "hi" }] } };
+	const post = (path: string, method: string, headers: Record<string, string> = {}) =>
+		s.call("POST", path, { token: tok, json: { jsonrpc: "2.0", id: 1, method, params: msg }, headers });
+	const last = () => s.calls.filter((c) => c.url === UPSTREAM).at(-1);
+
+	const q = await post("/?A2A-Version=0.3", "SendMessage");
+	assert.equal(q.status, 200, q.text);
+	assert.equal(last().url, UPSTREAM);
+	assert.equal(last().headers["a2a-version"], "0.3");
+	assert.equal(q.data.result.kind, "task");
+	assert.equal(q.data.result.status.state, "submitted");
+	assert.equal(q.data.result.task, undefined);
+
+	const bare = await post("/", "SendMessage");
+	assert.equal(last().headers["a2a-version"], undefined);
+	assert.equal(bare.data.result.task.status.state, "TASK_STATE_SUBMITTED");
+	assert.equal(bare.data.result.kind, undefined);
+
+	const bare03 = await post("/", "message/send");
+	assert.equal(last().headers["a2a-version"], undefined);
+	assert.equal(bare03.data.result.kind, "task");
+	assert.equal(bare03.data.result.status.state, "submitted");
+
+	const wins = await post("/?A2A-Version=0.3", "SendMessage", { "a2a-version": "1.0" });
+	assert.equal(last().headers["a2a-version"], "1.0");
+	assert.equal(wins.data.result.task.status.state, "TASK_STATE_SUBMITTED");
+
+	const patch = await post("/?A2A-Version=0.3.0", "SendMessage");
+	assert.equal(last().headers["a2a-version"], "0.3");
+	assert.equal(patch.data.result.kind, "task");
+	assert.equal(patch.data.result.status.state, "submitted");
+});
+
 test("proxy mode: peers sharing the upstream identity can't touch each other's tasks or contexts", async (t) => {
 	const s = setup({ UPSTREAM_URL: UPSTREAM, UPSTREAM_CARD_URL: "https://agent-upstream.example.net/card-c.json" });
 	t.after(s.restore);

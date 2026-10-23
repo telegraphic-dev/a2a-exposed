@@ -867,8 +867,9 @@ async function proxyRpc(req: Request, ctx: TenantContext, c: { raw: string; rid:
 	// public-looking name to a private address), so push configs never reach it. Follow-up: a relay through the Worker.
 	if (F.wantsPush(c.op, c.params)) return err(-32003, "Push notifications are not supported through this façade; poll GetTask with the task id instead");
 	const headers = upstreamHeaders(ctx, ep, { "content-type": "application/json", accept: "application/json", "x-a2a-peer": c.label });
-	const hv = req.headers.get("a2a-version");
-	if (hv) headers["a2a-version"] = hv;
+	// Declared version only (header, else query). A headerless call stays headerless, so the upstream still chooses from the method name.
+	const declared = declaredA2AVersion(req);
+	if (declared.version) headers["a2a-version"] = declared.version;
 	let r: Response;
 	try {
 		r = await fetch(ep, { method: "POST", headers, body: c.raw, redirect: "manual", signal: AbortSignal.timeout(90000) });

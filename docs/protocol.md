@@ -68,7 +68,7 @@ Anything else (`curl`, agents, `Accept: application/json`, `?format=json`) gets 
 
 ## Proxy mode
 
-Forwards `SendMessage`, `GetTask`, and `CancelTask` (1.0 and 0.3). Another peer's task returns `-32001`. An unknown or unrecorded context returns `-32602`. `ListTasks` returns `-32004`. Push notification config calls return `-32003`. Streaming returns `-32004`. `GetExtendedAgentCard` and `agent/getAuthenticatedExtendedCard` return `-32007` on the façade. The card advertises only the JSON-RPC versions the upstream card lists.
+Forwards `SendMessage`, `GetTask`, and `CancelTask` (1.0 and 0.3). Another peer's task returns `-32001`. An unknown or unrecorded context returns `-32602`. `ListTasks` returns `-32004`. Push notification config calls return `-32003`. Streaming returns `-32004`. `GetExtendedAgentCard` and `agent/getAuthenticatedExtendedCard` return `-32007` on the façade. A declared `A2A-Version` (header, or the query parameter when the header is absent; a patch is ignored) is forwarded to the upstream as the `A2A-Version` header. A call with neither stays headerless, so the upstream still chooses from the method name. The card advertises only the JSON-RPC versions the upstream card lists.
 
 ## Owner API
 
