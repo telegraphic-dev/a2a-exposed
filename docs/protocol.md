@@ -74,7 +74,7 @@ Authenticated with the owner token. The CLI is the supported way to call these. 
 | --- | --- |
 | A2A endpoint | `GET /owner/inbox`, `GET /owner/tasks/<id>`, `GET /owner/history/<contextId>`, `POST /owner/tasks/<id>/working`, `POST /owner/tasks/<id>/reply` |
 | Summary | `GET /owner/summary` (counts only: tasks in each state, pending pairing requests; no message text; does not clear a pending wake) |
-| Log | `GET /owner/log` (recent history, newest first; opening this log leaves a pending wake in place until you list the A2A endpoint) |
+| Log | `GET /owner/log` (recent history, newest first; opening this log leaves a pending wake in place until a `GET /owner/inbox` response includes that task) |
 | Export | `GET /owner/export` and `GET /owner/export?format=sql` |
 | Feedback discovery | `GET /owner/feedback` |
 | Façade | `GET /owner/facade`, `POST /owner/facade/verify` |
@@ -82,5 +82,7 @@ Authenticated with the owner token. The CLI is the supported way to call these. 
 | Peers | `GET /owner/peers`, `GET /owner/outbound-peers` |
 | MCP revoke | `DELETE /owner/mcp/<label>` |
 | Hosted MCP tools | `POST /owner/mcp/send`, `POST /owner/mcp/reply`, `POST /owner/mcp/mark_working`. The hosted control plane calls these after it has checked that the account owns the agent, the same check as the other hosted owner calls. Send takes `to` and `text`, plus optional `contextId` and `taskId`. Reply takes `taskId` and `text`, plus optional `state` (`completed`, `input-required`, `working`, `failed`, or `rejected`). Mark working takes `taskId`. Text is at most 100000 characters. The response is `{ text, isError }`. A tool failure is HTTP 200 with `isError: true`. The peer token stays on the A2A endpoint. The owner HTTP API accepts the same paths with the owner token |
+
+`GET /owner/inbox` returns one page of tasks, oldest first. The body stays a JSON array. The page is at most 200 tasks, which is also the default. `limit` is 1–200. When another page exists, the `x-a2a-next-cursor` response header is the value to send as `cursor`. A pending wake is cleared only for tasks in that response. A task the response does not include keeps its pending wake. `POST /owner/tasks/<id>/working` and `reply` clear the pending wake for that task. `HEAD` does not clear a pending wake.
 
 `/owner/*` requires the owner token. `export` with that token prints the A2A endpoint. `export --sql` prints the same tables as SQL.

@@ -107,7 +107,7 @@ The owner token authenticates these commands.
 
 | Command | Effect |
 | --- | --- |
-| `inbox [--context C] [--all] [--json]` | Unhandled inbound tasks. Peer text is untrusted. Then pending pairing requests, including the dashboard URL when `MANAGE_URL` is set. With `--json`, tasks go to stdout and requests to stderr |
+| `inbox [--context C] [--all] [--json]` | Unhandled inbound tasks, following every page. Peer text is untrusted. Then pending pairing requests, including the dashboard URL when `MANAGE_URL` is set. With `--json`, tasks go to stdout and requests to stderr |
 | `show <taskId>` | Full task JSON |
 | `working <taskId>` | Mark the task `working` |
 | `reply <taskId> (--text T \| --stdin) [--state completed\|input-required\|rejected\|failed\|working] [--artifact] [--artifact-name N] [--force]` | Reply. Default state is `completed` |

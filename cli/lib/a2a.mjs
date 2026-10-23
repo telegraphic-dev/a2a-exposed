@@ -77,7 +77,7 @@ export async function httpJson(url, { method, body, headers = {}, timeout = 3000
 	const text = await r.text();
 	let data = text;
 	try { data = text ? JSON.parse(text) : null; } catch { /* keep text */ }
-	return { status: r.status, data };
+	return { status: r.status, data, headers: r.headers };
 }
 
 // Cloudflare edge errors (HTML or "error code: NNNN" bodies, not the Worker's own JSON): code -> what it means here

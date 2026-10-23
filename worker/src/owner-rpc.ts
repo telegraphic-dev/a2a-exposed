@@ -56,6 +56,8 @@ export interface OwnerRpcRequest {
 export interface OwnerRpcResult {
 	status: number;
 	body: unknown;
+	/** Set when `GET /owner/inbox` has another page. The body stays the task array. */
+	nextCursor?: string;
 }
 
 export interface OwnerRoute {
@@ -85,7 +87,8 @@ function queryRecord(query: unknown): Record<string, string> | null {
 	if (typeof query !== "object" || Array.isArray(query)) return null;
 	const out: Record<string, string> = {};
 	for (const [k, v] of Object.entries(query)) {
-		if (typeof v !== "string" || v.length > 128) return null;
+		// Inbox cursors are base64url(updated_at, id). An id can be 128 characters, so this is wider than a context id.
+		if (typeof v !== "string" || v.length > 256) return null;
 		out[k] = v;
 	}
 	return out;
@@ -100,12 +103,16 @@ function noQuery(q: Record<string, string>): string | null {
 }
 
 function inboxQuery(q: Record<string, string>): string | null {
-	for (const k of Object.keys(q)) if (k !== "context" && k !== "all") return null;
+	for (const k of Object.keys(q)) if (k !== "context" && k !== "all" && k !== "limit" && k !== "cursor") return null;
 	if (q.context !== undefined && !idOk(q.context)) return null;
 	if (q.all !== undefined && q.all !== "1") return null;
+	if (q.limit !== undefined && (!/^[1-9]\d{0,2}$/.test(q.limit) || Number(q.limit) > 200)) return null;
+	if (q.cursor !== undefined && !/^[A-Za-z0-9_-]{1,256}$/.test(q.cursor)) return null;
 	const sp = new URLSearchParams();
 	if (q.context) sp.set("context", q.context);
 	if (q.all) sp.set("all", "1");
+	if (q.limit) sp.set("limit", q.limit);
+	if (q.cursor) sp.set("cursor", q.cursor);
 	const s = sp.toString();
 	return s ? `?${s}` : "";
 }

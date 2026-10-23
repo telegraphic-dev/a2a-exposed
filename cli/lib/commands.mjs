@@ -15,7 +15,7 @@ export async function owner(method, path, body, timeout) {
 	return data;
 }
 
-/** Owner API call that returns { status, data } instead of dying, so callers can explain errors themselves. */
+/** Owner API call that returns { status, data, headers } instead of dying, so callers can explain errors themselves. */
 export async function ownerTry(method, path, body, timeout) {
 	const base = baseUrl(), tok = C.get("A2A_OWNER_TOKEN");
 	if (!base || !tok) die(`A2A_BASE_URL / A2A_OWNER_TOKEN missing (run \`${CLI} init\` or edit ${C.CONFIG_FILE})`);
@@ -29,11 +29,29 @@ function printPush(res) {
 const readStdin = () => fs.readFileSync(0, "utf8");
 
 // ---------------------------------------------------------------- inbound side
+/** Every open page. Each response clears wakes only for the tasks it returns, so this follows the cursor. */
+async function inboxRows(o) {
+	const rows = [];
+	let cursor = "";
+	for (let page = 0; page < 100; page++) {
+		const qs = [];
+		if (o.context) qs.push("context=" + q(o.context));
+		if (o.all) qs.push("all=1");
+		if (cursor) qs.push("cursor=" + q(cursor));
+		const path = "/owner/inbox" + (qs.length ? "?" + qs.join("&") : "");
+		const r = await ownerTry("GET", path);
+		if (r.status < 200 || r.status >= 300) die(`worker GET ${path} -> ${describeHttp(r.status, r.data)}`);
+		if (!Array.isArray(r.data)) die(`worker GET ${path} -> inbox response is not a list`);
+		rows.push(...r.data);
+		const next = r.headers?.get("x-a2a-next-cursor") || "";
+		if (!next || next === cursor) return rows;
+		cursor = next;
+	}
+	return rows;
+}
+
 export async function inbox(o) {
-	const qs = [];
-	if (o.context) qs.push("context=" + q(o.context));
-	if (o.all) qs.push("all=1");
-	const rows = await owner("GET", "/owner/inbox" + (qs.length ? "?" + qs.join("&") : ""));
+	const rows = await inboxRows(o);
 	// pending pairing requests: polling agents get no pairing wake, so the inbox shows them too (not with --context:
 	// that is one conversation). An older Worker without pairing: nothing to show.
 	let pairing = [];
