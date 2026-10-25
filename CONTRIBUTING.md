@@ -2,17 +2,27 @@
 
 Issues and pull requests are welcome.
 
-- **Worker** (`worker/`, TypeScript):
-  ```bash
-  npm install
-  npm test        # wake presets, A2A 1.0/0.3 serialisation, tokens; Node 22.18+
-  npx tsc         # after `npx cf workers types`
-  npx cf build
-  ```
-  To run it locally, use `npx cf dev` with a `.dev.vars` file containing `OWNER_TOKEN=...`. D1 migrations live in `worker/migrations/`; add new numbered files instead of editing old ones.
-- **CLI** (`cli/`): plain Node ESM with zero dependencies. Check it with `node cli/bin/a2a-exposed.mjs --help` and `cd cli && npm test` (uses a throwaway `A2A_CONFIG_DIR`; unset any real `WAKE_*` secrets first). `npm pack` bundles `worker/` through the prepack script. It does not bundle `control/`.
-- **Library and Worker** (`control/`, `@a2a-exposed/control-core` at the repository root): the source entry is `control/src/core/index.ts`. `prepare` compiles it to JavaScript and declarations on `npm pack` and on a `file:` install. The Worker in `control/` serves `GET /health`, feedback when configured, and static files. `cd control && npm test && npx cf workers types && npx tsc --noEmit && npm run build && node scripts/check-build.mjs` runs the Node tests, a Vitest suite inside Miniflare, the typecheck, and the build. The Vitest suite runs the Cloudflare provisioning calls in workerd against a mocked Cloudflare API, with no account credentials. The contract test installs the package and imports it. The `a2a-exposed` tarball does not include `control/`. See `control/README.md`.
-- **Skills** (`skills/*/SKILL.md`): the frontmatter `name` must match the folder name. Check discovery with `npx -y skills add ./ --list`.
+Start with [AGENTS.md](AGENTS.md) for repository layout, setup, commands,
+security invariants, PR/review rules, and releases. The complete local and CI
+checklist is [Contributor verification and QA](docs/agents/verification.md).
+Use Node 22.18+; install locked dependencies with `npm ci` in `worker/` and
+`control/`. The CLI has zero dependencies. Run the full suite before pushing,
+including both storage backends and time-sensitive tests in Prague and UTC.
+
+Work on a branch from up-to-date `main` and open a PR against `main`. Reference
+the issue with `Closes #N` or `Refs #N`. Keep dependency bumps separate from
+feature work. Merge requires green CI, `jean-ci` approval of the current head
+from `jean-de-bot`, and zero unresolved review threads. Address all failures and
+comments in one pass, validate, push once, then resolve addressed threads.
+
 - **New wake presets:** add the preset to `worker/src/wake.ts` (`PRESETS` and `renderWake`), add a test in `worker/test/wake.test.ts`, list it in the CLI (`cli/lib/deploy.mjs`), and document the request shape in `docs/receiving-messages.md` and the setup skill, with a link to the target's docs. Say which agents were tested end to end. Describe any other webhook target as untested.
 - Never commit secrets, account ids, or hostnames of real deployments.
-- **Releases:** bump `version` in `cli/package.json`, in the root `package.json` (`@a2a-exposed/control-core`), and in both skills' frontmatter, add a `CHANGELOG.md` entry, merge, then push a `v<version>` tag; `.github/workflows/publish.yml` sets both package versions from the tag, publishes them to npm, and creates the GitHub release. `a2a-exposed` publishes with the `NPM_TOKEN` secret. `@a2a-exposed/control-core` publishes with npm trusted publishing. CI (`.github/workflows/ci.yml`) runs the same checks as above on every PR. See also [AGENTS.md](AGENTS.md).
+- **Releases:** maintainers cut releases; agents do not publish or push tags.
+  Follow the complete version and manifest checklist in [AGENTS.md](AGENTS.md#release).
+  The tag workflow publishes both npm packages and creates the GitHub release.
+- Infrastructure belongs to the separate Terraform repository. Real self-host QA
+  uses a dedicated maintainer-provided test account/profile, never the owner's
+  main account. Automated checks need no Cloudflare credentials and never deploy.
+- Write docs for outsiders, in present tense, with no decision log. Keep README
+  short and `docs/` authoritative. Mark platforms without end-to-end testing
+  `untested` or `in testing`, following the client compatibility table.
