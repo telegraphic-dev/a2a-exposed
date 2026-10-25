@@ -103,7 +103,7 @@ jobs:
         run: node scripts/check-skill-plugin.mjs
 
       - name: Plugin - claude plugin validate
-        run: npx --yes @anthropic-ai/claude-code@2.1.296 plugin validate . --strict
+        run: node scripts/check-claude-plugin.mjs
       - name: CLI - npm pack (dry run)
         working-directory: cli
         run: |
