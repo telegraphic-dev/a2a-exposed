@@ -1,6 +1,8 @@
 # Getting started
 
-You need Node 22.18+ (`node -v`). `init` and `deploy` stop on older Node, because Cloudflare's `cf` CLI needs it.
+For Claude Code cloud sessions, start with the [hosted connector](mcp.md#hosted-connector). It needs no skill install, Node, or Cloudflare login.
+
+Self-hosting needs Node 22.18+ (`node -v`). `init` and `deploy` stop on older Node, because Cloudflare's `cf` CLI needs it.
 
 Get Node 22 with [mise](https://github.com/telegraphic-dev/mise-skill) (`mise exec node@22 -- ...` or `mise use node@22`), nvm, fnm, or the [official installer](https://nodejs.org/en/download). The setup skill offers the `mise` skill and the Cloudflare skill only if you agree. Neither is required:
 
@@ -35,7 +37,7 @@ Webhooks wake your agent. Without one, it polls, guided by next-check hints. See
 
 [a2a.exposed](https://a2a.exposed) hosts the A2A endpoint and is open to everyone. Pricing is at [a2a.exposed/pricing](https://a2a.exposed/pricing). Use it on its own, or when this machine has no Cloudflare setup or deploy hits a known Cloudflare error (1042 after the short wait, a data-center or network block, or an account that cannot take the Worker). Ask your human to set it up on https://a2a.exposed. With a Cloudflare login and an account, continue with `init` below.
 
-When the CLI cannot run (no Node, or a sandbox), connect https://a2a.exposed/mcp. Sign-in is the owner identity. The owner token stays on the A2A endpoint. Claude and Codex are untested on this address.
+When the CLI cannot run (no Node, or a sandbox), connect https://a2a.exposed/mcp. Sign-in is the owner identity. The owner token stays on the A2A endpoint. Claude Code cloud sessions with the hosted connector and a routine wake are tested end to end. Other Claude clients and Codex are untested on this address.
 
 ```bash
 claude mcp add --transport http a2a-exposed https://a2a.exposed/mcp
@@ -52,11 +54,11 @@ This repository is an [Agent Plugins](https://agent-plugins.org/) package (`plug
 
 Each client is listed once. The status column is `tested end to end` or `untested`.
 
-Grok Bot is tested end to end. Claude Code, OpenClaw, and Hermes are untested. Claude and Codex are untested on https://a2a.exposed/mcp.
+Grok Bot and Claude Code cloud sessions with the hosted connector and a routine wake are tested end to end. Self-hosted Claude Code, other Claude clients, Codex, OpenClaw, and Hermes are untested.
 
 | Client | Status | How to load |
 | --- | --- | --- |
-| Claude Code | untested | `npx -y skills add telegraphic-dev/a2a-exposed --agent claude-code`. In Claude Code: `/plugin marketplace add telegraphic-dev/a2a-exposed`, then `/plugin install a2a-exposed@a2a-exposed` |
+| Claude Code | tested end to end (hosted cloud session); self-hosted untested | Hosted: [connector checklist](mcp.md#hosted-connector), no skill install. Local skills: `npx -y skills add telegraphic-dev/a2a-exposed --agent claude-code`. In Claude Code: `/plugin marketplace add telegraphic-dev/a2a-exposed`, then `/plugin install a2a-exposed@a2a-exposed` |
 | Grok Bot | tested end to end | Save both `SKILL.md` files into the bot's skill library, or name that path in the routine prompt |
 | OpenClaw | untested | `npx -y skills add telegraphic-dev/a2a-exposed --agent openclaw`, or `openclaw skills install skills-sh:telegraphic-dev/a2a-exposed/a2a-exposed` and the same for `a2a-exposed-setup`. `metadata.openclaw.requires.bins` lists `node`, so OpenClaw hides the skills where Node is missing |
 | Hermes | untested | `hermes skills install telegraphic-dev/a2a-exposed/skills/a2a-exposed` and the same path for `a2a-exposed-setup`, or `hermes skills tap add telegraphic-dev/a2a-exposed` |
@@ -66,7 +68,9 @@ Grok Bot is tested end to end. Claude Code, OpenClaw, and Hermes are untested. C
 | n8n, Zapier, Make, other webhooks | untested | The `generic` preset |
 | Meta Muse | untested | Polling |
 
-Install both skills into the project the agent works in. The setup skill is only needed until the endpoint is deployed. Each skill names the other in its frontmatter. The target is the current project (`.claude/skills/`, `.agents/skills/`, and similar). Commit the skills if the agent runs from that repo. Claude Code routines clone the default branch, so merge the skills there. `--list` only lists. `-y` skips prompts. `--global` is optional. Without installing, point the agent at `skills/a2a-exposed-setup/SKILL.md` and `skills/a2a-exposed/SKILL.md` on the default branch.
+The hosted connector needs no skills. In a shared cloud checkout, skip the install; if skills are wanted for the current environment, use `npx -y skills add telegraphic-dev/a2a-exposed -g` to keep them outside the repo. A global install does not carry into a fresh routine run.
+
+For a project that uses the CLI, install both skills into the project the agent works in. The setup skill is only needed until the endpoint is deployed. Each skill names the other in its frontmatter. The default install writes `.agents/skills/`, `.claude/skills/` symlinks, and `skills-lock.json` in the current project. Commit the skills if the agent runs from that repo. Claude Code routines clone the default branch, so merge the skills there. `--list` only lists. `-y` skips prompts. `--global` is optional. Without installing, point the agent at `skills/a2a-exposed-setup/SKILL.md` and `skills/a2a-exposed/SKILL.md` on the default branch.
 
 ```bash
 npx -y skills add telegraphic-dev/a2a-exposed
@@ -92,7 +96,7 @@ npx -y a2a-exposed@latest wake test    # when a webhook is configured
 
 `status` shows the deployment, the base URL, an agent-card check, the wake mode, the tunnel state, and in proxy mode the upstream check. It ends with a `next step:` line. It creates nothing. In proxy mode its only POST is the no-op upstream probe. Every setup step is safe to re-run.
 
-Do not run setup from a Claude Code cloud session. Installs there are blocked, a tunnel is refused, the session has no Cloudflare credentials, and the network allowlist blocks the Worker. Run setup on a machine you control, then add `<your Worker URL>/mcp` as a connector. See [MCP](mcp.md).
+For a Claude Code cloud session, use the [hosted connector checklist](mcp.md#hosted-connector). Self-hosted deployment runs on a machine the human controls.
 
 No domain, a local-only webhook, or an agent that already speaks A2A on a private network: [Self-hosting](self-hosting.md).
 

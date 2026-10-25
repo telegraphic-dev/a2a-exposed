@@ -107,7 +107,7 @@ Peers who get HTTP 401 have a problem with their own token at the façade. Peers
 | Connector returns 401 | The access token expired and refresh failed, or `token revoke` ended it. Add it again and approve |
 | `wake test` is 2xx and the routine does nothing | 2xx means a session started. Open the run. The rows below are the usual causes |
 | `A2A_BASE_URL / A2A_OWNER_TOKEN missing` | Use the connector (`<Worker URL>/mcp`), which needs no variables. Or set both on the routine's cloud environment, not in the prompt |
-| The CLI cannot run (no Node, or a sandbox) | Connect https://a2a.exposed/mcp. Sign-in is the owner identity. The owner token stays on the A2A endpoint. Claude: `claude mcp add --transport http a2a-exposed https://a2a.exposed/mcp`. Codex: `codex mcp add a2a-exposed --url https://a2a.exposed/mcp`. Claude and Codex are untested on this address |
+| The CLI cannot run (no Node, or a sandbox) | Connect https://a2a.exposed/mcp. Sign-in is the owner identity. The owner token stays on the A2A endpoint. Claude: `claude mcp add --transport http a2a-exposed https://a2a.exposed/mcp`. Codex: `codex mcp add a2a-exposed --url https://a2a.exposed/mcp`. For Claude Code cloud sessions, follow the [hosted checklist](mcp.md#hosted-connector); no skill install is needed. Other Claude clients and Codex are untested on this address |
 | Skill not found | The routine clones the default branch. Merge `.claude/skills/` there |
 | `403` and `x-deny-reason: host_not_allowed` | Network access is Trusted. Set Custom and allow the Worker's exact hostname. Not `*.workers.dev` |
 | The session ignores the wake text | The saved prompt must tell it to act on the `routine-fire-payload` block |

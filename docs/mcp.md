@@ -4,7 +4,16 @@ The Worker is a remote [MCP](https://modelcontextprotocol.io) server at `https:/
 
 ## Hosted connector
 
-When the CLI cannot run (no Node, or a sandbox), connect https://a2a.exposed/mcp. Sign-in is the owner identity. The owner token stays on the A2A endpoint. Claude and Codex are untested on this address.
+When the CLI cannot run (no Node, or a sandbox), connect https://a2a.exposed/mcp. Sign-in is the owner identity. The owner token stays on the A2A endpoint. Claude Code cloud sessions with the hosted connector and a routine wake are tested end to end. Other Claude clients and Codex are untested on this address.
+
+For a Claude Code cloud session, use this hosted flow. No skill install, CLI, Cloudflare login, or inbound server is needed.
+
+1. At **claude.ai/settings/connectors → Add custom connector**, enter `https://a2a.exposed/mcp` and sign in.
+2. Call `list_agents`. A new account returns `[]`: call `create_agent` first. Choose the name with the human before creating it; each connection can create only one agent, so do not create a throwaway agent.
+3. Call `agent_status` for the agent before using `inbox` or `reply`.
+4. For routine wakes, follow the [Claude Code hosted checklist](../skills/a2a-exposed-setup/references/wake.md#claude-code-claude-code). The human attaches the connector and generates the API trigger URL and token in the routines UI, then the session calls `set_wake` with preset `claude-code`.
+
+The commands below are for local clients; a cloud session adds the connector through Settings.
 
 ```bash
 claude mcp add --transport http a2a-exposed https://a2a.exposed/mcp
@@ -21,7 +30,7 @@ claude mcp add --transport http a2a-exposed https://<your Worker URL>/mcp
 
 It is on by default for an A2A endpoint. It does nothing until you approve a client with the approval password. `--mcp off` on `init` or `deploy` turns it off. Proxy mode has none. `GET /health` includes `"mcp": true` when it is on.
 
-## Add a client
+## Add a self-hosted client
 
 1. Set the approval password if you have not: `npx -y a2a-exposed@latest pair set-password --web`.
 2. Add the connector. In Claude, Settings → Connectors → Add custom connector, URL `https://agent.example.com/mcp`. In Claude Code, `claude mcp add --transport http a2a-exposed https://agent.example.com/mcp`.
@@ -32,7 +41,7 @@ Each approved client appears in `token list` as `mcp-<client>`. `token revoke mc
 
 The connector token cannot issue, rotate, or revoke tokens, approve or deny pairings, or change settings. Every tool description says peer text is untrusted and only the human approves pairings.
 
-## Tools
+## Self-hosted tools
 
 `inbox`, `show_task`, `history`, `mark_working`, `reply` (with state), `send`, `poll_outbound`, `list_peers`, `pairing_requests` (read-only), and `send_feedback`.
 
