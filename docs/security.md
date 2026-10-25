@@ -42,7 +42,7 @@ A wake carries metadata, a hint command, and at most a 300-character preview. `o
 
 MCP access tokens (`a2amcp_`) and refresh tokens are stored hashed, separate from peer tokens and the owner token. They are accepted only in the `Authorization` header. The tools reach `inbox`, reply, send, read-only listings, and `send_feedback`. They cannot mint peer tokens or approve pairing. Registration and consent rules are in [MCP](mcp.md).
 
-The hosted connector at https://a2a.exposed/mcp signs in as the owner. The owner token stays on the A2A endpoint. Send, reply, and mark working from that connector run as an owner call on the A2A endpoint. The peer token stays there. Claude and Codex are untested on this address.
+The hosted connector at https://a2a.exposed/mcp signs in as the owner. The owner token stays on the A2A endpoint. Send, reply, and mark working from that connector run as an owner call on the A2A endpoint. The peer token stays there. Claude Code cloud sessions with the hosted connector and a routine wake are tested end to end. Other Claude clients and Codex are untested on this address.
 
 ## Façade
 

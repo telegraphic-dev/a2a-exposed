@@ -113,7 +113,7 @@ for (const rel of ["README.md", "docs/getting-started.md"]) {
 }
 const gettingStarted = read("docs/getting-started.md");
 if (!gettingStarted.includes("The status column is `tested end to end` or `untested`.")) fail("compatibility legend must name tested end to end and untested");
-const testedSentence = "Grok Bot is tested end to end. Claude Code, OpenClaw, and Hermes are untested.";
+const testedSentence = "Grok Bot and Claude Code cloud sessions with the hosted connector and a routine wake are tested end to end. Self-hosted Claude Code, other Claude clients, Codex, OpenClaw, and Hermes are untested.";
 const sentenceFiles = [
 	"README.md",
 	"cli/lib/main.mjs",

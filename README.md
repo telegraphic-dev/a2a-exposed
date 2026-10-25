@@ -10,7 +10,9 @@ Agents that can call out over HTTP and cannot run a public server: hosted assist
 
 ## Quick start
 
-Requires Node 22.18+. The skills are installed into the project the agent works in. They do not install the CLI. Every command runs through npx.
+Claude Code cloud sessions use the [hosted connector](docs/mcp.md#hosted-connector), with no skill install or CLI. Skip project installs in shared cloud checkouts; optional skills use `npx -y skills add telegraphic-dev/a2a-exposed -g`.
+
+Self-hosting requires Node 22.18+. The skills are installed into the project the agent works in. They do not install the CLI. Every command runs through npx.
 
 1. **Add the skills to the project**
 
@@ -35,11 +37,11 @@ Requires Node 22.18+. The skills are installed into the project the agent works 
 
    `status` is read-only and prints the next step. Open the one-time link (15 minutes by default, `--ttl` from 1 to 60) and choose the approval password yourself. Another agent then runs `npx -y a2a-exposed@latest connect https://agent.example.com` (the code lasts 60 minutes). You approve that request on the `/device` page, or with `npx -y a2a-exposed@latest pair approve <code>`. Removing the A2A endpoint later is `npx -y a2a-exposed@latest uninstall` ([Self-hosting](docs/self-hosting.md#remove-an-inbox)).
 
-After the skill is in the project, you can ask the agent to set this up. It follows the setup skill. Do not run setup from a Claude Code cloud session: that environment cannot install, tunnel, or reach your Worker. Claude Code: `/plugin marketplace add telegraphic-dev/a2a-exposed`, then `/plugin install a2a-exposed@a2a-exposed`. [Getting started](docs/getting-started.md) has Node, the client table, and what to do if setup stops halfway.
+After the skill is in the project, you can ask the agent to set this up. It follows the setup skill. Claude Code cloud sessions follow the [hosted checklist](docs/mcp.md#hosted-connector); self-hosted deployment runs on a machine you control. Claude Code: `/plugin marketplace add telegraphic-dev/a2a-exposed`, then `/plugin install a2a-exposed@a2a-exposed`. [Getting started](docs/getting-started.md) has Node, the client table, and what to do if setup stops halfway.
 
 ## Hosted
 
-[a2a.exposed](https://a2a.exposed) hosts the A2A endpoint and is open to everyone. Pricing is at [a2a.exposed/pricing](https://a2a.exposed/pricing). When the CLI cannot run, connect https://a2a.exposed/mcp. Sign-in is the owner identity. The owner token stays on the A2A endpoint. Claude and Codex are untested on this address. When to use the hosted endpoint, and the connect commands, are in [Getting started](docs/getting-started.md#hosted-inbox).
+[a2a.exposed](https://a2a.exposed) hosts the A2A endpoint and is open to everyone. Pricing is at [a2a.exposed/pricing](https://a2a.exposed/pricing). When the CLI cannot run, connect https://a2a.exposed/mcp. Sign-in is the owner identity. The owner token stays on the A2A endpoint. Claude Code cloud sessions with the hosted connector and a routine wake are tested end to end. Other Claude clients and Codex are untested on this address. When to use the hosted endpoint, and the connect commands, are in [Getting started](docs/getting-started.md#hosted-inbox).
 
 ## Docs
 

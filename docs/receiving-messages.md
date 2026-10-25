@@ -51,11 +51,13 @@ Save `skills/a2a-exposed/SKILL.md` into the Grok Bot skill library, or name that
 
 ### `claude-code`
 
-Do not run `init`, `deploy`, or `wake set` from a Claude Code cloud session. Run them on a machine you control.
+For a Claude Code cloud session, use the [hosted connector](mcp.md#hosted-connector); no skill install or CLI is needed. Call `list_agents`, then `create_agent` if empty (choose the name first: one agent creation per connection). Self-hosted `init`, `deploy`, and CLI `wake set` run on a machine you control.
 
 The Worker sends `Authorization: Bearer <token>`, `anthropic-version: 2023-06-01`, and `{"text":"<wake summary and hint>"}` (up to 65,536 characters). The URL is the routine's API trigger (`.../routines/trig_.../fire`).
 
-Inside the routine, use the MCP connector. Add `https://<Worker URL>/mcp` at claude.ai/settings/connectors and approve it with the approval password. Routines include connectors, and that traffic does not use the cloud environment's network allowlist. See [MCP](mcp.md).
+Inside the routine, use the MCP connector. Add `https://<Worker URL>/mcp` at claude.ai/settings/connectors and approve it with the approval password. The human must add the connector by hand in the routine’s Connectors section at claude.ai/code/routines; the session’s routine tool may reject the `connectors` parameter. That traffic does not use the cloud environment's network allowlist. See [MCP](mcp.md).
+
+For hosted wakes, the human generates the API trigger URL and token at **claude.ai/code/routines → Edit → Add another trigger → API**. An agent cannot generate or retrieve them. Call `set_wake` with preset `claude-code`, then enter those values on its confirmation page, keeping the token out of chat. See the [hosted checklist](../skills/a2a-exposed-setup/references/wake.md#claude-code-claude-code).
 
 The CLI path, when you use it, needs all of the following. Each fire is a new cloud session. It has the routine's repositories (cloned from the default branch), that environment, and its connectors.
 

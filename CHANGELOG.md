@@ -4,6 +4,8 @@ All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.
 
 ## Unreleased
 
+- **Hosted Claude Code setup (#138, items 1–5).** Document the connector flow without project skill installs, initial agent creation, manual routine connector attachment, UI-only API trigger credentials, and `set_wake` with preset `claude-code`. Mark the hosted cloud-session flow tested end to end; other Claude clients and Codex remain untested.
+
 `npx -y a2a-exposed@latest deploy` (applies migrations `0009_outbound_seen`, `0010_conversation_peer`, `0011_conversation_owner`, and `0012_conversation_peer_owner`: an outbound reply stays in the inbox until that list is read, a wake is keyed by peer and conversation, and each peer has its own row for a context id).
 
 - **A2A version (#131).** `A2A-Version` (the header, or the `A2A-Version` query parameter when the header is absent) selects the 0.3 or 1.0 response shape, including when the method name belongs to the other version. A patch suffix is ignored. With no header and no query parameter, the method name still selects the shape, so a 0.3 client that omits the header keeps a 0.3 answer and a headerless `SendMessage` stays 1.0. An unsupported version is `-32009` before method lookup. The façade forwards a declared version to the upstream as the `A2A-Version` header. A call with no header and no query parameter stays headerless, so the upstream still chooses from the method name.
