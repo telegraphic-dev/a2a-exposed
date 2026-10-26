@@ -152,7 +152,7 @@ test("the entry re-exports tenants, provisioning, routing, env, and migrations",
 	assert.equal(refreshTokenAfterResponse("", "previous"), "previous");
 	assert.equal(refreshTokenAfterResponse("next", "previous"), "next");
 	assert.deepEqual(WIZARD_STEPS, ["grant", "account", "address", "name", "database", "migrations", "upload", "verify"]);
-	assert.deepEqual(WAKE_PRESETS, ["grok-bot", "claude-code", "openclaw-wake", "openclaw-agent", "hermes", "generic"]);
+	assert.deepEqual(WAKE_PRESETS, ["grok-bot", "claude-code", "openclaw-wake", "openclaw-agent", "hermes", "openbot", "generic"]);
 	assert.equal(CONTROL_MIGRATIONS_DIR, "control/migrations");
 	assert.equal(configuredFreeAgentLimit("2"), 2);
 	assert.equal(configuredFreeAgentLimit(""), null);

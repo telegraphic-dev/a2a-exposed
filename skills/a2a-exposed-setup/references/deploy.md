@@ -5,13 +5,13 @@ The wake target can be configured later. If the user already has it, export the 
 ```bash
 export WAKE_WEBHOOK_URL='...'      # optional now
 export WAKE_WEBHOOK_KEY='...'      # optional (bearer/API key)
-export WAKE_HMAC_SECRET='...'      # optional (hermes / signed generic webhooks)
+export WAKE_HMAC_SECRET='...'      # optional (hermes / openbot / signed generic webhooks)
 # omit --hostname to deploy to https://<worker-name>.<account-subdomain>.workers.dev
 npx -y a2a-exposed@latest init \
   --hostname agent.example.com \
   --agent-name "My Agent" \
   --agent-description "What this agent does, for other agents" \
-  --preset grok-bot                # grok-bot | claude-code | openclaw-wake | openclaw-agent | hermes | generic
+  --preset grok-bot                # grok-bot | claude-code | openclaw-wake | openclaw-agent | hermes | openbot | generic
 ```
 
 `init` is non-interactive and idempotent. It:

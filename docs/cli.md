@@ -40,7 +40,7 @@ init [--hostname <host> | --workers-dev [--workers-dev-subdomain NAME]]
 | `--hostname` | Custom domain. Omit it and the Worker is served on `https://<worker>.<account subdomain>.workers.dev` |
 | `--workers-dev` | Move an existing custom-domain deployment to workers.dev. `--hostname` moves it back. The old URL answers 301 (the card) or 410 |
 | `--workers-dev-subdomain` | Register the account's workers.dev subdomain when it has none |
-| `--preset` | `grok-bot`, `claude-code`, `openclaw-wake`, `openclaw-agent`, `hermes`, or `generic` |
+| `--preset` | `grok-bot`, `claude-code`, `openclaw-wake`, `openclaw-agent`, `hermes`, `openbot`, or `generic` |
 | `--worker-name` | Worker name. Also the default D1 name |
 | `--d1-name` | D1 database to create or reuse |
 | `--account-id` | When the login can see more than one account |
@@ -169,7 +169,7 @@ One A2A endpoint has one owner token, saved by `init` in `config.env`. That toke
 | `CF_PROFILE` | Named `cf` auth profile |
 | `WAKE_WEBHOOK_URL` | Wake URL. Worker secret |
 | `WAKE_WEBHOOK_KEY` | Bearer or API key. Worker secret |
-| `WAKE_HMAC_SECRET` | HMAC secret for `hermes` and signed `generic` wakes |
+| `WAKE_HMAC_SECRET` | HMAC secret for `hermes`, `openbot`, and signed `generic` wakes |
 | `WAKE_ACCESS_CLIENT_ID` / `WAKE_ACCESS_CLIENT_SECRET` | Access service token for a wake tunnel. Set by `tunnel create` |
 | `WAKE_CLI_COMMAND` | Command in wake hints |
 | `WAKE_PRESET`, `WAKE_AGENT_ID`, `WAKE_KEY_HEADER`, `WAKE_KEY_PREFIX`, `WAKE_BODY_TEMPLATE` | Wake shape. Usually set by flags |

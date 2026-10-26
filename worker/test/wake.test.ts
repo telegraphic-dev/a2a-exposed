@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
-import { renderWake, renderTemplate, wakeSummary, redact, addAccessHeaders, cloudflareErrorHint, PRESETS, type WakeEvent } from "../src/wake.ts";
+import { renderWake, renderTemplate, wakeSummary, redact, addAccessHeaders, cloudflareErrorHint, PRESETS, wakePayload, type WakeEvent } from "../src/wake.ts";
 
 const ev: WakeEvent = {
 	contextId: "ctx-1", taskId: "t-2", taskIds: ["t-1", "t-2"], from: "peer-a",
@@ -144,6 +144,7 @@ test("Access service-token headers are added for every preset, next to the prese
 		assert.equal(r.headers["CF-Access-Client-Id"], "abc123.access", preset);
 		assert.equal(r.headers["CF-Access-Client-Secret"], "s3cr3t-value-0123456789", preset);
 		if (preset === "hermes") assert.ok(r.headers["X-Webhook-Signature-V2"], "hermes keeps its HMAC");
+		else if (preset === "openbot") assert.ok(r.headers["x-openbot-signature"], "openbot keeps its HMAC");
 		else assert.ok(r.headers["authorization"], `${preset} keeps its bearer`);
 	}
 });
@@ -180,3 +181,24 @@ test("cloudflareErrorHint explains tunnel / Access failures", () => {
 	assert.match(cloudflareErrorHint(530, "error code: 1016", { tunnel: true }), /tunnel hostname has no matching DNS record/);
 });
 
+
+// Fixed vector independently generated with Python hashlib/hmac.
+test("openbot: envelope and signature cover the exact body and delivery ID", async () => {
+	assert.ok(PRESETS.includes("openbot"));
+	const req = (await renderWake({ preset: "openbot", url: "https://hooks.example.com/a2a", hmacSecret: "openbot-test-secret", key: "unused-key" }, ev,
+		{ nowMs: 1760000000000, requestId: "delivery-1" }))!;
+	assert.deepEqual(JSON.parse(req.body), { type: "a2a_wake", occurredAt: "2025-10-09T08:53:20.000Z", data: wakePayload(ev, "npx -y a2a-exposed@latest") });
+	assert.equal(req.headers["x-openbot-timestamp"], "1760000000");
+	assert.equal(req.headers["x-openbot-delivery-id"], "delivery-1");
+	assert.equal(req.headers["x-openbot-signature"], "sha256=8d28056bd4d5f700fd49865a0cc240bd769462d6e75aac4aa15fc7051c3ecc26");
+	assert.equal(req.headers["authorization"], undefined);
+	assert.equal(req.headers["X-Webhook-Signature-V2"], undefined);
+	const preview = redact(req);
+	assert.equal(preview.headers["x-openbot-delivery-id"], "delivery-1");
+	assert.equal(preview.headers["x-openbot-timestamp"], "1760000000");
+	assert.equal(preview.headers["x-openbot-signature"], "••••");
+	assert.ok(!JSON.stringify(preview).includes("openbot-test-secret"));
+	const unicode = (await renderWake({ preset: "openbot", url: req.url, hmacSecret: "s" }, { ...ev, preview: '雪 "quoted"\ntext' },
+		{ nowMs: 1760000000000, requestId: "delivery-2" }))!;
+	assert.equal(unicode.headers["x-openbot-signature"], "sha256=" + createHmac("sha256", "s").update(`1760000000.delivery-2.${unicode.body}`).digest("hex"));
+});

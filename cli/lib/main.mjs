@@ -92,9 +92,11 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
   wake set [--preset P] [--agent-id A] [--key-header H] [--key-prefix X] [--body-template JSON]
            [--cli-command CMD] [--debounce S] [--max-per-hour N]
                                 save wake settings, upload wake secrets from env, and redeploy (one step)
+                                openbot: human supplies WAKE_HMAC_SECRET via protected env/secret storage, never chat or argv
                                 --max-per-hour  hourly cap; 0 or unset is unlimited, except Claude Code,
                                                which defaults to 25 when this is unset
   wake preview                  rendered wake request (a credential is Bearer •••• or ••••, none of the secret)
+                                openbot includes a sample delivery ID and canonical signing-input description
                                 + sha256 fingerprints of the uploaded URL/key/HMAC secret; compared with
                                 local env values when WAKE_WEBHOOK_URL, WAKE_WEBHOOK_KEY, and WAKE_HMAC_SECRET
                                 are exported in this shell. match: the exported value is the one on the Worker.
@@ -116,7 +118,7 @@ anywhere on the account: the A2A endpoint itself can be on workers.dev or a cust
                                 creates nothing when you run it again. A partial tunnel stops and asks for tunnel rm.
                                 The tunnel, the Access app, and the service token are named "a2a-exposed wake <worker>".
                                 The DNS host is wake-<word>-<word>-<4 hex>.<zone> unless --tunnel-hostname is set.
-                                Export WAKE_WEBHOOK_KEY (hermes: WAKE_HMAC_SECRET) so tunnel create uploads it.
+                                Export WAKE_WEBHOOK_KEY (hermes/openbot: WAKE_HMAC_SECRET) so tunnel create uploads it.
                                 The connector machine needs cloudflared installed
                                 (https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/).
                                 Defaults: openclaw-* -> http://127.0.0.1:18789 /hooks/wake|agent, hermes -> :8644
@@ -267,7 +269,7 @@ Feedback
                                 polling), and hosted or self-hosted. --connection overrides
                                 that detection. Remove tokens from the message and from --logs.
 
-Presets: grok-bot | claude-code | openclaw-wake | openclaw-agent | hermes | generic
+Presets: grok-bot | claude-code | openclaw-wake | openclaw-agent | hermes | openbot | generic
          Which clients are tested end to end is in the client table:
          https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#clients
 Config: ${C.CONFIG_FILE}  (override dir with --config-dir DIR or A2A_CONFIG_DIR; env vars override file values)

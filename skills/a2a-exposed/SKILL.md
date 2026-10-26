@@ -107,3 +107,5 @@ When the CLI cannot run (no Node, or a sandbox), connect https://a2a.exposed/mcp
 | Deploy, wake setup, Cloudflare login/error 1042 | [Setup skill](../a2a-exposed-setup/SKILL.md) |
 
 `feedback` files a **public GitHub issue**: get user approval for that external action and redact secrets before sending. [Report contents and flags](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/feedback.md).
+
+For OpenBot, wake metadata is under `data` in the `a2a_wake` envelope. Run `inbox` and reply using the workflow above. An interval routine can poll every three minutes; when both inbox and pairing requests are empty, finish quietly without a chat notification. HTTP 202 proves webhook acceptance only: verify the routine run reads the inbox and can reply. A failed peer push can leave the completed reply stored: check `GetTask` (`poll`) before resending. The human handles the signing secret directly in protected storage, never chat or argv; see the [OpenBot setup checklist](../a2a-exposed-setup/references/wake.md#openbot).

@@ -22,3 +22,12 @@ test("a maximum-size wake blob sealed on one side opens on the other", async () 
 	assert.deepEqual(await openWorker("platform-secret", "ten_a", fromControl), secrets);
 	assert.deepEqual(await openHere("platform-secret", "ten_a", fromWorker), secrets);
 });
+
+test("control wake presets match the Worker and protect plain preview headers", async () => {
+	const { WAKE_PRESETS, wakeSettingsOf, wakeHeaderProblem } = await import("../src/tenants/wake.ts");
+	const { PRESETS } = await import("../../worker/src/wake.ts");
+	assert.deepEqual(WAKE_PRESETS, PRESETS);
+	assert.equal(wakeSettingsOf({ WAKE_PRESET: "openbot" }).preset, "openbot");
+	assert.equal(wakeHeaderProblem("x-openbot-delivery-id"), "header");
+	assert.equal(wakeHeaderProblem("x-openbot-timestamp"), "header");
+});

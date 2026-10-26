@@ -171,8 +171,8 @@ function nextStepCore(s) {
 	if (t && !t.complete) return fail(`a previous \`tunnel create\` did not finish: run \`${CLI} tunnel rm\`, then \`${CLI} tunnel create\``);
 	if (t && !t.tokenFileOk)
 		return fail(`the tunnel's connector token file (${t.tokenFile}) is missing or empty: run \`${CLI} tunnel create\` again (it downloads the token again; nothing new is created)`);
-	const agentSecret = s.wake.preset === "hermes" ? "WAKE_HMAC_SECRET" : "WAKE_WEBHOOK_KEY";
-	const needsAgentSecret = LOCAL_PRESETS.includes(s.wake.preset) && !s.wake.hasKey && !s.wake.hasHmacSecret;
+	const agentSecret = ["hermes", "openbot"].includes(s.wake.preset) ? "WAKE_HMAC_SECRET" : "WAKE_WEBHOOK_KEY";
+	const needsAgentSecret = s.wake.preset === "openbot" ? !s.wake.hasHmacSecret : LOCAL_PRESETS.includes(s.wake.preset) && !s.wake.hasKey && !s.wake.hasHmacSecret;
 	const now = typeof s.now === "number" ? s.now : Date.now();
 	if (t && !(s.wake.hasAccessServiceToken && t.workerUrlMatches)) {
 		if (secretsPropagating(t, now) && (t.connections === 0 || t.connections == null))
@@ -184,7 +184,7 @@ function nextStepCore(s) {
 	if (t && t.connections === 0)
 		return fail(`the tunnel has ${t.state === "inactive" ? "never connected" : "no running connector"}: on the agent's machine run \`cloudflared tunnel run --token-file ${t.tokenFile}\` (outbound port 7844 must be open), then \`${CLI} wake test\``);
 	if (s.wake.configured && needsAgentSecret)
-		return fail(`the Worker sends no webhook auth, so the ${s.wake.preset} webhook will reject wakes: export ${agentSecret} (${s.wake.preset === "hermes" ? "the route secret" : "the hooks token"}), then run \`${CLI} ${t ? "tunnel create" : "wake set"}\``);
+		return fail(`the Worker sends no webhook auth, so the ${s.wake.preset} webhook will reject wakes: export ${agentSecret} (${["hermes", "openbot"].includes(s.wake.preset) ? "the route secret" : "the hooks token"}), then run \`${CLI} ${t ? "tunnel create" : "wake set"}\``);
 	// not broken, but peers can't pair until the human sets the approval password
 	const also = [];
 	if (s.pairing && s.pairing.mode === "human" && !s.pairing.passwordSet)
@@ -195,7 +195,7 @@ function nextStepCore(s) {
 	if (!s.wake.configured) {
 		const poll = "the agent must check the A2A endpoint on a schedule (Hermes and OpenClaw have copy-paste commands in the setup references)";
 		if (s.wake.preset && !LOCAL_PRESETS.includes(s.wake.preset) && s.wake.preset !== "generic")
-			return done2(`no wake webhook: export WAKE_WEBHOOK_URL and WAKE_WEBHOOK_KEY, then run \`${CLI} wake set --preset ${s.wake.preset}\`; or ${poll}`);
+			return done2(`no wake webhook: export WAKE_WEBHOOK_URL and ${agentSecret}, then run \`${CLI} wake set --preset ${s.wake.preset}\`; or ${poll}`);
 		const z = s.zones;
 		const tunnel = !z ? `a local-only webhook can use \`${CLI} tunnel create\` (needs a zone on the account)`
 			: !z.length ? "the account has no domain (zone), so the secure tunnel is not available"
