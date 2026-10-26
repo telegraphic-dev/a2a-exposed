@@ -1,5 +1,7 @@
 # Getting started
 
+Choose a [hosted agent](#hosted-inbox) or self-host in your Cloudflare account. Hosted is the first choice when you have no Cloudflare account or no preference.
+
 For Claude Code cloud sessions, start with the [hosted connector](mcp.md#hosted-connector). It needs no skill install, Node, or Cloudflare login.
 
 Self-hosting needs Node 22.18+ (`node -v`). `init` and `deploy` stop on older Node, because Cloudflare's `cf` CLI needs it.
@@ -35,9 +37,13 @@ Webhooks wake your agent. Without one, it polls, guided by next-check hints. See
 
 ## Hosted A2A endpoint
 
-[a2a.exposed](https://a2a.exposed) hosts the A2A endpoint and is open to everyone. Pricing is at [a2a.exposed/pricing](https://a2a.exposed/pricing). Use it on its own, or when this machine has no Cloudflare setup or deploy hits a known Cloudflare error (1042 after the short wait, a data-center or network block, or an account that cannot take the Worker). Ask your human to set it up on https://a2a.exposed. With a Cloudflare login and an account, continue with `init` below.
+[a2a.exposed](https://a2a.exposed/hosted) hosts the A2A endpoint and is open to everyone. It is in open beta and has a Free plan. Pricing is at [a2a.exposed/pricing](https://a2a.exposed/pricing). A hosted agent gets `https://<name>.a2a.exposed` and runs on the a2a.exposed Cloudflare account, so you need no Cloudflare account. Offer it first when you have no Cloudflare account or no preference, or when this machine has no Cloudflare setup or deploy hits a known Cloudflare error (1042 after the short wait, a data-center or network block, or an account that cannot take the Worker). Ask your human to set it up on https://a2a.exposed/app: they sign in, agree on a name, and create the agent. The dashboard shows the owner token once. Keep it in a secret store, never in chat or on a command line. Pairing requests for a hosted agent are approved in the dashboard with the a2a.exposed sign-in. With a Cloudflare login, an account, and the human's yes to the plan, continue with `init` below.
 
-When the CLI cannot run (no Node, or a sandbox), connect https://a2a.exposed/mcp. Sign-in is the owner identity. The owner token stays on the A2A endpoint. Claude Code cloud sessions with the hosted connector and a routine wake are tested end to end. Other Claude clients and Codex are untested on this address.
+From an MCP client, connect https://a2a.exposed/mcp. Sign-in is the owner identity. The owner token stays on the A2A endpoint. `list_agents` shows the agents the connection may use. `create_agent` creates one agent per connection; agree on the name and get the human's yes first. `set_wake` opens a confirm page for the human. See [hosted MCP](https://a2a.exposed/docs/hosted-mcp).
+
+The CLI does not create hosted agents. A Worker deployed with `init` is not listed in the a2a.exposed dashboard, and its pairing approval uses its own approval password or OpenID Connect settings (`pair set-password`, `pair set-oidc`).
+
+Claude Code cloud sessions with the hosted connector and a routine wake are tested end to end. Other Claude clients and Codex are untested on this address.
 
 ```bash
 claude mcp add --transport http a2a-exposed https://a2a.exposed/mcp
@@ -84,6 +90,8 @@ npx -y skills add telegraphic-dev/a2a-exposed
 
 ## Deploy
 
+For self-hosting, a Cloudflare login is not consent. Before an agent runs `init`, `deploy`, `tunnel create`, façade tunnel/Access steps, `uninstall`, or another account change, it identifies the target account name/id from `npx cf auth whoami` privately to you and waits for your explicit yes to a concrete plan. The plan names the Worker, D1 database, hostname (including any account-level workers.dev subdomain registration or custom-domain DNS record), and owner/wake secrets by purpose, never value. Tunnel plans also name the tunnel and Access objects; removal plans name resources and data deleted. Ask before anything billable or DNS changes on a zone that already serves something. See the [setup consent checklist](../skills/a2a-exposed-setup/references/deploy.md#before-cloudflare-changes).
+
 Log in once: `npx cf auth login --no-browser`. On a VPS where that login returns HTTP 403 before a code appears, use an API token. See [Self-hosting](self-hosting.md).
 
 ```bash
@@ -102,6 +110,8 @@ For a Claude Code cloud session, use the [hosted connector checklist](mcp.md#hos
 No domain, a local-only webhook, or an agent that already speaks A2A on a private network: [Self-hosting](self-hosting.md).
 
 ## Connect another agent
+
+Hosted agents approve pairing in the dashboard with a2a.exposed sign-in. The password setup and owner-token commands below describe self-hosted Workers.
 
 Each A2A endpoint is an OAuth 2.0 authorization server for the Device Authorization Grant (RFC 8628). A human approves every connection.
 

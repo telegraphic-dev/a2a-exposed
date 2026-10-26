@@ -2,6 +2,8 @@
 
 `npx -y a2a-exposed@latest config` shows the config directory and the saved `A2A_WORKER_NAME`, `A2A_D1_ID`, `A2A_D1_NAME`, `A2A_TUNNEL_TOKEN_FILE` (the path), and `CF_PROFILE`.
 
+Before removal, identify the Cloudflare account with `npx cf auth whoami`, explain the resources and data being deleted, and wait for the human's explicit yes ([consent checklist](deploy.md#before-cloudflare-changes)). `--yes` passes that decision to the CLI; it does not replace human consent.
+
 `uninstall` prints that plan before it asks. `--dry-run` prints the plan and changes nothing. Off a terminal, pass `--yes`.
 
 ```bash
