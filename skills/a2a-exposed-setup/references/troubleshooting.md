@@ -1,5 +1,7 @@
 # Troubleshooting setup
 
+A failure these fixes do not cover, a wrong step in the docs, or a workaround you had to invent is worth a report. Offer it to the human as described in [When something goes wrong](../SKILL.md#when-something-goes-wrong).
+
 Offer hosted up front when the human has no Cloudflare account or no preference; see [Getting started](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#hosted-inbox). If self-hosting is chosen, name the reason and offer hosted when this machine has no Cloudflare profile, token, or account, or when a known Cloudflare error blocks the deploy. A fresh workers.dev deploy can show error 1042 for about 30 seconds; run `status` again once, then offer hosted if 1042 is still there. A working login does not authorize resource changes: follow the [consent checklist](deploy.md#before-cloudflare-changes) before any mutating fix below.
 
 | Symptom | Fix |
