@@ -19,7 +19,9 @@ comments in one pass, validate, push once, then resolve addressed threads.
 - Never commit secrets, account ids, or hostnames of real deployments.
 - **Releases:** maintainers cut releases; agents do not publish or push tags.
   Follow the complete version and manifest checklist in [AGENTS.md](AGENTS.md#release).
-  The tag workflow publishes both npm packages and creates the GitHub release.
+  Open a PR running `npm run version:set -- <x.y.z>`, merge it into `main`,
+  then a maintainer pushes the matching `vX.Y.Z` tag from the merged commit.
+  The tag workflow checks committed versions, publishes both npm packages, and creates the GitHub release.
 - Infrastructure belongs to the separate Terraform repository. Real self-host QA
   uses a dedicated maintainer-provided test account/profile, never the owner's
   main account. Automated checks need no Cloudflare credentials and never deploy.

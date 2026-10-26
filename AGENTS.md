@@ -146,14 +146,15 @@ for private vulnerability reports; never post exploit details publicly.
 Maintainers cut releases after merge. Agents prepare changes but never publish
 to npm, push tags, or deploy the hosted service.
 
-For a release, bump `cli/package.json`, root `package.json`, both skills'
-`metadata.version`, and every plugin manifest: `plugin.json`, `.cursor-plugin/`,
-`.grok-plugin/`, `.claude-plugin/`, including the marketplace plugin entry.
-Copy `description` and `keywords` from `plugin.json` to the other manifests.
-Add `CHANGELOG.md` and run `node scripts/check-skill-plugin.mjs` to detect drift.
+Open a release PR that runs `npm run version:set -- <x.y.z>` to update package,
+lockfile, skill, plugin, and Worker versions together. Add the release notes to
+`CHANGELOG.md` and run `node scripts/check-skill-plugin.mjs` to detect drift.
+Merge the PR into `main`, then a maintainer pushes the matching `vX.Y.Z` tag
+from the merged commit.
 
-A maintainer's `v<version>` tag triggers `publish.yml`, which sets both npm
-versions from the tag, tests/builds, publishes packages with provenance, and
+A maintainer's `v<version>` tag triggers `publish.yml`, which checks that the
+committed versions match the tag, tests/builds, publishes packages with
+provenance, and
 creates a GitHub release. CLI publishing uses the configured `NPM_TOKEN` secret;
 control-core uses npm trusted publishing. Prereleases use `next`, stable releases
 use `latest`. No credentials are needed to prepare or validate release changes.

@@ -30,15 +30,20 @@ jobs:
       - name: Upgrade npm
         run: npm install -g npm@^11.5.1
 
-      - name: Set version from tag
+      - name: Check committed release version
         id: version
-        working-directory: cli
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
             echo "::error::tag $GITHUB_REF_NAME is not v<semver>"; exit 1
           fi
-          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          COMMITTED_VERSION="$(node -p 'JSON.parse(require("fs").readFileSync("cli/package.json", "utf8")).version')"
+          if [[ "$VERSION" != "$COMMITTED_VERSION" ]]; then
+            echo "::error::tag version $VERSION differs from committed CLI version $COMMITTED_VERSION; merge a PR running npm run version:set -- $VERSION before tagging"; exit 1
+          fi
+          if ! node scripts/check-skill-plugin.mjs; then
+            echo "::error::committed release versions or plugin metadata are inconsistent; run npm run version:set before tagging"; exit 1
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Worker - install, test, typecheck, build
@@ -93,14 +98,6 @@ jobs:
           NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/npmrc-control-core"
           printf '%s\n' 'registry=https://registry.npmjs.org/' > "$NPM_CONFIG_USERCONFIG"
           export NPM_CONFIG_USERCONFIG
-          node --input-type=module -e '
-            import fs from "node:fs";
-            const version = process.env.VERSION;
-            const text = fs.readFileSync("package.json", "utf8");
-            if (!/"version": "[^"]+"/.test(text)) throw new Error("version field missing");
-            const next = text.replace(/"version": "[^"]+"/, `"version": "${version}"`);
-            fs.writeFileSync("package.json", next);
-          '
           if npm view "@a2a-exposed/control-core@$VERSION" version >/dev/null 2>&1; then
             echo "@a2a-exposed/control-core@$VERSION is already on npm; skipping publish"
             exit 0
