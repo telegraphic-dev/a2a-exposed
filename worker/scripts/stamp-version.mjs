@@ -1,4 +1,4 @@
-// Write worker/src/version.ts from cli/package.json. Publish runs `npm version` in cli/
+// Write worker/src/version.ts from cli/package.json. Release preparation runs `npm run version:set`
 // before the Worker tests and build, and prepack bundles this tree into the npm package.
 import fs from "node:fs";
 import path from "node:path";
