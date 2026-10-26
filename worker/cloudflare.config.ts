@@ -28,7 +28,7 @@ const plain: Record<string, string> = {
 	PROVIDER_ORGANIZATION: v("A2A_PROVIDER_ORGANIZATION"),
 	PROVIDER_URL: v("A2A_PROVIDER_URL"),
 	DOCUMENTATION_URL: v("A2A_DOCUMENTATION_URL"),
-	WAKE_PRESET: v("WAKE_PRESET") || "generic", // grok-bot | claude-code | openclaw-wake | openclaw-agent | hermes | generic
+	WAKE_PRESET: v("WAKE_PRESET") || "generic", // grok-bot | claude-code | openclaw-wake | openclaw-agent | hermes | openbot | generic
 	WAKE_AGENT_ID: v("WAKE_AGENT_ID"), // openclaw presets (default "main")
 	WAKE_KEY_HEADER: v("WAKE_KEY_HEADER"), // generic preset (default "authorization")
 	WAKE_KEY_PREFIX: e.WAKE_KEY_PREFIX ?? "", // generic preset; unset = "Bearer "

@@ -1619,6 +1619,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			fingerprints: { url: await A.fingerprint(ctx.WAKE_WEBHOOK_URL), key: await A.fingerprint(ctx.WAKE_WEBHOOK_KEY),
 				hmacSecret: await A.fingerprint(ctx.WAKE_HMAC_SECRET),
 				accessClientId: await A.fingerprint(ctx.WAKE_ACCESS_CLIENT_ID), accessClientSecret: await A.fingerprint(ctx.WAKE_ACCESS_CLIENT_SECRET) },
+			...(preset(ctx) === "openbot" ? { signingInput: "<timestamp>.<delivery-id>.<exact-body-bytes>" } : {}),
 			request: req ? redact(req) : null });
 	}
 	if (seg[0] === "wake" && seg[1] === "test" && m === "POST") {

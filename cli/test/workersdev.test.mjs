@@ -342,3 +342,17 @@ test("--workers-dev and --hostname together are rejected", async (t) => {
 	assert.match(r.stderr, /mutually exclusive/);
 });
 
+
+test("wake set accepts openbot and rejects unknown presets without exposing secrets", async (t) => {
+	const s = stubEnv(t, { subdomain: "acme" });
+	assert.equal((await s.init()).status, 0);
+	const args = ["wake", "set", "--skip-install", "--dir", path.join(s.dir, "worker"), "--preset"];
+	const result = await s.cli([...args, "openbot"], { WAKE_HMAC_SECRET: "dummy-openbot-secret" });
+	assert.equal(result.status, 0, result.stderr);
+	assert.equal(s.config().WAKE_PRESET, "openbot");
+	assert.ok(!fs.readFileSync(path.join(s.dir, "cfg", "config.env"), "utf8").includes("dummy-openbot-secret"));
+	assert.ok(!(result.stdout + result.stderr).includes("dummy-openbot-secret"));
+	const invalid = await s.cli([...args, "unknown-preset"]);
+	assert.notEqual(invalid.status, 0);
+	assert.match(invalid.stderr, /unknown preset/);
+});

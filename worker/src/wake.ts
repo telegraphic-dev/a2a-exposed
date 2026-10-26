@@ -46,7 +46,7 @@ export type WakeConfig = {
 
 export type WakeRequest = { url: string; method: "POST"; headers: Record<string, string>; body: string };
 
-export const PRESETS = ["grok-bot", "claude-code", "openclaw-wake", "openclaw-agent", "hermes", "generic"] as const;
+export const PRESETS = ["grok-bot", "claude-code", "openclaw-wake", "openclaw-agent", "hermes", "openbot", "generic"] as const;
 
 /** Default debounce window per preset (seconds), used when WAKE_DEBOUNCE_SECONDS is unset. */
 export function defaultDebounceSeconds(preset: string): number {
@@ -207,6 +207,16 @@ export async function renderWake(cfg: WakeConfig, ev: WakeEvent, opts: { nowMs?:
 			// `name` is the hook name OpenClaw filters match. It stays "A2A inbox". The wake text itself starts with "A2A endpoint:".
 			body = JSON.stringify({ message: wakeSummary(ev, cli), name: "A2A inbox", agentId: cfg.agentId || "main", sessionMode: "isolated", deliver: false });
 			break;
+		case "openbot": {
+			const ts = String(Math.floor(nowMs / 1000));
+			headers["x-openbot-timestamp"] = ts;
+			headers["x-openbot-delivery-id"] = requestId;
+			// Serialize once: the signature covers exactly the UTF-8 bytes sent to OpenBot.
+			body = JSON.stringify({ type: "a2a_wake", occurredAt: new Date(nowMs).toISOString(), data: wakePayload(ev, cli) });
+			if (cfg.hmacSecret)
+				headers["x-openbot-signature"] = `sha256=${await hmacSha256Hex(cfg.hmacSecret, `${ts}.${requestId}.${body}`)}`;
+			break;
+		}
 		case "hermes":
 			headers["x-request-id"] = requestId;
 			body = JSON.stringify(wakePayload(ev, cli));
@@ -268,7 +278,7 @@ export function cloudflareErrorHint(status: number, body: string, opts?: { tunne
 
 /** Headers a wake preview may show in full. Every other header carries a credential, whatever its name. */
 export const PREVIEW_PLAIN_HEADERS = new Set([
-	"content-type", "user-agent", "x-request-id", "idempotency-key", "anthropic-version", "x-webhook-timestamp",
+	"content-type", "user-agent", "x-request-id", "idempotency-key", "anthropic-version", "x-webhook-timestamp", "x-openbot-timestamp", "x-openbot-delivery-id",
 ]);
 
 export function previewHeaderPlain(name: string): boolean {

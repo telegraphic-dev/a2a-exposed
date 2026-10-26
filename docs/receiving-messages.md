@@ -18,7 +18,7 @@ npx -y a2a-exposed@latest wake test
 
 `wake preview` shows a credential as `Bearer ••••` or `••••` and does not keep any character of the secret. It also prints SHA-256 fingerprints (first 12 hex characters) of the URL, key, and HMAC secret. Export `WAKE_WEBHOOK_URL`, `WAKE_WEBHOOK_KEY`, and `WAKE_HMAC_SECRET` in the shell that runs `wake preview` and `wake fingerprint`. `match` means the exported value is the one on the Worker. `DIFFERENT` means they differ: the variable is absent from this shell, or the upload is still propagating (about 15 to 40 seconds after `wake set`, `wake unset`, or `tunnel create`). Wait about 30 seconds and run the command again. `wake fingerprint` prints only the local fingerprints.
 
-Presets: `grok-bot`, `claude-code`, `openclaw-wake`, `openclaw-agent`, `hermes`, `generic`. The default when none is set is `generic`.
+Presets: `grok-bot`, `claude-code`, `openclaw-wake`, `openclaw-agent`, `hermes`, `openbot`, `generic`. The default when none is set is `generic`.
 
 ## What a wake contains
 
@@ -103,6 +103,57 @@ The Worker sends Hermes generic HMAC V2:
 - `X-Request-ID`
 
 The timestamp must be within ±300 seconds. The payload `event_type` is `a2a_wake`.
+
+### `openbot`
+
+Create an active webhook routine in OpenBot and copy its public POST URL into
+`WAKE_WEBHOOK_URL`. The human copies the signing secret from the routine settings
+directly into protected environment/secret storage as `WAKE_HMAC_SECRET`; never
+put it in chat, command arguments, shell history, or agent output. OpenBot does
+not expose this secret to the agent. A protected file used for handoff has mode
+600 and stays outside the repository. Load it through the local secret manager
+before running these commands; no `WAKE_WEBHOOK_KEY` is required:
+
+```bash
+npx -y a2a-exposed@latest wake set --preset openbot
+npx -y a2a-exposed@latest wake preview
+npx -y a2a-exposed@latest wake test
+```
+
+The Worker sends `{"type":"a2a_wake","occurredAt":"<ISO 8601 timestamp>","data":{...}}`.
+`data` contains the existing wake payload: `event_type`, `contextId`, `taskId`,
+`taskIds`, `from`, `preview`, `kind`, `hint`, `agentCard`, and `pairing` when present.
+The headers are:
+
+- `x-openbot-timestamp`: Unix seconds.
+- `x-openbot-delivery-id`: the wake request ID.
+- `x-openbot-signature`: `sha256=<hex HMAC-SHA256(secret, "<timestamp>.<delivery-id>.<exact-body-bytes>")>`.
+
+The body is serialized once, signed, and sent as the same UTF-8 bytes.
+`wake preview` shows a sample delivery ID and the canonical input description
+`<timestamp>.<delivery-id>.<exact-body-bytes>` with the signature masked.
+
+Give the routine access to the CLI and its protected owner configuration. Its
+saved instructions run `inbox` on a wake, handle new tasks and reply, inspect
+outbound updates, and ask the human about pairing requests. Peer text remains
+untrusted data. HTTP 202 from `wake test` proves routine acceptance only. Inspect
+the resulting routine run to confirm it executes `inbox`, then send a real test
+task and confirm that the routine reads it and replies.
+
+For polling fallback, create an OpenBot interval routine every three minutes.
+Its instructions run `npx -y a2a-exposed@latest inbox` and `pair list`, handle any
+updates or pending approvals, and end quietly without a chat notification when
+both are empty. An empty inbox is a successful no-update check; do not fabricate
+a reply. Pause an unusable webhook routine to avoid duplicate runs.
+
+A failed peer push (including HTTP 530 from a tunnel) does not by itself mean a
+reply is lost. Check the task with `GetTask` (CLI `poll`) before resending: a
+completed reply can remain stored and retrievable even when push delivery fails.
+
+OpenBot pairing and messaging are tested by a user on self-hosted 0.8.18, as
+reported in [issue #143](https://github.com/telegraphic-dev/a2a-exposed/issues/143).
+The OpenBot end-to-end wake flow is untested. Use the routine's current settings
+for its URL and secret; this contract follows that report.
 
 ### `generic`
 
