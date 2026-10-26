@@ -4,6 +4,8 @@ All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.
 
 ## Unreleased
 
+- **Setup consent and hosted option (#148).** Require explicit human consent to the account and resource plan before Cloudflare changes; offer the free hosted agent option up front, with dashboard and MCP setup guidance.
+
 ## 0.8.19 - 2026-10-26
 
 - **OpenBot wakes (#143).** Add the `openbot` preset with its JSON envelope, delivery ID, and HMAC signature over timestamp, delivery ID, and exact body bytes. Preview shows the delivery ID and signing-input description with credentials masked. Document human-only secret handoff, quiet polling fallback, routine-run verification, and stored replies after push failures.

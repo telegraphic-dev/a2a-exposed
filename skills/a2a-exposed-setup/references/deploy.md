@@ -1,5 +1,18 @@
 # Deploy
 
+## Before Cloudflare changes
+
+Confirm the human chooses self-hosting; offer the [hosted option](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#hosted-inbox) first when they have no Cloudflare account or no preference. Before any account mutation, including `init`, `deploy`, `wake set`, `wake unset`, `tunnel create`, `tunnel rm`, façade tunnel/Access steps, and `uninstall`:
+
+1. Run `npx cf auth whoami` with the selected profile (`--profile <name>` when used). Tell the human which account it shows (name and id) in your private chat with them; keep account ids out of issues, logs, and other public evidence. If it lists several accounts, have the human choose; if account identity is unavailable, resolve it before proceeding. Never print tokens.
+2. Describe the concrete plan: Worker name (`--worker-name`, default `a2a-exposed`), D1 name (`--d1-name`, default the Worker name; create or reuse and apply migrations), and hostname. For workers.dev, name the Worker URL and any account-level subdomain registration; for a custom domain, name the hostname and DNS record Cloudflare creates. Name the owner token and any wake secrets to upload or change by purpose only, without values. For a redeploy, state what changes and which existing resources are reused.
+3. For tunnels or the façade, also name the tunnel, hostname/DNS record, Access application, service token, any Zero Trust organization creation, and Worker secrets affected. For removal, list the resources and data being deleted; `uninstall --dry-run` previews the plan without deleting anything.
+4. Ask whether the human agrees to that plan in that account and wait for an explicit yes. A saved login or a successful authentication is not consent. Ask again if the account or scope changes. Ask before anything billable and before DNS changes on a zone that already serves something.
+
+`init` and `deploy` do not prompt, so the agent asks before it runs them.
+
+## Deploy the Worker
+
 The wake target can be configured later. If the user already has it, export the secrets first (see [wake](wake.md)). `init` never takes secrets as arguments.
 
 ```bash
@@ -95,7 +108,7 @@ peer ──HTTPS + per-peer bearer──> https://agent.example.com            (
 
 A Worker can't reach a Tailnet or LAN address, so the upstream is published through a **named Cloudflare Tunnel** whose hostname is locked by a **Cloudflare Access** app that admits only one service token, held by the Worker (the same pattern as the wake tunnel). The CLI refuses a private `--upstream`.
 
-1. **Tunnel + Access for the upstream** (manual for now; a `tunnel create --upstream` helper is planned). Ask the user first: this creates DNS, a tunnel, and Access objects. Needs Zero Trust (free) and a zone on the account. On the agent's machine:
+1. **Tunnel + Access for the upstream** (manual for now; a `tunnel create --upstream` helper is planned). Follow the consent checklist above and wait for an explicit yes: this creates DNS, a tunnel, and Access objects in the selected account. Needs Zero Trust (free) and a zone on the account. On the agent's machine:
 
    ```bash
    cloudflared tunnel login                       # once, picks the zone

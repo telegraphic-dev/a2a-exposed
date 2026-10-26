@@ -1,13 +1,13 @@
 # Troubleshooting setup
 
-Name the reason, then use the sentence in [Getting started](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#hosted-inbox), when this machine has no Cloudflare profile, token, or account, or when a known Cloudflare error blocks the deploy. A fresh workers.dev deploy can show error 1042 for about 30 seconds; run `status` again once, then use that sentence if 1042 is still there.
+Offer hosted up front when the human has no Cloudflare account or no preference; see [Getting started](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#hosted-inbox). If self-hosting is chosen, name the reason and offer hosted when this machine has no Cloudflare profile, token, or account, or when a known Cloudflare error blocks the deploy. A fresh workers.dev deploy can show error 1042 for about 30 seconds; run `status` again once, then offer hosted if 1042 is still there. A working login does not authorize resource changes: follow the [consent checklist](deploy.md#before-cloudflare-changes) before any mutating fix below.
 
 | Symptom | Fix |
 |---|---|
-| No `CF_PROFILE`, no `CLOUDFLARE_API_TOKEN`, and `cf auth whoami` shows no account | This machine has no Cloudflare account. Use the sentence in Getting started, linked above |
-| `cf auth login` returns HTTP 403 or "Just a moment..." before a code, and no API token is available | Cloudflare is blocking this network. Use the sentence in Getting started, linked above |
-| Cloudflare error 1042 after the 30-second wait | Cloudflare error 1042 is still here. Use the sentence in Getting started, linked above |
-| `init` or `deploy` fails because the token sees no account, or the account refuses the Worker or the database | This Cloudflare account cannot take the A2A endpoint. Use the sentence in Getting started, linked above |
+| No `CF_PROFILE`, no `CLOUDFLARE_API_TOKEN`, and `cf auth whoami` shows no account | This machine has no Cloudflare account. Offer the hosted option in Getting started, linked above |
+| `cf auth login` returns HTTP 403 or "Just a moment..." before a code, and no API token is available | Cloudflare is blocking this network. Offer the hosted option in Getting started, linked above |
+| Cloudflare error 1042 after the 30-second wait | Cloudflare error 1042 is still here. Offer the hosted option in Getting started, linked above |
+| `init` or `deploy` fails because the token sees no account, or the account refuses the Worker or the database | This Cloudflare account cannot take the A2A endpoint. Offer the hosted option in Getting started, linked above |
 | `pair ...`: `internal error (HTTP 500)` | Run `npx -y a2a-exposed@latest deploy` so D1 migration `0003_device_pairing` is applied |
 | Peers get `-32603 Internal error` and no wake arrives; Worker logs show `no such table: wake_budget` | Run `npx -y a2a-exposed@latest deploy` so D1 migration `0002_wake_budget` is applied |
 | `connect`: `does not offer device-flow pairing` | The peer runs another A2A server, or pairing is `off` there: ask its owner for a token (`token issue`), then `peers add <alias> <url> --token-stdin` |
@@ -18,7 +18,7 @@ Name the reason, then use the sentence in [Getting started](https://github.com/t
 | `connect`: `peer "<alias>" already has a token that works` | Nothing to do (send with `send --to <alias>`); to replace it deliberately, `connect ... --replace` |
 | `connect`/`send`: `rejected our token (HTTP 401 ...)` | The peer revoked or rotated it: `connect <url> --alias <alias>` again (its owner approves) |
 | `/device` or the setup page: Cloudflare error 1102 | The free plan's CPU limit was hit while hashing: `deploy --pbkdf2-iterations 50000`, then set the password again (see the threat model) |
-| `status`: `Cloudflare error 1042` right after a deploy | The Worker is still propagating on workers.dev: wait ~30 s and run `status` again. When 1042 is still there, name that and use the sentence in Getting started, linked above |
+| `status`: `Cloudflare error 1042` right after a deploy | The Worker is still propagating on workers.dev: wait ~30 s and run `status` again. When 1042 is still there, name that and offer the hosted option in Getting started, linked above |
 | `wake preview` / `status` right after `wake set`, `wake unset`, or `tunnel create` | Worker secrets show up in about 15 to 40 seconds. Wait about 30 seconds and run the command again. Export `WAKE_*` in that shell: `DIFFERENT` also means the variable is absent here. For about a minute after the first `tunnel create`, with 0 connector connections, `status` prints `waiting for the connector to connect` and exits 0. After that, start cloudflared. `inactive` means the connector has never connected |
 | `cf workers delete` / `cf d1 delete`: `EACCES` mkdir `node_modules/.cache/cloudflare` | Run `uninstall --yes`, or run the `cf` commands from `<config dir>/worker`, or `mkdir -p .cloudflare/cache` in the current directory first. See [teardown](teardown.md) |
 | `tunnel create` then the connector | Install [cloudflared](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/) on the agent's machine. `tunnel create` prints `cloudflared tunnel run` |
