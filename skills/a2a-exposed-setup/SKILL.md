@@ -106,6 +106,30 @@ Never paste secrets into chat or onto the command line. Ask the user before anyt
 6. **Pairing** — [references/pairing.md](references/pairing.md).
 7. **Teardown** — [references/teardown.md](references/teardown.md).
 
+## When something goes wrong
+
+When a setup step fails, offer the human to report it: an `init` or `deploy` error, a `status` check that fails, a `wake test` that does not pass, a pairing failure, a step the docs get wrong, or a workaround you had to invent. Fix or work around the problem first, using [references/troubleshooting.md](references/troubleshooting.md), then offer the report.
+
+- Feedback becomes a **public GitHub issue**. Never include tokens, secrets, private hostnames or URLs, message contents, or personal data. Redact the error output before it goes into `--actual` or `--logs`.
+- Ask the human before sending. Show them the report and send it only after an explicit yes.
+- Include the CLI and Worker versions, the deployment type (hosted or self-hosted), the connection (`webhook`, `proxy`, or `polling`), the step that failed, the redacted error, and what you tried.
+
+Use one of these:
+
+- **CLI:** `npx -y a2a-exposed@latest feedback "message"` with `--kind bug|idea|other`, `--steps`, `--expected`, `--actual`, `--logs`, `--agent`, `--environment`, `--connection`, and `--contact`. A bug needs `--steps`. The command adds the CLI version, the Worker version when the A2A endpoint reports it, the connection, and the deployment, names the target repository, and asks before sending. Pass `--yes` only after the human said yes; off a terminal it is required. When the A2A endpoint reports no feedback URL, for example before the first deploy, it prints a link to a prefilled GitHub form instead of posting.
+- **MCP:** `send_feedback` on an approved connector takes the same fields.
+- **Web:** the human can fill in https://a2a.exposed/app/feedback themselves.
+
+A CLI report looks like this:
+
+```bash
+npx -y a2a-exposed@latest feedback "init fails on the D1 step" --kind bug \
+  --steps "1. init --preset grok-bot  2. ..." --expected "..." --actual "<redacted error>" \
+  --logs "<redacted output; what was tried>" --agent "<your agent>" --environment local --connection webhook
+```
+
+Details are in [Feedback](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/feedback.md).
+
 Day-to-day use is [../a2a-exposed/SKILL.md](../a2a-exposed/SKILL.md).
 
 OpenBot uses preset `openbot` and `WAKE_HMAC_SECRET`. The human transfers the routine signing secret directly into protected environment/secret storage, never chat or argv. Follow the [OpenBot checklist](references/wake.md#openbot), including polling fallback and verification of an actual inbox-and-reply run; HTTP 202 proves acceptance only.

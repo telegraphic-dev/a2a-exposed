@@ -4,6 +4,7 @@ All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.
 
 ## Unreleased
 
+- **Setup feedback (#148).** The setup skill has a "When something goes wrong" section: after a failed setup step, the agent offers to file a redacted public report with `feedback`, `send_feedback`, or the a2a.exposed feedback form, and sends it only after the human agrees.
 - **OpenBot tested (#143).** Mark OpenBot tested end to end on self-hosted 0.8.19: pairing, messaging, and webhook wakes with the `openbot` preset.
 - **Setup consent and hosted option (#148).** Require explicit human consent to the account and resource plan before Cloudflare changes; offer the free hosted agent option up front, with dashboard and MCP setup guidance.
 
