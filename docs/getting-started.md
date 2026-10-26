@@ -54,14 +54,14 @@ This repository is an [Agent Plugins](https://agent-plugins.org/) package (`plug
 
 Each client is listed once. The status column is `tested end to end` or `untested`.
 
-Grok Bot and Claude Code cloud sessions with the hosted connector and a routine wake are tested end to end. Self-hosted Claude Code, other Claude clients, Codex, OpenClaw, and Hermes are untested.
+Grok Bot and Claude Code cloud sessions with the hosted connector and a routine wake are tested end to end. OpenBot on a self-hosted Worker with the `openbot` preset is tested end to end. Self-hosted Claude Code, other Claude clients, Codex, OpenClaw, and Hermes are untested.
 
 | Client | Status | How to load |
 | --- | --- | --- |
 | Claude Code | tested end to end (hosted cloud session); self-hosted untested | Hosted: [connector checklist](mcp.md#hosted-connector), no skill install. Local skills: `npx -y skills add telegraphic-dev/a2a-exposed --agent claude-code`. In Claude Code: `/plugin marketplace add telegraphic-dev/a2a-exposed`, then `/plugin install a2a-exposed@a2a-exposed` |
 | Grok Bot | tested end to end | Save both `SKILL.md` files into the bot's skill library, or name that path in the routine prompt |
 | OpenClaw | untested | `npx -y skills add telegraphic-dev/a2a-exposed --agent openclaw`, or `openclaw skills install skills-sh:telegraphic-dev/a2a-exposed/a2a-exposed` and the same for `a2a-exposed-setup`. `metadata.openclaw.requires.bins` lists `node`, so OpenClaw hides the skills where Node is missing |
-| OpenBot | Pairing and messaging tested by a user on self-hosted 0.8.18; end-to-end wake untested ([#143](https://github.com/telegraphic-dev/a2a-exposed/issues/143)) | See [OpenBot setup](receiving-messages.md#openbot) |
+| OpenBot | tested end to end (self-hosted 0.8.19, `openbot` preset); hosted untested | See [OpenBot setup](receiving-messages.md#openbot) |
 | Hermes | untested | `hermes skills install telegraphic-dev/a2a-exposed/skills/a2a-exposed` and the same path for `a2a-exposed-setup`, or `hermes skills tap add telegraphic-dev/a2a-exposed` |
 | Codex / ChatGPT | untested | Root `plugin.json`. `extensions.com.openai.onboardingSkill` points at the setup skill ([Codex plugin packaging](https://developers.openai.com/plugins/build/plugins)) |
 | Cursor | untested | `.cursor-plugin/plugin.json` sets `logo` (`assets/logo.svg`) and `skills` (`./skills/`) |

@@ -4,6 +4,8 @@ All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.
 
 ## Unreleased
 
+- **OpenBot tested end to end (#143).** Pairing, messaging, and webhook wakes with the `openbot` preset are tested end to end on self-hosted a2a-exposed 0.8.19. The docs and the compatibility table say so; hosted OpenBot remains untested.
+
 ## 0.8.19 - 2026-10-26
 
 - **OpenBot wakes (#143).** Add the `openbot` preset with its JSON envelope, delivery ID, and HMAC signature over timestamp, delivery ID, and exact body bytes. Preview shows the delivery ID and signing-input description with credentials masked. Document human-only secret handoff, quiet polling fallback, routine-run verification, and stored replies after push failures.
