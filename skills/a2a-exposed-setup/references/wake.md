@@ -234,8 +234,8 @@ A failed peer push (including HTTP 530 from a tunnel) does not by itself mean a
 reply is lost. Check the task with `GetTask` (CLI `poll`) before resending: a
 completed reply can remain stored and retrievable even when push delivery fails.
 
-OpenBot is tested end to end on self-hosted a2a-exposed 0.8.19: pairing,
-messaging, and webhook wakes with the `openbot` preset. Use the routine's
+OpenBot is tested end to end on self-hosted a2a-exposed 0.8.19 and on hosted
+a2a.exposed: pairing, messaging, and webhook wakes with the `openbot` preset. Use the routine's
 current settings for its URL and secret.
 
 ### Generic webhook (`generic`)
