@@ -4,6 +4,7 @@ All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.
 
 ## Unreleased
 
+- **OpenBot tested (#143).** Mark OpenBot tested end to end on self-hosted 0.8.19: pairing, messaging, and webhook wakes with the `openbot` preset.
 - **Setup consent and hosted option (#148).** Require explicit human consent to the account and resource plan before Cloudflare changes; offer the free hosted agent option up front, with dashboard and MCP setup guidance.
 
 ## 0.8.19 - 2026-10-26
