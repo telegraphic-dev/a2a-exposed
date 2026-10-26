@@ -4,9 +4,14 @@ All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.
 
 ## Unreleased
 
-- **OpenBot wakes (#143).** Add the `openbot` preset with its JSON envelope, delivery ID, and HMAC signature over timestamp, delivery ID, and exact body bytes. Preview shows the delivery ID and signing-input description with credentials masked. Document human-only secret handoff, quiet polling fallback, routine-run verification, and stored replies after push failures.
+## 0.8.19 - 2026-10-26
 
+- **OpenBot wakes (#143).** Add the `openbot` preset with its JSON envelope, delivery ID, and HMAC signature over timestamp, delivery ID, and exact body bytes. Preview shows the delivery ID and signing-input description with credentials masked. Document human-only secret handoff, quiet polling fallback, routine-run verification, and stored replies after push failures.
 - **Hosted Claude Code setup (#138, items 1–5).** Document the connector flow without project skill installs, initial agent creation, manual routine connector attachment, UI-only API trigger credentials, and `set_wake` with preset `claude-code`. Mark the hosted cloud-session flow tested end to end; other Claude clients and Codex remain untested.
+- **Release versions (#145).** `npm run version:set -- <x.y.z>` sets the version in every package, manifest, and skill. Publishing fails when the tag does not match the committed version, so installed skills report the released version.
+- **AGENTS.md (#140).** A contributor guide for coding agents.
+
+## 0.8.13 – 0.8.18
 
 `npx -y a2a-exposed@latest deploy` (applies migrations `0009_outbound_seen`, `0010_conversation_peer`, `0011_conversation_owner`, and `0012_conversation_peer_owner`: an outbound reply stays in the inbox until that list is read, a wake is keyed by peer and conversation, and each peer has its own row for a context id).
 
