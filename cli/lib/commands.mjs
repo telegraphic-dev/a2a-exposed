@@ -26,6 +26,14 @@ function printPush(res) {
 	for (const r of (res && res.push) || []) console.error(`push -> ${r.url}: ${r.ok ? "ok" : "FAILED"} (${r.info})`);
 }
 
+function printDelivery(res) {
+	const d = res && res.delivery;
+	if (!d) return;
+	const target = d.target ? `${d.target.alias ? `${d.target.alias} at ` : ""}${d.target.host}` : "task storage";
+	const http = d.httpStatus ? ` (HTTP ${d.httpStatus})` : "";
+	console.error(`reply -> ${d.status} via ${d.method}: ${target}${http}`);
+}
+
 const readStdin = () => fs.readFileSync(0, "utf8");
 
 // ---------------------------------------------------------------- inbound side
@@ -121,7 +129,7 @@ export async function reply(id, o) {
 	const res = await owner("POST", `/owner/tasks/${q(id)}/reply`, {
 		text, state: o.state, artifact: !!o.artifact, artifactName: o["artifact-name"], force: !!o.force,
 	});
-	printPush(res);
+	printDelivery(res);
 	console.log(`${id} -> ${o.state}`);
 }
 

@@ -7,7 +7,7 @@ import { Duplex } from "node:stream";
 import worker from "../src/index.ts";
 import { d1 } from "./d1.ts";
 import * as M from "../src/mcp.ts";
-import { dialChecked, fetchCheckedWake, publicWakeProblem, wakeNet, type AddressLookup, type CheckedDeliver, type WakeConnect } from "../src/wake-target.ts";
+import { dialChecked, fetchCheckedPeer, fetchCheckedWake, publicWakeProblem, wakeNet, type AddressLookup, type CheckedDeliver, type WakeConnect } from "../src/wake-target.ts";
 
 const publicLookup: AddressLookup = async (host) => {
 	if (host === "hook.example" || host === "also.example") return ["1.2.3.4"];
@@ -194,6 +194,26 @@ test("a cross-origin redirect is not followed, so credentials stay on the first 
 	assert.equal(hop.calls.length, 1);
 	assert.equal(hop.calls[0].ip, "1.2.3.4");
 	assert.equal("refused" in result && result.refused, "cross-origin redirect");
+});
+
+test("an authenticated peer call pins DNS, refuses every redirect, and fails closed on private or missing answers", async () => {
+	const hop = recorded(() => ({ status: 307, location: "https://hook.example/next" }));
+	const redirected = await fetchCheckedPeer("https://hook.example/a2a", {
+		method: "POST", headers: { authorization: "Bearer peer-secret" }, body: "{\"jsonrpc\":\"2.0\"}",
+	}, { lookup: publicLookup, deliver: hop.deliver });
+	assert.equal(hop.calls.length, 1);
+	assert.deepEqual({ ip: hop.calls[0].ip, hostname: hop.calls[0].hostname, redirect: hop.calls[0].redirect },
+		{ ip: "1.2.3.4", hostname: "hook.example", redirect: "manual" });
+	assert.equal(hop.calls[0].authorization, "Bearer peer-secret");
+	assert.equal("refused" in redirected && redirected.refused, "redirects are not allowed");
+
+	let calls = 0;
+	const never: CheckedDeliver = async () => { calls++; return new Response(null, { status: 200 }); };
+	for (const url of ["https://split.example/a2a", "https://meta.example/a2a", "https://missing.example/a2a", "https://unknown.example/a2a"]) {
+		const result = await fetchCheckedPeer(url, { method: "POST", headers: { authorization: "Bearer peer-secret" }, body: "{}" }, { lookup: publicLookup, deliver: never });
+		assert.equal("refused" in result, true, url);
+	}
+	assert.equal(calls, 0, "no socket is opened after a failed address check");
 });
 
 test("a same-origin redirect is checked again and keeps the wake headers", async () => {

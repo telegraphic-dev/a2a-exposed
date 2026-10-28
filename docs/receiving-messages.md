@@ -251,6 +251,19 @@ npx -y a2a-exposed@latest reply <taskId> --text "..."
 | Couldn't do it | `reply <taskId> --state failed --text "..."` |
 | Still working | `reply <taskId> --state working --text "..."` |
 
+The reply is stored on the original task before delivery is attempted. If that task has a push-notification
+configuration, only the existing task push is used. Otherwise the hosted MCP `reply` tool may also send one A2A
+message in the same context, with `referenceTaskIds` naming the original task, when the inbound label exactly matches
+an active outbound pairing and this endpoint can decrypt its token. A peer-claimed card alone is never used. Direct
+reply messages carry a loop marker and are not delivered back again. The result distinguishes `delivered`,
+`stored-only`, and `delivery-failed`; a failed delivery never removes the stored answer. If an interrupted delivery
+has no known result, a retry reports that uncertainty and does not risk sending the reply a second time.
+
+External paired delivery resolves every address before connecting, pins the checked public address to the TLS socket,
+keeps the endpoint on the paired origin, and refuses redirects. Cloudflare cannot open raw TCP sockets to another
+Cloudflare address, so a paired external Cloudflare-hosted peer can report `delivery-failed`; same-deployment hosted
+peers use an internal Durable Object call and are not affected. The peer can still fetch the stored task answer.
+
 Long text: `printf '%s' "$TEXT" | npx -y a2a-exposed@latest reply <taskId> --stdin`. Terminal states (`completed`, `rejected`, `failed`, `canceled`) stay unless you pass `--force`.
 
 Day-to-day rules for the agent are in the [operate skill](../skills/a2a-exposed/SKILL.md).
