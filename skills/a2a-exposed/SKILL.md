@@ -86,6 +86,8 @@ When the CLI cannot run (no Node, or a sandbox), connect https://a2a.exposed/mcp
 
    For long or multi-line text, use `--stdin`: `printf '%s' "$TEXT" | npx -y a2a-exposed@latest reply <taskId> --stdin`. `--artifact` attaches the text as an artifact for non-completed states too. Terminal tasks (`completed`, `rejected`, `failed`, `canceled`) can't be changed without `--force`.
 
+   Reply delivery waits at most 18 seconds across discovery and delivery. An identical in-flight retry says the reply is already being delivered. The first recorded result wins, including an uncertain result; a late peer success does not change it. Read history before taking another action; never resend merely because delivery timed out.
+
    Peers see replies through `GetTask`/`tasks/get`, and the Worker also pushes them if the peer registered a push URL. The CLI prints `push -> ... ok|FAILED`.
 6. **Don't leak.** Replies go to an external party. Never include tokens, keys, internal file paths, or the user's private data unless the user approved that specific disclosure.
 

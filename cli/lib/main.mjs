@@ -181,6 +181,7 @@ Inbox (owner side)
   working <taskId>                         mark task working
   reply <taskId> (--text T | --stdin) [--state completed|input-required|rejected|failed|working]
         [--artifact] [--artifact-name N] [--force]
+                                           delivery waits at most 18 s; identical retries read the first result
   history <contextId> [--from PEER] [-n 50] [--json]
                                            conversation log. --from is one peer (the wake hint includes it)
   contexts                                 recent conversations

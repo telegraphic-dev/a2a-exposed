@@ -9,6 +9,7 @@ import * as A from "./a2a.ts";
 import * as F from "./facade.ts";
 import { renderWake, redact, cloudflareErrorHint, wakeUrlIsTunnelHost, defaultDebounceSeconds, defaultMaxPerHour, type WakeConfig, type WakeEvent } from "./wake.ts";
 import { fetchCheckedPeer, fetchCheckedWake } from "./wake-target.ts";
+import { withDeadline } from "./deadline.ts";
 import * as P from "./pairing.ts";
 import * as M from "./mcp.ts";
 import { lookupDirectory, pinDirectoryRegion, tenantNameFromHost, tenantRegion } from "./directory.ts";
@@ -140,7 +141,8 @@ async function fetchTenant(ctx: TenantContext, target: URL, init: RequestInit): 
 	const ns = namespaceForRegion(namespace, tenantRegion(pinned));
 	const headers = new Headers(init.headers);
 	headers.delete("x-a2a-tenant");
-	const req = new Request(target, { method: init.method, headers, body: init.body ?? undefined, redirect: init.redirect });
+	init.signal?.throwIfAborted();
+	const req = new Request(target, { method: init.method, headers, body: init.body ?? undefined, redirect: init.redirect, signal: init.signal ?? undefined });
 	return ns.get(ns.idFromName(pinned.id)).fetch(req);
 }
 
@@ -154,7 +156,7 @@ async function doFetch(ctx: TenantContext, ectx: ExecutionContext, url: string, 
 	// peerRpc, the peer card, and push delivery all come through here. A same-deployment tenant is an internal call.
 	const internal = await fetchTenant(ctx, target, init);
 	if (internal) return internal;
-	return fetch(url, { ...init, signal: AbortSignal.timeout(15000) });
+	return fetch(url, { ...init, signal: init.signal ?? AbortSignal.timeout(15000) });
 }
 
 // ------------------------------------------------------------------ wake webhook (presets), debounced per peer and context via D1
@@ -1076,7 +1078,7 @@ async function proxyRpc(req: Request, ctx: TenantContext, c: { raw: string; rid:
 }
 
 // ------------------------------------------------------------------ push delivery (to peers) and receipt (from peers)
-async function sendPush(ctx: TenantContext, ectx: ExecutionContext, task: Json, cfg: Json): Promise<[boolean, string]> {
+async function sendPush(ctx: TenantContext, ectx: ExecutionContext, task: Json, cfg: Json, signal?: AbortSignal): Promise<[boolean, string]> {
 	const [ok, why] = A.pushUrlAllowed(cfg.url);
 	if (!ok) return [false, why];
 	const v1 = String(cfg._version || "0.3").startsWith("1");
@@ -1088,17 +1090,21 @@ async function sendPush(ctx: TenantContext, ectx: ExecutionContext, task: Json, 
 	if (scheme && auth.credentials) headers["authorization"] = `${scheme} ${auth.credentials}`;
 	const body = v1 ? { task: A.publicTask(task, "1.0") } : A.publicTask(task, "0.3");
 	try {
-		const r = await doFetch(ctx, ectx, cfg.url, { method: "POST", headers, body: JSON.stringify(body) });
+		const r = await doFetch(ctx, ectx, cfg.url, { method: "POST", headers, body: JSON.stringify(body), signal });
 		return [r.status >= 200 && r.status < 300, `HTTP ${r.status}`];
 	} catch (e) {
 		return [false, String(e).slice(0, 200)];
 	}
 }
 
-async function notifyPeer(ctx: TenantContext, ectx: ExecutionContext, t: Json): Promise<Json[]> {
+async function notifyPeer(ctx: TenantContext, ectx: ExecutionContext, t: Json, signal?: AbortSignal): Promise<Json[]> {
 	const results = [];
 	for (const cfg of t._push || []) {
-		const [ok, info] = await sendPush(ctx, ectx, t, cfg);
+		signal?.throwIfAborted();
+		const [ok, info] = signal
+			? await withDeadline(7000, (step) => sendPush(ctx, ectx, t, cfg, step), signal)
+			: await sendPush(ctx, ectx, t, cfg);
+		signal?.throwIfAborted();
 		results.push({ url: cfg.url, ok, info });
 		await histStmt(ctx, t.contextId, { dir: "out", peer: t._peer, taskId: t.id, event: "push", state: t.status.state, text: `${ok ? "ok" : "FAILED"} ${info}` }).run();
 	}
@@ -1124,6 +1130,7 @@ function safeTarget(alias: string | undefined, raw: string): { alias?: string; h
 /** A paired endpoint fetch. Same-deployment tenants stay inside the Durable Object namespace. Every other host is
  *  resolved once and the checked address is pinned to the socket; redirects are refused. */
 async function checkedPeerFetch(ctx: TenantContext, ectx: ExecutionContext, base: string, url: string, init: RequestInit): Promise<Response> {
+	init.signal?.throwIfAborted();
 	let baseUrl: URL, target: URL;
 	try { baseUrl = new URL(base); target = new URL(url); } catch { throw new ToolError("peer endpoint is not a URL"); }
 	if (target.origin !== baseUrl.origin) throw new ToolError("peer card endpoint refused: it is on a different origin");
@@ -1139,17 +1146,19 @@ async function checkedPeerFetch(ctx: TenantContext, ectx: ExecutionContext, base
 	return checked.response;
 }
 
-async function checkedPeerCard(ctx: TenantContext, ectx: ExecutionContext, base: string): Promise<Json> {
-	for (const p of ["/.well-known/agent-card.json", "/.well-known/agent.json"]) {
-		try {
-			const r = await checkedPeerFetch(ctx, ectx, base, new URL(p, base).href, { headers: { accept: "application/json" } });
-			if (r.status !== 200) continue;
+async function checkedPeerCard(ctx: TenantContext, ectx: ExecutionContext, base: string, signal: AbortSignal): Promise<Json> {
+	try {
+		return await withDeadline(7000, async (step) => {
+			const r = await checkedPeerFetch(ctx, ectx, base, new URL("/.well-known/agent-card.json", base).href, { headers: { accept: "application/json" }, signal: step });
+			if (r.status !== 200) return null;
 			const text = (await r.text()).slice(0, 1 << 20);
 			const d = JSON.parse(text);
-			if (d && typeof d === "object") return d;
-		} catch { /* default endpoint below */ }
+			return d && typeof d === "object" ? d : null;
+		}, signal);
+	} catch {
+		signal.throwIfAborted();
+		return null; // Use the paired base endpoint; never fetch a second card.
 	}
-	return null;
 }
 
 /** The exact inbound label must still have a live token here and an outbound pairing whose token we can decrypt.
@@ -1166,9 +1175,9 @@ async function replyPeer(ctx: TenantContext, label: string): Promise<{ alias: st
 	return token ? { alias: row.alias, url: row.url, token } : null;
 }
 
-async function deliverReplyMessage(ctx: TenantContext, ectx: ExecutionContext, task: Json, message: Json, state: string, text: string): Promise<ReplyDelivery> {
+async function deliverReplyMessage(ctx: TenantContext, ectx: ExecutionContext, task: Json, message: Json, state: string, text: string, signal: AbortSignal): Promise<ReplyDelivery> {
 	if (task._push?.length) {
-		const pushed = await notifyPeer(ctx, ectx, task);
+		const pushed = await notifyPeer(ctx, ectx, task, signal);
 		const failed = pushed.find((x: Json) => !x.ok);
 		const target = safeTarget(undefined, String((failed || pushed[0])?.url || ""));
 		const http = /HTTP (\d{3})/.exec(String((failed || pushed[0])?.info || ""));
@@ -1189,7 +1198,7 @@ async function deliverReplyMessage(ctx: TenantContext, ectx: ExecutionContext, t
 	};
 	const target = safeTarget(peer.alias, peer.url);
 	try {
-		const card = await checkedPeerCard(ctx, ectx, peer.url);
+		const card = await checkedPeerCard(ctx, ectx, peer.url, signal);
 		const [endpoint, version] = M.pickEndpoint(peer.url, card);
 		if (new URL(endpoint).origin !== new URL(peer.url).origin) throw new ToolError("peer card endpoint refused: it is on a different origin");
 		const v1 = version.startsWith("1");
@@ -1205,13 +1214,15 @@ async function deliverReplyMessage(ctx: TenantContext, ectx: ExecutionContext, t
 			"content-type": "application/json", accept: "application/json", "a2a-version": v1 ? "1.0" : "0.3",
 			authorization: `Bearer ${peer.token}`,
 		};
-		const response = await checkedPeerFetch(ctx, ectx, peer.url, endpoint, {
-			method: "POST", headers,
-			body: JSON.stringify({ jsonrpc: "2.0", id: message.messageId, method: v1 ? "SendMessage" : "message/send",
-				params: { message: direct, metadata: directMetadata, configuration: v1 ? { returnImmediately: true } : { blocking: false } } }),
-		});
+		const { response, raw } = await withDeadline(7000, async (step) => {
+			const response = await checkedPeerFetch(ctx, ectx, peer.url, endpoint, {
+				method: "POST", headers, signal: step,
+				body: JSON.stringify({ jsonrpc: "2.0", id: message.messageId, method: v1 ? "SendMessage" : "message/send",
+					params: { message: direct, metadata: directMetadata, configuration: v1 ? { returnImmediately: true } : { blocking: false } } }),
+			});
+			return { response, raw: (await response.text()).slice(0, 1 << 20) };
+		}, signal);
 		const httpStatus = response.status;
-		const raw = (await response.text()).slice(0, 1 << 20);
 		let body: Json = null;
 		try { body = JSON.parse(raw); } catch { /* failure below */ }
 		if (httpStatus !== 200 || !body || typeof body !== "object" || body.error) return {
@@ -1591,6 +1602,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 					.bind(deliveryKey, previous.updated_at).run();
 				previous = null;
 			}
+			if (previous) return json({ error: "this reply is already being delivered; retry to read its result" }, 409);
 			if (A.TERMINAL.has(t.status.state) && !b.force) return json({ error: `task is already ${t.status.state}` }, 409);
 			const msg = { kind: "message", role: "agent", messageId: A.newId(), contextId: t.contextId, taskId: t.id, parts: [{ kind: "text", text: b.text }] };
 			const now = A.nowIso();
@@ -1609,13 +1621,18 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 				histStmt(ctx, t.contextId, { dir: "out", peer: t._peer, taskId: t.id, role: "agent", state, text: b.text })]);
 			await ackPendingWakes(ctx, [{ taskId: t.id, contextId: t.contextId }]);
 			let delivery: ReplyDelivery;
-			try { delivery = await deliverReplyMessage(ctx, ectx, t, msg, state, b.text); }
+			try { delivery = await withDeadline(18000, (signal) => deliverReplyMessage(ctx, ectx, t, msg, state, b.text, signal)); }
 			catch {
 				delivery = { status: "delivery-failed", method: t._push?.length ? "push" : "a2a-message", taskId: t.id, state,
 					detail: "Delivery could not be completed; the reply remains stored on the task." };
 			}
-			await ctx.DB.prepare("UPDATE reply_deliveries SET result_json = ?, updated_at = ? WHERE delivery_key = ?")
+			const finalized = await ctx.DB.prepare("UPDATE reply_deliveries SET result_json = ?, updated_at = ? WHERE delivery_key = ? AND result_json IS NULL")
 				.bind(JSON.stringify(delivery), A.nowIso(), deliveryKey).run();
+			if (finalized.meta.changes !== 1) {
+				const settled: Json = await ctx.DB.prepare("SELECT result_json FROM reply_deliveries WHERE delivery_key = ?").bind(deliveryKey).first();
+				if (!settled?.result_json) return json({ error: "reply is stored but its delivery result is unavailable; read history before retrying" }, 409);
+				delivery = JSON.parse(settled.result_json);
+			}
 			return json({ task: ownerTaskView(t), delivery, idempotent: false });
 		}
 	}

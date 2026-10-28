@@ -320,3 +320,13 @@ test("public-https does not request a metadata address, and does post to a check
 	assert.equal(tls.status, null);
 	assert.equal(tls.info, "Error: TLS Handshake Failed.");
 });
+
+
+test("an aborted peer request starts neither DNS lookup nor delivery", async () => {
+	const controller = new AbortController();
+	controller.abort(new Error("delivery deadline"));
+	await assert.rejects(() => fetchCheckedPeer("https://hook.example/rpc", { signal: controller.signal }, {
+		async lookup() { assert.fail("aborted request must not resolve DNS"); },
+		async deliver() { assert.fail("aborted request must not send"); },
+	}), /delivery deadline/);
+});

@@ -20,15 +20,25 @@ async function fixture(t: Parameters<typeof test>[1] extends (t: infer T) => unk
 	};
 	const byId = new Map<string, TenantContext>();
 	let directPosts = 0;
+	const cards: string[] = [];
+	let missingCard = false;
 	let hold: Promise<void> | null = null;
+	let posted: (() => void) | null = null;
+	let aborted = false;
 	const ns: DoNamespace = {
 		idFromName(name: string) { return name; },
 		get(id: unknown) {
 			return { async fetch(req: Request) {
 				const ctx = byId.get(String(id));
 				if (!ctx) return new Response("missing", { status: 404 });
+				if (req.method === "GET" && new URL(req.url).pathname.startsWith("/.well-known/agent")) {
+					cards.push(new URL(req.url).pathname);
+					if (missingCard) return new Response("missing", { status: 404 });
+				}
 				if (req.method === "POST" && new URL(req.url).pathname === "/") {
 					directPosts++;
+					posted?.();
+					req.signal.addEventListener("abort", () => { aborted = true; }, { once: true });
 					if (hold) await hold;
 				}
 				return dispatch(req, ctx, ectx as never);
@@ -61,10 +71,11 @@ async function fixture(t: Parameters<typeof test>[1] extends (t: infer T) => unk
 		assert.equal(r.status, 200, JSON.stringify(data));
 		return data.result.id as string;
 	};
-	return { a, b, dbA, dbB, owner, sendToBob, get directPosts() { return directPosts; }, blockDirect() {
+	return { a, b, dbA, dbB, owner, sendToBob, cards, missingCard() { missingCard = true; }, get directPosts() { return directPosts; }, get aborted() { return aborted; }, blockDirect() {
 		let release!: () => void;
 		hold = new Promise<void>((resolve) => { release = resolve; });
-		return () => { hold = null; release(); };
+		const started = new Promise<void>((resolve) => { posted = resolve; });
+		return Object.assign(() => { hold = null; posted = null; release(); }, { started });
 	} };
 }
 
@@ -129,8 +140,9 @@ test("stale recovery never overlaps an uncertain delivery and a later retry read
 	const s = await fixture(t as never);
 	const taskId = await s.sendToBob("concurrent question", "ctx-concurrent");
 	const release = s.blockDirect();
+	t.after(release);
 	const first = s.owner(s.b, "acct-bob", "POST", "/owner/mcp/reply", { taskId, text: "one answer" });
-	while (s.directPosts === 0) await new Promise((resolve) => setTimeout(resolve, 0));
+	await release.started;
 	await s.dbB.prepare("UPDATE reply_deliveries SET updated_at = '2000-01-01T00:00:00.000Z'").run();
 	const raced = await s.owner(s.b, "acct-bob", "POST", "/owner/mcp/reply", { taskId, text: "one answer" });
 	assert.equal(raced.status, 200);
@@ -138,11 +150,48 @@ test("stale recovery never overlaps an uncertain delivery and a later retry read
 	assert.match(String((raced.body as any).structuredContent.detail), /uncertain.*not sent again/);
 	assert.equal(s.directPosts, 1, "the overlapping call cannot start a second delivery");
 	release();
-	assert.equal(((await first).body as any).structuredContent.status, "delivered");
+	assert.deepEqual(((await first).body as any).structuredContent, (raced.body as any).structuredContent, "a late success cannot replace the recorded uncertain result");
 	const retry = await s.owner(s.b, "acct-bob", "POST", "/owner/mcp/reply", { taskId, text: "one answer" });
 	assert.equal(retry.status, 200);
-	assert.equal((retry.body as any).structuredContent.status, "delivered");
+	assert.deepEqual((retry.body as any).structuredContent, (raced.body as any).structuredContent);
 	assert.equal(s.directPosts, 1);
+});
+
+test("an identical retry during delivery reports in-flight before the stored completed state", async (t) => {
+	const s = await fixture(t as never);
+	const taskId = await s.sendToBob("retry question", "ctx-in-flight");
+	const release = s.blockDirect();
+	t.after(release);
+	const first = s.owner(s.b, "acct-bob", "POST", "/owner/mcp/reply", { taskId, text: "one answer" });
+	await release.started;
+	const retry = await s.owner(s.b, "acct-bob", "POST", "/owner/mcp/reply", { taskId, text: "one answer" });
+	assert.equal(retry.status, 200);
+	assert.equal((retry.body as any).isError, true);
+	assert.match(String((retry.body as any).text), /already being delivered/);
+	assert.equal(s.directPosts, 1);
+	release();
+	assert.equal(((await first).body as any).structuredContent.status, "delivered");
+});
+
+test("the total delivery deadline returns while a peer ignores cancellation and retries never resend", async (t) => {
+	const s = await fixture(t as never);
+	const taskId = await s.sendToBob("slow question", "ctx-deadline");
+	const release = s.blockDirect();
+	t.after(release);
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	t.after(() => t.mock.timers.reset());
+	const first = s.owner(s.b, "acct-bob", "POST", "/owner/mcp/reply", { taskId, text: "bounded answer" });
+	await release.started;
+	t.mock.timers.tick(18000);
+	t.mock.timers.reset();
+	const result = await first;
+	assert.equal(result.status, 200);
+	assert.equal((result.body as any).structuredContent.status, "delivery-failed");
+	assert.equal(s.aborted, true, "the deadline reaches the actual peer request signal");
+	const retry = await s.owner(s.b, "acct-bob", "POST", "/owner/mcp/reply", { taskId, text: "bounded answer" });
+	assert.deepEqual((retry.body as any).structuredContent, (result.body as any).structuredContent);
+	assert.equal(s.directPosts, 1);
+	release();
 });
 
 test("a remote token rejection reports HTTP status without losing the stored reply", async (t) => {
@@ -158,4 +207,15 @@ test("a remote token rejection reports HTTP status without losing the stored rep
 	const stored = await s.dbB.prepare("SELECT state, status_json FROM tasks WHERE id = ?").bind(taskId).first() as { state: string; status_json: string };
 	assert.equal(stored.state, "completed");
 	assert.match(stored.status_json, /the answer stays/);
+});
+
+
+test("reply discovers one canonical card and uses the paired base when it is missing", async (t) => {
+	const s = await fixture(t as never);
+	const taskId = await s.sendToBob("no card question", "ctx-one-card");
+	s.missingCard();
+	const result = await s.owner(s.b, "acct-bob", "POST", "/owner/mcp/reply", { taskId, text: "stored answer" });
+	assert.equal((result.body as any).structuredContent.status, "delivered");
+	assert.deepEqual(s.cards, ["/.well-known/agent-card.json"]);
+	assert.equal(s.directPosts, 1);
 });
