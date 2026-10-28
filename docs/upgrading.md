@@ -2,6 +2,8 @@
 
 History of each release is in [CHANGELOG.md](../CHANGELOG.md). This page is how to move a running A2A endpoint onto the current CLI.
 
+`status` reports the deployed Worker version and CLI version. An older Worker, including one whose `/health` has no `version`, produces a deploy next step and exit code 1. Unreachable health reports an unknown version. Cached npm latest can add an upgrade hint without a foreground registry request. Deploy sets the Worker version tag `a2a-exposed-<version>` and message `a2a-exposed <version> <ISO date>`.
+
 ## After a new CLI
 
 ```bash

@@ -36,7 +36,7 @@ export function notice(current, cache) {
 
 export const due = (cache, now = Date.now()) => !cache || !(now - (cache.checkedAt || 0) < CHECK_INTERVAL_MS);
 
-function readCache(file) {
+export function readCache(file) {
 	try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return null; }
 }
 

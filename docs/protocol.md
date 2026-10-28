@@ -76,7 +76,7 @@ When `EVENT_URL` is an https URL and `EVENT_SECRET` is set, the A2A endpoint POS
 
 Anything else (`curl`, agents, `Accept: application/json`, `?format=json`) gets JSON: `name`, `description`, `agentCard`, `a2a` (the JSON-RPC endpoint), and `pairing`.
 
-`GET /health` returns `{ ok, publicUrl, mode, mcp }`. `mode` is `inbox` or `proxy`.
+`GET /health` returns `{ ok, publicUrl, mode, mcp, version }`. `mode` is `inbox` or `proxy`; `version` is the deployed inbox build’s package version.
 
 ## Proxy mode
 

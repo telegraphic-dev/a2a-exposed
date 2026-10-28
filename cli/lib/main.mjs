@@ -88,7 +88,7 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
                                                e.g. "node /path/to/repo/cli/bin/a2a-exposed.mjs")
                                 --worker-dir   where the Worker project (template copy) lives (default
                                                <config dir>/worker). The config dir is --config-dir / A2A_CONFIG_DIR
-  deploy [same flags]           redeploy with saved settings (secrets persist)
+  deploy [same flags]           redeploy with saved settings (secrets persist); tag the Worker version as a2a-exposed-<version>
   wake set [--preset P] [--agent-id A] [--key-header H] [--key-prefix X] [--body-template JSON]
            [--cli-command CMD] [--debounce S] [--max-per-hour N]
                                 save wake settings, upload wake secrets from env, and redeploy (one step)
@@ -145,11 +145,12 @@ Remove
                                 --dir and --worker-dir are the Worker project directory (default <config dir>/worker)
 
 Status
-  status [--json]               deployment, base URL, agent card check (fetched by the CLI: no curl needed), wake
+  status [--json]               deployment, Worker version, base URL, agent card check (fetched by the CLI), wake
                                 mode (webhook / tunnel / none = polling), tunnel state, proxy mode (--upstream):
                                 upstream card, Access credential and upstream bearer configured (separately), the
                                 live upstream check, the last failed peer call, card-leak check; warnings for peer
                                 token variables shadowing saved tokens; and the next step to run.
+                                Older Workers need deploy (exit 1); npm latest hints use the local update cache.
                                 When GET /owner/mcp reports enabled and the agent card is reachable, prints
                                 \`claude mcp add --transport http a2a-exposed <base URL>/mcp\`.
                                 A failed probe, an unreachable card, or a Worker that reports MCP off leaves that line out.

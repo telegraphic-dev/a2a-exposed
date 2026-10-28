@@ -1,7 +1,7 @@
 // `status`: the next-step logic (pure, no network).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mcpAddCommand, nextStep, wakeLine } from "../lib/status.mjs";
+import { checkHealth, mcpAddCommand, nextStep, wakeLine } from "../lib/status.mjs";
 import { cardUrlProblem } from "../lib/a2a.mjs";
 
 const healthy = (over = {}) => ({
@@ -125,4 +125,41 @@ test("OpenBot status asks for the HMAC secret even when a bearer key exists", ()
 	assert.match(nextStep(healthy({ wake })).text, /export WAKE_HMAC_SECRET/);
 	assert.match(nextStep(healthy({ wake: { ...wake, configured: false } })).text, /export WAKE_WEBHOOK_URL and WAKE_HMAC_SECRET/);
 	assert.ok(!nextStep(healthy({ wake: { ...wake, hasHmacSecret: true } })).text.includes("reject wakes"));
+});
+
+test("Worker versions: stale, current, newer, legacy, and unknown health", () => {
+	const step = (over) => nextStep(healthy({ cliVersion: "0.8.21", ...over }));
+	const old = step({ workerVersion: "0.8.20" });
+	assert.equal(old.ok, false);
+	assert.match(old.text, /older than this CLI \(0.8.21\).*deploy/);
+	for (const workerVersion of [undefined, null, "0.8.21", "0.8.22"])
+		assert.equal(step({ workerVersion }).ok, true);
+	const legacy = step({ health: { ok: true, version: null } });
+	assert.equal(legacy.ok, false);
+	assert.match(legacy.text, /predates version reporting/);
+	assert.equal(step({ health: { ok: false, version: null } }).ok, true);
+	const latest = step({ workerVersion: "0.8.20", latestVersion: "0.8.22" });
+	assert.deepEqual(latest.also, ["a2a-exposed 0.8.22 is available: run npx -y a2a-exposed@latest deploy"]);
+	assert.ok(!step({ workerVersion: "0.8.22", latestVersion: "0.8.23" }).also.some((hint) => hint.includes("is available")));
+});
+
+test("health probe keeps only the public version and distinguishes legacy from unreachable", async (t) => {
+	const original = globalThis.fetch;
+	t.after(() => { globalThis.fetch = original; });
+	const probe = async (body, status = 200) => {
+		globalThis.fetch = async (url, init) => {
+			assert.equal(url, "https://agent.example.com/health");
+			assert.equal(init.method, "GET");
+			assert.ok(init.signal instanceof AbortSignal);
+			return new Response(JSON.stringify(body), { status });
+		};
+		return checkHealth("https://agent.example.com");
+	};
+	assert.deepEqual(await probe({ ok: true, version: "0.8.20", ignored: "dummy" }), { ok: true, version: "0.8.20" });
+	assert.deepEqual(await probe({ ok: true }), { ok: true, version: null });
+	assert.deepEqual(await probe({ ok: true, version: 42 }), { ok: true, version: null });
+	assert.deepEqual(await probe({ ok: true }, 503), { ok: false, version: null });
+	assert.deepEqual(await probe({}), { ok: false, version: null });
+	globalThis.fetch = async () => { throw new Error("offline"); };
+	assert.deepEqual(await checkHealth("https://agent.example.com"), { ok: false, version: null });
 });
