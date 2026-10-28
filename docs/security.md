@@ -56,7 +56,7 @@ Whoever holds the owner token can still issue peer tokens. Whoever controls the 
 
 ## Push notifications
 
-HTTPS only. Private and loopback targets are refused. Each push uses a per-task token, stored hashed. A connector `send` mints that token only when the peer card advertises `capabilities.pushNotifications`, points the peer at `POST /push`, and stores only the hash before the send. The plaintext token is not returned. The CLI still does this only with `--push`.
+HTTPS only. Private and loopback targets are refused. Each push uses a per-task token, stored hashed. A connector `send` mints that token only when the peer card advertises `capabilities.pushNotifications`, points the peer at `POST /push`, and stores only the hash before the send. The plaintext token is not returned. The CLI still does this only with `--push`. Revoking that peer's label rejects a later push that presents the token from a task already sent. That push is HTTP 401 and is not stored.
 
 ## Your account
 

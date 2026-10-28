@@ -2,6 +2,7 @@
 // A connector send attaches a push config only when the peer card advertises it, and stores the token
 // hash before SendMessage returns. Inbox marks a reply seen only when the stored update is still the
 // snapshot that response returned, on every storage backend this file runs against.
+// Revoking the peer label clears that peer's push hashes. A later push with the old token is 401.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { sha256 } from "../src/a2a.ts";
@@ -338,5 +339,194 @@ test("message and artifactUpdate pushes supply inbox text", async () => {
 		assert.equal(row.state, c.state);
 		const history = await owner(ctx, "GET", `/owner/history/${c.context}`);
 		assert.equal((history.data as Hist[]).some((r) => r.event === "push" && r.text === c.text && r.state === c.state), true, history.text);
+	}
+});
+
+type OutSnap = {
+	task_id?: string;
+	context_id?: string;
+	peer?: string;
+	task_json?: string | null;
+	updates_json?: string;
+	updates_seen?: number;
+	hash_cleared?: number;
+};
+
+test("revoking a peer rejects its old push token on the self-hosted and hosted paths", async (t) => {
+	const logs: string[] = [];
+	const origLog = console.log;
+	console.log = (...args: unknown[]) => {
+		logs.push(args.map((a) => String(a)).join(" "));
+		origLog(...args);
+	};
+	const pushByHost = new Map<string, string>();
+	const origFetch = globalThis.fetch;
+	globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+		const url = new URL(reqUrl(input));
+		if (init?.method !== "POST") {
+			return new Response(JSON.stringify(card(`https://${url.host}`, "1.0", true)), { status: 200, headers: { "content-type": "application/json" } });
+		}
+		const body = JSON.parse(String(init.body)) as { params?: { configuration?: { taskPushNotificationConfig?: { token?: string } } } };
+		const token = body.params?.configuration?.taskPushNotificationConfig?.token || "";
+		pushByHost.set(url.host, token);
+		const taskId = url.host.startsWith("bea.") ? "task-bea" : "task-ada";
+		const contextId = url.host.startsWith("bea.") ? "ctx-bea" : "ctx-ada";
+		return new Response(JSON.stringify({ jsonrpc: "2.0", id: "1", result: taskResult(taskId, contextId, "1.0") }), { status: 200, headers: { "content-type": "application/json" } });
+	}) as typeof fetch;
+	t.after(() => {
+		globalThis.fetch = origFetch;
+		console.log = origLog;
+	});
+
+	const secrets: string[] = [];
+	const outputs: string[] = [];
+	const hides = (blob: string, where: string) => {
+		for (const secret of secrets) assert.equal(secret.length > 0 && blob.includes(secret), false, `${where} contains a token`);
+	};
+
+	for (const mode of ["single", "host"] as const) {
+		pushByHost.clear();
+		const db = d1(MIGRATIONS);
+		const publicUrl = "https://owner.example.net";
+		const ctx = mode === "single"
+			? resolveTenant({ DB: db, PUBLIC_URL: publicUrl, OWNER_TOKEN: OWNER, AGENT_NAME: "Owner" } as WorkerBindings)
+			: hostedTenantContext({
+				DB: db, TENANCY: "host", TENANT_SECRETS_KEY: "platform-key", PUBLIC_URL: publicUrl, OWNER_TOKEN: "platform-owner",
+			} as WorkerBindings, {
+				id: "ten_revoke_push", db, publicUrl, ownerTokenHash: await sha256(OWNER), status: "active", config: { AGENT_NAME: "Owner" },
+			});
+		const http = (method: string, path: string, body?: unknown) => owner(ctx, method, path, body);
+		const call = async (method: string, path: string, body?: unknown) => {
+			if (mode === "single") return http(method, path, body);
+			const res = await runOwnerRpc(ctx, ectx as never, {
+				accountId: "acct_owner", method, path, ...(body === undefined ? {} : { body }),
+			});
+			const text = JSON.stringify(res.body);
+			return { status: res.status, data: res.body, text };
+		};
+		const note = (res: { text: string }) => { outputs.push(res.text); return res; };
+
+		const issue = async (label: string) => {
+			const issued = await http("POST", "/owner/peers", { label });
+			assert.equal(issued.status, 200, issued.text);
+			const token = (issued.data as { token?: string }).token || "";
+			assert.match(token, /^a2aow_/);
+			secrets.push(token);
+			return token;
+		};
+		const beaBearer = await issue("bea");
+		const adaBearer = await issue("ada");
+		for (const [alias, bearer] of [["bea", beaBearer], ["ada", adaBearer]] as const) {
+			const synced = note(await call("PUT", `/owner/outbound-peers/${alias}`, { url: `https://${alias}.example.net`, token: bearer }));
+			assert.equal(synced.status, 200, synced.text);
+			assert.equal(JSON.stringify(synced.data).includes(bearer), false);
+		}
+		for (const alias of ["bea", "ada"] as const) {
+			const sent = note(await call("POST", "/owner/mcp/send", { to: alias, text: `hello ${alias}`, contextId: `ctx-${alias}` }));
+			assert.equal(sent.status, 200, sent.text);
+			assert.equal((sent.data as SendBody).isError, false, sent.text);
+			assert.match((sent.data as SendBody).text || "", new RegExp(`task task-${alias}`));
+		}
+		const beaPush = pushByHost.get("bea.example.net") || "";
+		const adaPush = pushByHost.get("ada.example.net") || "";
+		assert.equal(beaPush.length > 0 && adaPush.length > 0 && beaPush !== adaPush, true);
+		secrets.push(beaPush, adaPush);
+		const pendingToken = "pending-push-token";
+		secrets.push(pendingToken);
+		await db.prepare(
+			`INSERT INTO outbound (task_id, context_id, peer, endpoint, protocol, push_token_hash, sent_at, updates_json, updates_seen)
+			 VALUES ('pend.revoked', 'ctx-bea', 'bea', 'https://bea.example.net/', '1.0', ?, '2026-01-01T00:00:00.000Z', '[]', 0)`,
+		).bind(await sha256(pendingToken)).run();
+
+		const missed = note(await call("DELETE", "/owner/peers/nobody"));
+		assert.equal(missed.status, 404, missed.text);
+		const beforeRevoke = await db.prepare("SELECT push_token_hash IS NULL AS cleared FROM outbound WHERE task_id = ?").bind("task-bea").first() as { cleared?: number };
+		assert.equal(Number(beforeRevoke.cleared), 0);
+
+		const revoked = note(await call("DELETE", "/owner/peers/bea"));
+		assert.equal(revoked.status, 200, revoked.text);
+		assert.deepEqual(revoked.data, { revoked: true, label: "bea" });
+		const again = note(await call("DELETE", "/owner/peers/bea"));
+		assert.equal(again.status, 404, again.text);
+
+		const cleared = async (taskId: string) => Number((await db.prepare("SELECT push_token_hash IS NULL AS cleared FROM outbound WHERE task_id = ?").bind(taskId).first() as { cleared?: number }).cleared);
+		assert.equal(await cleared("task-bea"), 1);
+		assert.equal(await cleared("pend.revoked"), 1);
+		assert.equal(await cleared("task-ada"), 0);
+
+		const snap = async (taskId: string) => await db.prepare(
+			`SELECT task_id, context_id, peer, task_json, updates_json, updates_seen, push_token_hash IS NULL AS hash_cleared
+			 FROM outbound WHERE task_id = ?`,
+		).bind(taskId).first() as OutSnap;
+		const histCount = async (contextId: string) => Number((await db.prepare("SELECT COUNT(*) AS n FROM history WHERE context_id = ?").bind(contextId).first() as { n: number }).n);
+		const taskCount = async () => Number((await db.prepare("SELECT COUNT(*) AS n FROM tasks").first() as { n: number }).n);
+		const beaBefore = await snap("task-bea");
+		const beaHist = await histCount("ctx-bea");
+		const tasksBefore = await taskCount();
+		const push = async (token: string, taskId: string, text: string) => {
+			const res = await dispatch(new Request("https://owner.example.net/push", {
+				method: "POST",
+				headers: { "content-type": "application/json", "x-a2a-notification-token": token },
+				body: JSON.stringify({ task: { id: taskId, contextId: "ctx-bea", status: { state: "completed", message: { parts: [{ text }] } } } }),
+			}), ctx, ectx as never);
+			const body = await res.text();
+			outputs.push(body);
+			return { status: res.status, body };
+		};
+		const rejected = await push(beaPush, "task-bea", "revoked reply");
+		assert.equal(rejected.status, 401);
+		assert.equal(rejected.body, '{"error":"unauthorized"}');
+		assert.deepEqual(await snap("task-bea"), beaBefore);
+		assert.equal(await histCount("ctx-bea"), beaHist);
+		assert.equal(await taskCount(), tasksBefore);
+		const wake = await db.prepare("SELECT pending_json FROM wakes WHERE context_id = ?").bind("ctx-bea").first() as { pending_json?: string | null } | null;
+		assert.equal(wake?.pending_json ?? null, null);
+
+		const pending = await push(pendingToken, "task-claimed", "pending reply");
+		assert.equal(pending.status, 401);
+		assert.equal(pending.body, '{"error":"unauthorized"}');
+		assert.equal(await cleared("pend.revoked"), 1);
+		const claimed = await db.prepare("SELECT task_id FROM outbound WHERE task_id = ?").bind("task-claimed").first();
+		assert.equal(claimed, null);
+		assert.equal(await histCount("ctx-bea"), beaHist);
+		assert.deepEqual(await snap("task-bea"), beaBefore);
+
+		const standin = "restored-push-token";
+		secrets.push(standin);
+		await db.prepare("UPDATE outbound SET push_token_hash = ? WHERE task_id = ?").bind(await sha256(standin), "task-bea").run();
+		const restored = await push(standin, "task-bea", "restored reply");
+		assert.equal(restored.status, 401);
+		assert.equal(restored.body, '{"error":"unauthorized"}');
+		const afterRestore = await snap("task-bea");
+		assert.equal(Number(afterRestore.hash_cleared), 0);
+		assert.equal(afterRestore.task_json, beaBefore.task_json);
+		assert.equal(afterRestore.updates_json, beaBefore.updates_json);
+		assert.equal(afterRestore.updates_seen, beaBefore.updates_seen);
+		assert.equal(await histCount("ctx-bea"), beaHist);
+
+		const accepted = await dispatch(new Request("https://owner.example.net/push", {
+			method: "POST",
+			headers: { "content-type": "application/json", "x-a2a-notification-token": adaPush },
+			body: JSON.stringify({ task: { id: "task-ada", contextId: "ctx-ada", status: { state: "completed", message: { parts: [{ text: "ada reply" }] } } } }),
+		}), ctx, ectx as never);
+		const acceptedText = await accepted.text();
+		outputs.push(acceptedText);
+		assert.equal(accepted.status, 200, acceptedText);
+		const adaRow = await snap("task-ada");
+		assert.match(String(adaRow.updates_json), /ada reply/);
+		assert.equal(Number(adaRow.hash_cleared), 0);
+		const adaHist = note(await call("GET", "/owner/history/ctx-ada"));
+		assert.equal((adaHist.data as Hist[]).some((r) => r.event === "push" && r.text === "ada reply"), true, adaHist.text);
+		const beaHistory = note(await call("GET", "/owner/history/ctx-bea"));
+		assert.equal((beaHistory.data as Hist[]).some((r) => r.text === "revoked reply" || r.text === "pending reply" || r.text === "restored reply"), false, beaHistory.text);
+		assert.deepEqual(await snap("task-bea"), afterRestore);
+	}
+
+	hides(outputs.join("\n"), "response");
+	hides(logs.join("\n"), "log");
+	for (const secret of secrets) {
+		const hash = await sha256(secret);
+		assert.equal(outputs.join("\n").includes(hash), false, "response contains a token hash");
+		assert.equal(logs.join("\n").includes(hash), false, "log contains a token hash");
 	}
 });

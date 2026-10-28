@@ -1339,22 +1339,31 @@ function changed(res: { meta?: { changes?: number } } | null | undefined): numbe
 	return Number(res?.meta?.changes ?? 0);
 }
 
+/** Outbound rows whose peer label is still active. A row with no inbound label stays eligible, because send does not require one. */
+const LIVE_OUTBOUND = "SELECT o.* FROM outbound o LEFT JOIN peers p ON p.label = o.peer WHERE p.revoked_at IS NULL";
+
 /** The outbound row this push may update. A callback that arrives before SendMessage returns matches the
  *  pending row by token hash and claims the peer's task id. A row already stored under that id must
- *  present the same hash. */
+ *  present the same hash. A revoked peer matches neither, so the handler returns 401 and stores nothing. */
 async function outboundForPush(ctx: TenantContext, taskId: string, givenHash: string): Promise<Json | null> {
 	if (!givenHash) return null;
-	const rec: Json = await ctx.DB.prepare("SELECT * FROM outbound WHERE task_id = ?").bind(taskId).first();
-	if (rec) return rec.push_token_hash && A.timingSafeEqualStr(rec.push_token_hash, givenHash) ? rec : null;
-	const pending: Json = await ctx.DB.prepare("SELECT * FROM outbound WHERE push_token_hash = ? AND task_id LIKE 'pend.%'").bind(givenHash).first();
-	if (!pending?.push_token_hash || !A.timingSafeEqualStr(pending.push_token_hash, givenHash)) return null;
+	const same = (row: Json | null) => row?.push_token_hash && A.timingSafeEqualStr(row.push_token_hash, givenHash) ? row : null;
+	const rec: Json = await ctx.DB.prepare(`${LIVE_OUTBOUND} AND o.task_id = ?`).bind(taskId).first();
+	if (rec) return same(rec);
+	const pending: Json = await ctx.DB.prepare(`${LIVE_OUTBOUND} AND o.push_token_hash = ? AND o.task_id LIKE 'pend.%'`).bind(givenHash).first();
+	if (!same(pending)) return null;
 	try {
-		const renamed = await ctx.DB.prepare("UPDATE outbound SET task_id = ? WHERE task_id = ? AND push_token_hash = ?")
-			.bind(taskId, pending.task_id, givenHash).run();
-		if (changed(renamed) === 1) return { ...pending, task_id: taskId };
+		const renamed = await ctx.DB.prepare(
+			`UPDATE outbound SET task_id = ? WHERE task_id = ? AND push_token_hash = ?
+			 AND NOT EXISTS (SELECT 1 FROM peers WHERE label = outbound.peer AND revoked_at IS NOT NULL)`,
+		).bind(taskId, pending.task_id, givenHash).run();
+		if (changed(renamed) === 1) {
+			const claimed: Json = await ctx.DB.prepare(`${LIVE_OUTBOUND} AND o.task_id = ?`).bind(taskId).first();
+			return same(claimed);
+		}
 	} catch { /* the send path already stored this task id */ }
-	const now: Json = await ctx.DB.prepare("SELECT * FROM outbound WHERE task_id = ?").bind(taskId).first();
-	return now?.push_token_hash && A.timingSafeEqualStr(now.push_token_hash, givenHash) ? now : null;
+	const now: Json = await ctx.DB.prepare(`${LIVE_OUTBOUND} AND o.task_id = ?`).bind(taskId).first();
+	return same(now);
 }
 
 /** Move a pending push row onto the peer's task id without dropping an update that already arrived. */
@@ -1691,8 +1700,17 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 		}
 		if (m === "DELETE" && seg[1]) {
 			const label = decodeURIComponent(seg[1]);
-			const r = await ctx.DB.prepare("UPDATE peers SET revoked_at = ? WHERE label = ? AND revoked_at IS NULL").bind(A.nowIso(), label).run();
-			if (r.meta.changes !== 1) {
+			const now = A.nowIso();
+			// Drop push hashes only while this label is still active, in the same transaction as the revoke.
+			// An unknown or already-revoked label leaves every outbound row alone, including an alias of the same name.
+			const [, revoked] = await ctx.DB.batch([
+				ctx.DB.prepare(
+					`UPDATE outbound SET push_token_hash = NULL
+					 WHERE peer = ? AND EXISTS (SELECT 1 FROM peers WHERE label = ? AND revoked_at IS NULL)`,
+				).bind(label, label),
+				ctx.DB.prepare("UPDATE peers SET revoked_at = ? WHERE label = ? AND revoked_at IS NULL").bind(now, label),
+			]);
+			if (changed(revoked) !== 1) {
 				const ex: Json = await ctx.DB.prepare("SELECT revoked_at FROM peers WHERE label = ?").bind(label).first();
 				return json({ revoked: false, error: ex ? `the token with label ${label} was already revoked (${ex.revoked_at})` : `no active token with label ${label} (see token list)` }, 404);
 			}

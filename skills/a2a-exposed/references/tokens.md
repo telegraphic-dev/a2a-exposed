@@ -6,5 +6,5 @@ Issue or rotate tokens only when the user asks. All access changes require user 
 | --- | --- |
 | `npx -y a2a-exposed@latest token issue <label>` | Prints a new token (`a2aow_...`) once on stdout. Only its SHA-256 hash is stored. Fails when the label is already active |
 | `npx -y a2a-exposed@latest token list` | Labels, creation time, active or revoked, and `via pairing: code ...` for tokens created by pairing |
-| `npx -y a2a-exposed@latest token revoke <label>` | Takes effect immediately: the peer gets 401. An unknown or already revoked label exits 1 |
+| `npx -y a2a-exposed@latest token revoke <label>` | Takes effect immediately: the peer gets 401, including a push reply to a task already sent. An unknown or already revoked label exits 1 |
 | `npx -y a2a-exposed@latest token rotate <label>` | Issues a new token and invalidates the old one |
