@@ -93,6 +93,7 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
            [--cli-command CMD] [--debounce S] [--max-per-hour N]
                                 save wake settings, upload wake secrets from env, and redeploy (one step)
                                 openbot: human supplies WAKE_HMAC_SECRET via protected env/secret storage, never chat or argv
+                                the Worker refuses unsigned openbot wakes (a webhook key is not a signing secret)
                                 --max-per-hour  hourly cap; 0 or unset is unlimited, except Claude Code,
                                                which defaults to 25 when this is unset
   wake preview                  rendered wake request (a credential is Bearer •••• or ••••, none of the secret)

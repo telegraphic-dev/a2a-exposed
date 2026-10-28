@@ -4,6 +4,9 @@ All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.
 
 ## Unreleased
 
+- **Wake settings API.** Control-core accepts encrypted signing secrets and an optional tested configuration version. Blank secrets are reused only for the same destination and authentication mode; removal clears wake credentials. Existing ciphertext remains compatible. Failed wake pushes retain the outbox without logging provider error text.
+- **OpenBot signing and replay.** The Worker refuses unsigned OpenBot wakes. Setup docs explain timestamp checks, per-attempt delivery IDs and task-level retry idempotency. Hosted OpenBot evidence is scoped to webhook wakes; self-hosted 0.8.19 retains its pairing/messaging/wake evidence.
+
 - **Setup feedback (#148).** The setup skill has a "When something goes wrong" section: after a failed setup step, the agent offers to file a redacted public report with `feedback`, `send_feedback`, or the a2a.exposed feedback form, and sends it only after the human agrees.
 - **Hosted OpenBot tested.** The compatibility table and OpenBot setup docs list hosted OpenBot wakes at a2a.exposed as tested end to end.
 - **OpenBot tested (#143).** Mark OpenBot tested end to end on self-hosted 0.8.19: pairing, messaging, and webhook wakes with the `openbot` preset.

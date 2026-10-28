@@ -35,3 +35,27 @@ From this directory, `npm test` runs the Node tests and a Vitest suite inside Mi
 Pass `refreshAccess` to supply the access token from the caller's cache. A cache hit sets `rotated: false`. A hook that throws is recorded as a removal failure. Pass `accessToken` to use a token the caller already holds. With both omitted, the step refreshes the stored grant once and reuses that access token until the wait ends. `onEvent` receives `removal_step` and `removal_step_failed` with the step, HTTP status, Cloudflare error code, seconds since consent, rotation count, and lock outcome.
 
 A refresh response that includes `refresh_token` replaces the stored token. A response that omits it leaves the stored token in place. `refreshTokenAfterResponse` applies that rule to a token response the caller handles itself. The refresh request omits `scope`. A response that omits `scope` leaves the stored scopes in place. Migration `0015_cloudflare_grant_access.sql` stores the sealed access token on this library's own storage, with the other files in `migrations/`. The inbox Worker D1 is unchanged.
+
+## Tenant wake settings
+
+`saveWakeSettings(db, plane, secretsKey, input)` accepts `WakeSaveInput`: accountId,
+name, url, preset, keyHeader, key, optional hmacSecret and optional expectedVersion.
+The caller authenticates the account, confirms the human's choice, and validates
+public DNS before saving; the Worker independently enforces its wake target policy
+and pinned delivery. No public or owner HTTP route is added by this function.
+
+`hmacSecret` is stored as encrypted `WAKE_HMAC_SECRET`, never in public config.
+OpenBot requires a signing secret and rejects nonempty key/keyHeader inputs.
+Blank credentials retain a saved value only for the same URL and preset; a webhook
+key also requires the same key header. Removing the URL clears both wake
+credentials; other sealed event and Access fields are preserved. Legacy plaintext
+secrets migrate on save; existing ciphertext takes precedence and an unreadable
+blob fails closed. The v1 ciphertext format and Worker reader remain unchanged.
+
+Pass `expectedVersion` from the settings the caller tested to reject a stale save
+with `conflict`. The caller still verifies its short-lived signed test receipt;
+this version check does not replace authentication, confirmation or test proof.
+The database update and outbox enqueue are atomic, with optimistic version checks.
+A failed push leaves the outbox for retry and logs a generic failure code, including on outbox retries.
+Optional fields preserve the call shape for existing importers; all importers use
+the same credential-reuse rules, including callers that omit the new fields.

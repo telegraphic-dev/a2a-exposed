@@ -24,7 +24,7 @@ export {
 	wakeSettingsOf,
 	wakeUrlProblem,
 } from "../tenants/wake.ts";
-export type { WakeSave, WakeSettings } from "../tenants/wake.ts";
+export type { WakeSave, WakeSaveInput, WakeSettings } from "../tenants/wake.ts";
 export {
 	MAX_WAKE_PLAIN,
 	MAX_WAKE_SEALED,

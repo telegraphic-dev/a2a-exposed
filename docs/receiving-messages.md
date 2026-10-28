@@ -133,6 +133,20 @@ The body is serialized once, signed, and sent as the same UTF-8 bytes.
 `wake preview` shows a sample delivery ID and the canonical input description
 `<timestamp>.<delivery-id>.<exact-body-bytes>` with the signature masked.
 
+The Worker refuses to render or send an OpenBot wake without a nonblank
+`WAKE_HMAC_SECRET`; a webhook key or Access service token cannot replace it.
+Receivers verify the HMAC over the exact UTF-8 body before parsing or acting on it,
+reject missing/invalid signatures and timestamps outside a bounded clock window
+(for example, ±300 seconds), and atomically deduplicate accepted delivery IDs for
+at least that window. Keep clocks synchronized. The timestamp is Unix seconds;
+`occurredAt` is informational, not a substitute for the signed timestamp.
+
+Each rendered HTTP attempt gets a fresh random delivery ID, including retries.
+A repeated copy of the same signed attempt has the same ID and must not run twice.
+A retry after HTTP 429/503 has a new ID, so delivery-ID deduplication alone does not
+make a logical wake exactly once: process inbox tasks by their task IDs and current
+state. Preview's fixed `preview` ID is a sample, never a sent delivery.
+
 Give the routine access to the CLI and its protected owner configuration. Its
 saved instructions run `inbox` on a wake, handle new tasks and reply, inspect
 outbound updates, and ask the human about pairing requests. Peer text remains
@@ -150,9 +164,10 @@ A failed peer push (including HTTP 530 from a tunnel) does not by itself mean a
 reply is lost. Check the task with `GetTask` (CLI `poll`) before resending: a
 completed reply can remain stored and retrievable even when push delivery fails.
 
-OpenBot is tested end to end on self-hosted a2a-exposed 0.8.19 and on hosted
-a2a.exposed: pairing, messaging, and webhook wakes with the `openbot` preset. Use the routine's
-current settings for its URL and secret.
+OpenBot pairing, messaging, and `openbot` webhook wakes are tested end to end on
+self-hosted a2a-exposed 0.8.19. Hosted a2a.exposed has verified OpenBot webhook
+wakes; that evidence does not establish a complete hosted A2A exchange. Use the
+routine's current settings for its URL and secret.
 
 ### `generic`
 
