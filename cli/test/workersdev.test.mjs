@@ -8,7 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseEnv } from "../lib/config.mjs";
 import { baseUrlFor, compactPrompt, needsSubdomain, noSubdomainHelp, parseWorkersDevSubdomain, LABEL_RE, REGISTRATION_STEPS, UNAVAILABLE_RE } from "../lib/workersdev.mjs";
-import { migrationStderr, withoutWranglerConfigMention } from "../lib/deploy.mjs";
+import { deployArgs, VERSION, migrationStderr, withoutWranglerConfigMention } from "../lib/deploy.mjs";
 
 const BIN = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "bin", "a2a-exposed.mjs");
 
@@ -57,6 +57,7 @@ const STUB = `#!/bin/bash
 log=$STUB_DIR/calls.log
 prof=""; for a in "$@"; do [ "$prev" = --profile ] && prof=$a; prev=$a; done
 echo "$1 $2 profile=$prof sub=\${A2A_WORKERS_DEV_SUBDOMAIN:-} host=\${A2A_HOSTNAME:-} retired=\${A2A_RETIRED_HOSTNAMES:-}" >> "$log"
+[ "$1" = deploy ] && printf '%s\\n' "$@" >> "$STUB_DIR/deploy-args.log"
 [ "$1" = deploy ] && echo "public=\${A2A_PUBLIC_URL:-}\${PUBLIC_URL:-}" >> "$STUB_DIR/deploy-env.log"
 case "$1 $2" in
   "auth whoami")
@@ -134,6 +135,9 @@ test("init without --hostname: learns the existing subdomain from cf, saves the 
 	assert.match(r.stderr, /Like it\? Star us: https:\/\/github\.com\/telegraphic-dev\/a2a-exposed/);
 	assert.ok(!/Using fallback value in non-interactive context/.test(r.stderr), r.stderr);
 	assert.equal(r.stdout.includes("Like it?"), false);
+	const args = fs.readFileSync(path.join(s.dir, "deploy-args.log"), "utf8");
+	assert.match(args, new RegExp(`--tag\\na2a-exposed-${VERSION.replaceAll(".", "\\.")}`));
+	assert.match(args, new RegExp(`--message\\na2a-exposed ${VERSION.replaceAll(".", "\\.")} \\d{4}-\\d{2}-\\d{2}T`));
 	const c = s.config();
 	assert.equal(c.A2A_BASE_URL, "https://wdtest.acme.workers.dev");
 	assert.equal(c.A2A_WORKERS_DEV_SUBDOMAIN, "acme");
@@ -355,4 +359,11 @@ test("wake set accepts openbot and rejects unknown presets without exposing secr
 	const invalid = await s.cli([...args, "unknown-preset"]);
 	assert.notEqual(invalid.status, 0);
 	assert.match(invalid.stderr, /unknown preset/);
+});
+
+test("deploy arguments carry the package version tag and dated message", () => {
+	const date = "2026-10-28T12:00:00.000Z";
+	assert.deepEqual(deployArgs(VERSION, date), ["deploy", "--message", `a2a-exposed ${VERSION} ${date}`, "--tag", `a2a-exposed-${VERSION}`]);
+	assert.match(deployArgs(VERSION, date)[4], /^[A-Za-z0-9._-]+$/);
+	assert.throws(() => deployArgs("bad+tag", date), /invalid Worker version tag/);
 });

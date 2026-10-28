@@ -157,3 +157,36 @@ test("status without a deployment names the config directory and points at init 
 	assert.equal(j.ok, false);
 	assert.equal(j.deployed, false);
 });
+
+test("status reports Worker version, stale exit code, and cached latest with notices disabled", (t) => {
+	const s = sandbox(); t.after(s.done);
+	const base = "https://agent.example.com";
+	fs.writeFileSync(path.join(s.dir, "config.env"), `A2A_BASE_URL=${base}\nA2A_OWNER_TOKEN=dummy-owner\nA2A_WORKER_NAME=test-worker\nA2A_D1_ID=dummy-db\n`, { mode: 0o600 });
+	const routesFile = path.join(s.dir, "routes.json");
+	s.env.NODE_OPTIONS = `--import=${fileURLToPath(new URL("./fetch-stub.mjs", import.meta.url))}`;
+	s.env.A2A_TEST_FETCH_ROUTES = routesFile;
+	s.env.XDG_CACHE_HOME = path.join(s.dir, "cache");
+	const cache = path.join(s.env.XDG_CACHE_HOME, "a2a-exposed", "update-check.json");
+	fs.mkdirSync(path.dirname(cache), { recursive: true });
+	fs.writeFileSync(cache, JSON.stringify({ latest: "99.0.0", checkedAt: 1 }));
+	const routes = {
+		[`${base}/.well-known/agent-card.json`]: { status: 200, body: { name: "Test", supportedInterfaces: [{ url: base, protocolVersion: "1.0" }] } },
+		[`${base}/health`]: { status: 200, body: { ok: true, version: "0.0.1" } },
+		[`${base}/owner/wake/preview`]: { status: 200, body: { configured: true, preset: "grok-bot", hasKey: true } },
+	};
+	fs.writeFileSync(routesFile, JSON.stringify(routes));
+	const r = s.cli(["status", "--json"]);
+	assert.equal(r.status, 1, r.stderr);
+	const j = JSON.parse(r.stdout);
+	assert.equal(j.workerVersion, "0.0.1");
+	assert.equal(j.ok, false);
+	assert.match(j.nextStep, /older than this CLI.*deploy/);
+	assert.ok(j.also.includes("a2a-exposed 99.0.0 is available: run npx -y a2a-exposed@latest deploy"));
+	assert.deepEqual(JSON.parse(fs.readFileSync(cache, "utf8")), { latest: "99.0.0", checkedAt: 1 }, "status only reads the cache");
+	assert.match(s.cli(["status"]).stdout, /worker version: +0\.0\.1 \(CLI /);
+	routes[`${base}/health`] = { status: 503, body: {} };
+	fs.writeFileSync(routesFile, JSON.stringify(routes));
+	const unreachable = s.cli(["status", "--json"]);
+	assert.equal(unreachable.status, 0, unreachable.stderr);
+	assert.equal(JSON.parse(unreachable.stdout).workerVersion, null);
+});

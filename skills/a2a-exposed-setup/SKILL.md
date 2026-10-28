@@ -133,3 +133,5 @@ Details are in [Feedback](https://github.com/telegraphic-dev/a2a-exposed/blob/ma
 Day-to-day use is [../a2a-exposed/SKILL.md](../a2a-exposed/SKILL.md).
 
 OpenBot uses preset `openbot` and `WAKE_HMAC_SECRET`. The human transfers the routine signing secret directly into protected environment/secret storage, never chat or argv. Follow the [OpenBot checklist](references/wake.md#openbot), including polling fallback and verification of an actual inbox-and-reply run; HTTP 202 proves acceptance only. The Worker refuses unsigned OpenBot wakes; the reference explains signed timestamps, delivery-ID replay protection, and retry idempotency.
+
+`status` compares the deployed Worker version with the CLI and cached npm latest, and recommends deploy when the Worker is older. Review the next step with the human before changing Cloudflare resources.

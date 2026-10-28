@@ -7,6 +7,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
+import { VERSION } from "../src/version.ts";
 import worker from "../src/index.ts";
 import { sha256 } from "../src/a2a.ts";
 import { sealWakeSecrets } from "../src/wake-secrets.ts";
@@ -81,6 +82,7 @@ test("gates unset: the hosted entry matches the self-host handler, including TEN
 	const base = "https://agent.example.com";
 	const nodeEnv = { DB: d1(MIGRATIONS), PUBLIC_URL: base, OWNER_TOKEN: "owner-secret" };
 	const nodeHealth = await text(await worker.fetch(new Request(base + "/health"), nodeEnv as never, ectx as never));
+	assert.deepEqual(JSON.parse(nodeHealth), { ok: true, version: VERSION, publicUrl: base, mode: "inbox", mcp: true });
 	const nodeDenied = await text(await worker.fetch(new Request(base + "/", {
 		method: "POST", headers: { "content-type": "application/json" },
 		body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "message/send", params: {} }),
@@ -179,6 +181,9 @@ test("per-tenant SQLite: directory, config push, and isolation", async (t) => {
 	const bobPush = await push("id-bobby", { version: 1, tenantId: "id-bobby", name: "bobby", status: "active", ownerTokenHash: hashB, config: { AGENT_NAME: "Bob" } });
 	assert.equal(bobPush.result.applied, true, JSON.stringify(bobPush.result));
 	await kv.put("tenant:bobby", JSON.stringify({ id: "id-bobby", status: "active", region: "", version: 1 }));
+
+	assert.deepEqual(await (await mf.dispatchFetch("https://alice.example.com/health")).json(),
+		{ ok: true, version: VERSION, publicUrl: "https://alice.example.com", mode: "inbox", mcp: true });
 
 	const card = async (name: string, headers?: HeadersInit) => (await mf.dispatchFetch(`https://${name}.example.com/.well-known/agent-card.json`, { headers })).json() as Promise<{ name: string }>;
 	const aliceCard = await mf.dispatchFetch("https://alice.example.com/.well-known/agent-card.json");

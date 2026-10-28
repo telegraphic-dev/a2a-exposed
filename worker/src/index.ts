@@ -4,6 +4,7 @@
 // Worker serves a rewritten agent card and device-flow pairing, and forwards authenticated JSON-RPC to the upstream.
 // Handlers take a TenantContext (tenancy.ts) built from the Worker bindings. With the hosted gates unset, that
 // context is the single self-host tenant and behaviour matches a Worker that read env.* directly.
+import { VERSION } from "./version.ts";
 import * as A from "./a2a.ts";
 import * as F from "./facade.ts";
 import { renderWake, redact, cloudflareErrorHint, wakeUrlIsTunnelHost, defaultDebounceSeconds, defaultMaxPerHour, type WakeConfig, type WakeEvent } from "./wake.ts";
@@ -3404,7 +3405,7 @@ async function handle(req: Request, ctx: TenantContext, ectx: ExecutionContext, 
 		// legacy discovery path (A2A 0.2): the 0.3-shaped card that clients of that era parse
 		if (req.method === "GET" && path === "/.well-known/agent.json")
 			return json(agentCard03(ctx, await agentCard(ctx)), 200, { "access-control-allow-origin": "*", "cache-control": cardCacheControl(ctx) });
-		if (req.method === "GET" && path === "/health") return json({ ok: true, publicUrl: ctx.PUBLIC_URL, mode: proxyMode(ctx) ? "proxy" : "inbox", mcp: mcpOn(ctx) });
+		if (req.method === "GET" && path === "/health") return json({ ok: true, version: VERSION, publicUrl: ctx.PUBLIC_URL, mode: proxyMode(ctx) ? "proxy" : "inbox", mcp: mcpOn(ctx) });
 		if (path === "/mcp") return mcpOn(ctx) ? await handleMcp(req, ctx, ectx, url) : json({ error: "not_found", error_description: "the MCP server is turned off on this A2A endpoint (MCP=off)" }, 404);
 		if (mcpOn(ctx)) {
 			if (req.method === "GET" && path === "/.well-known/oauth-protected-resource/mcp") return json(mcpResourceMetadata(ctx), 200, { "access-control-allow-origin": "*" });

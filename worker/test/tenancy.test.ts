@@ -1,5 +1,6 @@
 // Tenant context: gates default off, self-host owner auth and peer-token key stay compatible, hosted uses a hash
 // and TENANT_SECRETS_KEY. Run: npm test
+import { VERSION } from "../src/version.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import worker from "../src/index.ts";
@@ -258,7 +259,7 @@ test("fetch path: gates set or unset, the self-host Worker still answers from OW
 	const plain = await call(base, "/health");
 	const reserved = await call({ ...base, ...gates }, "/health");
 	const empty = await call({ ...base, TENANCY: "", QUOTAS: "", DATA_REGION: "", SIGNUP_URL: "" }, "/health");
-	assert.deepEqual(plain.data, { ok: true, publicUrl: BASE, mode: "inbox", mcp: true });
+	assert.deepEqual(plain.data, { ok: true, version: VERSION, publicUrl: BASE, mode: "inbox", mcp: true });
 	assert.deepEqual(reserved.data, plain.data);
 	assert.deepEqual(empty.data, plain.data);
 

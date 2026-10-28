@@ -11,6 +11,14 @@ import { readHidden } from "./pair.mjs";
 import * as WD from "./workersdev.mjs";
 import { printStar } from "./feedback.mjs";
 
+export const VERSION = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
+
+/** Arguments shared by deploy attempts, including workers.dev registration retries. */
+export function deployArgs(version, isoDate) {
+	if (!/^[A-Za-z0-9._-]+$/.test(version)) throw new Error("invalid Worker version tag");
+	return ["deploy", "--message", `a2a-exposed ${version} ${isoDate}`, "--tag", `a2a-exposed-${version}`];
+}
+
 const PKG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 /** Each Claude Code routine fire is a new cloud session: a 2xx only means a session started. */
 export const CLAUDE_CODE_NOTE = [
@@ -392,7 +400,7 @@ function runTee(cmd, args, { cwd, env }) {
 /** cf deploy (secrets via a temporary chmod-600 file). If the account has no workers.dev subdomain yet and
  *  `register` names one, retry through cf's own registration prompt. Returns cf's output. */
 async function cfDeploy(dir, secrets, { register } = {}) {
-	const base = ["deploy", "--message", `a2a-exposed ${new Date().toISOString()}`];
+	const base = deployArgs(VERSION, new Date().toISOString());
 	const go = async (file) => {
 		const args = cfArgs(file ? [...base, "--secrets-file", file] : base);
 		let r = await runTee(cfBin(dir), args, { cwd: dir, env: deployEnv() });

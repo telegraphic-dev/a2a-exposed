@@ -8,6 +8,17 @@ import { CLI, cardUrlProblem, cfErrorCode, describeHttp, die, fingerprint, httpJ
 import { baseUrl, owner, ownerTry } from "./commands.mjs";
 import * as D from "./deploy.mjs";
 import * as T from "./tunnel.mjs";
+import { cacheFile, readCache, newer } from "./update.mjs";
+
+/** Public health probe. Only a valid health answer establishes missing version reporting. */
+export async function checkHealth(base) {
+	try {
+		const { status, data } = await httpJson(`${base}/health`, { timeout: 15000 });
+		if (status === 200 && data?.ok === true)
+			return { ok: true, version: typeof data.version === "string" && data.version ? data.version : null };
+	} catch { /* unreachable: version stays unknown */ }
+	return { ok: false, version: null };
+}
 
 /** Presets whose webhook usually listens only locally: wakes need the tunnel (or another reverse proxy). */
 export const LOCAL_PRESETS = ["openclaw-wake", "openclaw-agent", "hermes"];
@@ -111,6 +122,9 @@ export function secretsPropagating(tunnel, now = Date.now()) {
  *  as separate lines (so the next step stays one short instruction). */
 export function nextStep(s) {
 	const n = nextStepCore(s);
+	const version = s.cliVersion || D.VERSION;
+	if (s.workerVersion && s.latestVersion && newer(s.latestVersion, s.workerVersion) && !newer(s.workerVersion, version))
+		n.also.push(`a2a-exposed ${s.latestVersion} is available: run npx -y a2a-exposed@latest deploy`);
 	const sh = (s.peerTokenShadowed || []).map((k) => `${k} is set in the environment and overrides the different peer token saved in ${s.configFile} (e.g. a stale value from before \`connect\` stored a new one): send/poll use the environment value. Unset ${k} where it is set to use the saved token`);
 	return sh.length ? { ...n, also: [...n.also, ...sh] } : n;
 }
@@ -133,6 +147,11 @@ function nextStepCore(s) {
 		return fail(/HTTP 401/.test(s.ownerApi.error)
 			? `the owner token in ${s.configFile} does not match the Worker: run \`${CLI} init --rotate-owner-token\` from the machine that owns this deployment`
 			: `the owner API failed (${s.ownerApi.error}): run \`${CLI} deploy\``);
+	const version = s.cliVersion || D.VERSION;
+	if (s.workerVersion && newer(version, s.workerVersion))
+		return fail(`the deployed Worker is ${s.workerVersion}, older than this CLI (${version}): run \`${CLI} deploy\``);
+	if (s.health?.ok && s.health.version === null)
+		return fail(`the deployed Worker predates version reporting (older than ${version}): run \`${CLI} deploy\``);
 	// proxy / expose mode: the upstream answers peers, so wakes are optional (pairing notifications only)
 	const fc = s.facade;
 	if (fc) {
@@ -220,12 +239,14 @@ export async function collect() {
 		upstream: C.get("A2A_UPSTREAM_URL") || null, facade: null, upstreamVerify: null, upstreamVerifyError: "", facadePeerAuth: null,
 		upstreamNoToken: C.get("A2A_UPSTREAM_NO_TOKEN") === "1", localUpstreamToken: fingerprint(process.env.UPSTREAM_TOKEN),
 		peerTokenShadowed: shadowedPeerTokens(),
-		mcp: "unknown",
+		mcp: "unknown", health: null, workerVersion: null, cliVersion: D.VERSION, latestVersion: readCache(cacheFile())?.latest || null,
 	};
 	const envBase = (process.env.A2A_BASE_URL || "").replace(/\/$/, "");
 	if (envBase && envBase !== s.baseUrlSaved) s.baseUrlEnv = envBase;
 	if (!s.deployed || !s.baseUrl) return s;
 	s.card = await checkCard(s.baseUrl);
+	s.health = await checkHealth(s.baseUrl);
+	s.workerVersion = s.health.version;
 	if (s.hasOwnerToken) {
 		try {
 			const p = await owner("GET", "/owner/wake/preview");
@@ -335,6 +356,7 @@ export async function status(o) {
 		if (s.deployed && s.baseUrl) {
 			rows.push(["agent card", !s.card.ok ? `FAILED: ${s.card.error}` : s.card.urlProblem ? `WRONG URL: "${s.card.name}", but ${s.card.urlProblem}`
 				: `OK: "${s.card.name}" (A2A ${s.card.versions.join(", ") || "?"})`]);
+			rows.push(["worker version", `${s.workerVersion || "unknown"} (CLI ${s.cliVersion})`]);
 			rows.push(["owner API", s.ownerApi.ok ? "OK" : `FAILED: ${s.ownerApi.error}`]);
 			if (s.upstream) {
 				const f = s.facade || {};
