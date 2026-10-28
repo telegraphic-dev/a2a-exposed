@@ -134,7 +134,7 @@ The owner token authenticates these commands.
 | `token issue <label>` | Print a new peer token once. Fails if the label is active. Manual fallback to `connect` |
 | `token rotate <label>` | Replace that label's token |
 | `token list` | Labels, how each was created (pairing code and date), and MCP connectors (`mcp-*`) |
-| `token revoke <label>` | Immediate. Works for peer labels and MCP connectors. An unknown label exits 1 |
+| `token revoke <label>` | Immediate. A later push reply to a task already sent is rejected. Works for peer labels and MCP connectors. An unknown label exits 1 |
 | `peers add <alias> <url> [--token-env VAR \| --token-stdin]` | Store an outbound peer. The token is `PEER_<ALIAS>_TOKEN` in the config file |
 | `peers list` / `peers rm <alias>` | List or remove |
 | `peers sync [alias...]` / `peers unsync <alias>` | Upload peers so the MCP connector can send to them. URL and token are encrypted on the Worker with a key derived from the owner token. Re-run after `connect`, a token change, or an owner-token rotation |

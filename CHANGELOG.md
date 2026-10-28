@@ -2,6 +2,10 @@
 
 All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.3.x), Worker template, control core, and skills. Versions follow [semver](https://semver.org); a `v*` tag publishes the CLI and `@a2a-exposed/control-core` to npm (see [Releases](docs/README.md#releases)).
 
+## Unreleased
+
+- **Revoked push replies (#164).** Revoking a peer label rejects a later push reply to a task already sent. `POST /push` with that notification token is HTTP 401 and stores nothing. A peer that is still active can still push.
+
 ## 0.8.21 - 2026-10-28
 
 - **Worker version (#151).** Public `/health` reports the inbox build version. `status` detects stale Workers, recommends deploy, and uses cached npm latest for upgrade hints. Deploy adds a Worker version tag and a versioned, dated message.
