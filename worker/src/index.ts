@@ -7,7 +7,7 @@
 import * as A from "./a2a.ts";
 import * as F from "./facade.ts";
 import { renderWake, redact, cloudflareErrorHint, wakeUrlIsTunnelHost, defaultDebounceSeconds, defaultMaxPerHour, type WakeConfig, type WakeEvent } from "./wake.ts";
-import { fetchCheckedWake } from "./wake-target.ts";
+import { fetchCheckedPeer, fetchCheckedWake } from "./wake-target.ts";
 import * as P from "./pairing.ts";
 import * as M from "./mcp.ts";
 import { lookupDirectory, pinDirectoryRegion, tenantNameFromHost, tenantRegion } from "./directory.ts";
@@ -1104,6 +1104,131 @@ async function notifyPeer(ctx: TenantContext, ectx: ExecutionContext, t: Json): 
 	return results;
 }
 
+type ReplyDelivery = {
+	status: "delivered" | "stored-only" | "delivery-failed";
+	method: "push" | "a2a-message" | "stored";
+	taskId: string;
+	state: string;
+	target?: { alias?: string; host: string };
+	httpStatus?: number;
+	detail: string;
+};
+
+const DIRECT_REPLY_META = "a2a.exposed/reply-delivery";
+
+function safeTarget(alias: string | undefined, raw: string): { alias?: string; host: string } | undefined {
+	try { return { ...(alias ? { alias } : {}), host: new URL(raw).host }; } catch { return undefined; }
+}
+
+/** A paired endpoint fetch. Same-deployment tenants stay inside the Durable Object namespace. Every other host is
+ *  resolved once and the checked address is pinned to the socket; redirects are refused. */
+async function checkedPeerFetch(ctx: TenantContext, ectx: ExecutionContext, base: string, url: string, init: RequestInit): Promise<Response> {
+	let baseUrl: URL, target: URL;
+	try { baseUrl = new URL(base); target = new URL(url); } catch { throw new ToolError("peer endpoint is not a URL"); }
+	if (target.origin !== baseUrl.origin) throw new ToolError("peer card endpoint refused: it is on a different origin");
+	const why = peerUrlProblem(target.href);
+	if (why) throw new ToolError(`peer endpoint ${target.href} refused: ${why}`);
+	const internal = await fetchTenant(ctx, target, { ...init, redirect: "manual" });
+	if (internal) {
+		if (internal.status >= 300 && internal.status < 400) throw new ToolError("peer endpoint refused: redirects are not allowed");
+		return internal;
+	}
+	const checked = await fetchCheckedPeer(target.href, { ...init, redirect: "manual" });
+	if ("refused" in checked) throw new ToolError(`peer endpoint refused: ${checked.refused}`);
+	return checked.response;
+}
+
+async function checkedPeerCard(ctx: TenantContext, ectx: ExecutionContext, base: string): Promise<Json> {
+	for (const p of ["/.well-known/agent-card.json", "/.well-known/agent.json"]) {
+		try {
+			const r = await checkedPeerFetch(ctx, ectx, base, new URL(p, base).href, { headers: { accept: "application/json" } });
+			if (r.status !== 200) continue;
+			const text = (await r.text()).slice(0, 1 << 20);
+			const d = JSON.parse(text);
+			if (d && typeof d === "object") return d;
+		} catch { /* default endpoint below */ }
+	}
+	return null;
+}
+
+/** The exact inbound label must still have a live token here and an outbound pairing whose token we can decrypt.
+ *  A claimed card URL or a tokenless outbound entry is never enough. */
+async function replyPeer(ctx: TenantContext, label: string): Promise<{ alias: string; url: string; token: string } | null> {
+	const row: Json = await ctx.DB.prepare(
+		`SELECT o.alias, o.url, o.token_enc FROM outbound_peers o
+		 JOIN peers p ON p.label = o.alias
+		 WHERE o.alias = ? AND o.token_enc IS NOT NULL AND p.revoked_at IS NULL`,
+	).bind(label).first();
+	if (!row) return null;
+	const key = await ctx.peerKey();
+	const token = key ? await M.openPeerTokenWithKey(key, row.alias, row.token_enc) : null;
+	return token ? { alias: row.alias, url: row.url, token } : null;
+}
+
+async function deliverReplyMessage(ctx: TenantContext, ectx: ExecutionContext, task: Json, message: Json, state: string, text: string): Promise<ReplyDelivery> {
+	if (task._push?.length) {
+		const pushed = await notifyPeer(ctx, ectx, task);
+		const failed = pushed.find((x: Json) => !x.ok);
+		const target = safeTarget(undefined, String((failed || pushed[0])?.url || ""));
+		const http = /HTTP (\d{3})/.exec(String((failed || pushed[0])?.info || ""));
+		return {
+			status: failed ? "delivery-failed" : "delivered", method: "push", taskId: task.id, state,
+			...(target ? { target } : {}), ...(http ? { httpStatus: Number(http[1]) } : {}),
+			detail: failed ? "A task push failed; the reply remains stored on the task." : "Delivered as the task's existing push update.",
+		};
+	}
+	if (task.metadata?.[DIRECT_REPLY_META]) return {
+		status: "stored-only", method: "stored", taskId: task.id, state,
+		detail: "Stored on the task; a directly delivered reply is not delivered again.",
+	};
+	const peer = await replyPeer(ctx, task._peer);
+	if (!peer) return {
+		status: "stored-only", method: "stored", taskId: task.id, state,
+		detail: "Stored on the task for the peer to fetch; no live paired outbound address with a held token was found.",
+	};
+	const target = safeTarget(peer.alias, peer.url);
+	try {
+		const card = await checkedPeerCard(ctx, ectx, peer.url);
+		const [endpoint, version] = M.pickEndpoint(peer.url, card);
+		if (new URL(endpoint).origin !== new URL(peer.url).origin) throw new ToolError("peer card endpoint refused: it is on a different origin");
+		const v1 = version.startsWith("1");
+		const direct: Json = {
+			messageId: message.messageId, role: v1 ? "ROLE_USER" : "user", contextId: task.contextId,
+			referenceTaskIds: [task.id],
+			parts: v1 ? [{ text }] : [{ kind: "text", text }],
+			metadata: { [DIRECT_REPLY_META]: { taskId: task.id, messageId: message.messageId, state } },
+		};
+		if (!v1) direct.kind = "message";
+		const directMetadata = { [DIRECT_REPLY_META]: { taskId: task.id, messageId: message.messageId, state } };
+		const headers: Record<string, string> = {
+			"content-type": "application/json", accept: "application/json", "a2a-version": v1 ? "1.0" : "0.3",
+			authorization: `Bearer ${peer.token}`,
+		};
+		const response = await checkedPeerFetch(ctx, ectx, peer.url, endpoint, {
+			method: "POST", headers,
+			body: JSON.stringify({ jsonrpc: "2.0", id: message.messageId, method: v1 ? "SendMessage" : "message/send",
+				params: { message: direct, metadata: directMetadata, configuration: v1 ? { returnImmediately: true } : { blocking: false } } }),
+		});
+		const httpStatus = response.status;
+		const raw = (await response.text()).slice(0, 1 << 20);
+		let body: Json = null;
+		try { body = JSON.parse(raw); } catch { /* failure below */ }
+		if (httpStatus !== 200 || !body || typeof body !== "object" || body.error) return {
+			status: "delivery-failed", method: "a2a-message", taskId: task.id, state, ...(target ? { target } : {}), httpStatus,
+			detail: "The paired peer did not accept the A2A message; the reply remains stored on the task.",
+		};
+		return {
+			status: "delivered", method: "a2a-message", taskId: task.id, state, ...(target ? { target } : {}), httpStatus,
+			detail: "Delivered as an A2A message in the same context, referencing the original task.",
+		};
+	} catch (e: any) {
+		return {
+			status: "delivery-failed", method: "a2a-message", taskId: task.id, state, ...(target ? { target } : {}),
+			detail: `${scrubSecretText(String(e?.message || "delivery failed")).slice(0, 200)}; the reply remains stored on the task.`,
+		};
+	}
+}
+
 /** State and text of one pushed task, in the internal shape history and the inbox store.
  *  A full task or a status update carries both. A message and an artifact update carry text and no task state. */
 function pushUpdateView(body: Json): { state: string | null; text: string } {
@@ -1436,15 +1561,52 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			const state = b.state || "completed";
 			if (!["completed", "input-required", "failed", "rejected", "working"].includes(state)) return json({ error: "bad state" }, 400);
 			if (typeof b.text !== "string" || !b.text) return json({ error: "text required" }, 400);
+			const turn = [...t.history].reverse().find((x: Json) => x.role === "user")?.messageId || t.id;
+			const deliveryKey = await A.sha256(JSON.stringify([t.id, turn, state, b.text]));
+			let previous: Json = await ctx.DB.prepare("SELECT message_id, result_json, updated_at FROM reply_deliveries WHERE delivery_key = ?").bind(deliveryKey).first();
+			if (previous?.result_json) return json({ task: ownerTaskView(t), delivery: JSON.parse(previous.result_json), idempotent: true });
+			if (previous && Date.now() - Date.parse(previous.updated_at) > 20000) {
+				const storedMessage = t.history.find((x: Json) => x.messageId === previous.message_id);
+				if (storedMessage) {
+					const recovered: ReplyDelivery = {
+						status: "delivery-failed", method: t._push?.length ? "push" : "a2a-message", taskId: t.id, state,
+						detail: "The earlier delivery result is uncertain, so it was not sent again; the reply remains stored on the task.",
+					};
+					await ctx.DB.prepare("UPDATE reply_deliveries SET result_json = ?, updated_at = ? WHERE delivery_key = ? AND result_json IS NULL")
+						.bind(JSON.stringify(recovered), A.nowIso(), deliveryKey).run();
+					const settled: Json = await ctx.DB.prepare("SELECT result_json FROM reply_deliveries WHERE delivery_key = ?").bind(deliveryKey).first();
+					return json({ task: ownerTaskView(t), delivery: JSON.parse(settled.result_json), idempotent: true });
+				}
+				await ctx.DB.prepare("DELETE FROM reply_deliveries WHERE delivery_key = ? AND result_json IS NULL AND updated_at = ?")
+					.bind(deliveryKey, previous.updated_at).run();
+				previous = null;
+			}
 			if (A.TERMINAL.has(t.status.state) && !b.force) return json({ error: `task is already ${t.status.state}` }, 409);
 			const msg = { kind: "message", role: "agent", messageId: A.newId(), contextId: t.contextId, taskId: t.id, parts: [{ kind: "text", text: b.text }] };
+			const now = A.nowIso();
+			const claimed = await ctx.DB.prepare(
+				"INSERT INTO reply_deliveries (delivery_key, task_id, message_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
+			).bind(deliveryKey, t.id, msg.messageId, now, now).run();
+			if (claimed.meta.changes !== 1) {
+				const raced: Json = await ctx.DB.prepare("SELECT result_json FROM reply_deliveries WHERE delivery_key = ?").bind(deliveryKey).first();
+				if (raced?.result_json) return json({ task: ownerTaskView(await loadTask(ctx, t.id)), delivery: JSON.parse(raced.result_json), idempotent: true });
+				return json({ error: "this reply is already being delivered; retry to read its result" }, 409);
+			}
 			if (state === "completed" || b.artifact) t.artifacts.push({ artifactId: A.newId(), name: b.artifactName || "response", parts: [{ kind: "text", text: b.text }] });
 			t.history.push(msg);
-			t.status = { state, timestamp: A.nowIso(), message: msg };
+			t.status = { state, timestamp: now, message: msg };
 			await ctx.DB.batch([saveTaskStmt(ctx, t), msgStmt(ctx, t, msg),
 				histStmt(ctx, t.contextId, { dir: "out", peer: t._peer, taskId: t.id, role: "agent", state, text: b.text })]);
 			await ackPendingWakes(ctx, [{ taskId: t.id, contextId: t.contextId }]);
-			return json({ task: ownerTaskView(t), push: await notifyPeer(ctx, ectx, t) });
+			let delivery: ReplyDelivery;
+			try { delivery = await deliverReplyMessage(ctx, ectx, t, msg, state, b.text); }
+			catch {
+				delivery = { status: "delivery-failed", method: t._push?.length ? "push" : "a2a-message", taskId: t.id, state,
+					detail: "Delivery could not be completed; the reply remains stored on the task." };
+			}
+			await ctx.DB.prepare("UPDATE reply_deliveries SET result_json = ?, updated_at = ? WHERE delivery_key = ?")
+				.bind(JSON.stringify(delivery), A.nowIso(), deliveryKey).run();
+			return json({ task: ownerTaskView(t), delivery, idempotent: false });
 		}
 	}
 	if (seg[0] === "history" && seg[1] && m === "GET") {
@@ -1542,8 +1704,9 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 		const checked = ownerRpcBody(`POST /owner/mcp/${seg[1]}`, await body());
 		if (!checked.ok) return json({ error: checked.error }, 400);
 		try {
-			const text = await runTool(ctx, ectx, seg[1], checked.value);
-			return json({ text, isError: false });
+			const result = await runTool(ctx, ectx, seg[1], checked.value);
+			return json({ text: typeof result === "string" ? result : result.text, isError: false,
+				...(typeof result === "string" ? {} : { structuredContent: result.structuredContent }) });
 		} catch (e: any) {
 			if (e instanceof ToolError) return json({ text: `Error: ${e.message}`, isError: true });
 			throw e;
@@ -2913,7 +3076,9 @@ function newPushToken(): string {
 	return btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string, a: Json, grant?: Json): Promise<string> {
+type ToolRun = string | { text: string; structuredContent: Json };
+
+async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string, a: Json, grant?: Json): Promise<ToolRun> {
 	const enc = encodeURIComponent;
 	switch (name) {
 		case "inbox": {
@@ -2966,7 +3131,15 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 		case "reply": {
 			const state = argStr(a, "state", false) || "completed";
 			const r = must(await ownerCall(ctx, ectx, "POST", `/owner/tasks/${enc(A.checkId(argStr(a, "taskId"), "taskId"))}/reply`, { text: argStr(a, "text"), state }));
-			return M.toolText(`Replied; task ${r.task.id} is now ${r.task.status.state}.`, { push: r.push });
+			const d: ReplyDelivery = r.delivery;
+			const where = d.target ? `${d.target.alias ? `**${d.target.alias}** at ` : ""}\`${d.target.host}\`` : "the task";
+			const http = d.httpStatus ? ` (HTTP ${d.httpStatus})` : "";
+			const line = d.status === "delivered"
+				? `Task \`${d.taskId}\` is now ${d.state}. Reply stored and delivered to ${where} via ${d.method}${http}.`
+				: d.status === "delivery-failed"
+					? `Task \`${d.taskId}\` is now ${d.state}. Reply stored; delivery to ${where} failed${http}, so the stored reply was not lost.`
+					: `Task \`${d.taskId}\` is now ${d.state}. Reply stored for the peer to fetch.`;
+			return { text: `${line}\n\n${d.detail}`, structuredContent: d };
 		}
 		case "send": {
 			const peer = await outboundPeer(ctx, argStr(a, "to"));
@@ -3105,9 +3278,10 @@ async function callTool(ctx: TenantContext, ectx: ExecutionContext, grant: Json,
 	const args = params.arguments ?? {};
 	if (typeof args !== "object" || Array.isArray(args)) return { error: [M.ERR.INVALID_PARAMS, "arguments must be an object"] };
 	try {
-		const text = await runTool(ctx, ectx, name, args, grant);
+		const value = await runTool(ctx, ectx, name, args, grant);
 		log("mcp_tool", { label: grant.label, tool: name });
-		return { result: { content: [{ type: "text", text }], isError: false } };
+		return { result: { content: [{ type: "text", text: typeof value === "string" ? value : value.text }],
+			...(typeof value === "string" ? {} : { structuredContent: value.structuredContent }), isError: false } };
 	} catch (e: any) {
 		log("mcp_tool_failed", { label: grant.label, tool: name, error: String(e.message).slice(0, 200) });
 		return { result: { content: [{ type: "text", text: `Error: ${e.message}` }], isError: true } };

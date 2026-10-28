@@ -318,7 +318,7 @@ type Schema = Record<string, unknown>;
 const str = (description: string, extra: Schema = {}): Schema => ({ type: "string", description, ...extra });
 const ro = { readOnlyHint: true, destructiveHint: false, openWorldHint: false };
 
-export const TOOLS: { name: string; title: string; description: string; inputSchema: Schema; annotations: Schema }[] = [
+export const TOOLS: { name: string; title: string; description: string; inputSchema: Schema; outputSchema?: Schema; annotations: Schema }[] = [
 	{ name: "inbox", title: "Inbox", annotations: ro,
 		description: `Open tasks other agents sent to this A2A endpoint (state submitted or working), oldest first, one page at a time, plus a reply to a message you sent (kind "outbound") until this inbox lists it, plus pending pairing requests. When the result says more tasks are waiting, call inbox again with the cursor before you stop. Handle each inbound task, then answer it with reply. A reply to a message you sent: read it with history, and continue that conversation with send. ${RULES}`,
 		inputSchema: { type: "object", properties: {
@@ -338,9 +338,16 @@ export const TOOLS: { name: string; title: string; description: string; inputSch
 		description: "Tell the peer you are working on a task (state working; the peer is notified if it asked for push updates). Use for anything that takes more than a moment.",
 		inputSchema: { type: "object", properties: { taskId: str("Task id") }, required: ["taskId"], additionalProperties: false } },
 	{ name: "reply", title: "Reply to task", annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
-		description: `Answer an inbound task. state: completed (default; the text becomes the result), input-required (ask the peer a question), working, failed or rejected. The reply goes to the agent that sent the task. Don't include secrets or private data your human hasn't approved sharing. ${RULES}`,
+		description: `Answer an inbound task. state: completed (default; the text becomes the result), input-required (ask the peer a question), working, failed or rejected. The answer is always stored on the task. It uses the task's existing push update, or, when no push exists, an exact paired outbound peer with a held token; otherwise the peer fetches it. Don't include secrets or private data your human hasn't approved sharing. ${RULES}`,
 		inputSchema: { type: "object", properties: { taskId: str("Task id"), text: str("Reply text"),
-			state: str("New task state", { enum: ["completed", "input-required", "working", "failed", "rejected"] }) }, required: ["taskId", "text"], additionalProperties: false } },
+			state: str("New task state", { enum: ["completed", "input-required", "working", "failed", "rejected"] }) }, required: ["taskId", "text"], additionalProperties: false },
+		outputSchema: { type: "object", properties: {
+			taskId: str("Task that stores the reply"), state: str("Stored task state"),
+			status: str("Delivery outcome", { enum: ["delivered", "stored-only", "delivery-failed"] }),
+			method: str("Path used", { enum: ["push", "a2a-message", "stored"] }),
+			target: { type: "object", properties: { alias: str("Paired peer alias"), host: str("Destination host") }, required: ["host"], additionalProperties: false },
+			httpStatus: { type: "integer", minimum: 100, maximum: 599 }, detail: str("Safe delivery summary"),
+		}, required: ["taskId", "state", "status", "method", "detail"], additionalProperties: false } },
 	{ name: "send", title: "Send to peer", annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
 		description: `Send a message to a peer agent (alias from list_peers; only peers synced to this A2A endpoint with \`peers sync\`). When the peer's card advertises push notifications, the peer is asked to push its reply here, which then shows in history and in the inbox. Otherwise check the task with poll_outbound. Pass contextId to continue a conversation, taskId to answer a peer's input-required task. The conversation id stays the one returned. Returns the peer's task. Ask your human before sending anything consequential or private. ${RULES}`,
 		inputSchema: { type: "object", properties: { to: str("Peer alias"), text: str("Message text"), contextId: str("Continue this conversation"), taskId: str("Continue this peer task") }, required: ["to", "text"], additionalProperties: false } },

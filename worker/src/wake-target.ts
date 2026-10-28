@@ -199,6 +199,57 @@ async function responseForCaller(res: Response): Promise<Response> {
 	return new Response(merged, { status: res.status, headers });
 }
 
+/** Keep a bounded response body for an authenticated peer JSON-RPC call. The socket client enforces the
+ *  limit before this helper runs; copying detaches the returned body from the socket before it is closed. */
+async function peerResponseForCaller(res: Response): Promise<Response> {
+	const body = res.body ? await res.arrayBuffer() : null;
+	return new Response(body, { status: res.status, headers: new Headers(res.headers) });
+}
+
+async function deliverPinnedPeer(url: string, init: RequestInit, target: { ip: string; hostname: string }, connect: WakeConnect): Promise<Response> {
+	const client = new Client({
+		connect: dialChecked(target.ip, connect),
+		forceTunnel: true,
+		maxRedirects: 0,
+		maxBodyBytes: 1 << 20,
+		http2: false,
+		keepAlive: false,
+		timeouts: { totalMs: REQUEST_TIMEOUT_MS },
+	});
+	try {
+		const res = await client.fetch(url, { method: init.method, headers: init.headers, body: init.body, redirect: "manual" });
+		return await peerResponseForCaller(res);
+	} catch (e) {
+		if (e instanceof TlsError || e instanceof CertificateError) throw new Error("TLS Handshake Failed.");
+		throw e;
+	} finally {
+		await client.close().catch(() => {});
+	}
+}
+
+/** One authenticated peer request with DNS resolution pinned to the connected socket. Redirects are refused:
+ *  a bearer token and a reply must never be replayed at a card-selected second destination. */
+export async function fetchCheckedPeer(
+	url: string,
+	init: RequestInit,
+	deps: Pick<WakeDeps, "lookup" | "connect" | "deliver"> = {},
+): Promise<{ response: Response } | { refused: string }> {
+	const checked = await checkedWakeAddresses(url, deps.lookup ?? lookupAddresses);
+	if ("refused" in checked) return checked;
+	const target = { ip: checked.ips[0]!, hostname: checked.hostname };
+	const nextInit: RequestInit = { ...init, redirect: "manual" };
+	const response = deps.deliver
+		? await deps.deliver(url, nextInit, target)
+		: wakeNet.deliver
+			? await wakeNet.deliver(url, nextInit, target)
+			: await deliverPinnedPeer(url, nextInit, target, deps.connect ?? wakeNet.connect ?? await runtimeConnect());
+	if (response.status >= 300 && response.status < 400) {
+		await response.body?.cancel().catch(() => {});
+		return { refused: "redirects are not allowed" };
+	}
+	return { response };
+}
+
 function bodyBytes(body: BodyInit | null | undefined): Uint8Array {
 	if (body == null) return new Uint8Array();
 	if (typeof body === "string") return new TextEncoder().encode(body);

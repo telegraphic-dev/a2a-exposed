@@ -4,6 +4,7 @@ All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.
 
 ## Unreleased
 
+- **Reply delivery (#257).** A reply is always stored on its task. An existing task push stays the only delivery path when configured; otherwise an exact live paired peer whose outbound token is held receives one A2A message in the same context, referencing the original task. Claimed cards and tokenless or revoked peers remain stored-only. The result distinguishes delivered, stored-only, and failed delivery without exposing credentials; retries are idempotent, direct replies do not loop, and failed delivery never loses the stored answer. External delivery uses DNS-pinned sockets and refuses redirects; Cloudflare-hosted external peers remain subject to the platform raw-socket limitation, while tenants on the same hosted deployment use the internal Durable Object route.
 - **Setup feedback (#148).** The setup skill has a "When something goes wrong" section: after a failed setup step, the agent offers to file a redacted public report with `feedback`, `send_feedback`, or the a2a.exposed feedback form, and sends it only after the human agrees.
 - **Hosted OpenBot tested.** The compatibility table and OpenBot setup docs list hosted OpenBot wakes at a2a.exposed as tested end to end.
 - **OpenBot tested (#143).** Mark OpenBot tested end to end on self-hosted 0.8.19: pairing, messaging, and webhook wakes with the `openbot` preset.

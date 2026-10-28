@@ -411,6 +411,8 @@ test("tools: inbox, show_task, history, mark_working, reply (with state), pairin
 	assert.match((await s.tool(a.access_token, "mark_working", { taskId: task.id })).content[0].text, /now working/);
 	const q = await s.tool(a.access_token, "reply", { taskId: task.id, text: "Which report?", state: "input-required" });
 	assert.match(q.content[0].text, /now input-required/);
+	assert.deepEqual({ status: q.structuredContent.status, method: q.structuredContent.method, taskId: q.structuredContent.taskId },
+		{ status: "stored-only", method: "stored", taskId: task.id });
 	const done = await s.tool(a.access_token, "reply", { taskId: task.id, text: "Here it is." });
 	assert.match(done.content[0].text, /now completed/);
 	assert.equal((await s.tool(a.access_token, "reply", { taskId: task.id, text: "again" })).isError, true, "terminal tasks stay closed");
