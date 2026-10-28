@@ -247,8 +247,8 @@ export async function flushOutbox(db: Sql, plane: DataPlane, now = Date.now()): 
 		}
 		try {
 			if (await deliverOutbox(db, plane, row)) delivered += 1;
-		} catch (error) {
-			console.log(JSON.stringify({ ts: new Date(now).toISOString(), event: "outbox_push_failed", tenant: row.id, error: String(error).slice(0, 200) }));
+		} catch {
+			console.log(JSON.stringify({ ts: new Date(now).toISOString(), event: "outbox_push_failed", tenant: row.id, error: "config_delivery_failed" }));
 		}
 	}
 	const left = await db.prepare("SELECT COUNT(*) AS n FROM config_outbox").first<{ n: number }>();

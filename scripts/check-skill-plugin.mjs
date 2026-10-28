@@ -113,7 +113,7 @@ for (const rel of ["README.md", "docs/getting-started.md"]) {
 }
 const gettingStarted = read("docs/getting-started.md");
 if (!gettingStarted.includes("The status column is `tested end to end` or `untested`.")) fail("compatibility legend must name tested end to end and untested");
-const testedSentence = "Grok Bot and Claude Code cloud sessions with the hosted connector and a routine wake are tested end to end. OpenBot with the `openbot` wake preset is tested end to end, self-hosted on a2a-exposed 0.8.19 and hosted on a2a.exposed. Self-hosted Claude Code, other Claude clients, Codex, OpenClaw, and Hermes are untested.";
+const testedSentence = "Grok Bot and Claude Code cloud sessions with the hosted connector and a routine wake are tested end to end. OpenBot pairing, messaging, and `openbot` wakes are tested end to end on self-hosted a2a-exposed 0.8.19; hosted a2a.exposed has verified OpenBot webhook wakes only. Self-hosted Claude Code, other Claude clients, Codex, OpenClaw, and Hermes are untested.";
 const sentenceFiles = [
 	"README.md",
 	"cli/lib/main.mjs",

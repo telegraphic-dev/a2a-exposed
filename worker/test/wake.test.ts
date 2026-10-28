@@ -202,3 +202,17 @@ test("openbot: envelope and signature cover the exact body and delivery ID", asy
 		{ nowMs: 1760000000000, requestId: "delivery-2" }))!;
 	assert.equal(unicode.headers["x-openbot-signature"], "sha256=" + createHmac("sha256", "s").update(`1760000000.delivery-2.${unicode.body}`).digest("hex"));
 });
+
+test("OpenBot refuses unsigned requests; a webhook key or Access credentials cannot replace signing", async () => {
+	for (const hmacSecret of [undefined, "", "   "]) {
+		await assert.rejects(renderWake({ preset: "openbot", url: "https://hooks.example.com/wake", key: "wrong-auth", ...ACCESS, hmacSecret }, ev), /OpenBot requires WAKE_HMAC_SECRET/);
+	}
+	assert.equal(await renderWake({ preset: "openbot" }, ev), null);
+});
+
+test("OpenBot assigns a fresh delivery ID to every rendered attempt", async () => {
+	const cfg = { preset: "openbot", url: "https://hooks.example.com/wake", hmacSecret: "dummy" };
+	const first = (await renderWake(cfg, ev))!;
+	const second = (await renderWake(cfg, ev))!;
+	assert.notEqual(first.headers["x-openbot-delivery-id"], second.headers["x-openbot-delivery-id"]);
+});
