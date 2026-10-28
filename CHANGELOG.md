@@ -2,7 +2,7 @@
 
 All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.3.x), Worker template, control core, and skills. Versions follow [semver](https://semver.org); a `v*` tag publishes the CLI and `@a2a-exposed/control-core` to npm (see [Releases](docs/README.md#releases)).
 
-## Unreleased
+## 0.8.20 - 2026-10-28
 
 - **Reply delivery (#257).** A reply is always stored on its task. An existing task push stays the only delivery path when configured; otherwise an exact live paired peer whose outbound token is held receives one A2A message in the same context, referencing the original task. Claimed cards and tokenless or revoked peers remain stored-only. The result distinguishes delivered, stored-only, and failed delivery without exposing credentials; retries are idempotent, direct replies do not loop, and failed delivery never loses the stored answer. External delivery uses DNS-pinned sockets and refuses redirects; Cloudflare-hosted external peers remain subject to the platform raw-socket limitation, while tenants on the same hosted deployment use the internal Durable Object route.
 - **Wake settings API.** Control-core accepts encrypted signing secrets and an optional tested configuration version. Blank secrets are reused only for the same destination and authentication mode; removal clears wake credentials. Existing ciphertext remains compatible. Failed wake pushes retain the outbox without logging provider error text.
