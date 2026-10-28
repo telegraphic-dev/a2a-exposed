@@ -1612,6 +1612,8 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 		// uploaded secrets so the owner can compare them with local values without revealing them
 		const ev: WakeEvent = { contextId: "ctx-preview", taskId: "task-preview", taskIds: ["task-preview"], from: "example-peer",
 			preview: "Example message preview", kind: "test", publicUrl: ctx.PUBLIC_URL };
+		if (preset(ctx) === "openbot" && !ctx.WAKE_HMAC_SECRET?.trim())
+			return json({ error: "OpenBot requires WAKE_HMAC_SECRET from the routine settings" }, 400);
 		const req = await renderWake(wakeConfig(ctx), ev, { requestId: "preview" });
 		return json({ preset: preset(ctx), configured: !!req, debounceSeconds: debounceMs(ctx) / 1000, maxPerHour: maxPerHour(ctx),
 			hasKey: !!ctx.WAKE_WEBHOOK_KEY, hasHmacSecret: !!ctx.WAKE_HMAC_SECRET,

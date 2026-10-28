@@ -272,11 +272,13 @@ test("the published package loads the entry and hides deep paths", () => {
 		const ran = spawnSync(process.execPath, ["--input-type=module", "--eval", probe], { cwd: dest, encoding: "utf8" });
 		assert.equal(ran.status, 0, `${ran.stderr}\n${ran.stdout}`);
 		const consumer = `
-			import { CONTROL_MIGRATIONS, RUN_WORKER_FIRST, createTenant, routes, type ControlEnv } from "@a2a-exposed/control-core";
+			import { CONTROL_MIGRATIONS, RUN_WORKER_FIRST, createTenant, routes, type ControlEnv, type WakeSaveInput } from "@a2a-exposed/control-core";
 			const health: "/health" = routes.health;
 			const tenantsPath: "/api/v1/tenants" = routes.tenants;
 			const workerFirst: true = RUN_WORKER_FIRST;
 			const env: ControlEnv = {};
+			const wake: WakeSaveInput = { accountId: "owner", name: "sample", url: "https://hooks.example.com/wake", preset: "openbot", keyHeader: "", key: "", hmacSecret: "dummy", expectedVersion: 1 };
+			void wake;
 			if (CONTROL_MIGRATIONS[0]?.name !== "0001_auth.sql") throw new Error("migrations");
 			void health; void tenantsPath; void workerFirst; void env; void createTenant;
 		`;

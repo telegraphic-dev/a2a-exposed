@@ -19,6 +19,20 @@ export interface WakeSettings {
 	keyHeader: string;
 }
 
+/** Blank credentials retain a saved value only for the same URL and authentication mode.
+ * Callers validate public DNS before saving; the Worker enforces its delivery policy separately. */
+export interface WakeSaveInput {
+	accountId: string;
+	name: string;
+	url: string;
+	preset: string;
+	keyHeader: string;
+	key: string;
+	hmacSecret?: string;
+	/** Version of the settings the caller tested. A stale version makes no write. */
+	expectedVersion?: number;
+}
+
 export type WakeSave =
 	| { ok: true }
 	| { ok: false; error: "url" | "preset" | "header" | "key" | "unavailable" | "unreadable" | "conflict" };
@@ -89,18 +103,20 @@ export async function saveWakeSettings(
 	db: Sql,
 	plane: DataPlane,
 	secretsKey: string,
-	input: { accountId: string; name: string; url: string; preset: string; keyHeader: string; key: string },
+	input: WakeSaveInput,
 ): Promise<WakeSave> {
 	const row = await tenantForAccount(db, input.accountId, input.name);
-	if (!row) return { ok: false, error: "conflict" };
+	if (!row || (input.expectedVersion !== undefined && input.expectedVersion !== row.config_version)) return { ok: false, error: "conflict" };
 	const url = input.url.trim();
 	const preset = input.preset.trim();
 	const keyHeader = input.keyHeader.trim();
 	const key = input.key.trim();
+	const hmacSecret = (input.hmacSecret ?? "").trim();
 	if (wakeUrlProblem(url)) return { ok: false, error: "url" };
 	if (!WAKE_PRESETS.includes(preset as (typeof WAKE_PRESETS)[number])) return { ok: false, error: "preset" };
 	if (wakeHeaderProblem(keyHeader)) return { ok: false, error: "header" };
-	if (key.length > 4096 || /[\u0000-\u001f]/.test(key)) return { ok: false, error: "key" };
+	if ([key, hmacSecret].some((value) => value.length > 4096 || /[\u0000-\u001f]/.test(value))) return { ok: false, error: "key" };
+	if (url && preset === "openbot" && (key || keyHeader)) return { ok: false, error: keyHeader ? "header" : "key" };
 
 	const config = configFields(row.config_json);
 	const plaintext: WakeSecrets = {};
@@ -109,26 +125,34 @@ export async function saveWakeSettings(
 		if (value) plaintext[secret] = value;
 		delete config[secret];
 	}
+	// Read credentials before editing the public config. Ciphertext wins over legacy plaintext.
+	const same = config.WAKE_WEBHOOK_URL === url && config.WAKE_PRESET === preset;
+	const sameKey = same && (config.WAKE_KEY_HEADER ?? "") === keyHeader;
+	let secretsEnc = row.secrets_enc;
+	const hasSecrets = !!secretsEnc || Object.keys(plaintext).length > 0;
+	if (hasSecrets || key || hmacSecret || (url && preset === "openbot")) {
+		const ikm = secretsKey.trim();
+		if (!ikm) return { ok: false, error: "unavailable" };
+		const current = secretsEnc ? await openWakeSecrets(ikm, row.id, secretsEnc) : { ...plaintext };
+		if (!current) return { ok: false, error: "unreadable" };
+		const before = JSON.stringify(current);
+		if (!url || !sameKey || preset === "openbot") delete current.WAKE_WEBHOOK_KEY;
+		if (!url || !same) delete current.WAKE_HMAC_SECRET;
+		if (url && key && preset !== "openbot") current.WAKE_WEBHOOK_KEY = key;
+		if (url && hmacSecret) current.WAKE_HMAC_SECRET = hmacSecret;
+		if (url && preset === "openbot" && !current.WAKE_HMAC_SECRET) return { ok: false, error: "key" };
+		// Preserve ciphertext on an unchanged edit and fail closed on every decrypt/seal error.
+		if (!secretsEnc || JSON.stringify(current) !== before) {
+			const sealed = await sealWakeSecrets(ikm, row.id, current);
+			if (!sealed) return { ok: false, error: "unavailable" };
+			secretsEnc = sealed;
+		}
+	}
 	if (url) config.WAKE_WEBHOOK_URL = url;
 	else delete config.WAKE_WEBHOOK_URL;
 	config.WAKE_PRESET = preset;
-	if (keyHeader) config.WAKE_KEY_HEADER = keyHeader;
+	if (keyHeader && url) config.WAKE_KEY_HEADER = keyHeader;
 	else delete config.WAKE_KEY_HEADER;
-
-	let secretsEnc = row.secrets_enc;
-	// A blank key keeps the saved secret. Credentials that are still plaintext in config_json are
-	// sealed on this save, including when the key field is left blank. Ciphertext, once present, wins.
-	const migrate = !secretsEnc && Object.keys(plaintext).length > 0;
-	if (key || migrate) {
-		const ikm = secretsKey.trim();
-		if (!ikm) return { ok: false, error: "unavailable" };
-		const current: WakeSecrets | null = secretsEnc ? await openWakeSecrets(ikm, row.id, secretsEnc) : { ...plaintext };
-		if (!current) return { ok: false, error: "unreadable" };
-		if (key) current.WAKE_WEBHOOK_KEY = key;
-		const sealed = await sealWakeSecrets(ikm, row.id, current);
-		if (!sealed) return { ok: false, error: "unavailable" };
-		secretsEnc = sealed;
-	}
 
 	const version = row.config_version + 1;
 	const now = new Date().toISOString();
@@ -152,8 +176,8 @@ export async function saveWakeSettings(
 	};
 	console.log(JSON.stringify({ ts: now, event: "wake_settings", tenant: row.id, accountId: input.accountId, preset }));
 	try { await deliverOutbox(db, plane, outbox); }
-	catch (error) {
-		console.log(JSON.stringify({ ts: now, event: "outbox_push_failed", tenant: row.id, error: String(error).slice(0, 200) }));
+	catch {
+		console.log(JSON.stringify({ ts: now, event: "outbox_push_failed", tenant: row.id, error: "wake_delivery_failed" }));
 	}
 	return { ok: true };
 }

@@ -177,9 +177,10 @@ async function hermesSign(headers: Record<string, string>, secret: string, body:
 	headers["X-Webhook-Signature-V2"] = await hmacSha256Hex(secret, `${ts}.${body}`);
 }
 
-/** Build the HTTP request for a wake, or return null when the wake is not configured. */
+/** Build the HTTP request, return null without a URL, or throw when OpenBot signing is missing. */
 export async function renderWake(cfg: WakeConfig, ev: WakeEvent, opts: { nowMs?: number; requestId?: string } = {}): Promise<WakeRequest | null> {
 	if (!cfg.url) return null;
+	if (cfg.preset === "openbot" && !cfg.hmacSecret?.trim()) throw new Error("OpenBot requires WAKE_HMAC_SECRET from the routine settings");
 	const cli = cfg.cliCommand || DEFAULT_CLI;
 	const nowMs = opts.nowMs ?? Date.now();
 	const requestId = opts.requestId ?? crypto.randomUUID();

@@ -100,3 +100,30 @@ test("OpenBot preview masks signing credentials and wake test accepts HTTP 202",
 	assert.equal(sent, true);
 	await Promise.allSettled(pending);
 });
+
+test("unsigned OpenBot owner test/preview and inbound wake never contact the webhook", async (t) => {
+	const env: any = { DB: d1(new URL("../migrations/", import.meta.url)), PUBLIC_URL: BASE, OWNER_TOKEN: "owner-secret",
+		WAKE_PRESET: "openbot", WAKE_WEBHOOK_URL: "https://hooks.example.com/wake", WAKE_WEBHOOK_KEY: "not-a-signing-secret" };
+	let calls = 0;
+	const original = globalThis.fetch;
+	globalThis.fetch = (async () => { calls++; throw new Error("must not send"); }) as typeof fetch;
+	t.after(() => { globalThis.fetch = original; });
+	const call = async (method: string, path: string, body?: unknown, auth = "Bearer owner-secret") => {
+		const pending: Promise<unknown>[] = [];
+		const res = await worker.fetch(new Request(BASE + path, { method, headers: { authorization: auth, "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined }) as any,
+			env, { waitUntil: (p: Promise<unknown>) => pending.push(p), passThroughOnException() {} } as any);
+		await Promise.allSettled(pending);
+		return { status: res.status, body: await res.json() as any };
+	};
+	const preview = await call("GET", "/owner/wake/preview");
+	assert.equal(preview.status, 400);
+	assert.match(preview.body.error, /WAKE_HMAC_SECRET/);
+	const result = await call("POST", "/owner/wake/test");
+	assert.equal(result.body.status, null);
+	assert.match(result.body.info, /WAKE_HMAC_SECRET/);
+	const peer = await call("POST", "/owner/peers", { label: "dummy" });
+	const message = await call("POST", "/", { jsonrpc: "2.0", id: 1, method: "message/send", params: { message: { kind: "message", role: "user", messageId: "unsigned", parts: [{ kind: "text", text: "dummy" }] } } }, `Bearer ${peer.body.token}`);
+	assert.equal(message.status, 200);
+	assert.equal(message.body.error, undefined, "stored inbox message succeeds without a wake");
+	assert.equal(calls, 0);
+});
