@@ -217,7 +217,7 @@ async function deliverPinnedPeer(url: string, init: RequestInit, target: { ip: s
 		timeouts: { totalMs: REQUEST_TIMEOUT_MS },
 	});
 	try {
-		const res = await client.fetch(url, { method: init.method, headers: init.headers, body: init.body, redirect: "manual" });
+		const res = await client.fetch(url, { method: init.method, headers: init.headers, body: init.body, redirect: "manual", signal: init.signal ?? undefined });
 		return await peerResponseForCaller(res);
 	} catch (e) {
 		if (e instanceof TlsError || e instanceof CertificateError) throw new Error("TLS Handshake Failed.");
@@ -234,7 +234,9 @@ export async function fetchCheckedPeer(
 	init: RequestInit,
 	deps: Pick<WakeDeps, "lookup" | "connect" | "deliver"> = {},
 ): Promise<{ response: Response } | { refused: string }> {
-	const checked = await checkedWakeAddresses(url, deps.lookup ?? lookupAddresses);
+	init.signal?.throwIfAborted();
+	const checked = await checkedWakeAddresses(url, deps.lookup ?? ((host) => lookupAddresses(host, init.signal ?? undefined)));
+	init.signal?.throwIfAborted();
 	if ("refused" in checked) return checked;
 	const target = { ip: checked.ips[0]!, hostname: checked.hostname };
 	const nextInit: RequestInit = { ...init, redirect: "manual" };
