@@ -31,3 +31,22 @@ test("control wake presets match the Worker and protect plain preview headers", 
 	assert.equal(wakeHeaderProblem("x-openbot-delivery-id"), "header");
 	assert.equal(wakeHeaderProblem("x-openbot-timestamp"), "header");
 });
+
+test("facade credentials share the tenant-bound encrypted envelope and remain out of public config", async () => {
+	const secrets = {
+		EVENT_SECRET: "dummy-event-secret",
+		UPSTREAM_TOKEN: "dummy-upstream-token",
+		UPSTREAM_ACCESS_CLIENT_ID: "dummy-upstream-access-id",
+		UPSTREAM_ACCESS_CLIENT_SECRET: "dummy-upstream-access-secret",
+	};
+	const sealed = await sealHere("platform-secret", "ten_a", secrets);
+	assert.ok(sealed);
+	assert.deepEqual(await openWorker("platform-secret", "ten_a", sealed), secrets);
+	assert.equal(await openWorker("platform-secret", "ten_b", sealed), null);
+	assert.equal(await openWorker("wrong-key", "ten_a", sealed), null);
+	const { omitSealedSecrets } = await import("../../worker/src/wake-secrets.ts");
+	assert.deepEqual(omitSealedSecrets({ AGENT_NAME: "northwind", ...secrets }, sealed), { AGENT_NAME: "northwind" });
+	const { omitSealedSecrets: omitHere } = await import("../src/tenants/wake-secrets.ts");
+	assert.deepEqual(omitHere({ AGENT_NAME: "northwind", ...secrets }, sealed), { AGENT_NAME: "northwind" });
+	for (const value of Object.values(secrets)) assert.equal(sealed.includes(value), false);
+});

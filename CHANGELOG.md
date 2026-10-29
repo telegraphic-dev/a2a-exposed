@@ -2,6 +2,11 @@
 
 All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.3.x), Worker template, control core, and skills. Versions follow [semver](https://semver.org); a `v*` tag publishes the CLI and `@a2a-exposed/control-core` to npm (see [Releases](docs/README.md#releases)).
 
+## Unreleased
+
+- Control-core accepts a complete tunnel Access service-token pair when saving tenant wake settings. The encrypted pair stays on the same wake URL and clears when the URL changes or is removed.
+- Tenant secret envelopes recognize upstream bearer and Access credentials for hosted façade integrations. Deploy the matching data-plane reader before writing these fields.
+
 ## 0.8.23 - 2026-10-29
 
 `npx -y a2a-exposed@latest deploy` (applies migrations `0014_peer_address` and `0015_outbound_source`: a peer row can hold a verified card URL, and each outbound peer records whether the owner synced it or an address announcement created it). Existing pairings keep working unchanged.

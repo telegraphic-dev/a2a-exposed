@@ -19,7 +19,7 @@ export interface WakeSettings {
 	keyHeader: string;
 }
 
-/** Blank credentials retain a saved value only for the same URL and authentication mode.
+/** Blank webhook/signing credentials retain a saved value only for the same URL and authentication mode.
  * Callers validate public DNS before saving; the Worker enforces its delivery policy separately. */
 export interface WakeSaveInput {
 	accountId: string;
@@ -29,6 +29,9 @@ export interface WakeSaveInput {
 	keyHeader: string;
 	key: string;
 	hmacSecret?: string;
+	/** Both fields are required when replacing a tunnel Access service token. */
+	accessClientId?: string;
+	accessClientSecret?: string;
 	/** Version of the settings the caller tested. A stale version makes no write. */
 	expectedVersion?: number;
 }
@@ -112,10 +115,13 @@ export async function saveWakeSettings(
 	const keyHeader = input.keyHeader.trim();
 	const key = input.key.trim();
 	const hmacSecret = (input.hmacSecret ?? "").trim();
+	const accessClientId = (input.accessClientId ?? "").trim();
+	const accessClientSecret = (input.accessClientSecret ?? "").trim();
 	if (wakeUrlProblem(url)) return { ok: false, error: "url" };
 	if (!WAKE_PRESETS.includes(preset as (typeof WAKE_PRESETS)[number])) return { ok: false, error: "preset" };
 	if (wakeHeaderProblem(keyHeader)) return { ok: false, error: "header" };
-	if ([key, hmacSecret].some((value) => value.length > 4096 || /[\u0000-\u001f]/.test(value))) return { ok: false, error: "key" };
+	if ([key, hmacSecret, accessClientId, accessClientSecret].some((value) => value.length > 4096 || /[\u0000-\u001f]/.test(value))) return { ok: false, error: "key" };
+	if (url && Boolean(accessClientId) !== Boolean(accessClientSecret)) return { ok: false, error: "key" };
 	if (url && preset === "openbot" && (key || keyHeader)) return { ok: false, error: keyHeader ? "header" : "key" };
 
 	const config = configFields(row.config_json);
@@ -130,7 +136,7 @@ export async function saveWakeSettings(
 	const sameKey = same && (config.WAKE_KEY_HEADER ?? "") === keyHeader;
 	let secretsEnc = row.secrets_enc;
 	const hasSecrets = !!secretsEnc || Object.keys(plaintext).length > 0;
-	if (hasSecrets || key || hmacSecret || (url && preset === "openbot")) {
+	if (hasSecrets || key || hmacSecret || accessClientId || accessClientSecret || (url && preset === "openbot")) {
 		const ikm = secretsKey.trim();
 		if (!ikm) return { ok: false, error: "unavailable" };
 		const current = secretsEnc ? await openWakeSecrets(ikm, row.id, secretsEnc) : { ...plaintext };
@@ -138,6 +144,15 @@ export async function saveWakeSettings(
 		const before = JSON.stringify(current);
 		if (!url || !sameKey || preset === "openbot") delete current.WAKE_WEBHOOK_KEY;
 		if (!url || !same) delete current.WAKE_HMAC_SECRET;
+		// Tunnel credentials never follow a destination change or a disabled wake.
+		if (!url || config.WAKE_WEBHOOK_URL !== url) {
+			delete current.WAKE_ACCESS_CLIENT_ID;
+			delete current.WAKE_ACCESS_CLIENT_SECRET;
+		}
+		if (url && accessClientId && accessClientSecret) {
+			current.WAKE_ACCESS_CLIENT_ID = accessClientId;
+			current.WAKE_ACCESS_CLIENT_SECRET = accessClientSecret;
+		}
 		if (url && key && preset !== "openbot") current.WAKE_WEBHOOK_KEY = key;
 		if (url && hmacSecret) current.WAKE_HMAC_SECRET = hmacSecret;
 		if (url && preset === "openbot" && !current.WAKE_HMAC_SECRET) return { ok: false, error: "key" };

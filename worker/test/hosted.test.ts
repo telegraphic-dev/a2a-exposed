@@ -929,3 +929,50 @@ test("self-host workerd: human mode owner token approves, the device poll return
 	const deniedToken = await deniedPoll.json() as { error?: string };
 	assert.equal(deniedToken.error, "access_denied");
 });
+
+
+test("sealed upstream and wake Access credentials reach only their tenant context in workerd", async (t) => {
+	const received: { origin: string; bearer: string | null; id: string | null; secret: string | null }[] = [];
+	const mf = await start({
+		bindings: { TENANCY: "host", TENANT_DOMAIN: "example.com", TENANT_SECRETS_KEY: "platform-secret" },
+		durableObjects: { TENANT_DO: { className: "TenantStore", useSQLite: true } },
+		outboundService: async (request: Request) => {
+			received.push({ origin: new URL(request.url).origin, bearer: request.headers.get("authorization"), id: request.headers.get("cf-access-client-id"), secret: request.headers.get("cf-access-client-secret") });
+			return Response.json({ protocolVersion: "0.3.0", name: "Example", url: "https://upstream.example.com/a2a", capabilities: {}, skills: [] });
+		},
+	});
+	t.after(() => mf.dispose());
+	await mf.ready;
+	const ns = await mf.getDurableObjectNamespace("TENANT_DO");
+	const stub = ns.get(ns.idFromName("sealed-tenant")) as unknown as {
+		pushConfig(body: Record<string, unknown>): Promise<{ applied: boolean }>;
+		owner(input: { accountId: string; method: string; path: string }): Promise<{ status: number; body: unknown }>;
+	};
+	const secrets = { UPSTREAM_TOKEN: "dummy-bearer", UPSTREAM_ACCESS_CLIENT_ID: "dummy-upstream-id", UPSTREAM_ACCESS_CLIENT_SECRET: "dummy-upstream-secret", WAKE_ACCESS_CLIENT_ID: "dummy-wake-id", WAKE_ACCESS_CLIENT_SECRET: "dummy-wake-secret" };
+	const sealed = await sealWakeSecrets("platform-secret", "sealed-tenant", secrets);
+	assert.ok(sealed);
+	const push = async (version: number, secretsEnc: string) => stub.pushConfig({
+		version, tenantId: "sealed-tenant", name: "sealed", status: "active", ownerTokenHash: await sha256("dummy-owner-token"), secretsEnc,
+		config: { UPSTREAM_URL: "https://upstream.example.com/a2a", UPSTREAM_TOKEN: "plaintext-must-not-win", WAKE_WEBHOOK_URL: "https://hooks.example.com/wake" },
+	});
+	assert.equal((await push(1, sealed)).applied, true);
+	const facade = await stub.owner({ accountId: "dummy-owner", method: "GET", path: "/owner/facade" });
+	assert.equal(facade.status, 200);
+	assert.equal((facade.body as { hasUpstreamToken: boolean }).hasUpstreamToken, true);
+	assert.equal((facade.body as { hasUpstreamAccessServiceToken: boolean }).hasUpstreamAccessServiceToken, true);
+	assert.ok(received.length > 0);
+	for (const request of received) assert.deepEqual(request, { origin: "https://upstream.example.com", bearer: "Bearer dummy-bearer", id: "dummy-upstream-id", secret: "dummy-upstream-secret" });
+	const preview = await stub.owner({ accountId: "dummy-owner", method: "GET", path: "/owner/wake/preview" });
+	assert.equal(preview.status, 200);
+	assert.equal((preview.body as { hasAccessServiceToken: boolean }).hasAccessServiceToken, true);
+	for (const value of Object.values(secrets)) assert.equal(JSON.stringify([facade.body, preview.body]).includes(value), false);
+	const otherTenantBlob = await sealWakeSecrets("platform-secret", "another-tenant", secrets);
+	assert.ok(otherTenantBlob);
+	assert.equal((await push(2, otherTenantBlob)).applied, true);
+	const rejected = await stub.owner({ accountId: "dummy-owner", method: "GET", path: "/owner/facade" });
+	assert.equal((rejected.body as { hasUpstreamToken: boolean }).hasUpstreamToken, false);
+	assert.equal((rejected.body as { hasUpstreamAccessServiceToken: boolean }).hasUpstreamAccessServiceToken, false);
+	const emptyPreview = await stub.owner({ accountId: "dummy-owner", method: "GET", path: "/owner/wake/preview" });
+	assert.equal((emptyPreview.body as { hasAccessServiceToken: boolean }).hasAccessServiceToken, false);
+	assert.equal(received.at(-1)?.bearer, null, "an unreadable blob never falls back to plaintext");
+});

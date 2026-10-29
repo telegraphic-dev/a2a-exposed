@@ -69,7 +69,7 @@ test("webhook key reuse requires identical URL, preset and key header; disable c
 	assert.equal(config.WAKE_KEY_HEADER, undefined);
 });
 
-test("legacy plaintext migrates, ciphertext wins, unrelated sealed event/Access credentials survive", async () => {
+test("legacy plaintext migrates, ciphertext wins, unrelated sealed event credentials survive; tunnel credentials clear on removal", async () => {
 	const s = await setup();
 	const row = (await s.row())!;
 	const config = { ...JSON.parse(row.config_json), WAKE_WEBHOOK_URL: input.url, WAKE_PRESET: "openbot", WAKE_HMAC_SECRET: "legacy", EVENT_SECRET: "event", WAKE_ACCESS_CLIENT_ID: "access-id", WAKE_ACCESS_CLIENT_SECRET: "access-secret" };
@@ -81,7 +81,7 @@ test("legacy plaintext migrates, ciphertext wins, unrelated sealed event/Access 
 	await s.save({ hmacSecret: "" });
 	assert.equal((await s.secrets())?.WAKE_HMAC_SECRET, "sealed");
 	await s.save({ url: "", hmacSecret: "" });
-	assert.deepEqual(await s.secrets(), { EVENT_SECRET: "sealed-event", WAKE_ACCESS_CLIENT_ID: "id", WAKE_ACCESS_CLIENT_SECRET: "secret" });
+	assert.deepEqual(await s.secrets(), { EVENT_SECRET: "sealed-event" });
 	const raw = JSON.parse((await s.row())!.config_json);
 	for (const name of ["WAKE_HMAC_SECRET", "EVENT_SECRET", "WAKE_ACCESS_CLIENT_ID", "WAKE_ACCESS_CLIENT_SECRET"]) assert.equal(raw[name], undefined);
 });
@@ -129,4 +129,79 @@ test("failed push preserves encrypted outbox for retry and does not log provider
 	assert.equal(logs.join("").includes("dummy-provider-private-value"), false, "retry logs are sanitized too");
 	s.plane.pushConfig = async (body) => ({ version: body.version, applied: true });
 	assert.deepEqual(await flushOutbox(s.db, s.plane), { delivered: 1, pending: 0 });
+});
+
+test("tunnel Access credentials are sealed, replaced as a pair, and never follow a changed URL", async () => {
+	const s = await setup();
+	const access = { accessClientId: "dummy-access-client", accessClientSecret: "dummy-access-secret" };
+	assert.deepEqual(await s.save(access), { ok: true });
+	const first = (await s.row())!;
+	assert.equal(first.config_json.includes(access.accessClientId), false);
+	assert.equal(first.config_json.includes(access.accessClientSecret), false);
+	assert.equal(s.pushes.at(-1)?.config.WAKE_ACCESS_CLIENT_ID, undefined);
+	assert.equal(s.pushes.at(-1)?.config.WAKE_ACCESS_CLIENT_SECRET, undefined);
+	assert.deepEqual(await openWorker(platform, first.id, first.secrets_enc), {
+		WAKE_HMAC_SECRET: input.hmacSecret,
+		WAKE_ACCESS_CLIENT_ID: access.accessClientId,
+		WAKE_ACCESS_CLIENT_SECRET: access.accessClientSecret,
+	});
+	await s.save({ hmacSecret: "" });
+	assert.equal((await s.row())?.secrets_enc, first.secrets_enc);
+	await s.save({ accessClientId: "replacement-id", accessClientSecret: "replacement-secret" });
+	assert.equal((await s.secrets())?.WAKE_ACCESS_CLIENT_ID, "replacement-id");
+	await s.save({ url: "https://other.example.com/wake" });
+	assert.equal((await s.secrets())?.WAKE_ACCESS_CLIENT_ID, undefined);
+	assert.equal((await s.secrets())?.WAKE_ACCESS_CLIENT_SECRET, undefined);
+	await s.save(access);
+	await s.save({ url: "", ...access });
+	assert.deepEqual(await s.secrets(), {});
+});
+
+test("invalid tunnel credentials fail before storage or push", async () => {
+	const s = await setup();
+	await s.save();
+	const before = await s.row();
+	const pushes = s.pushes.length;
+	for (const edit of [
+		{ accessClientId: "only-id" },
+		{ accessClientSecret: "only-secret" },
+		{ accessClientId: "bad\nvalue", accessClientSecret: "secret" },
+		{ accessClientId: "id", accessClientSecret: "x".repeat(4097) },
+	]) {
+		assert.deepEqual(await s.save(edit), { ok: false, error: "key" });
+		assert.deepEqual(await s.row(), before);
+		assert.equal(s.pushes.length, pushes);
+	}
+	assert.deepEqual(await s.save({ accountId: "other", accessClientId: "id", accessClientSecret: "secret" }), { ok: false, error: "conflict" });
+	assert.deepEqual(await s.row(), before);
+});
+
+
+test("wake edits migrate upstream secrets and preserve them across tunnel removal and failed encryption", async () => {
+	const s = await setup();
+	const row = (await s.row())!;
+	const upstream = { UPSTREAM_TOKEN: "dummy-bearer", UPSTREAM_ACCESS_CLIENT_ID: "dummy-id", UPSTREAM_ACCESS_CLIENT_SECRET: "dummy-secret" };
+	await s.db.prepare("UPDATE tenants SET config_json = ? WHERE id = ?")
+		.bind(JSON.stringify({ ...JSON.parse(row.config_json), ...upstream }), row.id).run();
+	const access = { accessClientId: "dummy-wake-id", accessClientSecret: "dummy-wake-secret" };
+	assert.deepEqual(await s.save(access), { ok: true });
+	const saved = (await s.row())!;
+	for (const value of Object.values(upstream)) assert.equal(saved.config_json.includes(value), false);
+	const beforePushes = s.pushes.length;
+	for (const [key, error] of [["", "unavailable"], ["wrong-key", "unreadable"]] as const) {
+		assert.deepEqual(await s.save({ ...access, accessClientSecret: "replacement" }, key), { ok: false, error });
+		assert.deepEqual(await s.row(), saved);
+		assert.equal(s.pushes.length, beforePushes);
+	}
+	assert.deepEqual(await s.save({ url: "", hmacSecret: "" }), { ok: true });
+	assert.deepEqual(await s.secrets(), upstream);
+	assert.deepEqual(await openWorker(platform, row.id, (await s.row())!.secrets_enc), upstream);
+	for (const key of Object.keys(upstream)) assert.equal(s.pushes.at(-1)?.config[key], undefined);
+});
+
+test("Access transport authentication survives a preset change on the same destination", async () => {
+	const s = await setup();
+	await s.save({ accessClientId: "dummy-id", accessClientSecret: "dummy-secret" });
+	assert.deepEqual(await s.save({ preset: "generic", hmacSecret: "" }), { ok: true });
+	assert.deepEqual(await s.secrets(), { WAKE_ACCESS_CLIENT_ID: "dummy-id", WAKE_ACCESS_CLIENT_SECRET: "dummy-secret" });
 });
