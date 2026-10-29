@@ -64,6 +64,8 @@ Pass `expectedVersion` from the settings the caller tested to reject a stale sav
 with `conflict`. The caller still verifies its short-lived signed test receipt;
 this version check does not replace authentication, confirmation or test proof.
 The database update and outbox enqueue are atomic, with optimistic version checks.
+A concurrent save that loses the version check returns `conflict` and enqueues
+nothing, including while the winning save is still delivering its configuration.
 A failed push leaves the outbox for retry and logs a generic failure code, including on outbox retries.
 Optional fields preserve the call shape for existing importers; all importers use
 the same credential-reuse rules, including callers that omit the new fields.

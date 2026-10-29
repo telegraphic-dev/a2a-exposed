@@ -4,6 +4,8 @@ All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.
 
 ## Unreleased
 
+- **Concurrent wake saves.** Control-core returns `conflict` when another save wins the configuration version, including while that save's outbox delivery is pending. Only the winning update enqueues a configuration. Database failures still roll back the batch, and failed pushes remain queued for retry.
+
 ## 0.8.24 - 2026-10-29
 
 No new migrations. Self-hosted inboxes need no action beyond `npx -y a2a-exposed@latest deploy`.
