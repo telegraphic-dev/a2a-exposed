@@ -4,8 +4,17 @@ All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.
 
 ## Unreleased
 
-- Control-core accepts a complete tunnel Access service-token pair when saving tenant wake settings. The encrypted pair stays on the same wake URL and clears when the URL changes or is removed.
-- Tenant secret envelopes recognize upstream bearer and Access credentials for hosted façade integrations. Deploy the matching data-plane reader before writing these fields.
+## 0.8.24 - 2026-10-29
+
+No new migrations. Self-hosted inboxes need no action beyond `npx -y a2a-exposed@latest deploy`.
+
+- **Tunnel Access credentials for tenant wakes (#169).** Control-core accepts a complete tunnel Access service-token pair when saving tenant wake settings. The encrypted pair stays on the same wake URL and clears when the URL changes or is removed. A partial or invalid pair is rejected before anything is stored.
+- **Sealed upstream credentials (#169).** Tenant secret envelopes recognize upstream bearer and Access credentials (`UPSTREAM_TOKEN`, `UPSTREAM_ACCESS_CLIENT_ID`, `UPSTREAM_ACCESS_CLIENT_SECRET`) for hosted façade integrations. The v1 envelope format is unchanged.
+
+**Upgrade notes for hosted (multi-tenant) operators:**
+
+- Before deploying this Worker, confirm no tenant row has `secrets_enc IS NOT NULL` together with `UPSTREAM_` keys in `config_json`. With a sealed blob present, the new reader treats `UPSTREAM_*` as sealed-only fields and ignores plaintext copies, so such a row would lose its upstream credentials. Expect 0 rows; move any you find into the sealed envelope first.
+- Roll out in this order: (1) the Worker (data-plane reader), (2) every control-plane writer, (3) only then start writing upstream secrets. Older writers drop unknown fields when they reseal, so writing upstream secrets before all writers are updated can silently remove them.
 
 ## 0.8.23 - 2026-10-29
 
