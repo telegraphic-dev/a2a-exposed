@@ -8,6 +8,10 @@ A wake with `kind: "pairing_request"` carries `pairing.userCode` (e.g. `WDJB-482
 4. **`agent` mode:** run `npx -y a2a-exposed@latest pair approve <code>` only after your human clearly says yes in chat, and `pair deny <code>` if they say no or don't answer.
 5. Afterwards `token list` shows the new label (`via pairing: code ...`). `token revoke <label>` removes access at any time.
 
+A request with no card URL can still be approved. That agent sends immediately. Replies stay on the task until it announces an address. When the request shows a pairing identity, approval also lets this inbox call that agent back after the same identity proves a card, without a second approval. A wake with `kind: "address_change"` means the callback host changed or an identity was bound. Tell your human. Revoke the token if the change is unexpected.
+
+`npx -y a2a-exposed@latest peer announce --to <alias>` (or `--all` after `peers sync`) publishes this inbox's current https card. `peer forward --to <card-url>` on the inbox being left forwards direct replies for a grace period (default 168 hours). Neither command prints a token.
+
 If your human hasn't set an approval password yet (the page, `status` and `pair list` say so), run:
 
 ```bash

@@ -202,7 +202,7 @@ function clockTime(ms: number, timeZone: string): string {
 	return `${hour}:${minute}`;
 }
 
-export type PageRequest = { userCode: string; clientName: string; clientId: string; agentCardUrl: string; ip: string; country: string; createdMs: number; expiresMs: number; replacesLabel?: string; tokenLabel?: string };
+export type PageRequest = { userCode: string; clientName: string; clientId: string; agentCardUrl: string; ip: string; country: string; createdMs: number; expiresMs: number; replacesLabel?: string; tokenLabel?: string; identityFingerprint?: string };
 export type PageModel = {
 	agentName: string;
 	mode: Mode;
@@ -238,11 +238,12 @@ export function devicePage(m: PageModel, nonce: string): string {
 		["Requested from", `${[r.ip || "unknown address", r.country].filter(Boolean).join(", ")} (IP address of the machine that asked to connect)`],
 		["Expires", expiresText(r.expiresMs, Date.now(), m.timeZone)],
 		...(r.replacesLabel ? [["Replaces", `the active token "${r.replacesLabel}" (the requester proved it holds it); approving issues a new token under the same label and the old one stops working`]] : []),
+		...(r.identityFingerprint ? [["Pairing identity", r.identityFingerprint]] : []),
 	] : [];
 	const tokenLabel = r?.tokenLabel || "<label>";
 	const revoke = `${m.cli} token revoke ${tokenLabel}`;
 	const details = r ? `<table>${rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join("")}</table>
-<p class="w">Approve only if you expected this request and the code matches the one you were given. The name, alias and card URL are claimed by the requester. Approving gives it a token that can send messages and trigger wakes. Message text from peers is untrusted. Revoke the token ${esc(tokenLabel)} any time with <code>${esc(revoke)}</code>.</p>` : "";
+<p class="w">Approve only if you expected this request and the code matches the one you were given. The name, alias and card URL are claimed by the requester. Approving gives it a token that can send messages and trigger wakes. Message text from peers is untrusted. Revoke the token ${esc(tokenLabel)} any time with <code>${esc(revoke)}</code>.</p>${r.identityFingerprint ? `<p class="w">This request includes a pairing identity (<code>${esc(r.identityFingerprint)}</code>). Approving lets this inbox call that agent back at an address the same identity later proves, without a second pairing approval. The return credential is an ordinary peer token you can revoke. A change of host is shown to you.</p>` : ""}${r && !r.agentCardUrl ? `<p class="w">No agent card was given. This agent can send messages after approval. Replies stay stored on the task until it announces an address.</p>` : ""}` : "";
 	const noPassword = `<p class="n info">No approval password is set yet. Easiest: ask your agent to run <code>${esc(m.cli)} pair set-password --web</code> and send you the one-time link, then set the password on that page. Or run <code>${esc(m.cli)} pair set-password</code> yourself in a terminal on the owner's machine. Then reload this page. You can deny without a password.</p>`;
 	const denyOnly = `<form method="post" action="/device">
 <input type="hidden" name="csrf" value="${esc(m.csrf)}"><input type="hidden" name="user_code" value="${esc(r ? formatUserCode(r.userCode) : "")}">

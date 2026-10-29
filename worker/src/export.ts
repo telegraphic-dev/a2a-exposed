@@ -100,6 +100,7 @@ const OMIT_COLUMNS: Record<string, readonly string[]> = {
 	outbound: ["push_token_hash"],
 	mcp_grants: ["access_hash", "refresh_hash"],
 	outbound_peers: ["token_enc"],
+	peers: ["token_enc"],
 	device_requests: ["replaces_hash", "ip", "country"],
 };
 
@@ -137,7 +138,7 @@ export function redactExport(file: ExportFile): ExportFile {
 		const omit = new Set(OMIT_COLUMNS[name] ?? []);
 		const rows: Record<string, unknown>[] = [];
 		for (const [index, row] of (file.tables[name] ?? []).entries()) {
-			if (name === "settings" && (row.key === "approval_password" || row.key === "password_setup")) continue;
+			if (name === "settings" && (row.key === "approval_password" || row.key === "password_setup" || row.key === "peer_identity")) continue;
 			const out: Record<string, unknown> = {};
 			for (const [key, value] of Object.entries(row)) {
 				if (omit.has(key) || key.toLowerCase() === "replaces_hash") continue;

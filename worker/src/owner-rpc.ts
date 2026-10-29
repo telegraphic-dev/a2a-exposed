@@ -29,6 +29,7 @@ const SECRET_KEYS = new Set([
 	"token", "access_token", "refresh_token", "device_code",
 	"ownertoken", "owner_token", "secretsenc", "secrets_enc",
 	"clientsecret", "client_secret", "pushtoken", "push_token", "authorization",
+	"privatekey", "private_key",
 ]);
 
 /**
@@ -154,6 +155,11 @@ const ROUTES: RouteDef[] = [
 	{ method: "GET", name: "GET /owner/tasks/:id", take: (s) => s.length === 3 && s[1] === "tasks" && idOk(s[2]!), search: noQuery, path: (s) => `/owner/tasks/${s[2]}` },
 	{ method: "GET", name: "GET /owner/history/:id", take: (s) => s.length === 3 && s[1] === "history" && idOk(s[2]!), search: historyQuery, path: (s) => `/owner/history/${s[2]}` },
 	{ method: "GET", name: "GET /owner/outbound/:id", take: (s) => s.length === 3 && s[1] === "outbound" && idOk(s[2]!), search: noQuery, path: (s) => `/owner/outbound/${s[2]}` },
+	{ method: "GET", name: "GET /owner/address", take: (s) => s.length === 2 && s[1] === "address", search: noQuery, path: () => "/owner/address" },
+	{ method: "GET", name: "GET /owner/identity", take: (s) => s.length === 2 && s[1] === "identity", search: noQuery, path: () => "/owner/identity" },
+	{ method: "POST", name: "POST /owner/peers/announce", take: (s) => s.length === 3 && s[1] === "peers" && s[2] === "announce", search: noQuery, path: () => "/owner/peers/announce" },
+	{ method: "PUT", name: "PUT /owner/address-forward", take: (s) => s.length === 2 && s[1] === "address-forward", search: noQuery, path: () => "/owner/address-forward" },
+	{ method: "DELETE", name: "DELETE /owner/address-forward", take: (s) => s.length === 2 && s[1] === "address-forward", search: noQuery, path: () => "/owner/address-forward" },
 	{ method: "GET", name: "GET /owner/peers", take: (s) => s.length === 2 && s[1] === "peers", search: noQuery, path: () => "/owner/peers" },
 	{ method: "DELETE", name: "DELETE /owner/peers/:label", take: (s) => s.length === 3 && s[1] === "peers" && LABEL.test(s[2]!), search: noQuery, path: (s) => `/owner/peers/${s[2]}` },
 	{ method: "GET", name: "GET /owner/pairing", take: (s) => s.length === 2 && s[1] === "pairing", search: noQuery, path: () => "/owner/pairing" },
@@ -164,6 +170,7 @@ const ROUTES: RouteDef[] = [
 	{ method: "POST", name: "POST /owner/mcp/send", take: (s) => s.length === 3 && s[1] === "mcp" && s[2] === "send", search: noQuery, path: () => "/owner/mcp/send" },
 	{ method: "POST", name: "POST /owner/mcp/reply", take: (s) => s.length === 3 && s[1] === "mcp" && s[2] === "reply", search: noQuery, path: () => "/owner/mcp/reply" },
 	{ method: "POST", name: "POST /owner/mcp/mark_working", take: (s) => s.length === 3 && s[1] === "mcp" && s[2] === "mark_working", search: noQuery, path: () => "/owner/mcp/mark_working" },
+	{ method: "POST", name: "POST /owner/mcp/announce_address", take: (s) => s.length === 3 && s[1] === "mcp" && s[2] === "announce_address", search: noQuery, path: () => "/owner/mcp/announce_address" },
 	{ method: "GET", name: "GET /owner/outbound-peers", take: (s) => s.length === 2 && s[1] === "outbound-peers", search: noQuery, path: () => "/owner/outbound-peers" },
 	{ method: "PUT", name: "PUT /owner/outbound-peers/:alias", take: (s) => s.length === 3 && s[1] === "outbound-peers" && ALIAS.test(s[2]!) && s[2] !== "." && s[2] !== "..", search: noQuery, path: (s) => `/owner/outbound-peers/${s[2]}` },
 	{ method: "DELETE", name: "DELETE /owner/outbound-peers/:alias", take: (s) => s.length === 3 && s[1] === "outbound-peers" && ALIAS.test(s[2]!) && s[2] !== "." && s[2] !== "..", search: noQuery, path: (s) => `/owner/outbound-peers/${s[2]}` },
@@ -232,14 +239,47 @@ function outboundPeerBody(body: unknown): { ok: true; value: Record<string, stri
 	return { ok: true, value };
 }
 
+/** `{ to }` or `{ all: true }` for an address announcement. No token, no private key. */
+function announceBody(body: unknown): { ok: true; value: Record<string, string> } | { ok: false; error: string } {
+	if (body == null || typeof body !== "object" || Array.isArray(body)) return { ok: false, error: "body must be an object" };
+	const keys = Object.keys(body);
+	if (keys.length > 2 || keys.some((key) => key !== "to" && key !== "all")) return { ok: false, error: "body is not allowed" };
+	const raw = body as Record<string, unknown>;
+	const all = raw.all === true || raw.all === "true";
+	const to = raw.to;
+	if (to !== undefined && (typeof to !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(to))) return { ok: false, error: "to is invalid" };
+	if (all === !!to) return { ok: false, error: "pass to (one alias) or all: true" };
+	return { ok: true, value: all ? { all: "true" } : { to: String(to) } };
+}
+
+/** `{ cardUrl, hours? }` for the grace forward. The card URL is public. */
+function forwardBody(body: unknown): { ok: true; value: Record<string, string> } | { ok: false; error: string } {
+	if (body == null || typeof body !== "object" || Array.isArray(body)) return { ok: false, error: "body must be an object" };
+	const keys = Object.keys(body);
+	if (!keys.length || keys.length > 2 || keys.some((key) => key !== "cardUrl" && key !== "hours")) return { ok: false, error: "body is not allowed" };
+	const raw = body as Record<string, unknown>;
+	if (typeof raw.cardUrl !== "string" || !raw.cardUrl || raw.cardUrl.length > PEER_URL_MAX) return { ok: false, error: "cardUrl is invalid" };
+	const value: Record<string, string> = { cardUrl: raw.cardUrl };
+	if (raw.hours !== undefined) {
+		const hours = typeof raw.hours === "number" ? raw.hours : typeof raw.hours === "string" ? Number(raw.hours) : NaN;
+		if (!Number.isInteger(hours) || hours < 1 || hours > 720) return { ok: false, error: "hours is invalid" };
+		value.hours = String(hours);
+	}
+	return { ok: true, value };
+}
+
 /**
  * Body allowed on this owner RPC route.
- * MCP send, reply, and mark_working receive a flat object of tool arguments.
+ * MCP send, reply, mark_working, and announce_address receive a flat object of tool arguments.
  * PUT /owner/outbound-peers/:alias receives `{ url, token }`. The token is sealed before any log line.
+ * PUT /owner/address-forward receives `{ cardUrl, hours? }`. POST /owner/peers/announce receives `{ to }` or `{ all: true }`.
+ * The pairing identity private key is not accepted on this RPC.
  * Every other route accepts only an absent body.
  */
 export function ownerRpcBody(routeName: string, body: unknown): { ok: true; value?: Record<string, string> } | { ok: false; error: string } {
 	if (routeName === "PUT /owner/outbound-peers/:alias") return outboundPeerBody(body);
+	if (routeName === "POST /owner/peers/announce" || routeName === "POST /owner/mcp/announce_address") return announceBody(body);
+	if (routeName === "PUT /owner/address-forward") return forwardBody(body);
 	const spec = MCP_ARGS[routeName];
 	if (!spec) {
 		if (body !== undefined && body !== null) return { ok: false, error: "this call takes no body" };
