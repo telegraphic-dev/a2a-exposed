@@ -172,6 +172,8 @@ export async function saveWakeSettings(
 	const version = row.config_version + 1;
 	const now = new Date().toISOString();
 	const configJson = JSON.stringify(config);
+	// Keep the INSERT immediately after the CAS: changes() belongs to that UPDATE
+	// in this atomic batch. Matching N+1 alone can enqueue another writer's version.
 	const updated = await db.batch([
 		db.prepare(
 			`UPDATE tenants SET config_json = ?, secrets_enc = ?, config_version = ?, updated_at = ?
@@ -179,7 +181,7 @@ export async function saveWakeSettings(
 		).bind(configJson, secretsEnc, version, now, row.id, input.accountId, row.config_version),
 		db.prepare(
 			`INSERT INTO config_outbox (tenant_id, version, created_at)
-			 SELECT id, ?, ? FROM tenants WHERE id = ? AND owner_account_id = ? AND config_version = ?`,
+			 SELECT id, ?, ? FROM tenants WHERE id = ? AND owner_account_id = ? AND config_version = ? AND changes() = 1`,
 		).bind(version, now, row.id, input.accountId, version),
 	]) as { meta?: { changes?: number } }[];
 	if (updated[0]?.meta?.changes !== 1) return { ok: false, error: "conflict" };
