@@ -2,9 +2,16 @@
 
 All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.3.x), Worker template, control core, and skills. Versions follow [semver](https://semver.org); a `v*` tag publishes the CLI and `@a2a-exposed/control-core` to npm (see [Releases](docs/README.md#releases)).
 
-## Unreleased
+## 0.8.25 - 2026-10-29
 
-- **Concurrent wake saves.** Control-core returns `conflict` when another save wins the configuration version, including while that save's outbox delivery is pending. Only the winning update enqueues a configuration. Database failures still roll back the batch, and failed pushes remain queued for retry.
+No new migrations. Self-hosted inboxes need no action beyond `npx -y a2a-exposed@latest deploy`.
+
+- **Concurrent wake saves (#174).** When two saves of the same wake settings race, the one that loses the configuration version now gets a typed `conflict` result instead of a database duplicate-key error. This also holds while the winning save's outbox delivery is still pending. Only the winning save enqueues a configuration push. Database failures still roll back the whole batch, and failed pushes stay queued for retry.
+
+**Upgrade notes for hosted (multi-tenant) operators** (unchanged from 0.8.24; they apply if you are upgrading from 0.8.23 or earlier):
+
+- Before deploying this Worker, confirm no tenant row has `secrets_enc IS NOT NULL` together with `UPSTREAM_` keys in `config_json`. Expect 0 rows; move any you find into the sealed envelope first.
+- Roll out in this order: (1) the Worker (data-plane reader), (2) every control-plane writer, (3) only then start writing upstream secrets.
 
 ## 0.8.24 - 2026-10-29
 
