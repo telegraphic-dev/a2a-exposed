@@ -109,6 +109,15 @@ test("owner RPC accepts a tool-argument body only on send, reply, and mark_worki
 	assert.deepEqual(ownerRpcBody("POST /owner/mcp/mark_working", { taskId: ".." }), { ok: false, error: "taskId is invalid" });
 	assert.deepEqual(ownerRpcBody("POST /owner/mcp/mark_working", { taskId: "task-1", text: "no" }), { ok: false, error: "body is not allowed" });
 
+	assert.deepEqual(ownerRpcBody("POST /owner/peers/announce", { to: "alpha", reissue: true }), { ok: true, value: { to: "alpha", reissue: "true" } });
+	assert.deepEqual(ownerRpcBody("POST /owner/peers/announce", { all: true, reissue: true }), { ok: false, error: "reissue needs one alias" });
+	assert.deepEqual(ownerRpcBody("POST /owner/mcp/announce_address", { to: "alpha" }), { ok: true, value: { to: "alpha" } });
+	assert.deepEqual(ownerRpcBody("POST /owner/mcp/announce_address", { all: true }), { ok: true, value: { all: "true" } });
+	for (const reissue of [true, "true", false, null]) {
+		const refused = ownerRpcBody("POST /owner/mcp/announce_address", { to: "alpha", reissue });
+		assert.equal(refused.ok, false);
+		assert.equal(!refused.ok && refused.code, "reissue_owner_only");
+	}
 	const synced = ownerRpcBody("PUT /owner/outbound-peers/:alias", { url: "https://alpha.example.org", token: "tok-alpha" });
 	assert.deepEqual(synced, { ok: true, value: { url: "https://alpha.example.org", token: "tok-alpha" } });
 	assert.deepEqual(ownerRpcBody("PUT /owner/outbound-peers/:alias", { url: "https://alpha.example.org" }), {

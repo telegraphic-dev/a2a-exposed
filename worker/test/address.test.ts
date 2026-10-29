@@ -397,6 +397,68 @@ test("revoking a return token stays revoked until an explicit reissue", async (t
 	assert.equal((await alice.db.prepare("SELECT revoked_at FROM peers WHERE label = 'carol'").first() as { revoked_at: string | null }).revoked_at, null);
 });
 
+test("the MCP announce_address path never revives a revoked return token (#170)", async (t) => {
+	const { alice, carol, call, owner } = await world(t as never);
+	const ident = await Addr.generateIdentity();
+	assert.equal((await call(alice.ctx, "/owner/identity", {
+		method: "PUT", headers: { authorization: `Bearer ${alice.ownerToken}`, "content-type": "application/json" },
+		body: JSON.stringify(ident),
+	})).status, 200);
+	const carolToken = (await call(carol.ctx, "/owner/peers", {
+		method: "POST", headers: { authorization: `Bearer ${carol.ownerToken}`, "content-type": "application/json" },
+		body: JSON.stringify({ label: "alice" }),
+	})).data.token as string;
+	assert.equal((await owner(alice.ctx, "acct-alice", "PUT", "/owner/outbound-peers/carol", { url: "https://carol.example.com", token: carolToken })).status, 200);
+	const results = (body: unknown) => {
+		const text = String((body as any).text);
+		return JSON.parse(text.slice(text.indexOf("\n{") + 1)).results as any[];
+	};
+	// The connector path can set up the first return token.
+	const first = await owner(alice.ctx, "acct-alice", "POST", "/owner/mcp/announce_address", { to: "carol" });
+	assert.equal(first.status, 200, JSON.stringify(first.body));
+	assert.equal(results(first.body)[0].status, "updated", JSON.stringify(first.body));
+	const before = await alice.db.prepare("SELECT token_hash, revoked_at FROM peers WHERE label = 'carol' AND source = 'reverse'").first() as { token_hash: string; revoked_at: string | null };
+	assert.equal(before.revoked_at, null);
+	assert.equal((await call(alice.ctx, "/owner/peers/carol", { method: "DELETE", headers: { authorization: `Bearer ${alice.ownerToken}` } })).status, 200);
+	const unchanged = async () => {
+		const row = await alice.db.prepare("SELECT token_hash, revoked_at FROM peers WHERE label = 'carol'").first() as { token_hash: string; revoked_at: string | null };
+		assert.equal(row.token_hash, before.token_hash);
+		assert.ok(row.revoked_at, "the return token stays revoked");
+		assert.equal((await alice.db.prepare("SELECT COUNT(*) AS n FROM peers WHERE source = 'reverse' AND revoked_at IS NULL").first() as { n: number }).n, 0);
+	};
+	// Hosted owner RPC for the connector: reissue is refused with a typed error, for any value.
+	for (const reissue of [true, "true", false]) {
+		const refused = await owner(alice.ctx, "acct-alice", "POST", "/owner/mcp/announce_address", { to: "carol", reissue });
+		assert.equal(refused.status, 400);
+		assert.equal((refused.body as any).code, "reissue_owner_only", JSON.stringify(refused.body));
+		await unchanged();
+	}
+	// Self-hosted owner HTTP route for the connector refuses it the same way.
+	const http = await call(alice.ctx, "/owner/mcp/announce_address", {
+		method: "POST", headers: { authorization: `Bearer ${alice.ownerToken}`, "content-type": "application/json" },
+		body: JSON.stringify({ to: "carol", reissue: true }),
+	});
+	assert.equal(http.status, 400);
+	assert.equal(http.data.code, "reissue_owner_only");
+	await unchanged();
+	// A plain announce, to one alias or to all, reports revoked and mints nothing.
+	for (const body of [{ to: "carol" }, { all: true }]) {
+		const again = await owner(alice.ctx, "acct-alice", "POST", "/owner/mcp/announce_address", body);
+		assert.equal(again.status, 200, JSON.stringify(again.body));
+		const result = results(again.body).find((r: any) => r.alias === "carol");
+		assert.equal(result.status, "revoked", JSON.stringify(again.body));
+		assert.match(result.detail, /Only the owner/);
+		assert.equal(JSON.stringify(again.body).includes("a2aow_"), false);
+		await unchanged();
+	}
+	// The owner's explicit command still reissues.
+	const reissued = await owner(alice.ctx, "acct-alice", "POST", "/owner/peers/announce", { to: "carol", reissue: true });
+	assert.equal((reissued.body as any).results[0].status, "updated", JSON.stringify(reissued.body));
+	const after = await alice.db.prepare("SELECT token_hash, revoked_at FROM peers WHERE label = 'carol'").first() as { token_hash: string; revoked_at: string | null };
+	assert.equal(after.revoked_at, null);
+	assert.notEqual(after.token_hash, before.token_hash);
+});
+
 test("export omits the sealed pairing identity and a stored return token", async (t) => {
 	const { alice, call } = await world(t as never);
 	const ident = await Addr.generateIdentity();

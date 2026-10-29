@@ -239,10 +239,19 @@ function outboundPeerBody(body: unknown): { ok: true; value: Record<string, stri
 	return { ok: true, value };
 }
 
-/** `{ to }` or `{ all: true }` for an address announcement. No token, no private key. */
-function announceBody(body: unknown): { ok: true; value: Record<string, string> } | { ok: false; error: string } {
+/** Error code for a reissue request on a route that is not the owner's explicit announce. */
+export const REISSUE_OWNER_ONLY = "reissue_owner_only";
+export const REISSUE_OWNER_ONLY_MESSAGE = "reissue is owner-only. The owner runs peer announce --to <alias> --reissue on the CLI or the owner API.";
+
+/**
+ * `{ to }` or `{ all: true }` for an address announcement. No token, no private key.
+ * Only `POST /owner/peers/announce` (the owner's explicit command) accepts `reissue` with one alias.
+ * `POST /owner/mcp/announce_address` refuses `reissue` with code `reissue_owner_only`: an MCP agent cannot revive a revoked return token.
+ */
+function announceBody(body: unknown, allowReissue: boolean): { ok: true; value: Record<string, string> } | { ok: false; error: string; code?: string } {
 	if (body == null || typeof body !== "object" || Array.isArray(body)) return { ok: false, error: "body must be an object" };
 	const keys = Object.keys(body);
+	if (!allowReissue && keys.includes("reissue")) return { ok: false, error: REISSUE_OWNER_ONLY_MESSAGE, code: REISSUE_OWNER_ONLY };
 	if (keys.length > 3 || keys.some((key) => key !== "to" && key !== "all" && key !== "reissue")) return { ok: false, error: "body is not allowed" };
 	const raw = body as Record<string, unknown>;
 	const all = raw.all === true || raw.all === "true";
@@ -276,13 +285,15 @@ function forwardBody(body: unknown): { ok: true; value: Record<string, string> }
  * Body allowed on this owner RPC route.
  * MCP send, reply, mark_working, and announce_address receive a flat object of tool arguments.
  * PUT /owner/outbound-peers/:alias receives `{ url, token }`. The token is sealed before any log line.
- * PUT /owner/address-forward receives `{ cardUrl, hours? }`. POST /owner/peers/announce receives `{ to }` or `{ all: true }`.
+ * PUT /owner/address-forward receives `{ cardUrl, hours? }`. POST /owner/peers/announce receives `{ to }` or `{ all: true }`,
+ * and `reissue` with one alias. POST /owner/mcp/announce_address refuses `reissue` (code `reissue_owner_only`).
  * The pairing identity private key is not accepted on this RPC.
  * Every other route accepts only an absent body.
  */
-export function ownerRpcBody(routeName: string, body: unknown): { ok: true; value?: Record<string, string> } | { ok: false; error: string } {
+export function ownerRpcBody(routeName: string, body: unknown): { ok: true; value?: Record<string, string> } | { ok: false; error: string; code?: string } {
 	if (routeName === "PUT /owner/outbound-peers/:alias") return outboundPeerBody(body);
-	if (routeName === "POST /owner/peers/announce" || routeName === "POST /owner/mcp/announce_address") return announceBody(body);
+	if (routeName === "POST /owner/peers/announce") return announceBody(body, true);
+	if (routeName === "POST /owner/mcp/announce_address") return announceBody(body, false);
 	if (routeName === "PUT /owner/address-forward") return forwardBody(body);
 	const spec = MCP_ARGS[routeName];
 	if (!spec) {

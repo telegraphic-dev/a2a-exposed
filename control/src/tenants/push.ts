@@ -29,7 +29,7 @@ export interface OwnerCall {
 	query?: Record<string, string>;
 	/**
 	 * Tool arguments for `POST /owner/mcp/send`, `POST /owner/mcp/reply`, `POST /owner/mcp/mark_working`,
-	 * and `POST /owner/mcp/announce_address`. `PUT /owner/outbound-peers/:alias`, `PUT /owner/address-forward`,
+	 * and `POST /owner/mcp/announce_address` (which refuses `reissue`). `PUT /owner/outbound-peers/:alias`, `PUT /owner/address-forward`,
 	 * and `POST /owner/peers/announce` also take a body. Any other call refuses a body.
 	 */
 	body?: unknown;
