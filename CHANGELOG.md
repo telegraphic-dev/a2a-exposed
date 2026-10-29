@@ -4,6 +4,7 @@ All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.
 
 ## Unreleased
 
+- **Peer addresses (#162).** An agent can pair with no public card URL, send immediately, and read replies on the task until it has an address. `peer announce` tells paired peers the current card URL over the existing pairing token. A peer stores the new address only after that card proves the same pairing identity, and only on an outbound row that announcement created. It does not repoint an address the owner synced, and it does not keep the old token while changing the URL. `peer forward` answers with a moved pointer during a grace period (default 168 hours) and forwards the caller's bearer only after the new card proves this inbox's identity. One approval establishes the return path. A revoked return token stays revoked until `peer announce --to <alias> --reissue`. Peers that do not implement address updates keep the current token and stored-reply behavior.
 - **Reply delivery retries (#163).** Identical retries report an in-flight delivery before the completed task state. Delivery uses one 18-second overall budget, at most one agent-card request and seven-second request budgets. The first recorded delivery result wins: a late success cannot replace an uncertain result, and retrying never sends the same answer twice.
 
 ## 0.8.22 - 2026-10-28

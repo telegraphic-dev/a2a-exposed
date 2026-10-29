@@ -13,6 +13,8 @@ import m0010 from "../migrations/0010_conversation_peer.sql?raw";
 import m0011 from "../migrations/0011_conversation_owner.sql?raw";
 import m0012 from "../migrations/0012_conversation_peer_owner.sql?raw";
 import m0013 from "../migrations/0013_reply_delivery.sql?raw";
+import m0014 from "../migrations/0014_peer_address.sql?raw";
+import m0015 from "../migrations/0015_outbound_source.sql?raw";
 import type { Migration } from "./storage.ts";
 
 export const MIGRATIONS: Migration[] = [
@@ -29,4 +31,6 @@ export const MIGRATIONS: Migration[] = [
 	{ name: "0011_conversation_owner.sql", sql: m0011 },
 	{ name: "0012_conversation_peer_owner.sql", sql: m0012 },
 	{ name: "0013_reply_delivery.sql", sql: m0013 },
+	{ name: "0014_peer_address.sql", sql: m0014 },
+	{ name: "0015_outbound_source.sql", sql: m0015 },
 ];

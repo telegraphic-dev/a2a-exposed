@@ -126,6 +126,11 @@ export function nextStep(s) {
 	if (s.workerVersion && s.latestVersion && newer(s.latestVersion, s.workerVersion) && !newer(s.workerVersion, version))
 		n.also.push(`a2a-exposed ${s.latestVersion} is available: run npx -y a2a-exposed@latest deploy`);
 	const sh = (s.peerTokenShadowed || []).map((k) => `${k} is set in the environment and overrides the different peer token saved in ${s.configFile} (e.g. a stale value from before \`connect\` stored a new one): send/poll use the environment value. Unset ${k} where it is set to use the saved token`);
+	const addr = s.addresses;
+	if (addr && Array.isArray(addr.announcePending) && addr.announcePending.length)
+		n.also.push(`an address announcement is still pending: run \`${CLI} peer announce --all\``);
+	if (addr && Array.isArray(addr.inboundNoAddress) && addr.inboundNoAddress.length)
+		n.also.push("paired peers with no callback keep replies on the task until they announce an address");
 	return sh.length ? { ...n, also: [...n.also, ...sh] } : n;
 }
 
@@ -238,7 +243,7 @@ export async function collect() {
 		card: { ok: false, error: "not checked" }, ownerApi: { ok: false, error: "not checked" }, wake: null, tunnel: null, zones: null, pairing: null,
 		upstream: C.get("A2A_UPSTREAM_URL") || null, facade: null, upstreamVerify: null, upstreamVerifyError: "", facadePeerAuth: null,
 		upstreamNoToken: C.get("A2A_UPSTREAM_NO_TOKEN") === "1", localUpstreamToken: fingerprint(process.env.UPSTREAM_TOKEN),
-		peerTokenShadowed: shadowedPeerTokens(),
+		peerTokenShadowed: shadowedPeerTokens(), addresses: null,
 		mcp: "unknown", health: null, workerVersion: null, cliVersion: D.VERSION, latestVersion: readCache(cacheFile())?.latest || null,
 	};
 	const envBase = (process.env.A2A_BASE_URL || "").replace(/\/$/, "");
@@ -263,6 +268,10 @@ export async function collect() {
 						...(typeof pr.oidcIssuer === "string" && pr.oidcIssuer ? { oidcIssuer: pr.oidcIssuer } : {}),
 						...(typeof pr.manageUrl === "string" && pr.manageUrl ? { manageUrl: pr.manageUrl } : {}) };
 			} catch { /* older Worker (no pairing yet): leave unknown */ }
+			try {
+				const ad = await ownerTry("GET", "/owner/address");
+				if (ad.status === 200 && ad.data && typeof ad.data === "object") s.addresses = ad.data;
+			} catch { /* older Worker: no address lifecycle */ }
 			if (s.upstream) {
 				try { s.facade = await owner("GET", "/owner/facade"); }
 				catch (e) { s.facade = { mode: "unknown", error: e.message }; }
@@ -378,6 +387,16 @@ export async function status(o) {
 			rows.push(["tunnel", !t ? "none" : `${t.wakeUrl} -> ${t.origin || "?"}; ${!t.complete ? "INCOMPLETE" : t.tokenFileOk ? "set up" : "set up, but the connector token file is MISSING"}` +
 				(t.connections != null ? `; ${tunnelStateLabel(t.state)}, ${t.connections} connector connection(s)` : t.error ? `; state unknown (${t.error})` : "")]);
 			if (s.zones) rows.push(["zones", s.zones.length ? s.zones.join(", ") : "none on this account"]);
+			const addr = s.addresses;
+			if (addr) {
+				const bits = [];
+				if (Array.isArray(addr.inboundNoAddress) && addr.inboundNoAddress.length)
+					bits.push(`${addr.inboundNoAddress.length} paired peer(s) with no callback (${addr.inboundNoAddress.map((x) => x.label).join(", ")})`);
+				if (Array.isArray(addr.announcePending) && addr.announcePending.length)
+					bits.push(`announce still pending for ${addr.announcePending.map((x) => x.alias).join(", ")}`);
+				if (addr.forward && addr.forward.active) bits.push(`grace forward until ${addr.forward.until}`);
+				if (bits.length) rows.push(["addresses", bits.join("; ")]);
+			}
 			const pg = s.pairing;
 			if (pg) rows.push(["pairing", pg.mode === "off" ? "off (token issue only)"
 				: `${pg.mode} approval; approval password ${pg.passwordSet ? `set${pg.passwordSetAt ? ` ${pg.passwordSetAt}` : ""}${pg.passwordSetVia ? ` (via ${pg.passwordSetVia})` : ""}` : `NOT SET${pg.setupLinkExpiresAt ? ` (a setup link is open until ${pg.setupLinkExpiresAt})` : ""}`}${pg.oidcIssuer ? `; OpenID Connect (${pg.oidcIssuer})` : ""}${pg.manageUrl ? `; dashboard ${pg.manageUrl}` : ""}${pg.pending ? `; ${pg.pending} pending request(s): ${CLI} pair list` : ""}`]);

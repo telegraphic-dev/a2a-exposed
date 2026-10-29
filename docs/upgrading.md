@@ -28,7 +28,7 @@ There is no `adopt` command. To keep an existing Worker, its D1 data, peer token
 4. Run `status`. The card should show the existing name and base URL. Continue from the `next step:` line.
 5. Pairing is on after that deploy, with human approval. Run `pair set-password --web`, or deploy with `--pairing-approval off` to keep tokens manual only.
 
-Current Worker migrations, applied when missing: `0001_init`, `0002_wake_budget`, `0003_device_pairing`, `0004_pairing_replace`, `0005_facade_owners`, `0006_mcp`, `0007_cimd`, `0008_oidc_txns`, `0009_outbound_seen`, `0010_conversation_peer`, `0011_conversation_owner`, `0012_conversation_peer_owner`. A file that is already recorded is not run again. A lower number that was added later still runs if it is not recorded.
+Current Worker migrations, applied when missing: `0001_init`, `0002_wake_budget`, `0003_device_pairing`, `0004_pairing_replace`, `0005_facade_owners`, `0006_mcp`, `0007_cimd`, `0008_oidc_txns`, `0009_outbound_seen`, `0010_conversation_peer`, `0011_conversation_owner`, `0012_conversation_peer_owner`, `0013_reply_delivery`, `0014_peer_address`, `0015_outbound_source`. A file that is already recorded is not run again. A lower number that was added later still runs if it is not recorded. `0014_peer_address` adds nullable columns, so existing peer tokens keep working.
 
 If `pair` returns HTTP 500, or peers get `-32603` and the Worker log says `no such table: wake_budget`, run `deploy`. That applies the missing migration.
 

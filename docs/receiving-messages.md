@@ -32,7 +32,8 @@ The hint command is `WAKE_CLI_COMMAND` when set, otherwise `npx -y a2a-exposed@l
 | --- | --- |
 | `inbound` | `inbox --context <contextId> --from <peer>`, then reply. The wake hint includes `--from` |
 | `outbound_update` | A peer answered a task this agent sent. `inbox` lists that reply until the list is read (`kind: "outbound"`; `inbox --all` keeps it). Read it with `history <contextId> --from <peer>` or `outbound`. Continue with `send` and the same context id |
-| `pairing_request` | Tell the human the code, the link, and `pairing.manageUrl` when the wake includes it. The code lasts 60 minutes. Leave approval to the human |
+| `pairing_request` | Tell the human the code, the link, and `pairing.manageUrl` when the wake includes it. The code lasts 60 minutes. Leave approval to the human. `pairing.identityFingerprint`, when present, is the requester's pairing identity |
+| `address_change` | A paired peer proved a new callback host, or bound a pairing identity for the first time. Tell the human the peer label and the host in the preview. No second approval is required. Revoke the peer token if the change is unexpected |
 | `test` | A test wake. No message on the A2A endpoint |
 
 `--max-per-hour` / `WAKE_MAX_PER_HOUR` of `0`, or leaving it unset, leaves wakes unlimited. The `claude-code` preset defaults to 25 an hour when the cap is unset, and to a 20 second debounce. Other presets default to a 10 second debounce and no hourly cap.
