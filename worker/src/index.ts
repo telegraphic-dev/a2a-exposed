@@ -1194,14 +1194,6 @@ async function forwardMovedReply(ctx: TenantContext, ectx: ExecutionContext, raw
 	try { own = new URL(ctx.PUBLIC_URL).origin; } catch { own = ""; }
 	const target = Addr.originOf(forward.cardUrl);
 	if (!target || target === own) return null;
-	const headers: Record<string, string> = {
-		"content-type": req.headers.get("content-type") || "application/json",
-		accept: "application/json",
-		"a2a-version": req.headers.get("a2a-version") || "1.0",
-		"user-agent": "a2a-exposed",
-	};
-	const auth = req.headers.get("authorization");
-	if (auth) headers.authorization = auth;
 	const until = new Date(forward.untilMs).toISOString();
 	const pointer = () => json({
 		jsonrpc: "2.0", id: rid,
@@ -1209,9 +1201,20 @@ async function forwardMovedReply(ctx: TenantContext, ectx: ExecutionContext, raw
 	}, 200, { "a2a-moved": forward.cardUrl });
 	try {
 		const signal = AbortSignal.timeout(7000);
+		const ident = await readIdentity(ctx);
 		const card = await checkedPeerCard(ctx, ectx, target, signal);
+		// The caller's bearer is forwarded only after the new card proves this inbox's own identity.
+		if (!ident || ident === "unreadable" || !card || !await Addr.cardProves(card, ident.publicKey, forward.cardUrl)) return pointer();
 		const [endpoint] = M.pickEndpoint(target, card);
 		if (new URL(endpoint).origin !== target) return pointer();
+		const headers: Record<string, string> = {
+			"content-type": req.headers.get("content-type") || "application/json",
+			accept: "application/json",
+			"a2a-version": req.headers.get("a2a-version") || "1.0",
+			"user-agent": "a2a-exposed",
+		};
+		const auth = req.headers.get("authorization");
+		if (auth) headers.authorization = auth;
 		const response = await checkedPeerFetch(ctx, ectx, target, endpoint, { method: "POST", headers, body: raw, signal });
 		const text = (await response.text()).slice(0, 1 << 20);
 		let body: Json = null;
@@ -1303,20 +1306,29 @@ async function publicCard(ctx: TenantContext): Promise<Json> {
 	return card;
 }
 
-async function rememberPeerAddress(ctx: TenantContext, label: string, cardUrl: string, opts: { identity?: string | null; token?: string; graceMs?: number; previous?: string | null } = {}): Promise<void> {
+async function rememberPeerAddress(ctx: TenantContext, label: string, cardUrl: string, opts: { identity?: string | null; token?: string; firstBind?: boolean; graceMs?: number; previous?: string | null } = {}): Promise<void> {
 	const origin = Addr.originOf(cardUrl);
 	const now = A.nowIso();
 	const nowMs = Date.now();
-	if (opts.token) {
+	const existing: Json = await ctx.DB.prepare("SELECT url, source FROM outbound_peers WHERE alias = ?").bind(label).first();
+	const sameOrigin = !!existing && Addr.originOf(String(existing.url)) === origin;
+	// An owner-synced outbound name is not this announcement's to move. A first identity bind also
+	// cannot move an address that is already stored: that needs the owner, not a TOFU key.
+	if (existing && existing.source !== "announce")
+		throw new RpcError(-32602, "address update refused: this name already has an outbound address");
+	if (existing && opts.firstBind && !sameOrigin)
+		throw new RpcError(-32602, "address update refused: a first identity cannot move an existing address");
+	if (existing && !sameOrigin && !opts.token)
+		throw new RpcError(-32602, "address update refused: a new address needs a new return token");
+	if (opts.token && (!existing || existing.source === "announce")) {
 		const key = await ctx.peerKey();
 		if (!key) throw new RpcError(-32603, "this inbox cannot store a return token");
 		const enc = await M.sealPeerTokenWithKey(key, label, opts.token);
 		await ctx.DB.prepare(
-			`INSERT INTO outbound_peers (alias, url, token_enc, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
-			 ON CONFLICT(alias) DO UPDATE SET url = excluded.url, token_enc = excluded.token_enc, updated_at = excluded.updated_at`,
+			`INSERT INTO outbound_peers (alias, url, token_enc, source, created_at, updated_at) VALUES (?, ?, ?, 'announce', ?, ?)
+			 ON CONFLICT(alias) DO UPDATE SET url = excluded.url, token_enc = excluded.token_enc, source = 'announce', updated_at = excluded.updated_at
+			 WHERE outbound_peers.source = 'announce'`,
 		).bind(label, origin, enc, now, now).run();
-	} else {
-		await ctx.DB.prepare("UPDATE outbound_peers SET url = ?, updated_at = ? WHERE alias = ?").bind(origin, now, label).run();
 	}
 	const until = opts.graceMs ? nowMs + opts.graceMs : null;
 	const previous = opts.previous && Addr.hostOf(opts.previous) !== Addr.hostOf(cardUrl) ? opts.previous : null;
@@ -1363,7 +1375,7 @@ async function rpcAddress(params: Json, label: string, _version: string, ctx: Te
 	const old = typeof peer.card_url === "string" ? peer.card_url : "";
 	const hostChanged = !!old && Addr.hostOf(old) !== Addr.hostOf(cardUrl);
 	await rememberPeerAddress(ctx, label, cardUrl, {
-		identity: firstBind ? publicKey : null,
+		identity: firstBind ? publicKey : null, firstBind,
 		...(reverse ? { token: reverse } : {}),
 		...(hostChanged ? { graceMs: hours * 3600 * 1000, previous: old } : {}),
 	});
@@ -1381,14 +1393,19 @@ async function rpcAddress(params: Json, label: string, _version: string, ctx: Te
 	};
 }
 
-async function reverseLabel(ctx: TenantContext, alias: string): Promise<string | null> {
-	const row: Json = await ctx.DB.prepare("SELECT source, revoked_at FROM peers WHERE label = ?").bind(alias).first();
-	if (!row || row.revoked_at || row.source === "reverse") return alias;
+/** Where this inbox keeps the return token it minted for `alias`. A revoked reverse row stays revoked. */
+async function planReverse(ctx: TenantContext, alias: string): Promise<{ kind: "use"; label: string } | { kind: "revoked"; label: string } | { kind: "none" }> {
 	const alt = `return-${alias}`.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 32).replace(/-+$/, "");
-	if (!alt || alt === alias) return null;
-	const altRow: Json = await ctx.DB.prepare("SELECT source, revoked_at FROM peers WHERE label = ?").bind(alt).first();
-	if (!altRow || altRow.revoked_at || altRow.source === "reverse") return alt;
-	return null;
+	const labels = [...new Set([alias, alt].filter((label) => !!label))];
+	const rows: { label: string; row: Json }[] = [];
+	for (const label of labels) {
+		const row: Json = await ctx.DB.prepare("SELECT source, revoked_at FROM peers WHERE label = ?").bind(label).first();
+		rows.push({ label, row });
+	}
+	for (const { label, row } of rows) if (row && row.source === "reverse" && row.revoked_at) return { kind: "revoked", label };
+	for (const { label, row } of rows) if (row && row.source === "reverse") return { kind: "use", label };
+	for (const { label, row } of rows) if (!row) return { kind: "use", label };
+	return { kind: "none" };
 }
 
 async function openReverse(ctx: TenantContext, label: string): Promise<string | null> {
@@ -1398,25 +1415,38 @@ async function openReverse(ctx: TenantContext, label: string): Promise<string | 
 	return key ? await M.openPeerTokenWithKey(key, label, row.token_enc) : null;
 }
 
-async function storeReverse(ctx: TenantContext, label: string, token: string, clientName: string): Promise<void> {
+async function storeReverse(ctx: TenantContext, label: string, token: string, clientName: string, reissue = false): Promise<void> {
 	const key = await ctx.peerKey();
 	if (!key) return;
 	const enc = await M.sealPeerTokenWithKey(key, label, token);
+	const hash = await A.sha256(token);
+	const now = A.nowIso();
+	if (reissue) {
+		await ctx.DB.prepare(
+			`UPDATE peers SET token_hash = ?, token_enc = ?, revoked_at = NULL, source = 'reverse', client_name = COALESCE(client_name, ?)
+			 WHERE label = ? AND source = 'reverse'`,
+		).bind(hash, enc, clientName, label).run();
+		return;
+	}
 	await ctx.DB.prepare(
 		`INSERT INTO peers (label, token_hash, created_at, source, client_name, token_enc) VALUES (?, ?, ?, 'reverse', ?, ?)
-		 ON CONFLICT(label) DO UPDATE SET token_hash = excluded.token_hash, revoked_at = NULL, source = 'reverse', token_enc = excluded.token_enc,
-		 client_name = COALESCE(peers.client_name, excluded.client_name)`,
-	).bind(label, await A.sha256(token), A.nowIso(), clientName, enc).run();
+		 ON CONFLICT(label) DO UPDATE SET token_hash = excluded.token_hash, source = 'reverse', token_enc = excluded.token_enc,
+		 client_name = COALESCE(peers.client_name, excluded.client_name)
+		 WHERE peers.revoked_at IS NULL AND peers.source = 'reverse'`,
+	).bind(label, hash, now, clientName, enc).run();
 }
 
-async function announceOne(ctx: TenantContext, ectx: ExecutionContext, alias: string, ident: PairingIdentity, cardUrl: string): Promise<Json> {
+async function announceOne(ctx: TenantContext, ectx: ExecutionContext, alias: string, ident: PairingIdentity, cardUrl: string, reissue = false): Promise<Json> {
 	let peer: { alias: string; url: string; token: string | null };
 	try { peer = await outboundPeer(ctx, alias); }
 	catch (e: any) { return { alias, status: "failed", detail: scrubSecretText(String(e?.message || "no peer")).slice(0, 200) }; }
 	if (!peer.token) return { alias, status: "failed", detail: "This peer has no stored token. Run peers sync after connect." };
-	const label = await reverseLabel(ctx, alias);
+	const plan = await planReverse(ctx, alias);
+	if (plan.kind === "revoked" && !reissue)
+		return { alias, status: "revoked", detail: "The return token was revoked. Run peer announce --to this alias --reissue to mint a new one.", host: Addr.hostOf(peer.url) };
+	const label = plan.kind === "none" ? "" : plan.label;
 	let reverse = "";
-	if (label) reverse = (await openReverse(ctx, label)) || A.randomToken();
+	if (label) reverse = plan.kind === "revoked" ? A.randomToken() : ((await openReverse(ctx, label)) || A.randomToken());
 	const reverseHash = reverse ? await A.sha256(reverse) : "-";
 	const announcementSignature = await Addr.signBytes(ident.privateKey, Addr.updateMessage(cardUrl, ident.publicKey, reverseHash));
 	if (!announcementSignature) return { alias, status: "failed", detail: "This inbox could not sign the announcement.", host: Addr.hostOf(peer.url) };
@@ -1441,7 +1471,7 @@ async function announceOne(ctx: TenantContext, ectx: ExecutionContext, alias: st
 		let body: Json = null;
 		try { body = JSON.parse(text); } catch { body = null; }
 		const outcome = Addr.announceOutcome(response.status, body);
-		if (outcome.status === "updated" && reverse && label) await storeReverse(ctx, label, reverse, alias);
+		if (outcome.status === "updated" && reverse && label) await storeReverse(ctx, label, reverse, alias, plan.kind === "revoked");
 		return { alias, status: outcome.status, detail: scrubSecretText(outcome.detail).slice(0, 200), host };
 	} catch (e: any) {
 		return { alias, status: "failed", detail: scrubSecretText(String(e?.message || "announcement failed")).slice(0, 200), host };
@@ -1457,7 +1487,7 @@ async function saveAnnounce(ctx: TenantContext, results: Json[]): Promise<void> 
 	const at = A.nowIso();
 	for (const r of results) {
 		if (!r || typeof r.alias !== "string" || r.alias === "*") continue;
-		if (r.status === "updated") map.delete(r.alias);
+		if (r.status === "updated" || r.status === "revoked") map.delete(r.alias);
 		else map.set(r.alias, { alias: r.alias, detail: scrubSecretText(String(r.detail || "")).slice(0, 200), at });
 	}
 	const next = [...map.values()].slice(0, 100);
@@ -1465,7 +1495,7 @@ async function saveAnnounce(ctx: TenantContext, results: Json[]): Promise<void> 
 		.bind(Addr.ANNOUNCE_SETTING, JSON.stringify({ pending: next })).run();
 }
 
-async function announcePeers(ctx: TenantContext, ectx: ExecutionContext, which: { all?: boolean; to?: string }): Promise<Json[]> {
+async function announcePeers(ctx: TenantContext, ectx: ExecutionContext, which: { all?: boolean; to?: string; reissue?: boolean }): Promise<Json[]> {
 	const ident = await ensureIdentity(ctx);
 	const cardUrl = Addr.cardUrlFor(ctx.PUBLIC_URL);
 	if (!ident) return [{ alias: which.to || "*", status: "failed", detail: "This inbox has no usable pairing identity." }];
@@ -1477,7 +1507,7 @@ async function announcePeers(ctx: TenantContext, ectx: ExecutionContext, which: 
 	} else if (which.to) aliases = [which.to];
 	if (!aliases.length) return [{ alias: which.to || "*", status: "failed", detail: "No synced peer to announce to. Run peers sync after connect." }];
 	const results: Json[] = [];
-	for (const alias of aliases) results.push(await announceOne(ctx, ectx, alias, ident, cardUrl));
+	for (const alias of aliases) results.push(await announceOne(ctx, ectx, alias, ident, cardUrl, !!which.reissue && !which.all));
 	await saveAnnounce(ctx, results);
 	return results.map((r) => ({ alias: r.alias, status: r.status, detail: r.detail, ...(r.host ? { host: r.host } : {}) }));
 }
@@ -1506,16 +1536,16 @@ async function addressView(ctx: TenantContext): Promise<Json> {
 /** The exact inbound label must still have a live token here and an outbound pairing whose token we can decrypt.
  *  A claimed card URL or a tokenless outbound entry is never enough. `identityKey` is set only after a verified
  *  address announcement. It is a public key, and it is what a moved card has to match. */
-async function replyPeer(ctx: TenantContext, label: string): Promise<{ alias: string; url: string; token: string; identityKey: string } | null> {
+async function replyPeer(ctx: TenantContext, label: string): Promise<{ alias: string; url: string; token: string; identityKey: string; announced: boolean } | null> {
 	const row: Json = await ctx.DB.prepare(
-		`SELECT o.alias, o.url, o.token_enc, p.identity_key FROM outbound_peers o
+		`SELECT o.alias, o.url, o.token_enc, o.source, p.identity_key FROM outbound_peers o
 		 JOIN peers p ON p.label = o.alias
 		 WHERE o.alias = ? AND o.token_enc IS NOT NULL AND p.revoked_at IS NULL`,
 	).bind(label).first();
 	if (!row) return null;
 	const key = await ctx.peerKey();
 	const token = key ? await M.openPeerTokenWithKey(key, row.alias, row.token_enc) : null;
-	return token ? { alias: row.alias, url: row.url, token, identityKey: Addr.cleanPublicKey(row.identity_key) } : null;
+	return token ? { alias: row.alias, url: row.url, token, identityKey: Addr.cleanPublicKey(row.identity_key), announced: row.source === "announce" } : null;
 }
 
 async function deliverReplyMessage(ctx: TenantContext, ectx: ExecutionContext, task: Json, message: Json, state: string, text: string, signal: AbortSignal): Promise<ReplyDelivery> {
@@ -1550,11 +1580,11 @@ async function deliverReplyMessage(ctx: TenantContext, ectx: ExecutionContext, t
 			signal.throwIfAborted();
 			try {
 				const next = await checkedPeerCard(ctx, ectx, Addr.originOf(moved.cardUrl), signal);
-				if (next && await Addr.cardProves(next, peer.identityKey, moved.cardUrl)) {
+				if (next && peer.announced && await Addr.cardProves(next, peer.identityKey, moved.cardUrl)) {
 					base = Addr.originOf(moved.cardUrl);
 					cardUsed = next;
 					target = safeTarget(peer.alias, base);
-					await ctx.DB.prepare("UPDATE outbound_peers SET url = ?, updated_at = ? WHERE alias = ?").bind(base, A.nowIso(), peer.alias).run();
+					await ctx.DB.prepare("UPDATE outbound_peers SET url = ?, updated_at = ? WHERE alias = ? AND source = 'announce'").bind(base, A.nowIso(), peer.alias).run();
 					await ctx.DB.prepare("UPDATE peers SET card_url = ? WHERE label = ?").bind(moved.cardUrl, peer.alias).run();
 				}
 			} catch {
@@ -1592,8 +1622,8 @@ async function deliverReplyMessage(ctx: TenantContext, ectx: ExecutionContext, t
 			try {
 				signal.throwIfAborted();
 				const next = await checkedPeerCard(ctx, ectx, Addr.originOf(hinted), signal);
-				if (next && await Addr.cardProves(next, peer.identityKey, hinted)) {
-					await ctx.DB.prepare("UPDATE outbound_peers SET url = ?, updated_at = ? WHERE alias = ?").bind(Addr.originOf(hinted), A.nowIso(), peer.alias).run();
+				if (next && peer.announced && await Addr.cardProves(next, peer.identityKey, hinted)) {
+					await ctx.DB.prepare("UPDATE outbound_peers SET url = ?, updated_at = ? WHERE alias = ? AND source = 'announce'").bind(Addr.originOf(hinted), A.nowIso(), peer.alias).run();
 					await ctx.DB.prepare("UPDATE peers SET card_url = ? WHERE label = ?").bind(hinted, peer.alias).run();
 				}
 			} catch { /* the result below stands; a second send is not attempted */ }
@@ -2107,9 +2137,11 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 		const b = await body();
 		const all = b.all === true || b.all === "true";
 		const to = typeof b.to === "string" ? b.to : "";
+		const reissue = b.reissue === true || b.reissue === "true";
 		if (all === !!to) return json({ error: "pass to (one alias) or all: true" }, 400);
+		if (reissue && (all || !to)) return json({ error: "reissue needs one alias" }, 400);
 		if (to && !/^[A-Za-z0-9_-]{1,64}$/.test(to)) return json({ error: "to is invalid" }, 400);
-		const results = await announcePeers(ctx, ectx, all ? { all: true } : { to });
+		const results = await announcePeers(ctx, ectx, all ? { all: true } : { to, reissue });
 		return json({ results });
 	}
 	if (seg[0] === "peers") {
@@ -2140,6 +2172,9 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 					 WHERE peer = ? AND EXISTS (SELECT 1 FROM peers WHERE label = ? AND revoked_at IS NULL)`,
 				).bind(label, label),
 				ctx.DB.prepare("UPDATE peers SET revoked_at = ?, token_enc = NULL WHERE label = ? AND revoked_at IS NULL").bind(now, label),
+				// Drop only the callback this announcement created. An owner-synced alias of the same name stays.
+				// The other inbox still accepts the return token until that owner revokes it.
+				ctx.DB.prepare("DELETE FROM outbound_peers WHERE alias = ? AND source = 'announce'").bind(label),
 			]);
 			if (changed(revoked) !== 1) {
 				const ex: Json = await ctx.DB.prepare("SELECT revoked_at FROM peers WHERE label = ?").bind(label).first();
@@ -2190,7 +2225,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			if (b.token && !peerKey) return json({ error: ctx.mode === "host" ? "this agent has no secret key to encrypt peer tokens with" : "the Worker has no OWNER_TOKEN to encrypt peer tokens with" }, 409);
 			const enc = b.token ? await M.sealPeerTokenWithKey(peerKey!, alias, b.token) : null;
 			const now = A.nowIso();
-			await ctx.DB.prepare("INSERT INTO outbound_peers (alias, url, token_enc, created_at, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(alias) DO UPDATE SET url = excluded.url, token_enc = excluded.token_enc, updated_at = excluded.updated_at")
+			await ctx.DB.prepare("INSERT INTO outbound_peers (alias, url, token_enc, created_at, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(alias) DO UPDATE SET url = excluded.url, token_enc = excluded.token_enc, source = NULL, updated_at = excluded.updated_at")
 				.bind(alias, String(b.url).replace(/\/$/, ""), enc, now, now).run();
 			log("outbound_peer_synced", { alias, hasToken: !!enc });
 			return json({ ok: true, alias, hasToken: !!enc });
@@ -2483,7 +2518,8 @@ async function tokenEndpoint(req: Request, ctx: TenantContext): Promise<Response
 async function freeLabel(ctx: TenantContext, base: string): Promise<string> {
 	const rows = await ctx.DB.prepare("SELECT label FROM peers WHERE label = ? OR label LIKE ?").bind(base, `${base}-%`).all();
 	const pend = await ctx.DB.prepare("SELECT label FROM device_requests WHERE label IS NOT NULL").all();
-	return P.dedupeLabel(base, new Set([...(rows.results as Json[]), ...(pend.results as Json[])].map((x) => x.label)));
+	const outbound = await ctx.DB.prepare("SELECT alias AS label FROM outbound_peers").all();
+	return P.dedupeLabel(base, new Set([...(rows.results as Json[]), ...(pend.results as Json[]), ...(outbound.results as Json[])].map((x) => x.label)));
 }
 
 const pendingRequest = async (ctx: TenantContext, code: string): Promise<Json | null> =>
@@ -3715,9 +3751,11 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 		case "announce_address": {
 			const to = argStr(a, "to", false);
 			const all = a.all === true || a.all === "true";
+			const reissue = a.reissue === true || a.reissue === "true";
 			if (!!to === all) throw new ToolError("Pass to (one alias) or all: true.");
+			if (reissue && (all || !to)) throw new ToolError("reissue needs one alias.");
 			if (to && !/^[A-Za-z0-9_-]{1,64}$/.test(to)) throw new ToolError("to is invalid");
-			const results = await announcePeers(ctx, ectx, all ? { all: true } : { to });
+			const results = await announcePeers(ctx, ectx, all ? { all: true } : { to, reissue });
 			return M.toolText(`Address announcement for this inbox. A peer that does not support it keeps the current pairing. Tokens are not included. ${M.RULES}`, { results });
 		}
 	}

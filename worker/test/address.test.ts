@@ -215,6 +215,7 @@ test("a legacy pairing binds an identity once, and a later key is refused", asyn
 test("the old address forwards a direct reply and answers with a moved pointer", async (t) => {
 	const { alice, bob, call } = await world(t as never);
 	const cardUrl = "https://alice.example.com/.well-known/agent-card.json";
+	const ident = await Addr.generateIdentity();
 	const set = await call(bob.ctx, "/owner/address-forward", {
 		method: "PUT", headers: { authorization: `Bearer ${bob.ownerToken}`, "content-type": "application/json" },
 		body: JSON.stringify({ cardUrl, hours: 24 }),
@@ -228,6 +229,23 @@ test("the old address forwards a direct reply and answers with a moved pointer",
 	})).data.token as string;
 	const same = await sha256(token);
 	await alice.db.prepare("INSERT INTO peers (label, token_hash, created_at) VALUES ('carol', ?, ?)").bind(same, new Date().toISOString()).run();
+	const early = await call(bob.ctx, "/", {
+		method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+		body: JSON.stringify({ jsonrpc: "2.0", id: "early", method: "message/send", params: {
+			message: { kind: "message", role: "user", messageId: "m-early", contextId: "ctx-early", parts: [{ kind: "text", text: "before proof" }], metadata: { "a2a.exposed/reply-delivery": { taskId: "t0", messageId: "m0", state: "completed" } } },
+			metadata: { "a2a.exposed/reply-delivery": { taskId: "t0", messageId: "m0", state: "completed" } },
+		} }),
+	});
+	assert.equal(early.data.error.code, Addr.MOVED_CODE);
+	assert.equal((await alice.db.prepare("SELECT COUNT(*) AS n FROM tasks").first() as { n: number }).n, 0);
+	assert.equal((await call(bob.ctx, "/owner/identity", {
+		method: "PUT", headers: { authorization: `Bearer ${bob.ownerToken}`, "content-type": "application/json" },
+		body: JSON.stringify(ident),
+	})).status, 200);
+	assert.equal((await call(alice.ctx, "/owner/identity", {
+		method: "PUT", headers: { authorization: `Bearer ${alice.ownerToken}`, "content-type": "application/json" },
+		body: JSON.stringify(ident),
+	})).status, 200);
 	const reply = await call(bob.ctx, "/", {
 		method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
 		body: JSON.stringify({ jsonrpc: "2.0", id: "fwd", method: "message/send", params: {
@@ -300,12 +318,83 @@ test("a reply follows a moved card only when the new card proves the stored iden
 		body: JSON.stringify({ label: "bob" }),
 	})).data.token as string;
 	assert.equal((await owner(bob.ctx, "acct-bob", "PUT", "/owner/outbound-peers/mover", { url: "https://carol.example.com", token: callback })).status, 200);
+	await bob.db.prepare("UPDATE outbound_peers SET source = 'announce' WHERE alias = 'mover'").run();
 	const taskId = await send(bob.ctx, inbound, "where", "ctx-move");
 	const reply = await owner(bob.ctx, "acct-bob", "POST", "/owner/mcp/reply", { taskId, text: "followed", state: "completed" });
 	assert.equal(reply.body.structuredContent.status, "delivered", JSON.stringify(reply.body));
 	assert.equal(reply.body.structuredContent.target.host, "alice.example.com");
 	assert.equal((await bob.db.prepare("SELECT url FROM outbound_peers WHERE alias = 'mover'").first() as { url: string }).url, "https://alice.example.com");
 	assert.equal(JSON.stringify(reply.body).includes(callback), false);
+});
+
+test("an announcement cannot take over an outbound alias or keep its token", async (t) => {
+	const { alice, bob, call } = await world(t as never);
+	const ident = await Addr.generateIdentity();
+	assert.equal((await call(alice.ctx, "/owner/identity", {
+		method: "PUT", headers: { authorization: `Bearer ${alice.ownerToken}`, "content-type": "application/json" },
+		body: JSON.stringify(ident),
+	})).status, 200);
+	const now = new Date().toISOString();
+	await bob.db.prepare("INSERT INTO outbound_peers (alias, url, token_enc, created_at, updated_at) VALUES ('carol', 'https://carol.example.com', 'sealed-carol-token', ?, ?)").bind(now, now).run();
+	const started = await call(bob.ctx, "/oauth/device_authorization", {
+		method: "POST", headers: { "content-type": "application/json" },
+		body: JSON.stringify({ client_name: "carol", client_id: "carol", agent_identity: ident.publicKey }),
+	});
+	assert.equal(started.status, 200, JSON.stringify(started.data));
+	const code = String(started.data.user_code).replace("-", "");
+	assert.equal((await call(bob.ctx, `/owner/pairing/${code}/approve`, { method: "POST", headers: { authorization: `Bearer ${bob.ownerToken}` } })).status, 200);
+	const redeemed = await call(bob.ctx, "/oauth/token", {
+		method: "POST", headers: { "content-type": "application/json" },
+		body: JSON.stringify({ grant_type: "urn:ietf:params:oauth:grant-type:device_code", device_code: started.data.device_code }),
+	});
+	assert.equal(redeemed.data.peer_label, "carol-2");
+	assert.equal((await bob.db.prepare("SELECT url, token_enc FROM outbound_peers WHERE alias = 'carol'").first() as { url: string; token_enc: string }).url, "https://carol.example.com");
+	const planted = "a2aow_" + "d".repeat(43);
+	await bob.db.prepare("INSERT INTO peers (label, token_hash, created_at, source) VALUES ('carol', ?, ?, 'pairing')").bind(await sha256(planted), now).run();
+	const cardUrl = "https://alice.example.com/.well-known/agent-card.json";
+	const signature = await Addr.signBytes(ident.privateKey, Addr.updateMessage(cardUrl, ident.publicKey, "-"));
+	const taken = await call(bob.ctx, "/", {
+		method: "POST", headers: { authorization: `Bearer ${planted}`, "content-type": "application/json" },
+		body: JSON.stringify({ jsonrpc: "2.0", id: "take", method: "PeerAddressUpdate", params: { agentCardUrl: cardUrl, publicKey: ident.publicKey, announcementSignature: signature } }),
+	});
+	assert.equal(taken.data.error.code, -32602, JSON.stringify(taken.data));
+	const row = await bob.db.prepare("SELECT url, token_enc FROM outbound_peers WHERE alias = 'carol'").first() as { url: string; token_enc: string };
+	assert.equal(row.url, "https://carol.example.com");
+	assert.equal(row.token_enc, "sealed-carol-token");
+});
+
+test("revoking a return token stays revoked until an explicit reissue", async (t) => {
+	const { alice, carol, call, owner } = await world(t as never);
+	const ident = await Addr.generateIdentity();
+	assert.equal((await call(alice.ctx, "/owner/identity", {
+		method: "PUT", headers: { authorization: `Bearer ${alice.ownerToken}`, "content-type": "application/json" },
+		body: JSON.stringify(ident),
+	})).status, 200);
+	const carolToken = (await call(carol.ctx, "/owner/peers", {
+		method: "POST", headers: { authorization: `Bearer ${carol.ownerToken}`, "content-type": "application/json" },
+		body: JSON.stringify({ label: "alice" }),
+	})).data.token as string;
+	assert.equal((await owner(alice.ctx, "acct-alice", "PUT", "/owner/outbound-peers/carol", { url: "https://carol.example.com", token: carolToken })).status, 200);
+	const first = await owner(alice.ctx, "acct-alice", "POST", "/owner/peers/announce", { to: "carol" });
+	assert.equal((first.body as any).results[0].status, "updated", JSON.stringify(first.body));
+	const before = await alice.db.prepare("SELECT token_hash, revoked_at FROM peers WHERE label = 'carol' AND source = 'reverse'").first() as { token_hash: string; revoked_at: string | null };
+	assert.equal(before.revoked_at, null);
+	assert.equal((await call(alice.ctx, "/owner/peers/carol", { method: "DELETE", headers: { authorization: `Bearer ${alice.ownerToken}` } })).status, 200);
+	const again = await owner(alice.ctx, "acct-alice", "POST", "/owner/peers/announce", { to: "carol" });
+	assert.equal((again.body as any).results[0].status, "revoked", JSON.stringify(again.body));
+	const stuck = await alice.db.prepare("SELECT token_hash, revoked_at FROM peers WHERE label = 'carol'").first() as { token_hash: string; revoked_at: string | null };
+	assert.equal(stuck.token_hash, before.token_hash);
+	assert.ok(stuck.revoked_at);
+	const reissued = await owner(alice.ctx, "acct-alice", "POST", "/owner/peers/announce", { to: "carol", reissue: true });
+	assert.equal((reissued.body as any).results[0].status, "updated", JSON.stringify(reissued.body));
+	const after = await alice.db.prepare("SELECT token_hash, revoked_at FROM peers WHERE label = 'carol'").first() as { token_hash: string; revoked_at: string | null };
+	assert.equal(after.revoked_at, null);
+	assert.notEqual(after.token_hash, before.token_hash);
+	assert.equal(JSON.stringify(again.body).includes("a2aow_"), false);
+	assert.equal((await carol.db.prepare("SELECT source FROM outbound_peers WHERE alias = 'alice'").first() as { source: string }).source, "announce");
+	assert.equal((await call(carol.ctx, "/owner/peers/alice", { method: "DELETE", headers: { authorization: `Bearer ${carol.ownerToken}` } })).status, 200);
+	assert.equal((await carol.db.prepare("SELECT COUNT(*) AS n FROM outbound_peers WHERE alias = 'alice'").first() as { n: number }).n, 0);
+	assert.equal((await alice.db.prepare("SELECT revoked_at FROM peers WHERE label = 'carol'").first() as { revoked_at: string | null }).revoked_at, null);
 });
 
 test("export omits the sealed pairing identity and a stored return token", async (t) => {

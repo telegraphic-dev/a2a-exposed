@@ -89,10 +89,11 @@ async function requireIdentityOnWorker() {
 }
 
 export async function announce(o = {}) {
-	if (!!o.to === !!o.all) die(`usage: ${CLI} peer announce (--to <alias> | --all) [--json]`);
+	if (!!o.to === !!o.all) die(`usage: ${CLI} peer announce (--to <alias> | --all) [--reissue] [--json]`);
+	if (o.reissue && (o.all || !o.to)) die("--reissue needs --to <alias>");
 	if (o.to !== undefined && !/^[A-Za-z0-9_-]{1,64}$/.test(o.to)) die("--to must be a peer alias");
 	await requireIdentityOnWorker();
-	const r = await ownerCall("POST", "/owner/peers/announce", o.all ? { all: true } : { to: o.to });
+	const r = await ownerCall("POST", "/owner/peers/announce", o.all ? { all: true } : { to: o.to, ...(o.reissue ? { reissue: true } : {}) });
 	if (!r || r.status !== 200) die(`could not announce this address: ${r ? ownerError(r) : "no answer"}`);
 	const results = Array.isArray(r.data.results) ? r.data.results : [];
 	if (results.length === 1 && results[0].alias === "*") die(results[0].detail || "could not announce this address");

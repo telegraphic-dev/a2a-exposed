@@ -243,13 +243,17 @@ function outboundPeerBody(body: unknown): { ok: true; value: Record<string, stri
 function announceBody(body: unknown): { ok: true; value: Record<string, string> } | { ok: false; error: string } {
 	if (body == null || typeof body !== "object" || Array.isArray(body)) return { ok: false, error: "body must be an object" };
 	const keys = Object.keys(body);
-	if (keys.length > 2 || keys.some((key) => key !== "to" && key !== "all")) return { ok: false, error: "body is not allowed" };
+	if (keys.length > 3 || keys.some((key) => key !== "to" && key !== "all" && key !== "reissue")) return { ok: false, error: "body is not allowed" };
 	const raw = body as Record<string, unknown>;
 	const all = raw.all === true || raw.all === "true";
+	const reissue = raw.reissue === true || raw.reissue === "true";
 	const to = raw.to;
 	if (to !== undefined && (typeof to !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(to))) return { ok: false, error: "to is invalid" };
 	if (all === !!to) return { ok: false, error: "pass to (one alias) or all: true" };
-	return { ok: true, value: all ? { all: "true" } : { to: String(to) } };
+	if (reissue && (all || !to)) return { ok: false, error: "reissue needs one alias" };
+	const value: Record<string, string> = all ? { all: "true" } : { to: String(to) };
+	if (reissue) value.reissue = "true";
+	return { ok: true, value };
 }
 
 /** `{ cardUrl, hours? }` for the grace forward. The card URL is public. */

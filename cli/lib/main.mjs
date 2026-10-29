@@ -237,10 +237,11 @@ Outbound (agents you call)
   peers sync [alias...] | peers unsync <alias>
                           upload peers (URL + token, encrypted on the Worker) so the MCP connector can send to
                           them; default: all peers. Re-run after connect, token changes or an owner-token rotation
-  peer announce (--to <alias> | --all) [--json]
+  peer announce (--to <alias> | --all) [--reissue] [--json]
                           tell paired peers this inbox's current card URL. They switch only after the card
                           proves the same pairing identity. A peer that does not support this keeps the
-                          current pairing. The return token is not printed
+                          current pairing. A revoked return token stays revoked unless --to and --reissue.
+                          The return token is not printed
   peer forward --to <card-url> [--hours N] | peer forward --off
                           on the old inbox, forward direct replies and answer with a moved pointer for N hours
                           (default 168, max 720)
@@ -333,7 +334,7 @@ const SPEC = {
 	history: { from: S, n: { type: "string", short: "n", default: "50" }, json: B },
 	token: { rotate: B },
 	peers: { "token-env": S, "token-stdin": B },
-	peer: { to: S, all: B, hours: S, off: B, json: B },
+	peer: { to: S, all: B, reissue: B, hours: S, off: B, json: B },
 	send: { to: S, text: S, context: S, task: S, push: B, proto: S },
 	poll: { to: S, proto: S },
 	status: { json: B },

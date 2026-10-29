@@ -41,7 +41,7 @@ export function cleanPublicKey(v: unknown): string {
 	return raw && raw.length === 32 ? b64urlEncode(raw) : "";
 }
 
-/** A return token this inbox minted. Anything else is refused so a caller cannot store an arbitrary secret. */
+/** A peer token the caller grants this inbox, so this inbox can call the new address back. Anything else is refused. */
 export function cleanReverseToken(v: unknown): string {
 	return typeof v === "string" && /^(?:a2aow_|s2a_)[A-Za-z0-9_-]{43}$/.test(v) ? v : "";
 }

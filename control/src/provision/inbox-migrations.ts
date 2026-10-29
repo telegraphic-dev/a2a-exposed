@@ -16,6 +16,7 @@ import m0011 from "../../../worker/migrations/0011_conversation_owner.sql?raw";
 import m0012 from "../../../worker/migrations/0012_conversation_peer_owner.sql?raw";
 import m0013 from "../../../worker/migrations/0013_reply_delivery.sql?raw";
 import m0014 from "../../../worker/migrations/0014_peer_address.sql?raw";
+import m0015 from "../../../worker/migrations/0015_outbound_source.sql?raw";
 
 export type { InboxMigration };
 
@@ -34,4 +35,5 @@ export const INBOX_MIGRATIONS: InboxMigration[] = [
 	{ name: "0012_conversation_peer_owner.sql", sql: m0012 },
 	{ name: "0013_reply_delivery.sql", sql: m0013 },
 	{ name: "0014_peer_address.sql", sql: m0014 },
+	{ name: "0015_outbound_source.sql", sql: m0015 },
 ];
