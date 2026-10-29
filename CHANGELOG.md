@@ -4,6 +4,9 @@ All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.
 
 ## Unreleased
 
+- Control-core accepts a complete tunnel Access service-token pair when saving tenant wake settings. The encrypted pair stays on the same wake URL and clears when the URL changes or is removed.
+- Tenant secret envelopes recognize upstream bearer and Access credentials for hosted façade integrations. Deploy the matching data-plane reader before writing these fields.
+
 - **Reply delivery retries (#163).** Identical retries report an in-flight delivery before the completed task state. Delivery uses one 18-second overall budget, at most one agent-card request and seven-second request budgets. The first recorded delivery result wins: a late success cannot replace an uncertain result, and retrying never sends the same answer twice.
 
 ## 0.8.22 - 2026-10-28

@@ -39,18 +39,26 @@ A refresh response that includes `refresh_token` replaces the stored token. A re
 ## Tenant wake settings
 
 `saveWakeSettings(db, plane, secretsKey, input)` accepts `WakeSaveInput`: accountId,
-name, url, preset, keyHeader, key, optional hmacSecret and optional expectedVersion.
+name, url, preset, keyHeader, key, optional hmacSecret, optional accessClientId and
+accessClientSecret, and optional expectedVersion.
 The caller authenticates the account, confirms the human's choice, and validates
 public DNS before saving; the Worker independently enforces its wake target policy
 and pinned delivery. No public or owner HTTP route is added by this function.
 
 `hmacSecret` is stored as encrypted `WAKE_HMAC_SECRET`, never in public config.
 OpenBot requires a signing secret and rejects nonempty key/keyHeader inputs.
-Blank credentials retain a saved value only for the same URL and preset; a webhook
-key also requires the same key header. Removing the URL clears both wake
-credentials; other sealed event and Access fields are preserved. Legacy plaintext
-secrets migrate on save; existing ciphertext takes precedence and an unreadable
-blob fails closed. The v1 ciphertext format and Worker reader remain unchanged.
+Blank signing credentials retain a saved value only for the same URL and preset; a webhook
+key also requires the same key header. Removing the URL clears wake credentials,
+including the tunnel Access pair; unrelated sealed event and upstream fields are
+preserved. Legacy plaintext secrets migrate on save; existing ciphertext takes
+precedence and an unreadable blob fails closed. The v1 ciphertext format remains
+unchanged. Both readers recognize upstream bearer and Access credentials alongside
+wake and event secrets. Upgrade the data-plane
+Worker before a control-plane writer starts sealing the new upstream fields.
+Upgrade all control-plane writers before enabling upstream-secret writes: an older
+writer does not preserve fields it does not recognize when it reseals an envelope.
+Once an envelope exists, its values are authoritative; do not retain upstream
+credentials only in public config alongside it.
 
 Pass `expectedVersion` from the settings the caller tested to reject a stale save
 with `conflict`. The caller still verifies its short-lived signed test receipt;
@@ -59,3 +67,10 @@ The database update and outbox enqueue are atomic, with optimistic version check
 A failed push leaves the outbox for retry and logs a generic failure code, including on outbox retries.
 Optional fields preserve the call shape for existing importers; all importers use
 the same credential-reuse rules, including callers that omit the new fields.
+
+Tunnel Access credentials are supplied together using `accessClientId` and
+`accessClientSecret`. A partial pair is refused. Blank fields retain the saved
+pair only for the identical wake URL; changing or removing that URL clears it.
+The pair is sealed as `WAKE_ACCESS_CLIENT_ID` and `WAKE_ACCESS_CLIENT_SECRET`,
+never returned in public config. Creating Cloudflare objects, confirming settings,
+and checking a passing wake test remain the caller's responsibility.
