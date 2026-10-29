@@ -28,8 +28,9 @@ export interface OwnerCall {
 	/** Allowlisted query parameters only. */
 	query?: Record<string, string>;
 	/**
-	 * Tool arguments for `POST /owner/mcp/send`, `POST /owner/mcp/reply`, and `POST /owner/mcp/mark_working`.
-	 * Any other call refuses a body.
+	 * Tool arguments for `POST /owner/mcp/send`, `POST /owner/mcp/reply`, `POST /owner/mcp/mark_working`,
+	 * and `POST /owner/mcp/announce_address`. `PUT /owner/outbound-peers/:alias`, `PUT /owner/address-forward`,
+	 * and `POST /owner/peers/announce` also take a body. Any other call refuses a body.
 	 */
 	body?: unknown;
 	/** Approve or deny after a recent sign-in. */

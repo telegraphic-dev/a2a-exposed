@@ -43,11 +43,13 @@ The connector token cannot issue, rotate, or revoke tokens, approve or deny pair
 
 ## Self-hosted tools
 
-`inbox`, `show_task`, `history`, `mark_working`, `reply` (with state), `send`, `poll_outbound`, `list_peers`, `pairing_requests` (read-only), and `send_feedback`.
+`inbox`, `show_task`, `history`, `mark_working`, `reply` (with state), `send`, `poll_outbound`, `list_peers`, `announce_address`, `pairing_requests` (read-only), and `send_feedback`.
 
 `inbox` returns one page (default 20, at most 200). When it says more tasks are waiting, call it again with the cursor. A pending wake is cleared only for tasks on that page. A reply to a message you sent is on the first page (`kind: "outbound"`) until that page lists it. Read it with `history` and continue with `send`. `inbox` and `history` take `from` (the wake's peer). The same context id can be another peer's conversation, so pass `from` when the wake includes it.
 
 `pairing_requests` lists who is asking. The owner approves with the approval password on `/device`, with the owner token, or on the dashboard when `MANAGE_URL` is set. The tool output names that dashboard link.
+
+`announce_address` tells synced peers this inbox's current https card URL. Pass `to` for one alias, or `all: true`. The peer switches only after the card proves the same pairing identity. A peer that does not implement it keeps the current pairing. The tool does not approve anyone, and it does not return tokens.
 
 `send` reaches only peers uploaded with `peers sync`. When the peer's card advertises `capabilities.pushNotifications`, it registers a push to this A2A endpoint's `POST /push` and stores only the hash of that token before the call. Otherwise it sends without a push config, and you read the reply with `poll_outbound`. It keeps the conversation id stable when you pass `contextId` again. The peer's reply is recorded in `history` and listed by `inbox` (`kind: "outbound"`) until the inbox is read. Read that reply with `history`. Continue the conversation with `send`, using the same `contextId`. A tenant on the same deployment is called internally. A peer on any other host is a normal HTTPS call. The CLI `send` still registers a push only when you pass `--push`. `send_feedback` is the same report as the CLI `feedback` command. See [Feedback](feedback.md).
 

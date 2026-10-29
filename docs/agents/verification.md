@@ -93,7 +93,7 @@ For endpoint behavior, start from the existing user contracts:
 | Area | Contract and tests |
 | --- | --- |
 | A2A versions, task/context ownership, pagination, HEAD | [Protocol](../protocol.md); `worker/test/a2a.test.ts`, `context-peer.test.ts`, `list-tasks.test.ts`, `owner-rpc.test.ts` |
-| Pairing, password, OIDC | [Security](../security.md); `worker/test/pairing.test.ts`, `approval-oidc.test.ts` |
+| Pairing, password, OIDC, peer addresses | [Security](../security.md); `worker/test/pairing.test.ts`, `approval-oidc.test.ts`, `address.test.ts` |
 | MCP/OAuth | [MCP](../mcp.md); `worker/test/mcp.test.ts`, `owner-mcp.test.ts` |
 | Wake delivery/retries and presets | [Receiving messages](../receiving-messages.md); `worker/test/wake*.test.ts`, `inbox-wake.test.ts` |
 | Façade and SSRF defenses | [Self-hosting](../self-hosting.md), [Security](../security.md); `worker/test/facade.test.ts`, `wake-target.test.ts` |

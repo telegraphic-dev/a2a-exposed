@@ -7,6 +7,7 @@ import path from "node:path";
 import * as C from "./config.mjs";
 import { CLI, describeHttp, die, fetchCard, httpJson, isPrivateHost, pickEndpoint } from "./a2a.mjs";
 import { baseUrl, peerToken, warnPeerTokenEnv } from "./commands.mjs";
+import { publicIdentityForConnect } from "./address.mjs";
 
 export const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 export const PBKDF2_ITERATIONS = 100000; // default (the Workers runtime's maximum); the Worker advertises its own setting
@@ -168,6 +169,8 @@ export async function list(o) {
 	for (const p of d.pending) {
 		console.log(`--- ${p.userCode}  ${JSON.stringify(p.clientName || p.clientId || "(no name)")} (claimed, untrusted)  expires ${p.expiresAt}${p.replacesLabel ? `  replaces the active token "${p.replacesLabel}"` : ""}`);
 		console.log(`    card: ${p.agentCardUrl || "-"}  from: ${[p.ip || "?", p.country].filter(Boolean).join(", ")}`);
+		if (p.identityFingerprint) console.log(`    identity: ${p.identityFingerprint}`);
+		if (!p.agentCardUrl) console.log("    no callback address yet: replies stay on the task until this agent announces one");
 		console.log(`    link: ${p.verificationUriComplete}`);
 	}
 	console.log(`Ask your human about each request; never approve on your own.`);
@@ -356,6 +359,8 @@ A different agent at the same URL? Pass another --alias.`);
 		// deployment exists) wins. With no override, read this deployment's card, including an http one.
 		const nameUrl = sentCard || (!o["card-url"] && /^https?:\/\//.test(own || "") ? `${own.replace(/\/$/, "")}/.well-known/agent-card.json` : "");
 		const params = { client_name: pairingClientName({ explicit: o.name, cardName: await readCardName(nameUrl), agentName: C.get("A2A_AGENT_NAME"), workerName: C.get("A2A_WORKER_NAME"), ownUrl: own }), client_id: C.get("A2A_WORKER_NAME") || alias };
+		const identity = await publicIdentityForConnect();
+		if (identity) params.agent_identity = identity;
 		if (sentCard) params.agent_card_url = sentCard;
 		// replacing: present the old token, so a peer that supports it swaps the token under the same label (no orphan)
 		const r = await postForm(ep.device, params, replace && oldToken ? oldToken : null);

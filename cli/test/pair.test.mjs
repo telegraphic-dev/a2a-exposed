@@ -121,7 +121,10 @@ test("connect --card-url names the request with that card, not the deployment ca
 	const s = sandbox(t, {});
 	let r = await s.cli(["connect", peer, "--alias", "peer1", "--card-url", jean, "--no-wait"], { extraEnv: stub });
 	assert.equal(r.status, 0, r.stderr);
-	assert.deepEqual(posted().at(-1), { client_name: "Jean", client_id: "peer1", agent_card_url: jean });
+	const named = posted().at(-1);
+	assert.match(named.agent_identity, /^[A-Za-z0-9_-]{43}$/);
+	delete named.agent_identity;
+	assert.deepEqual(named, { client_name: "Jean", client_id: "peer1", agent_card_url: jean });
 
 	r = await s.cli(["connect", peer, "--alias", "peer2", "--card-url", jean, "--name", "Override", "--no-wait"], { extraEnv: stub });
 	assert.equal(r.status, 0, r.stderr);
@@ -157,6 +160,8 @@ test("connect: shows the code and link, honours interval and slow_down, stores t
 	// the request: form-encoded, who is asking, our card
 	assert.equal(m.seen.device.length, 1);
 	assert.equal(m.seen.device[0].type, "application/x-www-form-urlencoded");
+	assert.match(m.seen.device[0].params.agent_identity, /^[A-Za-z0-9_-]{43}$/);
+	delete m.seen.device[0].params.agent_identity;
 	assert.deepEqual(m.seen.device[0].params, { client_name: "Client Bot", client_id: "client-bot", agent_card_url: "https://client.example.com/.well-known/agent-card.json" });
 	assert.equal(m.seen.token.length, 4);
 	assert.ok(m.seen.token.every((x) => x.params.grant_type === GRANT && x.params.device_code === "dev-code-secret"));

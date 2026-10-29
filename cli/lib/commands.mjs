@@ -152,7 +152,8 @@ export async function contexts() {
 export async function token(action, label, o) {
 	if (action === "list") {
 		for (const r of await owner("GET", "/owner/peers")) {
-			const via = r.source === "pairing" ? `\tvia pairing: code ${r.user_code || "?"}${r.client_name ? `, ${JSON.stringify(r.client_name)}` : ""}` : "";
+			const via = r.source === "pairing" ? `\tvia pairing: code ${r.user_code || "?"}${r.client_name ? `, ${JSON.stringify(r.client_name)}` : ""}`
+				: r.source === "reverse" ? "\tvia reverse pairing (return token; revoke ends the return path)" : "";
 			console.log(`${r.label}\tcreated=${r.created_at}\t${r.revoked_at ? "REVOKED " + r.revoked_at : "active"}${via}`);
 		}
 		// MCP connectors (Worker 0.5+): their own tokens, listed and revoked by label like peer tokens

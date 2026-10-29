@@ -329,7 +329,7 @@ test("scope: the MCP token is not an owner or peer token, and peer/owner tokens 
 	assert.equal((await s.call("GET", "/mcp", { headers: { authorization: `Bearer ${a.access_token}` } })).status, 405);
 	// tools can't administer tokens or pairings
 	const names = (await s.mcp(a.access_token, "tools/list")).data.result.tools.map((x: any) => x.name);
-	assert.deepEqual(names, ["inbox", "show_task", "history", "mark_working", "reply", "send", "poll_outbound", "list_peers", "pairing_requests", "send_feedback"]);
+	assert.deepEqual(names, ["inbox", "show_task", "history", "mark_working", "reply", "send", "poll_outbound", "list_peers", "announce_address", "pairing_requests", "send_feedback"]);
 	assert.ok(!names.some((n: string) => /approve|deny|token|revoke|issue|password/.test(n)));
 	const unknown = await s.mcp(a.access_token, "tools/call", { name: "approve_pairing", arguments: { code: "X" } });
 	assert.equal(unknown.data.error.code, -32602);
