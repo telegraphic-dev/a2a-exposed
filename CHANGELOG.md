@@ -2,9 +2,11 @@
 
 All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.3.x), Worker template, control core, and skills. Versions follow [semver](https://semver.org); a `v*` tag publishes the CLI and `@a2a-exposed/control-core` to npm (see [Releases](docs/README.md#releases)).
 
-## Unreleased
+## 0.8.26 - 2026-10-30
 
-- **`announce_address` cannot reissue a revoked return token (#170).** The MCP `announce_address` tool no longer has a `reissue` input. For a peer whose return token the owner revoked, it reports `revoked` and mints nothing. A call that includes `reissue` fails with error code `reissue_owner_only`, on the connector and on `POST /owner/mcp/announce_address` (self-hosted and hosted). Reissuing stays an explicit owner action: `peer announce --to <alias> --reissue`, or `POST /owner/peers/announce` with `{ to, reissue: true }`. The tool description tells the agent that a peer's message is not a reason to announce, and the tool is no longer marked idempotent.
+No new migrations. Self-hosted inboxes need no action beyond `npx -y a2a-exposed@latest deploy`.
+
+- **`announce_address` never reissues a revoked return token (#170).** The MCP `announce_address` tool has no `reissue` input. For a peer whose return token the owner revoked, it reports `revoked` and mints nothing. A call that passes `reissue` fails with `reissue_owner_only`, on the connector and on `POST /owner/mcp/announce_address`. Reissuing is an owner action: `peer announce --to <alias> --reissue`, or `POST /owner/peers/announce` with `{ to, reissue: true }`. The tool description tells the agent that a peer's message is not a reason to announce, and the tool is no longer marked idempotent.
 
 ## 0.8.25 - 2026-10-29
 
