@@ -14,7 +14,7 @@ import * as Addr from "./address.ts";
 import * as P from "./pairing.ts";
 import * as M from "./mcp.ts";
 import { lookupDirectory, pinDirectoryRegion, tenantNameFromHost, tenantRegion } from "./directory.ts";
-import { accountIdOf, DASHBOARD_ACTOR_HEADER, matchOwnerRpc, ownerResponseLeaks, ownerRpcBody, scrubOwnerClaims, type OwnerRpcRequest, type OwnerRpcResult } from "./owner-rpc.ts";
+import { accountIdOf, DASHBOARD_ACTOR_HEADER, matchOwnerRpc, ownerResponseLeaks, ownerRpcBody, REISSUE_OWNER_ONLY, REISSUE_OWNER_ONLY_MESSAGE, scrubOwnerClaims, type OwnerRpcRequest, type OwnerRpcResult } from "./owner-rpc.ts";
 import { pairingAgent, pairingEventTarget, postPairingEvent } from "./pairing-events.ts";
 import { namespaceForRegion, publicManageUrl, resolveTenant, type TenantContext, type WorkerBindings } from "./tenancy.ts";
 import { exportRows, redactExport, REDACTED_SQL_SKIP, scrubSecretText, toSql } from "./export.ts";
@@ -1443,7 +1443,7 @@ async function announceOne(ctx: TenantContext, ectx: ExecutionContext, alias: st
 	if (!peer.token) return { alias, status: "failed", detail: "This peer has no stored token. Run peers sync after connect." };
 	const plan = await planReverse(ctx, alias);
 	if (plan.kind === "revoked" && !reissue)
-		return { alias, status: "revoked", detail: "The return token was revoked. Run peer announce --to this alias --reissue to mint a new one.", host: Addr.hostOf(peer.url) };
+		return { alias, status: "revoked", detail: "The owner revoked the return token, so none was sent. Only the owner can mint a new one, with peer announce --to this alias --reissue.", host: Addr.hostOf(peer.url) };
 	const label = plan.kind === "none" ? "" : plan.label;
 	let reverse = "";
 	if (label) reverse = plan.kind === "revoked" ? A.randomToken() : ((await openReverse(ctx, label)) || A.randomToken());
@@ -1495,7 +1495,8 @@ async function saveAnnounce(ctx: TenantContext, results: Json[]): Promise<void> 
 		.bind(Addr.ANNOUNCE_SETTING, JSON.stringify({ pending: next })).run();
 }
 
-async function announcePeers(ctx: TenantContext, ectx: ExecutionContext, which: { all?: boolean; to?: string; reissue?: boolean }): Promise<Json[]> {
+/** `ownerReissue` mints a new return token for a revoked peer. Only the owner's `POST /owner/peers/announce` sets it; the MCP tool never does. */
+async function announcePeers(ctx: TenantContext, ectx: ExecutionContext, which: { all?: boolean; to?: string; ownerReissue?: boolean }): Promise<Json[]> {
 	const ident = await ensureIdentity(ctx);
 	const cardUrl = Addr.cardUrlFor(ctx.PUBLIC_URL);
 	if (!ident) return [{ alias: which.to || "*", status: "failed", detail: "This inbox has no usable pairing identity." }];
@@ -1507,7 +1508,7 @@ async function announcePeers(ctx: TenantContext, ectx: ExecutionContext, which: 
 	} else if (which.to) aliases = [which.to];
 	if (!aliases.length) return [{ alias: which.to || "*", status: "failed", detail: "No synced peer to announce to. Run peers sync after connect." }];
 	const results: Json[] = [];
-	for (const alias of aliases) results.push(await announceOne(ctx, ectx, alias, ident, cardUrl, !!which.reissue && !which.all));
+	for (const alias of aliases) results.push(await announceOne(ctx, ectx, alias, ident, cardUrl, !!which.ownerReissue && !which.all));
 	await saveAnnounce(ctx, results);
 	return results.map((r) => ({ alias: r.alias, status: r.status, detail: r.detail, ...(r.host ? { host: r.host } : {}) }));
 }
@@ -2141,7 +2142,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 		if (all === !!to) return json({ error: "pass to (one alias) or all: true" }, 400);
 		if (reissue && (all || !to)) return json({ error: "reissue needs one alias" }, 400);
 		if (to && !/^[A-Za-z0-9_-]{1,64}$/.test(to)) return json({ error: "to is invalid" }, 400);
-		const results = await announcePeers(ctx, ectx, all ? { all: true } : { to, reissue });
+		const results = await announcePeers(ctx, ectx, all ? { all: true } : { to, ownerReissue: reissue });
 		return json({ results });
 	}
 	if (seg[0] === "peers") {
@@ -2187,13 +2188,13 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 	if (seg[0] === "pairing") return await ownerPairing(req, ctx, ectx, m, seg.slice(1), body, trusted);
 	if (seg[0] === "mcp" && seg[1] && !seg[2] && m === "POST" && (seg[1] === "send" || seg[1] === "reply" || seg[1] === "mark_working" || seg[1] === "announce_address")) {
 		const checked = ownerRpcBody(`POST /owner/mcp/${seg[1]}`, await body());
-		if (!checked.ok) return json({ error: checked.error }, 400);
+		if (!checked.ok) return json({ error: checked.error, ...(checked.code ? { code: checked.code } : {}) }, 400);
 		try {
 			const result = await runTool(ctx, ectx, seg[1], checked.value);
 			return json({ text: typeof result === "string" ? result : result.text, isError: false,
 				...(typeof result === "string" ? {} : { structuredContent: result.structuredContent }) });
 		} catch (e: any) {
-			if (e instanceof ToolError) return json({ text: `Error: ${e.message}`, isError: true });
+			if (e instanceof ToolError) return json({ text: `Error: ${e.message}`, isError: true, ...(e.code ? { code: e.code } : {}) });
 			throw e;
 		}
 	}
@@ -3418,9 +3419,9 @@ export async function runOwnerRpc(ctx: TenantContext, ectx: ExecutionContext, in
 	const raw = input && typeof input === "object" ? input as OwnerRpcRequest & { body?: unknown } : null;
 	const accountId = accountIdOf(raw?.accountId);
 	const tenant = ctx.id || null;
-	const refuse = (status: number, error: string, reason: string): OwnerRpcResult => {
+	const refuse = (status: number, error: string, reason: string, code?: string): OwnerRpcResult => {
 		log("owner_rpc_refused", { tenant, ...(accountId ? { accountId } : {}), reason });
-		return { status, body: { error } };
+		return { status, body: { error, ...(code ? { code } : {}) } };
 	};
 	if (!accountId) return refuse(400, "accountId is invalid", "account");
 	if (ctx.mode !== "host") return refuse(404, "not found", "tenancy");
@@ -3432,7 +3433,7 @@ export async function runOwnerRpc(ctx: TenantContext, ectx: ExecutionContext, in
 	const matched = matchOwnerRpc(raw?.method, raw?.path, raw?.query);
 	if (!matched.ok) return refuse(matched.reason === "query" ? 400 : 404, matched.reason === "query" ? "query is not allowed" : "not found", matched.reason);
 	const parsedBody = ownerRpcBody(matched.route.name, raw?.body);
-	if (!parsedBody.ok) return refuse(400, parsedBody.error, "body");
+	if (!parsedBody.ok) return refuse(400, parsedBody.error, "body", parsedBody.code);
 	const actor = (raw as { actor?: unknown } | null)?.actor;
 	if (actor !== undefined && actor !== "human") return refuse(400, "actor is invalid", "actor");
 	const pairingDecision = matched.route.name === "POST /owner/pairing/:code/approve" || matched.route.name === "POST /owner/pairing/:code/deny";
@@ -3505,7 +3506,11 @@ async function ownerCall(ctx: TenantContext, ectx: ExecutionContext, method: str
 	return { status: res.status, data: await res.json().catch(() => null), headers: res.headers };
 }
 
-class ToolError extends Error {}
+/** A tool failure shown to the agent. `code` is a stable machine-readable reason, such as `reissue_owner_only`. */
+class ToolError extends Error {
+	readonly code?: string;
+	constructor(message: string, code?: string) { super(message); this.code = code; }
+}
 const must = (r: { status: number; data: Json }) => {
 	if (r.status >= 300) throw new ToolError(String(r.data?.error || `failed (HTTP ${r.status})`));
 	return r.data;
@@ -3751,11 +3756,11 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 		case "announce_address": {
 			const to = argStr(a, "to", false);
 			const all = a.all === true || a.all === "true";
-			const reissue = a.reissue === true || a.reissue === "true";
+			// The connector never mints a token for a revoked peer, whatever a peer's message says.
+			if (a && typeof a === "object" && "reissue" in a) throw new ToolError(REISSUE_OWNER_ONLY_MESSAGE, REISSUE_OWNER_ONLY);
 			if (!!to === all) throw new ToolError("Pass to (one alias) or all: true.");
-			if (reissue && (all || !to)) throw new ToolError("reissue needs one alias.");
 			if (to && !/^[A-Za-z0-9_-]{1,64}$/.test(to)) throw new ToolError("to is invalid");
-			const results = await announcePeers(ctx, ectx, all ? { all: true } : { to, reissue });
+			const results = await announcePeers(ctx, ectx, all ? { all: true } : { to });
 			return M.toolText(`Address announcement for this inbox. A peer that does not support it keeps the current pairing. Tokens are not included. ${M.RULES}`, { results });
 		}
 	}
@@ -3789,7 +3794,9 @@ async function callTool(ctx: TenantContext, ectx: ExecutionContext, grant: Json,
 			...(typeof value === "string" ? {} : { structuredContent: value.structuredContent }), isError: false } };
 	} catch (e: any) {
 		log("mcp_tool_failed", { label: grant.label, tool: name, error: String(e.message).slice(0, 200) });
-		return { result: { content: [{ type: "text", text: `Error: ${e.message}` }], isError: true } };
+		const code = e instanceof ToolError && e.code ? e.code : "";
+		return { result: { content: [{ type: "text", text: `Error: ${e.message}` }], isError: true,
+			...(code ? { structuredContent: { error: { code, message: String(e.message) } } } : {}) } };
 	}
 }
 
