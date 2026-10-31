@@ -4,6 +4,10 @@ All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.
 
 ## Unreleased
 
+- **Hosted finish recovery (#193).** Authenticate request creation with the saved account session bound to its original service; reject partial environment session overrides before network access; provide local error guidance, preserve numeric origin failure status, and accept a validated `--preset <id>` for existing links without a preset.
+
+- **Single-bot hosted link creation (untested) (site #354).** `hosted link create` submits the hostname, local origin, webhook path and preset for owner approval, then reuses the private connector/start/test/save flow. The site reuses an identical ready link and refuses a different one. The CLI checks the approved plan before reading the signing secret and reports creation failures without echoing server text. Both create and finish use the saved hosted login only on its matching service origin when starting the request. Skills describe self-setup without a second bot or clipboard transfer; staging end-to-end testing is pending.
+
 ## 0.8.27 - 2026-10-31
 
 No new migrations. Self-hosted inboxes need no action beyond `npx -y a2a-exposed@latest deploy`.

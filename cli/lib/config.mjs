@@ -54,6 +54,14 @@ export function get(key, dflt = "") {
 	return f !== undefined && f !== "" ? f : dflt;
 }
 
+/** Resolve a control credential with the origin from the same source.
+ * A partial environment override must never borrow saved credentials.
+ */
+export function controlSession(env = process.env, saved = fileConfig()) {
+	const source = env.CONTROL_URL || env.CONTROL_TOKEN ? env : saved;
+	return { origin: source.CONTROL_URL || "", token: source.CONTROL_TOKEN || "" };
+}
+
 function ensureDir() {
 	fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
 }
