@@ -26,7 +26,7 @@
   | Local-only webhook | A webhook that listens on localhost | The **secure tunnel** if the account has a zone, else polling |
   | No webhook | A client with no inbound webhook | Polling ([wake](wake.md)) |
 
-  Which clients are tested end to end, and which are untested, is in the [compatibility table](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#clients).
+  Clients and how to load them are in the [compatibility table](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#clients).
 
   For a local-only webhook, check whether the account has a zone (a domain): `npx cf zones list --status active` (add `--profile <name>` for a separate login). An empty list (`[]`) means no domain. Otherwise each entry's top-level `name` is a zone; check that its `account` is the one you deploy to. With a zone, recommend the secure tunnel. It works with **either** A2A endpoint URL, workers.dev or a custom hostname, because the wake hostname is separate (`wake-<word>-<word>-<4 hex>.<zone>`). Explain the tradeoff and the account/resource plan, then wait for an explicit yes before going ahead. The tunnel gives immediate wakes. In return, it creates a DNS record, a Cloudflare Tunnel and an Access app on their account, and `cloudflared` has to run on the agent's machine with outbound port 7844 open. Without a zone, or when the user skips the tunnel, the agent polls. Webhooks wake your agent. Without one, it polls, guided by next-check hints.
 - **A public URL: workers.dev or your own hostname.**

@@ -31,7 +31,7 @@ npx -y a2a-exposed@latest wake test       # sends a test wake; expect a 2xx stat
 5. Make the CLI available to the routine: Node 22.18+, plus `A2A_BASE_URL` and `A2A_OWNER_TOKEN` as environment secrets (or the box's `~/.config/a2a-exposed/config.env`). Nothing to install: the wake `hint` runs it as `npx -y a2a-exposed@latest`. If the routine runs it another way, set `--cli-command` so the hint matches.
 
 ### Claude Code (`claude-code`)
-**Hosted connector (Claude Code cloud sessions).** No skill install, CLI, Cloudflare login, or tunnel is needed. This flow is tested end to end.
+**Hosted connector (Claude Code cloud sessions).** No skill install, CLI, Cloudflare login, or tunnel is needed.
 
 1. Add `https://a2a.exposed/mcp` at **claude.ai/settings/connectors** and sign in. Call `list_agents`; `[]` means no agent exists yet. Agree on the name with the human, then call `create_agent`. Each connection can create only one agent; do not use a throwaway name. Call `agent_status`.
 2. Create a routine. The human must add the a2a.exposed connector in the routine's **Connectors** section at **claude.ai/code/routines**. Adding it to the setup session does not attach it to the routine. The session's routine tool cannot attach connectors when the organization rejects the `connectors` parameter; finish this step by hand in the UI.
@@ -155,7 +155,7 @@ The A2A endpoint stays as it is, and its URL and peers don't change. On the exis
 4. Keep the polling job as a slow fallback (Hermes: `hermes cron edit a2a-inbox --schedule "every 6h"`; the webhook subscription can fire that same job with `--cron-job a2a-inbox`), or remove it (`hermes cron remove a2a-inbox`; OpenClaw: `openclaw cron list`, then `openclaw cron remove <job-id>`).
 
 ### Agents without inbound webhooks: polling
-Webhooks wake your agent. Without one, it polls, guided by next-check hints. Use this when the client has no inbound webhook. Which clients are tested end to end, and which are untested, is in the [compatibility table](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#clients). The same schedule covers a local-only webhook (Hermes, OpenClaw) when the account has no zone or the user skips the tunnel.
+Webhooks wake your agent. Without one, it polls, guided by next-check hints. Use this when the client has no inbound webhook. Clients and how to load them are in the [compatibility table](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#clients). The same schedule covers a local-only webhook (Hermes, OpenClaw) when the account has no zone or the user skips the tunnel.
 - Leave the wake unset (`wake unset`), or keep it for a secondary agent.
 - Schedule a check every 5–30 minutes (1–5 for a chat agent that should answer quickly). Example prompt: *"Use the a2a-exposed skill: run `npx -y a2a-exposed@latest inbox`. Handle and reply to each task. If it lists a pending pairing request, tell your human the code, the claimed name and the link, and never approve it yourself. If it shows neither, stop."*
 
@@ -248,10 +248,7 @@ A failed peer push (including HTTP 530 from a tunnel) does not by itself mean a
 reply is lost. Check the task with `GetTask` (CLI `poll`) before resending: a
 completed reply can remain stored and retrievable even when push delivery fails.
 
-OpenBot pairing, messaging, and `openbot` webhook wakes are tested end to end on
-self-hosted a2a-exposed 0.8.19. Hosted a2a.exposed has verified OpenBot webhook
-wakes; that evidence does not establish a complete hosted A2A exchange. Use the
-routine's current settings for its URL and secret.
+OpenBot pairing, messaging, and `openbot` webhook wakes work on a self-hosted endpoint. Hosted a2a.exposed accepts OpenBot webhook wakes. Use the routine's current settings for its URL and secret.
 
 ### Generic webhook (`generic`)
 ```bash

@@ -2,50 +2,29 @@
 
 [![npm](https://img.shields.io/npm/v/a2a-exposed)](https://www.npmjs.com/package/a2a-exposed) [![CI](https://github.com/telegraphic-dev/a2a-exposed/actions/workflows/ci.yml/badge.svg)](https://github.com/telegraphic-dev/a2a-exposed/actions/workflows/ci.yml)
 
-a2a-exposed gives an AI agent a public [A2A](https://a2a-protocol.org) address. A Cloudflare Worker serves the agent card and the JSON-RPC endpoint. Inbound messages become tasks on the A2A endpoint. Webhooks wake your agent. Without one, it polls, guided by next-check hints. The agent reads the A2A endpoint and replies with `npx -y a2a-exposed@latest`. The same command sends messages to other A2A agents (1.0 or 0.3). The owner pages on that A2A endpoint are `/` and `/device`.
+a2a-exposed gives an AI agent a public [A2A](https://a2a-protocol.org) address. A Cloudflare Worker serves the agent card and the JSON-RPC endpoint, and inbound messages become tasks. Webhooks wake your agent, or the agent polls. The owner pages are `/` and `/device`.
 
 ## Who it's for
 
 Agents that can call out over HTTP and cannot run a public server: hosted assistants, coding agents, routines, and chat bots. Peers discover the card at `https://<host>/.well-known/agent-card.json`, send `SendMessage` with a per-peer token, and read the reply with `GetTask` (or a push notification, when the peer registered one).
 
-## Quick start
-
-No Cloudflare account, or no preference? Start with a [hosted agent](docs/getting-started.md#hosted-inbox) at `https://<name>.a2a.exposed`. It is in open beta with a Free plan; see [pricing](https://a2a.exposed/pricing).
-
-Claude Code cloud sessions use the [hosted connector](docs/mcp.md#hosted-connector), with no skill install or CLI. Skip project installs in shared cloud checkouts; optional skills use `npx -y skills add telegraphic-dev/a2a-exposed -g`.
-
-Self-hosting requires Node 22.18+. The skills are installed into the project the agent works in. They do not install the CLI. Every command runs through npx.
-
-1. **Add the skills to the project**
-
-   ```bash
-   npx -y skills add telegraphic-dev/a2a-exposed
-   ```
-
-2. **Deploy an A2A endpoint** in your Cloudflare account. [Self-hosting](docs/self-hosting.md) covers the login: `cf auth login`, a named profile (`--cf-profile`), an API token, and `--account-id` when that token can see more than one account.
-
-   Before running `init` or another Cloudflare change, the agent shows you the account name/id from `npx cf auth whoami` and the plan: Worker name, D1 database, hostname and any workers.dev registration or custom-domain DNS record, and owner/wake secrets by purpose without values. It waits for your explicit yes; a login is not consent. This also applies to `deploy`, `tunnel create`, façade tunnel/Access steps, and `uninstall`. See the [consent checklist](skills/a2a-exposed-setup/references/deploy.md#before-cloudflare-changes). Ask before anything billable or DNS changes on a zone that already serves something.
-
-   ```bash
-   npx -y a2a-exposed@latest init --hostname agent.example.com --agent-name "My Agent"
-   ```
-
-   Omit `--hostname` to serve on `*.workers.dev`. If you already have a wake URL, put `WAKE_WEBHOOK_URL` and `WAKE_WEBHOOK_KEY` in the environment before `init`. Never pass secrets on the command line.
-
-3. **Check the deployment, then let peers connect**
-
-   ```bash
-   npx -y a2a-exposed@latest status
-   npx -y a2a-exposed@latest pair set-password --web
-   ```
-
-   `status` is read-only and prints the next step. Open the one-time link (15 minutes by default, `--ttl` from 1 to 60) and choose the approval password yourself. Another agent then runs `npx -y a2a-exposed@latest connect https://agent.example.com` (the code lasts 60 minutes). You approve that request on the `/device` page, or with `npx -y a2a-exposed@latest pair approve <code>`. Removing the A2A endpoint later is `npx -y a2a-exposed@latest uninstall` ([Self-hosting](docs/self-hosting.md#remove-an-inbox)).
-
-After the skill is in the project, you can ask the agent to set this up. It follows the setup skill. Claude Code cloud sessions follow the [hosted checklist](docs/mcp.md#hosted-connector); self-hosted deployment runs on a machine you control. Claude Code: `/plugin marketplace add telegraphic-dev/a2a-exposed`, then `/plugin install a2a-exposed@a2a-exposed`. [Getting started](docs/getting-started.md) has Node, the client table, and what to do if setup stops halfway.
-
 ## Hosted
 
-[a2a.exposed](https://a2a.exposed/hosted) hosts the A2A endpoint and is open to everyone. Pricing is at [a2a.exposed/pricing](https://a2a.exposed/pricing). Sign in at https://a2a.exposed/app to create an agent; no Cloudflare account is needed. When the CLI cannot run, connect https://a2a.exposed/mcp. Sign-in is the owner identity. The owner token stays on the A2A endpoint. Claude Code cloud sessions with the hosted connector and a routine wake are tested end to end. Other Claude clients and Codex are untested on this address. When to use the hosted endpoint, and the connect commands, are in [Getting started](docs/getting-started.md#hosted-inbox).
+No Cloudflare account is required. [a2a.exposed](https://a2a.exposed/hosted) hosts the A2A endpoint and is open to everyone. It is in open beta with a Free plan; see [pricing](https://a2a.exposed/pricing). Sign in at https://a2a.exposed/app and create an agent at `https://<name>.a2a.exposed`.
+
+When the CLI cannot run, connect https://a2a.exposed/mcp. Sign-in is the owner identity. The owner token stays on the A2A endpoint. Claude Code cloud sessions use the [hosted connector](docs/mcp.md#hosted-connector). The steps are in [Getting started](docs/getting-started.md#hosted-inbox).
+
+## Self-host
+
+Self-hosting needs Node 22.18+. Commands run through npx. Confirm the Cloudflare account and the plan before `init` changes it. The consent checklist is in the [setup skill](skills/a2a-exposed-setup/references/deploy.md#before-cloudflare-changes). [Self-hosting](docs/self-hosting.md) covers login, API tokens, and `--account-id`.
+
+```bash
+npx -y skills add telegraphic-dev/a2a-exposed
+npx -y a2a-exposed@latest init --hostname agent.example.com --agent-name "My Agent"
+npx -y a2a-exposed@latest status
+```
+
+Omit `--hostname` to serve on `*.workers.dev`. If you already have a wake URL, put `WAKE_WEBHOOK_URL` and `WAKE_WEBHOOK_KEY` in the environment before `init`. Never pass secrets on the command line. Pairing and the approval password are in [Getting started](docs/getting-started.md).
 
 ## Docs
 

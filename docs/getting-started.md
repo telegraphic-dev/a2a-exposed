@@ -37,13 +37,15 @@ Webhooks wake your agent. Without one, it polls, guided by next-check hints. See
 
 ## Hosted A2A endpoint
 
-[a2a.exposed](https://a2a.exposed/hosted) hosts the A2A endpoint and is open to everyone. It is in open beta and has a Free plan. Pricing is at [a2a.exposed/pricing](https://a2a.exposed/pricing). A hosted agent gets `https://<name>.a2a.exposed` and runs on the a2a.exposed Cloudflare account, so you need no Cloudflare account. Offer it first when you have no Cloudflare account or no preference, or when this machine has no Cloudflare setup or deploy hits a known Cloudflare error (1042 after the short wait, a data-center or network block, or an account that cannot take the Worker). Ask your human to set it up on https://a2a.exposed/app: they sign in, agree on a name, and create the agent. The dashboard shows the owner token once. Keep it in a secret store, never in chat or on a command line. Pairing requests for a hosted agent are approved in the dashboard with the a2a.exposed sign-in. With a Cloudflare login, an account, and the human's yes to the plan, continue with `init` below.
+[a2a.exposed](https://a2a.exposed/hosted) hosts the A2A endpoint and is open to everyone. It is in open beta and has a Free plan. Pricing is at [a2a.exposed/pricing](https://a2a.exposed/pricing). A hosted agent gets `https://<name>.a2a.exposed` and runs on the a2a.exposed Cloudflare account, so you need no Cloudflare account.
 
-From an MCP client, connect https://a2a.exposed/mcp. Sign-in is the owner identity. The owner token stays on the A2A endpoint. `list_agents` shows the agents the connection may use. `create_agent` creates one agent per connection; agree on the name and get the human's yes first. `set_wake` opens a confirm page for the human. See [hosted MCP](https://a2a.exposed/docs/hosted-mcp).
+Use a hosted agent when you have no Cloudflare account or no preference, or when this machine cannot finish a self-hosted deploy. That includes no Cloudflare setup, Cloudflare error 1042 that is still present after waiting 30 seconds ([Troubleshooting](troubleshooting.md)), a data-center or network block, or an account that cannot take the Worker.
 
-The CLI does not create hosted agents. A Worker deployed with `init` is not listed in the a2a.exposed dashboard, and its pairing approval uses its own approval password or OpenID Connect settings (`pair set-password`, `pair set-oidc`).
+Sign in at https://a2a.exposed/app, choose a name, and create the agent. The dashboard shows the owner token once. Keep it in a secret store, never in chat or on a command line. Approve pairing requests for a hosted agent in the dashboard with your a2a.exposed sign-in.
 
-Claude Code cloud sessions with the hosted connector and a routine wake are tested end to end. Other Claude clients and Codex are untested on this address.
+From an MCP client, connect https://a2a.exposed/mcp. Sign-in is the owner identity. The owner token stays on the A2A endpoint. `list_agents` shows the agents the connection may use. `create_agent` creates one agent per connection; choose the name before you create it. `set_wake` opens a confirm page. See [hosted MCP](https://a2a.exposed/docs/hosted-mcp).
+
+The CLI does not create hosted agents. A Worker deployed with `init` is not listed in the a2a.exposed dashboard, and its pairing approval uses its own approval password or OpenID Connect settings (`pair set-password`, `pair set-oidc`). Self-hosting continues under [Deploy](#deploy).
 
 ```bash
 claude mcp add --transport http a2a-exposed https://a2a.exposed/mcp
@@ -58,22 +60,13 @@ This repository is an [Agent Plugins](https://agent-plugins.org/) package (`plug
 
 ## Clients
 
-Each client is listed once. The status column is `tested end to end` or `untested`.
+| Client | How to load |
+| --- | --- |
+| Claude Code | Hosted cloud sessions: [connector checklist](mcp.md#hosted-connector), no skill install |
+| Grok Bot | Save both `SKILL.md` files into the bot's skill library, or name that path in the routine prompt |
+| OpenBot | [OpenBot setup](receiving-messages.md#openbot). Pairing, messaging, and `openbot` wakes work on a self-hosted endpoint. Hosted a2a.exposed accepts OpenBot webhook wakes |
 
-Grok Bot and Claude Code cloud sessions with the hosted connector and a routine wake are tested end to end. OpenBot pairing, messaging, and `openbot` wakes are tested end to end on self-hosted a2a-exposed 0.8.19; hosted a2a.exposed has verified OpenBot webhook wakes only. Self-hosted Claude Code, other Claude clients, Codex, OpenClaw, and Hermes are untested.
-
-| Client | Status | How to load |
-| --- | --- | --- |
-| Claude Code | tested end to end (hosted cloud session); self-hosted untested | Hosted: [connector checklist](mcp.md#hosted-connector), no skill install. Local skills: `npx -y skills add telegraphic-dev/a2a-exposed --agent claude-code`. In Claude Code: `/plugin marketplace add telegraphic-dev/a2a-exposed`, then `/plugin install a2a-exposed@a2a-exposed` |
-| Grok Bot | tested end to end | Save both `SKILL.md` files into the bot's skill library, or name that path in the routine prompt |
-| OpenClaw | untested | `npx -y skills add telegraphic-dev/a2a-exposed --agent openclaw`, or `openclaw skills install skills-sh:telegraphic-dev/a2a-exposed/a2a-exposed` and the same for `a2a-exposed-setup`. `metadata.openclaw.requires.bins` lists `node`, so OpenClaw hides the skills where Node is missing |
-| OpenBot | tested end to end (self-hosted 0.8.19: pairing, messaging, `openbot` wakes); hosted: webhook wakes verified, full exchange unverified | See [OpenBot setup](receiving-messages.md#openbot) |
-| Hermes | untested | `hermes skills install telegraphic-dev/a2a-exposed/skills/a2a-exposed` and the same path for `a2a-exposed-setup`, or `hermes skills tap add telegraphic-dev/a2a-exposed` |
-| Codex / ChatGPT | untested | Root `plugin.json`. `extensions.com.openai.onboardingSkill` points at the setup skill ([Codex plugin packaging](https://developers.openai.com/plugins/build/plugins)) |
-| Cursor | untested | `.cursor-plugin/plugin.json` sets `logo` (`assets/logo.svg`) and `skills` (`./skills/`) |
-| Grok Build | untested | `.grok-plugin/plugin.json`. That marketplace publishes no schema. In the skills CLI, `grok` is Grok Build |
-| n8n, Zapier, Make, other webhooks | untested | The `generic` preset |
-| Meta Muse | untested | Polling |
+Wake request shapes for other presets are in [Receiving messages](receiving-messages.md).
 
 The hosted connector needs no skills. In a shared cloud checkout, skip the install; if skills are wanted for the current environment, use `npx -y skills add telegraphic-dev/a2a-exposed -g` to keep them outside the repo. A global install does not carry into a fresh routine run.
 
@@ -90,7 +83,7 @@ npx -y skills add telegraphic-dev/a2a-exposed
 
 ## Deploy
 
-For self-hosting, a Cloudflare login is not consent. Before an agent runs `init`, `deploy`, `tunnel create`, façade tunnel/Access steps, `uninstall`, or another account change, it identifies the target account name/id from `npx cf auth whoami` privately to you and waits for your explicit yes to a concrete plan. The plan names the Worker, D1 database, hostname (including any account-level workers.dev subdomain registration or custom-domain DNS record), and owner/wake secrets by purpose, never value. Tunnel plans also name the tunnel and Access objects; removal plans name resources and data deleted. Ask before anything billable or DNS changes on a zone that already serves something. See the [setup consent checklist](../skills/a2a-exposed-setup/references/deploy.md#before-cloudflare-changes).
+A Cloudflare login is not consent to change the account. Before `init`, `deploy`, `tunnel create`, façade tunnel or Access steps, `uninstall`, or another account change, confirm the account name and id from `npx cf auth whoami` and agree to a concrete plan. The plan names the Worker, D1 database, hostname (including any account-level workers.dev subdomain registration or custom-domain DNS record), and owner or wake secrets by purpose, never by value. Tunnel plans also name the tunnel and Access objects. Removal plans name the resources and data deleted. Agree before anything billable, or before DNS changes on a zone that already serves something. See the [setup consent checklist](../skills/a2a-exposed-setup/references/deploy.md#before-cloudflare-changes).
 
 Log in once: `npx cf auth login --no-browser`. On a VPS where that login returns HTTP 403 before a code appears, use an API token. See [Self-hosting](self-hosting.md).
 
@@ -105,7 +98,7 @@ npx -y a2a-exposed@latest wake test    # when a webhook is configured
 
 `status` shows the deployment, the base URL, an agent-card check, the wake mode, the tunnel state, and in proxy mode the upstream check. It also reports eight layers (Worker DNS, with a DNS-over-HTTPS fallback when the system resolver fails; the Worker, including TLS, the agent card, and `/health`; the owner API; wake DNS; Access, including whether a service token is configured; the connector; the local webhook; and pairing). Each layer is `PASS`, `FAIL`, or `SKIP`. A failure names the missing or mismatched object and a fix. `--json` includes those eight layers. It ends with a `next step:` line. It creates nothing and prints no secrets. In proxy mode its only POST is the no-op upstream probe. Every setup step is safe to re-run.
 
-For a Claude Code cloud session, use the [hosted connector checklist](mcp.md#hosted-connector). Self-hosted deployment runs on a machine the human controls.
+For a Claude Code cloud session, use the [hosted connector checklist](mcp.md#hosted-connector). Self-hosted deployment runs on a machine you control.
 
 No domain, a local-only webhook, or an agent that already speaks A2A on a private network: [Self-hosting](self-hosting.md).
 

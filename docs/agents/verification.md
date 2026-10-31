@@ -44,7 +44,7 @@ node cli/bin/a2a-exposed.mjs --help
 ```
 
 CI runs the default Node suite and both storage backends, but does not explicitly
-set a timezone matrix. The dual-timezone requirement is contributor policy.
+set a timezone matrix. Run the time-sensitive tests in `Europe/Prague` and in `UTC`.
 Control `npm test` runs Node tests serially, then Vitest in Miniflare with a
 mock Cloudflare API. If Node tests fail, the shell skips Vitest: fix the failure
 and rerun the full command; use `npx vitest run` separately to diagnose it.
@@ -82,7 +82,7 @@ none replaces the others.
 
 ## Manual QA
 
-There is no `qa/` directory or browser runner. For affected pages, use local
+For affected pages, use local
 `npx cf dev` with ignored `.dev.vars` and dummy credentials. Check landing-page
 HTML versus JSON negotiation, setup-link expiry/single use, approval and denial,
 MCP consent/redirect behavior, error messages, CSP, and timezone display as
@@ -102,13 +102,12 @@ For endpoint behavior, start from the existing user contracts:
 | CLI configuration and packaging | [CLI](../cli.md); `cli/test/`, `cli/scripts/sync-worker.mjs` |
 | Skills and platforms | [Client table](../getting-started.md#clients); `skills/` and root validation scripts |
 
-Real self-host testing uses only a dedicated maintainer-provided Cloudflare
-account/profile with explicit authorization. Project infrastructure stays in
-the separate Terraform repository. Do not use the owner's main account or run
-public user setup commands against project infrastructure. Confirm test scope,
-use dummy messages, check auth rejection as well as success, verify cleanup,
-and record the exact version and client/preset tested. Do not mark a platform
-tested end to end based on mocks or a successful webhook status alone.
+Real self-host testing uses a Cloudflare account the maintainers provide for
+that purpose, and only with their explicit authorization. Do not run the public
+setup commands against infrastructure this repository does not own. Confirm the
+test scope, use dummy messages, check auth rejection as well as success, verify
+cleanup, and record the version and the client or preset you exercised. A mock
+or a successful webhook status does not show that a client works.
 
 The Claude check stages the installable manifests, skills, assets, license, and
 README, then runs the pinned validator with `--strict`. Repository-only
