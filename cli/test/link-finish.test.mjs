@@ -4,13 +4,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
-import { finishLink } from "../lib/link-finish.mjs";
+import { finishLink, createLink, savedLinkSession } from "../lib/link-finish.mjs";
 import { writeTokenFile, readSigningSecret, startConnector, connectorArgs } from "../lib/local-link.mjs";
+import { controlSession } from "../lib/config.mjs";
 import { EventEmitter } from "node:events";
+import { spawnSync } from "node:child_process";
 
 const link = { agent: "example", hostname: "wake.example.com", origin: "http://127.0.0.1:8644", path: "/webhooks/inbox", preset: "hermes" };
 const o = { agent: "example", "control-url": "https://control.example", "secret-env": "TEST_SIGNING_SECRET" };
-const sensitive = ["private-grant", "private-connector", "private-signing-secret"];
+const sensitive = ["private-grant", "private-connector", "private-signing-secret", "private-session"];
 
 function harness(overrides = {}) {
 	const calls = [], lines = [], writes = [], runs = [], sleeps = [];
@@ -34,7 +36,8 @@ function harness(overrides = {}) {
 			assert.equal(init.redirect, "error");
 			assert.equal(url.includes(sensitive[0]), false);
 			const body = init.body ? JSON.parse(init.body) : undefined;
-			if (endpoint === "requests") { challenge = body.challenge; assert.equal(body.agent, "example"); }
+			if (endpoint === "requests") { challenge = body.challenge; assert.equal(body.agent, "example"); assert.equal(init.headers.authorization, `Bearer ${sensitive[3]}`); }
+			if (endpoint === "token") assert.equal(init.headers.authorization, undefined);
 			if (["connector", "status", "wake-test"].includes(endpoint)) assert.equal(init.headers.authorization, `Grant ${sensitive[0]}`);
 			if (endpoint === "wake-test") assert.deepEqual(body, { signing_secret: sensitive[2], preset: "hermes" });
 			return responses[endpoint](body, init);
@@ -42,6 +45,7 @@ function harness(overrides = {}) {
 		sleep: async (ms) => { sleeps.push(ms); clock += ms; }, now: () => clock,
 		write: (line) => lines.push(line), saveToken: (...args) => writes.push(args),
 		readSecret: () => sensitive[2], runConnector: async (file) => runs.push(file),
+		sessionToken: () => sensitive[3],
 	};
 	return { deps, calls, lines, writes, runs, sleeps };
 }
@@ -178,4 +182,171 @@ test("connector spawn passes only the token filename, detaches and suppresses ou
 		assert.equal(Object.keys(options.env).some((k) => /TOKEN|SECRET|PASSWORD|KEY/i.test(k)), false);
 		queueMicrotask(() => child.emit("spawn")); return child;
 	});
+});
+
+const plan = { hostname: link.hostname, origin: link.origin, path: link.path, preset: link.preset };
+
+test("create sends only the exact plan before approval, then connects, tests and saves on the same bot", async () => {
+	let sent;
+	const h = harness({ requests: (body) => {
+		sent = body;
+		return Response.json({ request_id: "request-id", user_code: "ABCD-1234", approve_url: "https://control.example/approve", expires_in: 600 }, { status: 201 });
+	} });
+	assert.deepEqual(await createLink({ ...o, ...plan }, h.deps), { saved: true, connectorStarted: true });
+	assert.deepEqual(sent.create, plan);
+	assert.deepEqual(Object.keys(sent).sort(), ["agent", "challenge", "create"]);
+	for (const value of sensitive) {
+		assert.equal(JSON.stringify(sent).includes(value), false);
+		assert.equal(h.lines.join("\n").includes(value), false);
+	}
+	assert.deepEqual(h.calls, ["requests", "token", "connector", "status", "wake-test"]);
+});
+
+test("creation normalizes hostname and origin and refuses malformed plans before network calls", async () => {
+	const h = harness({ requests: (body) => {
+		assert.deepEqual(body.create, plan);
+		return Response.json({ error: "access_denied" }, { status: 403 });
+	} });
+	await assert.rejects(createLink({ ...o, ...plan, hostname: " WAKE.EXAMPLE.COM ", origin: link.origin + "/" }, h.deps), /access_denied/);
+	for (const invalid of [
+		{ hostname: "https://wake.example.com" }, { hostname: "bad..example.com" },
+		{ origin: "http://user:password@localhost" }, { origin: "file:///tmp/local" },
+		{ origin: "http://127.0.0.1:8644/path" }, { origin: "http://localhost?key=value" },
+		{ path: "" }, { path: "//other/path" }, { path: "/webhooks/inbox?key=value" },
+		{ path: "/bad\\path" }, { preset: "" }, { preset: "not a preset" },
+	]) {
+		const w = harness();
+		await assert.rejects(async () => createLink({ ...o, ...plan, ...invalid }, w.deps));
+		assert.deepEqual(w.calls, []);
+	}
+	for (const field of Object.keys(plan)) {
+		const options = { ...o, ...plan }; delete options[field];
+		assert.throws(() => createLink(options, harness().deps), new RegExp(`--${field}`));
+	}
+});
+
+test("creation refuses wrong Hermes route or changed approved metadata before secret access", async () => {
+	for (const options of [{ route: "other" }, { preset: "openbot" }, { path: "/p/profile/webhooks/inbox" }]) {
+		const h = harness();
+		assert.throws(() => createLink({ ...o, ...plan, "secret-env": undefined, "secret-from": "hermes", ...options }, h.deps), /Hermes route/);
+		assert.deepEqual(h.calls, []);
+	}
+	for (const key of Object.keys(plan)) {
+		const h = harness({ token: () => Response.json({ grant: sensitive[0], link: { ...link, [key]: key === "path" ? "/other" : "different" } }) });
+		h.deps.readSecret = () => assert.fail("must not read the signing secret");
+		await assert.rejects(createLink({ ...o, ...plan }, h.deps), /differs/);
+		assert.equal(h.calls.includes("connector"), false);
+	}
+});
+
+test("creation failures never deliver a connector, read secrets, or retry provisioning automatically", async () => {
+	for (const [status, error] of [[409, "link_exists"], [502, "provision_failed"], [403, "access_denied"], [410, "expired_token"]]) {
+		const h = harness({ token: () => Response.json({ error, phase: sensitive[1], message: sensitive[2] }, { status }) });
+		h.deps.readSecret = () => assert.fail("must not read the signing secret");
+		await assert.rejects(createLink({ ...o, ...plan }, h.deps), (err) => err.message.includes(error) && sensitive.every((s) => !err.message.includes(s)));
+		assert.deepEqual(h.calls, ["requests", "token"]);
+	}
+});
+
+test("the saved account session is bound to the service and never falls back to an owner token", () => {
+	const config = { CONTROL_URL: "https://control.example/", CONTROL_TOKEN: sensitive[3], A2A_OWNER_TOKEN: "owner" };
+	assert.equal(savedLinkSession("https://control.example", controlSession({}, config)), sensitive[3]);
+	assert.throws(() => savedLinkSession("https://other.example", controlSession({}, config)), /sign in/);
+	delete config.CONTROL_TOKEN;
+	assert.throws(() => savedLinkSession("https://control.example", controlSession({}, config)), /sign in/);
+});
+
+test("control sessions keep origin and token together across environment overrides", async () => {
+	const saved = { CONTROL_URL: "https://control.example/", CONTROL_TOKEN: sensitive[3] };
+	assert.equal(savedLinkSession("https://control.example", controlSession({}, saved)), sensitive[3]);
+	assert.equal(savedLinkSession("https://other.example", controlSession({ CONTROL_URL: "https://other.example", CONTROL_TOKEN: "other-session" }, saved)), "other-session");
+	for (const env of [{ CONTROL_URL: "https://other.example" }, { CONTROL_URL: "https://control.example" }, { CONTROL_TOKEN: "other-session" }]) {
+		const h = harness();
+		h.deps.sessionToken = (origin) => savedLinkSession(origin, controlSession(env, saved));
+		await assert.rejects(finishLink({ ...o, "control-url": env.CONTROL_URL || o["control-url"] }, h.deps), /sign in/);
+		assert.deepEqual(h.calls, []);
+	}
+	assert.throws(() => savedLinkSession("https://control.example", controlSession({ CONTROL_URL: "https://other.example", CONTROL_TOKEN: "other-session" }, saved)), /sign in/);
+});
+
+test("default session resolution rejects a saved token with only CONTROL_URL overridden before fetch", (t) => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "a2a-session-origin-"));
+	t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+	fs.writeFileSync(path.join(dir, "config.env"), "CONTROL_URL=https://control.example\nCONTROL_TOKEN=dummy-saved-session\n");
+	const script = `
+		import assert from 'node:assert/strict';
+		import { finishLink } from ${JSON.stringify(new URL("../lib/link-finish.mjs", import.meta.url).href)};
+		let fetched = false;
+		await assert.rejects(finishLink({ agent: 'example', 'control-url': 'https://other.example', 'secret-env': 'DUMMY' }, { fetchImpl: () => { fetched = true; throw new Error('unexpected fetch'); } }), /sign in/);
+		assert.equal(fetched, false);
+	`;
+	const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+		encoding: "utf8", env: { PATH: process.env.PATH, HOME: dir, A2A_CONFIG_DIR: dir, CONTROL_URL: "https://other.example", DO_NOT_TRACK: "1" },
+	});
+	assert.equal(result.status, 0, result.stderr);
+});
+
+test("missing login refuses locally and finish cannot silently ignore create options", async (t) => {
+	const h = harness();
+	h.deps.sessionToken = () => { throw new Error("sign in first"); };
+	await assert.rejects(createLink({ ...o, ...plan }, h.deps), /sign in first/);
+	assert.deepEqual(h.calls, []);
+	assert.throws(() => finishLink({ ...o, ...plan }, harness().deps), /creation options/);
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "a2a-create-options-"));
+	t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+	const result = spawnSync(process.execPath, [new URL("../bin/a2a-exposed.mjs", import.meta.url).pathname, "hosted", "link", "create", "--agent", "example", "--secret-env", "DUMMY"], {
+		encoding: "utf8", env: { PATH: process.env.PATH, HOME: dir, A2A_CONFIG_DIR: dir, DO_NOT_TRACK: "1" },
+	});
+	assert.equal(result.status, 1);
+	assert.match(result.stderr, /requires --hostname/);
+});
+
+test("finish authenticates a real HTTP requests endpoint with the saved Bearer session", async (t) => {
+	const { createServer } = await import("node:http");
+	let accepted = 0;
+	const server = createServer((req, res) => {
+		assert.equal(req.url, "/api/link-finish/requests");
+		const authorized = req.headers.authorization === `Bearer ${sensitive[3]}`;
+		if (authorized) accepted++;
+		res.writeHead(authorized ? 201 : 401, { "content-type": "application/json" });
+		res.end(JSON.stringify(authorized ? { request_id: "id", user_code: "ABCD-1234", approve_url: "https://control.example/approve" } : { error: "unauthorized" }));
+	});
+	await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+	t.after(() => new Promise((resolve) => { server.close(resolve); server.closeAllConnections(); }));
+	const base = `http://127.0.0.1:${server.address().port}`;
+	assert.equal((await fetch(`${base}/api/link-finish/requests`, { method: "POST" })).status, 401);
+	const h = harness(), original = h.deps.fetchImpl;
+	h.deps.fetchImpl = (url, init) => url.endsWith("/requests") ? fetch(base + new URL(url).pathname, init) : original(url, init);
+	// The harness normally records the challenge; this endpoint checks auth instead.
+	h.deps.fetchImpl = ((fetchRequest) => (url, init) => {
+		if (url.endsWith("/token")) return Response.json({ grant: sensitive[0], link });
+		return fetchRequest(url, init);
+	})(h.deps.fetchImpl);
+	await finishLink(o, h.deps);
+	assert.equal(accepted, 1);
+});
+
+test("finish validates preset before network and uses it for a link without a preset", async () => {
+	for (const preset of ["", "bad preset", "../bad"]) {
+		const h = harness();
+		await assert.rejects(finishLink({ ...o, preset }, h.deps), /--preset/);
+		assert.deepEqual(h.calls, []);
+	}
+	const h = harness({ token: () => Response.json({ grant: sensitive[0], link: { ...link, preset: "" } }) });
+	h.deps.readSecret = (_options, approved) => { assert.equal(approved.preset, "hermes"); return sensitive[2]; };
+	await finishLink({ ...o, preset: "hermes" }, h.deps);
+	const missing = harness({ token: () => Response.json({ grant: sensitive[0], link: { ...link, preset: "" } }) });
+	await assert.rejects(finishLink(o, missing.deps), /--preset/);
+	assert.equal(missing.calls.includes("connector"), false);
+});
+
+test("known errors give fixed local recovery and origin status codes remain visible", async () => {
+	for (const [error, message] of Object.entries({ unauthorized: "login", invalid_request: "options", link_exists: "different link", provision_failed: "cleanup", preset: "--preset", signing_secret: "signing-secret", unreadable: "Reconnect", unavailable: "retry later" })) {
+		const h = harness({ requests: () => Response.json({ error, message: sensitive[0] }, { status: 400 }) });
+		await assert.rejects(finishLink(o, h.deps), (err) => err.message.includes(message) && !err.message.includes(sensitive[0]));
+	}
+	for (const result of ["origin-404", "origin-500"]) {
+		const h = harness({ "wake-test": () => Response.json({ result, saved: false }) });
+		await assert.rejects(finishLink(o, h.deps), new RegExp(result));
+	}
 });
