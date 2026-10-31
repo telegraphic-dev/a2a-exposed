@@ -16,7 +16,7 @@ const fail = (msg) => {
 };
 
 /** Product status badges. Ordinary prose such as "untested settings" does not match. */
-export const STATUS_LABEL = /tested end to end|\(untested\)|\(in testing\)|`untested`|`in testing`|\bare untested\b|\bremain untested\b|\buntested on this address\b|\|\s*untested\b/gi;
+export const STATUS_LABEL = /awaiting (?:staging )?end-to-end|staging end-to-end|mocked tests do not establish|tested end to end|\(untested\)|\(in testing\)|`untested`|`in testing`|\bare untested\b|\bremain untested\b|\buntested on this address\b|\|\s*untested\b/gi;
 
 export function statusLabels(text) {
 	return text.match(new RegExp(STATUS_LABEL.source, "gi")) || [];

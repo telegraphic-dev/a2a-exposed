@@ -34,8 +34,8 @@ test("with no inbox, feedback prints an encoded GitHub issue URL", async () => {
 	const token = "a2aot_" + "a".repeat(24);
 	const r = await run(["feedback", `saw ${token} then Bearer supersecretvalue`, "--kind", "bug", "--contact", "ada@example.com", "--steps", `1. ran ${token}`, "--expected", "a reply", "--actual", "nothing", "--agent", "Claude Code", "--environment", "local laptop", "--yes"]);
 	assert.equal(r.status, 0, r.stderr);
-	assert.match(r.stderr, /public GitHub issue on telegraphic-dev\/a2a-exposed/);
-	assert.match(r.stderr, /confidential information/);
+	assert.match(r.stderr, /Not filed/);
+	assert.doesNotMatch(r.stderr, /is filed as a public GitHub issue/);
 	const url = new URL(r.stdout.trim());
 	assert.equal(`${url.origin}${url.pathname}`, "https://github.com/telegraphic-dev/a2a-exposed/issues/new");
 	assert.equal(url.searchParams.get("template"), "bug_report.yml");
@@ -59,12 +59,12 @@ test("with no inbox, feedback prints an encoded GitHub issue URL", async () => {
 	assert.equal(r.stdout.split("\n").filter(Boolean).length, 1);
 });
 
-test("feedback without --yes does not send off a terminal", async () => {
-	const r = await run(["feedback", "hello"]);
-	assert.equal(r.status, 1);
-	assert.equal(r.stdout.trim(), "");
-	assert.match(r.stderr, /public GitHub issue on telegraphic-dev\/a2a-exposed/);
-	assert.match(r.stderr, /pass --yes/);
+test("feedback fallback JSON says it has not filed an issue", async () => {
+	const r = await run(["feedback", "hello", "--json"]);
+	assert.equal(r.status, 0);
+	assert.equal(JSON.parse(r.stdout).filed, false);
+	assert.match(r.stderr, /Not filed/);
+	assert.doesNotMatch(r.stderr, /is filed as a public GitHub issue/);
 });
 
 test("confirmPublicIssue asks on a terminal and accepts yes", async () => {
@@ -129,11 +129,14 @@ test("a hosted inbox posts, a 404 falls back, and a 429 does not", async () => {
 	const base = { message: `hello ${token}`, kind: "idea", version: VERSION, baseUrl: "https://agent.example.com", ownerToken: "owner-secret" };
 	const filed = "https://github.com/telegraphic-dev/a2a-exposed/issues/9";
 	let posts = 0;
+	let approvals = 0;
 	const ok = await runFeedback({
 		...base,
+		beforePost: async () => { approvals += 1; },
 		fetchImpl: async (url, init) => {
 			if (String(url).endsWith("/owner/feedback")) return Response.json({ hosted: true, url: "https://control.example.com/api/feedback", version: "0.7.0", connection: "webhook" });
 			posts += 1;
+			assert.equal(approvals, 1);
 			assert.equal(new Headers(init.headers).get("authorization"), "Bearer owner-secret");
 			const body = JSON.parse(String(init.body));
 			assert.equal(body.source, "cli");
@@ -154,6 +157,7 @@ test("a hosted inbox posts, a 404 falls back, and a 429 does not", async () => {
 
 	const missing = await runFeedback({
 		...base,
+		beforePost: () => assert.fail("a prefilled link needs no posting approval"),
 		fetchImpl: async () => new Response("no", { status: 404 }),
 	});
 	assert.equal(missing.filed, false);

@@ -33,6 +33,8 @@ Needs a Cloudflare login (`npx cf auth login --no-browser`). On a VPS where that
 
 ### `init` and `deploy`
 
+`--skip-install` skips the Worker dependency install; use it only when the copied Worker already has its dependencies.
+
 `init` deploys the Worker and D1. `deploy` redeploys with the saved settings. Secrets already on the Worker stay, unless you export new values.
 
 Workers.dev subdomain registration uses the system `script` utility on macOS and Linux. It supports CLI runs started by automation without an outer terminal. An unexpected prompt times out and stops the terminal job. CLI shutdown signals (SIGINT, SIGTERM, SIGHUP) also stop the detached terminal job.
@@ -92,84 +94,6 @@ Wake secrets are read from `WAKE_WEBHOOK_URL`, `WAKE_WEBHOOK_KEY`, and `WAKE_HMA
 | `wake fingerprint` | Fingerprints of `WAKE_*` exported in this shell |
 | `wake test` | Send a test wake and print the HTTP status |
 | `wake unset` | Remove wake secrets. The agent polls |
-
-### `hosted link create` and `hosted link finish`
-
-One bot runs these commands on its own receiver machine. A second bot and
-manual secret copying are not required. First sign the CLI in to the selected
-service with `login --control-url https://control.example`; the owner approves
-that sign-in in the browser. The saved account session is sent only to that
-same service when starting a setup request, never to the connector or webhook.
-
-To create a link and complete setup:
-
-```bash
-npx -y a2a-exposed@latest hosted link create --agent example \
-  --control-url https://control.example --hostname wake.example.com \
-  --origin http://127.0.0.1:8644 --path /webhooks/inbox --preset hermes \
-  --secret-from hermes --route inbox
-```
-
-The owner approves the exact hostname, local origin, webhook path and preset
-on the printed approval page before the service creates Cloudflare resources.
-The page handles Cloudflare reconnect if permissions are missing. Creation
-reuses an identical ready link. A different existing link returns `link_exists`;
-the CLI does not remove or replace it. A failed creation returns
-`provision_failed`: inspect the approval page for the failing phase and any
-cleanup needed. There is no automatic retry of provisioning.
-
-After approval, creation continues through the same connector, wake test and
-save steps as `finish`. The approved metadata must match the requested plan
-before the CLI reads or transfers the signing secret. All four creation
-options are required; `finish` refuses them rather than ignoring them.
-
-For recovery, finish an existing link:
-
-Use this on the machine that receives wakes for an agent you already created on [a2a.exposed](https://a2a.exposed), when that service lets you finish a secure link from here.
-
-1. Create the agent, or the secure link, on a2a.exposed.
-2. Sign in from this machine with `npx -y a2a-exposed@latest login --control-url https://control.example` and approve the code it prints. `login` saves `CONTROL_URL`. `hosted link finish` uses that saved value when you omit `--control-url`.
-3. Install [cloudflared](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/) on this machine.
-
-```bash
-npx -y a2a-exposed@latest hosted link finish --agent example \
-  --control-url https://control.example --secret-from hermes \
-  --hermes-home /path/to/hermes-home --route inbox
-```
-
-The owner opens the printed approval URL and confirms the code. The CLI never
-approves the page. It fetches the connector token once, writes it atomically
-with mode 600, starts cloudflared in the background using `--token-file`, and
-checks the service's connector status every three seconds for up to 60 seconds.
-Only a connected status allows the signed wake test. A passing test saves the
-wake settings. The connector stays running; no startup service is installed.
-Child output is suppressed. If it exits, inspect your cloudflared installation.
-
-For an existing link with no preset, pass `--preset <id>` to finish. The CLI validates
-the option before requesting approval or exchanging the request for a grant.
-This preset is used for local secret-source validation and the wake test.
-
-`--control-url` defaults to saved `CONTROL_URL`. The account token stays bound to its saved service origin. Environment sessions require both `CONTROL_URL` and `CONTROL_TOKEN`; a partial override is rejected before any request. Choose exactly one source:
-
-- `--secret-file FILE`: regular file, mode 600, no symlinks. One trailing line ending is removed.
-- `--secret-env VAR`: names an existing environment variable, never its value.
-- `--secret-from hermes`: reads `webhook_subscriptions.json` under `--hermes-home`,
-  `HERMES_HOME`, or `~/.hermes`. The approved preset must be `hermes` and the path
-  exactly `/webhooks/<name>`. `--route`, if supplied, must match that name.
-  Missing, disabled, or unsigned subscriptions are refused. Static YAML routes
-  and profile-prefixed paths need an explicit file or environment source; the
-  adapter refuses to guess which route secret the gateway uses.
-
-`--token-file FILE` overrides `~/.a2a-exposed/links/<agent>.token`. `--no-run`
-writes the token and prints only the connector command after approval; it does
-not start cloudflared or test/save the wake. Start that command locally, then
-rerun finish without `--no-run` with fresh approval to complete setup.
-
-If token delivery or the write fails, run finish again. Fresh approval fetches
-the token for the same ready link, without provisioning. Denial, expiry,
-revocation, connection failure, and a failed wake test exit non-zero. The
-signing secret, verifier, grant, and connector token stay out of CLI output,
-URLs, and process arguments. Keep token files private. Approve the page yourself. The CLI does not fill it.
 
 ### `tunnel`
 
@@ -277,3 +201,5 @@ One A2A endpoint has one owner token, saved by `init` in `config.env`. That toke
 | `APPROVAL_OIDC_CLIENT_SECRET` | OpenID Connect client secret. Not written to `config.env` |
 
 Deploy-time Worker settings for a manual `cf deploy` are listed in `worker/deploy.env.example`.
+
+Worker dependency installs save npm output in `<config dir>/npm-install.log` (mode 600) and print that path only on failure. Inspect the log locally and redact secrets before sharing it.

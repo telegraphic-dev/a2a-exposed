@@ -27,6 +27,8 @@ npx -y a2a-exposed@latest init \
   --preset grok-bot                # grok-bot | claude-code | openclaw-wake | openclaw-agent | hermes | openbot | generic
 ```
 
+`--skip-install` skips dependency installation when the Worker already has its dependencies.
+
 `init` is non-interactive and idempotent. It:
 
 1. Checks Node, then the Cloudflare login, and resolves the account, before it installs packages. Those login and account checks run outside the Worker directory, so they do not load `cloudflare.config.ts` before `npm install`. A fresh init runs `npx --yes cf auth whoami` for that check (`npx cf auth login` does not install a global `cf`). A later init uses `node_modules/.bin/cf`. With `--cf-profile`, an empty whoami account list is filled from `cf accounts list` on that same `cf`. If that list fails and no account id is set, init prints cf's error and stops. An id from `--account-id` or `CLOUDFLARE_ACCOUNT_ID` is used anyway. If the login can see several accounts, pass `--account-id`. An empty successful list says how many accounts are available. A failed login leaves the Worker packages uninstalled.
@@ -45,7 +47,7 @@ Optional flags:
 | `--d1-name` | D1 database to create or reuse (default: worker name). Useful when several bots share an account |
 | `--cli-command` | Command shown in wake hints (`hint` / summaries). Default `npx -y a2a-exposed@latest`. For a checkout, pass e.g. `node /path/to/repo/cli/bin/a2a-exposed.mjs`. Saved as `WAKE_CLI_COMMAND` |
 | `--debounce <s>` | Wake debounce window |
-| `--pairing-approval human\|agent\|off` | Who approves device-flow pairing requests ([pairing](pairing.md)). `human` (default): the owner, with the owner token (`pair approve`) or on the `/device` page with the approval password. `agent`: the agent runs `pair approve <code>` after asking its human in chat, and the decision is recorded as the agent. `off`: no pairing endpoints; `token issue` only. Change it later with `deploy --pairing-approval ...` |
+| `--pairing-approval human\|agent\|off` | Who approves device-flow pairing requests ([pairing](pairing.md)). `human` (default): the owner, with the owner token (`pair approve`) or on the `/device` page with the approval password. `agent`: the agent runs `pair approve <code>` after asking its owner in chat, and the decision is recorded as the agent. `off`: no pairing endpoints; `token issue` only. Change it later with `deploy --pairing-approval ...` |
 | `--max-per-hour <n>` | Hourly wake cap. `0` or unset is unlimited. Claude Code defaults to 25 when this is unset |
 | `--cf-profile <name>` | Use a named cf auth profile (separate Cloudflare login). Saved as `CF_PROFILE` |
 | `--workers-dev` | Move to workers.dev: clears the saved hostname, so the base URL, agent card and printed URLs become `https://<worker>.<subdomain>.workers.dev`. The old custom domain then answers 410 (its agent card redirects 301 to the new card) until you detach it in the dashboard; peers must update their URL. `--hostname <host>` on a workers.dev deployment moves it back (the workers.dev route is switched off). A wake tunnel keeps working (it has its own hostname on a zone) |
@@ -108,7 +110,7 @@ peer ──HTTPS + per-peer bearer──> https://agent.example.com            (
 
 A Worker can't reach a Tailnet or LAN address, so the upstream is published through a **named Cloudflare Tunnel** whose hostname is locked by a **Cloudflare Access** app that admits only one service token, held by the Worker (the same pattern as the wake tunnel). The CLI refuses a private `--upstream`.
 
-1. **Tunnel + Access for the upstream** (manual for now; a `tunnel create --upstream` helper is planned). Follow the consent checklist above and wait for an explicit yes: this creates DNS, a tunnel, and Access objects in the selected account. Needs Zero Trust (free) and a zone on the account. On the agent's machine:
+1. **Tunnel + Access for the upstream**. Follow the consent checklist above and wait for an explicit yes: this creates DNS, a tunnel, and Access objects in the selected account. Needs Zero Trust (free) and a zone on the account. On the agent's machine:
 
    ```bash
    cloudflared tunnel login                       # once, picks the zone
@@ -171,3 +173,5 @@ Workers.dev registration uses the system `script` utility on macOS and Linux.
 It can answer the known registration prompts when started by an agent without
 an outer terminal. An unexpected prompt stops the terminal job after the idle
 timeout; inspect the message before retrying rather than sending extra answers.
+
+Worker dependency installs save npm output in `<config dir>/npm-install.log` (mode 600) and print that path only on failure. Inspect the log locally and redact secrets before sharing it.

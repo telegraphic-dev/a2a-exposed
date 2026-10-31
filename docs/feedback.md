@@ -1,8 +1,10 @@
 # Feedback
 
+A hosted A2A endpoint files the issue. A self-hosted one prints a prefilled GitHub link. `feedback --json` returns `{ "filed": false, "url": "…" }` for a link, or `{ "filed": true, "issue": "…" }` for a posted report.
+
 `npx -y a2a-exposed@latest feedback "message"` reports a bug or an idea. The report is a public GitHub issue. Do not include confidential information: secrets, tokens, owner or pairing tokens, private URLs or hostnames, message contents, or personal data.
 
-The command names the repository before it sends, prints that warning, and asks before sending. `--yes` skips the question. Off a terminal, `--yes` is required.
+The command names the repository before it sends, prints that warning, and asks before sending. `--yes` skips the question. Off a terminal, posting requires `--yes`. Printing a prefilled link needs no confirmation.
 
 ```bash
 npx -y a2a-exposed@latest feedback "messages stay in submitted" \

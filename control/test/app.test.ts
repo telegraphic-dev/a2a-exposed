@@ -144,6 +144,8 @@ test("control sources do not name a hosted domain", () => {
 		for (const name of fs.readdirSync(dir)) {
 			if (skip.has(name)) continue;
 			const abs = path.join(dir, name);
+			// The generated inbox bundle contains protocol identifiers, not control-site copy.
+			if (path.relative(root, abs) === path.join("public", "inbox-worker.js.txt")) continue;
 			if (fs.statSync(abs).isDirectory()) walk(abs);
 			else if (/\.(ts|tsx|mjs|html|css|txt|svg|md|json)$/.test(name)) files.push(abs);
 		}

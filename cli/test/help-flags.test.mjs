@@ -50,9 +50,13 @@ test("every a2a-exposed flag named in skills/ is in --help", () => {
 	assert.equal(help.status, 0, help.stderr);
 	const helpFlags = new Set(flagsIn(help.stdout));
 	const accepted = parserFlags();
+	// cloudflared uses --token-file; it is not a public CLI flag.
+	accepted.delete("token-file");
 	const skillText = walk(path.join(repo, "skills")).map((p) => fs.readFileSync(p, "utf8")).join("\n");
 	const missing = [...new Set(flagsIn(skillText))].filter((f) => accepted.has(f) && !helpFlags.has(f)).sort();
 	assert.deepEqual(missing, [], `skills name flags missing from --help: ${missing.join(", ")}`);
 	assert.ok(helpFlags.has("rotate-owner-token"));
+	assert.ok(helpFlags.has("skip-install"));
+	assert.doesNotMatch(help.stdout, /hosted link (?:create|finish)|CONTROL_URL|CONTROL_TOKEN/);
 	assert.match(help.stdout, /claude mcp add --transport http a2a-exposed/);
 });
