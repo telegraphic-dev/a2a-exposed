@@ -13,6 +13,11 @@ test("status label scan ignores ordinary prose", () => {
 test("status label scan catches product badges", () => {
 	for (const sample of [
 		"This flow is tested end to end.",
+		"(in testing)",
+		"awaiting staging end-to-end verification",
+		"awaiting end-to-end testing",
+		"staging end-to-end verification is pending",
+		"mocked tests do not establish client support",
 		"`hosted link finish` (untested)",
 		"mark the client `in testing`",
 		"mark the client `untested`",

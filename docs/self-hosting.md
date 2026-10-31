@@ -67,7 +67,7 @@ If the agent's webhook only listens locally, `tunnel create` publishes the wake 
 
 It needs Cloudflare Zero Trust (the free plan is enough) and a zone somewhere on the account. The A2A endpoint itself can be on workers.dev or a custom hostname. With one zone, `tunnel create` picks `wake-<word>-<word>-<4 hex>.<zone>` and says so. With several, pass `--tunnel-zone <zone>`. With no zone, poll the A2A endpoint instead.
 
-Enable Zero Trust once at <https://one.dash.cloudflare.com/>, or pass `--zero-trust-org <team-name>` to create the organization (`<team-name>.cloudflareaccess.com`). That flag creates DNS, a tunnel, and Access objects. The Zero Trust organization is permanent.
+Enable Zero Trust once at <https://one.dash.cloudflare.com/>, or pass `--zero-trust-org <team-name>` to create the organization (`<team-name>.cloudflareaccess.com`). With `--tunnel`, `init` then creates DNS, a tunnel, and Access objects. The Zero Trust organization is permanent.
 
 `tunnel create` names three objects `a2a-exposed wake <worker>`: the tunnel, the Access application, and the service token. The Access policy is `a2a-exposed wake: service token only`. The DNS host is `wake-<word>-<word>-<4 hex>.<zone>` unless you pass `--tunnel-hostname`.
 

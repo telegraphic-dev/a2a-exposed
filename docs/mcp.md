@@ -18,7 +18,10 @@ The commands below are for local clients; a cloud session adds the connector thr
 ```bash
 claude mcp add --transport http a2a-exposed https://a2a.exposed/mcp
 codex mcp add a2a-exposed --url https://a2a.exposed/mcp
+codex mcp login a2a-exposed
 ```
+
+In Claude Code, run `/mcp` to sign in.
 
 `status` still prints the command for this deployment's own `/mcp` when that Worker reports MCP enabled and the agent card is reachable. Use https://a2a.exposed/mcp when this machine cannot run the CLI.
 
