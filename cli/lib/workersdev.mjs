@@ -1,6 +1,6 @@
 // workers.dev support: URL helpers, cf output parsing, and registering the account's workers.dev subdomain
 // through cf's own interactive prompt (cf has no non-interactive command for it).
-import { spawn } from "node:child_process";
+import { spawnScript, stopScript } from "./script.mjs";
 import { CliError, die } from "./a2a.mjs";
 
 /** A valid DNS label: worker names and workers.dev subdomains must be one. */
@@ -65,12 +65,18 @@ export function deployWithRegistration(cfBin, args, name, { cwd, env, idleMs = 1
 	const penv = { ...env, TERM: env?.TERM || "xterm-256color", COLUMNS: "160", LINES: "50" };
 	delete penv.CI; // cf only prompts when interactive
 	return new Promise((resolve, reject) => {
-		const ch = spawn("script", sargs, { cwd, env: penv, stdio: ["pipe", "pipe", "pipe"] });
+		const ch = spawnScript(sargs, { cwd, env: penv });
 		// cf's prompts, in order; each is answered once, and only from output that arrived after the previous
 		// answer (prompt libraries re-render answered questions, which must not be answered twice)
 		const steps = REGISTRATION_STEPS(name);
-		let out = "", pending = "", stage = 0, failure = "";
-		const stop = (why) => { failure ||= why; ch.kill("SIGTERM"); };
+		let out = "", pending = "", stage = 0, failure = "", escalation;
+		const stop = (why) => {
+			if (failure) return;
+			failure = why;
+			stopScript(ch);
+			escalation = setTimeout(() => stopScript(ch, "SIGKILL"), 1000);
+			escalation.unref();
+		};
 		const arm = () => setTimeout(() => stop("cf stopped responding (unexpected prompt?)"), idleMs);
 		let idle = arm();
 		const onData = (d) => {
@@ -86,9 +92,10 @@ export function deployWithRegistration(cfBin, args, name, { cwd, env, idleMs = 1
 		};
 		ch.stdout.on("data", onData);
 		ch.stderr.on("data", onData);
-		ch.on("error", (e) => { clearTimeout(idle); reject(e); });
+		ch.on("error", (e) => { clearTimeout(idle); clearTimeout(escalation); reject(e); });
 		ch.on("close", (code) => {
 			clearTimeout(idle);
+			clearTimeout(escalation);
 			ch.stdin.destroy();
 			if (failure) return reject(new CliError(failure));
 			resolve({ status: code ?? 1, out });
