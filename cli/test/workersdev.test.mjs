@@ -57,14 +57,19 @@ const STUB = `#!/bin/bash
 log=$STUB_DIR/calls.log
 prof=""; for a in "$@"; do [ "$prev" = --profile ] && prof=$a; prev=$a; done
 echo "$1 $2 profile=$prof sub=\${A2A_WORKERS_DEV_SUBDOMAIN:-} host=\${A2A_HOSTNAME:-} retired=\${A2A_RETIRED_HOSTNAMES:-}" >> "$log"
+[ -n "\${STUB_CWD_LOG:-}" ] && printf '%s %s %s\\n' "$1" "$2" "$(pwd)" >> "$STUB_CWD_LOG"
 [ "$1" = deploy ] && printf '%s\\n' "$@" >> "$STUB_DIR/deploy-args.log"
 [ "$1" = deploy ] && echo "public=\${A2A_PUBLIC_URL:-}\${PUBLIC_URL:-}" >> "$STUB_DIR/deploy-env.log"
 case "$1 $2" in
   "auth whoami")
+    if [ -n "\${STUB_WHOAMI_FAIL:-}" ]; then printf '%s\\n' "$STUB_WHOAMI_FAIL" >&2; exit 1; fi
     if [ -n "$prof" ] && [ -n "\${STUB_PROFILE_WHOAMI:-}" ]; then printf '%s\\n' "$STUB_PROFILE_WHOAMI"
     else echo '{"authenticated":true,"accounts":[{"id":"acc123","name":"Test"}]}'; fi
     ;;
-  "accounts list") printf '%s\\n' "\${STUB_ACCOUNTS_LIST:-[]}";;
+  "accounts list")
+    if [ -n "\${STUB_ACCOUNTS_FAIL:-}" ]; then printf '%s\\n' "$STUB_ACCOUNTS_FAIL" >&2; exit 1; fi
+    printf '%s\\n' "\${STUB_ACCOUNTS_LIST:-[]}"
+    ;;
   "d1 list") echo '[{"name":"wdtest","uuid":"d1-uuid"}]';;
   "d1 migrations")
     echo '[]'
@@ -226,17 +231,34 @@ test("--cf-profile is saved and passed as --profile to every cf call", async (t)
 	assert.ok(s.calls().filter((l) => l.startsWith("deploy")).every((l) => l.includes("profile=bot-acct")));
 });
 
+function recordedCwds(file, command) {
+	return fs.readFileSync(file, "utf8").trim().split("\n")
+		.filter((l) => l.startsWith(command + " "))
+		.map((l) => l.slice(command.length + 1));
+}
+
+function samePath(a, b) {
+	return fs.realpathSync(a) === fs.realpathSync(b);
+}
+
 test("init --cf-profile reads cf accounts list when whoami lists none", async (t) => {
 	const s = stubEnv(t, { subdomain: "acme" });
+	const cwdLog = path.join(s.dir, "cwd.log");
+	const worker = path.join(s.dir, "worker");
 	const r = await s.cli(
-		["init", "--worker-name", "wdtest", "--skip-install", "--dir", path.join(s.dir, "worker"), "--cf-profile", "bot-acct"],
-		{ STUB_PROFILE_WHOAMI: '{"authenticated":true,"accounts":[]}', STUB_ACCOUNTS_LIST: '{"result":[{"id":"acc999","name":"Bot Co"}]}' },
+		["init", "--worker-name", "wdtest", "--skip-install", "--dir", worker, "--cf-profile", "bot-acct"],
+		{ STUB_PROFILE_WHOAMI: '{"authenticated":true,"accounts":[]}', STUB_ACCOUNTS_LIST: '{"result":[{"id":"acc999","name":"Bot Co"}]}', STUB_CWD_LOG: cwdLog },
 	);
 	assert.equal(r.status, 0, r.stderr);
 	assert.equal(s.config().CLOUDFLARE_ACCOUNT_ID, "acc999");
 	assert.ok(s.calls().some((l) => l.startsWith("accounts list") && l.includes("profile=bot-acct")), s.calls().join("\n"));
 	assert.doesNotMatch(r.stderr, /0 accounts/);
 	assert.match(r.stderr, /Bot Co/);
+	for (const cwd of [...recordedCwds(cwdLog, "auth whoami"), ...recordedCwds(cwdLog, "accounts list")]) {
+		assert.equal(samePath(cwd, worker), false, cwd);
+		assert.equal(fs.existsSync(path.join(cwd, "cloudflare.config.ts")), false, cwd);
+	}
+	for (const cwd of recordedCwds(cwdLog, "deploy --message")) assert.equal(samePath(cwd, worker), true, cwd);
 });
 
 test("init --cf-profile with several accounts from cf accounts list still requires --account-id", async (t) => {
@@ -249,6 +271,7 @@ test("init --cf-profile with several accounts from cf accounts list still requir
 	assert.match(r.stderr, /2 accounts available/);
 	assert.match(r.stderr, /acc1/);
 	assert.match(r.stderr, /acc2/);
+	assert.doesNotMatch(r.stderr, /could not list Cloudflare accounts/);
 	assert.ok(!s.config().CLOUDFLARE_ACCOUNT_ID);
 });
 
@@ -260,7 +283,120 @@ test("init --cf-profile with an empty accounts list reports 0 accounts", async (
 	);
 	assert.equal(r.status, 1);
 	assert.match(r.stderr, /0 accounts available/);
+	assert.doesNotMatch(r.stderr, /could not list Cloudflare accounts/);
 	assert.ok(s.calls().some((l) => l.startsWith("accounts list")));
+});
+
+test("init --cf-profile reports a failed accounts list instead of 0 accounts", async (t) => {
+	const s = stubEnv(t, { subdomain: "acme" });
+	const err = "Cannot find package 'cf' imported from /tmp/worker/cloudflare.config.ts";
+	const r = await s.cli(
+		["init", "--worker-name", "wdtest", "--skip-install", "--dir", path.join(s.dir, "worker"), "--cf-profile", "bot-acct"],
+		{ STUB_PROFILE_WHOAMI: '{"authenticated":true,"accounts":[]}', STUB_ACCOUNTS_FAIL: err },
+	);
+	assert.equal(r.status, 1);
+	assert.match(r.stderr, /could not list Cloudflare accounts for profile "bot-acct": Cannot find package 'cf'/);
+	assert.match(r.stderr, /cf accounts list failed \(exit 1\)/);
+	assert.match(r.stderr, /Check: npx --yes cf accounts list --profile bot-acct {3}\(run it outside the project directory\)/);
+	assert.match(r.stderr, /Or pass --account-id <id>/);
+	assert.doesNotMatch(r.stderr, /0 accounts available/);
+	assert.equal(s.config().CLOUDFLARE_ACCOUNT_ID, undefined);
+});
+
+test("init --cf-profile with --account-id continues when accounts list fails", async (t) => {
+	const s = stubEnv(t, { subdomain: "acme" });
+	const r = await s.cli(
+		["init", "--worker-name", "wdtest", "--skip-install", "--dir", path.join(s.dir, "worker"), "--cf-profile", "bot-acct", "--account-id", "acc999"],
+		{ STUB_PROFILE_WHOAMI: '{"authenticated":true,"accounts":[]}', STUB_ACCOUNTS_FAIL: "Cannot find package 'cf' imported from /tmp/worker/cloudflare.config.ts" },
+	);
+	assert.equal(r.status, 0, r.stderr);
+	assert.equal(s.config().CLOUDFLARE_ACCOUNT_ID, "acc999");
+	assert.ok(s.calls().some((l) => l.startsWith("accounts list")), s.calls().join("\n"));
+	assert.ok(s.calls().some((l) => l.startsWith("deploy")), s.calls().join("\n"));
+	assert.doesNotMatch(r.stderr, /could not list Cloudflare accounts/);
+	assert.doesNotMatch(r.stderr, /0 accounts available/);
+});
+
+test("init --cf-profile keeps CLOUDFLARE_ACCOUNT_ID when accounts list fails", async (t) => {
+	const s = stubEnv(t, { subdomain: "acme" });
+	const r = await s.cli(
+		["init", "--worker-name", "wdtest", "--skip-install", "--dir", path.join(s.dir, "worker"), "--cf-profile", "bot-acct"],
+		{ STUB_PROFILE_WHOAMI: '{"authenticated":true,"accounts":[]}', STUB_ACCOUNTS_FAIL: "Cannot find package 'cf'", CLOUDFLARE_ACCOUNT_ID: "accenv" },
+	);
+	assert.equal(r.status, 0, r.stderr);
+	assert.match(r.stderr, /Cloudflare account: accenv/);
+	assert.ok(s.calls().some((l) => l.startsWith("deploy")), s.calls().join("\n"));
+	assert.doesNotMatch(r.stderr, /could not list Cloudflare accounts|0 accounts available/);
+});
+
+test("init surfaces a failing cf auth whoami with its stderr and exit code", async (t) => {
+	const s = stubEnv(t, { subdomain: "acme" });
+	const r = await s.cli(
+		["init", "--worker-name", "wdtest", "--skip-install", "--dir", path.join(s.dir, "worker"), "--cf-profile", "bot-acct"],
+		{ STUB_WHOAMI_FAIL: "Cannot find package 'cf' imported from /tmp/worker/cloudflare.config.ts" },
+	);
+	assert.equal(r.status, 1);
+	assert.match(r.stderr, /cf auth whoami failed \(exit 1\): Cannot find package 'cf'/);
+	assert.match(r.stderr, /Check: npx --yes cf auth whoami --profile bot-acct {3}\(run it outside the project directory\)/);
+	assert.doesNotMatch(r.stderr, /0 accounts available/);
+	assert.doesNotMatch(r.stderr, /could not list Cloudflare accounts/);
+});
+
+test("init --cf-profile reaches deploy when cf fails inside the Worker directory before install", async (t) => {
+	const s = stubEnv(t, { subdomain: "acme" });
+	const worker = path.join(s.dir, "worker");
+	const bin = path.join(s.dir, "bin");
+	fs.rmSync(path.join(worker, "node_modules"), { recursive: true, force: true });
+	fs.mkdirSync(bin);
+	const cf = path.join(bin, "cf");
+	const body = STUB.replace(/^#!\/bin\/bash\n/, "");
+	const script = `#!/bin/bash
+here=$(pwd)
+printf '%s %s %s\\n' "$1" "$2" "$here" >> "$STUB_DIR/login-cwd.log"
+if [ -f "$here/cloudflare.config.ts" ] && [ ! -e "$here/node_modules/cf" ]; then
+  printf '%s\\n' "Cannot find package 'cf' imported from $here/cloudflare.config.ts" >&2
+  exit 1
+fi
+${body}`;
+	fs.writeFileSync(cf, script, { mode: 0o755 });
+	fs.writeFileSync(path.join(bin, "npx"), `#!/bin/bash
+if [ "$1" = "--yes" ] && [ "$2" = "cf" ]; then
+  shift 2
+  exec ${JSON.stringify(cf)} "$@"
+fi
+echo "unexpected npx $*" >&2
+exit 1
+`, { mode: 0o755 });
+	fs.writeFileSync(path.join(bin, "npm"), `#!/bin/bash
+if [ "$1" = install ]; then
+  mkdir -p node_modules/cf node_modules/.bin
+  cp ${JSON.stringify(cf)} node_modules/.bin/cf
+  chmod +x node_modules/.bin/cf
+  exit 0
+fi
+echo "unexpected npm $*" >&2
+exit 1
+`, { mode: 0o755 });
+	const r = await s.cli(
+		["init", "--worker-name", "wdtest", "--dir", worker, "--cf-profile", "bot-acct"],
+		{
+			PATH: `${bin}:${process.env.PATH}`,
+			STUB_PROFILE_WHOAMI: '{"authenticated":true,"accounts":[]}',
+			STUB_ACCOUNTS_LIST: '{"result":[{"id":"acc999","name":"Bot Co"}]}',
+		},
+	);
+	assert.equal(r.status, 0, r.stderr);
+	assert.equal(s.config().CLOUDFLARE_ACCOUNT_ID, "acc999");
+	assert.ok(s.calls().some((l) => l.startsWith("deploy")), s.calls().join("\n"));
+	assert.doesNotMatch(r.stderr, /Cannot find package 'cf'|0 accounts available|could not list Cloudflare accounts/);
+	assert.equal(fs.existsSync(path.join(worker, "node_modules", "cf")), true);
+	const log = path.join(s.dir, "login-cwd.log");
+	for (const cwd of [...recordedCwds(log, "auth whoami"), ...recordedCwds(log, "accounts list")]) {
+		assert.equal(samePath(cwd, worker), false, cwd);
+		assert.equal(fs.existsSync(path.join(cwd, "cloudflare.config.ts")), false, cwd);
+	}
+	assert.ok(recordedCwds(log, "deploy --message").length > 0);
+	for (const cwd of recordedCwds(log, "deploy --message")) assert.equal(samePath(cwd, worker), true, cwd);
 });
 
 // ------------------------------------------------------------------ switching between a custom domain and workers.dev

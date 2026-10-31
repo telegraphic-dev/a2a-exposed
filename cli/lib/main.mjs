@@ -44,6 +44,7 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
                                 --cf-profile   cf auth profile for a separate Cloudflare login
                                                (npx cf auth create NAME --no-browser); saved, used by every cf call.
                                                When whoami lists no accounts, init reads cf accounts list
+                                               outside the Worker directory. A failed list prints cf's error unless --account-id is set
                                 --d1-name      D1 database to create or reuse (default: worker name)
                                 --pairing-approval  who approves device-flow pairing requests (default human:
                                                the owner token via \`pair approve\`, or the approval password

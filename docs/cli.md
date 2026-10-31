@@ -44,7 +44,7 @@ init [--hostname <host> | --workers-dev [--workers-dev-subdomain NAME]]
 | `--worker-name` | Worker name. Also the default D1 name |
 | `--d1-name` | D1 database to create or reuse |
 | `--account-id` | When the login can see more than one account |
-| `--cf-profile` | Named `cf` auth profile. Saved and used by later `cf` calls. When `whoami` lists no accounts, `init` reads `cf accounts list` and saves the account when that list has exactly one |
+| `--cf-profile` | Named `cf` auth profile. Saved and used by later `cf` calls. When `whoami` lists no accounts, `init` reads `cf accounts list` outside the Worker directory and saves the account when that list has exactly one. A failed list prints cf's error unless `--account-id` is already set |
 | `--cli-command` | Command shown in wake hints. Default `npx -y a2a-exposed@latest`. Saved as `WAKE_CLI_COMMAND` |
 | `--debounce` | Wake debounce in seconds. `claude-code` defaults to 20. Others default to 10 |
 | `--max-per-hour` | Hourly cap. `0` or unset is unlimited, except `claude-code`, which defaults to 25 when unset |

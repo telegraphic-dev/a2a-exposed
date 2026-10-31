@@ -29,7 +29,8 @@ Report a result the docs do not cover with `npx -y a2a-exposed@latest feedback`.
 | API token error `1001` (Memberships) | Memberships needs the user-scoped resource, not an account or a zone |
 | `tokens verify` succeeds, later `cf` calls are denied by an IP policy | The token filter must allow both the host's IPv4 `/32` and its IPv6 `/128` |
 | Several accounts | `--account-id` (listed by `cf auth whoami`, or by `cf accounts list` when a profile's whoami is empty) |
-| `0 accounts available` with `--cf-profile` | `cf auth whoami` and `cf accounts list` both listed none. Pass `--account-id` |
+| `0 accounts available` with `--cf-profile` | `cf auth whoami` and `cf accounts list` both succeeded and listed none. Pass `--account-id` |
+| `could not list Cloudflare accounts` | `cf accounts list` failed and no account id was set. The message includes cf's own error and the exit code. Run the printed `npx --yes cf accounts list` command outside the Worker directory, or pass `--account-id`. An id already set with `--account-id` or `CLOUDFLARE_ACCOUNT_ID` is used anyway |
 | `You need to register a workers.dev subdomain` | `init --workers-dev-subdomain <name>`, or create it in the Workers section of the dashboard |
 | `status`: agent card FAILED right after deploy | A new custom domain needs 1–5 minutes for DNS and the certificate. The hostname must be on a zone in this account, with no conflicting DNS record. A new workers.dev subdomain can take a few minutes. Cloudflare error 1042 just after deploy means the Worker is still propagating: wait about 30 seconds. When 1042 is still there, the hosted option is in [Getting started](getting-started.md#hosted-inbox) |
 | Card says WRONG URL | The card URL comes from the custom hostname or the workers.dev URL. Put the webhook in `WAKE_WEBHOOK_URL` only. Unset a wrong `A2A_BASE_URL` and run `deploy` |
