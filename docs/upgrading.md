@@ -14,13 +14,13 @@ npx -y a2a-exposed@latest deploy
 
 The CLI prints a one-line notice when a newer version is on npm, at most once a day. `A2A_NO_UPDATE_CHECK=1` or `DO_NOT_TRACK=1` turns it off.
 
-The config directory is `~/.config/a2a-exposed`, or `$XDG_CONFIG_HOME/a2a-exposed`, or `A2A_CONFIG_DIR`. A directory named `a2a-over-webhook` is not read. If your config is still there, copy it to `~/.config/a2a-exposed` (chmod 600) and then `deploy`.
+The config directory is `~/.config/a2a-exposed`, or `$XDG_CONFIG_HOME/a2a-exposed`, or `A2A_CONFIG_DIR`.
 
-New peer tokens use the `a2aow_` prefix. A token issued with the `s2a_` prefix still authenticates: only the hash is stored.
+New peer tokens use the `a2aow_` prefix. Only the hash is stored.
 
-## An A2A endpoint deployed before this CLI
+## Adopt an existing Worker
 
-There is no `adopt` command. To keep an existing Worker, its D1 data, peer tokens, and wake secrets:
+To keep an existing Worker, its D1 data, peer tokens, and wake secrets:
 
 1. Back up D1 first. Export the tables you need, and note the time-travel bookmark (`npx cf d1 time-travel get-bookmark <db-id>`).
 2. Write `config.env` yourself (chmod 600) with `CLOUDFLARE_ACCOUNT_ID`, `A2A_WORKER_NAME`, `A2A_D1_NAME`, `A2A_D1_ID`, `A2A_HOSTNAME` (for workers.dev, leave the hostname out and set `A2A_WORKERS_DEV_SUBDOMAIN`), `A2A_BASE_URL`, the existing owner token as `A2A_OWNER_TOKEN`, and the agent-card settings (`A2A_AGENT_NAME`, `A2A_AGENT_DESCRIPTION`, and the others you use). With `A2A_D1_ID` set, the saved hostname is not treated as a move.
