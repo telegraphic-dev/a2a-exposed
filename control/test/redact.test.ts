@@ -313,3 +313,84 @@ test("encoded parameter names also hide quoted values completely", () => {
 		assert.equal(sanitized({ text: input }).text, "?%74oken=[redacted]");
 	}
 });
+
+const nestedUrl = "https://example.com/?token=opaque-field-secret";
+const cleanUrl = "https://example.com/?token=[redacted]";
+const nestedCases: [string, string][] = [
+	[`url=${nestedUrl}`, `url=${cleanUrl}`],
+	[`url='${nestedUrl}'`, `url='${cleanUrl}'`],
+	[`https://example.com/#url=${nestedUrl}&name=Ada`, `https://example.com/#url=${cleanUrl}&name=Ada`],
+	[`body: url=${nestedUrl}&name=Ada`, `body: url=${cleanUrl}&name=Ada`],
+	[`url=https://example.com/?next=${nestedUrl}`, `url=https://example.com/?next=${cleanUrl}`],
+	['url=https://example.com/#token=opaque-field-secret', 'url=https://example.com/#token=[redacted]'],
+];
+for (let layers = 0; layers < 5; layers += 1) {
+	let input = nestedUrl;
+	let expected = cleanUrl;
+	for (let layer = 0; layer < layers; layer += 1) {
+		input = `next=${encodeURIComponent(input)}`;
+		expected = `next=${encodeURIComponent(expected)}`;
+	}
+	nestedCases.push([`url=${input}&name=Ada`, `url=${expected}&name=Ada`]);
+	nestedCases.push([JSON.stringify({ url: input, name: "Ada" }), JSON.stringify({ url: expected, name: "Ada" })]);
+	nestedCases.push([JSON.stringify({ text: JSON.stringify({ url: input }) }), JSON.stringify({ text: JSON.stringify({ url: expected }) })]);
+}
+for (const [input, expected] of nestedCases) {
+	test(`ordinary containers inspect embedded credentials: ${input}`, () => {
+		assert.equal(redact(input), expected);
+		assert.deepEqual(sanitized({ url: input }), { url: expected });
+	});
+}
+
+test("ordinary nested and encoded values retain their content", () => {
+	for (const input of ['url=https://example.com/?name=Ada', 'url=https%3A%2F%2Fexample.com%2F%3Fname%3DAda', JSON.stringify({ url: 'url=https://example.com/#name=Ada' })]) {
+		assert.equal(redact(input), input);
+		assert.deepEqual(sanitized({ url: input }), { url: input });
+	}
+});
+
+test("query values consume backslashes that are part of a credential", () => {
+	const input = String.raw`url=https://example.com/?token=opaque\remaining-secret&name=Ada`;
+	const expected = "url=https://example.com/?token=[redacted]&name=Ada";
+	assert.equal(redact(input), expected);
+	assert.deepEqual(sanitized({ url: input }), { url: expected });
+});
+
+test("excessive nesting fails closed", () => {
+	const input = 'url='.repeat(100) + nestedUrl;
+	for (const output of [redact(input), sanitized({ url: input }).url]) {
+		assert.equal(output.includes('opaque-field-secret'), false);
+		assert.match(output, /redacted/);
+	}
+});
+
+test("repeated encoding of labels and JSON escapes cannot hide parameters", () => {
+	for (const input of [
+		'url=https://example.com/?%2574oken=opaque-field-secret',
+		String.raw`{"url":"url=https:\/\/example.com\/?\u0074oken=opaque-field-secret"}`,
+		`url=${encodeURIComponent('https://example.com/#next=' + encodeURIComponent(nestedUrl))}`,
+	]) {
+		for (const output of [redact(input), sanitized({ url: input }).url]) {
+			assert.equal(output.includes('opaque-field-secret'), false);
+			assert.match(output, /redacted/);
+		}
+	}
+});
+
+test("nested setup parameters inspect quoted and repeatedly encoded values", () => {
+	for (const item of ['"opaque-field-secret"', '%6Fpaque-field-secret', '%256Fpaque-field-secret']) {
+		const input = `url=https://example.com/?t=${item}&name=Ada`;
+		const expected = 'url=https://example.com/?t=[redacted]&name=Ada';
+		assert.equal(redact(input), expected);
+		assert.deepEqual(sanitized({ url: input }), { url: expected });
+	}
+});
+
+test("a nested URL with a quoted credential is independently inspected", () => {
+	for (const value of ['"opaque-field-secret"', "'opaque-field-secret'", '"opaque field secret"']) {
+		const input = `url=https://example.com/?token=${value}&name=Ada`;
+		const expected = 'url=https://example.com/?token=[redacted]&name=Ada';
+		assert.equal(redact(input), expected);
+		assert.deepEqual(sanitized({ url: input }), { url: expected });
+	}
+});

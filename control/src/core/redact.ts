@@ -13,7 +13,7 @@ const API_KEY_RE = /(?:(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za
 const JWT_RE = /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g;
 const AUTH_RE = /\b((?:proxy-)?authorization)(\s*[:=]\s*)([^\n]+)/gi;
 // Queries, fragment parameters, and form bodies share name=value encoding.
-const QUERY_RE = /(^|[?&#\s])([^?&#\s="'<>]+)=("(?:\\.|[^"\\])*(?:"|$)|'(?:\\.|[^'\\])*(?:'|$)|[^&#\s]*)/g;
+const QUERY_RE = /(^|[?&#\s])([^?&#\s="'<>]+)=("(?:\\.|[^"\\])*(?:"|$)|'(?:\\.|[^'\\])*(?:'|$)|(?:\\(?!["'])|[^&#\s"'<>\\])*)/g;
 const ASSIGN_RE = /\b([A-Za-z_][A-Za-z0-9_]*)(\s*=\s*)/g;
 
 const SECRET_EXACT = new Set([
@@ -118,6 +118,7 @@ function redactAssignments(text: string): string {
 		while (parameter < parameters.length && parameters[parameter].index + parameters[parameter][0].length <= match.index) parameter += 1;
 		if (parameter < parameters.length && parameters[parameter].index <= match.index) continue;
 		const name = match[1] ?? "";
+		if (!secretName(name)) continue;
 		const sep = match[2] ?? "=";
 		const valueStart = match.index + match[0].length;
 		const quoted = quotedValueEnd(text, valueStart);
@@ -152,7 +153,7 @@ function jsonValueEnd(text: string, start: number): number {
 }
 
 /** Preserve surrounding log text and JSON formatting while removing complete secret values. */
-function redactJsonFields(text: string): string {
+function redactJsonFields(text: string, depth: number): string {
 	let out = "";
 	let last = 0;
 	for (let i = 0; i < text.length; i += 1) {
@@ -176,14 +177,39 @@ function redactJsonFields(text: string): string {
 				}
 			}
 		}
+		// JSON string values may contain another serialized document or URL.
+		if (text[cursor] !== ":") {
+			try {
+				const decoded: string = JSON.parse(text.slice(i, keyEnd));
+				const cleaned = redactNested(decoded, depth + 1);
+				if (cleaned !== decoded) {
+					out += text.slice(last, i) + JSON.stringify(cleaned);
+					last = keyEnd;
+				}
+			} catch { /* Text passes also inspect malformed log strings. */ }
+		}
 		i = keyEnd - 1;
 	}
 	return out + text.slice(last);
 }
 
+/** Inspect encoded containers, preserving their encoding when unchanged. */
+function redactNested(value: string, depth: number): string {
+	// Fail closed on excessively nested untrusted input, without overflowing.
+	if (depth >= 64) return REDACTED;
+	const text = redactText(value, depth);
+	if (text !== value) return text;
+	const decoded = parameterName(value);
+	if (decoded !== value) {
+		const cleaned = redactNested(decoded, depth + 1);
+		if (cleaned !== decoded) return encodeURIComponent(cleaned);
+	}
+	return value;
+}
+
 /** Remove secret text. The words around it stay. */
-function redactText(value: string): string {
-	let text = redactJsonFields(value);
+function redactText(value: string, depth = 0): string {
+	let text = redactJsonFields(value, depth);
 	text = replaceAll(text, PEM_RE, REDACTED);
 	text = replaceAll(text, JWT_RE, REDACTED);
 	text = replaceAll(text, API_KEY_RE, REDACTED);
@@ -195,12 +221,46 @@ function redactText(value: string): string {
 		return `${name}${sep}${REDACTED}`;
 	});
 	text = replaceAll(text, USERINFO_RE, `$1${REDACTED}@`);
-	text = replaceAll(text, QUERY_RE, (all, sep: string, name: string, item: string) => {
-		const decoded = parameterName(name);
-		const setup = decoded.trim().toLowerCase() === "t" && /^[A-Za-z0-9_-]{16,}/.test(item);
-		if (!item || (!secretName(decoded) && !setup)) return all;
+	const cleanParameter = (all: string, sep: string, name: string, item: string): string => {
+		let decoded = name;
+		// Each decoding step shortens an escaped name; repeated encoding must
+		// not turn a credential label into an ordinary container.
+		while (true) {
+			const next = parameterName(decoded);
+			if (next === decoded) break;
+			decoded = next;
+		}
+		let setup = false;
+		if (decoded.trim().toLowerCase() === "t") {
+			let candidate = item.replace(/^["']|["']$/g, "");
+			while (true) {
+				const next = parameterName(candidate);
+				if (next === candidate) break;
+				candidate = next;
+			}
+			setup = /^[A-Za-z0-9_-]{16,}/.test(candidate);
+		}
+		if (!item) return all;
+		if (!secretName(decoded) && !setup) return `${sep}${name}=${redactNested(item, depth + 1)}`;
 		return `${sep}${name}=${REDACTED}`;
-	});
+	};
+	const parameters = new RegExp(QUERY_RE.source, "g");
+	let out = "";
+	let last = 0;
+	let match: RegExpExecArray | null;
+	while ((match = parameters.exec(text)) !== null) {
+		const cleaned = cleanParameter(match[0], match[1], match[2], match[3]);
+		if (cleaned === match[0]) {
+			// An ordinary container is not evidence that its contents are safe.
+			// Inspect nested delimiters even when its value ends at a quote.
+			parameters.lastIndex = match.index + match[1].length + match[2].length + 1;
+			continue;
+		}
+		out += text.slice(last, match.index) + cleaned;
+		last = parameters.lastIndex;
+	}
+	text = out + text.slice(last);
+
 	text = redactAssignments(text);
 
 	return text;
