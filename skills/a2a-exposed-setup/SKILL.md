@@ -98,7 +98,14 @@ Never paste secrets into chat or onto the command line. Ask the user before anyt
 
 ## Workflow
 
-For a ready hosted secure link, use `npx -y a2a-exposed@latest hosted link finish
+A local bot can create and finish its own hosted secure link; no second bot is
+required. First use `login --control-url <service-origin>` for the selected
+service. For creation, run `npx -y a2a-exposed@latest hosted link create
+--agent <name> --hostname <host> --origin <local-origin> --path /webhooks/<name>
+--preset hermes --control-url <service-origin> --secret-from hermes` after the
+human authorizes resource creation. The human approves the exact plan on the
+printed page. An identical ready link is reused; a different link is refused.
+For an existing ready hosted secure link, use `npx -y a2a-exposed@latest hosted link finish
 --agent <name> --control-url <service-origin> --secret-from hermes
 --hermes-home <dir> --route <name>` after the human authorizes setup. Show the
 printed URL and code to the human; never open or approve that page yourself.

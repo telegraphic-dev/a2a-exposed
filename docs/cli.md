@@ -76,7 +76,37 @@ Wake secrets are read from `WAKE_WEBHOOK_URL`, `WAKE_WEBHOOK_KEY`, and `WAKE_HMA
 | `wake test` | Send a test wake and print the HTTP status |
 | `wake unset` | Remove wake secrets. The agent polls |
 
-### `hosted link finish`
+### `hosted link create` and `hosted link finish`
+
+One bot runs these commands on its own receiver machine. A second bot and
+manual secret copying are not required. First sign the CLI in to the selected
+service with `login --control-url https://control.example`; the owner approves
+that sign-in in the browser. The saved account session is sent only to that
+same service when starting a setup request, never to the connector or webhook.
+
+To create a link and complete setup:
+
+```bash
+npx -y a2a-exposed@latest hosted link create --agent example \
+  --control-url https://control.example --hostname wake.example.com \
+  --origin http://127.0.0.1:8644 --path /webhooks/inbox --preset hermes \
+  --secret-from hermes --route inbox
+```
+
+The owner approves the exact hostname, local origin, webhook path and preset
+on the printed approval page before the service creates Cloudflare resources.
+The page handles Cloudflare reconnect if permissions are missing. Creation
+reuses an identical ready link. A different existing link returns `link_exists`;
+the CLI does not remove or replace it. A failed creation returns
+`provision_failed`: inspect the approval page for the failing phase and any
+cleanup needed. There is no automatic retry of provisioning.
+
+After approval, creation continues through the same connector, wake test and
+save steps as `finish`. The approved metadata must match the requested plan
+before the CLI reads or transfers the signing secret. All four creation
+options are required; `finish` refuses them rather than ignoring them.
+
+For recovery, finish an existing link:
 
 Requires a ready secure link on a service with link-finish enabled and
 [cloudflared](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/) installed locally.

@@ -12,7 +12,7 @@ import * as account from "./account.mjs";
 import * as upd from "./update.mjs";
 import * as fb from "./feedback.mjs";
 import * as un from "./uninstall.mjs";
-import { finishLink } from "./link-finish.mjs";
+import { finishLink, createLink } from "./link-finish.mjs";
 
 const VERSION = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 
@@ -23,6 +23,13 @@ Usage: npx -y a2a-exposed@latest <command> [options]
        --version, -v                 print the version
        --help, -h                    print this help
 
+  hosted link create --agent NAME --hostname HOST --origin URL --path PATH --preset ID
+       --control-url https://control.example
+       (--secret-file FILE | --secret-env VAR | --secret-from hermes)
+       [--hermes-home DIR] [--route NAME] [--token-file FILE] [--no-run]
+                                One bot creates its own link after the owner approves the exact plan.
+                                An identical ready link is reused; a different existing link is refused.
+                                Then starts, tests and saves as below. Requires login to the same service.
   hosted link finish --agent NAME --control-url https://control.example
        (--secret-file FILE | --secret-env VAR | --secret-from hermes)
        [--hermes-home DIR] [--route NAME] [--token-file FILE] [--no-run]
@@ -349,7 +356,7 @@ const deployOpts = {
 	"workers-dev": B, "workers-dev-subdomain": S, "upstream-token-stdin": B, "no-upstream-token": B, "event-secret-stdin": B,
 };
 const SPEC = {
-	hosted: { agent: S, "control-url": S, "secret-file": S, "secret-env": S, "secret-from": S, "hermes-home": S, route: S, "token-file": S, "no-run": B },
+	hosted: { agent: S, hostname: S, origin: S, path: S, preset: S, "control-url": S, "secret-file": S, "secret-env": S, "secret-from": S, "hermes-home": S, route: S, "token-file": S, "no-run": B },
 	init: { ...deployOpts, ...tunnelOpts, tunnel: B }, deploy: deployOpts, wake: deployOpts, tunnel: tunnelOpts,
 	inbox: { context: S, from: S, all: B, json: B },
 	reply: { text: S, stdin: B, state: { type: "string", default: "completed" }, artifact: B, "artifact-name": { type: "string", default: "response" }, force: B },
@@ -472,8 +479,8 @@ export async function main(argv) {
 			throw new CliError(`unknown peer action ${sub} (announce|forward)`);
 		}
 		case "hosted": {
-			if (p.length !== 2 || p[0] !== "link" || p[1] !== "finish") throw new CliError("usage: hosted link finish --agent NAME (--secret-file FILE | --secret-env VAR | --secret-from hermes)");
-			return finishLink({ ...o, "control-url": o["control-url"] || C.get("CONTROL_URL") });
+			if (p.length !== 2 || p[0] !== "link" || !["finish", "create"].includes(p[1])) throw new CliError("usage: hosted link create|finish --agent NAME (--secret-file FILE | --secret-env VAR | --secret-from hermes)");
+			return (p[1] === "create" ? createLink : finishLink)({ ...o, "control-url": o["control-url"] || C.get("CONTROL_URL") });
 		}
 		case "signup":
 		case "login": {
