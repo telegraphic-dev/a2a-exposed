@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { fingerprint } from "../lib/a2a.mjs";
 import { LAYER_NAMES, buildLayers, layerValue, noPublicDns, publicDnsMismatch, usablePin } from "../lib/layers.mjs";
 import { queryDoh, resolveWakeDns, resolveWorkerDns } from "../lib/status.mjs";
 
@@ -126,7 +127,7 @@ test("TLS failure names the certificate, and Access does not require printing th
 	assert.equal(JSON.stringify(ok).includes(SECRET), false);
 });
 
-test("an Access login redirect or Access 401/403 fails the webhook layer; HTTP 405 still passes", () => {
+test("an Access login redirect or Access 403 fails the webhook layer; an origin 401 and an unclear status do not", () => {
 	const login = "https://team.cloudflareaccess.com/cdn-cgi/access/login?token=secret-login";
 	const redirected = buildLayers(facts({ authed: { status: 302, location: login } }));
 	const hook = redirected.find((l) => l.name === "Local webhook");
@@ -136,15 +137,38 @@ test("an Access login redirect or Access 401/403 fails the webhook layer; HTTP 4
 	assert.equal(hook.detail.includes(login), false);
 	assert.equal(hook.detail.includes("secret-login"), false);
 	assert.equal(redirected.find((l) => l.name === "Access").result, "PASS");
-	for (const status of [401, 403]) {
-		const denied = buildLayers(facts({ authed: { status } }));
-		const row = denied.find((l) => l.name === "Local webhook");
-		assert.equal(row.result, "FAIL", String(status));
-		assert.match(row.detail, new RegExp(`HTTP ${status} from Cloudflare Access`));
-		assert.match(row.fix, /tunnel status/);
-	}
-	const origin = buildLayers(facts({ authed: { status: 405 } }));
-	const reached = origin.find((l) => l.name === "Local webhook");
+	const page = "<html>Cloudflare Access</html> secret-page-token";
+	const byBody = buildLayers(facts({ authed: { status: 403, body: page } }));
+	const bodyRow = byBody.find((l) => l.name === "Local webhook");
+	assert.equal(bodyRow.result, "FAIL");
+	assert.match(bodyRow.detail, /HTTP 403 from Cloudflare Access/);
+	assert.match(bodyRow.detail, /Likely mismatched: Access service token or Access policy/);
+	assert.match(bodyRow.fix, /tunnel status/);
+	assert.equal(bodyRow.detail.includes("secret-page-token"), false);
+	assert.equal(byBody.find((l) => l.name === "Access").result, "PASS");
+	const byHeader = buildLayers(facts({ authed: { status: 403, body: "denied", accessHeaders: ["CF-Access-Domain"] } }));
+	const headerRow = byHeader.find((l) => l.name === "Local webhook");
+	assert.equal(headerRow.result, "FAIL");
+	assert.match(headerRow.detail, /HTTP 403 from Cloudflare Access/);
+	assert.equal(headerRow.detail.includes("CF-Access-Domain"), false);
+	const byChallenge = buildLayers(facts({ authed: { status: 401, wwwAuthenticate: "Cloudflare-Access" } }));
+	assert.equal(byChallenge.find((l) => l.name === "Local webhook").result, "FAIL");
+	assert.match(byChallenge.find((l) => l.name === "Local webhook").detail, /HTTP 401 from Cloudflare Access/);
+	const originAuth = buildLayers(facts({ authed: { status: 401, wwwAuthenticate: "Bearer realm=\"webhook\"", body: "{\"error\":\"missing bearer\"}" } }));
+	const originRow = originAuth.find((l) => l.name === "Local webhook");
+	assert.equal(originRow.result, "PASS");
+	assert.equal(originRow.fix, "");
+	assert.match(originRow.detail, /wake endpoint HTTP 401/);
+	assert.doesNotMatch(originRow.detail, /Cloudflare Access|Access service token or Access policy/);
+	assert.equal(originRow.detail.includes("missing bearer"), false);
+	assert.equal(originAuth.find((l) => l.name === "Access").result, "PASS");
+	const unclear = buildLayers(facts({ authed: { status: 403, body: "Forbidden" } }));
+	const unclearRow = unclear.find((l) => l.name === "Local webhook");
+	assert.equal(unclearRow.result, "PASS");
+	assert.equal(unclearRow.fix, "");
+	assert.match(unclearRow.detail, /wake endpoint HTTP 403/);
+	assert.doesNotMatch(unclearRow.detail, /Cloudflare Access|Access service token or Access policy/);
+	const reached = buildLayers(facts({ authed: { status: 405 } })).find((l) => l.name === "Local webhook");
 	assert.equal(reached.result, "PASS");
 	assert.match(reached.detail, /wake endpoint HTTP 405/);
 	const other = buildLayers(facts({ authed: { status: 302, location: "https://wake-test.example.com/elsewhere" } }));
@@ -202,7 +226,7 @@ function run(args, env) {
 	});
 }
 
-function harness(t, { dns = "", doh = "answer", cardStatus = 200, conns = "1", passwordSet = true } = {}) {
+function harness(t, { dns = "", doh = "answer", cardStatus = 200, conns = "1", passwordSet = true, wakeAuthed } = {}) {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "a2a-layers-"));
 	t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 	const bin = path.join(dir, "worker", "node_modules", ".bin");
@@ -223,11 +247,11 @@ process.stdout.write(JSON.stringify({ id: "tun1", status: "healthy", connections
 		"https://cloudflare-dns.com/dns-query": { status: 200, body: answer },
 		[`${BASE}/.well-known/agent-card.json`]: { status: cardStatus, body: cardStatus === 200 ? { name: "Layer Test", supportedInterfaces: [{ url: `${BASE}/`, protocolVersion: "1.0" }] } : { error: "missing" } },
 		[`${BASE}/health`]: { status: 200, body: { ok: true, version: "99.0.0" } },
-		[`${BASE}/owner/wake/preview`]: { status: 200, body: { preset: "hermes", configured: true, hasKey: false, hasHmacSecret: true, hasAccessServiceToken: true, fingerprints: { url: "abc" } } },
+		[`${BASE}/owner/wake/preview`]: { status: 200, body: { preset: "hermes", configured: true, hasKey: false, hasHmacSecret: true, hasAccessServiceToken: true, fingerprints: { url: fingerprint(WAKE) } } },
 		[`${BASE}/owner/pairing`]: { status: 200, body: { mode: "human", passwordSet, pending: [] } },
 		[`${BASE}/owner/mcp`]: { status: 200, body: { enabled: false } },
 		[WAKE]: {
-			byHeader: { "cf-access-client-id": { status: 200, body: "ok" } },
+			byHeader: { "cf-access-client-id": wakeAuthed || { status: 200, body: "ok" } },
 			default: { status: 401, body: "denied" },
 		},
 	}));
@@ -313,6 +337,80 @@ test("a failed card and a down tunnel still print the pairing row in the same ru
 	assert.ok(h.fetches().every((f) => f.method === "GET"));
 	assert.match(h.calls(), /tunnels get tun1/);
 	assert.ok(!/create|delete|secrets/i.test(h.calls()));
+});
+
+test("status tells an Access 403 from an origin 401 and from an unclear refusal", async (t) => {
+	const aud = "aud-should-not-print";
+	const pageToken = "page-secret-token";
+	const accessByHeader = harness(t, {
+		wakeAuthed: {
+			status: 403, body: "denied",
+			headers: { "content-type": "text/plain", "cf-access-domain": "wake-test.example.com", "cf-access-aud": aud },
+		},
+	});
+	const headerRun = await accessByHeader.run(["status"]);
+	assert.equal(headerRun.status, 1, headerRun.stdout + headerRun.stderr);
+	assert.match(headerRun.stdout, /^Local webhook: +FAIL {2}Likely mismatched: Access service token or Access policy/m);
+	assert.match(headerRun.stdout, /HTTP 403 from Cloudflare Access/);
+	assert.match(headerRun.stdout, /tunnel status/);
+	assert.equal(headerRun.stdout.includes(aud), false);
+	assert.equal(headerRun.stdout.includes("cf-access-aud"), false);
+	noSecrets(headerRun.stdout + headerRun.stderr);
+	const headerFetches = accessByHeader.fetches().filter((f) => f.url.startsWith(WAKE));
+	assert.equal(headerFetches.length, 2);
+	assert.ok(headerFetches.every((f) => f.method === "GET"));
+	const authed = headerFetches.find((f) => f.headers["cf-access-client-id"]);
+	assert.ok(authed);
+	assert.deepEqual(Object.keys(authed.headers).sort(), ["cf-access-client-id", "cf-access-client-secret", "user-agent"]);
+	assert.equal(authed.headers.authorization, undefined);
+	const accessByBody = harness(t, {
+		wakeAuthed: {
+			status: 403,
+			body: `<html>Cloudflare Access ${pageToken}</html>`,
+			headers: { "content-type": "text/html" },
+		},
+	});
+	const bodyRun = await accessByBody.run(["status", "--json"]);
+	assert.equal(bodyRun.status, 1, bodyRun.stdout + bodyRun.stderr);
+	const bodyJson = JSON.parse(bodyRun.stdout);
+	const bodyHook = bodyJson.layers.find((l) => l.name === "Local webhook");
+	assert.equal(bodyHook.result, "FAIL");
+	assert.match(bodyHook.detail, /HTTP 403 from Cloudflare Access/);
+	assert.equal(bodyRun.stdout.includes(pageToken), false);
+	noSecrets(bodyRun.stdout + bodyRun.stderr);
+	assert.ok(accessByBody.fetches().every((f) => f.method === "GET"));
+	const origin = harness(t, {
+		wakeAuthed: {
+			status: 401, body: "{\"error\":\"missing bearer\"}",
+			headers: { "www-authenticate": "Bearer realm=\"webhook\"", "content-type": "application/json" },
+		},
+	});
+	const originRun = await origin.run(["status"]);
+	assert.equal(originRun.status, 0, originRun.stdout + originRun.stderr);
+	assert.match(originRun.stdout, /^Local webhook: +PASS {2}wake endpoint HTTP 401/m);
+	assert.match(originRun.stdout, /^Access: +PASS/m);
+	assert.doesNotMatch(originRun.stdout, /Cloudflare Access|Access service token or Access policy/);
+	assert.equal(originRun.stdout.includes("missing bearer"), false);
+	noSecrets(originRun.stdout + originRun.stderr);
+	const originAuthed = origin.fetches().filter((f) => f.url.startsWith(WAKE)).find((f) => f.headers["cf-access-client-id"]);
+	assert.deepEqual(Object.keys(originAuthed.headers).sort(), ["cf-access-client-id", "cf-access-client-secret", "user-agent"]);
+	assert.ok(origin.fetches().every((f) => f.method === "GET"));
+	const unclear = harness(t, {
+		wakeAuthed: { status: 403, body: "Forbidden", headers: { "content-type": "text/plain" } },
+	});
+	const unclearRun = await unclear.run(["status", "--json"]);
+	assert.equal(unclearRun.status, 0, unclearRun.stdout + unclearRun.stderr);
+	const unclearJson = JSON.parse(unclearRun.stdout);
+	const unclearHook = unclearJson.layers.find((l) => l.name === "Local webhook");
+	assert.equal(unclearHook.result, "PASS");
+	assert.equal(unclearHook.fix, "");
+	assert.match(unclearHook.detail, /wake endpoint HTTP 403/);
+	assert.doesNotMatch(unclearHook.detail, /Cloudflare Access|Access service token or Access policy/);
+	assert.equal(unclearJson.ok, true);
+	assert.equal(unclearRun.stdout.includes("Forbidden"), false);
+	noSecrets(unclearRun.stdout + unclearRun.stderr);
+	assert.ok(unclear.fetches().every((f) => f.method === "GET"));
+	assert.ok(!/create|delete|secrets/i.test(unclear.calls()));
 });
 
 test("status --json reports eight layers when nothing is deployed", async (t) => {

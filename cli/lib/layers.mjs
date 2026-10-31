@@ -158,13 +158,26 @@ function webhookLayer(f) {
 	return layer("Local webhook", "PASS", `wake endpoint HTTP ${p.status}`);
 }
 
-/** Access rejected the service token: a login redirect, or an Access 401/403. The location URL is not repeated. */
+/** Login host, Access path, Access error page, or an Access challenge. "Forbidden" alone is not a marker. */
+const ACCESS_MARK = /cloudflareaccess\.com|\/cdn-cgi\/access\/|cloudflare[- ]access/i;
+
+/** True when this response shows Cloudflare Access, from its headers or its body. */
+function accessMarked(p) {
+	const headers = Array.isArray(p.accessHeaders) ? p.accessHeaders : [];
+	if (headers.some((n) => String(n).toLowerCase().startsWith("cf-access-"))) return true;
+	return ACCESS_MARK.test(String(p.location || ""))
+		|| ACCESS_MARK.test(String(p.wwwAuthenticate || ""))
+		|| ACCESS_MARK.test(String(p.body || ""));
+}
+
+/** Access rejected the service token: a login redirect, or a 401/403 that carries Access markers.
+ *  A 401/403 without those markers is not an Access refusal. The location URL is not repeated. */
 function serviceTokenRefusal(p) {
 	if (!p || p.error || p.status == null) return "";
 	const loc = String(p.location || "");
 	const login = /cloudflareaccess\.com|\/cdn-cgi\/access\//i.test(loc);
 	if (p.status >= 300 && p.status < 400 && login) return `HTTP ${p.status} redirect to the Cloudflare Access login`;
-	if (p.status === 401 || p.status === 403) return `HTTP ${p.status} from Cloudflare Access`;
+	if ((p.status === 401 || p.status === 403) && accessMarked(p)) return `HTTP ${p.status} from Cloudflare Access`;
 	return "";
 }
 

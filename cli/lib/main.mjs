@@ -162,8 +162,11 @@ Status
                                 when that lookup fails), Worker (TLS, the agent card, and /health), Owner API,
                                 Wake DNS, Access (protected or not, and whether a service token is configured;
                                 the token is never printed), Connector, Local webhook (HTTP status of the wake
-                                endpoint), and Pairing. A failure names the missing or mismatched object and a
-                                fix. --json includes layers (eight objects). Exit 1 if any layer fails.
+                                endpoint), and Pairing. A 401 or 403 fails the local webhook layer only when the
+                                response shows Cloudflare Access. The webhook's own auth refusal reports the HTTP
+                                status and passes, as does a 401 or 403 with no Access marker. A failure names the
+                                missing or mismatched object and a fix. --json includes layers (eight objects).
+                                Exit 1 if any layer fails.
                                 For about a minute after tunnel create, while the connector reports 0 connections,
                                 status prints "waiting for the connector to connect" and exits 0. After that,
                                 0 connections is broken. A tunnel status of inactive is "never connected".

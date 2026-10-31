@@ -134,7 +134,9 @@ export async function resolveWakeDns(host, { doh = queryDoh } = {}) {
 	}
 }
 
-/** GET probe. Headers are sent and never returned. */
+/** GET probe. Request headers are sent and never returned. The result keeps the status, redirect
+ *  location, Cloudflare error code, Access response-header names (never their values), the
+ *  WWW-Authenticate challenge, and a body slice, so a 401/403 can be attributed. */
 async function probeGet(url, headers) {
 	try {
 		const r = await fetch(url, {
@@ -142,9 +144,19 @@ async function probeGet(url, headers) {
 			headers: { "user-agent": "a2a-exposed-cli", ...(headers || {}) },
 			signal: AbortSignal.timeout(15000),
 		});
-		const body = (await r.text()).slice(0, 2000);
+		const body = (await r.text()).slice(0, 8192);
 		const cf = T.cloudflareErrorCode(body);
-		return { status: r.status, location: r.headers.get("location") || "", ...(cf ? { cf } : {}) };
+		const accessHeaders = [];
+		r.headers.forEach((_value, name) => {
+			if (name.toLowerCase().startsWith("cf-access-")) accessHeaders.push(name.toLowerCase());
+		});
+		const wwwAuthenticate = r.headers.get("www-authenticate") || "";
+		return {
+			status: r.status, location: r.headers.get("location") || "", ...(cf ? { cf } : {}),
+			...(accessHeaders.length ? { accessHeaders } : {}),
+			...(wwwAuthenticate ? { wwwAuthenticate: wwwAuthenticate.slice(0, 500) } : {}),
+			...(body ? { body } : {}),
+		};
 	} catch (e) {
 		return { error: e?.cause?.code || e?.cause?.message || e?.message || "request failed" };
 	}
@@ -391,7 +403,8 @@ function layerFacts(s, extra) {
 	};
 }
 
-/** Wake DNS, the bare Access probe, and the service-token probe. GET only. The token is not stored. */
+/** Wake DNS, the bare Access probe, and the service-token probe. GET only. The Access token is sent
+ *  and not stored. The webhook's bearer and HMAC are not sent. */
 async function wakeProbes(s, net) {
 	const wakeHost = s.tunnel?.hostname || "";
 	const empty = { wakeHost, wakeDns: { kind: "skip" }, bare: null, authed: null, down1033: false };

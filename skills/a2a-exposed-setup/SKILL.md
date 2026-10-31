@@ -94,7 +94,7 @@ Run every command as `npx -y a2a-exposed@latest <cmd>` (Node 22.18+; [references
 
 Never paste secrets into chat or onto the command line. Ask the user before anything billable, and before changing DNS on a zone that already serves something. The A2A endpoint URL is the deployment's public base URL. A webhook URL goes only in `WAKE_WEBHOOK_URL`. Check the endpoint with `status`, not curl. A private A2A card goes to [references/deploy.md](references/deploy.md).
 
-`status` is read-only, prints eight layers as `PASS`, `FAIL`, or `SKIP`, and ends with `next step:`. Clients are in the [compatibility table](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#clients).
+`status` is read-only, prints eight layers as `PASS`, `FAIL`, or `SKIP`, and ends with `next step:`. A local-webhook 401 or 403 fails that layer only when the response shows Cloudflare Access; the webhook's own auth refusal reports the HTTP status and passes. Clients are in the [compatibility table](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#clients).
 
 ## Workflow
 
