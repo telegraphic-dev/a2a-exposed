@@ -33,7 +33,7 @@ export CLOUDFLARE_ACCOUNT_ID=...   # when the token can see more than one accoun
 npx -y a2a-exposed@latest init --hostname agent.example.com --agent-name "My Agent"
 ```
 
-A separate Cloudflare login is a named profile: `npx cf auth create NAME --no-browser`, then `--cf-profile NAME`. It is saved as `CF_PROFILE`. When that profile's `cf auth whoami` lists no accounts, `init` reads `cf accounts list` outside the Worker directory and saves the account when the list has exactly one. Several accounts still need `--account-id`. A failed `cf accounts list` prints cf's error and the exit code.
+A separate Cloudflare login is a named profile: `npx cf auth create NAME --no-browser`, then `--cf-profile NAME`. It is saved as `CF_PROFILE`. When that profile's `cf auth whoami` lists no accounts, `init` reads `cf accounts list` outside the Worker directory and saves the account when the list has exactly one. Several accounts still need `--account-id`. A failed `cf accounts list` prints cf's error and the exit code when no account id is set. `--account-id` or `CLOUDFLARE_ACCOUNT_ID` is used anyway.
 
 Token errors (Memberships error `1001`, an IP filter that needs both the host's IPv4 and IPv6) are in [Troubleshooting](troubleshooting.md).
 

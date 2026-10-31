@@ -492,13 +492,17 @@ function normalizeAccounts(raw) {
 }
 
 /** `cf accounts list` (GET /accounts). whoami intersects memberships and can return [] for a logged-in profile.
- *  A non-zero exit is a failed cf call. It is not an empty account list. */
-function accountsFromList(dir) {
+ *  A non-zero exit is a failed cf call. It is not an empty account list. When an account id is already
+ *  set, a failed list is not fatal: init keeps that id. */
+function accountsFromList(dir, { required = true } = {}) {
 	const all = [];
 	const seen = new Set();
 	for (let page = 1; page <= 20; page++) {
 		const r = cfSpawn(dir, ["accounts", "list", "--page", String(page), "--per-page", "50"], { allowFail: true });
-		if (!r || r.status !== 0) die(accountsListFailure(r));
+		if (!r || r.status !== 0) {
+			if (!required) return page === 1 ? [] : all;
+			die(accountsListFailure(r));
+		}
 		let data;
 		try { data = JSON.parse(r.stdout); } catch { return page === 1 ? [] : all; }
 		if (data && typeof data === "object" && !Array.isArray(data) && Array.isArray(data.result)) data = data.result;
@@ -521,7 +525,7 @@ function requireCfLogin(dir) {
 		? `cf profile "${prof}" is not logged in: run \`npx cf auth create ${prof} --no-browser\`, open the printed URL, enter the code, then re-run init`
 		: "not logged in to Cloudflare: run `npx cf auth login --no-browser`, open the printed URL, enter the code, then re-run init") + `\n${LOGIN_403_HELP}`);
 	let accts = normalizeAccounts(who.accounts);
-	if (!accts.length && prof) accts = accountsFromList(dir);
+	if (!accts.length && prof) accts = accountsFromList(dir, { required: !C.get("CLOUDFLARE_ACCOUNT_ID") });
 	if (!C.get("CLOUDFLARE_ACCOUNT_ID")) {
 		if (!accts.length && process.env.CLOUDFLARE_API_TOKEN)
 			die("the API token can't list accounts: add the permission User -> Memberships -> Read (or pass --account-id <id> / export CLOUDFLARE_ACCOUNT_ID; the id is in the dashboard URL)");

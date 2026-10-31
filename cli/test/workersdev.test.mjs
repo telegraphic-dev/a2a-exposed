@@ -303,6 +303,32 @@ test("init --cf-profile reports a failed accounts list instead of 0 accounts", a
 	assert.equal(s.config().CLOUDFLARE_ACCOUNT_ID, undefined);
 });
 
+test("init --cf-profile with --account-id continues when accounts list fails", async (t) => {
+	const s = stubEnv(t, { subdomain: "acme" });
+	const r = await s.cli(
+		["init", "--worker-name", "wdtest", "--skip-install", "--dir", path.join(s.dir, "worker"), "--cf-profile", "bot-acct", "--account-id", "acc999"],
+		{ STUB_PROFILE_WHOAMI: '{"authenticated":true,"accounts":[]}', STUB_ACCOUNTS_FAIL: "Cannot find package 'cf' imported from /tmp/worker/cloudflare.config.ts" },
+	);
+	assert.equal(r.status, 0, r.stderr);
+	assert.equal(s.config().CLOUDFLARE_ACCOUNT_ID, "acc999");
+	assert.ok(s.calls().some((l) => l.startsWith("accounts list")), s.calls().join("\n"));
+	assert.ok(s.calls().some((l) => l.startsWith("deploy")), s.calls().join("\n"));
+	assert.doesNotMatch(r.stderr, /could not list Cloudflare accounts/);
+	assert.doesNotMatch(r.stderr, /0 accounts available/);
+});
+
+test("init --cf-profile keeps CLOUDFLARE_ACCOUNT_ID when accounts list fails", async (t) => {
+	const s = stubEnv(t, { subdomain: "acme" });
+	const r = await s.cli(
+		["init", "--worker-name", "wdtest", "--skip-install", "--dir", path.join(s.dir, "worker"), "--cf-profile", "bot-acct"],
+		{ STUB_PROFILE_WHOAMI: '{"authenticated":true,"accounts":[]}', STUB_ACCOUNTS_FAIL: "Cannot find package 'cf'", CLOUDFLARE_ACCOUNT_ID: "accenv" },
+	);
+	assert.equal(r.status, 0, r.stderr);
+	assert.match(r.stderr, /Cloudflare account: accenv/);
+	assert.ok(s.calls().some((l) => l.startsWith("deploy")), s.calls().join("\n"));
+	assert.doesNotMatch(r.stderr, /could not list Cloudflare accounts|0 accounts available/);
+});
+
 test("init surfaces a failing cf auth whoami with its stderr and exit code", async (t) => {
 	const s = stubEnv(t, { subdomain: "acme" });
 	const r = await s.cli(
