@@ -260,3 +260,19 @@ test("redact leaves ordinary text", () => {
 	];
 	for (const sample of samples) assert.equal(redact(sample), sample, sample);
 });
+
+for (const value of [123456789, true, false, null, ["opaque-secret", { nested: [1, 2] }], { nested: ["opaque-secret", { text: 'escaped " quote } ]' }] }]) {
+	test(`redact removes JSON secret value ${JSON.stringify(value)}`, () => {
+		const input = `{"password":${JSON.stringify(value)},"name":"Ada"}`;
+		const expected = '{"password":"[redacted]","name":"Ada"}';
+		assert.equal(redact(input), expected);
+		assert.equal(redact(`before ${input} after`), `before ${expected} after`);
+		assert.equal(redact(`{"outer":${input},"token":${JSON.stringify(value)}}`), `{"outer":${expected},"token":"[redacted]"}`);
+	});
+}
+
+test("redact decodes escaped JSON secret names and preserves ordinary JSON values", () => {
+	assert.equal(redact(String.raw`{"pass\u0077ord": ["opaque-secret"]}`), String.raw`{"pass\u0077ord": "[redacted]"}`);
+	const ordinary = '{"count":123,"enabled":true,"items":[1,2],"metadata":{"name":"Ada"},"empty":null}';
+	assert.equal(redact(ordinary), ordinary);
+});

@@ -15,7 +15,6 @@ const JWT_RE = /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g;
 const AUTH_RE = /\b((?:proxy-)?authorization)(\s*[:=]\s*)([^\n]+)/gi;
 const QUERY_RE = /([?&])([A-Za-z0-9_-]+)=([^&#\s]*)/g;
 const ASSIGN_RE = /\b([A-Za-z_][A-Za-z0-9_]*)(\s*=\s*)/g;
-const JSON_RE = /"([^"\\]+)"(\s*:\s*)"((?:\\.|[^"\\])*)"/g;
 
 const SECRET_EXACT = new Set([
 	"authorization",
@@ -115,9 +114,60 @@ function redactAssignments(text: string): string {
 	return out + text.slice(last);
 }
 
+/** Read one JSON value in log text without stopping at delimiters inside strings. */
+function jsonValueEnd(text: string, start: number): number {
+	if (text[start] === '"') return quotedValueEnd(text, start);
+	if (text[start] === "[" || text[start] === "{") {
+		const closers = [text[start] === "[" ? "]" : "}"];
+		for (let i = start + 1; i < text.length; i += 1) {
+			const char = text[i];
+			if (char === '"') i = quotedValueEnd(text, i) - 1;
+			else if (char === "[" || char === "{") closers.push(char === "[" ? "]" : "}");
+			else if (char === closers[closers.length - 1]) {
+				closers.pop();
+				if (!closers.length) return i + 1;
+			}
+		}
+		return text.length;
+	}
+	let end = start;
+	while (end < text.length && !/[\s,}\]]/.test(text[end])) end += 1;
+	return end;
+}
+
+/** Preserve surrounding log text and JSON formatting while removing complete secret values. */
+function redactJsonFields(text: string): string {
+	let out = "";
+	let last = 0;
+	for (let i = 0; i < text.length; i += 1) {
+		if (text[i] !== '"') continue;
+		const keyEnd = quotedValueEnd(text, i);
+		let cursor = keyEnd;
+		while (/\s/.test(text[cursor] ?? "") && cursor < text.length) cursor += 1;
+		if (text[cursor] === ":") {
+			let name: string;
+			try { name = JSON.parse(text.slice(i, keyEnd)); }
+			catch { i = keyEnd - 1; continue; }
+			if (secretName(name)) {
+				cursor += 1;
+				while (cursor < text.length && /\s/.test(text[cursor])) cursor += 1;
+				const end = jsonValueEnd(text, cursor);
+				if (end > cursor) {
+					out += text.slice(last, cursor) + JSON.stringify(REDACTED);
+					last = end;
+					i = end - 1;
+					continue;
+				}
+			}
+		}
+		i = keyEnd - 1;
+	}
+	return out + text.slice(last);
+}
+
 /** Remove secret text. The words around it stay. */
 function redactText(value: string): string {
-	let text = value;
+	let text = redactJsonFields(value);
 	text = replaceAll(text, PEM_RE, REDACTED);
 	text = replaceAll(text, JWT_RE, REDACTED);
 	text = replaceAll(text, API_KEY_RE, REDACTED);
@@ -135,10 +185,7 @@ function redactText(value: string): string {
 		return `${sep}${name}=${REDACTED}`;
 	});
 	text = redactAssignments(text);
-	text = replaceAll(text, JSON_RE, (all, name: string, sep: string) => {
-		if (!secretName(name)) return all;
-		return `"${name}"${sep}"${REDACTED}"`;
-	});
+
 	return text;
 }
 
