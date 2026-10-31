@@ -7,12 +7,23 @@ import * as C from "./config.mjs";
 import { readSigningSecret, validateSecretSource, writeTokenFile, startConnector, connectorCommand } from "./local-link.mjs";
 
 const sleepDefault = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const ERRORS = new Set(["access_denied", "expired_token", "link_not_ready", "invalid_grant", "already_delivered", "connector_not_connected", "not_found", "cloudflare_unavailable", "link_exists", "provision_failed", "unauthorized"]);
+const ERRORS = {
+	unauthorized: "Run a2a-exposed login, then run finish again.",
+	invalid_request: "Check the agent name and link options, then run setup again.",
+	link_exists: "A different link already exists; review it on the website before retrying.",
+	provision_failed: "Check the approval page for the failing provisioning phase and cleanup state before retrying.",
+	preset: "Select a valid wake preset with --preset <id>, then run finish again.",
+	signing_secret: "Check the local signing-secret source and receiver configuration before retrying.",
+	unreadable: "Reconnect Cloudflare on the website, then run finish again.",
+	unavailable: "The service is temporarily unavailable; retry later with fresh approval.",
+};
+const APPROVAL_ERRORS = new Set(["access_denied", "expired_token", "link_not_ready", "invalid_grant", "already_delivered", "connector_not_connected", "not_found", "cloudflare_unavailable"]);
 
 // Deliberately never echo server text, bodies, fetch errors, or child output.
 function failure(status, body) {
-	const code = ERRORS.has(body?.error) ? body.error : `HTTP ${status}`;
-	return new CliError(`link setup failed (${code}); check the link on the website and rerun the command for fresh approval`);
+	const code = Object.hasOwn(ERRORS, body?.error) || APPROVAL_ERRORS.has(body?.error) ? body.error : `HTTP ${status}`;
+	const message = Object.hasOwn(ERRORS, code) ? ERRORS[code] : "check the link on the website and rerun the command for fresh approval";
+	return new CliError(`link setup failed (${code}); ${message}`);
 }
 
 export function savedLinkSession(origin, get = C.get) {
@@ -50,7 +61,7 @@ export function createLink(o, deps) {
 }
 
 export function finishLink(o, deps) {
-	if (CREATE_FIELDS.some((key) => o[key] !== undefined)) throw new CliError("creation options require hosted link create; finish only reuses an existing link");
+	if (CREATE_FIELDS.filter((key) => key !== "preset").some((key) => o[key] !== undefined)) throw new CliError("creation options require hosted link create; finish only reuses an existing link");
 	return setupLink(o, deps);
 }
 
@@ -63,6 +74,7 @@ async function setupLink(o, {
 	validateSecretSource(o);
 	const agent = o.agent;
 	if (typeof agent !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$/.test(agent)) throw new CliError("--agent must be an agent name (letters, digits, underscores or hyphens)");
+	if (o.preset !== undefined && (typeof o.preset !== "string" || !/^[a-z][a-z0-9-]{0,63}$/.test(o.preset))) throw new CliError("--preset must be a wake preset id");
 	const origin = controlOrigin(o["control-url"]);
 	if (!origin) throw new CliError("--control-url must be an https origin with no path");
 	const session = sessionToken(origin);
@@ -104,12 +116,14 @@ async function setupLink(o, {
 	}
 	if (!authorized) throw failure(410, { error: "expired_token" });
 	const { grant, link } = authorized;
-	if (typeof grant !== "string" || !/^[\x21-\x7e]+$/.test(grant) || grant.length > 4096 || link?.agent !== agent || typeof link.path !== "string" || !link.path.startsWith("/") || typeof link.preset !== "string" || !link.preset || typeof link.hostname !== "string" || typeof link.origin !== "string")
+	if (typeof grant !== "string" || !/^[\x21-\x7e]+$/.test(grant) || grant.length > 4096 || link?.agent !== agent || typeof link.path !== "string" || !link.path.startsWith("/") || typeof link.preset !== "string" || typeof link.hostname !== "string" || typeof link.origin !== "string")
 		throw new CliError("invalid approved link response");
 	if (create && CREATE_FIELDS.some((key) => link[key] !== create[key]))
 		throw new CliError("approved link differs from the requested creation plan; no connector or signing secret was transferred");
+	const preset = o.preset ?? link.preset;
+	if (!/^[a-z][a-z0-9-]{0,63}$/.test(preset)) throw new CliError("approved link has no valid preset; rerun finish with --preset <id> before requesting fresh approval");
 	// Resolve and validate the source before spending the one-time connector delivery.
-	const secret = readSecret(o, link);
+	const secret = readSecret(o, { ...link, preset });
 	const connector = await request("connector", {}, grant);
 	if (!connector.response.ok) throw failure(connector.response.status, connector.body);
 	if (typeof connector.body.connector_token !== "string" || !connector.body.connector_token.trim() || /\s/.test(connector.body.connector_token)) throw new CliError("invalid connector response; run finish again for fresh approval");
@@ -130,10 +144,10 @@ async function setupLink(o, {
 		await sleep(Math.min(3000, Math.max(0, connectDeadline - now())));
 	}
 	if (!connected) throw new CliError("connector did not report connected within 60 seconds; check cloudflared and run finish again for fresh approval");
-	const tested = await request("wake-test", { signing_secret: secret, preset: link.preset }, grant);
+	const tested = await request("wake-test", { signing_secret: secret, preset }, grant);
 	if (!tested.response.ok) throw failure(tested.response.status, tested.body);
 	if (tested.body.result !== "ok" || tested.body.saved !== true) {
-		const result = ["dns-missing", "access-401", "access-403", "origin-4xx/5xx", "timeout"].includes(tested.body.result) ? tested.body.result : "unknown";
+		const result = (["dns-missing", "access-401", "access-403", "timeout"].includes(tested.body.result) || /^origin-\d{3}$/.test(tested.body.result)) ? tested.body.result : "unknown";
 		throw new CliError(`wake test did not save settings (${result}); fix the receiver and run finish again for fresh approval`);
 	}
 	write("Connector connected. Wake test passed and settings saved.");

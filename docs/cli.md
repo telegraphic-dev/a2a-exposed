@@ -126,6 +126,10 @@ Only a connected status allows the signed wake test. A passing test saves the
 wake settings. The connector stays running; no startup service is installed.
 Child output is suppressed. If it exits, inspect your cloudflared installation.
 
+For an existing link with no preset, pass `--preset <id>` to finish. The CLI validates
+the option before requesting approval or exchanging the request for a grant.
+This preset is used for local secret-source validation and the wake test.
+
 `--control-url` defaults to saved `CONTROL_URL`. Choose exactly one source:
 
 - `--secret-file FILE`: regular file, mode 600, no symlinks. One trailing line ending is removed.

@@ -30,7 +30,7 @@ Usage: npx -y a2a-exposed@latest <command> [options]
                                 One bot creates its own link after the owner approves the exact plan.
                                 An identical ready link is reused; a different existing link is refused.
                                 Then starts, tests and saves as below. Requires login to the same service.
-  hosted link finish --agent NAME --control-url https://control.example
+  hosted link finish --agent NAME --control-url https://control.example [--preset ID]
        (--secret-file FILE | --secret-env VAR | --secret-from hermes)
        [--hermes-home DIR] [--route NAME] [--token-file FILE] [--no-run]
                                 Human approves the printed URL/code. Saves the connector token privately,

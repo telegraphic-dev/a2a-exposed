@@ -269,3 +269,53 @@ test("missing login refuses locally and finish cannot silently ignore create opt
 	assert.equal(result.status, 1);
 	assert.match(result.stderr, /requires --hostname/);
 });
+
+test("finish authenticates a real HTTP requests endpoint with the saved Bearer session", async (t) => {
+	const { createServer } = await import("node:http");
+	let accepted = 0;
+	const server = createServer((req, res) => {
+		assert.equal(req.url, "/api/link-finish/requests");
+		const authorized = req.headers.authorization === `Bearer ${sensitive[3]}`;
+		if (authorized) accepted++;
+		res.writeHead(authorized ? 201 : 401, { "content-type": "application/json" });
+		res.end(JSON.stringify(authorized ? { request_id: "id", user_code: "ABCD-1234", approve_url: "https://control.example/approve" } : { error: "unauthorized" }));
+	});
+	await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+	t.after(() => new Promise((resolve) => { server.close(resolve); server.closeAllConnections(); }));
+	const base = `http://127.0.0.1:${server.address().port}`;
+	assert.equal((await fetch(`${base}/api/link-finish/requests`, { method: "POST" })).status, 401);
+	const h = harness(), original = h.deps.fetchImpl;
+	h.deps.fetchImpl = (url, init) => url.endsWith("/requests") ? fetch(base + new URL(url).pathname, init) : original(url, init);
+	// The harness normally records the challenge; this endpoint checks auth instead.
+	h.deps.fetchImpl = ((fetchRequest) => (url, init) => {
+		if (url.endsWith("/token")) return Response.json({ grant: sensitive[0], link });
+		return fetchRequest(url, init);
+	})(h.deps.fetchImpl);
+	await finishLink(o, h.deps);
+	assert.equal(accepted, 1);
+});
+
+test("finish validates preset before network and uses it for a link without a preset", async () => {
+	for (const preset of ["", "bad preset", "../bad"]) {
+		const h = harness();
+		await assert.rejects(finishLink({ ...o, preset }, h.deps), /--preset/);
+		assert.deepEqual(h.calls, []);
+	}
+	const h = harness({ token: () => Response.json({ grant: sensitive[0], link: { ...link, preset: "" } }) });
+	h.deps.readSecret = (_options, approved) => { assert.equal(approved.preset, "hermes"); return sensitive[2]; };
+	await finishLink({ ...o, preset: "hermes" }, h.deps);
+	const missing = harness({ token: () => Response.json({ grant: sensitive[0], link: { ...link, preset: "" } }) });
+	await assert.rejects(finishLink(o, missing.deps), /--preset/);
+	assert.equal(missing.calls.includes("connector"), false);
+});
+
+test("known errors give fixed local recovery and origin status codes remain visible", async () => {
+	for (const [error, message] of Object.entries({ unauthorized: "login", invalid_request: "options", link_exists: "different link", provision_failed: "cleanup", preset: "--preset", signing_secret: "signing-secret", unreadable: "Reconnect", unavailable: "retry later" })) {
+		const h = harness({ requests: () => Response.json({ error, message: sensitive[0] }, { status: 400 }) });
+		await assert.rejects(finishLink(o, h.deps), (err) => err.message.includes(message) && !err.message.includes(sensitive[0]));
+	}
+	for (const result of ["origin-404", "origin-500"]) {
+		const h = harness({ "wake-test": () => Response.json({ result, saved: false }) });
+		await assert.rejects(finishLink(o, h.deps), new RegExp(result));
+	}
+});

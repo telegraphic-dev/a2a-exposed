@@ -98,24 +98,9 @@ Never paste secrets into chat or onto the command line. Ask the user before anyt
 
 ## Workflow
 
-A local bot can create and finish its own hosted secure link; no second bot is
-required. First use `login --control-url <service-origin>` for the selected
-service. For creation, run `npx -y a2a-exposed@latest hosted link create
---agent <name> --hostname <host> --origin <local-origin> --path /webhooks/<name>
---preset hermes --control-url <service-origin> --secret-from hermes` after the
-human authorizes resource creation. The human approves the exact plan on the
-printed page. An identical ready link is reused; a different link is refused.
-For an existing ready hosted secure link, use `npx -y a2a-exposed@latest hosted link finish
---agent <name> --control-url <service-origin> --secret-from hermes
---hermes-home <dir> --route <name>` after the human authorizes setup. Show the
-printed URL and code to the human; never open or approve that page yourself.
-The command privately transfers the connector token and signing secret, starts
-cloudflared, waits for connected status, then tests and saves the wake. Never
-ask for either secret in chat or the clipboard. Other sources are
-`--secret-file` (mode 600) and `--secret-env` (variable name only). For exact
-route selection, recovery, `--no-run`, and current testing limits, read
-[hosted finish](references/link-finish.md). Requires the service feature to be
-enabled; this flow is awaiting staging end-to-end verification.
+A local bot creates its own link with `hosted link create --agent <name> --hostname <host> --origin <local-origin> --path /webhooks/<name> --preset hermes --control-url <service-origin> --secret-from hermes`. First use `login --control-url <service-origin>` and obtain human authorization for resource creation. The human approves the exact printed plan. An identical ready link is reused; a different link is refused.
+
+For a ready link, use `hosted link finish --agent <name> --control-url <service-origin> --secret-from hermes --hermes-home <dir> --route <name>`. Use `--preset <id>` when the link has no preset; it is validated before token exchange. Show the printed URL/code to the human; never open or approve it yourself. The CLI privately transfers credentials, starts cloudflared, waits for connected status, then tests and saves the wake. Other sources are `--secret-file` (mode 600) and `--secret-env` (variable name only). Never ask for secrets in chat or the clipboard. Read [hosted finish](references/link-finish.md) for route selection, recovery, `--no-run` and testing limits. Requires the service feature; staging end-to-end verification is pending.
 
 1. **Choose hosted or self-hosted with the human.** Offer hosted first without a Cloudflare account or a preference. For hosted creation, agree on the name and get an explicit yes. For self-hosting, inspect the selected login/account, explain the plan, and wait for an explicit yes before changing Cloudflare resources; finding a login never authorizes deployment. For Cloudflare errors, see [references/troubleshooting.md](references/troubleshooting.md).
 2. **Prerequisites** — [references/prerequisites.md](references/prerequisites.md).

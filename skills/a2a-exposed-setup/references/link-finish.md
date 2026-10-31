@@ -66,3 +66,7 @@ the wake test/save. Start it locally and rerun finish without `--no-run` for a
 fresh approval. If delivery, writing, connection, or testing fails, fix the
 reported phase and rerun; fresh approval reuses the same ready link without
 provisioning. Never mark a failed or skipped wake test as saved.
+
+For an existing link with no preset, pass `--preset <id>` to finish. The CLI validates
+the option before requesting approval or exchanging the request for a grant.
+This preset is used for local secret-source validation and the wake test.
