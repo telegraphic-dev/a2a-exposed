@@ -12,6 +12,7 @@ import * as account from "./account.mjs";
 import * as upd from "./update.mjs";
 import * as fb from "./feedback.mjs";
 import * as un from "./uninstall.mjs";
+import { finishLink } from "./link-finish.mjs";
 
 const VERSION = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 
@@ -21,6 +22,15 @@ Usage: npx -y a2a-exposed@latest <command> [options]
        (optional speed-up: npm i -g a2a-exposed, then a2a-exposed <command>)
        --version, -v                 print the version
        --help, -h                    print this help
+
+  hosted link finish --agent NAME --control-url https://control.example
+       (--secret-file FILE | --secret-env VAR | --secret-from hermes)
+       [--hermes-home DIR] [--route NAME] [--token-file FILE] [--no-run]
+                                Human approves the printed URL/code. Saves the connector token privately,
+                                starts cloudflared, waits up to 60 seconds, then tests and saves the wake.
+                                --control-url defaults to saved CONTROL_URL. No secrets in arguments/output.
+                                --no-run saves the token and prints the connector command; wake is not saved.
+                                Recovery: rerun with fresh approval; the ready link is reused.
 
 Setup (needs Node 22.18+, e.g. \`mise exec node@22 -- npx -y a2a-exposed@latest ...\`, and a Cloudflare login:
 npx cf auth login --no-browser; on a VPS where it fails with HTTP 403 before showing a code, export
@@ -339,6 +349,7 @@ const deployOpts = {
 	"workers-dev": B, "workers-dev-subdomain": S, "upstream-token-stdin": B, "no-upstream-token": B, "event-secret-stdin": B,
 };
 const SPEC = {
+	hosted: { agent: S, "control-url": S, "secret-file": S, "secret-env": S, "secret-from": S, "hermes-home": S, route: S, "token-file": S, "no-run": B },
 	init: { ...deployOpts, ...tunnelOpts, tunnel: B }, deploy: deployOpts, wake: deployOpts, tunnel: tunnelOpts,
 	inbox: { context: S, from: S, all: B, json: B },
 	reply: { text: S, stdin: B, state: { type: "string", default: "completed" }, artifact: B, "artifact-name": { type: "string", default: "response" }, force: B },
@@ -459,6 +470,10 @@ export async function main(argv) {
 			if (sub === "announce") return address.announce(o);
 			if (sub === "forward") return address.forward(o);
 			throw new CliError(`unknown peer action ${sub} (announce|forward)`);
+		}
+		case "hosted": {
+			if (p.length !== 2 || p[0] !== "link" || p[1] !== "finish") throw new CliError("usage: hosted link finish --agent NAME (--secret-file FILE | --secret-env VAR | --secret-from hermes)");
+			return finishLink({ ...o, "control-url": o["control-url"] || C.get("CONTROL_URL") });
 		}
 		case "signup":
 		case "login": {
