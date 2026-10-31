@@ -200,6 +200,7 @@ async function tunnelEnv(t, { preset = "openclaw-wake", hostname = "agent.exampl
 			res.statusCode = cardStatus;
 			return res.end(JSON.stringify(cardStatus === 200 ? { name: "Tun Test", supportedInterfaces: [{ url: cardUrl || `http://${req.headers.host}/`, protocolVersion: "1.0" }, { url: `http://${req.headers.host}/`, protocolVersion: "0.3" }] } : { error: "not found" }));
 		}
+		if (req.url === "/health") return res.end(JSON.stringify({ ok: true, version: "99.0.0" }));
 		if (req.url === "/owner/mcp") {
 			res.statusCode = mcp.status;
 			return res.end(JSON.stringify(mcp.status === 200 ? { enabled: mcp.enabled, grants: [] } : { error: "not found" }));

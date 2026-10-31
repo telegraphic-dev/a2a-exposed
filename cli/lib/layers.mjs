@@ -72,9 +72,17 @@ function workerLayer(f) {
 		return layer("Worker", "FAIL", `Likely mismatched: agent card URL. ${card.urlProblem}`, `${CLI} deploy`);
 	const tls = https ? "TLS ok" : "TLS skipped (not https)";
 	const named = card.name ? ` ("${card.name}")` : "";
+	const cardBit = `${tls}; agent card HTTP ${card.httpStatus || 200}${named}`;
 	const h = f.health;
-	const healthBit = h && h.ok ? `/health HTTP ${h.httpStatus || 200}` : `/health did not report ok${h && h.httpStatus ? ` (HTTP ${h.httpStatus})` : ""}`;
-	return layer("Worker", "PASS", `${tls}; agent card HTTP ${card.httpStatus || 200}${named}; ${healthBit}`);
+	if (!h || h.ok !== true) {
+		const problem = !h || h.httpStatus == null
+			? `/health unreachable${h && h.error ? ` (${h.error})` : ""}`
+			: h.httpStatus < 200 || h.httpStatus >= 300
+				? `/health HTTP ${h.httpStatus}`
+				: `/health HTTP ${h.httpStatus} did not report ok`;
+		return layer("Worker", "FAIL", `Likely missing: Worker /health. ${cardBit}; ${problem}`, `${CLI} deploy`);
+	}
+	return layer("Worker", "PASS", `${cardBit}; /health HTTP ${h.httpStatus || 200}`);
 }
 
 function ownerLayer(f) {
@@ -143,9 +151,21 @@ function webhookLayer(f) {
 	if (p.cf === "1033") return layer("Local webhook", "SKIP", "not reached (Cloudflare error 1033)");
 	const origin = f.tunnel && f.tunnel.origin ? ` at ${f.tunnel.origin}` : "";
 	if (p.error) return layer("Local webhook", "FAIL", `wake endpoint not reachable (${p.error}). Likely missing: local webhook${origin}`, "start the agent's webhook");
+	const refusal = serviceTokenRefusal(p);
+	if (refusal) return layer("Local webhook", "FAIL", `Likely mismatched: Access service token or Access policy. The service-token request was refused (${refusal})`, `${CLI} tunnel status`);
 	if (p.status === 502 || p.status === 504 || p.status === 530)
 		return layer("Local webhook", "FAIL", `wake endpoint HTTP ${p.status}. Likely missing: local webhook${origin}`, "start the agent's webhook");
 	return layer("Local webhook", "PASS", `wake endpoint HTTP ${p.status}`);
+}
+
+/** Access rejected the service token: a login redirect, or an Access 401/403. The location URL is not repeated. */
+function serviceTokenRefusal(p) {
+	if (!p || p.error || p.status == null) return "";
+	const loc = String(p.location || "");
+	const login = /cloudflareaccess\.com|\/cdn-cgi\/access\//i.test(loc);
+	if (p.status >= 300 && p.status < 400 && login) return `HTTP ${p.status} redirect to the Cloudflare Access login`;
+	if (p.status === 401 || p.status === 403) return `HTTP ${p.status} from Cloudflare Access`;
+	return "";
 }
 
 function pairingLayer(f) {

@@ -161,5 +161,5 @@ test("health probe keeps only the public version and distinguishes legacy from u
 	assert.deepEqual(await probe({ ok: true }, 503), { ok: false, version: null, httpStatus: 503 });
 	assert.deepEqual(await probe({}), { ok: false, version: null, httpStatus: 200 });
 	globalThis.fetch = async () => { throw new Error("offline"); };
-	assert.deepEqual(await checkHealth("https://agent.example.com"), { ok: false, version: null, httpStatus: null });
+	assert.deepEqual(await checkHealth("https://agent.example.com"), { ok: false, version: null, httpStatus: null, error: "request to https://agent.example.com failed: offline" });
 });

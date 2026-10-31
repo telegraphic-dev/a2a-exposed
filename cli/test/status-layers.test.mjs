@@ -126,6 +126,46 @@ test("TLS failure names the certificate, and Access does not require printing th
 	assert.equal(JSON.stringify(ok).includes(SECRET), false);
 });
 
+test("an Access login redirect or Access 401/403 fails the webhook layer; HTTP 405 still passes", () => {
+	const login = "https://team.cloudflareaccess.com/cdn-cgi/access/login?token=secret-login";
+	const redirected = buildLayers(facts({ authed: { status: 302, location: login } }));
+	const hook = redirected.find((l) => l.name === "Local webhook");
+	assert.equal(hook.result, "FAIL");
+	assert.match(hook.detail, /Likely mismatched: Access service token or Access policy/);
+	assert.match(hook.detail, /HTTP 302 redirect to the Cloudflare Access login/);
+	assert.equal(hook.detail.includes(login), false);
+	assert.equal(hook.detail.includes("secret-login"), false);
+	assert.equal(redirected.find((l) => l.name === "Access").result, "PASS");
+	for (const status of [401, 403]) {
+		const denied = buildLayers(facts({ authed: { status } }));
+		const row = denied.find((l) => l.name === "Local webhook");
+		assert.equal(row.result, "FAIL", String(status));
+		assert.match(row.detail, new RegExp(`HTTP ${status} from Cloudflare Access`));
+		assert.match(row.fix, /tunnel status/);
+	}
+	const origin = buildLayers(facts({ authed: { status: 405 } }));
+	const reached = origin.find((l) => l.name === "Local webhook");
+	assert.equal(reached.result, "PASS");
+	assert.match(reached.detail, /wake endpoint HTTP 405/);
+	const other = buildLayers(facts({ authed: { status: 302, location: "https://wake-test.example.com/elsewhere" } }));
+	assert.equal(other.find((l) => l.name === "Local webhook").result, "PASS");
+});
+
+test("a failed /health probe fails the Worker layer", () => {
+	const cases = [
+		[{ ok: false, httpStatus: 500 }, /\/health HTTP 500/],
+		[{ ok: false, httpStatus: 200 }, /\/health HTTP 200 did not report ok/],
+		[{ ok: false, httpStatus: null, error: "The operation was aborted due to timeout" }, /\/health unreachable \(The operation was aborted due to timeout\)/],
+	];
+	for (const [health, re] of cases) {
+		const row = buildLayers(facts({ health })).find((l) => l.name === "Worker");
+		assert.equal(row.result, "FAIL", JSON.stringify(health));
+		assert.match(row.detail, /Likely missing: Worker \/health/);
+		assert.match(row.detail, re);
+		assert.match(row.fix, /deploy/);
+	}
+});
+
 test("usablePin refuses loopback and private addresses", () => {
 	assert.equal(usablePin("203.0.113.10"), true);
 	assert.equal(usablePin("127.0.0.1"), false);

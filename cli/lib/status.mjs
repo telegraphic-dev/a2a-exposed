@@ -157,8 +157,7 @@ export async function checkHealth(base) {
 		if (status === 200 && data?.ok === true)
 			return { ok: true, version: typeof data.version === "string" && data.version ? data.version : null, httpStatus: status };
 		return { ok: false, version: null, httpStatus: status };
-	} catch { /* unreachable: version stays unknown */ }
-	return { ok: false, version: null, httpStatus: null };
+	} catch (e) { /* unreachable: version stays unknown */ return { ok: false, version: null, httpStatus: null, error: e.message }; }
 }
 
 /** Presets whose webhook usually listens only locally: wakes need the tunnel (or another reverse proxy). */
