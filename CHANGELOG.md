@@ -2,6 +2,10 @@
 
 All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.3.x), Worker template, control core, and skills. Versions follow [semver](https://semver.org); a `v*` tag publishes the CLI and `@a2a-exposed/control-core` to npm (see [Releases](docs/README.md#releases)).
 
+## Unreleased
+
+- **Cloudflare account check during `init` (#179).** `init` runs the Cloudflare login and account check outside the Worker directory, so `cloudflare.config.ts` is not loaded before `npm install`. When `cf accounts list` fails, the error names that failure, includes cf's message and the exit code, and says how to re-run the command outside the project. A list that succeeds and is empty says `0 accounts available`.
+
 ## 0.8.26 - 2026-10-30
 
 No new migrations. Self-hosted inboxes need no action beyond `npx -y a2a-exposed@latest deploy`.

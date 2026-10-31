@@ -439,15 +439,46 @@ async function deployAndLearn(dir, secrets, o) {
 }
 
 /**
- * whoami before npm install. A previous install has node_modules/.bin/cf.
+ * whoami and accounts list run before npm install. A previous install has node_modules/.bin/cf.
  * A fresh init does not: `npx cf auth login` does not put `cf` on PATH, so this check uses `npx --yes cf`.
+ * cwd stays outside the Worker project. Inside it, cf loads cloudflare.config.ts, and that import fails
+ * with "Cannot find package 'cf'" until npm install. These commands do not need the project.
  */
+function cfAccountCwd() {
+	return os.tmpdir();
+}
+
+function firstStreamLine(text) {
+	return String(text || "").split(/\r?\n/).map((s) => s.trim()).find(Boolean) || "";
+}
+
 function cfSpawn(dir, args, { allowFail = false } = {}) {
 	const local = path.join(dir, "node_modules", ".bin", "cf");
 	const full = cfArgs(args);
-	return fs.existsSync(local)
-		? run(local, full, { cwd: dir, capture: true, allowFail })
-		: run("npx", ["--yes", "cf", ...full], { cwd: dir, capture: true, allowFail });
+	const cwd = cfAccountCwd();
+	const r = fs.existsSync(local)
+		? run(local, full, { cwd, capture: true, captureStderr: true, allowFail: true })
+		: run("npx", ["--yes", "cf", ...full], { cwd, capture: true, captureStderr: true, allowFail: true });
+	if (r.status !== 0 && !allowFail) die(cfCommandFailure(args, r));
+	return r;
+}
+
+function cfCommandFailure(args, r) {
+	const line = firstStreamLine(r && (r.stderr || r.stdout));
+	const code = r && r.status != null ? r.status : "unknown";
+	const shown = args.slice(0, 2).join(" ");
+	const prof = cfProfile();
+	const profileArg = prof ? ` --profile ${prof}` : "";
+	return `cf ${shown} failed (exit ${code})${line ? `: ${line}` : ""}\nCheck: npx --yes cf ${shown}${profileArg}   (run it outside the project directory)`;
+}
+
+function accountsListFailure(r) {
+	const line = firstStreamLine(r && r.stderr) || firstStreamLine(r && r.stdout);
+	const code = r && r.status != null ? r.status : "unknown";
+	const prof = cfProfile();
+	const forProfile = prof ? ` for profile "${prof}"` : "";
+	const check = `npx --yes cf accounts list${prof ? ` --profile ${prof}` : ""}`;
+	return `could not list Cloudflare accounts${forProfile}${line ? `: ${line}` : ""}\ncf accounts list failed (exit ${code}).\nCheck: ${check}   (run it outside the project directory)\nOr pass --account-id <id>.`;
 }
 
 function cfLoginJson(dir) {
@@ -460,13 +491,14 @@ function normalizeAccounts(raw) {
 	return list.filter((a) => a && typeof a.id === "string" && a.id).map((a) => ({ id: a.id, name: typeof a.name === "string" && a.name ? a.name : a.id }));
 }
 
-/** `cf accounts list` (GET /accounts). whoami intersects memberships and can return [] for a logged-in profile. */
+/** `cf accounts list` (GET /accounts). whoami intersects memberships and can return [] for a logged-in profile.
+ *  A non-zero exit is a failed cf call. It is not an empty account list. */
 function accountsFromList(dir) {
 	const all = [];
 	const seen = new Set();
 	for (let page = 1; page <= 20; page++) {
 		const r = cfSpawn(dir, ["accounts", "list", "--page", String(page), "--per-page", "50"], { allowFail: true });
-		if (!r || r.status !== 0) return page === 1 ? [] : all;
+		if (!r || r.status !== 0) die(accountsListFailure(r));
 		let data;
 		try { data = JSON.parse(r.stdout); } catch { return page === 1 ? [] : all; }
 		if (data && typeof data === "object" && !Array.isArray(data) && Array.isArray(data.result)) data = data.result;
