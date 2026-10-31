@@ -276,3 +276,40 @@ test("redact decodes escaped JSON secret names and preserves ordinary JSON value
 	const ordinary = '{"count":123,"enabled":true,"items":[1,2],"metadata":{"name":"Ada"},"empty":null}';
 	assert.equal(redact(ordinary), ordinary);
 });
+
+for (const prefix of ["https://example.com/?", "https://example.com/#", "https://example.com/#/route?", "", "body: "]) {
+	for (const name of ["%74oken", "%54oKeN", "api%5fkey", "access+token", "client%20secret", "%74oken%", "%FF%74oken", "%ZZ%74oken", "TOKEN", "%74", "%54", "T", "+t+"]) {
+		test(`encoded parameter ${prefix}${name} through both public functions`, () => {
+			const input = `${prefix}${name}=${BODY}&name=Ada`;
+			const expected = `${prefix}${name}=[redacted]&name=Ada`;
+			assert.equal(redact(input), expected);
+			assert.deepEqual(sanitized({ text: input }), { text: expected });
+		});
+	}
+}
+
+test("malformed and ordinary encoded parameters remain safe and unchanged", () => {
+	for (const input of ["?%ZZ=Ada", "?%FF=Ada", "?na%6De=Ada+Lovelace", "?%74=short", "name=Ada&%74oken=&city=Prague"]) {
+		assert.equal(redact(input), input);
+		assert.equal(sanitized({ text: input }).text, input);
+	}
+	const input = `?name=Ada&%74oken=${OPAQUE}#access+token=${OPAQUE}`;
+	const expected = "?name=Ada&%74oken=[redacted]#access+token=[redacted]";
+	assert.equal(redact(input), expected);
+	assert.equal(sanitized({ text: input }).text, expected);
+});
+
+test("a redaction marker in an input value cannot hide its trailing secret", () => {
+	for (const input of ["PASSWORD=[redacted]still-secret", "?token=[redacted]still-secret"]) {
+		assert.equal(redact(input).includes("still-secret"), false);
+		assert.equal(sanitized({ text: input }).text.includes("still-secret"), false);
+	}
+});
+
+test("encoded parameter names also hide quoted values completely", () => {
+	for (const value of ['"first second"', "'first second'", '"unterminated secret']) {
+		const input = `?%74oken=${value}`;
+		assert.equal(redact(input), "?%74oken=[redacted]");
+		assert.equal(sanitized({ text: input }).text, "?%74oken=[redacted]");
+	}
+});

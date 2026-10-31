@@ -5,7 +5,6 @@
 const REDACTED = "[redacted]";
 
 const TOKEN_RE = /(?:a2aow_|s2a_|a2amcpr_|a2amcp_|a2aot_)[A-Za-z0-9_-]{20,}/g;
-const SETUP_RE = /([?&])t=[A-Za-z0-9_-]{16,}/g;
 const USERINFO_RE = /([a-z][a-z0-9+.-]*:\/\/)[^/?\s]*@/gi;
 const BEARER_RE = /(bearer\s+)(\S{8,})/gi;
 const BASIC_RE = /(basic\s+)(\S+)/gi;
@@ -13,7 +12,8 @@ const PEM_RE = /-----BEGIN (?:[A-Z0-9]+ )?PRIVATE KEY-----[\s\S]*?(?:-----END (?
 const API_KEY_RE = /(?:(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|\bAKIA[0-9A-Z]{16}\b|\bsk_(?:live|test)_[A-Za-z0-9]{10,}|\brk_(?:live|test)_[A-Za-z0-9]{10,}|\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}|\bxox[baprs]-[A-Za-z0-9-]{10,}|\bAIza[0-9A-Za-z_-]{35}\b)/g;
 const JWT_RE = /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g;
 const AUTH_RE = /\b((?:proxy-)?authorization)(\s*[:=]\s*)([^\n]+)/gi;
-const QUERY_RE = /([?&])([A-Za-z0-9_-]+)=([^&#\s]*)/g;
+// Queries, fragment parameters, and form bodies share name=value encoding.
+const QUERY_RE = /(^|[?&#\s])([^?&#\s="'<>]+)=("(?:\\.|[^"\\])*(?:"|$)|'(?:\\.|[^'\\])*(?:'|$)|[^&#\s]*)/g;
 const ASSIGN_RE = /\b([A-Za-z_][A-Za-z0-9_]*)(\s*=\s*)/g;
 
 const SECRET_EXACT = new Set([
@@ -57,6 +57,16 @@ const SECRET_SUFFIX = [
 	"cookie",
 ];
 
+/** Decode form names without allowing malformed escapes to hide adjacent ASCII. */
+function parameterName(name: string): string {
+	return name.replace(/\+/g, " ").replace(/(?:%[0-9a-f]{2})+/gi, (encoded) => {
+		try { return decodeURIComponent(encoded); }
+		catch {
+			return encoded.replace(/%([0-7][0-9a-f])/gi, (_all, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+		}
+	});
+}
+
 function compactName(name: string): string {
 	return name.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
 }
@@ -97,10 +107,16 @@ function unquotedValueEnd(text: string, start: number): number {
 /** A secret assignment loses its whole value. Quoted values, including escaped quotes, are read before an unquoted word. */
 function redactAssignments(text: string): string {
 	const pattern = new RegExp(ASSIGN_RE.source, "g");
+	// Parameters were handled as complete name/value pairs; do not reinterpret
+	// their names or consume following parameters as part of an assignment.
+	const parameters = Array.from(text.matchAll(new RegExp(QUERY_RE.source, "g")));
+	let parameter = 0;
 	let out = "";
 	let last = 0;
 	let match: RegExpExecArray | null;
 	while ((match = pattern.exec(text)) !== null) {
+		while (parameter < parameters.length && parameters[parameter].index + parameters[parameter][0].length <= match.index) parameter += 1;
+		if (parameter < parameters.length && parameters[parameter].index <= match.index) continue;
 		const name = match[1] ?? "";
 		const sep = match[2] ?? "=";
 		const valueStart = match.index + match[0].length;
@@ -179,9 +195,10 @@ function redactText(value: string): string {
 		return `${name}${sep}${REDACTED}`;
 	});
 	text = replaceAll(text, USERINFO_RE, `$1${REDACTED}@`);
-	text = replaceAll(text, SETUP_RE, `$1t=${REDACTED}`);
 	text = replaceAll(text, QUERY_RE, (all, sep: string, name: string, item: string) => {
-		if (!item || !secretName(name)) return all;
+		const decoded = parameterName(name);
+		const setup = decoded.trim().toLowerCase() === "t" && /^[A-Za-z0-9_-]{16,}/.test(item);
+		if (!item || (!secretName(decoded) && !setup)) return all;
 		return `${sep}${name}=${REDACTED}`;
 	});
 	text = redactAssignments(text);

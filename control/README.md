@@ -4,7 +4,7 @@ This directory is the source for `@a2a-exposed/control-core` and a Worker. The W
 
 The library source entry is `src/core/index.ts`. It exports inbox provisioning, routing helpers, the `ControlEnv` type, `redact` and `sanitized`, and the D1 migrations in `migrations/`.
 
-`redact` removes secrets from text, including complete secret-named JSON field values of any type in serialized JSON or mixed log text. `sanitized` copies a value and does the same for every string, for a field whose name is a secret, and for a `{ name, value }`, `{ key, value }`, or `[name, value]` pair whose name identifies a secret. A field such as `name`, `title`, `url`, or `preset` stays, including a pair whose name is not a secret. The published module is compiled JavaScript and TypeScript declarations. `prepare` at the repository root builds that module on `npm pack` and on a `file:` install. The `a2a-exposed` CLI package leaves this directory out.
+`redact` removes secrets from text, including URL-encoded secret parameter names in queries, fragments, and form bodies, and complete secret-named JSON field values of any type in serialized JSON or mixed log text. `sanitized` copies a value and does the same for every string, for a field whose name is a secret, and for a `{ name, value }`, `{ key, value }`, or `[name, value]` pair whose name identifies a secret. A field such as `name`, `title`, `url`, or `preset` stays, including a pair whose name is not a secret. The published module is compiled JavaScript and TypeScript declarations. `prepare` at the repository root builds that module on `npm pack` and on a `file:` install. The `a2a-exposed` CLI package leaves this directory out.
 
 ## Account sign-in on a Cloudflare agent
 
