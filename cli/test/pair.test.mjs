@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { parseEnv } from "../lib/config.mjs";
 import { deploySecretsFromEnv } from "../lib/deploy.mjs";
 import { deviceEndpointsFromCard, hostAlias, pairingClientName, passwordRecord } from "../lib/pair.mjs";
+import { spawnScript } from "../lib/script.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const BIN = path.join(HERE, "..", "bin", "a2a-exposed.mjs");
@@ -269,7 +270,7 @@ test("pair set-password: refuses argv and non-terminal stdin; in a terminal it u
 		}
 	};
 	const out = await new Promise((resolve) => {
-		const ch = spawn("script", args, { env: s.env, stdio: ["pipe", "pipe", "pipe"] });
+		const ch = spawnScript(args, { env: s.env });
 		let o = "";
 		const type = async (flag) => { ch[flag] = true; await echoOff(); ch.stdin.write(pw + "\r"); };
 		ch.stdout.on("data", (d) => {
