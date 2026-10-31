@@ -156,6 +156,7 @@ test("status without a deployment names the config directory and points at init 
 	const j = JSON.parse(s.cli(["status", "--json"]).stdout);
 	assert.equal(j.ok, false);
 	assert.equal(j.deployed, false);
+	assert.equal(j.layers.length, 8);
 });
 
 test("status reports Worker version, stale exit code, and cached latest with notices disabled", (t) => {
@@ -187,6 +188,10 @@ test("status reports Worker version, stale exit code, and cached latest with not
 	routes[`${base}/health`] = { status: 503, body: {} };
 	fs.writeFileSync(routesFile, JSON.stringify(routes));
 	const unreachable = s.cli(["status", "--json"]);
-	assert.equal(unreachable.status, 0, unreachable.stderr);
-	assert.equal(JSON.parse(unreachable.stdout).workerVersion, null);
+	assert.equal(unreachable.status, 1, unreachable.stderr);
+	const unhealthy = JSON.parse(unreachable.stdout);
+	assert.equal(unhealthy.workerVersion, null);
+	const worker = unhealthy.layers.find((l) => l.name === "Worker");
+	assert.equal(worker.result, "FAIL");
+	assert.match(worker.detail, /\/health HTTP 503/);
 });

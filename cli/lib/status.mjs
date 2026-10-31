@@ -1,23 +1,175 @@
 // `status`: where a setup stands and what to do next. Safe to run any time (read-only: GET requests and cf list/get
 // calls only), so an agent that was interrupted can resume from the printed next step. The CLI fetches the agent card
 // itself, so agents need no curl (some agent sandboxes flag *.dev URLs in shell commands).
+import dns from "node:dns";
 import fs from "node:fs";
+import { isIP } from "node:net";
 import path from "node:path";
+import { promisify } from "node:util";
 import * as C from "./config.mjs";
-import { CLI, cardUrlProblem, cfErrorCode, describeHttp, die, fingerprint, httpJson } from "./a2a.mjs";
+import { CLI, cardUrlProblem, cfErrorCode, describeHttp, die, fingerprint, httpJson, isPrivateHost } from "./a2a.mjs";
 import { baseUrl, owner, ownerTry } from "./commands.mjs";
 import * as D from "./deploy.mjs";
+import { buildLayers, layerValue, usablePin } from "./layers.mjs";
 import * as T from "./tunnel.mjs";
 import { cacheFile, readCache, newer } from "./update.mjs";
+
+const DOH_URL = "https://cloudflare-dns.com/dns-query";
+const LOOKUP_MS = 5000;
+
+/** ENOTFOUND / EAI_AGAIN, including the text httpJson puts on a failed request. */
+export function isResolverError(e) {
+	const code = e?.code || e?.cause?.code || "";
+	if (code === "ENOTFOUND" || code === "EAI_AGAIN") return true;
+	return /\b(ENOTFOUND|EAI_AGAIN)\b/.test(String(e?.message || ""));
+}
+
+/** First address from the system resolver, or EAI_AGAIN when it does not answer in time. */
+export async function defaultLookup(host) {
+	let timer;
+	const timeout = new Promise((_, reject) => {
+		timer = setTimeout(() => {
+			const err = new Error(`DNS lookup timed out for ${host}`);
+			err.code = "EAI_AGAIN";
+			reject(err);
+		}, LOOKUP_MS);
+	});
+	try {
+		const rows = await Promise.race([dns.promises.lookup(host, { all: true }), timeout]);
+		const first = Array.isArray(rows) ? rows[0] : null;
+		const address = typeof first === "string" ? first : first?.address;
+		if (!address) {
+			const err = new Error(`ENOTFOUND ${host}`);
+			err.code = "ENOTFOUND";
+			throw err;
+		}
+		return address;
+	} finally { clearTimeout(timer); }
+}
+
+/** Connect `host` to `ip` for the duration of `fn` (TLS still checks the hostname). Other names use the previous resolver. */
+export async function withHostPin(host, ip, fn) {
+	const prev = dns.lookup;
+	const prevPromises = dns.promises.lookup;
+	dns.lookup = (hostname, options, callback) => {
+		if (typeof options === "function") { callback = options; options = {}; }
+		else if (typeof options === "number") options = { family: options };
+		else options = options || {};
+		if (hostname === host) {
+			if (options.all) return callback(null, [{ address: ip, family: 4 }]);
+			return callback(null, ip, 4);
+		}
+		return prev(hostname, options, callback);
+	};
+	dns.promises.lookup = promisify(dns.lookup);
+	try { return await fn(); }
+	finally {
+		dns.lookup = prev;
+		dns.promises.lookup = prevPromises;
+	}
+}
+
+/** DNS-over-HTTPS A (or the requested type) lookup. `application/dns-json`. No redirects.
+ *  When the system resolver cannot resolve the DoH host, retry once pinned to 1.1.1.1. */
+export async function queryDoh(name, type = "A") {
+	const url = `${DOH_URL}?name=${encodeURIComponent(name)}&type=${encodeURIComponent(type)}`;
+	const init = {
+		method: "GET", redirect: "manual",
+		headers: { accept: "application/dns-json", "user-agent": "a2a-exposed-cli" },
+		signal: AbortSignal.timeout(5000),
+	};
+	let res;
+	try { res = await fetch(url, init); }
+	catch (e) {
+		if (!isResolverError(e)) throw e;
+		res = await withHostPin("cloudflare-dns.com", "1.1.1.1", () => fetch(url, init));
+	}
+	if (!res || res.status !== 200) {
+		const err = new Error(`HTTP ${res ? res.status : 0}`);
+		err.code = `HTTP_${res ? res.status : 0}`;
+		throw err;
+	}
+	const data = await res.json();
+	const want = type === "AAAA" ? 28 : 1;
+	const answer = Array.isArray(data?.Answer) ? data.Answer : [];
+	return answer.filter((a) => a && Number(a.type) === want && typeof a.data === "string").map((a) => a.data);
+}
+
+function firstAddress(raw) {
+	if (typeof raw === "string") return raw;
+	if (Array.isArray(raw)) {
+		const first = raw[0];
+		return typeof first === "string" ? first : first?.address || "";
+	}
+	return raw?.address || "";
+}
+
+/** System lookup, then DNS-over-HTTPS on ENOTFOUND or EAI_AGAIN. `lookup` and `doh` are injectable. */
+export async function resolveWorkerDns(host, { lookup = defaultLookup, doh = queryDoh } = {}) {
+	if (!host) return { kind: "skip" };
+	if (isIP(host)) return { kind: "ip", ip: host };
+	try {
+		const ip = firstAddress(await lookup(host));
+		return { kind: "system", ip };
+	} catch (e) {
+		if (!isResolverError(e)) return { kind: "fail", error: e?.code || e?.message || "lookup failed" };
+		let answers;
+		try { answers = await doh(host, "A"); }
+		catch (err) { return { kind: "fail", error: err?.code || err?.message || "DNS-over-HTTPS failed" }; }
+		const ips = (Array.isArray(answers) ? answers : []).map(String).filter((a) => isIP(a) === 4);
+		if (!ips.length) return { kind: "no-record" };
+		return { kind: "public-only", ip: ips[0] };
+	}
+}
+
+/** Public DNS for the wake hostname (DNS-over-HTTPS only). */
+export async function resolveWakeDns(host, { doh = queryDoh } = {}) {
+	if (!host || isIP(host) || isPrivateHost(host)) return { kind: "skip" };
+	try {
+		const ips = (await doh(host, "A") || []).map(String).filter((a) => isIP(a) === 4);
+		if (!ips.length) return { kind: "no-record" };
+		return { kind: "pass", ip: ips[0] };
+	} catch (e) {
+		return { kind: "fail", error: e?.code || e?.message || "DNS-over-HTTPS failed" };
+	}
+}
+
+/** GET probe. Request headers are sent and never returned. The result keeps the status, redirect
+ *  location, Cloudflare error code, Access response-header names (never their values), the
+ *  WWW-Authenticate challenge, and a body slice, so a 401/403 can be attributed. */
+async function probeGet(url, headers) {
+	try {
+		const r = await fetch(url, {
+			method: "GET", redirect: "manual",
+			headers: { "user-agent": "a2a-exposed-cli", ...(headers || {}) },
+			signal: AbortSignal.timeout(15000),
+		});
+		const body = (await r.text()).slice(0, 8192);
+		const cf = T.cloudflareErrorCode(body);
+		const accessHeaders = [];
+		r.headers.forEach((_value, name) => {
+			if (name.toLowerCase().startsWith("cf-access-")) accessHeaders.push(name.toLowerCase());
+		});
+		const wwwAuthenticate = r.headers.get("www-authenticate") || "";
+		return {
+			status: r.status, location: r.headers.get("location") || "", ...(cf ? { cf } : {}),
+			...(accessHeaders.length ? { accessHeaders } : {}),
+			...(wwwAuthenticate ? { wwwAuthenticate: wwwAuthenticate.slice(0, 500) } : {}),
+			...(body ? { body } : {}),
+		};
+	} catch (e) {
+		return { error: e?.cause?.code || e?.cause?.message || e?.message || "request failed" };
+	}
+}
 
 /** Public health probe. Only a valid health answer establishes missing version reporting. */
 export async function checkHealth(base) {
 	try {
 		const { status, data } = await httpJson(`${base}/health`, { timeout: 15000 });
 		if (status === 200 && data?.ok === true)
-			return { ok: true, version: typeof data.version === "string" && data.version ? data.version : null };
-	} catch { /* unreachable: version stays unknown */ }
-	return { ok: false, version: null };
+			return { ok: true, version: typeof data.version === "string" && data.version ? data.version : null, httpStatus: status };
+		return { ok: false, version: null, httpStatus: status };
+	} catch (e) { /* unreachable: version stays unknown */ return { ok: false, version: null, httpStatus: null, error: e.message }; }
 }
 
 /** Presets whose webhook usually listens only locally: wakes need the tunnel (or another reverse proxy). */
@@ -30,11 +182,11 @@ export async function checkCard(base) {
 		const { status, data } = await httpJson(`${base}/.well-known/agent-card.json`, { timeout: 15000 });
 		if (status !== 200 || !data || typeof data !== "object" || !data.name) {
 			const cf = cfErrorCode(typeof data === "string" ? data : "");
-			return { ok: false, error: status === 200 ? "HTTP 200 (no agent card)" : describeHttp(status, data), ...(cf ? { cfError: cf } : {}) };
+			return { ok: false, httpStatus: status, error: status === 200 ? "HTTP 200 (no agent card)" : describeHttp(status, data), ...(cf ? { cfError: cf } : {}) };
 		}
-		return { ok: true, name: data.name, versions: (data.supportedInterfaces || []).map((i) => i.protocolVersion).filter(Boolean),
+		return { ok: true, httpStatus: status, name: data.name, versions: (data.supportedInterfaces || []).map((i) => i.protocolVersion).filter(Boolean),
 			urls: [...new Set((data.supportedInterfaces || []).map((i) => i && i.url).filter(Boolean))], urlProblem: cardUrlProblem(data, base) };
-	} catch (e) { return { ok: false, error: e.message }; }
+	} catch (e) { return { ok: false, httpStatus: null, error: e.message }; }
 }
 
 /** One line describing how wakes reach the agent. */
@@ -232,8 +384,65 @@ function nextStepCore(s) {
 		[`peers connect with \`${CLI} connect ${s.baseUrl}\` (your human approves each one); \`${CLI} token issue <peer>\` is the manual fallback`]);
 }
 
-/** Collect the snapshot. Each probe tolerates failure; nothing is created or changed. */
-export async function collect() {
+function hostOf(url) {
+	try { return new URL(url).hostname; } catch { return ""; }
+}
+
+/** Facts for the eight layers. Tokens and client secrets stay out of this object. */
+function layerFacts(s, extra) {
+	const t = s.tunnel;
+	return {
+		deployed: s.deployed, baseUrl: s.baseUrl || "", host: extra.host || "", platform: process.platform,
+		workerDns: extra.workerDns, card: s.card, health: s.health, hasOwnerToken: s.hasOwnerToken, ownerApi: s.ownerApi,
+		wakeHost: extra.wakeHost || "", wakeDns: extra.wakeDns, bare: extra.bare, authed: extra.authed,
+		serviceToken: extra.serviceToken, localServiceToken: extra.localServiceToken, pairing: s.pairing,
+		tunnel: t ? {
+			complete: t.complete, tokenFileOk: t.tokenFileOk, tokenFile: t.tokenFile, connections: t.connections,
+			grace: connectorConnecting(t), origin: t.origin, down1033: !!extra.down1033,
+		} : null,
+	};
+}
+
+/** Wake DNS, the bare Access probe, and the service-token probe. GET only. The Access token is sent
+ *  and not stored. The webhook's bearer and HMAC are not sent. */
+async function wakeProbes(s, net) {
+	const wakeHost = s.tunnel?.hostname || "";
+	const empty = { wakeHost, wakeDns: { kind: "skip" }, bare: null, authed: null, down1033: false };
+	if (!wakeHost) return empty;
+	const wakeDns = await resolveWakeDns(wakeHost, net);
+	if (wakeDns.kind !== "pass" || !s.tunnel?.wakeUrl) return { ...empty, wakeDns };
+	const localServiceToken = !!(C.get("A2A_TUNNEL_ACCESS_CLIENT_ID") && C.get("A2A_TUNNEL_ACCESS_CLIENT_SECRET"));
+	const run = async () => {
+		const bare = await probeGet(s.tunnel.wakeUrl);
+		let authed = null;
+		if (localServiceToken) {
+			authed = await probeGet(s.tunnel.wakeUrl, {
+				"CF-Access-Client-Id": C.get("A2A_TUNNEL_ACCESS_CLIENT_ID"),
+				"CF-Access-Client-Secret": C.get("A2A_TUNNEL_ACCESS_CLIENT_SECRET"),
+			});
+		}
+		return { bare, authed };
+	};
+	let probed;
+	try {
+		probed = wakeDns.ip && usablePin(wakeDns.ip) ? await withHostPin(wakeHost, wakeDns.ip, run) : await run();
+	} catch (e) {
+		probed = { bare: { error: e?.message || "request failed" }, authed: null };
+	}
+	const down1033 = [probed.bare, probed.authed].some((p) => p && p.cf === "1033");
+	return { wakeHost, wakeDns, bare: probed.bare, authed: probed.authed, down1033 };
+}
+
+function finishLayers(s, extra) {
+	const localServiceToken = !!(C.get("A2A_TUNNEL_ACCESS_CLIENT_ID") && C.get("A2A_TUNNEL_ACCESS_CLIENT_SECRET"));
+	const serviceToken = localServiceToken || s.wake?.hasAccessServiceToken ? "configured" : "not-configured";
+	s.layers = buildLayers(layerFacts(s, { ...extra, localServiceToken, serviceToken }));
+	return s;
+}
+
+/** Collect the snapshot. Each probe tolerates failure; nothing is created or changed.
+ *  `net.lookup` and `net.doh` replace the system resolver and DNS-over-HTTPS in tests. */
+export async function collect(net = {}) {
 	const s = {
 		configFile: C.CONFIG_FILE,
 		deployed: !!(C.get("A2A_D1_ID") && C.get("A2A_WORKER_NAME")),
@@ -248,61 +457,68 @@ export async function collect() {
 	};
 	const envBase = (process.env.A2A_BASE_URL || "").replace(/\/$/, "");
 	if (envBase && envBase !== s.baseUrlSaved) s.baseUrlEnv = envBase;
-	if (!s.deployed || !s.baseUrl) return s;
-	s.card = await checkCard(s.baseUrl);
-	s.health = await checkHealth(s.baseUrl);
-	s.workerVersion = s.health.version;
-	if (s.hasOwnerToken) {
-		try {
-			const p = await owner("GET", "/owner/wake/preview");
-			s.ownerApi = { ok: true };
-			s.wake = { preset: p.preset, configured: !!p.configured, hasKey: !!p.hasKey, hasHmacSecret: !!p.hasHmacSecret,
-				hasAccessServiceToken: !!p.hasAccessServiceToken, urlFingerprint: p.fingerprints?.url || null };
-		} catch (e) { s.ownerApi = { ok: false, error: e.message }; }
-		if (s.ownerApi.ok) {
+	if (!s.deployed || !s.baseUrl) return finishLayers(s, { host: "", workerDns: { kind: "skip" }, wakeHost: "", wakeDns: { kind: "skip" }, bare: null, authed: null });
+	const host = hostOf(s.baseUrl);
+	const workerDns = await resolveWorkerDns(host, net);
+	const remote = async () => {
+		s.card = await checkCard(s.baseUrl);
+		s.health = await checkHealth(s.baseUrl);
+		s.workerVersion = s.health.version;
+		if (s.hasOwnerToken) {
 			try {
-				const pr = await owner("GET", "/owner/pairing");
-				if (pr && typeof pr === "object" && ["human", "agent", "off"].includes(pr.mode))
-					s.pairing = { mode: pr.mode, passwordSet: !!pr.passwordSet, passwordSetAt: pr.passwordSetAt || null, passwordSetVia: pr.passwordSetVia || null,
-						setupLinkExpiresAt: pr.setupLinkExpiresAt || null, pending: (pr.pending || []).length,
-						...(typeof pr.oidcIssuer === "string" && pr.oidcIssuer ? { oidcIssuer: pr.oidcIssuer } : {}),
-						...(typeof pr.manageUrl === "string" && pr.manageUrl ? { manageUrl: pr.manageUrl } : {}) };
-			} catch { /* older Worker (no pairing yet): leave unknown */ }
-			try {
-				const ad = await ownerTry("GET", "/owner/address");
-				if (ad.status === 200 && ad.data && typeof ad.data === "object") s.addresses = ad.data;
-			} catch { /* older Worker: no address lifecycle */ }
-			if (s.upstream) {
-				try { s.facade = await owner("GET", "/owner/facade"); }
-				catch (e) { s.facade = { mode: "unknown", error: e.message }; }
-				if (s.facade && s.facade.mode === "proxy") Object.assign(s, await upstreamCheck(s.baseUrl));
+				const p = await owner("GET", "/owner/wake/preview");
+				s.ownerApi = { ok: true };
+				s.wake = { preset: p.preset, configured: !!p.configured, hasKey: !!p.hasKey, hasHmacSecret: !!p.hasHmacSecret,
+					hasAccessServiceToken: !!p.hasAccessServiceToken, urlFingerprint: p.fingerprints?.url || null };
+			} catch (e) { s.ownerApi = { ok: false, error: e.message }; }
+			if (s.ownerApi.ok) {
+				try {
+					const pr = await owner("GET", "/owner/pairing");
+					if (pr && typeof pr === "object" && ["human", "agent", "off"].includes(pr.mode))
+						s.pairing = { mode: pr.mode, passwordSet: !!pr.passwordSet, passwordSetAt: pr.passwordSetAt || null, passwordSetVia: pr.passwordSetVia || null,
+							setupLinkExpiresAt: pr.setupLinkExpiresAt || null, pending: (pr.pending || []).length,
+							...(typeof pr.oidcIssuer === "string" && pr.oidcIssuer ? { oidcIssuer: pr.oidcIssuer } : {}),
+							...(typeof pr.manageUrl === "string" && pr.manageUrl ? { manageUrl: pr.manageUrl } : {}) };
+				} catch { /* older Worker (no pairing yet): leave unknown */ }
+				try {
+					const ad = await ownerTry("GET", "/owner/address");
+					if (ad.status === 200 && ad.data && typeof ad.data === "object") s.addresses = ad.data;
+				} catch { /* older Worker: no address lifecycle */ }
+				if (s.upstream) {
+					try { s.facade = await owner("GET", "/owner/facade"); }
+					catch (e) { s.facade = { mode: "unknown", error: e.message }; }
+					if (s.facade && s.facade.mode === "proxy") Object.assign(s, await upstreamCheck(s.baseUrl));
+				}
+				try {
+					const m = await ownerTry("GET", "/owner/mcp");
+					if (m.status === 200 && m.data && typeof m.data === "object" && typeof m.data.enabled === "boolean")
+						s.mcp = m.data.enabled ? "on" : "off";
+				} catch { /* probe failed: leave mcp unknown so status omits the add line */ }
 			}
-			try {
-				const m = await ownerTry("GET", "/owner/mcp");
-				if (m.status === 200 && m.data && typeof m.data === "object" && typeof m.data.enabled === "boolean")
-					s.mcp = m.data.enabled ? "on" : "off";
-			} catch { /* probe failed: leave mcp unknown so status omits the add line */ }
 		}
-	}
-	const dir = D.workerDir({});
-	const haveCf = fs.existsSync(dir);
-	const host = C.get("A2A_TUNNEL_HOSTNAME");
-	if (host || C.get("A2A_TUNNEL_ID")) {
-		const url = T.wakeUrl(host || "?", C.get("A2A_TUNNEL_PATH") || "/");
-		s.tunnel = { hostname: host, wakeUrl: url, origin: C.get("A2A_TUNNEL_ORIGIN"), complete: T.tunnelComplete(), tokenFileOk: T.tokenFileOk(),
-			tokenFile: C.get("A2A_TUNNEL_TOKEN_FILE") || "<config dir>/tunnel-token", workerUrlMatches: s.wake?.urlFingerprint === fingerprint(url),
-			secretsAt: Number(C.get("A2A_TUNNEL_SECRETS_AT")) || 0, connections: null };
-		if (haveCf && C.get("A2A_TUNNEL_ID")) {
-			try {
-				const t = T.cfCall(dir, ["tunnels", "get", C.get("A2A_TUNNEL_ID")], { allowNotFound: true });
-				if (!t) s.tunnel.complete = false;
-				else { s.tunnel.state = t.status; s.tunnel.connections = (t.connections || []).length; }
-			} catch (e) { s.tunnel.error = e.message; }
+		const dir = D.workerDir({});
+		const haveCf = fs.existsSync(dir);
+		const tunnelHost = C.get("A2A_TUNNEL_HOSTNAME");
+		if (tunnelHost || C.get("A2A_TUNNEL_ID")) {
+			const url = T.wakeUrl(tunnelHost || "?", C.get("A2A_TUNNEL_PATH") || "/");
+			s.tunnel = { hostname: tunnelHost, wakeUrl: url, origin: C.get("A2A_TUNNEL_ORIGIN"), complete: T.tunnelComplete(), tokenFileOk: T.tokenFileOk(),
+				tokenFile: C.get("A2A_TUNNEL_TOKEN_FILE") || "<config dir>/tunnel-token", workerUrlMatches: s.wake?.urlFingerprint === fingerprint(url),
+				secretsAt: Number(C.get("A2A_TUNNEL_SECRETS_AT")) || 0, connections: null };
+			if (haveCf && C.get("A2A_TUNNEL_ID")) {
+				try {
+					const t = T.cfCall(dir, ["tunnels", "get", C.get("A2A_TUNNEL_ID")], { allowNotFound: true });
+					if (!t) s.tunnel.complete = false;
+					else { s.tunnel.state = t.status; s.tunnel.connections = (t.connections || []).length; }
+				} catch (e) { s.tunnel.error = e.message; }
+			}
+		} else if (s.wake && !s.wake.configured && haveCf) {
+			try { s.zones = T.listZones(dir).filter((z) => !z.status || z.status === "active").map((z) => z.name); } catch { /* not logged in, offline: leave unknown */ }
 		}
-	} else if (s.wake && !s.wake.configured && haveCf) {
-		try { s.zones = T.listZones(dir).filter((z) => !z.status || z.status === "active").map((z) => z.name); } catch { /* not logged in, offline: leave unknown */ }
-	}
-	return s;
+	};
+	if (workerDns.kind === "public-only" && usablePin(workerDns.ip)) await withHostPin(host, workerDns.ip, remote);
+	else await remote();
+	const wake = await wakeProbes(s, net);
+	return finishLayers(s, { host, workerDns, ...wake });
 }
 
 const VERIFY_METHOD = "a2a-exposed/verify-unknown-method";
@@ -351,8 +567,10 @@ export async function status(o) {
 	const s = await collect();
 	const next = nextStep(s);
 	const mcpAdd = mcpAddCommand(s);
+	const layers = Array.isArray(s.layers) ? s.layers : [];
+	const ok = next.ok && !layers.some((l) => l.result === "FAIL");
 	if (o.json) {
-		const out = { ...s, mcpAdd, nextStep: next.text, also: next.also, ok: next.ok };
+		const out = { ...s, mcpAdd, nextStep: next.text, also: next.also, ok, layers };
 		if (out.tunnel && out.tunnel.state != null) out.tunnel = { ...out.tunnel, state: tunnelStateLabel(out.tunnel.state) };
 		console.log(JSON.stringify(out, null, 2));
 	}
@@ -402,10 +620,11 @@ export async function status(o) {
 				: `${pg.mode} approval; approval password ${pg.passwordSet ? `set${pg.passwordSetAt ? ` ${pg.passwordSetAt}` : ""}${pg.passwordSetVia ? ` (via ${pg.passwordSetVia})` : ""}` : `NOT SET${pg.setupLinkExpiresAt ? ` (a setup link is open until ${pg.setupLinkExpiresAt})` : ""}`}${pg.oidcIssuer ? `; OpenID Connect (${pg.oidcIssuer})` : ""}${pg.manageUrl ? `; dashboard ${pg.manageUrl}` : ""}${pg.pending ? `; ${pg.pending} pending request(s): ${CLI} pair list` : ""}`]);
 		}
 		if (mcpAdd) rows.push(["mcp", mcpAdd]);
+		for (const l of layers) rows.push([l.name, layerValue(l)]);
 		rows.push(["next step", next.text]);
 		for (const a of next.also || []) rows.push(["also", a]);
 		const w = Math.max(12, ...rows.map(([k]) => k.length + 2));
 		for (const [k, v] of rows) console.log(`${(k + ":").padEnd(w)} ${v}`);
 	}
-	if (!next.ok) process.exitCode = 1;
+	if (!ok) process.exitCode = 1;
 }

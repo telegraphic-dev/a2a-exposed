@@ -88,7 +88,7 @@ cloudflared tunnel run --token-file ~/.config/a2a-exposed/tunnel-token
 
 Copy the token file to that machine if `init` ran elsewhere. Worker secrets show up in about 15 to 40 seconds. Wait about 30 seconds, then check again. For about a minute after `tunnel create`, while the connector reports 0 connections, `status` prints `waiting for the connector to connect`, tells you to start `cloudflared tunnel run --token-file …` now, and exits 0. After that minute, 0 connections is broken. A tunnel status of `inactive` means the connector has never connected.
 
-- `status` shows connector connections and the next step.
+- `status` shows connector connections, eight layers (`PASS`, `FAIL`, or `SKIP`), and the next step. A failure names the missing or mismatched object. The Access layer says whether a service token is configured and does not print it.
 - `tunnel status` checks the Access policy and two probes: a request without the token must be blocked (401/403); with the token, `530` (Cloudflare error 1033) means the connector is not running.
 - `wake preview` shows `hasAccessServiceToken: true`. Export `WAKE_WEBHOOK_URL`, `WAKE_WEBHOOK_KEY`, and `WAKE_HMAC_SECRET` in that shell so the fingerprints can match.
 - `wake test` sends a wake through Access and the tunnel.

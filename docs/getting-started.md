@@ -103,7 +103,7 @@ npx -y a2a-exposed@latest wake test    # when a webhook is configured
 
 `init` stores the owner token in `~/.config/a2a-exposed/config.env` (chmod 600). `A2A_CONFIG_DIR` overrides that directory. Environment variables override the file.
 
-`status` shows the deployment, the base URL, an agent-card check, the wake mode, the tunnel state, and in proxy mode the upstream check. It ends with a `next step:` line. It creates nothing. In proxy mode its only POST is the no-op upstream probe. Every setup step is safe to re-run.
+`status` shows the deployment, the base URL, an agent-card check, the wake mode, the tunnel state, and in proxy mode the upstream check. It also reports eight layers (Worker DNS, with a DNS-over-HTTPS fallback when the system resolver fails; the Worker, including TLS, the agent card, and `/health`; the owner API; wake DNS; Access, including whether a service token is configured; the connector; the local webhook; and pairing). Each layer is `PASS`, `FAIL`, or `SKIP`. A failure names the missing or mismatched object and a fix. `--json` includes those eight layers. It ends with a `next step:` line. It creates nothing and prints no secrets. In proxy mode its only POST is the no-op upstream probe. Every setup step is safe to re-run.
 
 For a Claude Code cloud session, use the [hosted connector checklist](mcp.md#hosted-connector). Self-hosted deployment runs on a machine the human controls.
 

@@ -301,6 +301,7 @@ test("status and upstream verify against a façade (stubbed Worker): layers, sep
 	const worker = (facade, verify) => s.routes({
 		[`${W}/`]: { status: 401, body: { jsonrpc: "2.0", id: "a2a-exposed-verify", error: { code: -32000, message: "Missing bearer token." } } },
 		[`${W}/.well-known/agent-card.json`]: { status: 200, body: { name: "Jean", supportedInterfaces: [{ url: `${W}/`, protocolBinding: "JSONRPC", protocolVersion: "0.3" }] } },
+		[`${W}/health`]: { status: 200, body: { ok: true, version: "99.0.0" } },
 		[`${W}/owner/wake/preview`]: { status: 200, body: { preset: "generic", configured: false } },
 		[`${W}/owner/pairing`]: { status: 200, body: { mode: "human", passwordSet: true, pending: [] } },
 		[`${W}/owner/facade/verify`]: { status: 200, body: { mode: "proxy", ...verify } },
