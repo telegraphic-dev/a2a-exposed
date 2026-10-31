@@ -44,7 +44,7 @@ Requires a site with link-finish enabled, a ready link, and cloudflared installe
 on the receiving agent's machine. This command is awaiting staging end-to-end
 testing; mocked tests do not establish client support.
 
-`--control-url` defaults to saved `CONTROL_URL`. Exactly one signing source is
+`--control-url` defaults to saved `CONTROL_URL`. The account token stays bound to its saved service origin. Environment sessions require both `CONTROL_URL` and `CONTROL_TOKEN`; a partial override is rejected before any request. Exactly one signing source is
 required: `--secret-file FILE`, `--secret-env VAR`, or `--secret-from hermes`.
 Files must be regular files, mode 600, without symlinks. The Hermes adapter
 reads `webhook_subscriptions.json` at `--hermes-home`, `HERMES_HOME`, or

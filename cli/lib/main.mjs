@@ -35,7 +35,8 @@ Usage: npx -y a2a-exposed@latest <command> [options]
        [--hermes-home DIR] [--route NAME] [--token-file FILE] [--no-run]
                                 Human approves the printed URL/code. Saves the connector token privately,
                                 starts cloudflared, waits up to 60 seconds, then tests and saves the wake.
-                                --control-url defaults to saved CONTROL_URL. No secrets in arguments/output.
+                                --control-url defaults to saved CONTROL_URL. Environment sessions need CONTROL_URL + CONTROL_TOKEN.
+                                No secrets in arguments/output.
                                 --no-run saves the token and prints the connector command; wake is not saved.
                                 Recovery: rerun with fresh approval; the ready link is reused.
 

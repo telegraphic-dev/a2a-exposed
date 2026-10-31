@@ -6,6 +6,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { finishLink, createLink, savedLinkSession } from "../lib/link-finish.mjs";
 import { writeTokenFile, readSigningSecret, startConnector, connectorArgs } from "../lib/local-link.mjs";
+import { controlSession } from "../lib/config.mjs";
 import { EventEmitter } from "node:events";
 import { spawnSync } from "node:child_process";
 
@@ -249,10 +250,40 @@ test("creation failures never deliver a connector, read secrets, or retry provis
 
 test("the saved account session is bound to the service and never falls back to an owner token", () => {
 	const config = { CONTROL_URL: "https://control.example/", CONTROL_TOKEN: sensitive[3], A2A_OWNER_TOKEN: "owner" };
-	assert.equal(savedLinkSession("https://control.example", (key) => config[key]), sensitive[3]);
-	assert.throws(() => savedLinkSession("https://other.example", (key) => config[key]), /sign in/);
+	assert.equal(savedLinkSession("https://control.example", controlSession({}, config)), sensitive[3]);
+	assert.throws(() => savedLinkSession("https://other.example", controlSession({}, config)), /sign in/);
 	delete config.CONTROL_TOKEN;
-	assert.throws(() => savedLinkSession("https://control.example", (key) => config[key]), /sign in/);
+	assert.throws(() => savedLinkSession("https://control.example", controlSession({}, config)), /sign in/);
+});
+
+test("control sessions keep origin and token together across environment overrides", async () => {
+	const saved = { CONTROL_URL: "https://control.example/", CONTROL_TOKEN: sensitive[3] };
+	assert.equal(savedLinkSession("https://control.example", controlSession({}, saved)), sensitive[3]);
+	assert.equal(savedLinkSession("https://other.example", controlSession({ CONTROL_URL: "https://other.example", CONTROL_TOKEN: "other-session" }, saved)), "other-session");
+	for (const env of [{ CONTROL_URL: "https://other.example" }, { CONTROL_URL: "https://control.example" }, { CONTROL_TOKEN: "other-session" }]) {
+		const h = harness();
+		h.deps.sessionToken = (origin) => savedLinkSession(origin, controlSession(env, saved));
+		await assert.rejects(finishLink({ ...o, "control-url": env.CONTROL_URL || o["control-url"] }, h.deps), /sign in/);
+		assert.deepEqual(h.calls, []);
+	}
+	assert.throws(() => savedLinkSession("https://control.example", controlSession({ CONTROL_URL: "https://other.example", CONTROL_TOKEN: "other-session" }, saved)), /sign in/);
+});
+
+test("default session resolution rejects a saved token with only CONTROL_URL overridden before fetch", (t) => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "a2a-session-origin-"));
+	t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+	fs.writeFileSync(path.join(dir, "config.env"), "CONTROL_URL=https://control.example\nCONTROL_TOKEN=dummy-saved-session\n");
+	const script = `
+		import assert from 'node:assert/strict';
+		import { finishLink } from ${JSON.stringify(new URL("../lib/link-finish.mjs", import.meta.url).href)};
+		let fetched = false;
+		await assert.rejects(finishLink({ agent: 'example', 'control-url': 'https://other.example', 'secret-env': 'DUMMY' }, { fetchImpl: () => { fetched = true; throw new Error('unexpected fetch'); } }), /sign in/);
+		assert.equal(fetched, false);
+	`;
+	const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+		encoding: "utf8", env: { PATH: process.env.PATH, HOME: dir, A2A_CONFIG_DIR: dir, CONTROL_URL: "https://other.example", DO_NOT_TRACK: "1" },
+	});
+	assert.equal(result.status, 0, result.stderr);
 });
 
 test("missing login refuses locally and finish cannot silently ignore create options", async (t) => {

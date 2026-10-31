@@ -26,10 +26,10 @@ function failure(status, body) {
 	return new CliError(`link setup failed (${code}); ${message}`);
 }
 
-export function savedLinkSession(origin, get = C.get) {
-	if (controlOrigin(get("CONTROL_URL")) !== origin || !get("CONTROL_TOKEN"))
-		throw new CliError("sign in to this service first: run login --control-url <service-origin>, then rerun link setup");
-	return get("CONTROL_TOKEN");
+export function savedLinkSession(origin, session = C.controlSession()) {
+	if (controlOrigin(session.origin) !== origin || !session.token)
+		throw new CliError("sign in to this service first: run login --control-url <service-origin>, then rerun link setup; environment sessions require both CONTROL_URL and CONTROL_TOKEN");
+	return session.token;
 }
 
 const CREATE_FIELDS = ["hostname", "origin", "path", "preset"];

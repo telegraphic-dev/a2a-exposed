@@ -130,7 +130,7 @@ For an existing link with no preset, pass `--preset <id>` to finish. The CLI val
 the option before requesting approval or exchanging the request for a grant.
 This preset is used for local secret-source validation and the wake test.
 
-`--control-url` defaults to saved `CONTROL_URL`. Choose exactly one source:
+`--control-url` defaults to saved `CONTROL_URL`. The account token stays bound to its saved service origin. Environment sessions require both `CONTROL_URL` and `CONTROL_TOKEN`; a partial override is rejected before any request. Choose exactly one source:
 
 - `--secret-file FILE`: regular file, mode 600, no symlinks. One trailing line ending is removed.
 - `--secret-env VAR`: names an existing environment variable, never its value.
