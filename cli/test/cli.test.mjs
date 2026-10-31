@@ -156,6 +156,7 @@ test("status without a deployment names the config directory and points at init 
 	const j = JSON.parse(s.cli(["status", "--json"]).stdout);
 	assert.equal(j.ok, false);
 	assert.equal(j.deployed, false);
+	assert.equal(j.layers.length, 8);
 });
 
 test("status reports Worker version, stale exit code, and cached latest with notices disabled", (t) => {

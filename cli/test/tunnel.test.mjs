@@ -142,6 +142,7 @@ import { fileURLToPath } from "node:url";
 import { parseEnv } from "../lib/config.mjs";
 
 const BIN = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "bin", "a2a-exposed.mjs");
+const NET_STUB = path.join(path.dirname(fileURLToPath(import.meta.url)), "status-net-stub.mjs");
 const STUB = `#!/usr/bin/env node
 const fs = require("fs");
 const a = process.argv.slice(2);
@@ -216,6 +217,7 @@ async function tunnelEnv(t, { preset = "openclaw-wake", hostname = "agent.exampl
 	].join("\n") + "\n", { mode: 0o600 });
 	const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(A2A_|PEER_|CLOUDFLARE_|CF_)|WAKE_/.test(k)));
 	Object.assign(env, { A2A_CONFIG_DIR: cfg, STUB_DIR: dir, A2A_NO_UPDATE_CHECK: "1", ...stub });
+	env.NODE_OPTIONS = [env.NODE_OPTIONS, `--import ${NET_STUB}`].filter(Boolean).join(" ");
 	const cli = (args, extraEnv = {}) => new Promise((resolve) => {
 		const ch = spawn(process.execPath, [BIN, ...args], { env: { ...env, ...extraEnv }, stdio: ["ignore", "pipe", "pipe"] });
 		let stdout = "", stderr = "";
@@ -499,6 +501,7 @@ test("status on a workers.dev inbox with no wake: card OK, polling expected, tun
 	assert.ok(!s.calls().some((c) => !/^(zones list)/.test(c.cmd)), "read-only: only zones list");
 	const j = JSON.parse((await s.cli(["status", "--json"])).stdout);
 	assert.equal(j.ok, true);
+	assert.equal(j.layers.length, 8);
 	assert.deepEqual(j.zones, ["example.com"]);
 	assert.equal(j.card.name, "Tun Test");
 	assert.equal(j.hasOwnerToken, true);

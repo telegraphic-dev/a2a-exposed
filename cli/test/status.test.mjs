@@ -155,11 +155,11 @@ test("health probe keeps only the public version and distinguishes legacy from u
 		};
 		return checkHealth("https://agent.example.com");
 	};
-	assert.deepEqual(await probe({ ok: true, version: "0.8.20", ignored: "dummy" }), { ok: true, version: "0.8.20" });
-	assert.deepEqual(await probe({ ok: true }), { ok: true, version: null });
-	assert.deepEqual(await probe({ ok: true, version: 42 }), { ok: true, version: null });
-	assert.deepEqual(await probe({ ok: true }, 503), { ok: false, version: null });
-	assert.deepEqual(await probe({}), { ok: false, version: null });
+	assert.deepEqual(await probe({ ok: true, version: "0.8.20", ignored: "dummy" }), { ok: true, version: "0.8.20", httpStatus: 200 });
+	assert.deepEqual(await probe({ ok: true }), { ok: true, version: null, httpStatus: 200 });
+	assert.deepEqual(await probe({ ok: true, version: 42 }), { ok: true, version: null, httpStatus: 200 });
+	assert.deepEqual(await probe({ ok: true }, 503), { ok: false, version: null, httpStatus: 503 });
+	assert.deepEqual(await probe({}), { ok: false, version: null, httpStatus: 200 });
 	globalThis.fetch = async () => { throw new Error("offline"); };
-	assert.deepEqual(await checkHealth("https://agent.example.com"), { ok: false, version: null });
+	assert.deepEqual(await checkHealth("https://agent.example.com"), { ok: false, version: null, httpStatus: null });
 });

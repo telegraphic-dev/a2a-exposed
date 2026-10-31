@@ -157,6 +157,13 @@ Status
                                 \`claude mcp add --transport http a2a-exposed <base URL>/mcp\`.
                                 A failed probe, an unreachable card, or a Worker that reports MCP off leaves that line out.
                                 Read-only; run it after an interruption and continue from "next step". Exit 1 = broken.
+                                Prints eight layers in order, each PASS, FAIL, or SKIP, and still checks the
+                                later layers after one fails: Worker DNS (system lookup, then DNS-over-HTTPS
+                                when that lookup fails), Worker (TLS, the agent card, and /health), Owner API,
+                                Wake DNS, Access (protected or not, and whether a service token is configured;
+                                the token is never printed), Connector, Local webhook (HTTP status of the wake
+                                endpoint), and Pairing. A failure names the missing or mismatched object and a
+                                fix. --json includes layers (eight objects). Exit 1 if any layer fails.
                                 For about a minute after tunnel create, while the connector reports 0 connections,
                                 status prints "waiting for the connector to connect" and exits 0. After that,
                                 0 connections is broken. A tunnel status of inactive is "never connected".
