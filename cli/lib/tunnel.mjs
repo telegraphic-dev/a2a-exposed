@@ -14,6 +14,7 @@ import * as C from "./config.mjs";
 import { CLI, CliError, die, fingerprint, httpJson } from "./a2a.mjs";
 import { owner } from "./commands.mjs";
 import * as D from "./deploy.mjs";
+import { writeTokenFile } from "./local-link.mjs";
 
 const step = (s) => console.error(`==> ${s}`);
 
@@ -366,8 +367,7 @@ function fetchTokenFile(dir, tunnelId) {
 	const token = typeof tok === "string" ? tok.trim() : tok.raw || tok.token || tok.result || "";
 	if (!token) die("could not read the tunnel token");
 	const tokenFile = path.join(C.CONFIG_DIR, "tunnel-token");
-	fs.writeFileSync(tokenFile, token + "\n", { mode: 0o600 });
-	fs.chmodSync(tokenFile, 0o600);
+	writeTokenFile(tokenFile, token);
 	C.saveConfig({ A2A_TUNNEL_TOKEN_FILE: tokenFile });
 	return { tokenFile, token };
 }

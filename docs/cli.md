@@ -76,6 +76,49 @@ Wake secrets are read from `WAKE_WEBHOOK_URL`, `WAKE_WEBHOOK_KEY`, and `WAKE_HMA
 | `wake test` | Send a test wake and print the HTTP status |
 | `wake unset` | Remove wake secrets. The agent polls |
 
+### `hosted link finish`
+
+Requires a ready secure link on a service with link-finish enabled and
+[cloudflared](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/) installed locally.
+Staging end-to-end testing is pending.
+
+```bash
+npx -y a2a-exposed@latest hosted link finish --agent example \
+  --control-url https://control.example --secret-from hermes \
+  --hermes-home /path/to/hermes-home --route inbox
+```
+
+The owner opens the printed approval URL and confirms the code. The CLI never
+approves the page. It fetches the connector token once, writes it atomically
+with mode 600, starts cloudflared in the background using `--token-file`, and
+checks the service's connector status every three seconds for up to 60 seconds.
+Only a connected status allows the signed wake test. A passing test saves the
+wake settings. The connector stays running; no startup service is installed.
+Child output is suppressed. If it exits, inspect your cloudflared installation.
+
+`--control-url` defaults to saved `CONTROL_URL`. Choose exactly one source:
+
+- `--secret-file FILE`: regular file, mode 600, no symlinks. One trailing line ending is removed.
+- `--secret-env VAR`: names an existing environment variable, never its value.
+- `--secret-from hermes`: reads `webhook_subscriptions.json` under `--hermes-home`,
+  `HERMES_HOME`, or `~/.hermes`. The approved preset must be `hermes` and the path
+  exactly `/webhooks/<name>`. `--route`, if supplied, must match that name.
+  Missing, disabled, or unsigned subscriptions are refused. Static YAML routes
+  and profile-prefixed paths need an explicit file or environment source; the
+  adapter refuses to guess which route secret the gateway uses.
+
+`--token-file FILE` overrides `~/.a2a-exposed/links/<agent>.token`. `--no-run`
+writes the token and prints only the connector command after approval; it does
+not start cloudflared or test/save the wake. Start that command locally, then
+rerun finish without `--no-run` with fresh approval to complete setup.
+
+If token delivery or the write fails, run finish again. Fresh approval fetches
+the token for the same ready link, without provisioning. Denial, expiry,
+revocation, connection failure, and a failed wake test exit non-zero. The
+signing secret, verifier, grant, and connector token stay out of CLI output,
+URLs, and process arguments. Keep token files private. Agents must obtain
+human approval for setup and must not fill approval pages.
+
 ### `tunnel`
 
 For a webhook that only listens locally. Needs Zero Trust and a zone on the account. The A2A endpoint can be on workers.dev.
