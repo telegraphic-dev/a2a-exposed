@@ -45,7 +45,9 @@ init [--hostname <host> | --workers-dev [--workers-dev-subdomain NAME]]
      [--account-id ID] [--cf-profile NAME] [--cli-command CMD]
      [--debounce S] [--max-per-hour N]
      [--pairing-approval human|agent|off] [--pbkdf2-iterations N]
-     [--workers-logs on|off] [--mcp on|off] [--cron] [--rotate-owner-token]
+     [--workers-logs on|off] [--mcp on|off] [--cron]
+     [--manage-url URL] [--event-url URL] [--event-secret-stdin]
+     [--rotate-owner-token]
      [--upstream URL [--upstream-card-url URL] [--upstream-token-stdin | --no-upstream-token]]
      [--worker-dir DIR] [--tunnel]
 ```
@@ -93,9 +95,11 @@ Wake secrets are read from `WAKE_WEBHOOK_URL`, `WAKE_WEBHOOK_KEY`, and `WAKE_HMA
 
 ### `hosted link finish`
 
-Requires a ready secure link on a service with link-finish enabled and
-[cloudflared](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/) installed locally.
-Staging end-to-end testing is pending.
+Use this on the machine that receives wakes for an agent you already created on [a2a.exposed](https://a2a.exposed), when that service lets you finish a secure link from here.
+
+1. Create the agent, or the secure link, on a2a.exposed.
+2. Sign in from this machine with `npx -y a2a-exposed@latest login --control-url https://control.example` and approve the code it prints. `login` saves `CONTROL_URL`. `hosted link finish` uses that saved value when you omit `--control-url`.
+3. Install [cloudflared](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/) on this machine.
 
 ```bash
 npx -y a2a-exposed@latest hosted link finish --agent example \
@@ -131,8 +135,7 @@ If token delivery or the write fails, run finish again. Fresh approval fetches
 the token for the same ready link, without provisioning. Denial, expiry,
 revocation, connection failure, and a failed wake test exit non-zero. The
 signing secret, verifier, grant, and connector token stay out of CLI output,
-URLs, and process arguments. Keep token files private. Agents must obtain
-human approval for setup and must not fill approval pages.
+URLs, and process arguments. Keep token files private. Approve the page yourself. The CLI does not fill it.
 
 ### `tunnel`
 
@@ -140,7 +143,7 @@ For a webhook that only listens locally. Needs Zero Trust and a zone on the acco
 
 | Command | Effect |
 | --- | --- |
-| `tunnel create` | Named tunnel, proxied DNS, and an Access app that admits one service token. The tunnel, the Access app, and the service token are named `a2a-exposed wake <worker>`. The DNS host is `wake-<word>-<word>-<4 hex>.<zone>` unless `--tunnel-hostname` is set. A finished tunnel creates nothing when you run it again. A partial tunnel stops and asks for `tunnel rm`. Prints the Access application name and ids, and `tunnel rm` as the undo. Export `WAKE_WEBHOOK_KEY` (hermes: `WAKE_HMAC_SECRET`). The connector machine needs [cloudflared](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/). Flags: `--tunnel-zone`, `--tunnel-hostname`, `--tunnel-origin`, `--tunnel-path`, `--show-token`, `--zero-trust-org`, `--dir`, `--worker-dir`. Secrets show up in about 15 to 40 seconds. Wait about 30 seconds and check again |
+| `tunnel create` | Named tunnel, proxied DNS, and an Access app that admits one service token. The tunnel, the Access app, and the service token are named `a2a-exposed wake <worker>`. The DNS host is `wake-<word>-<word>-<4 hex>.<zone>` unless `--tunnel-hostname` is set. A finished tunnel creates nothing when you run it again. A partial tunnel stops and asks for `tunnel rm`. Prints the Access application name and ids, and `tunnel rm` as the undo. Export `WAKE_WEBHOOK_KEY` (hermes/openbot: `WAKE_HMAC_SECRET`). The connector machine needs [cloudflared](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/). Flags: `--tunnel-zone`, `--tunnel-hostname`, `--tunnel-origin`, `--tunnel-path`, `--show-token`, `--zero-trust-org`, `--dir`, `--worker-dir`. Secrets show up in about 15 to 40 seconds. Wait about 30 seconds and check again |
 | `tunnel status` | Tunnel, Access, and Worker state, plus probes. A network error says DNS may still be propagating; retry in 30 seconds. An `inactive` tunnel reads as `never connected`. The Access warning appears only for an HTTP response other than 401 or 403 |
 | `tunnel rm` | Prints each removed object: DNS record, tunnel, Access app, and service token (named `a2a-exposed wake <worker>`), plus Worker secrets `WAKE_ACCESS_CLIENT_ID`, `WAKE_ACCESS_CLIENT_SECRET`, `WAKE_WEBHOOK_KEY`, and `WAKE_HMAC_SECRET`. `WAKE_WEBHOOK_URL` goes too when it is this tunnel's. If the tunnel is already gone, the saved ids are cleared. With nothing saved, prints `nothing to remove`. A missing Worker (Cloudflare error 10007) is already gone |
 

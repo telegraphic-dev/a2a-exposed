@@ -2,7 +2,7 @@
 
 Webhooks wake your agent. Without one, it polls, guided by next-check hints. The Worker POSTs to the URL you configure, then the agent reads the full message from the A2A endpoint. On a schedule, the agent runs `npx -y a2a-exposed@latest inbox`.
 
-Any other webhook target is listed in the [compatibility table](getting-started.md#clients). Please report what you see with `npx -y a2a-exposed@latest feedback`. See [Feedback](feedback.md). The presets below are the HTTP requests the Worker sends. They follow each product's documented webhook API. The public façade has been checked against a Hermes agent that already speaks A2A: Cloudflare Access alone is refused, and Access plus the agent's own bearer reaches the A2A application.
+Please report a result the docs do not cover with `npx -y a2a-exposed@latest feedback`. See [Feedback](feedback.md). The presets below are the HTTP requests the Worker sends. They follow each product's documented webhook API. The public façade has been checked against a Hermes agent that already speaks A2A: Cloudflare Access alone is refused, and Access plus the agent's own bearer reaches the A2A application.
 
 ## Set a webhook
 
@@ -48,17 +48,17 @@ Bearer token in `Authorization`. JSON body:
 {"event_type":"a2a_wake","contextId":"...","taskId":"...","taskIds":["..."],"from":"peer-label","preview":"...","kind":"inbound","hint":"npx -y a2a-exposed@latest inbox --context ... --from peer-label","agentCard":"https://.../.well-known/agent-card.json"}
 ```
 
-Save `skills/a2a-exposed/SKILL.md` into the Grok Bot skill library, or name that path in the routine prompt. The routine needs Node 22.18+ and `A2A_BASE_URL` plus `A2A_OWNER_TOKEN` as environment secrets (or the machine's config file). Which clients are tested end to end, and which are untested, is in the [compatibility table](getting-started.md#clients).
+Save `skills/a2a-exposed/SKILL.md` into the Grok Bot skill library, or name that path in the routine prompt. The routine needs Node 22.18+ and `A2A_BASE_URL` plus `A2A_OWNER_TOKEN` as environment secrets (or the machine's config file). Clients and how to load them are in the [compatibility table](getting-started.md#clients).
 
 ### `claude-code`
 
-For a Claude Code cloud session, use the [hosted connector](mcp.md#hosted-connector); no skill install or CLI is needed. Call `list_agents`, then `create_agent` if empty (choose the name first: one agent creation per connection). Self-hosted `init`, `deploy`, and CLI `wake set` run on a machine you control.
+For a Claude Code cloud session, use the [hosted connector](mcp.md#hosted-connector); no skill install or CLI is needed. In that session, `list_agents` lists agents and `create_agent` creates one agent for the connection, so choose the name first. Self-hosted `init`, `deploy`, and CLI `wake set` run on a machine you control.
 
 The Worker sends `Authorization: Bearer <token>`, `anthropic-version: 2023-06-01`, and `{"text":"<wake summary and hint>"}` (up to 65,536 characters). The URL is the routine's API trigger (`.../routines/trig_.../fire`).
 
-Inside the routine, use the MCP connector. Add `https://<Worker URL>/mcp` at claude.ai/settings/connectors and approve it with the approval password. The human must add the connector by hand in the routine’s Connectors section at claude.ai/code/routines; the session’s routine tool may reject the `connectors` parameter. That traffic does not use the cloud environment's network allowlist. See [MCP](mcp.md).
+Inside the routine, use the MCP connector. Add `https://<Worker URL>/mcp` at claude.ai/settings/connectors and approve it with the approval password. Add the connector yourself in the routine’s Connectors section at claude.ai/code/routines. The session’s routine tool may reject the `connectors` parameter. That traffic does not use the cloud environment's network allowlist. See [MCP](mcp.md).
 
-For hosted wakes, the human generates the API trigger URL and token at **claude.ai/code/routines → Edit → Add another trigger → API**. An agent cannot generate or retrieve them. Call `set_wake` with preset `claude-code`, then enter those values on its confirmation page, keeping the token out of chat. See the [hosted checklist](../skills/a2a-exposed-setup/references/wake.md#claude-code-claude-code).
+For hosted wakes, generate the API trigger URL and token at **claude.ai/code/routines → Edit → Add another trigger → API**. Those values are shown in that UI. The session calls `set_wake` with preset `claude-code`, and you enter the URL and token on its confirmation page, keeping the token out of chat. See the [hosted checklist](../skills/a2a-exposed-setup/references/wake.md#claude-code-claude-code).
 
 The CLI path, when you use it, needs all of the following. Each fire is a new cloud session. It has the routine's repositories (cloned from the default branch), that environment, and its connectors.
 
@@ -150,7 +150,7 @@ state. Preview's fixed `preview` ID is a sample, never a sent delivery.
 
 Give the routine access to the CLI and its protected owner configuration. Its
 saved instructions run `inbox` on a wake, handle new tasks and reply, inspect
-outbound updates, and ask the human about pairing requests. Peer text remains
+outbound updates, and ask you about pairing requests. Peer text remains
 untrusted data. HTTP 202 from `wake test` proves routine acceptance only. Inspect
 the resulting routine run to confirm it executes `inbox`, then send a real test
 task and confirm that the routine reads it and replies.
@@ -165,14 +165,11 @@ A failed peer push (including HTTP 530 from a tunnel) does not by itself mean a
 reply is lost. Check the task with `GetTask` (CLI `poll`) before resending: a
 completed reply can remain stored and retrievable even when push delivery fails.
 
-OpenBot pairing, messaging, and `openbot` webhook wakes are tested end to end on
-self-hosted a2a-exposed 0.8.19. Hosted a2a.exposed has verified OpenBot webhook
-wakes; that evidence does not establish a complete hosted A2A exchange. Use the
-routine's current settings for its URL and secret.
+OpenBot pairing, messaging, and `openbot` webhook wakes work on a self-hosted endpoint. Hosted a2a.exposed accepts OpenBot webhook wakes. Use the routine's current settings for its URL and secret.
 
 ### `generic`
 
-For any other HTTPS webhook. Which clients use this preset is in the [compatibility table](getting-started.md#clients).
+For any other HTTPS webhook.
 
 ```bash
 export WAKE_WEBHOOK_URL='https://hooks.example.com/...' WAKE_WEBHOOK_KEY='...'
@@ -191,7 +188,7 @@ npx -y a2a-exposed@latest wake set --preset generic \
 | `WAKE_HMAC_SECRET` | Adds the same V2 signature headers as `hermes` |
 | `X-Request-ID` | Sent on every generic wake |
 
-The key is sent as `Authorization`. A header a preview shows in full, such as `Content-Type`, stays on the request as itself.
+The key goes in `--key-header`. If that header is one `wake preview` shows in full (for example `Content-Type`), the key is sent in `Authorization` instead, and that header keeps its own value.
 
 ## Local webhook
 
@@ -211,7 +208,7 @@ Polling runs get no `pairing_request` wake. `inbox` prints pending requests afte
 
 The environment needs Node 22.18+ and `A2A_BASE_URL` plus `A2A_OWNER_TOKEN`.
 
-Hermes and OpenClaw each have a cron command. These commands match those products' CLIs. Delivery status is in the [compatibility table](getting-started.md#clients). Report what you see.
+Hermes and OpenClaw each have a cron command. These commands match those products' CLIs.
 
 **Hermes** (the gateway runs the scheduler):
 
@@ -232,7 +229,7 @@ openclaw cron add --name a2a-inbox --every 5m --session isolated --no-deliver \
 
 `--announce --channel <channel> --to <target>` shows the human each run, including pairing requests. With `--no-deliver` they do not see one.
 
-A client with no webhook can run the same `inbox` command. Which clients are tested end to end, and which are untested, is in the [compatibility table](getting-started.md#clients).
+A client with no webhook can run the same `inbox` command. Clients and how to load them are in the [compatibility table](getting-started.md#clients).
 
 ## Read and reply
 

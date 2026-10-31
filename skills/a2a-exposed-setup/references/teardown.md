@@ -15,7 +15,7 @@ rm -rf <config dir>                        # owner token, WAKE_* values, stored 
 
 Stop `cloudflared` afterwards (`cloudflared service uninstall` when it runs as a service). After you delete the Worker, check that Worker's custom domains and routes, and the zone's DNS, and remove a custom domain that is still listed. `tunnel rm` deletes the wake hostname's DNS record. The account's workers.dev subdomain stays. A Zero Trust organization created with `--zero-trust-org` is permanent. Peers lose access immediately.
 
-To call `cf` yourself, run it from `<config dir>/worker`, or create a writable cache first (`mkdir -p .cloudflare/cache`). Otherwise `cf` exits with `EACCES: mkdir '.../node_modules/.cache/cloudflare'`. Add `--profile <name>` for a named login.
+To call `cf` yourself, run it from `<config dir>/worker`, or create the cache directory named in the error (`mkdir -p node_modules/.cache/cloudflare`) in the current directory. `cf` uses that directory when it is writable. Otherwise it exits with `EACCES: mkdir '.../node_modules/.cache/cloudflare'`. Add `--profile <name>` for a named login.
 
 ```bash
 npx cf workers delete <A2A_WORKER_NAME> --force

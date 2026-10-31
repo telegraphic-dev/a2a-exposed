@@ -170,7 +170,7 @@ Real self-host QA needs a dedicated test account/profile explicitly supplied by
 maintainers. Never use the owner's main account. Coordinate infrastructure in
 the Terraform repository; user self-hosting commands in docs are product
 instructions, not permission to modify project infrastructure. Record which
-client/preset was actually tested end to end and clean up approved test resources.
+client and preset you exercised, and clean up approved test resources.
 
 ## Security invariants
 
@@ -242,9 +242,9 @@ can still require an owner decision on a website; do not automate that decision.
 
 Write for outsiders in present tense. No decision logs or historical rationale.
 Keep the public README short and link out; `docs/` is the user source of truth.
-The [client compatibility table](docs/getting-started.md#clients) determines which
-clients are tested end to end. Mark others `untested` or `in testing`; do not
-infer support from a successful mock test or a documented API.
+The [client compatibility table](docs/getting-started.md#clients) lists clients
+and how to load them. Describe what works. Do not add tested, untested, or
+in-testing labels, and do not infer support from a mock or a documented API.
 
 For a user-visible command, flag, preset, or output change, update the relevant
 `docs/` page, relevant `SKILL.md` and references, `cli/lib/main.mjs` help, and

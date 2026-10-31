@@ -1,6 +1,10 @@
 # Self-hosting on Cloudflare
 
-`npx -y a2a-exposed@latest init` deploys the A2A endpoint Worker and a D1 database (Cloudflare's SQLite) into your Cloudflare account, plus the CLI and MCP you run with npx. The owner pages on that A2A endpoint are `/` and `/device`. [a2a.exposed](https://a2a.exposed) hosts the A2A endpoint and is open to everyone. When to use it, and the sentence to say, is in [Getting started](getting-started.md#hosted-inbox). With a Cloudflare login and an account, this page is that A2A endpoint, a tunnel for a local webhook, and a public façade for an agent that already speaks A2A.
+`npx -y a2a-exposed@latest init` deploys the A2A endpoint Worker and a D1 database (Cloudflare's SQLite) into your Cloudflare account. You run the CLI and MCP with npx. The owner pages on that A2A endpoint are `/` and `/device`.
+
+[a2a.exposed](https://a2a.exposed) hosts the A2A endpoint and is open to everyone. When to use that hosted endpoint is in [Getting started](getting-started.md#hosted-inbox).
+
+This page is the self-hosted path: the A2A endpoint in your Cloudflare account, a tunnel for a local webhook, and a public façade for an agent that already speaks A2A.
 
 The client table is in [Getting started](getting-started.md#clients).
 
@@ -69,10 +73,10 @@ Enable Zero Trust once at <https://one.dash.cloudflare.com/>, or pass `--zero-tr
 
 Install [cloudflared](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/) on the machine that runs the connector. `tunnel create` prints the `cloudflared tunnel run` command.
 
-If `WAKE_WEBHOOK_URL` is already set, run `wake unset` before `tunnel create`. `tunnel create` sets the wake URL to the tunnel hostname. Export `WAKE_WEBHOOK_KEY` (or `WAKE_HMAC_SECRET` for hermes) in that shell: `tunnel create` uploads it with the Access secrets.
+If `WAKE_WEBHOOK_URL` is already set, run `wake unset` before `tunnel create`. `tunnel create` sets the wake URL to the tunnel hostname. Export `WAKE_WEBHOOK_KEY` (or `WAKE_HMAC_SECRET` for hermes/openbot) in that shell: `tunnel create` uploads it with the Access secrets.
 
 ```bash
-export WAKE_WEBHOOK_KEY='...'          # or WAKE_HMAC_SECRET for hermes. tunnel create sets WAKE_WEBHOOK_URL
+export WAKE_WEBHOOK_KEY='...'          # or WAKE_HMAC_SECRET for hermes/openbot. tunnel create sets WAKE_WEBHOOK_URL
 npx -y a2a-exposed@latest tunnel create
 # hermes:  --tunnel-path /webhooks/<name>     (origin defaults to 127.0.0.1:8644)
 # generic: --tunnel-origin http://127.0.0.1:5678 --tunnel-path /webhook/a2a
@@ -165,7 +169,7 @@ Stop `cloudflared` afterwards (`cloudflared service uninstall` when it runs as a
 
 The config directory stays. It still holds the owner token, `WAKE_*` values, peer tokens, and the Worker project (`~/.config/a2a-exposed`, or `A2A_CONFIG_DIR`). A later `init` reuses the owner token. Remove that directory when those should go too.
 
-To delete the Worker and the database with `cf` yourself, run the commands from `<config dir>/worker`. From any other directory, create the cache directory first (`mkdir -p .cloudflare/cache`), or `cf` exits with `EACCES: mkdir '.../node_modules/.cache/cloudflare'`. Add `--profile <CF_PROFILE>` when the login is a named profile.
+To delete the Worker and the database with `cf` yourself, run the commands from `<config dir>/worker`. From any other directory, create the cache directory named in the error, in the current directory (`mkdir -p node_modules/.cache/cloudflare`). `cf` writes its account cache there when that directory is writable. Otherwise it tries an ancestor `node_modules` and exits with `EACCES: mkdir '.../node_modules/.cache/cloudflare'`. Add `--profile <CF_PROFILE>` when the login is a named profile.
 
 ```bash
 npx cf workers delete <A2A_WORKER_NAME> --force
