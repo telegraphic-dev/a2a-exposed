@@ -17,11 +17,11 @@
 	},
 	"devDependencies": {
 		"@cloudflare/vite-plugin": "beta",
-		"cf": "^1.0.0-beta.18",
+		"cf": "^1.0.0-beta.21",
 		"esbuild": "^0.28.2",
 		"miniflare": "^5.20261006.0-alpha",
 		"typescript": "^7.0.2",
-		"vite": "^8.3.4"
+		"vite": "^8.3.5"
 	},
 	"dependencies": {
 		"tunnelfetch": "1.13.0"
