@@ -23,22 +23,7 @@ Usage: npx -y a2a-exposed@latest <command> [options]
        --version, -v                 print the version
        --help, -h                    print this help
 
-  hosted link create --agent NAME --hostname HOST --origin URL --path PATH --preset ID
-       --control-url https://control.example
-       (--secret-file FILE | --secret-env VAR | --secret-from hermes)
-       [--hermes-home DIR] [--route NAME] [--token-file FILE] [--no-run]
-                                One bot creates its own link after the owner approves the exact plan.
-                                An identical ready link is reused; a different existing link is refused.
-                                Then starts, tests and saves as below. Requires login to the same service.
-  hosted link finish --agent NAME --control-url https://control.example [--preset ID]
-       (--secret-file FILE | --secret-env VAR | --secret-from hermes)
-       [--hermes-home DIR] [--route NAME] [--token-file FILE] [--no-run]
-                                Human approves the printed URL/code. Saves the connector token privately,
-                                starts cloudflared, waits up to 60 seconds, then tests and saves the wake.
-                                --control-url defaults to saved CONTROL_URL. Environment sessions need CONTROL_URL + CONTROL_TOKEN.
-                                No secrets in arguments/output.
-                                --no-run saves the token and prints the connector command; wake is not saved.
-                                Recovery: rerun with fresh approval; the ready link is reused.
+Setup options: --skip-install skips dependency installation when dependencies already exist.
 
 Setup (needs Node 22.18+, e.g. \`mise exec node@22 -- npx -y a2a-exposed@latest ...\`, and a Cloudflare login:
 npx cf auth login --no-browser; on a VPS where it fails with HTTP 403 before showing a code, export
@@ -289,7 +274,7 @@ Owner
   the MCP consent page when the issuer, client id, client secret, and allowlist are all set.
 
 Feedback
-  feedback "message" [--kind bug|idea|other] [--contact x]
+  feedback "message" [--json] [--kind bug|idea|other] [--contact x]
             [--steps S] [--expected S] [--actual S] [--logs S] [--agent A]
             [--environment local|cloud VM|CI|cloud agent sandbox|other]
             [--connection webhook|proxy|polling] [--yes]
@@ -301,9 +286,9 @@ Feedback
                                 confidential information: secrets, tokens, owner or pairing
                                 tokens, private URLs or hostnames, message contents, or
                                 personal data. Prints that warning and asks before sending,
-                                unless --yes is set. Off a terminal, --yes is required.
+                                unless --yes is set. Off a terminal, posting requires --yes.
                                 Posts when this A2A endpoint names a feedback URL.
-                                Otherwise prints a link to the bug
+                                Otherwise prints Not filed and a link to the bug
                                 report form and does not open a browser. The CLI adds its
                                 version, the A2A endpoint Worker version when the A2A endpoint reports it,
                                 the OS, the Node version, the connection (webhook, proxy, or
@@ -371,10 +356,11 @@ const SPEC = {
 	export: { sql: B },
 	upstream: { json: B },
 	connect: { alias: S, name: S, json: B, "no-wait": B, replace: B, force: B, "card-url": S },
+	// Internal hosted-service integration commands. Keep out of public help until the production flow is available.
 	signup: { "control-url": S, json: B },
 	login: { "control-url": S, json: B },
 	pair: { json: B, web: B, ttl: S, issuer: S, "client-id": S, subjects: S, methods: S, "secret-stdin": B },
-	feedback: { kind: S, contact: S, steps: S, expected: S, actual: S, logs: S, agent: S, environment: S, connection: S, yes: B },
+	feedback: { kind: S, contact: S, steps: S, expected: S, actual: S, logs: S, agent: S, environment: S, connection: S, yes: B, json: B },
 	uninstall: { yes: B, "dry-run": B, dir: S, "worker-dir": S },
 };
 const STATES = ["completed", "input-required", "failed", "rejected", "working"];
@@ -418,7 +404,7 @@ export async function main(argv) {
 		if (e && e.code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") {
 			const flag = (String(e.message).match(/'([^']+)'/) || [])[1] || "that flag";
 			if (flag === "-y") throw new CliError("unknown flag -y. To skip a prompt, pass --yes.");
-			throw new CliError(`unknown flag ${flag}. Run \`${CLI} ${name} --help\` for this command's flags.`);
+			throw new CliError(`unknown flag ${flag}. Run \`${CLI} --help\` and see the ${name} section.`);
 		}
 		if (e && String(e.code || "").startsWith("ERR_PARSE_ARGS")) throw new CliError(String(e.message));
 		throw e;
@@ -503,21 +489,22 @@ export async function main(argv) {
 		case "outbound": return cmd.outbound(need(p[0], "outbound <taskId>"));
 		case "feedback": {
 			const message = p.join(" ").trim();
-			need(message, `feedback "message" [--kind bug|idea|other] [--steps S] [--expected S] [--actual S] [--logs S] [--agent A] [--environment E] [--connection webhook|proxy|polling]`);
+			need(message, `feedback "message" [--json] [--kind bug|idea|other] [--steps S] [--expected S] [--actual S] [--logs S] [--agent A] [--environment E] [--connection webhook|proxy|polling]`);
 			const kind = o.kind || "other";
 			if (!fb.KINDS.includes(kind)) throw new CliError("--kind must be bug, idea, or other");
 			if (o.connection && !fb.CONNECTIONS.includes(o.connection)) throw new CliError("--connection must be webhook, proxy, or polling");
 			if (kind === "bug" && !String(o.steps || "").trim()) throw new CliError("a bug report needs reproduction steps (--steps)");
 			const repo = await fb.feedbackPublicRepo({ baseUrl: C.get("A2A_BASE_URL"), ownerToken: C.get("A2A_OWNER_TOKEN") });
-			await fb.confirmPublicIssue(Boolean(o.yes), undefined, undefined, repo);
 			const result = await fb.runFeedback({
+				beforePost: () => fb.confirmPublicIssue(Boolean(o.yes), undefined, undefined, repo),
 				message, kind, contact: o.contact || "", version: VERSION,
 				steps: o.steps || "", expected: o.expected || "", actual: o.actual || "", logs: o.logs || "",
 				agent: o.agent || "", environment: o.environment || "",
 				connection: o.connection || "",
 				baseUrl: C.get("A2A_BASE_URL"), ownerToken: C.get("A2A_OWNER_TOKEN"),
 			});
-			console.log(result.url);
+			if (!result.filed) console.error("Not filed: this A2A endpoint has no feedback inbox. Open this link to file it on GitHub:");
+			console.log(o.json ? JSON.stringify(result.filed ? { filed: true, issue: result.url } : result) : result.url);
 			return;
 		}
 		default: throw new CliError(`unknown command ${name} (see --help)`);

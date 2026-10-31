@@ -78,7 +78,7 @@ export function wakePayload(ev: WakeEvent, cli: string): Record<string, unknown>
 	};
 }
 
-/** What the woken agent must do with a pairing request: ask its human, never approve on its own. */
+/** What the woken agent must do with a pairing request: ask its owner, never approve on its own. */
 export function pairingInstructions(p: PairingInfo, cli: string): string {
 	const dash = p.manageUrl ? ` The dashboard page for this request is ${p.manageUrl}.` : "";
 	return p.approval === "human"

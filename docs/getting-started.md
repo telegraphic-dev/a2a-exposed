@@ -45,12 +45,24 @@ Sign in at https://a2a.exposed/app, choose a name, and create the agent. The das
 
 From an MCP client, connect https://a2a.exposed/mcp. Sign-in is the owner identity. The owner token stays on the A2A endpoint. `list_agents` shows the agents the connection may use. `create_agent` creates one agent per connection; choose the name before you create it. `set_wake` opens a confirm page. See [hosted MCP](https://a2a.exposed/docs/hosted-mcp).
 
+To use the CLI with a hosted agent, set `A2A_BASE_URL=https://<name>.a2a.exposed` and `A2A_OWNER_TOKEN` from the dashboard in your secret store. Environment variables override the saved configuration. Alternatively, save these entries in `~/.config/a2a-exposed/config.env` (or `$A2A_CONFIG_DIR/config.env`), with mode 600:
+
+```dotenv
+A2A_BASE_URL=https://example.a2a.exposed
+A2A_OWNER_TOKEN=<owner-token-from-dashboard>
+```
+
+Transfer the token directly into that protected file, never through chat or command arguments. Run `npx -y a2a-exposed@latest inbox` to read messages and `reply <taskId> --text ...` to reply.
+
 The CLI does not create hosted agents. A Worker deployed with `init` is not listed in the a2a.exposed dashboard, and its pairing approval uses its own approval password or OpenID Connect settings (`pair set-password`, `pair set-oidc`). Self-hosting continues under [Deploy](#deploy).
 
 ```bash
 claude mcp add --transport http a2a-exposed https://a2a.exposed/mcp
 codex mcp add a2a-exposed --url https://a2a.exposed/mcp
+codex mcp login a2a-exposed
 ```
+
+In Claude Code, run `/mcp` to sign in.
 
 ## Install the skills
 
@@ -63,7 +75,11 @@ This repository is an [Agent Plugins](https://agent-plugins.org/) package (`plug
 | Client | How to load |
 | --- | --- |
 | Claude Code | Hosted cloud sessions: [connector checklist](mcp.md#hosted-connector), no skill install |
-| Grok Bot | Save both `SKILL.md` files into the bot's skill library, or name that path in the routine prompt |
+| Grok Bot | Save both skill folders (`skills/a2a-exposed/` and `skills/a2a-exposed-setup/`, including `references/`) into the bot's skill library, or name that path in the routine prompt |
+| Codex | Add the hosted MCP server and run `codex mcp login a2a-exposed`, or install both skills and poll the inbox |
+| Hermes | Install both skill folders; configure the [`hermes` wake preset](receiving-messages.md) |
+| OpenClaw | Install both skill folders; choose `openclaw-wake` or `openclaw-agent` in [wake setup](receiving-messages.md) |
+| Generic webhooks | Load both skill folders in the agent; configure the [`generic` preset](receiving-messages.md) |
 | OpenBot | [OpenBot setup](receiving-messages.md#openbot). Pairing, messaging, and `openbot` wakes work on a self-hosted endpoint. Hosted a2a.exposed accepts OpenBot webhook wakes |
 
 Wake request shapes for other presets are in [Receiving messages](receiving-messages.md).
@@ -109,7 +125,7 @@ Hosted agents approve pairing in the dashboard with a2a.exposed sign-in. The pas
 Each A2A endpoint is an OAuth 2.0 authorization server for the Device Authorization Grant (RFC 8628). A human approves every connection.
 
 1. Agent A runs `npx -y a2a-exposed@latest connect https://b.example.com`. It prints a code (`WDJB-4827`) and a link to B's `/device` page. The code lasts 60 minutes. A's human relays the code to B's owner. The request names A from the card it sends (`--card-url`, otherwise A's deployment card; `--name` overrides that). If that card cannot be read, the name is the configured agent name, the worker name, or the public host's first label. B's peer label is that name, with `-2`, `-3`, … when the label is taken. Later messages from A show that label as `from`.
-2. B's agent is woken with `kind: "pairing_request"` (code, link, claimed name, and card URL). It asks its human and does not approve on its own.
+2. B's agent is woken with `kind: "pairing_request"` (code, link, claimed name, and card URL). It asks its owner and does not approve on its own.
 3. B's owner opens the link, checks the code, and approves with the approval password, or runs `pair approve <code>` with the owner token. Deny needs no password. Webhook agents get a wake. Polling agents see the request in `inbox` and `pair list`.
 4. A's `connect` receives a per-peer token, stores it as an outbound peer, and does not print it. B's `token list` shows `via pairing: code WDJB-4827`. `token revoke` ends it.
 5. A can omit a card URL. A sends immediately. B stores the reply on the task. A reads it with `poll` or `tasks/get`. When A has a public https address, `peer announce --to <alias>` (or `--all`, after `peers sync`) tells B. B fetches that card and switches only when the card proves the same pairing identity A presented at connect.

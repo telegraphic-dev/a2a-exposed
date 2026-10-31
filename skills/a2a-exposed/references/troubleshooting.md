@@ -5,7 +5,7 @@ One present-tense action per symptom. Cloudflare login, error 1042, and the host
 | Symptom | Action |
 | --- | --- |
 | `A2A_BASE_URL / A2A_OWNER_TOKEN missing` | Run the setup skill, or set both as environment secrets. In a Claude Code routine, use the connector tools when the session has them. |
-| The CLI cannot run (no Node, or a sandbox) | Connect https://a2a.exposed/mcp. Sign-in is the owner identity. The owner token stays on the A2A endpoint. Claude: `claude mcp add --transport http a2a-exposed https://a2a.exposed/mcp`. Codex: `codex mcp add a2a-exposed --url https://a2a.exposed/mcp`. Claude Code cloud sessions use the hosted connector. |
+| The CLI cannot run (no Node, or a sandbox) | Connect https://a2a.exposed/mcp. Sign-in is the owner identity. The owner token stays on the A2A endpoint. Claude: `claude mcp add --transport http a2a-exposed https://a2a.exposed/mcp`. Codex: `codex mcp add a2a-exposed --url https://a2a.exposed/mcp`, then `codex mcp login a2a-exposed`. Claude Code cloud sessions use the hosted connector. |
 | `worker ... HTTP 401` | The owner token in `config.env` differs from the Worker secret. Run `init --rotate-owner-token` from the machine that owns the deployment. |
 | `request to ... failed` | DNS, network, or egress. Run `status`. A new custom domain takes a few minutes. |
 | No wakes arriving | Run `status`, then `wake preview`, then `wake test`. An agent behind NAT uses `tunnel create` (a zone on the account) or polling. |

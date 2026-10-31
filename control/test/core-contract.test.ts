@@ -245,6 +245,7 @@ test("the published package loads the entry and hides deep paths", () => {
 	assert.equal(manifest.exports?.["."]?.types, "./dist/types/control/src/core/index.d.ts");
 	fs.rmSync(path.join(repo, "dist"), { recursive: true, force: true });
 	const linked = fs.mkdtempSync(path.join(os.tmpdir(), "control-core-file-"));
+	fs.writeFileSync(path.join(linked, "package.json"), JSON.stringify({ private: true }));
 	try {
 		const fromFile = spawnSync("npm", ["install", "--no-audit", "--no-fund", `file:${repo}`], {
 			cwd: linked,
@@ -268,6 +269,7 @@ test("the published package loads the entry and hides deep paths", () => {
 	assert.equal(listed.has("control/src/core/index.ts"), false);
 	assert.equal(listed.has("control/src/views/account.tsx"), false);
 	const dest = fs.mkdtempSync(path.join(os.tmpdir(), "control-core-"));
+	fs.writeFileSync(path.join(dest, "package.json"), JSON.stringify({ private: true }));
 	try {
 		const installed = spawnSync("npm", ["install", "--no-audit", "--no-fund", "--ignore-scripts", tarball], {
 			cwd: dest,

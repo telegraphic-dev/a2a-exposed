@@ -1,6 +1,6 @@
 ---
 name: a2a-exposed-setup
-description: Use when deploying, redeploying, or configuring the a2a-exposed Cloudflare Worker, a wake webhook, polling, or a public façade for an agent that already speaks A2A.
+description: Use when deploying, redeploying, or configuring the a2a-exposed Cloudflare Worker, a wake webhook, polling, or a public façade for an agent that already speaks A2A, or creating a hosted agent on a2a.exposed. Not for reading or replying to messages (use a2a-exposed).
 license: MIT
 compatibility: Requires Node 22.18+; runs the a2a-exposed CLI with npx -y a2a-exposed@latest (no global install). Cloudflare account for deploy.
 metadata:
@@ -98,10 +98,6 @@ Never paste secrets into chat or onto the command line. Ask the user before anyt
 
 ## Workflow
 
-A local bot creates its own link with `hosted link create --agent <name> --hostname <host> --origin <local-origin> --path /webhooks/<name> --preset hermes --control-url <service-origin> --secret-from hermes`. First use `login --control-url <service-origin>` and obtain human authorization for resource creation. The human approves the exact printed plan. An identical ready link is reused; a different link is refused.
-
-Hosted account tokens stay bound to their saved service origin; environment sessions require both `CONTROL_URL` and `CONTROL_TOKEN`. For a ready link, use `hosted link finish --agent <name> --control-url <service-origin> --secret-from hermes --hermes-home <dir> --route <name>`. Use `--preset <id>` when the link has no preset; it is validated before token exchange. Show the printed URL/code to the human; never open or approve it yourself. The CLI privately transfers credentials, starts cloudflared, waits for connected status, then tests and saves the wake. Other sources are `--secret-file` (mode 600) and `--secret-env` (variable name only). Never ask for secrets in chat or the clipboard. Read [hosted finish](references/link-finish.md) for route selection, recovery, `--no-run` and testing limits. Requires the service feature; staging end-to-end verification is pending.
-
 1. **Choose hosted or self-hosted with the human.** Offer hosted first without a Cloudflare account or a preference. For hosted creation, agree on the name and get an explicit yes. For self-hosting, inspect the selected login/account, explain the plan, and wait for an explicit yes before changing Cloudflare resources; finding a login never authorizes deployment. For Cloudflare errors, see [references/troubleshooting.md](references/troubleshooting.md).
 2. **Prerequisites** — [references/prerequisites.md](references/prerequisites.md).
 3. **Deploy** — [references/deploy.md](references/deploy.md), including the loopback test and a private A2A agent.
@@ -120,7 +116,7 @@ When a setup step fails, offer the human to report it: an `init` or `deploy` err
 
 Use one of these:
 
-- **CLI:** `npx -y a2a-exposed@latest feedback "message"` with `--kind bug|idea|other`, `--steps`, `--expected`, `--actual`, `--logs`, `--agent`, `--environment`, `--connection`, and `--contact`. A bug needs `--steps`. The command adds the CLI version, the Worker version when the A2A endpoint reports it, the connection, and the deployment, names the target repository, and asks before sending. Pass `--yes` only after the human said yes; off a terminal it is required. When the A2A endpoint reports no feedback URL, for example before the first deploy, it prints a link to a prefilled GitHub form instead of posting.
+- **CLI:** `npx -y a2a-exposed@latest feedback "message"` with `--kind bug|idea|other`, `--steps`, `--expected`, `--actual`, `--logs`, `--agent`, `--environment`, `--connection`, and `--contact`. A bug needs `--steps`. The command adds the CLI version, the Worker version when the A2A endpoint reports it, the connection, and the deployment, names the target repository, and asks before sending. Pass `--yes` only after the human said yes; off a terminal posting requires it. When the A2A endpoint reports no feedback URL, for example before the first deploy, it prints `Not filed` and a link to a prefilled GitHub form instead of posting; `--json` includes `filed: false`.
 - **MCP:** `send_feedback` on an approved connector takes the same fields.
 - **Web:** the human can fill in https://a2a.exposed/app/feedback themselves.
 
