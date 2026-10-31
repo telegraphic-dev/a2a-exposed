@@ -169,4 +169,9 @@ The A2A endpoint card (no `--upstream`) uses the same scrubbing for `--agent-des
 
 `status` reports the deployed Worker version and CLI version. An older Worker, including one whose `/health` has no `version`, produces a deploy next step and exit code 1. Unreachable health reports an unknown version. Cached npm latest can add an upgrade hint without a foreground registry request. Deploy sets the Worker version tag `a2a-exposed-<version>` and message `a2a-exposed <version> <ISO date>`.
 
+Workers.dev registration uses the system `script` utility on macOS and Linux.
+It can answer the known registration prompts when started by an agent without
+an outer terminal. An unexpected prompt stops the terminal job after the idle
+timeout; inspect the message before retrying rather than sending extra answers.
+
 Worker dependency installs save npm output in `<config dir>/npm-install.log` (mode 600) and print that path only on failure. Inspect the log locally and redact secrets before sharing it.

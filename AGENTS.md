@@ -229,6 +229,17 @@ These user contracts hold feature-level behavior; keep hard invariants here too.
 
 ## Docs and copy style
 
+Every CLI command must have a noninteractive path. Required choices need flags
+or named configuration inputs, with a clear error when they are missing.
+Terminal prompts may be optional conveniences, never the only way to supply an
+option. When available choices depend on current state, provide a read-only
+command to list them before the action, with structured output for agents.
+Missing or invalid choices must point to that listing command; never require
+an interactive menu to discover account, zone, agent or route values.
+Secrets use protected files, named environment variables or stdin,
+never plaintext argument values. Deliberate account or pairing authorization
+can still require an owner decision on a website; do not automate that decision.
+
 Write for outsiders in present tense. No decision logs or historical rationale.
 Keep the public README short and link out; `docs/` is the user source of truth.
 The [client compatibility table](docs/getting-started.md#clients) lists clients

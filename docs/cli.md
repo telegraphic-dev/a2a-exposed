@@ -14,6 +14,19 @@ Config is `~/.config/a2a-exposed/config.env` (chmod 600), or `$XDG_CONFIG_HOME/a
 
 From a checkout: `node <checkout>/cli/bin/a2a-exposed.mjs <command>`.
 
+## Automation
+
+Supply required choices through command options or named configuration inputs.
+Commands run without a terminal and report missing inputs instead of waiting
+for someone to type. Supply secrets through their documented environment
+variables, private files or stdin options, never plaintext arguments.
+
+Use `--workers-dev-subdomain NAME` for account subdomain registration and
+`--yes` for the documented feedback or uninstall confirmation after approving
+the action. Optional terminal prompts are conveniences. For pairing-password
+setup without a terminal, `pair set-password --web` prints the owner's setup
+link. Website sign-in and owner approval remain explicit steps.
+
 ## Setup
 
 Needs a Cloudflare login (`npx cf auth login --no-browser`). On a VPS where that returns HTTP 403 before a code, export `CLOUDFLARE_API_TOKEN`. The hosted A2A endpoint is open to everyone: [Getting started](getting-started.md#hosted-inbox). See [Self-hosting](self-hosting.md).
@@ -23,6 +36,8 @@ Needs a Cloudflare login (`npx cf auth login --no-browser`). On a VPS where that
 `--skip-install` skips the Worker dependency install; use it only when the copied Worker already has its dependencies.
 
 `init` deploys the Worker and D1. `deploy` redeploys with the saved settings. Secrets already on the Worker stay, unless you export new values.
+
+Workers.dev subdomain registration uses the system `script` utility on macOS and Linux. It supports CLI runs started by automation without an outer terminal. An unexpected prompt times out and stops the terminal job. CLI shutdown signals (SIGINT, SIGTERM, SIGHUP) also stop the detached terminal job.
 
 ```text
 init [--hostname <host> | --workers-dev [--workers-dev-subdomain NAME]]

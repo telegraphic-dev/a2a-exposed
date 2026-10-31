@@ -4,6 +4,8 @@ All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.
 
 ## Unreleased
 
+- **macOS terminal prompts.** Workers.dev registration relays input through a real pipe before starting BSD `script`, avoiding the socket ioctl failure when the CLI runs under automation. The relay preserves command arguments and exit status, exits when its terminal job finishes, and stops on the registration timeout or CLI shutdown (SIGINT, SIGTERM, SIGHUP). The password-entry regression uses the same adapter and still verifies that the password is never echoed. No new package dependency is required.
+
 - **Quieter installs (#188).** Worker dependency installs save output to a private local log and report its path on failure.
 - **Docs and CLI.** Hosted setup covers owner-token configuration and MCP sign-in. The client table covers every wake preset and preserves skill references. Skill descriptions distinguish setup from messaging. Public help and skills describe production features only. The status-label guard catches additional verification badges. Unknown-flag errors point to global help; `--skip-install` documents its dependency requirement. Feedback fallback prints `Not filed`; `--json` distinguishes a prefilled link from a filed issue. Pairing text refers to the agent’s owner.
 
