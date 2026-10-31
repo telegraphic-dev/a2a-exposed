@@ -35,7 +35,7 @@ Usage: npx -y a2a-exposed@latest <command> [options]
 Setup (needs Node 22.18+, e.g. \`mise exec node@22 -- npx -y a2a-exposed@latest ...\`, and a Cloudflare login:
 npx cf auth login --no-browser; on a VPS where it fails with HTTP 403 before showing a code, export
 CLOUDFLARE_API_TOKEN instead: setup skill, Troubleshooting. a2a.exposed hosts the A2A endpoint and is open to everyone
-(https://a2a.exposed/pricing). When to use it, and the sentence to say:
+(https://a2a.exposed/pricing). When to use it:
 https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#hosted-inbox)
   init [--hostname <host> | --workers-dev [--workers-dev-subdomain NAME]]
        [--agent-name N] [--agent-description D] [--agent-skills JSON]
@@ -303,7 +303,7 @@ Feedback
                                 that detection. Remove tokens from the message and from --logs.
 
 Presets: grok-bot | claude-code | openclaw-wake | openclaw-agent | hermes | openbot | generic
-         Which clients are tested end to end is in the client table:
+         Clients and how to load them:
          https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#clients
 Config: ${C.CONFIG_FILE}  (override dir with --config-dir DIR or A2A_CONFIG_DIR; env vars override file values)
 Update notice: at most a daily background check of the npm registry; off with A2A_NO_UPDATE_CHECK=1 (or DO_NOT_TRACK=1)`;

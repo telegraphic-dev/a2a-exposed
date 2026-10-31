@@ -5,6 +5,7 @@
 // checked by scripts/check-skill-metadata.py.
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const read = (rel) => fs.readFileSync(path.join(root, rel), "utf8");
@@ -14,6 +15,14 @@ const fail = (msg) => {
 	process.exitCode = 1;
 };
 
+/** Product status badges. Ordinary prose such as "untested settings" does not match. */
+export const STATUS_LABEL = /tested end to end|\(untested\)|\(in testing\)|`untested`|`in testing`|\bare untested\b|\bremain untested\b|\buntested on this address\b|\|\s*untested\b/gi;
+
+export function statusLabels(text) {
+	return text.match(new RegExp(STATUS_LABEL.source, "gi")) || [];
+}
+
+function runChecks() {
 const cliVersion = json("cli/package.json").version;
 const plugin = json("plugin.json");
 const manifests = [
@@ -64,7 +73,6 @@ function versionOf(fm, rel) {
 }
 
 const hosted = /Ask your human to set it up on https:\/\/a2a\.exposed/;
-const untestedNames = /\b(Codex|Cursor|Grok Build|n8n|Zapier|Make)\b/;
 const skills = ["skills/a2a-exposed/SKILL.md", "skills/a2a-exposed-setup/SKILL.md"];
 for (const rel of skills) {
 	const text = read(rel);
@@ -77,7 +85,6 @@ for (const rel of skills) {
 	const lines = text.endsWith("\n") ? text.split("\n").length - 1 : text.split("\n").length;
 	if (lines >= 150) fail(`${rel} is ${lines} lines; keep each skill under 150`);
 	if (rel.endsWith("a2a-exposed-setup/SKILL.md")) {
-		if (untestedNames.test(description)) fail("setup description must not name untested clients");
 		if (!body.includes("https://a2a.exposed")) fail("setup skill body must name the hosted inbox");
 		if (!body.includes("https://a2a.exposed/pricing")) fail("setup skill body must link pricing");
 		if (!body.includes("docs/getting-started.md#hosted-inbox")) fail("setup skill body must link the hosted inbox section");
@@ -111,28 +118,25 @@ for (const rel of ["README.md", "docs/getting-started.md"]) {
 	if (!read(rel).includes("https://a2a.exposed/pricing")) fail(`${rel} must link pricing`);
 	if (!read(rel).includes("open to everyone")) fail(`${rel} must say the hosted inbox is open to everyone`);
 }
-const gettingStarted = read("docs/getting-started.md");
-if (!gettingStarted.includes("The status column is `tested end to end` or `untested`.")) fail("compatibility legend must name tested end to end and untested");
-const testedSentence = "Grok Bot and Claude Code cloud sessions with the hosted connector and a routine wake are tested end to end. OpenBot pairing, messaging, and `openbot` wakes are tested end to end on self-hosted a2a-exposed 0.8.19; hosted a2a.exposed has verified OpenBot webhook wakes only. Self-hosted Claude Code, other Claude clients, Codex, OpenClaw, and Hermes are untested.";
 const sentenceFiles = [
 	"README.md",
+	"AGENTS.md",
+	"CONTRIBUTING.md",
+	"CHANGELOG.md",
 	"cli/lib/main.mjs",
 	...walk(path.join(root, "docs")).map((file) => path.relative(root, file)),
 	...walk(path.join(root, "skills")).map((file) => path.relative(root, file)),
 ];
 for (const rel of sentenceFiles) {
 	const text = read(rel);
-	const hits = text.match(new RegExp(hosted.source, "g")) || [];
-	if (rel === "docs/getting-started.md") {
-		if (hits.length !== 1) fail(`getting-started must state the hosted sentence once (found ${hits.length})`);
-		if ((text.match(new RegExp(testedSentence.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) || []).length !== 1)
-			fail("the tested-platforms sentence lives once, in docs/getting-started.md");
-	} else if (hits.length) {
-		fail(`${rel} repeats the hosted sentence; link to docs/getting-started.md#hosted-inbox`);
-	} else if (text.includes(testedSentence)) {
-		fail(`${rel} repeats the tested-platforms sentence; it lives in docs/getting-started.md`);
-	}
+	const hits = rel === "CHANGELOG.md" ? [] : text.match(new RegExp(hosted.source, "g")) || [];
+	if (hits.length) fail(`${rel} addresses the agent with the hosted setup sentence; describe the steps for the reader`);
+	const labels = statusLabels(text);
+	if (labels.length) fail(`${rel} has a product status label (${labels[0]})`);
 }
 
 if (process.exitCode) process.exit(process.exitCode);
 console.log(`check-skill-plugin: version ${cliVersion} matches across manifests and skills`);
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) runChecks();
