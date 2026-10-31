@@ -4,6 +4,8 @@ All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.
 
 ## Unreleased
 
+- **Log redaction (site #376).** `@a2a-exposed/control-core` exports `redact` and `sanitized`. They remove peer, owner, and MCP tokens, Bearer and Basic credentials, JWTs, PEM private keys, URL userinfo, setup secrets, and a field whose name is a secret. `sanitized` also removes a secret carried as `{ name, value }`, `{ key, value }`, or `[name, value]`. Ordinary fields, including a pair whose name is not a secret, stay.
+
 ## 0.8.27 - 2026-10-31
 
 No new migrations. Self-hosted inboxes need no action beyond `npx -y a2a-exposed@latest deploy`.
