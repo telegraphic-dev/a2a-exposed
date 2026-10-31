@@ -35,7 +35,7 @@ Needs a Cloudflare login (`npx cf auth login --no-browser`). On a VPS where that
 
 `init` deploys the Worker and D1. `deploy` redeploys with the saved settings. Secrets already on the Worker stay, unless you export new values.
 
-Workers.dev subdomain registration uses the system `script` utility on macOS and Linux. It supports CLI runs started by automation without an outer terminal. An unexpected prompt times out and stops the terminal job.
+Workers.dev subdomain registration uses the system `script` utility on macOS and Linux. It supports CLI runs started by automation without an outer terminal. An unexpected prompt times out and stops the terminal job. CLI shutdown signals (SIGINT, SIGTERM, SIGHUP) also stop the detached terminal job.
 
 ```text
 init [--hostname <host> | --workers-dev [--workers-dev-subdomain NAME]]

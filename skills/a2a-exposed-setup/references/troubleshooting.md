@@ -80,3 +80,6 @@ Offer hosted up front when the human has no Cloudflare account or no preference;
 | Routine token pasted into chat or a prompt | Regenerate it on the routine's API trigger, export the new value as `WAKE_WEBHOOK_KEY` from a file, run `wake set --preset claude-code` |
 | Hermes 401 | `WAKE_HMAC_SECRET` must equal the route secret, and the Worker clock skew must be under 300 s (it normally is) |
 | `cf deploy` lists secrets as `Environment Variable (hidden)` | Expected: `cf` uploads secrets that way; they are still Worker secrets, not plain vars |
+
+Workers.dev registration uses a terminal relay on macOS and Linux. An unexpected
+prompt times out; SIGINT, SIGTERM, and SIGHUP stop its detached terminal job.

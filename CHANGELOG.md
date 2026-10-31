@@ -4,7 +4,7 @@ All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.
 
 ## Unreleased
 
-- **macOS terminal prompts.** Workers.dev registration relays input through a real pipe before starting BSD `script`, avoiding the socket ioctl failure when the CLI runs under automation. The relay preserves command arguments and exit status, exits when its terminal job finishes, and stops on the registration timeout. The password-entry regression uses the same adapter and still verifies that the password is never echoed. No new package dependency is required.
+- **macOS terminal prompts.** Workers.dev registration relays input through a real pipe before starting BSD `script`, avoiding the socket ioctl failure when the CLI runs under automation. The relay preserves command arguments and exit status, exits when its terminal job finishes, and stops on the registration timeout or CLI shutdown (SIGINT, SIGTERM, SIGHUP). The password-entry regression uses the same adapter and still verifies that the password is never echoed. No new package dependency is required.
 
 ## 0.8.27 - 2026-10-31
 

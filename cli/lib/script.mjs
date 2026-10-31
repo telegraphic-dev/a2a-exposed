@@ -3,7 +3,7 @@
 import { spawn } from "node:child_process";
 
 export function spawnScript(args, options = {}) {
-	if (process.platform !== "darwin") return spawn("script", args, { ...options, detached: true, stdio: ["pipe", "pipe", "pipe"] });
+	if (process.platform !== "darwin") return forwardShutdown(spawn("script", args, { ...options, detached: true, stdio: ["pipe", "pipe", "pipe"] }));
 	// All command arguments remain positional, never interpolated into shell code.
 	// fd 3 reports script completion so cat cannot keep the wrapper alive waiting
 	// for input. The terminal job cannot write that channel or inherit it.
@@ -14,7 +14,7 @@ export function spawnScript(args, options = {}) {
 	child.stdio[3].once("data", () => child.stdin.end());
 	child.stdio[3].resume();
 	child.stdin.on("error", () => {}); // script can exit just before an answer.
-	return child;
+	return forwardShutdown(child);
 }
 
 export function stopScript(child, signal = "SIGTERM") {
@@ -28,4 +28,29 @@ export function stopScript(child, signal = "SIGTERM") {
 		if (error.code === "ESRCH") return false;
 		throw error;
 	}
+}
+
+// Detached PTYs do not receive the CLI's terminal signals. Forward shutdown
+// before allowing the parent's usual signal behavior, and release all hooks
+// on spawn failure or completion so repeated commands do not retain children.
+function forwardShutdown(child) {
+	const handlers = new Map();
+	const cleanup = () => {
+		for (const [signal, handler] of handlers) process.removeListener(signal, handler);
+		process.removeListener("exit", onExit);
+	};
+	const onExit = () => stopScript(child);
+	for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+		const handler = () => {
+			stopScript(child, signal);
+			cleanup();
+			if (process.listenerCount(signal) === 0) process.kill(process.pid, signal);
+		};
+		handlers.set(signal, handler);
+		process.on(signal, handler);
+	}
+	process.on("exit", onExit);
+	child.once("error", cleanup);
+	child.once("close", cleanup);
+	return child;
 }
