@@ -83,13 +83,13 @@ npx -y a2a-exposed@latest token revoke self-test && npx -y a2a-exposed@latest pe
 
 ### Adopting an existing deployment (same Worker, D1 and hostname)
 
-There is no `adopt` command yet. To move a Worker that runs an earlier build of this code (same D1 schema, e.g. the s2a2a prototype) onto the CLI without losing data, peers or wake secrets:
+To keep an existing Worker, its D1 data, peer tokens, and wake secrets:
 
 1. Back up the D1 database first (for example, export every table with `npx cf d1 query <db-id> --sql ...`, and note the time-travel bookmark from `npx cf d1 time-travel get-bookmark <db-id>`).
 2. Write `config.env` yourself (chmod 600) with `CLOUDFLARE_ACCOUNT_ID`, `A2A_WORKER_NAME`, `A2A_D1_NAME`, `A2A_D1_ID`, `A2A_HOSTNAME` (a workers.dev Worker: leave it out and set `A2A_WORKERS_DEV_SUBDOMAIN`), `A2A_BASE_URL`, the **existing** owner token as `A2A_OWNER_TOKEN`, and the agent-card settings (`A2A_AGENT_NAME`, `A2A_AGENT_DESCRIPTION`, `A2A_AGENT_SKILLS`, ...). With `A2A_D1_ID` already saved, the saved hostname (or workers.dev) is not treated as a move.
 3. Run `npx -y a2a-exposed@latest deploy --preset <preset>` with **no** `WAKE_*` (or `UPSTREAM_*`) variables exported. `deploy` (unlike `init`) uploads no secrets file when none are exported, so `OWNER_TOKEN` and the wake secrets already on the Worker are kept. It also applies the pending D1 migrations (`0002_wake_budget`, `0003_device_pairing`, `0004_pairing_replace`, `0005_facade_owners`) and prints `applied: ...`.
 4. Run `npx -y a2a-exposed@latest status`. The agent card should show the existing name and base URL, and the wake mode should match the wake the Worker already had. Continue from its `next step:` line.
-5. Peer tokens live in D1 as SHA-256 hashes, and lookups are by hash, so existing tokens (including the older `s2a_` prefix) keep working; nothing needs reissuing.
+5. Peer tokens live in D1 as SHA-256 hashes, and lookups are by hash, so existing tokens keep working; nothing needs reissuing.
 6. Device-flow pairing ([pairing](pairing.md)) is on after the deploy, with `human` approval: run `pair set-password --web` and send your human the one-time link (or they run `pair set-password` in a terminal). To keep tokens manual only, deploy with `--pairing-approval off`.
 
 Migrations are tracked by file name, and `deploy` applies every file not yet recorded in `d1_migrations`, in numeric order, including a lower number added later. So an older `0001_init.sql` that is already recorded is not re-run. `0002_wake_budget.sql` adds the one table the earlier schema lacked (on newer databases it does nothing), `0003_device_pairing.sql` adds pairing, and `0004_pairing_replace.sql` adds one column for re-pairing (`connect --replace`). A database that already recorded `0003` under v0.2.0 still gets `0002` (and `0004`) on its next `deploy`.
