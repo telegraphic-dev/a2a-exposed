@@ -468,3 +468,69 @@ test("repeated encoded containers remain bounded and hide the credential", () =>
 		assert.doesNotMatch(output, /deeplyNestedSecret/);
 	}
 });
+
+test("encoding failures redact the whole affected span through both APIs", () => {
+	for (const surrogate of ["\uD800", "\uDBFF", "\uDC00", "\uDFFF", "\uDC00\uD800"]) {
+		const input = `${surrogate} password%3Dopaque`;
+		assert.equal(redact(input), "[redacted]");
+		assert.equal(sanitized(input), "[redacted]");
+		assert.deepEqual(sanitized({ message: input }), { message: "[redacted]" });
+		const nested = JSON.stringify({ message: input, name: "Ada" });
+		assert.equal(redact(nested), JSON.stringify({ message: "[redacted]", name: "Ada" }));
+	}
+});
+
+test("seeded UTF-16 fuzz: arbitrary strings never throw through either API", () => {
+	let seed = 0x210c96;
+	const random = () => {
+		seed ^= seed << 13;
+		seed ^= seed >>> 17;
+		seed ^= seed << 5;
+		return seed >>> 0;
+	};
+	const fragments = ["%", "%ZZ", "%FF", "%ED%A0%80", "%C0%AF", "%E2%82", "%00", "%25", "%3D", "+", "\\", '"', "'", "&", "=", "?", "\n", "\uD800", "\uDFFF", "password", "token"];
+	for (let i = 0; i < 2000; i += 1) {
+		let input = "";
+		const length = random() % 80;
+		for (let j = 0; j < length; j += 1) {
+			input += random() % 2 ? String.fromCharCode(random() & 0xffff) : fragments[random() % fragments.length];
+		}
+		const output = redact(input);
+		assert.equal(typeof output, "string");
+		assert.equal(sanitized(input), output);
+		assert.deepEqual(sanitized({ message: input }), { message: output });
+	}
+});
+
+test("malformed encoding and Unicode cannot hide injected credentials", () => {
+	const damage = ["", "%", "%ZZ", "%FF", "%ED%A0%80", "%F0%80%80%AF", "%E2%82", "\uD800", "\uDFFF", "\uDC00\uD800", "😀"];
+	const credentials = [
+		"password=fuzzSecretAlpha", 'PASSWORD= "fuzzSecretAlpha fuzzSecretBeta"',
+		"?token=fuzzSecretAlpha'fuzzSecretBeta&name=Ada",
+		'{"password":["fuzzSecretAlpha",{"nested":"fuzzSecretBeta"}]}',
+		"?%2574oken=fuzzSecretAlpha", "url=https://example.com/?token=fuzzSecretAlpha",
+		"token=fuzzSecretBeta password%3DfuzzSecretAlpha",
+		"Bearer fuzzSecretAlpha" + "A".repeat(201), "Basic dTpw",
+	];
+	const containers = [
+		(s: string) => s,
+		(s: string) => JSON.stringify({ message: s }),
+		(s: string) => JSON.stringify({ message: JSON.stringify({ url: s }) }),
+		(s: string) => "url=" + encodeURIComponent(JSON.stringify({ message: s })),
+	];
+	// Decode ASCII independently so invalid UTF-8 cannot hide an encoded leak
+	// from the test oracle by making whole-string decodeURIComponent throw.
+	const decodeAscii = (s: string) => s.replace(/%([0-7][0-9a-f])/gi, (_all, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+	for (const bad of damage) for (const credential of credentials) {
+		for (const container of containers) {
+			for (const input of [container(`${bad} ${credential}`), container(`${credential} ${bad}`)]) {
+				for (let output of [redact(input), sanitized(input), sanitized({ message: input }).message]) {
+					for (let depth = 0; depth < 8; depth += 1) {
+						assert.doesNotMatch(output, /fuzzSecretAlpha|fuzzSecretBeta|dTpw/, JSON.stringify(input));
+						output = decodeAscii(output);
+					}
+				}
+			}
+		}
+	}
+});

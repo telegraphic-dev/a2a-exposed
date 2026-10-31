@@ -195,22 +195,29 @@ function redactJsonFields(text: string, depth: number, cache: Map<string, string
 
 /** Inspect encoded containers, preserving their encoding when unchanged. */
 function redactNested(value: string, depth: number, cache = new Map<string, string>()): string {
-	// Fail closed on excessively nested untrusted input, without overflowing.
-	if (depth >= 64) return REDACTED;
-	// Containers and the encoded-content pass can reach the same text. Share
-	// results within this call so repeated encodings do not multiply the work.
-	const key = depth + ":" + value;
-	const cached = cache.get(key);
-	if (cached !== undefined) return cached;
-	const text = redactText(value, depth, cache);
-	const decoded = parameterName(text);
-	let result = text;
-	if (decoded !== text) {
-		const cleaned = redactNested(decoded, depth + 1, cache);
-		if (cleaned !== decoded) result = encodeURIComponent(cleaned);
+	// Each recursive span is a failure boundary. Never return untrusted content
+	// after a scanner/codec failure: it may still contain credentials. In
+	// particular, encodeURIComponent rejects unpaired UTF-16 surrogates.
+	try {
+		// Fail closed on excessively nested untrusted input, without overflowing.
+		if (depth >= 64) return REDACTED;
+		// Containers and the encoded-content pass can reach the same text. Share
+		// results within this call so repeated encodings do not multiply the work.
+		const key = depth + ":" + value;
+		const cached = cache.get(key);
+		if (cached !== undefined) return cached;
+		const text = redactText(value, depth, cache);
+		const decoded = parameterName(text);
+		let result = text;
+		if (decoded !== text) {
+			const cleaned = redactNested(decoded, depth + 1, cache);
+			if (cleaned !== decoded) result = encodeURIComponent(cleaned);
+		}
+		cache.set(key, result);
+		return result;
+	} catch {
+		return REDACTED;
 	}
-	cache.set(key, result);
-	return result;
 }
 
 /** Remove secret text. The words around it stay. */
