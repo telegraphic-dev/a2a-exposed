@@ -394,3 +394,77 @@ test("a nested URL with a quoted credential is independently inspected", () => {
 		assert.deepEqual(sanitized({ url: input }), { url: expected });
 	}
 });
+
+test("assignment whitespace and apostrophes preserve genuine following parameters", () => {
+	for (const value of ['"first second"', "'first second'", "first", "first'second", 'first"second']) {
+		const input = `PASSWORD= ${value}&name=Ada`;
+		assert.equal(redact(input), "PASSWORD= [redacted]&name=Ada");
+		assert.equal(sanitized({ message: input }).message, "PASSWORD= [redacted]&name=Ada");
+	}
+	assert.equal(redact("https://example.com/?password=first'second&name=Ada"), "https://example.com/?password=[redacted]&name=Ada");
+	assert.equal(redact("?t=FakeSetupTokenValue'second&name=Ada"), "?t=[redacted]&name=Ada");
+	assert.equal(redact("PASSWORD= &name=Ada"), "PASSWORD= &name=Ada");
+});
+
+test("adversarial cross product of credential names, values, and containers", () => {
+	const labels = [
+		"authorization", "proxy-authorization", "cookie", "set-cookie", "password", "passwd",
+		"secret", "token", "apiKey", "access_token", "refresh_token", "id_token",
+		"client_secret", "private_key", "hmac_secret", "credential", "credentials",
+		"bearer", "webhook_key", "access_client_id", "access_client_secret",
+	];
+	const names = labels.flatMap((key) => [
+		key, key.toUpperCase(), ...(key === "bearer" ? [] : [`OWNER_${key}`]), key.replace(/[-_]/g, "."),
+		key.replace(/./g, (c) => `%${c.charCodeAt(0).toString(16)}`),
+		key.replace(/./g, (c) => `%25${c.charCodeAt(0).toString(16)}`),
+	]);
+	const encodedValue = "leakAlpha".replace(/./g, (c) => `%${c.charCodeAt(0).toString(16)}`);
+	const values = [
+		encodedValue, encodedValue.replace(/%/g, "%25"),
+		"leakAlpha", '"leakAlpha leakBeta"', "'leakAlpha leakBeta'",
+		"leakAlpha'leakBeta", 'leakAlpha"leakBeta',
+		String.raw`"leakAlpha \"leakBeta\""`, String.raw`'leakAlpha \'leakBeta'`,
+		"leakAlpha%20leakBeta", "leakAlpha%2520leakBeta",
+		"'leakAlpha'leakBeta", '"leakAlpha"leakBeta', String.raw`"leakAlpha"'leakBeta tail'`,
+		"[redacted]'leakAlpha", '[redacted]"leakBeta', String.raw`leakAlpha\leakBeta`,
+	];
+	const containers = [
+		(s: string) => s,
+		(s: string) => `https://example.com/?${s}&name=Ada`,
+		(s: string) => `body: name=Ada&${s}&city=Prague`,
+		(s: string) => `url=https://example.com/?${s}&name=Ada`,
+		(s: string) => `next=url=https://example.com/#${s}&name=Ada`,
+		(s: string) => `url=${encodeURIComponent("https://example.com/?" + s)}&name=Ada`,
+		(s: string) => `url=${encodeURIComponent(encodeURIComponent("https://example.com/?" + s))}`,
+		(s: string) => JSON.stringify({ message: s }),
+		(s: string) => JSON.stringify({ message: JSON.stringify({ url: s }) }),
+		(s: string) => `token=otherLeak ${s} password%3DencodedLeak`,
+	];
+	for (const name of names) for (const value of values) for (const sep of ["=", "= ", " = ", "\t=\t", "=\n"]) {
+		for (const container of containers) {
+			const input = container(`${name}${sep}${value}`);
+			for (const output of [redact(input), sanitized(input), sanitized({ message: input }).message]) {
+				let decoded = output;
+				for (let i = 0; i < 6; i += 1) {
+					assert.doesNotMatch(decoded, /leakAlpha|leakBeta|otherLeak|encodedLeak/, input + " => " + output);
+					try { decoded = decodeURIComponent(decoded); } catch { break; }
+				}
+			}
+		}
+	}
+});
+
+test("text redaction continues inspecting encoded secrets", () => {
+	const input = JSON.stringify({ message: "token=first-secret password%3Dsecond-secret" });
+	for (const output of [redact(input), sanitized({ message: input }).message]) {
+		assert.doesNotMatch(decodeURIComponent(output), /first-secret|second-secret/);
+	}
+});
+
+test("repeated encoded containers remain bounded and hide the credential", () => {
+	let input = "?password=deeplyNestedSecret";
+	for (let i = 0; i < 12; i += 1) input = "url=" + encodeURIComponent(input);
+	for (const output of [redact(input), sanitized({ message: input }).message]) {
+		assert.doesNotMatch(output, /deeplyNestedSecret/);
+	}
+});

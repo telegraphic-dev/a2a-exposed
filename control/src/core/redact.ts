@@ -13,7 +13,7 @@ const API_KEY_RE = /(?:(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za
 const JWT_RE = /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g;
 const AUTH_RE = /\b((?:proxy-)?authorization)(\s*[:=]\s*)([^\n]+)/gi;
 // Queries, fragment parameters, and form bodies share name=value encoding.
-const QUERY_RE = /(^|[?&#\s])([^?&#\s="'<>]+)=("(?:\\.|[^"\\])*(?:"|$)|'(?:\\.|[^'\\])*(?:'|$)|(?:\\(?!["'])|[^&#\s"'<>\\])*)/g;
+const QUERY_RE = /(^|[?&#\s])([^?&#\s="'<>]+)(\s*=\s*)("(?:\\.|[^"\\])*(?:"|$)|'(?:\\.|[^'\\])*(?:'|$)|(?:\\(?!["'])|[^&#\s"'<>\\])*)/g;
 const ASSIGN_RE = /\b([A-Za-z_][A-Za-z0-9_]*)(\s*=\s*)/g;
 
 const SECRET_EXACT = new Set([
@@ -153,7 +153,7 @@ function jsonValueEnd(text: string, start: number): number {
 }
 
 /** Preserve surrounding log text and JSON formatting while removing complete secret values. */
-function redactJsonFields(text: string, depth: number): string {
+function redactJsonFields(text: string, depth: number, cache: Map<string, string>): string {
 	let out = "";
 	let last = 0;
 	for (let i = 0; i < text.length; i += 1) {
@@ -181,7 +181,7 @@ function redactJsonFields(text: string, depth: number): string {
 		if (text[cursor] !== ":") {
 			try {
 				const decoded: string = JSON.parse(text.slice(i, keyEnd));
-				const cleaned = redactNested(decoded, depth + 1);
+				const cleaned = redactNested(decoded, depth + 1, cache);
 				if (cleaned !== decoded) {
 					out += text.slice(last, i) + JSON.stringify(cleaned);
 					last = keyEnd;
@@ -194,22 +194,28 @@ function redactJsonFields(text: string, depth: number): string {
 }
 
 /** Inspect encoded containers, preserving their encoding when unchanged. */
-function redactNested(value: string, depth: number): string {
+function redactNested(value: string, depth: number, cache = new Map<string, string>()): string {
 	// Fail closed on excessively nested untrusted input, without overflowing.
 	if (depth >= 64) return REDACTED;
-	const text = redactText(value, depth);
-	if (text !== value) return text;
-	const decoded = parameterName(value);
-	if (decoded !== value) {
-		const cleaned = redactNested(decoded, depth + 1);
-		if (cleaned !== decoded) return encodeURIComponent(cleaned);
+	// Containers and the encoded-content pass can reach the same text. Share
+	// results within this call so repeated encodings do not multiply the work.
+	const key = depth + ":" + value;
+	const cached = cache.get(key);
+	if (cached !== undefined) return cached;
+	const text = redactText(value, depth, cache);
+	const decoded = parameterName(text);
+	let result = text;
+	if (decoded !== text) {
+		const cleaned = redactNested(decoded, depth + 1, cache);
+		if (cleaned !== decoded) result = encodeURIComponent(cleaned);
 	}
-	return value;
+	cache.set(key, result);
+	return result;
 }
 
 /** Remove secret text. The words around it stay. */
-function redactText(value: string, depth = 0): string {
-	let text = redactJsonFields(value, depth);
+function redactText(value: string, depth: number, cache: Map<string, string>): string {
+	let text = redactJsonFields(value, depth, cache);
 	text = replaceAll(text, PEM_RE, REDACTED);
 	text = replaceAll(text, JWT_RE, REDACTED);
 	text = replaceAll(text, API_KEY_RE, REDACTED);
@@ -221,7 +227,7 @@ function redactText(value: string, depth = 0): string {
 		return `${name}${sep}${REDACTED}`;
 	});
 	text = replaceAll(text, USERINFO_RE, `$1${REDACTED}@`);
-	const cleanParameter = (all: string, sep: string, name: string, item: string): string => {
+	const cleanParameter = (all: string, sep: string, name: string, assignment: string, item: string): string => {
 		let decoded = name;
 		// Each decoding step shortens an escaped name; repeated encoding must
 		// not turn a credential label into an ordinary container.
@@ -241,19 +247,47 @@ function redactText(value: string, depth = 0): string {
 			setup = /^[A-Za-z0-9_-]{16,}/.test(candidate);
 		}
 		if (!item) return all;
-		if (!secretName(decoded) && !setup) return `${sep}${name}=${redactNested(item, depth + 1)}`;
-		return `${sep}${name}=${REDACTED}`;
+		if (!secretName(decoded) && !setup) {
+			const quote = item[0];
+			const wrapped = (quote === '"' || quote === "'") && item.endsWith(quote) && item.length > 1;
+			const cleaned = wrapped ? quote + redactNested(item.slice(1, -1), depth + 1, cache) + quote : redactNested(item, depth + 1, cache);
+			return `${sep}${name}${assignment}${cleaned}`;
+		}
+		return `${sep}${name}${assignment}${REDACTED}`;
 	};
+	const strings: [number, number][] = [];
+	for (let i = 0; i < text.length; i += 1) {
+		if (text[i] !== '"') continue;
+		const end = quotedValueEnd(text, i);
+		try { JSON.parse(text.slice(i, end)); strings.push([i, end]); }
+		catch { /* Malformed strings still need the text scanners. */ }
+		i = end - 1;
+	}
 	const parameters = new RegExp(QUERY_RE.source, "g");
 	let out = "";
 	let last = 0;
 	let match: RegExpExecArray | null;
 	while ((match = parameters.exec(text)) !== null) {
-		const cleaned = cleanParameter(match[0], match[1], match[2], match[3]);
+		// JSON strings have already been inspected as decoded containers. Do
+		// not reinterpret their closing quotes as part of a URL credential.
+		if (strings.some(([start, end]) => match!.index >= start && match!.index < end)) continue;
+		// A quote opens a value only at its start (including a nested URL's
+		// assignment). Other quotes are characters in the unquoted value.
+		const valueStart = match.index + match[1].length + match[2].length + match[3].length;
+		const quoted = quotedValueEnd(text, valueStart);
+		let end = quoted >= 0 ? quoted : valueStart;
+		while (end < text.length && !/[&#\s<>]/.test(text[end])) {
+			if ((text[end] === '"' || text[end] === "'") && (quoted >= 0 || text[end - 1] === "=")) end = quotedValueEnd(text, end);
+			else end += 1;
+		}
+		match[4] = text.slice(valueStart, end);
+		match[0] = text.slice(match.index, end);
+		parameters.lastIndex = end;
+		const cleaned = cleanParameter(match[0], match[1], match[2], match[3], match[4]);
 		if (cleaned === match[0]) {
 			// An ordinary container is not evidence that its contents are safe.
 			// Inspect nested delimiters even when its value ends at a quote.
-			parameters.lastIndex = match.index + match[1].length + match[2].length + 1;
+			parameters.lastIndex = match.index + match[1].length + match[2].length + match[3].length;
 			continue;
 		}
 		out += text.slice(last, match.index) + cleaned;
@@ -282,7 +316,7 @@ function pairLabel(record: Record<string, unknown>): string {
 }
 
 function walk(value: unknown, seen: WeakSet<object>): unknown {
-	if (typeof value === "string") return redactText(value);
+	if (typeof value === "string") return redactNested(value, 0);
 	if (!value || typeof value !== "object") return value;
 	if (seen.has(value)) return REDACTED;
 	seen.add(value);
@@ -320,6 +354,6 @@ export function sanitized<T>(value: T): T {
 export function redact(value: string): string;
 export function redact(value: unknown): unknown;
 export function redact(value: unknown): unknown {
-	if (typeof value === "string") return redactText(value);
+	if (typeof value === "string") return redactNested(value, 0);
 	return sanitized(value);
 }
