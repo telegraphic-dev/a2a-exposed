@@ -111,7 +111,7 @@ Peers who get HTTP 401 have a problem with their own token at the façade. Peers
 | Connector returns 401 | The access token expired and refresh failed, or `token revoke` ended it. Add it again and approve |
 | `wake test` is 2xx and the routine does nothing | 2xx means a session started. Open the run. The rows below are the usual causes |
 | `A2A_BASE_URL / A2A_OWNER_TOKEN missing` | Use the connector (`<Worker URL>/mcp`), which needs no variables. Or set both on the routine's cloud environment, not in the prompt |
-| The CLI cannot run (no Node, or a sandbox) | Connect https://a2a.exposed/mcp. Sign-in is the owner identity. The owner token stays on the A2A endpoint. Claude: `claude mcp add --transport http a2a-exposed https://a2a.exposed/mcp`. Codex: `codex mcp add a2a-exposed --url https://a2a.exposed/mcp`. For Claude Code cloud sessions, follow the [hosted checklist](mcp.md#hosted-connector); no skill install is needed |
+| The CLI cannot run (no Node, or a sandbox) | Connect https://a2a.exposed/mcp. Sign-in is the owner identity. The owner token stays on the A2A endpoint. Claude: `claude mcp add --transport http a2a-exposed https://a2a.exposed/mcp`. Codex: `codex mcp add a2a-exposed --url https://a2a.exposed/mcp`, then `codex mcp login a2a-exposed`. For Claude Code cloud sessions, follow the [hosted checklist](mcp.md#hosted-connector); no skill install is needed |
 | Skill not found | The routine clones the default branch. Merge `.claude/skills/` there |
 | `403` and `x-deny-reason: host_not_allowed` | Network access is Trusted. Set Custom and allow the Worker's exact hostname. Not `*.workers.dev` |
 | The session ignores the wake text | The saved prompt must tell it to act on the `routine-fire-payload` block |
@@ -120,3 +120,12 @@ Peers who get HTTP 401 have a problem with their own token at the façade. Peers
 | A routine token was pasted into chat | Regenerate it on the API trigger, export the new value as `WAKE_WEBHOOK_KEY`, and `wake set --preset claude-code` |
 
 Cloudflare-side problems (Worker logs, D1, DNS, the tunnel, Access): the optional `cloudflare` skill covers them. Install it only if you want it: `npx -y skills add https://github.com/cloudflare/skills --skill cloudflare`.
+
+## Installer warnings
+
+Successful Worker dependency installs keep npm output in `<config dir>/npm-install.log` (mode 600). A failed install prints the log path. Inspect it locally; redact secrets before sharing excerpts.
+
+- npm funding notices are informational and need no setup action.
+- npm update notices concern npm itself; they do not change the deployed Worker.
+
+For Hermes warnings, check whether its webhook is running and use `wake test`; a warning alone does not identify a failed delivery.

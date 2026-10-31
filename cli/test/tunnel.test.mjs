@@ -770,7 +770,7 @@ test("uninstall and tunnel --help are command-specific; unknown flags name the f
 	assert.doesNotMatch(y.stderr, /ERR_PARSE_ARGS/);
 	const bad = await s.cli(["tunnel", "create", "--nope"]);
 	assert.equal(bad.status, 1);
-	assert.match(bad.stderr, /unknown flag --nope\. Run `npx -y a2a-exposed@latest tunnel --help`/);
+	assert.match(bad.stderr, /unknown flag --nope\. Run `npx -y a2a-exposed@latest --help` and see the tunnel section/);
 	s.setConfig({
 		A2A_TUNNEL_HOSTNAME: "wake-test.example.com", A2A_TUNNEL_ID: "tun1", A2A_TUNNEL_ZONE_ID: "z1", A2A_TUNNEL_DNS_ID: "dns1",
 	});

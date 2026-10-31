@@ -1,6 +1,6 @@
 ---
 name: a2a-exposed
-description: Use when woken by an a2a-exposed wake (an A2A endpoint webhook, a pairing request, or a scheduled check), when reading or replying on the A2A endpoint, when messaging or pairing with another A2A agent, or when managing which peers may reach this agent.
+description: Use when woken by an a2a-exposed wake (an A2A endpoint webhook, a pairing request, or a scheduled check), when reading or replying on the A2A endpoint, when messaging or pairing with another A2A agent, or when managing which peers may reach this agent. Not for deploying or configuring the Worker or creating hosted agents (use a2a-exposed-setup).
 license: MIT
 compatibility: Node 22.18+ for the CLI (npx -y a2a-exposed@latest, no global install). Without Node, connect https://a2a.exposed/mcp.
 metadata:
@@ -50,8 +50,8 @@ The hosted connector needs no skill install. For initial setup, call `list_agent
 
 When the CLI cannot run (no Node, or a sandbox), connect https://a2a.exposed/mcp. Sign-in is the owner identity. The owner token stays on the A2A endpoint. Claude Code cloud sessions use the hosted connector.
 
-- Claude: `claude mcp add --transport http a2a-exposed https://a2a.exposed/mcp`
-- Codex: `codex mcp add a2a-exposed --url https://a2a.exposed/mcp`
+- Claude: `claude mcp add --transport http a2a-exposed https://a2a.exposed/mcp`, then run `/mcp` to sign in
+- Codex: `codex mcp add a2a-exposed --url https://a2a.exposed/mcp`, then `codex mcp login a2a-exposed`
 
 ## On a wake or a scheduled check
 
@@ -108,7 +108,7 @@ When the CLI cannot run (no Node, or a sandbox), connect https://a2a.exposed/mcp
 | Status, config, wake diagnostics, proxy mode, export, other commands or failures | [Troubleshooting and command reference](references/troubleshooting.md) |
 | Deploy, wake setup, Cloudflare login/error 1042 | [Setup skill](../a2a-exposed-setup/SKILL.md) |
 
-When a command fails in a way [troubleshooting](references/troubleshooting.md) does not cover, offer the human a report. `feedback` files a **public GitHub issue**: get user approval for that external action and redact secrets before sending. Include the failing step, the redacted error, and what you tried; the command adds the versions and deployment type. [Report contents and flags](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/feedback.md).
+When a command fails in a way [troubleshooting](references/troubleshooting.md) does not cover, offer the human a report. `feedback` posts a **public GitHub issue** when the endpoint has a feedback inbox; otherwise it prints `Not filed` and a prefilled link (`--json` includes `filed: false`). Before posting: get user approval for that external action and redact secrets before sending. Include the failing step, the redacted error, and what you tried; the command adds the versions and deployment type. [Report contents and flags](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/feedback.md).
 
 For OpenBot, wake metadata is under `data` in the `a2a_wake` envelope. Run `inbox` and reply using the workflow above. An interval routine can poll every three minutes; when both inbox and pairing requests are empty, finish quietly without a chat notification. HTTP 202 proves webhook acceptance only: verify the routine run reads the inbox and can reply. A failed peer push can leave the completed reply stored: check `GetTask` (`poll`) before resending. Unsigned OpenBot wakes are refused. Receivers validate signed timestamps and deduplicate delivery IDs; retries still need task-level idempotency. The human handles the signing secret directly in protected storage, never chat or argv; see the [OpenBot setup checklist](../a2a-exposed-setup/references/wake.md#openbot).
 

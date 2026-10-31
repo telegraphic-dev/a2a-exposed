@@ -124,6 +124,21 @@ function run(cmd, args, { cwd, env, capture = false, captureStderr = false, allo
 	return r;
 }
 
+/** Keep dependency installer output in a private local log. */
+export function installDependencies(dir, { configDir = C.CONFIG_DIR, env = process.env } = {}) {
+	fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
+	const log = path.join(configDir, "npm-install.log");
+	const fd = fs.openSync(log, "w", 0o600);
+	fs.fchmodSync(fd, 0o600);
+	let result;
+	try {
+		result = spawnSync("npm", ["install", "--no-audit", "--no-fund", "--loglevel=error"], { cwd: dir, env, stdio: ["ignore", fd, fd] });
+	} finally {
+		fs.closeSync(fd);
+	}
+	if (result.error || result.status !== 0) die(`npm install failed; inspect the private log: ${log}`);
+}
+
 export function cfBin(dir) {
 	const local = path.join(dir, "node_modules", ".bin", "cf");
 	return fs.existsSync(local) ? local : "cf";
@@ -561,7 +576,7 @@ export async function init(o) {
 	step(`worker project -> ${dir}`);
 	syncTemplate(dir);
 	requireCfLogin(dir);
-	if (!o["skip-install"]) run("npm", ["install", "--no-audit", "--no-fund", "--loglevel=error"], { cwd: dir });
+	if (!o["skip-install"]) installDependencies(dir);
 	const env = cfEnv();
 
 	const dbName = C.get("A2A_D1_NAME") || C.get("A2A_WORKER_NAME");
@@ -685,7 +700,7 @@ export async function deploy(o) {
 	guardTunnelUrl();
 	step(`worker project -> ${dir}${cfProfile() ? ` (cf profile ${cfProfile()})` : ""}`);
 	syncTemplate(dir);
-	if (!o["skip-install"]) run("npm", ["install", "--no-audit", "--no-fund", "--loglevel=error"], { cwd: dir });
+	if (!o["skip-install"]) installDependencies(dir);
 	const env = cfEnv();
 	applyMigrations(dir, env);
 	const secrets = { ...deploySecretsFromEnv(), ...upstreamSecrets, ...await eventSecretFromStdin(o) };

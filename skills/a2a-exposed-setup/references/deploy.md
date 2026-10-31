@@ -27,6 +27,8 @@ npx -y a2a-exposed@latest init \
   --preset grok-bot                # grok-bot | claude-code | openclaw-wake | openclaw-agent | hermes | openbot | generic
 ```
 
+`--skip-install` skips dependency installation when the Worker already has its dependencies.
+
 `init` is non-interactive and idempotent. It:
 
 1. Checks Node, then the Cloudflare login, and resolves the account, before it installs packages. Those login and account checks run outside the Worker directory, so they do not load `cloudflare.config.ts` before `npm install`. A fresh init runs `npx --yes cf auth whoami` for that check (`npx cf auth login` does not install a global `cf`). A later init uses `node_modules/.bin/cf`. With `--cf-profile`, an empty whoami account list is filled from `cf accounts list` on that same `cf`. If that list fails and no account id is set, init prints cf's error and stops. An id from `--account-id` or `CLOUDFLARE_ACCOUNT_ID` is used anyway. If the login can see several accounts, pass `--account-id`. An empty successful list says how many accounts are available. A failed login leaves the Worker packages uninstalled.
@@ -45,7 +47,7 @@ Optional flags:
 | `--d1-name` | D1 database to create or reuse (default: worker name). Useful when several bots share an account |
 | `--cli-command` | Command shown in wake hints (`hint` / summaries). Default `npx -y a2a-exposed@latest`. For a checkout, pass e.g. `node /path/to/repo/cli/bin/a2a-exposed.mjs`. Saved as `WAKE_CLI_COMMAND` |
 | `--debounce <s>` | Wake debounce window |
-| `--pairing-approval human\|agent\|off` | Who approves device-flow pairing requests ([pairing](pairing.md)). `human` (default): the owner, with the owner token (`pair approve`) or on the `/device` page with the approval password. `agent`: the agent runs `pair approve <code>` after asking its human in chat, and the decision is recorded as the agent. `off`: no pairing endpoints; `token issue` only. Change it later with `deploy --pairing-approval ...` |
+| `--pairing-approval human\|agent\|off` | Who approves device-flow pairing requests ([pairing](pairing.md)). `human` (default): the owner, with the owner token (`pair approve`) or on the `/device` page with the approval password. `agent`: the agent runs `pair approve <code>` after asking its owner in chat, and the decision is recorded as the agent. `off`: no pairing endpoints; `token issue` only. Change it later with `deploy --pairing-approval ...` |
 | `--max-per-hour <n>` | Hourly wake cap. `0` or unset is unlimited. Claude Code defaults to 25 when this is unset |
 | `--cf-profile <name>` | Use a named cf auth profile (separate Cloudflare login). Saved as `CF_PROFILE` |
 | `--workers-dev` | Move to workers.dev: clears the saved hostname, so the base URL, agent card and printed URLs become `https://<worker>.<subdomain>.workers.dev`. The old custom domain then answers 410 (its agent card redirects 301 to the new card) until you detach it in the dashboard; peers must update their URL. `--hostname <host>` on a workers.dev deployment moves it back (the workers.dev route is switched off). A wake tunnel keeps working (it has its own hostname on a zone) |
@@ -108,7 +110,7 @@ peer ──HTTPS + per-peer bearer──> https://agent.example.com            (
 
 A Worker can't reach a Tailnet or LAN address, so the upstream is published through a **named Cloudflare Tunnel** whose hostname is locked by a **Cloudflare Access** app that admits only one service token, held by the Worker (the same pattern as the wake tunnel). The CLI refuses a private `--upstream`.
 
-1. **Tunnel + Access for the upstream** (manual for now; a `tunnel create --upstream` helper is planned). Follow the consent checklist above and wait for an explicit yes: this creates DNS, a tunnel, and Access objects in the selected account. Needs Zero Trust (free) and a zone on the account. On the agent's machine:
+1. **Tunnel + Access for the upstream**. Follow the consent checklist above and wait for an explicit yes: this creates DNS, a tunnel, and Access objects in the selected account. Needs Zero Trust (free) and a zone on the account. On the agent's machine:
 
    ```bash
    cloudflared tunnel login                       # once, picks the zone
@@ -166,3 +168,5 @@ The A2A endpoint card (no `--upstream`) uses the same scrubbing for `--agent-des
 `APPROVAL_OIDC_*` turns on OpenID Connect approval on `/device` and the MCP consent page when the issuer, client id, client secret, and allowlist are all set. Unset, those pages stay on the password. `npx -y a2a-exposed@latest pair set-oidc` writes the non-secret settings. The client secret is `APPROVAL_OIDC_CLIENT_SECRET` in the environment (or `--secret-stdin`) and is uploaded on the next `deploy`, and is not stored in `config.env`. `A2A_BACKUP_BUCKET=1` adds a daily R2 snapshot of the A2A endpoint, kept 30 days. Leave it unset and the deploy has no backup bucket and no extra cron. `npx -y a2a-exposed@latest init --manage-url https://example.com/app/agents/name#pairing` saves `MANAGE_URL` (https, no user name or password; `none` clears it). A pairing wake, the MCP inbox line, `pair list`, and `inbox` include that page as `manageUrl`. `--event-url` saves `EVENT_URL` the same way. With `EVENT_SECRET` set, the A2A endpoint posts a signed pairing event when a request is created, approved, or denied. Pass `--event-secret-stdin` or export `EVENT_SECRET`. The secret is uploaded on that deploy, stays out of `config.env`, and stays out of the command output. Names are also listed in `worker/deploy.env.example`.
 
 `status` reports the deployed Worker version and CLI version. An older Worker, including one whose `/health` has no `version`, produces a deploy next step and exit code 1. Unreachable health reports an unknown version. Cached npm latest can add an upgrade hint without a foreground registry request. Deploy sets the Worker version tag `a2a-exposed-<version>` and message `a2a-exposed <version> <ISO date>`.
+
+Worker dependency installs save npm output in `<config dir>/npm-install.log` (mode 600) and print that path only on failure. Inspect the log locally and redact secrets before sharing it.

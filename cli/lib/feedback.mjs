@@ -32,7 +32,7 @@ const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 /** The repository that will receive the issue. The prefilled form is ISSUE_REPO. A hosted post uses the name that URL returns. */
 export function publicIssueWarning(repo = ISSUE_REPO) {
 	const name = typeof repo === "string" && REPO_RE.test(repo) && repo.length <= 100 && !repo.includes("..") ? repo : ISSUE_REPO;
-	return `This report is filed as a public GitHub issue on ${name}. Do not include confidential information: secrets, tokens, owner or pairing tokens, private URLs or hostnames, message contents, or personal data.`;
+	return `Posting this report creates a public GitHub issue on ${name}. Do not include confidential information: secrets, tokens, owner or pairing tokens, private URLs or hostnames, message contents, or personal data.`;
 }
 
 export const PUBLIC_ISSUE_WARNING = publicIssueWarning(ISSUE_REPO);
@@ -316,6 +316,7 @@ export async function runFeedback(input) {
 		}),
 	});
 	if (!endpoint) return fallback();
+	await input.beforePost?.();
 	let response;
 	try {
 		response = await call(endpoint, {
