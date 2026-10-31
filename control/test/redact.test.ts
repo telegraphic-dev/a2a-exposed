@@ -54,6 +54,25 @@ test("redact removes a Bearer credential", () => {
 	assert.equal(text, "see Bearer [redacted] end");
 });
 
+test("redact keeps a Bearer value under 8 characters and removes one of 8", () => {
+	assert.equal(redact(`Bearer ${"C".repeat(7)}`), `Bearer ${"C".repeat(7)}`);
+	assert.equal(redact(`Bearer ${"C".repeat(8)}`), "Bearer [redacted]");
+});
+
+test("redact consumes a Bearer credential of 200 and 201 characters", () => {
+	assert.equal(redact(`Bearer ${"A".repeat(200)}`), "Bearer [redacted]");
+	const text = redact(`Bearer ${"A".repeat(201)}`);
+	assert.equal(text, "Bearer [redacted]");
+	assert.equal(text.includes("A"), false);
+});
+
+test("redact removes a short Basic credential and a long one", () => {
+	assert.equal(redact("Basic dTpw"), "Basic [redacted]");
+	const text = redact(`see Basic ${"E".repeat(201)} end`);
+	assert.equal(text, "see Basic [redacted] end");
+	assert.equal(text.includes("E"), false);
+});
+
 test("redact removes a JWT", () => {
 	const secret = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI0MjQyIn0.sigvalue1234567890";
 	const text = redact(`see ${secret} end`);
@@ -108,6 +127,24 @@ test("redact removes an env assignment whose name is a secret", () => {
 	const text = redact(`OWNER_TOKEN=${secret}`);
 	assert.equal(text.includes(secret), false);
 	assert.equal(text, "OWNER_TOKEN=[redacted]");
+});
+
+test("redact removes a whole quoted assignment value", () => {
+	const doubles = redact('PASSWORD="first second"');
+	assert.equal(doubles, "PASSWORD=[redacted]");
+	assert.equal(doubles.includes("first"), false);
+	assert.equal(doubles.includes("second"), false);
+	const singles = redact("PASSWORD='first second'");
+	assert.equal(singles, "PASSWORD=[redacted]");
+	assert.equal(singles.includes("first"), false);
+	const escaped = redact('PASSWORD="say \\"hi there\\"" tail');
+	assert.equal(escaped, "PASSWORD=[redacted] tail");
+	assert.equal(escaped.includes("there"), false);
+	const singleEscaped = redact("PASSWORD='it\\'s a secret' tail");
+	assert.equal(singleEscaped, "PASSWORD=[redacted] tail");
+	assert.equal(singleEscaped.includes("secret"), false);
+	assert.equal(redact('NAME="Ada Lovelace"'), 'NAME="Ada Lovelace"');
+	assert.equal(redact("PASSWORD=onlyfirst second"), "PASSWORD=[redacted] second");
 });
 
 test("redact removes a JSON secret field", () => {
