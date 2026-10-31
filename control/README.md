@@ -2,7 +2,9 @@
 
 This directory is the source for `@a2a-exposed/control-core` and a Worker. The Worker serves `GET /health`, `GET` and `POST /api/feedback` when `FEEDBACK_REPO` and `FEEDBACK_GITHUB_TOKEN` are set, and the static files in `public/`. The owner pages for one inbox (`/` and `/device`) are on the inbox Worker. `npm run deploy` applies `migrations/` when `CONTROL_D1_ID` or `CONTROL_D1_NAME` is set, then runs `cf deploy`.
 
-The library source entry is `src/core/index.ts`. It exports inbox provisioning, routing helpers, the `ControlEnv` type, and the D1 migrations in `migrations/`. The published module is compiled JavaScript and TypeScript declarations. `prepare` at the repository root builds that module on `npm pack` and on a `file:` install. The `a2a-exposed` CLI package leaves this directory out.
+The library source entry is `src/core/index.ts`. It exports inbox provisioning, routing helpers, the `ControlEnv` type, `redact` and `sanitized`, and the D1 migrations in `migrations/`.
+
+`redact` removes secrets from text, including URL-encoded secret parameter names in queries, fragments, and form bodies, including nested URLs and encoded values inside ordinary fields and JSON strings, whitespace-separated assignments, embedded apostrophes in URL credentials, and mixed direct and encoded secrets, and complete secret-named JSON field values of any type in serialized JSON or mixed log text. `sanitized` copies a value and does the same for every string, for a field whose name is a secret, and for a `{ name, value }`, `{ key, value }`, or `[name, value]` pair whose name identifies a secret. A field such as `name`, `title`, `url`, or `preset` stays, including a pair whose name is not a secret. Malformed percent-encoding and unpaired Unicode surrogates do not throw; if a string span cannot be safely processed, the whole span becomes `[redacted]`. The published module is compiled JavaScript and TypeScript declarations. `prepare` at the repository root builds that module on `npm pack` and on a `file:` install. The `a2a-exposed` CLI package leaves this directory out.
 
 ## Account sign-in on a Cloudflare agent
 

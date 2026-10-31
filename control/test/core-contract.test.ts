@@ -71,6 +71,8 @@ import {
 	wakeSettingsOf,
 	wakeUrlProblem,
 	withOutboxLock,
+	redact,
+	sanitized,
 	type ControlEnv,
 	type ControlMigration,
 	type CoreRoutes,
@@ -134,7 +136,8 @@ test("the entry re-exports tenants, provisioning, routing, env, and migrations",
 			|| spec === "../env.ts"
 			|| spec === "./sql.ts"
 			|| spec === "./migrations.ts"
-			|| spec === "./routes.ts";
+			|| spec === "./routes.ts"
+			|| spec === "./redact.ts";
 		assert.equal(allowed, true, spec);
 	}
 	assert.equal(workerFirst, true);
@@ -210,6 +213,8 @@ test("the entry re-exports tenants, provisioning, routing, env, and migrations",
 		wakeSettingsOf,
 		wakeUrlProblem,
 		withOutboxLock,
+		redact,
+		sanitized,
 	];
 	for (const fn of functions) assert.equal(typeof fn, "function");
 });

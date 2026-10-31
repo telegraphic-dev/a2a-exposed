@@ -1,7 +1,7 @@
 // Source entry for `@a2a-exposed/control-core`. `prepare` compiles this file to
 // JavaScript and declarations on `npm pack` and on a `file:` install. An app
 // imports tenants, the Cloudflare provisioning calls, routing, the environment
-// type, and the D1 migrations from that published module.
+// type, redaction, and the D1 migrations from that published module.
 
 export {
 	accountAgentLimit,
@@ -104,3 +104,5 @@ export { INBOX_MIGRATIONS } from "../provision/inbox-migrations.ts";
 
 export { CONTROL_MIGRATIONS, CONTROL_MIGRATIONS_DIR } from "./migrations.ts";
 export type { ControlMigration } from "./migrations.ts";
+
+export { redact, sanitized } from "./redact.ts";
