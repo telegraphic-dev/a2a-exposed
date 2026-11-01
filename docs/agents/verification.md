@@ -141,3 +141,7 @@ README, then runs the pinned validator with `--strict`. Repository-only
 `CLAUDE.md` points coding contributors at AGENTS.md; it is not plugin context.
 The validator warns about that file when run against the whole checkout, so CI
 validates the plugin payload separately without weakening strict validation.
+
+Internal hosted link wake-test diagnostics preserve the fixed site codes (`none`,
+`tls`, `private`, `dns`, `connection`, `unreadable`, `failed`) as well as HTTP,
+Access, DNS-missing and timeout codes. Unknown values stay hidden as `unknown`.

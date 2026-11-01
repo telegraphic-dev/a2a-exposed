@@ -198,7 +198,7 @@ async function setupLink(o, {
 	const tested = await request("wake-test", { signing_secret: secret, preset }, grant);
 	if (!tested.response.ok) throw failure(tested.response.status, tested.body, context);
 	if (tested.body.result !== "ok" || tested.body.saved !== true) {
-		const result = (["dns-missing", "access-401", "access-403", "timeout"].includes(tested.body.result) || /^origin-\d{3}$/.test(tested.body.result)) ? tested.body.result : "unknown";
+		const result = (["none", "dns-missing", "access-401", "access-403", "timeout", "tls", "private", "dns", "connection", "unreadable", "failed"].includes(tested.body.result) || /^origin-\d{3}$/.test(tested.body.result)) ? tested.body.result : "unknown";
 		throw new CliError(`wake test did not save settings (${result}); fix the receiver and run finish again for fresh approval`);
 	}
 	write("Connector connected. Wake test passed and settings saved.");

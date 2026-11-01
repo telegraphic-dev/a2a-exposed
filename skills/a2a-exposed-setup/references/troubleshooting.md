@@ -91,6 +91,10 @@ public setup option. Follow the scope in [contributor verification](https://gith
 Recovery that creates or removes resources requires the owner's authorization;
 never perform it automatically or approve on the owner's behalf.
 
+The wake-test failure keeps recognized codes such as `none`, `tls`, `private`, and
+`connection`. An unrecognized result displays `unknown`; server text stays hidden.
+A connected tunnel alone does not prove the receiver accepts a wake.
+
 | Refusal | Recovery |
 | --- | --- |
 | `apex_hostname` | Choose a hostname below the domain, such as `wake.example.com` |

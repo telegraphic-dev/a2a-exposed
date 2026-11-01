@@ -345,10 +345,16 @@ test("known errors give fixed local recovery and origin status codes remain visi
 		const h = harness({ requests: () => Response.json({ error, message: sensitive[0] }, { status: 400 }) });
 		await assert.rejects(finishLink(o, h.deps), (err) => err.message.includes(message) && !err.message.includes(sensitive[0]));
 	}
-	for (const result of ["origin-404", "origin-500"]) {
+	for (const result of ["origin-404", "origin-500", "none", "tls", "private", "dns", "connection", "unreadable", "failed"]) {
 		const h = harness({ "wake-test": () => Response.json({ result, saved: false }) });
 		await assert.rejects(finishLink(o, h.deps), new RegExp(result));
 	}
+});
+
+
+test("wake result diagnostics never echo arbitrary server text", async () => {
+ const h = harness({ "wake-test": () => Response.json({ result: sensitive[0], saved: false }) });
+ await assert.rejects(finishLink(o, h.deps), err => err.message.includes('(unknown)') && !err.message.includes(sensitive[0]));
 });
 
 
