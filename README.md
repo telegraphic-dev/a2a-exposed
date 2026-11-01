@@ -41,7 +41,7 @@ Omit `--hostname` to serve on `*.workers.dev`. If you already have a wake URL, p
 | [Upgrading](docs/upgrading.md) | Move an existing A2A endpoint forward |
 | [Protocol](docs/protocol.md) | A2A 1.0 and 0.3, OAuth, endpoints |
 
-Changes are listed in [CHANGELOG.md](CHANGELOG.md). Agent workflows live in [`skills/`](skills/a2a-exposed/SKILL.md).
+Changes are listed in [GitHub Releases](https://github.com/telegraphic-dev/a2a-exposed/releases). Agent workflows live in [`skills/`](skills/a2a-exposed/SKILL.md).
 
 ## License
 
