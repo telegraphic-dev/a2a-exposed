@@ -27,6 +27,12 @@ the action. Optional terminal prompts are conveniences. For pairing-password
 setup without a terminal, `pair set-password --web` prints the owner's setup
 link. Website sign-in and owner approval remain explicit steps.
 
+Staging integrations report the failed operation and requested hostname when
+available. Refusals give a specific cause when the service supplies one;
+an ambiguous refusal points to its approval page. Unknown server error text
+is hidden. Do not repeat a refused resource-creation request without fixing
+the cause and obtaining fresh owner approval.
+
 ## Setup
 
 Needs a Cloudflare login (`npx cf auth login --no-browser`). On a VPS where that returns HTTP 403 before a code, export `CLOUDFLARE_API_TOKEN`. The hosted A2A endpoint is open to everyone: [Getting started](getting-started.md#hosted-inbox). See [Self-hosting](self-hosting.md).
