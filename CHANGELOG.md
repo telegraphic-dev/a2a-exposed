@@ -2,6 +2,10 @@
 
 All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.3.x), Worker template, control core, and skills. Versions follow [semver](https://semver.org); a `v*` tag publishes the CLI and `@a2a-exposed/control-core` to npm (see [Releases](docs/README.md#releases)).
 
+## Unreleased
+
+- **Internal link refusal reference (#217).** Setup skill and troubleshooting guidance cover pending-request limits, unreadable access keys, provisioning failures and approval recovery for maintainer runs.
+
 ## 0.8.28 - 2026-11-01
 
 No new migrations. Self-hosted inboxes need no action beyond `npx -y a2a-exposed@latest deploy`.
