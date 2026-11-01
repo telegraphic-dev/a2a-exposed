@@ -6,7 +6,7 @@ All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.
 
 - `link finish` keeps recognized wake-test failure codes and never prints server text. Diagnostics include a next step and a stable `wake_result=<code>` line.
 - **Wake handling (#182).** Setup saves the owner’s autonomous, review-all or escalate mode in handler prompts. Each handled wake produces a one-line owner notice, and webhook setup keeps a six-hour fallback job.
-- **Staging link expiry (#216).** Expired link requests explain that the request expired and direct users to start a new one with `hosted link create`. Diagnostics use fixed local text and hide server messages and secrets.
+- **Staging link recovery (#226).** Expired requests restart the same create/finish command. Grant expiry requests fresh approval with `hosted link finish` and explains when the connector token remains locally without saved wake settings. Polling and missing-session refusals name the relevant recovery operation. Diagnostics use fixed local text and hide server messages and secrets.
 - **Internal link refusal reference (#217).** Setup skill and troubleshooting guidance cover pending-request limits, unreadable access keys, provisioning failures and approval recovery for maintainer runs.
 
 ## 0.8.28 - 2026-11-01

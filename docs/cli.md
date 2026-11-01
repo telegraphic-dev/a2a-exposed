@@ -205,3 +205,10 @@ One A2A endpoint has one owner token, saved by `init` in `config.env`. That toke
 Deploy-time Worker settings for a manual `cf deploy` are listed in `worker/deploy.env.example`.
 
 Worker dependency installs save npm output in `<config dir>/npm-install.log` (mode 600) and print that path only on failure. Inspect the log locally and redact secrets before sharing it.
+
+In the staging secure-link integration, an expired approval request requires a
+new request with the same command: `hosted link create` or `hosted link finish`.
+An expired grant after approval requires `hosted link finish` for fresh approval.
+A connector token already saved locally remains on disk; wake settings are not
+saved when the grant expires. A polling refusal requires fresh approval, rather
+than changes to hostname or creation options.
