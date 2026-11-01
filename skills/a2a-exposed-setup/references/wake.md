@@ -1,5 +1,15 @@
 # Wake: pick the agent
 
+Before saving any handler, routine or polling job below, ask the owner to choose
+`autonomous`, `review-all` or `escalate` as defined in the
+[operate skill](../../a2a-exposed/SKILL.md#on-a-wake-or-a-scheduled-check).
+Save `Handling mode: <chosen-mode>` in each prompt, including the fallback job.
+Add: "Follow the saved handling mode. After every handled wake, write one line
+to the owner channel with peer, task and outcome; omit peer text and secrets.
+Empty scheduled checks stay quiet." Configure owner delivery (Hermes:
+`--deliver origin`) so notices reach the human. These instructions apply to
+each example prompt below.
+
 `wake set` saves the preset (and related flags), uploads any wake secrets currently in the environment, and **redeploys in one step** — there is no separate redeploy after it.
 
 ```bash
