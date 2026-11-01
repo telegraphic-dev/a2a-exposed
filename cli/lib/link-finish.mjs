@@ -8,6 +8,7 @@ import { readSigningSecret, validateSecretSource, writeTokenFile, startConnector
 
 const sleepDefault = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const ERRORS = {
+	expired_token: "The link request expired. Start a new one with hosted link create.",
 	unauthorized: "Run a2a-exposed login, then run finish again.",
 	invalid_request: "Check the agent name, hostname and link options before running the command again.",
 	link_exists: "The link request was refused; review the approval page before changing or removing an existing link.",
@@ -21,7 +22,6 @@ const ERRORS = {
 	unreadable: "The secure link access key could not be read. Remove the secure link on the website, then run create again.",
 	slow_down: "Too many pending requests for this agent. Deny an earlier request on the website or wait for it to expire, then run finish again.",
 	access_denied: "The request was denied. Run finish again only if you still want to set up this link.",
-	expired_token: "This request or grant expired. Run finish again for fresh approval.",
 	link_not_ready: "The secure link is not ready. Finish creating it in Wake settings on the website, then run finish again.",
 	invalid_grant: "This grant is not valid. Run finish again and approve a new request.",
 	already_delivered: "Credentials were already delivered for this request. Run finish again for fresh approval if you did not receive them.",

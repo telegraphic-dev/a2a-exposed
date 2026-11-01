@@ -205,3 +205,6 @@ One A2A endpoint has one owner token, saved by `init` in `config.env`. That toke
 Deploy-time Worker settings for a manual `cf deploy` are listed in `worker/deploy.env.example`.
 
 Worker dependency installs save npm output in `<config dir>/npm-install.log` (mode 600) and print that path only on failure. Inspect the log locally and redact secrets before sharing it.
+
+In the staging secure-link integration, `expired_token` means the link request
+has expired. Start a new request with `hosted link create`.
