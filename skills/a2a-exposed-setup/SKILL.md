@@ -4,7 +4,7 @@ description: Use when deploying, redeploying, or configuring the a2a-exposed Clo
 license: MIT
 compatibility: Requires Node 22.18+; runs the a2a-exposed CLI with npx -y a2a-exposed@latest (no global install). Cloudflare account for deploy.
 metadata:
-  version: "0.8.27"
+  version: "0.8.28"
   author: Telegraphic Developer
   homepage: https://github.com/telegraphic-dev/a2a-exposed
   hermes:
@@ -105,10 +105,6 @@ Never paste secrets into chat or onto the command line. Ask the user before anyt
 5. **Wake** — [references/wake.md](references/wake.md).
 6. **Pairing** — [references/pairing.md](references/pairing.md). `init` checks approval-password readiness; a missing password and pairing wakes point to `pair set-password --web`. Give the one-time setup link privately to the human; never open it or ask for their password. Password setup guidance appears only when password approval is enabled; OIDC-only endpoints omit it.
 7. **Teardown** — [references/teardown.md](references/teardown.md).
-
-Staging secure-link refusals identify the hostname or direct you to the approval
-page when the cause is ambiguous. Follow the refusal guidance; never repeat
-resource creation automatically. See [troubleshooting](references/troubleshooting.md).
 
 ## When something goes wrong
 

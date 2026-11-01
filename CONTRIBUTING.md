@@ -26,5 +26,5 @@ comments in one pass, validate, push once, then resolve addressed threads.
   uses a dedicated maintainer-provided test account/profile, never the owner's
   main account. Automated checks need no Cloudflare credentials and never deploy.
 - Write docs for outsiders, in present tense, with no decision log. Keep README
-  short and `docs/` authoritative. Describe what works. Do not add tested,
-  untested, or in-testing labels.
+  short and `docs/` authoritative. Describe what works. Do not add product
+  verification or maturity labels.
