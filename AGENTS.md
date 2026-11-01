@@ -243,8 +243,8 @@ can still require an owner decision on a website; do not automate that decision.
 Write for outsiders in present tense. No decision logs or historical rationale.
 Keep the public README short and link out; `docs/` is the user source of truth.
 The [client compatibility table](docs/getting-started.md#clients) lists clients
-and how to load them. Describe what works. Do not add tested, untested, or
-in-testing labels, and do not infer support from a mock or a documented API.
+and how to load them. Describe what works. Do not add product verification or
+maturity labels, and do not infer support from a mock or a documented API.
 
 For a user-visible command, flag, preset, or output change, update the relevant
 `docs/` page, relevant `SKILL.md` and references, `cli/lib/main.mjs` help, and

@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { statusLabels } from "./check-skill-plugin.mjs";
 
 test("status label scan ignores ordinary prose", () => {
-	assert.deepEqual(statusLabels("Leave untested settings as they are."), []);
+	assert.deepEqual(statusLabels("Leave existing settings as they are."), []);
 	assert.deepEqual(statusLabels("an optional tested configuration version"), []);
 	assert.deepEqual(statusLabels("in testing the login, wait for the code"), []);
 });
@@ -14,6 +14,14 @@ test("status label scan catches product badges", () => {
 	for (const sample of [
 		"This flow is tested end to end.",
 		"(in testing)",
+		"staging-only",
+		"awaiting staging verification",
+		"awaiting staging testing",
+		"untested",
+		"(not tested)",
+		"pending verification",
+		"experimental",
+		"(beta)",
 		"awaiting staging end-to-end verification",
 		"awaiting end-to-end testing",
 		"staging end-to-end verification is pending",
