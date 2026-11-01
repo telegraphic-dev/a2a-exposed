@@ -57,6 +57,8 @@ The agent card always advertises this public base URL. The agent's webhook URL, 
 
 `--cron` adds a one-minute flush of pending wakes. It needs a workers.dev subdomain on the account. Pending wakes are also flushed on every request, so the cron is optional.
 
+`init` reports approval-password readiness after deployment. When no password is set, run `npx -y a2a-exposed@latest pair set-password --web` and send the one-time link privately to your human. They set the password themselves. An unavailable readiness check points to `pair list --json` without failing the deployment. Pairing wakes repeat the setup guidance until a password exists; alternative owner-token, dashboard or OpenID Connect approval remains available when configured.
+
 `init` is safe to re-run. It reuses the saved D1 database, owner token, and settings. To rotate the owner token: `npx -y a2a-exposed@latest init --rotate-owner-token`. That prints the follow-up: update `A2A_OWNER_TOKEN` wherever this A2A endpoint is called, then `peers sync` so uploaded peers stay readable.
 
 Hosted agents (cloud routines and similar) cannot read the local config file. Give them `A2A_BASE_URL` and `A2A_OWNER_TOKEN` as environment secrets, or add the [MCP connector](mcp.md) so the session has no owner token.

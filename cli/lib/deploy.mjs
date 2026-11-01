@@ -603,11 +603,27 @@ export async function init(o) {
 	const base = deployedBase();
 	if (base) await verifyDeployedCard(base);
 	console.log(base);
+	await reportApprovalReadiness(base, ownerToken);
 	reportSwitch(switched);
 	proxyNote(secrets);
 	if (rotated) console.error(`owner token replaced. Update A2A_OWNER_TOKEN wherever this A2A endpoint is called, then run \`${CLI} peers sync\` so uploaded peers stay readable.`);
 	console.error(`config saved to ${C.CONFIG_FILE} (chmod 600). Next: ${CLI} status (shows the next setup step)`);
 	printStar();
+}
+
+/** Read the deployed inbox, using its saved owner token rather than an environment override. */
+async function reportApprovalReadiness(base, ownerToken) {
+	try {
+		if (!base) throw new Error();
+		const { status, data } = await httpJson(`${base}/owner/pairing`, { headers: { authorization: `Bearer ${ownerToken}` }, timeout: 3000 });
+		if (status !== 200 || typeof data?.passwordSet !== "boolean" || !["human", "agent", "off"].includes(data.mode)) throw new Error();
+		if (data.mode === "off") return;
+		console.error(data.passwordSet ? "Approval password: set."
+			: `Approval password: not set. To approve pairing on /device with a password, run: ${CLI} pair set-password --web`);
+		if (!data.passwordSet) console.error("Send the one-time setup link privately to your human. They set the password themselves; never open the page or ask for the password.");
+	} catch {
+		console.error(`Approval password: could not check. Run: ${CLI} pair list --json`);
+	}
 }
 
 /** Proxy / expose mode reminder after a deploy (the upstream credentials are secrets: only their names are shown). */

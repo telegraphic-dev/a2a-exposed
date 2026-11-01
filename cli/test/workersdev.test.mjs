@@ -119,6 +119,9 @@ function stubEnv(t, { subdomain = "" } = {}) {
 	if (subdomain) fs.writeFileSync(path.join(dir, "subdomain"), subdomain + "\n");
 	const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(A2A_|PEER_|CLOUDFLARE_)|WAKE_/.test(k)));
 	Object.assign(env, { A2A_CONFIG_DIR: path.join(dir, "cfg"), STUB_DIR: dir, A2A_VERIFY_TRIES: "0", A2A_NO_UPDATE_CHECK: "1" });
+	const routes = path.join(dir, "fetch-routes.json");
+	fs.writeFileSync(routes, JSON.stringify({ "https://wdtest.acme.workers.dev/owner/pairing": { status: 200, body: { mode: "human", passwordSet: false } } }));
+	Object.assign(env, { NODE_OPTIONS: `--import=${fileURLToPath(new URL("./fetch-stub.mjs", import.meta.url))}`, A2A_TEST_FETCH_ROUTES: routes });
 	const cli = (args, extraEnv = {}) => new Promise((resolve) => {
 		const ch = spawn(process.execPath, [BIN, ...args], { env: { ...env, ...extraEnv }, stdio: ["ignore", "pipe", "pipe"] });
 		let stdout = "", stderr = "";
@@ -129,7 +132,7 @@ function stubEnv(t, { subdomain = "" } = {}) {
 	const config = () => parseEnv(fs.readFileSync(path.join(dir, "cfg", "config.env"), "utf8"));
 	const calls = () => fs.readFileSync(path.join(dir, "calls.log"), "utf8").trim().split("\n");
 	const init = (...extra) => cli(["init", "--worker-name", "wdtest", "--skip-install", "--dir", path.join(dir, "worker"), ...extra]);
-	return { dir, cli, config, calls, init };
+	return { dir, cli, config, calls, init, routes };
 }
 
 test("init without --hostname: learns the existing subdomain from cf, saves the URL, redeploys once", async (t) => {
@@ -137,6 +140,7 @@ test("init without --hostname: learns the existing subdomain from cf, saves the 
 	const r = await s.init();
 	assert.equal(r.status, 0, r.stderr);
 	assert.equal(r.stdout.trim(), "https://wdtest.acme.workers.dev");
+	assert.match(r.stderr, /Approval password: not set[^\n]*pair set-password --web/);
 	assert.match(r.stderr, /Like it\? Star us: https:\/\/github\.com\/telegraphic-dev\/a2a-exposed/);
 	assert.ok(!/Using fallback value in non-interactive context/.test(r.stderr), r.stderr);
 	assert.equal(r.stdout.includes("Like it?"), false);
@@ -502,4 +506,25 @@ test("deploy arguments carry the package version tag and dated message", () => {
 	assert.deepEqual(deployArgs(VERSION, date), ["deploy", "--message", `a2a-exposed ${VERSION} ${date}`, "--tag", `a2a-exposed-${VERSION}`]);
 	assert.match(deployArgs(VERSION, date)[4], /^[A-Za-z0-9._-]+$/);
 	assert.throws(() => deployArgs("bad+tag", date), /invalid Worker version tag/);
+});
+
+for (const [name, response, expected] of [
+	["existing password", { status: 200, body: { mode: "human", passwordSet: true } }, /Approval password: set\./],
+	["unavailable owner API", { status: 503, body: { error: "unavailable" } }, /Approval password: could not check[^\n]*pair list --json/],
+	["invalid response", { status: 200, body: { mode: "human" } }, /Approval password: could not check[^\n]*pair list --json/],
+]) test(`init readiness: ${name}`, async (t) => {
+	const s = stubEnv(t, { subdomain: "acme" });
+	fs.writeFileSync(s.routes, JSON.stringify({ "https://wdtest.acme.workers.dev/owner/pairing": response }));
+	const r = await s.init();
+	assert.equal(r.status, 0, r.stderr);
+	assert.match(r.stderr, expected);
+	assert.doesNotMatch(r.stderr, /Approval password: not set/);
+});
+
+test("init readiness: pairing disabled does not report missing password", async (t) => {
+	const s = stubEnv(t, { subdomain: "acme" });
+	fs.writeFileSync(s.routes, JSON.stringify({ "https://wdtest.acme.workers.dev/owner/pairing": { status: 200, body: { mode: "off", passwordSet: false } } }));
+	const r = await s.init("--pairing-approval", "off");
+	assert.equal(r.status, 0, r.stderr);
+	assert.doesNotMatch(r.stderr, /Approval password:/);
 });

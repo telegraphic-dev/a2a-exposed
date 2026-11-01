@@ -272,6 +272,8 @@ test("human approval: pending, slow_down, page approve with the password, single
 	assert.equal(w.pairing.agentCardUrl, "https://barry.example.org/.well-known/agent-card.json");
 	assert.equal("manageUrl" in w.pairing, false);
 	assert.match(w.pairing.instructions, /never approve on your own[\s\S]*give them this link/);
+	assert.equal(w.pairing.passwordSet, false);
+	assert.match(w.pairing.instructions, /Approval password: not set[\s\S]*pair set-password --web/);
 
 	let p = await s.poll(d.device_code);
 	assert.deepEqual([p.status, p.data.error, p.data.error_description], [400, "authorization_pending", "waiting for the agent owner to approve"]);
@@ -970,4 +972,25 @@ test("approval page shows the visitor's clock, and an https MANAGE_URL is on the
 	t.after(bad.restore);
 	await bad.start(undefined, "203.0.113.82");
 	assert.equal("manageUrl" in bad.wakes[0].body.pairing, false);
+});
+
+test("pairing wake omits setup guidance once a password exists", async (t) => {
+	const s = setup(); t.after(s.restore);
+	await s.owner("PUT", "/owner/pairing/password", await passwordRecord());
+	assert.equal((await s.start()).status, 200);
+	const pairing = s.wakes[0].body.pairing;
+	assert.equal(pairing.passwordSet, true);
+	assert.doesNotMatch(pairing.instructions, /pair set-password|Approval password: not set/);
+	assert.doesNotMatch(JSON.stringify(s.wakes), /pbkdf2|correct horse|salt|hash/);
+});
+
+test("pairing readiness reaches text wakes without requester text on the trusted preset", async () => {
+	const ev: WakeEvent = { contextId: "pairing", taskId: "none", taskIds: [], from: "Untrusted", preview: "", kind: "pairing_request", publicUrl: BASE,
+		pairing: { userCode: "WDJB-2345", verificationUriComplete: `${BASE}/device?user_code=WDJB-2345`, approval: "human", clientName: "Untrusted", clientId: "untrusted", agentCardUrl: "", expiresIn: 3600, passwordSet: false } };
+	for (const preset of ["claude-code", "openclaw-wake", "openclaw-agent"]) {
+		const request = (await renderWake({ preset, url: "https://hook.example.net/wake", cliCommand: "a2a" }, ev))!;
+		const body = JSON.parse(request.body);
+		assert.match(body.text || body.message, /Approval password: not set[\s\S]*a2a pair set-password --web/);
+		if (preset === "openclaw-wake") assert.doesNotMatch(body.text, /Untrusted/);
+	}
 });

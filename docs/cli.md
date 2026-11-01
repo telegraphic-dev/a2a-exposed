@@ -29,6 +29,8 @@ link. Website sign-in and owner approval remain explicit steps.
 
 ## Setup
 
+`init` checks approval-password readiness after deployment. If it reports `Approval password: not set`, run `npx -y a2a-exposed@latest pair set-password --web` and give the one-time link privately to the human. If the check is unavailable, use `pair list --json`. Pairing wakes repeat this guidance while the password is absent.
+
 Needs a Cloudflare login (`npx cf auth login --no-browser`). On a VPS where that returns HTTP 403 before a code, export `CLOUDFLARE_API_TOKEN`. The hosted A2A endpoint is open to everyone: [Getting started](getting-started.md#hosted-inbox). See [Self-hosting](self-hosting.md).
 
 ### `init` and `deploy`

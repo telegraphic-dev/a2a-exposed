@@ -54,6 +54,8 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
                                                the owner token via \`pair approve\`, or the approval password
                                                on the /device page; agent: the agent runs \`pair approve\` after
                                                the human says yes; off: no pairing endpoints, \`token issue\` only)
+                                init reports approval-password readiness; when missing, use
+                                               \`pair set-password --web\` for the human-owned setup page.
                                 --pbkdf2-iterations  approval-password hashing cost, 50000-100000 (default 100000,
                                                the Workers maximum; lower only if /device hits error 1102)
                                 --workers-logs on|off  persisted Cloudflare Workers Logs (query strings redacted)

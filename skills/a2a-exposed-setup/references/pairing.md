@@ -2,6 +2,8 @@
 
 Agents connect without pasting tokens into chat, using the standard OAuth 2.0 Device Authorization Grant (RFC 8628). Your A2A endpoint is the authorization server, and **your human approves each connection**.
 
+`init` reports whether the approval password is set after deploying. If the check is unavailable, read `pair list --json`. Pairing-request wakes include `passwordSet` and setup guidance while it is false, without including the password or its hash. This guidance does not approve the pending request.
+
 **Set the approval password (once, human mode).** Your human types it, never the agent. Two ways:
 
 ```bash
