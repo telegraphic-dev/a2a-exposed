@@ -144,5 +144,6 @@ OpenBot uses preset `openbot` and `WAKE_HMAC_SECRET`. The human transfers the ro
 
 `status` compares the deployed Worker version with the CLI and cached npm latest, and recommends deploy when the Worker is older. Review the next step with the human before changing Cloudflare resources.
 
-In the staging secure-link integration, `expired_token` means the link request
-has expired. Start a new request with `hosted link create`.
+For staging link expiry, repeat the same create/finish command before approval;
+after grant expiry, use `hosted link finish` for fresh approval. Saved connector
+tokens remain local; wake settings are not saved. See [troubleshooting](references/troubleshooting.md).

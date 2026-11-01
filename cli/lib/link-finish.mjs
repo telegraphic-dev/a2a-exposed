@@ -67,18 +67,22 @@ function provisionGuidance(body) {
 	return ERRORS.provision_failed;
 }
 
-function failure(status, body, { command, hostname }) {
+function failure(status, body, { command, hostname }, phase = "requests") {
 	const known = (value) => typeof value === "string" && Object.hasOwn(ERRORS, value);
 	const code = known(body?.reason) ? body.reason : known(body?.error) ? body.error : `HTTP ${status}`;
-	const detail = ["invalid_request", "apex_hostname", "outside_zone"].includes(code) ? validationDetail(body, hostname) : "";
-	const guidance = code === "provision_failed" ? provisionGuidance(body) : Object.hasOwn(ERRORS, code) ? ERRORS[code] : "check the link on the website and rerun the command for fresh approval";
+	const detail = phase === "requests" && ["invalid_request", "apex_hostname", "outside_zone"].includes(code) ? validationDetail(body, hostname) : "";
+	let guidance = code === "provision_failed" ? provisionGuidance(body) : Object.hasOwn(ERRORS, code) ? ERRORS[code] : "check the link on the website and rerun the command for fresh approval";
+	if (code === "expired_token") guidance = ["grant", "connector"].includes(phase)
+		? `The approval grant expired. Run hosted link finish again for fresh approval; ${phase === "grant" ? "the saved connector token remains on disk and " : ""}wake settings were not saved.`
+		: `The link request expired. Start a new one with hosted link ${command}.`;
+	if (code === "invalid_request" && phase === "token") guidance = `The approval polling request was refused. Run hosted link ${command} again for fresh approval.`;
 	const message = detail || guidance.replace(/run finish/gi, (match) => `${match.startsWith("R") ? "Run" : "run"} ${command}`);
 	return new CliError(`link ${command} failed${hostname ? ` for ${hostname}` : ""} (${code}); ${message}`);
 }
 
-export function savedLinkSession(origin, session = C.controlSession()) {
+export function savedLinkSession(origin, session = C.controlSession(), command = "finish") {
 	if (controlOrigin(session.origin) !== origin || !session.token)
-		throw new CliError("sign in to this service first: run login --control-url <service-origin>, then rerun link setup; environment sessions require both CONTROL_URL and CONTROL_TOKEN");
+		throw new CliError(`sign in to this service first: run login --control-url <service-origin>, then rerun hosted link ${command}; environment sessions require both CONTROL_URL and CONTROL_TOKEN`);
 	return session.token;
 }
 
@@ -128,7 +132,7 @@ async function setupLink(o, {
 	if (o.preset !== undefined && (typeof o.preset !== "string" || !/^[a-z][a-z0-9-]{0,63}$/.test(o.preset))) throw new CliError("--preset must be a wake preset id");
 	const origin = controlOrigin(o["control-url"]);
 	if (!origin) throw new CliError("--control-url must be an https origin with no path");
-	const session = sessionToken(origin);
+	const session = sessionToken(origin, undefined, context.command);
 	const request = async (endpoint, body, grant, timeout = 15000) => {
 		let response;
 		try {
@@ -162,10 +166,10 @@ async function setupLink(o, {
 		const token = await request("token", { request_id: setup.request_id, verifier });
 		if (token.response.status === 428 && token.body.error === "authorization_pending") continue;
 		if (token.response.status === 429 && token.body.error === "slow_down") { interval += 5; continue; }
-		if (!token.response.ok) throw failure(token.response.status, token.body, context);
+		if (!token.response.ok) throw failure(token.response.status, token.body, context, "token");
 		authorized = token.body; break;
 	}
-	if (!authorized) throw failure(410, { error: "expired_token" }, context);
+	if (!authorized) throw failure(410, { error: "expired_token" }, context, "token");
 	const { grant, link } = authorized;
 	if (typeof grant !== "string" || !/^[\x21-\x7e]+$/.test(grant) || grant.length > 4096 || link?.agent !== agent || typeof link.path !== "string" || !link.path.startsWith("/") || typeof link.preset !== "string" || typeof link.hostname !== "string" || typeof link.origin !== "string")
 		throw new CliError("invalid approved link response");
@@ -176,7 +180,7 @@ async function setupLink(o, {
 	// Resolve and validate the source before spending the one-time connector delivery.
 	const secret = readSecret(o, { ...link, preset });
 	const connector = await request("connector", {}, grant);
-	if (!connector.response.ok) throw failure(connector.response.status, connector.body, context);
+	if (!connector.response.ok) throw failure(connector.response.status, connector.body, context, "connector");
 	if (typeof connector.body.connector_token !== "string" || !connector.body.connector_token.trim() || /\s/.test(connector.body.connector_token)) throw new CliError("invalid connector response; run finish again for fresh approval");
 	const tokenFile = path.resolve(o["token-file"] || path.join(os.homedir(), ".a2a-exposed", "links", `${agent}.token`));
 	saveToken(tokenFile, connector.body.connector_token);
@@ -190,13 +194,13 @@ async function setupLink(o, {
 	for (let poll = 0; poll < 20 && now() < connectDeadline; poll++) {
 		const status = await request("status", undefined, grant, Math.min(15000, connectDeadline - now()));
 		if (now() >= connectDeadline) break;
-		if (!status.response.ok) throw failure(status.response.status, status.body, context);
+		if (!status.response.ok) throw failure(status.response.status, status.body, context, "grant");
 		if (status.body.connector === "connected" && Number.isInteger(status.body.connections) && status.body.connections > 0) { connected = true; break; }
 		await sleep(Math.min(3000, Math.max(0, connectDeadline - now())));
 	}
 	if (!connected) throw new CliError("connector did not report connected within 60 seconds; check cloudflared and run finish again for fresh approval");
 	const tested = await request("wake-test", { signing_secret: secret, preset }, grant);
-	if (!tested.response.ok) throw failure(tested.response.status, tested.body, context);
+	if (!tested.response.ok) throw failure(tested.response.status, tested.body, context, "grant");
 	if (tested.body.result !== "ok" || tested.body.saved !== true) {
 		const result = (["dns-missing", "access-401", "access-403", "timeout"].includes(tested.body.result) || /^origin-\d{3}$/.test(tested.body.result)) ? tested.body.result : "unknown";
 		throw new CliError(`wake test did not save settings (${result}); fix the receiver and run finish again for fresh approval`);
