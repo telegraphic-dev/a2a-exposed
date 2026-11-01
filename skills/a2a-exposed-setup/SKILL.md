@@ -102,7 +102,7 @@ Never paste secrets into chat or onto the command line. Ask the user before anyt
 2. **Prerequisites** — [references/prerequisites.md](references/prerequisites.md).
 3. **Deploy** — [references/deploy.md](references/deploy.md), including the loopback test and a private A2A agent.
 4. **Owner token** — `init` stores it in `config.env`. Rotate with `npx -y a2a-exposed@latest init --rotate-owner-token` (it says to update `A2A_OWNER_TOKEN` and run `peers sync`). Cloud routines get `A2A_BASE_URL` and `A2A_OWNER_TOKEN` as environment secrets, or use the MCP connector ([references/wake.md](references/wake.md)).
-5. **Wake** — [references/wake.md](references/wake.md).
+5. **Wake** — [references/wake.md](references/wake.md). Ask the owner to choose **autonomous** (reply within authorized scope), **review-all** (draft and set `input-required` until approved), or **escalate** (reply within scope; ask about money, credentials or a new commitment). Save the chosen mode in the webhook handler and scheduled job prompts. Include a one-line owner notice after every handled wake, with no peer text or secrets; Hermes uses `--deliver origin`. Keep the webhook's fallback job at `every 6h`.
 6. **Pairing** — [references/pairing.md](references/pairing.md). `init` checks approval-password readiness; a missing password and pairing wakes point to `pair set-password --web`. Give the one-time setup link privately to the human; never open it or ask for their password. Password setup guidance appears only when password approval is enabled; OIDC-only endpoints omit it.
 7. **Teardown** — [references/teardown.md](references/teardown.md).
 
