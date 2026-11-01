@@ -527,7 +527,6 @@ for (const [raw, code, next] of [
 	["unreadable", "unreadable", "Remove the secure link on the website"],
 	["failed", "failed", "Check the receiver configuration"],
 	["unknown", "unknown", "Update the CLI (npx a2a-exposed@latest) and send feedback"],
-	["ok", "unknown", "Update the CLI"],
 	[null, "unknown", "Update the CLI"],
 	[{}, "unknown", "Update the CLI"],
 ]) {
@@ -541,6 +540,26 @@ for (const [raw, code, next] of [
 		});
 		assert.equal(h.lines.filter(line => line.startsWith("wake_result=")).join("\n"), `wake_result=${code}`);
 		assert.ok(!h.lines.join("\n").includes(sensitive[0]));
+	});
+}
+
+for (const command of ["create", "finish"]) for (const saved of [false, undefined, null, "true", 1]) {
+	test(`${command}: delivered wake with saved=${JSON.stringify(saved)} reports not-saved without retrying`, async () => {
+		const h = harness({ "wake-test": () => Response.json({ result: "ok", saved, message: sensitive.join(" ") }) });
+		const run = command === "create" ? createLink : finishLink;
+		await assert.rejects(run({ ...o, ...(command === "create" ? plan : {}) }, h.deps), err => {
+			assert.match(err.message, /test wake was delivered.*settings were not saved.*Save them in Wake settings.*test again/);
+			assert.doesNotMatch(err.message, /Update the CLI|unknown|wake test.*failed/);
+			assert.ok(sensitive.every(secret => !err.message.includes(secret)));
+			return true;
+		});
+		assert.deepEqual(h.lines.filter(line => line.startsWith("wake_result=")), ["wake_result=not-saved"]);
+		assert.equal(h.calls.filter(call => call === "wake-test").length, 1);
+		assert.equal(h.calls.at(-1), "wake-test");
+		assert.equal(h.writes.length, 1);
+		assert.equal(h.runs.length, 1);
+		assert.ok(!h.lines.includes("Connector connected. Wake test passed and settings saved."));
+		assert.ok(sensitive.every(secret => !h.lines.join("\n").includes(secret)));
 	});
 }
 

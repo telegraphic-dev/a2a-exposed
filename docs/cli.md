@@ -212,3 +212,8 @@ An expired grant after approval requires `hosted link finish` for fresh approval
 A connector token already saved locally remains on disk; wake settings are not
 saved when the grant expires. A polling refusal requires fresh approval, rather
 than changes to hostname or creation options.
+
+For internal secure-link tests, `wake_result=not-saved` means the test wake was
+delivered but saving settings was not confirmed. Save the settings in Wake
+settings on the website, then test again. The connector token remains on disk;
+the CLI does not retry the test or save automatically.

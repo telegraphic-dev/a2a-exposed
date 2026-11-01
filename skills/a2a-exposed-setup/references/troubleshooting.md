@@ -133,3 +133,8 @@ does not read a signing secret or request connector credentials.
 For internal link wake-test failures, `wake_result=<code>` on stderr gives the
 fixed diagnostic code. The local message gives the next step and confirms saved
 wake settings were not changed. Unknown results call for a CLI update and feedback.
+
+For internal secure-link tests, `wake_result=not-saved` means the test wake was
+delivered but saving settings was not confirmed. Save the settings in Wake
+settings on the website, then test again. The connector token remains on disk;
+the CLI does not retry the test or save automatically.

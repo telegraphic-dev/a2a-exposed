@@ -229,7 +229,11 @@ async function setupLink(o, {
 	if (!connected) throw new CliError("connector did not report connected within 60 seconds; check cloudflared and run finish again for fresh approval");
 	const tested = await request("wake-test", { signing_secret: secret, preset }, grant);
 	if (!tested.response.ok) throw failure(tested.response.status, tested.body, context, "grant");
-	if (tested.body.result !== "ok" || tested.body.saved !== true) {
+	if (tested.body.result === "ok" && tested.body.saved !== true) {
+		write("wake_result=not-saved");
+		throw new CliError("The test wake was delivered, but the settings were not saved. Save them in Wake settings on the website, then test again. The saved connector token remains on disk.");
+	}
+	if (tested.body.result !== "ok") {
 		const { result, message } = wakeFailure(tested.body.result);
 		write(`wake_result=${result}`);
 		throw new CliError(message);
