@@ -528,3 +528,12 @@ test("init readiness: pairing disabled does not report missing password", async 
 	assert.equal(r.status, 0, r.stderr);
 	assert.doesNotMatch(r.stderr, /Approval password:/);
 });
+
+for (const methods of [["oidc"], ["password", "oidc"], ["password"]]) test(`init readiness respects approval methods: ${methods}`, async (t) => {
+	const s = stubEnv(t, { subdomain: "acme" });
+	fs.writeFileSync(s.routes, JSON.stringify({ "https://wdtest.acme.workers.dev/owner/pairing": { status: 200, body: { mode: "human", passwordSet: false, approvalMethods: methods } } }));
+	const r = await s.init();
+	assert.equal(r.status, 0, r.stderr);
+	if (methods.includes("password")) assert.match(r.stderr, /Approval password: not set[^\n]*pair set-password --web/);
+	else assert.doesNotMatch(r.stderr, /Approval password:|pair set-password --web/);
+});

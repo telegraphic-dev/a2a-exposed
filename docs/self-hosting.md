@@ -8,7 +8,7 @@ This page is the self-hosted path: the A2A endpoint in your Cloudflare account, 
 
 The client table is in [Getting started](getting-started.md#clients).
 
-`init` deploys one A2A endpoint. Pass `--hostname` for your own domain, or omit it to serve on `*.workers.dev`.
+`init` deploys one A2A endpoint. Pass `--hostname` for your own domain, or omit it to serve on `*.workers.dev`. Password setup guidance appears only when password approval is enabled; OIDC-only endpoints omit it.
 
 Secrets go in the environment or a chmod-600 file, never on the command line or in chat:
 

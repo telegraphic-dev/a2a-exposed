@@ -617,7 +617,7 @@ async function reportApprovalReadiness(base, ownerToken) {
 		if (!base) throw new Error();
 		const { status, data } = await httpJson(`${base}/owner/pairing`, { headers: { authorization: `Bearer ${ownerToken}` }, timeout: 3000 });
 		if (status !== 200 || typeof data?.passwordSet !== "boolean" || !["human", "agent", "off"].includes(data.mode)) throw new Error();
-		if (data.mode === "off") return;
+		if (data.mode === "off" || (Array.isArray(data.approvalMethods) && !data.approvalMethods.includes("password"))) return;
 		console.error(data.passwordSet ? "Approval password: set."
 			: `Approval password: not set. To approve pairing on /device with a password, run: ${CLI} pair set-password --web`);
 		if (!data.passwordSet) console.error("Send the one-time setup link privately to your human. They set the password themselves; never open the page or ask for the password.");

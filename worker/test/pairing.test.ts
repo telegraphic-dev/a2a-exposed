@@ -994,3 +994,17 @@ test("pairing readiness reaches text wakes without requester text on the trusted
 		if (preset === "openclaw-wake") assert.doesNotMatch(body.text, /Untrusted/);
 	}
 });
+
+for (const [name, config, enabled] of [
+	["OIDC only", { APPROVAL_METHODS: "oidc", APPROVAL_OIDC_ISSUER: "https://idp.example", APPROVAL_OIDC_CLIENT_ID: "client-1", APPROVAL_OIDC_CLIENT_SECRET: "dummy-secret", APPROVAL_OIDC_ALLOWED_SUBJECTS: "owner-1" }, false],
+	["incomplete OIDC fallback", { APPROVAL_METHODS: "oidc", APPROVAL_OIDC_ISSUER: "https://idp.example", APPROVAL_OIDC_CLIENT_ID: "client-1" }, true],
+	["password and OIDC", { APPROVAL_METHODS: "password,oidc", APPROVAL_OIDC_ISSUER: "https://idp.example", APPROVAL_OIDC_CLIENT_ID: "client-1", APPROVAL_OIDC_CLIENT_SECRET: "dummy-secret", APPROVAL_OIDC_ALLOWED_SUBJECTS: "owner-1" }, true],
+] as const) test(`pairing wake readiness respects ${name}`, async (t) => {
+	const s = setup(config); t.after(s.restore);
+	assert.equal((await s.start()).status, 200);
+	const pairing = s.wakes[0].body.pairing;
+	assert.equal(pairing.passwordSet, false);
+	assert.equal(pairing.passwordEnabled, enabled);
+	if (enabled) assert.match(pairing.instructions, /Approval password: not set[\s\S]*pair set-password --web/);
+	else assert.doesNotMatch(pairing.instructions, /Approval password: not set|pair set-password --web/);
+});

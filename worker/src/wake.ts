@@ -24,6 +24,7 @@ export type PairingInfo = {
 	agentCardPrivate?: boolean; // the claimed card is on a private network (Tailnet, LAN): informational, not reachable
 	expiresIn: number;
 	passwordSet?: boolean; // readiness only; never the password or its hash
+	passwordEnabled?: boolean; // effective approval policy, including incomplete-OIDC fallback
 	/** Dashboard page for this agent. Present only when MANAGE_URL is an https URL. */
 	manageUrl?: string;
 	replacesLabel?: string; // re-pairing: the requester proved it holds this active token; approval replaces it
@@ -81,7 +82,7 @@ export function wakePayload(ev: WakeEvent, cli: string): Record<string, unknown>
 
 /** What the woken agent must do with a pairing request: ask its owner, never approve on its own. */
 export function pairingInstructions(p: PairingInfo, cli: string): string {
-	const readiness = p.passwordSet === false
+	const readiness = p.passwordSet === false && p.passwordEnabled !== false
 		? ` Approval password: not set. To approve pairing on /device with a password, run: ${cli} pair set-password --web. Send the one-time setup link privately to your human; they set the password themselves. Never open the page or ask for the password.` : "";
 	const dash = p.manageUrl ? ` The dashboard page for this request is ${p.manageUrl}.` : "";
 	return p.approval === "human"

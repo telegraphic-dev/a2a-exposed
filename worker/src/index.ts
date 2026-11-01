@@ -2445,7 +2445,7 @@ async function deviceAuthorization(req: Request, ctx: TenantContext, ectx: Execu
 		if (!(await wakeBudgetOk(ctx))) return log("wake_skipped", { reason: "hourly cap", kind: "pairing_request" });
 		const identityFingerprint = identity ? await A.fingerprint(identity) : null;
 		await sendWake(ctx, ectx, { contextId: "pairing", taskId: "none", taskIds: [], from: clientName || clientId || "unknown agent", preview: "",
-			kind: "pairing_request", pairing: { passwordSet: !!(await approvalPassword(ctx)), userCode: shown, verificationUriComplete: complete, approval: mode, clientName, clientId, agentCardUrl: cardUrl,
+			kind: "pairing_request", pairing: { passwordSet: !!(await approvalPassword(ctx)), passwordEnabled: O.approvalPolicy(ctx.gates.approvalOidc).password, userCode: shown, verificationUriComplete: complete, approval: mode, clientName, clientId, agentCardUrl: cardUrl,
 				...(cardUrl && P.cardIsPrivate(cardUrl) ? { agentCardPrivate: true } : {}),
 				...(identityFingerprint ? { identityFingerprint } : {}), expiresIn: P.EXPIRES_S,
 				...(manage ? { manageUrl: manage } : {}),
