@@ -106,7 +106,12 @@ An older `link_exists` is ambiguous, so it points to the approval
 page without assuming a different link exists. A refusal never retries
 provisioning, reads a signing secret or requests a connector credential.
 An `expired_token` response or local approval deadline uses fixed local text:
-the link request expired; start a new one with `hosted link create`.
+the link request expired; start a new one with the same create/finish command.
+Grant expiry after approval instead names the grant and requests fresh approval
+with `hosted link finish`. After connector delivery, diagnostics state that the
+local token remains and wake settings were not saved. Polling validation errors
+do not suggest editing creation options. Missing-session errors name the failed
+create/finish command before any network request.
 `cli/test/link-finish.test.mjs` covers these boundaries for create and finish,
 including expiry before approval and local timeout without secret transfer.
 
