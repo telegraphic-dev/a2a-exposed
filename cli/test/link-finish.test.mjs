@@ -604,3 +604,32 @@ for (const command of ["create", "finish"]) {
 		assert.deepEqual(h.writes, []);
 	});
 }
+
+for (const command of ["create", "finish"]) for (const error of ["url", "preset", "header", "key", "unavailable", "unreadable", "conflict", "failed"]) {
+	test(`${command}: passing wake followed by HTTP 409 ${error} reports not-saved`, async () => {
+		const h = harness({ "wake-test": () => Response.json({ error, message: sensitive.join(" ") }, { status: 409 }) });
+		const run = command === "create" ? createLink : finishLink;
+		await assert.rejects(run({ ...o, ...(command === "create" ? plan : {}) }, h.deps), err => {
+			assert.match(err.message, /test wake was delivered.*settings were not saved.*Save them in Wake settings.*test again/);
+			assert.ok(sensitive.every(secret => !err.message.includes(secret)));
+			return true;
+		});
+		assert.deepEqual(h.lines.filter(line => line.startsWith("wake_result=")), ["wake_result=not-saved"]);
+		assert.equal(h.calls.filter(call => call === "wake-test").length, 1);
+		assert.equal(h.calls.at(-1), "wake-test");
+		assert.equal(h.writes.length, 1);
+		assert.equal(h.runs.length, 1);
+		assert.ok(sensitive.every(secret => !h.lines.join("\n").includes(secret)));
+	});
+}
+
+for (const [status, error] of [[409, "future_save_code"], [500, "failed"], [409, "connector_not_connected"]]) {
+	test(`wake HTTP ${status} ${error} is not classified as a confirmed save refusal`, async () => {
+		const h = harness({ "wake-test": () => Response.json({ error, message: sensitive.join(" ") }, { status }) });
+		await assert.rejects(finishLink(o, h.deps), err => {
+			assert.ok(sensitive.every(secret => !err.message.includes(secret)));
+			return true;
+		});
+		assert.deepEqual(h.lines.filter(line => line.startsWith("wake_result=")), []);
+	});
+}
