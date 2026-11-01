@@ -15,8 +15,8 @@ const fail = (msg) => {
 	process.exitCode = 1;
 };
 
-/** Product status badges. Ordinary prose such as "untested settings" does not match. */
-export const STATUS_LABEL = /awaiting (?:staging )?end-to-end|staging end-to-end|mocked tests do not establish|tested end to end|\(untested\)|\(in testing\)|`untested`|`in testing`|\bare untested\b|\bremain untested\b|\buntested on this address\b|\|\s*untested\b/gi;
+/** Product status labels excluded from public documentation. */
+export const STATUS_LABEL = /\bstaging-only\b|awaiting staging (?:verification|testing)|\buntested\b|\(not tested\)|pending verification|\bexperimental\b|\(beta\)|awaiting (?:staging )?end-to-end|staging end-to-end|mocked tests do not establish|tested end to end|\(untested\)|\(in testing\)|`untested`|`in testing`|\bare untested\b|\bremain untested\b|\buntested on this address\b|\|\s*untested\b/gi;
 
 export function statusLabels(text) {
 	return text.match(new RegExp(STATUS_LABEL.source, "gi")) || [];
@@ -131,7 +131,7 @@ for (const rel of sentenceFiles) {
 	const text = read(rel);
 	const hits = rel === "CHANGELOG.md" ? [] : text.match(new RegExp(hosted.source, "g")) || [];
 	if (hits.length) fail(`${rel} addresses the agent with the hosted setup sentence; describe the steps for the reader`);
-	const labels = statusLabels(text);
+	const labels = rel.startsWith("docs/agents/") ? [] : statusLabels(text);
 	if (labels.length) fail(`${rel} has a product status label (${labels[0]})`);
 }
 

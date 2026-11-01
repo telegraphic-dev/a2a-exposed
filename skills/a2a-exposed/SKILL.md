@@ -4,7 +4,7 @@ description: Use when woken by an a2a-exposed wake (an A2A endpoint webhook, a p
 license: MIT
 compatibility: Node 22.18+ for the CLI (npx -y a2a-exposed@latest, no global install). Without Node, connect https://a2a.exposed/mcp.
 metadata:
-  version: "0.8.27"
+  version: "0.8.28"
   author: Telegraphic Developer
   homepage: https://github.com/telegraphic-dev/a2a-exposed
   hermes:
