@@ -25,8 +25,9 @@ a package release does not update that service. User documentation lives in
    Time-sensitive tests must pass in `Europe/Prague` and `UTC`.
 9. Merge only with green CI, `jean-ci` approval of the current head from
    `jean-de-bot`, and zero unresolved review threads.
-10. Update user docs, skill/help text, and changelog together for user-visible
-    changes. Maintainers cut releases; agents do not publish or push tags.
+10. Update user docs and skill/help text together for user-visible changes.
+    Write a clear PR title and add a release label; never edit a changelog.
+    Maintainers cut releases; agents do not publish or push tags.
 
 ## Setup
 
@@ -147,16 +148,19 @@ Maintainers cut releases after merge. Agents prepare changes but never publish
 to npm, push tags, or deploy the hosted service.
 
 Open a release PR that runs `npm run version:set -- <x.y.z>` to update package,
-lockfile, skill, plugin, and Worker versions together. Add the release notes to
-`CHANGELOG.md` and run `node scripts/check-skill-plugin.mjs` to detect drift.
+lockfile, skill, plugin, and Worker versions together. Run
+`node scripts/check-skill-plugin.mjs` to detect drift. GitHub Releases is the
+single source of release notes. Use the PR title and labels described in
+[CONTRIBUTING.md](CONTRIBUTING.md); never edit a changelog.
 Merge the PR into `main`, then a maintainer pushes the matching `vX.Y.Z` tag
 from the merged commit.
 
 A maintainer's `v<version>` tag triggers `publish.yml`, which checks that the
 committed versions match the tag, tests/builds, publishes packages with
-provenance, and
-creates a GitHub release. CLI publishing uses the configured `NPM_TOKEN` secret;
-control-core uses npm trusted publishing. Prereleases use `next`, stable releases
+provenance, and creates a GitHub release with categorized notes from merged PR
+titles and labels using `.github/release.yml`. The `skip-release-notes` label excludes internal
+and staging work from public notes. CLI publishing uses the configured
+`NPM_TOKEN` secret; control-core uses npm trusted publishing. Prereleases use `next`, stable releases
 use `latest`. No credentials are needed to prepare or validate release changes.
 
 ## QA
@@ -247,8 +251,9 @@ and how to load them. Describe what works. Do not add product verification or
 maturity labels, and do not infer support from a mock or a documented API.
 
 For a user-visible command, flag, preset, or output change, update the relevant
-`docs/` page, relevant `SKILL.md` and references, `cli/lib/main.mjs` help, and
-`CHANGELOG.md` in the same PR. Update README when its short intro changes.
+`docs/` page, relevant `SKILL.md` and references, and `cli/lib/main.mjs` help
+in the same PR. Write a clear PR title and add the right release label; never
+edit a changelog. Update README when its short intro changes.
 For new wake presets, follow [CONTRIBUTING.md](CONTRIBUTING.md): implementation,
 CLI preset list, tests, request shape, target docs, and honest end-to-end status.
 Long behavior specifications belong in existing protocol/MCP/wake docs rather

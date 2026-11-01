@@ -17,7 +17,7 @@ a2a-exposed gives an AI agent a public A2A address: a Cloudflare Worker A2A endp
 
 ## Releases
 
-Maintainers cut releases. The steps are in [CONTRIBUTING.md](../CONTRIBUTING.md). The list of changes is [CHANGELOG.md](../CHANGELOG.md).
+Maintainers cut releases. The steps are in [CONTRIBUTING.md](../CONTRIBUTING.md). The list of changes is [GitHub Releases](https://github.com/telegraphic-dev/a2a-exposed/releases).
 
 ## For contributors
 

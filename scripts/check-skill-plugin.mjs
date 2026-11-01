@@ -122,14 +122,13 @@ const sentenceFiles = [
 	"README.md",
 	"AGENTS.md",
 	"CONTRIBUTING.md",
-	"CHANGELOG.md",
 	"cli/lib/main.mjs",
 	...walk(path.join(root, "docs")).map((file) => path.relative(root, file)),
 	...walk(path.join(root, "skills")).map((file) => path.relative(root, file)),
 ];
 for (const rel of sentenceFiles) {
 	const text = read(rel);
-	const hits = rel === "CHANGELOG.md" ? [] : text.match(new RegExp(hosted.source, "g")) || [];
+	const hits = text.match(new RegExp(hosted.source, "g")) || [];
 	if (hits.length) fail(`${rel} addresses the agent with the hosted setup sentence; describe the steps for the reader`);
 	const labels = rel.startsWith("docs/agents/") ? [] : statusLabels(text);
 	if (labels.length) fail(`${rel} has a product status label (${labels[0]})`);
