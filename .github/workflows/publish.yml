@@ -130,7 +130,6 @@ jobs:
 
           **Upgrade an existing deployment:** `a2a-exposed deploy` (re-syncs the Worker template and redeploys; secrets are kept).
 
-          See [CHANGELOG.md](https://github.com/telegraphic-dev/a2a-exposed/blob/main/CHANGELOG.md).
           NOTES
           sed -i "s/@VERSION@/$VERSION/g" "$RUNNER_TEMP/notes.md"
           PRERELEASE=()
