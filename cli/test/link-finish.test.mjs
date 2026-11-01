@@ -416,7 +416,7 @@ for (const command of ["create", "finish"]) {
 		} : { [phase]: expired });
 		h.deps.readSecret = () => assert.fail("must not read secrets after expiry");
 		await assert.rejects((command === "create" ? createLink : finishLink)({ ...o, ...(command === "create" ? plan : {}) }, h.deps), (err) => {
-			assert.equal(err.message, `link ${command} failed${command === "create" ? " for wake.example.com" : ""} (expired_token); The link request expired. Start a new one with hosted link create.`);
+			assert.equal(err.message, `link ${command} failed${command === "create" ? " for wake.example.com" : ""} (expired_token); The link request expired. Start a new one with hosted link ${command}.`);
 			for (const secret of sensitive) assert.ok(!err.message.includes(secret));
 			return true;
 		});
@@ -501,3 +501,40 @@ test("unknown or malformed reason falls back to the known error without echoing 
 		});
 	}
 });
+
+for (const command of ["create", "finish"]) {
+	const run = command === "create" ? createLink : finishLink;
+	const options = { ...o, ...(command === "create" ? plan : {}) };
+	for (const endpoint of ["connector", "status", "wake-test"]) test(`${command} distinguishes grant expiry at ${endpoint} without retrying or losing saved token`, async () => {
+		const h = harness({ [endpoint]: () => Response.json({ error: "expired_token", message: sensitive.join(" ") }, { status: 410 }) });
+		await assert.rejects(run(options, h.deps), (err) => {
+			assert.match(err.message, /approval grant expired.*hosted link finish again.*wake settings were not saved/);
+			assert.doesNotMatch(err.message, /link request expired|hosted link create/);
+			assert.equal(err.message.includes("saved connector token remains on disk"), endpoint !== "connector");
+			return sensitive.every((secret) => !err.message.includes(secret));
+		});
+		assert.equal(h.calls.at(-1), endpoint);
+		assert.equal(h.calls.filter((call) => call === endpoint).length, 1);
+		assert.equal(h.writes.length, endpoint === "connector" ? 0 : 1);
+		if (h.writes.length) assert.equal(h.writes[0][1], sensitive[1]);
+	});
+	test(`${command} polling 400 gives approval recovery without trusting create validation text`, async () => {
+		const h = harness({ token: () => Response.json({ error: "invalid_request", message: "Choose a wake preset.", field: sensitive[0] }, { status: 400 }) });
+		h.deps.readSecret = () => assert.fail("must not read secrets after polling refusal");
+		await assert.rejects(run(options, h.deps), (err) => {
+			assert.match(err.message, new RegExp(`approval polling request was refused.*hosted link ${command} again`));
+			assert.doesNotMatch(err.message, /hostname|preset|link options/);
+			return sensitive.every((secret) => !err.message.includes(secret));
+		});
+		assert.deepEqual(h.calls, ["requests", "token"]);
+		assert.deepEqual(h.writes, []);
+	});
+	test(`${command} missing session names the command and refuses before network or secret access`, async () => {
+		const h = harness();
+		h.deps.sessionToken = (origin, session, operation) => savedLinkSession(origin, { origin: "", token: "" }, operation);
+		h.deps.readSecret = () => assert.fail("must not read secrets without login");
+		await assert.rejects(run(options, h.deps), new RegExp(`login --control-url.*rerun hosted link ${command}`));
+		assert.deepEqual(h.calls, []);
+		assert.deepEqual(h.writes, []);
+	});
+}
