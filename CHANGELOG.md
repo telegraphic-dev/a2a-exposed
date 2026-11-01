@@ -4,8 +4,8 @@ All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.
 
 ## Unreleased
 
-- Hosted link wake-test failures retain recognized diagnostic codes, including `none` and `connection`, while arbitrary server text stays hidden.
-
+- `link finish` keeps recognized wake-test failure codes and never prints server text. Diagnostics include a next step and a stable `wake_result=<code>` line.
+- Expired link requests explain the expiry and how to start a new request using fixed local text.
 - **Internal link refusal reference (#217).** Setup skill and troubleshooting guidance cover pending-request limits, unreadable access keys, provisioning failures and approval recovery for maintainer runs.
 
 ## 0.8.28 - 2026-11-01

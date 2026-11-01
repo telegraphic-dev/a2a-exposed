@@ -84,6 +84,9 @@ Offer hosted up front when the human has no Cloudflare account or no preference;
 Workers.dev registration uses a terminal relay on macOS and Linux. An unexpected
 prompt times out; SIGINT, SIGTERM, and SIGHUP stop its detached terminal job.
 
+In the staging secure-link integration, `expired_token` means the link request
+has expired. Start a new request with `hosted link create`.
+
 ## Internal secure-link refusal recovery
 
 This reference applies to maintainer runs of the internal integration, not a
@@ -109,7 +112,8 @@ A connected tunnel alone does not prove the receiver accepts a wake.
 | Other `provision_failed` | Review the failing phase and cleanup state on the approval page before retrying |
 | `unreadable` | Ask the owner to remove the secure link on the website, then recreate it; reconnecting Cloudflare does not recover the access key |
 | `access_denied` | Request fresh approval only if the owner still wants the link |
-| `expired_token`, `invalid_grant` | Rerun the failed operation for fresh owner approval |
+| `expired_token` | The link request expired. Start a new one with `hosted link create` |
+| `invalid_grant` | Rerun the failed operation for fresh owner approval |
 | `already_delivered` | Request fresh approval if the credentials were not received |
 | `link_not_ready` | Finish creating the link in Wake settings before requesting fresh approval |
 | `connector_not_connected` | Start cloudflared with the saved token file, then request fresh approval |

@@ -414,6 +414,25 @@ test("legacy ambiguous link_exists gives approval-page guidance without guessing
 	assert.deepEqual(h.calls, ["requests", "token"]);
 });
 
+for (const command of ["create", "finish"]) {
+	for (const phase of ["requests", "token", "deadline"]) test(`${command} explains expired link requests at ${phase} with fixed recovery and no secret transfer`, async () => {
+		const expired = () => Response.json({ error: "expired_token", message: sensitive.join(" "), secret: sensitive[0] }, { status: 410 });
+		const h = harness(phase === "deadline" ? {
+			token: () => Response.json({ error: "authorization_pending" }, { status: 428 }),
+		} : { [phase]: expired });
+		h.deps.readSecret = () => assert.fail("must not read secrets after expiry");
+		await assert.rejects((command === "create" ? createLink : finishLink)({ ...o, ...(command === "create" ? plan : {}) }, h.deps), (err) => {
+			assert.equal(err.message, `link ${command} failed${command === "create" ? " for wake.example.com" : ""} (expired_token); The link request expired. Start a new one with hosted link create.`);
+			for (const secret of sensitive) assert.ok(!err.message.includes(secret));
+			return true;
+		});
+		assert.ok(h.calls.every((endpoint) => ["requests", "token"].includes(endpoint)));
+		assert.deepEqual(h.writes, []);
+		assert.deepEqual(h.runs, []);
+		for (const secret of sensitive) assert.ok(!h.lines.join("\n").includes(secret));
+	});
+}
+
 // Response shapes from site a125621 (#415); all diagnostics remain local templates.
 const siteRefusals = [
 	[400, { error: "invalid_request", field: "hostname", reason: "outside_zone", message: "That hostname is not on a domain in your Cloudflare account. Use a hostname under example.net or example.org." }, /\(outside_zone\).*under example\.net or example\.org\./],
@@ -421,7 +440,7 @@ const siteRefusals = [
 	[400, { error: "invalid_request", reason: "apex_hostname", message: "Use a hostname under example.com, such as wake.example.com. The domain itself is not a secure link." }, /\(apex_hostname\).*domain itself/],
 	[429, { error: "slow_down", message: "Too many pending requests for this agent. Deny an earlier request or wait for it to expire, then run create again." }, /\(slow_down\).*Deny an earlier request.*wait for it to expire/],
 	[403, { error: "access_denied" }, /request was denied/],
-	[410, { error: "expired_token" }, /expired.*Run create again for fresh approval/],
+	[410, { error: "expired_token" }, /link request expired.*Start a new one with hosted link create/],
 	[409, { error: "link_not_ready" }, /Finish creating it in Wake settings/],
 	[401, { error: "invalid_grant" }, /grant is not valid.*Run create again and approve/],
 	[409, { error: "already_delivered" }, /already delivered.*fresh approval/],
