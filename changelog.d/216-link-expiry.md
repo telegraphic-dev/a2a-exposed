@@ -1,0 +1,1 @@
+- **Staging link expiry (#216).** Expired link requests explain that the request expired and direct users to start a new one with `hosted link create`. Diagnostics use fixed local text and hide server messages and secrets.

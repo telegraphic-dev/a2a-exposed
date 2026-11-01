@@ -15,11 +15,16 @@ feature work. Merge requires green CI, `jean-ci` approval of the current head
 from `jean-de-bot`, and zero unresolved review threads. Address all failures and
 comments in one pass, validate, push once, then resolve addressed threads.
 
+Each PR adds one unique [changelog fragment](changelog.d/README.md) in
+`changelog.d/<issue-or-slug>.md`. Never edit Unreleased directly. Preview with
+`npm run changelog:preview --silent`.
+
 - **New wake presets:** add the preset to `worker/src/wake.ts` (`PRESETS` and `renderWake`), add a test in `worker/test/wake.test.ts`, list it in the CLI (`cli/lib/deploy.mjs`), and document the request shape in `docs/receiving-messages.md` and the setup skill, with a link to the target's docs. Describe what works with that preset.
 - Never commit secrets, account ids, or hostnames of real deployments.
 - **Releases:** maintainers cut releases; agents do not publish or push tags.
   Follow the complete version and manifest checklist in [AGENTS.md](AGENTS.md#release).
-  Open a PR running `npm run version:set -- <x.y.z>`, merge it into `main`,
+  Open a PR running `npm run version:set -- <x.y.z>`. The command assembles and
+  deletes fragments; review and commit the release notes and deletions. Merge it into `main`,
   then a maintainer pushes the matching `vX.Y.Z` tag from the merged commit.
   The tag workflow checks committed versions, publishes both npm packages, and creates the GitHub release.
 - Infrastructure belongs to the separate Terraform repository. Real self-host QA

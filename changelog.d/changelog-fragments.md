@@ -1,0 +1,1 @@
+- **Changelog contributions.** Each PR adds a separate Markdown fragment in `changelog.d/`. Release preparation assembles the fragments into the dated changelog. `npm run changelog:preview --silent` shows pending entries with released history.

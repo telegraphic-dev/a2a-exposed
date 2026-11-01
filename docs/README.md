@@ -22,3 +22,5 @@ Maintainers cut releases. The steps are in [CONTRIBUTING.md](../CONTRIBUTING.md)
 ## For contributors
 
 Repository layout, tests, and how to add a wake preset are in [CONTRIBUTING.md](../CONTRIBUTING.md) and [AGENTS.md](../AGENTS.md). The `a2a-exposed` CLI package is `cli/`. `@a2a-exposed/control-core` is the repository root. The source entry is `control/src/core/index.ts`. It exports A2A endpoint provisioning, routing helpers, and D1 migrations. The published module is compiled JavaScript and declarations, built by `prepare` on `npm pack` and on a `file:` install. See [control/README.md](../control/README.md).
+
+Pending release notes are available as [changelog fragments](../changelog.d/README.md).

@@ -1,0 +1,1 @@
+- **Wake handling (#182).** Setup saves the owner’s autonomous, review-all or escalate mode in handler prompts. Each handled wake produces a one-line owner notice, and webhook setup keeps a six-hour fallback job.

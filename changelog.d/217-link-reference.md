@@ -1,0 +1,1 @@
+- **Internal link refusal reference (#217).** Setup skill and troubleshooting guidance cover pending-request limits, unreadable access keys, provisioning failures and approval recovery for maintainer runs.

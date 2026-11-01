@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from "node:fs";
+import { planRelease } from "./changelog.mjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -13,6 +14,8 @@ if (process.argv.length !== 3 || (!semver.test(version) || version !== version.t
 	console.error("Usage: npm run version:set -- <x.y.z> (valid SemVer required)");
 	process.exit(1);
 }
+
+const release = planRelease(root, version);
 
 // Prepare all changes before writing; replace only version values to retain formatting.
 const changes = new Map();
@@ -51,4 +54,6 @@ for (const skill of fs.readdirSync(path.join(root, "skills"))) {
 }
 update("worker/src/version.ts", (text) => replace(text, /(export const VERSION = ")[^"]*(")/, "worker/src/version.ts"));
 for (const [file, text] of changes) fs.writeFileSync(file, text);
+fs.writeFileSync(release.file, release.text);
+for (const { file } of release.fragments) fs.unlinkSync(file);
 console.log(`Release version set to ${version}`);

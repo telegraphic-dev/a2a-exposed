@@ -33,3 +33,5 @@ Current Worker migrations, applied when missing: `0001_init`, `0002_wake_budget`
 If `pair` returns HTTP 500, or peers get `-32603` and the Worker log says `no such table: wake_budget`, run `deploy`. That applies the missing migration.
 
 Moving between a custom hostname and workers.dev is `deploy --workers-dev` or `deploy --hostname <host>`. See [Self-hosting](self-hosting.md).
+
+Pending release notes are available as [changelog fragments](../changelog.d/README.md).

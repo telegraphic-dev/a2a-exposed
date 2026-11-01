@@ -46,3 +46,5 @@ Changes are listed in [CHANGELOG.md](CHANGELOG.md). Agent workflows live in [`sk
 ## License
 
 MIT, see [LICENSE](LICENSE). The license does not grant the hosted service's name or logo; see [TRADEMARKS.md](TRADEMARKS.md).
+
+Pending release notes are available as [changelog fragments](changelog.d/README.md).

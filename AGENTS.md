@@ -25,8 +25,8 @@ a package release does not update that service. User documentation lives in
    Time-sensitive tests must pass in `Europe/Prague` and `UTC`.
 9. Merge only with green CI, `jean-ci` approval of the current head from
    `jean-de-bot`, and zero unresolved review threads.
-10. Update user docs, skill/help text, and changelog together for user-visible
-    changes. Maintainers cut releases; agents do not publish or push tags.
+10. Update user docs, skill/help text, and a changelog fragment together for
+    user-visible changes. Maintainers cut releases; agents do not publish or push tags.
 
 ## Setup
 
@@ -147,8 +147,11 @@ Maintainers cut releases after merge. Agents prepare changes but never publish
 to npm, push tags, or deploy the hosted service.
 
 Open a release PR that runs `npm run version:set -- <x.y.z>` to update package,
-lockfile, skill, plugin, and Worker versions together. Add the release notes to
-`CHANGELOG.md` and run `node scripts/check-skill-plugin.mjs` to detect drift.
+lockfile, skill, plugin, and Worker versions together. The command assembles
+`changelog.d/*.md` into a dated `CHANGELOG.md` release and deletes consumed
+fragments. Review and commit the notes and deletions together; see
+[changelog fragments](changelog.d/README.md). Run
+`node scripts/check-skill-plugin.mjs` to detect drift.
 Merge the PR into `main`, then a maintainer pushes the matching `vX.Y.Z` tag
 from the merged commit.
 
@@ -248,7 +251,9 @@ maturity labels, and do not infer support from a mock or a documented API.
 
 For a user-visible command, flag, preset, or output change, update the relevant
 `docs/` page, relevant `SKILL.md` and references, `cli/lib/main.mjs` help, and
-`CHANGELOG.md` in the same PR. Update README when its short intro changes.
+one unique `changelog.d/<issue-or-slug>.md` fragment in the same PR. Never edit
+Unreleased directly; preserve Markdown structure and issue/PR references.
+Update README when its short intro changes.
 For new wake presets, follow [CONTRIBUTING.md](CONTRIBUTING.md): implementation,
 CLI preset list, tests, request shape, target docs, and honest end-to-end status.
 Long behavior specifications belong in existing protocol/MCP/wake docs rather

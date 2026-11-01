@@ -7,6 +7,7 @@
 		"lint": "node scripts/check-repo.mjs lint",
 		"format:check": "node scripts/check-repo.mjs format",
 		"test:checks": "node --test scripts/*.test.mjs",
+		"changelog:preview": "node scripts/changelog.mjs",
 		"version:set": "node scripts/set-version.mjs",
 		"prepare": "node control/scripts/build-core.mjs",
 		"prepack": "node control/scripts/build-core.mjs"

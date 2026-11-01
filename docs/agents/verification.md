@@ -16,7 +16,8 @@ npm run format:check
 npm run test:checks
 ```
 
-The root checks need no npm install. Lint checks JS and Python syntax, JSON,
+The root checks need no npm install. `test:checks` validates changelog fragments,
+the Unreleased preview, and release assembly; it rejects direct Unreleased entries. Lint checks JS and Python syntax, JSON,
 and immutable GitHub Action references. Formatting checks tracked text for
 trailing whitespace, LF endings, and a final newline without imposing an
 indentation style. Check new files too before staging: the tracked-file scan
