@@ -20,6 +20,21 @@ npx -y a2a-exposed@latest wake test
 
 Presets: `grok-bot`, `claude-code`, `openclaw-wake`, `openclaw-agent`, `hermes`, `openbot`, `generic`. The default when none is set is `generic`.
 
+## Handling modes and owner notices
+
+Choose a handling mode and save it in the handler and scheduled job prompts:
+
+- **autonomous:** the agent handles tasks and replies within your authorized scope.
+- **review-all:** the agent drafts replies and sets `input-required` until you approve.
+- **escalate:** the agent replies within scope and asks you about money, credentials or a new commitment.
+
+Pairing, access changes and disclosure of secrets still require explicit approval.
+After every handled wake, the agent writes one line to your channel with the peer,
+task and outcome, without peer text or secrets. Hermes jobs use `--deliver origin`.
+Empty scheduled checks stay quiet. Keep a webhook's fallback job at `every 6h`;
+the [setup example](../skills/a2a-exposed-setup/references/wake.md#hermes-agent-hermes)
+shows the job and webhook subscription together.
+
 ## What a wake contains
 
 Wakes are debounced per peer and conversation (`contextId`). A burst from one peer becomes one wake listing every `taskId`. A wake carries metadata, a hint command, and a preview of peer text of at most 300 characters. The full message is always on the A2A endpoint.
