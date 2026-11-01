@@ -90,7 +90,19 @@ must exactly name the requested hostname, including its example subdomain.
 
 Site refusal codes `apex_hostname`, `outside_zone`, `existing_dns` and
 `existing_tunnel` have distinct local guidance. These codes are supplied by
-site PR #415. An older `link_exists` is ambiguous, so it points to the approval
+site PR #415. For validation failures, a recognized `reason` takes precedence
+over `error`; unknown reasons fall back to a recognized error or HTTP status.
+Outside-zone validation shows only the exact public template with DNS domain
+names, or the no-domain template. Pending-request limits tell the owner to deny
+an earlier request or wait for expiry; token polling still backs off on
+`slow_down`. Provisioning failures distinguish hostname/zone conflicts,
+unfinished cleanup, Cloudflare authorization (401/403), temporary failures
+(429/5xx), and unknown failures. Phase and status select local messages; they
+never expose arbitrary server text. Approval refusal codes each explain their
+recovery. An unreadable secure-link access key requires removing and recreating
+the link, rather than reconnecting Cloudflare.
+
+An older `link_exists` is ambiguous, so it points to the approval
 page without assuming a different link exists. A refusal never retries
 provisioning, reads a signing secret or requests a connector credential.
 An `expired_token` response or local approval deadline uses fixed local text:

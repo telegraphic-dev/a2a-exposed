@@ -86,3 +86,38 @@ prompt times out; SIGINT, SIGTERM, and SIGHUP stop its detached terminal job.
 
 In the staging secure-link integration, `expired_token` means the link request
 has expired. Start a new request with `hosted link create`.
+
+## Internal secure-link refusal recovery
+
+This reference applies to maintainer runs of the internal integration, not a
+public setup option. Follow the scope in [contributor verification](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/agents/verification.md#staging-hosted-link-refusal-contract).
+Recovery that creates or removes resources requires the owner's authorization;
+never perform it automatically or approve on the owner's behalf.
+
+| Refusal | Recovery |
+| --- | --- |
+| `apex_hostname` | Choose a hostname below the domain, such as `wake.example.com` |
+| `outside_zone` | Choose a hostname on a domain in the connected Cloudflare account |
+| `existing_dns`, `existing_tunnel` | Choose another hostname; do not delete existing resources as an automatic fix |
+| `link_exists` | Review the approval page; an older service's refusal does not prove another link exists |
+| `slow_down` when starting a request | Ask the owner to deny an earlier pending request on the website, or wait for expiry before rerunning the failed operation. Token-polling `slow_down` instead increases the polling interval |
+| `provision_failed`, hostname/zone conflict | Choose another hostname on a domain in the connected account |
+| `provision_failed`, cleanup phase | Ask the owner to remove the unfinished link on the website, then recreate it |
+| `provision_failed`, Cloudflare 401/403 | Reconnect Cloudflare on the website before recreating the link |
+| `provision_failed`, Cloudflare 429/5xx | Wait a few minutes before recreating the link |
+| Other `provision_failed` | Review the failing phase and cleanup state on the approval page before retrying |
+| `unreadable` | Ask the owner to remove the secure link on the website, then recreate it; reconnecting Cloudflare does not recover the access key |
+| `access_denied` | Request fresh approval only if the owner still wants the link |
+| `expired_token` | The link request expired. Start a new one with `hosted link create` |
+| `invalid_grant` | Rerun the failed operation for fresh owner approval |
+| `already_delivered` | Request fresh approval if the credentials were not received |
+| `link_not_ready` | Finish creating the link in Wake settings before requesting fresh approval |
+| `connector_not_connected` | Start cloudflared with the saved token file, then request fresh approval |
+| `not_found` | Check the selected agent on the website before requesting fresh approval |
+| `cloudflare_unavailable` | Reconnect Cloudflare in Wake settings before requesting fresh approval |
+| `unavailable` | Retry later with fresh owner approval |
+
+A recognized `reason` takes precedence over `error`. Provisioning phase and
+status select local recovery guidance. Only checked public validation templates
+may be displayed; arbitrary server text and extra fields stay hidden. A refusal
+does not read a signing secret or request connector credentials.

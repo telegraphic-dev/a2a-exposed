@@ -341,7 +341,7 @@ test("finish validates preset before network and uses it for a link without a pr
 });
 
 test("known errors give fixed local recovery and origin status codes remain visible", async () => {
-	for (const [error, message] of Object.entries({ unauthorized: "login", invalid_request: "options", link_exists: "approval page", provision_failed: "cleanup", preset: "--preset", signing_secret: "signing-secret", unreadable: "Reconnect", unavailable: "retry later" })) {
+	for (const [error, message] of Object.entries({ unauthorized: "login", invalid_request: "options", link_exists: "approval page", provision_failed: "cleanup", preset: "--preset", signing_secret: "signing-secret", unreadable: "Remove the secure link", unavailable: "retry later" })) {
 		const h = harness({ requests: () => Response.json({ error, message: sensitive[0] }, { status: 400 }) });
 		await assert.rejects(finishLink(o, h.deps), (err) => err.message.includes(message) && !err.message.includes(sensitive[0]));
 	}
@@ -426,3 +426,78 @@ for (const command of ["create", "finish"]) {
 		for (const secret of sensitive) assert.ok(!h.lines.join("\n").includes(secret));
 	});
 }
+
+// Response shapes from site a125621 (#415); all diagnostics remain local templates.
+const siteRefusals = [
+	[400, { error: "invalid_request", field: "hostname", reason: "outside_zone", message: "That hostname is not on a domain in your Cloudflare account. Use a hostname under example.net or example.org." }, /\(outside_zone\).*under example\.net or example\.org\./],
+	[400, { error: "invalid_request", reason: "outside_zone", message: "That hostname is not on a domain in your Cloudflare account. Add a domain to Cloudflare, then run create again." }, /Add a domain to Cloudflare/],
+	[400, { error: "invalid_request", reason: "apex_hostname", message: "Use a hostname under example.com, such as wake.example.com. The domain itself is not a secure link." }, /\(apex_hostname\).*domain itself/],
+	[429, { error: "slow_down", message: "Too many pending requests for this agent. Deny an earlier request or wait for it to expire, then run create again." }, /\(slow_down\).*Deny an earlier request.*wait for it to expire/],
+	[403, { error: "access_denied" }, /request was denied/],
+	[410, { error: "expired_token" }, /link request expired.*Start a new one with hosted link create/],
+	[409, { error: "link_not_ready" }, /Finish creating it in Wake settings/],
+	[401, { error: "invalid_grant" }, /grant is not valid.*Run create again and approve/],
+	[409, { error: "already_delivered" }, /already delivered.*fresh approval/],
+	[409, { error: "connector_not_connected" }, /Start cloudflared with the saved token file/],
+	[404, { error: "not_found" }, /not found.*Check --agent/],
+	[503, { error: "cloudflare_unavailable" }, /Reconnect Cloudflare in Wake settings/],
+	[409, { error: "unreadable" }, /access key could not be read.*Remove the secure link.*run create again/],
+];
+for (const [status, body, expected] of siteRefusals) {
+	test(`site refusal ${body.reason || body.error} (${status}) gives specific recovery before any secret access`, async () => {
+		const h = harness({ requests: () => Response.json(body, { status }) });
+		h.deps.readSecret = () => assert.fail("must not read the signing secret");
+		await assert.rejects(createLink({ ...o, ...plan, ...(body.reason === "apex_hostname" ? { hostname: "example.com" } : {}) }, h.deps), expected);
+		assert.deepEqual(h.calls, ["requests"]);
+		assert.deepEqual(h.writes, []);
+		assert.deepEqual(h.lines, []);
+	});
+}
+
+for (const [phase, status, expected] of [
+	["tunnel", 401, /Reconnect Cloudflare.*run create again/],
+	["access", 403, /Reconnect Cloudflare.*run create again/],
+	["dns", 429, /Run create again in a few minutes/],
+	["tunnel", 500, /Run create again in a few minutes/],
+	["access", 503, /Run create again in a few minutes/],
+	["unknown", 599, /Run create again in a few minutes/],
+	["cleanup", 403, /Remove the unfinished secure link/],
+	...["hostname", "zone", "existing_dns", "existing_tunnel"].map((phase) => [phase, null, /Choose another hostname/]),
+	["unknown", null, /approval page.*cleanup state/],
+	["unknown", "401", /approval page.*cleanup state/],
+	["unknown", 600, /approval page.*cleanup state/],
+]) test(`site provisioning phase ${phase}, status ${status} maps recovery without trusting message text`, async () => {
+	const h = harness({ token: () => Response.json({ error: "provision_failed", phase, status, message: sensitive.join(" "), cleanup: sensitive[0] }, { status: 502 }) });
+	h.deps.readSecret = () => assert.fail("must not read the signing secret");
+	await assert.rejects(createLink({ ...o, ...plan }, h.deps), (err) => {
+		assert.match(err.message, expected);
+		assert.ok(sensitive.every((secret) => !err.message.includes(secret)));
+		return true;
+	});
+	assert.deepEqual(h.calls, ["requests", "token"]);
+	assert.deepEqual(h.writes, []);
+	assert.deepEqual(h.runs, []);
+});
+
+test("outside-zone template rejects appended secrets, malformed domains and terminal escapes", async () => {
+	const prefix = "That hostname is not on a domain in your Cloudflare account. Use a hostname under ";
+	for (const suffix of ["example.net. " + sensitive[0], "example.net\n\x1b[2J.", "https://example.net.", "example.net or .", "example.net or private-grant."]) {
+		const h = harness({ requests: () => Response.json({ error: "invalid_request", reason: "outside_zone", message: prefix + suffix }, { status: 400 }) });
+		await assert.rejects(createLink({ ...o, ...plan }, h.deps), (err) => {
+			assert.match(err.message, /\(outside_zone\).*Choose a hostname on your domain/);
+			assert.doesNotMatch(err.message, /example\.net|\x1b|private-grant/);
+			return true;
+		});
+	}
+});
+
+test("unknown or malformed reason falls back to the known error without echoing fields", async () => {
+	for (const reason of [sensitive[0], ["outside_zone"], { value: "outside_zone" }, "toString", null]) {
+		const h = harness({ requests: () => Response.json({ reason, error: "access_denied", message: sensitive[1] }, { status: 403 }) });
+		await assert.rejects(finishLink(o, h.deps), (err) => {
+			assert.match(err.message, /\(access_denied\).*request was denied.*Run finish again/);
+			assert.ok(sensitive.every((secret) => !err.message.includes(secret)));
+			return true;
+		});
+	}
+});

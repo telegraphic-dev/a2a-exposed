@@ -106,6 +106,14 @@ Never paste secrets into chat or onto the command line. Ask the user before anyt
 6. **Pairing** — [references/pairing.md](references/pairing.md). `init` checks approval-password readiness; a missing password and pairing wakes point to `pair set-password --web`. Give the one-time setup link privately to the human; never open it or ask for their password. Password setup guidance appears only when password approval is enabled; OIDC-only endpoints omit it.
 7. **Teardown** — [references/teardown.md](references/teardown.md).
 
+For maintainer runs of the internal secure-link integration, use the
+[refusal recovery reference](references/troubleshooting.md#internal-secure-link-refusal-recovery).
+Pending-request limits require the owner to deny an earlier request or wait for
+expiry; an unreadable access key requires owner removal and recreation of the
+link. Never repeat resource creation or remove resources automatically. This
+integration is not a public setup option; its scope is defined in
+[contributor verification](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/agents/verification.md#staging-hosted-link-refusal-contract).
+
 ## When something goes wrong
 
 When a setup step fails, offer the human to report it: an `init` or `deploy` error, a `status` check that fails, a `wake test` that does not pass, a pairing failure, a step the docs get wrong, or a workaround you had to invent. Fix or work around the problem first, using [references/troubleshooting.md](references/troubleshooting.md), then offer the report.

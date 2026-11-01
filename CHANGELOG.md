@@ -5,10 +5,13 @@ All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.
 ## Unreleased
 
 - **Staging link expiry (#216).** Expired link requests explain that the request expired and direct users to start a new one with `hosted link create`. Diagnostics use fixed local text and hide server messages and secrets.
+- **Internal link refusal reference (#217).** Setup skill and troubleshooting guidance cover pending-request limits, unreadable access keys, provisioning failures and approval recovery for maintainer runs.
 
 ## 0.8.28 - 2026-11-01
 
 No new migrations. Self-hosted inboxes need no action beyond `npx -y a2a-exposed@latest deploy`.
+
+- **Staging hosted link recovery (#217).** Recognized refusal reasons take precedence over generic errors. Outside-domain validation names the available domains using a checked public template. Pending-request limits, each approval error, and provisioning phases and statuses give specific recovery guidance. An unreadable access key points to removing and recreating the secure link. Token polling still backs off on `slow_down`; arbitrary server text stays hidden.
 
 - **Approval password readiness (#184).** After deployment, `init` checks the pairing password and points to `pair set-password --web` when missing. Pairing wakes include the same setup guidance until a password exists. OIDC-only endpoints omit password setup guidance. Failed readiness checks point to `pair list --json`; they do not fail a successful deployment. Human approval remains required.
 - **Log redaction (site #376).** `@a2a-exposed/control-core` exports `redact` and `sanitized`. They mask recognized token formats, Bearer and Basic credentials, JWTs, PEM private keys, URL userinfo, and recognized secret-named fields in objects, JSON text, assignments, and URL parameters, including encoded values. `sanitized` also masks recognized secret values in `{ name, value }`, `{ key, value }`, and `[name, value]` pairs. Malformed percent-encoding and unpaired Unicode surrogates do not throw.
