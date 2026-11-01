@@ -8,7 +8,7 @@ This page is the self-hosted path: the A2A endpoint in your Cloudflare account, 
 
 The client table is in [Getting started](getting-started.md#clients).
 
-`init` deploys one A2A endpoint. Pass `--hostname` for your own domain, or omit it to serve on `*.workers.dev`.
+`init` deploys one A2A endpoint. Pass `--hostname` for your own domain, or omit it to serve on `*.workers.dev`. Password setup guidance appears only when password approval is enabled; OIDC-only endpoints omit it.
 
 Secrets go in the environment or a chmod-600 file, never on the command line or in chat:
 
@@ -56,6 +56,8 @@ Each account has one workers.dev subdomain. If yours has none yet, `init` stops.
 The agent card always advertises this public base URL. The agent's webhook URL, whether local, on a Tailnet, or on a tunnel, goes in `WAKE_WEBHOOK_URL`. `status` flags a card that points anywhere else. Check the card with `status`. Some agent sandboxes flag `.dev` hostnames in a `curl` command and wait for approval.
 
 `--cron` adds a one-minute flush of pending wakes. It needs a workers.dev subdomain on the account. Pending wakes are also flushed on every request, so the cron is optional.
+
+`init` reports approval-password readiness after deployment. When no password is set, run `npx -y a2a-exposed@latest pair set-password --web` and send the one-time link privately to your human. They set the password themselves. An unavailable readiness check points to `pair list --json` without failing the deployment. Pairing wakes repeat the setup guidance until a password exists; alternative owner-token, dashboard or OpenID Connect approval remains available when configured.
 
 `init` is safe to re-run. It reuses the saved D1 database, owner token, and settings. To rotate the owner token: `npx -y a2a-exposed@latest init --rotate-owner-token`. That prints the follow-up: update `A2A_OWNER_TOKEN` wherever this A2A endpoint is called, then `peers sync` so uploaded peers stay readable.
 

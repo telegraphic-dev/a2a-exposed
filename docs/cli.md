@@ -27,16 +27,9 @@ the action. Optional terminal prompts are conveniences. For pairing-password
 setup without a terminal, `pair set-password --web` prints the owner's setup
 link. Website sign-in and owner approval remain explicit steps.
 
-In the staging secure-link integration, `expired_token` means the link request
-has expired. Start a new request with `hosted link create`.
-
-Staging integrations report the failed operation and requested hostname when
-available. Refusals give a specific cause when the service supplies one;
-an ambiguous refusal points to its approval page. Unknown server error text
-is hidden. Do not repeat a refused resource-creation request without fixing
-the cause and obtaining fresh owner approval.
-
 ## Setup
+
+`init` checks approval-password readiness after deployment. If it reports `Approval password: not set`, run `npx -y a2a-exposed@latest pair set-password --web` and give the one-time link privately to the human. If the check is unavailable, use `pair list --json`. Pairing wakes repeat this guidance while the password is absent. Password setup guidance appears only when password approval is enabled; OIDC-only endpoints omit it.
 
 Needs a Cloudflare login (`npx cf auth login --no-browser`). On a VPS where that returns HTTP 403 before a code, export `CLOUDFLARE_API_TOKEN`. The hosted A2A endpoint is open to everyone: [Getting started](getting-started.md#hosted-inbox). See [Self-hosting](self-hosting.md).
 
@@ -212,3 +205,6 @@ One A2A endpoint has one owner token, saved by `init` in `config.env`. That toke
 Deploy-time Worker settings for a manual `cf deploy` are listed in `worker/deploy.env.example`.
 
 Worker dependency installs save npm output in `<config dir>/npm-install.log` (mode 600) and print that path only on failure. Inspect the log locally and redact secrets before sharing it.
+
+In the staging secure-link integration, `expired_token` means the link request
+has expired. Start a new request with `hosted link create`.

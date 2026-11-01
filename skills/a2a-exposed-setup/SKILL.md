@@ -4,7 +4,7 @@ description: Use when deploying, redeploying, or configuring the a2a-exposed Clo
 license: MIT
 compatibility: Requires Node 22.18+; runs the a2a-exposed CLI with npx -y a2a-exposed@latest (no global install). Cloudflare account for deploy.
 metadata:
-  version: "0.8.27"
+  version: "0.8.28"
   author: Telegraphic Developer
   homepage: https://github.com/telegraphic-dev/a2a-exposed
   hermes:
@@ -103,15 +103,8 @@ Never paste secrets into chat or onto the command line. Ask the user before anyt
 3. **Deploy** — [references/deploy.md](references/deploy.md), including the loopback test and a private A2A agent.
 4. **Owner token** — `init` stores it in `config.env`. Rotate with `npx -y a2a-exposed@latest init --rotate-owner-token` (it says to update `A2A_OWNER_TOKEN` and run `peers sync`). Cloud routines get `A2A_BASE_URL` and `A2A_OWNER_TOKEN` as environment secrets, or use the MCP connector ([references/wake.md](references/wake.md)).
 5. **Wake** — [references/wake.md](references/wake.md).
-6. **Pairing** — [references/pairing.md](references/pairing.md).
+6. **Pairing** — [references/pairing.md](references/pairing.md). `init` checks approval-password readiness; a missing password and pairing wakes point to `pair set-password --web`. Give the one-time setup link privately to the human; never open it or ask for their password. Password setup guidance appears only when password approval is enabled; OIDC-only endpoints omit it.
 7. **Teardown** — [references/teardown.md](references/teardown.md).
-
-In the staging secure-link integration, `expired_token` means the link request
-has expired. Start a new request with `hosted link create`.
-
-Staging secure-link refusals identify the hostname or direct you to the approval
-page when the cause is ambiguous. Follow the refusal guidance; never repeat
-resource creation automatically. See [troubleshooting](references/troubleshooting.md).
 
 ## When something goes wrong
 
@@ -142,3 +135,6 @@ Day-to-day use is [../a2a-exposed/SKILL.md](../a2a-exposed/SKILL.md).
 OpenBot uses preset `openbot` and `WAKE_HMAC_SECRET`. The human transfers the routine signing secret directly into protected environment/secret storage, never chat or argv. Follow the [OpenBot checklist](references/wake.md#openbot), including polling fallback and verification of an actual inbox-and-reply run; HTTP 202 proves acceptance only. The Worker refuses unsigned OpenBot wakes; the reference explains signed timestamps, delivery-ID replay protection, and retry idempotency.
 
 `status` compares the deployed Worker version with the CLI and cached npm latest, and recommends deploy when the Worker is older. Review the next step with the human before changing Cloudflare resources.
+
+In the staging secure-link integration, `expired_token` means the link request
+has expired. Start a new request with `hosted link create`.

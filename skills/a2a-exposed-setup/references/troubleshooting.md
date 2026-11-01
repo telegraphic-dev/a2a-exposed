@@ -84,15 +84,5 @@ Offer hosted up front when the human has no Cloudflare account or no preference;
 Workers.dev registration uses a terminal relay on macOS and Linux. An unexpected
 prompt times out; SIGINT, SIGTERM, and SIGHUP stop its detached terminal job.
 
-## Staging secure-link refusals
-
 In the staging secure-link integration, `expired_token` means the link request
 has expired. Start a new request with `hosted link create`.
-
-The hosted secure-link integration remains staging-only. An apex refusal means
-the domain itself was supplied: choose a hostname below it. An outside-domain
-refusal requires a hostname on a domain in the connected Cloudflare account.
-Existing DNS and tunnel-route refusals require another hostname; do not remove
-resources as an automatic fix. An ambiguous refusal from an older service
-requires reviewing the approval page. Correct the cause before requesting
-fresh owner approval. Unknown server messages stay hidden to protect secrets.
