@@ -2,6 +2,10 @@
 
 All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.3.x), Worker template, control core, and skills. Versions follow [semver](https://semver.org); a `v*` tag publishes the CLI and `@a2a-exposed/control-core` to npm (see [Releases](docs/README.md#releases)).
 
+## Unreleased
+
+- **Wake handling (#182).** Setup saves the owner’s autonomous, review-all or escalate mode in handler prompts. Each handled wake produces a one-line owner notice, and webhook setup keeps a six-hour fallback job.
+
 ## 0.8.28 - 2026-11-01
 
 No new migrations. Self-hosted inboxes need no action beyond `npx -y a2a-exposed@latest deploy`.
