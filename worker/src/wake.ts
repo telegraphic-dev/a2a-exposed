@@ -23,6 +23,8 @@ export type PairingInfo = {
 	agentCardUrl: string;
 	agentCardPrivate?: boolean; // the claimed card is on a private network (Tailnet, LAN): informational, not reachable
 	expiresIn: number;
+	passwordSet?: boolean; // readiness only; never the password or its hash
+	passwordEnabled?: boolean; // effective approval policy, including incomplete-OIDC fallback
 	/** Dashboard page for this agent. Present only when MANAGE_URL is an https URL. */
 	manageUrl?: string;
 	replacesLabel?: string; // re-pairing: the requester proved it holds this active token; approval replaces it
@@ -80,14 +82,16 @@ export function wakePayload(ev: WakeEvent, cli: string): Record<string, unknown>
 
 /** What the woken agent must do with a pairing request: ask its owner, never approve on its own. */
 export function pairingInstructions(p: PairingInfo, cli: string): string {
+	const readiness = p.passwordSet === false && p.passwordEnabled !== false
+		? ` Approval password: not set. To approve pairing on /device with a password, run: ${cli} pair set-password --web. Send the one-time setup link privately to your human; they set the password themselves. Never open the page or ask for the password.` : "";
 	const dash = p.manageUrl ? ` The dashboard page for this request is ${p.manageUrl}.` : "";
 	return p.approval === "human"
 		? `Ask your human; never approve on your own. Show them the code ${p.userCode} and give them this link: ${p.verificationUriComplete} . ` +
 			`They approve there with their approval password, or with \`${cli} pair approve ${p.userCode}\` (the owner token), after checking the code with the other agent's owner. Deny with \`${cli} pair deny ${p.userCode}\`. Details: \`${cli} pair list\`.` +
-			dash
+			dash + readiness
 		: `Ask your human; never approve on your own. Show them the code ${p.userCode}, who is asking, and the link ${p.verificationUriComplete} . ` +
 			`Only if they say yes, run \`${cli} pair approve ${p.userCode}\`; if they say no (or don't answer), \`${cli} pair deny ${p.userCode}\`.` +
-			dash;
+			dash + readiness;
 }
 
 function hintFor(ev: WakeEvent, cli: string): string {
