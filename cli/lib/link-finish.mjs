@@ -18,10 +18,18 @@ const ERRORS = {
 	provision_failed: "Check the approval page for the failing provisioning phase and cleanup state before running the command again.",
 	preset: "Select a valid wake preset with --preset <id>, then run finish again.",
 	signing_secret: "Check the local signing-secret source and receiver configuration before running the command again.",
-	unreadable: "Reconnect Cloudflare on the website, then run finish again.",
+	unreadable: "The secure link access key could not be read. Remove the secure link on the website, then run create again.",
+	slow_down: "Too many pending requests for this agent. Deny an earlier request on the website or wait for it to expire, then run finish again.",
+	access_denied: "The request was denied. Run finish again only if you still want to set up this link.",
+	expired_token: "This request or grant expired. Run finish again for fresh approval.",
+	link_not_ready: "The secure link is not ready. Finish creating it in Wake settings on the website, then run finish again.",
+	invalid_grant: "This grant is not valid. Run finish again and approve a new request.",
+	already_delivered: "Credentials were already delivered for this request. Run finish again for fresh approval if you did not receive them.",
+	connector_not_connected: "The connector is not connected. Start cloudflared with the saved token file, then run finish again for fresh approval.",
+	not_found: "That agent or request was not found. Check --agent on the website, then run finish again.",
+	cloudflare_unavailable: "Cloudflare could not be reached. Reconnect Cloudflare in Wake settings on the website, then run finish again.",
 	unavailable: "The service is temporarily unavailable; retry later with fresh approval.",
 };
-const APPROVAL_ERRORS = new Set(["access_denied", "expired_token", "link_not_ready", "invalid_grant", "already_delivered", "connector_not_connected", "not_found", "cloudflare_unavailable"]);
 
 // Only these public validation templates may cross the server-text boundary.
 // Never echo arbitrary bodies, fetch errors, child output, or credential-bearing fields.
@@ -34,17 +42,37 @@ const VALIDATION_MESSAGES = new Set([
 	"Use an http or https origin with no path or credentials.",
 	"Use a path beginning with /, with no query or fragment.",
 ]);
+const DOMAIN = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 function validationDetail(body, hostname) {
 	if (typeof body?.message !== "string") return "";
 	if (VALIDATION_MESSAGES.has(body.message)) return body.message.replace(/ and try again\.$/, ".");
+	if (body.reason === "outside_zone" || body.error === "outside_zone") {
+		const prefix = "That hostname is not on a domain in your Cloudflare account. ";
+		if (body.message === prefix + "Add a domain to Cloudflare, then run create again.") return body.message;
+		const match = body.message.match(/^That hostname is not on a domain in your Cloudflare account\. Use a hostname under (.+)\.$/);
+		if (match && match[1].split(" or ").every((domain) => DOMAIN.test(domain))) return body.message;
+	}
 	const apex = `Use a hostname under ${hostname}, such as wake.${hostname}. The domain itself is not a secure link.`;
 	return hostname && body.message === apex ? apex : "";
 }
 
+function provisionGuidance(body) {
+	if (body.phase === "cleanup") return "Remove the unfinished secure link on the website, then run create again.";
+	if (["hostname", "zone", "existing_dns", "existing_tunnel"].includes(body.phase))
+		return "Choose another hostname on a domain in your Cloudflare account, then run create again.";
+	if (body.status === 401 || body.status === 403)
+		return "Cloudflare refused access. Reconnect Cloudflare on the website, then run create again.";
+	if (body.status === 429 || (Number.isInteger(body.status) && body.status >= 500 && body.status <= 599))
+		return "Cloudflare was busy. Run create again in a few minutes.";
+	return ERRORS.provision_failed;
+}
+
 function failure(status, body, { command, hostname }) {
-	const code = Object.hasOwn(ERRORS, body?.error) || APPROVAL_ERRORS.has(body?.error) ? body.error : `HTTP ${status}`;
-	const detail = ["invalid_request", "apex_hostname"].includes(code) ? validationDetail(body, hostname) : "";
-	const message = detail || (Object.hasOwn(ERRORS, code) ? ERRORS[code].replace(/run finish/g, `run ${command}`) : "check the link on the website and rerun the command for fresh approval");
+	const known = (value) => typeof value === "string" && Object.hasOwn(ERRORS, value);
+	const code = known(body?.reason) ? body.reason : known(body?.error) ? body.error : `HTTP ${status}`;
+	const detail = ["invalid_request", "apex_hostname", "outside_zone"].includes(code) ? validationDetail(body, hostname) : "";
+	const guidance = code === "provision_failed" ? provisionGuidance(body) : Object.hasOwn(ERRORS, code) ? ERRORS[code] : "check the link on the website and rerun the command for fresh approval";
+	const message = detail || guidance.replace(/run finish/gi, (match) => `${match.startsWith("R") ? "Run" : "run"} ${command}`);
 	return new CliError(`link ${command} failed${hostname ? ` for ${hostname}` : ""} (${code}); ${message}`);
 }
 
