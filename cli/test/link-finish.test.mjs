@@ -341,7 +341,7 @@ test("finish validates preset before network and uses it for a link without a pr
 });
 
 test("known errors give fixed local recovery and origin status codes remain visible", async () => {
-	for (const [error, message] of Object.entries({ unauthorized: "login", invalid_request: "options", link_exists: "different link", provision_failed: "cleanup", preset: "--preset", signing_secret: "signing-secret", unreadable: "Reconnect", unavailable: "retry later" })) {
+	for (const [error, message] of Object.entries({ unauthorized: "login", invalid_request: "options", link_exists: "approval page", provision_failed: "cleanup", preset: "--preset", signing_secret: "signing-secret", unreadable: "Reconnect", unavailable: "retry later" })) {
 		const h = harness({ requests: () => Response.json({ error, message: sensitive[0] }, { status: 400 }) });
 		await assert.rejects(finishLink(o, h.deps), (err) => err.message.includes(message) && !err.message.includes(sensitive[0]));
 	}
@@ -349,4 +349,61 @@ test("known errors give fixed local recovery and origin status codes remain visi
 		const h = harness({ "wake-test": () => Response.json({ result, saved: false }) });
 		await assert.rejects(finishLink(o, h.deps), new RegExp(result));
 	}
+});
+
+
+test("create shows the public server apex guidance and requested hostname without requesting approval", async () => {
+	const hostname = "example.com";
+	const message = `Use a hostname under ${hostname}, such as wake.${hostname}. The domain itself is not a secure link.`;
+	const h = harness({ requests: () => Response.json({ error: "invalid_request", message }, { status: 400 }) });
+	h.deps.readSecret = () => assert.fail("must not read secrets on refusal");
+	await assert.rejects(createLink({ ...o, ...plan, hostname }, h.deps), (err) => {
+		assert.match(err.message, /^link create failed for example\.com \(invalid_request\)/);
+		assert.ok(err.message.includes(message));
+		assert.doesNotMatch(err.message, /setup|try again|run finish/);
+		return true;
+	});
+	assert.deepEqual(h.calls, ["requests"]);
+	assert.deepEqual(h.lines, []);
+});
+
+for (const [code, cause] of Object.entries({ apex_hostname: "domain itself", outside_zone: "not on a domain", existing_dns: "DNS record", existing_tunnel: "another tunnel" })) {
+	for (const command of ["create", "finish"]) test(`${command} explains ${code} without leaking server text or transferring secrets`, async () => {
+		const h = harness({ token: () => Response.json({ error: code, message: sensitive.join(" "), phase: sensitive[0] }, { status: 409 }) });
+		h.deps.readSecret = () => assert.fail("must not read secrets on refusal");
+		await assert.rejects((command === "create" ? createLink : finishLink)({ ...o, ...(command === "create" ? plan : {}) }, h.deps), (err) => {
+			assert.ok(err.message.includes(code));
+			assert.ok(err.message.includes(cause));
+			assert.ok(err.message.startsWith(`link ${command} failed`));
+			assert.doesNotMatch(err.message, /different link|try again|retry/);
+			for (const secret of sensitive) assert.ok(!err.message.includes(secret));
+			return true;
+		});
+		assert.deepEqual(h.calls, ["requests", "token"]);
+		assert.deepEqual(h.writes, []);
+		assert.deepEqual(h.runs, []);
+	});
+}
+
+test("create refuses arbitrary validation text, terminal escapes, foreign apex domains and appended secrets", async () => {
+	const apex = "Use a hostname under example.com, such as wake.example.com. The domain itself is not a secure link.";
+	for (const message of [sensitive.join(" "), apex + sensitive[0], apex + "\n\x1b[2J", apex.replaceAll("example.com", "other.example"), { text: apex }]) {
+		const h = harness({ requests: () => Response.json({ error: "invalid_request", message }, { status: 400 }) });
+		await assert.rejects(createLink({ ...o, ...plan, hostname: "example.com" }, h.deps), (err) => {
+			assert.match(err.message, /link create failed for example\.com/);
+			assert.doesNotMatch(err.message, /other\.example|\x1b|domain itself/);
+			return sensitive.every((secret) => !err.message.includes(secret));
+		});
+		assert.deepEqual(h.calls, ["requests"]);
+	}
+});
+
+test("legacy ambiguous link_exists gives approval-page guidance without guessing its cause", async () => {
+	const h = harness({ token: () => Response.json({ error: "link_exists", message: "A DNS record exists, then try again." }, { status: 409 }) });
+	await assert.rejects(createLink({ ...o, ...plan }, h.deps), (err) => {
+		assert.match(err.message, /approval page/);
+		assert.doesNotMatch(err.message, /different link|try again|retry/);
+		return true;
+	});
+	assert.deepEqual(h.calls, ["requests", "token"]);
 });

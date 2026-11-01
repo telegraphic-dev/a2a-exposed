@@ -467,7 +467,7 @@ export async function main(argv) {
 			throw new CliError(`unknown peer action ${sub} (announce|forward)`);
 		}
 		case "hosted": {
-			if (p.length !== 2 || p[0] !== "link" || !["finish", "create"].includes(p[1])) throw new CliError("usage: hosted link create|finish --agent NAME (--secret-file FILE | --secret-env VAR | --secret-from hermes)");
+			if (p.length !== 2 || p[0] !== "link" || !["finish", "create"].includes(p[1])) throw new CliError("usage: hosted link create --agent NAME --hostname HOST --origin URL --path PATH --preset ID (--secret-file FILE | --secret-env VAR | --secret-from hermes); or hosted link finish --agent NAME (--secret-file FILE | --secret-env VAR | --secret-from hermes)");
 			return (p[1] === "create" ? createLink : finishLink)({ ...o, "control-url": o["control-url"] || C.get("CONTROL_URL") });
 		}
 		case "signup":

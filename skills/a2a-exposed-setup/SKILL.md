@@ -106,6 +106,10 @@ Never paste secrets into chat or onto the command line. Ask the user before anyt
 6. **Pairing** — [references/pairing.md](references/pairing.md).
 7. **Teardown** — [references/teardown.md](references/teardown.md).
 
+Staging secure-link refusals identify the hostname or direct you to the approval
+page when the cause is ambiguous. Follow the refusal guidance; never repeat
+resource creation automatically. See [troubleshooting](references/troubleshooting.md).
+
 ## When something goes wrong
 
 When a setup step fails, offer the human to report it: an `init` or `deploy` error, a `status` check that fails, a `wake test` that does not pass, a pairing failure, a step the docs get wrong, or a workaround you had to invent. Fix or work around the problem first, using [references/troubleshooting.md](references/troubleshooting.md), then offer the report.
