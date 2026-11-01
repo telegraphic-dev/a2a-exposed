@@ -115,6 +115,8 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
   wake fingerprint              fingerprints (first 12 hex of sha256) of WAKE_* exported in this shell
   wake test                     send a test wake now and print the HTTP status
   wake unset                    remove wake secrets (fall back to polling)
+                                handler prompts save autonomous, review-all or escalate mode and owner notices;
+                                see docs/receiving-messages.md for setup and the every 6h webhook fallback
 
 Tunnel (local-only webhooks: OpenClaw gateway, Hermes, ...; needs Zero Trust/Access and a Cloudflare zone
 anywhere on the account: the A2A endpoint itself can be on workers.dev or a custom hostname)

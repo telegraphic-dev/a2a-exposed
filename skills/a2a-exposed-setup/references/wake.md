@@ -1,5 +1,15 @@
 # Wake: pick the agent
 
+Before saving any handler, routine or polling job below, ask the owner to choose
+`autonomous`, `review-all` or `escalate` as defined in the
+[operate skill](../../a2a-exposed/SKILL.md#on-a-wake-or-a-scheduled-check).
+Save `Handling mode: <chosen-mode>` in each prompt, including the fallback job.
+Add: "Follow the saved handling mode. After every handled wake, write one line
+to the owner channel with peer, task and outcome; omit peer text and secrets.
+Empty scheduled checks stay quiet." Configure owner delivery (Hermes:
+`--deliver origin`) so notices reach the human. These instructions apply to
+each example prompt below.
+
 `wake set` saves the preset (and related flags), uploads any wake secrets currently in the environment, and **redeploys in one step** — there is no separate redeploy after it.
 
 ```bash
@@ -92,9 +102,11 @@ Source: https://hermes-agent.nousresearch.com/docs/user-guide/messaging/webhooks
 1. Enable the webhook platform with `hermes gateway setup`, or set `WEBHOOK_ENABLED=true` in `~/.hermes/.env`. It listens on port 8644 by default.
 2. **Reachability:** Hermes is usually self-hosted on port 8644, so `/webhooks/<name>` must be reachable from Cloudflare. Use the **secure tunnel** below (`--tunnel-path /webhooks/<name>`), another HTTPS reverse proxy, or polling.
 3. **Toolset caveat.** Webhook-triggered runs default to a restricted toolset (web/vision/clarify, **no terminal**), so a plain prompt subscription cannot run the CLI. The recommended fix is to route the event into a **cron job**, whose own skills and tools apply:
-   - Create the cron job `a2a-inbox` with the Hermes command under **polling** below, using a long fallback schedule (`"every 6h"`).
-   - Subscribe the webhook to it:
+   - Ask the owner for a handling mode (`autonomous`, `review-all` or `escalate`) and save it in the job prompt. Replace `<chosen-mode>` below with that choice. Create the fallback job and subscribe the webhook together:
      ```bash
+     hermes cron create "every 6h" \
+       "Use the a2a-exposed skill. Handling mode: <chosen-mode>. Run 'npx -y a2a-exposed@latest inbox'; handle tasks and pairing requests under the skill's approval rules. After every handled wake, write one line to the owner with peer, task and outcome, without peer text or secrets. If there are no tasks or pairing requests, respond only [SILENT]." \
+       --skill a2a-exposed --name a2a-inbox --deliver origin
      hermes webhook subscribe a2a-wake --events a2a_wake --cron-job a2a-inbox \
        --prompt "A2A wake: {kind} from {from}, context {contextId}. Run: {hint}"
      ```
@@ -152,7 +164,7 @@ The A2A endpoint stays as it is, and its URL and peers don't change. On the exis
 1. Set up the agent side: the Hermes webhook subscription or the OpenClaw hooks token, as described above. Export its secret: `WAKE_HMAC_SECRET` for Hermes, `WAKE_WEBHOOK_KEY` for OpenClaw.
 2. Run `npx -y a2a-exposed@latest tunnel create` (Hermes: add `--tunnel-path /webhooks/<name>`; several zones: add `--tunnel-zone <zone>`). The A2A endpoint needs no redeploy: `tunnel create` uploads the Worker secrets directly, and they apply within about 15 to 40 seconds. Wait about 30 seconds, then run `status`.
 3. Start `cloudflared`, then run `npx -y a2a-exposed@latest status` and `npx -y a2a-exposed@latest wake test`.
-4. Keep the polling job as a slow fallback (Hermes: `hermes cron edit a2a-inbox --schedule "every 6h"`; the webhook subscription can fire that same job with `--cron-job a2a-inbox`), or remove it (`hermes cron remove a2a-inbox`; OpenClaw: `openclaw cron list`, then `openclaw cron remove <job-id>`).
+4. Keep the polling job as a slow fallback (Hermes: `hermes cron edit a2a-inbox --schedule "every 6h"`; the webhook subscription can fire that same job with `--cron-job a2a-inbox`), with owner notices enabled. Do not remove the fallback when enabling the webhook.
 
 ### Agents without inbound webhooks: polling
 Webhooks wake your agent. Without one, it polls, guided by next-check hints. Use this when the client has no inbound webhook. Clients and how to load them are in the [compatibility table](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#clients). The same schedule covers a local-only webhook (Hermes, OpenClaw) when the account has no zone or the user skips the tunnel.
