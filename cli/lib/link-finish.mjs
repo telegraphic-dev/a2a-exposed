@@ -31,6 +31,34 @@ const ERRORS = {
 	unavailable: "The service is temporarily unavailable; retry later with fresh approval.",
 };
 
+// Fixed local guidance only: wake results must never expose server text.
+const WAKE_NEXT_STEPS = {
+	none: "Update the hosted Worker, then run finish again for fresh approval.",
+	"dns-missing": "Wait for DNS propagation, then run finish again for fresh approval.",
+	"access-401": "Check the signing secret and Access service-token pair, then run finish again for fresh approval.",
+	"access-403": "Check the signing secret and Access service-token pair, then run finish again for fresh approval.",
+	timeout: "Retry later by running finish again for fresh approval.",
+	"origin-429": "Retry later by running finish again for fresh approval.",
+	"origin-5xx": "Retry later by running finish again for fresh approval.",
+	"origin-NNN": "Check the receiver's HTTP response, then run finish again for fresh approval.",
+	tls: "Fix the receiver's TLS certificate, then run finish again for fresh approval.",
+	private: "Use a public HTTPS wake URL, then run finish again for fresh approval.",
+	dns: "Check the wake hostname's DNS records, then run finish again for fresh approval.",
+	connection: "Check that the receiver is reachable, then run finish again for fresh approval.",
+	unreadable: "Remove the secure link on the website, then run create again.",
+	failed: "Check the receiver configuration, then run finish again for fresh approval.",
+	unknown: "Update the CLI (npx a2a-exposed@latest) and send feedback.",
+};
+
+function wakeFailure(raw) {
+	const value = typeof raw === "string" ? raw : "";
+	const normalized = /^[1-5]\d{2}$/.test(value) ? `origin-${value}` : value;
+	const result = Object.hasOwn(WAKE_NEXT_STEPS, normalized) && !["origin-5xx", "origin-NNN"].includes(normalized)
+		? normalized : /^origin-\d{3}$/.test(normalized) ? normalized : "unknown";
+	const guidance = WAKE_NEXT_STEPS[result] ?? WAKE_NEXT_STEPS[/^origin-5\d{2}$/.test(result) ? "origin-5xx" : "origin-NNN"];
+	return { result, message: `wake test of the new secure link failed (${result}); saved wake settings were not changed. ${guidance}` };
+}
+
 // Only these public validation templates may cross the server-text boundary.
 // Never echo arbitrary bodies, fetch errors, child output, or credential-bearing fields.
 const VALIDATION_MESSAGES = new Set([
@@ -198,9 +226,11 @@ async function setupLink(o, {
 	const tested = await request("wake-test", { signing_secret: secret, preset }, grant);
 	if (!tested.response.ok) throw failure(tested.response.status, tested.body, context);
 	if (tested.body.result !== "ok" || tested.body.saved !== true) {
-		const result = (["none", "dns-missing", "access-401", "access-403", "timeout", "tls", "private", "dns", "connection", "unreadable", "failed"].includes(tested.body.result) || /^origin-\d{3}$/.test(tested.body.result)) ? tested.body.result : "unknown";
-		throw new CliError(`wake test did not save settings (${result}); fix the receiver and run finish again for fresh approval`);
+		const { result, message } = wakeFailure(tested.body.result);
+		write(`wake_result=${result}`);
+		throw new CliError(message);
 	}
+	write("wake_result=ok");
 	write("Connector connected. Wake test passed and settings saved.");
 	return { saved: true, connectorStarted: true };
 }

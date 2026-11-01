@@ -110,9 +110,9 @@ For maintainer runs of the internal secure-link integration, use the
 [refusal recovery reference](references/troubleshooting.md#internal-secure-link-refusal-recovery).
 Pending-request limits require the owner to deny an earlier request or wait for
 expiry; an unreadable access key requires owner removal and recreation of the
-link. Wake failures retain fixed diagnostic codes; an unknown result displays
-`unknown` without server text. Never repeat resource creation or remove resources automatically. This
-integration is not a public setup option; its scope is defined in
+link. Wake failures emit `wake_result=<code>` on stderr and give a next step; saved
+wake settings remain unchanged. Unknown results display `unknown` without server text and call for a CLI update and feedback. Never repeat resource creation or remove resources automatically.
+This integration is not a public setup option; its scope is defined in
 [contributor verification](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/agents/verification.md#staging-hosted-link-refusal-contract).
 
 ## When something goes wrong

@@ -125,3 +125,7 @@ A recognized `reason` takes precedence over `error`. Provisioning phase and
 status select local recovery guidance. Only checked public validation templates
 may be displayed; arbitrary server text and extra fields stay hidden. A refusal
 does not read a signing secret or request connector credentials.
+
+For internal link wake-test failures, `wake_result=<code>` on stderr gives the
+fixed diagnostic code. The local message gives the next step and confirms saved
+wake settings were not changed. Unknown results call for a CLI update and feedback.

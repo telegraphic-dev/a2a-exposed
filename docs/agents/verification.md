@@ -146,5 +146,9 @@ The validator warns about that file when run against the whole checkout, so CI
 validates the plugin payload separately without weakening strict validation.
 
 Internal hosted link wake-test diagnostics preserve the fixed site codes (`none`,
-`tls`, `private`, `dns`, `connection`, `unreadable`, `failed`) as well as HTTP,
-Access, DNS-missing and timeout codes. Unknown values stay hidden as `unknown`.
+`dns-missing`, `access-401`, `access-403`, `timeout`, `tls`, `private`,
+`connection`, `failed`) and `origin-NNN` HTTP codes. Raw numeric HTTP results
+such as `301` normalize to `origin-301`. Unknown values stay hidden as `unknown`.
+Each failure states that the new secure link was tested, that saved wake settings
+were not changed, and gives a next step. Stderr includes `wake_result=<code>`
+(`ok` on success).
