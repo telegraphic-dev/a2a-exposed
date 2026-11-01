@@ -4,6 +4,8 @@ All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.
 
 ## Unreleased
 
+- **Staging hosted link recovery (#217).** Recognized refusal reasons take precedence over generic errors. Outside-domain validation names the available domains using a checked public template. Pending-request limits, each approval error, and provisioning phases and statuses give specific recovery guidance. An unreadable access key points to removing and recreating the secure link. Token polling still backs off on `slow_down`; arbitrary server text stays hidden.
+
 - **Approval password readiness (#184).** After deployment, `init` checks the pairing password and points to `pair set-password --web` when missing. Pairing wakes include the same setup guidance until a password exists. OIDC-only endpoints omit password setup guidance. Failed readiness checks point to `pair list --json`; they do not fail a successful deployment. Human approval remains required.
 - **Staging hosted link refusals (#213).** Create failures name the requested hostname and show recognized public validation guidance, including the zone-apex explanation. Create and finish distinguish apex, outside-domain, existing DNS and existing tunnel refusals without suggesting a blind retry. Unrecognized server text stays hidden, and older ambiguous `link_exists` replies point to the approval page. Hosted link integration remains staging-only.
 
