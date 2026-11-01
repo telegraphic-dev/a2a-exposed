@@ -9,21 +9,43 @@ import { readSigningSecret, validateSecretSource, writeTokenFile, startConnector
 const sleepDefault = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const ERRORS = {
 	unauthorized: "Run a2a-exposed login, then run finish again.",
-	invalid_request: "Check the agent name and link options, then run setup again.",
-	link_exists: "A different link already exists; review it on the website before retrying.",
-	provision_failed: "Check the approval page for the failing provisioning phase and cleanup state before retrying.",
+	invalid_request: "Check the agent name, hostname and link options before running the command again.",
+	link_exists: "The link request was refused; review the approval page before changing or removing an existing link.",
+	apex_hostname: "The domain itself cannot be a secure link. Choose a hostname below it, such as wake.example.com, then run create again.",
+	outside_zone: "The hostname is not on a domain in your Cloudflare account. Choose a hostname on your domain, then run create again.",
+	existing_dns: "The hostname already has a DNS record. Choose another hostname, then run create again.",
+	existing_tunnel: "The hostname is already routed through another tunnel. Choose another hostname, then run create again.",
+	provision_failed: "Check the approval page for the failing provisioning phase and cleanup state before running the command again.",
 	preset: "Select a valid wake preset with --preset <id>, then run finish again.",
-	signing_secret: "Check the local signing-secret source and receiver configuration before retrying.",
+	signing_secret: "Check the local signing-secret source and receiver configuration before running the command again.",
 	unreadable: "Reconnect Cloudflare on the website, then run finish again.",
 	unavailable: "The service is temporarily unavailable; retry later with fresh approval.",
 };
 const APPROVAL_ERRORS = new Set(["access_denied", "expired_token", "link_not_ready", "invalid_grant", "already_delivered", "connector_not_connected", "not_found", "cloudflare_unavailable"]);
 
-// Deliberately never echo server text, bodies, fetch errors, or child output.
-function failure(status, body) {
+// Only these public validation templates may cross the server-text boundary.
+// Never echo arbitrary bodies, fetch errors, child output, or credential-bearing fields.
+const VALIDATION_MESSAGES = new Set([
+	"Choose a wake preset.", "Choose a wake preset and try again.",
+	"Use a hostname on the selected domain.",
+	"Use a full hostname such as wake.example.com.",
+	"Remove the scheme (https://), port and path. Use a full hostname such as wake.example.com.",
+	"Enter the local origin URL, such as http://127.0.0.1:8644.",
+	"Use an http or https origin with no path or credentials.",
+	"Use a path beginning with /, with no query or fragment.",
+]);
+function validationDetail(body, hostname) {
+	if (typeof body?.message !== "string") return "";
+	if (VALIDATION_MESSAGES.has(body.message)) return body.message.replace(/ and try again\.$/, ".");
+	const apex = `Use a hostname under ${hostname}, such as wake.${hostname}. The domain itself is not a secure link.`;
+	return hostname && body.message === apex ? apex : "";
+}
+
+function failure(status, body, { command, hostname }) {
 	const code = Object.hasOwn(ERRORS, body?.error) || APPROVAL_ERRORS.has(body?.error) ? body.error : `HTTP ${status}`;
-	const message = Object.hasOwn(ERRORS, code) ? ERRORS[code] : "check the link on the website and rerun the command for fresh approval";
-	return new CliError(`link setup failed (${code}); ${message}`);
+	const detail = ["invalid_request", "apex_hostname"].includes(code) ? validationDetail(body, hostname) : "";
+	const message = detail || (Object.hasOwn(ERRORS, code) ? ERRORS[code].replace(/run finish/g, `run ${command}`) : "check the link on the website and rerun the command for fresh approval");
+	return new CliError(`link ${command} failed${hostname ? ` for ${hostname}` : ""} (${code}); ${message}`);
 }
 
 export function savedLinkSession(origin, session = C.controlSession()) {
@@ -72,6 +94,7 @@ async function setupLink(o, {
 	sessionToken = savedLinkSession,
 } = {}, create) {
 	validateSecretSource(o);
+	const context = { command: create ? "create" : "finish", hostname: create?.hostname };
 	const agent = o.agent;
 	if (typeof agent !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$/.test(agent)) throw new CliError("--agent must be an agent name (letters, digits, underscores or hyphens)");
 	if (o.preset !== undefined && (typeof o.preset !== "string" || !/^[a-z][a-z0-9-]{0,63}$/.test(o.preset))) throw new CliError("--preset must be a wake preset id");
@@ -91,12 +114,12 @@ async function setupLink(o, {
 			const parsed = JSON.parse(text);
 			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
 			return { response, body: parsed };
-		} catch { throw new CliError("link finish request failed; check the connection and run finish again for fresh approval"); }
+		} catch { throw new CliError(`link ${context.command} request failed; check the connection and run ${context.command} again for fresh approval`); }
 	};
 	const verifier = crypto.randomBytes(32).toString("base64url");
 	const challenge = crypto.createHash("sha256").update(verifier).digest("base64url");
 	const started = await request("requests", { agent, challenge, ...(create ? { create } : {}) });
-	if (started.response.status !== 201) throw failure(started.response.status, started.body);
+	if (started.response.status !== 201) throw failure(started.response.status, started.body, context);
 	const setup = started.body;
 	let approval;
 	try { approval = new URL(setup.approve_url); } catch { throw new CliError("invalid approval response"); }
@@ -111,10 +134,10 @@ async function setupLink(o, {
 		const token = await request("token", { request_id: setup.request_id, verifier });
 		if (token.response.status === 428 && token.body.error === "authorization_pending") continue;
 		if (token.response.status === 429 && token.body.error === "slow_down") { interval += 5; continue; }
-		if (!token.response.ok) throw failure(token.response.status, token.body);
+		if (!token.response.ok) throw failure(token.response.status, token.body, context);
 		authorized = token.body; break;
 	}
-	if (!authorized) throw failure(410, { error: "expired_token" });
+	if (!authorized) throw failure(410, { error: "expired_token" }, context);
 	const { grant, link } = authorized;
 	if (typeof grant !== "string" || !/^[\x21-\x7e]+$/.test(grant) || grant.length > 4096 || link?.agent !== agent || typeof link.path !== "string" || !link.path.startsWith("/") || typeof link.preset !== "string" || typeof link.hostname !== "string" || typeof link.origin !== "string")
 		throw new CliError("invalid approved link response");
@@ -125,7 +148,7 @@ async function setupLink(o, {
 	// Resolve and validate the source before spending the one-time connector delivery.
 	const secret = readSecret(o, { ...link, preset });
 	const connector = await request("connector", {}, grant);
-	if (!connector.response.ok) throw failure(connector.response.status, connector.body);
+	if (!connector.response.ok) throw failure(connector.response.status, connector.body, context);
 	if (typeof connector.body.connector_token !== "string" || !connector.body.connector_token.trim() || /\s/.test(connector.body.connector_token)) throw new CliError("invalid connector response; run finish again for fresh approval");
 	const tokenFile = path.resolve(o["token-file"] || path.join(os.homedir(), ".a2a-exposed", "links", `${agent}.token`));
 	saveToken(tokenFile, connector.body.connector_token);
@@ -139,13 +162,13 @@ async function setupLink(o, {
 	for (let poll = 0; poll < 20 && now() < connectDeadline; poll++) {
 		const status = await request("status", undefined, grant, Math.min(15000, connectDeadline - now()));
 		if (now() >= connectDeadline) break;
-		if (!status.response.ok) throw failure(status.response.status, status.body);
+		if (!status.response.ok) throw failure(status.response.status, status.body, context);
 		if (status.body.connector === "connected" && Number.isInteger(status.body.connections) && status.body.connections > 0) { connected = true; break; }
 		await sleep(Math.min(3000, Math.max(0, connectDeadline - now())));
 	}
 	if (!connected) throw new CliError("connector did not report connected within 60 seconds; check cloudflared and run finish again for fresh approval");
 	const tested = await request("wake-test", { signing_secret: secret, preset }, grant);
-	if (!tested.response.ok) throw failure(tested.response.status, tested.body);
+	if (!tested.response.ok) throw failure(tested.response.status, tested.body, context);
 	if (tested.body.result !== "ok" || tested.body.saved !== true) {
 		const result = (["dns-missing", "access-401", "access-403", "timeout"].includes(tested.body.result) || /^origin-\d{3}$/.test(tested.body.result)) ? tested.body.result : "unknown";
 		throw new CliError(`wake test did not save settings (${result}); fix the receiver and run finish again for fresh approval`);

@@ -80,6 +80,21 @@ Discovery must list both `a2a-exposed` and `a2a-exposed-setup`. Schema checks,
 metadata checks, discovery, and Claude validation cover different contracts;
 none replaces the others.
 
+## Staging hosted link refusal contract
+
+The internal hosted link integration remains staging-only and outside public
+CLI help. Its create failures name the requested hostname and the operation.
+Only recognized public validation templates are shown from server messages;
+unknown text, extra fields and transport errors are hidden. The apex template
+must exactly name the requested hostname, including its example subdomain.
+
+Site refusal codes `apex_hostname`, `outside_zone`, `existing_dns` and
+`existing_tunnel` have distinct local guidance. These codes are supplied by
+site PR #415. An older `link_exists` is ambiguous, so it points to the approval
+page without assuming a different link exists. A refusal never retries
+provisioning, reads a signing secret or requests a connector credential.
+`cli/test/link-finish.test.mjs` covers these boundaries for create and finish.
+
 ## Manual QA
 
 For affected pages, use local

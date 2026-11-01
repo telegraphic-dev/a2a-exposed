@@ -27,6 +27,12 @@ the action. Optional terminal prompts are conveniences. For pairing-password
 setup without a terminal, `pair set-password --web` prints the owner's setup
 link. Website sign-in and owner approval remain explicit steps.
 
+Staging integrations report the failed operation and requested hostname when
+available. Refusals give a specific cause when the service supplies one;
+an ambiguous refusal points to its approval page. Unknown server error text
+is hidden. Do not repeat a refused resource-creation request without fixing
+the cause and obtaining fresh owner approval.
+
 ## Setup
 
 `init` checks approval-password readiness after deployment. If it reports `Approval password: not set`, run `npx -y a2a-exposed@latest pair set-password --web` and give the one-time link privately to the human. If the check is unavailable, use `pair list --json`. Pairing wakes repeat this guidance while the password is absent.
