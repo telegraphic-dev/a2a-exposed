@@ -345,10 +345,16 @@ test("known errors give fixed local recovery and origin status codes remain visi
 		const h = harness({ requests: () => Response.json({ error, message: sensitive[0] }, { status: 400 }) });
 		await assert.rejects(finishLink(o, h.deps), (err) => err.message.includes(message) && !err.message.includes(sensitive[0]));
 	}
-	for (const result of ["origin-404", "origin-500"]) {
+	for (const result of ["origin-404", "origin-500", "none", "tls", "private", "dns", "connection", "unreadable", "failed"]) {
 		const h = harness({ "wake-test": () => Response.json({ result, saved: false }) });
 		await assert.rejects(finishLink(o, h.deps), new RegExp(result));
 	}
+});
+
+
+test("wake result diagnostics never echo arbitrary server text", async () => {
+ const h = harness({ "wake-test": () => Response.json({ result: sensitive[0], saved: false }) });
+ await assert.rejects(finishLink(o, h.deps), err => err.message.includes('(unknown)') && !err.message.includes(sensitive[0]));
 });
 
 
@@ -502,6 +508,47 @@ test("unknown or malformed reason falls back to the known error without echoing 
 	}
 });
 
+for (const [raw, code, next] of [
+	["none", "none", "Update the hosted Worker"],
+	["dns-missing", "dns-missing", "Wait for DNS propagation"],
+	["access-401", "access-401", "Check the signing secret and Access service-token pair"],
+	["access-403", "access-403", "Check the signing secret and Access service-token pair"],
+	["timeout", "timeout", "Retry later"],
+	["origin-429", "origin-429", "Retry later"],
+	["origin-500", "origin-500", "Retry later"],
+	["origin-503", "origin-503", "Retry later"],
+	["origin-404", "origin-404", "Check the receiver's HTTP response"],
+	["301", "origin-301", "Check the receiver's HTTP response"],
+	["103", "origin-103", "Check the receiver's HTTP response"],
+	["tls", "tls", "Fix the receiver's TLS certificate"],
+	["private", "private", "Use a public HTTPS wake URL"],
+	["dns", "dns", "Check the wake hostname's DNS records"],
+	["connection", "connection", "Check that the receiver is reachable"],
+	["unreadable", "unreadable", "Remove the secure link on the website"],
+	["failed", "failed", "Check the receiver configuration"],
+	["unknown", "unknown", "Update the CLI (npx a2a-exposed@latest) and send feedback"],
+	["ok", "unknown", "Update the CLI"],
+	[null, "unknown", "Update the CLI"],
+	[{}, "unknown", "Update the CLI"],
+]) {
+	test(`wake failure ${JSON.stringify(raw)} gives safe recovery and a machine-readable code`, async () => {
+		const h = harness({ "wake-test": () => Response.json({ result: raw, saved: false, message: sensitive[0] }) });
+		await assert.rejects(finishLink(o, h.deps), err => {
+			assert.ok(err.message.startsWith(`wake test of the new secure link failed (${code}); saved wake settings were not changed. `));
+			assert.ok(err.message.includes(next));
+			assert.ok(!err.message.includes(sensitive[0]));
+			return true;
+		});
+		assert.equal(h.lines.filter(line => line.startsWith("wake_result=")).join("\n"), `wake_result=${code}`);
+		assert.ok(!h.lines.join("\n").includes(sensitive[0]));
+	});
+}
+
+test("successful wake test emits a stable result", async () => {
+	const h = harness();
+	await finishLink(o, h.deps);
+	assert.ok(h.lines.includes("wake_result=ok"));
+});
 for (const command of ["create", "finish"]) {
 	const run = command === "create" ? createLink : finishLink;
 	const options = { ...o, ...(command === "create" ? plan : {}) };

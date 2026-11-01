@@ -110,8 +110,9 @@ For maintainer runs of the internal secure-link integration, use the
 [refusal recovery reference](references/troubleshooting.md#internal-secure-link-refusal-recovery).
 Pending-request limits require the owner to deny an earlier request or wait for
 expiry; an unreadable access key requires owner removal and recreation of the
-link. Never repeat resource creation or remove resources automatically. This
-integration is not a public setup option; its scope is defined in
+link. Wake failures emit `wake_result=<code>` on stderr and give a next step; saved
+wake settings remain unchanged. Unknown results display `unknown` without server text and call for a CLI update and feedback. Never repeat resource creation or remove resources automatically.
+This integration is not a public setup option; its scope is defined in
 [contributor verification](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/agents/verification.md#staging-hosted-link-refusal-contract).
 
 ## When something goes wrong
@@ -144,6 +145,5 @@ OpenBot uses preset `openbot` and `WAKE_HMAC_SECRET`. The human transfers the ro
 
 `status` compares the deployed Worker version with the CLI and cached npm latest, and recommends deploy when the Worker is older. Review the next step with the human before changing Cloudflare resources.
 
-For staging link expiry, repeat the same create/finish command before approval;
-after grant expiry, use `hosted link finish` for fresh approval. Saved connector
+For staging link expiry, repeat the same create/finish command before approval; after grant expiry, use `hosted link finish` for fresh approval. Saved connector
 tokens remain local; wake settings are not saved. See [troubleshooting](references/troubleshooting.md).
