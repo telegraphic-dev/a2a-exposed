@@ -407,3 +407,22 @@ test("legacy ambiguous link_exists gives approval-page guidance without guessing
 	});
 	assert.deepEqual(h.calls, ["requests", "token"]);
 });
+
+for (const command of ["create", "finish"]) {
+	for (const phase of ["requests", "token", "deadline"]) test(`${command} explains expired link requests at ${phase} with fixed recovery and no secret transfer`, async () => {
+		const expired = () => Response.json({ error: "expired_token", message: sensitive.join(" "), secret: sensitive[0] }, { status: 410 });
+		const h = harness(phase === "deadline" ? {
+			token: () => Response.json({ error: "authorization_pending" }, { status: 428 }),
+		} : { [phase]: expired });
+		h.deps.readSecret = () => assert.fail("must not read secrets after expiry");
+		await assert.rejects((command === "create" ? createLink : finishLink)({ ...o, ...(command === "create" ? plan : {}) }, h.deps), (err) => {
+			assert.equal(err.message, `link ${command} failed${command === "create" ? " for wake.example.com" : ""} (expired_token); The link request expired. Start a new one with hosted link create.`);
+			for (const secret of sensitive) assert.ok(!err.message.includes(secret));
+			return true;
+		});
+		assert.ok(h.calls.every((endpoint) => ["requests", "token"].includes(endpoint)));
+		assert.deepEqual(h.writes, []);
+		assert.deepEqual(h.runs, []);
+		for (const secret of sensitive) assert.ok(!h.lines.join("\n").includes(secret));
+	});
+}

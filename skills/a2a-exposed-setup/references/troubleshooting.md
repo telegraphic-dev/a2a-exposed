@@ -86,6 +86,9 @@ prompt times out; SIGINT, SIGTERM, and SIGHUP stop its detached terminal job.
 
 ## Staging secure-link refusals
 
+In the staging secure-link integration, `expired_token` means the link request
+has expired. Start a new request with `hosted link create`.
+
 The hosted secure-link integration remains staging-only. An apex refusal means
 the domain itself was supplied: choose a hostname below it. An outside-domain
 refusal requires a hostname on a domain in the connected Cloudflare account.

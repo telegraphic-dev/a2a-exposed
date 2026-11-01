@@ -93,7 +93,10 @@ Site refusal codes `apex_hostname`, `outside_zone`, `existing_dns` and
 site PR #415. An older `link_exists` is ambiguous, so it points to the approval
 page without assuming a different link exists. A refusal never retries
 provisioning, reads a signing secret or requests a connector credential.
-`cli/test/link-finish.test.mjs` covers these boundaries for create and finish.
+An `expired_token` response or local approval deadline uses fixed local text:
+the link request expired; start a new one with `hosted link create`.
+`cli/test/link-finish.test.mjs` covers these boundaries for create and finish,
+including expiry before approval and local timeout without secret transfer.
 
 ## Manual QA
 

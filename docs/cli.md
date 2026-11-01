@@ -27,6 +27,9 @@ the action. Optional terminal prompts are conveniences. For pairing-password
 setup without a terminal, `pair set-password --web` prints the owner's setup
 link. Website sign-in and owner approval remain explicit steps.
 
+In the staging secure-link integration, `expired_token` means the link request
+has expired. Start a new request with `hosted link create`.
+
 Staging integrations report the failed operation and requested hostname when
 available. Refusals give a specific cause when the service supplies one;
 an ambiguous refusal points to its approval page. Unknown server error text

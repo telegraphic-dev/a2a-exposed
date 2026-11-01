@@ -8,6 +8,7 @@ import { readSigningSecret, validateSecretSource, writeTokenFile, startConnector
 
 const sleepDefault = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const ERRORS = {
+	expired_token: "The link request expired. Start a new one with hosted link create.",
 	unauthorized: "Run a2a-exposed login, then run finish again.",
 	invalid_request: "Check the agent name, hostname and link options before running the command again.",
 	link_exists: "The link request was refused; review the approval page before changing or removing an existing link.",
@@ -21,7 +22,7 @@ const ERRORS = {
 	unreadable: "Reconnect Cloudflare on the website, then run finish again.",
 	unavailable: "The service is temporarily unavailable; retry later with fresh approval.",
 };
-const APPROVAL_ERRORS = new Set(["access_denied", "expired_token", "link_not_ready", "invalid_grant", "already_delivered", "connector_not_connected", "not_found", "cloudflare_unavailable"]);
+const APPROVAL_ERRORS = new Set(["access_denied", "link_not_ready", "invalid_grant", "already_delivered", "connector_not_connected", "not_found", "cloudflare_unavailable"]);
 
 // Only these public validation templates may cross the server-text boundary.
 // Never echo arbitrary bodies, fetch errors, child output, or credential-bearing fields.

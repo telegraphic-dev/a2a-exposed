@@ -106,6 +106,9 @@ Never paste secrets into chat or onto the command line. Ask the user before anyt
 6. **Pairing** — [references/pairing.md](references/pairing.md).
 7. **Teardown** — [references/teardown.md](references/teardown.md).
 
+In the staging secure-link integration, `expired_token` means the link request
+has expired. Start a new request with `hosted link create`.
+
 Staging secure-link refusals identify the hostname or direct you to the approval
 page when the cause is ambiguous. Follow the refusal guidance; never repeat
 resource creation automatically. See [troubleshooting](references/troubleshooting.md).
