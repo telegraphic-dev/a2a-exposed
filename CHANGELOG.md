@@ -5,6 +5,7 @@ All notable changes to the `a2a-exposed` CLI (called `a2a-over-webhook` up to 0.
 ## Unreleased
 
 - **Wake handling (#182).** Setup saves the owner’s autonomous, review-all or escalate mode in handler prompts. Each handled wake produces a one-line owner notice, and webhook setup keeps a six-hour fallback job.
+- **Staging link expiry (#216).** Expired link requests explain that the request expired and direct users to start a new one with `hosted link create`. Diagnostics use fixed local text and hide server messages and secrets.
 - **Internal link refusal reference (#217).** Setup skill and troubleshooting guidance cover pending-request limits, unreadable access keys, provisioning failures and approval recovery for maintainer runs.
 
 ## 0.8.28 - 2026-11-01
