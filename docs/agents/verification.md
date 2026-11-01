@@ -157,3 +157,9 @@ such as `301` normalize to `origin-301`. Unknown values stay hidden as `unknown`
 Each failure states that the new secure link was tested, that saved wake settings
 were not changed, and gives a next step. Stderr includes `wake_result=<code>`
 (`ok` on success).
+
+For internal secure-link tests, HTTP 409 save refusals (including `failed` and
+`conflict`) emit `wake_result=not-saved`. This result also means the test wake was
+delivered but saving settings was not confirmed. Save the settings in Wake
+settings on the website, then test again. The connector token remains on disk;
+the CLI does not retry the test or save automatically.
