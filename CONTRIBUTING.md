@@ -22,7 +22,9 @@ comments in one pass, validate, push once, then resolve addressed threads.
   Open a PR running `npm run version:set -- <x.y.z>`, merge it into `main`,
   then a maintainer pushes the matching `vX.Y.Z` tag from the merged commit.
   The tag workflow checks committed versions, publishes both npm packages, and
-  creates the GitHub release with `gh release create --generate-notes`. The generated notes follow
+  creates the GitHub release with `gh release create --generate-notes`, then
+  publishes both skills to ClawHub. See [ClawHub publishing](docs/agents/clawhub.md)
+  for the publishing token, owner selection, preview and retry commands. The generated notes follow
   `.github/release.yml` and accompany the installation and upgrade instructions.
 - Infrastructure belongs to the separate Terraform repository. Real self-host QA
   uses a dedicated maintainer-provided test account/profile, never the owner's
