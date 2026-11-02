@@ -1,0 +1,121 @@
+name: ClawHub skills
+
+on:
+  workflow_call:
+    inputs:
+      dry_run:
+        description: Preview without publishing
+        type: boolean
+        default: true
+    secrets:
+      CLH_TOKEN:
+        required: false
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Preview without publishing (real publishes require a release tag)
+        type: boolean
+        default: true
+  pull_request:
+    paths:
+      - 'skills/**'
+      - '.github/workflows/clawhub.yml'
+      - '.github/workflows/publish.yml'
+      - 'scripts/check-skill-plugin.mjs'
+      - 'cli/package.json'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clawhub-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - slug: a2a-exposed
+            name: A2A Exposed
+          - slug: a2a-exposed-setup
+            name: 'A2A Exposed: setup'
+    env:
+      DRY_RUN: ${{ github.event_name == 'pull_request' || inputs.dry_run }}
+      CLAWHUB_OWNER: ${{ vars.CLAWHUB_OWNER }}
+      CLAWHUB_SITE: https://clawhub.ai
+      CLAWHUB_REGISTRY: https://clawhub.ai
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      - name: Validate release and prepare credentials
+        env:
+          CLAWHUB_CONFIG_PATH: ${{ runner.temp }}/clawhub-config.json
+          # PRs and previews never receive the publishing token.
+          CLH_TOKEN: ${{ github.event_name != 'pull_request' && !inputs.dry_run && secrets.CLH_TOKEN || '' }}
+        run: |
+          node scripts/check-skill-plugin.mjs
+          VERSION="$(node -p 'JSON.parse(require("fs").readFileSync("cli/package.json", "utf8")).version')"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          if [[ "$DRY_RUN" != "true" ]]; then
+            if [[ "$GITHUB_REF" != "refs/tags/v$VERSION" ]]; then
+              echo "::error::Publishing requires the matching release tag v$VERSION; select it with workflow_dispatch --ref or use dry_run=true."
+              exit 1
+            fi
+            if [[ -z "$CLH_TOKEN" ]]; then
+              echo "::error::Add the CLH_TOKEN repository secret with a ClawHub API token before publishing. Previews use dry_run=true and need no token."
+              exit 1
+            fi
+          fi
+          python3 - <<'PYTHON'
+          import json
+          import os
+          from pathlib import Path
+          path = Path(os.environ['CLAWHUB_CONFIG_PATH'])
+          config = {'registry': os.environ['CLAWHUB_REGISTRY']}
+          if os.environ['DRY_RUN'] != 'true':
+              config['token'] = os.environ['CLH_TOKEN']
+          with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'w') as stream:
+              json.dump(config, stream)
+          PYTHON
+
+      - name: Install pinned ClawHub CLI
+        run: npm install --global clawhub@0.25.0 --no-audit --no-fund
+
+      - name: Publish skill or preview
+        env:
+          CLAWHUB_CONFIG_PATH: ${{ runner.temp }}/clawhub-config.json
+          SKILL_SLUG: ${{ matrix.slug }}
+          SKILL_NAME: ${{ matrix.name }}
+        run: |
+          ARGS=(--no-input --workdir "$PWD" --site "$CLAWHUB_SITE" --registry "$CLAWHUB_REGISTRY"
+            skill publish "skills/$SKILL_SLUG" --slug "$SKILL_SLUG" --name "$SKILL_NAME"
+            --version "$VERSION" --changelog "Release v$VERSION" --json
+            --source-repo "$GITHUB_REPOSITORY" --source-commit "$(git rev-parse HEAD)"
+            --source-ref "$GITHUB_REF" --source-path "skills/$SKILL_SLUG")
+          TAG=latest
+          if [[ "$VERSION" == *-* ]]; then TAG=next; fi
+          ARGS+=(--tags "$TAG")
+          if [[ -n "$CLAWHUB_OWNER" ]]; then ARGS+=(--owner "$CLAWHUB_OWNER"); fi
+          if [[ "$DRY_RUN" == "true" ]]; then ARGS+=(--dry-run); fi
+          clawhub "${ARGS[@]}"
+
+      - name: Remove credentials
+        if: always()
+        env:
+          CLAWHUB_CONFIG_PATH: ${{ runner.temp }}/clawhub-config.json
+        run: |
+          python3 - <<'PYTHON'
+          import os
+          from pathlib import Path
+          Path(os.environ['CLAWHUB_CONFIG_PATH']).unlink(missing_ok=True)
+          PYTHON

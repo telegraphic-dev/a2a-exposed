@@ -163,3 +163,10 @@ For internal secure-link tests, HTTP 409 save refusals (including `failed` and
 delivered but saving settings was not confirmed. Save the settings in Wake
 settings on the website, then test again. The connector token remains on disk;
 the CLI does not retry the test or save automatically.
+
+## ClawHub release workflow
+
+Pull requests affecting skills or publishing configuration run both ClawHub
+previews without a publishing token. See [ClawHub publishing](clawhub.md) for
+manual preview and release commands. Previews resolve against the live registry
+but never upload; they do not replace the skill schema checks above.

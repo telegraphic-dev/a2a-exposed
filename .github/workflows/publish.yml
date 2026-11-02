@@ -137,10 +137,12 @@ jobs:
           gh release create "$GITHUB_REF_NAME" --verify-tag --title "a2a-exposed $VERSION" \
             --generate-notes --notes-file "$RUNNER_TEMP/notes.md" "${PRERELEASE[@]}"
 
-      # ClawHub (OpenClaw skill registry): not enabled yet. ClawHub publishes every skill under MIT-0
-      # and needs an owner handle decision. When decided, add a CLH_TOKEN secret and, per skill folder:
-      #   npm i -g clawhub && clawhub login --token "$CLH_TOKEN" --no-browser
-      #   clawhub skill publish skills/a2a-exposed --slug a2a-exposed --name "A2A Exposed" \
-      #     --version "$VERSION" --changelog "Release $GITHUB_REF_NAME"
-      #   clawhub skill publish skills/a2a-exposed-setup --slug a2a-exposed-setup --name "A2A Exposed: setup" \
-      #     --version "$VERSION" --changelog "Release $GITHUB_REF_NAME"
+  publish-skills:
+    needs: publish
+    permissions:
+      contents: read
+    uses: ./.github/workflows/clawhub.yml
+    with:
+      dry_run: false
+    secrets:
+      CLH_TOKEN: ${{ secrets.CLH_TOKEN }}
