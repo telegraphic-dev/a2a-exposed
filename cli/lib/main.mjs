@@ -9,6 +9,7 @@ import * as st from "./status.mjs";
 import * as pair from "./pair.mjs";
 import * as address from "./address.mjs";
 import * as account from "./account.mjs";
+import * as hosted from "./hosted.mjs";
 import * as upd from "./update.mjs";
 import * as fb from "./feedback.mjs";
 import * as un from "./uninstall.mjs";
@@ -24,6 +25,28 @@ Usage: npx -y a2a-exposed@latest <command> [options]
        --help, -h                    print this help
 
 Setup options: --skip-install skips dependency installation when dependencies already exist.
+
+Hosted setup:
+  hosted capabilities --json   list setup scopes, wake presets and service capabilities
+  login --machine NAME --scopes SCOPES [--control-url URL] --json
+                                approve the explicit scopes using the printed website link once;
+                                save the scoped grant locally (mode 600), never print it
+  hosted list --json           list agents before choosing --name or --agent
+  hosted create --name NAME --json
+                                create and save the owner credential in this config directory;
+                                use a separate --config-dir for each agent
+  wake preview|test|set --agent NAME [--url URL] [--preset P] --json
+                                hosted settings: read, test a draft, or test then save it
+                                secrets: --key-file, --key-env, --key-stdin, --hmac-secret-file, --hmac-secret-env,
+                                --access-client-id-file, --access-client-id-env and --access-client-secret-file, --access-client-secret-env
+  wake prepare --agent NAME --url URL --preset P --reference-file FILE --json
+                                when the service lists secret_reference, upload the draft and save a
+                                ten-minute single-use reference in a new protected file; never print it
+  wake set --agent NAME --reference-file FILE --json
+                                test and save exactly that reference's draft; --reference-env VAR also works
+                                MCP set_wake accepts secretReference on services listing that capability
+  Hosted wake removal uses the agent's Wake settings on the website.
+  Listings and previews show result fields; --json provides structured output.
 
 Setup (needs Node 22.18+, e.g. \`mise exec node@22 -- npx -y a2a-exposed@latest ...\`, and a Cloudflare login:
 npx cf auth login --no-browser; on a VPS where it fails with HTTP 403 before showing a code, export
@@ -351,8 +374,9 @@ const deployOpts = {
 	"workers-dev": B, "workers-dev-subdomain": S, "upstream-token-stdin": B, "no-upstream-token": B, "event-secret-stdin": B,
 };
 const SPEC = {
-	hosted: { agent: S, hostname: S, origin: S, path: S, preset: S, "control-url": S, "secret-file": S, "secret-env": S, "secret-from": S, "hermes-home": S, route: S, "token-file": S, "no-run": B },
-	init: { ...deployOpts, ...tunnelOpts, tunnel: B }, deploy: deployOpts, wake: deployOpts, tunnel: tunnelOpts,
+	hosted: { name: S, json: B, agent: S, hostname: S, origin: S, path: S, preset: S, "control-url": S, "secret-file": S, "secret-env": S, "secret-from": S, "hermes-home": S, route: S, "token-file": S, "no-run": B },
+	init: { ...deployOpts, ...tunnelOpts, tunnel: B }, deploy: deployOpts,
+	wake: { ...deployOpts, json: B, url: S, "reference-file": S, "reference-env": S, agent: S, "control-url": S, "key-header": S, "key-file": S, "key-env": S, "key-stdin": B, "hmac-secret-file": S, "hmac-secret-env": S, "access-client-id-file": S, "access-client-id-env": S, "access-client-secret-file": S, "access-client-secret-env": S }, tunnel: tunnelOpts,
 	inbox: { context: S, from: S, all: B, json: B },
 	reply: { text: S, stdin: B, state: { type: "string", default: "completed" }, artifact: B, "artifact-name": { type: "string", default: "response" }, force: B },
 	history: { from: S, n: { type: "string", short: "n", default: "50" }, json: B },
@@ -367,7 +391,7 @@ const SPEC = {
 	connect: { alias: S, name: S, json: B, "no-wait": B, replace: B, force: B, "card-url": S },
 	// Internal hosted-service integration commands. Keep out of public help until the production flow is available.
 	signup: { "control-url": S, json: B },
-	login: { "control-url": S, json: B },
+	login: { "control-url": S, json: B, machine: S, scopes: S },
 	pair: { json: B, web: B, ttl: S, issuer: S, "client-id": S, subjects: S, methods: S, "secret-stdin": B },
 	feedback: { kind: S, contact: S, steps: S, expected: S, actual: S, logs: S, agent: S, environment: S, connection: S, yes: B, json: B },
 	uninstall: { yes: B, "dry-run": B, dir: S, "worker-dir": S },
@@ -444,7 +468,7 @@ export async function main(argv) {
 			if (sub === "verify" || sub === "check") return st.upstreamVerify(o);
 			throw new CliError(`unknown upstream action ${sub} (verify)`);
 		}
-		case "wake": return dep.wake(p[0], o);
+		case "wake": return C.deploymentKind() === "hosted" || o.agent ? hosted.output(() => hosted.wake(p[0], o), o) : dep.wake(p[0], o);
 		case "url": {
 			const u = cmd.baseUrl();
 			if (!u) throw new CliError(`no base URL configured in ${C.CONFIG_FILE}: run \`${CLI} init\` (or pass --config-dir / A2A_CONFIG_DIR for another deployment)`);
@@ -475,11 +499,13 @@ export async function main(argv) {
 			throw new CliError(`unknown peer action ${sub} (announce|forward)`);
 		}
 		case "hosted": {
+			if (p.length === 1 && ["capabilities", "list", "create"].includes(p[0])) return hosted.output(() => hosted[p[0]](o), o);
 			if (p.length !== 2 || p[0] !== "link" || !["finish", "create"].includes(p[1])) throw new CliError("usage: hosted link create --agent NAME --hostname HOST --origin URL --path PATH --preset ID (--secret-file FILE | --secret-env VAR | --secret-from hermes); or hosted link finish --agent NAME (--secret-file FILE | --secret-env VAR | --secret-from hermes)");
 			return (p[1] === "create" ? createLink : finishLink)({ ...o, "control-url": o["control-url"] || C.get("CONTROL_URL") });
 		}
 		case "signup":
 		case "login": {
+			if (o.machine || o.scopes) return hosted.output(() => hosted.login(o), o);
 			const result = await account.deviceLogin({ controlUrl: o["control-url"] || C.get("CONTROL_URL"), intent: name });
 			if (o.json) console.log(JSON.stringify({ control_url: result.controlUrl, email: result.email }));
 			return;

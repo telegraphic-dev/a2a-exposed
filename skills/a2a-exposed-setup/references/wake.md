@@ -305,3 +305,27 @@ npx -y a2a-exposed@latest wake set --preset generic \
 | Raw placeholders | `{{payload}} {{taskIdsJson}}` insert raw JSON; use them unquoted |
 | Signing | Setting `WAKE_HMAC_SECRET` also adds the Hermes-style V2 signature headers |
 | Idempotency | Every wake carries `X-Request-ID` |
+
+
+## Scoped hosted CLI setup
+
+List choices with `hosted capabilities --json`, approve explicit scopes with
+`login --machine NAME --scopes SCOPES --json`, then `hosted list --json`.
+`hosted create --name NAME --json` saves the new owner credential mode 600; use a separate
+config directory per agent. `wake preview|test|set --agent NAME --json` reads, tests or
+tests then saves. Provide URL and preset explicitly. Use webhook wake for OpenClaw and
+Hermes, a separately approved tunnel for private hosts, and polling as the fallback.
+
+Keys use `--key-file`, `--key-env` or `--key-stdin`. Signing secrets use
+`--hmac-secret-file` or `--hmac-secret-env`. Access credentials use
+`--access-client-id-file|--access-client-id-env` and
+`--access-client-secret-file|--access-client-secret-env`. Never pass secret values in argv.
+When capabilities reports `secret_reference`, `wake prepare --agent NAME --url URL
+--preset P --reference-file FILE --json` writes a single-use ten-minute reference to a
+new mode-600 file without printing it. Consume it using `wake set --agent NAME
+--reference-file FILE --json` or MCP `set_wake` with `secretReference` and matching draft
+settings. Both grants must remain valid. A failed test spends the reference too. Raw
+MCP keys keep their browser-only refusal; without a reference use browser confirmation.
+References are available when advertised by service capabilities. Hosted wake removal uses the website.
+
+Hosted listings and wake previews show result fields in text output; use `--json` for structured output. Owner credentials stay bound to their deployment origin independently of setup URL overrides.

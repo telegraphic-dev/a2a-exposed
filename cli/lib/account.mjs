@@ -38,6 +38,8 @@ async function readJson(response) {
 export async function deviceLogin({
 	controlUrl,
 	intent = "login",
+	scope = "",
+	machine = "",
 	fetchImpl = fetch,
 	sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 	write = (line) => console.error(line),
@@ -48,7 +50,8 @@ export async function deviceLogin({
 	const codeResponse = await fetchImpl(`${origin}/api/auth/device/code`, {
 		method: "POST",
 		headers: { "content-type": "application/json", accept: "application/json" },
-		body: JSON.stringify({ client_id: CLI_CLIENT_ID }),
+		redirect: "error", signal: AbortSignal.timeout(30_000),
+		body: JSON.stringify({ client_id: CLI_CLIENT_ID, ...(scope ? { scope, machine } : {}) }),
 	});
 	const started = await readJson(codeResponse);
 	if (!codeResponse.ok || !started.device_code || !started.user_code || !started.verification_uri_complete) {
@@ -57,6 +60,9 @@ export async function deviceLogin({
 			? `login is not turned on at ${origin}`
 			: `could not start sign-in at ${origin} (${reason})`);
 	}
+	let verification;
+	try { verification = new URL(started.verification_uri_complete); } catch { die("invalid sign-in approval URL"); }
+	if (verification.origin !== origin || verification.username || verification.password || !/^[A-Za-z0-9-]{4,32}$/.test(started.user_code)) die("invalid sign-in approval URL or comparison code");
 	const verb = intent === "signup" ? "Create an account and approve" : "Sign in and approve";
 	write(`${verb} this code:\n${started.user_code}\n${started.verification_uri_complete}`);
 	const interval = Math.max(1, Number(started.interval) || 5);
@@ -66,11 +72,18 @@ export async function deviceLogin({
 		await sleep(wait * 1000 * scale());
 		const tokenResponse = await fetchImpl(`${origin}/api/auth/device/token`, {
 			method: "POST",
+			redirect: "error", signal: AbortSignal.timeout(30_000),
 			headers: { "content-type": "application/json", accept: "application/json" },
 			body: JSON.stringify({ grant_type: DEVICE_GRANT, device_code: started.device_code, client_id: CLI_CLIENT_ID }),
 		});
 		const body = await readJson(tokenResponse);
 		if (tokenResponse.ok && typeof body.access_token === "string" && body.access_token) {
+			if (scope) {
+				if (!/^a2asg_[a-f0-9]{64}$/.test(body.access_token) || body.scope !== scope) die("invalid hosted setup grant response; start approval again");
+				save({ HOSTED_SETUP_URL: origin, HOSTED_SETUP_TOKEN: body.access_token, HOSTED_SETUP_SCOPES: scope, HOSTED_SETUP_MACHINE: machine });
+				write("Hosted setup approved. Credential saved privately.");
+				return { controlUrl: origin, email: "" };
+			}
 			save({ CONTROL_URL: origin, CONTROL_TOKEN: body.access_token });
 			const sessionResponse = await fetchImpl(`${origin}/api/auth/get-session`, {
 				headers: { accept: "application/json", authorization: `Bearer ${body.access_token}` },
