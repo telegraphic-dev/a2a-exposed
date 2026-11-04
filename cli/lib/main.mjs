@@ -155,6 +155,7 @@ Remove
                                 --dir and --worker-dir are the Worker project directory (default <config dir>/worker)
 
 Status
+  Hosted-only configs report deployment: hosted and hosted recovery guidance.
   status [--json]               deployment, Worker version, base URL, agent card check (fetched by the CLI), wake
                                 mode (webhook / tunnel / none = polling), tunnel state, proxy mode (--upstream):
                                 upstream card, Access credential and upstream bearer configured (separately), the
@@ -308,6 +309,8 @@ Update notice: at most a daily background check of the npm registry; off with A2
 
 const HELP_TUNNEL = `tunnel create|status|rm
 
+Self-hosted only. Hosted configs use hosted webhook settings or polling. Check status --json first.
+
   tunnel create [--tunnel-zone Z | --tunnel-hostname H] [--tunnel-origin URL] [--tunnel-path /p]
                 [--show-token] [--zero-trust-org TEAM] [--dir DIR | --worker-dir DIR]
                                 Named Cloudflare Tunnel, proxied DNS, and an Access app that admits one service token.
@@ -327,6 +330,7 @@ const HELP_TUNNEL = `tunnel create|status|rm
 
 const HELP_UNINSTALL = `uninstall [--yes] [--dry-run] [--dir DIR | --worker-dir DIR]
 
+Self-hosted only. Hosted agents are deleted through hosted settings and confirmation.
 Remove the Worker, the wake tunnel when the config has one, and the D1 database.
 Prints the plan first: Worker name, D1 name and id, account, and the wake hostname
 when a tunnel is saved. Removal is permanent and takes the messages and paired peers with it.
