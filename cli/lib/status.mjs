@@ -275,7 +275,7 @@ export function secretsPropagating(tunnel, now = Date.now()) {
 export function nextStep(s) {
 	const n = nextStepCore(s);
 	const version = s.cliVersion || D.VERSION;
-	if (s.workerVersion && s.latestVersion && newer(s.latestVersion, s.workerVersion) && !newer(s.workerVersion, version))
+	if (s.deployment !== "hosted" && s.workerVersion && s.latestVersion && newer(s.latestVersion, s.workerVersion) && !newer(s.workerVersion, version))
 		n.also.push(`a2a-exposed ${s.latestVersion} is available: run npx -y a2a-exposed@latest deploy`);
 	const sh = (s.peerTokenShadowed || []).map((k) => `${k} is set in the environment and overrides the different peer token saved in ${s.configFile} (e.g. a stale value from before \`connect\` stored a new one): send/poll use the environment value. Unset ${k} where it is set to use the saved token`);
 	const addr = s.addresses;
@@ -289,6 +289,16 @@ export function nextStep(s) {
 function nextStepCore(s) {
 	const fail = (text) => ({ ok: false, text, also: [] });
 	const done = (text, also = []) => ({ ok: true, text, also });
+	if (s.deployment === "hosted") {
+		if (!s.card.ok) return fail(`the hosted agent card is not reachable (${s.card.error}). Run \`${CLI} status\` again; if it still fails, check the hosted service and the saved A2A_BASE_URL.`);
+		if (s.card.urlProblem) return fail(`the hosted agent card has a different endpoint: ${s.card.urlProblem}. Check the address with the hosted service.`);
+		if (!s.health?.ok) return fail("the hosted health check failed. Check the hosted service and run status again.");
+		if (!s.ownerApi.ok) return fail("the hosted owner API refused or could not check the saved credential. Check the hosted agent access with its owner.");
+		if (!s.wake) return done("the hosted endpoint is reachable and its owner credential is accepted. Wake preview is unavailable; check wake delivery through the hosted service.");
+		return done(s.wake?.configured
+			? "none: the hosted endpoint is reachable and its owner credential is accepted. Check wake delivery through the hosted service."
+			: "the hosted endpoint is reachable. Configure a public HTTPS webhook through the hosted service, or use polling. Cloudflare Tunnel delivery may be unavailable; do not provision a self-hosted tunnel for this address.");
+	}
 	if (!s.deployed) return fail(`nothing is deployed from ${path.dirname(s.configFile)}. Run \`${CLI} init\` (see the quick start). Another deployment? Set A2A_CONFIG_DIR.`);
 	if (s.baseUrlEnv)
 		return fail(`A2A_BASE_URL is exported as ${s.baseUrlEnv}, but ${s.configFile} has ${s.baseUrlSaved || "(none)"}: CLI commands (and push URLs sent to peers) use the exported value. Unset A2A_BASE_URL (the A2A endpoint URL is always the deployment's own)`);
@@ -392,7 +402,7 @@ function hostOf(url) {
 function layerFacts(s, extra) {
 	const t = s.tunnel;
 	return {
-		deployed: s.deployed, baseUrl: s.baseUrl || "", host: extra.host || "", platform: process.platform,
+		deployed: s.deployed, deployment: s.deployment, baseUrl: s.baseUrl || "", host: extra.host || "", platform: process.platform,
 		workerDns: extra.workerDns, card: s.card, health: s.health, hasOwnerToken: s.hasOwnerToken, ownerApi: s.ownerApi,
 		wakeHost: extra.wakeHost || "", wakeDns: extra.wakeDns, bare: extra.bare, authed: extra.authed,
 		serviceToken: extra.serviceToken, localServiceToken: extra.localServiceToken, pairing: s.pairing,
@@ -445,6 +455,7 @@ function finishLayers(s, extra) {
 export async function collect(net = {}) {
 	const s = {
 		configFile: C.CONFIG_FILE,
+		deployment: C.deploymentKind(),
 		deployed: !!(C.get("A2A_D1_ID") && C.get("A2A_WORKER_NAME")),
 		worker: C.get("A2A_WORKER_NAME"), d1: C.get("A2A_D1_NAME"), account: C.get("CLOUDFLARE_ACCOUNT_ID"), cfProfile: C.get("CF_PROFILE"),
 		baseUrl: baseUrl(), urlKind: C.get("A2A_HOSTNAME") ? "custom domain" : "workers.dev", cron: C.get("A2A_ENABLE_CRON") === "1",
@@ -455,6 +466,7 @@ export async function collect(net = {}) {
 		peerTokenShadowed: shadowedPeerTokens(), addresses: null,
 		mcp: "unknown", health: null, workerVersion: null, cliVersion: D.VERSION, latestVersion: readCache(cacheFile())?.latest || null,
 	};
+	if (s.deployment === "hosted") { s.deployed = true; s.urlKind = "hosted"; }
 	const envBase = (process.env.A2A_BASE_URL || "").replace(/\/$/, "");
 	if (envBase && envBase !== s.baseUrlSaved) s.baseUrlEnv = envBase;
 	if (!s.deployed || !s.baseUrl) return finishLayers(s, { host: "", workerDns: { kind: "skip" }, wakeHost: "", wakeDns: { kind: "skip" }, bare: null, authed: null });
@@ -470,7 +482,13 @@ export async function collect(net = {}) {
 				s.ownerApi = { ok: true };
 				s.wake = { preset: p.preset, configured: !!p.configured, hasKey: !!p.hasKey, hasHmacSecret: !!p.hasHmacSecret,
 					hasAccessServiceToken: !!p.hasAccessServiceToken, urlFingerprint: p.fingerprints?.url || null };
-			} catch (e) { s.ownerApi = { ok: false, error: e.message }; }
+			} catch (e) {
+				s.ownerApi = { ok: false, error: e.message };
+				if (s.deployment === "hosted" && /HTTP (404|405)\b/.test(e.message)) {
+					try { await owner("GET", "/owner/summary"); s.ownerApi = { ok: true }; }
+					catch (summaryError) { s.ownerApi = { ok: false, error: summaryError.message }; }
+				}
+			}
 			if (s.ownerApi.ok) {
 				try {
 					const pr = await owner("GET", "/owner/pairing");
@@ -496,6 +514,7 @@ export async function collect(net = {}) {
 				} catch { /* probe failed: leave mcp unknown so status omits the add line */ }
 			}
 		}
+		if (s.deployment === "hosted") return;
 		const dir = D.workerDir({});
 		const haveCf = fs.existsSync(dir);
 		const tunnelHost = C.get("A2A_TUNNEL_HOSTNAME");
@@ -577,7 +596,7 @@ export async function status(o) {
 	else {
 		const rows = [
 			["config", s.configFile],
-			["deployment", s.deployed ? `Worker ${s.worker}, D1 ${s.d1 || s.worker}${s.account ? `, account ${s.account}` : ""}${s.cfProfile ? `, cf profile ${s.cfProfile}` : ""}${s.cron ? ", cron flush on" : ""}` : "none"],
+			["deployment", s.deployment === "hosted" ? "hosted" : s.deployed ? `Worker ${s.worker}, D1 ${s.d1 || s.worker}${s.account ? `, account ${s.account}` : ""}${s.cfProfile ? `, cf profile ${s.cfProfile}` : ""}${s.cron ? ", cron flush on" : ""}` : "none"],
 			["base URL", s.baseUrl ? `${s.baseUrl} (${s.baseUrlEnv ? `from the exported A2A_BASE_URL; ${s.configFile} has ${s.baseUrlSaved || "none"}` : s.urlKind})` : "(not saved)"],
 		];
 		if (s.deployed && s.baseUrl) {

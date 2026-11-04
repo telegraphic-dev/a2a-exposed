@@ -254,7 +254,12 @@ export function cfWorkDir(preferred) {
 	return base;
 }
 
+function refuseHosted() {
+	if (C.deploymentKind() === "hosted") die("this is a hosted config. tunnel provisions a self-hosted Worker only. Configure a public HTTPS webhook through the hosted service, or use polling if Cloudflare Tunnel delivery is unavailable. Check `status --json` first.");
+}
+
 function needDeployment(o) {
+	refuseHosted();
 	if (!C.get("A2A_D1_ID") || !C.get("A2A_WORKER_NAME")) die(`nothing is deployed from ${C.CONFIG_DIR}. Another deployment? Set A2A_CONFIG_DIR.`);
 	const dir = D.workerDir(o);
 	if (!fs.existsSync(dir)) die(`worker project not found at ${dir}; run \`${CLI} deploy\` once`);
@@ -263,6 +268,7 @@ function needDeployment(o) {
 
 /** `cf` cwd for `tunnel rm` / `uninstall`. A missing Worker project uses a temp directory with a writable cache. */
 function cfDirForRemove(o, { allowMissingProject = false } = {}) {
+	refuseHosted();
 	if (!C.get("A2A_D1_ID") || !C.get("A2A_WORKER_NAME")) die(`nothing is deployed from ${C.CONFIG_DIR}. Another deployment? Set A2A_CONFIG_DIR.`);
 	const dir = D.workerDir(o);
 	if (!fs.existsSync(dir) && !allowMissingProject) die(`worker project not found at ${dir}; run \`${CLI} deploy\` once`);
@@ -475,6 +481,7 @@ export function bareProbeNote(withoutToken) {
 }
 
 export async function remove(o, { quiet = false, allowMissingProject = false, skipSecrets = false, secretNames = undefined, rerun = "" } = {}) {
+	refuseHosted();
 	if (!TUNNEL_KEYS.some((k) => C.get(k))) {
 		if (!quiet) console.error("nothing to remove");
 		return;

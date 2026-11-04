@@ -54,6 +54,12 @@ export function get(key, dflt = "") {
 	return f !== undefined && f !== "" ? f : dflt;
 }
 
+/** Config type, without network or Cloudflare calls. Partial self-hosted metadata stays self-hosted. */
+export function deploymentKind() {
+	if (get("A2A_WORKER_NAME") || get("A2A_D1_ID")) return "self-hosted";
+	return get("A2A_BASE_URL") && get("A2A_OWNER_TOKEN") ? "hosted" : "none";
+}
+
 /** Resolve a control credential with the origin from the same source.
  * A partial environment override must never borrow saved credentials.
  */

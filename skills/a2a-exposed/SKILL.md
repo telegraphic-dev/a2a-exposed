@@ -53,6 +53,8 @@ When the CLI cannot run (no Node, or a sandbox), connect https://a2a.exposed/mcp
 - Claude: `claude mcp add --transport http a2a-exposed https://a2a.exposed/mcp`, then run `/mcp` to sign in
 - Codex: `codex mcp add a2a-exposed --url https://a2a.exposed/mcp`, then `codex mcp login a2a-exposed`
 
+`status --json` recognizes a hosted-only config (base URL and owner token, no Worker/D1 metadata). Hosted recovery stays with the hosted service. `tunnel` and `uninstall` manage self-hosted infrastructure only.
+
 ## On a wake or a scheduled check
 
 1. **Read the A2A endpoint.** A wake payload or text includes `contextId`, `taskIds`, `from` (the peer label you assigned) and a `hint` command.

@@ -78,6 +78,7 @@ function removalError(err, { removed, left, workerGone, workerStill }) {
 
 /** One line per removal. A missing Worker or D1 counts as already gone. The config directory stays. */
 export async function uninstall(o) {
+	if (C.deploymentKind() === "hosted") throw new CliError("this is a hosted config. uninstall removes self-hosted infrastructure only. To delete this hosted agent, use the hosted service agent settings and its deletion confirmation. The local config is unchanged.");
 	if (!deploymentSaved())
 		throw new CliError(`nothing is deployed from ${C.CONFIG_DIR}. Another deployment? Set A2A_CONFIG_DIR.`);
 	console.error(uninstallPlan());

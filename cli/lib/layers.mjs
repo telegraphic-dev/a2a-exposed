@@ -61,15 +61,16 @@ function workerDnsLayer(f) {
 }
 
 function workerLayer(f) {
+	const fix = f.deployment === "hosted" ? "check the hosted service and saved A2A_BASE_URL; run status again" : `${CLI} deploy`;
 	if (!f.baseUrl) return layer("Worker", "SKIP", "not checked (no base URL)");
 	const https = /^https:/i.test(f.baseUrl);
 	const card = f.card || { ok: false, error: "not checked" };
 	if (https && card.error && TLS_RE.test(card.error))
 		return layer("Worker", "FAIL", `Likely mismatched: TLS certificate for ${f.host}. ${card.error}`, `check the certificate for ${f.host} in Cloudflare (SSL/TLS)`);
 	if (!card.ok)
-		return layer("Worker", "FAIL", `Likely missing: deployed Worker. Agent card: ${card.error || "unreachable"}`, `${CLI} deploy`);
+		return layer("Worker", "FAIL", `Likely missing: deployed Worker. Agent card: ${card.error || "unreachable"}`, fix);
 	if (card.urlProblem)
-		return layer("Worker", "FAIL", `Likely mismatched: agent card URL. ${card.urlProblem}`, `${CLI} deploy`);
+		return layer("Worker", "FAIL", `Likely mismatched: agent card URL. ${card.urlProblem}`, fix);
 	const tls = https ? "TLS ok" : "TLS skipped (not https)";
 	const named = card.name ? ` ("${card.name}")` : "";
 	const cardBit = `${tls}; agent card HTTP ${card.httpStatus || 200}${named}`;
@@ -80,7 +81,7 @@ function workerLayer(f) {
 			: h.httpStatus < 200 || h.httpStatus >= 300
 				? `/health HTTP ${h.httpStatus}`
 				: `/health HTTP ${h.httpStatus} did not report ok`;
-		return layer("Worker", "FAIL", `Likely missing: Worker /health. ${cardBit}; ${problem}`, `${CLI} deploy`);
+		return layer("Worker", "FAIL", `Likely missing: Worker /health. ${cardBit}; ${problem}`, fix);
 	}
 	return layer("Worker", "PASS", `${cardBit}; /health HTTP ${h.httpStatus || 200}`);
 }
@@ -91,6 +92,7 @@ function ownerLayer(f) {
 	if (f.ownerApi && f.ownerApi.ok) return layer("Owner API", "PASS", "owner token accepted");
 	const err = (f.ownerApi && f.ownerApi.error) || "not checked";
 	if (err === "not checked") return layer("Owner API", "SKIP", "not checked");
+	if (f.deployment === "hosted") return layer("Owner API", "FAIL", `hosted owner credential check failed: ${err}`, "check hosted agent access with its owner");
 	if (/HTTP 401/.test(err)) return layer("Owner API", "FAIL", "Likely mismatched: owner token", `${CLI} init --rotate-owner-token`);
 	return layer("Owner API", "FAIL", `Likely missing: deployed Worker. ${err}`, `${CLI} deploy`);
 }
