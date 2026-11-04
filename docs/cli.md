@@ -220,3 +220,39 @@ For internal secure-link tests, HTTP 409 save refusals (including `failed` and
 delivered but saving settings was not confirmed. Save the settings in Wake
 settings on the website, then test again. The connector token remains on disk;
 the CLI does not retry the test or save automatically.
+
+
+## Hosted setup from the CLI
+
+Run `hosted capabilities --json` to list scopes and wake presets. Then request only the
+scopes you need with `login --machine NAME --scopes "agents:create agents:owner-token wake:write wake:test"
+--control-url https://a2a.exposed --json`. The human follows the printed approval link once.
+The CLI saves the scoped setup grant in the protected configuration; it never prints it.
+`hosted list --json` lists agents before selection. `hosted create --name NAME --json` saves
+the new agent's owner credential locally without returning it in output. Use a separate
+`--config-dir` for each agent; creation refuses to overwrite an existing deployment.
+
+Use `wake preview --agent NAME --json` to inspect the settings, then `wake test` or `wake set`
+with explicit `--url` and `--preset`. `set` tests before saving. Webhook is the default for
+OpenClaw and Hermes; use polling if there is no public webhook. A tunnel needs its separate
+Cloudflare authorization. Hosted removal remains on the agent's Wake settings page.
+
+Read secrets through `--key-file`, `--key-env` or `--key-stdin`; signing secrets through
+`--hmac-secret-file` or `--hmac-secret-env`; Access pairs through the corresponding
+`--access-client-id-file|--access-client-id-env` and
+`--access-client-secret-file|--access-client-secret-env`. Protected files must be regular
+files with no group or other permissions. No secret belongs in an argument value.
+
+When capabilities lists `secret_reference: true`, `wake set` uploads the draft for a
+short-lived reference before testing and saving. `wake prepare --agent NAME --url URL
+--preset P --reference-file FILE --json` saves a reference in a new mode-600 file without
+printing it. Use it within ten minutes with `wake set --agent NAME --reference-file FILE
+--json` (or `--reference-env VAR`). Existing files are never replaced.
+MCP `set_wake` accepts the reference as `secretReference`, with the same agent, URL, preset
+and key header. Both the setup grant and the OAuth grant must still authorize the save.
+The server spends a reference before its test, even on failure; prepare a new draft to
+retry after checking current settings. Raw keys remain browser-only in MCP. Without a
+reference the browser confirmation stays available. The service currently enables
+references only on staging; capabilities is the source of available choices.
+
+Hosted setup commands exit 0 on success and 1 on a refusal or failure. `--json` returns `{ok, code, next}`; credential values are omitted. The approval link and comparison code are printed on stderr for the human.

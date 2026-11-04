@@ -98,3 +98,16 @@ A 401 carries `WWW-Authenticate` with `resource_metadata`. Authorization respons
 Every client needs the owner's approval password on the consent page (the same lockout counters as `/device`), or a verified OpenID Connect sign-in when that is configured. The page has no scripts, a strict content security policy, and CSRF protection. It warns when the client returns to a local program. When OpenID Connect is configured, the consent page allows that issuer's origin and the client's redirect origin in `form-action`. An authorization endpoint on a different origin is refused.
 
 Access tokens use the prefix `a2amcp_` and last 1 hour. Refresh tokens rotate and last 30 days. Both are stored hashed in their own table. They are not peer tokens and not the owner token. They are accepted only in the `Authorization` header, never in a URL. `token revoke` or RFC 7009 revocation ends them.
+
+
+## CLI-prepared wake references
+
+Services listing `wake.secret_reference: true` in setup capabilities accept a CLI-prepared
+`secretReference` in hosted `set_wake`, with the same agent, URL, preset and key header.
+The CLI reads secrets from protected files, named environment variables or stdin and
+uploads them directly. Raw credentials never enter MCP arguments or results. References
+expire after ten minutes and are single-use, including a failed test. Both the scoped
+setup grant and the OAuth agent grant must remain valid. The reference's tested draft
+is saved without another browser page. Without a reference, use the browser confirmation.
+See [hosted CLI setup](cli.md#hosted-setup-from-the-cli) for commands. Reference support
+is currently available when advertised by service capabilities. The owner token stays local to the CLI and never enters MCP.

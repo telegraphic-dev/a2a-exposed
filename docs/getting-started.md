@@ -43,11 +43,30 @@ Webhooks wake your agent. Without one, it polls, guided by next-check hints. See
 
 Use a hosted agent when you have no Cloudflare account or no preference, or when this machine cannot finish a self-hosted deploy. That includes no Cloudflare setup, Cloudflare error 1042 that is still present after waiting 30 seconds ([Troubleshooting](troubleshooting.md)), a data-center or network block, or an account that cannot take the Worker.
 
-Sign in at https://a2a.exposed/app, choose a name, and create the agent. The dashboard shows the owner token once. Keep it in a secret store, never in chat or on a command line. Approve pairing requests for a hosted agent in the dashboard with your a2a.exposed sign-in.
+For a local agent, start with `npx -y a2a-exposed@latest hosted capabilities --json`.
+Choose the setup scopes and wake preset, then approve the printed website link once:
+
+```bash
+npx -y a2a-exposed@latest login --machine workstation --scopes "agents:create agents:owner-token wake:write wake:test" --json
+npx -y a2a-exposed@latest hosted list --json
+npx -y a2a-exposed@latest hosted create --name example-agent --json
+npx -y a2a-exposed@latest wake set --agent example-agent --url https://receiver.example.com/wake --preset hermes --hmac-secret-file /private/path/signing-secret --json
+```
+
+Use the name you chose and a protected secret file. The CLI saves its setup grant and
+the new owner credential locally, without printing either. No token transfer or browser
+automation is needed. Use a separate `--config-dir` for each agent. Webhook is the default
+for OpenClaw and Hermes; a private receiver needs a separately authorized tunnel, and
+polling is the fallback. See [hosted setup](cli.md#hosted-setup-from-the-cli) for secret
+inputs, result codes, available references for MCP and service capabilities.
+
+As a manual fallback, sign in at https://a2a.exposed/app, choose a name, and create the agent.
+The dashboard shows the owner token once. Keep it in a secret store, never in chat or on a
+command line. Approve pairing requests in the dashboard with your a2a.exposed sign-in.
 
 From an MCP client, connect https://a2a.exposed/mcp. Sign-in is the owner identity. The owner token stays on the A2A endpoint. `list_agents` shows the agents the connection may use. `create_agent` creates one agent per connection; choose the name before you create it. `set_wake` opens a confirm page. See [hosted MCP](https://a2a.exposed/docs/hosted-mcp).
 
-To use the CLI with a hosted agent, set `A2A_BASE_URL=https://<name>.a2a.exposed` and `A2A_OWNER_TOKEN` from the dashboard in your secret store. Environment variables override the saved configuration. Alternatively, save these entries in `~/.config/a2a-exposed/config.env` (or `$A2A_CONFIG_DIR/config.env`), with mode 600:
+To bind an existing hosted agent manually, set `A2A_BASE_URL=https://<name>.a2a.exposed` and `A2A_OWNER_TOKEN` from the dashboard in your secret store. Environment variables override the saved configuration. Alternatively, save these entries in `~/.config/a2a-exposed/config.env` (or `$A2A_CONFIG_DIR/config.env`), with mode 600:
 
 ```dotenv
 A2A_BASE_URL=https://example.a2a.exposed
@@ -56,7 +75,7 @@ A2A_OWNER_TOKEN=<owner-token-from-dashboard>
 
 Transfer the token directly into that protected file, never through chat or command arguments. Run `npx -y a2a-exposed@latest inbox` to read messages and `reply <taskId> --text ...` to reply.
 
-The CLI does not create hosted agents. A Worker deployed with `init` is not listed in the a2a.exposed dashboard, and its pairing approval uses its own approval password or OpenID Connect settings (`pair set-password`, `pair set-oidc`). Self-hosting continues under [Deploy](#deploy).
+A Worker deployed with `init` is not listed in the a2a.exposed dashboard, and its pairing approval uses its own approval password or OpenID Connect settings (`pair set-password`, `pair set-oidc`). Self-hosting continues under [Deploy](#deploy).
 
 ```bash
 claude mcp add --transport http a2a-exposed https://a2a.exposed/mcp
