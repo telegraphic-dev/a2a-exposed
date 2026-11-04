@@ -46,6 +46,7 @@ Hosted setup:
                                 test and save exactly that reference's draft; --reference-env VAR also works
                                 MCP set_wake accepts secretReference on services listing that capability
   Hosted wake removal uses the agent's Wake settings on the website.
+  Listings and previews show result fields; --json provides structured output.
 
 Setup (needs Node 22.18+, e.g. \`mise exec node@22 -- npx -y a2a-exposed@latest ...\`, and a Cloudflare login:
 npx cf auth login --no-browser; on a VPS where it fails with HTTP 403 before showing a code, export

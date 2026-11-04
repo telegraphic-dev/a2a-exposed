@@ -327,3 +327,5 @@ new mode-600 file without printing it. Consume it using `wake set --agent NAME
 settings. Both grants must remain valid. A failed test spends the reference too. Raw
 MCP keys keep their browser-only refusal; without a reference use browser confirmation.
 References are available when advertised by service capabilities. Hosted wake removal uses the website.
+
+Hosted listings and wake previews show result fields in text output; use `--json` for structured output. Owner credentials stay bound to their deployment origin independently of setup URL overrides.

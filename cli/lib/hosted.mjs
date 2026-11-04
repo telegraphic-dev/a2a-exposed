@@ -111,12 +111,15 @@ function secret(o, name, envName) {
 function wakeCredential(o) {
 	const origin = originFor(o), session = setupSession();
 	let name = o.agent || C.get("HOSTED_AGENT_NAME");
-	const owner = C.get("A2A_OWNER_TOKEN"), base = C.get("A2A_BASE_URL");
+	// Deployment halves come from one source, independently of setup selection.
+	const saved = C.fileConfig();
+	const source = process.env.A2A_BASE_URL || process.env.A2A_OWNER_TOKEN ? process.env : saved;
+	const owner = source.A2A_OWNER_TOKEN || "", base = source.A2A_BASE_URL || "";
 	if (!name && base) { try { name = new URL(base).hostname.split(".")[0]; } catch {} }
 	if (!/^[a-z0-9][a-z0-9-]{2,30}[a-z0-9]$/.test(name || "")) fail("agent", "Pass --agent NAME selected from hosted list --json.");
 	// An explicit agent must not borrow a different agent's owner token.
-	let ownerOrigin = controlOrigin(C.get("HOSTED_SETUP_URL"));
-	if (!ownerOrigin && controlOrigin(base)) {
+	let ownerOrigin = "";
+	if (controlOrigin(base)) {
 		const parsed = new URL(base);
 		if (parsed.hostname.startsWith(`${name}.`)) ownerOrigin = controlOrigin(`${parsed.protocol}//${parsed.host.slice(name.length + 1)}`);
 	}
@@ -176,7 +179,13 @@ export async function wake(sub, o = {}) {
 export async function output(run, o = {}) {
 	try {
 		const result = await run();
-		console.log(o.json ? JSON.stringify(result) : `${result.code}: ${result.next}`);
+		if (o.json) console.log(JSON.stringify(result));
+		else {
+			console.log(`${result.code}: ${result.next}`);
+			for (const [key, value] of Object.entries(result)) {
+				if (!["ok", "code", "next"].includes(key)) console.log(`${key}: ${JSON.stringify(value, null, 2)}`);
+			}
+		}
 		if (!result.ok) process.exitCode = 1;
 	} catch (error) {
 		const result = error.result || { ok: false, code: "unavailable", next: "Hosted setup did not finish. Check hosted list --json before retrying." };
