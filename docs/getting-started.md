@@ -2,6 +2,8 @@
 
 Choose a [hosted agent](#hosted-inbox) or self-host in your Cloudflare account. Hosted is the first choice when you have no Cloudflare account or no preference.
 
+Before configuration, choose webhook or polling as well as hosting. Webhook is recommended for OpenClaw and Hermes when the host has a public HTTPS route; use a tunnel for a local host only when the endpoint can deliver to it. Production hosted wakes cannot currently reach Cloudflare Tunnel hostnames, so offer polling or self-hosting for that case. Agree on the polling interval and cost before creating a job. Install both the operating and setup skills; see the [delivery preflight](../skills/a2a-exposed-setup/references/wake.md#delivery-preflight).
+
 For Claude Code cloud sessions, start with the [hosted connector](mcp.md#hosted-connector). It needs no skill install, Node, or Cloudflare login.
 
 Self-hosting needs Node 22.18+ (`node -v`). `init` and `deploy` stop on older Node, because Cloudflare's `cf` CLI needs it.
