@@ -37,6 +37,7 @@ async function request(origin, path, { token = "", method = "GET", body, fetchIm
 		const next = code === "taken" || code === "reserved_name" ? "Choose another --name and run hosted list --json before creating."
 			: code === "limit" ? "The account is at its agent limit. Review hosted list --json and account plans."
 			: code === "conflict" ? "Wake settings changed. Run wake preview --json, then test the draft again."
+			: code === "invalid_reference" ? "The wake reference was already used, expired or does not match this draft. Run wake prepare again with the draft inputs and a new --reference-file."
 			: code === "invalid_grant" || code === "insufficient_scope" ? NEXT
 			: "Hosted setup refused the request. Run hosted capabilities --json and check the inputs; no automatic retry was made.";
 		fail(code, next);
@@ -71,7 +72,7 @@ export async function list(o = {}) {
 	const { origin, token } = accountCredential(o);
 	const data = await request(origin, "/api/v1/tenants", { token });
 	if (!Array.isArray(data.tenants)) fail("invalid_response", "The service did not return an agent listing.");
-	return { ok: true, code: "agents", next: "Select an agent, or run hosted create --name NAME --json.", agents: data.tenants.map(row => ({ name: String(row.name || ""), status: String(row.status || ""), version: row.version })) };
+	return { ok: true, code: "agents", next: "This listing contains hosted agents only; Cloudflare-linked Workers remain in dashboard Your agents. Select an agent, or run hosted create --name NAME --json.", agents: data.tenants.map(row => ({ name: String(row.name || ""), status: String(row.status || ""), version: row.version })) };
 }
 
 export async function create(o = {}) {
@@ -108,7 +109,7 @@ function secret(o, name, envName) {
 	return value;
 }
 
-function wakeCredential(o) {
+function wakeCredential(o, preferOwner = false) {
 	const origin = originFor(o), session = setupSession();
 	let name = o.agent || C.get("HOSTED_AGENT_NAME");
 	// Deployment halves come from one source, independently of setup selection.
@@ -124,9 +125,15 @@ function wakeCredential(o) {
 		if (parsed.hostname.startsWith(`${name}.`)) ownerOrigin = controlOrigin(`${parsed.protocol}//${parsed.host.slice(name.length + 1)}`);
 	}
 	const ownerMatches = owner && base && ownerOrigin === origin && controlOrigin(base) && new URL(base).hostname.split(".")[0] === name;
-	const token = session.origin === origin && session.token ? session.token : ownerMatches ? owner : "";
+	const token = preferOwner && ownerMatches ? owner : session.origin === origin && session.token ? session.token : ownerMatches ? owner : "";
 	if (!token) fail("login_required", NEXT);
 	return { origin, token, name };
+}
+
+// A webhook path or query may contain its credential. Show only the public destination.
+function previewUrl(value) {
+ try { const url = new URL(value); return url.protocol === "https:" && !url.username && !url.password ? `${url.origin}${url.pathname === "/" ? "/" : "/…"}` : ""; }
+ catch { return ""; }
 }
 
 export async function wake(sub, o = {}) {
@@ -137,10 +144,10 @@ export async function wake(sub, o = {}) {
 		try { fs.lstatSync(o["reference-file"]); fail("reference_file", "Choose a new --reference-file path; existing files are never replaced."); }
 		catch (error) { if (error.result) throw error; if (error.code !== "ENOENT") fail("reference_file", "Cannot inspect --reference-file; check its path and permissions."); }
 	}
-	const { origin, token, name } = wakeCredential(o), path = `/api/v1/agents/${encodeURIComponent(name)}/wake`;
+	const { origin, token, name } = wakeCredential(o, sub !== "prepare" && !o["reference-file"] && !o["reference-env"]), path = `/api/v1/agents/${encodeURIComponent(name)}/wake`;
 	const current = await request(origin, path, { token });
 	if (!Number.isSafeInteger(current.version)) fail("invalid_response", "The service did not return a valid wake version. Saved settings were not changed.");
-	if (sub === "preview") return { ok: true, code: "preview", next: "Test an explicit draft before saving.", version: current.version, preset: current.preset, configured: Boolean(current.url), key_header: current.keyHeader || "" };
+	if (sub === "preview") return { ok: true, code: "preview", next: "Test an explicit draft before saving.", version: current.version, preset: current.preset, configured: Boolean(current.url), key_header: ["hermes", "openbot"].includes(current.preset) ? "" : ["grok-bot", "claude-code", "openclaw-wake", "openclaw-agent"].includes(current.preset) ? "Authorization" : current.keyHeader || "Authorization", url: previewUrl(current.url) };
 	if (sub === "set" && (o["reference-file"] || o["reference-env"])) {
 		if (o.url || o.preset || o["key-file"] || o["key-env"] || o["key-stdin"] || o["hmac-secret-file"] || o["hmac-secret-env"]) fail("reference_inputs", "Use a reference without draft overrides; it saves exactly the uploaded settings.");
 		const reference = secret(o, "reference", "");

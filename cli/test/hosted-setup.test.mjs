@@ -49,6 +49,8 @@ test("scoped approval saves only the setup grant and never prints credentials", 
 		assert.equal(saved.CONTROL_TOKEN, undefined);
 		assert.equal(fs.statSync(f.config).mode & 0o777, 0o600);
 		assert.match(r.stderr, /ABCD2345/);
+		assert.match(r.stderr, /Machine: test workstation/);
+		assert.match(r.stderr, /Permissions: agents:create, agents:owner-token, wake:write, wake:test/);
 		assert.ok(!r.stdout.includes(grant) && !r.stderr.includes(grant));
 		assert.ok(!r.stdout.includes("private-device") && !r.stderr.includes("private-device"));
 	} finally { f.clean(); }
@@ -157,5 +159,45 @@ test("human-readable listings and previews include the requested results", () =>
   const list=f.run(["hosted","list"],{"https://control.example/api/v1/tenants":{status:200,body:{tenants:[{name:"sample-agent",status:"active"}]}}});assert.equal(list.status,0,list.stderr);assert.match(list.stdout,/agents:[\s\S]*sample-agent[\s\S]*active/);
   const preview=f.run(["wake","preview","--agent","sample-agent"],{"https://control.example/api/v1/agents/sample-agent/wake":{status:200,body:{version:7,preset:"hermes",url:"https://receiver.example/wake"}}});assert.equal(preview.status,0,preview.stderr);assert.match(preview.stdout,/version: 7/);assert.match(preview.stdout,/preset: "hermes"/);assert.match(preview.stdout,/configured: true/);
   for (const r of [caps,list,preview]) assert.ok(!(r.stdout+r.stderr).includes(grant));
+ }finally{f.clean();}
+});
+
+
+test("saved owner token handles wake preview/test after setup grant revocation, without retrying a write", () => {
+ const f=fixture();f.save(`HOSTED_AGENT_NAME=sample-agent\nA2A_BASE_URL=https://sample-agent.control.example\nA2A_OWNER_TOKEN=${owner}\n`);
+ try {
+  for (const command of ["preview","test"]) {
+   const log=path.join(f.dir,command+".requests");
+   const r=f.run(["wake",command,"--agent","sample-agent","--json"],{
+    "https://control.example/api/v1/agents/sample-agent/wake":{status:200,body:{version:2,preset:"generic",url:"https://receiver.example/private-key?token=sensitive",keyHeader:"Authorization",ok:true,code:"204"}},
+   },{A2A_TEST_FETCH_LOG:log});
+   assert.equal(r.status,0,r.stdout+r.stderr);
+   const calls=fs.readFileSync(log,"utf8").trim().split("\n").map(JSON.parse).filter(c=>c.headers.authorization);
+   assert.ok(calls.length>0); assert.ok(calls.every(c=>c.headers.authorization===`Bearer ${owner}`));
+   if(command==="preview") { assert.equal(JSON.parse(r.stdout).url,"https://receiver.example/…"); assert.equal(JSON.parse(r.stdout).key_header,"Authorization"); }
+   for(const secret of [owner,grant,"private-key","sensitive"]) assert.ok(!(r.stdout+r.stderr).includes(secret));
+  }
+ }finally{f.clean();}
+});
+
+test("a refused reference gives fixed prepare guidance without reflecting server text", () => {
+ const f=fixture();f.save("HOSTED_AGENT_NAME=sample-agent\n");
+ const reference=path.join(f.dir,"reference");fs.writeFileSync(reference,"a2awr_"+"b".repeat(64),{mode:0o600});
+ try {
+  const r=f.run(["wake","set","--agent","sample-agent","--reference-file",reference,"--json"],{
+   "https://control.example/api/v1/agents/sample-agent/wake":{status:400,body:{error:"invalid_reference",message:owner}},
+  });
+  assert.equal(r.status,1); assert.match(JSON.parse(r.stdout).next,/already used.*wake prepare/); assert.ok(!r.stdout.includes(owner));
+ }finally{f.clean();}
+});
+
+
+test("hosted preview reports each preset's effective header without changing saved header inputs", () => {
+ const f=fixture();f.save("HOSTED_AGENT_NAME=sample-agent\n");
+ try {
+  for (const [preset,keyHeader,expected] of [["generic","","Authorization"],["generic","X-Hook-Key","X-Hook-Key"],["openclaw-agent","X-Ignored","Authorization"],["grok-bot","","Authorization"],["claude-code","","Authorization"],["hermes","",""],["openbot","",""]]) {
+   const r=f.run(["wake","preview","--agent","sample-agent","--json"],{"https://control.example/api/v1/agents/sample-agent/wake":{status:200,body:{version:1,preset,keyHeader,url:"https://receiver.example/wake"}}});
+   assert.equal(r.status,0,r.stdout+r.stderr); assert.equal(JSON.parse(r.stdout).key_header,expected,preset);
+  }
  }finally{f.clean();}
 });
