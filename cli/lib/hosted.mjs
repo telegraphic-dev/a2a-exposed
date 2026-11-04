@@ -147,7 +147,7 @@ export async function wake(sub, o = {}) {
 	const { origin, token, name } = wakeCredential(o, sub !== "prepare" && !o["reference-file"] && !o["reference-env"]), path = `/api/v1/agents/${encodeURIComponent(name)}/wake`;
 	const current = await request(origin, path, { token });
 	if (!Number.isSafeInteger(current.version)) fail("invalid_response", "The service did not return a valid wake version. Saved settings were not changed.");
-	if (sub === "preview") return { ok: true, code: "preview", next: "Test an explicit draft before saving.", version: current.version, preset: current.preset, configured: Boolean(current.url), key_header: current.preset === "claude-code" ? "Authorization" : current.keyHeader || "", url: previewUrl(current.url) };
+	if (sub === "preview") return { ok: true, code: "preview", next: "Test an explicit draft before saving.", version: current.version, preset: current.preset, configured: Boolean(current.url), key_header: ["hermes", "openbot"].includes(current.preset) ? "" : ["grok-bot", "claude-code", "openclaw-wake", "openclaw-agent"].includes(current.preset) ? "Authorization" : current.keyHeader || "Authorization", url: previewUrl(current.url) };
 	if (sub === "set" && (o["reference-file"] || o["reference-env"])) {
 		if (o.url || o.preset || o["key-file"] || o["key-env"] || o["key-stdin"] || o["hmac-secret-file"] || o["hmac-secret-env"]) fail("reference_inputs", "Use a reference without draft overrides; it saves exactly the uploaded settings.");
 		const reference = secret(o, "reference", "");

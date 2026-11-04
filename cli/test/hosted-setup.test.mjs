@@ -190,3 +190,14 @@ test("a refused reference gives fixed prepare guidance without reflecting server
   assert.equal(r.status,1); assert.match(JSON.parse(r.stdout).next,/already used.*wake prepare/); assert.ok(!r.stdout.includes(owner));
  }finally{f.clean();}
 });
+
+
+test("hosted preview reports each preset's effective header without changing saved header inputs", () => {
+ const f=fixture();f.save("HOSTED_AGENT_NAME=sample-agent\n");
+ try {
+  for (const [preset,keyHeader,expected] of [["generic","","Authorization"],["generic","X-Hook-Key","X-Hook-Key"],["openclaw-agent","X-Ignored","Authorization"],["grok-bot","","Authorization"],["claude-code","","Authorization"],["hermes","",""],["openbot","",""]]) {
+   const r=f.run(["wake","preview","--agent","sample-agent","--json"],{"https://control.example/api/v1/agents/sample-agent/wake":{status:200,body:{version:1,preset,keyHeader,url:"https://receiver.example/wake"}}});
+   assert.equal(r.status,0,r.stdout+r.stderr); assert.equal(JSON.parse(r.stdout).key_header,expected,preset);
+  }
+ }finally{f.clean();}
+});
