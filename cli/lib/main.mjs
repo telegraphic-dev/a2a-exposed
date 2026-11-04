@@ -31,7 +31,7 @@ Hosted setup:
   login --machine NAME --scopes SCOPES [--control-url URL] --json
                                 approve the explicit scopes using the printed website link once;
                                 save the scoped grant locally (mode 600), never print it
-  hosted list --json           list agents before choosing --name or --agent
+  hosted list --json           list hosted agents before choosing --name or --agent
   hosted create --name NAME --json
                                 create and save the owner credential in this config directory;
                                 use a separate --config-dir for each agent

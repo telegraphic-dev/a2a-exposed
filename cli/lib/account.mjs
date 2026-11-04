@@ -64,6 +64,7 @@ export async function deviceLogin({
 	try { verification = new URL(started.verification_uri_complete); } catch { die("invalid sign-in approval URL"); }
 	if (verification.origin !== origin || verification.username || verification.password || !/^[A-Za-z0-9-]{4,32}$/.test(started.user_code)) die("invalid sign-in approval URL or comparison code");
 	const verb = intent === "signup" ? "Create an account and approve" : "Sign in and approve";
+	if (scope) write(`Hosted setup access\nMachine: ${machine}\nPermissions: ${scope.split(" ").join(", ")}`);
 	write(`${verb} this code:\n${started.user_code}\n${started.verification_uri_complete}`);
 	const interval = Math.max(1, Number(started.interval) || 5);
 	const deadline = Date.now() + Math.max(1, Number(started.expires_in) || 600) * 1000;

@@ -258,3 +258,5 @@ references only on staging; capabilities is the source of available choices.
 Hosted setup commands exit 0 on success and 1 on a refusal or failure. `--json` returns `{ok, code, next}`; credential values are omitted. The approval link and comparison code are printed on stderr for the human.
 
 Hosted listings and wake previews include their result fields in text output; use `--json` for structured output. Owner credentials remain bound to their deployment origin even when a setup URL is overridden.
+
+Scoped login prints the machine label and requested permissions beside the approval code. Compare all three with the approval page. `hosted list` lists hosted agents; Cloudflare-linked Workers are listed in dashboard Your agents. Hosted `wake preview` shows the effective key header and destination origin, with any path and query hidden. Direct wake preview/test/set prefer a matching saved agent owner token, so revoking setup access does not disable that owner's credential. Reference prepare/set still require the scoped setup grant. A spent or expired reference needs a fresh `wake prepare` and a new protected reference file.
