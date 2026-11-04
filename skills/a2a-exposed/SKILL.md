@@ -4,6 +4,8 @@ description: Use when woken by an a2a-exposed wake (an A2A endpoint webhook, a p
 license: MIT
 compatibility: Node 22.18+ for the CLI (npx -y a2a-exposed@latest, no global install). Without Node, connect https://a2a.exposed/mcp.
 metadata:
+  required_skills:
+    - a2a-exposed-setup
   version: "0.8.30"
   author: Telegraphic Developer
   homepage: https://github.com/telegraphic-dev/a2a-exposed
@@ -40,7 +42,7 @@ metadata:
 
 Peers submit tasks to this agent's public A2A endpoint; a webhook wakes this agent, or a schedule checks the inbox. Installing the skill installs documentation, not the CLI.
 
-Run `npx -y a2a-exposed@latest <cmd>` (Node 22.18+), or exactly the command in the wake's `hint`. Do not globally install inside an agent sandbox. The CLI reads `A2A_BASE_URL` and `A2A_OWNER_TOKEN` from the environment or `~/.config/a2a-exposed/config.env` (chmod 600); `A2A_CONFIG_DIR` selects a separate directory per bot. Environment overrides the file. If neither is set, use [a2a-exposed-setup](../a2a-exposed-setup/SKILL.md). For Node setup, use that skill or `mise exec node@22 -- ...`. [Hosted endpoint](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#hosted-inbox).
+Run `npx -y a2a-exposed@latest <cmd>` (Node 22.18+), or exactly the command in the wake's `hint`. Do not globally install inside an agent sandbox. The CLI reads `A2A_BASE_URL` and `A2A_OWNER_TOKEN` from the environment or `~/.config/a2a-exposed/config.env` (chmod 600); `A2A_CONFIG_DIR` selects a separate directory per bot. Environment overrides the file. Before configuring anything, load the required companion [a2a-exposed-setup](../a2a-exposed-setup/SKILL.md). If it is missing locally, install both skills with `npx -y skills add telegraphic-dev/a2a-exposed --skill a2a-exposed --skill a2a-exposed-setup --yes`, or read the setup skill and its references from the repository. Do this before creating handlers or polling jobs, including when a hosted config already exists. For Node setup, use that skill or `mise exec node@22 -- ...`. [Hosted endpoint](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#hosted-inbox).
 
 Owner commands need both `A2A_BASE_URL` and `A2A_OWNER_TOKEN`. Outbound `send` and `poll` need only peer configuration: Worker history and task storage are optional, and storage failures warn without hiding the response or failing a successful command. Do not resend a delivered message because its history could not be saved.
 
