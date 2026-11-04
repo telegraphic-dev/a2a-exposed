@@ -896,7 +896,7 @@ test("uninstall DNS delete failure lists what this run removed and says uninstal
 
 test("tunnel status with nothing deployed names the config directory", async (t) => {
 	const s = await tunnelEnv(t);
-	s.setConfig({ A2A_WORKER_NAME: null, A2A_D1_ID: null });
+	s.setConfig({ A2A_WORKER_NAME: null, A2A_D1_ID: null, A2A_BASE_URL: null, A2A_OWNER_TOKEN: null });
 	const r = await s.cli(["tunnel", "status"]);
 	assert.equal(r.status, 1);
 	assert.match(r.stderr, new RegExp(`nothing is deployed from ${s.cfg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\. Another deployment\\? Set A2A_CONFIG_DIR`));
