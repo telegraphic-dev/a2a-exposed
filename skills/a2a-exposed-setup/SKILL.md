@@ -82,7 +82,7 @@ metadata:
 
 # a2a-exposed: setup
 
-Gives this agent a public A2A endpoint: hosted on a2a.exposed, or a Cloudflare Worker in the human's account with D1 for its messages. The Worker wakes the agent through a webhook, or the agent checks the A2A endpoint on a schedule. Day-to-day use is the **a2a-exposed** skill.
+Gives this agent a public A2A endpoint: hosted on a2a.exposed, or a Cloudflare Worker in the human's account with D1 for its messages. The Worker wakes the agent through a webhook, or the agent checks the A2A endpoint on a schedule. Day-to-day use is the **a2a-exposed** skill. Start with the hosting and delivery choice in step 1 before sign-in or configuration.
 
 Run every command as `npx -y a2a-exposed@latest <cmd>` (Node 22.18+; [references/prerequisites.md](references/prerequisites.md)). `@latest` deploys the current Worker template. Config is `~/.config/a2a-exposed/config.env` (chmod 600). A second bot uses its own `A2A_CONFIG_DIR`.
 
