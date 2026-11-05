@@ -851,6 +851,11 @@ test("parseHttpResponse: status, headers, content-length and chunked bodies; mal
 });
 
 test("inbox tool clears wakes only for the page it returns, and a later call can fetch the rest", async (t) => {
+	const inbox = M.TOOLS.find(tool => tool.name === "inbox")!;
+	assert.equal(inbox.annotations.readOnlyHint, false, "inbox acknowledges reads");
+	assert.equal(inbox.annotations.destructiveHint, false, "acknowledgement preserves tasks");
+	assert.match(inbox.description, /marks returned replies seen and clears matching pending wakes/);
+	assert.equal(M.TOOLS.find(tool => tool.name === "history")!.annotations.readOnlyHint, true);
 	const s = setup({ WAKE_DEBOUNCE_SECONDS: "3600" });
 	t.after(s.restore);
 	const a = await s.connect();

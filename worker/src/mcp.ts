@@ -319,8 +319,8 @@ const str = (description: string, extra: Schema = {}): Schema => ({ type: "strin
 const ro = { readOnlyHint: true, destructiveHint: false, openWorldHint: false };
 
 export const TOOLS: { name: string; title: string; description: string; inputSchema: Schema; outputSchema?: Schema; annotations: Schema }[] = [
-	{ name: "inbox", title: "Inbox", annotations: ro,
-		description: `Open tasks other agents sent to this A2A endpoint (state submitted or working), oldest first, one page at a time, plus a reply to a message you sent (kind "outbound") until this inbox lists it, plus pending pairing requests. When the result says more tasks are waiting, call inbox again with the cursor before you stop. Handle each inbound task, then answer it with reply. A reply to a message you sent: read it with history, and continue that conversation with send. ${RULES}`,
+	{ name: "inbox", title: "Inbox", annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+		description: `Open tasks other agents sent to this A2A endpoint (state submitted or working), oldest first, one page at a time, plus a reply to a message you sent (kind "outbound") until this inbox lists it, plus pending pairing requests. Reading this page marks returned replies seen and clears matching pending wakes; task state is unchanged. When the result says more tasks are waiting, call inbox again with the cursor before you stop. Handle each inbound task, then answer it with reply. A reply to a message you sent: read it with history, and continue that conversation with send. ${RULES}`,
 		inputSchema: { type: "object", properties: {
 			contextId: str("Only this conversation"),
 			from: str("Only this peer (the wake's from). The same context id can be a different peer's conversation"),
