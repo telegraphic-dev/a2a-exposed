@@ -368,3 +368,49 @@ test('removal preparation uploads clear only and protects the single-use referen
   const calls=fs.readFileSync(log,'utf8').trim().split('\n').map(JSON.parse);assert.deepEqual(JSON.parse(calls.at(-1).body),{version:7,clear:true});
  }finally{f.clean();}
 });
+
+test('name preflight is anonymous, read-only and returns only supplied-name availability',()=>{
+ const f=fixture();f.save();
+ try{
+  const log=path.join(f.dir,'names');
+  const r=f.run(['hosted','names','--name','Windmill','--json'],{
+   'https://control.example/api/v1/setup/capabilities':{status:200,body:{...capabilities,preflight:true}},
+   'https://control.example/api/v1/setup/name?name=windmill':{status:200,body:{name:'windmill',available:true,reason:'available',owner_token:owner}},
+  },{A2A_TEST_FETCH_LOG:log});
+  assert.equal(r.status,0,r.stdout+r.stderr);assert.equal(JSON.parse(r.stdout).available,true);assert.doesNotMatch(r.stdout,/a2asg_|a2aot_/);
+  const calls=fs.readFileSync(log,'utf8').trim().split('\n').map(JSON.parse);assert.ok(calls.every(c=>c.method==='GET'&&!c.headers.authorization));
+  const badlog=path.join(f.dir,'invalid');
+  for(const args of [[],['--name','bad name'],['--name','-wrong']]){
+   const invalid=f.run(['hosted','names',...args,'--json'],{}, {A2A_TEST_FETCH_LOG:badlog});assert.equal(invalid.status,1);assert.equal(fs.existsSync(badlog),false);
+  }
+ }finally{f.clean();}
+});
+test('capacity preflight validates numbers, strips unexpected fields and leaves configuration intact',()=>{
+ const f=fixture();f.save();
+ try{
+  const before=fs.readFileSync(f.config,'utf8'),log=path.join(f.dir,'capacity');
+  const replies={
+   'https://control.example/api/v1/setup/capabilities':{status:200,body:{...capabilities,preflight:true}},
+   'https://control.example/api/v1/setup/capacity':{status:200,body:{limit:3,used:1,remaining:2,can_create:true,owner_token:owner,other_agents:['private-agent']}},
+  };
+  const r=f.run(['hosted','capacity','--json'],replies,{A2A_TEST_FETCH_LOG:log});assert.equal(r.status,0,r.stdout+r.stderr);const data=JSON.parse(r.stdout);assert.equal(data.remaining,2);assert.doesNotMatch(r.stdout,/a2aot_|private-agent/);assert.equal(fs.readFileSync(f.config,'utf8'),before);
+  const calls=fs.readFileSync(log,'utf8').trim().split('\n').map(JSON.parse);assert.ok(calls.every(c=>c.method==='GET'));assert.equal(calls[1].headers.authorization,`Bearer ${grant}`);
+  replies['https://control.example/api/v1/setup/capacity'].body.remaining=99;
+  const invalid=f.run(['hosted','capacity','--json'],replies);assert.equal(invalid.status,1);assert.equal(JSON.parse(invalid.stdout).code,'invalid_response');
+ }finally{f.clean();}
+});
+test('create preflights advertised names and capacity before any POST',()=>{
+ for(const scenario of ['taken','limit']){
+  const f=fixture();f.save();
+  try{
+   const log=path.join(f.dir,'requests');
+   const r=f.run(['hosted','create','--name','windmill','--json'],{
+    'https://control.example/api/v1/setup/capabilities':{status:200,body:{...capabilities,preflight:true}},
+    'https://control.example/api/v1/setup/name?name=windmill':{status:200,body:{name:'windmill',available:scenario!=='taken',reason:scenario==='taken'?'taken':'available'}},
+    'https://control.example/api/v1/setup/capacity':{status:200,body:{limit:1,used:1,remaining:0,can_create:false}},
+   },{A2A_TEST_FETCH_LOG:log});
+   assert.equal(r.status,1,r.stdout+r.stderr);assert.equal(JSON.parse(r.stdout).code,scenario);
+   assert.ok(fs.readFileSync(log,'utf8').trim().split('\n').map(JSON.parse).every(c=>c.method==='GET'));
+  }finally{f.clean();}
+ }
+});
