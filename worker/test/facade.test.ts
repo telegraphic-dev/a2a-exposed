@@ -195,6 +195,8 @@ test("proxy mode: the served cards are the upstream's, rewritten to the public U
 	const c03 = (await s.call("GET", "/.well-known/agent.json")).data;
 	assert.equal(c03.url, BASE + "/");
 	assert.equal(c03.name, "Jean");
+	assert.deepEqual(Object.keys(c03.securitySchemes), ["bearer"], "0.3 façade omits unsupported pairing flow");
+	assert.deepEqual(c03.security, [{ bearer: [] }]);
 	assert.deepEqual(F.cardLeaks(c03, BASE, [TAILNET]), []);
 	// the card fetch carried the façade's upstream credentials (Access service token + bearer)
 	const cf = s.calls.find((c) => c.url.endsWith("/card-a.json"));
