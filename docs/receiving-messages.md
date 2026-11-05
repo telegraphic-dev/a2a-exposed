@@ -6,6 +6,16 @@ Please report a result the docs do not cover with `npx -y a2a-exposed@latest fee
 
 ## Set a webhook
 
+For a hosted address, start with `hosted capabilities --json`. When setup is
+advertised, list agents with `hosted list --json` after device approval, then use
+`wake preview|test|set --agent NAME --json` with explicit URL, preset and protected
+secret inputs. See [hosted CLI setup](cli.md#hosted-setup-from-the-cli). If the
+service does not expose setup, use dashboard Wake settings or hosted MCP
+`set_wake` and enter secrets on its confirmation page. Do not run `init` or
+`deploy` for a hosted address.
+
+For a self-hosted endpoint:
+
 ```bash
 export WAKE_WEBHOOK_URL=...     # from the agent's webhook panel
 export WAKE_WEBHOOK_KEY=...     # never on the command line
@@ -56,6 +66,11 @@ The hint command is `WAKE_CLI_COMMAND` when set, otherwise `npx -y a2a-exposed@l
 ## Presets
 
 ### `grok-bot`
+
+For hosted setup, select `grok-bot` from `hosted capabilities --json` when
+advertised and pass the routine key through `--key-file`, `--key-env` or
+`--key-stdin`. If setup is unavailable, the human enters the key on the website;
+never paste it in chat. The environment-upload example above is self-hosted.
 
 Bearer token in `Authorization`. JSON body:
 

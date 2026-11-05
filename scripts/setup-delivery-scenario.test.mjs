@@ -27,6 +27,10 @@ test("fresh hosted OpenClaw: companion and both delivery options precede any pol
 
 test("compatibility and human handoffs prevent self-host-only commands and pasted secrets", () => {
 	for (const row of [/`inbox`, `show`, `history`, `reply`/, /`init`, `deploy`, `tunnel create\/status\/rm`, `uninstall`/, /CLI `wake set\/test\/preview\/unset`/, /Hosted MCP `list_agents`, `create_agent`, `agent_status`, `set_wake`/]) assert.match(wake, row);
+	assert.match(wake, /Use `--agent NAME` when the service advertises hosted setup/);
+	assert.match(wake, /Run `hosted capabilities --json` before requesting setup access/);
+	assert.doesNotMatch(wake, /Self-hosted only in the current release|Hosted CLI\/API integration may add supported commands later/);
+	assert.match(wake, /If setup is unavailable, stop the CLI setup path and offer dashboard Wake settings/);
 	assert.match(wake, /Prefer a supported device-code grant over asking for pasted tokens/);
 	assert.match(wake, /config.env` \(mode 600\)/);
 	assert.match(wake, /human handles sign-in\/consent and device-code approval, pairing approval/);

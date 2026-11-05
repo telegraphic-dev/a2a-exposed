@@ -22,12 +22,12 @@ Check hosting compatibility before account steps. A hosted endpoint does not imp
 | Command or tool | Hosted config | Self-hosted config |
 | --- | --- | --- |
 | `inbox`, `show`, `history`, `reply`, `connect`, `send`, `poll`, peer commands | Owner/peer credentials for that hosted address | Owner/peer credentials for that Worker |
-| `status` | Check installed CLI support for hosted detection; older releases require the hosted `agent_status` tool | Read-only Worker, card, owner and wake diagnostics |
+| `status` | Read selected hosted settings with `status --agent NAME --json`; list names with `hosted list --json` | Read-only Worker, card, owner and wake diagnostics |
 | `init`, `deploy`, `tunnel create/status/rm`, `uninstall` | Self-hosted only; do not run these to repair a hosted address | Provision/update/remove the selected account’s resources after approval |
-| CLI `wake set/test/preview/unset` | Self-hosted only in the current release; use hosted settings or supported hosted MCP wake tools | Configure, preview and test Worker wake delivery |
+| CLI `wake set/test/preview/unset` | Use `--agent NAME` when the service advertises hosted setup; otherwise use dashboard Wake settings or hosted MCP `set_wake` | Configure, preview and test Worker wake delivery |
 | Hosted MCP `list_agents`, `create_agent`, `agent_status`, `set_wake` | Hosted connector; follow its consent and secret-entry flow | Does not administer a self-hosted Worker |
 
-Hosted CLI/API integration may add supported commands later: inspect the installed help and service capabilities before using them. Do not send wake secrets through browser automation. The manual hosted fallback is a human action; prefer the device-code flow once available. Never ask for secret values in chat or argv.
+Run `hosted capabilities --json` before requesting setup access. When the service advertises setup scopes and wake presets, follow [scoped hosted CLI setup](#scoped-hosted-cli-setup). If setup is unavailable, stop the CLI setup path and offer dashboard Wake settings or hosted MCP `set_wake`; do not run `init` or `deploy` to repair a hosted address. Do not send wake secrets through browser automation. The manual hosted fallback is a human action; prefer the device-code flow once available. Never ask for secret values in chat or argv.
 
 ## Human handoffs
 
@@ -56,6 +56,17 @@ npx -y a2a-exposed@latest wake test       # sends a test wake; expect a 2xx stat
 **Rotating or removing wake secrets.** `wake set` uploads only the secrets currently in the environment; secrets you leave unset stay as they were on the Worker. To remove all wake secrets, run `wake unset`.
 
 ### Grok Bot (`grok-bot`)
+
+Choose hosting first. For a hosted address, check `hosted capabilities --json` and use
+[scoped hosted CLI setup](#scoped-hosted-cli-setup) when advertised. Select `grok-bot`
+from the advertised presets and read the routine key through `--key-file`, `--key-env`
+or `--key-stdin`; the self-hosted environment-upload commands below do not apply.
+If the service does not expose setup, the human enters the key in dashboard Wake
+settings or the hosted MCP confirmation page. Never request it in chat or automate
+secret entry.
+
+For a self-hosted endpoint:
+
 1. Create a **routine** with a **webhook trigger**. The routine's webhook **URL** and **key** are handed to the bot as **two separate secrets**.
 2. Export them under the names the CLI reads, `WAKE_WEBHOOK_URL` and `WAKE_WEBHOOK_KEY` (from the secret values, never typed onto the command line), then run `npx -y a2a-exposed@latest wake set --preset grok-bot`. The CLI reads both from the environment at `wake set` time and uploads them as Worker secrets; they are not written to `config.env`. The Worker sends `Authorization: Bearer <key>`.
 3. The JSON body looks like this:
