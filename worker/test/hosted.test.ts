@@ -933,8 +933,10 @@ test("self-host workerd: human mode owner token approves, the device poll return
 
 test("sealed upstream and wake Access credentials reach only their tenant context in workerd", async (t) => {
 	const received: { origin: string; bearer: string | null; id: string | null; secret: string | null }[] = [];
+	const keys = { previous: "platform-secret", current: "next-platform-secret" };
+	const keyring = (active: string) => JSON.stringify({ v: 2, active, keys });
 	const mf = await start({
-		bindings: { TENANCY: "host", TENANT_DOMAIN: "example.com", TENANT_SECRETS_KEY: "platform-secret" },
+		bindings: { TENANCY: "host", TENANT_DOMAIN: "example.com", TENANT_SECRETS_KEY: keyring("current") },
 		durableObjects: { TENANT_DO: { className: "TenantStore", useSQLite: true } },
 		outboundService: async (request: Request) => {
 			received.push({ origin: new URL(request.url).origin, bearer: request.headers.get("authorization"), id: request.headers.get("cf-access-client-id"), secret: request.headers.get("cf-access-client-secret") });
@@ -966,9 +968,22 @@ test("sealed upstream and wake Access credentials reach only their tenant contex
 	assert.equal(preview.status, 200);
 	assert.equal((preview.body as { hasAccessServiceToken: boolean }).hasAccessServiceToken, true);
 	for (const value of Object.values(secrets)) assert.equal(JSON.stringify([facade.body, preview.body]).includes(value), false);
+	let version = 1;
+	for (const active of ["previous", "current"]) {
+		const v2 = await sealWakeSecrets(keyring(active), "sealed-tenant", secrets);
+		assert.ok(v2?.startsWith(`v2.${active}.`));
+		assert.equal((await push(++version, v2)).applied, true);
+		const facadeV2 = await stub.owner({ accountId: "dummy-owner", method: "GET", path: "/owner/facade" });
+		assert.equal((facadeV2.body as { hasUpstreamToken: boolean }).hasUpstreamToken, true);
+		assert.equal(received.at(-1)?.bearer, "Bearer dummy-bearer");
+		const wakeV2 = await stub.owner({ accountId: "dummy-owner", method: "GET", path: "/owner/wake/preview" });
+		assert.equal((wakeV2.body as { hasAccessServiceToken: boolean }).hasAccessServiceToken, true);
+		for (const value of Object.values(secrets)) assert.equal(JSON.stringify([facadeV2.body, wakeV2.body]).includes(value), false);
+	}
+
 	const otherTenantBlob = await sealWakeSecrets("platform-secret", "another-tenant", secrets);
 	assert.ok(otherTenantBlob);
-	assert.equal((await push(2, otherTenantBlob)).applied, true);
+	assert.equal((await push(++version, otherTenantBlob)).applied, true);
 	const rejected = await stub.owner({ accountId: "dummy-owner", method: "GET", path: "/owner/facade" });
 	assert.equal((rejected.body as { hasUpstreamToken: boolean }).hasUpstreamToken, false);
 	assert.equal((rejected.body as { hasUpstreamAccessServiceToken: boolean }).hasUpstreamAccessServiceToken, false);

@@ -3533,8 +3533,10 @@ async function outboundPeer(ctx: TenantContext, alias: string): Promise<{ alias:
 	if (!r) throw new ToolError(`no peer "${alias}" synced to this A2A endpoint. On the machine with the CLI: ${cliCommand(ctx)} peers sync ${alias}`);
 	let token: string | null = null;
 	if (r.token_enc) {
-		const peerKey = await ctx.peerKey();
-		token = peerKey ? await M.openPeerTokenWithKey(peerKey, alias, r.token_enc) : null;
+		for (const key of await ctx.peerReadKeys()) {
+			token = await M.openPeerTokenWithKey(key, alias, r.token_enc);
+			if (token) break;
+		}
 		if (!token) throw new ToolError(`the stored token for "${alias}" can't be read (the owner token was rotated since it was synced): run ${cliCommand(ctx)} peers sync ${alias} again`);
 	}
 	return { alias, url: r.url, token };

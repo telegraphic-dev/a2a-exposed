@@ -30,7 +30,7 @@ export interface ControlEnv extends PlaneEnv {
 	SIGNUP_ALLOWLIST?: string;
 	/** Default agents per account. Unset or empty: no cap, unless that account sets agent_limit. An explicit non-negative integer sets the cap. */
 	FREE_AGENT_LIMIT?: string;
-	/** Same secret as the data-plane Worker. Seals wake secrets. Unset: a new key cannot be saved. */
+	/** Same raw key or JSON rotation keyring as the data-plane Worker. Seals tenant secrets. Unset: a new key cannot be saved. */
 	TENANT_SECRETS_KEY?: string;
 	/**
 	 * Fine-grained token with Issues write on FEEDBACK_REPO. A secret.

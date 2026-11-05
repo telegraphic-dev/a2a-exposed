@@ -268,3 +268,20 @@ test("fetch path: gates set or unset, the self-host Worker still answers from OW
 	const no = await call({ ...base, ...gates }, "/owner/inbox", { authorization: "Bearer platform-key" });
 	assert.equal(no.status, 401);
 });
+
+test("hosted peer token keys follow the active ring key and keep the previous key for reads", async () => {
+	const make = (key: string, id = "ten_a") => hostedTenantContext(selfEnv({ TENANT_SECRETS_KEY: key }), { id, db: dummy, publicUrl: BASE });
+	const old = make("old-platform-key");
+	const ring = JSON.stringify({ v: 2, active: "current", keys: { previous: "old-platform-key", current: "new-platform-key" } });
+	const rotating = make(ring);
+	const oldToken = await sealPeerTokenWithKey((await old.peerKey())!, "alpha", "fixture-old-token");
+	const keys = await rotating.peerReadKeys();
+	assert.equal(keys.length, 2);
+	assert.equal(await openPeerTokenWithKey(keys[0], "alpha", oldToken), null);
+	assert.equal(await openPeerTokenWithKey(keys[1], "alpha", oldToken), "fixture-old-token");
+	const newToken = await sealPeerTokenWithKey((await rotating.peerKey())!, "alpha", "fixture-new-token");
+	assert.equal(await openPeerTokenWithKey((await make("new-platform-key").peerKey())!, "alpha", newToken), "fixture-new-token");
+	for (const key of await make(ring, "ten_b").peerReadKeys()) assert.equal(await openPeerTokenWithKey(key, "alpha", oldToken), null);
+	assert.deepEqual(await make('{"v":2}').peerReadKeys(), []);
+	assert.equal((await resolveTenant(selfEnv()).peerReadKeys()).length, 1);
+});

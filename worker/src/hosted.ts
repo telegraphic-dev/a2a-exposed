@@ -163,9 +163,6 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 		// config_json is ignored, and a blob that cannot be opened leaves those fields unset.
 		if (row.secretsEnc) {
 			const opened = await openWakeSecrets(parsed.secretsKey || "", row.tenantId, row.secretsEnc);
-			if (!opened) {
-				console.log(JSON.stringify({ ts: new Date().toISOString(), event: "wake_secrets_unreadable", tenant: row.tenantId }));
-			}
 			for (const key of WAKE_SECRET_KEYS) {
 				const value = opened?.[key];
 				if (value) config[key] = value;
