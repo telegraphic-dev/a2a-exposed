@@ -11,9 +11,13 @@ const BASIC_RE = /(basic\s+)(\S+)/gi;
 const PEM_RE = /-----BEGIN (?:[A-Z0-9]+ )?PRIVATE KEY-----[\s\S]*?(?:-----END (?:[A-Z0-9]+ )?PRIVATE KEY-----|$)/g;
 const API_KEY_RE = /(?:(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|\bAKIA[0-9A-Z]{16}\b|\bsk_(?:live|test)_[A-Za-z0-9]{10,}|\brk_(?:live|test)_[A-Za-z0-9]{10,}|\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}|\bxox[baprs]-[A-Za-z0-9-]{10,}|\bAIza[0-9A-Za-z_-]{35}\b)/g;
 const JWT_RE = /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g;
-const AUTH_RE = /\b((?:proxy-)?authorization)(\s*[:=]\s*)([^\n]+)/gi;
+const AUTH_RE = /\b((?:proxy-)?authorization)(\s*[:=]\s*)([^\r\n]+)/gi;
 // Queries, fragment parameters, and form bodies share name=value encoding.
 const QUERY_RE = /(^|[?&#\s])([^?&#\s="'<>]+)(\s*=\s*)("(?:\\.|[^"\\])*(?:"|$)|'(?:\\.|[^'\\])*(?:'|$)|(?:\\(?!["'])|[^&#\s"'<>\\])*)/g;
+const HEADER_RE = /\b([A-Za-z][A-Za-z0-9_-]*)([ \t]*:[ \t]*)/g;
+const CONFIG_LINE_RE = /^([ \t]*)([A-Z_][A-Z0-9_]*)([ \t]*=[ \t]*)([^\r\n]*)/gm;
+const URL_PATH_RE = /(\bhttps?:\/\/[^/?#\s"'<>]+)([^?#\s"'<>]*)/gi;
+const QUERY_SECRET = new Set(["key", "sig", "code", "codeverifier"]);
 const ASSIGN_RE = /\b([A-Za-z_][A-Za-z0-9_]*)(\s*=\s*)/g;
 
 const SECRET_EXACT = new Set([
@@ -24,6 +28,8 @@ const SECRET_EXACT = new Set([
 	"password",
 	"passwd",
 	"secret",
+	"secrets",
+	"signature",
 	"token",
 	"apikey",
 	"accesstoken",
@@ -38,9 +44,12 @@ const SECRET_EXACT = new Set([
 	"webhookkey",
 	"accessclientid",
 	"accessclientsecret",
+	"xhubsignature256",
 ]);
 
 const SECRET_SUFFIX = [
+	"secrets",
+	"signature",
 	"authorization",
 	"token",
 	"secret",
@@ -104,7 +113,40 @@ function unquotedValueEnd(text: string, start: number): number {
 	return i;
 }
 
-/** A secret assignment loses its whole value. Quoted values, including escaped quotes, are read before an unquoted word. */
+/** Serialized JSON strings were already inspected as decoded containers. */
+function jsonStringSpans(text: string): [number, number][] {
+	const strings: [number, number][] = [];
+	for (let i = 0; i < text.length; i += 1) {
+		if (text[i] !== '"') continue;
+		const end = quotedValueEnd(text, i);
+		try { JSON.parse(text.slice(i, end)); strings.push([i, end]); }
+		catch { /* Malformed strings still need the text scanners. */ }
+		i = end - 1;
+	}
+	return strings;
+}
+
+/** Inspect header labels after log prefixes such as Error:, preserving line endings. */
+function redactHeaderLines(text: string): string {
+	const strings = jsonStringSpans(text);
+	const pattern = new RegExp(HEADER_RE.source, "g");
+	let out = "";
+	let last = 0;
+	let match: RegExpExecArray | null;
+	while ((match = pattern.exec(text)) !== null) {
+		if (!secretName(match[1]) || strings.some(([start, end]) => match!.index >= start && match!.index < end)) continue;
+		const start = pattern.lastIndex;
+		let end = start;
+		while (end < text.length && !/[\r\n]/.test(text[end])) end += 1;
+		if (end === start) continue;
+		out += text.slice(last, start) + REDACTED;
+		last = end;
+		pattern.lastIndex = end;
+	}
+	return out + text.slice(last);
+}
+
+/** A secret assignment loses its whole value. */
 function redactAssignments(text: string): string {
 	const pattern = new RegExp(ASSIGN_RE.source, "g");
 	// Parameters were handled as complete name/value pairs; do not reinterpret
@@ -222,18 +264,31 @@ function redactNested(value: string, depth: number, cache = new Map<string, stri
 
 /** Remove secret text. The words around it stay. */
 function redactText(value: string, depth: number, cache: Map<string, string>): string {
-	let text = redactJsonFields(value, depth, cache);
+	// A standalone uppercase environment value can contain spaces or JSON.
+	// Parameter lists retain their &/# separators; quoted assignments retain
+	// the existing quote-aware boundary handling. Leave a trailing assignment
+	// label for the scanners that can consume its value on the next line.
+	let text = replaceAll(value, CONFIG_LINE_RE, (all, indent, name, sep, item) => {
+		if (!secretName(name) || !item || /^["']/.test(item) || /[&#]/.test(item) || /\b[A-Za-z_][A-Za-z0-9_]*\s*=\s*$/.test(item)) return all;
+		return `${indent}${name}${sep}${REDACTED}`;
+	});
+	text = redactJsonFields(text, depth, cache);
 	text = replaceAll(text, PEM_RE, REDACTED);
 	text = replaceAll(text, JWT_RE, REDACTED);
 	text = replaceAll(text, API_KEY_RE, REDACTED);
 	text = replaceAll(text, TOKEN_RE, REDACTED);
 	text = replaceAll(text, BEARER_RE, `$1${REDACTED}`);
 	text = replaceAll(text, BASIC_RE, `$1${REDACTED}`);
+	text = redactHeaderLines(text);
 	text = replaceAll(text, AUTH_RE, (_all, name: string, sep: string, rest: string) => {
 		if (rest.trim().length < 8 && !/bearer|basic/i.test(rest)) return `${name}${sep}${rest}`;
 		return `${name}${sep}${REDACTED}`;
 	});
 	text = replaceAll(text, USERINFO_RE, `$1${REDACTED}@`);
+	// Known credential paths also occur without an origin in request logs.
+	text = text.replace(/(\/(?:hooks|webhooks)\/)[^/?#\s"'<>]+/gi, `$1${REDACTED}`)
+		.replace(/\/bot[0-9]+:[^/?#\s"'<>]+/gi, `/bot${REDACTED}`);
+	text = replaceAll(text, URL_PATH_RE, (_all, origin, path) => origin + path.replace(/\/[^/]{16,}/g, `/${REDACTED}`));
 	const cleanParameter = (all: string, sep: string, name: string, assignment: string, item: string): string => {
 		let decoded = name;
 		// Each decoding step shortens an escaped name; repeated encoding must
@@ -254,7 +309,7 @@ function redactText(value: string, depth: number, cache: Map<string, string>): s
 			setup = /^[A-Za-z0-9_-]{16,}/.test(candidate);
 		}
 		if (!item) return all;
-		if (!secretName(decoded) && !setup) {
+		if (!secretName(decoded) && !QUERY_SECRET.has(compactName(decoded)) && !setup) {
 			const quote = item[0];
 			const wrapped = (quote === '"' || quote === "'") && item.endsWith(quote) && item.length > 1;
 			const cleaned = wrapped ? quote + redactNested(item.slice(1, -1), depth + 1, cache) + quote : redactNested(item, depth + 1, cache);
@@ -262,14 +317,7 @@ function redactText(value: string, depth: number, cache: Map<string, string>): s
 		}
 		return `${sep}${name}${assignment}${REDACTED}`;
 	};
-	const strings: [number, number][] = [];
-	for (let i = 0; i < text.length; i += 1) {
-		if (text[i] !== '"') continue;
-		const end = quotedValueEnd(text, i);
-		try { JSON.parse(text.slice(i, end)); strings.push([i, end]); }
-		catch { /* Malformed strings still need the text scanners. */ }
-		i = end - 1;
-	}
+	const strings = jsonStringSpans(text);
 	const parameters = new RegExp(QUERY_RE.source, "g");
 	let out = "";
 	let last = 0;
@@ -332,6 +380,21 @@ function walk(value: unknown, seen: WeakSet<object>): unknown {
 		return value.map((item) => walk(item, seen));
 	}
 	const proto = Object.getPrototypeOf(value);
+	if (value instanceof Error) {
+		// Error message, stack, cause and AggregateError.errors are usually
+		// non-enumerable. Copy descriptors without retaining raw values or
+		// invoking untrusted accessors. Preserve the Error subtype.
+		const out = new Error();
+		Object.setPrototypeOf(out, proto);
+		delete out.stack;
+		for (const key of Reflect.ownKeys(value)) {
+			const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
+			const item = "value" in descriptor && !(typeof key === "string" && secretName(key))
+				? walk(descriptor.value, seen) : REDACTED;
+			Object.defineProperty(out, key, { value: item, enumerable: descriptor.enumerable, configurable: true, writable: true });
+		}
+		return out;
+	}
 	if (proto !== Object.prototype && proto !== null) return value;
 	const record = value as Record<string, unknown>;
 	const hidden = new Set<string>();
