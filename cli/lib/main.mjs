@@ -232,7 +232,8 @@ Inbox (owner side)
                                            history and continue with send. Then pending pairing
                                            requests (tell your human; the dashboard URL when MANAGE_URL is set;
                                            --json: rows on stdout, requests on stderr). Follows every page; past
-                                           10000 pages it errors instead of a short list
+                                           10000 pages it errors instead of a short list. Reading marks returned replies
+                                           seen and clears matching pending wakes; task state is unchanged
   show <taskId>                            full task JSON
   working <taskId>                         mark task working
   reply <taskId> (--text T | --stdin) [--state completed|input-required|rejected|failed|working]
