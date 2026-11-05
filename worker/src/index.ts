@@ -2663,7 +2663,7 @@ async function devicePage(req: Request, ctx: TenantContext, ectx: ExecutionConte
 			model.askCode = true;
 			model.codeValue = raw || "";
 			if (raw && !notice) {
-				let text = "That is not a valid code (it looks like WDJB-4827).";
+				let text = "Enter four consonants, a hyphen, and four digits.";
 				if (code && !r) { lookupStatus = 404; text = PAIRING_NOT_FOUND; }
 				else if (r && r.status !== "pending") text = `That request was already ${r.status === "denied" ? "denied" : "approved"}.`;
 				else if (code && r) { lookupStatus = 404; text = PAIRING_EXPIRED; }
@@ -2682,6 +2682,11 @@ async function devicePage(req: Request, ctx: TenantContext, ectx: ExecutionConte
 	if ((origin && origin !== "null" && origin !== new URL(ctx.PUBLIC_URL).origin && origin !== url.origin) || fresh || !form.csrf || !A.timingSafeEqualStr(form.csrf, csrf)) {
 		await show(form.user_code || null, { kind: "error", text: "This form expired or came from another site. Reload the page and try again." });
 		return send(403);
+	}
+	// Code entry is a lookup only; approval and denial remain separate CSRF-protected submissions.
+	if (form.decision === "lookup") {
+		await show(form.user_code || null);
+		return send(lookupStatus);
 	}
 	const code = P.normUserCode(form.user_code);
 	if (!code) { await show(form.user_code || null); return send(400); }

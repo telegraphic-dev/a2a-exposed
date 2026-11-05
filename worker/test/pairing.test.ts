@@ -65,6 +65,66 @@ function setup(over: Record<string, string> = {}) {
 	return { env, DB, wakes, call, owner, start, poll, decidePage, restore: () => { globalThis.fetch = origFetch; } };
 }
 
+test("device code entry posts a CSRF-protected lookup without making a pairing decision", async (t) => {
+	const s = setup(); t.after(s.restore);
+	const d = (await s.start()).data;
+	const entry = await s.call("GET", "/device");
+	assert.match(entry.text, /<form method="post" action="\/device">/);
+	assert.doesNotMatch(entry.text, /method="get"|placeholder="WDJB-4827"|aria-invalid/);
+	assert.match(entry.text, /placeholder="XXXX-0000"/);
+	assert.match(entry.text, /spellcheck="false" autocomplete="off" autocapitalize="characters"/);
+	assert.match(entry.text, /name="decision" value="lookup"/);
+	const cookie = entry.headers.get("set-cookie")!.split(";")[0];
+	const csrf = /name="csrf" value="([^"]+)"/.exec(entry.text)![1];
+	const lookup = (code: string, overrides = {}) => s.call("POST", "/device", {
+		form: { csrf, decision: "lookup", user_code: code }, cookie, headers: { origin: BASE }, ...overrides,
+	});
+	const page = await lookup(d.user_code.toLowerCase());
+	assert.equal(page.status, 200, page.text);
+	assert.equal(page.headers.get("location"), null, "no redirect puts the code in a URL");
+	assert.match(page.text, /Barry Bot/);
+	assert.match(page.text, /name="decision" value="deny"/);
+	assert.doesNotMatch(page.text, /aria-invalid/);
+	assert.equal((await s.poll(d.device_code)).data.error, "authorization_pending");
+	assert.equal(s.DB.db.prepare("SELECT status FROM device_requests").get()!.status, "pending");
+	assert.equal((await lookup(d.user_code, { cookie: "" })).status, 403);
+	assert.equal((await lookup(d.user_code, { headers: { origin: "https://evil.example" } })).status, 403);
+	assert.equal((await lookup(d.user_code, { form: { decision: "lookup", user_code: d.user_code } })).status, 403);
+	const invalid = await lookup("<bad>");
+	assert.equal(invalid.status, 200);
+	assert.match(invalid.text, /value="&lt;bad&gt;"/);
+	assert.match(invalid.text, /<input id="uc"[^>]*aria-invalid="true" aria-describedby="device-error"/);
+	assert.match(invalid.text, /<p id="device-error" role="alert"[^>]*>Enter four consonants/);
+	assert.equal((await lookup("BCDF-2345")).status, 404);
+	advance(3601);
+	const expired = await lookup(d.user_code);
+	assert.equal(expired.status, 404);
+	assert.match(expired.text, /aria-describedby="device-error"/);
+	assert.match(expired.text, /expired/i);
+});
+
+test("POST code lookups keep the existing IP limit", async (t) => {
+	const s = setup(); t.after(s.restore);
+	const g = await s.call("GET", "/device");
+	const cookie = g.headers.get("set-cookie")!.split(";")[0];
+	const csrf = /name="csrf" value="([^"]+)"/.exec(g.text)![1];
+	const lookup = () => s.call("POST", "/device", { form: { csrf, decision: "lookup", user_code: "BCDF-2345" }, cookie, headers: { origin: BASE } });
+	for (let i = 0; i < P.LIMITS.lookupsPerIp; i++) assert.equal((await lookup()).status, 404);
+	const limited = await lookup();
+	assert.match(limited.text, /Too many code lookups/);
+	assert.match(limited.text, /<input id="uc"[^>]*aria-invalid="true" aria-describedby="device-error"/);
+});
+
+test("wrong approval passwords identify the password input and error text", async (t) => {
+	const s = setup(); t.after(s.restore);
+	assert.equal((await s.owner("PUT", "/owner/pairing/password", await passwordRecord())).status, 200);
+	const d = (await s.start()).data;
+	const page = await s.decidePage(d.user_code, "wrong password", "approve");
+	assert.equal(page.status, 403);
+	assert.match(page.text, /<input id="pw"[^>]*aria-invalid="true" aria-describedby="device-error"/);
+	assert.match(page.text, /<p id="device-error" role="alert"[^>]*>Wrong password/);
+});
+
 test("HEAD answers like GET with an empty body, and a self-hosted card stays cached for 5 minutes", async (t) => {
 	const s = setup();
 	t.after(s.restore);
@@ -903,7 +963,7 @@ test("device page copy: code hint, expiry, token scope, settled result, A2A endp
 	const base = { agentName: "this A2A endpoint", mode: "human" as const, cli: "a2a", csrf: "c".repeat(24), passwordSet: true };
 	const bare = P.devicePage({ ...base, askCode: true }, "n");
 	assert.match(bare, /The connecting agent prints this code when it runs <code>a2a connect &lt;url&gt;<\/code>/);
-	assert.match(bare, /It looks like WDJB-4827/);
+	assert.match(bare, /four consonants, a hyphen, and four digits/);
 	assert.match(bare, /<title>Connect an agent to this A2A endpoint<\/title>/);
 	const req = { userCode: "WDJB4827", clientName: "Barry", clientId: "barry", agentCardUrl: "http://127.0.0.1/card", ip: "192.0.2.1", country: "", createdMs: now, expiresMs: now + 20_000 };
 	const page = P.devicePage({ ...base, request: req }, "n");
@@ -934,7 +994,7 @@ test("device page copy: code hint, expiry, token scope, settled result, A2A endp
 	const s = setup(); t.after(s.restore);
 	const empty = await s.call("GET", "/device");
 	assert.match(empty.text, /prints this code when it runs/);
-	assert.match(empty.text, /WDJB-4827/);
+	assert.match(empty.text, /placeholder="XXXX-0000"/);
 	const named = setup({ AGENT_NAME: "" }); t.after(named.restore);
 	const title = await named.call("GET", "/device");
 	assert.match(title.text, /Connect an agent to this A2A endpoint/);
