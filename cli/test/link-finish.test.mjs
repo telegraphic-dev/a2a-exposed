@@ -734,8 +734,9 @@ test("CLI JSON missing preset fails before session lookup or approval", t => {
 
 test("CLI JSON parser and usage errors do not echo untrusted arguments", () => {
 	const cli = new URL("../bin/a2a-exposed.mjs", import.meta.url).pathname;
-	for (const args of [["--hostname"], ["--private-grant"], ["extra-private-grant"]]) {
-		const response = spawnSync(process.execPath, [cli, "hosted", "link", "create", "--json", ...args], {
+	for (const args of [["--hostname"], ["--private-grant"], ["extra-private-grant"]])
+	for (const command of [["link", "create", "--json"], ["--json", "link", "create"], ["link", "--json", "create"]]) {
+		const response = spawnSync(process.execPath, [cli, "hosted", ...command, ...args], {
 			encoding: "utf8", env: { PATH: process.env.PATH, DO_NOT_TRACK: "1" }, timeout: 5000,
 		});
 		assert.equal(response.status, 1);
@@ -744,7 +745,6 @@ test("CLI JSON parser and usage errors do not echo untrusted arguments", () => {
 		assert.equal(response.stdout.includes("private-grant"), false);
 	}
 });
-
 
 test("JSON preserves recognized service field-validation reasons", async () => {
 	for (const field of ["hostname", "origin", "path", "preset"]) {

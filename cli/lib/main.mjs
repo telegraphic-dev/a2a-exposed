@@ -446,7 +446,7 @@ export async function main(argv) {
 	try {
 		parsed = parseArgs({ args: rest, options: SPEC[name] || {}, allowPositionals: true, strict: true });
 	} catch (e) {
-		if (name === "hosted" && rest[0] === "link" && ["create", "finish"].includes(rest[1]) && rest.includes("--json")) return linkOutput(linkUsage, { json: true });
+		if (name === "hosted" && rest.includes("link") && rest.some(value => ["create", "finish"].includes(value)) && rest.includes("--json")) return linkOutput(linkUsage, { json: true });
 		if (e && e.code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") {
 			const flag = (String(e.message).match(/'([^']+)'/) || [])[1] || "that flag";
 			if (flag === "-y") throw new CliError("unknown flag -y. To skip a prompt, pass --yes.");
