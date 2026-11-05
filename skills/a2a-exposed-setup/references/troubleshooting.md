@@ -139,3 +139,19 @@ For internal secure-link tests, HTTP 409 save refusals (including `failed` and
 delivered but saving settings was not confirmed. Save the settings in Wake
 settings on the website, then test again. The connector token remains on disk;
 the CLI does not retry the test or save automatically.
+
+The staging `hosted link create|finish --json` commands write one result object
+on stdout: `{ok, code, reason, field, phase, status, hostname, next}`. Fields
+without a value are `null`; success also includes `saved` and
+`connectorStarted`. Approval links, codes and connector guidance remain on
+stderr. Exit status is 0 on success and 1 on any failure. Diagnostics contain
+only local guidance and recognized public codes, never grants or signing secrets.
+
+Both commands require an explicit `--preset ID` before any approval request,
+even when a link already has a saved preset. List choices with
+`hosted capabilities --json` and select the agent with `hosted list --json`.
+`create --hostname` accepts a DNS name or a root HTTPS URL. It normalizes case,
+one trailing root dot and IDN labels to ASCII. Credentials, ports, non-root
+paths, queries, fragments, IP addresses and malformed labels receive distinct
+local validation reasons before any network request. Invalid hostname input
+is never echoed in the result.

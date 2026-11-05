@@ -4,14 +4,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
-import { finishLink, createLink, savedLinkSession } from "../lib/link-finish.mjs";
+import { finishLink, createLink, savedLinkSession, normalizeHostname, linkOutput } from "../lib/link-finish.mjs";
 import { writeTokenFile, readSigningSecret, startConnector, connectorArgs } from "../lib/local-link.mjs";
 import { controlSession } from "../lib/config.mjs";
 import { EventEmitter } from "node:events";
 import { spawnSync } from "node:child_process";
 
 const link = { agent: "example", hostname: "wake.example.com", origin: "http://127.0.0.1:8644", path: "/webhooks/inbox", preset: "hermes" };
-const o = { agent: "example", "control-url": "https://control.example", "secret-env": "TEST_SIGNING_SECRET" };
+const o = { preset: "hermes", agent: "example", "control-url": "https://control.example", "secret-env": "TEST_SIGNING_SECRET" };
 const sensitive = ["private-grant", "private-connector", "private-signing-secret", "private-session"];
 
 function harness(overrides = {}) {
@@ -52,7 +52,7 @@ function harness(overrides = {}) {
 
 test("finish binds PKCE, saves token, starts connector, checks status then tests/saves wake without printing secrets", async () => {
 	const h = harness();
-	assert.deepEqual(await finishLink(o, h.deps), { saved: true, connectorStarted: true });
+	assert.deepEqual(await finishLink(o, h.deps), { saved: true, connectorStarted: true, hostname: link.hostname });
 	assert.deepEqual(h.calls, ["requests", "token", "connector", "status", "wake-test"]);
 	assert.equal(h.writes[0][1], sensitive[1]);
 	assert.equal(h.runs[0], h.writes[0][0]);
@@ -86,7 +86,7 @@ test("malicious error text and thrown transport errors never reach diagnostics",
 
 test("no-run prints token-file command and never starts connector or tests/saves wake", async () => {
 	const h = harness();
-	assert.deepEqual(await finishLink({ ...o, "no-run": true, "token-file": "/tmp/example token" }, h.deps), { saved: false, connectorStarted: false });
+	assert.deepEqual(await finishLink({ ...o, "no-run": true, "token-file": "/tmp/example token" }, h.deps), { saved: false, connectorStarted: false, hostname: link.hostname });
 	assert.equal(h.runs.length, 0);
 	assert.equal(h.calls.includes("status"), false);
 	assert.equal(h.calls.includes("wake-test"), false);
@@ -192,7 +192,7 @@ test("create sends only the exact plan before approval, then connects, tests and
 		sent = body;
 		return Response.json({ request_id: "request-id", user_code: "ABCD-1234", approve_url: "https://control.example/approve", expires_in: 600 }, { status: 201 });
 	} });
-	assert.deepEqual(await createLink({ ...o, ...plan }, h.deps), { saved: true, connectorStarted: true });
+	assert.deepEqual(await createLink({ ...o, ...plan }, h.deps), { saved: true, connectorStarted: true, hostname: link.hostname });
 	assert.deepEqual(sent.create, plan);
 	assert.deepEqual(Object.keys(sent).sort(), ["agent", "challenge", "create"]);
 	for (const value of sensitive) {
@@ -209,7 +209,7 @@ test("creation normalizes hostname and origin and refuses malformed plans before
 	} });
 	await assert.rejects(createLink({ ...o, ...plan, hostname: " WAKE.EXAMPLE.COM ", origin: link.origin + "/" }, h.deps), /access_denied/);
 	for (const invalid of [
-		{ hostname: "https://wake.example.com" }, { hostname: "bad..example.com" },
+		{ hostname: "https://wake.example.com/path" }, { hostname: "bad..example.com" },
 		{ origin: "http://user:password@localhost" }, { origin: "file:///tmp/local" },
 		{ origin: "http://127.0.0.1:8644/path" }, { origin: "http://localhost?key=value" },
 		{ path: "" }, { path: "//other/path" }, { path: "/webhooks/inbox?key=value" },
@@ -277,7 +277,7 @@ test("default session resolution rejects a saved token with only CONTROL_URL ove
 		import assert from 'node:assert/strict';
 		import { finishLink } from ${JSON.stringify(new URL("../lib/link-finish.mjs", import.meta.url).href)};
 		let fetched = false;
-		await assert.rejects(finishLink({ agent: 'example', 'control-url': 'https://other.example', 'secret-env': 'DUMMY' }, { fetchImpl: () => { fetched = true; throw new Error('unexpected fetch'); } }), /sign in/);
+		await assert.rejects(finishLink({ preset: 'hermes', agent: 'example', 'control-url': 'https://other.example', 'secret-env': 'DUMMY' }, { fetchImpl: () => { fetched = true; throw new Error('unexpected fetch'); } }), /sign in/);
 		assert.equal(fetched, false);
 	`;
 	const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
@@ -336,8 +336,8 @@ test("finish validates preset before network and uses it for a link without a pr
 	h.deps.readSecret = (_options, approved) => { assert.equal(approved.preset, "hermes"); return sensitive[2]; };
 	await finishLink({ ...o, preset: "hermes" }, h.deps);
 	const missing = harness({ token: () => Response.json({ grant: sensitive[0], link: { ...link, preset: "" } }) });
-	await assert.rejects(finishLink(o, missing.deps), /--preset/);
-	assert.equal(missing.calls.includes("connector"), false);
+	await assert.rejects(finishLink({ ...o, preset: undefined }, missing.deps), /--preset/);
+	assert.deepEqual(missing.calls, []);
 });
 
 test("known errors give fixed local recovery and origin status codes remain visible", async () => {
@@ -633,3 +633,127 @@ for (const [status, error] of [[409, "future_save_code"], [500, "failed"], [409,
 		assert.deepEqual(h.lines.filter(line => line.startsWith("wake_result=")), []);
 	});
 }
+
+for (const [input, expected] of [
+	["wake.example.com.", "wake.example.com"], [" WAKE.EXAMPLE.COM. ", "wake.example.com"],
+	["wake.example.xn--p1ai", "wake.example.xn--p1ai"], ["wake.example.рф", "wake.example.xn--p1ai"],
+	["https://WAKE.EXAMPLE.COM./", "wake.example.com"], ["https://wake.example.рф", "wake.example.xn--p1ai"],
+	["wake。example。com。", "wake.example.com"],
+]) test(`hostname normalizes ${input}`, async () => {
+	assert.equal(normalizeHostname(input), expected);
+	let submitted;
+	const h = harness({ requests: body => { submitted = body.create; return Response.json({ error: "access_denied" }, { status: 403 }); } });
+	await assert.rejects(createLink({ ...o, ...plan, hostname: input }, h.deps));
+	assert.equal(submitted.hostname, expected);
+});
+
+for (const [hostname, reason] of [
+	["http://wake.example.com", "scheme"], ["https://user:private@wake.example.com", "credentials"],
+	["https://wake.example.com:443", "port"], ["wake.example.com:443", "port"],
+	["https://wake.example.com/path", "path"], ["https://wake.example.com/?secret=x", "query_fragment"],
+	["https://wake.example.com/#secret", "query_fragment"], ["https://wake.example.com/./", "path"],
+	["wake.example.com..", "dns_labels"], ["wake..example.com", "dns_labels"], ["-wake.example.com", "dns_labels"],
+	["127.0.0.1", "ip_address"], ["localhost", "domain"], ["wake.123", "dns_labels"],
+	["wake.exa mple.com", "characters"], ["wake\\example.com", "characters"],
+]) test(`hostname refusal ${reason}: ${hostname}`, async () => {
+	const h = harness();
+	await assert.rejects(async () => createLink({ ...o, ...plan, hostname }, h.deps), error => {
+		assert.equal(error.result.code, "invalid_hostname");
+		assert.equal(error.result.reason, reason);
+		assert.equal(error.result.field, "hostname");
+		assert.equal(error.result.hostname, null);
+		assert.equal(JSON.stringify(error.result).includes("private"), false);
+		return true;
+	});
+	assert.deepEqual(h.calls, []);
+});
+
+async function jsonResult(run) {
+	const lines = [], log = console.log, exitCode = process.exitCode;
+	console.log = line => lines.push(line);
+	try {
+		await linkOutput(run, { json: true });
+		assert.equal(lines.length, 1);
+		const data = JSON.parse(lines[0]);
+		for (const key of ["ok", "code", "reason", "field", "phase", "status", "hostname", "next"]) assert.ok(Object.hasOwn(data, key), key);
+		for (const value of sensitive) assert.equal(lines[0].includes(value), false);
+		return { data, exitCode: process.exitCode };
+	} finally { console.log = log; process.exitCode = exitCode; }
+}
+
+test("JSON success and no-run report useful results without credentials", async () => {
+	for (const noRun of [false, true]) {
+		const h = harness();
+		const { data } = await jsonResult(() => finishLink({ ...o, "no-run": noRun }, h.deps));
+		assert.equal(data.ok, true);
+		assert.equal(data.code, noRun ? "connector_saved" : "saved");
+		assert.equal(data.hostname, link.hostname);
+		assert.equal(data.saved, !noRun);
+		assert.equal(data.status, null);
+		assert.ok(h.lines.some(line => line.includes("ABCD-1234")));
+	}
+});
+
+test("JSON service errors retain whitelisted reasons, phases and statuses only", async () => {
+	const h = harness({ requests: () => Response.json({ error: "provision_failed", reason: sensitive[0], field: sensitive[1], phase: "cleanup", status: 403, message: sensitive[2] }, { status: 409 }) });
+	const { data, exitCode } = await jsonResult(() => createLink({ ...o, ...plan }, h.deps));
+	assert.equal(exitCode, 1);
+	assert.equal(data.code, "provision_failed");
+	assert.equal(data.reason, null);
+	assert.equal(data.field, null);
+	assert.equal(data.phase, "cleanup");
+	assert.equal(data.status, 403);
+});
+
+test("JSON transport errors and local exceptions never echo raw errors", async () => {
+	for (const run of [
+		() => finishLink(o, harness({ requests: () => { throw new Error(sensitive.join(" ")); } }).deps),
+		() => { throw new Error(sensitive.join(" ")); },
+	]) {
+		const { data, exitCode } = await jsonResult(run);
+		assert.equal(data.ok, false);
+		assert.equal(exitCode, 1);
+		assert.equal(data.status, null);
+	}
+});
+
+test("CLI JSON missing preset fails before session lookup or approval", t => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "a2a-json-link-"));
+	t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+	const cli = new URL("../bin/a2a-exposed.mjs", import.meta.url).pathname;
+	const response = spawnSync(process.execPath, [cli, "hosted", "link", "finish", "--agent", "example", "--control-url", "https://control.example", "--secret-env", "DUMMY", "--json"], {
+		encoding: "utf8", env: { PATH: process.env.PATH, HOME: dir, A2A_CONFIG_DIR: dir, DO_NOT_TRACK: "1" }, timeout: 5000,
+	});
+	assert.equal(response.status, 1, response.stderr);
+	assert.equal(response.stderr, "");
+	const data = JSON.parse(response.stdout);
+	assert.equal(data.code, "preset");
+	assert.equal(data.field, "preset");
+	assert.match(data.next, /hosted capabilities --json/);
+});
+
+test("CLI JSON parser and usage errors do not echo untrusted arguments", () => {
+	const cli = new URL("../bin/a2a-exposed.mjs", import.meta.url).pathname;
+	for (const args of [["--hostname"], ["--private-grant"], ["extra-private-grant"]]) {
+		const response = spawnSync(process.execPath, [cli, "hosted", "link", "create", "--json", ...args], {
+			encoding: "utf8", env: { PATH: process.env.PATH, DO_NOT_TRACK: "1" }, timeout: 5000,
+		});
+		assert.equal(response.status, 1);
+		assert.equal(response.stderr, "");
+		assert.equal(JSON.parse(response.stdout).code, "usage");
+		assert.equal(response.stdout.includes("private-grant"), false);
+	}
+});
+
+
+test("JSON preserves recognized service field-validation reasons", async () => {
+	for (const field of ["hostname", "origin", "path", "preset"]) {
+		const reason = field === "preset" ? "preset_invalid" : `${field}_format`;
+		const h = harness({ requests: () => Response.json({ error: "invalid_request", reason, field, message: sensitive[0] }, { status: 400 }) });
+		const { data } = await jsonResult(() => createLink({ ...o, ...plan }, h.deps));
+		assert.equal(data.reason, reason);
+		assert.equal(data.field, field);
+		assert.equal(data.status, 400);
+		assert.equal(data.phase, "requests");
+	}
+});

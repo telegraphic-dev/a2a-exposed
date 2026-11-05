@@ -13,7 +13,7 @@ import * as hosted from "./hosted.mjs";
 import * as upd from "./update.mjs";
 import * as fb from "./feedback.mjs";
 import * as un from "./uninstall.mjs";
-import { finishLink, createLink } from "./link-finish.mjs";
+import { finishLink, createLink, linkOutput, linkUsage } from "./link-finish.mjs";
 
 const VERSION = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 
@@ -446,6 +446,7 @@ export async function main(argv) {
 	try {
 		parsed = parseArgs({ args: rest, options: SPEC[name] || {}, allowPositionals: true, strict: true });
 	} catch (e) {
+		if (name === "hosted" && rest[0] === "link" && ["create", "finish"].includes(rest[1]) && rest.includes("--json")) return linkOutput(linkUsage, { json: true });
 		if (e && e.code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") {
 			const flag = (String(e.message).match(/'([^']+)'/) || [])[1] || "that flag";
 			if (flag === "-y") throw new CliError("unknown flag -y. To skip a prompt, pass --yes.");
@@ -512,8 +513,8 @@ export async function main(argv) {
 		}
 		case "hosted": {
 			if (p.length === 1 && ["capabilities", "list", "create", "names", "capacity"].includes(p[0])) return hosted.output(() => hosted[p[0]](o), o);
-			if (p.length !== 2 || p[0] !== "link" || !["finish", "create"].includes(p[1])) throw new CliError("usage: hosted link create --agent NAME --hostname HOST --origin URL --path PATH --preset ID (--secret-file FILE | --secret-env VAR | --secret-from hermes); or hosted link finish --agent NAME (--secret-file FILE | --secret-env VAR | --secret-from hermes)");
-			return (p[1] === "create" ? createLink : finishLink)({ ...o, "control-url": o["control-url"] || C.get("CONTROL_URL") });
+			if (p.length !== 2 || p[0] !== "link" || !["finish", "create"].includes(p[1])) return linkOutput(linkUsage, o);
+			return linkOutput(() => (p[1] === "create" ? createLink : finishLink)({ ...o, "control-url": o["control-url"] || C.get("CONTROL_URL") }), o);
 		}
 		case "signup":
 		case "login": {

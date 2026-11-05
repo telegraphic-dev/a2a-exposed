@@ -83,7 +83,10 @@ none replaces the others.
 ## Staging hosted link refusal contract
 
 The internal hosted link integration remains staging-only and outside public
-CLI help. Its create failures name the requested hostname and the operation.
+CLI help. Both commands require an explicit preset before approval. JSON mode
+returns one structured result on stdout, keeping approval instructions on stderr;
+all failures exit 1. Test normalized trailing-dot, IDN and root HTTPS hostnames,
+and specific refusals before any network call. Its create failures name the requested hostname and the operation.
 Only recognized public validation templates are shown from server messages;
 unknown text, extra fields and transport errors are hidden. The apex template
 must exactly name the requested hostname, including its example subdomain.
