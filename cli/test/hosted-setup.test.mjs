@@ -201,3 +201,81 @@ test("hosted preview reports each preset's effective header without changing sav
   }
  }finally{f.clean();}
 });
+
+test("empty and malformed references explain preparation before any network request", () => {
+ const f = fixture(); f.save();
+ try {
+  const file = path.join(f.dir, "reference");
+  for (const value of ["", "\n", "not-a-reference", "a2awr_" + "b".repeat(63), "private\u0000reference"]) {
+   fs.writeFileSync(file, value, { mode: 0o600 });
+   for (const source of [["--reference-file", file], ["--reference-env", "TEST_WAKE_REFERENCE"]]) {
+    const log = path.join(f.dir, "requests");
+    const r = f.run(["wake", "set", "--agent", "sample-agent", ...source, "--json"], {}, { TEST_WAKE_REFERENCE: value.includes("\u0000") ? "invalid" : value, A2A_TEST_FETCH_LOG: log });
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    const result = JSON.parse(r.stdout);
+    assert.equal(result.code, "invalid_reference");
+    assert.match(result.next, /wake prepare --agent NAME/);
+    assert.match(result.next, /new --reference-file/);
+    assert.equal(fs.existsSync(log), false, "invalid local references must not contact the service");
+   }
+  }
+ } finally { f.clean(); }
+});
+
+test("selected hosted status uses only GET, redacts destination secrets and leaves config intact", () => {
+ const f = fixture(); f.save("HOSTED_AGENT_NAME=different-agent\n");
+ try {
+  const before = fs.readFileSync(f.config, "utf8");
+  const log = path.join(f.dir, "requests");
+  const replies = { "https://control.example/api/v1/agents/sample-agent/wake": { status: 200, body: { version: 8, preset: "hermes", url: "https://receiver.example/private-token?key=secret", history: [{ machine: "do-not-print" }] } } };
+  const r = f.run(["status", "--agent", "sample-agent", "--json"], replies, { A2A_TEST_FETCH_LOG: log });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const result = JSON.parse(r.stdout);
+  assert.equal(result.code, "status"); assert.equal(result.agent, "sample-agent");
+  assert.equal(result.configured, true); assert.equal(result.version, 8);
+  assert.equal(result.preset, "hermes"); assert.equal(result.url, "https://receiver.example/…");
+  assert.doesNotMatch(r.stdout + r.stderr, /private-token|key=secret|do-not-print|a2asg_/);
+  assert.equal(fs.readFileSync(f.config, "utf8"), before);
+  const calls = fs.readFileSync(log, "utf8").trim().split("\n").map(JSON.parse);
+  assert.deepEqual(calls.map(({ url, method }) => ({ url, method })), [{ url: "https://control.example/api/v1/agents/sample-agent/wake", method: "GET" }]);
+  const text = f.run(["status", "--agent", "sample-agent"], replies);
+  assert.equal(text.status, 0); assert.match(text.stdout, /agent: "sample-agent"/);
+ } finally { f.clean(); }
+});
+
+test("selected status refuses foreign owner credentials and preserves service refusal exit codes", () => {
+ const f = fixture();
+ fs.writeFileSync(f.config, `A2A_BASE_URL=https://other-agent.control.example\nA2A_OWNER_TOKEN=${owner}\n`, { mode: 0o600 });
+ try {
+  const log = path.join(f.dir, "requests");
+  const r = f.run(["status", "--agent", "sample-agent", "--control-url", "https://control.example", "--json"], {}, { A2A_TEST_FETCH_LOG: log });
+  assert.equal(r.status, 1); assert.equal(JSON.parse(r.stdout).code, "login_required");
+  assert.equal(fs.existsSync(log), false);
+  f.save();
+  for (const json of [[], ["--json"]]) {
+   const denied = f.run(["status", "--agent", "sample-agent", ...json], { "https://control.example/api/v1/agents/sample-agent/wake": { status: 403, body: { error: "insufficient_scope", message: owner } } });
+   assert.equal(denied.status, 1); assert.match(denied.stdout, /insufficient_scope/);
+   assert.ok(!denied.stdout.includes(owner));
+  }
+ } finally { f.clean(); }
+});
+
+test("selected status accepts only an explicit valid agent and supports its saved owner", () => {
+ const f = fixture();
+ fs.writeFileSync(f.config, `A2A_BASE_URL=https://sample-agent.control.example\nA2A_OWNER_TOKEN=${owner}\n`, { mode: 0o600 });
+ try {
+  const log = path.join(f.dir, "requests");
+  for (const args of [["--agent", ""], ["--agent", "BAD"], ["--control-url", "https://control.example"]]) {
+   const invalid = f.run(["status", ...args, "--json"], {}, { A2A_TEST_FETCH_LOG: log });
+   assert.equal(invalid.status, 1); assert.equal(JSON.parse(invalid.stdout).code, "agent");
+   assert.match(JSON.parse(invalid.stdout).next, /hosted list --json/);
+   assert.equal(fs.existsSync(log), false);
+  }
+  const r = f.run(["status", "--agent", "sample-agent", "--control-url", "https://control.example", "--json"], { "https://control.example/api/v1/agents/sample-agent/wake": { status: 200, body: { version: 3, preset: "generic", url: "" } } }, { A2A_TEST_FETCH_LOG: log });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(JSON.parse(r.stdout).configured, false);
+  assert.match(JSON.parse(r.stdout).next, /polling/);
+  assert.equal(JSON.parse(fs.readFileSync(log, "utf8").trim()).headers.authorization, `Bearer ${owner}`);
+  assert.ok(!(r.stdout + r.stderr).includes(owner));
+ } finally { f.clean(); }
+});

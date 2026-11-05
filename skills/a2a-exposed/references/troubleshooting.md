@@ -46,3 +46,13 @@ Installing this skill gives the agent the workflow documentation. Run every comm
 `status` reports the deployed Worker version and CLI version. An older Worker, including one whose `/health` has no `version`, produces a deploy next step and exit code 1. Unreachable health reports an unknown version. Cached npm latest can add an upgrade hint without a foreground registry request. Deploy sets the Worker version tag `a2a-exposed-<version>` and message `a2a-exposed <version> <ISO date>`.
 
 A hosted-only config (base URL and owner token, no Worker/D1 metadata) reports `deployment: "hosted"` in `status --json`. It checks card, health and owner access without suggesting a self-hosted deploy. `tunnel create|status|rm` and `uninstall` are self-hosted only. Configure hosted wake delivery through the hosted service; if Cloudflare Tunnel delivery is unavailable, use polling. Delete a hosted agent only through its hosted settings and confirmation.
+
+`status --agent NAME --json` reads the selected hosted agent's wake configuration,
+including its version, preset and whether a webhook is configured. Select the name
+with `hosted list --json`; use `--control-url URL` for another hosted service.
+It uses setup approval with `wake:test` or `wake:write`, or the matching agent's
+owner credential. This read-only check does not test delivery, health or the card;
+`status --json` keeps the full diagnostics for the saved deployment.
+Empty or malformed reference files and environment values fail before a network
+request with `invalid_reference` and guidance to run `wake prepare` using a new
+protected reference file. Hosted failures exit 1 in text and JSON output.
