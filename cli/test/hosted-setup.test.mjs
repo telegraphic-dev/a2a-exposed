@@ -145,6 +145,44 @@ test("protected secret file validation fails before a test or save", () => {
 	} finally { f.clean(); }
 });
 
+test("hosted draft failures give fixed layer guidance without retries, saves or credential disclosure", () => {
+	const cases = [
+		["transport-socket", /socket transport.*route compatibility.*local checks/],
+		["cloudflare-target-unsupported", /cannot deliver.*supported public HTTPS route, polling.*do not create another tunnel/],
+		["dns", /resolve.*public DNS/],
+		["dns-missing", /resolve.*public DNS/],
+		["tls", /TLS.*certificate.*verification enabled/],
+		["access-401", /Access refused.*service token and policy.*without disabling/],
+		["access-403", /Access refused.*service token and policy.*without disabling/],
+		["unexpected-private-detail", /Check the receiver, credentials and draft/],
+	];
+	for (const [code, guidance] of cases) {
+		for (const sub of ["test", "set"]) {
+			const f = fixture(); f.save("HOSTED_AGENT_NAME=sample-agent\n");
+			try {
+				const before = fs.readFileSync(f.config, "utf8"), log = path.join(f.dir, "requests");
+				const endpoint = "https://control.example/api/v1/agents/sample-agent/wake";
+				const r = f.run(["wake", sub, "--agent", "sample-agent", "--url", "https://receiver.example/private-path", "--preset", "openclaw-wake", "--key-env", "FIXTURE_KEY", "--json"], {
+					"https://control.example/api/v1/setup/capabilities": { status: 200, body: { ...capabilities, wake: { ...capabilities.wake, presets: ["openclaw-wake"] } } },
+					[endpoint]: { status: 200, body: { version: 7, preset: "generic", url: "", ok: false, saved: false, code, message: owner, proof: grant } },
+					[`${endpoint}/test`]: { status: 200, body: { ok: false, code, message: owner, proof: grant } },
+				}, { FIXTURE_KEY: "dummy-hook-secret", A2A_TEST_FETCH_LOG: log });
+				assert.equal(r.status, 1, r.stdout + r.stderr);
+				const result = JSON.parse(r.stdout);
+				assert.equal(result.ok, false); assert.equal(result.saved, false);
+				assert.equal(result.code, code === "unexpected-private-detail" ? "failed" : code);
+				assert.match(result.next, /^Saved settings were not changed\./);
+				assert.match(result.next, guidance);
+				for (const secret of [owner, grant, "dummy-hook-secret", "private-path", "unexpected-private-detail"]) assert.ok(!(r.stdout + r.stderr).includes(secret));
+				assert.equal(fs.readFileSync(f.config, "utf8"), before);
+				const calls = fs.readFileSync(log, "utf8").trim().split("\n").map(JSON.parse);
+				assert.equal(calls.filter(call => call.method !== "GET").length, 1);
+				assert.equal(calls.at(-1).method, sub === "test" ? "POST" : "PUT");
+			} finally { f.clean(); }
+		}
+	}
+});
+
 test("cross-origin setup override never sends the saved owner credential", () => {
 	const f = fixture(); f.save(`HOSTED_AGENT_NAME=sample-agent\nA2A_BASE_URL=https://sample-agent.control.example\nA2A_OWNER_TOKEN=${owner}\n`);
 	try {

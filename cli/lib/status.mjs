@@ -191,9 +191,12 @@ export async function checkCard(base) {
 
 /** One line describing how wakes reach the agent. */
 export function wakeLine(s) {
-	if (!s.wake) return "unknown (owner API not reachable)";
+	if (!s.wake) return s.deployment === "hosted" && s.ownerApi?.ok
+		? "unknown (hosted wake preview unavailable)" : "unknown (owner API not reachable)";
 	const w = s.wake;
-	if (!w.configured) return "none: no WAKE_WEBHOOK_URL on the Worker, so the agent is expected to poll the A2A endpoint";
+	if (!w.configured) return s.deployment === "hosted"
+		? "no webhook configured; choose delivery after checking hosted route compatibility"
+		: "none: no WAKE_WEBHOOK_URL on the Worker, so the agent is expected to poll the A2A endpoint";
 	const auth = [w.hasKey && "bearer/API key", w.hasHmacSecret && "HMAC signature", w.hasAccessServiceToken && "Access service token"].filter(Boolean);
 	return `webhook (preset ${w.preset}${s.tunnel ? ", through the tunnel" : ""}); auth: ${auth.join(" + ") || "none"}; URL fingerprint ${w.urlFingerprint || "-"}`;
 }
@@ -294,10 +297,13 @@ function nextStepCore(s) {
 		if (s.card.urlProblem) return fail(`the hosted agent card has a different endpoint: ${s.card.urlProblem}. Check the address with the hosted service.`);
 		if (!s.health?.ok) return fail("the hosted health check failed. Check the hosted service and run status again.");
 		if (!s.ownerApi.ok) return fail("the hosted owner API refused or could not check the saved credential. Check the hosted agent access with its owner.");
-		if (!s.wake) return done("the hosted endpoint is reachable and its owner credential is accepted. Wake preview is unavailable; check wake delivery through the hosted service.");
-		return done(s.wake?.configured
-			? "none: the hosted endpoint is reachable and its owner credential is accepted. Check wake delivery through the hosted service."
-			: "the hosted endpoint is reachable. Configure a public HTTPS webhook through the hosted service, or use polling. Cloudflare Tunnel delivery may be unavailable; do not provision a self-hosted tunnel for this address.");
+		const discover = `Run \`${CLI} hosted capabilities --json\` to list supported setup scopes and wake presets.`;
+		const fallback = "If unavailable, use hosted dashboard Wake settings or MCP set_wake.";
+		if (!s.wake) return done(`the hosted endpoint is reachable and its owner credential is accepted. Wake preview is unavailable; delivery is unverified. ${discover}`, [fallback]);
+		if (s.wake.configured) return done(`the hosted endpoint is reachable and wake settings are saved; status does not test delivery. ${discover}`, [fallback,
+			`When supported, read \`${CLI} wake preview --json\` for the saved agent before an authorized draft test, then verify an inbox-and-reply run.`]);
+		return done(`the hosted endpoint is reachable; no webhook is configured. ${discover}`, [fallback,
+			"Check hook support and hosted route compatibility, then offer webhook or polling with its interval and cost before configuring either. Do not provision a self-hosted tunnel for this address."]);
 	}
 	if (!s.deployed) return fail(`nothing is deployed from ${path.dirname(s.configFile)}. Run \`${CLI} init\` (see the quick start). Another deployment? Set A2A_CONFIG_DIR.`);
 	if (s.baseUrlEnv)

@@ -56,6 +56,7 @@ When the CLI cannot run (no Node, or a sandbox), connect https://a2a.exposed/mcp
 - Codex: `codex mcp add a2a-exposed --url https://a2a.exposed/mcp`, then `codex mcp login a2a-exposed`
 
 `status --json` recognizes a hosted-only config (base URL and owner token, no Worker/D1 metadata). Hosted recovery stays with the hosted service. `tunnel` and `uninstall` manage self-hosted infrastructure only.
+Hosted status points to `hosted capabilities --json` before setup; saved wake settings do not prove delivery. Load the setup skill, check hook support and route compatibility, and let the human choose webhook or polling before configuring either. A hosted `transport-socket` failure can occur even when a local Tunnel test passes; follow the fixed CLI recovery guidance without weakening Access or hook authentication.
 
 ## On a wake or a scheduled check
 

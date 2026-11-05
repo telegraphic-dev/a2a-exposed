@@ -111,6 +111,24 @@ A hosted-only config has `A2A_BASE_URL` and `A2A_OWNER_TOKEN`, with no Worker or
 
 ### `status`, `upstream`, `url`, `config`
 
+For a reachable hosted endpoint with no webhook, `status` points to
+`hosted capabilities --json` before setup. Check hook support and the hosted
+service's route compatibility, then choose webhook or polling with the human,
+including the polling interval and cost. If setup capabilities are unavailable,
+use dashboard Wake settings or hosted MCP `set_wake`. Saved wake settings do not
+prove delivery: read `wake preview --json` for the saved agent, authorize and run
+a draft test with explicit inputs, then verify a real inbox-and-reply run.
+`status` performs none of those writes or tests.
+
+Hosted draft-test failures preserve saved settings and return fixed recovery guidance.
+`transport-socket` identifies a failed public-HTTPS socket connection; it does
+not prove that the receiver credentials are wrong. An owner-created Cloudflare
+Tunnel can pass local checks while remaining unreachable by that transport.
+`cloudflare-target-unsupported` confirms the service cannot use that route;
+choose a supported public HTTPS route, polling, or an explicitly authorized
+self-hosted Worker. DNS, TLS and Access failures name their respective checks.
+Keep Access, hook authentication and HTTPS verification enabled.
+
 | Command | Effect |
 | --- | --- |
 | `status [--json]` | Worker version (compared with the CLI and cached npm latest), deployment, base URL, agent card, wake mode (webhook, tunnel, or none), tunnel state, and in proxy mode the upstream card, Access credential, upstream bearer, live check, last failed peer call, and a card-leak check. Warns when a peer-token variable shadows a saved token. When `GET /owner/mcp` reports enabled and the agent card is reachable, prints `claude mcp add --transport http a2a-exposed <base URL>/mcp`. Prints the next step. With an empty config, that step says to run `init`; hosted configs receive hosted recovery guidance. Exit 1 means something is broken. For about a minute after `tunnel create`, while the connector reports 0 connections, the next step says `waiting for the connector to connect`, tells you to start `cloudflared tunnel run --token-file …` now, and the exit code stays 0. After that, 0 connections is broken. A tunnel status of `inactive` reads as `never connected`. Wake settings from `wake set`, `wake unset`, and `tunnel create` show up in `wake preview` in about 15 to 40 seconds. Wait about 30 seconds and check again. Eight layers are printed in order, each `PASS`, `FAIL`, or `SKIP`: Worker DNS (system lookup, then DNS-over-HTTPS when that lookup fails), Worker (TLS, the agent card, and `/health`), Owner API, Wake DNS, Access (whether the wake host is protected and whether a service token is configured; secrets are not printed), Connector, Local webhook (HTTP status of the wake endpoint), and Pairing. A 401 or 403 fails the local webhook layer only when the response shows Cloudflare Access. The webhook's own auth refusal reports the HTTP status and passes, as does a 401 or 403 with no Access marker. A failure names the missing or mismatched object and a fix. Later layers are still checked after an earlier failure. `--json` adds `layers`, an array of those eight results. Exit 1 if any layer fails. Read-only, except the no-op upstream probe in proxy mode. When the Worker reports them, an `addresses` line lists paired peers with no callback and announcements still pending |
