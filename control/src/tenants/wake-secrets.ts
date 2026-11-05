@@ -36,8 +36,47 @@ export const MAX_WAKE_PLAIN = (() => {
 	return n;
 })();
 
-/** `v1.` + base64(12-byte iv) + `.` + base64(utf-8 plaintext + 16-byte tag). */
-export const MAX_WAKE_SEALED = 3 + 16 + 1 + Math.ceil((MAX_WAKE_PLAIN * 3 + 16) * 4 / 3);
+/** Longest envelope: `v2.<64-char kid>.<iv>.<ciphertext>`. */
+export const MAX_WAKE_SEALED = 3 + 64 + 1 + 16 + 1 + Math.ceil((MAX_WAKE_PLAIN * 3 + 16) * 4 / 3);
+
+/** A bounded keyring lives in the existing secret binding, never in public config. */
+export interface TenantSecretsKeyring {
+	active: string;
+	keys: Record<string, string>;
+	legacy: boolean;
+}
+
+/** Raw keys preserve v1 writes for a reader-first rollout. JSON keyrings enable v2 writes. */
+export function tenantSecretsKeyring(input: string): TenantSecretsKeyring | null {
+	if (!input) return null;
+	if (!input.trimStart().startsWith("{")) return { active: "", keys: { "": input }, legacy: true };
+	if (input.length > 65536) return null;
+	try {
+		const value = JSON.parse(input);
+		if (!value || value.v !== 2 || typeof value.active !== "string" ||
+			!value.keys || typeof value.keys !== "object" || Array.isArray(value.keys) ||
+			Object.keys(value).some((name) => !["v", "active", "keys"].includes(name))) return null;
+		const entries = Object.entries(value.keys);
+		if (entries.length < 1 || entries.length > 2 || !Object.hasOwn(value.keys, value.active)) return null;
+		for (const [kid, key] of entries) {
+			if (!/^[A-Za-z0-9_-]{1,64}$/.test(kid) || typeof key !== "string" || !key.trim() || key.length > 4096) return null;
+		}
+		return { active: value.active, keys: value.keys, legacy: false };
+	} catch { return null; }
+}
+
+/** Current material first, then the single read-only rotation key. No caller may log these values. */
+export function tenantSecretsMaterials(input: string): string[] {
+	const ring = tenantSecretsKeyring(input);
+	if (!ring) return [];
+	return [ring.keys[ring.active], ...Object.entries(ring.keys).filter(([kid]) => kid !== ring.active).map(([, key]) => key)];
+}
+
+function unreadable(): null {
+	// Only a fixed event: ciphertext, key ids, credentials and tenant identifiers never enter logs.
+	console.error(JSON.stringify({ event: "wake_secrets_unreadable", level: "error" }));
+	return null;
+}
 
 function b64(bytes: Uint8Array): string {
 	let raw = "";
@@ -77,21 +116,24 @@ function payloadOf(secrets: WakeSecrets): Record<string, string> | null {
 	return payload;
 }
 
-/** `v1.<iv>.<ciphertext>`, or null when the key or a value is unusable. */
+/** `v2.<kid>.<iv>.<ciphertext>` for keyrings; raw keys keep v1 writes until rollout completes. */
 export async function sealWakeSecrets(ikm: string, tenantId: string, secrets: WakeSecrets): Promise<string | null> {
-	const key = await derive(ikm, tenantId);
+	const ring = tenantSecretsKeyring(ikm);
+	const key = ring ? await derive(ring.keys[ring.active], tenantId) : null;
 	const payload = payloadOf(secrets);
 	if (!key || !payload) return null;
 	const json = JSON.stringify(payload);
 	const encoded = new TextEncoder().encode(json);
 	if (json.length > MAX_WAKE_PLAIN || encoded.length > MAX_WAKE_PLAIN * 3) return null;
+	const prefix = ring!.legacy ? "v1" : `v2.${ring!.active}`;
+	const aad = ring!.legacy ? tenantId : `${prefix}\0${tenantId}`;
 	const iv = crypto.getRandomValues(new Uint8Array(12));
 	const ct = new Uint8Array(await crypto.subtle.encrypt(
-		{ name: "AES-GCM", iv, additionalData: new TextEncoder().encode(tenantId) },
+		{ name: "AES-GCM", iv, additionalData: new TextEncoder().encode(aad) },
 		key,
 		encoded,
 	));
-	const sealed = `v1.${b64(iv)}.${b64(ct)}`;
+	const sealed = `${prefix}.${b64(iv)}.${b64(ct)}`;
 	return sealed.length <= MAX_WAKE_SEALED ? sealed : null;
 }
 
@@ -101,28 +143,47 @@ export async function sealWakeSecrets(ikm: string, tenantId: string, secrets: Wa
  */
 export async function openWakeSecrets(ikm: string, tenantId: string, sealed: string | null | undefined): Promise<WakeSecrets | null> {
 	if (sealed == null || sealed === "") return {};
-	if (sealed.length > MAX_WAKE_SEALED) return null;
-	const key = await derive(ikm, tenantId);
-	if (!key) return null;
-	const [version, iv, ct, extra] = sealed.split(".");
-	if (version !== "v1" || !iv || !ct || extra !== undefined) return null;
-	try {
-		const plain = new TextDecoder().decode(await crypto.subtle.decrypt(
-			{ name: "AES-GCM", iv: unb64(iv), additionalData: new TextEncoder().encode(tenantId) },
-			key,
-			unb64(ct),
-		));
-		if (plain.length > MAX_WAKE_PLAIN) return null;
-		const parsed = JSON.parse(plain) as unknown;
-		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-		const out: WakeSecrets = {};
-		for (const name of WAKE_SECRET_KEYS) {
-			const value = (parsed as Record<string, unknown>)[name];
-			if (typeof value !== "string" || !value || value.length > MAX_WAKE_VALUE) continue;
-			out[name] = value;
-		}
-		return out;
-	} catch {
-		return null;
+	if (typeof sealed !== "string" || sealed.length > MAX_WAKE_SEALED) return unreadable();
+	const ring = tenantSecretsKeyring(ikm);
+	if (!ring || !tenantId) return unreadable();
+	const parts = sealed.split(".");
+	const version = parts[0];
+	const kid = version === "v2" ? parts[1] : "";
+	if (version !== "v1" && version !== "v2") return unreadable();
+	if (parts.length !== (version === "v2" ? 4 : 3)) return unreadable();
+	const [iv, ct] = parts.slice(version === "v2" ? 2 : 1);
+	if (!iv || !ct || (version === "v2" && (ring.legacy || !Object.hasOwn(ring.keys, kid)))) return unreadable();
+	const materials = version === "v2" ? [ring.keys[kid]] : tenantSecretsMaterials(ikm);
+	const aad = version === "v2" ? `v2.${kid}\0${tenantId}` : tenantId;
+	for (const material of materials) {
+		try {
+			const key = await derive(material, tenantId);
+			if (!key) continue;
+			const ivBytes = unb64(iv);
+			if (ivBytes.length !== 12) return unreadable();
+			const plain = new TextDecoder().decode(await crypto.subtle.decrypt(
+				{ name: "AES-GCM", iv: ivBytes, additionalData: new TextEncoder().encode(aad) },
+				key,
+				unb64(ct),
+			));
+			if (plain.length > MAX_WAKE_PLAIN) return unreadable();
+			const parsed = JSON.parse(plain) as unknown;
+			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return unreadable();
+			const out: WakeSecrets = {};
+			for (const name of WAKE_SECRET_KEYS) {
+				const value = (parsed as Record<string, unknown>)[name];
+				if (typeof value !== "string" || !value || value.length > MAX_WAKE_VALUE) continue;
+				out[name] = value;
+			}
+			return out;
+		} catch { /* Try the previous key only for an unlabelled v1 blob. */ }
 	}
+	return unreadable();
+}
+
+/** Pure maintenance helper. The caller must CAS the original blob and queue the new tenant config. */
+export async function rewrapWakeSecrets(ikm: string, tenantId: string, sealed: string): Promise<string | null> {
+	if (!sealed) return null;
+	const secrets = await openWakeSecrets(ikm, tenantId, sealed);
+	return secrets ? sealWakeSecrets(ikm, tenantId, secrets) : null;
 }

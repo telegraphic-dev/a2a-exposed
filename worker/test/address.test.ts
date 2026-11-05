@@ -7,6 +7,7 @@ import { dispatch, runOwnerRpc } from "../src/index.ts";
 import { redactExport, exportRows } from "../src/export.ts";
 import { hostedTenantContext, type DoNamespace, type KvNamespace, type TenantContext, type WorkerBindings } from "../src/tenancy.ts";
 import { d1 } from "./d1.ts";
+import { openPeerTokenWithKey } from "../src/mcp.ts";
 
 const MIGRATIONS = new URL("../migrations/", import.meta.url);
 const ectx = { waitUntil(p: Promise<unknown>) { p.catch(() => {}); }, passThroughOnException() {} };
@@ -70,7 +71,14 @@ async function world(t: { after: (fn: () => void) => void }) {
 	};
 	const owner = (ctx: TenantContext, accountId: string, method: string, path: string, body?: unknown) =>
 		runOwnerRpc(ctx, ectx as never, { accountId, method, path, ...(body === undefined ? {} : { body }) });
-	return { alice, bob, carol, call, owner };
+	const rotate = async (agent: typeof alice, secretsKey: string) => {
+		agent.ctx = hostedTenantContext({ ...env, TENANT_SECRETS_KEY: secretsKey }, {
+			id: agent.ctx.id, db: agent.db, publicUrl: agent.ctx.PUBLIC_URL,
+			ownerTokenHash: await sha256(agent.ownerToken), status: "active", config: { AGENT_NAME: "fixture" },
+		});
+		byId.set(agent.ctx.id, agent.ctx);
+	};
+	return { alice, bob, carol, call, owner, rotate };
 }
 
 async function pair(bob: { ctx: TenantContext; ownerToken: string }, call: (ctx: TenantContext, path: string, init?: RequestInit) => Promise<{ status: number; data: any }>, identity?: string) {
@@ -473,4 +481,54 @@ test("export omits the sealed pairing identity and a stored return token", async
 	assert.equal(redacted.tables.peers?.[0]?.token_enc, undefined);
 	assert.equal(JSON.stringify(redacted).includes(ident.privateKey), false);
 	assert.equal(JSON.stringify(redacted).includes("sealed-return"), false);
+});
+
+
+test("hosted key rotation preserves identity proofs, reverse tokens and direct replies", async (t) => {
+	const { alice, carol, call, owner, rotate } = await world(t as never);
+	const ident = await Addr.generateIdentity();
+	const putIdentity = () => call(alice.ctx, "/owner/identity", {
+		method: "PUT", headers: { authorization: `Bearer ${alice.ownerToken}`, "content-type": "application/json" },
+		body: JSON.stringify(ident),
+	});
+	assert.equal((await putIdentity()).status, 200);
+	const paired = await pair(carol, call, ident.publicKey);
+	assert.equal((await owner(alice.ctx, "acct-alice", "PUT", `/owner/outbound-peers/${paired.label}`, { url: carol.ctx.PUBLIC_URL, token: paired.access })).status, 200);
+	const announce = () => owner(alice.ctx, "acct-alice", "POST", "/owner/peers/announce", { to: paired.label });
+	const firstAnnouncement = await announce();
+	assert.equal(firstAnnouncement.body.results[0].status, "updated", JSON.stringify(firstAnnouncement.body));
+	const reverseBefore = await alice.db.prepare("SELECT token_hash, token_enc FROM peers WHERE label = ? AND source = 'reverse'").bind(paired.label).first() as { token_hash: string; token_enc: string };
+	assert.ok(reverseBefore.token_enc);
+	const identityBefore = await alice.db.prepare("SELECT value FROM settings WHERE key = ?").bind(Addr.IDENTITY_SETTING).first() as { value: string };
+	const ring = JSON.stringify({ v: 2, active: "current", keys: { previous: "platform-key", current: "new-platform-key" } });
+	await rotate(alice, ring);
+	await rotate(carol, ring);
+	const cardUrl = Addr.cardUrlFor(alice.ctx.PUBLIC_URL);
+	const card = await call(alice.ctx, "/.well-known/agent-card.json");
+	assert.equal(await Addr.cardProves(card.data, ident.publicKey, cardUrl), true, "the stored old-key identity still signs the card");
+	assert.deepEqual(await alice.db.prepare("SELECT value FROM settings WHERE key = ?").bind(Addr.IDENTITY_SETTING).first(), identityBefore, "a public read never rewrites identity storage");
+	const taskId = await send(carol.ctx, paired.access, "rotation question", "ctx-rotation");
+	const reply = await owner(carol.ctx, "acct-carol", "POST", "/owner/mcp/reply", { taskId, text: "rotation answer", state: "completed" });
+	assert.equal(reply.body.structuredContent.status, "delivered", JSON.stringify(reply.body));
+	assert.equal((await announce()).body.results[0].status, "updated", "the old-key identity and outbound token remain usable");
+	const reverseAfter = await alice.db.prepare("SELECT token_hash, token_enc FROM peers WHERE label = ? AND source = 'reverse'").bind(paired.label).first() as typeof reverseBefore;
+	assert.equal(reverseAfter.token_hash, reverseBefore.token_hash, "rotation must preserve the existing return token");
+	assert.notEqual(reverseAfter.token_enc, reverseBefore.token_enc);
+	assert.ok(await openPeerTokenWithKey((await alice.ctx.peerKey())!, paired.label, reverseAfter.token_enc), "authorized announcement reseals the same reverse token with the active key");
+	// Existing owner-only identity installation reseals the SAME validated identity; it never regenerates it.
+	const unauthorized = await call(alice.ctx, "/owner/identity", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(ident) });
+	assert.equal(unauthorized.status, 401);
+	const resealed = await putIdentity();
+	assert.equal(resealed.status, 200);
+	assert.equal(resealed.data.publicKey, ident.publicKey);
+	assert.equal(JSON.stringify(resealed.data).includes(ident.privateKey), false);
+	const onlyCurrent = JSON.stringify({ v: 2, active: "current", keys: { current: "new-platform-key" } });
+	await rotate(alice, onlyCurrent);
+	const retiredCard = await call(alice.ctx, "/.well-known/agent-card.json");
+	assert.equal(await Addr.cardProves(retiredCard.data, ident.publicKey, cardUrl), true, "owner reseal keeps the identity readable after retirement");
+	const identityAfter = await alice.db.prepare("SELECT value FROM settings WHERE key = ?").bind(Addr.IDENTITY_SETTING).first() as { value: string };
+	assert.notEqual(identityAfter.value, identityBefore.value);
+	const other = await Addr.generateIdentity();
+	const replacement = await call(alice.ctx, "/owner/identity", { method: "PUT", headers: { authorization: `Bearer ${alice.ownerToken}`, "content-type": "application/json" }, body: JSON.stringify(other) });
+	assert.equal(replacement.status, 409, "rotation never authorizes replacing the identity");
 });

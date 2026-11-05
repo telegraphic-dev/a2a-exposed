@@ -1233,14 +1233,21 @@ async function withMovedHeader(ctx: TenantContext, res: Response): Promise<Respo
 	return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
 }
 
+/** Every hosted credential sealed by peerKey must retain the previous key during rotation. */
+async function openPeerSecret(ctx: TenantContext, aad: string, sealed: string): Promise<string | null> {
+	for (const key of await ctx.peerReadKeys()) {
+		const opened = await M.openPeerTokenWithKey(key, aad, sealed);
+		if (opened !== null) return opened;
+	}
+	return null;
+}
+
 type PairingIdentity = { publicKey: string; privateKey: string };
 
 async function readIdentity(ctx: TenantContext): Promise<PairingIdentity | null | "unreadable"> {
 	const row: Json = await ctx.DB.prepare("SELECT value FROM settings WHERE key = ?").bind(Addr.IDENTITY_SETTING).first();
 	if (!row?.value) return null;
-	const key = await ctx.peerKey();
-	if (!key) return "unreadable";
-	const opened = await M.openPeerTokenWithKey(key, Addr.IDENTITY_AAD, row.value);
+	const opened = await openPeerSecret(ctx, Addr.IDENTITY_AAD, row.value);
 	if (!opened) return "unreadable";
 	try {
 		const parsed = JSON.parse(opened);
@@ -1411,8 +1418,7 @@ async function planReverse(ctx: TenantContext, alias: string): Promise<{ kind: "
 async function openReverse(ctx: TenantContext, label: string): Promise<string | null> {
 	const row: Json = await ctx.DB.prepare("SELECT token_enc, source, revoked_at FROM peers WHERE label = ?").bind(label).first();
 	if (!row || row.revoked_at || row.source !== "reverse" || !row.token_enc) return null;
-	const key = await ctx.peerKey();
-	return key ? await M.openPeerTokenWithKey(key, label, row.token_enc) : null;
+	return openPeerSecret(ctx, label, row.token_enc);
 }
 
 async function storeReverse(ctx: TenantContext, label: string, token: string, clientName: string, reissue = false): Promise<void> {
@@ -1544,8 +1550,7 @@ async function replyPeer(ctx: TenantContext, label: string): Promise<{ alias: st
 		 WHERE o.alias = ? AND o.token_enc IS NOT NULL AND p.revoked_at IS NULL`,
 	).bind(label).first();
 	if (!row) return null;
-	const key = await ctx.peerKey();
-	const token = key ? await M.openPeerTokenWithKey(key, row.alias, row.token_enc) : null;
+	const token = await openPeerSecret(ctx, row.alias, row.token_enc);
 	return token ? { alias: row.alias, url: row.url, token, identityKey: Addr.cleanPublicKey(row.identity_key), announced: row.source === "announce" } : null;
 }
 
@@ -3533,8 +3538,7 @@ async function outboundPeer(ctx: TenantContext, alias: string): Promise<{ alias:
 	if (!r) throw new ToolError(`no peer "${alias}" synced to this A2A endpoint. On the machine with the CLI: ${cliCommand(ctx)} peers sync ${alias}`);
 	let token: string | null = null;
 	if (r.token_enc) {
-		const peerKey = await ctx.peerKey();
-		token = peerKey ? await M.openPeerTokenWithKey(peerKey, alias, r.token_enc) : null;
+		token = await openPeerSecret(ctx, alias, r.token_enc);
 		if (!token) throw new ToolError(`the stored token for "${alias}" can't be read (the owner token was rotated since it was synced): run ${cliCommand(ctx)} peers sync ${alias} again`);
 	}
 	return { alias, url: r.url, token };

@@ -71,3 +71,12 @@ HTTPS only. Private and loopback targets are refused. Each push uses a per-task 
 ## Your account
 
 A self-hosted A2A endpoint runs in your Cloudflare account. Data leaves through wakes to your agent and through pushes to URLs your peers registered. The hosted A2A endpoint is in [Getting started](getting-started.md#hosted-inbox).
+
+## Hosted tenant-key rotation
+
+Hosted control and inbox deployments can use a two-key JSON keyring in `TENANT_SECRETS_KEY`.
+The active key writes authenticated v2 envelopes with a key id; the other key keeps stored
+credentials readable during rotation. Legacy v1 blobs remain readable. An unreadable blob fails
+closed and emits `wake_secrets_unreadable` without sensitive values. Configure an operator alert
+for that event. See [the control library rotation procedure](../control/README.md#tenant-secret-key-rotation)
+for reader-first rollout, rewrapping, outbound peer-token resync and retirement checks.

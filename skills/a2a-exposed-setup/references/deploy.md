@@ -175,3 +175,14 @@ an outer terminal. An unexpected prompt stops the terminal job after the idle
 timeout; inspect the message before retrying rather than sending extra answers.
 
 Worker dependency installs save npm output in `<config dir>/npm-install.log` (mode 600) and print that path only on failure. Inspect the log locally and redact secrets before sharing it.
+
+## Hosted tenant-secret rotation
+
+For a hosted deployment using `TENANT_SECRETS_KEY`, follow the
+[control library rotation procedure](https://github.com/telegraphic-dev/a2a-exposed/blob/main/control/README.md#tenant-secret-key-rotation).
+The binding accepts a raw secret for legacy writes or a bounded two-key JSON keyring for v2
+writes. Roll out compatible readers first, retain both keys through migration, and alert on
+`wake_secrets_unreadable`. Include outbound peer-token resync and delayed tenant config copies
+in retirement checks. This changes Worker secrets and stored credentials: prepare the exact
+plan and obtain the human's authorization before executing it. Never put key material in chat,
+command arguments, committed files or logs.

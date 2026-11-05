@@ -31,6 +31,7 @@ export {
 	MAX_WAKE_VALUE,
 	WAKE_SECRET_KEYS,
 	openWakeSecrets,
+	rewrapWakeSecrets,
 	sealWakeSecrets,
 } from "../tenants/wake-secrets.ts";
 export type { WakeSecretKey, WakeSecrets } from "../tenants/wake-secrets.ts";

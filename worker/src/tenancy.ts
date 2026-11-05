@@ -11,6 +11,7 @@
 // and an allowlist are all set (approval-oidc.ts).
 
 import * as A from "./a2a.ts";
+import { tenantSecretsMaterials } from "./wake-secrets.ts";
 
 /** Subset of D1 used by the handlers. A Durable Object adapter satisfies the same shape. */
 export interface SqlDb {
@@ -489,10 +490,20 @@ export class TenantContext implements ConfigFields {
 		return this.#peerKey;
 	}
 
+	/** Read-only keys for hosted outbound tokens during rotation; self-host keeps OWNER_TOKEN semantics. */
+	async peerReadKeys(): Promise<CryptoKey[]> {
+		const active = await this.peerKey();
+		if (!active) return [];
+		if (this.mode === "single") return [active];
+		const previous = tenantSecretsMaterials(this.#secretsKey || "").slice(1);
+		return [active, ...await Promise.all(previous.map((material) => derivePeerKey(material, peerKeyInfoForTenant(this.id))))];
+	}
+
 	async #derivePeerKey(): Promise<CryptoKey | null> {
 		if (this.mode === "single") return this.#ownerToken ? derivePeerKey(this.#ownerToken) : null;
 		if (!this.#secretsKey || !this.id) return null;
-		return derivePeerKey(this.#secretsKey, peerKeyInfoForTenant(this.id));
+		const material = tenantSecretsMaterials(this.#secretsKey)[0];
+		return material ? derivePeerKey(material, peerKeyInfoForTenant(this.id)) : null;
 	}
 }
 

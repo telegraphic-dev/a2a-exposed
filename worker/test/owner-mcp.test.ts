@@ -95,6 +95,17 @@ test("hosted control plane send, reply, and mark_working", async (t) => {
 	assert.equal(viaHttp.text.includes("tok-alpha"), false);
 	assert.equal(peerCalls.at(-1)!.body.params.message.parts[0].text, "from the owner token");
 
+	// A hosted rotation keeps stored outbound tokens readable through the actual owner send path.
+	const rotating = hostedTenantContext({ ...env, TENANT_SECRETS_KEY: JSON.stringify({
+		v: 2, active: "next", keys: { old: "platform-key", next: "next-platform-key" },
+	}) }, { id: "ten_carol", db: DB, publicUrl: BASE, ownerTokenHash: hash, status: "active" });
+	const afterRotation = await runOwnerRpc(rotating, ectx as any, {
+		accountId: "acct_carol", method: "POST", path: "/owner/mcp/send", body: { to: "alpha", text: "after rotation" },
+	});
+	assert.equal(afterRotation.status, 200);
+	assert.equal((afterRotation.body as any).isError, false, JSON.stringify(afterRotation.body));
+	assert.equal(peerCalls.at(-1)!.auth, "Bearer tok-alpha");
+
 	const withBody = await runOwnerRpc(ctx, ectx as any, { accountId: "acct_carol", method: "GET", path: "/owner/peers", body: { label: "bob" } });
 	assert.equal(withBody.status, 400);
 	assert.equal((withBody.body as { error?: string }).error, "this call takes no body");
