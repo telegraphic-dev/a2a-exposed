@@ -144,7 +144,7 @@ test("redact removes a whole quoted assignment value", () => {
 	assert.equal(singleEscaped, "PASSWORD=[redacted] tail");
 	assert.equal(singleEscaped.includes("secret"), false);
 	assert.equal(redact('NAME="Ada Lovelace"'), 'NAME="Ada Lovelace"');
-	assert.equal(redact("PASSWORD=onlyfirst second"), "PASSWORD=[redacted] second");
+	assert.equal(redact("PASSWORD=onlyfirst second"), "PASSWORD=[redacted]");
 });
 
 test("redact removes a JSON secret field", () => {
@@ -243,12 +243,15 @@ test("sanitized redacts secret field names and leaves ordinary fields", () => {
 	assert.equal(input.password, secret);
 });
 
+test("redact removes even short authorization header values", () => {
+	assert.equal(redact("authorization: none"), "authorization: [redacted]");
+});
+
 test("redact leaves ordinary text", () => {
 	const samples = [
 		"hello Ada",
 		"the token is unset",
 		"authorization server",
-		"authorization: none",
 		"session=morning",
 		"Bearer hi",
 		"https://agent.example.com/card",
@@ -533,4 +536,142 @@ test("malformed encoding and Unicode cannot hide injected credentials", () => {
 			}
 		}
 	}
+});
+
+
+// #219: header, URL, configuration and Error representations use the same policy.
+test("redacts credential header lines including short values and CRLF", () => {
+	for (const name of ["CF-Access-Client-Secret", "CF-Access-Client-Id", "X-Webhook-Key", "x-api-key", "X-Hub-Signature-256", "Cookie", "Set-Cookie", "Authorization", "X-Custom-Signature"]) {
+		const input = `Content-Type: text/plain\r\n  ${name}: a b\r\nX-Request-Id: public`;
+		const expected = `Content-Type: text/plain\r\n  ${name}: [redacted]\r\nX-Request-Id: public`;
+		assert.equal(redact(input), expected, name);
+		assert.equal(sanitized({ message: input }).message, expected, name);
+	}
+});
+
+test("redacts extra query and form names without hiding ordinary object keys", () => {
+	for (const name of ["key", "sig", "code", "code_verifier", "%6bey", "CODE", "code%5fverifier"]) {
+		for (const prefix of ["https://example.com/?", "#", "", "body: "]) {
+			assert.equal(redact(`${prefix}${name}=fake-value&name=Ada`), `${prefix}${name}=[redacted]&name=Ada`);
+		}
+	}
+	assert.deepEqual(sanitized({ key: "theme", code: "public", name: "Ada" }), { key: "theme", code: "public", name: "Ada" });
+});
+
+test("redacts webhook and Telegram paths, long segments and encoded containers", () => {
+	for (const path of ["/hooks/fake-hook", "/webhooks/fake-hook", "/bot123:fake-token/sendMessage", "/services/fake-long-path-secret/post"]) {
+		const input = `https://example.com${path}?name=Ada`;
+		const output = redact(input);
+		assert.equal(output.includes("fake-"), false, output);
+		assert.match(output, /redacted/);
+		assert.equal(output.endsWith("?name=Ada"), true, output);
+		assert.equal(decodeURIComponent(redact(encodeURIComponent(input))).includes("fake-"), false);
+		assert.equal(redact(JSON.stringify({ url: input })).includes("fake-"), false);
+	}
+	for (const path of ["/card", "/bottom/public", "/bot/status", "/hooks", "/short/path"]) {
+		assert.equal(redact(`https://example.com${path}`), `https://example.com${path}`);
+	}
+});
+
+test("redacts known credential paths without a URL origin", () => {
+	assert.equal(redact("POST /hooks/fake-secret?name=Ada"), "POST /hooks/[redacted]?name=Ada");
+	assert.equal(redact("/bot123:fake-token/sendMessage"), "/bot[redacted]/sendMessage");
+	assert.equal(redact(JSON.stringify({ path: "/hooks/fake-secret", name: "Ada" })), JSON.stringify({ path: "/hooks/[redacted]", name: "Ada" }));
+});
+
+test("redacts plural secrets, signatures and complete unquoted assignment lines", () => {
+	for (const name of ["secrets", "signature", "EVENT_SECRETS", "WAKE_SECRETS", "X-Custom-Signature", "CF-Access-Client-Id"]) {
+		assert.deepEqual(sanitized({ [name]: { nested: "fake-secret" }, name: "Ada" }), { [name]: "[redacted]", name: "Ada" });
+		assert.equal(redact(JSON.stringify({ [name]: { nested: "fake-secret" } })).includes("fake-secret"), false);
+	}
+	assert.equal(redact('EVENT_SECRETS={"first":"fake-one", "second":"fake-two"}'), "EVENT_SECRETS=[redacted]");
+	assert.equal(redact("EVENT_SECRET=a b\nNAME=Ada"), "EVENT_SECRET=[redacted]\nNAME=Ada");
+	assert.equal(redact("PASSWORD=first second\nNAME=Ada"), "PASSWORD=[redacted]\nNAME=Ada");
+});
+
+test("configuration redaction preserves multiline credential boundaries", () => {
+	assert.equal(redact("EVENT_SECRET=a=b c"), "EVENT_SECRET=[redacted]");
+	assert.equal(redact("EVENT_SECRET=first AUTHORIZATION=\nsecond secret").includes("second"), false);
+});
+
+test("redacts credential headers after Error and log prefixes", () => {
+	assert.equal(redact("Error: CF-Access-Client-Secret: fake-stack\n    at public"), "Error: CF-Access-Client-Secret: [redacted]\n    at public");
+	assert.equal(redact("warn: X-Webhook-Key: fake-header"), "warn: X-Webhook-Key: [redacted]");
+});
+
+test("header redaction preserves serialized JSON containers", () => {
+	const input = JSON.stringify({ message: "Error: X-Webhook-Key: fake-json", name: "Ada" });
+	assert.deepEqual(JSON.parse(redact(input)), { message: "Error: X-Webhook-Key: [redacted]", name: "Ada" });
+});
+
+test("Error accessors are masked without being invoked", () => {
+	const input = new Error("public");
+	Object.defineProperty(input, "detail", { get() { throw new Error("do not invoke"); } });
+	assert.equal((sanitized(input) as Error & { detail: string }).detail, "[redacted]");
+});
+
+test("sanitized copies Error fields, causes, aggregates and cycles without mutating input", () => {
+	const cause = new Error("https://example.com/?code=fake-code");
+	const input = new AggregateError([new Error(cause.message)], "X-Webhook-Key: fake-key", { cause });
+	Object.defineProperty(input, "hidden", { value: "https://example.com/hooks/fake-hook" });
+	Object.assign(input, { EVENT_SECRETS: { value: "fake-config" }, context: { message: "CF-Access-Client-Id: fake-id" }, self: input });
+	for (const output of [sanitized(input), redact(input) as AggregateError]) {
+		assert.ok(output instanceof AggregateError);
+		assert.notEqual(output, input);
+		assert.equal(output.message, "X-Webhook-Key: [redacted]");
+		assert.ok(output.cause instanceof Error);
+		assert.equal((output.cause as Error).message, "https://example.com/?code=[redacted]");
+		assert.ok(output.errors[0] instanceof Error);
+		assert.equal(output.errors[0].message, "https://example.com/?code=[redacted]");
+		for (const key of Object.getOwnPropertyNames(output)) {
+			assert.equal(String((output as unknown as Record<string, unknown>)[key]).includes("fake-"), false, key);
+		}
+		assert.equal(JSON.stringify(output).includes("fake-"), false);
+	}
+	assert.equal(input.message, "X-Webhook-Key: fake-key");
+	assert.equal(cause.message, "https://example.com/?code=fake-code");
+});
+
+
+test("standalone environment values keep spaces and delimiters inside the redaction", () => {
+	for (const value of ["first second&third", "first second#third", "first&second", "first#second", "first second&third=fourth", "first second#third=fourth"]) {
+		const input = `PASSWORD=${value}\nNAME=Ada`;
+		assert.equal(redact(input), "PASSWORD=[redacted]\nNAME=Ada");
+		assert.equal(sanitized({ message: input }).message, "PASSWORD=[redacted]\nNAME=Ada");
+	}
+	assert.equal(redact("PASSWORD=first&name=Ada"), "PASSWORD=[redacted]&name=Ada");
+	assert.equal(redact('EVENT_SECRETS={"one":"fake&name=Ada", "two":"fake#value"}'), "EVENT_SECRETS=[redacted]");
+});
+
+test("Discord webhook tokens are redacted after their numeric identifier", () => {
+	for (const prefix of ["", "https://example.com", "POST "]) {
+		for (const token of ["fake-short", "fake-webhook-token-long-value"]) {
+			const input = `${prefix}/api/webhooks/123456789012345678/${token}?wait=true`;
+			const expected = `${prefix}/api/webhooks/[redacted]/[redacted]?wait=true`;
+			assert.equal(redact(input), expected);
+			assert.equal(sanitized({ url: input }).url, expected);
+			assert.equal(redact(JSON.stringify({ url: input, name: "Ada" })), JSON.stringify({ url: expected, name: "Ada" }));
+		}
+	}
+});
+
+test("all credential header names preserve JSON syntax and sibling fields", () => {
+	for (const name of ["Authorization", "Proxy-Authorization", "CF-Access-Client-Id", "X-Webhook-Key", "X-Hub-Signature-256"]) {
+		const input = JSON.stringify({ message: `${name}: fake-json-value`, name: "Ada" });
+		assert.deepEqual(JSON.parse(redact(input)), { message: `${name}: [redacted]`, name: "Ada" });
+	}
+});
+
+
+test("environment assignments redact complete multiline PEM and structured secrets", () => {
+	const pem = "-----BEGIN PRIVATE KEY-----\nZmFrZS1zZWNyZXQ=\n-----END PRIVATE KEY-----";
+	for (const input of [`PRIVATE_KEY=${pem}`, `PRIVATE_KEY=${pem}\nNAME=Ada`]) {
+		assert.equal(redact(input), input.endsWith("NAME=Ada") ? "PRIVATE_KEY=[redacted]\nNAME=Ada" : "PRIVATE_KEY=[redacted]");
+		assert.equal(sanitized({ message: input }).message.includes("ZmFr"), false);
+	}
+	for (const value of ['{\n"one":"fake-one",\n"two":"fake-two"\n}', '[\n"fake-one",\n"fake-two"\n]']) {
+		assert.equal(redact(`EVENT_SECRETS=${value}\nNAME=Ada`), "EVENT_SECRETS=[redacted]\nNAME=Ada");
+	}
+	const input = JSON.stringify({ message: "-----BEGIN PRIVATE KEY-----\nfake-unclosed", name: "Ada" });
+	assert.deepEqual(JSON.parse(redact(input)), { message: "[redacted]", name: "Ada" });
 });
