@@ -12,6 +12,55 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 const grant = "a2asg_" + "a".repeat(64), owner = "a2aot_" + "x".repeat(43);
 const capabilities = { scopes: ["agents:create", "agents:owner-token", "wake:write", "wake:test"], wake: { presets: ["generic", "hermes"], secure_link_create: false } };
 
+test("hosted prepare capacity errors report the wait without retrying or writing a reference", () => {
+	const f = fixture(); f.save("HOSTED_AGENT_NAME=sample-agent\n");
+	const message = "This setup grant has 20 unused references. Wait 544 seconds before uploading another draft.";
+	try {
+		const cases = [
+			{ header: "321", body: 544, expected: 321 },
+			{ body: 544, expected: 544 },
+			{ header: "0", body: 544, expected: 0 },
+			{ header: new Date(Date.now() + 120_000).toUTCString(), body: 544, date: true },
+			{ header: "Thu, 01 Jan 1970 00:00:00 GMT", body: 544, expected: 0 },
+			{ header: "invalid", body: 544, expected: 544 },
+			{ header: "999999999999999999999", body: 544, expected: 544 },
+			{ header: "-1", body: 544, expected: 544 },
+			{ header: "1.5", body: 544, expected: 544 },
+			{ header: "invalid", body: -1 },
+			{ body: "544" },
+			{},
+		];
+		for (const [index, item] of cases.entries()) {
+			const reference = path.join(f.dir, `reference-${index}`), log = path.join(f.dir, `requests-${index}`);
+			const before = fs.readFileSync(f.config, "utf8");
+			const r = f.run(["wake", "prepare", "--agent", "sample-agent", "--url", "https://receiver.example/wake", "--preset", "generic", "--reference-file", reference, "--json"], {
+				"https://control.example/api/v1/setup/capabilities": { status: 200, body: { ...capabilities, wake: { ...capabilities.wake, secret_reference: true } } },
+				"https://control.example/api/v1/agents/sample-agent/wake": { status: 200, body: { version: 1 } },
+				"https://control.example/api/v1/agents/sample-agent/wake/reference": { status: 429, headers: item.header === undefined ? {} : { "Retry-After": item.header }, body: { error: "too_many_references", message, retry_after: item.body, token: grant, proof: owner } },
+			}, { A2A_TEST_FETCH_LOG: log });
+			assert.equal(r.status, 1, r.stdout + r.stderr);
+			const result = JSON.parse(r.stdout);
+			assert.equal(result.code, "too_many_references"); assert.equal(result.message, message);
+			if (item.date) assert.ok(result.retry_after > 0 && result.retry_after <= 120);
+			else assert.equal(result.retry_after, item.expected);
+			assert.match(result.next, /wake prepare.*no automatic retry/);
+			if (result.retry_after !== undefined) assert.ok(result.next.includes(`Wait ${result.retry_after} seconds`));
+			else assert.match(result.next, /expire/);
+			assert.equal(fs.existsSync(reference), false); assert.equal(fs.readFileSync(f.config, "utf8"), before);
+			const calls = fs.readFileSync(log, "utf8").trim().split("\n").map(JSON.parse);
+			assert.deepEqual(calls.filter(c => c.method !== "GET").map(c => c.method), ["POST"]);
+			for (const secret of [owner, grant]) assert.ok(!(r.stdout + r.stderr).includes(secret));
+		}
+		for (const [index, body] of [{ error: "too_many_references", message, retry_after: 544 }, { error: "too_many_references", message: owner + "\u001b[31m", retry_after: 544 }, { error: "unknown_code", message: owner }].entries()) {
+			const r = f.run(["hosted", "list"], { "https://control.example/api/v1/tenants": { status: 429, body } });
+			assert.equal(r.status, 1);
+			if (index === 0) { assert.match(r.stdout, /too_many_references: Wait 544 seconds/); assert.ok(r.stdout.includes(message)); }
+			else { assert.ok(!(r.stdout + r.stderr).includes(owner)); assert.doesNotMatch(r.stdout, /\u001b/); }
+			if (index === 2) assert.match(r.stdout, /http_429/);
+		}
+	} finally { f.clean(); }
+});
+
 function fixture() {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hosted-setup-"));
 	const configDir = path.join(dir, "config"); fs.mkdirSync(configDir);

@@ -56,3 +56,11 @@ owner credential. This read-only check does not test delivery, health or the car
 Empty or malformed reference files and environment values fail before a network
 request with `invalid_reference` and guidance to run `wake prepare` using a new
 protected reference file. Hosted failures exit 1 in text and JSON output.
+
+Hosted reference capacity failures exit 1 with `code: too_many_references`.
+`retry_after` reports seconds from `Retry-After` (seconds or an HTTP date),
+falling back to a nonnegative integer body `retry_after`. The recognized capacity
+message is retained; other service fields and arbitrary text are omitted.
+`next` says when to run `wake prepare` again with a new protected reference file.
+If no valid delay is supplied, wait for an unused reference to expire. The CLI
+never retries automatically or saves a reference on this refusal.

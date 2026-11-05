@@ -9,6 +9,18 @@ const NEXT = "Run hosted capabilities --json to list scopes and presets; login -
 const fail = (code, next) => { const error = new CliError(next); error.result = { ok: false, code, next }; throw error; };
 const printable = value => typeof value === "string" && value.length <= 4096 && !/[\x00-\x1f\x7f]/.test(value);
 
+function retryAfter(response, data) {
+	const header = response.headers.get("retry-after");
+	let seconds;
+	if (header && /^\d+$/.test(header)) seconds = Number(header);
+	else if (header && /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(header)) {
+		const date = Date.parse(header);
+		if (Number.isFinite(date)) seconds = Math.max(0, Math.ceil((date - Date.now()) / 1000));
+	}
+	if (Number.isSafeInteger(seconds) && seconds >= 0) return seconds;
+	return Number.isSafeInteger(data.retry_after) && data.retry_after >= 0 ? data.retry_after : undefined;
+}
+
 export function setupSession(env = process.env, saved = C.fileConfig()) {
 	const source = env.HOSTED_SETUP_URL || env.HOSTED_SETUP_TOKEN ? env : saved;
 	return { origin: controlOrigin(source.HOSTED_SETUP_URL), token: source.HOSTED_SETUP_TOKEN || "" };
@@ -32,6 +44,17 @@ async function request(origin, path, { token = "", method = "GET", body, fetchIm
 	} catch { fail("unavailable", "Hosted setup did not answer with JSON. Check the service and try again. Do not repeat a create request until hosted list confirms its result."); }
 	if (!data || typeof data !== "object" || Array.isArray(data)) fail("invalid_response", "The hosted service returned an invalid setup response.");
 	if (!response.ok) {
+		if (response.status === 429 && data.error === "too_many_references") {
+			const seconds = retryAfter(response, data);
+			const next = seconds === undefined
+				? "Wait for an unused reference to expire before running wake prepare again; no automatic retry was made."
+				: `Wait ${seconds} seconds before running wake prepare again with a new --reference-file; no automatic retry was made.`;
+			// Retain the capacity message, but never reflect arbitrary service text or credentials.
+			const message = typeof data.message === "string" && /^This setup grant has \d{1,10} unused references\. Wait \d{1,10} seconds before uploading another draft\.$/.test(data.message) ? data.message : undefined;
+			const error = new CliError(next);
+			error.result = { ok: false, code: "too_many_references", next, ...(message ? { message } : {}), ...(seconds === undefined ? {} : { retry_after: seconds }) };
+			throw error;
+		}
 		const known = ["taken", "limit", "invalid_name", "reserved_name", "invalid_grant", "insufficient_scope", "conflict", "unavailable", "not_found", "test", "signing", "unreadable", "preset", "url", "header", "access", "invalid_reference"];
 		const code = known.includes(data.error) ? data.error : `http_${response.status}`;
 		const next = code === "taken" || code === "reserved_name" ? "Choose another --name and run hosted list --json before creating."
@@ -212,7 +235,7 @@ export async function output(run, o = {}) {
 		if (!result.ok) process.exitCode = 1;
 	} catch (error) {
 		const result = error.result || { ok: false, code: "unavailable", next: "Hosted setup did not finish. Check hosted list --json before retrying." };
-		console.log(o.json ? JSON.stringify(result) : `${result.code}: ${result.next}`);
+		console.log(o.json ? JSON.stringify(result) : `${result.code}: ${result.next}${result.message ? `\nmessage: ${result.message}` : ""}`);
 		process.exitCode = 1;
 	}
 }

@@ -45,6 +45,7 @@ Hosted setup:
   wake set --agent NAME --reference-file FILE --json
                                 test and save exactly that reference's draft; --reference-env VAR also works
                                 MCP set_wake accepts secretReference on services listing that capability
+  Hosted reference capacity failures report too_many_references and a retry wait; never auto-retry.
   Hosted wake removal uses the agent's Wake settings on the website.
   Listings and previews show result fields; --json provides structured output.
 

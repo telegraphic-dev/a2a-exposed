@@ -130,3 +130,5 @@ For a selected hosted agent, run `hosted list --json`, then
 Use `status --json` for full diagnostics of the saved deployment. An empty or
 malformed wake reference requires `wake prepare` with a new protected reference
 file; failed hosted commands exit 1.
+
+Hosted `too_many_references` reports `retry_after` seconds and `next`; wait before another `wake prepare`. No automatic retry.
