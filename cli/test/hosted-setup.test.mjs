@@ -328,3 +328,43 @@ test("selected status accepts only an explicit valid agent and supports its save
   assert.ok(!(r.stdout + r.stderr).includes(owner));
  } finally { f.clean(); }
 });
+
+test('hosted removal requires an explicit listed version before any network request',()=>{
+ const f=fixture();f.save();
+ try{
+  for(const args of [[],['--version=-1'],['--version','1.5'],['--version','1','--url','https://receiver.example/hook']]){
+   const log=path.join(f.dir,'requests');
+   const result=f.run(['wake','remove','--agent','sample-agent',...args,'--json'],{}, {A2A_TEST_FETCH_LOG:log});
+   assert.equal(result.status,1,result.stdout+result.stderr);assert.match(JSON.parse(result.stdout).next,/wake preview/);assert.equal(fs.existsSync(log),false);
+  }
+ }finally{f.clean();}
+});
+test('hosted remove and unset send only the selected version and show safe JSON outcomes',()=>{
+ const f=fixture();f.save();
+ try{
+  for(const [sub,body] of [['remove',{ok:true,removed:true,already_removed:false,version:8}],['unset',{ok:true,removed:false,already_removed:true,version:7}]]){
+   const log=path.join(f.dir,sub);
+   // Stub chooses by HTTP method through a test-only preload.
+   const preload=path.join(f.dir,'remove-fetch.mjs');
+   fs.writeFileSync(preload,`import fs from 'node:fs';globalThis.fetch=async(url,init={})=>{fs.appendFileSync(process.env.REMOVE_LOG,JSON.stringify({url,method:init.method,body:init.body})+'\\n');return Response.json(String(url).endsWith('/capabilities')?{scopes:['wake:write'],wake:{presets:['generic'],removal:true}}:init.method==='DELETE'?${JSON.stringify({...body,token:grant,secret:owner})}:{version:7,url:'https://receiver.example/hook'});};`);
+   const result=spawnSync(process.execPath,['--import',preload,path.join(root,'bin/a2a-exposed.mjs'),'wake',sub,'--agent','sample-agent','--version','7','--json'],{encoding:'utf8',env:{...f.env,REMOVE_LOG:log}});
+   assert.equal(result.status,0,result.stdout+result.stderr);const outcome=JSON.parse(result.stdout);assert.equal(outcome.code,sub==='remove'?'removed':'already_removed');assert.doesNotMatch(result.stdout,/a2asg_|a2aot_|receiver/);
+   const calls=fs.readFileSync(log,'utf8').trim().split('\n').map(JSON.parse);assert.deepEqual(calls.map(c=>c.method),['GET','GET','DELETE']);assert.deepEqual(JSON.parse(calls[2].body),{version:7});
+  }
+  const log=path.join(f.dir,'stale');
+  const stale=f.run(['wake','remove','--agent','sample-agent','--version','6','--json'],{'https://control.example/api/v1/agents/sample-agent/wake':{status:200,body:{version:7}}},{A2A_TEST_FETCH_LOG:log});assert.equal(stale.status,1);assert.equal(JSON.parse(stale.stdout).code,'conflict');assert.equal(fs.readFileSync(log,'utf8').trim().split('\n').length,1);
+ }finally{f.clean();}
+});
+test('removal preparation uploads clear only and protects the single-use reference',()=>{
+ const f=fixture();f.save();
+ try{
+  const file=path.join(f.dir,'reference'), log=path.join(f.dir,'requests'),reference='a2awr_'+'d'.repeat(64);
+  const result=f.run(['wake','prepare','--agent','sample-agent','--clear','--version','7','--reference-file',file,'--json'],{
+   'https://control.example/api/v1/setup/capabilities':{status:200,body:{...capabilities,wake:{...capabilities.wake,removal:true,secret_reference:true}}},
+   'https://control.example/api/v1/agents/sample-agent/wake':{status:200,body:{version:7,url:'https://receiver.example/hook'}},
+   'https://control.example/api/v1/agents/sample-agent/wake/reference':{status:200,body:{reference,version:7,clear:true}},
+  },{A2A_TEST_FETCH_LOG:log});
+  assert.equal(result.status,0,result.stdout+result.stderr);assert.equal(fs.statSync(file).mode&0o777,0o600);assert.equal(fs.readFileSync(file,'utf8').trim(),reference);assert.ok(!result.stdout.includes(reference));
+  const calls=fs.readFileSync(log,'utf8').trim().split('\n').map(JSON.parse);assert.deepEqual(JSON.parse(calls.at(-1).body),{version:7,clear:true});
+ }finally{f.clean();}
+});

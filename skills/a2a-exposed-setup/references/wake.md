@@ -326,7 +326,7 @@ new mode-600 file without printing it. Consume it using `wake set --agent NAME
 --reference-file FILE --json` or MCP `set_wake` with `secretReference` and matching draft
 settings. Both grants must remain valid. A failed test spends the reference too. Raw
 MCP keys keep their browser-only refusal; without a reference use browser confirmation.
-References are available when advertised by service capabilities. Hosted wake removal uses the website.
+References are available when advertised by service capabilities. When capabilities advertises `wake_removal`, list `wake preview --agent NAME --json`, then run `wake remove --agent NAME --version N --json` with the reviewed version (`unset` is an alias). For MCP, `wake prepare --agent NAME --clear --version N --reference-file FILE --json` writes a ten-minute single-use removal reference, mode 600. MCP `set_wake clear: true, secretReference` consumes that reference while both grants remain live. Save and removal references are not interchangeable. Without a reference, use browser confirmation. Older services keep removal on the website.
 
 Hosted listings and wake previews show result fields in text output; use `--json` for structured output. Owner credentials stay bound to their deployment origin independently of setup URL overrides.
 

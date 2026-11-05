@@ -55,7 +55,7 @@ async function request(origin, path, { token = "", method = "GET", body, fetchIm
 			error.result = { ok: false, code: "too_many_references", next, ...(message ? { message } : {}), ...(seconds === undefined ? {} : { retry_after: seconds }) };
 			throw error;
 		}
-		const known = ["taken", "limit", "invalid_name", "reserved_name", "invalid_grant", "insufficient_scope", "conflict", "unavailable", "not_found", "test", "signing", "unreadable", "preset", "url", "header", "access", "invalid_reference"];
+		const known = ["taken", "limit", "invalid_name", "reserved_name", "invalid_grant", "insufficient_scope", "conflict", "unavailable", "not_found", "test", "signing", "unreadable", "preset", "url", "header", "access", "invalid_reference", "body"];
 		const code = known.includes(data.error) ? data.error : `http_${response.status}`;
 		const next = code === "taken" || code === "reserved_name" ? "Choose another --name and run hosted list --json before creating."
 			: code === "limit" ? "The account is at its agent limit. Review hosted list --json and account plans."
@@ -71,7 +71,7 @@ async function request(origin, path, { token = "", method = "GET", body, fetchIm
 export async function capabilities(o = {}) {
 	const data = await request(originFor(o), "/api/v1/setup/capabilities");
 	if (!Array.isArray(data.scopes) || !Array.isArray(data.wake?.presets)) fail("unsupported", "This service does not expose hosted setup capabilities yet.");
-	return { ok: true, code: "capabilities", next: "Select explicit scopes and a wake preset from this listing.", scopes: data.scopes.filter(s => SETUP_SCOPES.includes(s)), presets: data.wake.presets.filter(s => /^[a-z-]+$/.test(s)), secret_reference: data.wake.secret_reference === true, secure_link_create: data.wake.secure_link_create === true };
+	return { ok: true, code: "capabilities", next: "Select explicit scopes and a wake preset from this listing.", scopes: data.scopes.filter(s => SETUP_SCOPES.includes(s)), presets: data.wake.presets.filter(s => /^[a-z-]+$/.test(s)), secret_reference: data.wake.secret_reference === true, wake_removal: data.wake.removal === true, secure_link_create: data.wake.secure_link_create === true };
 }
 
 export async function login(o = {}) {
@@ -169,14 +169,20 @@ export async function status(o = {}) {
 
 export async function wake(sub, o = {}) {
 	if (!["preview", "test", "set", "prepare", "remove", "unset"].includes(sub)) fail("usage", "Use wake preview|test|set|prepare|remove. List presets with hosted capabilities --json.");
-	if (sub === "remove" || sub === "unset") fail("unsupported", "This hosted API does not support wake removal yet. Remove it in the agent's Wake settings; saved settings were not changed.");
+	const removing = sub === "remove" || sub === "unset";
+ const preparingRemoval = sub === "prepare" && o.clear === true;
+ if (o.clear && !preparingRemoval) fail("usage", "Use wake prepare --clear for an MCP removal reference, or wake remove --version N. Run wake preview --json to list the current version.");
+ if (removing || preparingRemoval) {
+  if (o.url || o.preset || Object.keys(o).some(key => /^(?:key|hmac-secret|access-client)/.test(key))) fail("removal_inputs", "Omit draft settings and secrets when removing a wake. Run wake preview --json first.");
+  if (!/^(0|[1-9][0-9]*)$/.test(String(o.version ?? "")) || !Number.isSafeInteger(Number(o.version))) fail("version", "Pass --version N selected from wake preview --agent NAME --json. Removal never selects a version automatically.");
+ }
 	if (sub === "prepare") {
 		if (!o["reference-file"]) fail("reference_file", "Pass a new --reference-file FILE. The reference is saved mode 600 and never printed.");
 		try { fs.lstatSync(o["reference-file"]); fail("reference_file", "Choose a new --reference-file path; existing files are never replaced."); }
 		catch (error) { if (error.result) throw error; if (error.code !== "ENOENT") fail("reference_file", "Cannot inspect --reference-file; check its path and permissions."); }
 	}
 	let reference;
-	if (sub === "set" && (o["reference-file"] || o["reference-env"])) {
+	if ((sub === "set" || removing) && (o["reference-file"] || o["reference-env"])) {
 		if (o.url || o.preset || o["key-file"] || o["key-env"] || o["key-stdin"] || o["hmac-secret-file"] || o["hmac-secret-env"]) fail("reference_inputs", "Use a reference without draft overrides; it saves exactly the uploaded settings.");
 		const next = "Run wake prepare --agent NAME with the draft inputs and a new --reference-file FILE, then use that protected reference with wake set. Existing files are never replaced.";
 		try { reference = secret(o, "reference", ""); }
@@ -190,6 +196,22 @@ export async function wake(sub, o = {}) {
 	const current = await request(origin, path, { token });
 	if (!Number.isSafeInteger(current.version)) fail("invalid_response", "The service did not return a valid wake version. Saved settings were not changed.");
 	if (sub === "preview") return { ok: true, code: "preview", next: "Test an explicit draft before saving.", version: current.version, preset: current.preset, configured: Boolean(current.url), key_header: ["hermes", "openbot"].includes(current.preset) ? "" : ["grok-bot", "claude-code", "openclaw-wake", "openclaw-agent"].includes(current.preset) ? "Authorization" : current.keyHeader || "Authorization", url: previewUrl(current.url) };
+ if (removing || preparingRemoval) {
+  const version = Number(o.version);
+  if (version !== current.version) fail("conflict", "Wake settings changed. Run wake preview --agent NAME --json, review them, then repeat removal with its explicit --version.");
+  const available = await capabilities({ "control-url": origin });
+  if (!available.wake_removal || (preparingRemoval && !available.secret_reference)) fail("unsupported", "This service does not support this removal operation. Use the agent's Wake settings on the website.");
+  if (preparingRemoval) {
+   const prepared = await request(origin, `${path}/reference`, { token, method: "POST", body: { version, clear: true } });
+   if (!/^a2awr_[a-f0-9]{64}$/.test(prepared.reference || "")) fail("invalid_response", "The service did not return a valid removal reference. No wake was removed.");
+   try { fs.writeFileSync(o["reference-file"], prepared.reference + "\n", { mode: 0o600, flag: "wx" }); }
+   catch { fail("reference_file", "Cannot create --reference-file. Choose a new path in a private directory; existing files are never replaced."); }
+   return { ok: true, code: "prepared", version, next: "Within ten minutes, use MCP set_wake with clear: true and secretReference, or wake remove --version N --reference-file FILE. The reference is single-use and never printed." };
+  }
+  const result = await request(origin, path, { token, method: "DELETE", body: { version, ...(reference ? { secretReference: reference } : {}) } });
+  const ok = result.ok === true && (result.removed === true || result.already_removed === true);
+  return { ok, code: ok ? result.already_removed === true ? "already_removed" : "removed" : "failed", removed: result.removed === true, already_removed: result.already_removed === true, version: result.version, next: ok ? "Use polling to read messages." : "Read wake preview --json before retrying removal with an explicit --version." };
+ }
 	if (reference) {
 		const result = await request(origin, path, { token, method: "PUT", body: { version: current.version, secretReference: reference } });
 		return { ok: result.ok === true && result.saved === true, code: result.saved === true ? "saved" : "failed", saved: result.saved === true, next: result.saved === true ? "Check the receiver for the test wake." : "The reference is spent. Check saved settings before preparing another draft." };

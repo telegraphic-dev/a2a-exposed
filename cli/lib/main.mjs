@@ -46,7 +46,12 @@ Hosted setup:
                                 test and save exactly that reference's draft; --reference-env VAR also works
                                 MCP set_wake accepts secretReference on services listing that capability
   Hosted reference capacity failures report too_many_references and a retry wait; never auto-retry.
-  Hosted wake removal uses the agent's Wake settings on the website.
+  wake remove --agent NAME --version N --json
+                                read wake preview --json first; remove only the version explicitly selected
+                                wake unset is an alias; credentials remain in protected storage
+  wake prepare --agent NAME --clear --version N --reference-file FILE --json
+                                prepare a removal reference for MCP set_wake clear: true, secretReference;
+                                without that reference MCP keeps browser confirmation
   Listings and previews show result fields; --json provides structured output.
 
 Setup (needs Node 22.18+, e.g. \`mise exec node@22 -- npx -y a2a-exposed@latest ...\`, and a Cloudflare login:
@@ -380,7 +385,7 @@ const deployOpts = {
 const SPEC = {
 	hosted: { name: S, json: B, agent: S, hostname: S, origin: S, path: S, preset: S, "control-url": S, "secret-file": S, "secret-env": S, "secret-from": S, "hermes-home": S, route: S, "token-file": S, "no-run": B },
 	init: { ...deployOpts, ...tunnelOpts, tunnel: B }, deploy: deployOpts,
-	wake: { ...deployOpts, json: B, url: S, "reference-file": S, "reference-env": S, agent: S, "control-url": S, "key-header": S, "key-file": S, "key-env": S, "key-stdin": B, "hmac-secret-file": S, "hmac-secret-env": S, "access-client-id-file": S, "access-client-id-env": S, "access-client-secret-file": S, "access-client-secret-env": S }, tunnel: tunnelOpts,
+	wake: { ...deployOpts, json: B, url: S, "reference-file": S, "reference-env": S, clear: B, version: S, agent: S, "control-url": S, "key-header": S, "key-file": S, "key-env": S, "key-stdin": B, "hmac-secret-file": S, "hmac-secret-env": S, "access-client-id-file": S, "access-client-id-env": S, "access-client-secret-file": S, "access-client-secret-env": S }, tunnel: tunnelOpts,
 	inbox: { context: S, from: S, all: B, json: B },
 	reply: { text: S, stdin: B, state: { type: "string", default: "completed" }, artifact: B, "artifact-name": { type: "string", default: "response" }, force: B },
 	history: { from: S, n: { type: "string", short: "n", default: "50" }, json: B },

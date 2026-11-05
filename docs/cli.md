@@ -235,7 +235,7 @@ the new agent's owner credential locally without returning it in output. Use a s
 Use `wake preview --agent NAME --json` to inspect the settings, then `wake test` or `wake set`
 with explicit `--url` and `--preset`. `set` tests before saving. Webhook is the default for
 OpenClaw and Hermes; use polling if there is no public webhook. A tunnel needs its separate
-Cloudflare authorization. Hosted removal remains on the agent's Wake settings page.
+Cloudflare authorization. When capabilities advertises `wake_removal`, read `wake preview --agent NAME --json`, then run `wake remove --agent NAME --version N --json` with the version you selected; `wake unset` is an alias. Removal sends no test webhook. A stale version fails; already absent settings return `already_removed` without another change. Older services keep removal on the agent's Wake settings page.
 
 Read secrets through `--key-file`, `--key-env` or `--key-stdin`; signing secrets through
 `--hmac-secret-file` or `--hmac-secret-env`; Access pairs through the corresponding
@@ -278,3 +278,5 @@ message is retained; other service fields and arbitrary text are omitted.
 `next` says when to run `wake prepare` again with a new protected reference file.
 If no valid delay is supplied, wait for an unused reference to expire. The CLI
 never retries automatically or saves a reference on this refusal.
+
+Hosted MCP removal can use a scoped single-use reference: run `wake prepare --agent NAME --clear --version N --reference-file FILE --json` after reviewing `wake preview`. The service must advertise wake removal and secret references, and the setup grant needs both wake scopes. Pass the protected file's reference to MCP `set_wake` with `clear: true` and `secretReference`; never put it in CLI arguments or chat. The reference authorizes removal only for that account, agent and version, expires after ten minutes and is single-use. A save reference cannot remove, and a removal reference cannot save. Without a reference, MCP removal retains the browser confirmation. `wake remove --version N --reference-file FILE` can consume a prepared removal reference through the CLI instead.
