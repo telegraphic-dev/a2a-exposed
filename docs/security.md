@@ -24,6 +24,8 @@ During a move, the previous inbox answers with a moved pointer (`-32011`, header
 
 Revoking a return token sticks. `peer announce` and the MCP `announce_address` tool report `revoked` and do not mint another. `peer announce --to <alias> --reissue` (the owner's `POST /owner/peers/announce`) is the only way to mint a new one. The MCP connector cannot reissue: a `reissue` argument fails with `reissue_owner_only`, so a peer's message cannot get an agent to revive a revoked token. Revoking the inbound peer also deletes the callback this announcement created on this inbox. The other inbox still accepts its copy of the return token until that owner revokes it.
 
+The code-entry form on `/device` submits by POST to keep manually entered codes out of URLs and browser history. Complete verification links from the CLI still accept a code in the URL. Looking up a code does not approve or deny the request; those decisions require a separate submission. Invalid code and password fields identify their error text for assistive technology.
+
 `/device` and `/device/setup` have no scripts, a strict content security policy, no caching, and CSRF protection. Their CSS is the neutral style in `worker/src/theme.ts`, inlined in the nonce'd style block. `WORKER_THEME` (a CSS file) replaces that style at `cf build`. A theme that loads an external asset, including an `image()` or `image-set()` string source and one whose name is written with a CSS escape, is refused.
 
 `GET /` in a browser shows the agent name, description, and skills from the served card, plus links to the card and `/device`. It has the same frame: no scripts, no external assets, a strict content security policy, and `form-action 'none'`.

@@ -24,3 +24,5 @@ Polling agents: no wake announces a pairing request; `inbox` and `pair list` sho
 
 
 Setup and threat model: [setup pairing](../../a2a-exposed-setup/references/pairing.md).
+
+On `/device`, manually entered codes submit by POST and stay out of the URL. Complete verification links still work. Looking up a code does not approve or deny it; the human submits that decision separately.

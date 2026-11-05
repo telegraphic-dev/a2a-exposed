@@ -224,7 +224,8 @@ export type PageModel = {
 };
 
 export function devicePage(m: PageModel, nonce: string): string {
-	const notice = m.notice ? `<p class="n ${m.notice.kind}">${esc(m.notice.text)}</p>` : "";
+	const errorAttrs = m.notice?.kind === "error" ? ` aria-invalid="true" aria-describedby="device-error"` : "";
+	const notice = m.notice ? `<p${errorAttrs ? ` id="device-error" role="alert"` : ""} class="n ${m.notice.kind}">${esc(m.notice.text)}</p>` : "";
 	if (m.settled) {
 		const title = m.settled === "approved" ? "Approved" : "Denied";
 		return pageShell(title, nonce, `${notice}<p>You can close this page.</p>`);
@@ -253,14 +254,14 @@ export function devicePage(m: PageModel, nonce: string): string {
 	const passwordOn = m.passwordEnabled !== false;
 	const form = r && passwordOn && m.passwordSet ? `<form method="post" action="/device">
 <input type="hidden" name="csrf" value="${esc(m.csrf)}"><input type="hidden" name="user_code" value="${esc(formatUserCode(r.userCode))}">
-<label for="pw">Approval password (needed to approve; deny works without it)</label><input id="pw" name="password" type="password" autocomplete="current-password" required maxlength="1024" autofocus>
+<label for="pw">Approval password (needed to approve; deny works without it)</label><input id="pw" name="password" type="password"${errorAttrs} autocomplete="current-password" required maxlength="1024" autofocus>
 <div class="b"><button name="decision" value="approve" type="submit">Approve</button><button name="decision" value="deny" type="submit" class="d" formnovalidate>Deny</button></div>
 </form>` : r && passwordOn && !m.passwordSet ? noPassword + denyOnly : r ? denyOnly : "";
 	const oidcForm = m.oidc && r ? `<form method="post" action="/device">
 <input type="hidden" name="csrf" value="${esc(m.csrf)}"><input type="hidden" name="user_code" value="${esc(formatUserCode(r.userCode))}">
 <div class="b"><button name="decision" value="oidc" type="submit">Approve with ${esc(m.oidc.label)}</button></div>
 </form>` : "";
-	const ask = m.askCode ? `<p class="w">The connecting agent prints this code when it runs <code>${esc(`${m.cli} connect <url>`)}</code>. It looks like WDJB-4827.</p><form method="get" action="/device"><label for="uc">Code</label><input id="uc" name="user_code" value="${esc(m.codeValue || "")}" placeholder="WDJB-4827" autocomplete="off" autocapitalize="characters" required maxlength="16" autofocus><div class="b"><button type="submit">Continue</button></div></form>` : "";
+	const ask = m.askCode ? `<p class="w">The connecting agent prints this code when it runs <code>${esc(`${m.cli} connect <url>`)}</code>. Use four consonants, a hyphen, and four digits.</p><form method="post" action="/device"><input type="hidden" name="csrf" value="${esc(m.csrf)}"><input type="hidden" name="decision" value="lookup"><label for="uc">Code</label><input id="uc" name="user_code" value="${esc(m.codeValue || "")}" placeholder="XXXX-0000"${errorAttrs} spellcheck="false" autocomplete="off" autocapitalize="characters" required maxlength="16" autofocus><div class="b"><button type="submit">Continue</button></div></form>` : "";
 	return pageShell(`Connect an agent to ${m.agentName}`, nonce, `${notice}${details}${form}${oidcForm}${ask}`);
 }
 
