@@ -104,9 +104,10 @@ corrupt ciphertext and missing keys return `null` and emit the fixed error event
 An empty blob returns `{}` without an alert. Operators must route that error event to their
 alerting system; this package does not provision an alert destination.
 
-Deploy compatible readers everywhere with the original raw key first. Next install the same
-two-key ring everywhere with the old key active. Once all readers have both keys, switch `active`
-to the new key. Do not remove the old key while any reader is behind, or roll back to code that
+Deploy compatible readers everywhere with the original raw key first. Quiesce every tenant-secret
+writer while installing the same two-key ring everywhere with the old key active: a raw-key
+reader cannot resolve a v2 key id. Verify all readers use that ring before resuming writes. Once
+all readers have both keys, switch `active` to the new key. Do not remove the old key while any reader is behind, or roll back to code that
 only supports v1 after v2 writes start.
 
 `rewrapWakeSecrets(keyring, tenantId, sealed)` decrypts an existing blob and seals all supported
@@ -117,9 +118,25 @@ a fresh read; leave the original row untouched on `null`. Reconcile delivered in
 pending/retry outbox payloads as well as the control table before retiring a key. Normal unchanged
 wake saves intentionally preserve their ciphertext and are not a bulk rotation mechanism.
 
-Hosted outbound peer tokens also derive from this binding. New uploads use the active material;
-reads try both keys and preserve tenant/alias isolation. Those tokens retain their v1 format.
+Hosted outbound peer tokens, reverse tokens and the stored pairing identity also derive from
+this binding. All credential readers try both keys and preserve tenant/alias isolation; new writes
+use the active material. These credential blobs retain their v1 format.
 Inventory every tenant's outbound peers through its owner API, then explicitly re-sync each
 selected alias with the active key before dropping the old key. Merely reading or sending does
-not rewrite a token. Keep both keys until all stored blobs, peer tokens and delayed config copies
-are verified to work without the previous key. Self-hosted owner-token encryption is unchanged.
+not rewrite a token. For announce-created outbound entries that are absent from the CLI configuration, authorized
+maintenance must decrypt and reseal the same token with active material using a ciphertext CAS;
+preserve the row's alias, source and other metadata.
+
+Include `peers.token_enc` reverse tokens and the identity in `settings` under `peer_identity`
+in the migration inventory. A permitted `peer announce --to <alias>` reuses and reseals an existing
+live reverse token after the peer accepts it; it does not need `--reissue`. Verify the token hash
+is unchanged. Do not announce or revive revoked peers as part of rotation. The existing owner-only
+`PUT /owner/identity` can reseal the exact same validated public/private identity with the active
+key. Supply the original identity from a protected source through a request body; never expose
+its private key in arguments or logs. For an identity generated on the Worker, use approved
+maintenance to decrypt the existing ciphertext and pass the same identity, or CAS-reseal it in
+place. Never regenerate or replace the identity to rotate encryption. Check that its public key
+and fingerprint remain unchanged and that its signed card validates with only the new key.
+
+Keep both keys until tenant blobs, outbound and reverse tokens, pairing identities and delayed
+config copies are verified without the previous key. Self-hosted owner-token encryption is unchanged.
