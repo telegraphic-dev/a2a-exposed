@@ -124,3 +124,9 @@ When a command fails in a way [troubleshooting](references/troubleshooting.md) d
 For OpenBot, wake metadata is under `data` in the `a2a_wake` envelope. Run `inbox` and reply using the workflow above. An interval routine can poll every three minutes; when both inbox and pairing requests are empty, finish quietly without a chat notification. HTTP 202 proves webhook acceptance only: verify the routine run reads the inbox and can reply. A failed peer push can leave the completed reply stored: check `GetTask` (`poll`) before resending. Unsigned OpenBot wakes are refused. Receivers validate signed timestamps and deduplicate delivery IDs; retries still need task-level idempotency. The human handles the signing secret directly in protected storage, never chat or argv; see the [OpenBot setup checklist](../a2a-exposed-setup/references/wake.md#openbot).
 
 `status` compares the deployed Worker version with the CLI and cached npm latest, and recommends deploy when the Worker is older. Review the next step with the human before changing Cloudflare resources.
+
+For a selected hosted agent, run `hosted list --json`, then
+`status --agent NAME --json` to read wake configuration without testing delivery.
+Use `status --json` for full diagnostics of the saved deployment. An empty or
+malformed wake reference requires `wake prepare` with a new protected reference
+file; failed hosted commands exit 1.

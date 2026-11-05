@@ -136,6 +136,14 @@ function previewUrl(value) {
  catch { return ""; }
 }
 
+export async function status(o = {}) {
+	if (!/^[a-z0-9][a-z0-9-]{2,30}[a-z0-9]$/.test(o.agent || "")) fail("agent", "Pass --agent NAME selected from hosted list --json.");
+	const preview = await wake("preview", o);
+	return { ...preview, code: "status", agent: o.agent, next: preview.configured
+		? "Wake settings are configured. Run wake test --agent NAME with explicit draft inputs to check delivery."
+		: "No webhook is configured. Select a preset from hosted capabilities --json, then prepare a wake draft, or use polling." };
+}
+
 export async function wake(sub, o = {}) {
 	if (!["preview", "test", "set", "prepare", "remove", "unset"].includes(sub)) fail("usage", "Use wake preview|test|set|prepare|remove. List presets with hosted capabilities --json.");
 	if (sub === "remove" || sub === "unset") fail("unsupported", "This hosted API does not support wake removal yet. Remove it in the agent's Wake settings; saved settings were not changed.");
@@ -144,14 +152,22 @@ export async function wake(sub, o = {}) {
 		try { fs.lstatSync(o["reference-file"]); fail("reference_file", "Choose a new --reference-file path; existing files are never replaced."); }
 		catch (error) { if (error.result) throw error; if (error.code !== "ENOENT") fail("reference_file", "Cannot inspect --reference-file; check its path and permissions."); }
 	}
+	let reference;
+	if (sub === "set" && (o["reference-file"] || o["reference-env"])) {
+		if (o.url || o.preset || o["key-file"] || o["key-env"] || o["key-stdin"] || o["hmac-secret-file"] || o["hmac-secret-env"]) fail("reference_inputs", "Use a reference without draft overrides; it saves exactly the uploaded settings.");
+		const next = "Run wake prepare --agent NAME with the draft inputs and a new --reference-file FILE, then use that protected reference with wake set. Existing files are never replaced.";
+		try { reference = secret(o, "reference", ""); }
+		catch (error) {
+			if (error.result?.code === "secret_input") fail("invalid_reference", next);
+			throw error;
+		}
+		if (!/^a2awr_[a-f0-9]{64}$/.test(reference)) fail("invalid_reference", next);
+	}
 	const { origin, token, name } = wakeCredential(o, sub !== "prepare" && !o["reference-file"] && !o["reference-env"]), path = `/api/v1/agents/${encodeURIComponent(name)}/wake`;
 	const current = await request(origin, path, { token });
 	if (!Number.isSafeInteger(current.version)) fail("invalid_response", "The service did not return a valid wake version. Saved settings were not changed.");
 	if (sub === "preview") return { ok: true, code: "preview", next: "Test an explicit draft before saving.", version: current.version, preset: current.preset, configured: Boolean(current.url), key_header: ["hermes", "openbot"].includes(current.preset) ? "" : ["grok-bot", "claude-code", "openclaw-wake", "openclaw-agent"].includes(current.preset) ? "Authorization" : current.keyHeader || "Authorization", url: previewUrl(current.url) };
-	if (sub === "set" && (o["reference-file"] || o["reference-env"])) {
-		if (o.url || o.preset || o["key-file"] || o["key-env"] || o["key-stdin"] || o["hmac-secret-file"] || o["hmac-secret-env"]) fail("reference_inputs", "Use a reference without draft overrides; it saves exactly the uploaded settings.");
-		const reference = secret(o, "reference", "");
-		if (!/^a2awr_[a-f0-9]{64}$/.test(reference)) fail("invalid_reference", "Read a valid reference from a protected --reference-file or --reference-env.");
+	if (reference) {
 		const result = await request(origin, path, { token, method: "PUT", body: { version: current.version, secretReference: reference } });
 		return { ok: result.ok === true && result.saved === true, code: result.saved === true ? "saved" : "failed", saved: result.saved === true, next: result.saved === true ? "Check the receiver for the test wake." : "The reference is spent. Check saved settings before preparing another draft." };
 	}

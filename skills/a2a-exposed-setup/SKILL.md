@@ -143,6 +143,7 @@ Details are in [Feedback](https://github.com/telegraphic-dev/a2a-exposed/blob/ma
 
 OpenBot uses preset `openbot` and `WAKE_HMAC_SECRET`. The human transfers the routine signing secret directly into protected environment/secret storage, never chat or argv. Follow the [OpenBot checklist](references/wake.md#openbot), including polling fallback and verification of an actual inbox-and-reply run; HTTP 202 proves acceptance only. The Worker refuses unsigned OpenBot wakes; the reference explains signed timestamps, delivery-ID replay protection, and retry idempotency.
 
+`hosted list --json` lists agent names; `status --agent NAME --json` reads selected hosted wake settings without testing delivery. Empty or malformed wake references need `wake prepare` with a new protected file; hosted failures exit 1. See [wake guidance](references/wake.md).
 `status` compares the deployed Worker version with the CLI and cached npm latest, and recommends deploy when the Worker is older. Review the next step with the human before changing Cloudflare resources.
 For staging link expiry, repeat the same create/finish command before approval; after grant expiry, use `hosted link finish` for fresh approval. Saved connector
 tokens remain local; wake settings are not saved. See [troubleshooting](references/troubleshooting.md).

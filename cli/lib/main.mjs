@@ -178,6 +178,9 @@ Remove
                                 --dir and --worker-dir are the Worker project directory (default <config dir>/worker)
 
 Status
+  status --agent NAME [--control-url URL] [--json]
+                                read selected hosted agent wake configuration; select NAME with hosted list --json.
+                                Uses setup approval or that agent's matching owner credential; no delivery test.
   Hosted-only configs report deployment: hosted and hosted recovery guidance.
   status [--json]               deployment, Worker version, base URL, agent card check (fetched by the CLI), wake
                                 mode (webhook / tunnel / none = polling), tunnel state, proxy mode (--upstream):
@@ -385,7 +388,7 @@ const SPEC = {
 	peer: { to: S, all: B, reissue: B, hours: S, off: B, json: B },
 	send: { to: S, text: S, context: S, task: S, push: B, proto: S },
 	poll: { to: S, proto: S },
-	status: { json: B },
+	status: { json: B, agent: S, "control-url": S },
 	export: { sql: B },
 	upstream: { json: B },
 	connect: { alias: S, name: S, json: B, "no-wait": B, replace: B, force: B, "card-url": S },
@@ -462,7 +465,7 @@ export async function main(argv) {
 			if (p.length) throw new CliError(`uninstall takes no arguments (${p.join(" ")}). Run \`${CLI} uninstall --help\`.`);
 			return un.uninstall(o);
 		case "deploy": return dep.deploy(o);
-		case "status": return st.status(o);
+		case "status": return o.agent !== undefined || o["control-url"] !== undefined ? hosted.output(() => hosted.status(o), o) : st.status(o);
 		case "upstream": {
 			const sub = need(p[0], "upstream verify [--json]");
 			if (sub === "verify" || sub === "check") return st.upstreamVerify(o);
