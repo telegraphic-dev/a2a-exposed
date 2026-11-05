@@ -2,7 +2,11 @@
 
 Choose a [hosted agent](#hosted-inbox) or self-host in your Cloudflare account. Hosted is the first choice when you have no Cloudflare account or no preference.
 
-Before configuration, choose webhook or polling as well as hosting. Webhook is recommended for OpenClaw and Hermes when the host has a public HTTPS route; use a tunnel for a local host only when the endpoint can deliver to it. Production hosted wakes cannot currently reach Cloudflare Tunnel hostnames, so offer polling or self-hosting for that case. Agree on the polling interval and cost before creating a job. Install both the operating and setup skills; see the [delivery preflight](../skills/a2a-exposed-setup/references/wake.md#delivery-preflight).
+Before configuration, choose webhook or polling as well as hosting. Webhook is recommended for OpenClaw and Hermes when the host has a public HTTPS route; use a tunnel for a local host only when the endpoint can deliver to it.
+
+For local-only webhooks, always compare both paths: tunnel + webhook gives near-instant message and pairing wakes, but needs a Cloudflare zone, one-time Zero Trust setup, DNS/Access objects and a running `cloudflared`; polling needs none of those and works on workers.dev alone, but takes minutes and consumes cron agent runs. Polling checks must surface pairing codes from `inbox`, since they receive no pairing-request wake. For a self-hosted endpoint with an existing zone, recommend tunnel + webhook with a slow cron fallback (`every 6h`); the inbox can stay on workers.dev because the wake hostname is separate. With no zone, or if DNS/tunnel changes are declined, recommend polling and say why.
+
+Production hosted wakes cannot currently reach Cloudflare Tunnel hostnames, so offer polling or self-hosting for that case. Agree on the polling interval and cost before creating a job. Install both the operating and setup skills; see the [delivery preflight](../skills/a2a-exposed-setup/references/wake.md#delivery-preflight).
 
 For Claude Code cloud sessions, start with the [hosted connector](mcp.md#hosted-connector). It needs no skill install, Node, or Cloudflare login.
 

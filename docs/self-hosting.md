@@ -65,6 +65,10 @@ Hosted agents (cloud routines and similar) cannot read the local config file. Gi
 
 ## Local webhook
 
+Before setup, compare both paths with the human. **Tunnel + webhook** gives near-instant message and pairing-request wakes; it needs a zone on the account, one-time Zero Trust setup, DNS/Access objects and a running `cloudflared` on the agent machine. **Polling cron** needs no DNS, tunnel or Access and works on workers.dev alone, but messages wait minutes and every check consumes an agent run. Polling has no `pairing_request` wake: checks must surface pending codes and approval links from `inbox`.
+
+With an existing zone, recommend tunnel + webhook with a slow cron fallback (`every 6h`). The inbox can stay on workers.dev; its hostname is separate from the wake tunnel hostname. With no zone, or when the human declines DNS/tunnel changes, recommend polling and explain that reason. Always present both choices and get authorization for the concrete account/resource plan; do not default to polling just to avoid DNS consent.
+
 If the agent's webhook only listens locally, `tunnel create` publishes the wake path through a named Cloudflare Tunnel. A Cloudflare Access application on that hostname admits only one service token, held by the Worker. The Worker sends `CF-Access-Client-Id` and `CF-Access-Client-Secret` on every wake, next to the preset's own auth. Keep the agent's own auth enabled.
 
 It needs Cloudflare Zero Trust (the free plan is enough) and a zone somewhere on the account. The A2A endpoint itself can be on workers.dev or a custom hostname. With one zone, `tunnel create` picks `wake-<word>-<word>-<4 hex>.<zone>` and says so. With several, pass `--tunnel-zone <zone>`. With no zone, poll the A2A endpoint instead.
