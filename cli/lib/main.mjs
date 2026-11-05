@@ -191,8 +191,10 @@ Status
                                 read selected hosted agent wake configuration; select NAME with hosted list --json.
                                 Uses setup approval or that agent's matching owner credential; no delivery test.
   Hosted-only configs report deployment: hosted and hosted recovery guidance.
+  Hosted status lists capability/preview next steps; saved wake settings do not prove delivery.
+  Offer webhook or polling after checking hook support and hosted route compatibility.
   status [--json]               deployment, Worker version, base URL, agent card check (fetched by the CLI), wake
-                                mode (webhook / tunnel / none = polling), tunnel state, proxy mode (--upstream):
+                                mode (webhook / tunnel / none = no webhook), tunnel state, proxy mode (--upstream):
                                 upstream card, Access credential and upstream bearer configured (separately), the
                                 live upstream check, the last failed peer call, card-leak check; warnings for peer
                                 token variables shadowing saved tokens; and the next step to run.

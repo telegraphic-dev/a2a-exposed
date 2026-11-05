@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const base = "https://hosted.example.com";
 const secret = "hosted-owner-test-secret";
-function harness(t, { preview = 200, owner = 200, card = 200, health = true } = {}) {
+function harness(t, { preview = 200, owner = 200, card = 200, health = true, configured = false } = {}) {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "a2a-hosted-status-"));
 	t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 	const config = `A2A_BASE_URL=${base}\nA2A_OWNER_TOKEN=${secret}\n`;
@@ -18,7 +18,7 @@ function harness(t, { preview = 200, owner = 200, card = 200, health = true } = 
 	fs.writeFileSync(routes, JSON.stringify({
 		[`${base}/.well-known/agent-card.json`]: { status: card, body: { name: "Hosted", supportedInterfaces: [{ url: base, protocolVersion: "1.0" }] } },
 		[`${base}/health`]: { status: 200, body: { ok: health } },
-		[`${base}/owner/wake/preview`]: { status: preview === 200 ? owner : preview, body: { configured: false } },
+		[`${base}/owner/wake/preview`]: { status: preview === 200 ? owner : preview, body: { configured, preset: "openclaw-wake" } },
 		[`${base}/owner/summary`]: { status: owner, body: { tasks: {} } },
 	}));
 	const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(A2A_|WAKE_|CF_|CLOUDFLARE_|CONTROL_|UPSTREAM_|PEER_)/.test(k)));
@@ -48,8 +48,39 @@ test("hosted status tolerates unavailable wake preview and uses the read-only ow
 	const r = await h.run(["status", "--json"]);
 	assert.equal(r.code, 0, r.stdout + r.stderr);
 	assert.match(JSON.parse(r.stdout).nextStep, /Wake preview is unavailable/);
+	assert.match(JSON.parse(r.stdout).nextStep, /delivery is unverified.*hosted capabilities --json/);
+	assert.match(JSON.parse(r.stdout).also.join(" "), /dashboard Wake settings or MCP set_wake/);
+	const plain = await h.run(["status"]);
+	assert.equal(plain.code, 0, plain.stdout + plain.stderr);
+	assert.match(plain.stdout, /unknown \(hosted wake preview unavailable\)/);
+	assert.doesNotMatch(plain.stdout, /owner API not reachable/);
 	const requests = fs.readFileSync(path.join(h.dir, "requests"), "utf8");
 	assert.match(requests, /owner\/summary/); assert.doesNotMatch(requests, /owner\/inbox/);
+});
+
+test("hosted status distinguishes delivery choice and saved settings from verification without testing or writing", async (t) => {
+	for (const configured of [false, true]) {
+		const h = harness(t, { configured });
+		for (const json of [false, true]) {
+			const r = await h.run(["status", ...(json ? ["--json"] : [])]);
+			assert.equal(r.code, 0, r.stdout + r.stderr);
+			const data = json ? JSON.parse(r.stdout) : null;
+			const next = json ? [data.nextStep, ...data.also].join(" ") : r.stdout;
+			assert.match(next, /hosted capabilities --json/);
+			if (configured) {
+				assert.match(next, /wake settings are saved; status does not test delivery/);
+				assert.match(next, /wake preview --json.*authorized draft test.*inbox-and-reply run/);
+			} else {
+				assert.match(next, /no webhook is configured/);
+				assert.match(next, /hook support and hosted route compatibility.*offer webhook or polling with its interval and cost before configuring either/);
+			}
+			assert.doesNotMatch(next, /none:|expected to poll|nothing is deployed|rotate-owner-token|hosted-owner-test-secret/);
+		}
+		assert.equal(fs.readFileSync(path.join(h.dir, "config.env"), "utf8"), h.config);
+		const calls = fs.readFileSync(path.join(h.dir, "requests"), "utf8").trim().split("\n").map(JSON.parse);
+		assert.ok(calls.every(call => call.method === "GET" || call.method === "HEAD"));
+		assert.ok(calls.every(call => !/\/test|\/inbox|\/setup\//.test(new URL(call.url).pathname)));
+	}
 });
 
 test("hosted failures keep recovery within the hosted service", async (t) => {

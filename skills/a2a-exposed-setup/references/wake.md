@@ -54,6 +54,18 @@ Run `hosted capabilities --json` before requesting setup access. When the servic
 
 ## Human handoffs
 
+Hosted `status --json` checks endpoint reachability and saved wake settings;
+it does not send a test wake. Follow its `hosted capabilities --json` discovery
+step before setup. If a wake is saved, read `wake preview --json` for that saved
+agent before an authorized draft test with explicit inputs, then verify a real
+inbox-and-reply run. When a hosted test returns `transport-socket`, check hosted
+route compatibility first: a successful local Cloudflare Tunnel check does not
+prove the hosted socket transport can reach it. `cloudflare-target-unsupported`
+requires a supported route, polling, or explicitly authorized self-hosting.
+Keep Access, hook bearer authentication and HTTPS verification enabled; do not
+repeat tunnel provisioning to fix a hosted transport refusal. DNS, TLS and
+Access failures have separate CLI recovery guidance; saved settings stay intact.
+
 The human handles sign-in/consent and device-code approval, pairing approval, and approval of the concrete account or infrastructure changes. Prefer a supported device-code grant over asking for pasted tokens. Never bypass those decisions. The agent performs the remaining approved setup: installs both skills, creates the protected `config.env` (mode 600), configures the selected delivery route, verifies a real inbox/reply run and reports failures. When the installed CLI offers hosted setup and wake APIs, use those APIs rather than browser automation; check help and service capabilities first. Otherwise explain the manual hosted fallback without claiming those commands exist.
 
 ## Self-hosted wake commands

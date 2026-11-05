@@ -266,7 +266,16 @@ export async function wake(sub, o = {}) {
 	// Do not print proofs, arbitrary service text, webhook URLs or unexpected fields.
 	const code = typeof result.code === "string" && /^(?:[1-5][0-9]{2}|access-40[13]|none|timeout|tls|private|dns|dns-missing|transport-delivery|transport-native|transport-socket|cloudflare-target-unsupported|connection|failed|unreadable|signing)$/.test(result.code) ? result.code : result.saved === true ? "saved" : "failed";
 	const ok = result.ok === true && (sub !== "set" || result.saved === true);
-	return { ok, code, saved: result.saved === true, next: ok ? sub === "set" ? "Check the receiver for the test wake." : "The draft passed. Run wake set with the same inputs to test and save." : code === "cloudflare-target-unsupported" ? "Use polling or a self-hosted Worker for this Cloudflare-proxied webhook." : "Saved settings were not changed. Check the receiver, credentials and draft, then test again." };
+	const recovery = {
+		"cloudflare-target-unsupported": "This hosted service cannot deliver to this Cloudflare-proxied webhook. Choose a supported public HTTPS route, polling, or an explicitly authorized self-hosted Worker; do not create another tunnel or weaken Access or hook authentication.",
+		"transport-socket": "The hosted service could not connect using its public-HTTPS socket transport. Check hosted route compatibility before changing the receiver. An owner-created Cloudflare Tunnel can pass local checks and still be unreachable by this transport; do not weaken Access or hook authentication.",
+		"dns": "The hosted service could not resolve the webhook hostname. Check its public DNS before testing again.",
+		"dns-missing": "The hosted service could not resolve the webhook hostname. Check its public DNS before testing again.",
+		"tls": "The hosted service could not establish TLS to the webhook. Check the hostname and certificate; keep HTTPS verification enabled.",
+		"access-401": "Cloudflare Access refused the test. Check the selected Access service token and policy without disabling Access or hook authentication.",
+		"access-403": "Cloudflare Access refused the test. Check the selected Access service token and policy without disabling Access or hook authentication.",
+	};
+	return { ok, code, saved: result.saved === true, next: ok ? sub === "set" ? "Check the receiver for the test wake." : "The draft passed. Run wake set with the same inputs to test and save." : `Saved settings were not changed. ${recovery[code] || "Check the receiver, credentials and draft, then test again."}` };
 }
 
 export async function output(run, o = {}) {
