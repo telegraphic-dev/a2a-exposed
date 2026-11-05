@@ -91,7 +91,7 @@ Wake secrets are read from `WAKE_WEBHOOK_URL`, `WAKE_WEBHOOK_KEY`, and `WAKE_HMA
 
 | Command | Effect |
 | --- | --- |
-| `wake set` | Save wake settings, upload secrets from the environment, redeploy. Flags: `--preset`, `--agent-id`, `--key-header`, `--key-prefix`, `--body-template`, `--cli-command`, `--debounce`, `--max-per-hour` |
+| `wake set` | Self-hosted: save wake settings, upload secrets from the environment, redeploy. Flags: `--preset`, `--agent-id`, `--key-header`, `--key-prefix`, `--body-template`, `--cli-command`, `--debounce`, `--max-per-hour`. A hosted config without `--agent` stops with dashboard Wake settings and hosted MCP `set_wake` guidance, without network calls or local changes |
 | `wake preview` | Rendered request with credentials masked, plus SHA-256 fingerprints. Export `WAKE_WEBHOOK_URL`, `WAKE_WEBHOOK_KEY`, and `WAKE_HMAC_SECRET` in this shell. `match` means the exported value is the one on the Worker. `DIFFERENT` means they differ: the variable is absent from this shell, or the upload is still propagating (about 15 to 40 seconds after `wake set`, `wake unset`, or `tunnel create`). Wait about 30 seconds and run it again |
 | `wake fingerprint` | Fingerprints of `WAKE_*` exported in this shell |
 | `wake test` | Send a test wake and print the HTTP status |
@@ -108,6 +108,12 @@ For a webhook that only listens locally. Needs Zero Trust and a zone on the acco
 | `tunnel rm` | Prints each removed object: DNS record, tunnel, Access app, and service token (named `a2a-exposed wake <worker>`), plus Worker secrets `WAKE_ACCESS_CLIENT_ID`, `WAKE_ACCESS_CLIENT_SECRET`, `WAKE_WEBHOOK_KEY`, and `WAKE_HMAC_SECRET`. `WAKE_WEBHOOK_URL` goes too when it is this tunnel's. If the tunnel is already gone, the saved ids are cleared. With nothing saved, prints `nothing to remove`. A missing Worker (Cloudflare error 10007) is already gone |
 
 A hosted-only config has `A2A_BASE_URL` and `A2A_OWNER_TOKEN`, with no Worker or D1 metadata. `status --json` reports `deployment: "hosted"`, checks the card, health and owner API, and reports wake settings when available. The hosted service manages its Worker version. `tunnel create|status|rm` provisions only self-hosted infrastructure; for a hosted address, configure a public HTTPS webhook through the hosted service or use polling if Tunnel delivery is unavailable. To delete a hosted agent, use its hosted settings and deletion confirmation. `uninstall` leaves the hosted agent and local config untouched.
+
+For this config, plain `wake set` exits 1 with `code: "hosted_config"` in
+`--json` output. Use dashboard Wake settings or hosted MCP `set_wake`; the human
+enters wake secrets on the confirmation page. To use the scoped hosted CLI,
+read `hosted capabilities --json`, then `hosted list --json` and select an
+explicit `--agent NAME` for `wake set`. See [hosted CLI setup](#hosted-setup-from-the-cli).
 
 ### `status`, `upstream`, `url`, `config`
 
