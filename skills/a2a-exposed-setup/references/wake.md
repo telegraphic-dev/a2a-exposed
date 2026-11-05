@@ -17,6 +17,29 @@ Before any handler, routine or polling job is created, present these choices and
 - **Webhook (recommended for OpenClaw and Hermes):** immediate wake. This host needs hook support and a public HTTPS route to the hook, supplied by the platform, a tunnel or a reverse proxy. A local host needs a reachable route before configuring delivery. Explain the sign-in, device-code consent and any account/DNS/Tunnel/Access changes the human must authorize.
 - **Polling (fallback):** no inbound route. Agree on the interval and explain that every check can start an agent run and consume time or quota, even when there is no message. Use it when webhook delivery is unavailable or the human chooses it.
 
+### Local-only webhook: compare both paths
+
+For Hermes, OpenClaw and any other local-only webhook, always present both paths
+with these pros/cons when confirming the deploy/wake plan:
+
+- **Tunnel + webhook:** near-instant wakes, including pairing-request wakes.
+  Requires a Cloudflare zone on the selected account, one-time Zero Trust setup,
+  DNS and Access objects, and a running `cloudflared` on the agent machine.
+- **Polling cron:** no DNS, tunnel or Access setup; works with workers.dev alone.
+  Messages wait for the next check (usually minutes), and cron agent runs consume
+  time or quota even for an empty inbox. There is no `pairing_request` wake:
+  every scheduled check must surface pending codes and approval links from `inbox`.
+
+Read the account's zones as described in [prerequisites](prerequisites.md) before
+recommending a path. For a self-hosted endpoint, if the account already has a
+zone, recommend **tunnel + webhook with a slow cron fallback** (`every 6h`). The
+inbox can stay on workers.dev: the inbox hostname and wake tunnel hostname are
+separate. If there is no zone, or the human declines DNS/tunnel changes,
+recommend **polling** and state that reason. Do not recommend polling by default
+just to avoid asking for DNS consent. Present both choices even when one is
+recommended; explain the concrete resources and wait for authorization before
+creating them. A public webhook that is already reachable needs no tunnel.
+
 Check hosting compatibility before account steps. A hosted endpoint does not imply hosted delivery can reach a local tunnel. Production a2a.exposed cannot currently deliver wakes to Cloudflare Tunnel hostnames. Do not create a tunnel or Access app by hand to work around this. Offer polling or an explicitly authorized self-hosted endpoint instead. For other public HTTPS routes, verify a test wake before claiming delivery works.
 
 | Command or tool | Hosted config | Self-hosted config |
