@@ -262,31 +262,50 @@ function redactNested(value: string, depth: number, cache = new Map<string, stri
 	}
 }
 
+/** Mask complete standalone environment values, including multiline JSON. */
+function redactEnvironmentLines(text: string): string {
+	const pattern = new RegExp(CONFIG_LINE_RE.source, "gm");
+	let out = "";
+	let last = 0;
+	let match: RegExpExecArray | null;
+	while ((match = pattern.exec(text)) !== null) {
+		const [, indent, name, sep, item] = match;
+		const structured = item.startsWith("{") || item.startsWith("[");
+		const parameterList = /^[^\s<>]*[&#][^?&#\s="'<>]+[ \t]*=/.test(item) && !structured;
+		// Quoted values and a trailing empty assignment retain their existing
+		// quote/newline-aware scanners. Form lists preserve public parameters.
+		if (!secretName(name) || !item || /^["']/.test(item) || parameterList || /\b[A-Za-z_][A-Za-z0-9_]*\s*=\s*$/.test(item)) continue;
+		const start = match.index + indent.length + name.length + sep.length;
+		const end = structured ? jsonValueEnd(text, start) : pattern.lastIndex;
+		out += text.slice(last, start) + REDACTED;
+		last = end;
+		pattern.lastIndex = end;
+	}
+	return out + text.slice(last);
+}
+
 /** Remove secret text. The words around it stay. */
 function redactText(value: string, depth: number, cache: Map<string, string>): string {
-	// A standalone uppercase environment value can contain spaces or JSON.
-	// Parameter lists retain their &/# separators; quoted assignments retain
-	// the existing quote-aware boundary handling. Leave a trailing assignment
-	// label for the scanners that can consume its value on the next line.
-	let text = replaceAll(value, CONFIG_LINE_RE, (all, indent, name, sep, item) => {
-		if (!secretName(name) || !item || /^["']/.test(item) || /[&#]/.test(item) || /\b[A-Za-z_][A-Za-z0-9_]*\s*=\s*$/.test(item)) return all;
-		return `${indent}${name}${sep}${REDACTED}`;
-	});
-	text = redactJsonFields(text, depth, cache);
+	let text = redactJsonFields(value, depth, cache);
+	// Remove multiline keys before an assignment can discard their BEGIN marker.
 	text = replaceAll(text, PEM_RE, REDACTED);
+	text = redactEnvironmentLines(text);
 	text = replaceAll(text, JWT_RE, REDACTED);
 	text = replaceAll(text, API_KEY_RE, REDACTED);
 	text = replaceAll(text, TOKEN_RE, REDACTED);
 	text = replaceAll(text, BEARER_RE, `$1${REDACTED}`);
 	text = replaceAll(text, BASIC_RE, `$1${REDACTED}`);
 	text = redactHeaderLines(text);
-	text = replaceAll(text, AUTH_RE, (_all, name: string, sep: string, rest: string) => {
+	const authStrings = jsonStringSpans(text);
+	text = text.replace(AUTH_RE, (all, name: string, sep: string, rest: string, offset: number) => {
+		if (authStrings.some(([start, end]) => offset >= start && offset < end)) return all;
 		if (rest.trim().length < 8 && !/bearer|basic/i.test(rest)) return `${name}${sep}${rest}`;
 		return `${name}${sep}${REDACTED}`;
 	});
 	text = replaceAll(text, USERINFO_RE, `$1${REDACTED}@`);
 	// Known credential paths also occur without an origin in request logs.
-	text = text.replace(/(\/(?:hooks|webhooks)\/)[^/?#\s"'<>]+/gi, `$1${REDACTED}`)
+	text = text.replace(/(\/webhooks\/)\d+\/[^/?#\s"'<>]+/gi, `$1${REDACTED}/${REDACTED}`)
+		.replace(/(\/(?:hooks|webhooks)\/)[^/?#\s"'<>]+/gi, `$1${REDACTED}`)
 		.replace(/\/bot[0-9]+:[^/?#\s"'<>]+/gi, `/bot${REDACTED}`);
 	text = replaceAll(text, URL_PATH_RE, (_all, origin, path) => origin + path.replace(/\/[^/]{16,}/g, `/${REDACTED}`));
 	const cleanParameter = (all: string, sep: string, name: string, assignment: string, item: string): string => {

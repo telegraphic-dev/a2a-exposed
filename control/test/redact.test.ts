@@ -631,3 +631,47 @@ test("sanitized copies Error fields, causes, aggregates and cycles without mutat
 	assert.equal(input.message, "X-Webhook-Key: fake-key");
 	assert.equal(cause.message, "https://example.com/?code=fake-code");
 });
+
+
+test("standalone environment values keep spaces and delimiters inside the redaction", () => {
+	for (const value of ["first second&third", "first second#third", "first&second", "first#second", "first second&third=fourth", "first second#third=fourth"]) {
+		const input = `PASSWORD=${value}\nNAME=Ada`;
+		assert.equal(redact(input), "PASSWORD=[redacted]\nNAME=Ada");
+		assert.equal(sanitized({ message: input }).message, "PASSWORD=[redacted]\nNAME=Ada");
+	}
+	assert.equal(redact("PASSWORD=first&name=Ada"), "PASSWORD=[redacted]&name=Ada");
+	assert.equal(redact('EVENT_SECRETS={"one":"fake&name=Ada", "two":"fake#value"}'), "EVENT_SECRETS=[redacted]");
+});
+
+test("Discord webhook tokens are redacted after their numeric identifier", () => {
+	for (const prefix of ["", "https://example.com", "POST "]) {
+		for (const token of ["fake-short", "fake-webhook-token-long-value"]) {
+			const input = `${prefix}/api/webhooks/123456789012345678/${token}?wait=true`;
+			const expected = `${prefix}/api/webhooks/[redacted]/[redacted]?wait=true`;
+			assert.equal(redact(input), expected);
+			assert.equal(sanitized({ url: input }).url, expected);
+			assert.equal(redact(JSON.stringify({ url: input, name: "Ada" })), JSON.stringify({ url: expected, name: "Ada" }));
+		}
+	}
+});
+
+test("all credential header names preserve JSON syntax and sibling fields", () => {
+	for (const name of ["Authorization", "Proxy-Authorization", "CF-Access-Client-Id", "X-Webhook-Key", "X-Hub-Signature-256"]) {
+		const input = JSON.stringify({ message: `${name}: fake-json-value`, name: "Ada" });
+		assert.deepEqual(JSON.parse(redact(input)), { message: `${name}: [redacted]`, name: "Ada" });
+	}
+});
+
+
+test("environment assignments redact complete multiline PEM and structured secrets", () => {
+	const pem = "-----BEGIN PRIVATE KEY-----\nZmFrZS1zZWNyZXQ=\n-----END PRIVATE KEY-----";
+	for (const input of [`PRIVATE_KEY=${pem}`, `PRIVATE_KEY=${pem}\nNAME=Ada`]) {
+		assert.equal(redact(input), input.endsWith("NAME=Ada") ? "PRIVATE_KEY=[redacted]\nNAME=Ada" : "PRIVATE_KEY=[redacted]");
+		assert.equal(sanitized({ message: input }).message.includes("ZmFr"), false);
+	}
+	for (const value of ['{\n"one":"fake-one",\n"two":"fake-two"\n}', '[\n"fake-one",\n"fake-two"\n]']) {
+		assert.equal(redact(`EVENT_SECRETS=${value}\nNAME=Ada`), "EVENT_SECRETS=[redacted]\nNAME=Ada");
+	}
+	const input = JSON.stringify({ message: "-----BEGIN PRIVATE KEY-----\nfake-unclosed", name: "Ada" });
+	assert.deepEqual(JSON.parse(redact(input)), { message: "[redacted]", name: "Ada" });
+});
