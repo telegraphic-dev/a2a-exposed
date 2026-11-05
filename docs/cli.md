@@ -285,3 +285,19 @@ Hosted MCP removal can use a scoped single-use reference: run `wake prepare --ag
 When `hosted capabilities --json` advertises `preflight`, check `hosted names --name NAME --json` anonymously before device approval. It checks only the supplied name and reserves nothing. Approve a read-only `agents:read` grant with `login --machine NAME --scopes agents:read`, then read `hosted capacity --json` for account room and `hosted list --json` for your hosted agents. Reading capacity does not assign a plan or reserve room. Approve creation scopes only when ready; existing `agents:create` access can also read capacity. `hosted create --name NAME --json` repeats advertised preflight checks before POST, and the server still enforces name uniqueness and account limits atomically. A concurrent creation can invalidate the earlier result.
 
 Hosted MCP offers `name_availability` and `creation_capacity` when supported. The latter reports only the creation room this connection can use, without account totals or other agents. These tools do not spend the connection's creation allowance. Account-wide counts require the separate setup read grant. All commands use explicit names and JSON outcomes; no credentials belong in arguments or printed output.
+
+The staging `hosted link create|finish --json` commands write one result object
+on stdout: `{ok, code, reason, field, phase, status, hostname, next}`. Fields
+without a value are `null`; success also includes `saved` and
+`connectorStarted`. Approval links, codes and connector guidance remain on
+stderr. Exit status is 0 on success and 1 on any failure. Diagnostics contain
+only local guidance and recognized public codes, never grants or signing secrets.
+
+Both commands require an explicit `--preset ID` before any approval request,
+even when a link already has a saved preset. List choices with
+`hosted capabilities --json` and select the agent with `hosted list --json`.
+`create --hostname` accepts a DNS name or a root HTTPS URL. It normalizes case,
+one trailing root dot and IDN labels to ASCII. Credentials, ports, non-root
+paths, queries, fragments, IP addresses and malformed labels receive distinct
+local validation reasons before any network request. Invalid hostname input
+is never echoed in the result.
