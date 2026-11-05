@@ -18,7 +18,7 @@ The same endpoint accepts `message/send`, `tasks/get`, `tasks/cancel`, and `task
 
 `GetExtendedAgentCard` and `agent/getAuthenticatedExtendedCard` return `-32007` (the extended agent card is not configured). The served card advertises `extendedAgentCard: false`.
 
-`/.well-known/agent.json` serves an A2A 0.3-shaped card (`url`, `protocolVersion`, `preferredTransport`) for 0.3 clients.
+`/.well-known/agent.json` serves an A2A 0.3-shaped card (`url`, `protocolVersion`, `preferredTransport`) for 0.3 clients. Its only security scheme is bearer authentication: 0.3 has no device-code OAuth flow. When pairing is enabled, the bearer description links to the 1.0 card for pairing instructions. The resulting per-peer bearer token works with both protocol versions.
 
 ## Conversations
 

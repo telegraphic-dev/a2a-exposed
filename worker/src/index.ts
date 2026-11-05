@@ -602,12 +602,12 @@ const agentCard = (ctx: TenantContext): Promise<Json> => (proxyMode(ctx) ? facad
 
 /** The same agent as an A2A 0.3 AgentCard (served at the legacy /.well-known/agent.json for 0.2/0.3 clients): top-level
  *  url + preferredTransport + protocolVersion, OpenAPI-style securitySchemes and `security`. 0.3 has no device-code
- *  flow, so the pairing scheme only points to the RFC 8414 metadata (oauth2MetadataUrl) and is not a requirement. */
+ *  flow, so only bearer authentication is advertised; pairing discovery stays on the 1.0 card. */
 function agentCard03(ctx: TenantContext, c: Json): Json {
 	const base = ctx.PUBLIC_URL.replace(/\/$/, "");
-	const schemes: Json = { bearer: { type: "http", scheme: "bearer", description: c.securitySchemes.bearer.httpAuthSecurityScheme.description } };
-	if (pairingOn(ctx)) schemes.pairing = { type: "oauth2", description: c.securitySchemes.pairing.oauth2SecurityScheme.description,
-		flows: {}, oauth2MetadataUrl: oauthUrls(ctx).metadata };
+	const schemes: Json = { bearer: { type: "http", scheme: "bearer", description: pairingOn(ctx)
+		? `Per-peer bearer token: from device-flow pairing described at ${base}/.well-known/agent-card.json (A2A 1.0), or issued by the agent's operator`
+		: c.securitySchemes.bearer.httpAuthSecurityScheme.description } };
 	const card: Json = {
 		protocolVersion: "0.3.0", name: c.name, description: c.description, url: base + "/", preferredTransport: "JSONRPC",
 		additionalInterfaces: [{ url: base + "/", transport: "JSONRPC" }], version: c.version,

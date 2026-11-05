@@ -268,8 +268,8 @@ test("/.well-known/agent.json serves an A2A 0.3 card (url, preferredTransport, p
 	assert.deepEqual([old.name, old.version], ["Test Inbox", "1.0.0"]);
 	assert.deepEqual(old.capabilities, { streaming: false, pushNotifications: true, stateTransitionHistory: false });
 	assert.deepEqual(old.securitySchemes.bearer, { type: "http", scheme: "bearer", description: old.securitySchemes.bearer.description });
-	assert.equal(old.securitySchemes.pairing.type, "oauth2");
-	assert.equal(old.securitySchemes.pairing.oauth2MetadataUrl, `${BASE}/.well-known/oauth-authorization-server`);
+	assert.deepEqual(Object.keys(old.securitySchemes), ["bearer"], "0.3 has no device-code OAuth flow");
+	assert.match(old.securitySchemes.bearer.description, /device-flow pairing described at https:\/\/agent\.example\.com\/\.well-known\/agent-card\.json/);
 	assert.deepEqual(old.security, [{ bearer: [] }]);
 	assert.deepEqual(old.skills, [{ id: "s1", name: "S1", description: "d", tags: [] }], "0.3 requires tags");
 	assert.equal(old.supportedInterfaces, undefined, "no 1.0-only fields");

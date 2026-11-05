@@ -22,6 +22,8 @@ This stores the token as `PEER_<ALIAS>_TOKEN` in the chmod-600 config. Alternati
 
 The environment overrides the config: if `connect`, `send` or `poll` warns that `PEER_<ALIAS>_TOKEN` is set in the environment and overrides the saved token, a stale variable is shadowing the token in `config.env` (typically right after `connect` stored a new one). Tell the user; the fix is `unset PEER_<ALIAS>_TOKEN` where it is set. The warning never shows either value.
 
+The legacy `/.well-known/agent.json` card advertises bearer authentication only. For device-flow pairing instructions, read `/.well-known/agent-card.json` (A2A 1.0). The resulting token works with both A2A 1.0 and 0.3.
+
 ## Send
 
 ```bash
