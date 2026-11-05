@@ -31,7 +31,10 @@ Hosted setup:
   login --machine NAME --scopes SCOPES [--control-url URL] --json
                                 approve the explicit scopes using the printed website link once;
                                 save the scoped grant locally (mode 600), never print it
-  hosted list --json           list hosted agents before choosing --name or --agent
+  hosted names --name NAME --json
+                                check one name anonymously before device approval; never lists other agents
+  hosted capacity --json      read account room with agents:read (or agents:create); reserves nothing
+  hosted list --json           list hosted agents with agents:read or agents:create before choosing an agent
   hosted create --name NAME --json
                                 create and save the owner credential in this config directory;
                                 use a separate --config-dir for each agent
@@ -508,7 +511,7 @@ export async function main(argv) {
 			throw new CliError(`unknown peer action ${sub} (announce|forward)`);
 		}
 		case "hosted": {
-			if (p.length === 1 && ["capabilities", "list", "create"].includes(p[0])) return hosted.output(() => hosted[p[0]](o), o);
+			if (p.length === 1 && ["capabilities", "list", "create", "names", "capacity"].includes(p[0])) return hosted.output(() => hosted[p[0]](o), o);
 			if (p.length !== 2 || p[0] !== "link" || !["finish", "create"].includes(p[1])) throw new CliError("usage: hosted link create --agent NAME --hostname HOST --origin URL --path PATH --preset ID (--secret-file FILE | --secret-env VAR | --secret-from hermes); or hosted link finish --agent NAME (--secret-file FILE | --secret-env VAR | --secret-from hermes)");
 			return (p[1] === "create" ? createLink : finishLink)({ ...o, "control-url": o["control-url"] || C.get("CONTROL_URL") });
 		}

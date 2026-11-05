@@ -349,3 +349,8 @@ message is retained; other service fields and arbitrary text are omitted.
 `next` says when to run `wake prepare` again with a new protected reference file.
 If no valid delay is supplied, wait for an unused reference to expire. The CLI
 never retries automatically or saves a reference on this refusal.
+
+
+When `hosted capabilities --json` advertises `preflight`, check `hosted names --name NAME --json` anonymously before device approval. It checks only the supplied name and reserves nothing. Approve a read-only `agents:read` grant with `login --machine NAME --scopes agents:read`, then read `hosted capacity --json` for account room and `hosted list --json` for your hosted agents. Reading capacity does not assign a plan or reserve room. Approve creation scopes only when ready; existing `agents:create` access can also read capacity. `hosted create --name NAME --json` repeats advertised preflight checks before POST, and the server still enforces name uniqueness and account limits atomically. A concurrent creation can invalidate the earlier result.
+
+Hosted MCP offers `name_availability` and `creation_capacity` when supported. The latter reports only the creation room this connection can use, without account totals or other agents. These tools do not spend the connection's creation allowance. Account-wide counts require the separate setup read grant. All commands use explicit names and JSON outcomes; no credentials belong in arguments or printed output.

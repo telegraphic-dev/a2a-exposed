@@ -4,7 +4,7 @@ import * as C from "./config.mjs";
 import { controlOrigin, deviceLogin } from "./account.mjs";
 import { CliError, upstreamUrlProblem } from "./a2a.mjs";
 
-export const SETUP_SCOPES = ["agents:create", "agents:owner-token", "wake:write", "wake:test"];
+export const SETUP_SCOPES = ["agents:read", "agents:create", "agents:owner-token", "wake:write", "wake:test"];
 const NEXT = "Run hosted capabilities --json to list scopes and presets; login --machine NAME --scopes SCOPES to approve setup.";
 const fail = (code, next) => { const error = new CliError(next); error.result = { ok: false, code, next }; throw error; };
 const printable = value => typeof value === "string" && value.length <= 4096 && !/[\x00-\x1f\x7f]/.test(value);
@@ -57,8 +57,8 @@ async function request(origin, path, { token = "", method = "GET", body, fetchIm
 		}
 		const known = ["taken", "limit", "invalid_name", "reserved_name", "invalid_grant", "insufficient_scope", "conflict", "unavailable", "not_found", "test", "signing", "unreadable", "preset", "url", "header", "access", "invalid_reference", "body"];
 		const code = known.includes(data.error) ? data.error : `http_${response.status}`;
-		const next = code === "taken" || code === "reserved_name" ? "Choose another --name and run hosted list --json before creating."
-			: code === "limit" ? "The account is at its agent limit. Review hosted list --json and account plans."
+		const next = code === "taken" || code === "reserved_name" ? "Choose another --name using hosted names --name NAME --json before creating."
+			: code === "limit" ? "The account is at its agent limit. Read hosted capacity --json and review account plans."
 			: code === "conflict" ? "Wake settings changed. Run wake preview --json, then test the draft again."
 			: code === "invalid_reference" ? "The wake reference was already used, expired or does not match this draft. Run wake prepare again with the draft inputs and a new --reference-file."
 			: code === "invalid_grant" || code === "insufficient_scope" ? NEXT
@@ -71,7 +71,7 @@ async function request(origin, path, { token = "", method = "GET", body, fetchIm
 export async function capabilities(o = {}) {
 	const data = await request(originFor(o), "/api/v1/setup/capabilities");
 	if (!Array.isArray(data.scopes) || !Array.isArray(data.wake?.presets)) fail("unsupported", "This service does not expose hosted setup capabilities yet.");
-	return { ok: true, code: "capabilities", next: "Select explicit scopes and a wake preset from this listing.", scopes: data.scopes.filter(s => SETUP_SCOPES.includes(s)), presets: data.wake.presets.filter(s => /^[a-z-]+$/.test(s)), secret_reference: data.wake.secret_reference === true, wake_removal: data.wake.removal === true, secure_link_create: data.wake.secure_link_create === true };
+	return { ok: true, code: "capabilities", next: "Select explicit scopes and a wake preset from this listing.", scopes: data.scopes.filter(s => SETUP_SCOPES.includes(s)), presets: data.wake.presets.filter(s => /^[a-z-]+$/.test(s)), preflight: data.preflight === true, secret_reference: data.wake.secret_reference === true, wake_removal: data.wake.removal === true, secure_link_create: data.wake.secure_link_create === true };
 }
 
 export async function login(o = {}) {
@@ -98,12 +98,37 @@ export async function list(o = {}) {
 	return { ok: true, code: "agents", next: "This listing contains hosted agents only; Cloudflare-linked Workers remain in dashboard Your agents. Select an agent, or run hosted create --name NAME --json.", agents: data.tenants.map(row => ({ name: String(row.name || ""), status: String(row.status || ""), version: row.version })) };
 }
 
+export async function names(o = {}) {
+ const name = String(o.name || "").trim().toLowerCase();
+ if (!/^[a-z0-9][a-z0-9-]{2,30}[a-z0-9]$/.test(name)) fail("invalid_name", "Pass one explicit --name of 4–32 letters, numbers or hyphens, starting and ending with a letter or number. Use hosted names --name NAME --json before approving setup.");
+ const origin = originFor(o);
+ if (!(await capabilities(o)).preflight) fail("unsupported", "This service does not expose name preflight. Use hosted capabilities --json or the website.");
+ const data = await request(origin, `/api/v1/setup/name?name=${encodeURIComponent(name)}`);
+ if (data.name !== name || typeof data.available !== "boolean" || !["available", "invalid_name", "reserved_name", "taken"].includes(data.reason) || data.available !== (data.reason === "available")) fail("invalid_response", "The service did not return a valid name availability result. No creation was attempted.");
+ return { ok: true, code: "name_availability", name, available: data.available, reason: data.reason, next: data.available ? "This name is available now, without a reservation. Run hosted capacity --json before hosted create --name NAME --json." : "Choose another --name and repeat hosted names --name NAME --json before requesting creation access." };
+}
+
+export async function capacity(o = {}) {
+ const { origin, token } = accountCredential(o);
+ if (!(await capabilities(o)).preflight) fail("unsupported", "This service does not expose capacity preflight. Use hosted capabilities --json or the website.");
+ const data = await request(origin, "/api/v1/setup/capacity", { token });
+ const count = value => Number.isSafeInteger(value) && value >= 0;
+ if (!(data.limit === null || count(data.limit)) || !count(data.used) || !(data.remaining === null || count(data.remaining)) || data.remaining !== (data.limit === null ? null : Math.max(0, data.limit - data.used)) || data.can_create !== (data.remaining === null || data.remaining > 0)) fail("invalid_response", "The service did not return valid account capacity. No creation was attempted.");
+ return { ok: true, code: "capacity", limit: data.limit, used: data.used, remaining: data.remaining, can_create: data.can_create, next: data.can_create ? "This is a read-only snapshot. Check hosted names --name NAME --json, then explicitly approve creation scopes if needed and run hosted create --name NAME --json." : "The account has no creation room. Review its agents and plan before another creation attempt." };
+}
+
 export async function create(o = {}) {
 	const name = String(o.name || "").trim().toLowerCase();
 	if (!/^[a-z0-9][a-z0-9-]{2,30}[a-z0-9]$/.test(name)) fail("invalid_name", "Pass --name with 4–32 letters, numbers or hyphens, starting and ending with a letter or number. Run hosted list --json first.");
 	// Never replace an existing deployment or an environment-selected credential.
 	if (C.get("A2A_BASE_URL") || C.get("A2A_OWNER_TOKEN") || C.get("A2A_WORKER_NAME") || C.get("A2A_D1_ID")) fail("config_in_use", "Use --config-dir with a separate directory for the new agent; keep the existing deployment configuration.");
 	const { origin, token } = accountCredential(o);
+ const service = await capabilities(o);
+ if (service.preflight) {
+  const available = await names(o);
+  if (!available.available) fail(available.reason, "Choose a name with hosted names --name NAME --json before creating.");
+  if (!(await capacity(o)).can_create) fail("limit", "The account is at its agent limit. Read hosted capacity --json and review its agents or plan.");
+ }
 	const before = await list(o);
 	if (before.agents.some(row => row.name === name && row.status !== "deleted")) fail("taken", "That name already belongs to this account. Select it from hosted list --json or choose another --name.");
 	const data = await request(origin, "/api/v1/tenants", { token, method: "POST", body: { name } });
