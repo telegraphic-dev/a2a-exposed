@@ -21,10 +21,10 @@ function harness(t, { preview = 200, owner = 200, card = 200, health = true, con
 		[`${base}/owner/wake/preview`]: { status: preview === 200 ? owner : preview, body: { configured, preset: "openclaw-wake" } },
 		[`${base}/owner/summary`]: { status: owner, body: { tasks: {} } },
 	}));
-	const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(A2A_|WAKE_|CF_|CLOUDFLARE_|CONTROL_|UPSTREAM_|PEER_)/.test(k)));
+	const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(A2A_|WAKE_|CF_|CLOUDFLARE_|CONTROL_|HOSTED_|UPSTREAM_|PEER_)/.test(k)));
 	Object.assign(env, { A2A_CONFIG_DIR: dir, A2A_TEST_FETCH_ROUTES: routes, A2A_TEST_FETCH_LOG: path.join(dir, "requests"), DO_NOT_TRACK: "1" });
-	return { dir, config, run: (args) => new Promise((resolve) => {
-		const child = spawn(process.execPath, ["--import", path.join(here, "fetch-stub.mjs"), path.join(here, "../bin/a2a-exposed.mjs"), ...args], { env, stdio: ["ignore", "pipe", "pipe"] });
+	return { dir, config, run: (args, extraEnv = {}) => new Promise((resolve) => {
+		const child = spawn(process.execPath, ["--import", path.join(here, "fetch-stub.mjs"), path.join(here, "../bin/a2a-exposed.mjs"), ...args], { env: { ...env, ...extraEnv }, stdio: ["ignore", "pipe", "pipe"] });
 		let stdout = "", stderr = "";
 		child.stdout.on("data", (d) => { stdout += d; }); child.stderr.on("data", (d) => { stderr += d; });
 		child.on("close", (code) => resolve({ code, stdout, stderr }));
@@ -41,6 +41,34 @@ test("hosted-only status checks the endpoint without requiring Worker metadata o
 	assert.doesNotMatch(r.stdout + r.stderr, /\binit\b|\bdeploy\b|nothing is deployed|hosted-owner-test-secret/);
 	const plain = await h.run(["status"]);
 	assert.equal(plain.code, 0); assert.match(plain.stdout, /deployment:\s+hosted/);
+});
+
+test("plain hosted wake set gives dashboard and MCP guidance without calls, writes or secret disclosure", async (t) => {
+	for (const source of ["saved", "environment"]) {
+		const h = harness(t);
+		const configFile = path.join(h.dir, "config.env");
+		if (source === "environment") fs.unlinkSync(configFile);
+		const credentials = source === "environment" ? { A2A_BASE_URL: base, A2A_OWNER_TOKEN: secret } : {};
+		for (const json of [false, true]) {
+			for (const withSecrets of [false, true]) {
+				const r = await h.run(["wake", "set", ...(withSecrets ? ["--preset", "grok-bot"] : []), ...(json ? ["--json"] : [])], {
+					...credentials,
+					...(withSecrets ? { WAKE_WEBHOOK_URL: "https://receiver.example/private-hook?key=private-query", WAKE_WEBHOOK_KEY: "private-wake-key", WAKE_HMAC_SECRET: "private-signing-secret" } : {}),
+				});
+				assert.equal(r.code, 1, r.stdout + r.stderr);
+				const next = json ? JSON.parse(r.stdout).next : r.stdout;
+				if (json) { assert.equal(JSON.parse(r.stdout).ok, false); assert.equal(JSON.parse(r.stdout).code, "hosted_config"); }
+				assert.match(next, /hosted config.*dashboard Wake settings or hosted MCP set_wake/);
+				assert.match(next, /human enters wake secrets on the confirmation page/);
+				assert.match(next, /hosted capabilities --json.*hosted list --json.*--agent NAME/);
+				assert.doesNotMatch(r.stdout + r.stderr, /no saved deployment|\binit\b|\bdeploy\b|hosted-owner-test-secret|private-hook|private-query|private-wake-key|private-signing-secret/);
+			}
+		}
+		if (source === "saved") assert.equal(fs.readFileSync(configFile, "utf8"), h.config);
+		else assert.equal(fs.existsSync(configFile), false);
+		assert.equal(fs.existsSync(path.join(h.dir, "requests")), false);
+		assert.equal(fs.existsSync(path.join(h.dir, "worker")), false);
+	}
 });
 
 test("hosted status tolerates unavailable wake preview and uses the read-only owner summary", async (t) => {

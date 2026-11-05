@@ -131,7 +131,9 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
   deploy [same flags]           redeploy with saved settings (secrets persist); tag the Worker version as a2a-exposed-<version>
   wake set [--preset P] [--agent-id A] [--key-header H] [--key-prefix X] [--body-template JSON]
            [--cli-command CMD] [--debounce S] [--max-per-hour N]
-                                save wake settings, upload wake secrets from env, and redeploy (one step)
+                                self-hosted: save wake settings, upload wake secrets from env, and redeploy
+                                hosted config without --agent: stop with dashboard Wake settings / hosted MCP set_wake guidance
+                                hosted CLI: list hosted capabilities --json and hosted list --json, then select --agent NAME
                                 openbot: human supplies WAKE_HMAC_SECRET via protected env/secret storage, never chat or argv
                                 the Worker refuses unsigned openbot wakes (a webhook key is not a signing secret)
                                 --max-per-hour  hourly cap; 0 or unset is unlimited, except Claude Code,

@@ -194,6 +194,8 @@ export async function status(o = {}) {
 
 export async function wake(sub, o = {}) {
 	if (!["preview", "test", "set", "prepare", "remove", "unset"].includes(sub)) fail("usage", "Use wake preview|test|set|prepare|remove. List presets with hosted capabilities --json.");
+	if (sub === "set" && C.deploymentKind() === "hosted" && !o.agent)
+		fail("hosted_config", "This is a hosted config. Use dashboard Wake settings or hosted MCP set_wake; the human enters wake secrets on the confirmation page. For scoped CLI setup, run hosted capabilities --json, then hosted list --json to select an explicit --agent NAME before wake set --agent NAME --url URL --preset P --json. No wake settings were changed.");
 	const removing = sub === "remove" || sub === "unset";
  const preparingRemoval = sub === "prepare" && o.clear === true;
  if (o.clear && !preparingRemoval) fail("usage", "Use wake prepare --clear for an MCP removal reference, or wake remove --version N. Run wake preview --json to list the current version.");

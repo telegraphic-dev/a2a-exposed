@@ -52,6 +52,8 @@ Check hosting compatibility before account steps. A hosted endpoint does not imp
 
 Run `hosted capabilities --json` before requesting setup access. When the service advertises setup scopes and wake presets, follow [scoped hosted CLI setup](#scoped-hosted-cli-setup). If setup is unavailable, stop the CLI setup path and offer dashboard Wake settings or hosted MCP `set_wake`; do not run `init` or `deploy` to repair a hosted address. Do not send wake secrets through browser automation. The manual hosted fallback is a human action; prefer the device-code flow once available. Never ask for secret values in chat or argv.
 
+A hosted-only config contains `A2A_BASE_URL` and `A2A_OWNER_TOKEN` without Worker or D1 metadata. Plain `wake set` exits 1 without network calls or local changes; `--json` returns `code: "hosted_config"` with dashboard Wake settings and hosted MCP `set_wake` guidance. The human enters secrets on the confirmation page. The scoped hosted CLI path remains available with an explicit `--agent NAME` selected from `hosted list --json`, after reading `hosted capabilities --json`.
+
 ## Human handoffs
 
 Hosted `status --json` checks endpoint reachability and saved wake settings;
