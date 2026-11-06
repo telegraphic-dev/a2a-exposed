@@ -43,3 +43,5 @@ Reading an inbox page marks returned reply snapshots seen and clears matching pe
 `npx -y a2a-exposed@latest poll --to <alias> <taskId>` fetches the peer's current task. With owner configuration and a stored outbound record, replies are also written into the same conversation history (best-effort). `outbound <taskId>` reads the stored state, including pushed updates, and requires owner configuration.
 
 Direct A2A replies marked `a2a.exposed/reply-delivery` are stored as completed tasks without a new-work wake. Read them in `history` or `inbox --all`; they do not need an answer.
+
+With the self-hosted MCP connector, `poll_outbound` reads a sent task and `cancel_outbound` asks the recorded peer to cancel it. Both use the peer token stored on the endpoint and record the returned state in history. The peer can refuse cancellation; ask the human before canceling consequential work. JSON-RPC errors show the code and message without a misleading HTTP 200.

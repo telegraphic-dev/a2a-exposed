@@ -4,7 +4,7 @@
 // PUT /owner/outbound-peers/:alias is the one call that accepts a peer token. handleOwner seals it.
 // The response is { ok, alias, hasToken } and the token is not logged.
 // GET /owner/export is here only because runOwnerRpc redacts it first.
-// POST /owner/mcp/send, reply, and mark_working take a checked argument object. A peer token is not one of those arguments.
+// POST /owner/mcp/send, reply, mark_working, poll_outbound, and cancel_outbound take a checked argument object. A peer token is not one of those arguments.
 // Self-host never calls this.
 
 import { ID_RE } from "./a2a.ts";
@@ -169,6 +169,8 @@ const ROUTES: RouteDef[] = [
 	{ method: "DELETE", name: "DELETE /owner/mcp/:label", take: (s) => s.length === 3 && s[1] === "mcp" && MCP_LABEL.test(s[2]!), search: noQuery, path: (s) => `/owner/mcp/${s[2]}` },
 	{ method: "POST", name: "POST /owner/mcp/send", take: (s) => s.length === 3 && s[1] === "mcp" && s[2] === "send", search: noQuery, path: () => "/owner/mcp/send" },
 	{ method: "POST", name: "POST /owner/mcp/reply", take: (s) => s.length === 3 && s[1] === "mcp" && s[2] === "reply", search: noQuery, path: () => "/owner/mcp/reply" },
+	{ method: "POST", name: "POST /owner/mcp/poll_outbound", take: (s) => s.length === 3 && s[1] === "mcp" && s[2] === "poll_outbound", search: noQuery, path: () => "/owner/mcp/poll_outbound" },
+	{ method: "POST", name: "POST /owner/mcp/cancel_outbound", take: (s) => s.length === 3 && s[1] === "mcp" && s[2] === "cancel_outbound", search: noQuery, path: () => "/owner/mcp/cancel_outbound" },
 	{ method: "POST", name: "POST /owner/mcp/mark_working", take: (s) => s.length === 3 && s[1] === "mcp" && s[2] === "mark_working", search: noQuery, path: () => "/owner/mcp/mark_working" },
 	{ method: "POST", name: "POST /owner/mcp/announce_address", take: (s) => s.length === 3 && s[1] === "mcp" && s[2] === "announce_address", search: noQuery, path: () => "/owner/mcp/announce_address" },
 	{ method: "GET", name: "GET /owner/outbound-peers", take: (s) => s.length === 2 && s[1] === "outbound-peers", search: noQuery, path: () => "/owner/outbound-peers" },
@@ -204,6 +206,8 @@ const REPLY_STATES = new Set(["completed", "input-required", "working", "failed"
 const MCP_ARGS: Record<string, { required: readonly string[]; optional: readonly string[] }> = {
 	"POST /owner/mcp/send": { required: ["to", "text"], optional: ["contextId", "taskId"] },
 	"POST /owner/mcp/reply": { required: ["taskId", "text"], optional: ["state"] },
+	"POST /owner/mcp/poll_outbound": { required: ["taskId"], optional: [] },
+	"POST /owner/mcp/cancel_outbound": { required: ["taskId"], optional: [] },
 	"POST /owner/mcp/mark_working": { required: ["taskId"], optional: [] },
 };
 
