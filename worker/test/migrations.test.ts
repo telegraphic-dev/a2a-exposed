@@ -62,6 +62,7 @@ test("fresh database: every migration applies in order; a second run applies not
 	assert.ok(columns(db, "peers").includes("identity_key"));
 	assert.ok(columns(db, "peers").includes("card_url"));
 	assert.ok(columns(db, "peers").includes("token_enc"));
+	assert.ok(columns(db, "wakes").includes("busy_until_ms"));
 	assert.ok(columns(db, "device_requests").includes("identity_key"));
 	assert.ok(columns(db, "device_requests").includes("replaces_label"));
 	assert.ok(columns(db, "device_requests").includes("replaces_hash"));
@@ -71,15 +72,15 @@ test("fresh database: every migration applies in order; a second run applies not
 test("database from the 0002 fix (0001-0003 recorded): only 0004 and later apply; pending requests keep working", () => {
 	const db = existingDb([sql("0001_init.sql"), sql("0002_wake_budget.sql"), sql("0003_device_pairing.sql")], ["0001_init.sql", "0002_wake_budget.sql", "0003_device_pairing.sql"]);
 	db.prepare("INSERT INTO device_requests (device_hash, user_code, status, created_ms, expires_ms, interval_s) VALUES ('h', 'WDJB4827', 'pending', 1, 2, 5)").run();
-	assert.deepEqual(applyMigrations(db), ["0004_pairing_replace.sql", "0005_facade_owners.sql", "0006_mcp.sql", "0007_cimd.sql", "0008_oidc_txns.sql", "0009_outbound_seen.sql", "0010_conversation_peer.sql", "0011_conversation_owner.sql", "0012_conversation_peer_owner.sql", "0013_reply_delivery.sql", "0014_peer_address.sql", "0015_outbound_source.sql"]);
+	assert.deepEqual(applyMigrations(db), ["0004_pairing_replace.sql", "0005_facade_owners.sql", "0006_mcp.sql", "0007_cimd.sql", "0008_oidc_txns.sql", "0009_outbound_seen.sql", "0010_conversation_peer.sql", "0011_conversation_owner.sql", "0012_conversation_peer_owner.sql", "0013_reply_delivery.sql", "0014_peer_address.sql", "0015_outbound_source.sql", "0016_wake_busy.sql"]);
 	assert.equal((db.prepare("SELECT replaces_label FROM device_requests WHERE device_hash = 'h'").get() as any).replaces_label, null);
 });
 
 test("database from v0.2.0 (0001 and 0003 recorded): 0002 applies as a no-op and keeps the data", () => {
 	const db = existingDb([sql("0001_init.sql"), sql("0003_device_pairing.sql")], ["0001_init.sql", "0003_device_pairing.sql"]);
 	db.prepare("INSERT INTO wake_budget (hour, count) VALUES (1, 7)").run();
-	assert.deepEqual(applyMigrations(db), ["0002_wake_budget.sql", "0004_pairing_replace.sql", "0005_facade_owners.sql", "0006_mcp.sql", "0007_cimd.sql", "0008_oidc_txns.sql", "0009_outbound_seen.sql", "0010_conversation_peer.sql", "0011_conversation_owner.sql", "0012_conversation_peer_owner.sql", "0013_reply_delivery.sql", "0014_peer_address.sql", "0015_outbound_source.sql"]);
-	assert.deepEqual(recorded(db), ["0001_init.sql", "0003_device_pairing.sql", "0002_wake_budget.sql", "0004_pairing_replace.sql", "0005_facade_owners.sql", "0006_mcp.sql", "0007_cimd.sql", "0008_oidc_txns.sql", "0009_outbound_seen.sql", "0010_conversation_peer.sql", "0011_conversation_owner.sql", "0012_conversation_peer_owner.sql", "0013_reply_delivery.sql", "0014_peer_address.sql", "0015_outbound_source.sql"]);
+	assert.deepEqual(applyMigrations(db), ["0002_wake_budget.sql", "0004_pairing_replace.sql", "0005_facade_owners.sql", "0006_mcp.sql", "0007_cimd.sql", "0008_oidc_txns.sql", "0009_outbound_seen.sql", "0010_conversation_peer.sql", "0011_conversation_owner.sql", "0012_conversation_peer_owner.sql", "0013_reply_delivery.sql", "0014_peer_address.sql", "0015_outbound_source.sql", "0016_wake_busy.sql"]);
+	assert.deepEqual(recorded(db), ["0001_init.sql", "0003_device_pairing.sql", "0002_wake_budget.sql", "0004_pairing_replace.sql", "0005_facade_owners.sql", "0006_mcp.sql", "0007_cimd.sql", "0008_oidc_txns.sql", "0009_outbound_seen.sql", "0010_conversation_peer.sql", "0011_conversation_owner.sql", "0012_conversation_peer_owner.sql", "0013_reply_delivery.sql", "0014_peer_address.sql", "0015_outbound_source.sql", "0016_wake_busy.sql"]);
 	assert.equal((db.prepare("SELECT count FROM wake_budget WHERE hour = 1").get() as any).count, 7);
 });
 
@@ -111,7 +112,7 @@ test("database from an earlier build without wake_budget (0001 and 0003 recorded
 		assert.equal(before.data.error?.code, -32603, JSON.stringify(before.data));
 		assert.equal(wakes.length, 0);
 
-		assert.deepEqual(applyMigrations(db), ["0002_wake_budget.sql", "0004_pairing_replace.sql", "0005_facade_owners.sql", "0006_mcp.sql", "0007_cimd.sql", "0008_oidc_txns.sql", "0009_outbound_seen.sql", "0010_conversation_peer.sql", "0011_conversation_owner.sql", "0012_conversation_peer_owner.sql", "0013_reply_delivery.sql", "0014_peer_address.sql", "0015_outbound_source.sql"]);
+		assert.deepEqual(applyMigrations(db), ["0002_wake_budget.sql", "0004_pairing_replace.sql", "0005_facade_owners.sql", "0006_mcp.sql", "0007_cimd.sql", "0008_oidc_txns.sql", "0009_outbound_seen.sql", "0010_conversation_peer.sql", "0011_conversation_owner.sql", "0012_conversation_peer_owner.sql", "0013_reply_delivery.sql", "0014_peer_address.sql", "0015_outbound_source.sql", "0016_wake_busy.sql"]);
 		assert.deepEqual(columns(db, "wake_budget"), ["hour", "count"]);
 		assert.deepEqual(applyMigrations(db), []);
 
@@ -172,6 +173,21 @@ test("0012 lets each peer own the same context id and keeps the first row", () =
 	db.prepare("INSERT INTO conversation_owners (context_id, peer, created_at) VALUES ('ctx-y', 'bob', 'later')").run();
 	const peers = db.prepare("SELECT peer FROM conversation_owners WHERE context_id = 'ctx-y' ORDER BY peer").all() as { peer: string }[];
 	assert.deepEqual(peers.map((r) => r.peer), ["ada", "bob"]);
+});
+
+test("0016 adds the wake busy column and keeps an existing wake", () => {
+	const prior = [...FILES].sort(byNumber).filter((f) => f !== "0016_wake_busy.sql");
+	const db = existingDb(prior.map(sql), prior);
+	const pending = JSON.stringify({ contextId: "ctx-y", from: "ada", taskId: "t1", taskIds: ["t1"], kind: "inbound", preview: "hi" });
+	db.prepare("INSERT INTO wakes (context_id, peer, last_sent_ms, pending_json, pending_since_ms) VALUES ('ctx-y', 'ada', 5, ?, 5)").run(pending);
+	assert.deepEqual(applyMigrations(db), ["0016_wake_busy.sql"]);
+	const row = db.prepare("SELECT pending_json, last_sent_ms, busy_until_ms FROM wakes WHERE context_id = 'ctx-y'").get() as {
+		pending_json: string; last_sent_ms: number; busy_until_ms: number | null;
+	};
+	assert.equal(row.pending_json, pending);
+	assert.equal(row.last_sent_ms, 5);
+	assert.equal(row.busy_until_ms, null);
+	assert.ok(columns(db, "wakes").includes("busy_until_ms"));
 });
 
 test("0014 adds address columns and keeps an existing peer token", () => {

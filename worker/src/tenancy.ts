@@ -35,7 +35,9 @@ export const CONFIG_KEYS = [
 	"PROVIDER_ORGANIZATION", "PROVIDER_URL", "DOCUMENTATION_URL",
 	"WAKE_WEBHOOK_URL", "WAKE_WEBHOOK_KEY", "WAKE_HMAC_SECRET", "WAKE_ACCESS_CLIENT_ID", "WAKE_ACCESS_CLIENT_SECRET",
 	"WAKE_PRESET", "WAKE_AGENT_ID", "WAKE_KEY_HEADER", "WAKE_KEY_PREFIX", "WAKE_BODY_TEMPLATE", "WAKE_CLI_COMMAND",
-	"WAKE_DEBOUNCE_SECONDS", "WAKE_MAX_PER_HOUR",
+	"WAKE_DEBOUNCE_SECONDS", "WAKE_BUSY_SECONDS", "WAKE_MAX_PER_HOUR",
+	/** "1" when this self-host deploy has the minute cron. Hosted flushes from the inbox alarm instead. */
+	"ENABLE_CRON",
 	"MAX_BODY", "RATE_PER_MIN",
 	"PAIRING_APPROVAL", "PBKDF2_ITERATIONS",
 	"UPSTREAM_URL", "UPSTREAM_CARD_URL", "UPSTREAM_TOKEN", "UPSTREAM_ACCESS_CLIENT_ID", "UPSTREAM_ACCESS_CLIENT_SECRET",
@@ -376,7 +378,9 @@ export class TenantContext implements ConfigFields {
 	readonly WAKE_BODY_TEMPLATE?: string;
 	readonly WAKE_CLI_COMMAND?: string;
 	readonly WAKE_DEBOUNCE_SECONDS?: string;
+	readonly WAKE_BUSY_SECONDS?: string;
 	readonly WAKE_MAX_PER_HOUR?: string;
+	readonly ENABLE_CRON?: string;
 	readonly MAX_BODY?: string;
 	readonly RATE_PER_MIN?: string;
 	readonly PAIRING_APPROVAL?: string;

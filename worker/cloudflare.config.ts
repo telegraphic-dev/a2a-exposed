@@ -35,7 +35,10 @@ const plain: Record<string, string> = {
 	WAKE_BODY_TEMPLATE: v("WAKE_BODY_TEMPLATE"), // generic preset JSON template
 	WAKE_CLI_COMMAND: v("WAKE_CLI_COMMAND"), // how the woken agent runs the CLI (default "npx -y a2a-exposed@latest")
 	WAKE_DEBOUNCE_SECONDS: v("WAKE_DEBOUNCE_SECONDS"),
+	WAKE_BUSY_SECONDS: v("WAKE_BUSY_SECONDS"),
 	WAKE_MAX_PER_HOUR: v("WAKE_MAX_PER_HOUR"),
+	// Visible at runtime so a busy catch-up is held only when this minute cron will flush it.
+	ENABLE_CRON: v("A2A_ENABLE_CRON") === "1" ? "1" : "",
 	MAX_BODY: v("A2A_MAX_BODY"),
 	RATE_PER_MIN: v("A2A_RATE_PER_MIN"),
 	RETIRED_HOSTNAMES: v("A2A_RETIRED_HOSTNAMES"), // custom domains this agent moved away from (see movedResponse)

@@ -15,6 +15,7 @@ import m0012 from "../migrations/0012_conversation_peer_owner.sql?raw";
 import m0013 from "../migrations/0013_reply_delivery.sql?raw";
 import m0014 from "../migrations/0014_peer_address.sql?raw";
 import m0015 from "../migrations/0015_outbound_source.sql?raw";
+import m0016 from "../migrations/0016_wake_busy.sql?raw";
 import type { Migration } from "./storage.ts";
 
 export const MIGRATIONS: Migration[] = [
@@ -33,4 +34,5 @@ export const MIGRATIONS: Migration[] = [
 	{ name: "0013_reply_delivery.sql", sql: m0013 },
 	{ name: "0014_peer_address.sql", sql: m0014 },
 	{ name: "0015_outbound_source.sql", sql: m0015 },
+	{ name: "0016_wake_busy.sql", sql: m0016 },
 ];

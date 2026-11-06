@@ -47,7 +47,7 @@ init [--hostname <host> | --workers-dev [--workers-dev-subdomain NAME]]
      [--provider-organization O --provider-url U]
      [--preset P] [--worker-name W] [--d1-name D]
      [--account-id ID] [--cf-profile NAME] [--cli-command CMD]
-     [--debounce S] [--max-per-hour N]
+     [--debounce S] [--busy S] [--max-per-hour N]
      [--pairing-approval human|agent|off] [--pbkdf2-iterations N]
      [--workers-logs on|off] [--mcp on|off] [--cron]
      [--manage-url URL] [--event-url URL] [--event-secret-stdin]
@@ -68,6 +68,7 @@ init [--hostname <host> | --workers-dev [--workers-dev-subdomain NAME]]
 | `--cf-profile` | Named `cf` auth profile. Saved and used by later `cf` calls. When `whoami` lists no accounts, `init` reads `cf accounts list` outside the Worker directory and saves the account when that list has exactly one. A failed list prints cf's error unless `--account-id` is already set |
 | `--cli-command` | Command shown in wake hints. Default `npx -y a2a-exposed@latest`. Saved as `WAKE_CLI_COMMAND` |
 | `--debounce` | Wake debounce in seconds. `claude-code` defaults to 20. Others default to 10 |
+| `--busy` | Busy cool-down in seconds after a sent wake. `0` disables it. Unset uses the preset default: 300 for `claude-code`, 180 for the others. See [Receiving messages](receiving-messages.md#what-a-wake-contains) |
 | `--max-per-hour` | Hourly cap. `0` or unset is unlimited, except `claude-code`, which defaults to 25 when unset |
 | `--pairing-approval` | `human` (default), `agent`, or `off` |
 | `--pbkdf2-iterations` | Approval-password cost, 50000–100000. Default 100000. Lower it only if `/device` hits Cloudflare error 1102 |
@@ -76,7 +77,7 @@ init [--hostname <host> | --workers-dev [--workers-dev-subdomain NAME]]
 | `--manage-url` | https dashboard page (`MANAGE_URL`). A pairing wake, the MCP inbox line, `pair list`, and `inbox` include it. `none` clears it |
 | `--event-url` | https URL that receives a signed pairing event (`EVENT_URL`). `none` clears it. The post also needs `EVENT_SECRET` |
 | `--event-secret-stdin` | Read `EVENT_SECRET` from stdin and upload it on this deploy. A hidden prompt on a terminal. The value stays out of `config.env` and out of the command output. Or export `EVENT_SECRET` |
-| `--cron` | One-minute cron that flushes pending wakes |
+| `--cron` | One-minute cron that flushes pending wakes. Self-hosted busy catch-ups need this cron. Without it, `wake preview` reports `busySeconds` of 0 |
 | `--upstream` | Public façade. `none` switches back to the A2A endpoint. See [Self-hosting](self-hosting.md#public-facade) |
 | `--upstream-card-url` | Upstream card. Must be on the `--upstream` origin |
 | `--upstream-token-stdin` | Read `UPSTREAM_TOKEN` from stdin |
@@ -91,7 +92,7 @@ Wake secrets are read from `WAKE_WEBHOOK_URL`, `WAKE_WEBHOOK_KEY`, and `WAKE_HMA
 
 | Command | Effect |
 | --- | --- |
-| `wake set` | Self-hosted: save wake settings, upload secrets from the environment, redeploy. Flags: `--preset`, `--agent-id`, `--key-header`, `--key-prefix`, `--body-template`, `--cli-command`, `--debounce`, `--max-per-hour`. A hosted config without `--agent` stops with dashboard Wake settings and hosted MCP `set_wake` guidance, without network calls or local changes |
+| `wake set` | Self-hosted: save wake settings, upload secrets from the environment, redeploy. Flags: `--preset`, `--agent-id`, `--key-header`, `--key-prefix`, `--body-template`, `--cli-command`, `--debounce`, `--busy`, `--max-per-hour`. A hosted config without `--agent` stops with dashboard Wake settings and hosted MCP `set_wake` guidance, without network calls or local changes |
 | `wake preview` | Rendered request with credentials masked, plus SHA-256 fingerprints. Export `WAKE_WEBHOOK_URL`, `WAKE_WEBHOOK_KEY`, and `WAKE_HMAC_SECRET` in this shell. `match` means the exported value is the one on the Worker. `DIFFERENT` means they differ: the variable is absent from this shell, or the upload is still propagating (about 15 to 40 seconds after `wake set`, `wake unset`, or `tunnel create`). Wait about 30 seconds and run it again |
 | `wake fingerprint` | Fingerprints of `WAKE_*` exported in this shell |
 | `wake test` | Send a test wake and print the HTTP status |
@@ -222,7 +223,7 @@ One A2A endpoint has one owner token, saved by `init` in `config.env`. That toke
 | `WAKE_ACCESS_CLIENT_ID` / `WAKE_ACCESS_CLIENT_SECRET` | Access service token for a wake tunnel. Set by `tunnel create` |
 | `WAKE_CLI_COMMAND` | Command in wake hints |
 | `WAKE_PRESET`, `WAKE_AGENT_ID`, `WAKE_KEY_HEADER`, `WAKE_KEY_PREFIX`, `WAKE_BODY_TEMPLATE` | Wake shape. Usually set by flags |
-| `WAKE_DEBOUNCE_SECONDS`, `WAKE_MAX_PER_HOUR` | Debounce and hourly cap |
+| `WAKE_DEBOUNCE_SECONDS`, `WAKE_BUSY_SECONDS`, `WAKE_MAX_PER_HOUR` | Debounce, busy cool-down, and hourly cap. `WAKE_BUSY_SECONDS=0` disables the cool-down |
 | `UPSTREAM_TOKEN` | Façade only. Bearer presented to the private agent |
 | `UPSTREAM_ACCESS_CLIENT_ID` / `UPSTREAM_ACCESS_CLIENT_SECRET` | Façade only. Access service token for the upstream tunnel |
 | `PEER_<ALIAS>_TOKEN` | Outbound peer token. Overrides the saved value |
