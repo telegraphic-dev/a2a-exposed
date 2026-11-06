@@ -537,3 +537,21 @@ for (const methods of [["oidc"], ["password", "oidc"], ["password"]]) test(`init
 	if (methods.includes("password")) assert.match(r.stderr, /Approval password: not set[^\n]*pair set-password --web/);
 	else assert.doesNotMatch(r.stderr, /Approval password:|pair set-password --web/);
 });
+
+
+test("wake set accepts mausbot with protected env inputs and explains verification", async (t) => {
+	const s = stubEnv(t, { subdomain: "acme" });
+	assert.equal((await s.init()).status, 0);
+	const result = await s.cli(["wake", "set", "--skip-install", "--dir", path.join(s.dir, "worker"), "--preset", "mausbot"], {
+		WAKE_WEBHOOK_URL: "https://receiver.example.com/hooks/wh_test", WAKE_WEBHOOK_KEY: "dummy-mausbot-secret",
+	});
+	assert.equal(result.status, 0, result.stderr);
+	assert.equal(s.config().WAKE_PRESET, "mausbot");
+	assert.match(result.stderr, /Verify and enable.*wake test again/);
+	assert.ok(!fs.readFileSync(path.join(s.dir, "cfg", "config.env"), "utf8").includes("dummy-mausbot-secret"));
+	assert.ok(!(result.stdout + result.stderr).includes("dummy-mausbot-secret"));
+	fs.writeFileSync(s.routes, JSON.stringify({ "https://wdtest.acme.workers.dev/owner/wake/test": { status: 200, body: { preset: "mausbot", configured: true, status: 202, info: "HTTP 202" } } }));
+	const checked = await s.cli(["wake", "test"]);
+	assert.equal(checked.status, 0, checked.stderr);
+	assert.match(checked.stderr, /Verify and enable.*wake test again/);
+});

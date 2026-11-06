@@ -33,7 +33,9 @@ export const CLAUDE_CODE_NOTE = [
 	"  Then open the new session from the routine's runs and confirm it ran the inbox command without errors.",
 ].join("\n");
 
-const PRESETS = ["grok-bot", "claude-code", "openclaw-wake", "openclaw-agent", "hermes", "openbot", "generic"];
+export const MAUSBOT_NOTE = "note (mausbot): the first test may only capture a verification sample. Verify and enable the webhook in MausBot, then run wake test again. HTTP 202 proves acceptance; check that the bot reads the inbox and replies.";
+
+const PRESETS = ["grok-bot", "claude-code", "openclaw-wake", "openclaw-agent", "hermes", "openbot", "mausbot", "generic"];
 // WAKE_ACCESS_*: Cloudflare Access service token for a wake URL behind Access (set by `tunnel create`, or exported
 // by hand for your own Access-protected endpoint)
 export const WAKE_SECRETS = ["WAKE_WEBHOOK_URL", "WAKE_WEBHOOK_KEY", "WAKE_HMAC_SECRET", "WAKE_ACCESS_CLIENT_ID", "WAKE_ACCESS_CLIENT_SECRET"];
@@ -797,6 +799,7 @@ export async function wake(sub, o) {
 		console.log(JSON.stringify(r, null, 2));
 		if (!(r.status >= 200 && r.status < 300)) process.exitCode = 1;
 		else if (C.get("WAKE_PRESET") === "claude-code") console.error(CLAUDE_CODE_NOTE);
+		if (r.preset === "mausbot" || C.get("WAKE_PRESET") === "mausbot") console.error(MAUSBOT_NOTE);
 		return;
 	}
 	if (sub === "set") {
@@ -807,6 +810,7 @@ export async function wake(sub, o) {
 		await deploy(o); // wake set = save settings + upload secrets + redeploy, in one step
 		console.error(`wake settings deployed. Next: ${CLI} wake preview, then ${CLI} wake test`);
 		if (C.get("WAKE_PRESET") === "claude-code") console.error(CLAUDE_CODE_NOTE);
+		if (C.get("WAKE_PRESET") === "mausbot") console.error(MAUSBOT_NOTE);
 		return;
 	}
 	if (sub === "unset") {

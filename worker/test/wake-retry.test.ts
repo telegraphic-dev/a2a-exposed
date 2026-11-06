@@ -127,3 +127,45 @@ test("unsigned OpenBot owner test/preview and inbound wake never contact the web
 	assert.equal(message.body.error, undefined, "stored inbox message succeeds without a wake");
 	assert.equal(calls, 0);
 });
+
+
+test("MausBot retries keep their key, later messages and verification tests get new keys", async (t) => {
+	const env: any = { DB: d1(new URL("../migrations/", import.meta.url)), PUBLIC_URL: BASE, OWNER_TOKEN: "owner-secret",
+		WAKE_PRESET: "mausbot", WAKE_WEBHOOK_URL: "https://hooks.example.com/hooks/wh_test", WAKE_WEBHOOK_KEY: "dummy-secret", WAKE_DEBOUNCE_SECONDS: "0", WAKE_BUSY_SECONDS: "0" };
+	const sent: any[] = [];
+	let answer = 429;
+	const original = globalThis.fetch;
+	globalThis.fetch = (async (_url: any, init: any) => { sent.push(init); return new Response("{}", { status: answer, headers: { "retry-after": "30" } }); }) as typeof fetch;
+	t.after(() => { globalThis.fetch = original; });
+	const call = async (method: string, path: string, body?: any, auth = "Bearer owner-secret") => {
+		const pending: Promise<unknown>[] = [];
+		const response = await worker.fetch(new Request(BASE + path, { method, headers: { authorization: auth, "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined }) as any,
+			env, { waitUntil: (p: Promise<unknown>) => pending.push(p), passThroughOnException() {} } as any);
+		await Promise.allSettled(pending);
+		return { status: response.status, body: await response.json() as any };
+	};
+	const preview = await call("GET", "/owner/wake/preview");
+	assert.equal(preview.status, 200);
+	assert.equal(preview.body.request.headers.authorization, "Bearer ••••");
+	assert.ok(!JSON.stringify(preview.body).includes(env.WAKE_WEBHOOK_KEY));
+	const peer = await call("POST", "/owner/peers", { label: "maus-test" });
+	const msg = (id: string, taskId?: string) => call("POST", "/", { jsonrpc: "2.0", id: 1, method: "message/send", params: { message: { kind: "message", role: "user", messageId: id, contextId: "ctx-maus", ...(taskId ? { taskId } : {}), parts: [{ kind: "text", text: "same text" }] } } }, `Bearer ${peer.body.token}`);
+	const first = await msg("m1");
+	assert.equal(sent.length, 1);
+	answer = 202;
+	// Advance only the saved retry deadline, without changing the global clock.
+	await env.DB.prepare("UPDATE wakes SET last_sent_ms = ? WHERE context_id = ?").bind(Date.now() - 1000, "ctx-maus").run();
+	await call("GET", "/health");
+	assert.equal(sent.length, 2);
+	assert.equal(sent[0].headers["idempotency-key"], sent[1].headers["idempotency-key"]);
+	await msg("m2", first.body.result.id);
+	assert.equal(sent.length, 3);
+	assert.notEqual(sent[2].headers["idempotency-key"], sent[1].headers["idempotency-key"]);
+	await call("POST", "/owner/wake/test");
+	await call("POST", "/owner/wake/test");
+	assert.notEqual(sent[3].headers["idempotency-key"], sent[4].headers["idempotency-key"]);
+	delete env.WAKE_WEBHOOK_KEY;
+	assert.equal((await call("GET", "/owner/wake/preview")).status, 400);
+	assert.equal((await call("POST", "/owner/wake/test")).body.status, null);
+	assert.equal(sent.length, 5, "no unsigned request leaves the Worker");
+});

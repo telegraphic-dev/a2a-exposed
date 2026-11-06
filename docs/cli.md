@@ -61,7 +61,7 @@ init [--hostname <host> | --workers-dev [--workers-dev-subdomain NAME]]
 | `--hostname` | Custom domain. Omit it and the Worker is served on `https://<worker>.<account subdomain>.workers.dev` |
 | `--workers-dev` | Move an existing custom-domain deployment to workers.dev. `--hostname` moves it back. The old URL answers 301 (the card) or 410 |
 | `--workers-dev-subdomain` | Register the account's workers.dev subdomain when it has none |
-| `--preset` | `grok-bot`, `claude-code`, `openclaw-wake`, `openclaw-agent`, `hermes`, `openbot`, or `generic` |
+| `--preset` | `grok-bot`, `claude-code`, `openclaw-wake`, `openclaw-agent`, `hermes`, `openbot`, `mausbot`, or `generic` |
 | `--worker-name` | Worker name. Also the default D1 name |
 | `--d1-name` | D1 database to create or reuse |
 | `--account-id` | When the login can see more than one account |

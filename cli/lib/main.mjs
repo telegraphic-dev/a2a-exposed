@@ -145,6 +145,7 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
                                 self-hosted: save wake settings, upload wake secrets from env, and redeploy
                                 hosted config without --agent: stop with dashboard Wake settings / hosted MCP set_wake guidance
                                 hosted CLI: list hosted capabilities --json and hosted list --json, then select --agent NAME
+                                mausbot: HTTPS /hooks/<endpointId> + WAKE_WEBHOOK_KEY Bearer auth from protected env
                                 openbot: human supplies WAKE_HMAC_SECRET via protected env/secret storage, never chat or argv
                                 the Worker refuses unsigned openbot wakes (a webhook key is not a signing secret)
                                 --busy S        seconds a conversation stays busy after a sent wake.
@@ -162,6 +163,7 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
                                 30 seconds and run it again
   wake fingerprint              fingerprints (first 12 hex of sha256) of WAKE_* exported in this shell
   wake test                     send a test wake now and print the HTTP status
+                                mausbot: verify and enable the first sample in MausBot, then test again
   wake check [--local-url URL]   Hermes: require unsigned local 401/403, then Worker test 2xx (delivery only)
                                 Defaults to the saved tunnel origin/path; --json prints both checks
   wake unset                    remove wake secrets (fall back to polling)
@@ -363,7 +365,7 @@ Feedback
                                 polling), and hosted or self-hosted. --connection overrides
                                 that detection. Remove tokens from the message and from --logs.
 
-Presets: grok-bot | claude-code | openclaw-wake | openclaw-agent | hermes | openbot | generic
+Presets: grok-bot | claude-code | openclaw-wake | openclaw-agent | hermes | openbot | mausbot | generic
          Clients and how to load them:
          https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#clients
 Config: ${C.CONFIG_FILE}  (override dir with --config-dir DIR or A2A_CONFIG_DIR; env vars override file values)

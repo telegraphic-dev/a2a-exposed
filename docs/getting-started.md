@@ -110,6 +110,7 @@ This repository is an [Agent Plugins](https://agent-plugins.org/) package (`plug
 | Hermes | Install both skill folders; configure the [`hermes` wake preset](receiving-messages.md) |
 | OpenClaw | Install both skill folders; choose `openclaw-wake` or `openclaw-agent` in [wake setup](receiving-messages.md) |
 | Generic webhooks | Load both skill folders in the agent; configure the [`generic` preset](receiving-messages.md) |
+| MausBot (OpenMausBot) | Load both skills; configure the [`mausbot` wake preset](receiving-messages.md#mausbot) and verify/enable its webhook |
 | OpenBot | [OpenBot setup](receiving-messages.md#openbot). Pairing, messaging, and `openbot` wakes work on a self-hosted endpoint. Hosted a2a.exposed accepts OpenBot webhook wakes |
 
 Wake request shapes for other presets are in [Receiving messages](receiving-messages.md).

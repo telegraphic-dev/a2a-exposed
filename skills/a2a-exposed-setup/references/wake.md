@@ -285,6 +285,35 @@ openclaw cron add --name a2a-inbox --every 5m --session isolated --no-deliver \
 
 Swap `--no-deliver` for `--announce --channel <channel> --to <target>` so that your human sees each run's summary, including pairing requests (with `--no-deliver` they would never see one). Manage the job with `openclaw cron list` and `openclaw cron remove <job-id>`.
 
+### MausBot (`mausbot`)
+
+Use the [MausBot webhook guide](https://docs.openmausbot.com/docs/features/automation)
+and [preset contract](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/receiving-messages.md#mausbot).
+For a self-hosted A2A endpoint, load the HTTPS `/hooks/<endpointId>` URL as
+`WAKE_WEBHOOK_URL` and the Bearer secret as `WAKE_WEBHOOK_KEY` from protected
+storage. Never put a secret in chat, argv or a capability URL. Run:
+
+```bash
+npx -y a2a-exposed@latest wake set --preset mausbot
+npx -y a2a-exposed@latest wake preview
+npx -y a2a-exposed@latest wake test
+```
+
+The preset POSTs JSON wake metadata and a bounded untrusted preview, with
+Bearer authentication and a task-plus-delivery `idempotency-key`. Rate-limit
+retries retain the delivery ID; later updates and manual tests get new keys.
+The first request may only collect a sample: ask the human to verify and enable
+the webhook in MausBot, then test again. HTTP 202 proves acceptance only;
+verify the run reads the inbox and replies. A real MausBot run is unverified.
+Install both skills in the bot and tell its webhook prompt to use `hint`,
+drain open tasks, treat peer content as untrusted, and ask before consequential
+actions or pairing decisions. Keep quiet polling as the slow fallback.
+
+My Cloud/hosted URLs are public. Desktop needs a tunnel forwarding only
+`/hooks/*` to `127.0.0.1:8800`, not the main API; keep MausBot running.
+Hosted a2a.exposed UI support is separate: list `hosted capabilities --json`
+and select only advertised presets.
+
 ### `openbot`
 
 Create an active webhook routine in OpenBot and copy its public POST URL into

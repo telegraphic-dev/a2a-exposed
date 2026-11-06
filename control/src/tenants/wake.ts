@@ -4,7 +4,7 @@ import { deliverOutbox, type DataPlane, type OutboxRow } from "./push.ts";
 import { WAKE_SECRET_KEYS, openWakeSecrets, sealWakeSecrets, type WakeSecrets } from "./wake-secrets.ts";
 
 /** The same list the Worker renders. Claude Code is one of them. */
-export const WAKE_PRESETS = ["grok-bot", "claude-code", "openclaw-wake", "openclaw-agent", "hermes", "openbot", "generic"] as const;
+export const WAKE_PRESETS = ["grok-bot", "claude-code", "openclaw-wake", "openclaw-agent", "hermes", "openbot", "mausbot", "generic"] as const;
 
 /** Headers a wake preview shows in full. A key header must not be one of these. */
 const PLAIN_HEADERS = new Set([
