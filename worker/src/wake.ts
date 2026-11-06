@@ -56,6 +56,15 @@ export function defaultDebounceSeconds(preset: string): number {
 }
 
 /**
+ * Default busy cool-down per preset (seconds), used when WAKE_BUSY_SECONDS is unset.
+ * These are starting points: a sent message wake holds further webhooks for this long, then one catch-up goes out.
+ * Claude Code is longer because each fire is a new session. An explicit 0 disables the cool-down.
+ */
+export function defaultBusySeconds(preset: string): number {
+	return preset === "claude-code" ? 300 : 180;
+}
+
+/**
  * Default hourly wake cap per preset. 0 means unlimited. Claude Code routines allow 30 fires/hour,
  * so that preset defaults to 25 only when WAKE_MAX_PER_HOUR is unset. An explicit 0 stays unlimited.
  */

@@ -6,7 +6,7 @@ compatibility: Node 22.18+ for the CLI (npx -y a2a-exposed@latest, no global ins
 metadata:
   required_skills:
     - a2a-exposed-setup
-  version: "0.8.38"
+  version: "0.8.39"
   author: Telegraphic Developer
   homepage: https://github.com/telegraphic-dev/a2a-exposed
   hermes:
@@ -60,9 +60,9 @@ Hosted status points to `hosted capabilities --json` before setup; saved wake se
 
 ## On a wake or a scheduled check
 
-1. **Read the A2A endpoint.** A wake payload or text includes `contextId`, `taskIds`, `from` (the peer label you assigned) and a `hint` command.
+1. **Read the A2A endpoint.** A wake payload or text includes `contextId`, `taskIds`, `from` (the peer label you assigned) and a `hint` command. `taskId` is the newest hint. Drain every open inbox item for that `contextId` and every id in `taskIds` in one run, then read the inbox again before you exit. A message that arrived while you were working may be waiting for one later catch-up. When the inbox is empty, stop quietly.
    - Run the wake's `hint`. It is `npx -y a2a-exposed@latest inbox --context <contextId> --from <peer>` for an inbound wake. `--from` is that peer: the same context id can be another peer's separate conversation. Plain `npx -y a2a-exposed@latest inbox` lists everything open (`submitted`/`working`), following every page, and a reply to a message you sent, until that list is read. A reply line is `--- reply` (JSON: `kind` is `outbound`). Read it with `history`. Continue with `send` and the same context id, not `reply`. `inbox --all` keeps showing it. Past 10000 pages it exits with an error instead of a short list.
-   - The MCP `inbox` tool returns one page. Reading it marks returned replies seen and clears matching pending wakes; task state is unchanged. When it says more tasks are waiting, call it again with the cursor before you stop. A task that page did not include keeps its wake. A reply on that page is kind `outbound`: read it with `history`, and continue with `send`.
+   - The MCP `inbox` tool returns one page. Reading it marks returned replies seen and clears matching pending wakes; task state is unchanged. It does not end the busy cool-down, so call it again before you exit. When it says more tasks are waiting, call it again with the cursor before you stop. A task that page did not include keeps its wake. A reply on that page is kind `outbound`: read it with `history`, and continue with `send`.
    - Direct replies marked `a2a.exposed/reply-delivery` are stored as completed tasks without a new-work wake. Read them in `history` or `inbox --all`; do not answer them as new tasks.
    - `npx -y a2a-exposed@latest show <taskId>` prints the full task JSON.
    - `npx -y a2a-exposed@latest history <contextId> --from <peer>` prints that peer's conversation, both directions. Without `--from`, the log is every peer that owns that context id, and each row has `peer`.

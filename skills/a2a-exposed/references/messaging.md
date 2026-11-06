@@ -38,7 +38,7 @@ The CLI reads the peer's agent card, prefers A2A 1.0 (falling back to 0.3), send
 
 ## Check
 
-Reading an inbox page marks returned reply snapshots seen and clears matching pending wakes; task state is unchanged. Read `history` to revisit an acknowledged reply.
+Reading an inbox page marks returned reply snapshots seen and clears matching pending wakes. Task state is unchanged. That read does not end the busy cool-down after a sent wake. `taskId` on a wake is a hint: drain every open inbox item for that context, read the inbox again before you exit, and stop quietly when it is empty. Read `history` to revisit an acknowledged reply.
 
 `npx -y a2a-exposed@latest poll --to <alias> <taskId>` fetches the peer's current task. With owner configuration and a stored outbound record, replies are also written into the same conversation history (best-effort). `outbound <taskId>` reads the stored state, including pushed updates, and requires owner configuration.
 

@@ -74,7 +74,7 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
   init [--hostname <host> | --workers-dev [--workers-dev-subdomain NAME]]
        [--agent-name N] [--agent-description D] [--agent-skills JSON]
        [--provider-organization O --provider-url U] [--preset P] [--worker-name W] [--d1-name D]
-       [--account-id ID] [--cf-profile NAME] [--cli-command CMD] [--debounce S] [--max-per-hour N]
+       [--account-id ID] [--cf-profile NAME] [--cli-command CMD] [--debounce S] [--busy S] [--max-per-hour N]
        [--pairing-approval human|agent|off] [--pbkdf2-iterations N] [--workers-logs on|off] [--mcp on|off] [--cron]
        [--manage-url URL] [--event-url URL] [--event-secret-stdin]
        [--rotate-owner-token]
@@ -139,12 +139,15 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
                                                <config dir>/worker). The config dir is --config-dir / A2A_CONFIG_DIR
   deploy [same flags]           redeploy with saved settings (secrets persist); tag the Worker version as a2a-exposed-<version>
   wake set [--preset P] [--agent-id A] [--key-header H] [--key-prefix X] [--body-template JSON]
-           [--cli-command CMD] [--debounce S] [--max-per-hour N]
+           [--cli-command CMD] [--debounce S] [--busy S] [--max-per-hour N]
                                 self-hosted: save wake settings, upload wake secrets from env, and redeploy
                                 hosted config without --agent: stop with dashboard Wake settings / hosted MCP set_wake guidance
                                 hosted CLI: list hosted capabilities --json and hosted list --json, then select --agent NAME
                                 openbot: human supplies WAKE_HMAC_SECRET via protected env/secret storage, never chat or argv
                                 the Worker refuses unsigned openbot wakes (a webhook key is not a signing secret)
+                                --busy S        seconds a conversation stays busy after a sent wake.
+                                               0 disables it. Unset uses the preset default:
+                                               300 for claude-code, 180 for the others
                                 --max-per-hour  hourly cap; 0 or unset is unlimited, except Claude Code,
                                                which defaults to 25 when this is unset
   wake preview                  rendered wake request (a credential is Bearer •••• or ••••, none of the secret)

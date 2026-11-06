@@ -2,12 +2,23 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
-import { renderWake, renderTemplate, wakeSummary, redact, addAccessHeaders, cloudflareErrorHint, PRESETS, wakePayload, type WakeEvent } from "../src/wake.ts";
+import { renderWake, renderTemplate, wakeSummary, redact, addAccessHeaders, cloudflareErrorHint, PRESETS, defaultBusySeconds, defaultDebounceSeconds, wakePayload, type WakeEvent } from "../src/wake.ts";
 
 const ev: WakeEvent = {
 	contextId: "ctx-1", taskId: "t-2", taskIds: ["t-1", "t-2"], from: "peer-a",
 	preview: 'Please "do" X\nnow', kind: "inbound", publicUrl: "https://agent.example.com",
 };
+
+test("busy and debounce defaults differ by preset", () => {
+	assert.equal(defaultDebounceSeconds("claude-code"), 20);
+	assert.equal(defaultDebounceSeconds("grok-bot"), 10);
+	assert.equal(defaultBusySeconds("claude-code"), 300);
+	for (const preset of PRESETS) {
+		if (preset === "claude-code") continue;
+		assert.equal(defaultBusySeconds(preset), 180, preset);
+		assert.equal(defaultDebounceSeconds(preset), 10, preset);
+	}
+});
 
 test("unconfigured wake is a no-op", async () => {
 	assert.equal(await renderWake({ preset: "grok-bot" }, ev), null);
