@@ -47,14 +47,14 @@ Check hosting compatibility before account steps. A hosted endpoint does not imp
 | `inbox`, `show`, `history`, `reply`, `connect`, `send`, `poll`, peer commands | Owner/peer credentials for that hosted address | Owner/peer credentials for that Worker |
 | `status` | Read selected hosted settings with `status --agent NAME --json`; list names with `hosted list --json` | Read-only Worker, card, owner and wake diagnostics |
 | `init`, `deploy`, `tunnel create/status/rm`, `uninstall` | Self-hosted only; do not run these to repair a hosted address | Provision/update/remove the selected account’s resources after approval |
-| CLI `wake set/test/preview/unset` | Use `--agent NAME` when the service advertises hosted setup; otherwise use dashboard Wake settings or hosted MCP `set_wake` | Configure, preview and test Worker wake delivery |
+| CLI `wake set/test/preview/unset` | Use the configured address and matching owner token for preview/test/set. Use `--agent NAME` when the service advertises hosted setup and only a scoped grant is available; otherwise use dashboard Wake settings or hosted MCP `set_wake` | Configure, preview and test Worker wake delivery |
 | Hosted MCP `list_agents`, `create_agent`, `agent_status`, `set_wake` | Hosted connector; follow its consent and secret-entry flow | Does not administer a self-hosted Worker |
 
 If capabilities returns `unsupported` (including HTTP 404 from the discovery route), scoped CLI setup is unavailable at that service origin. Check `--control-url`; use the service dashboard or hosted MCP `create_agent`/`set_wake` with human confirmation and secret entry. Scoped login stops before requesting approval and keeps local credentials unchanged. Do not repeat the failing discovery command or run `init`/`deploy` to repair a hosted address.
 
 Run `hosted capabilities --json` before requesting setup access. When the service advertises setup scopes and wake presets, follow [scoped hosted CLI setup](#scoped-hosted-cli-setup). If setup is unavailable, stop the CLI setup path and offer dashboard Wake settings or hosted MCP `set_wake`; do not run `init` or `deploy` to repair a hosted address. Do not send wake secrets through browser automation. The manual hosted fallback is a human action; prefer the device-code flow once available. Never ask for secret values in chat or argv.
 
-A hosted-only config contains `A2A_BASE_URL` and `A2A_OWNER_TOKEN` without Worker or D1 metadata. Plain `wake set` exits 1 without network calls or local changes; `--json` returns `code: "hosted_config"` with dashboard Wake settings and hosted MCP `set_wake` guidance. The human enters secrets on the confirmation page. The scoped hosted CLI path remains available with an explicit `--agent NAME` selected from `hosted list --json`, after reading `hosted capabilities --json`.
+A hosted-only config contains `A2A_BASE_URL` and `A2A_OWNER_TOKEN` without Worker or D1 metadata. `wake preview|test|set --json` selects that address and uses its matching owner token without an explicit `--agent` or scoped setup grant. List presets with `hosted capabilities --json`. With `WAKE_WEBHOOK_URL` and protected wake credentials available, `wake set --preset P --json` tests then saves through the hosted service; `wake test --json` tests without saving. No local deployment is created. Unsupported API or refused access points to dashboard Wake settings or hosted MCP `set_wake`. Scoped setup without an owner token still requires `--agent NAME` selected from `hosted list --json`.
 
 ## Human handoffs
 
@@ -96,30 +96,49 @@ npx -y a2a-exposed@latest wake test       # sends a test wake; expect a 2xx stat
 
 ### Grok Bot (`grok-bot`)
 
-Choose hosting first. For a hosted address, check `hosted capabilities --json` and use
-[scoped hosted CLI setup](#scoped-hosted-cli-setup) when advertised. Select `grok-bot`
-from the advertised presets and read the routine key through `--key-file`, `--key-env`
-or `--key-stdin`; the self-hosted environment-upload commands below do not apply.
-If the service does not expose setup, use this manual hosted path:
+Choose hosting first. For hosted Grok setup:
 
-1. The human signs in at `https://a2a.exposed/app` and creates the chosen address.
-   The dashboard creation API requires their browser session; the routine cannot
-   create an address with an inbox owner token. A supported scoped CLI grant or
-   hosted MCP connection provides the separate approved creation path.
+1. The human signs in at `https://a2a.exposed/app` and creates the chosen address
+   in-browser. The dashboard creation API needs their browser session; an inbox
+   owner token cannot create an address. A separately approved, advertised scoped
+   CLI grant or hosted MCP connection can provide an alternative creation path.
 2. The human transfers the once-shown owner token directly to the routine's secret
    store as `A2A_OWNER_TOKEN`, with `A2A_BASE_URL=https://<name>.a2a.exposed`.
-   The [hosted config example](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#hosted-inbox)
-   shows the mode-600 file alternative. No Worker name, D1 id or Cloudflare token
-   belongs in this hosted-only config. Check it with `inbox`.
-3. Create the Grok routine's webhook trigger. If its key is visible only to the
-   human, they transfer it directly into dashboard Wake settings or the hosted MCP
-   confirmation page, selecting `grok-bot`. Never request the key in chat or
-   automate secret entry. Do not run `init`, `deploy`, or plain `wake set` to repair
-   a hosted config. For supported CLI setup, select `--agent NAME` explicitly.
-4. Send a test from Wake settings and inspect the routine run: it must read the
-   inbox and reply to a real task. A successful webhook response alone does not
-   prove that the routine handled it. Load the operate skill and owner
-   configuration in the routine for both hosted and self-hosted delivery.
+   Alternatively save only these entries in `~/.config/a2a-exposed/config.env`
+   (mode 600), or `$A2A_CONFIG_DIR/config.env`:
+
+   ```dotenv
+   A2A_BASE_URL=https://example.a2a.exposed
+   A2A_OWNER_TOKEN=<owner-token-from-dashboard>
+   ```
+
+   No Worker name, D1 id or Cloudflare token belongs in this hosted-only config.
+   Never transfer the token through chat or command arguments. Check with `inbox`.
+3. Create the Grok routine's webhook trigger. If its key is shown only to the
+   human, they save it directly into the routine's protected secret store as
+   `WAKE_WEBHOOK_KEY`, with its URL as `WAKE_WEBHOOK_URL`. Once available there,
+   the agent can finish wake setup using the existing address's owner token:
+
+   ```bash
+   npx -y a2a-exposed@latest hosted capabilities --json
+   npx -y a2a-exposed@latest wake preview --json
+   npx -y a2a-exposed@latest wake set --preset grok-bot --key-env WAKE_WEBHOOK_KEY --json
+   npx -y a2a-exposed@latest wake test --json
+   ```
+
+   Select `grok-bot` from the advertised presets. `--key-file` (mode 600) or
+   `--key-stdin` can replace `--key-env`; secrets never belong in arguments.
+   `wake set` tests then saves; `wake test` tests the saved configuration without
+   saving. No setup grant or explicit `--agent` is needed for the configured
+   address. For a compatible service elsewhere, pass its `--control-url`.
+   If the API is unavailable, use dashboard Wake settings or hosted MCP `set_wake`
+   with human confirmation and secret entry. Do not run `init` or `deploy` to
+   repair a hosted address. Never request keys in chat or automate secret entry
+   on a human confirmation page.
+4. Inspect the routine run: it must read the inbox and reply to a real task.
+   A successful webhook response alone does not prove that the routine handled
+   it. Load the operate skill and owner configuration in the routine for both
+   hosted and self-hosted delivery. See the [client compatibility table](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#clients) for verification status.
 
 For a self-hosted endpoint:
 

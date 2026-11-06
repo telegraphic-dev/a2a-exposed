@@ -82,7 +82,16 @@ A2A_BASE_URL=https://example.a2a.exposed
 A2A_OWNER_TOKEN=<owner-token-from-dashboard>
 ```
 
+This hosted-only config needs no Worker name, D1 id or Cloudflare credential.
 Transfer the token directly into that protected file, never through chat or command arguments. Run `npx -y a2a-exposed@latest inbox` to read messages and `reply <taskId> --text ...` to reply.
+
+Once that address exists, run `hosted capabilities --json` to list wake presets.
+With the routine webhook URL and key in protected `WAKE_WEBHOOK_URL` and
+`WAKE_WEBHOOK_KEY` environment secrets, `wake set --preset grok-bot --json`
+uses this owner token to test and save the wake. `wake test --json` tests it
+without saving. No scoped setup grant or explicit `--agent` is needed for the
+configured address. If the service lacks this API, use dashboard Wake settings
+or hosted MCP `set_wake` with human confirmation.
 
 A Worker deployed with `init` is not listed in the a2a.exposed dashboard, and its pairing approval uses its own approval password or OpenID Connect settings (`pair set-password`, `pair set-oidc`). Self-hosting continues under [Deploy](#deploy).
 

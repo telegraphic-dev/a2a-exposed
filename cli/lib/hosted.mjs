@@ -36,17 +36,30 @@ function originFor(o = {}) {
 async function request(origin, path, { token = "", method = "GET", body, fetchImpl = fetch } = {}) {
 	let response, data;
 	const discovery = method === "GET" && path === "/api/v1/setup/capabilities";
+	const wakeRequest = /^\/api\/v1\/agents\/[^/]+\/wake(?:\/test)?$/.test(path);
 	try {
 		response = await fetchImpl(`${origin}${path}`, {
 			method, redirect: "error", signal: AbortSignal.timeout(30_000),
 			headers: { accept: "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}), ...(body === undefined ? {} : { "content-type": "application/json" }) },
 			...(body === undefined ? {} : { body: JSON.stringify(body) }),
 		});
-		if (!(discovery && response.status === 404)) data = await response.json();
+		if (!(discovery && response.status === 404)) {
+			try { data = await response.json(); }
+			catch (error) {
+				if (wakeRequest && [401, 403, 404].includes(response.status)) data = {};
+				else throw error;
+			}
+		}
 	} catch { fail("unavailable", "Hosted setup did not answer with JSON. Check the service and try again. Do not repeat a create request until hosted list confirms its result."); }
 	if (discovery && response.status === 404) fail("unsupported", SETUP_UNSUPPORTED);
 	if (!data || typeof data !== "object" || Array.isArray(data)) fail("invalid_response", "The hosted service returned an invalid setup response.");
 	if (!response.ok) {
+		if (wakeRequest && [401, 403, 404].includes(response.status)) {
+			const code = ["invalid_grant", "insufficient_scope"].includes(data.error) ? data.error : `http_${response.status}`;
+			fail(code, response.status === 404
+				? "This service does not expose the hosted wake API for this agent. Check --control-url and the selected agent; use dashboard Wake settings or hosted MCP set_wake. No settings were changed."
+				: "Hosted wake access was refused. Check that A2A_BASE_URL and A2A_OWNER_TOKEN belong to the same agent and service, or approve the required setup scopes. Use dashboard Wake settings or hosted MCP set_wake if needed. No settings were changed.");
+		}
 		if (response.status === 429 && data.error === "too_many_references") {
 			const seconds = retryAfter(response, data);
 			const next = seconds === undefined
@@ -198,8 +211,6 @@ export async function status(o = {}) {
 
 export async function wake(sub, o = {}) {
 	if (!["preview", "test", "set", "prepare", "remove", "unset"].includes(sub)) fail("usage", "Use wake preview|test|set|prepare|remove. List presets with hosted capabilities --json.");
-	if (sub === "set" && C.deploymentKind() === "hosted" && !o.agent)
-		fail("hosted_config", "This is a hosted config. Use dashboard Wake settings or hosted MCP set_wake; the human enters wake secrets on the confirmation page. For scoped CLI setup, run hosted capabilities --json, then hosted list --json to select an explicit --agent NAME before wake set --agent NAME --url URL --preset P --json. No wake settings were changed.");
 	const removing = sub === "remove" || sub === "unset";
  const preparingRemoval = sub === "prepare" && o.clear === true;
  if (o.clear && !preparingRemoval) fail("usage", "Use wake prepare --clear for an MCP removal reference, or wake remove --version N. Run wake preview --json to list the current version.");
@@ -249,6 +260,7 @@ export async function wake(sub, o = {}) {
 	}
 	const url = o.url || process.env.WAKE_WEBHOOK_URL || current.url;
 	const preset = o.preset || current.preset || "generic";
+	if (!url) fail("wake_unconfigured", "No hosted wake URL is configured. Run hosted capabilities --json to list presets, then wake set --preset P with WAKE_WEBHOOK_URL and protected wake credentials. Alternatively use dashboard Wake settings or hosted MCP set_wake; no settings were changed.");
 	const problem = upstreamUrlProblem(url);
 	if (problem) fail("url", "Pass --url with a public HTTPS webhook URL without credentials. Use polling if no public webhook is available.");
 	const available = await capabilities({ "control-url": origin });

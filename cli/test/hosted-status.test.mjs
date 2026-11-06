@@ -43,33 +43,6 @@ test("hosted-only status checks the endpoint without requiring Worker metadata o
 	assert.equal(plain.code, 0); assert.match(plain.stdout, /deployment:\s+hosted/);
 });
 
-test("plain hosted wake set gives dashboard and MCP guidance without calls, writes or secret disclosure", async (t) => {
-	for (const source of ["saved", "environment"]) {
-		const h = harness(t);
-		const configFile = path.join(h.dir, "config.env");
-		if (source === "environment") fs.unlinkSync(configFile);
-		const credentials = source === "environment" ? { A2A_BASE_URL: base, A2A_OWNER_TOKEN: secret } : {};
-		for (const json of [false, true]) {
-			for (const withSecrets of [false, true]) {
-				const r = await h.run(["wake", "set", ...(withSecrets ? ["--preset", "grok-bot"] : []), ...(json ? ["--json"] : [])], {
-					...credentials,
-					...(withSecrets ? { WAKE_WEBHOOK_URL: "https://receiver.example/private-hook?key=private-query", WAKE_WEBHOOK_KEY: "private-wake-key", WAKE_HMAC_SECRET: "private-signing-secret" } : {}),
-				});
-				assert.equal(r.code, 1, r.stdout + r.stderr);
-				const next = json ? JSON.parse(r.stdout).next : r.stdout;
-				if (json) { assert.equal(JSON.parse(r.stdout).ok, false); assert.equal(JSON.parse(r.stdout).code, "hosted_config"); }
-				assert.match(next, /hosted config.*dashboard Wake settings or hosted MCP set_wake/);
-				assert.match(next, /human enters wake secrets on the confirmation page/);
-				assert.match(next, /hosted capabilities --json.*hosted list --json.*--agent NAME/);
-				assert.doesNotMatch(r.stdout + r.stderr, /no saved deployment|\binit\b|\bdeploy\b|hosted-owner-test-secret|private-hook|private-query|private-wake-key|private-signing-secret/);
-			}
-		}
-		if (source === "saved") assert.equal(fs.readFileSync(configFile, "utf8"), h.config);
-		else assert.equal(fs.existsSync(configFile), false);
-		assert.equal(fs.existsSync(path.join(h.dir, "requests")), false);
-		assert.equal(fs.existsSync(path.join(h.dir, "worker")), false);
-	}
-});
 
 test("hosted status tolerates unavailable wake preview and uses the read-only owner summary", async (t) => {
 	const h = harness(t, { preview: 404 });

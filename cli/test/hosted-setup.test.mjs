@@ -522,3 +522,64 @@ test("hosted upstream requires explicit versions, protects secret inputs, and pr
   const bad=f.run(['hosted','upstream','set','--agent','sample-agent','--url','https://agent.example.net/a2a','--version','7','--upstream-token-file',tokenFile,'--json'],replies);assert.equal(bad.status,1);assert.equal(JSON.parse(bad.stdout).code,'secret_file');
  } finally {f.clean();}
 });
+
+
+test("two-entry hosted config supports Grok preview, set and test without setup grant or explicit agent", () => {
+ const f = fixture();
+ try {
+  for (const source of ["saved", "environment"]) {
+   const config = `A2A_BASE_URL=https://example-agent.a2a.exposed\nA2A_OWNER_TOKEN=${owner}\n`;
+   fs.writeFileSync(f.config, source === "saved" ? config : "", { mode: 0o600 });
+   const credentials = source === "environment" ? { A2A_BASE_URL: "https://example-agent.a2a.exposed", A2A_OWNER_TOKEN: owner } : {};
+   for (const command of ["preview", "set", "test"]) {
+    const log = path.join(f.dir, `${source}-${command}.requests`);
+    const r = f.run(["wake", command, ...(command === "set" ? ["--preset", "grok-bot"] : []), "--json"], {
+     "https://a2a.exposed/api/v1/setup/capabilities": { status: 200, body: { ...capabilities, wake: { presets: ["grok-bot"], secret_reference: true } } },
+     "https://a2a.exposed/api/v1/agents/example-agent/wake": { status: 200, body: { version: 3, preset: "grok-bot", url: "https://receiver.example/private-hook?key=hidden-query", ok: true, saved: true, code: "204" } },
+    }, { ...credentials, WAKE_WEBHOOK_URL: "https://receiver.example/private-hook?key=hidden-query", WAKE_WEBHOOK_KEY: "hidden-wake-key", A2A_TEST_FETCH_LOG: log });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    const calls = fs.readFileSync(log, "utf8").trim().split("\n").map(JSON.parse);
+    const authenticated = calls.filter(c => c.headers.authorization);
+    assert.ok(authenticated.length > 0);
+    assert.ok(authenticated.every(c => c.headers.authorization === `Bearer ${owner}` && c.url.startsWith("https://a2a.exposed/api/v1/agents/example-agent/wake")));
+    assert.ok(calls.every(c => !/reference|tenants/.test(c.url)));
+    const writes = calls.filter(c => c.method !== "GET");
+    assert.deepEqual(writes.map(c => c.method), command === "preview" ? [] : [command === "set" ? "PUT" : "POST"]);
+    if (writes.length) {
+     const draft = JSON.parse(writes[0].body);
+     assert.equal(draft.version, 3); assert.equal(draft.preset, "grok-bot"); assert.equal(draft.key, "hidden-wake-key");
+    }
+    for (const secret of [owner, "private-hook", "hidden-query", "hidden-wake-key"]) assert.ok(!(r.stdout + r.stderr).includes(secret));
+    assert.equal(fs.readFileSync(f.config, "utf8"), source === "saved" ? config : "");
+    assert.equal(fs.existsSync(path.join(path.dirname(f.config), "worker")), false);
+   }
+  }
+ } finally { f.clean(); }
+});
+
+test("hosted wake failures give hosted recovery and never write or reflect service secrets", () => {
+ const f = fixture();
+ fs.writeFileSync(f.config, `A2A_BASE_URL=https://example-agent.a2a.exposed\nA2A_OWNER_TOKEN=${owner}\n`, { mode: 0o600 });
+ try {
+  for (const [status, body] of [[200, { version: 1 }], [401, { error: "invalid_grant", message: owner }], [403, { error: "insufficient_scope", message: owner }], [404, { error: "not_found", message: owner }], [404, "<html>Not found</html>"]]) {
+   for (const command of ["set", "test"]) {
+    const log = path.join(f.dir, `${status}-${typeof body}-${command}.requests`);
+    const r = f.run(["wake", command, "--json"], {
+     "https://a2a.exposed/api/v1/agents/example-agent/wake": { status, body },
+    }, { A2A_TEST_FETCH_LOG: log });
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    const result = JSON.parse(r.stdout);
+    assert.equal(result.code, status === 200 ? "wake_unconfigured" : status === 401 ? "invalid_grant" : status === 403 ? "insufficient_scope" : `http_${status}`);
+    assert.match(result.next, /dashboard Wake settings or hosted MCP set_wake/);
+    assert.doesNotMatch(r.stdout + r.stderr, /no saved deployment|run init|Worker.*wake set/);
+    assert.ok(!(r.stdout + r.stderr).includes(owner));
+    const calls = fs.readFileSync(log, "utf8").trim().split("\n").map(JSON.parse);
+    assert.ok(calls.every(c => c.method === "GET"));
+   }
+  }
+  const log = path.join(f.dir, "different-agent.requests");
+  const r = f.run(["wake", "set", "--agent", "another-agent", "--json"], {}, { A2A_TEST_FETCH_LOG: log });
+  assert.equal(r.status, 1); assert.equal(JSON.parse(r.stdout).code, "login_required");
+  assert.equal(fs.existsSync(log), false);
+ } finally { f.clean(); }
+});
