@@ -160,16 +160,20 @@ Revoke the connector with `npx -y a2a-exposed@latest token revoke mcp-claude` (o
 
 ### OpenClaw (`openclaw-wake` or `openclaw-agent`)
 Source: https://docs.openclaw.ai/automation/cron-jobs/webhooks
+
+Before step 1, complete the [delivery preflight](#delivery-preflight), agree on a reachable route and get authorization for the concrete hook/account changes. If polling is selected, skip hook configuration and use the polling section below.
+
 1. Hooks are **off by default**. Enable them in the gateway config with a **dedicated** token (not the gateway token):
    ```json5
    { hooks: { enabled: true, token: "<new random token>", path: "/hooks", allowedAgentIds: ["main"] } }
    ```
-2. **Reachability:** the gateway listens on `127.0.0.1:18789` by default, so the Worker can't reach it directly. Use the **secure tunnel** below (recommended), another HTTPS reverse proxy, or skip the webhook and use polling.
+2. **Reachability and hosting:** the gateway listens on `127.0.0.1:18789` by default, so the Worker can't reach it directly. Complete the [delivery preflight](#delivery-preflight) before changing gateway config or creating a tunnel. For self-hosting, offer the secure tunnel below, another HTTPS reverse proxy, or polling. Production hosted wakes cannot currently reach Cloudflare Tunnel hostnames: offer another supported public HTTPS route, polling, or explicitly authorized self-hosting. An advertised OpenClaw preset does not establish route compatibility; do not create a Tunnel/Access app for an incompatible hosted route.
 3. **OpenClaw behind local cloudflared:** keep the gateway bound to loopback and keep the dedicated hooks bearer token. Add only the local connector address `127.0.0.1` to `gateway.trustedProxies`; untrusted forwarded traffic can return `403 proxy_attribution_required`. Do not broaden this to all proxies or change gateway authentication to `trusted-proxy` mode for a bearer-authenticated wake hook. Restart/reload the gateway as its installed version requires, then test the hook through the tunnel. See [OpenClaw proxy attribution](https://docs.openclaw.ai/gateway/trusted-proxy-auth).
 4. Pick a preset:
    - **`openclaw-wake`** POSTs `<gateway>/hooks/wake` with `{"text": ..., "mode": "now", "agentId": "main"}`. This wakes the main session. OpenClaw treats wake text as a trusted system event, so this preset sends **no peer text**: only the peer label, ids, and the hint.
    - **`openclaw-agent`** POSTs `<gateway>/hooks/agent` with `{"message": ..., "name": "A2A inbox", "agentId": "main", "sessionMode": "isolated", "deliver": false}` plus an `Idempotency-Key` header. Each wake is an isolated run. The hook name is `A2A inbox`. The message starts with `A2A endpoint:`.
-5. Set `WAKE_WEBHOOK_URL=https://<public gateway>/hooks/wake` (or `/hooks/agent`) and `WAKE_WEBHOOK_KEY=<hooks token>`. The Worker sends it as `Authorization: Bearer`. Use `--agent-id` for an agent other than `main`.
+5. **Configure the selected endpoint:** for self-hosting, set `WAKE_WEBHOOK_URL=https://<public gateway>/hooks/wake` (or `/hooks/agent`) and load `WAKE_WEBHOOK_KEY` from protected secret storage, then use the self-hosted wake commands above. For hosted setup, list `hosted capabilities --json` and follow [scoped hosted CLI setup](#scoped-hosted-cli-setup), selecting an explicit `--agent NAME` from `hosted list --json` and reading the hook token with `--key-file`, `--key-env` or `--key-stdin`. Without advertised setup support, use the human confirmation flow. The Worker sends the hook token as `Authorization: Bearer`. Use `--agent-id` for an agent other than `main`.
+6. **Verify each boundary:** check the receiver's authentication and exact hook path, then test delivery from the selected A2A endpoint and confirm the settings were saved. Receiver 2xx, a passing draft test and saved settings are separate evidence. Finally, with an authorized test task, confirm OpenClaw reads `inbox` and replies; record the task outcome without peer text or secrets. For hosted `transport-socket` or `cloudflare-target-unsupported`, follow [human handoffs](#human-handoffs), preserve authentication and stop provisioning retries. Agree on polling interval/cost if delivery remains unavailable.
 
 ### Hermes Agent (`hermes`)
 Source: https://hermes-agent.nousresearch.com/docs/user-guide/messaging/webhooks and `gateway/platforms/webhook.py` in NousResearch/hermes-agent.
@@ -361,8 +365,11 @@ List choices with `hosted capabilities --json`, approve explicit scopes with
 `login --machine NAME --scopes SCOPES --json`, then `hosted list --json`.
 `hosted create --name NAME --json` saves the new owner credential mode 600; use a separate
 config directory per agent. `wake preview|test|set --agent NAME --json` reads, tests or
-tests then saves. Provide URL and preset explicitly. Use webhook wake for OpenClaw and
-Hermes, a separately approved tunnel for private hosts, and polling as the fallback.
+tests then saves. Provide URL and preset explicitly. For OpenClaw and Hermes, first
+check the [delivery preflight](#delivery-preflight): preset availability does not
+prove reachability. Production hosted wakes cannot currently reach Cloudflare
+Tunnel hostnames. Do not create a tunnel for that route; offer another supported
+public HTTPS receiver, polling, or explicitly authorized self-hosting.
 
 Keys use `--key-file`, `--key-env` or `--key-stdin`. Signing secrets use
 `--hmac-secret-file` or `--hmac-secret-env`. Access credentials use

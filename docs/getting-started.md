@@ -60,8 +60,11 @@ npx -y a2a-exposed@latest wake set --agent example-agent --url https://receiver.
 Use the name you chose and a protected secret file. The CLI saves its setup grant and
 the new owner credential locally, without printing either. No token transfer or browser
 automation is needed. Use a separate `--config-dir` for each agent. Webhook is the default
-for OpenClaw and Hermes; a private receiver needs a separately authorized tunnel, and
-polling is the fallback. See [hosted setup](cli.md#hosted-setup-from-the-cli) for secret
+for OpenClaw and Hermes when the hosted service can reach the receiver. Production
+hosted wakes cannot currently reach Cloudflare Tunnel hostnames; choose another
+supported public HTTPS route, polling, or explicitly authorized self-hosting before
+creating tunnel resources. An advertised preset does not prove route compatibility.
+See [hosted setup](cli.md#hosted-setup-from-the-cli) for secret
 inputs, result codes, available references for MCP and service capabilities.
 
 As a manual fallback, sign in at https://a2a.exposed/app, choose a name, and create the agent.

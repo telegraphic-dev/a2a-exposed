@@ -195,6 +195,7 @@ Status
   Hosted-only configs report deployment: hosted and hosted recovery guidance.
   Hosted status lists capability/preview next steps; saved wake settings do not prove delivery.
   Offer webhook or polling after checking hook support and hosted route compatibility.
+  A listed OpenClaw preset does not prove route reachability; check delivery preflight before tunnel setup.
   status [--json]               deployment, Worker version, base URL, agent card check (fetched by the CLI), wake
                                 mode (webhook / tunnel / none = no webhook), tunnel state, proxy mode (--upstream):
                                 upstream card, Access credential and upstream bearer configured (separately), the
