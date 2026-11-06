@@ -69,6 +69,8 @@ The busy time is preset-specific because each product handles a webhook differen
 
 Claude Code's busy window is longer because each routine fire is a new session.
 
+The catch-up needs a timer. A hosted inbox uses its alarm. A self-hosted endpoint uses the minute cron (`--cron`). Without either, `wake preview` reports `busySeconds` of 0 and only the debounce applies.
+
 A wake carries metadata, a hint command, and a preview of peer text of at most 300 characters. The full message is always on the A2A endpoint.
 
 `openclaw-wake` carries no peer text. That product treats wake text as a trusted system event, so the body has the peer label, the ids, and the hint only.

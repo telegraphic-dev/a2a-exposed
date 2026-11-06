@@ -13,7 +13,7 @@ function envFor(over: Record<string, string> = {}) {
 	const env: Record<string, unknown> = {
 		DB: d1(new URL("../migrations/", import.meta.url)), PUBLIC_URL: BASE, OWNER_TOKEN: "owner-secret",
 		WAKE_PRESET: "generic", WAKE_WEBHOOK_URL: "https://hook.example.net/wake", WAKE_WEBHOOK_KEY: "k",
-		WAKE_DEBOUNCE_SECONDS: "10", WAKE_BUSY_SECONDS: "120", ...over,
+		WAKE_DEBOUNCE_SECONDS: "10", WAKE_BUSY_SECONDS: "120", ENABLE_CRON: "1", ...over,
 	};
 	return env;
 }
@@ -138,6 +138,22 @@ test("busy cool-down, debounce, preset defaults, and an explicit 0", async (t) =
 	assert.equal(sent.length, offBefore + 2, "busy 0 sends again once the debounce has passed");
 	const offRow = off.DB.db.prepare("SELECT busy_until_ms FROM wakes WHERE context_id = 'ctx-off'").get() as { busy_until_ms: number | null };
 	assert.equal(offRow.busy_until_ms, null);
+
+	// No minute cron and no hosted alarm: the cool-down stays off, so the next task sends after the debounce.
+	const bare = envFor({ WAKE_PRESET: "claude-code", WAKE_DEBOUNCE_SECONDS: "20" });
+	delete bare.ENABLE_CRON;
+	delete bare.WAKE_BUSY_SECONDS;
+	const barePreview = await call(bare, "GET", "/owner/wake/preview");
+	assert.equal(barePreview.debounceSeconds, 20);
+	assert.equal(barePreview.busySeconds, 0);
+	const bareToken = (await call(bare, "POST", "/owner/peers", { label: "ada" })).token as string;
+	const bareBefore = sent.length;
+	await msg(bare, bareToken, "ctx-bare", "one");
+	offset += 21_000;
+	await msg(bare, bareToken, "ctx-bare", "two");
+	assert.equal(sent.length, bareBefore + 2, "without a flush timer the second task sends");
+	const bareRow = bare.DB.db.prepare("SELECT busy_until_ms FROM wakes WHERE context_id = 'ctx-bare'").get() as { busy_until_ms: number | null };
+	assert.equal(bareRow.busy_until_ms, null);
 
 	const parsed = events.flatMap((line) => { try { return [JSON.parse(line)]; } catch { return []; } });
 	assert.equal(parsed.filter((e) => e.event === "wake_absorbed" && e.contextId === "ctx-busy").length, 1);

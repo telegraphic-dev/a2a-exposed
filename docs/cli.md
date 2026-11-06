@@ -77,7 +77,7 @@ init [--hostname <host> | --workers-dev [--workers-dev-subdomain NAME]]
 | `--manage-url` | https dashboard page (`MANAGE_URL`). A pairing wake, the MCP inbox line, `pair list`, and `inbox` include it. `none` clears it |
 | `--event-url` | https URL that receives a signed pairing event (`EVENT_URL`). `none` clears it. The post also needs `EVENT_SECRET` |
 | `--event-secret-stdin` | Read `EVENT_SECRET` from stdin and upload it on this deploy. A hidden prompt on a terminal. The value stays out of `config.env` and out of the command output. Or export `EVENT_SECRET` |
-| `--cron` | One-minute cron that flushes pending wakes |
+| `--cron` | One-minute cron that flushes pending wakes. Self-hosted busy catch-ups need this cron. Without it, `wake preview` reports `busySeconds` of 0 |
 | `--upstream` | Public façade. `none` switches back to the A2A endpoint. See [Self-hosting](self-hosting.md#public-facade) |
 | `--upstream-card-url` | Upstream card. Must be on the `--upstream` origin |
 | `--upstream-token-stdin` | Read `UPSTREAM_TOKEN` from stdin |

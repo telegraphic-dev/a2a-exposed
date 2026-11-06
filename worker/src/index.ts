@@ -202,10 +202,20 @@ const WAKE_DUE_SQL = `CASE
   ELSE last_sent_ms + ?
 END`;
 
-function busyActive(ctx: TenantContext, row: Json | null, now: number): boolean {
-	if (busyMs(ctx) <= 0) return false;
+/** A catch-up past the in-request wait needs the hosted alarm or the self-host minute cron. */
+function busyScheduled(ctx: TenantContext, ectx: object): boolean {
+	return wakeWriteHooks.has(ectx) || ctx.ENABLE_CRON === "1";
+}
+
+function busyActive(ctx: TenantContext, ectx: object, row: Json | null, now: number): boolean {
+	if (!busyScheduled(ctx, ectx) || busyMs(ctx) <= 0) return false;
 	const until = Number(row?.busy_until_ms);
 	return Number.isFinite(until) && until > now;
+}
+
+/** Seconds `wake preview` reports. 0 when the cool-down is disabled or nothing will flush a catch-up. */
+function busySecondsReported(ctx: TenantContext, ectx: object): number {
+	return busyScheduled(ctx, ectx) ? busyMs(ctx) / 1000 : 0;
 }
 
 /**
@@ -278,7 +288,7 @@ async function sendWake(ctx: TenantContext, ectx: ExecutionContext, payload: Jso
 			tunnel: !!(ctx.WAKE_ACCESS_CLIENT_ID && ctx.WAKE_ACCESS_CLIENT_SECRET) || wakeUrlIsTunnelHost(req.url),
 		});
 		log("wake_sent", { preset: preset(ctx), contextId: ev.contextId, taskId: ev.taskId, status: r.status, ...(catchUp ? { catchUp: true } : {}), ...(hint ? { hint } : {}) });
-		if (r.ok) await armBusy(ctx, delivered, Date.now());
+		if (r.ok) await armBusy(ctx, ectx, delivered, Date.now());
 		else if (r.status === 429 || r.status === 503) {
 			// Retry-After owns the next POST. Drop the busy window so the retry is not held behind it.
 			await clearBusy(ctx, payload);
@@ -314,9 +324,9 @@ async function loadWake(ctx: TenantContext, contextId: string, peer: string): Pr
 }
 
 /** The busy window starts at this send and does not move when later events are absorbed. */
-async function armBusy(ctx: TenantContext, payload: Json, now: number): Promise<void> {
+async function armBusy(ctx: TenantContext, ectx: object, payload: Json, now: number): Promise<void> {
 	const wait = busyMs(ctx);
-	if (wait <= 0 || !messageWake(String(payload?.kind || "")) || !wakeHooked(ctx)) return;
+	if (wait <= 0 || !busyScheduled(ctx, ectx) || !messageWake(String(payload?.kind || "")) || !wakeHooked(ctx)) return;
 	const from = typeof payload.from === "string" ? payload.from : "";
 	const contextId = typeof payload.contextId === "string" ? payload.contextId : "";
 	const row = await loadWake(ctx, contextId, from);
@@ -326,26 +336,37 @@ async function armBusy(ctx: TenantContext, payload: Json, now: number): Promise<
 		.bind(now + wait, contextId, peer).run();
 }
 
-/** A send did not stick. Drop the busy window and leave any absorbed tasks as an ordinary pending wake. */
+/** A send did not stick. Drop the busy window and leave any absorbed tasks as an ordinary pending wake.
+ *  The pending text is replaced only when it still matches the row just read, and a lost race retries. */
 async function clearBusy(ctx: TenantContext, payload: Json): Promise<void> {
 	if (!messageWake(String(payload?.kind || ""))) return;
 	const from = typeof payload.from === "string" ? payload.from : "";
 	const contextId = typeof payload.contextId === "string" ? payload.contextId : "";
-	const row = await loadWake(ctx, contextId, from);
-	if (!row) return;
-	const peer = typeof row.peer === "string" ? row.peer : "";
-	let pending = row.pending_json ?? null;
-	if (typeof pending === "string") {
-		try {
-			const parsed = JSON.parse(pending);
-			if (parsed && typeof parsed === "object" && parsed.busy) {
-				delete parsed.busy;
-				pending = JSON.stringify(parsed);
-			}
-		} catch { /* leave the stored text */ }
+	for (let attempt = 0; attempt < 4; attempt++) {
+		const row = await loadWake(ctx, contextId, from);
+		if (!row) return;
+		const peer = typeof row.peer === "string" ? row.peer : "";
+		const original = typeof row.pending_json === "string" ? row.pending_json : null;
+		let next = original;
+		if (typeof next === "string") {
+			try {
+				const parsed = JSON.parse(next);
+				if (parsed && typeof parsed === "object" && parsed.busy) {
+					delete parsed.busy;
+					next = JSON.stringify(parsed);
+				}
+			} catch { /* keep the stored text */ }
+		}
+		if (row.busy_until_ms == null && next === original) return;
+		const args: unknown[] = [next, contextId, peer];
+		const pendingMatch = original == null ? "pending_json IS NULL" : "pending_json = ?";
+		if (original != null) args.push(original);
+		const res = await ctx.DB.prepare(
+			`UPDATE wakes SET busy_until_ms = NULL, pending_json = ? WHERE context_id = ? AND peer = ? AND ${pendingMatch}`,
+		).bind(...args).run();
+		if (changed(res) === 1) return;
 	}
-	await ctx.DB.prepare("UPDATE wakes SET busy_until_ms = NULL, pending_json = ? WHERE context_id = ? AND peer = ?")
-		.bind(pending, contextId, peer).run();
+	log("wake_busy_clear_failed", { contextId });
 }
 
 async function requeueWake(ctx: TenantContext, ectx: ExecutionContext, payload: Json, retryAfter: string | null) {
@@ -390,7 +411,7 @@ async function wake(ctx: TenantContext, ectx: ExecutionContext, contextId: strin
 		} else row = null;
 	}
 	const peer = row?.peer ?? from;
-	const suppress = wakeHooked(ctx) && messageWake(kind) && busyActive(ctx, row, now);
+	const suppress = wakeHooked(ctx) && messageWake(kind) && busyActive(ctx, ectx, row, now);
 	let claimed = false;
 	if (!row) {
 		const r = await ctx.DB.prepare("INSERT INTO wakes (context_id, peer, last_sent_ms) VALUES (?, ?, ?) ON CONFLICT DO NOTHING").bind(contextId, peer, now).run();
@@ -402,7 +423,7 @@ async function wake(ctx: TenantContext, ectx: ExecutionContext, contextId: strin
 	}
 	if (claimed && (await wakeBudgetOk(ctx))) {
 		// Cover the in-flight POST. sendWake refreshes the busy window on 2xx and clears it otherwise.
-		if (messageWake(kind) && wakeHooked(ctx)) await armBusy(ctx, payload, now);
+		if (messageWake(kind) && wakeHooked(ctx)) await armBusy(ctx, ectx, payload, now);
 		ectx.waitUntil(sendWake(ctx, ectx, payload));
 		return;
 	}
@@ -412,14 +433,16 @@ async function wake(ctx: TenantContext, ectx: ExecutionContext, contextId: strin
 	const curPeer = cur?.peer ?? peer;
 	const prev = cur?.pending_json ? JSON.parse(cur.pending_json) : null;
 	const sentAt = Number(cur?.last_sent_ms) || 0;
-	const hold = wakeHooked(ctx) && messageWake(kind) && busyActive(ctx, cur, now) && !prev?.attempts && now - sentAt >= deb;
-	const keeping = !!(prev?.busy && busyActive(ctx, cur, now) && !prev?.attempts);
+	const hold = wakeHooked(ctx) && messageWake(kind) && busyActive(ctx, ectx, cur, now) && !prev?.attempts && now - sentAt >= deb;
+	const keeping = !!(prev?.busy && busyActive(ctx, ectx, cur, now) && !prev?.attempts);
 	payload.taskIds = [...new Set([...(prev?.taskIds || []), taskId])];
 	if (hold || keeping) payload.busy = 1;
 	await ctx.DB.prepare("UPDATE wakes SET pending_json = ?, pending_since_ms = COALESCE(pending_since_ms, ?) WHERE context_id = ? AND peer = ?")
 		.bind(JSON.stringify(payload), now, contextId, curPeer).run();
 	// The pending row exists now. A hosted alarm is set in this turn, including when the delay is too long for waitUntil.
 	await noteWakeWrite(ectx);
+	// A busy hold is taken only when an alarm or the minute cron will flush the catch-up.
+	// waitUntil cannot cover that window, so there is no in-request timer on this path.
 	if (payload.busy) {
 		log("wake_absorbed", { contextId, kind, tasks: payload.taskIds.length });
 		return;
@@ -447,7 +470,7 @@ async function flushWake(ctx: TenantContext, ectx: ExecutionContext, contextId: 
 		"UPDATE wakes SET pending_json = NULL, pending_since_ms = NULL, last_sent_ms = ? WHERE context_id = ? AND peer = ? AND last_sent_ms = ? AND pending_json IS NOT NULL",
 	).bind(now, contextId, peer, row.last_sent_ms).run();
 	if (r.meta.changes === 1 && (await wakeBudgetOk(ctx))) {
-		if (messageWake(String(payload?.kind || "")) && wakeHooked(ctx)) await armBusy(ctx, payload, now);
+		if (messageWake(String(payload?.kind || "")) && wakeHooked(ctx)) await armBusy(ctx, ectx, payload, now);
 		await sendWake(ctx, ectx, payload);
 	}
 }
@@ -2386,7 +2409,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 		if (preset(ctx) === "openbot" && !ctx.WAKE_HMAC_SECRET?.trim())
 			return json({ error: "OpenBot requires WAKE_HMAC_SECRET from the routine settings" }, 400);
 		const req = await renderWake(wakeConfig(ctx), ev, { requestId: "preview" });
-		return json({ preset: preset(ctx), configured: !!req, debounceSeconds: debounceMs(ctx) / 1000, busySeconds: busyMs(ctx) / 1000, maxPerHour: maxPerHour(ctx),
+		return json({ preset: preset(ctx), configured: !!req, debounceSeconds: debounceMs(ctx) / 1000, busySeconds: busySecondsReported(ctx, ectx), maxPerHour: maxPerHour(ctx),
 			hasKey: !!ctx.WAKE_WEBHOOK_KEY, hasHmacSecret: !!ctx.WAKE_HMAC_SECRET,
 			hasAccessServiceToken: !!(ctx.WAKE_ACCESS_CLIENT_ID && ctx.WAKE_ACCESS_CLIENT_SECRET),
 			fingerprints: { url: await A.fingerprint(ctx.WAKE_WEBHOOK_URL), key: await A.fingerprint(ctx.WAKE_WEBHOOK_KEY),
