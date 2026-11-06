@@ -248,7 +248,11 @@ the CLI does not retry the test or save automatically.
 
 ## Hosted setup from the CLI
 
-Run `hosted capabilities --json` to list scopes and wake presets. Then request only the
+Run `hosted capabilities --json` to list scopes and wake presets.
+
+If capabilities returns `unsupported` (including HTTP 404 from the discovery route), scoped CLI setup is unavailable at that service origin. Check `--control-url`; use the service dashboard or hosted MCP `create_agent`/`set_wake` with human confirmation and secret entry. Scoped login stops before requesting approval and keeps local credentials unchanged. Do not repeat the failing discovery command or run `init`/`deploy` to repair a hosted address.
+
+When discovery succeeds, request only the
 scopes you need with `login --machine NAME --scopes "agents:create agents:owner-token wake:write wake:test"
 --control-url https://a2a.exposed --json`. The human follows the printed approval link once.
 The CLI saves the scoped setup grant in the protected configuration; it never prints it.

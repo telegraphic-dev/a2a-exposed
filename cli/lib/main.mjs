@@ -28,6 +28,7 @@ Setup options: --skip-install skips dependency installation when dependencies al
 
 Hosted setup:
   hosted capabilities --json   list setup scopes, wake presets and service capabilities
+                                unsupported/404: check --control-url; use dashboard or hosted MCP with human confirmation
   login --machine NAME --scopes SCOPES [--control-url URL] --json
                                 approve the explicit scopes using the printed website link once;
                                 save the scoped grant locally (mode 600), never print it

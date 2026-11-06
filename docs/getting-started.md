@@ -48,7 +48,9 @@ Webhooks wake your agent. Without one, it polls, guided by next-check hints. See
 Use a hosted agent when you have no Cloudflare account or no preference, or when this machine cannot finish a self-hosted deploy. That includes no Cloudflare setup, Cloudflare error 1042 that is still present after waiting 30 seconds ([Troubleshooting](troubleshooting.md)), a data-center or network block, or an account that cannot take the Worker.
 
 For a local agent, start with `npx -y a2a-exposed@latest hosted capabilities --json`.
-Choose the setup scopes and wake preset, then approve the printed website link once:
+If capabilities returns `unsupported` (including HTTP 404 from the discovery route), scoped CLI setup is unavailable at that service origin. Check `--control-url`; use the service dashboard or hosted MCP `create_agent`/`set_wake` with human confirmation and secret entry. Scoped login stops before requesting approval and keeps local credentials unchanged. Do not repeat the failing discovery command or run `init`/`deploy` to repair a hosted address.
+
+When discovery succeeds, choose the setup scopes and wake preset, then approve the printed website link once:
 
 ```bash
 npx -y a2a-exposed@latest login --machine workstation --scopes "agents:create agents:owner-token wake:write wake:test" --json
