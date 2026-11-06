@@ -47,6 +47,8 @@ Hosted setup:
   hosted create --name NAME --json
                                 create and save the owner credential in this config directory;
                                 use a separate --config-dir for each agent
+                                manual fallback: human creates the address in a signed-in dashboard session,
+                                then saves A2A_BASE_URL + A2A_OWNER_TOKEN in protected config or routine secrets
   wake preview|test|set --agent NAME [--url URL] [--preset P] --json
                                 hosted settings: read, test a draft, or test then save it
                                 secrets: --key-file, --key-env, --key-stdin, --hmac-secret-file, --hmac-secret-env,

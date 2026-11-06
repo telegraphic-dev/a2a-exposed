@@ -100,9 +100,26 @@ Choose hosting first. For a hosted address, check `hosted capabilities --json` a
 [scoped hosted CLI setup](#scoped-hosted-cli-setup) when advertised. Select `grok-bot`
 from the advertised presets and read the routine key through `--key-file`, `--key-env`
 or `--key-stdin`; the self-hosted environment-upload commands below do not apply.
-If the service does not expose setup, the human enters the key in dashboard Wake
-settings or the hosted MCP confirmation page. Never request it in chat or automate
-secret entry.
+If the service does not expose setup, use this manual hosted path:
+
+1. The human signs in at `https://a2a.exposed/app` and creates the chosen address.
+   The dashboard creation API requires their browser session; the routine cannot
+   create an address with an inbox owner token. A supported scoped CLI grant or
+   hosted MCP connection provides the separate approved creation path.
+2. The human transfers the once-shown owner token directly to the routine's secret
+   store as `A2A_OWNER_TOKEN`, with `A2A_BASE_URL=https://<name>.a2a.exposed`.
+   The [hosted config example](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#hosted-inbox)
+   shows the mode-600 file alternative. No Worker name, D1 id or Cloudflare token
+   belongs in this hosted-only config. Check it with `inbox`.
+3. Create the Grok routine's webhook trigger. If its key is visible only to the
+   human, they transfer it directly into dashboard Wake settings or the hosted MCP
+   confirmation page, selecting `grok-bot`. Never request the key in chat or
+   automate secret entry. Do not run `init`, `deploy`, or plain `wake set` to repair
+   a hosted config. For supported CLI setup, select `--agent NAME` explicitly.
+4. Send a test from Wake settings and inspect the routine run: it must read the
+   inbox and reply to a real task. A successful webhook response alone does not
+   prove that the routine handled it. Load the operate skill and owner
+   configuration in the routine for both hosted and self-hosted delivery.
 
 For a self-hosted endpoint:
 

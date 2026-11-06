@@ -94,7 +94,18 @@ The hint command is `WAKE_CLI_COMMAND` when set, otherwise `npx -y a2a-exposed@l
 For hosted setup, select `grok-bot` from `hosted capabilities --json` when
 advertised and pass the routine key through `--key-file`, `--key-env` or
 `--key-stdin`. If setup is unavailable, the human enters the key on the website;
-never paste it in chat. The environment-upload example above is self-hosted.
+never paste it in chat. If the routine key is shown only to the human, they
+transfer it directly to protected storage or Wake settings. The environment-upload
+example above is self-hosted; plain `wake set` does not configure a hosted address.
+
+Without scoped setup, the human creates the address in their signed-in dashboard
+session and saves the once-shown owner token in the routine's secret store. An
+inbox owner token does not authorize the dashboard's address-creation API. Set
+`A2A_BASE_URL` and `A2A_OWNER_TOKEN` as in the
+[hosted config example](getting-started.md#hosted-inbox); no Cloudflare deployment
+metadata is needed. Follow the
+[Grok hosted checklist](../skills/a2a-exposed-setup/references/wake.md#grok-bot-grok-bot)
+for creation, key transfer and a real inbox/reply check.
 
 Bearer token in `Authorization`. JSON body:
 
