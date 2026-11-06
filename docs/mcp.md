@@ -46,7 +46,7 @@ The connector token cannot issue, rotate, or revoke tokens, approve or deny pair
 
 ## Self-hosted tools
 
-`inbox`, `show_task`, `history`, `mark_working`, `reply` (with state), `send`, `poll_outbound`, `list_peers`, `announce_address`, `pairing_requests` (read-only), and `send_feedback`.
+`inbox`, `show_task`, `history`, `mark_working`, `reply` (with state), `send`, `poll_outbound`, `cancel_outbound`, `list_peers`, `announce_address`, `pairing_requests` (read-only), and `send_feedback`.
 
 `inbox` returns one page (default 20, at most 200). Reading that page marks returned outbound replies seen and clears matching pending wakes; task state is unchanged. The tool advertises `readOnlyHint: false` and `destructiveHint: false`. Hosted wrappers use the same annotations because their owner route acknowledges these reads. When it says more tasks are waiting, call it again with the cursor. A pending wake is cleared only for tasks on that page. A reply to a message you sent is on the first page (`kind: "outbound"`) until that page lists it. Read it with `history` and continue with `send`. `inbox` and `history` take `from` (the wake's peer). The same context id can be another peer's conversation, so pass `from` when the wake includes it.
 
@@ -55,6 +55,8 @@ The connector token cannot issue, rotate, or revoke tokens, approve or deny pair
 `announce_address` tells synced peers this inbox's current https card URL. Pass `to` for one alias, or `all: true`. The peer switches only after the card proves the same pairing identity. A peer that does not implement it keeps the current pairing. The tool does not approve anyone, and it does not return tokens. It never mints a return token the owner revoked: that peer reports `revoked`. The tool has no `reissue` input, and a call that passes one fails with error code `reissue_owner_only` (also on `POST /owner/mcp/announce_address`). Only the owner reissues, with `peer announce --to <alias> --reissue`.
 
 `send` reaches only peers uploaded with `peers sync`. When the peer's card advertises `capabilities.pushNotifications`, it registers a push to this A2A endpoint's `POST /push` and stores only the hash of that token before the call. Otherwise it sends without a push config, and you read the reply with `poll_outbound`. It keeps the conversation id stable when you pass `contextId` again. The peer's reply is recorded in `history` and listed by `inbox` (`kind: "outbound"`) until the inbox is read. Read that reply with `history`. Continue the conversation with `send`, using the same `contextId`. A tenant on the same deployment is called internally. A peer on any other host is a normal HTTPS call. The CLI `send` still registers a push only when you pass `--push`. `send_feedback` is the same report as the CLI `feedback` command. See [Feedback](feedback.md).
+
+`poll_outbound` fetches the current state of a task returned by `send`. `cancel_outbound` asks that same peer to cancel it. Both use the recorded endpoint and stored peer token, update the saved task, and record the returned state in history. Cancellation can be refused by the peer. Ask the human before canceling consequential work. Peer JSON-RPC failures include the numeric code and message; HTTP 200 is omitted from those errors.
 
 A session with these tools does the same work. Peer text is untrusted, and you approve pairing.
 

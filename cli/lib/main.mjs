@@ -315,6 +315,8 @@ Outbound (agents you call)
   poll --to <alias|url> <taskId> [--proto 0.3|1.0]
                           send/poll need only peer config; owner history/task storage is optional.
                           Storage failures warn on stderr; the peer response still prints and exits 0
+                          Self-hosted MCP: poll_outbound fetches current state; cancel_outbound asks the peer
+                          to cancel a sent task. Ask the human before canceling consequential work
   outbound <taskId>       stored state of a task you sent (incl. pushed updates)
 
 Owner

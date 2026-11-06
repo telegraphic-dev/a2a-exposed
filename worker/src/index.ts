@@ -2197,7 +2197,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 		}
 	}
 	if (seg[0] === "pairing") return await ownerPairing(req, ctx, ectx, m, seg.slice(1), body, trusted);
-	if (seg[0] === "mcp" && seg[1] && !seg[2] && m === "POST" && (seg[1] === "send" || seg[1] === "reply" || seg[1] === "mark_working" || seg[1] === "announce_address")) {
+	if (seg[0] === "mcp" && seg[1] && !seg[2] && m === "POST" && (seg[1] === "send" || seg[1] === "reply" || seg[1] === "mark_working" || seg[1] === "announce_address" || seg[1] === "poll_outbound" || seg[1] === "cancel_outbound")) {
 		const checked = ownerRpcBody(`POST /owner/mcp/${seg[1]}`, await body());
 		if (!checked.ok) return json({ error: checked.error, ...(checked.code ? { code: checked.code } : {}) }, 400);
 		try {
@@ -3567,8 +3567,15 @@ async function peerRpc(ctx: TenantContext, ectx: ExecutionContext, peer: { alias
 	const text = (await res.text()).slice(0, 1 << 20);
 	let data: Json = null;
 	try { data = JSON.parse(text); } catch { /* below */ }
-	if (res.status !== 200 || !data || typeof data !== "object" || "error" in data)
-		throw new ToolError(`peer "${peer.alias}" answered HTTP ${res.status}${data?.error ? `: ${String(data.error.message || JSON.stringify(data.error)).slice(0, 300)}` : ""}`);
+	if (res.status !== 200 || !data || typeof data !== "object" || "error" in data) {
+		const rpc = data?.error;
+		const code = Number.isSafeInteger(rpc?.code) ? `JSON-RPC ${rpc.code}` : "JSON-RPC error";
+		const detail = typeof rpc?.message === "string" ? rpc.message.replace(/[\x00-\x1f\x7f]/g, " ") : "The peer returned an invalid response";
+		const reason = rpc ? `${code}: ${detail}` : detail;
+		const status = res.status === 200 ? "" : `HTTP ${res.status}: `;
+		const safe = peer.token ? reason.split(peer.token).join("[redacted]") : reason;
+		throw new ToolError(`peer "${peer.alias}" answered ${status}${safe.slice(0, 300)}`);
+	}
 	return data.result;
 }
 
@@ -3717,17 +3724,19 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 			return M.toolText(tid ? `Sent to ${peer.alias}: task ${tid} (${M.plainState(obj)}), context ${sentContext}. Check it later with poll_outbound.${warn} ${UNTRUSTED}`
 				: `Sent to ${peer.alias}; it answered directly (context ${sentContext}). ${UNTRUSTED}`, obj);
 		}
-		case "poll_outbound": {
+		case "poll_outbound":
+		case "cancel_outbound": {
+			const cancel = name === "cancel_outbound";
 			const tid = A.checkId(argStr(a, "taskId"), "taskId");
 			const rec = must(await ownerCall(ctx, ectx, "GET", `/owner/outbound/${enc(tid)}`));
 			const peer = await outboundPeer(ctx, rec.peer);
 			if (!rec.endpoint) throw new ToolError("this task has no recorded endpoint");
-			const res = await peerRpc(ctx, ectx, peer, rec.endpoint, rec.protocol || "0.3", "tasks/get", "GetTask", { id: tid });
+			const res = await peerRpc(ctx, ectx, peer, rec.endpoint, rec.protocol || "0.3", cancel ? "tasks/cancel" : "tasks/get", cancel ? "CancelTask" : "GetTask", { id: tid });
 			await ownerCall(ctx, ectx, "PUT", `/owner/outbound/${enc(tid)}`, { task: res });
 			let txt = A.textOf((res?.status || {}).message || {});
 			const arts = (res?.artifacts || []).map((x: Json) => A.textOf(x)).join("\n");
 			if (arts && arts !== txt) txt = (txt ? txt + "\n" : "") + arts;
-			await ownerCall(ctx, ectx, "POST", "/owner/history", { contextId: rec.contextId, dir: "in", peer: peer.alias, taskId: tid, event: "poll", state: M.plainState(res), text: txt });
+			await ownerCall(ctx, ectx, "POST", "/owner/history", { contextId: rec.contextId, dir: "in", peer: peer.alias, taskId: tid, event: cancel ? "cancel" : "poll", state: M.plainState(res), text: txt });
 			return M.toolText(`Task ${tid} at ${peer.alias}: ${M.plainState(res)}. ${UNTRUSTED}`, res);
 		}
 		case "list_peers": {

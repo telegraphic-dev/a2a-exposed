@@ -54,7 +54,11 @@ test("owner RPC allowlist is the management reads and the calls that do not retu
 	assert.deepEqual(refused("POST", "/owner/purge"), { ok: false, reason: "path" });
 	assert.deepEqual(refused("POST", "/owner/tasks/task-1/reply"), { ok: false, reason: "path" });
 	assert.deepEqual(refused("POST", "/owner/mcp/send", { to: "alpha" }), { ok: false, reason: "query" });
-	assert.deepEqual(refused("POST", "/owner/mcp/poll_outbound"), { ok: false, reason: "path" });
+	for (const tool of ["poll_outbound", "cancel_outbound"]) {
+		assert.equal(ok("POST", `/owner/mcp/${tool}`)?.path, `/owner/mcp/${tool}`);
+		assert.deepEqual(ownerRpcBody(`POST /owner/mcp/${tool}`, { taskId: "task-1" }), { ok: true, value: { taskId: "task-1" } });
+		for (const body of [{}, { taskId: ".." }, { taskId: "task-1", to: "other" }, { taskId: "task-1", token: "secret" }]) assert.equal(ownerRpcBody(`POST /owner/mcp/${tool}`, body).ok, false);
+	}
 	assert.deepEqual(refused("PUT", "/owner/mcp/send"), { ok: false, reason: "path" });
 	assert.deepEqual(refused("POST", "/owner/history"), { ok: false, reason: "path" });
 	assert.deepEqual(refused("GET", "/owner/peers/../export"), { ok: false, reason: "path" });

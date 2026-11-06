@@ -21,17 +21,27 @@ test("hosted control plane send, reply, and mark_working", async (t) => {
 		config: { AGENT_NAME: "Carol" },
 	});
 	const peerCalls: { host: string; auth: string | null; body: any }[] = [];
+	let modern = true;
+	let cancelRefused = false;
 	const origFetch = globalThis.fetch;
 	globalThis.fetch = (async (input: any, init: any = {}) => {
 		const u = new URL(String(input));
 		if (u.pathname === "/.well-known/agent-card.json")
-			return Response.json({ name: u.host, supportedInterfaces: [{ url: `https://${u.host}/a2a`, protocolBinding: "JSONRPC", protocolVersion: "1.0" }] });
+			return modern ? Response.json({ name: u.host, supportedInterfaces: [{ url: `https://${u.host}/a2a`, protocolBinding: "JSONRPC", protocolVersion: "1.0" }] }) : Response.json({ url: `https://${u.host}/a2a`, protocolVersion: "0.3" });
 		if (u.pathname === "/a2a") {
 			const body = JSON.parse(init.body);
 			const auth = new Headers(init.headers).get("authorization");
 			peerCalls.push({ host: u.host, auth, body });
 			if (auth !== `Bearer tok-${u.host.split(".")[0]}`) return new Response("no", { status: 401 });
-			if (body.method === "SendMessage") return Response.json({ jsonrpc: "2.0", id: body.id, result: { task: { id: `pt-${u.host.split(".")[0]}`, contextId: "ctx-out-1", status: { state: "TASK_STATE_SUBMITTED" } } } });
+			if (body.method === "GetTask" || body.method === "tasks/get" || body.method === "CancelTask" || body.method === "tasks/cancel") {
+				assert.equal(new Headers(init.headers).get("a2a-version"), modern ? "1.0" : "0.3");
+				const cancel = body.method === "CancelTask" || body.method === "tasks/cancel";
+				if (cancel && cancelRefused) return Response.json({ jsonrpc: "2.0", id: body.id, error: { code: -32002, message: "Task cannot be canceled" } });
+				return Response.json({ jsonrpc: "2.0", id: body.id, result: { id: body.params.id, contextId: "ctx-out-1", status: { state: modern ? (cancel ? "TASK_STATE_CANCELED" : "TASK_STATE_WORKING") : (cancel ? "canceled" : "working") } } });
+			}
+			if (body.params?.message?.parts[0]?.text === "echo-token") return Response.json({ jsonrpc: "2.0", id: body.id, error: { code: -32603, message: "Rejected tok-alpha" } });
+			if (body.params?.message?.parts[0]?.text === "terminal") return Response.json({ jsonrpc: "2.0", id: body.id, error: { code: -32002, message: "Task is in a terminal state" } });
+			if (body.method === "SendMessage" || body.method === "message/send") return Response.json({ jsonrpc: "2.0", id: body.id, result: { task: { id: `pt-${u.host.split(".")[0]}${modern ? "" : "-03"}`, contextId: "ctx-out-1", status: { state: "TASK_STATE_SUBMITTED" } } } });
 		}
 		return new Response("not found", { status: 404 });
 	}) as typeof fetch;
@@ -88,6 +98,47 @@ test("hosted control plane send, reply, and mark_working", async (t) => {
 	assert.equal(peerCalls.at(-1)!.auth, "Bearer tok-alpha");
 	assert.equal(peerCalls.at(-1)!.body.params.message.parts[0].text, "status?");
 	assert.equal(peerCalls.at(-1)!.body.params.message.contextId, "ctx-hosted");
+
+	for (const version of [true, false]) {
+		modern = version;
+		const taskId = version ? "pt-alpha" : "pt-alpha-03";
+		await rpc("/owner/mcp/send", { to: "alpha", text: "status?" });
+		for (const tool of ["poll_outbound", "cancel_outbound"]) {
+			const before = peerCalls.length;
+			const missing = await rpc(`/owner/mcp/${tool}`, { taskId: "unknown" });
+			assert.equal((missing.body as any).isError, true);
+			assert.equal(peerCalls.length, before, "unknown task never calls a peer");
+			const denied = await http("POST", `/owner/mcp/${tool}`, "Bearer platform-owner", { taskId });
+			assert.equal(denied.status, 401);
+			const result = await rpc(`/owner/mcp/${tool}`, { taskId });
+			assert.equal(result.status, 200);
+			assert.equal((result.body as any).isError, false, JSON.stringify(result.body));
+			assert.match((result.body as any).text, tool === "poll_outbound" ? /working/ : /canceled/);
+			assert.equal(peerCalls.at(-1)!.auth, "Bearer tok-alpha");
+			assert.equal(peerCalls.at(-1)!.body.method, version ? (tool === "poll_outbound" ? "GetTask" : "CancelTask") : (tool === "poll_outbound" ? "tasks/get" : "tasks/cancel"));
+			assert.deepEqual(peerCalls.at(-1)!.body.params, { id: taskId });
+			assert.equal(JSON.stringify(result.body).includes("tok-alpha"), false);
+			const stored = await http("GET", `/owner/outbound/${taskId}`, `Bearer ${ownerToken}`);
+			assert.match(JSON.stringify(stored.data), tool === "poll_outbound" ? /WORKING|working/ : /CANCELED|canceled/);
+		}
+		cancelRefused = true;
+		const beforeRefusal = await http("GET", `/owner/outbound/${taskId}`, `Bearer ${ownerToken}`);
+		const refused = await rpc("/owner/mcp/cancel_outbound", { taskId });
+		assert.equal((refused.body as any).isError, true);
+		assert.match((refused.body as any).text, /JSON-RPC -32002: Task cannot be canceled/);
+		assert.deepEqual((await http("GET", `/owner/outbound/${taskId}`, `Bearer ${ownerToken}`)).data, beforeRefusal.data, "refused cancellation preserves the saved task");
+		cancelRefused = false;
+		const error = await rpc("/owner/mcp/send", { to: "alpha", text: "terminal" });
+		assert.equal((error.body as any).isError, true);
+		assert.match((error.body as any).text, /JSON-RPC -32002: Task is in a terminal state/);
+		assert.doesNotMatch((error.body as any).text, /HTTP 200/);
+	}
+	modern = true;
+	const echoed = await rpc("/owner/mcp/send", { to: "alpha", text: "echo-token" });
+	assert.equal((echoed.body as any).isError, true);
+	assert.doesNotMatch(JSON.stringify(echoed.body), /tok-alpha/);
+	const history = await http("GET", "/owner/history/ctx-out-1", `Bearer ${ownerToken}`);
+	assert.match(JSON.stringify(history.data), /"event":"cancel"/);
 
 	const viaHttp = await http("POST", "/owner/mcp/send", `Bearer ${ownerToken}`, { to: "alpha", text: "from the owner token" });
 	assert.equal(viaHttp.status, 200, viaHttp.text);
