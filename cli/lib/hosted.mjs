@@ -5,6 +5,7 @@ import { controlOrigin, deviceLogin } from "./account.mjs";
 import { CliError, upstreamUrlProblem } from "./a2a.mjs";
 
 export const SETUP_SCOPES = ["agents:read", "agents:create", "agents:owner-token", "wake:write", "wake:test"];
+const SETUP_UNSUPPORTED = "This service does not expose scoped hosted setup capabilities. Check the --control-url service origin. Use the service dashboard to create an agent and configure Wake settings, or hosted MCP create_agent/set_wake with human confirmation and secret entry. Do not run init or deploy to repair a hosted address; no setup approval was requested.";
 const NEXT = "Run hosted capabilities --json to list scopes and presets; login --machine NAME --scopes SCOPES to approve setup.";
 const fail = (code, next) => { const error = new CliError(next); error.result = { ok: false, code, next }; throw error; };
 const printable = value => typeof value === "string" && value.length <= 4096 && !/[\x00-\x1f\x7f]/.test(value);
@@ -34,14 +35,16 @@ function originFor(o = {}) {
 
 async function request(origin, path, { token = "", method = "GET", body, fetchImpl = fetch } = {}) {
 	let response, data;
+	const discovery = method === "GET" && path === "/api/v1/setup/capabilities";
 	try {
 		response = await fetchImpl(`${origin}${path}`, {
 			method, redirect: "error", signal: AbortSignal.timeout(30_000),
 			headers: { accept: "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}), ...(body === undefined ? {} : { "content-type": "application/json" }) },
 			...(body === undefined ? {} : { body: JSON.stringify(body) }),
 		});
-		data = await response.json();
+		if (!(discovery && response.status === 404)) data = await response.json();
 	} catch { fail("unavailable", "Hosted setup did not answer with JSON. Check the service and try again. Do not repeat a create request until hosted list confirms its result."); }
+	if (discovery && response.status === 404) fail("unsupported", SETUP_UNSUPPORTED);
 	if (!data || typeof data !== "object" || Array.isArray(data)) fail("invalid_response", "The hosted service returned an invalid setup response.");
 	if (!response.ok) {
 		if (response.status === 429 && data.error === "too_many_references") {
@@ -70,7 +73,7 @@ async function request(origin, path, { token = "", method = "GET", body, fetchIm
 
 export async function capabilities(o = {}) {
 	const data = await request(originFor(o), "/api/v1/setup/capabilities");
-	if (!Array.isArray(data.scopes) || !Array.isArray(data.wake?.presets)) fail("unsupported", "This service does not expose hosted setup capabilities yet.");
+	if (!Array.isArray(data.scopes) || !Array.isArray(data.wake?.presets)) fail("unsupported", SETUP_UNSUPPORTED);
 	return { ok: true, code: "capabilities", next: "Select explicit scopes and a wake preset from this listing.", scopes: data.scopes.filter(s => SETUP_SCOPES.includes(s)), presets: data.wake.presets.filter(s => /^[a-z-]+$/.test(s)), preflight: data.preflight === true, secret_reference: data.wake.secret_reference === true, wake_removal: data.wake.removal === true, secure_link_create: data.wake.secure_link_create === true };
 }
 

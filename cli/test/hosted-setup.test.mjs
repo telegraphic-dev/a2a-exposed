@@ -78,6 +78,51 @@ function fixture() {
 	};
 }
 
+test("missing capabilities stops discovery and scoped login before approval without changing config", () => {
+	const f = fixture();
+	try {
+		for (const saved of [false, true]) {
+			if (saved) f.save("UNRELATED=retained\n");
+			const before = saved ? fs.readFileSync(f.config, "utf8") : undefined;
+			for (const body of [{ error: "not_found", token: grant, message: owner }, "<html>Not found</html>", ""]) {
+				for (const command of [["hosted", "capabilities"], ["login", "--machine", "workstation", "--scopes", capabilities.scopes.join(" ")]]) {
+					for (const json of [false, true]) {
+						const log = path.join(f.dir, "discovery-log"); fs.writeFileSync(log, "");
+						const r = f.run([...command, "--control-url", "https://control.example", ...(json ? ["--json"] : [])], {
+							"https://control.example/api/v1/setup/capabilities": { status: 404, body },
+						}, { A2A_TEST_FETCH_LOG: log });
+						assert.equal(r.status, 1, r.stdout + r.stderr);
+						const next = json ? JSON.parse(r.stdout).next : r.stdout;
+						if (json) assert.equal(JSON.parse(r.stdout).code, "unsupported");
+						else assert.match(next, /unsupported:/);
+						assert.match(next, /--control-url.*dashboard.*hosted MCP.*human confirmation/);
+						assert.match(next, /no setup approval was requested/);
+						assert.doesNotMatch(next, /Run hosted capabilities/);
+						const calls = fs.readFileSync(log, "utf8").trim().split("\n").map(JSON.parse);
+						assert.equal(calls.length, 1); assert.equal(calls[0].method, "GET");
+						assert.equal(calls[0].headers.authorization, undefined);
+						assert.equal(fs.existsSync(f.config), saved);
+						if (saved) assert.equal(fs.readFileSync(f.config, "utf8"), before);
+						for (const secret of [owner, grant]) assert.ok(!(r.stdout + r.stderr).includes(secret));
+					}
+				}
+			}
+		}
+	} finally { f.clean(); }
+});
+
+test("other discovery failures and agent not-found retain their distinct results", () => {
+	const f = fixture(); f.save();
+	try {
+		for (const [status, body, code] of [[401, { error: "invalid_grant" }, "invalid_grant"], [403, { error: "insufficient_scope" }, "insufficient_scope"], [503, { error: "unavailable" }, "unavailable"], [200, {}, "unsupported"], [200, "not json", "unavailable"]]) {
+			const r = f.run(["hosted", "capabilities", "--json"], { "https://control.example/api/v1/setup/capabilities": { status, body } });
+			assert.equal(r.status, 1); assert.equal(JSON.parse(r.stdout).code, code);
+		}
+		const r = f.run(["hosted", "list", "--json"], { "https://control.example/api/v1/tenants": { status: 404, body: { error: "not_found" } } });
+		assert.equal(r.status, 1); assert.equal(JSON.parse(r.stdout).code, "not_found");
+	} finally { f.clean(); }
+});
+
 test("setup environment overrides never borrow saved credential halves", () => {
 	const saved = { HOSTED_SETUP_URL: "https://control.example", HOSTED_SETUP_TOKEN: grant };
 	assert.deepEqual(setupSession({ HOSTED_SETUP_URL: "https://other.example" }, saved), { origin: "https://other.example", token: "" });
