@@ -65,7 +65,7 @@ function fixture() {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hosted-setup-"));
 	const configDir = path.join(dir, "config"); fs.mkdirSync(configDir);
 	const config = path.join(configDir, "config.env"), routes = path.join(dir, "routes.json");
-	const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(A2A_|CONTROL_|HOSTED_|WAKE_|CF_|CLOUDFLARE_)/.test(key)));
+	const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(A2A_|CONTROL_|HOSTED_|WAKE_|UPSTREAM_|PEER_|EVENT_|APPROVAL_|FEEDBACK_|CF_|CLOUDFLARE_)/.test(key)));
 	Object.assign(env, { A2A_CONFIG_DIR: configDir, A2A_NO_UPDATE_CHECK: "1", DO_NOT_TRACK: "1", A2A_TEST_FETCH_ROUTES: routes });
 	return {
 		dir, config, env,
@@ -496,4 +496,27 @@ test('create preflights advertised names and capacity before any POST',()=>{
    assert.ok(fs.readFileSync(log,'utf8').trim().split('\n').map(JSON.parse).every(c=>c.method==='GET'));
   }finally{f.clean();}
  }
+});
+
+test("hosted upstream requires explicit versions, protects secret inputs, and prints only known results", () => {
+ const f=fixture();f.save("HOSTED_AGENT_NAME=sample-agent\n");
+ const base="https://control.example/api/v1/agents/sample-agent/upstream",log=path.join(f.dir,"upstream-log");
+ const replies={"https://control.example/api/v1/setup/capabilities":{status:200,body:{...capabilities,upstream:{configuration:true,verify:true}}},[base]:{byHeader:{"content-type":{status:200,body:{ok:true,saved:true,removed:true,version:8,token:owner}}},default:{status:200,body:{version:7,configured:true,url:"private-secret",token:owner}}}};
+ try {
+  const preview=f.run(["hosted","upstream","preview","--agent","sample-agent","--json"],replies);assert.equal(preview.status,0,preview.stdout+preview.stderr);assert.equal(JSON.parse(preview.stdout).version,7);assert.ok(!preview.stdout.includes("private-secret"));
+  for(const args of [["set","--url","https://agent.example.net/a2a"],["clear"],["verify"],["clear","--version","6"],["set","--version","7","--url","https://127.0.0.1/a2a"],["clear","--version","7","--url","https://agent.example.net/a2a"]]) {
+   fs.writeFileSync(log,"");const r=f.run(["hosted","upstream",...args,"--agent","sample-agent","--json"],replies,{A2A_TEST_FETCH_LOG:log});assert.equal(r.status,1,r.stdout+r.stderr);assert.ok(fs.readFileSync(log,"utf8").trim().split("\n").filter(Boolean).map(JSON.parse).every(c=>c.method==='GET'));
+  }
+  const tokenFile=path.join(f.dir,"bearer");fs.writeFileSync(tokenFile,"fixture-bearer\n",{mode:0o600});
+  fs.writeFileSync(log,"");
+  const result=f.run(["hosted","upstream","set","--agent","sample-agent","--url","https://agent.example.net/a2a","--version","7","--upstream-token-file",tokenFile,"--access-client-id-env","FIXTURE_ACCESS_ID","--access-client-secret-env","FIXTURE_ACCESS_SECRET","--json"],replies,{A2A_TEST_FETCH_LOG:log,FIXTURE_ACCESS_ID:"fixture-id",FIXTURE_ACCESS_SECRET:"fixture-access"});
+  assert.equal(result.status,0,result.stdout+result.stderr);assert.equal(JSON.parse(result.stdout).code,"saved");
+  const calls=fs.readFileSync(log,"utf8").trim().split("\n").map(JSON.parse),save=calls.find(c=>c.method==='PUT');assert.ok(save);
+  const body=JSON.parse(save.body);assert.equal(body.version,7);assert.equal(body.token,'fixture-bearer');assert.equal(body.accessClientSecret,'fixture-access');
+  for(const value of ['fixture-bearer','fixture-id','fixture-access',owner,grant]) assert.ok(!(result.stdout+result.stderr).includes(value));
+  const verified=f.run(['hosted','upstream','verify','--agent','sample-agent','--version','7','--json'],{...replies,[base+'/verify']:{status:200,body:{ok:false,reason:'access_rejected',detail:owner}}});assert.equal(verified.status,1);assert.equal(JSON.parse(verified.stdout).code,'access_rejected');assert.ok(!verified.stdout.includes(owner));
+  const clear=f.run(['hosted','upstream','clear','--agent','sample-agent','--version','7','--json'],replies);assert.equal(clear.status,0);assert.equal(JSON.parse(clear.stdout).code,'removed');
+  fs.chmodSync(tokenFile,0o644);
+  const bad=f.run(['hosted','upstream','set','--agent','sample-agent','--url','https://agent.example.net/a2a','--version','7','--upstream-token-file',tokenFile,'--json'],replies);assert.equal(bad.status,1);assert.equal(JSON.parse(bad.stdout).code,'secret_file');
+ } finally {f.clean();}
 });
