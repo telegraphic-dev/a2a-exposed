@@ -307,7 +307,8 @@ The reply is stored on the original task before delivery is attempted. If that t
 configuration, only the existing task push is used. Otherwise the hosted MCP `reply` tool may also send one A2A
 message in the same context, with `referenceTaskIds` naming the original task, when the inbound label exactly matches
 an active outbound pairing and this endpoint can decrypt its token. A peer-claimed card alone is never used. Direct
-reply messages carry a loop marker and are not delivered back again. The result distinguishes `delivered`,
+reply messages carry a loop marker and are not delivered back again. The receiving inbox stores them as completed
+tasks without a new-work wake. Read them in `history` or `inbox --all`; they do not need an answer. The result distinguishes `delivered`,
 `stored-only`, and `delivery-failed`; a failed delivery never removes the stored answer. If an interrupted delivery
 has no known result, a retry reports that uncertainty and does not risk sending the reply a second time.
 

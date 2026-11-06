@@ -698,6 +698,7 @@ type Rpc = (p: Json, label: string, version: string, ctx: TenantContext, ectx: E
 const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
 	const msg = A.normMessage(params.message);
 	if (msg.role !== "user") throw new RpcError(-32602, "message.role must be user");
+	const directReply = directReplyParams(params);
 	const conf = params.configuration || {};
 	const push = conf.taskPushNotificationConfig || conf.pushNotificationConfig;
 	const pushCfg = push ? normPushCfg(push, version) : null;
@@ -718,9 +719,11 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
 	if (!task) task = { id: A.newId(), contextId, status: { state: "submitted", timestamp: ts }, artifacts: [], history: [], _peer: label, _protocol: version, _createdAt: ts, _push: [] };
 	msg.contextId = contextId; msg.taskId = task.id;
 	task.history.push(msg);
-	task.status = { state: "submitted", timestamp: ts };
+	task.status = { state: directReply ? "completed" : "submitted", timestamp: ts };
 	if (pushCfg) task._push = [...task._push.filter((c: Json) => c.id !== pushCfg.id), pushCfg];
 	if (params.metadata && typeof params.metadata === "object") task.metadata = { ...(task.metadata || {}), ...params.metadata };
+	// Keep the loop marker on the task even when it was supplied only on the message.
+	if (directReply) task.metadata = { ...(task.metadata || {}), [DIRECT_REPLY_META]: params.metadata?.[DIRECT_REPLY_META] || msg.metadata?.[DIRECT_REPLY_META] };
 	const preview = A.textOf(msg);
 	if (creating) {
 		const stored = await ctx.DB.batch([
@@ -738,7 +741,8 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
 		]);
 	}
 	log("message_received", { peer: label, contextId, taskId: task.id, chars: preview.length, version });
-	await wake(ctx, ectx, contextId, task.id, label, preview);
+	// Direct replies are stored for history, not scheduled as new work.
+	if (!directReply) await wake(ctx, ectx, contextId, task.id, label, preview);
 	const pt = A.publicTask(task, version, conf.historyLength);
 	return version.startsWith("1") ? { task: pt } : pt;
 };
