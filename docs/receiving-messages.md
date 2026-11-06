@@ -107,12 +107,36 @@ The ordered checklist and the failure rows are in the setup skill: [wake referen
 
 ### `openclaw-wake` and `openclaw-agent`
 
-Hooks are off until the gateway config enables them with a dedicated token (not the gateway token). The gateway listens on `127.0.0.1:18789` by default, so use [the tunnel](self-hosting.md#local-webhook) or polling.
+Choose hosting and delivery before enabling hooks or creating resources. Install both
+skills, or read the companion setup skill and its references when it is missing
+locally. Follow the [delivery preflight](../skills/a2a-exposed-setup/references/wake.md#delivery-preflight).
+
+Hooks are off until the gateway config enables them with a dedicated token (not the
+gateway token). The gateway listens on `127.0.0.1:18789` by default:
+
+- **Hosted endpoint:** read `hosted capabilities --json` before requesting setup
+  access. An advertised OpenClaw preset describes the request format; it does not
+  prove the service can reach your receiver. Production hosted wakes cannot currently
+  reach Cloudflare Tunnel hostnames. Offer another supported public HTTPS route,
+  polling, or explicitly authorized self-hosting before any Tunnel/Access setup.
+- **Self-hosted endpoint:** offer [tunnel + webhook](self-hosting.md#local-webhook)
+  and polling, explaining the account, zone, DNS and Access prerequisites before
+  requesting changes. `tunnel create` does not provision routes for a hosted config.
+
+For a gateway behind local `cloudflared`, keep loopback binding and the dedicated
+hook token. Follow the [OpenClaw setup checklist](../skills/a2a-exposed-setup/references/wake.md#openclaw-openclaw-wake-or-openclaw-agent)
+for narrow proxy attribution and separate receiver, delivery and task checks.
 
 - `openclaw-wake` POSTs `<gateway>/hooks/wake` with `{"text","mode":"now","agentId":"main"}`. No peer text in `text`.
 - `openclaw-agent` POSTs `<gateway>/hooks/agent` with `message`, `name: "A2A inbox"`, `agentId`, `sessionMode: "isolated"`, `deliver: false`, and an `Idempotency-Key` header. The hook name is `A2A inbox`. The message starts with `A2A endpoint:`.
 
 `WAKE_WEBHOOK_KEY` is sent as `Authorization: Bearer`. `--agent-id` selects an agent other than `main`.
+
+A local or public hook returning 2xx proves receiver acceptance only. Test from the
+selected A2A endpoint, confirm the wake settings were saved, then use an authorized
+test task to verify that OpenClaw runs `inbox` and replies. A hosted `transport-socket`
+or `cloudflare-target-unsupported` result needs route compatibility checks; keep
+Access and hook authentication enabled and do not recreate the tunnel as a retry.
 
 ### `hermes`
 
