@@ -287,18 +287,9 @@ export async function wake(sub, o = {}) {
 /** Hosted upstream configuration uses only scoped setup or this agent's owner credential. */
 export async function upstream(sub, o = {}) {
 	if (!["preview", "set", "clear", "verify"].includes(sub)) fail("usage", "Use hosted upstream preview|set|clear|verify --agent NAME --json. Select NAME with hosted list --json and scopes with hosted capabilities --json.");
- const allowed = new Set(["agent", "json", "control-url", ...(sub === "preview" ? [] : ["version"]), ...(sub === "set" ? ["url", "upstream-token-file", "upstream-token-env", "access-client-id-file", "access-client-id-env", "access-client-secret-file", "access-client-secret-env"] : [])]);
- if (Object.keys(o).some(key => !allowed.has(key))) fail("usage", "Use only the options for hosted upstream preview|set|clear|verify shown in --help; secret inputs belong only to set.");
-	const { origin, token, name } = wakeCredential(o, true);
-	if (!(await capabilities({ "control-url": origin })).upstream) fail("unsupported", "This service does not expose upstream configuration. Run hosted capabilities --json before selecting an operation.");
-	const path = `/api/v1/agents/${encodeURIComponent(name)}/upstream`;
-	const current = await request(origin, path, { token });
-	if (!Number.isSafeInteger(current.version) || typeof current.configured !== "boolean") fail("invalid_response", "No valid upstream version was returned. Run hosted upstream preview --agent NAME --json before retrying.");
-	if (sub === "preview") return { ok: true, code: "upstream", version: current.version, configured: current.configured, next: "Review this version, then pass --version N to set, clear or verify. Addresses and credentials are never printed." };
-	if (!/^(0|[1-9][0-9]*)$/.test(String(o.version ?? "")) || !Number.isSafeInteger(Number(o.version))) fail("version", "Pass --version N from hosted upstream preview --agent NAME --json; no version is selected automatically.");
-	if (Number(o.version) !== current.version) fail("conflict", "Upstream settings changed. Run hosted upstream preview --agent NAME --json, review the version and repeat the explicit operation.");
-	const secretInputs = Object.keys(o).some(k => /^(?:upstream-token|access-client)/.test(k));
-	if (sub !== "set" && (o.url || secretInputs)) fail("usage", "Omit address and secret inputs for clear or verify. Read hosted upstream preview --json first.");
+	const allowed = new Set(["agent", "json", "control-url", ...(sub === "preview" ? [] : ["version"]), ...(sub === "set" ? ["url", "upstream-token-file", "upstream-token-env", "access-client-id-file", "access-client-id-env", "access-client-secret-file", "access-client-secret-env"] : [])]);
+	if (Object.keys(o).some(key => !allowed.has(key))) fail("usage", "Use only the options for hosted upstream preview|set|clear|verify shown in --help; secret inputs belong only to set.");
+	if (sub !== "preview" && (!/^(0|[1-9][0-9]*)$/.test(String(o.version ?? "")) || !Number.isSafeInteger(Number(o.version)))) fail("version", "Pass --version N from hosted upstream preview --agent NAME --json; no version is selected automatically.");
 	let body = { version: Number(o.version) };
 	if (sub === "set") {
 		const url = String(o.url || "");
@@ -306,9 +297,18 @@ export async function upstream(sub, o = {}) {
 		body = { ...body, url, token: secret(o, "upstream-token", "UPSTREAM_TOKEN"), accessClientId: secret(o, "access-client-id", "UPSTREAM_ACCESS_CLIENT_ID"), accessClientSecret: secret(o, "access-client-secret", "UPSTREAM_ACCESS_CLIENT_SECRET") };
 		if (Boolean(body.accessClientId) !== Boolean(body.accessClientSecret)) fail("access", "Supply both Access credentials through protected files or named environment variables. A new address requires both.");
 	}
+	const { origin, token, name } = wakeCredential(o, true);
+	if (!(await capabilities({ "control-url": origin })).upstream) fail("unsupported", "This service does not expose upstream configuration. Run hosted capabilities --json before selecting an operation.");
+	const path = `/api/v1/agents/${encodeURIComponent(name)}/upstream`;
+	const current = await request(origin, path, { token });
+	if (!Number.isSafeInteger(current.version) || typeof current.configured !== "boolean") fail("invalid_response", "No valid upstream version was returned. Run hosted upstream preview --agent NAME --json before retrying.");
+	if (sub === "preview") return { ok: true, code: "upstream", version: current.version, configured: current.configured, next: "Review this version, then pass --version N to set, clear or verify. Addresses and credentials are never printed." };
+
+	if (Number(o.version) !== current.version) fail("conflict", "Upstream settings changed. Run hosted upstream preview --agent NAME --json, review the version and repeat the explicit operation.");
+
 	const result = await request(origin, sub === "verify" ? `${path}/verify` : path, { token, method: sub === "verify" ? "POST" : sub === "clear" ? "DELETE" : "PUT", body });
 	const reasons = ["reachable", "access_credentials_missing", "access_rejected", "upstream_auth_missing", "upstream_auth_rejected", "tunnel_down", "upstream_unavailable", "network", "unexpected_response", "misconfigured"];
-	const ok = result.ok === true;
+	const ok = result.ok === true && (sub === "verify" ? result.reason === "reachable" : sub === "clear" ? result.removed === true : result.saved === true);
 	return { ok, code: sub === "verify" ? reasons.includes(result.reason) ? result.reason : "unexpected_response" : ok ? sub === "clear" ? "removed" : "saved" : "failed", ...(Number.isSafeInteger(result.version) ? { version: result.version } : {}), next: sub === "verify" ? ok ? "The saved upstream is reachable. You may pair and send a message." : "Check the connection layer named by code, then verify again. Keep Access and agent authentication enabled." : "Run hosted upstream preview --json, then verify with its explicit version before pairing." };
 }
 
