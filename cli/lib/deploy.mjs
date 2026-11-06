@@ -205,7 +205,7 @@ export function deploySecretsFromEnv() {
 
 const csv = (s) => String(s || "").split(",").map((x) => x.trim()).filter(Boolean);
 
-/** Save init/deploy flags. Returns { from, to } when the public URL switches between a custom domain and
+/** Validate init/deploy flags, check Node before writing, then save them. Returns { from, to } when the public URL switches between a custom domain and
  *  workers.dev (or to another custom domain), so the caller can tell the user what changed. */
 function applyFlags(o) {
 	const upd = {};
@@ -275,6 +275,8 @@ function applyFlags(o) {
 	if (upd.A2A_AGENT_SKILLS) {
 		try { if (!Array.isArray(JSON.parse(upd.A2A_AGENT_SKILLS))) throw 0; } catch { die("--agent-skills must be a JSON array of A2A AgentSkill objects"); }
 	}
+	// Report local input errors before Node guidance, but never save or deploy on unsupported Node.
+	checkNode();
 	C.saveConfig(upd);
 	return switched;
 }
@@ -564,7 +566,6 @@ function deployedBase() {
 }
 
 export async function init(o) {
-	checkNode();
 	const prevUpstream = C.fileConfig().A2A_UPSTREAM_URL || "";
 	const switched = applyFlags(o);
 	const upstreamSecrets = await upstreamTokenCheck(o, { upstreamChanged: (C.get("A2A_UPSTREAM_URL") || "") !== prevUpstream });
@@ -704,7 +705,6 @@ export async function upstreamTokenCheck(o, { upstreamChanged = false } = {}) {
 }
 
 export async function deploy(o) {
-	checkNode();
 	if (!C.get("A2A_D1_ID")) die(`no saved deployment; run \`${CLI} init\` first`);
 	// init saves A2A_WORKER_NAME before it creates the D1 database, so a saved D1 without a name is a hand-edited config:
 	// refuse rather than guess, so a redeploy never creates a second Worker next to the one this config deployed.

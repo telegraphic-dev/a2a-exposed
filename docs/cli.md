@@ -14,6 +14,11 @@ Config is `~/.config/a2a-exposed/config.env` (chmod 600), or `$XDG_CONFIG_HOME/a
 
 From a checkout: `node <checkout>/cli/bin/a2a-exposed.mjs <command>`.
 
+Local deployment and option errors are reported before the Node version check.
+For example, `deploy` without saved deployment settings reports `no saved deployment`
+even on older Node. Valid deployment requests still stop before writing configuration
+or calling Cloudflare when Node is older than 22.18.
+
 ## Automation
 
 Supply required choices through command options or named configuration inputs.

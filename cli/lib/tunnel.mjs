@@ -296,8 +296,8 @@ export function preflight(o) {
 }
 
 export async function create(o) {
-	D.checkNode();
 	const dir = needDeployment(o);
+	D.checkNode();
 	if (tunnelStarted() && !tunnelComplete()) return resume(dir, o, {});
 	const { preset, origin, wpath } = preflight(o);
 	if (o.preset && o.preset !== C.get("WAKE_PRESET", "generic"))
