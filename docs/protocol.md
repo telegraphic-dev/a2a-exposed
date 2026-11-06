@@ -32,6 +32,8 @@ The claim and the first task are one transaction. `conversation_owners` has one 
 
 `ListTaskPushNotificationConfig` and `ListTaskPushNotificationConfigs` list the configs stored on that task for the calling peer. The 1.0 result is `{ configs, nextPageToken }`. `tasks/pushNotificationConfig/list` returns the array. `DeleteTaskPushNotificationConfig` and `tasks/pushNotificationConfig/delete` remove one config by id. Deleting a config that is already gone succeeds. A missing id is `-32602`. Another peer's task is `-32001`. The façade still refuses push notification calls (`-32003` after that task check).
 
+Direct A2A reply messages marked with `a2a.exposed/reply-delivery` in request or message metadata are stored as completed tasks. Their text and metadata remain available in history and `inbox --all`; they do not appear as open work or schedule an inbound wake. The marker does not grant access to another peer's task or context.
+
 ## Streaming
 
 Work is asynchronous. The peer polls `GetTask`, or registers a push URL. `SendStreamingMessage` answers JSON-RPC `-32004`.

@@ -55,8 +55,10 @@ async function fixture(t: Parameters<typeof test>[1] extends (t: infer T) => unk
 	byId.set("id-alice", a); byId.set("id-bob", b);
 	store.set("tenant:alice", JSON.stringify({ id: "id-alice", status: "active", region: "default", version: 1 }));
 	store.set("tenant:bob", JSON.stringify({ id: "id-bob", status: "active", region: "default", version: 1 }));
-	const owner = (ctx: TenantContext, accountId: string, method: string, path: string, body?: unknown) =>
-		runOwnerRpc(ctx, ectx as never, { accountId, method, path, ...(body === undefined ? {} : { body }) });
+	const owner = (ctx: TenantContext, accountId: string, method: string, path: string, body?: unknown) => {
+		const url = new URL(path, ctx.PUBLIC_URL);
+		return runOwnerRpc(ctx, ectx as never, { accountId, method, path: url.pathname, query: Object.fromEntries(url.searchParams), ...(body === undefined ? {} : { body }) });
+	};
 	const issue = async (ctx: TenantContext, ownerToken: string, label: string) => {
 		const r = await dispatch(new Request(ctx.PUBLIC_URL + "/owner/peers", { method: "POST", headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" }, body: JSON.stringify({ label }) }), ctx, ectx as never);
 		return (await r.json() as { token: string }).token;
@@ -71,7 +73,7 @@ async function fixture(t: Parameters<typeof test>[1] extends (t: infer T) => unk
 		assert.equal(r.status, 200, JSON.stringify(data));
 		return data.result.id as string;
 	};
-	return { a, b, dbA, dbB, owner, sendToBob, cards, missingCard() { missingCard = true; }, get directPosts() { return directPosts; }, get aborted() { return aborted; }, blockDirect() {
+	return { a, b, dbA, dbB, owner, sendToBob, bobAtAlice, otherAtAlice: () => issue(a, ownerA, "other"), cards, missingCard() { missingCard = true; }, get directPosts() { return directPosts; }, get aborted() { return aborted; }, blockDirect() {
 		let release!: () => void;
 		hold = new Promise<void>((resolve) => { release = resolve; });
 		const started = new Promise<void>((resolve) => { posted = resolve; });
@@ -91,15 +93,20 @@ test("reply delivers once to an exact paired peer in the same context and a dire
 	assert.equal(JSON.stringify(first.body).includes("a2aow_"), false);
 	assert.equal(s.directPosts, 1);
 
-	const inbox = await s.owner(s.a, "acct-alice", "GET", "/owner/inbox");
+	const inbox = await s.owner(s.a, "acct-alice", "GET", "/owner/inbox?all=1");
 	const delivered = (inbox.body as any[]).find((row) => row.text === "answer");
 	assert.equal(delivered.contextId, "ctx-direct");
+	assert.equal(delivered.state, "completed");
+	assert.deepEqual((await s.dbA.prepare("SELECT * FROM wakes").all()).results, []);
+	const openInbox = await s.owner(s.a, "acct-alice", "GET", "/owner/inbox");
+	assert.deepEqual(openInbox.body, []);
 	const stored = await s.dbA.prepare("SELECT metadata_json FROM tasks WHERE id = ?").bind(delivered.taskId).first() as { metadata_json?: string };
 	const metadata = JSON.parse(stored.metadata_json || "{}");
 	assert.deepEqual(metadata["a2a.exposed/reply-delivery"].taskId, taskId);
 
 	const noLoop = await s.owner(s.a, "acct-alice", "POST", "/owner/mcp/reply", { taskId: delivered.taskId, text: "ack", state: "completed" });
-	assert.equal((noLoop.body as any).structuredContent.status, "stored-only");
+	assert.equal((noLoop.body as any).isError, true);
+	assert.match(String((noLoop.body as any).text), /already completed/);
 	assert.equal(s.directPosts, 1, "a directly delivered reply is never delivered back");
 
 	const retry = await s.owner(s.b, "acct-bob", "POST", "/owner/mcp/reply", { taskId, text: "answer", state: "completed" });
@@ -219,3 +226,36 @@ test("reply discovers one canonical card and uses the paired base when it is mis
 	assert.deepEqual(s.cards, ["/.well-known/agent-card.json"]);
 	assert.equal(s.directPosts, 1);
 });
+
+for (const version of ["0.3", "1.0"]) {
+	for (const placement of ["request", "message"]) {
+		test(`direct reply metadata on ${placement} auto-completes without waking (${version})`, async (t) => {
+			const s = await fixture(t as never);
+			const contextId = "ctx-marker";
+			const marker = { "a2a.exposed/reply-delivery": { taskId: "remote-task", messageId: "remote-message", state: "working" } };
+			const send = async (metadata: unknown, taskId?: string, token = s.bobAtAlice) => {
+				const message = { role: version === "1.0" ? "ROLE_USER" : "user", messageId: crypto.randomUUID(), contextId,
+					parts: [{ kind: "text", text: "reply text" }], ...(taskId ? { taskId } : {}), ...(placement === "message" ? { metadata } : {}) };
+				const r = await dispatch(new Request(s.a.PUBLIC_URL, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+					body: JSON.stringify({ jsonrpc: "2.0", id: "marker", method: version === "1.0" ? "SendMessage" : "message/send", params: { message, ...(placement === "request" ? { metadata } : {}) } }) }), s.a, ectx as never);
+				return await r.json() as any;
+			};
+			const result = await send(marker);
+			const task = version === "1.0" ? result.result.task : result.result;
+			assert.equal(task.status.state, version === "1.0" ? "TASK_STATE_COMPLETED" : "completed");
+			assert.deepEqual(task.metadata, marker);
+			assert.deepEqual((await s.owner(s.a, "acct-alice", "GET", "/owner/inbox")).body, []);
+			assert.deepEqual((await s.dbA.prepare("SELECT * FROM wakes").all()).results, []);
+			const history = await s.owner(s.a, "acct-alice", "GET", `/owner/history/${contextId}?from=bob`);
+			assert.match(JSON.stringify(history.body), /reply text/);
+			const unauthorized = await send(marker, task.id, await s.otherAtAlice());
+			assert.equal(unauthorized.error.code, -32001);
+			for (const metadata of [{ other: {} }, { "a2a.exposed/reply-delivery": "completed" }]) {
+				const normal = await send(metadata);
+				assert.equal((version === "1.0" ? normal.result.task : normal.result).status.state, version === "1.0" ? "TASK_STATE_SUBMITTED" : "submitted");
+			}
+			assert.equal(((await s.owner(s.a, "acct-alice", "GET", "/owner/inbox")).body as any[]).length, 2);
+			assert.equal((await s.dbA.prepare("SELECT COUNT(*) AS n FROM wakes").first() as any).n, 1);
+		});
+	}
+}
