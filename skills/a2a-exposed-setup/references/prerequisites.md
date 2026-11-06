@@ -10,7 +10,7 @@
   - **nvm:** `nvm install 22 && nvm use 22`. **fnm:** `fnm install 22 && fnm use 22`.
   - **Official installer or binaries:** [nodejs.org/en/download](https://nodejs.org/en/download) (a tarball unpacked under `~/.local/opt`, with its `bin/` put first on `PATH`, needs no root).
 
-  Then `node --version` must print v22.18.0 or newer. The CLI's version error prints the same list.
+  Then `node --version` must print v22.18.0 or newer. The CLI's version error prints the same list. Local option and missing-deployment errors appear before that version check; fix the reported error and use Node 22.18+ before deploying.
 - **Choose hosting before Cloudflare login.** Offer [hosted](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#hosted-inbox) first when the human has no Cloudflare account or no preference. Hosted needs no Cloudflare login. Continue below only when the human chooses self-hosting.
 - **Cloudflare login, device-code flow.** Check this before `init`. A saved `CF_PROFILE` or `CLOUDFLARE_API_TOKEN` selects credentials; `npx cf auth whoami` identifies the account. Authentication is not consent to deploy. Show the human the selected account name/id privately, explain the [resource plan](deploy.md#before-cloudflare-changes), and wait for an explicit yes before any account changes. If authentication or deployment fails, name the reason and offer hosted; see [troubleshooting](troubleshooting.md). No global `cf` is required: `npx cf` works, and the login is stored per user (`~/.config/cloudflare`), so every `cf` binary sees it.
   ```bash

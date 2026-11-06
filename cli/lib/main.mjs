@@ -25,6 +25,7 @@ Usage: npx -y a2a-exposed@latest <command> [options]
        --help, -h                    print this help
 
 Setup options: --skip-install skips dependency installation when dependencies already exist.
+Local option and missing-deployment errors appear before Node version guidance; deployment still requires Node 22.18+.
 
 Hosted setup:
   hosted capabilities --json   list setup scopes, wake presets and service capabilities
