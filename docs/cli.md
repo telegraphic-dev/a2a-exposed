@@ -97,7 +97,7 @@ Wake secrets are read from `WAKE_WEBHOOK_URL`, `WAKE_WEBHOOK_KEY`, and `WAKE_HMA
 
 | Command | Effect |
 | --- | --- |
-| `wake set` | Self-hosted: save wake settings, upload secrets from the environment, redeploy. Flags: `--preset`, `--agent-id`, `--key-header`, `--key-prefix`, `--body-template`, `--cli-command`, `--debounce`, `--busy`, `--max-per-hour`. A hosted config without `--agent` stops with dashboard Wake settings and hosted MCP `set_wake` guidance, without network calls or local changes |
+| `wake set` | Self-hosted: save wake settings, upload secrets from the environment, redeploy. Flags: `--preset`, `--agent-id`, `--key-header`, `--key-prefix`, `--body-template`, `--cli-command`, `--debounce`, `--busy`, `--max-per-hour`. Hosted: use the configured address and owner token to test then save through the hosted service; no Cloudflare deploy. Read presets with `hosted capabilities --json`; supply `WAKE_WEBHOOK_URL` or `--url` and protected secrets |
 | `wake preview` | Rendered request with credentials masked, plus SHA-256 fingerprints. Export `WAKE_WEBHOOK_URL`, `WAKE_WEBHOOK_KEY`, and `WAKE_HMAC_SECRET` in this shell. `match` means the exported value is the one on the Worker. `DIFFERENT` means they differ: the variable is absent from this shell, or the upload is still propagating (about 15 to 40 seconds after `wake set`, `wake unset`, or `tunnel create`). Wait about 30 seconds and run it again |
 | `wake fingerprint` | Fingerprints of `WAKE_*` exported in this shell |
 | `wake check [--local-url URL] [--json]` | Hermes delivery diagnostic: unsigned loopback POST must return 401/403 before the signed Worker test requires 2xx. Exits 1 on failure; no inbox task or receiver execution proof. See the [recipe](hermes.md) |
@@ -117,11 +117,29 @@ For a webhook that only listens locally. Needs Zero Trust and a zone on the acco
 
 A hosted-only config has `A2A_BASE_URL` and `A2A_OWNER_TOKEN`, with no Worker or D1 metadata. `status --json` reports `deployment: "hosted"`, checks the card, health and owner API, and reports wake settings when available. The hosted service manages its Worker version. `tunnel create|status|rm` provisions only self-hosted infrastructure; for a hosted address, configure a public HTTPS webhook through the hosted service or use polling if Tunnel delivery is unavailable. To delete a hosted agent, use its hosted settings and deletion confirmation. `uninstall` leaves the hosted agent and local config untouched.
 
-For this config, plain `wake set` exits 1 with `code: "hosted_config"` in
-`--json` output. Use dashboard Wake settings or hosted MCP `set_wake`; the human
-enters wake secrets on the confirmation page. To use the scoped hosted CLI,
-read `hosted capabilities --json`, then `hosted list --json` and select an
-explicit `--agent NAME` for `wake set`. See [hosted CLI setup](#hosted-setup-from-the-cli).
+For an existing hosted address, the two-entry [config.env example](getting-started.md#hosted-inbox)
+is enough for `wake preview|test|set --json`. The CLI selects the agent from
+`A2A_BASE_URL` and uses its matching owner token; no setup grant or `--agent` is
+needed. The service origin defaults to `https://a2a.exposed`; use `--control-url`
+for another compatible service. An explicit `--agent` cannot borrow a different
+agent's owner token. Scoped setup without an owner token still selects an
+explicit agent from `hosted list --json`.
+
+```bash
+npx -y a2a-exposed@latest hosted capabilities --json
+npx -y a2a-exposed@latest wake preview --json
+npx -y a2a-exposed@latest wake set --preset grok-bot --key-env WAKE_WEBHOOK_KEY --json
+npx -y a2a-exposed@latest wake test --json
+```
+
+Provide `WAKE_WEBHOOK_URL` and the key through the routine's protected secret
+store before running these commands. `wake set` tests the draft before saving;
+`wake test` tests without saving. With no draft overrides, testing reuses the
+saved URL, preset and same-destination credentials. Neither writes wake secrets
+to local config nor deploys a Worker. A missing hosted URL names `wake set` and
+the protected inputs. Unsupported API or refused owner access points to dashboard
+Wake settings or hosted MCP `set_wake`, never self-hosted `init`/`deploy`.
+See [hosted CLI setup](#hosted-setup-from-the-cli) for scoped grants and references.
 
 ### `status`, `upstream`, `url`, `config`
 

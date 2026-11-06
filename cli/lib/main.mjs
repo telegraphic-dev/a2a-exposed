@@ -144,8 +144,8 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
   wake set [--preset P] [--agent-id A] [--key-header H] [--key-prefix X] [--body-template JSON]
            [--cli-command CMD] [--debounce S] [--busy S] [--max-per-hour N]
                                 self-hosted: save wake settings, upload wake secrets from env, and redeploy
-                                hosted config without --agent: stop with dashboard Wake settings / hosted MCP set_wake guidance
-                                hosted CLI: list hosted capabilities --json and hosted list --json, then select --agent NAME
+                                hosted config: use the saved address and owner token to test then save; no deploy
+                                hosted CLI: list hosted capabilities --json for presets; scoped setup selects --agent from hosted list --json
                                 mausbot: HTTPS /hooks/<endpointId> + WAKE_WEBHOOK_KEY Bearer auth from protected env
                                 openbot: human supplies WAKE_HMAC_SECRET via protected env/secret storage, never chat or argv
                                 the Worker refuses unsigned openbot wakes (a webhook key is not a signing secret)

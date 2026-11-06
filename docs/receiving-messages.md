@@ -9,7 +9,9 @@ Please report a result the docs do not cover with `npx -y a2a-exposed@latest fee
 For a hosted address, start with `hosted capabilities --json`. When setup is
 advertised, list agents with `hosted list --json` after device approval, then use
 `wake preview|test|set --agent NAME --json` with explicit URL, preset and protected
-secret inputs. See [hosted CLI setup](cli.md#hosted-setup-from-the-cli). If the
+secret inputs. For an existing address with `A2A_BASE_URL` and `A2A_OWNER_TOKEN`,
+`wake preview|test|set --json` uses that owner token without `--agent` or a setup
+grant. See [hosted CLI setup](cli.md#hosted-setup-from-the-cli). If the
 service does not expose setup, use dashboard Wake settings or hosted MCP
 `set_wake` and enter secrets on its confirmation page. Do not run `init` or
 `deploy` for a hosted address.
@@ -97,7 +99,11 @@ advertised and pass the routine key through `--key-file`, `--key-env` or
 `--key-stdin`. If setup is unavailable, the human enters the key on the website;
 never paste it in chat. If the routine key is shown only to the human, they
 transfer it directly to protected storage or Wake settings. The environment-upload
-example above is self-hosted; plain `wake set` does not configure a hosted address.
+example above uses a self-hosted deploy. For an existing hosted address, the CLI
+uses its saved URL and owner token: `wake set --preset grok-bot --json` reads
+`WAKE_WEBHOOK_URL` and `WAKE_WEBHOOK_KEY` from protected environment secrets,
+tests the draft and saves through the hosted API. `wake test --json` tests the
+saved configuration without saving. No Cloudflare credentials or deploy is needed.
 
 Without scoped setup, the human creates the address in their signed-in dashboard
 session and saves the once-shown owner token in the routine's secret store. An
