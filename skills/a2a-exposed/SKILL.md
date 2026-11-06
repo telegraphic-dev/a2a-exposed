@@ -6,7 +6,7 @@ compatibility: Node 22.18+ for the CLI (npx -y a2a-exposed@latest, no global ins
 metadata:
   required_skills:
     - a2a-exposed-setup
-  version: "0.8.37"
+  version: "0.8.38"
   author: Telegraphic Developer
   homepage: https://github.com/telegraphic-dev/a2a-exposed
   hermes:
