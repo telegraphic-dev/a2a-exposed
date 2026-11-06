@@ -127,7 +127,7 @@ test("cloudflareErrorCode: text and HTML error pages", () => {
 test("ORIGIN_DEFAULTS / HOSTED_PRESETS", () => {
 	assert.deepEqual(ORIGIN_DEFAULTS["openclaw-wake"], ["http://127.0.0.1:18789", "/hooks/wake"]);
 	assert.deepEqual(ORIGIN_DEFAULTS["openclaw-agent"], ["http://127.0.0.1:18789", "/hooks/agent"]);
-	assert.deepEqual(ORIGIN_DEFAULTS.hermes, ["http://127.0.0.1:8644", ""]);
+	assert.deepEqual(ORIGIN_DEFAULTS.hermes, ["http://127.0.0.1:8644", "/webhooks/a2a-wake"]);
 	assert.ok(HOSTED_PRESETS.includes("grok-bot") && HOSTED_PRESETS.includes("claude-code"));
 });
 
@@ -219,8 +219,10 @@ async function tunnelEnv(t, { preset = "openclaw-wake", hostname = "agent.exampl
 	const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(A2A_|PEER_|CLOUDFLARE_|CF_)|WAKE_/.test(k)));
 	Object.assign(env, { A2A_CONFIG_DIR: cfg, STUB_DIR: dir, A2A_NO_UPDATE_CHECK: "1", ...stub });
 	env.NODE_OPTIONS = [env.NODE_OPTIONS, `--import ${NET_STUB}`].filter(Boolean).join(" ");
-	const cli = (args, extraEnv = {}) => new Promise((resolve) => {
-		const ch = spawn(process.execPath, [BIN, ...args], { env: { ...env, ...extraEnv }, stdio: ["ignore", "pipe", "pipe"] });
+	const cli = (args, extraEnv = {}, input = "") => new Promise((resolve) => {
+		const ch = spawn(process.execPath, [BIN, ...args], { env: { ...env, ...extraEnv }, stdio: ["pipe", "pipe", "pipe"] });
+		ch.stdin.on("error", () => {});
+		ch.stdin.end(input);
 		let stdout = "", stderr = "";
 		ch.stdout.on("data", (d) => (stdout += d));
 		ch.stderr.on("data", (d) => (stderr += d));
@@ -332,8 +334,8 @@ test("tunnel create refuses hosted presets, a missing --tunnel-path, accounts wi
 	assert.equal(r.status, 1);
 	assert.match(r.stderr, /only for local-only webhooks/);
 
-	const hermes = await tunnelEnv(t, { preset: "hermes" });
-	r = await hermes.cli(["tunnel", "create"]);
+	const generic = await tunnelEnv(t, { preset: "generic" });
+	r = await generic.cli(["tunnel", "create", "--tunnel-origin", "http://127.0.0.1:8644"]);
 	assert.equal(r.status, 1);
 	assert.match(r.stderr, /--tunnel-path is required/);
 
@@ -920,4 +922,90 @@ test("tunnel create --zero-trust-org creates the organization when Access is off
 	const org = s.calls().find((c) => c.cmd.startsWith("zero-trust organization create"));
 	assert.deepEqual(org.body, { name: "myteam", auth_domain: "myteam.cloudflareaccess.com" });
 	assert.match(r.stdout.trim(), /^https:\/\/wake-[a-z]+-[a-z]+-[0-9a-f]{4}\.example\.com\/hooks\/wake$/);
+});
+
+
+test("Hermes route and stdin secret use protected bulk file, never argv/output/config", async (t) => {
+	const s = await tunnelEnv(t, { preset: "hermes" });
+	const secret = "dummy-hmac-sensitive-value";
+	const r = await s.cli(["tunnel", "create", "--preset", "hermes", "--hermes-route", "custom-route", "--hmac-secret-stdin"], {}, secret + "\n");
+	assert.equal(r.status, 0, r.stderr);
+	assert.equal(s.config().A2A_TUNNEL_PATH, "/webhooks/custom-route");
+	assert.equal(s.config().A2A_TUNNEL_ORIGIN, "http://127.0.0.1:8644");
+	const upload = s.calls().find(c => c.cmd.startsWith("workers secrets bulk"));
+	assert.equal(upload.file.secrets.WAKE_HMAC_SECRET.text, secret);
+	assert.ok(!s.calls().some(c => c.cmd.includes(secret)));
+	assert.ok(!(r.stdout + r.stderr + JSON.stringify(s.config())).includes(secret));
+	assert.match(r.stderr, /hermes webhook subscribe custom-route/);
+	assert.match(r.stderr, /hermes cron create/);
+	assert.match(r.stderr, /wake check/);
+	const resume = await s.cli(["tunnel", "create", "--preset", "hermes", "--hmac-secret-stdin"], {}, secret);
+	assert.equal(resume.status, 0, resume.stderr);
+	assert.ok(!(resume.stdout + resume.stderr).includes(secret));
+});
+
+test("Hermes inputs fail before resource creation; default path is consistent", async (t) => {
+	for (const args of [
+		["--hermes-route", "../bad"], ["--hermes-route", "x", "--tunnel-path", "/x"], ["--hmac-secret-stdin"],
+	]) {
+		const s = await tunnelEnv(t, { preset: "hermes" });
+		const r = await s.cli(["tunnel", "create", ...args]);
+		assert.equal(r.status, 1, r.stderr);
+		assert.equal(s.calls().length, 0);
+	}
+	const s = await tunnelEnv(t, { preset: "hermes" });
+	const r = await s.cli(["tunnel", "create", "--preset", "hermes"], { WAKE_HMAC_SECRET: "dummy-secret" });
+	assert.equal(r.status, 0, r.stderr);
+	assert.equal(s.config().A2A_TUNNEL_PATH, "/webhooks/a2a-wake");
+});
+
+
+test("tunnel zones lists choices as JSON without creating resources", async t => {
+	const s = await tunnelEnv(t);
+	const r = await s.cli(["tunnel", "zones", "--json"]);
+	assert.equal(r.status, 0, r.stderr);
+	assert.equal(JSON.parse(r.stdout)[0].name, "example.com");
+	assert.ok(s.calls().every(c => c.cmd.startsWith("zones list")));
+});
+
+
+test("wake check CLI returns structured delivery evidence without private response bodies", async t => {
+	const s = await tunnelEnv(t, { preset: "hermes" });
+	s.setPreview({ status: 202, configured: true });
+	let requests = 0;
+	const local = http.createServer((req, res) => {
+		requests++;
+		assert.equal(req.headers["x-webhook-signature-v2"], undefined);
+		res.writeHead(401); res.end("private receiver response");
+	});
+	await new Promise(resolve => local.listen(0, "127.0.0.1", resolve));
+	t.after(() => local.close());
+	const r = await s.cli(["wake", "check", "--local-url", `http://127.0.0.1:${local.address().port}/webhooks/a2a-wake`, "--json"]);
+	assert.equal(r.status, 0, r.stderr);
+	assert.equal(requests, 1);
+	assert.deepEqual(JSON.parse(r.stdout), { unsigned: { status: 401, refused: true }, signed: { status: 202, delivered: true }, receiverExecution: "not-verified" });
+	assert.ok(!(r.stdout + r.stderr).includes("private receiver response"));
+	assert.match(r.stderr, /execution is not verified/);
+});
+
+test("Hermes preset mismatch, invalid stdin and resumed route changes refuse before cf mutation", async t => {
+	const mismatch = await tunnelEnv(t);
+	let r = await mismatch.cli(["tunnel", "create", "--preset", "hermes"]);
+	assert.equal(r.status, 1, r.stderr);
+	assert.match(r.stderr, /wake set --preset hermes/);
+	assert.equal(mismatch.calls().length, 0);
+	for (const input of ["", "first\nsecond", "x".repeat(4097)]) {
+		const s = await tunnelEnv(t, { preset: "hermes" });
+		r = await s.cli(["tunnel", "create", "--hmac-secret-stdin"], {}, input);
+		assert.equal(r.status, 1, r.stderr);
+		assert.match(r.stderr, /non-empty line/);
+		assert.equal(s.calls().length, 0);
+	}
+	const s = await tunnelEnv(t, { preset: "hermes" });
+	assert.equal((await s.cli(["tunnel", "create"])).status, 0);
+	const before = s.calls().length;
+	r = await s.cli(["tunnel", "create", "--hermes-route", "new-route"]);
+	assert.equal(r.status, 1, r.stderr);
+	assert.match(r.stderr, /different origin\/path/);
+	assert.equal(s.calls().length, before);
 });

@@ -744,7 +744,35 @@ function guardTunnelUrl() {
 	if (host !== th) die(`this deployment wakes through the tunnel https://${th} (tunnel create); unset WAKE_WEBHOOK_URL, or run \`${CLI} tunnel rm\` first`);
 }
 
+/** Delivery diagnostic only: a test wake has no task or execution receipt. */
+export async function checkWake(o, { request = fetch, callOwner = owner } = {}) {
+	if (C.get("WAKE_PRESET") !== "hermes") die("wake check requires the hermes preset; inspect wake preview first, then use wake set --preset hermes");
+	const local = o["local-url"] || `${C.get("A2A_TUNNEL_ORIGIN", "http://127.0.0.1:8644")}${C.get("A2A_TUNNEL_PATH", "/webhooks/a2a-wake")}`;
+	let url;
+	try { url = new URL(local); } catch { die("--local-url must be a loopback HTTP(S) webhook URL"); }
+	if (!["http:", "https:"].includes(url.protocol) || !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) || url.username || url.password || url.search || url.hash)
+		die("--local-url must be a loopback HTTP(S) webhook URL without credentials, query or fragment");
+	let status;
+	try {
+		const response = await request(url, { method: "POST", headers: { "content-type": "application/json", "user-agent": "a2a-exposed-cli" },
+			body: JSON.stringify({ event_type: "a2a_wake", kind: "test" }), redirect: "manual", signal: AbortSignal.timeout(10_000) });
+		status = response.status;
+		await response.body?.cancel();
+	} catch { die("unsigned local check could not reach the webhook; start the Hermes gateway and check --local-url"); }
+	const result = { unsigned: { status, refused: status === 401 || status === 403 }, signed: null, receiverExecution: "not-verified" };
+	if (result.unsigned.refused) {
+		const signed = await callOwner("POST", "/owner/wake/test", {});
+		result.signed = { status: Number.isInteger(signed.status) ? signed.status : null, delivered: signed.configured !== false && Number.isInteger(signed.status) && signed.status >= 200 && signed.status < 300 };
+	}
+	console.log(JSON.stringify(result, null, 2));
+	if (!result.unsigned.refused || !result.signed?.delivered) {
+		process.exitCode = 1;
+		console.error(!result.unsigned.refused ? "unsigned local POST must return 401 or 403; check the route's HMAC secret. Signed delivery was skipped." : "signed Worker delivery failed; run wake preview and tunnel status, then retry after secrets propagate");
+	} else console.error("delivery checks passed; receiver execution is not verified. Test wakes create no inbox task; inspect the Hermes job output for execution.");
+}
+
 export async function wake(sub, o) {
+	if (sub === "check") return checkWake(o);
 	if (sub === "fingerprint") {
 		const fp = localFingerprints();
 		if (!Object.values(fp).some(Boolean)) die(`no ${WAKE_SECRETS.join(" / ")} in the environment`);
@@ -796,5 +824,5 @@ export async function wake(sub, o) {
 		if (problems.length) die(`could not remove wake secrets:\n  ${problems.join("\n  ")}`);
 		return console.error("wake secrets removed (wake is now a no-op; use polling)");
 	}
-	die("usage: wake set|unset|test|preview|fingerprint");
+	die("usage: wake set|unset|test|check|preview|fingerprint");
 }

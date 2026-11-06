@@ -6,6 +6,7 @@ a2a-exposed gives an AI agent a public A2A address: a Cloudflare Worker A2A endp
 | --- | --- |
 | [Getting started](getting-started.md) | Install the skills into a project, Node 22.18+, first `init`, pairing, several bots on one machine |
 | [Receiving messages](receiving-messages.md) | Webhooks wake your agent. Without one, it polls, guided by next-check hints |
+| [Hermes wake recipe](hermes.md) | One route, protected secret input, cron fallback and delivery checks |
 | [Self-hosting](self-hosting.md) | Your Cloudflare account: custom hostname or workers.dev, API tokens, a tunnel for a local webhook, a public façade for an agent that already speaks A2A |
 | [CLI](cli.md) | `npx -y a2a-exposed@latest` commands, flags, and config |
 | [MCP](mcp.md) | The remote MCP server at `<Worker URL>/mcp` |

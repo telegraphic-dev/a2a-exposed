@@ -162,6 +162,8 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
                                 30 seconds and run it again
   wake fingerprint              fingerprints (first 12 hex of sha256) of WAKE_* exported in this shell
   wake test                     send a test wake now and print the HTTP status
+  wake check [--local-url URL]   Hermes: require unsigned local 401/403, then Worker test 2xx (delivery only)
+                                Defaults to the saved tunnel origin/path; --json prints both checks
   wake unset                    remove wake secrets (fall back to polling)
                                 handler prompts save autonomous, review-all or escalate mode and owner notices;
                                 see docs/receiving-messages.md for setup and the every 6h webhook fallback
@@ -169,7 +171,7 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
 Tunnel (local-only webhooks: OpenClaw gateway, Hermes, ...; needs Zero Trust/Access and a Cloudflare zone
 anywhere on the account: the A2A endpoint itself can be on workers.dev or a custom hostname)
   tunnel create [--tunnel-zone Z | --tunnel-hostname H] [--tunnel-origin URL] [--tunnel-path /p] [--show-token]
-                [--zero-trust-org TEAM]
+                [--zero-trust-org TEAM] [--preset hermes --hermes-route a2a-wake --hmac-secret-stdin]
                                 named Cloudflare Tunnel + proxied DNS + Access app that admits ONE service token;
                                 the Worker sends that token (CF-Access-Client-Id/Secret) on every wake.
                                 Wake hostname: wake-<word>-<word>-<4 hex>.<zone>, on the A2A endpoint hostname's zone, else the
@@ -181,8 +183,9 @@ anywhere on the account: the A2A endpoint itself can be on workers.dev or a cust
                                 The connector machine needs cloudflared installed
                                 (https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/).
                                 Defaults: openclaw-* -> http://127.0.0.1:18789 /hooks/wake|agent, hermes -> :8644
-                                (pass --tunnel-path /webhooks/<name>). Token -> <config dir>/tunnel-token (chmod 600).
+                                /webhooks/a2a-wake (override with --hermes-route NAME). Token -> <config dir>/tunnel-token (chmod 600).
                                 Worker secrets show up in about 15 to 40 seconds. Wait about 30 seconds and check again
+  tunnel zones [--json]         list available Cloudflare zones before selecting --tunnel-zone
   tunnel status                 tunnel/Access/Worker state + probes (bare request blocked? connector up?)
                                 A network error says DNS may still be propagating; retry in 30 seconds
   tunnel rm                     delete the DNS record, the tunnel, the Access app, and the service token
@@ -366,18 +369,24 @@ Presets: grok-bot | claude-code | openclaw-wake | openclaw-agent | hermes | open
 Config: ${C.CONFIG_FILE}  (override dir with --config-dir DIR or A2A_CONFIG_DIR; env vars override file values)
 Update notice: at most a daily background check of the npm registry; off with A2A_NO_UPDATE_CHECK=1 (or DO_NOT_TRACK=1)`;
 
-const HELP_TUNNEL = `tunnel create|status|rm
+const HELP_TUNNEL = `tunnel create|zones|status|rm
 
 Self-hosted only. Hosted configs use hosted webhook settings or polling. Check status --json first.
 
   tunnel create [--tunnel-zone Z | --tunnel-hostname H] [--tunnel-origin URL] [--tunnel-path /p]
                 [--show-token] [--zero-trust-org TEAM] [--dir DIR | --worker-dir DIR]
+                [--preset hermes --hermes-route a2a-wake --hmac-secret-stdin]
+                                Hermes defaults to :8644/webhooks/a2a-wake. --hermes-route selects another route.
+                                --preset must match the deployed preset (configure with wake set --preset first).
+                                --hmac-secret-stdin reads the existing subscription secret from protected stdin,
+                                never prompts or saves it in config.env. See docs/hermes.md for the receiver recipe.
                                 Named Cloudflare Tunnel, proxied DNS, and an Access app that admits one service token.
                                 The tunnel, the Access app, and the service token are named "a2a-exposed wake <worker>".
                                 The DNS host is wake-<word>-<word>-<4 hex>.<zone> unless --tunnel-hostname is set.
                                 A finished tunnel creates nothing when you run it again. A partial tunnel stops and
                                 asks for tunnel rm. Prints the Access application name and ids, then how to undo it
                                 with tunnel rm. Worker secrets show up in about 15 to 40 seconds. Wait about 30 seconds.
+  tunnel zones [--json]         List active zones before choosing --tunnel-zone; no resource changes.
   tunnel status                 Tunnel, Access, and Worker state, plus two probes.
                                 A network error says DNS may still be propagating; retry in 30 seconds.
                                 Warns about Access only when the bare request returns an HTTP status other than 401 or 403.
@@ -412,7 +421,7 @@ const deployOpts = {
 const SPEC = {
 	hosted: { url: S, version: S, "upstream-token-file": S, "upstream-token-env": S, "access-client-id-file": S, "access-client-id-env": S, "access-client-secret-file": S, "access-client-secret-env": S, name: S, json: B, agent: S, hostname: S, origin: S, path: S, preset: S, "control-url": S, "secret-file": S, "secret-env": S, "secret-from": S, "hermes-home": S, route: S, "token-file": S, "no-run": B },
 	init: { ...deployOpts, ...tunnelOpts, tunnel: B }, deploy: deployOpts,
-	wake: { ...deployOpts, json: B, url: S, "reference-file": S, "reference-env": S, clear: B, version: S, agent: S, "control-url": S, "key-header": S, "key-file": S, "key-env": S, "key-stdin": B, "hmac-secret-file": S, "hmac-secret-env": S, "access-client-id-file": S, "access-client-id-env": S, "access-client-secret-file": S, "access-client-secret-env": S }, tunnel: tunnelOpts,
+	wake: { ...deployOpts, "local-url": S, json: B, url: S, "reference-file": S, "reference-env": S, clear: B, version: S, agent: S, "control-url": S, "key-header": S, "key-file": S, "key-env": S, "key-stdin": B, "hmac-secret-file": S, "hmac-secret-env": S, "access-client-id-file": S, "access-client-id-env": S, "access-client-secret-file": S, "access-client-secret-env": S }, tunnel: { ...tunnelOpts, preset: S, "hermes-route": S, "hmac-secret-stdin": B, json: B },
 	inbox: { context: S, from: S, all: B, json: B },
 	reply: { text: S, stdin: B, state: { type: "string", default: "completed" }, artifact: B, "artifact-name": { type: "string", default: "response" }, force: B },
 	history: { from: S, n: { type: "string", short: "n", default: "50" }, json: B },
@@ -491,7 +500,7 @@ export async function main(argv) {
 				throw e;
 			}
 		case "tunnel": {
-			const sub = need(p[0], "tunnel create|status|rm");
+			const sub = need(p[0], "tunnel create|zones|status|rm");
 			if (p.length > 1) throw new CliError(`tunnel ${sub} takes no arguments (${p.slice(1).join(" ")}). Run \`${CLI} tunnel --help\`.`);
 			return tun.tunnel(sub, o);
 		}
