@@ -36,6 +36,14 @@ Hosted setup:
                                 check one name anonymously before device approval; never lists other agents
   hosted capacity --json      read account room with agents:read (or agents:create); reserves nothing
   hosted list --json           list hosted agents with agents:read or agents:create before choosing an agent
+  hosted upstream preview|set|clear|verify --agent NAME --json
+                                list scopes with hosted capabilities and agents with hosted list first
+                                preview returns version; set/clear/verify require --version N
+                                set takes --url URL and --upstream-token-file FILE|--upstream-token-env VAR,
+                                --access-client-id-file FILE|--access-client-id-env VAR and
+                                --access-client-secret-file FILE|--access-client-secret-env VAR
+                                files require mode 600; defaults UPSTREAM_TOKEN/UPSTREAM_ACCESS_CLIENT_ID/
+                                UPSTREAM_ACCESS_CLIENT_SECRET; never pass secret values as arguments
   hosted create --name NAME --json
                                 create and save the owner credential in this config directory;
                                 use a separate --config-dir for each agent
@@ -400,7 +408,7 @@ const deployOpts = {
 	"workers-dev": B, "workers-dev-subdomain": S, "upstream-token-stdin": B, "no-upstream-token": B, "event-secret-stdin": B,
 };
 const SPEC = {
-	hosted: { name: S, json: B, agent: S, hostname: S, origin: S, path: S, preset: S, "control-url": S, "secret-file": S, "secret-env": S, "secret-from": S, "hermes-home": S, route: S, "token-file": S, "no-run": B },
+	hosted: { url: S, version: S, "upstream-token-file": S, "upstream-token-env": S, "access-client-id-file": S, "access-client-id-env": S, "access-client-secret-file": S, "access-client-secret-env": S, name: S, json: B, agent: S, hostname: S, origin: S, path: S, preset: S, "control-url": S, "secret-file": S, "secret-env": S, "secret-from": S, "hermes-home": S, route: S, "token-file": S, "no-run": B },
 	init: { ...deployOpts, ...tunnelOpts, tunnel: B }, deploy: deployOpts,
 	wake: { ...deployOpts, json: B, url: S, "reference-file": S, "reference-env": S, clear: B, version: S, agent: S, "control-url": S, "key-header": S, "key-file": S, "key-env": S, "key-stdin": B, "hmac-secret-file": S, "hmac-secret-env": S, "access-client-id-file": S, "access-client-id-env": S, "access-client-secret-file": S, "access-client-secret-env": S }, tunnel: tunnelOpts,
 	inbox: { context: S, from: S, all: B, json: B },
@@ -526,6 +534,7 @@ export async function main(argv) {
 			throw new CliError(`unknown peer action ${sub} (announce|forward)`);
 		}
 		case "hosted": {
+			if (p[0] === "upstream" && p.length === 2) return hosted.output(() => hosted.upstream(p[1], o), o);
 			if (p.length === 1 && ["capabilities", "list", "create", "names", "capacity"].includes(p[0])) return hosted.output(() => hosted[p[0]](o), o);
 			if (p.length !== 2 || p[0] !== "link" || !["finish", "create"].includes(p[1])) return linkOutput(linkUsage, o);
 			return linkOutput(() => (p[1] === "create" ? createLink : finishLink)({ ...o, "control-url": o["control-url"] || C.get("CONTROL_URL") }), o);

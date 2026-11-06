@@ -64,3 +64,7 @@ message is retained; other service fields and arbitrary text are omitted.
 `next` says when to run `wake prepare` again with a new protected reference file.
 If no valid delay is supplied, wait for an unused reference to expire. The CLI
 never retries automatically or saves a reference on this refusal.
+
+### Hosted upstream configuration
+
+Read `hosted capabilities --json`, then `hosted list --json`, select an existing agent and run `hosted upstream preview --agent NAME --json`. If the service advertises upstream configuration, set, clear or verify with its explicit `--version N`. Set takes a public HTTPS `--url` and protected `--upstream-token-file`, `--access-client-id-file`, `--access-client-secret-file` inputs (or matching `*-env` names). Never pass raw credentials as arguments or MCP tool inputs. A new address needs a new Access pair. Device grants need `upstream:write` for set/clear and `upstream:test` for verify; the selected agent's owner token also works. Read preview again after every save. MCP uses `set_upstream` and its human confirmation page, then `verify_upstream`.

@@ -330,3 +330,11 @@ one trailing root dot and IDN labels to ASCII. Credentials, ports, non-root
 paths, queries, fragments, IP addresses and malformed labels receive distinct
 local validation reasons before any network request. Invalid hostname input
 is never echoed in the result.
+
+## Hosted upstream configuration
+
+For a hosted service advertising upstream configuration in `hosted capabilities --json`, use `hosted list --json` to choose an existing agent. Approve only the needed `upstream:write` and `upstream:test` scopes with `login --machine NAME --scopes SCOPES`; the agent's saved owner token also authorizes that agent alone.
+
+Run `hosted upstream preview --agent NAME --json` to read `version` and `configured`. Supply that explicit `--version N` to `hosted upstream set --agent NAME --url URL`, `hosted upstream clear --agent NAME`, or `hosted upstream verify --agent NAME`. Read preview again after saving. A version conflict requires another review of the current version; the CLI never retries a write automatically.
+
+Set reads the agent bearer with `--upstream-token-file FILE` or `--upstream-token-env VAR`, and the Access pair with `--access-client-id-file FILE` / `--access-client-id-env VAR` and `--access-client-secret-file FILE` / `--access-client-secret-env VAR`. Files must be regular, mode 600, and at most 4098 bytes. Defaults are the named environment variables `UPSTREAM_TOKEN`, `UPSTREAM_ACCESS_CLIENT_ID` and `UPSTREAM_ACCESS_CLIENT_SECRET`. A new address needs a new Access pair; blank credentials keep saved values only for the same address. Clear removes the address and every upstream credential. Preview and results never print credentials or the saved address. Verify reports a connection layer code and sends no peer message or task. Keep secrets out of arguments, chat and MCP tool inputs.
