@@ -98,6 +98,8 @@ Hosted status points to `hosted capabilities --json` before setup; saved wake se
 
    For long or multi-line text, use `--stdin`: `printf '%s' "$TEXT" | npx -y a2a-exposed@latest reply <taskId> --stdin`. `--artifact` attaches the text as an artifact for non-completed states too. Terminal tasks (`completed`, `rejected`, `failed`, `canceled`) can't be changed without `--force`.
 
+   Push reply results include `httpStatus` only for an exact HTTP status in the 100–599 range; transport error text is not a status. Refused paired endpoints show only their host, without the path or query.
+
    Reply delivery waits at most 18 seconds across discovery and delivery. An identical in-flight retry says the reply is already being delivered. The first recorded result wins, including an uncertain result; a late peer success does not change it. Read history before taking another action; never resend merely because delivery timed out.
 
    Peers see replies through `GetTask`/`tasks/get`, and the Worker also pushes them if the peer registered a push URL. The CLI prints `push -> ... ok|FAILED`.
