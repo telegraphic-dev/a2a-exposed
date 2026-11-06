@@ -35,6 +35,7 @@ const plain: Record<string, string> = {
 	WAKE_BODY_TEMPLATE: v("WAKE_BODY_TEMPLATE"), // generic preset JSON template
 	WAKE_CLI_COMMAND: v("WAKE_CLI_COMMAND"), // how the woken agent runs the CLI (default "npx -y a2a-exposed@latest")
 	WAKE_DEBOUNCE_SECONDS: v("WAKE_DEBOUNCE_SECONDS"),
+	WAKE_BUSY_SECONDS: v("WAKE_BUSY_SECONDS"),
 	WAKE_MAX_PER_HOUR: v("WAKE_MAX_PER_HOUR"),
 	MAX_BODY: v("A2A_MAX_BODY"),
 	RATE_PER_MIN: v("A2A_RATE_PER_MIN"),

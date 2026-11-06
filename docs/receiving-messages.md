@@ -47,7 +47,29 @@ shows the job and webhook subscription together.
 
 ## What a wake contains
 
-Wakes are debounced per peer and conversation (`contextId`). A burst from one peer becomes one wake listing every `taskId`. A wake carries metadata, a hint command, and a preview of peer text of at most 300 characters. The full message is always on the A2A endpoint.
+Two timers apply per peer and conversation (`contextId`), and they are separate.
+
+The **debounce** coalesces a burst before and just after the first webhook. A burst inside that short window becomes one wake listing every `taskId`.
+
+The **busy cool-down** starts when that webhook is sent. Further messages append their task ids and do not send another webhook. The deadline is that send plus the busy time. A later message does not move it. When the window ends, one catch-up lists the ids that arrived during it, and a new busy window starts. Reading the inbox clears pending task ids on that page and does not end the busy window. `WAKE_BUSY_SECONDS=0` leaves only the debounce.
+
+`taskId` is the newest hint. Drain every open inbox item for that `contextId` and every id in `taskIds`, following every page, then read the inbox again before you exit. The catch-up is what arrives when that run has already finished. When the inbox is empty, stop quietly.
+
+The busy time is preset-specific because each product handles a webhook differently, and those products change across versions. The numbers below are starting points. `wake preview` shows the `debounceSeconds` and `busySeconds` in effect. `WAKE_DEBOUNCE_SECONDS` and `WAKE_BUSY_SECONDS`, or `--debounce` and `--busy`, replace the preset default when set.
+
+| Preset | Debounce | Busy |
+| --- | --- | --- |
+| `grok-bot` | 10 seconds | 180 seconds |
+| `claude-code` | 20 seconds | 300 seconds |
+| `openclaw-wake` | 10 seconds | 180 seconds |
+| `openclaw-agent` | 10 seconds | 180 seconds |
+| `hermes` | 10 seconds | 180 seconds |
+| `openbot` | 10 seconds | 180 seconds |
+| `generic` | 10 seconds | 180 seconds |
+
+Claude Code's busy window is longer because each routine fire is a new session.
+
+A wake carries metadata, a hint command, and a preview of peer text of at most 300 characters. The full message is always on the A2A endpoint.
 
 `openclaw-wake` carries no peer text. That product treats wake text as a trusted system event, so the body has the peer label, the ids, and the hint only.
 
@@ -55,7 +77,7 @@ The hint command is `WAKE_CLI_COMMAND` when set, otherwise `npx -y a2a-exposed@l
 
 | `kind` | The agent does |
 | --- | --- |
-| `inbound` | `inbox --context <contextId> --from <peer>`, then reply. The wake hint includes `--from` |
+| `inbound` | `inbox --context <contextId> --from <peer>`, then reply. The wake hint includes `--from`. `taskId` is a hint: drain every open item for that context |
 | `outbound_update` | A peer answered a task this agent sent. `inbox` lists that reply until the list is read (`kind: "outbound"`; `inbox --all` keeps it). Read it with `history <contextId> --from <peer>` or `outbound`. Continue with `send` and the same context id |
 | `pairing_request` | Tell the human the code, the link, and `pairing.manageUrl` when the wake includes it. The code lasts 60 minutes. Leave approval to the human. `pairing.identityFingerprint`, when present, is the requester's pairing identity |
 | `address_change` | A paired peer proved a new callback host, or bound a pairing identity for the first time. Tell the human the peer label and the host in the preview. No second approval is required. Revoke the peer token if the change is unexpected |

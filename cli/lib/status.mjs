@@ -198,7 +198,12 @@ export function wakeLine(s) {
 		? "no webhook configured; choose delivery after checking hosted route compatibility"
 		: "none: no WAKE_WEBHOOK_URL on the Worker, so the agent is expected to poll the A2A endpoint";
 	const auth = [w.hasKey && "bearer/API key", w.hasHmacSecret && "HMAC signature", w.hasAccessServiceToken && "Access service token"].filter(Boolean);
-	return `webhook (preset ${w.preset}${s.tunnel ? ", through the tunnel" : ""}); auth: ${auth.join(" + ") || "none"}; URL fingerprint ${w.urlFingerprint || "-"}`;
+	const timing = [
+		Number.isFinite(Number(w.debounceSeconds)) ? `debounce ${w.debounceSeconds}s` : "",
+		Number.isFinite(Number(w.busySeconds)) ? `busy ${w.busySeconds}s` : "",
+	].filter(Boolean);
+	const timingText = timing.length ? `; ${timing.join(", ")}` : "";
+	return `webhook (preset ${w.preset}${s.tunnel ? ", through the tunnel" : ""})${timingText}; auth: ${auth.join(" + ") || "none"}; URL fingerprint ${w.urlFingerprint || "-"}`;
 }
 
 // ---------------------------------------------------------------- proxy mode: upstream diagnosis
@@ -487,7 +492,9 @@ export async function collect(net = {}) {
 				const p = await owner("GET", "/owner/wake/preview");
 				s.ownerApi = { ok: true };
 				s.wake = { preset: p.preset, configured: !!p.configured, hasKey: !!p.hasKey, hasHmacSecret: !!p.hasHmacSecret,
-					hasAccessServiceToken: !!p.hasAccessServiceToken, urlFingerprint: p.fingerprints?.url || null };
+					hasAccessServiceToken: !!p.hasAccessServiceToken, urlFingerprint: p.fingerprints?.url || null,
+					...(Number.isFinite(Number(p.debounceSeconds)) ? { debounceSeconds: Number(p.debounceSeconds) } : {}),
+					...(Number.isFinite(Number(p.busySeconds)) ? { busySeconds: Number(p.busySeconds) } : {}) };
 			} catch (e) {
 				s.ownerApi = { ok: false, error: e.message };
 				if (s.deployment === "hosted" && /HTTP (404|405)\b/.test(e.message)) {

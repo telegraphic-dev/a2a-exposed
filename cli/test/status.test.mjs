@@ -118,6 +118,8 @@ test("wakeLine: mode and auth, never secret values", () => {
 	assert.doesNotMatch(wakeLine({ wake: { preset: "generic", configured: false } }), /preset/, "no wake: no preset to talk about");
 	assert.equal(wakeLine({ wake: { preset: "hermes", configured: true, hasHmacSecret: true, hasAccessServiceToken: true, urlFingerprint: "abc123" }, tunnel: {} }),
 		"webhook (preset hermes, through the tunnel); auth: HMAC signature + Access service token; URL fingerprint abc123");
+	assert.equal(wakeLine({ wake: { preset: "claude-code", configured: true, hasKey: true, debounceSeconds: 20, busySeconds: 300, urlFingerprint: "abc123" } }),
+		"webhook (preset claude-code); debounce 20s, busy 300s; auth: bearer/API key; URL fingerprint abc123");
 });
 
 test("OpenBot status asks for the HMAC secret even when a bearer key exists", () => {

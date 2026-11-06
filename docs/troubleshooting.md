@@ -8,9 +8,9 @@ Report a result the docs do not cover with `npx -y a2a-exposed@latest feedback`.
 
 **Setup stopped halfway.** Run `status` and do the printed step. `init`, `deploy`, and `wake set` reuse the saved database, owner token, and settings. `tunnel create` on an existing tunnel creates nothing new. It re-uploads Worker secrets that are missing, so export `WAKE_WEBHOOK_KEY` or `WAKE_HMAC_SECRET` again first. If an earlier tunnel run stopped halfway, it tells you to run `tunnel rm` first.
 
-**No wakes, but the task is on the A2A endpoint.** Wakes are debounced per peer and conversation. An hourly cap of 0, or an unset cap, does not suppress them. The `claude-code` preset defaults to 25 an hour when the cap is unset. A local webhook needs the tunnel or polling. Run `wake preview`, then `wake test`.
+**No wakes, but the task is on the A2A endpoint.** A short debounce coalesces a burst. After a wake is sent, the conversation stays busy (`busySeconds` on `wake preview`) and further messages wait for one catch-up. An inbox read does not end that window. An hourly cap of 0, or an unset cap, does not suppress them. The `claude-code` preset defaults to 25 an hour when the cap is unset. A local webhook needs the tunnel or polling. Run `wake preview`, then `wake test`.
 
-**Where are the logs?** Real-time logs are in the Cloudflare dashboard. Persisted logs need `deploy --workers-logs on` (off by default), then the Worker's logs in the dashboard. Query strings are redacted. Useful lines: `message_received`, `wake_sent`, `wake_failed`, `auth_failed`, `pairing_password_set`, and in proxy mode `upstream_error` / `upstream_verify` with a `reason`.
+**Where are the logs?** Real-time logs are in the Cloudflare dashboard. Persisted logs need `deploy --workers-logs on` (off by default), then the Worker's logs in the dashboard. Query strings are redacted. Useful lines: `message_received`, `wake_sent`, `wake_absorbed`, `wake_failed`, `auth_failed`, `pairing_password_set`, and in proxy mode `upstream_error` / `upstream_verify` with a `reason`. `wake_absorbed` is a message held during the busy cool-down. `wake_sent` with `catchUp` is the one webhook when that cool-down ends.
 
 **The CLI says a newer version is out.** `npx -y a2a-exposed@latest deploy`. With a global install, `npm i -g a2a-exposed@latest` first. See [Upgrading](upgrading.md).
 
