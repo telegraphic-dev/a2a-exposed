@@ -24,7 +24,7 @@ npx -y a2a-exposed@latest init \
   --hostname agent.example.com \
   --agent-name "My Agent" \
   --agent-description "What this agent does, for other agents" \
-  --preset grok-bot                # grok-bot | claude-code | openclaw-wake | openclaw-agent | hermes | openbot | generic
+  --preset grok-bot                # grok-bot | claude-code | openclaw-wake | openclaw-agent | hermes | openbot | mausbot | generic
 ```
 
 `--skip-install` skips dependency installation when the Worker already has its dependencies.

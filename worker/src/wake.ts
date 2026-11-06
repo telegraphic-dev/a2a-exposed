@@ -10,6 +10,7 @@ export type WakeEvent = {
 	preview: string;
 	kind: string; // "inbound" | "outbound_update" | "test" | "pairing_request"
 	publicUrl: string;
+	deliveryId?: string; // MausBot wake identity, retained by Retry-After retries
 	pairing?: PairingInfo; // kind "pairing_request"
 };
 
@@ -48,7 +49,7 @@ export type WakeConfig = {
 
 export type WakeRequest = { url: string; method: "POST"; headers: Record<string, string>; body: string };
 
-export const PRESETS = ["grok-bot", "claude-code", "openclaw-wake", "openclaw-agent", "hermes", "openbot", "generic"] as const;
+export const PRESETS = ["grok-bot", "claude-code", "openclaw-wake", "openclaw-agent", "hermes", "openbot", "mausbot", "generic"] as const;
 
 /** Default debounce window per preset (seconds), used when WAKE_DEBOUNCE_SECONDS is unset. */
 export function defaultDebounceSeconds(preset: string): number {
@@ -190,9 +191,24 @@ async function hermesSign(headers: Record<string, string>, secret: string, body:
 	headers["X-Webhook-Signature-V2"] = await hmacSha256Hex(secret, `${ts}.${body}`);
 }
 
-/** Build the HTTP request, return null without a URL, or throw when OpenBot signing is missing. */
+/** MausBot uses header auth, never a capability URL containing a secret. */
+export function mausbotConfigProblem(cfg: WakeConfig): string {
+	if (cfg.preset !== "mausbot" || !cfg.url) return "";
+	try {
+		const url = new URL(cfg.url);
+		if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash || !/^\/hooks\/wh_[A-Za-z0-9_-]+$/.test(url.pathname))
+			return "MausBot requires an HTTPS /hooks/<endpointId> URL without credentials, query or fragment; use WAKE_WEBHOOK_KEY for Bearer auth";
+	} catch { return "MausBot requires an HTTPS /hooks/<endpointId> URL"; }
+	if (!cfg.key?.trim() || cfg.key.length > 4096 || /[\u0000-\u001f\u007f]/.test(cfg.key))
+		return "MausBot requires WAKE_WEBHOOK_KEY from protected environment/secret storage";
+	return "";
+}
+
+/** Build the HTTP request, return null without a URL, or throw when required preset auth/config is missing. */
 export async function renderWake(cfg: WakeConfig, ev: WakeEvent, opts: { nowMs?: number; requestId?: string } = {}): Promise<WakeRequest | null> {
 	if (!cfg.url) return null;
+	const mausbotProblem = mausbotConfigProblem(cfg);
+	if (mausbotProblem) throw new Error(mausbotProblem);
 	if (cfg.preset === "openbot" && !cfg.hmacSecret?.trim()) throw new Error("OpenBot requires WAKE_HMAC_SECRET from the routine settings");
 	const cli = cfg.cliCommand || DEFAULT_CLI;
 	const nowMs = opts.nowMs ?? Date.now();
@@ -220,6 +236,12 @@ export async function renderWake(cfg: WakeConfig, ev: WakeEvent, opts: { nowMs?:
 			headers["idempotency-key"] = requestId;
 			// `name` is the hook name OpenClaw filters match. It stays "A2A inbox". The wake text itself starts with "A2A endpoint:".
 			body = JSON.stringify({ message: wakeSummary(ev, cli), name: "A2A inbox", agentId: cfg.agentId || "main", sessionMode: "isolated", deliver: false });
+			break;
+		case "mausbot":
+			bearer();
+			// A task can wake more than once. Retry the same wake identity, not every update on that task.
+			headers["idempotency-key"] = `${ev.taskId}:${ev.deliveryId || requestId}`;
+			body = JSON.stringify(wakePayload(ev, cli));
 			break;
 		case "openbot": {
 			const ts = String(Math.floor(nowMs / 1000));

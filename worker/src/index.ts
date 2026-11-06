@@ -7,7 +7,7 @@
 import { VERSION } from "./version.ts";
 import * as A from "./a2a.ts";
 import * as F from "./facade.ts";
-import { renderWake, redact, cloudflareErrorHint, wakeUrlIsTunnelHost, defaultBusySeconds, defaultDebounceSeconds, defaultMaxPerHour, type WakeConfig, type WakeEvent } from "./wake.ts";
+import { renderWake, mausbotConfigProblem, redact, cloudflareErrorHint, wakeUrlIsTunnelHost, defaultBusySeconds, defaultDebounceSeconds, defaultMaxPerHour, type WakeConfig, type WakeEvent } from "./wake.ts";
 import { fetchCheckedPeer, fetchCheckedWake } from "./wake-target.ts";
 import { withDeadline } from "./deadline.ts";
 import * as Addr from "./address.ts";
@@ -397,7 +397,8 @@ async function requeueWake(ctx: TenantContext, ectx: ExecutionContext, payload: 
 }
 
 async function wake(ctx: TenantContext, ectx: ExecutionContext, contextId: string, taskId: string, from: string, preview: string, kind = "inbound") {
-	const payload: Json = { contextId, taskId, taskIds: [taskId], from, preview: preview.slice(0, 300), kind };
+	const payload: Json = { contextId, taskId, taskIds: [taskId], from, preview: preview.slice(0, 300), kind,
+		...(preset(ctx) === "mausbot" ? { deliveryId: crypto.randomUUID() } : {}) };
 	const now = Date.now(), deb = debounceMs(ctx);
 	let row: Json = await loadWake(ctx, contextId, from);
 	// A pre-peer row (peer '') is this conversation when it names this peer, or names nobody yet.
@@ -2408,6 +2409,8 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			preview: "Example message preview", kind: "test", publicUrl: ctx.PUBLIC_URL };
 		if (preset(ctx) === "openbot" && !ctx.WAKE_HMAC_SECRET?.trim())
 			return json({ error: "OpenBot requires WAKE_HMAC_SECRET from the routine settings" }, 400);
+		const mausbotProblem = mausbotConfigProblem(wakeConfig(ctx));
+		if (mausbotProblem) return json({ error: mausbotProblem }, 400);
 		const req = await renderWake(wakeConfig(ctx), ev, { requestId: "preview" });
 		return json({ preset: preset(ctx), configured: !!req, debounceSeconds: debounceMs(ctx) / 1000, busySeconds: busySecondsReported(ctx, ectx), maxPerHour: maxPerHour(ctx),
 			hasKey: !!ctx.WAKE_WEBHOOK_KEY, hasHmacSecret: !!ctx.WAKE_HMAC_SECRET,

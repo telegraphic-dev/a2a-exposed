@@ -28,7 +28,7 @@ npx -y a2a-exposed@latest wake test
 
 `wake preview` shows a credential as `Bearer ••••` or `••••` and does not keep any character of the secret. It also prints SHA-256 fingerprints (first 12 hex characters) of the URL, key, and HMAC secret. Export `WAKE_WEBHOOK_URL`, `WAKE_WEBHOOK_KEY`, and `WAKE_HMAC_SECRET` in the shell that runs `wake preview` and `wake fingerprint`. `match` means the exported value is the one on the Worker. `DIFFERENT` means they differ: the variable is absent from this shell, or the upload is still propagating (about 15 to 40 seconds after `wake set`, `wake unset`, or `tunnel create`). Wait about 30 seconds and run the command again. `wake fingerprint` prints only the local fingerprints.
 
-Presets: `grok-bot`, `claude-code`, `openclaw-wake`, `openclaw-agent`, `hermes`, `openbot`, `generic`. The default when none is set is `generic`.
+Presets: `grok-bot`, `claude-code`, `openclaw-wake`, `openclaw-agent`, `hermes`, `openbot`, `mausbot`, `generic`. The default when none is set is `generic`.
 
 ## Handling modes and owner notices
 
@@ -65,6 +65,7 @@ The busy time is preset-specific because each product handles a webhook differen
 | `openclaw-agent` | 10 seconds | 180 seconds |
 | `hermes` | 10 seconds | 180 seconds |
 | `openbot` | 10 seconds | 180 seconds |
+| `mausbot` | 10 seconds | 180 seconds |
 | `generic` | 10 seconds | 180 seconds |
 
 Claude Code's busy window is longer because each routine fire is a new session.
@@ -179,6 +180,42 @@ Use the [Hermes wake recipe](hermes.md) for the `/webhooks/a2a-wake` subscriptio
 cron fallback, `tunnel create --preset hermes --hermes-route a2a-wake
 --hmac-secret-stdin`, and `wake check`. The Worker uses Hermes generic HMAC V2;
 the recipe describes the request headers and delivery verification limits.
+
+### `mausbot`
+
+[MausBot (OpenMausBot)](https://docs.openmausbot.com/docs/features/automation)
+accepts JSON at `https://<host>/hooks/<endpointId>`. Use the endpoint URL
+without a secret path segment and put its secret in `WAKE_WEBHOOK_KEY` through
+protected environment/secret storage. The preset sends `Authorization: Bearer`
+and refuses HTTP URLs, URL credentials, queries, fragments and capability URLs.
+Secrets stay out of command arguments and `config.env`.
+
+```bash
+# Load WAKE_WEBHOOK_URL and WAKE_WEBHOOK_KEY from protected environment storage.
+npx -y a2a-exposed@latest wake set --preset mausbot
+npx -y a2a-exposed@latest wake preview
+npx -y a2a-exposed@latest wake test
+```
+
+The POST has `content-type: application/json` and the normal wake object:
+`event_type`, `from`, `contextId`, `taskId`, `taskIds`, `preview` (at most 300
+characters), `kind`, `hint`, `agentCard`, and `pairing` for pairing requests.
+`idempotency-key` combines the task ID and a wake delivery ID. Worker
+Retry-After retries retain that ID; a later message on the same task gets a
+new one. Each manual test gets a new key too.
+
+Leave MausBot event-type filters empty to receive every wake kind.
+The first test may capture only a verification sample. The owner must verify
+and enable the webhook in MausBot, then run `wake test` again. HTTP 202 means
+acceptance; check the run actually reads the inbox and replies. This preset
+has automated request coverage; a real MausBot inbox-and-reply run is still
+unverified. Peer content is untrusted; pairing decisions stay with the human.
+
+My Cloud and hosted workspaces provide a public hook URL. For desktop,
+[proxy only `/hooks/*`](https://docs.openmausbot.com/docs/self-hosting/networking)
+to the receiver at `127.0.0.1:8800`; keep MausBot running and do not expose its
+main app API. Hosted a2a.exposed Wake settings support is a separate follow-up;
+use the preset only where the service advertises it.
 
 ### `openbot`
 

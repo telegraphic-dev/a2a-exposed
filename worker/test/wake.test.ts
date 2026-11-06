@@ -106,7 +106,7 @@ test("generic: invalid template throws", () => {
 
 test("every preset renders valid JSON", async () => {
 	for (const p of PRESETS) {
-		const r = (await renderWake({ preset: p, url: "https://x/y", key: "k", hmacSecret: "s" }, ev))!;
+		const r = (await renderWake({ preset: p, url: "https://x/hooks/wh_test", key: "k", hmacSecret: "s" }, ev))!;
 		JSON.parse(r.body);
 	}
 });
@@ -151,7 +151,7 @@ const ACCESS = { accessClientId: "abc123.access", accessClientSecret: "s3cr3t-va
 
 test("Access service-token headers are added for every preset, next to the preset's own auth", async () => {
 	for (const preset of PRESETS) {
-		const r = (await renderWake({ preset, url: "https://wake-x.example.com/hooks/wake", key: "k1", hmacSecret: "h1", ...ACCESS }, ev))!;
+		const r = (await renderWake({ preset, url: "https://wake-x.example.com/hooks/wh_test", key: "k1", hmacSecret: "h1", ...ACCESS }, ev))!;
 		assert.equal(r.headers["CF-Access-Client-Id"], "abc123.access", preset);
 		assert.equal(r.headers["CF-Access-Client-Secret"], "s3cr3t-value-0123456789", preset);
 		if (preset === "hermes") assert.ok(r.headers["X-Webhook-Signature-V2"], "hermes keeps its HMAC");
@@ -226,4 +226,37 @@ test("OpenBot assigns a fresh delivery ID to every rendered attempt", async () =
 	const first = (await renderWake(cfg, ev))!;
 	const second = (await renderWake(cfg, ev))!;
 	assert.notEqual(first.headers["x-openbot-delivery-id"], second.headers["x-openbot-delivery-id"]);
+});
+
+
+test("mausbot: Bearer JSON, bounded peer preview, stable delivery identity and masked credentials", async () => {
+	const cfg = { preset: "mausbot", url: "https://hooks.example.com/hooks/wh_example", key: "dummy-mausbot-secret" };
+	const event = { ...ev, preview: '雪 "quoted"\n'.repeat(100), deliveryId: "wake-1" };
+	const first = (await renderWake(cfg, event, { requestId: "attempt-1" }))!;
+	const retry = (await renderWake(cfg, event, { requestId: "attempt-2" }))!;
+	assert.equal(first.headers.authorization, "Bearer dummy-mausbot-secret");
+	assert.equal(first.headers["content-type"], "application/json");
+	assert.equal(first.headers["idempotency-key"], "t-2:wake-1");
+	assert.equal(retry.headers["idempotency-key"], first.headers["idempotency-key"]);
+	assert.deepEqual(JSON.parse(first.body), wakePayload(event, "npx -y a2a-exposed@latest"));
+	assert.equal(JSON.parse(first.body).preview.length, 300);
+	assert.equal(JSON.parse(first.body).deliveryId, undefined);
+	assert.equal(redact(first).headers.authorization, "Bearer ••••");
+	assert.ok(!JSON.stringify(redact(first)).includes(cfg.key));
+	const update = (await renderWake(cfg, { ...event, kind: "outbound_update", deliveryId: "wake-2" }))!;
+	assert.notEqual(update.headers["idempotency-key"], first.headers["idempotency-key"]);
+	assert.match(JSON.parse(update.body).hint, /history ctx-1 --from peer-a/);
+	const test1 = (await renderWake(cfg, { ...ev, kind: "test", taskId: "none" }))!;
+	const test2 = (await renderWake(cfg, { ...ev, kind: "test", taskId: "none" }))!;
+	assert.notEqual(test1.headers["idempotency-key"], test2.headers["idempotency-key"], "verification test must not suppress the enabled test");
+});
+
+test("mausbot: rejects unsafe URLs, capability credentials and missing Bearer auth without echoing input", async () => {
+	for (const url of ["http://example.com/hooks/wh_test", "https://user:secret@example.com/hooks/wh_test", "https://example.com/hooks/wh_test/capability-secret", "https://example.com/hooks/wh_test?secret=dummy", "https://example.com/hooks/wh_test#dummy", "not-a-url", "https://example.com/api"]) {
+		await assert.rejects(renderWake({ preset: "mausbot", url, key: "dummy" }, ev), error => error instanceof Error && /MausBot requires an HTTPS/.test(error.message) && !error.message.includes(url));
+	}
+	for (const key of [undefined, "", "   ", "line\nbreak"]) {
+		await assert.rejects(renderWake({ preset: "mausbot", url: "https://example.com/hooks/wh_test", key, hmacSecret: "cannot-replace-bearer" }, ev), /MausBot requires WAKE_WEBHOOK_KEY/);
+	}
+	assert.equal(await renderWake({ preset: "mausbot" }, ev), null);
 });

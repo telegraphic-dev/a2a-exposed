@@ -226,7 +226,7 @@ export async function wake(sub, o = {}) {
 	const { origin, token, name } = wakeCredential(o, sub !== "prepare" && !o["reference-file"] && !o["reference-env"]), path = `/api/v1/agents/${encodeURIComponent(name)}/wake`;
 	const current = await request(origin, path, { token });
 	if (!Number.isSafeInteger(current.version)) fail("invalid_response", "The service did not return a valid wake version. Saved settings were not changed.");
-	if (sub === "preview") return { ok: true, code: "preview", next: "Test an explicit draft before saving.", version: current.version, preset: current.preset, configured: Boolean(current.url), key_header: ["hermes", "openbot"].includes(current.preset) ? "" : ["grok-bot", "claude-code", "openclaw-wake", "openclaw-agent"].includes(current.preset) ? "Authorization" : current.keyHeader || "Authorization", url: previewUrl(current.url) };
+	if (sub === "preview") return { ok: true, code: "preview", next: "Test an explicit draft before saving.", version: current.version, preset: current.preset, configured: Boolean(current.url), key_header: ["hermes", "openbot"].includes(current.preset) ? "" : ["grok-bot", "claude-code", "openclaw-wake", "openclaw-agent", "mausbot"].includes(current.preset) ? "Authorization" : current.keyHeader || "Authorization", url: previewUrl(current.url) };
  if (removing || preparingRemoval) {
   const version = Number(o.version);
   if (version !== current.version) fail("conflict", "Wake settings changed. Run wake preview --agent NAME --json, review them, then repeat removal with its explicit --version.");
