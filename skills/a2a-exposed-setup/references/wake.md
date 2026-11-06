@@ -195,27 +195,15 @@ Before step 1, complete the [delivery preflight](#delivery-preflight), agree on 
 6. **Verify each boundary:** check the receiver's authentication and exact hook path, then test delivery from the selected A2A endpoint and confirm the settings were saved. Receiver 2xx, a passing draft test and saved settings are separate evidence. Finally, with an authorized test task, confirm OpenClaw reads `inbox` and replies; record the task outcome without peer text or secrets. For hosted `transport-socket` or `cloudflare-target-unsupported`, follow [human handoffs](#human-handoffs), preserve authentication and stop provisioning retries. Agree on polling interval/cost if delivery remains unavailable.
 
 ### Hermes Agent (`hermes`)
-Source: https://hermes-agent.nousresearch.com/docs/user-guide/messaging/webhooks and `gateway/platforms/webhook.py` in NousResearch/hermes-agent.
-1. Enable the webhook platform with `hermes gateway setup`, or set `WEBHOOK_ENABLED=true` in `~/.hermes/.env`. It listens on port 8644 by default.
-2. **Reachability:** Hermes is usually self-hosted on port 8644, so `/webhooks/<name>` must be reachable from Cloudflare. Use the **secure tunnel** below (`--tunnel-path /webhooks/<name>`), another HTTPS reverse proxy, or polling.
-3. **Toolset caveat.** Webhook-triggered runs default to a restricted toolset (web/vision/clarify, **no terminal**), so a plain prompt subscription cannot run the CLI. The recommended fix is to route the event into a **cron job**, whose own skills and tools apply:
-   - Ask the owner for a handling mode (`autonomous`, `review-all` or `escalate`) and save it in the job prompt. Replace `<chosen-mode>` below with that choice. Create the fallback job and subscribe the webhook together:
-     ```bash
-     hermes cron create "every 6h" \
-       "Use the a2a-exposed skill. Handling mode: <chosen-mode>. Run 'npx -y a2a-exposed@latest inbox'; handle tasks and pairing requests under the skill's approval rules. After every handled wake, write one line to the owner with peer, task and outcome, without peer text or secrets. If there are no tasks or pairing requests, respond only [SILENT]." \
-       --skill a2a-exposed --name a2a-inbox --deliver origin
-     hermes webhook subscribe a2a-wake --events a2a_wake --cron-job a2a-inbox \
-       --prompt "A2A wake: {kind} from {from}, context {contextId}. Run: {hint}"
-     ```
-     The POST returns `202 Accepted` and the job runs in the background. The command prints the URL and an auto-generated HMAC secret. Use `--secret <value>` only if you need your own.
-   - Alternative: add `"toolsets": ["terminal", "file", "web"]` to the route in `~/.hermes/webhook_subscriptions.json`. This is a manual edit by design; only do it with a strong secret.
-4. Set `WAKE_WEBHOOK_URL=<printed URL>` and `WAKE_HMAC_SECRET=<printed secret>`. No `WAKE_WEBHOOK_KEY` is needed.
-5. **Signature: Hermes generic V2, verified against the gateway source.** The Worker sends:
-   - `X-Webhook-Timestamp: <unix seconds>`
-   - `X-Webhook-Signature-V2: hex(HMAC-SHA256(secret, "<timestamp>.<raw body>"))`
-   - `X-Request-ID` for idempotency, since Hermes caches delivery ids for 1 h.
-
-   The timestamp must be within ±300 s. The payload's `event_type` is `a2a_wake`, which is what `--events a2a_wake` matches. `hermes webhook test a2a-wake` checks the route locally, and `npx -y a2a-exposed@latest wake test` checks it end to end.
+Follow the [Hermes wake recipe](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/hermes.md)
+for the `a2a-inbox` cron job, the `/webhooks/a2a-wake` subscription and the
+HMAC V2 request. Set the owner's handling mode and enable owner notices in the
+job. Use `tunnel create --preset hermes --hermes-route a2a-wake
+--hmac-secret-stdin < /protected/hermes-hmac-secret` after configuring the
+Hermes preset. The human keeps the subscription secret in protected storage;
+never use argv or chat. Run `wake check --json` for unsigned local rejection
+and signed delivery. A test wake has no inbox task or execution receipt;
+inspect Hermes job output to confirm execution.
 
 ### Local-only webhooks (Hermes, OpenClaw): secure tunnel
 
@@ -230,7 +218,7 @@ Requirements: a **Cloudflare zone anywhere on the account**, for the wake hostna
 ```bash
 export WAKE_WEBHOOK_KEY='<OpenClaw hooks token>'      # or WAKE_HMAC_SECRET for Hermes. tunnel create sets WAKE_WEBHOOK_URL
 npx -y a2a-exposed@latest tunnel create                    # openclaw-*: origin http://127.0.0.1:18789, path /hooks/wake|agent
-# Hermes:   npx -y a2a-exposed@latest tunnel create --tunnel-path /webhooks/a2a-wake     (origin defaults to :8644)
+# Hermes: use the recipe above with --preset hermes --hermes-route a2a-wake --hmac-secret-stdin
 # generic:  npx -y a2a-exposed@latest tunnel create --tunnel-origin http://127.0.0.1:5678 --tunnel-path /webhook/a2a
 # several zones on the account: add --tunnel-zone example.com
 # or in one go: npx -y a2a-exposed@latest init --workers-dev ... --preset openclaw-wake --tunnel    (or --hostname agent.example.com)
@@ -259,7 +247,7 @@ Already have your own Access-protected URL? Export `WAKE_ACCESS_CLIENT_ID` / `WA
 The A2A endpoint stays as it is, and its URL and peers don't change. On the existing deployment:
 
 1. Set up the agent side: the Hermes webhook subscription or the OpenClaw hooks token, as described above. Export its secret: `WAKE_HMAC_SECRET` for Hermes, `WAKE_WEBHOOK_KEY` for OpenClaw.
-2. Run `npx -y a2a-exposed@latest tunnel create` (Hermes: add `--tunnel-path /webhooks/<name>`; several zones: add `--tunnel-zone <zone>`). The A2A endpoint needs no redeploy: `tunnel create` uploads the Worker secrets directly, and they apply within about 15 to 40 seconds. Wait about 30 seconds, then run `status`.
+2. Run `npx -y a2a-exposed@latest tunnel create` (Hermes: add `--tunnel-path /webhooks/a2a-wake`; several zones: add `--tunnel-zone <zone>`). The A2A endpoint needs no redeploy: `tunnel create` uploads the Worker secrets directly, and they apply within about 15 to 40 seconds. Wait about 30 seconds, then run `status`.
 3. Start `cloudflared`, then run `npx -y a2a-exposed@latest status` and `npx -y a2a-exposed@latest wake test`.
 4. Keep the polling job as a slow fallback (Hermes: `hermes cron edit a2a-inbox --schedule "every 6h"`; the webhook subscription can fire that same job with `--cron-job a2a-inbox`), with owner notices enabled. Do not remove the fallback when enabling the webhook.
 

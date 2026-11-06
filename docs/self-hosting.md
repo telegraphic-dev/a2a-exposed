@@ -79,12 +79,14 @@ Enable Zero Trust once at <https://one.dash.cloudflare.com/>, or pass `--zero-tr
 
 Install [cloudflared](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/) on the machine that runs the connector. `tunnel create` prints the `cloudflared tunnel run` command.
 
+For Hermes, follow the [single wake recipe](hermes.md) and use `/webhooks/a2a-wake`.
+
 If `WAKE_WEBHOOK_URL` is already set, run `wake unset` before `tunnel create`. `tunnel create` sets the wake URL to the tunnel hostname. Export `WAKE_WEBHOOK_KEY` (or `WAKE_HMAC_SECRET` for hermes/openbot) in that shell: `tunnel create` uploads it with the Access secrets.
 
 ```bash
 export WAKE_WEBHOOK_KEY='...'          # or WAKE_HMAC_SECRET for hermes/openbot. tunnel create sets WAKE_WEBHOOK_URL
 npx -y a2a-exposed@latest tunnel create
-# hermes:  --tunnel-path /webhooks/<name>     (origin defaults to 127.0.0.1:8644)
+# Hermes: follow docs/hermes.md for --preset hermes --hermes-route a2a-wake --hmac-secret-stdin
 # generic: --tunnel-origin http://127.0.0.1:5678 --tunnel-path /webhook/a2a
 ```
 

@@ -22,7 +22,7 @@ const step = (s) => console.error(`==> ${s}`);
 export const ORIGIN_DEFAULTS = {
 	"openclaw-wake": ["http://127.0.0.1:18789", "/hooks/wake"],
 	"openclaw-agent": ["http://127.0.0.1:18789", "/hooks/agent"],
-	hermes: ["http://127.0.0.1:8644", ""], // path is /webhooks/<subscription name>: pass --tunnel-path
+	hermes: ["http://127.0.0.1:8644", "/webhooks/a2a-wake"],
 	generic: ["", ""],
 };
 export const HOSTED_PRESETS = ["grok-bot", "claude-code"];
@@ -99,7 +99,7 @@ export function pickTunnelHostname({ tunnelHostname, tunnelZone, inboxHost, zone
 	return die([
 		`this Cloudflare account has ${usable.length} zones; choose one for the wake hostname (the A2A endpoint URL is unchanged):`,
 		zoneList(usable),
-		"Re-run with --tunnel-zone <zone>  (or --tunnel-hostname wake-<name>.<zone>).",
+		`List choices with \`${CLI} tunnel zones --json\`. Re-run with --tunnel-zone <zone>  (or --tunnel-hostname wake-<name>.<zone>).`,
 	].join("\n"));
 }
 
@@ -281,9 +281,13 @@ export function preflight(o) {
 	if (HOSTED_PRESETS.includes(preset)) die(`preset ${preset} wakes a hosted service; a tunnel is only for local-only webhooks (openclaw-*, hermes, generic)`);
 	const [dOrigin, dPath] = ORIGIN_DEFAULTS[preset] || ["", ""];
 	const origin = o["tunnel-origin"] || C.get("A2A_TUNNEL_ORIGIN") || dOrigin;
-	const wpath = o["tunnel-path"] || C.get("A2A_TUNNEL_PATH") || dPath;
+	if (o["hermes-route"] !== undefined && (preset !== "hermes" || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(o["hermes-route"])))
+		die("--hermes-route requires --preset hermes and a route name of 1–64 letters, digits, underscores or hyphens");
+	if (o["hermes-route"] && o["tunnel-path"]) die("choose --hermes-route or --tunnel-path, not both");
+	if (o["hmac-secret-stdin"] && preset !== "hermes") die("--hmac-secret-stdin requires --preset hermes");
+	const wpath = o["hermes-route"] ? `/webhooks/${o["hermes-route"]}` : o["tunnel-path"] || C.get("A2A_TUNNEL_PATH") || dPath;
 	if (!origin) die(`--tunnel-origin is required for preset ${preset} (the local webhook, e.g. http://127.0.0.1:8080)`);
-	if (!wpath || !wpath.startsWith("/")) die(`--tunnel-path is required for preset ${preset} and must start with / (e.g. /webhooks/a2a for Hermes)`);
+	if (!wpath || !wpath.startsWith("/")) die(`--tunnel-path is required for preset ${preset} and must start with / (e.g. /webhooks/a2a-wake for Hermes)`);
 	if (o["tunnel-hostname"] && !HOST_RE.test(o["tunnel-hostname"])) die("--tunnel-hostname must be a hostname like wake-abc.example.com");
 	if (o["tunnel-zone"] && !HOST_RE.test(o["tunnel-zone"].toLowerCase())) die("--tunnel-zone must be a zone name like example.com");
 	if (o["tunnel-zone"] && o["tunnel-hostname"]) die("pass --tunnel-zone or --tunnel-hostname, not both");
@@ -294,8 +298,16 @@ export function preflight(o) {
 export async function create(o) {
 	D.checkNode();
 	const dir = needDeployment(o);
-	if (tunnelStarted()) return resume(dir, o);
+	if (tunnelStarted() && !tunnelComplete()) return resume(dir, o, {});
 	const { preset, origin, wpath } = preflight(o);
+	if (o.preset && o.preset !== C.get("WAKE_PRESET", "generic"))
+		die(`the deployed preset must match --preset ${preset}; run \`${CLI} wake set --preset ${preset}\` first`);
+	const agentAuth = tunnelAuth(o);
+	if (tunnelStarted()) {
+		if (tunnelComplete() && ((o["tunnel-origin"] && origin !== C.get("A2A_TUNNEL_ORIGIN")) || ((o["tunnel-path"] || o["hermes-route"]) && wpath !== C.get("A2A_TUNNEL_PATH"))))
+			die("a tunnel already exists with a different origin/path; run tunnel rm before changing it");
+		return resume(dir, o, agentAuth);
+	}
 	const worker = D.workerName();
 	try {
 		const preview = await owner("GET", "/owner/wake/preview");
@@ -346,25 +358,51 @@ export async function create(o) {
 
 		const url = wakeUrl(hostname, wpath);
 		step("uploading Worker secrets: WAKE_WEBHOOK_URL, WAKE_ACCESS_CLIENT_ID, WAKE_ACCESS_CLIENT_SECRET" +
-			(process.env.WAKE_WEBHOOK_KEY ? ", WAKE_WEBHOOK_KEY" : "") + (process.env.WAKE_HMAC_SECRET ? ", WAKE_HMAC_SECRET" : ""));
+			(process.env.WAKE_WEBHOOK_KEY ? ", WAKE_WEBHOOK_KEY" : "") + (agentAuth.WAKE_HMAC_SECRET ? ", WAKE_HMAC_SECRET" : ""));
 		const secrets = { WAKE_WEBHOOK_URL: url, WAKE_ACCESS_CLIENT_ID: st.client_id, WAKE_ACCESS_CLIENT_SECRET: st.client_secret };
-		for (const k of ["WAKE_WEBHOOK_KEY", "WAKE_HMAC_SECRET"]) if (process.env[k]) secrets[k] = process.env[k];
+		Object.assign(secrets, agentAuth);
 		await putSecrets(dir, worker, secrets);
 		createdSecrets = Object.keys(secrets);
 
+		if (preset === "hermes" && /^\/webhooks\/[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(wpath)) console.error(hermesInstructions(wpath.slice("/webhooks/".length)));
 		console.log(url);
 		console.error(`\nAccess application "${label}" (id ${app.id}); service token id ${st.id}; tunnel id ${tun.id}.`);
 		console.error(`tunnel ready: wakes go to ${url} -> ${origin}${wpath} on the agent's machine`);
 		console.error(connectorInstructions(tokenFile, o["show-token"] ? token : ""));
 		console.error(`\nTo undo this, run \`${CLI} tunnel rm\`.`);
 		console.error(`Then (Worker secrets apply within about 15 to 40 seconds; wait about 30 seconds): ${CLI} tunnel status   and   ${CLI} wake test`);
-		if (!process.env.WAKE_WEBHOOK_KEY && !process.env.WAKE_HMAC_SECRET && preset !== "generic")
+		if (!Object.keys(agentAuth).length && preset !== "generic")
 			console.error(`note: no WAKE_WEBHOOK_KEY / WAKE_HMAC_SECRET in the environment; keep the ${preset} webhook's own auth too (export it and run \`wake set\`)`);
 	} catch (e) {
 		console.error("==> rolling back what was created");
 		await remove(o, { quiet: true, secretNames: createdSecrets }).catch((r) => console.error(`rollback incomplete: ${r.message}; re-run \`${CLI} tunnel rm\``));
 		throw e;
 	}
+}
+
+/** No prompt, argv secret, or config.env persistence. */
+function tunnelAuth(o) {
+	const auth = {};
+	for (const key of ["WAKE_WEBHOOK_KEY", "WAKE_HMAC_SECRET"]) if (process.env[key]) auth[key] = process.env[key];
+	if (o["hmac-secret-stdin"]) {
+		if (process.stdin.isTTY) die("--hmac-secret-stdin requires a protected file redirected to stdin; terminal prompts are not supported");
+		const secret = fs.readFileSync(0, "utf8").replace(/\r?\n$/, "");
+		if (!secret || secret.length > 4096 || /[\u0000-\u001f\u007f]/.test(secret))
+			die("--hmac-secret-stdin requires one non-empty line of at most 4096 printable characters");
+		auth.WAKE_HMAC_SECRET = secret;
+	}
+	return auth;
+}
+
+export function hermesInstructions(route) {
+	return [
+		"Hermes receiver (run subscribe once; keep its generated secret in protected storage):",
+		`  hermes cron create "every 6h" "Use the a2a-exposed skill. Run '${CLI} inbox'; follow the owner's handling mode and approval rules. Report peer, task and outcome without peer text or secrets; if empty, respond only [SILENT]." --skill a2a-exposed --name a2a-inbox --deliver origin`,
+		`  hermes webhook subscribe ${route} --events a2a_wake --cron-job a2a-inbox --prompt "A2A wake: {kind} from {from}, context {contextId}. Run: {hint}"`,
+		"Do not recreate an existing subscription: that can change its signing secret.",
+		`After starting the connector: ${CLI} wake check`,
+		"Recipe: https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/hermes.md",
+	].join("\n");
 }
 
 /** Download the tunnel's connector token into <config dir>/tunnel-token (chmod 600) and save its path. */
@@ -396,7 +434,7 @@ export const tunnelComplete = () =>
  *  are re-uploaded if the Worker lacks them (e.g. the first run was interrupted), together with WAKE_WEBHOOK_KEY /
  *  WAKE_HMAC_SECRET when exported (as on a first run); a missing connector token file is downloaded again. A partial
  *  tunnel must be removed first. */
-async function resume(dir, o) {
+async function resume(dir, o, agentAuth) {
 	if (!tunnelComplete())
 		die(`a previous \`tunnel create\` did not finish (some ids are saved, see \`${CLI} status\`); run \`${CLI} tunnel rm\`, then \`${CLI} tunnel create\` again`);
 	const host = C.get("A2A_TUNNEL_HOSTNAME");
@@ -409,8 +447,6 @@ async function resume(dir, o) {
 	const url = wakeUrl(host, C.get("A2A_TUNNEL_PATH") || "/");
 	let p = null;
 	try { p = await owner("GET", "/owner/wake/preview"); } catch (e) { console.error(`warning: Worker not reachable (${e.message}); cannot check its wake secrets`); }
-	const agentAuth = {};
-	for (const k of ["WAKE_WEBHOOK_KEY", "WAKE_HMAC_SECRET"]) if (process.env[k]) agentAuth[k] = process.env[k];
 	const lacksTunnel = p && (!p.hasAccessServiceToken || p.fingerprints?.url !== fingerprint(url));
 	if (lacksTunnel || Object.keys(agentAuth).length) {
 		const secrets = { WAKE_WEBHOOK_URL: url, WAKE_ACCESS_CLIENT_ID: C.get("A2A_TUNNEL_ACCESS_CLIENT_ID"), WAKE_ACCESS_CLIENT_SECRET: C.get("A2A_TUNNEL_ACCESS_CLIENT_SECRET"), ...agentAuth };
@@ -420,6 +456,7 @@ async function resume(dir, o) {
 	const preset = C.get("WAKE_PRESET", "generic");
 	if (p && !p.hasKey && !p.hasHmacSecret && !Object.keys(agentAuth).length && preset !== "generic")
 		console.error(`warning: the Worker has no WAKE_WEBHOOK_KEY / WAKE_HMAC_SECRET, so the ${preset} webhook will reject wakes; export it and run \`${CLI} tunnel create\` again`);
+	if (preset === "hermes" && /^\/webhooks\/[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(C.get("A2A_TUNNEL_PATH"))) console.error(hermesInstructions(C.get("A2A_TUNNEL_PATH").slice("/webhooks/".length)));
 	console.log(url);
 	console.error(`tunnel already set up: wakes go to ${url} -> ${C.get("A2A_TUNNEL_ORIGIN")}${C.get("A2A_TUNNEL_PATH")} (nothing new created; to change it: tunnel rm, then tunnel create)`);
 	console.error(connectorInstructions(C.get("A2A_TUNNEL_TOKEN_FILE")));
@@ -543,8 +580,12 @@ export async function remove(o, { quiet = false, allowMissingProject = false, sk
 }
 
 export async function tunnel(sub, o) {
+	if (sub === "zones") {
+		const zones = usableZones(listZones(needDeployment(o))).map(({ id, name, status }) => ({ id, name, status: status || "active" }));
+		return console.log(o.json ? JSON.stringify(zones, null, 2) : zoneList(zones) || "No active zones; use polling.");
+	}
 	if (sub === "create") return create(o);
 	if (sub === "status") return status(o);
 	if (sub === "rm") return remove(o);
-	die("usage: tunnel create|status|rm");
+	die("usage: tunnel create|zones|status|rm");
 }

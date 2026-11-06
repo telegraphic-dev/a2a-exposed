@@ -175,24 +175,10 @@ Access and hook authentication enabled and do not recreate the tunnel as a retry
 
 ### `hermes`
 
-The webhook platform listens on port 8644 by default. Publish `/webhooks/<name>` with the tunnel (`--tunnel-path /webhooks/<name>`), or poll.
-
-Webhook-triggered runs default to a toolset without a terminal, so a prompt-only subscription cannot run the CLI. Route the event into a cron job whose own skills and tools apply:
-
-```bash
-hermes webhook subscribe a2a-wake --events a2a_wake --cron-job a2a-inbox \
-  --prompt "A2A wake: {kind} from {from}, context {contextId}. Run: {hint}"
-```
-
-Set `WAKE_WEBHOOK_URL` to the printed URL and `WAKE_HMAC_SECRET` to the printed secret. No `WAKE_WEBHOOK_KEY` is required.
-
-The Worker sends Hermes generic HMAC V2:
-
-- `X-Webhook-Timestamp`: unix seconds
-- `X-Webhook-Signature-V2`: hex HMAC-SHA256 of `"<timestamp>.<raw body>"`
-- `X-Request-ID`
-
-The timestamp must be within ±300 seconds. The payload `event_type` is `a2a_wake`.
+Use the [Hermes wake recipe](hermes.md) for the `/webhooks/a2a-wake` subscription,
+cron fallback, `tunnel create --preset hermes --hermes-route a2a-wake
+--hmac-secret-stdin`, and `wake check`. The Worker uses Hermes generic HMAC V2;
+the recipe describes the request headers and delivery verification limits.
 
 ### `openbot`
 
