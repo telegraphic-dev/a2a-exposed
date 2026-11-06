@@ -311,6 +311,8 @@ reply messages carry a loop marker and are not delivered back again. The receivi
 tasks without a new-work wake. Read them in `history` or `inbox --all`; they do not need an answer. The result distinguishes `delivered`,
 `stored-only`, and `delivery-failed`; a failed delivery never removes the stored answer. If an interrupted delivery
 has no known result, a retry reports that uncertainty and does not risk sending the reply a second time.
+Push delivery results include `httpStatus` only for an exact HTTP response status in the 100–599 range;
+transport error text is not an HTTP status. A refused paired endpoint is identified by host, without its path or query.
 
 External paired delivery resolves every address before connecting, pins the checked public address to the TLS socket,
 keeps the endpoint on the paired origin, and refuses redirects. Cloudflare cannot open raw TCP sockets to another

@@ -1147,7 +1147,7 @@ async function checkedPeerFetch(ctx: TenantContext, ectx: ExecutionContext, base
 	try { baseUrl = new URL(base); target = new URL(url); } catch { throw new ToolError("peer endpoint is not a URL"); }
 	if (target.origin !== baseUrl.origin) throw new ToolError("peer card endpoint refused: it is on a different origin");
 	const why = peerUrlProblem(target.href);
-	if (why) throw new ToolError(`peer endpoint ${target.href} refused: ${why}`);
+	if (why) throw new ToolError(`peer endpoint ${target.host} refused: ${why}`);
 	const internal = await fetchTenant(ctx, target, { ...init, redirect: "manual" });
 	if (internal) {
 		if (internal.status >= 300 && internal.status < 400) throw new ToolError("peer endpoint refused: redirects are not allowed");
@@ -1563,10 +1563,12 @@ async function deliverReplyMessage(ctx: TenantContext, ectx: ExecutionContext, t
 		const pushed = await notifyPeer(ctx, ectx, task, signal);
 		const failed = pushed.find((x: Json) => !x.ok);
 		const target = safeTarget(undefined, String((failed || pushed[0])?.url || ""));
-		const http = /HTTP (\d{3})/.exec(String((failed || pushed[0])?.info || ""));
+		const info = String((failed || pushed[0])?.info || "");
+		const http = /^HTTP (\d{3})$/.exec(info);
+		const httpStatus = http && http[0] === info ? Number(http[1]) : undefined;
 		return {
 			status: failed ? "delivery-failed" : "delivered", method: "push", taskId: task.id, state,
-			...(target ? { target } : {}), ...(http ? { httpStatus: Number(http[1]) } : {}),
+			...(target ? { target } : {}), ...(httpStatus !== undefined && httpStatus >= 100 && httpStatus <= 599 ? { httpStatus } : {}),
 			detail: failed ? "A task push failed; the reply remains stored on the task." : "Delivered as the task's existing push update.",
 		};
 	}

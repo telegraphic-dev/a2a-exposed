@@ -259,3 +259,36 @@ for (const version of ["0.3", "1.0"]) {
 		});
 	}
 }
+
+
+test("push status only accepts an exact HTTP result in the output schema range", async (t) => {
+	const s = await fixture(t as never);
+	const originalFetch = globalThis.fetch;
+	t.after(() => { globalThis.fetch = originalFetch; });
+	for (const value of [200, 307, 401, 599, 99, 600, 999, "HTTP 999", "prefix HTTP 401 suffix", "HTTP 401\n"]) {
+		globalThis.fetch = (async () => {
+			if (typeof value === "string") throw value;
+			const response = new Response(null);
+			Object.defineProperty(response, "status", { value });
+			return response;
+		}) as typeof fetch;
+		const taskId = await s.sendToBob("status " + value, crypto.randomUUID(), { id: "cfg", url: "https://push.example.net/update" });
+		const result = await s.owner(s.b, "acct-bob", "POST", "/owner/mcp/reply", { taskId, text: "stored answer" });
+		const delivery = (result.body as any).structuredContent as Delivery;
+		assert.equal(delivery.httpStatus, typeof value === "number" && value >= 100 && value <= 599 ? value : undefined, String(value));
+		assert.equal(delivery.status, value === 200 ? "delivered" : "delivery-failed");
+		const stored = await s.dbB.prepare("SELECT state FROM tasks WHERE id = ?").bind(taskId).first() as { state: string };
+		assert.equal(stored.state, "completed");
+	}
+});
+
+test("direct reply refusal reports only the endpoint host", async (t) => {
+	const s = await fixture(t as never);
+	await s.dbB.prepare("UPDATE outbound_peers SET url = 'http://alice.example.com/private-path?private-query=yes' WHERE alias = 'alice'").run();
+	const taskId = await s.sendToBob("refused endpoint", "ctx-refused-url");
+	const result = await s.owner(s.b, "acct-bob", "POST", "/owner/mcp/reply", { taskId, text: "stored answer" });
+	const delivery = (result.body as any).structuredContent;
+	assert.equal(delivery.status, "delivery-failed");
+	assert.match(delivery.detail, /peer endpoint alice\.example\.com refused/);
+	assert.doesNotMatch(JSON.stringify(result.body), /private-path|private-query|http:\/\//);
+});
