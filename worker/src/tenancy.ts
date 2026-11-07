@@ -180,6 +180,7 @@ export interface FeatureGates {
 
 /** Pushed tenant row. Tests build a context from this; the Durable Object stores it. */
 export interface HostedOverlay {
+	relayRegion?: DataRegion;
 	configVersion?: number;
 	id: string;
 	db: SqlDb;
@@ -375,6 +376,7 @@ export class TenantContext implements ConfigFields {
 	readonly WAKE_TRANSPORT?: string;
 	readonly WAKE_WEBHOOK_URL?: string;
 	readonly relayNamespace?: DoNamespace;
+	readonly relayRegion?: DataRegion;
 	readonly WAKE_WEBHOOK_KEY?: string;
 	readonly WAKE_HMAC_SECRET?: string;
 	readonly WAKE_ACCESS_CLIENT_ID?: string;
@@ -423,7 +425,7 @@ export class TenantContext implements ConfigFields {
 		gates: FeatureGates; limits: Record<string, unknown>; approval: Record<string, unknown>;
 		config: ConfigFields; ownerToken?: string; ownerTokenHash?: string; secretsKey?: string;
 		approvalClientSecret?: string; controlService?: ControlFetcher;
-		tenantDirectory?: KvNamespace; tenantNamespace?: DoNamespace; relayNamespace?: DoNamespace;
+		tenantDirectory?: KvNamespace; tenantNamespace?: DoNamespace; relayNamespace?: DoNamespace; relayRegion?: DataRegion;
 	}) {
 		this.id = init.id;
 		this.configVersion = init.configVersion ?? 0;
@@ -442,6 +444,7 @@ export class TenantContext implements ConfigFields {
 		this.#tenantDirectory = init.tenantDirectory;
 		this.#tenantNamespace = init.tenantNamespace;
 		this.relayNamespace = init.relayNamespace;
+		this.relayRegion = init.relayRegion;
 		Object.assign(this, init.config);
 	}
 
@@ -551,7 +554,7 @@ export function hostedTenantContext(env: WorkerBindings, overlay: HostedOverlay)
 	// Hosted approval is the pushed tenant object only. Worker APPROVAL_OIDC_* does not approve a tenant.
 	const approval = approvalFromRecord(overlay.approval);
 	return new TenantContext({
-		configVersion: overlay.configVersion, id: overlay.id, mode: "host", status: overlay.status || "active", db: overlay.db,
+		relayRegion: overlay.relayRegion, configVersion: overlay.configVersion, id: overlay.id, mode: "host", status: overlay.status || "active", db: overlay.db,
 		publicUrl: overlay.publicUrl, gates: { ...parsed.gates, approvalOidc: approval.gate },
 		limits: overlay.limits || {}, approval: approval.publicRecord,
 		config, ownerTokenHash: hash || undefined, secretsKey: parsed.secretsKey,

@@ -82,7 +82,8 @@ repository does not update a hosted service or establish a production deployment
   `worker/src/relay.ts` and from `@a2a-exposed/control-core`, with value **1**.
 - Route the tenant hostname through the existing hosted router. The relay
   coordination key is `wake-relay-v1:host:<immutable tenant id>` (self-hosted:
-  `wake-relay-v1:single:self`), in the configured data jurisdiction. Never shard
+  `wake-relay-v1:single:self`), in the inbox directory's pinned jurisdiction (retained in tenant storage for deletion fencing).
+  Missing region discovery fails closed; it never silently enrolls a global relay. Never shard
   on a recyclable hostname or use a platform-wide room.
 - The public owner API requires the existing owner bearer. Peer and MCP tokens
   cannot enroll or administer a connector. The trusted `TenantStore.owner()`

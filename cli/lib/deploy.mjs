@@ -889,6 +889,7 @@ export async function wake(sub, o) {
 		return;
 	}
 	if (sub === "unset") {
+		if (C.get("WAKE_TRANSPORT") === "relay") die("relay mode: use relay revoke to stop delivery; wake unset only removes webhook-transport credentials");
 		const dir = workerDir(o), name = workerName();
 		const env = cfEnv();
 		const problems = [];

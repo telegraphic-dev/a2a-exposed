@@ -19,8 +19,8 @@ import { doSqlD1, migrateDo, type SqlStorageLike, type TxRunner } from "./storag
 import { MIGRATIONS } from "./migrations.ts";
 import { bookmarkForTime as readBookmark, exportRows, restoreBookmark as applyBookmark, restartAfterResult, toSql, ExportError, type BookmarkStorage } from "./export.ts";
 import { hostedDailyBackup } from "./backup.ts";
-import { lookupDirectory, pinDirectoryRegion, tenantNameFromHost, tenantRegion, TENANT_NAME, type DirectoryEntry } from "./directory.ts";
-import { hostedTenantContext, namespaceForRegion, parseGates, type WorkerBindings } from "./tenancy.ts";
+import { lookupDirectory, parseDirectoryEntry, pinDirectoryRegion, tenantNameFromHost, tenantRegion, TENANT_NAME, type DirectoryEntry } from "./directory.ts";
+import { hostedTenantContext, namespaceForRegion, parseGates, type WorkerBindings, type DataRegion } from "./tenancy.ts";
 import { WAKE_SECRET_KEYS, omitSealedSecrets, openWakeSecrets } from "./wake-secrets.ts";
 
 export { clearDirectoryCache, directoryKey, lookupDirectory, parseDirectoryEntry, pinDirectoryRegion, tenantNameFromHost, tenantRegion, TENANT_NAME } from "./directory.ts";
@@ -171,8 +171,22 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 				else delete config[key];
 			}
 		}
+		// Pin the relay to the same immutable directory jurisdiction as its inbox.
+		// Keep it independently of the directory so deletion can still revoke after directory removal.
+		let relayRegion: DataRegion | undefined;
+		if (this.env.WAKE_RELAY_ENABLED === "1" && this.env.WAKE_RELAY) {
+			const saved = await this.ctx.storage.get<string>("wake_relay_region");
+			if (saved === "default" || saved === "eu" || saved === "fedramp") relayRegion = saved === "default" ? "" : saved;
+			else if (this.env.TENANT_DIRECTORY) {
+				const entry = parseDirectoryEntry(await this.env.TENANT_DIRECTORY.get(`tenant:${row.name}`, "json"));
+				if (entry?.id === row.tenantId && ["default", "eu", "fedramp"].includes(entry.region)) {
+					await this.ctx.storage.put("wake_relay_region", entry.region);
+					relayRegion = entry.region === "default" ? "" : entry.region as DataRegion;
+				}
+			}
+		}
 		return hostedTenantContext(this.env, {
-			configVersion: row.version, id: row.tenantId, db: this.#db, publicUrl, ownerTokenHash: row.ownerTokenHash,
+			relayRegion, configVersion: row.version, id: row.tenantId, db: this.#db, publicUrl, ownerTokenHash: row.ownerTokenHash,
 			config, limits: row.limits, approval: row.approval, status: row.status,
 		});
 	}
@@ -297,7 +311,7 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 			// Fence separate relay authority before accepting a suspension/deletion or reactivation.
 			if (current && (body.status !== "active" || current.status !== "active")) {
 				const tenant = await this.#tenant();
-				if (tenant?.relayNamespace) {
+				if (tenant?.relayNamespace && tenant.relayRegion !== undefined) {
 					const response = await relayFetch(tenant, body.status === "active" ? "/enable" : "/disable", { method: "POST" });
 					if (!response.ok) throw new Error("relay lifecycle fence failed");
 				}
@@ -346,7 +360,7 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 			};
 			const tenantId = this.#row?.tenantId ?? null;
 			const tenant = await this.#tenant();
-			if (tenant?.relayNamespace) {
+			if (tenant?.relayNamespace && tenant.relayRegion !== undefined) {
 				const response = await relayFetch(tenant, "/disable", { method: "POST" });
 				if (!response.ok) throw new Error("relay deletion fence failed");
 			}

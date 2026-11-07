@@ -181,7 +181,7 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
                                 mausbot: verify and enable the first sample in MausBot, then test again
   wake check [--local-url URL]   Hermes: require unsigned local 401/403, then Worker test 2xx (delivery only)
                                 Defaults to the saved tunnel origin/path; --json prints both checks
-  wake unset                    remove wake secrets (fall back to polling)
+  wake unset                    webhook transport: remove wake secrets (relay transport: use relay revoke)
                                 handler prompts save autonomous, review-all or escalate mode and owner notices;
                                 see docs/receiving-messages.md for setup and the every 6h webhook fallback
 

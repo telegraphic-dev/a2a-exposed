@@ -5,7 +5,7 @@ import { build } from "esbuild";
 import { readFileSync, readdirSync } from "node:fs";
 import { createServer } from "node:http";
 import { once } from "node:events";
-import { randomBytes, createHash } from "node:crypto";
+import { randomBytes, createHash, createHmac } from "node:crypto";
 import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -29,7 +29,7 @@ async function runtime(hosted = false, persistence = "") {
 		b.onResolve({ filter: /\.sql\?raw$/ }, a => ({ path: new URL(a.path.replace("?raw", ""), `file://${a.resolveDir}/`).pathname, namespace: "sql" }));
 		b.onLoad({ filter: /.*/, namespace: "sql" }, a => ({ contents: `export default ${JSON.stringify(readFileSync(a.path, "utf8"))}`, loader: "js" }));
 	} }] });
-	const mf = new Miniflare(convertV4MiniflareOptions({ name: "relay-test", ...(persistence ? { resourcePersistencePath: persistence, isolatedResourcePersistencePath: persistence } : {}), modules: true, script: built.outputFiles[0].text, compatibilityDate: "2026-10-06", d1Databases: ["DB"], ...(hosted ? { kvNamespaces: ["TENANT_DIRECTORY"] } : {}), durableObjects: { ...(hosted ? { TENANT_DO: { className: "TenantStore", useSQLite: true } } : {}), WAKE_RELAY: { className: "WakeRelay", useSQLite: true } }, bindings: { ...(hosted ? { TENANCY: "host", TENANT_DOMAIN: "agents.example.com", TENANT_SECRETS_KEY: "dummy-platform" } : {}), OWNER_TOKEN: "dummy-owner", WAKE_RELAY_ENABLED: "1", WAKE_TRANSPORT: "relay", WAKE_PRESET: "generic", WAKE_WEBHOOK_KEY: "dummy-app-key", WAKE_DEBOUNCE_SECONDS: "0", WAKE_BUSY_SECONDS: "0", MCP: "off" } }));
+	const mf = new Miniflare(convertV4MiniflareOptions({ name: "relay-test", ...(persistence ? { resourcePersistencePath: persistence, isolatedResourcePersistencePath: persistence } : {}), modules: true, script: built.outputFiles[0].text, compatibilityDate: "2026-10-06", d1Databases: ["DB"], ...(hosted ? { kvNamespaces: ["TENANT_DIRECTORY"] } : {}), durableObjects: { ...(hosted ? { TENANT_DO: { className: "TenantStore", useSQLite: true } } : {}), WAKE_RELAY: { className: "WakeRelay", useSQLite: true } }, bindings: { ...(hosted ? { TENANCY: "host", TENANT_DOMAIN: "agents.example.com", TENANT_SECRETS_KEY: "dummy-platform" } : {}), OWNER_TOKEN: "dummy-owner", WAKE_RELAY_ENABLED: "1", WAKE_TRANSPORT: "relay", WAKE_PRESET: "generic", WAKE_WEBHOOK_KEY: "dummy-app-key", WAKE_HMAC_SECRET: "dummy-app-signing", WAKE_DEBOUNCE_SECONDS: "0", WAKE_BUSY_SECONDS: "0", MCP: "off" } }));
 	const db = await mf.getD1Database("DB");
 	if (!await db.prepare("SELECT name FROM sqlite_master WHERE name = 'tasks'").first()) for (const f of readdirSync("migrations").filter(n => n.endsWith(".sql")).sort()) await db.exec(readFileSync(`migrations/${f}`, "utf8").replace(/--[^\n]*/g, "").replace(/\n/g, " "));
 	const url = await mf.ready;
@@ -50,9 +50,10 @@ test("real workerd relay and native connector acknowledge the local webhook, fen
 	const stop = new AbortController();
 	const stop2 = new AbortController();
 	const received: any[] = [];
-	const server = createServer(async (req, res) => { let body = ""; for await (const chunk of req) body += chunk; received.push({ path: req.url, auth: req.headers.authorization, body: JSON.parse(body) }); res.writeHead(202).end(); });
+	const server = createServer(async (req, res) => { let body = ""; for await (const chunk of req) body += chunk; if (req.headers.authorization !== "Bearer dummy-app-key" || req.headers["x-webhook-signature-v2"] !== createHmac("sha256", "dummy-app-signing").update(`${req.headers["x-webhook-timestamp"]}.${body}`).digest("hex")) { res.writeHead(401).end(); return; } received.push({ path: req.url, auth: req.headers.authorization, body: JSON.parse(body) }); res.writeHead(202).end(); });
 	server.listen(0, "127.0.0.1"); await once(server, "listening");
 	try {
+		assert.equal((await fetch(`http://127.0.0.1:${(server.address() as any).port}/fixed`, { method: "POST", body: "{}" })).status, 401, "receiver requires application bearer and HMAC independently of transport");
 		assert.equal((await r.call("/owner/wake/relay", "POST", "peer")).status, 401);
 		const issued = await r.enroll();
 		assert.match(issued.token, /^a2ar_/);

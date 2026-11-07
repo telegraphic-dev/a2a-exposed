@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -6,10 +6,12 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { localDestination, relayEndpoint, protectedToken } from "../lib/relay.mjs";
 
+const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-cli-config-"));
+after(() => fs.rmSync(configDir, { recursive: true, force: true }));
 const bin = new URL("../bin/a2a-exposed.mjs", import.meta.url);
 
 test("relay has noninteractive help and refuses secret argv and missing choices", () => {
-	const run = args => spawnSync(process.execPath, [bin.pathname, ...args], { encoding: "utf8", env: { ...process.env, DO_NOT_TRACK: "1" } });
+	const run = args => spawnSync(process.execPath, [bin.pathname, ...args], { encoding: "utf8", env: { ...process.env, A2A_CONFIG_DIR: configDir, DO_NOT_TRACK: "1" } });
 	const help = run(["relay", "--help"]); assert.equal(help.status, 0); assert.match(help.stdout, /relay create --token-file/); assert.match(help.stdout, /relay run --local-url/);
 	for (const args of [["relay", "run"], ["relay", "create"], ["relay", "run", "--token", "do-not-print-this"], ["relay", "unexpected"]]) {
 		const result = run(args); assert.equal(result.status, 1); assert.equal((result.stdout + result.stderr).includes("do-not-print-this"), false);
@@ -31,4 +33,10 @@ test("connector credentials require protected regular files and refuse symlinks"
 		fs.chmodSync(file, 0o644); assert.throws(() => protectedToken(file)); fs.chmodSync(file, 0o600);
 		const link = path.join(dir, "symlink"); fs.symlinkSync(file, link); assert.throws(() => protectedToken(link));
 	} finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+
+test("wake unset in relay mode refuses before deleting application credentials", () => {
+	const result = spawnSync(process.execPath, [bin.pathname, "wake", "unset"], { encoding: "utf8", env: { ...process.env, A2A_CONFIG_DIR: configDir, DO_NOT_TRACK: "1", WAKE_TRANSPORT: "relay" } });
+	assert.equal(result.status, 1); assert.match(result.stderr, /relay mode: use relay revoke/);
 });
