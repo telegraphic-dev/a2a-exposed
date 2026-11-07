@@ -108,7 +108,7 @@ Forwards `SendMessage`, `GetTask`, and `CancelTask` (1.0 and 0.3). Another peer'
 
 ## Owner API
 
-Authenticated with the owner token. The CLI is the supported way to call these. Paths the CLI uses include:
+Authenticated with the owner token. A missing or invalid owner credential returns HTTP 401, `WWW-Authenticate: Bearer realm="owner"`, and `{ "error": "unauthorized" }`. The challenge identifies the owner credential; peer pairing and MCP OAuth do not grant owner access. The CLI is the supported way to call these. Paths the CLI uses include:
 
 | | |
 | --- | --- |

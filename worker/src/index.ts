@@ -2021,7 +2021,8 @@ function ownerTaskView(t: Json): Json {
 async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionContext, path: string, url: URL, trusted = false, head = false, deferAck = false): Promise<Response> {
 	// trusted: an in-process call. MCP tools use ownerCall (paths fixed in the tool code). The hosted
 	// owner() RPC uses runOwnerRpc, which has its own allowlist. A request from the network is never trusted.
-	if (!trusted && !(await isOwner(ctx, req.headers.get("authorization")))) return json({ error: "unauthorized" }, 401);
+	if (!trusted && !(await isOwner(ctx, req.headers.get("authorization"))))
+		return json({ error: "unauthorized" }, 401, { "www-authenticate": 'Bearer realm="owner"' });
 	const m = req.method;
 	const seg = path.split("/").filter(Boolean).slice(1); // after "owner"
 	const body = async () => { const raw = await readBody(req, ctx); return raw ? JSON.parse(raw) : {}; };

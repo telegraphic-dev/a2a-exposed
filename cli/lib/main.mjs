@@ -359,7 +359,9 @@ Outbound (agents you call)
 
 Owner
   One A2A endpoint. The owner token from init authenticates inbox, reply, export, and the other owner
-  commands. GET / in a browser shows the agent card. /device approves or denies a pairing request.
+  commands. Owner HTTP 401 responses advertise WWW-Authenticate: Bearer realm="owner"; check the
+  configured owner credential. Peer and MCP tokens cannot authorize owner calls.
+  GET / in a browser shows the agent card. /device approves or denies a pairing request.
   pair set-password sets the approval password. pair set-oidc adds OpenID Connect on /device and
   the MCP consent page when the issuer, client id, client secret, and allowlist are all set.
 
