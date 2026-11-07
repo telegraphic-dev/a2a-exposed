@@ -834,7 +834,7 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
 	const directReply = directReplyParams(params);
 	const conf = params.configuration || {};
 	const push = conf.taskPushNotificationConfig || conf.pushNotificationConfig;
-	const pushCfg = push ? normPushCfg(push, version) : null;
+	const pushCfg = push ? { ...normPushCfg(push, version), _role: "message push" } : null;
 	let task: Json = null;
 	if (msg.taskId) {
 		task = await ownedTask(ctx, msg.taskId, label);
@@ -896,7 +896,7 @@ const rpcPushSet: Rpc = async (p, label, version, ctx) => {
 	else if (p.config && typeof p.config === "object") { taskId = p.taskId || String(p.parent || "").split("/").pop(); cfg = p.config; }
 	else { taskId = p.taskId; cfg = { id: p.id, url: p.url, token: p.token, authentication: p.authentication }; }
 	const t = await ownedTask(ctx, taskId, label);
-	const c = normPushCfg(cfg, version);
+	const c = { ...normPushCfg(cfg, version), _role: "task push config" };
 	t._push = [...t._push.filter((x: Json) => x.id !== c.id), c];
 	await saveTaskStmt(ctx, t).run();
 	return pubCfg(t.id, c, version);
@@ -1237,8 +1237,8 @@ async function sendPush(ctx: TenantContext, ectx: ExecutionContext, task: Json, 
 	try {
 		const r = await doFetch(ctx, ectx, cfg.url, { method: "POST", headers, body: JSON.stringify(body), signal });
 		return [r.status >= 200 && r.status < 300, `HTTP ${r.status}`];
-	} catch (e) {
-		return [false, String(e).slice(0, 200)];
+	} catch {
+		return [false, "push request failed"];
 	}
 }
 
@@ -1250,8 +1250,9 @@ async function notifyPeer(ctx: TenantContext, ectx: ExecutionContext, t: Json, s
 			? await withDeadline(7000, (step) => sendPush(ctx, ectx, t, cfg, step), signal)
 			: await sendPush(ctx, ectx, t, cfg);
 		signal?.throwIfAborted();
-		results.push({ url: cfg.url, ok, info });
-		await histStmt(ctx, t.contextId, { dir: "out", peer: t._peer, taskId: t.id, event: "push", state: t.status.state, text: `${ok ? "ok" : "FAILED"} ${info}` }).run();
+		const result = { role: cfg._role === "message push" ? "message push" : "task push config", host: new URL(cfg.url).host, fingerprint: await A.fingerprint(cfg.url), ok, info };
+		results.push(result);
+		await histStmt(ctx, t.contextId, { dir: "out", peer: t._peer, taskId: t.id, event: "push", state: t.status.state, text: `${result.role} ${result.host} [${result.fingerprint}]: ${ok ? "ok" : "FAILED"} ${info}`, data: result }).run();
 	}
 	return results;
 }
@@ -1264,6 +1265,7 @@ type ReplyDelivery = {
 	target?: { alias?: string; host: string };
 	httpStatus?: number;
 	detail: string;
+	push?: Json[];
 };
 
 const DIRECT_REPLY_META = "a2a.exposed/reply-delivery";
@@ -1695,12 +1697,13 @@ async function deliverReplyMessage(ctx: TenantContext, ectx: ExecutionContext, t
 	if (task._push?.length) {
 		const pushed = await notifyPeer(ctx, ectx, task, signal);
 		const failed = pushed.find((x: Json) => !x.ok);
-		const target = safeTarget(undefined, String((failed || pushed[0])?.url || ""));
+		const host = (failed || pushed[0])?.host;
+		const target = host ? { host } : undefined;
 		const info = String((failed || pushed[0])?.info || "");
 		const http = /^HTTP (\d{3})$/.exec(info);
 		const httpStatus = http && http[0] === info ? Number(http[1]) : undefined;
 		return {
-			status: failed ? "delivery-failed" : "delivered", method: "push", taskId: task.id, state,
+			status: failed ? "delivery-failed" : "delivered", method: "push", taskId: task.id, state, push: pushed,
 			...(target ? { target } : {}), ...(httpStatus !== undefined && httpStatus >= 100 && httpStatus <= 599 ? { httpStatus } : {}),
 			detail: failed ? "A task push failed; the reply remains stored on the task." : "Delivered as the task's existing push update.",
 		};
@@ -2123,7 +2126,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 		if (seg[2] === "working" && m === "POST") {
 			if (A.TERMINAL.has(t.status.state)) return json({ error: `task is already ${t.status.state}` }, 409);
 			t.status = { state: "working", timestamp: A.nowIso() };
-			await ctx.DB.batch([saveTaskStmt(ctx, t), histStmt(ctx, t.contextId, { dir: "local", taskId: t.id, event: "state", state: "working" })]);
+			await ctx.DB.batch([saveTaskStmt(ctx, t), histStmt(ctx, t.contextId, { dir: "local", peer: t._peer, taskId: t.id, event: "state", state: "working" })]);
 			await ackPendingWakes(ctx, [{ taskId: t.id, contextId: t.contextId }]);
 			return json({ task: ownerTaskView(t), push: await notifyPeer(ctx, ectx, t) });
 		}
@@ -2164,11 +2167,14 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 				if (raced?.result_json) return json({ task: ownerTaskView(await loadTask(ctx, t.id)), delivery: JSON.parse(raced.result_json), idempotent: true });
 				return json({ error: "this reply is already being delivered; retry to read its result" }, 409);
 			}
+			const forced = !!b.force && A.TERMINAL.has(t.status.state);
+			const previousState = t.status.state;
 			if (state === "completed" || b.artifact) t.artifacts.push({ artifactId: A.newId(), name: b.artifactName || "response", parts: [{ kind: "text", text: b.text }] });
 			t.history.push(msg);
 			t.status = { state, timestamp: now, message: msg };
 			await ctx.DB.batch([saveTaskStmt(ctx, t), msgStmt(ctx, t, msg),
-				histStmt(ctx, t.contextId, { dir: "out", peer: t._peer, taskId: t.id, role: "agent", state, text: b.text })]);
+				histStmt(ctx, t.contextId, { dir: "out", peer: t._peer, taskId: t.id, role: "agent", state, text: b.text,
+					...(forced ? { event: "forced", data: { forced: true, previousState, state } } : {}) })]);
 			await ackPendingWakes(ctx, [{ taskId: t.id, contextId: t.contextId }]);
 			let delivery: ReplyDelivery;
 			try { delivery = await withDeadline(18000, (signal) => deliverReplyMessage(ctx, ectx, t, msg, state, b.text, signal)); }
@@ -2192,7 +2198,13 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 		if (fromFilter !== null && !PEER_FILTER.test(fromFilter)) return json({ error: "from is invalid" }, 400);
 		// Without `from`, rows for every peer that owns this context id (a task or an outbound task), plus local notes.
 		// With `from`, one peer's rows only, so another peer's conversation is not in this read.
-		const rows = await ctx.DB.prepare(fromFilter ? `SELECT * FROM (
+		const rows = await ctx.DB.prepare(`SELECT h.*,
+			(SELECT status_json FROM tasks WHERE id = h.task_id AND context_id = h.context_id
+			 AND (h.peer IS NULL OR h.peer = '' OR peer = h.peer)) AS current_status_json,
+			(SELECT json_object('state', state, 'timestamp', ts) FROM history latest
+			 WHERE latest.context_id = h.context_id AND latest.task_id = h.task_id AND latest.peer IS h.peer
+			 AND latest.state IS NOT NULL ORDER BY latest.seq DESC LIMIT 1) AS current_history_json
+			FROM (${fromFilter ? `SELECT * FROM (
 			SELECT * FROM history WHERE context_id = ? AND (
 				peer = ?
 				OR (
@@ -2213,10 +2225,12 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 					AND NOT EXISTS (SELECT 1 FROM outbound WHERE context_id = ?)
 				)
 			) ORDER BY seq DESC LIMIT ?
-		) ORDER BY seq`).bind(...(fromFilter
+		) ORDER BY seq`} ) h ORDER BY h.seq`).bind(...(fromFilter
 			? [seg[1], fromFilter, seg[1], fromFilter, seg[1], fromFilter, n]
 			: [seg[1], seg[1], seg[1], seg[1], seg[1], n])).all();
-		return json((rows.results as Json[]).map((r) => ({ ...r, data: r.data_json ? JSON.parse(r.data_json) : undefined, data_json: undefined })));
+		return json((rows.results as Json[]).map((r) => ({ ...r, data: r.data_json ? JSON.parse(r.data_json) : undefined, data_json: undefined,
+			currentState: r.current_status_json ? (({ state, timestamp }) => ({ state, timestamp }))(JSON.parse(r.current_status_json))
+				: r.current_history_json ? JSON.parse(r.current_history_json) : undefined, current_status_json: undefined, current_history_json: undefined })));
 	}
 	if (seg[0] === "history" && !seg[1] && m === "POST") {
 		const b = await body();

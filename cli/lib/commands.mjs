@@ -23,8 +23,15 @@ export async function ownerTry(method, path, body, timeout) {
 }
 
 function printPush(res) {
-	for (const r of (res && res.push) || []) console.error(`push -> ${r.url}: ${r.ok ? "ok" : "FAILED"} (${r.info})`);
+	for (const r of (res && res.push) || []) {
+		// Older Workers return a full URL. Print only its host, including on that compatibility path.
+		let host = r.host || "unknown host";
+		if (!r.host && r.url) { try { host = new URL(r.url).host; } catch { /* omit invalid URLs */ } }
+		console.error(`push -> ${r.role || "task push config"} ${host} [${r.fingerprint || "unknown fingerprint"}]: ${r.ok ? "ok" : "FAILED"} (${/^HTTP \d{3}$/.test(r.info) ? r.info : "push request failed"})`);
+	}
 }
+
+const printState = (state, timestamp, task = "") => console.log(`${task ? `${task} ` : ""}current state: ${plainState({ status: { state } })} (${timestamp || "timestamp unavailable"})`);
 
 function printDelivery(res) {
 	const d = res && res.delivery;
@@ -102,6 +109,7 @@ export async function inbox(o) {
 		console.log(r.text);
 		console.log("<<< END PEER MESSAGE");
 		if (reply) console.log(`(a reply to a message you sent; read it with \`${CLI} history ${r.contextId}\`. Continue with send, not reply.)`);
+		printState(r.state, r.updated);
 	}
 	if (pairing.length) {
 		console.log(`=== ${pairing.length} pending pairing request${pairing.length === 1 ? "" : "s"} (another agent asks to connect; ${pairing[0].approval} approval)`);
@@ -129,8 +137,10 @@ export async function reply(id, o) {
 	const res = await owner("POST", `/owner/tasks/${q(id)}/reply`, {
 		text, state: o.state, artifact: !!o.artifact, artifactName: o["artifact-name"], force: !!o.force,
 	});
+	printPush(res.delivery || res);
 	printDelivery(res);
 	console.log(`${id} -> ${o.state}`);
+	console.log(`task state saved: ${res.task?.status?.state || o.state} (peers can read it with GetTask even if a push fails)`);
 }
 
 export async function history(ctx, o) {
@@ -138,10 +148,15 @@ export async function history(ctx, o) {
 	if (o.from) qs.set("from", o.from);
 	const rows = await owner("GET", `/owner/history/${q(ctx)}?${qs}`);
 	if (o.json) return out(rows);
+	const states = new Map();
+	const peers = new Map(rows.filter((e) => e.task_id && e.peer).map((e) => [e.task_id, e.peer]));
 	for (const e of rows) {
 		const tag = [e.event, e.state || e.role].filter(Boolean).join("/");
-		console.log(`${e.ts} ${(e.dir || "").padEnd(5)} ${(e.peer || "-").padEnd(10)} ${e.task_id || "-"} ${tag}: ${(e.text || "").slice(0, 400)}`);
+		const forced = e.data?.forced ? `forced: ${e.data.previousState} → ${e.data.state}; ` : "";
+		console.log(`${e.ts} ${(e.dir || "").padEnd(5)} ${(e.peer || "-").padEnd(10)} ${e.task_id || "-"} ${tag}: ${forced}${(e.text || "").slice(0, 400)}`);
+		if (e.currentState?.state || e.state) states.set(`${e.peer || peers.get(e.task_id) || "-"}/${e.task_id || "-"}`, e.currentState || { state: e.state, timestamp: e.ts });
 	}
+	for (const [task, status] of states) printState(status.state, status.timestamp, states.size > 1 ? task : "");
 }
 
 export async function contexts() {

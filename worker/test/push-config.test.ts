@@ -159,3 +159,70 @@ test("1.0 list pages configs and 0.3 delete returns null", async (t) => {
 	hides(del.text, token);
 	assert.equal(s.logs.some((line) => line.includes(token)), false);
 });
+
+test("push results identify callbacks without URLs, and forced replies preserve transitions", async (t) => {
+	const s = setup();
+	t.after(s.restore);
+	const originalFetch = globalThis.fetch;
+	t.after(() => { globalThis.fetch = originalFetch; });
+	const attempted: string[] = [];
+	globalThis.fetch = (async (url: any) => {
+		attempted.push(String(url));
+		return new Response(null, { status: String(url).includes("first") ? 401 : 200 });
+	}) as typeof fetch;
+	const ada = (await s.owner("POST", "/owner/peers", { label: "ada" })).token;
+	const first = "https://hooks.example.net/private/first?token=first-secret";
+	const second = "https://hooks.example.net/private/second?token=second-secret";
+	const sent = await s.call(ada, "message/send", {
+		message: { kind: "message", role: "user", messageId: crypto.randomUUID(), parts: [{ kind: "text", text: "hello" }] },
+		configuration: { pushNotificationConfig: { id: "message", url: first } },
+	});
+	const { id: taskId, contextId } = sent.data.result;
+	await s.call(ada, "tasks/pushNotificationConfig/set", { taskId, pushNotificationConfig: { id: "task", url: second } });
+	const working = await s.owner("POST", `/owner/tasks/${taskId}/working`, {});
+	assert.deepEqual(working.push.map((r: any) => [r.role, r.host, r.ok, r.info]), [
+		["message push", "hooks.example.net", false, "HTTP 401"], ["task push config", "hooks.example.net", true, "HTTP 200"],
+	]);
+	assert.deepEqual(working.push.map((r: any) => r.fingerprint), [(await sha256(first)).slice(0, 12), (await sha256(second)).slice(0, 12)]);
+	assert.doesNotMatch(JSON.stringify(working.push), /token=|first-secret|second-secret|private|https:/);
+	const done = await s.owner("POST", `/owner/tasks/${taskId}/reply`, { text: "done", state: "completed" });
+	assert.deepEqual(done.delivery.push, working.push);
+	assert.equal(done.task.status.state, "completed");
+	const blocked = await s.owner("POST", `/owner/tasks/${taskId}/reply`, { text: "question", state: "input-required" });
+	assert.match(blocked.error, /already completed/);
+	const forced = await s.owner("POST", `/owner/tasks/${taskId}/reply`, { text: "question", state: "input-required", force: true });
+	assert.equal(forced.task.status.state, "input-required");
+	const history = await s.owner("GET", `/owner/history/${contextId}?from=ada`);
+	const transitions = history.filter((r: any) => r.event === "forced");
+	assert.equal(transitions.length, 1);
+	assert.deepEqual(transitions[0].data, { forced: true, previousState: "completed", state: "input-required" });
+	assert.ok(history.every((r: any) => r.currentState.state === "input-required"));
+	assert.deepEqual(history.at(-1).currentState, { state: "input-required", timestamp: forced.task.status.timestamp });
+	assert.doesNotMatch(JSON.stringify(history), /first-secret|second-secret|private/);
+	const count = attempted.length;
+	const retry = await s.owner("POST", `/owner/tasks/${taskId}/reply`, { text: "question", state: "input-required", force: true });
+	assert.equal(retry.idempotent, true);
+	assert.equal(attempted.length, count);
+	const after = await s.owner("GET", `/owner/history/${contextId}?n=1&from=ada`);
+	assert.deepEqual(after[0].currentState, history.at(-1).currentState);
+	globalThis.fetch = (async () => { throw new Error(`failed ${first}`); }) as typeof fetch;
+	const failed = await s.owner("POST", `/owner/tasks/${taskId}/reply`, { text: "final", state: "completed" });
+	assert.doesNotMatch(JSON.stringify(failed.delivery), /first-secret|second-secret|private/);
+	assert.equal(failed.delivery.push[0].info, "push request failed");
+});
+
+test("limited outbound history reports the latest state for that peer only", async (t) => {
+	const s = setup();
+	t.after(s.restore);
+	const contextId = "outbound-history";
+	const taskId = "remote-task";
+	await s.owner("POST", "/owner/history", { contextId, taskId, peer: "ada", state: "working", ts: "2026-11-07T01:00:00.000Z" });
+	await s.owner("POST", "/owner/history", { contextId, taskId, peer: "bob", state: "failed", ts: "2026-11-07T01:01:00.000Z" });
+	await s.owner("POST", "/owner/history", { contextId, taskId, peer: "ada", event: "note", text: "latest note without a state" });
+	const rows = await s.owner("GET", `/owner/history/${contextId}?from=ada&n=1`);
+	assert.equal(rows.length, 1);
+	assert.equal(rows[0].event, "note");
+	assert.deepEqual(rows[0].currentState, { state: "working", timestamp: "2026-11-07T01:00:00.000Z" });
+	assert.equal(rows[0].current_history_json, undefined);
+	assert.equal(rows[0].current_status_json, undefined);
+});

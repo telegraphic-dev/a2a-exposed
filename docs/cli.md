@@ -217,7 +217,7 @@ The owner token authenticates these commands.
 | `inbox [--context C] [--from PEER] [--all] [--json]` | Unhandled inbound tasks, following every page, and a reply to a message you sent until this list is read. Past 10000 pages it exits with an error instead of a short list. Peer text is untrusted. `--from` is one peer. The wake hint includes it. A reply is marked `reply` and `kind: "outbound"`: read it with `history`, and continue that conversation with `send`. `--all` keeps showing a reply after it has been listed. Then pending pairing requests, including the dashboard URL when `MANAGE_URL` is set. With `--json`, the rows go to stdout and pairing requests to stderr |
 | `show <taskId>` | Full task JSON |
 | `working <taskId>` | Mark the task `working` |
-| `reply <taskId> (--text T \| --stdin) [--state completed\|input-required\|rejected\|failed\|working] [--artifact] [--artifact-name N] [--force]` | Reply. Default state is `completed` |
+| `reply <taskId> (--text T \| --stdin) [--state completed\|input-required\|rejected\|failed\|working] [--artifact] [--artifact-name N] [--force]` | Reply. Default state is `completed`. `--force` changes a terminal task again; see below |
 | `history <contextId> [--from PEER] [-n 50] [--json]` | Conversation log. `--from` is one peer. The wake hint includes it. Without `--from`, the log is every peer that owns that context id, and each row has `peer` |
 | `contexts` | Recent conversations |
 | `export [--sql]` | JSON dump (`GET /owner/export`). `--sql` prints the same tables as SQL. The read is one transaction. Peer-token hashes and encrypted outbound peer tokens are in the dump. The owner token stays a Worker secret |
@@ -397,3 +397,26 @@ For a hosted service advertising upstream configuration in `hosted capabilities 
 Run `hosted upstream preview --agent NAME --json` to read `version` and `configured`. Supply that explicit `--version N` to `hosted upstream set --agent NAME --url URL`, `hosted upstream clear --agent NAME`, or `hosted upstream verify --agent NAME`. Read preview again after saving. A version conflict requires another review of the current version; the CLI never retries a write automatically.
 
 Set reads the agent bearer with `--upstream-token-file FILE` or `--upstream-token-env VAR`, and the Access pair with `--access-client-id-file FILE` / `--access-client-id-env VAR` and `--access-client-secret-file FILE` / `--access-client-secret-env VAR`. Files must be regular, mode 600, and at most 4098 bytes. Defaults are the named environment variables `UPSTREAM_TOKEN`, `UPSTREAM_ACCESS_CLIENT_ID` and `UPSTREAM_ACCESS_CLIENT_SECRET`. A new address needs a new Access pair; blank credentials keep saved values only for the same address. Clear removes the address and every upstream credential. Preview and results never print credentials or the saved address. Verify reports a connection layer code and sends no peer message or task. Keep secrets out of arguments, chat and MCP tool inputs.
+
+### Reply state and push results
+
+`reply --force` permits another change to a terminal task, including reopening
+`completed` as `input-required`. Peers can read each change with `GetTask` and
+receive the configured pushes. History labels the transition
+`forced: completed → input-required`. An identical retry reads the first delivery
+result and does not create another transition.
+
+Each push result shows `role` (`message push` for a callback supplied with a
+message, or `task push config` for a callback registered on the task), the host,
+and a fingerprint (the first 12 hex characters of SHA-256 of the full callback
+URL). Paths, query strings and credentials are omitted. Callbacks saved before
+role tracking default to `task push config`. The final `task state saved:` line
+confirms storage even when delivery fails; the peer can still use `GetTask`.
+
+Text `inbox` output ends each task with `current state: <state> (<timestamp>)`.
+Text `history` ends with current-state summaries for the tasks in the displayed
+rows, identifying each peer/task when more than one is present. Inbound summaries
+use the stored task status, including when the displayed rows are limited by
+`-n`; outbound summaries use the latest recorded state in that peer/task’s full log. JSON output
+keeps its array shape; history rows with a known task state include `currentState`
+with `state` and `timestamp`.

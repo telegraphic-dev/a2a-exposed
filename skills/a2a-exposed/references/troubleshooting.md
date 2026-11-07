@@ -22,7 +22,7 @@ One present-tense action per symptom. Cloudflare login, error 1042, and the host
 | Proxy mode: peers get HTTP 502 | Run `upstream verify`. It names the layer. A peer 401 is that peer's own token. |
 | `status` warns `PEER_<ALIAS>_TOKEN` overrides the saved token | A stale environment variable shadows the saved token. Unset it where it is set. |
 | `send` fails with `peer returned HTTP 4xx/5xx` | Check the alias URL and token with `peers list`. Try `--proto 0.3` for an older agent. |
-| Push FAILED | The peer push URL must be public HTTPS. The reply stays available through `GetTask`. |
+| Push FAILED | Each result names the callback role, host and SHA-256 URL fingerprint (first 12 hex characters), without the path or query. The peer push URL must be public HTTPS. `task state saved:` confirms the reply stays available through `GetTask` even if a push fails. |
 | Worker logs | Live logs are in the Cloudflare dashboard. Persisted logs follow `deploy --workers-logs on`. Lines include `message_received`, `wake_sent`, `wake_failed`, `auth_failed`, and `upstream_error`. |
 | Redeploy after an upgrade | Run `npx -y a2a-exposed@latest deploy`. Secrets on the Worker stay. |
 

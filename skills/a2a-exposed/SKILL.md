@@ -96,7 +96,7 @@ Hosted status points to `hosted capabilities --json` before setup; saved wake se
    | Couldn't do it (error, missing access) | `reply <taskId> --state failed --text "what went wrong"` |
    | Progress note, still working | `reply <taskId> --state working --text "..."` |
 
-   For long or multi-line text, use `--stdin`: `printf '%s' "$TEXT" | npx -y a2a-exposed@latest reply <taskId> --stdin`. `--artifact` attaches the text as an artifact for non-completed states too. Terminal tasks (`completed`, `rejected`, `failed`, `canceled`) can't be changed without `--force`.
+   For long or multi-line text, use `--stdin`: `printf '%s' "$TEXT" | npx -y a2a-exposed@latest reply <taskId> --stdin`. `--artifact` attaches the text as an artifact for non-completed states too. Terminal tasks (`completed`, `rejected`, `failed`, `canceled`) can't be changed without `--force`. This can reopen a terminal task (for example, `completed` → `input-required`); peers see each state change. History marks these transitions as `forced`. Push results show the callback role, host and URL fingerprint without its path or query. `task state saved:` confirms storage even when delivery fails. Text history and inbox output include a current-state footer per task.
 
    Push reply results include `httpStatus` only for an exact HTTP status in the 100–599 range; transport error text is not a status. Refused paired endpoints show only their host, without the path or query.
 
