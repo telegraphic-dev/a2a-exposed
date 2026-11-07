@@ -187,13 +187,13 @@ test("per-tenant SQLite: directory, config push, and isolation", async (t) => {
 
 	const card = async (name: string, headers?: HeadersInit) => (await mf.dispatchFetch(`https://${name}.example.com/.well-known/agent-card.json`, { headers })).json() as Promise<{ name: string }>;
 	const aliceCard = await mf.dispatchFetch("https://alice.example.com/.well-known/agent-card.json");
-	assert.equal(aliceCard.headers.get("cache-control"), "public, max-age=60");
+	assert.equal(aliceCard.headers.get("cache-control"), "no-store");
 	assert.equal((await aliceCard.json() as { name: string }).name, "Alice");
 	const aliceHead = await mf.dispatchFetch("https://alice.example.com/.well-known/agent-card.json", { method: "HEAD" });
 	assert.equal(aliceHead.status, 200);
 	assert.equal(await aliceHead.text(), "");
 	assert.equal(aliceHead.headers.get("content-type"), "application/json");
-	assert.equal(aliceHead.headers.get("cache-control"), "public, max-age=60");
+	assert.equal(aliceHead.headers.get("cache-control"), "no-store");
 	const aliceLegacy = await mf.dispatchFetch("https://alice.example.com/.well-known/agent.json", { method: "HEAD" });
 	assert.equal(aliceLegacy.status, 200);
 	assert.equal(await aliceLegacy.text(), "");
@@ -827,6 +827,17 @@ test("TenantStore.deleteStorage wipes the object and a second call succeeds", as
 		config: { AGENT_NAME: "delta" },
 	});
 	await kv.put("tenant:delta", JSON.stringify({ id: "id-delta", status: "active", region: "default", version: 1 }));
+	const cardPaths = ["/.well-known/agent-card.json", "/.well-known/agent.json"];
+	// Warm the directory lookup before deletion, as a browser discovering this agent would.
+	for (const path of cardPaths) {
+		for (const method of ["GET", "HEAD"]) {
+			const card = await mf.dispatchFetch(`https://delta.example.com${path}`, { method });
+			assert.equal(card.status, 200);
+			assert.equal(card.headers.get("cache-control"), "no-store", "a cached 200 must not outlive the agent");
+			if (method === "HEAD") assert.equal(await card.text(), "");
+			else assert.equal((await card.json() as { name: string }).name, "delta");
+		}
+	}
 	const before = await stub.storageStatus();
 	assert.equal(before.configured, true);
 	assert.ok(before.tables.includes("tenant_config"));
@@ -838,6 +849,16 @@ test("TenantStore.deleteStorage wipes the object and a second call succeeds", as
 	assert.equal((await stub.storageStatus()).configured, true, "the owner HTTP API does not wipe storage");
 	const wiped = await stub.deleteStorage();
 	assert.equal(wiped.deleted, true);
+	// Keep the directory entry active: even a stale router/KV lookup must reach the wiped object.
+	for (const path of cardPaths) {
+		for (const method of ["GET", "HEAD"]) {
+			const card = await mf.dispatchFetch(`https://delta.example.com${path}`, { method });
+			assert.equal(card.status, 404);
+			assert.equal(card.headers.get("cache-control"), "no-store");
+			if (method === "HEAD") assert.equal(await card.text(), "");
+			else assert.deepEqual(await card.json(), { error: "no such agent" });
+		}
+	}
 	const after = await stub.storageStatus();
 	assert.equal(after.configured, false);
 	assert.deepEqual(after.tables, []);
