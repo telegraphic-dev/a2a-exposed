@@ -34,7 +34,7 @@ export const CONFIG_KEYS = [
 	"AGENT_NAME", "AGENT_DESCRIPTION", "AGENT_VERSION", "AGENT_SKILLS",
 	"PROVIDER_ORGANIZATION", "PROVIDER_URL", "DOCUMENTATION_URL",
 	"WAKE_WEBHOOK_URL", "WAKE_WEBHOOK_KEY", "WAKE_HMAC_SECRET", "WAKE_ACCESS_CLIENT_ID", "WAKE_ACCESS_CLIENT_SECRET",
-	"WAKE_PRESET", "WAKE_AGENT_ID", "WAKE_KEY_HEADER", "WAKE_KEY_PREFIX", "WAKE_BODY_TEMPLATE", "WAKE_CLI_COMMAND",
+	"WAKE_CONNECTOR_ID", "WAKE_CONNECTOR_GENERATION", "WAKE_TRANSPORT", "WAKE_PRESET", "WAKE_AGENT_ID", "WAKE_KEY_HEADER", "WAKE_KEY_PREFIX", "WAKE_BODY_TEMPLATE", "WAKE_CLI_COMMAND",
 	"WAKE_DEBOUNCE_SECONDS", "WAKE_BUSY_SECONDS", "WAKE_MAX_PER_HOUR",
 	/** "1" when this self-host deploy has the minute cron. Hosted flushes from the inbox alarm instead. */
 	"ENABLE_CRON",
@@ -69,6 +69,8 @@ export interface ControlFetcher {
 /** Bindings the Worker entry sees. Gate bindings are optional and empty by default. */
 export interface WorkerBindings extends ConfigFields {
 	DB: SqlDb;
+	WAKE_RELAY_ENABLED?: string;
+	WAKE_RELAY?: DoNamespace;
 	PUBLIC_URL?: string;
 	OWNER_TOKEN?: string;
 	// --- gates (spec §6 / plan §4.3). Unset = today's behaviour. Reserved ones are parsed onto ctx.gates only. ---
@@ -178,6 +180,7 @@ export interface FeatureGates {
 
 /** Pushed tenant row. Tests build a context from this; the Durable Object stores it. */
 export interface HostedOverlay {
+	configVersion?: number;
 	id: string;
 	db: SqlDb;
 	publicUrl: string;
@@ -351,6 +354,7 @@ function pickConfig(src: ConfigFields | Record<string, string | undefined> | und
  */
 export class TenantContext implements ConfigFields {
 	readonly id: string;
+	readonly configVersion: number;
 	readonly mode: TenancyMode;
 	readonly status: string;
 	readonly DB: SqlDb;
@@ -366,7 +370,11 @@ export class TenantContext implements ConfigFields {
 	readonly PROVIDER_ORGANIZATION?: string;
 	readonly PROVIDER_URL?: string;
 	readonly DOCUMENTATION_URL?: string;
+	readonly WAKE_CONNECTOR_ID?: string;
+	readonly WAKE_CONNECTOR_GENERATION?: string;
+	readonly WAKE_TRANSPORT?: string;
 	readonly WAKE_WEBHOOK_URL?: string;
+	readonly relayNamespace?: DoNamespace;
 	readonly WAKE_WEBHOOK_KEY?: string;
 	readonly WAKE_HMAC_SECRET?: string;
 	readonly WAKE_ACCESS_CLIENT_ID?: string;
@@ -411,13 +419,14 @@ export class TenantContext implements ConfigFields {
 	#peerKey: Promise<CryptoKey | null> | null = null;
 
 	constructor(init: {
-		id: string; mode: TenancyMode; status: string; db: SqlDb; publicUrl: string;
+		configVersion?: number; id: string; mode: TenancyMode; status: string; db: SqlDb; publicUrl: string;
 		gates: FeatureGates; limits: Record<string, unknown>; approval: Record<string, unknown>;
 		config: ConfigFields; ownerToken?: string; ownerTokenHash?: string; secretsKey?: string;
 		approvalClientSecret?: string; controlService?: ControlFetcher;
-		tenantDirectory?: KvNamespace; tenantNamespace?: DoNamespace;
+		tenantDirectory?: KvNamespace; tenantNamespace?: DoNamespace; relayNamespace?: DoNamespace;
 	}) {
 		this.id = init.id;
+		this.configVersion = init.configVersion ?? 0;
 		this.mode = init.mode;
 		this.status = init.status;
 		this.DB = init.db;
@@ -432,6 +441,7 @@ export class TenantContext implements ConfigFields {
 		this.#controlService = init.controlService;
 		this.#tenantDirectory = init.tenantDirectory;
 		this.#tenantNamespace = init.tenantNamespace;
+		this.relayNamespace = init.relayNamespace;
 		Object.assign(this, init.config);
 	}
 
@@ -519,6 +529,7 @@ export function resolveTenant(env: WorkerBindings, req?: Request): TenantContext
 		id: "", mode: "single", status: "active", db: env.DB, publicUrl, gates,
 		limits: {}, approval: {}, config: pickConfig(env, CONFIG_KEYS),
 		ownerToken: env.OWNER_TOKEN, secretsKey: undefined,
+		relayNamespace: env.WAKE_RELAY_ENABLED === "1" ? env.WAKE_RELAY : undefined,
 		approvalClientSecret: (env.APPROVAL_OIDC_CLIENT_SECRET || "").trim(),
 		controlService: env.CONTROL_SERVICE,
 	});
@@ -540,7 +551,7 @@ export function hostedTenantContext(env: WorkerBindings, overlay: HostedOverlay)
 	// Hosted approval is the pushed tenant object only. Worker APPROVAL_OIDC_* does not approve a tenant.
 	const approval = approvalFromRecord(overlay.approval);
 	return new TenantContext({
-		id: overlay.id, mode: "host", status: overlay.status || "active", db: overlay.db,
+		configVersion: overlay.configVersion, id: overlay.id, mode: "host", status: overlay.status || "active", db: overlay.db,
 		publicUrl: overlay.publicUrl, gates: { ...parsed.gates, approvalOidc: approval.gate },
 		limits: overlay.limits || {}, approval: approval.publicRecord,
 		config, ownerTokenHash: hash || undefined, secretsKey: parsed.secretsKey,
@@ -548,5 +559,6 @@ export function hostedTenantContext(env: WorkerBindings, overlay: HostedOverlay)
 		controlService: env.CONTROL_SERVICE,
 		tenantDirectory: env.TENANT_DIRECTORY,
 		tenantNamespace: env.TENANT_DO,
+		relayNamespace: env.WAKE_RELAY_ENABLED === "1" ? env.WAKE_RELAY : undefined,
 	});
 }

@@ -11,6 +11,7 @@
 // while TENANCY=host, so there is no shared database to flush. A single inbox still uses its minute cron.
 // The daily backup cron runs only when BACKUP_BUCKET is bound, and it returns before any flush.
 // OpenID Connect approval, when the issuer, client id, client secret, and allowlist are set, uses the same pages.
+import { relayFetch } from "./relay-routing.ts";
 import { DurableObject } from "cloudflare:workers";
 import worker, { cronFlush, dispatch, nextCronAt, onWakeWrite, runOwnerRpc } from "./index.ts";
 import { accountIdOf, type OwnerRpcRequest, type OwnerRpcResult } from "./owner-rpc.ts";
@@ -24,6 +25,7 @@ import { WAKE_SECRET_KEYS, omitSealedSecrets, openWakeSecrets } from "./wake-sec
 
 export { clearDirectoryCache, directoryKey, lookupDirectory, parseDirectoryEntry, pinDirectoryRegion, tenantNameFromHost, tenantRegion, TENANT_NAME } from "./directory.ts";
 export type { DirectoryEntry };
+export { WakeRelay } from "./relay.ts";
 
 const JSON_HDR = { "content-type": "application/json", "cache-control": "no-store" };
 const notFound = () => Response.json({ error: "no such agent" }, { status: 404, headers: JSON_HDR });
@@ -170,7 +172,7 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 			}
 		}
 		return hostedTenantContext(this.env, {
-			id: row.tenantId, db: this.#db, publicUrl, ownerTokenHash: row.ownerTokenHash,
+			configVersion: row.version, id: row.tenantId, db: this.#db, publicUrl, ownerTokenHash: row.ownerTokenHash,
 			config, limits: row.limits, approval: row.approval, status: row.status,
 		});
 	}
@@ -276,6 +278,7 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 				await this.#enqueueArm(false);
 				return { version: current.version, applied: false };
 			}
+			if (current && current.tenantId !== body.tenantId) throw new Error("pushConfig: tenant identity is immutable");
 			const limits = requireObject(body.limits, "limits");
 			const approval = requireObject(body.approval, "approval");
 			const secretsEnc = body.secretsEnc ?? null;
@@ -291,6 +294,14 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 				ownerTokenHash: body.ownerTokenHash ? body.ownerTokenHash.toLowerCase() : null,
 				secretsEnc,
 			};
+			// Fence separate relay authority before accepting a suspension/deletion or reactivation.
+			if (current && (body.status !== "active" || current.status !== "active")) {
+				const tenant = await this.#tenant();
+				if (tenant?.relayNamespace) {
+					const response = await relayFetch(tenant, body.status === "active" ? "/enable" : "/disable", { method: "POST" });
+					if (!response.ok) throw new Error("relay lifecycle fence failed");
+				}
+			}
 			const now = new Date().toISOString();
 			this.#tx(() => {
 				this.#sql.exec(CREATE_CONFIG);
@@ -334,6 +345,11 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 				put(key: string, value: string): Promise<void>;
 			};
 			const tenantId = this.#row?.tenantId ?? null;
+			const tenant = await this.#tenant();
+			if (tenant?.relayNamespace) {
+				const response = await relayFetch(tenant, "/disable", { method: "POST" });
+				if (!response.ok) throw new Error("relay deletion fence failed");
+			}
 			await storage.deleteAlarm();
 			await storage.deleteAll();
 			const left = readRow(this.#sql);

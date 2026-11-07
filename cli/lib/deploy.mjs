@@ -53,7 +53,7 @@ const DEPLOY_KEYS = [
 	"CLOUDFLARE_ACCOUNT_ID", "A2A_WORKER_NAME", "A2A_HOSTNAME", "A2A_D1_ID", "A2A_D1_NAME",
 	"A2A_AGENT_NAME", "A2A_AGENT_DESCRIPTION", "A2A_AGENT_VERSION", "A2A_AGENT_SKILLS",
 	"A2A_PROVIDER_ORGANIZATION", "A2A_PROVIDER_URL", "A2A_DOCUMENTATION_URL",
-	"WAKE_PRESET", "WAKE_AGENT_ID", "WAKE_KEY_HEADER", "WAKE_KEY_PREFIX", "WAKE_BODY_TEMPLATE", "WAKE_CLI_COMMAND",
+	"A2A_WAKE_RELAY", "WAKE_TRANSPORT", "WAKE_PRESET", "WAKE_AGENT_ID", "WAKE_KEY_HEADER", "WAKE_KEY_PREFIX", "WAKE_BODY_TEMPLATE", "WAKE_CLI_COMMAND",
 	"WAKE_DEBOUNCE_SECONDS", "WAKE_BUSY_SECONDS", "WAKE_MAX_PER_HOUR", "A2A_MAX_BODY", "A2A_RATE_PER_MIN", "A2A_ENABLE_CRON",
 	"A2A_WORKERS_DEV_SUBDOMAIN", "A2A_RETIRED_HOSTNAMES", "PAIRING_APPROVAL", "A2A_PBKDF2_ITERATIONS", "A2A_WORKERS_LOGS", "A2A_MCP",
 	"A2A_UPSTREAM_URL", "A2A_UPSTREAM_CARD_URL",
@@ -65,6 +65,7 @@ const FLAG_KEYS = {
 	"account-id": "CLOUDFLARE_ACCOUNT_ID", "cf-profile": "CF_PROFILE", "worker-name": "A2A_WORKER_NAME", hostname: "A2A_HOSTNAME", "d1-name": "A2A_D1_NAME",
 	"agent-name": "A2A_AGENT_NAME", "agent-description": "A2A_AGENT_DESCRIPTION", "agent-skills": "A2A_AGENT_SKILLS",
 	"provider-organization": "A2A_PROVIDER_ORGANIZATION", "provider-url": "A2A_PROVIDER_URL",
+	"wake-relay": "A2A_WAKE_RELAY", "wake-transport": "WAKE_TRANSPORT",
 	preset: "WAKE_PRESET", "agent-id": "WAKE_AGENT_ID", "key-header": "WAKE_KEY_HEADER", "key-prefix": "WAKE_KEY_PREFIX",
 	"body-template": "WAKE_BODY_TEMPLATE", "cli-command": "WAKE_CLI_COMMAND", debounce: "WAKE_DEBOUNCE_SECONDS", busy: "WAKE_BUSY_SECONDS", "max-per-hour": "WAKE_MAX_PER_HOUR",
 	"pairing-approval": "PAIRING_APPROVAL", "pbkdf2-iterations": "A2A_PBKDF2_ITERATIONS", "workers-logs": "A2A_WORKERS_LOGS", mcp: "A2A_MCP",
@@ -251,6 +252,8 @@ function applyFlags(o, { persist = true } = {}) {
 		if (!["on", "off"].includes(upd.A2A_WORKERS_LOGS)) die("--workers-logs must be on or off (Cloudflare Workers Logs: persisted, searchable Worker logs; query strings redacted)");
 		upd.A2A_WORKERS_LOGS = upd.A2A_WORKERS_LOGS === "on" ? "1" : null;
 	}
+	if (upd.WAKE_TRANSPORT && !["webhook", "relay"].includes(upd.WAKE_TRANSPORT)) die("--wake-transport must be webhook or relay");
+	if (upd.A2A_WAKE_RELAY && !["0", "1"].includes(upd.A2A_WAKE_RELAY)) die("--wake-relay must be 0 or 1");
 	if (upd.WAKE_PRESET && !PRESETS.includes(upd.WAKE_PRESET)) die(`unknown preset ${upd.WAKE_PRESET} (${PRESETS.join(" | ")})`);
 	for (const [flag, key] of [["upstream", "A2A_UPSTREAM_URL"], ["upstream-card-url", "A2A_UPSTREAM_CARD_URL"]]) {
 		if (upd[key] === undefined) continue;

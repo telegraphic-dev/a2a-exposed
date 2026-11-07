@@ -24,6 +24,7 @@ test("release categories cover user changes and exclude internal staging work", 
 });
 
 test("release seed previews versioned history and rejects mutation flags", () => {
+	const changelogBefore = read("CHANGELOG.md");
 	const script = new URL("./seed-release-notes.mjs", import.meta.url);
 	const preview = (...args) => spawnSync(process.execPath, [script.pathname, ...args], { encoding: "utf8" });
 	const result = preview("--dry-run");
@@ -35,5 +36,5 @@ test("release seed previews versioned history and rejects mutation flags", () =>
 	assert.ok(plan.every(({ tag, body }) => tag.startsWith("v") && body.trim()));
 	assert.equal(preview().stdout, result.stdout);
 	assert.equal(preview("--apply").status, 2);
-	assert.equal(fs.existsSync(new URL("../CHANGELOG.md", import.meta.url)), false);
+	assert.equal(read("CHANGELOG.md"), changelogBefore, "preview must not mutate contributor release notes");
 });

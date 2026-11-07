@@ -1,5 +1,8 @@
 # Protocol
 
+The optional wake-only WebSocket carrier has a separate [relay v1 contract](wake-relay.md#websocket-protocol-v1). It does not change A2A methods or add streaming/façade capabilities.
+
+
 The public endpoint is the Worker origin. `HEAD` on a GET route returns that GET's status and headers with an empty body. It does not clear a pending wake, spend a setup or pairing lookup, or finish an OpenID Connect callback. A device callback that is still open answers 200 and the approval page's status, and does not approve. An MCP callback `HEAD` stays on the not-approved page, because the success response is a redirect that carries a newly issued code.
 
 ## A2A 1.0

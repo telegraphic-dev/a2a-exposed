@@ -4,6 +4,19 @@ import { createTenant, saveWakeSettings, openWakeSecrets, sealWakeSecrets, tenan
 import { openWakeSecrets as openWorker } from "../../worker/src/wake-secrets.ts";
 import { openDb } from "./sql.ts";
 
+test("relay settings preserve application authentication without a URL and use the same config CAS", async () => {
+	const s = await setup();
+	const version = (await s.row())!.config_version;
+	const edit = { transport: "relay" as const, connectorId: "default", generation: 3, url: "", expectedVersion: version };
+	assert.deepEqual(await s.save(edit), { ok: true });
+	const saved = (await s.row())!;
+	assert.equal(JSON.parse(saved.config_json).WAKE_TRANSPORT, "relay");
+	assert.equal(JSON.parse(saved.config_json).WAKE_CONNECTOR_GENERATION, "3");
+	assert.equal((await s.secrets())?.WAKE_HMAC_SECRET, input.hmacSecret);
+	assert.equal(s.pushes.at(-1)?.config.WAKE_TRANSPORT, "relay");
+	assert.deepEqual(await s.save(edit), { ok: false, error: "conflict" });
+});
+
 const platform = "dummy-platform-secret";
 const input: WakeSaveInput = { accountId: "owner", name: "northwind", url: "https://hooks.example.com/wake", preset: "openbot", keyHeader: "", key: "", hmacSecret: "dummy-signing-secret" };
 async function setup() {

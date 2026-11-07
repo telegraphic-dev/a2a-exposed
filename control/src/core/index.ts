@@ -22,6 +22,7 @@ export {
 	tenantForAccount,
 	wakeHeaderProblem,
 	wakeSettingsOf,
+	WAKE_RELAY_PROTOCOL_VERSION,
 	wakeUrlProblem,
 } from "../tenants/wake.ts";
 export type { WakeSave, WakeSaveInput, WakeSettings } from "../tenants/wake.ts";

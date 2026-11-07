@@ -10,6 +10,17 @@ Empty scheduled checks stay quiet." Configure owner delivery (Hermes:
 `--deliver origin`) so notices reach the human. These instructions apply to
 each example prompt below.
 
+## Optional relay
+
+A runtime with `relay status --json` reporting protocolVersion 1 can use an
+outbound wake connector instead of a public webhook/Tunnel. Offer it alongside
+the choices below when supported. The feature is off by default and hosted
+services must integrate it explicitly. See [wake relay](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/wake-relay.md)
+for `relay create|status|revoke|run`, deployment flags, protected token files,
+loopback-only destinations, local HTTP acknowledgments and uncertain delivery.
+No automatic service install; polling remains the fallback. Relay catch-up means
+read the unfiltered inbox, never replay a serialized POST or resend a message.
+
 ## Delivery preflight
 
 Before any handler, routine or polling job is created, present these choices and wait for the human’s selection:

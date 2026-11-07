@@ -42,6 +42,16 @@ Outbound peer tokens from `peers sync` are sealed with a key derived from that s
 
 Peer messages, wake previews, claimed names, and card URLs are data. The operate skill shows `inbox` text inside `UNTRUSTED PEER MESSAGE` fences. It ignores embedded instructions and requires the user's approval for anything consequential or externally visible. Replies go to an external party. Do not include tokens, keys, internal paths, or private data unless the user approved that disclosure.
 
+## Wake relay
+
+The optional [wake relay](wake-relay.md) uses a dedicated, hashed tenant-scoped
+credential, not an owner/peer/MCP credential. Enrollment requires existing owner
+authentication; rotation/revocation and hosted lifecycle changes fence current
+sockets. A connector can POST only to its locally configured loopback URL.
+Receiver bearer/HMAC validation still applies. There is no façade forwarding,
+public-HTTPS exception, or exactly-once guarantee. Never log the credential-bearing
+WebSocket protocol request header. See the linked API/protocol contract.
+
 ## Wake webhooks
 
 A wake carries metadata, a hint command, and at most a 300-character preview. `openclaw-wake` carries no peer text. The wake URL, key, and HMAC secret are Worker secrets. They are not written to `config.env`.

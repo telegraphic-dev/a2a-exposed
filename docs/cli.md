@@ -1,5 +1,10 @@
 # CLI
 
+For the optional zero-dependency outbound connector, see [wake relay](wake-relay.md):
+`relay create|status|revoke|run`. It uses protected credential files/environment,
+a fixed loopback receiver, and no global install. Self-hosted `init`/`deploy` accept
+`--wake-relay 1` and `--wake-transport relay|webhook`; the feature defaults off.
+
 Node 22.18+, zero dependencies. Nothing needs a global install:
 
 ```bash
