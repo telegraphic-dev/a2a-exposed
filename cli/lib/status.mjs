@@ -7,6 +7,7 @@ import { isIP } from "node:net";
 import path from "node:path";
 import { promisify } from "node:util";
 import * as C from "./config.mjs";
+import { runtimeInfo } from "./runtime.mjs";
 import { CLI, cardUrlProblem, cfErrorCode, describeHttp, die, fingerprint, httpJson, isPrivateHost } from "./a2a.mjs";
 import { baseUrl, owner, ownerTry } from "./commands.mjs";
 import * as D from "./deploy.mjs";
@@ -284,7 +285,7 @@ export function nextStep(s) {
 	const n = nextStepCore(s);
 	const version = s.cliVersion || D.VERSION;
 	if (s.deployment !== "hosted" && s.workerVersion && s.latestVersion && newer(s.latestVersion, s.workerVersion) && !newer(s.workerVersion, version))
-		n.also.push(`a2a-exposed ${s.latestVersion} is available: run npx -y a2a-exposed@latest deploy`);
+		n.also.push(`a2a-exposed ${s.latestVersion} is available: run ${CLI} deploy`);
 	const sh = (s.peerTokenShadowed || []).map((k) => `${k} is set in the environment and overrides the different peer token saved in ${s.configFile} (e.g. a stale value from before \`connect\` stored a new one): send/poll use the environment value. Unset ${k} where it is set to use the saved token`);
 	const addr = s.addresses;
 	if (addr && Array.isArray(addr.announcePending) && addr.announcePending.length)
@@ -465,7 +466,7 @@ function finishLayers(s, extra) {
  *  `net.lookup` and `net.doh` replace the system resolver and DNS-over-HTTPS in tests. */
 export async function collect(net = {}) {
 	const s = {
-		configFile: C.CONFIG_FILE,
+		configFile: C.CONFIG_FILE, runtime: runtimeInfo(),
 		deployment: C.deploymentKind(),
 		deployed: !!(C.get("A2A_D1_ID") && C.get("A2A_WORKER_NAME")),
 		worker: C.get("A2A_WORKER_NAME"), d1: C.get("A2A_D1_NAME"), account: C.get("CLOUDFLARE_ACCOUNT_ID"), cfProfile: C.get("CF_PROFILE"),
@@ -609,6 +610,7 @@ export async function status(o) {
 	else {
 		const rows = [
 			["config", s.configFile],
+			["runtime", `Node ${s.runtime.node} (${s.runtime.execPath})${s.runtime.warning ? `; WARNING: ${s.runtime.warning}` : ""}`],
 			["deployment", s.deployment === "hosted" ? "hosted" : s.deployed ? `Worker ${s.worker}, D1 ${s.d1 || s.worker}${s.account ? `, account ${s.account}` : ""}${s.cfProfile ? `, cf profile ${s.cfProfile}` : ""}${s.cron ? ", cron flush on" : ""}` : "none"],
 			["base URL", s.baseUrl ? `${s.baseUrl} (${s.baseUrlEnv ? `from the exported A2A_BASE_URL; ${s.configFile} has ${s.baseUrlSaved || "none"}` : s.urlKind})` : "(not saved)"],
 		];

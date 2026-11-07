@@ -5,6 +5,7 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import * as C from "./config.mjs";
+import { pathNode, pinnedCommand, sameExecutable } from "./runtime.mjs";
 import { CLI, cardUrlProblem, cfErrorCode, die, fetchUpstreamCard, fingerprint, httpJson, randomToken, upstreamAuth, upstreamCardUrlProblem, upstreamUrlProblem } from "./a2a.mjs";
 import { owner, ownerTry } from "./commands.mjs";
 import { readHidden } from "./pair.mjs";
@@ -565,12 +566,23 @@ function deployedBase() {
 	return base;
 }
 
+/** Preserve an explicit/saved hint; default hints carry this deployment's config directory. */
+function configureWakeCommand(o) {
+	const saved = C.get("WAKE_CLI_COMMAND");
+	if (o["cli-command"] === undefined && (!saved || saved === C.DEFAULT_CLI_COMMAND) && C.NON_DEFAULT_CONFIG)
+		C.saveConfig({ WAKE_CLI_COMMAND: C.CLI_COMMAND });
+	const fromPath = pathNode();
+	if (!sameExecutable(fromPath, process.execPath))
+		console.error(`Node runtime: ${process.execPath}; PATH node: ${fromPath || "not found"}. Pinned wake command: ${pinnedCommand()}. To save it, pass --cli-command with that command.`);
+}
+
 export async function init(o) {
 	const prevUpstream = C.fileConfig().A2A_UPSTREAM_URL || "";
 	const switched = applyFlags(o);
 	const upstreamSecrets = await upstreamTokenCheck(o, { upstreamChanged: (C.get("A2A_UPSTREAM_URL") || "") !== prevUpstream });
 	const dir = workerDir(o);
-	C.saveConfig({ A2A_WORKER_DIR: dir, A2A_WORKER_NAME: workerName() });
+	C.saveConfig({ A2A_WORKER_DIR: dir, A2A_WORKER_NAME: workerName(), A2A_NODE_EXEC_PATH: process.execPath });
+	configureWakeCommand(o);
 	if (workersDevMode()) {
 		if (!WD.LABEL_RE.test(workerName())) die("on workers.dev the --worker-name must be a DNS label (lowercase letters, digits, hyphens)");
 		if (!C.get("A2A_HOSTNAME")) console.error(`note: no --hostname, deploying to https://${workerName()}.<account subdomain>.workers.dev (${WD.DOCS})`);
@@ -712,6 +724,7 @@ export async function deploy(o) {
 		die(`${C.CONFIG_FILE} has a saved deployment (A2A_D1_ID) but no A2A_WORKER_NAME; rerun with --worker-name <the Worker it deployed> (saved for next time)`);
 	const prevUpstream = C.fileConfig().A2A_UPSTREAM_URL || "";
 	const switched = applyFlags(o);
+	configureWakeCommand(o);
 	const upstreamSecrets = await upstreamTokenCheck(o, { upstreamChanged: (C.get("A2A_UPSTREAM_URL") || "") !== prevUpstream });
 	const dir = workerDir(o);
 	if (workersDevMode() && !WD.LABEL_RE.test(workerName())) die("on workers.dev the worker name must be a DNS label (lowercase letters, digits, hyphens)");

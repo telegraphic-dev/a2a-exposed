@@ -2,6 +2,7 @@
 // version and caches it; every run only reads that cache (no network call in the foreground). Off with
 // A2A_NO_UPDATE_CHECK=1, DO_NOT_TRACK=1, NO_UPDATE_NOTIFIER, CI, and when running from a source checkout.
 import fs from "node:fs";
+import { CLI_COMMAND } from "./config.mjs";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -31,7 +32,7 @@ export function newer(a, b) {
 /** The notice for `current`, given the cache contents (or "" when up to date / unknown). */
 export function notice(current, cache) {
 	if (!cache || !cache.latest || !newer(cache.latest, current)) return "";
-	return `a2a-exposed ${cache.latest} is available (you have ${current}): run npx -y a2a-exposed@latest deploy (updates the Worker; applies new D1 migrations). With a global install, npm i -g a2a-exposed@latest first. Silence: A2A_NO_UPDATE_CHECK=1`;
+	return `a2a-exposed ${cache.latest} is available (you have ${current}): run ${CLI_COMMAND} deploy (updates the Worker; applies new D1 migrations). With a global install, npm i -g a2a-exposed@latest first. Silence: A2A_NO_UPDATE_CHECK=1`;
 }
 
 export const due = (cache, now = Date.now()) => !cache || !(now - (cache.checkedAt || 0) < CHECK_INTERVAL_MS);

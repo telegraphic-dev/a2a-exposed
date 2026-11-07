@@ -142,7 +142,7 @@ export async function setOidc(o, extra = []) {
 	console.error("The client secret was not written there and was not printed.");
 	if (sawStdin && !(process.env.APPROVAL_OIDC_CLIENT_SECRET || "").trim())
 		console.error(`Export APPROVAL_OIDC_CLIENT_SECRET in the environment you use for deploy. This command did not store it.`);
-	console.error(`The next \`npx -y a2a-exposed@latest deploy\` uploads APPROVAL_OIDC_CLIENT_SECRET only when that variable is set in the environment. A line from --secret-stdin is discarded.`);
+	console.error(`The next \`${CLI} deploy\` uploads APPROVAL_OIDC_CLIENT_SECRET only when that variable is set in the environment. A line from --secret-stdin is discarded.`);
 	console.error("Password approval stays available unless --methods oidc (and only once the issuer, client id, secret and allowlist are all set).");
 }
 

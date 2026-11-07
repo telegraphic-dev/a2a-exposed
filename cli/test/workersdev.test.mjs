@@ -6,7 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseEnv } from "../lib/config.mjs";
+import { parseEnv, shellQuote } from "../lib/config.mjs";
 import { baseUrlFor, compactPrompt, needsSubdomain, noSubdomainHelp, parseWorkersDevSubdomain, LABEL_RE, REGISTRATION_STEPS, UNAVAILABLE_RE } from "../lib/workersdev.mjs";
 import { deployArgs, VERSION, migrationStderr, withoutWranglerConfigMention } from "../lib/deploy.mjs";
 
@@ -137,7 +137,7 @@ function stubEnv(t, { subdomain = "" } = {}) {
 
 test("init without --hostname: learns the existing subdomain from cf, saves the URL, redeploys once", async (t) => {
 	const s = stubEnv(t, { subdomain: "acme" });
-	const r = await s.init();
+	const r = await s.init("--config-dir", path.join(s.dir, "cfg"));
 	assert.equal(r.status, 0, r.stderr);
 	assert.equal(r.stdout.trim(), "https://wdtest.acme.workers.dev");
 	assert.match(r.stderr, /Approval password: not set[^\n]*pair set-password --web/);
@@ -151,6 +151,9 @@ test("init without --hostname: learns the existing subdomain from cf, saves the 
 	assert.equal(c.A2A_BASE_URL, "https://wdtest.acme.workers.dev");
 	assert.equal(c.A2A_WORKERS_DEV_SUBDOMAIN, "acme");
 	assert.ok(!c.A2A_HOSTNAME);
+	assert.equal(c.A2A_NODE_EXEC_PATH, process.execPath);
+	assert.equal(c.WAKE_CLI_COMMAND, `npx -y a2a-exposed@latest --config-dir ${path.join(s.dir, "cfg")}`);
+	assert.match(r.stderr, /Next: npx -y a2a-exposed@latest --config-dir .* status/);
 	const deploys = s.calls().filter((l) => l.startsWith("deploy"));
 	assert.deepEqual(deploys, ["deploy --message profile= sub= host= retired=", "deploy --message profile= sub=acme host= retired="]);
 	// a later deploy knows the URL up front: no second round
@@ -475,7 +478,7 @@ test("init --rotate-owner-token says what to update next", async (t) => {
 	const r = await s.cli(["init", "--skip-install", "--rotate-owner-token", "--dir", path.join(s.dir, "worker")]);
 	assert.equal(r.status, 0, r.stderr);
 	assert.ok(s.config().A2A_OWNER_TOKEN && s.config().A2A_OWNER_TOKEN !== old);
-	assert.match(r.stderr, /owner token replaced\. Update A2A_OWNER_TOKEN wherever this A2A endpoint is called, then run `npx -y a2a-exposed@latest peers sync`/);
+	assert.match(r.stderr, /owner token replaced\. Update A2A_OWNER_TOKEN wherever this A2A endpoint is called, then run `npx -y a2a-exposed@latest --config-dir [^`]+ peers sync`/);
 	assert.ok(!r.stderr.includes(old) && !r.stderr.includes(s.config().A2A_OWNER_TOKEN));
 });
 
@@ -554,4 +557,45 @@ test("wake set accepts mausbot with protected env inputs and explains verificati
 	const checked = await s.cli(["wake", "test"]);
 	assert.equal(checked.status, 0, checked.stderr);
 	assert.match(checked.stderr, /Verify and enable.*wake test again/);
+});
+
+test("init/deploy preserve an explicit wake command; deploy fills a missing config-pinned default", async (t) => {
+	const s = stubEnv(t, { subdomain: "acme" });
+	const custom = "mise exec node@22 -- npx -y a2a-exposed@latest --config-dir /tmp/example";
+	const r = await s.init("--cli-command", custom);
+	assert.equal(r.status, 0, r.stderr);
+	assert.equal(s.config().WAKE_CLI_COMMAND, custom);
+	const r2 = await s.cli(["deploy", "--skip-install"]);
+	assert.equal(r2.status, 0, r2.stderr);
+	assert.equal(s.config().WAKE_CLI_COMMAND, custom);
+	const file = path.join(s.dir, "cfg", "config.env");
+	fs.writeFileSync(file, fs.readFileSync(file, "utf8").split("\n").filter(line => !line.startsWith("WAKE_CLI_COMMAND=")).join("\n"));
+	const r3 = await s.cli(["deploy", "--skip-install"]);
+	assert.equal(r3.status, 0, r3.stderr);
+	assert.equal(s.config().WAKE_CLI_COMMAND, `npx -y a2a-exposed@latest --config-dir ${path.join(s.dir, "cfg")}`);
+	fs.appendFileSync(file, "WAKE_CLI_COMMAND=npx -y a2a-exposed@latest\n");
+	const r4 = await s.cli(["deploy", "--skip-install"]);
+	assert.equal(r4.status, 0, r4.stderr);
+	assert.equal(s.config().WAKE_CLI_COMMAND, `npx -y a2a-exposed@latest --config-dir ${path.join(s.dir, "cfg")}`);
+});
+
+test("init prints a pinned wake command when PATH selects another node", async (t) => {
+	const s = stubEnv(t, { subdomain: "acme" });
+	const bin = path.join(s.dir, "bin"); fs.mkdirSync(bin);
+	fs.writeFileSync(path.join(bin, "node"), "#!/bin/sh\nexit 99\n", { mode: 0o700 });
+	const r = await s.cli(["init", "--worker-name", "wdtest", "--skip-install", "--dir", path.join(s.dir, "worker")], { PATH: bin + path.delimiter + process.env.PATH });
+	assert.equal(r.status, 0, r.stderr);
+	assert.equal(s.config().A2A_NODE_EXEC_PATH, process.execPath);
+	assert.match(r.stderr, /Pinned wake command: env PATH=/);
+	assert.ok(r.stderr.includes(path.dirname(process.execPath)));
+});
+
+test("init stores a shell-safe config-pinned hint for a directory containing shell syntax", async (t) => {
+	const s = stubEnv(t, { subdomain: "acme" });
+	const config = path.join(s.dir, "bot's $HOME $(id)");
+	const r = await s.init("--config-dir", config);
+	assert.equal(r.status, 0, r.stderr);
+	const saved = parseEnv(fs.readFileSync(path.join(config, "config.env"), "utf8"));
+	assert.equal(saved.WAKE_CLI_COMMAND, `npx -y a2a-exposed@latest --config-dir ${shellQuote(config)}`);
+	assert.ok(r.stderr.includes(`${saved.WAKE_CLI_COMMAND} status`));
 });

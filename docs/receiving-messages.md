@@ -326,6 +326,13 @@ Polling runs get no `pairing_request` wake. `inbox` prints pending requests afte
 
 The environment needs Node 22.18+ and `A2A_BASE_URL` plus `A2A_OWNER_TOKEN`.
 
+Scheduled jobs need the same Node and config directory as setup. Pin Node with
+`mise use node@22` and run `mise exec -- npx -y a2a-exposed@latest --config-dir
+/path/to/bot-config inbox` from that project directory. Outside it, use an absolute
+mise path and `mise exec node@22 -- ...`. `a2a-exposed env` prints the config export;
+`status` shows the runtime and warns about recognizable wake-command mismatches.
+See [CLI runtime and config pinning](cli.md).
+
 Hermes and OpenClaw each have a cron command. These commands match those products' CLIs.
 
 **Hermes** (the gateway runs the scheduler):

@@ -151,7 +151,7 @@ test("url exits 1 when nothing is configured; --config-dir picks the config dir 
 	const empty = sandbox(t);
 	let r = await empty.cli(["url"]);
 	assert.equal(r.status, 1);
-	assert.match(r.stderr, /no base URL configured in .*config\.env: run `npx -y a2a-exposed@latest init`/);
+	assert.match(r.stderr, /no base URL configured in .*config\.env: run `npx -y a2a-exposed@latest --config-dir \S+ init`/);
 	const other = sandbox(t, { A2A_BASE_URL: "https://other.example.com" });
 	r = await empty.cli(["url", "--config-dir", other.dir]);
 	assert.equal(r.status, 0, r.stderr);
@@ -240,7 +240,7 @@ test("pair set-password: the terminal path explains the --web alternative; pairi
 	const s = sandbox(t, { A2A_BASE_URL: off.url, A2A_OWNER_TOKEN: "owner-tok" });
 	let r = await s.cli(["pair", "set-password"]);
 	assert.equal(r.status, 1);
-	assert.match(r.stderr, /stdin is not a terminal[\s\S]*`npx -y a2a-exposed@latest pair set-password --web` prints a one-time link/);
+	assert.match(r.stderr, /stdin is not a terminal[\s\S]*`npx -y a2a-exposed@latest --config-dir \S+ pair set-password --web` prints a one-time link/);
 	r = await s.cli(["pair", "set-password", "--web"]);
 	assert.equal(r.status, 1);
 	assert.match(r.stderr, /could not create a setup link: device-flow pairing is disabled/);
@@ -364,7 +364,7 @@ test("connect: a working token is kept unless --replace; --replace swaps it unde
 	assert.equal((await ownerSide.cli(["token", "revoke", "Client-Bot"])).status, 0);
 	r = await client.cli(["send", "--to", "srv", "--text", "hi"]);
 	assert.equal(r.status, 1);
-	assert.match(r.stderr, new RegExp(`peer "srv" rejected our token \\(HTTP 401: revoked, rotated, or never valid there\\)\\. Re-pair: npx -y a2a-exposed@latest connect ${w.url.replace(/\./g, "\\.")} --alias srv`));
+	assert.match(r.stderr, new RegExp(`peer "srv" rejected our token \\(HTTP 401: revoked, rotated, or never valid there\\)\\. Re-pair: npx -y a2a-exposed@latest --config-dir \\S+ connect ${w.url.replace(/\./g, "\\.")} --alias srv`));
 	r = await client.cli(["connect", w.url, "--alias", "srv", "--no-wait"]);
 	assert.equal(r.status, 0, r.stderr);
 	assert.match(r.stderr, /note: peer "srv" rejects the stored token \(HTTP 401: revoked or rotated\); requesting a new one/);
@@ -382,7 +382,7 @@ test("connect: resuming an expired request exits 1 and says so; the rerun hint k
 	r = await client.cli(["connect", w.url, "--alias", "late", "--name", "My Bot"]);
 	assert.equal(r.status, 1);
 	assert.match(r.stderr, new RegExp(`the earlier pairing request to Server Inbox \\(code ${code}\\) expired before it was approved; nothing was stored\\.`));
-	assert.match(r.stderr, /For a new code \(a new approval request to its owner\), run: npx -y a2a-exposed@latest connect http:\/\/127\.0\.0\.1:\d+ --alias late --name 'My Bot'$/m);
+	assert.match(r.stderr, /For a new code \(a new approval request to its owner\), run: npx -y a2a-exposed@latest --config-dir \S+ connect http:\/\/127\.0\.0\.1:\d+ --alias late --name 'My Bot'$/m);
 	assert.ok(!fs.existsSync(st), "state dropped");
 	assert.equal(JSON.parse((await ownerSide.cli(["pair", "list", "--json"])).stdout).pending.length, 1, "no second request was made");
 });
