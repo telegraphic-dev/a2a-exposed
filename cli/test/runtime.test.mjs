@@ -88,3 +88,15 @@ test("pinned command overrides PATH node for npx shebangs, including quoted path
 	assert.ok(sameExecutable(r.stdout.trim(), process.execPath));
 	assert.equal(shellQuote("/tmp/simple"), "/tmp/simple");
 });
+
+test("status gives peers a generic connect command while local token fallback keeps the directory", (t) => {
+	const { dir } = fixture(t);
+	const script = `import { nextStep } from ${JSON.stringify(new URL("../lib/status.mjs", import.meta.url).href)};
+		console.log(JSON.stringify(nextStep({ deployed: true, baseUrl: "https://agent.example.com", hasOwnerToken: true,
+		card: { ok: true }, ownerApi: { ok: true }, wake: { configured: true, preset: "generic", hasKey: true } })));`;
+	const r = spawnSync(process.execPath, ["--input-type=module", "-e", script], { env: { ...clean(), A2A_CONFIG_DIR: dir }, encoding: "utf8" });
+	assert.equal(r.status, 0, r.stderr);
+	const step = JSON.parse(r.stdout);
+	assert.ok(step.also.some(text => text.includes("peers connect with `npx -y a2a-exposed@latest connect https://agent.example.com`")));
+	assert.ok(step.also.some(text => text.includes(`--config-dir ${dir} token issue`)));
+});

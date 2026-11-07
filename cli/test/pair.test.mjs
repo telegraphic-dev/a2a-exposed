@@ -225,6 +225,8 @@ test("connect discovers the endpoints from RFC 8414 metadata; without any, it po
 	const r = await s.cli(["connect", none.url]);
 	assert.equal(r.status, 1);
 	assert.match(r.stderr, /does not offer device-flow pairing[\s\S]*token issue <label>[\s\S]*peers add <alias> http:\/\/127\.0\.0\.1:\d+ --token-stdin/);
+	assert.ok(r.stderr.includes("they run `npx -y a2a-exposed@latest token issue <label>`"));
+	assert.ok(r.stderr.includes(`npx -y a2a-exposed@latest --config-dir ${s.dir} peers add`));
 	assert.equal((await s.cli(["connect", "not a url"])).status, 1);
 });
 
@@ -445,4 +447,18 @@ test("deploy uploads APPROVAL_OIDC_CLIENT_SECRET from the environment", () => {
 		if (prev === undefined) delete process.env.APPROVAL_OIDC_CLIENT_SECRET;
 		else process.env.APPROVAL_OIDC_CLIENT_SECRET = prev;
 	}
+});
+
+test("remote revocation instructions omit this client's config; local follow-ups retain it", async (t) => {
+	const m = await mockServer(t, { script: [{ access_token: "new-dummy-token", token_type: "Bearer", peer_label: "new-label" }] });
+	const s = sandbox(t, { PEER_P_TOKEN: "old-dummy-token" });
+	fs.writeFileSync(path.join(s.dir, "peers.json"), JSON.stringify({ p: { url: m.url, token_env: "PEER_P_TOKEN", paired: { label: "old-label" } } }));
+	const pending = await s.cli(["connect", m.url, "--alias", "p", "--replace", "--no-wait"]);
+	assert.equal(pending.status, 0, pending.stderr);
+	assert.ok(pending.stderr.includes("`npx -y a2a-exposed@latest token revoke old-label`"));
+	assert.ok(pending.stderr.includes(`--config-dir ${s.dir} connect`));
+	const completed = await s.cli(["connect", m.url, "--alias", "p", "--replace"]);
+	assert.equal(completed.status, 0, completed.stderr);
+	assert.ok(completed.stderr.includes("`npx -y a2a-exposed@latest token revoke old-label`"));
+	assert.ok(completed.stderr.includes(`--config-dir ${s.dir} send`));
 });

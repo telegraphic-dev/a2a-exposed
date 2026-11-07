@@ -363,7 +363,7 @@ function nextStepCore(s) {
 		if (s.pairing && s.pairing.mode === "human" && !s.pairing.passwordSet)
 			also.push(`peers can't connect yet: run \`${CLI} pair set-password --web\` and send your human the one-time link (or they run \`${CLI} pair set-password\` in a terminal); never set it yourself`);
 		if (s.pairing && s.pairing.pending) also.push(`${s.pairing.pending} pending pairing request(s): \`${CLI} pair list\`, then tell your human (never approve on your own)`);
-		return done(`none: the façade is up and forwards paired peers' A2A calls to the upstream. Peers connect with \`${CLI} connect ${s.baseUrl}\``, also);
+		return done(`none: the façade is up and forwards paired peers' A2A calls to the upstream. Peers connect with \`${C.DEFAULT_CLI_COMMAND} connect ${s.baseUrl}\``, also);
 	}
 	const t = s.tunnel;
 	if (t && !t.complete) return fail(`a previous \`tunnel create\` did not finish: run \`${CLI} tunnel rm\`, then \`${CLI} tunnel create\``);
@@ -403,7 +403,7 @@ function nextStepCore(s) {
 		return done2(`no wake webhook, so ${poll}.`, [`optional: ${tunnel}`, ...(pub ? [`optional: ${pub}`] : [])]);
 	}
 	return done2(`none: setup is complete. Check a real wake with \`${CLI} wake test\`.`,
-		[`peers connect with \`${CLI} connect ${s.baseUrl}\` (your human approves each one); \`${CLI} token issue <peer>\` is the manual fallback`]);
+		[`peers connect with \`${C.DEFAULT_CLI_COMMAND} connect ${s.baseUrl}\` (your human approves each one); \`${CLI} token issue <peer>\` is the manual fallback`]);
 }
 
 function hostOf(url) {

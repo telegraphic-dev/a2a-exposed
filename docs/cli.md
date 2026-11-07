@@ -17,7 +17,8 @@ Config is `~/.config/a2a-exposed/config.env` (chmod 600), or `$XDG_CONFIG_HOME/a
 creates no files. Select a directory with `--config-dir DIR` or `A2A_CONFIG_DIR`.
 Printed follow-up commands carry `--config-dir` when the directory is non-default,
 including when selected through the environment. Relative directories become absolute
-so a scheduled job can use them from another working directory.
+so a scheduled job can use them from another working directory. Instructions for
+remote peers and their owners use the generic command; they select their own config.
 
 `init` saves the Node executable as `A2A_NODE_EXEC_PATH`. When the first `node` on
 `PATH` differs (or is missing), it prints a pinned wake command using
