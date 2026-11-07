@@ -346,6 +346,10 @@ export const TOOLS: { name: string; title: string; description: string; inputSch
 			status: str("Delivery outcome", { enum: ["delivered", "stored-only", "delivery-failed"] }),
 			method: str("Path used", { enum: ["push", "a2a-message", "stored"] }),
 			target: { type: "object", properties: { alias: str("Paired peer alias"), host: str("Destination host") }, required: ["host"], additionalProperties: false },
+			push: { type: "array", items: { type: "object", properties: {
+				role: str("Callback origin", { enum: ["task push config", "message push"] }), host: str("Callback host"),
+				fingerprint: str("First 12 hex characters of SHA-256 of the callback URL"), ok: { type: "boolean" }, info: str("Safe push result"),
+			}, required: ["role", "host", "fingerprint", "ok", "info"], additionalProperties: false } },
 			httpStatus: { type: "integer", minimum: 100, maximum: 599 }, detail: str("Safe delivery summary"),
 		}, required: ["taskId", "state", "status", "method", "detail"], additionalProperties: false } },
 	{ name: "send", title: "Send to peer", annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },

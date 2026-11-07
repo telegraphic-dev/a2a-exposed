@@ -271,8 +271,11 @@ Inbox (owner side)
   reply <taskId> (--text T | --stdin) [--state completed|input-required|rejected|failed|working]
         [--artifact] [--artifact-name N] [--force]
                                            delivery waits at most 18 s; identical retries read the first result
+                                           --force changes a terminal task again; peers see every change
+                                           push results show role/host/URL fingerprint; task state saved confirms storage
   history <contextId> [--from PEER] [-n 50] [--json]
-                                           conversation log. --from is one peer (the wake hint includes it)
+                                           conversation log with forced transitions and current state per task.
+                                           --from is one peer (the wake hint includes it)
   contexts                                 recent conversations
   export [--sql]                       JSON dump of this A2A endpoint on stdout (peer-token hashes and
                                        encrypted peer tokens are in the dump; the owner token stays
