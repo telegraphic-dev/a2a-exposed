@@ -189,7 +189,7 @@ test("connect --json: one JSON line per step, for agents", async (t) => {
 });
 
 test("connect: denied, expired and used codes end cleanly (exit 1, no token, state removed)", async (t) => {
-	for (const [error, re] of [["access_denied", /the owner of Peer Inbox denied the pairing request \(code WDJB-4827\)/], ["expired_token", /expired before it was approved; nothing was stored\. For a new code, run: npx -y a2a-exposed@latest connect http:\/\/127\.0\.0\.1:\d+ --alias p/], ["invalid_grant", /no longer valid.*--alias p/]]) {
+	for (const [error, re] of [["access_denied", /the owner of Peer Inbox denied the pairing request \(code WDJB-4827\)/], ["expired_token", /expired before it was approved; nothing was stored\. For a new code, run: npx -y a2a-exposed@latest --config-dir \S+ connect http:\/\/127\.0\.0\.1:\d+ --alias p/], ["invalid_grant", /no longer valid.*--alias p/]]) {
 		const m = await mockServer(t, { script: [{ error: "authorization_pending" }, { error }] });
 		const s = sandbox(t);
 		const r = await s.cli(["connect", m.url, "--alias", "p"]);
@@ -205,7 +205,7 @@ test("connect --no-wait prints the code and exits; connect again resumes the sam
 	const s = sandbox(t);
 	let r = await s.cli(["connect", m.url, "--alias", "p", "--no-wait"]);
 	assert.equal(r.status, 0, r.stderr);
-	assert.match(r.stderr, /code: WDJB-4827[\s\S]*Not waiting \(--no-wait\)\. Run `npx -y a2a-exposed@latest connect http:\/\/127\.0\.0\.1:\d+ --alias p --no-wait` again to check \(same code\)/);
+	assert.match(r.stderr, /code: WDJB-4827[\s\S]*Not waiting \(--no-wait\)\. Run `npx -y a2a-exposed@latest --config-dir \S+ connect http:\/\/127\.0\.0\.1:\d+ --alias p --no-wait` again to check \(same code\)/);
 	const st = path.join(s.dir, "pairing-p.json");
 	assert.equal(fs.statSync(st).mode & 0o777, 0o600, "the device code is kept private");
 	assert.equal(m.seen.token.length, 0);
@@ -225,6 +225,8 @@ test("connect discovers the endpoints from RFC 8414 metadata; without any, it po
 	const r = await s.cli(["connect", none.url]);
 	assert.equal(r.status, 1);
 	assert.match(r.stderr, /does not offer device-flow pairing[\s\S]*token issue <label>[\s\S]*peers add <alias> http:\/\/127\.0\.0\.1:\d+ --token-stdin/);
+	assert.ok(r.stderr.includes("they run `npx -y a2a-exposed@latest token issue <label>`"));
+	assert.ok(r.stderr.includes(`npx -y a2a-exposed@latest --config-dir ${s.dir} peers add`));
 	assert.equal((await s.cli(["connect", "not a url"])).status, 1);
 });
 
@@ -333,8 +335,8 @@ test("connect against the real Worker (agent approval): pair list, pair approve,
 
 	r = await ownerSide.cli(["pair", "list"]);
 	assert.equal(r.status, 0, r.stderr);
-	assert.match(r.stdout, /^approval: agent \(`npx -y a2a-exposed@latest pair approve <code>` after your human says yes/m);
-	assert.match(r.stdout, /approval password: NOT SET: run `npx -y a2a-exposed@latest pair set-password --web`/);
+	assert.match(r.stdout, /^approval: agent \(`npx -y a2a-exposed@latest --config-dir \S+ pair approve <code>` after your human says yes/m);
+	assert.match(r.stdout, /approval password: NOT SET: run `npx -y a2a-exposed@latest --config-dir \S+ pair set-password --web`/);
 	assert.match(r.stdout, new RegExp(`^--- ${code}  "Client Bot" \\(claimed, untrusted\\)`, "m"));
 	assert.match(r.stdout, /card: https:\/\/client\.example\.com\/\.well-known\/agent-card\.json/);
 	assert.match(r.stdout, /never approve on your own/);
@@ -383,8 +385,8 @@ test("human approval mode: the owner token approves and the peer collects the to
 	assert.equal(j.pairing.pending, 1);
 	assert.ok((j.also || []).some((a) => /pair set-password --web/.test(a)));
 	const txt = await ownerSide.cli(["status"]);
-	assert.match(txt.stdout, /^pairing: +human approval; approval password NOT SET; 1 pending request\(s\): npx -y a2a-exposed@latest pair list$/m);
-	assert.match(txt.stdout, /^also: +peers can't connect yet: run `npx -y a2a-exposed@latest pair set-password --web`/m);
+	assert.match(txt.stdout, /^pairing: +human approval; approval password NOT SET; 1 pending request\(s\): npx -y a2a-exposed@latest --config-dir \S+ pair list$/m);
+	assert.match(txt.stdout, /^also: +peers can't connect yet: run `npx -y a2a-exposed@latest --config-dir \S+ pair set-password --web`/m);
 	const r = await ownerSide.cli(["pair", "approve", code]);
 	assert.equal(r.status, 0, r.stderr);
 	assert.match(r.stdout, new RegExp(`^approved ${code}`));
@@ -423,7 +425,7 @@ test("pair set-oidc writes non-secrets and refuses a secret argument", async (t)
 	assert.equal(s.config().APPROVAL_OIDC_CLIENT_SECRET, undefined);
 	assert.equal(r.stdout.includes("super-secret") || r.stderr.includes("super-secret"), false);
 	assert.match(r.stderr, /not written/);
-	assert.match(r.stderr, /npx -y a2a-exposed@latest deploy/);
+	assert.match(r.stderr, /npx -y a2a-exposed@latest --config-dir \S+ deploy/);
 
 	r = await s.cli(["pair", "set-oidc", "--issuer", "https://idp.example", "--client-id", "cid", "--subjects", "b@example.com", "--secret-stdin"], { input: "stdin-secret\n", extraEnv: { APPROVAL_OIDC_CLIENT_SECRET: "" } });
 	assert.equal(r.status, 0, r.stderr);
@@ -445,4 +447,18 @@ test("deploy uploads APPROVAL_OIDC_CLIENT_SECRET from the environment", () => {
 		if (prev === undefined) delete process.env.APPROVAL_OIDC_CLIENT_SECRET;
 		else process.env.APPROVAL_OIDC_CLIENT_SECRET = prev;
 	}
+});
+
+test("remote revocation instructions omit this client's config; local follow-ups retain it", async (t) => {
+	const m = await mockServer(t, { script: [{ access_token: "new-dummy-token", token_type: "Bearer", peer_label: "new-label" }] });
+	const s = sandbox(t, { PEER_P_TOKEN: "old-dummy-token" });
+	fs.writeFileSync(path.join(s.dir, "peers.json"), JSON.stringify({ p: { url: m.url, token_env: "PEER_P_TOKEN", paired: { label: "old-label" } } }));
+	const pending = await s.cli(["connect", m.url, "--alias", "p", "--replace", "--no-wait"]);
+	assert.equal(pending.status, 0, pending.stderr);
+	assert.ok(pending.stderr.includes("`npx -y a2a-exposed@latest token revoke old-label`"));
+	assert.ok(pending.stderr.includes(`--config-dir ${s.dir} connect`));
+	const completed = await s.cli(["connect", m.url, "--alias", "p", "--replace"]);
+	assert.equal(completed.status, 0, completed.stderr);
+	assert.ok(completed.stderr.includes("`npx -y a2a-exposed@latest token revoke old-label`"));
+	assert.ok(completed.stderr.includes(`--config-dir ${s.dir} send`));
 });

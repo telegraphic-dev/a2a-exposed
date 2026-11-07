@@ -9,7 +9,12 @@ export function defaultConfigDir(base = process.env.XDG_CONFIG_HOME || path.join
 	return path.join(base, "a2a-exposed");
 }
 
-export const CONFIG_DIR = process.env.A2A_CONFIG_DIR || defaultConfigDir();
+export const CONFIG_DIR = path.resolve(process.env.A2A_CONFIG_DIR || defaultConfigDir());
+export const NON_DEFAULT_CONFIG = CONFIG_DIR !== path.resolve(defaultConfigDir());
+/** POSIX shell word; never interpolate paths as shell syntax. */
+export const shellQuote = (value) => /^[A-Za-z0-9_./:@+,-]+$/.test(value) ? value : "'" + value.replaceAll("'", "'\\''") + "'";
+export const DEFAULT_CLI_COMMAND = "npx -y a2a-exposed@latest";
+export const CLI_COMMAND = DEFAULT_CLI_COMMAND + (NON_DEFAULT_CONFIG ? ` --config-dir ${shellQuote(CONFIG_DIR)}` : "");
 export const CONFIG_FILE = path.join(CONFIG_DIR, "config.env");
 export const PEERS_FILE = path.join(CONFIG_DIR, "peers.json");
 

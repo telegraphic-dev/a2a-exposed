@@ -45,7 +45,7 @@ Optional flags:
 | `--provider-organization`, `--provider-url` | Provider shown on the card |
 | `--worker-name` | Worker name (also the default D1 name) |
 | `--d1-name` | D1 database to create or reuse (default: worker name). Useful when several bots share an account |
-| `--cli-command` | Command shown in wake hints (`hint` / summaries). Default `npx -y a2a-exposed@latest`. For a checkout, pass e.g. `node /path/to/repo/cli/bin/a2a-exposed.mjs`. Saved as `WAKE_CLI_COMMAND` |
+| `--cli-command` | Command shown in wake hints (`hint` / summaries). Default `npx -y a2a-exposed@latest`, including `--config-dir DIR` for a non-default directory when no command is already saved. Explicit/saved commands are preserved. For a checkout, pass e.g. `node /path/to/repo/cli/bin/a2a-exposed.mjs`. Saved as `WAKE_CLI_COMMAND` |
 | `--debounce <s>` | Wake debounce window |
 | `--busy <s>` | Busy cool-down after a sent wake. `0` disables it. Unset uses the preset default (300 seconds for Claude Code, 180 for the others) |
 | `--pairing-approval human\|agent\|off` | Who approves device-flow pairing requests ([pairing](pairing.md)). `human` (default): the owner, with the owner token (`pair approve`) or on the `/device` page with the approval password. `agent`: the agent runs `pair approve <code>` after asking its owner in chat, and the decision is recorded as the agent. `off`: no pairing endpoints; `token issue` only. Change it later with `deploy --pairing-approval ...` |

@@ -61,3 +61,17 @@ npx -y a2a-exposed@latest init --cf-profile my-bot --agent-name "My Bot" ...
 ```
 
 `--cf-profile` is saved as `CF_PROFILE` in `config.env` and passed as `--profile` to every `cf` call for that deployment. Combine it with a separate `A2A_CONFIG_DIR` when several bots share one machine. Re-authenticate with `npx cf auth create my-bot --no-browser` (same name). `npx cf auth list` shows profiles. `npx cf auth activate my-bot <worker-dir>` binds a profile to a directory. `--cf-profile` passes that profile on each command.
+
+## Scheduled runtime and config
+
+Pin Node for cron, launchd and webhook handlers: `mise use node@22`, then
+`mise exec -- npx -y a2a-exposed@latest --config-dir /path/to/bot-config inbox`
+from that project directory. Outside it, use an absolute mise path and the explicit
+`mise exec node@22 -- ...` form. A scheduler does not inherit a login shell's PATH.
+`init` saves `process.execPath` as `A2A_NODE_EXEC_PATH` and prints a pinned command
+when PATH selects another Node. Set `--cli-command` to that command only when the
+wake handler can access the same runtime. Default hints carry a non-default config
+directory; explicit/saved commands are preserved. `a2a-exposed env` prints a
+shell-safe config export (`--json` returns the directory only). `status` shows the
+runtime, and `status --json` provides `runtime.node` / `runtime.execPath` and a
+warning when a recognizable wake command selects another Node.

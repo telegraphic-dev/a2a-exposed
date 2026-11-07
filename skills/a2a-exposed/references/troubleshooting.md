@@ -30,7 +30,7 @@ Cloudflare-side problems (Worker logs, D1, DNS, the wake tunnel, Access): the op
 
 ## CLI and configuration
 
-Installing this skill gives the agent the workflow documentation. Run every command as `npx -y a2a-exposed@latest <cmd>` (Node 22.18+; how to get Node: setup skill §1, or `mise exec node@22 -- ...`). Don't `npm i -g` it inside an agent sandbox: global installs there are often blocked as untrusted code. `@latest` always runs the newest release. A global install is only an optional speed-up on the user's own machine (`npm i -g a2a-exposed@latest`, then `a2a-exposed <cmd>`); it never upgrades itself, so the CLI prints a one-line notice on stderr when a newer version is out. Config lives in `~/.config/a2a-exposed/config.env` (chmod 600). Environment variables always override the file. Development from a checkout: `node <checkout>/cli/bin/a2a-exposed.mjs <command>`, and pass the same path as `--cli-command` on `init` if the wake hint should use it (default wake hint is `npx -y a2a-exposed@latest`).
+Installing this skill gives the agent the workflow documentation. Run every command as `npx -y a2a-exposed@latest <cmd>` (Node 22.18+; how to get Node: setup skill §1, or `mise exec node@22 -- ...`). Don't `npm i -g` it inside an agent sandbox: global installs there are often blocked as untrusted code. `@latest` always runs the newest release. A global install is only an optional speed-up on the user's own machine (`npm i -g a2a-exposed@latest`, then `a2a-exposed <cmd>`); it never upgrades itself, so the CLI prints a one-line notice on stderr when a newer version is out. Config lives in `~/.config/a2a-exposed/config.env` (chmod 600). Environment variables always override the file. Development from a checkout: `node <checkout>/cli/bin/a2a-exposed.mjs <command>`, and pass the same path as `--cli-command` on `init` if the wake hint should use it (default wake hint is `npx -y a2a-exposed@latest`, including a non-default `--config-dir DIR` when no explicit/saved command exists).
 
 ## Other commands
 
@@ -68,3 +68,15 @@ never retries automatically or saves a reference on this refusal.
 ### Hosted upstream configuration
 
 Read `hosted capabilities --json`, then `hosted list --json`, select an existing agent and run `hosted upstream preview --agent NAME --json`. If the service advertises upstream configuration, set, clear or verify with its explicit `--version N`. Set takes a public HTTPS `--url` and protected `--upstream-token-file`, `--access-client-id-file`, `--access-client-secret-file` inputs (or matching `*-env` names). Never pass raw credentials as arguments or MCP tool inputs. A new address needs a new Access pair. Device grants need `upstream:write` for set/clear and `upstream:test` for verify; the selected agent's owner token also works. Read preview again after every save. MCP uses `set_upstream` and its human confirmation page, then `verify_upstream`.
+
+### Runtime and config directory
+
+`env` prints a shell-safe `export A2A_CONFIG_DIR=<absolute directory>`; `env --json`
+returns that directory without credentials. Printed follow-up commands retain a
+non-default directory. `status --json` includes `runtime.node`, `runtime.execPath`,
+and a mismatch warning for recognizable Node/npx wake commands. Diagnostics never
+execute a saved command. `init` saves `A2A_NODE_EXEC_PATH` and prints a pinned wake
+command if PATH selects a different Node. Pin scheduled handlers with
+`mise exec node@22 -- npx -y a2a-exposed@latest --config-dir DIR inbox`, using an
+absolute mise path; or use `mise use node@22` and `mise exec -- ...` from that
+project directory. Set `--cli-command` explicitly for a custom handler runtime.

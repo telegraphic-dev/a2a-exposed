@@ -74,6 +74,9 @@ npx cf auth login --no-browser; on a VPS where it fails with HTTP 403 before sho
 CLOUDFLARE_API_TOKEN instead: setup skill, Troubleshooting. a2a.exposed hosts the A2A endpoint and is open to everyone
 (https://a2a.exposed/pricing). When to use it:
 https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#hosted-inbox)
+  env [--json]                 print export A2A_CONFIG_DIR=<absolute dir> (no credentials; read-only).
+                                Pin scheduled jobs: mise exec node@22 -- npx -y a2a-exposed@latest
+                                --config-dir DIR inbox; use an absolute mise path outside your shell.
   init [--hostname <host> | --workers-dev [--workers-dev-subdomain NAME]]
        [--agent-name N] [--agent-description D] [--agent-skills JSON]
        [--provider-organization O --provider-url U] [--preset P] [--worker-name W] [--d1-name D]
@@ -137,7 +140,9 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
                                 --upstream-token-stdin  read UPSTREAM_TOKEN from stdin (hidden prompt on a terminal)
                                 --no-upstream-token  the upstream needs no bearer token: skip that check (saved)
                                 --cli-command  command shown in wake hints (default "npx -y a2a-exposed@latest";
-                                               e.g. "node /path/to/repo/cli/bin/a2a-exposed.mjs")
+                                               e.g. "node /path/to/repo/cli/bin/a2a-exposed.mjs"). Non-default config dirs
+                                               are included in default hints; init saves the Node path and prints
+                                               a pinned command if PATH selects another Node.
                                 --worker-dir   where the Worker project (template copy) lives (default
                                                <config dir>/worker). The config dir is --config-dir / A2A_CONFIG_DIR
   deploy [same flags]           redeploy with saved settings (secrets persist); tag the Worker version as a2a-exposed-<version>
@@ -220,7 +225,7 @@ Status
                                 mode (webhook / tunnel / none = no webhook), tunnel state, proxy mode (--upstream):
                                 upstream card, Access credential and upstream bearer configured (separately), the
                                 live upstream check, the last failed peer call, card-leak check; warnings for peer
-                                token variables shadowing saved tokens; and the next step to run.
+                                token variables shadowing saved tokens; Node version/path and wake runtime mismatch; the next step.
                                 Older Workers need deploy (exit 1); npm latest hints use the local update cache.
                                 When GET /owner/mcp reports enabled and the agent card is reachable, prints
                                 \`claude mcp add --transport http a2a-exposed <base URL>/mcp\`.
@@ -434,6 +439,7 @@ const SPEC = {
 	send: { to: S, text: S, context: S, task: S, push: B, proto: S },
 	poll: { to: S, proto: S },
 	status: { json: B, agent: S, "control-url": S },
+	env: { json: B },
 	export: { sql: B },
 	upstream: { json: B },
 	connect: { alias: S, name: S, json: B, "no-wait": B, replace: B, force: B, "card-url": S },
@@ -477,7 +483,7 @@ export async function main(argv) {
 		if (extra.length && !ok)
 			throw new CliError("`pair set-password` takes no password argument: it reads the password from the terminal, without echo (never from argv, stdin or the environment). For a one-time web link instead: `pair set-password --web [--ttl MIN] [--json]`");
 	}
-	upd.check(VERSION);
+	if (name !== "env") upd.check(VERSION);
 	let parsed;
 	try {
 		parsed = parseArgs({ args: rest, options: SPEC[name] || {}, allowPositionals: true, strict: true });
@@ -494,6 +500,9 @@ export async function main(argv) {
 	const { values: o, positionals: p } = parsed;
 	if (o["worker-dir"] !== undefined) o.dir = o["worker-dir"];
 	switch (name) {
+		case "env":
+			if (p.length) throw new CliError("env takes no arguments; use --config-dir DIR to select a directory");
+			return console.log(o.json ? JSON.stringify({ A2A_CONFIG_DIR: C.CONFIG_DIR }) : `export A2A_CONFIG_DIR=${C.shellQuote(C.CONFIG_DIR)}`);
 		case "init":
 			if (o.tunnel) tun.preflight(o); // refuse early (hosted preset, missing --tunnel-path) before anything is deployed
 			await dep.init(o);

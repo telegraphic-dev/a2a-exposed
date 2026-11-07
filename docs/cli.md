@@ -12,6 +12,40 @@ Optional on your own machine: `npm i -g a2a-exposed@latest`, then `a2a-exposed <
 
 Config is `~/.config/a2a-exposed/config.env` (chmod 600), or `$XDG_CONFIG_HOME/a2a-exposed`. Override the directory with `--config-dir` or `A2A_CONFIG_DIR`. Environment variables override the file. `config` prints the file with secrets masked. `url` prints the public base URL and exits 1 when none is configured.
 
+`a2a-exposed env` prints a shell-safe `export A2A_CONFIG_DIR=<absolute directory>`;
+`env --json` returns `{ "A2A_CONFIG_DIR": "..." }`. It reads no credentials and
+creates no files. Select a directory with `--config-dir DIR` or `A2A_CONFIG_DIR`.
+Printed follow-up commands carry `--config-dir` when the directory is non-default,
+including when selected through the environment. Relative directories become absolute
+so a scheduled job can use them from another working directory. Instructions for
+remote peers and their owners use the generic command; they select their own config.
+
+`init` saves the Node executable as `A2A_NODE_EXEC_PATH`. When the first `node` on
+`PATH` differs (or is missing), it prints a pinned wake command using
+`env PATH=<Node directory>:"$PATH" npx ...`. Save that command explicitly with
+`--cli-command` if the wake handler runs on the same machine. For a handler on
+another machine, pin a Node installation available there. An explicit or saved
+`WAKE_CLI_COMMAND` is preserved. With no saved/explicit command (or the bare npx
+default saved by an older setup), `init` and `deploy`
+include a non-default config directory in the default `WAKE_CLI_COMMAND`.
+
+`status` reports the current Node version and executable. `status --json` includes
+`runtime.node`, `runtime.execPath`, the saved init path, the PATH Node, and a
+`runtime.warning` when a recognizable Node/npx wake command selects another runtime.
+Custom wrappers such as mise are not executed or guessed during diagnostics.
+
+For cron, launchd, and webhook handlers, pin Node instead of relying on a login
+shell's PATH. For example, install Node 22.18+ with mise, then run:
+
+```sh
+/absolute/path/to/mise exec node@22 -- npx -y a2a-exposed@latest --config-dir /path/to/bot-config inbox
+```
+
+Use `mise use node@22` to pin a project's Node version, and `mise exec -- npx -y
+a2a-exposed@latest ...` from that project directory in a handler. A scheduler must
+set that working directory, or use the explicit `mise exec node@22 -- ...` form.
+
+
 From a checkout: `node <checkout>/cli/bin/a2a-exposed.mjs <command>`.
 
 Local deployment and option errors are reported before the Node version check.
@@ -71,7 +105,7 @@ init [--hostname <host> | --workers-dev [--workers-dev-subdomain NAME]]
 | `--d1-name` | D1 database to create or reuse |
 | `--account-id` | When the login can see more than one account |
 | `--cf-profile` | Named `cf` auth profile. Saved and used by later `cf` calls. When `whoami` lists no accounts, `init` reads `cf accounts list` outside the Worker directory and saves the account when that list has exactly one. A failed list prints cf's error unless `--account-id` is already set |
-| `--cli-command` | Command shown in wake hints. Default `npx -y a2a-exposed@latest`. Saved as `WAKE_CLI_COMMAND` |
+| `--cli-command` | Command shown in wake hints. Default `npx -y a2a-exposed@latest`, plus `--config-dir DIR` for a non-default directory. Saved as `WAKE_CLI_COMMAND`; explicit/saved commands are preserved |
 | `--debounce` | Wake debounce in seconds. `claude-code` defaults to 20. Others default to 10 |
 | `--busy` | Busy cool-down in seconds after a sent wake. `0` disables it. Unset uses the preset default: 300 for `claude-code`, 180 for the others. See [Receiving messages](receiving-messages.md#what-a-wake-contains) |
 | `--max-per-hour` | Hourly cap. `0` or unset is unlimited, except `claude-code`, which defaults to 25 when unset |

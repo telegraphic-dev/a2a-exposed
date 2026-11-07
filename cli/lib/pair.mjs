@@ -142,7 +142,7 @@ export async function setOidc(o, extra = []) {
 	console.error("The client secret was not written there and was not printed.");
 	if (sawStdin && !(process.env.APPROVAL_OIDC_CLIENT_SECRET || "").trim())
 		console.error(`Export APPROVAL_OIDC_CLIENT_SECRET in the environment you use for deploy. This command did not store it.`);
-	console.error(`The next \`npx -y a2a-exposed@latest deploy\` uploads APPROVAL_OIDC_CLIENT_SECRET only when that variable is set in the environment. A line from --secret-stdin is discarded.`);
+	console.error(`The next \`${CLI} deploy\` uploads APPROVAL_OIDC_CLIENT_SECRET only when that variable is set in the environment. A line from --secret-stdin is discarded.`);
 	console.error("Password approval stays available unless --methods oidc (and only once the issuer, client id, secret and allowlist are all set).");
 }
 
@@ -290,7 +290,7 @@ async function discover(target) {
 			ep = { device: m.data.device_authorization_endpoint, token: m.data.token_endpoint };
 	}
 	if (!ep) die(`${base} does not offer device-flow pairing (no OAuth2 deviceCode flow on its agent card, no ${u.origin}/.well-known/oauth-authorization-server).
-Ask its owner for a token instead: they run \`${CLI} token issue <label>\` and send it to you privately; then \`${CLI} peers add <alias> ${base} --token-stdin\`.`);
+Ask its owner for a token instead: they run \`${C.DEFAULT_CLI_COMMAND} token issue <label>\` and send it to you privately; then \`${CLI} peers add <alias> ${base} --token-stdin\`.`);
 	for (const x of [ep.device, ep.token]) {
 		const e = new URL(x);
 		if (e.protocol !== "https:" && !["127.0.0.1", "localhost", "[::1]"].includes(e.hostname)) die(`refusing a non-https pairing endpoint: ${x}`);
@@ -378,7 +378,7 @@ A different agent at the same URL? Pass another --alias.`);
 		const mins = Math.round((st.expiresAt - Date.now()) / 60000);
 		const swap = !st.replacing ? "" : st.replacesLabel
 			? ` On approval the peer replaces our token "${st.replacesLabel}" (the old one stops working).`
-			: ` This peer does not swap tokens: our old token${oldLabel ? ` (label "${oldLabel}" on its side)` : ""} stays active until its owner revokes it${oldLabel ? ` (\`${CLI} token revoke ${oldLabel}\`)` : ""}; tell them.`;
+			: ` This peer does not swap tokens: our old token${oldLabel ? ` (label "${oldLabel}" on its side)` : ""} stays active until its owner revokes it${oldLabel ? ` (\`${C.DEFAULT_CLI_COMMAND} token revoke ${oldLabel}\`)` : ""}; tell them.`;
 		emit({ status: "authorization_pending", alias, user_code: st.userCode, verification_uri: st.verificationUri, verification_uri_complete: st.verificationUriComplete, expires_in: Math.round((st.expiresAt - Date.now()) / 1000), interval: st.interval,
 			...(st.replacing ? { replaces_label: st.replacesLabel } : {}),
 			instructions: `Show the code and the link to your human. They confirm the code with the owner of ${peerName}, who approves it on that page.${swap}` },
@@ -399,7 +399,7 @@ Show this code and link to your human. They confirm the code with the owner of $
 		dropState(alias);
 		const orphan = st.replacing && !r.data.replaced ? (st.replacesLabel || oldLabel || null) : null;
 		const note = r.data.replaced ? ` It replaced our previous token there (label "${label}").`
-			: st.replacing ? ` Our previous token${orphan ? ` ("${orphan}")` : ""} is still active on the peer until its owner revokes it${orphan ? `: \`${CLI} token revoke ${orphan}\`` : ""}.` : "";
+			: st.replacing ? ` Our previous token${orphan ? ` ("${orphan}")` : ""} is still active on the peer until its owner revokes it${orphan ? `: \`${C.DEFAULT_CLI_COMMAND} token revoke ${orphan}\`` : ""}.` : "";
 		emit({ status: "connected", alias, url: base, token_env: tokenEnv, ...(label ? { peer_label: label } : {}), ...(st.replacing ? { replaced: !!r.data.replaced } : {}), ...(envOverrides ? { env_overrides_token: true } : {}) },
 			`connected: peer "${alias}" -> ${base}${label ? ` (we are "${label}" there)` : ""}; token stored in ${C.CONFIG_FILE} as ${tokenEnv} (not printed).${note}
 Send a message: ${CLI} send --to ${alias} --text "..."`);

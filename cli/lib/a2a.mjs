@@ -1,11 +1,12 @@
 // Minimal A2A client helpers (0.3 + 1.0) and HTTP utilities.
 import crypto from "node:crypto";
+import { CLI_COMMAND } from "./config.mjs";
 
 export const ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
 
 /** The one way docs, hints and CLI output tell people (and agents) to run the CLI: npx, always the latest release, no
  *  global install (agent sandboxes block global installs as untrusted code). A global install is an optional speed-up. */
-export const CLI = "npx -y a2a-exposed@latest";
+export const CLI = CLI_COMMAND;
 
 export class CliError extends Error {}
 export const die = (msg) => { throw new CliError(msg); };

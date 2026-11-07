@@ -263,7 +263,7 @@ test("tunnel create: Access app + token before tunnel/DNS, secrets uploaded, tok
 	assert.match(r.stderr, /Access application "a2a-exposed wake tuntest" \(id app1\)/);
 	assert.match(r.stderr, /service token id st1/);
 	assert.match(r.stderr, /tunnel id tun1/);
-	assert.match(r.stderr, /To undo this, run `npx -y a2a-exposed@latest tunnel rm`/);
+	assert.match(r.stderr, /To undo this, run `npx -y a2a-exposed@latest --config-dir \S+ tunnel rm`/);
 	const c = s.config();
 	assert.equal(c.A2A_TUNNEL_ID, "tun1");
 	assert.equal(c.A2A_TUNNEL_ACCESS_APP_ID, "app1");
@@ -499,7 +499,7 @@ test("status on a workers.dev inbox with no wake: card OK, polling expected, tun
 	assert.match(r.stdout, /^wake: +none: no WAKE_WEBHOOK_URL on the Worker, so the agent is expected to poll the A2A endpoint/m);
 	assert.match(r.stdout, /^tunnel: +none$/m);
 	assert.match(r.stdout, /^next step: +no wake webhook, so the agent must check the A2A endpoint on a schedule/m);
-	assert.match(r.stdout, /^also: +optional: for immediate wakes to a local-only webhook, run `npx -y a2a-exposed@latest tunnel create` \(it uses the account's zone example\.com; no redeploy needed\)/m);
+	assert.match(r.stdout, /^also: +optional: for immediate wakes to a local-only webhook, run `npx -y a2a-exposed@latest --config-dir \S+ tunnel create` \(it uses the account's zone example\.com; no redeploy needed\)/m);
 	assert.match(r.stdout, /^mcp: +claude mcp add --transport http a2a-exposed http:\/\/127\.0\.0\.1:\d+\/mcp$/m);
 	assert.ok(!s.calls().some((c) => !/^(zones list)/.test(c.cmd)), "read-only: only zones list");
 	const j = JSON.parse((await s.cli(["status", "--json"])).stdout);
@@ -530,7 +530,7 @@ test("status on a workers.dev inbox with no wake: card OK, polling expected, tun
 	r = await s.cli(["status"]);
 	assert.equal(r.status, 1);
 	assert.match(r.stdout, /^agent card: +WRONG URL: "Tun Test", but it advertises http:\/\/hermes\.example\.ts\.net:8644\/ instead of http:\/\/127\.0\.0\.1:\d+\/$/m);
-	assert.match(r.stdout, /^next step: +the agent card does not point peers at this deployment: .*Run `npx -y a2a-exposed@latest deploy`/m);
+	assert.match(r.stdout, /^next step: +the agent card does not point peers at this deployment: .*Run `npx -y a2a-exposed@latest --config-dir \S+ deploy`/m);
 	s.setCardUrl("");
 	// an exported A2A_BASE_URL that differs from the saved one is flagged first
 	r = await s.cli(["status"], { A2A_BASE_URL: "http://100.101.102.103:8644" });
@@ -574,7 +574,7 @@ test("status follows a tunnel through: no connector -> start cloudflared; connec
 	assert.match(r.stdout, /^next step: +none: setup is complete/m);
 	s.setPreview({ hasAccessServiceToken: false });
 	r = await s.cli(["status"], { STUB_CONNS: "1" });
-	assert.match(r.stdout, /Worker does not have the tunnel's wake secrets: run `npx -y a2a-exposed@latest tunnel create` again/);
+	assert.match(r.stdout, /Worker does not have the tunnel's wake secrets: run `npx -y a2a-exposed@latest --config-dir \S+ tunnel create` again/);
 	s.setPreview({});
 	s.setCardStatus(404);
 	r = await s.cli(["status"], { STUB_CONNS: "1" });
@@ -587,14 +587,14 @@ test("status follows a tunnel through: no connector -> start cloudflared; connec
 	r = await s.cli(["status"], { STUB_CONNS: "1" });
 	assert.equal(r.status, 1);
 	assert.match(r.stdout, /; set up, but the connector token file is MISSING;/);
-	assert.match(r.stdout, /^next step: +the tunnel's connector token file \(.*tunnel-token\) is missing or empty: run `npx -y a2a-exposed@latest tunnel create` again \(it downloads the token again; nothing new is created\)/m);
+	assert.match(r.stdout, /^next step: +the tunnel's connector token file \(.*tunnel-token\) is missing or empty: run `npx -y a2a-exposed@latest --config-dir \S+ tunnel create` again \(it downloads the token again; nothing new is created\)/m);
 
 	const partial = await tunnelEnv(t);
 	partial.setConfig({ A2A_TUNNEL_HOSTNAME: "wake-p.example.com", A2A_TUNNEL_ID: "tun1" });
 	r = await partial.cli(["status"]);
 	assert.equal(r.status, 1);
 	assert.match(r.stdout, /INCOMPLETE/);
-	assert.match(r.stdout, /a previous `tunnel create` did not finish: run `npx -y a2a-exposed@latest tunnel rm`, then `npx -y a2a-exposed@latest tunnel create`/);
+	assert.match(r.stdout, /a previous `tunnel create` did not finish: run `npx -y a2a-exposed@latest --config-dir \S+ tunnel rm`, then `npx -y a2a-exposed@latest --config-dir \S+ tunnel create`/);
 });
 
 test("status after the first tunnel create waits while secrets propagate and the connector is down", async (t) => {
@@ -609,7 +609,7 @@ test("status after the first tunnel create waits while secrets propagate and the
 	s.setConfig({ A2A_TUNNEL_SECRETS_AT: "1" });
 	r = await s.cli(["status"]);
 	assert.equal(r.status, 1);
-	assert.match(r.stdout, /run `npx -y a2a-exposed@latest tunnel create` again/);
+	assert.match(r.stdout, /run `npx -y a2a-exposed@latest --config-dir \S+ tunnel create` again/);
 });
 
 test("uninstall removes the tunnel, the Worker, and the D1 database", async (t) => {
@@ -772,7 +772,7 @@ test("uninstall and tunnel --help are command-specific; unknown flags name the f
 	assert.doesNotMatch(y.stderr, /ERR_PARSE_ARGS/);
 	const bad = await s.cli(["tunnel", "create", "--nope"]);
 	assert.equal(bad.status, 1);
-	assert.match(bad.stderr, /unknown flag --nope\. Run `npx -y a2a-exposed@latest --help` and see the tunnel section/);
+	assert.match(bad.stderr, /unknown flag --nope\. Run `npx -y a2a-exposed@latest --config-dir \S+ --help` and see the tunnel section/);
 	s.setConfig({
 		A2A_TUNNEL_HOSTNAME: "wake-test.example.com", A2A_TUNNEL_ID: "tun1", A2A_TUNNEL_ZONE_ID: "z1", A2A_TUNNEL_DNS_ID: "dns1",
 	});
@@ -850,7 +850,7 @@ test("uninstall names the permission and what is left when Cloudflare refuses th
 	const r = await d1.cli(["uninstall", "--yes"], { STUB_FAIL: "d1 delete", STUB_FAIL_MSG: "[7403] Unauthorized" });
 	assert.equal(r.status, 1);
 	assert.match(r.stderr, /The API token needs D1: Edit/);
-	assert.match(r.stderr, /Run `npx -y a2a-exposed@latest uninstall --yes` again/);
+	assert.match(r.stderr, /Run `npx -y a2a-exposed@latest --config-dir \S+ uninstall --yes` again/);
 	assert.match(r.stderr, /D1 d1 \(untouched\)/);
 	assert.match(r.stderr, /The Worker is already gone\. A rerun removes the D1 database/);
 	assert.equal(d1.config().A2A_D1_ID, "d1");
