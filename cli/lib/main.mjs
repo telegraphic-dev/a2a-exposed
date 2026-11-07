@@ -88,7 +88,7 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
        [--account-id ID] [--cf-profile NAME] [--cli-command CMD] [--debounce S] [--busy S] [--max-per-hour N]
        [--pairing-approval human|agent|off] [--pbkdf2-iterations N] [--workers-logs on|off] [--mcp on|off] [--cron]
        [--manage-url URL] [--event-url URL] [--event-secret-stdin]
-       [--rotate-owner-token]
+       [--dry-run [--json]] [--rotate-owner-token]
        [--upstream URL [--upstream-card-url URL] [--upstream-token-stdin | --no-upstream-token]] [--worker-dir DIR]
                                 deploy the Worker + D1 to your account; wake secrets are read from
                                 env WAKE_WEBHOOK_URL / WAKE_WEBHOOK_KEY / WAKE_HMAC_SECRET (never argv)
@@ -97,6 +97,9 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
                                                --hostname H moves it back); the old URL answers 301/410
                                 --workers-dev-subdomain  create the account's workers.dev subdomain if missing
                                                Uses system script on macOS/Linux, including under automation.
+                                --dry-run      offline plan only: no writes, network, stdin reads, or deployment.
+                                               --json prints structured config/actions; secret names only.
+                                               Account/resource readiness is checked only during real init.
                                 --cf-profile   cf auth profile for a separate Cloudflare login
                                                (npx cf auth create NAME --no-browser); saved, used by every cf call.
                                                When whoami lists no accounts, init reads cf accounts list
@@ -440,7 +443,7 @@ const deployOpts = {
 };
 const SPEC = {
 	hosted: { url: S, version: S, "upstream-token-file": S, "upstream-token-env": S, "access-client-id-file": S, "access-client-id-env": S, "access-client-secret-file": S, "access-client-secret-env": S, name: S, json: B, agent: S, hostname: S, origin: S, path: S, preset: S, "control-url": S, "secret-file": S, "secret-env": S, "secret-from": S, "hermes-home": S, route: S, "token-file": S, "no-run": B },
-	init: { ...deployOpts, ...tunnelOpts, tunnel: B }, deploy: deployOpts,
+	init: { ...deployOpts, ...tunnelOpts, tunnel: B, "dry-run": B, json: B }, deploy: deployOpts,
 	wake: { ...deployOpts, "local-url": S, json: B, url: S, "reference-file": S, "reference-env": S, clear: B, version: S, agent: S, "control-url": S, "key-header": S, "key-file": S, "key-env": S, "key-stdin": B, "hmac-secret-file": S, "hmac-secret-env": S, "access-client-id-file": S, "access-client-id-env": S, "access-client-secret-file": S, "access-client-secret-env": S }, tunnel: { ...tunnelOpts, preset: S, "hermes-route": S, "hmac-secret-stdin": B, json: B },
 	inbox: { context: S, from: S, all: B, json: B },
 	reply: { text: S, stdin: B, state: { type: "string", default: "completed" }, artifact: B, "artifact-name": { type: "string", default: "response" }, force: B },
@@ -495,7 +498,7 @@ export async function main(argv) {
 		if (extra.length && !ok)
 			throw new CliError("`pair set-password` takes no password argument: it reads the password from the terminal, without echo (never from argv, stdin or the environment). For a one-time web link instead: `pair set-password --web [--ttl MIN] [--json]`");
 	}
-	if (name !== "env") upd.check(VERSION);
+	if (name !== "env" && !(name === "init" && (rest.includes("--dry-run") || rest.includes("--json")))) upd.check(VERSION);
 	let parsed;
 	try {
 		parsed = parseArgs({ args: rest, options: SPEC[name] || {}, allowPositionals: true, strict: true });
@@ -516,9 +519,11 @@ export async function main(argv) {
 			if (p.length) throw new CliError("env takes no arguments; use --config-dir DIR to select a directory");
 			return console.log(o.json ? JSON.stringify({ A2A_CONFIG_DIR: C.CONFIG_DIR }) : `export A2A_CONFIG_DIR=${C.shellQuote(C.CONFIG_DIR)}`);
 		case "init":
+			if (p.length) throw new CliError("init takes no positional arguments; use --worker-name NAME");
+			if (o.json && !o["dry-run"]) throw new CliError("init --json requires --dry-run");
 			if (o.tunnel) tun.preflight(o); // refuse early (hosted preset, missing --tunnel-path) before anything is deployed
 			await dep.init(o);
-			if (!o.tunnel) return;
+			if (!o.tunnel || o["dry-run"]) return;
 			try { return await tun.create(o); } catch (e) {
 				if (e instanceof CliError) e.message += `\n(the A2A endpoint is deployed and works; fix the above, then run \`${CLI} tunnel create\`, or check \`${CLI} status\`)`;
 				throw e;
