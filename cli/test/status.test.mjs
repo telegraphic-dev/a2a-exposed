@@ -1,7 +1,7 @@
 // `status`: the next-step logic (pure, no network).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { checkHealth, mcpAddCommand, nextStep, wakeLine } from "../lib/status.mjs";
+import { checkHealth, mcpAddCommand, nextStep, wakeLine, connectorLine, connectorPersistence } from "../lib/status.mjs";
 import { cardUrlProblem } from "../lib/a2a.mjs";
 
 const healthy = (over = {}) => ({
@@ -164,4 +164,35 @@ test("health probe keeps only the public version and distinguishes legacy from u
 	assert.deepEqual(await probe({}), { ok: false, version: null, httpStatus: 200 });
 	globalThis.fetch = async () => { throw new Error("offline"); };
 	assert.deepEqual(await checkHealth("https://agent.example.com"), { ok: false, version: null, httpStatus: null, error: "request to https://agent.example.com failed: offline" });
+});
+
+
+test("connector persistence is local, bounded, and never includes process arguments", () => {
+	const foreground = "ttys001 /usr/local/bin/cloudflared cloudflared tunnel run --token-file /cfg/token";
+	const probe = (processes, services = "", extra = {}) => connectorPersistence("/cfg/token", {
+		platform: "darwin", exists: () => false,
+		run: (cmd, args, options) => {
+			assert.equal(options.timeout, 2000);
+			assert.ok(options.maxBuffer > 0);
+			return { status: 0, stdout: cmd === "ps" ? processes : services };
+		}, ...extra,
+	});
+	assert.equal(probe(foreground), "ephemeral");
+	assert.equal(probe(foreground.replace("--token-file ", "--token-file=")), "ephemeral");
+	assert.equal(probe(foreground.replace("/cfg/token", "/cfg/token other")), "unknown");
+	assert.equal(probe(foreground, "", { platform: "linux" }), "ephemeral");
+	assert.equal(probe(foreground, "cloudflared.service enabled", { platform: "linux" }), "unknown");
+	assert.equal(probe(foreground, "", { platform: "linux", run: (cmd, args) => ({ status: 0, stdout: cmd === "ps" ? foreground : args.includes("--user") ? "cloudflared.service enabled" : "" }) }), "unknown");
+	assert.equal(probe(foreground, "", { run: (cmd) => cmd === "ps" ? { status: 0, stdout: foreground } : { status: 1, stdout: "" } }), "unknown");
+	assert.equal(probe(foreground, "123 0 com.cloudflare.cloudflared"), "unknown");
+	assert.equal(probe(foreground, "", { exists: () => true }), "unknown");
+	assert.equal(probe(foreground.replace("ttys001", "??")), "unknown");
+	assert.equal(probe(foreground.replace("/cfg/token", "/cfg/token-other")), "unknown");
+	assert.equal(probe(foreground.replace("cloudflared tunnel", "other tunnel" ).replace("/usr/local/bin/cloudflared", "/bin/echo")), "unknown");
+	assert.equal(probe(foreground, "", { run: () => ({ status: 1, stdout: "secret" }) }), "unknown");
+	assert.equal(probe(foreground, "", { platform: "win32", run: () => { throw Error("must not run"); } }), "unknown");
+	assert.equal(connectorLine({ connections: 4, persistence: "unknown" }), "connected (4), persistence unknown");
+	assert.match(connectorLine({ connections: 4, persistence: "ephemeral" }), /^connected \(4\), ephemeral/);
+	assert.equal(connectorLine({ connections: null }), "unknown, persistence unknown");
+	assert.equal(connectorLine({ connections: 0 }), "not connected (0), persistence unknown");
 });

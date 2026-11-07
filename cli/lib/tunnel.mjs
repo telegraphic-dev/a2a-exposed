@@ -156,7 +156,9 @@ export function connectorInstructions(tokenFile, token = "") {
 		"Run the connector there (outbound TCP/UDP 7844 to Cloudflare must be allowed):",
 		`  cloudflared tunnel run --token-file ${tokenFile}        # cloudflared 2025.4+`,
 		`  cloudflared tunnel run --token ${t}`,
-		`  sudo cloudflared service install ${t}   # as a system service (starts on boot)`,
+		`  sudo cloudflared service install ${t}   # optional system service (starts on boot)`,
+		"  On macOS, service install needs an admin password at a terminal; do not run it unattended.",
+		"  Without admin access, keep the --token-file command in a terminal, or use a user LaunchAgent (untested).",
 		token ? "  (token shown because of --show-token: treat it like a password)"
 			: `  The tunnel token is in ${tokenFile} (chmod 600). Copy that file to the agent's machine if it is another machine.`,
 	].join("\n");
@@ -373,6 +375,7 @@ export async function create(o) {
 		console.error(`Then (Worker secrets apply within about 15 to 40 seconds; wait about 30 seconds): ${CLI} tunnel status   and   ${CLI} wake test`);
 		if (!Object.keys(agentAuth).length && preset !== "generic")
 			console.error(`note: no WAKE_WEBHOOK_KEY / WAKE_HMAC_SECRET in the environment; keep the ${preset} webhook's own auth too (export it and run \`wake set\`)`);
+		console.error("created: tunnel, DNS, Access app, token\nconnector: not running (start it now)\npersistent service: not installed (optional)");
 	} catch (e) {
 		console.error("==> rolling back what was created");
 		await remove(o, { quiet: true, secretNames: createdSecrets }).catch((r) => console.error(`rollback incomplete: ${r.message}; re-run \`${CLI} tunnel rm\``));

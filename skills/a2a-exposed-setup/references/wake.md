@@ -250,6 +250,23 @@ cloudflared tunnel run --token-file ~/.config/a2a-exposed/tunnel-token     # clo
 sudo cloudflared service install "$(cat ~/.config/a2a-exposed/tunnel-token)" # run as a service
 ```
 
+`tunnel create` ends its diagnostics with `created: tunnel, DNS, Access app, token`,
+`connector: not running (start it now)`, and `persistent service: not installed (optional)`.
+These describe what creation does; it never starts cloudflared or installs a service.
+An existing setup is left intact when creation is repeated.
+
+`status` reports `connector: connected (N), persistence unknown` when Cloudflare
+reports connections. On macOS/Linux, a terminal-attached cloudflared process using
+this setup's exact token file is marked `ephemeral` if the local check finds no
+cloudflared service. This is a best-effort local observation; it does not establish
+persistence for custom services, other users, or remote connectors. JSON exposes `tunnel.persistence`
+as `ephemeral` or `unknown`; connection counts do not prove boot persistence.
+
+On macOS, `sudo cloudflared service install` needs an admin password at a terminal;
+do not run it unattended. Without admin access, keep
+`cloudflared tunnel run --token-file <file>` in a terminal, or use a user LaunchAgent. The LaunchAgent option has not been tested.
+Closing that terminal stops a foreground connector.
+
 Copy the token file to the agent's machine if `init` ran elsewhere; treat it like a password. Then check:
 
 - `npx -y a2a-exposed@latest status`: the summary, including connector connections and the next step.
