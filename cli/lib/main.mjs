@@ -52,6 +52,11 @@ Hosted setup:
                                 then saves A2A_BASE_URL + A2A_OWNER_TOKEN in protected config or routine secrets
   wake preview|test|set --agent NAME [--url URL] [--preset P] --json
                                 hosted settings: read, test a draft, or test then save it
+                                cloudflare-target-unsupported: when verified_import is advertised and recovery_url
+                                is returned, ask the human to open Import or manage your existing tunnel,
+                                authorize the exact existing route and Access pair, then test and save again
+                                no automatic import or retry; without recovery use supported HTTPS, polling,
+                                or an explicitly authorized self-hosted Worker; keep Access and hook auth enabled
                                 secrets: --key-file, --key-env, --key-stdin, --hmac-secret-file, --hmac-secret-env,
                                 --access-client-id-file, --access-client-id-env and --access-client-secret-file, --access-client-secret-env
   wake prepare --agent NAME --url URL --preset P --reference-file FILE --json
