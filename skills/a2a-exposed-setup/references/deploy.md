@@ -27,6 +27,8 @@ npx -y a2a-exposed@latest init \
   --preset grok-bot                # grok-bot | claude-code | openclaw-wake | openclaw-agent | hermes | openbot | mausbot | generic
 ```
 
+Preview with `init --dry-run` before deploying. It validates local options and prints the planned configuration and actions without writing files, reading stdin, installing packages, contacting Cloudflare or the upstream, generating tokens, or deploying. Add `--json` for structured output. Secret inputs are listed by name only; arbitrary metadata, URL, template and command settings are listed by key only. Saved settings and environment overrides still apply. Login, account visibility, resource existence and upstream authentication remain unverified until execution. List accounts with `npx cf accounts list --json`, select one with `--account-id ID` or `CLOUDFLARE_ACCOUNT_ID`, then rerun without `--dry-run`. For `--tunnel`, list `tunnel zones --json` before selecting a zone. The preview includes planned tunnel actions and does not create a tunnel. `--json` on `init` requires `--dry-run`.
+
 `--skip-install` skips dependency installation when the Worker already has its dependencies.
 
 `init` is non-interactive and idempotent. It:

@@ -208,7 +208,7 @@ const csv = (s) => String(s || "").split(",").map((x) => x.trim()).filter(Boolea
 
 /** Validate init/deploy flags, check Node before writing, then save them. Returns { from, to } when the public URL switches between a custom domain and
  *  workers.dev (or to another custom domain), so the caller can tell the user what changed. */
-function applyFlags(o) {
+function applyFlags(o, { persist = true } = {}) {
 	const upd = {};
 	for (const [flag, key] of Object.entries(FLAG_KEYS)) if (o[flag] !== undefined) upd[key] = o[flag];
 	if (o.cron) upd.A2A_ENABLE_CRON = "1";
@@ -278,8 +278,8 @@ function applyFlags(o) {
 	}
 	// Report local input errors before Node guidance, but never save or deploy on unsupported Node.
 	checkNode();
-	C.saveConfig(upd);
-	return switched;
+	if (persist) C.saveConfig(upd);
+	return persist ? switched : upd;
 }
 
 /** https URL with no userinfo, or null for none/off. The saved value is the trimmed URL, so a fragment stays. */
@@ -576,7 +576,66 @@ function configureWakeCommand(o) {
 		console.error(`Node runtime: ${process.execPath}; PATH node: ${fromPath || "not found"}. Pinned wake command: ${pinnedCommand()}. To save it, pass --cli-command with that command.`);
 }
 
+/** Offline preview: validate the same flags, but never save, read stdin, spawn, or fetch. */
+export function initPlan(o) {
+	const updates = applyFlags(o, { persist: false });
+	const saved = { ...C.fileConfig() };
+	for (const [key, value] of Object.entries(updates)) {
+		if (value === null) delete saved[key];
+		else if (value !== undefined) saved[key] = String(value);
+	}
+	const get = (key, fallback = "") => process.env[key] || saved[key] || fallback;
+	const worker = get("A2A_WORKER_NAME", "a2a-exposed");
+	const hostname = get("A2A_HOSTNAME");
+	if (!hostname && !WD.LABEL_RE.test(worker)) die("on workers.dev the --worker-name must be a DNS label (lowercase letters, digits, hyphens)");
+	if (o["upstream-token-stdin"] && o["no-upstream-token"]) die("--upstream-token-stdin and --no-upstream-token are mutually exclusive");
+	if (o["event-secret-stdin"] && o["upstream-token-stdin"]) die("--event-secret-stdin reads stdin, so it cannot be combined with --upstream-token-stdin");
+	const secrets = new Set(["OWNER_TOKEN", ...Object.keys(deploySecretsFromEnv())]);
+	if (o["upstream-token-stdin"]) secrets.add("UPSTREAM_TOKEN");
+	if (o["event-secret-stdin"]) secrets.add("EVENT_SECRET");
+	const actions = [
+		"Save configuration (chmod 600) and copy the Worker template",
+		"Check Cloudflare login and resolve the selected account",
+		...(o["skip-install"] ? [] : ["Install Worker dependencies"]),
+		get("A2A_D1_ID") ? "Reuse the saved D1 database and apply migrations" : "Find or create the named D1 database and apply migrations",
+		(o["rotate-owner-token"] && C.fileConfig().A2A_OWNER_TOKEN) ? "Replace the saved owner token" : C.fileConfig().A2A_OWNER_TOKEN ? "Reuse the saved owner token" : "Generate an owner token",
+		"Upload secrets, deploy the Worker, save its URL, and verify the agent card and pairing readiness",
+	];
+	if (o["workers-dev-subdomain"]) actions.push("Register the requested workers.dev subdomain if missing");
+	if (get("A2A_UPSTREAM_URL")) actions.unshift("Check upstream authentication at execution time; no card or credential check was made by this preview");
+	if (o.tunnel) actions.push("Create or resume the wake tunnel, DNS and Access resources; upload tunnel credentials and start the connector");
+	return {
+		dryRun: true,
+		configFile: C.CONFIG_FILE,
+		workerDir: path.resolve(o.dir || get("A2A_WORKER_DIR") || path.join(C.CONFIG_DIR, "worker")),
+		config: {
+			A2A_WORKER_NAME: worker,
+			A2A_HOSTNAME: hostname || null,
+			A2A_D1_NAME: get("A2A_D1_NAME", worker),
+			A2A_D1_ID: get("A2A_D1_ID") || null,
+			CLOUDFLARE_ACCOUNT_ID: get("CLOUDFLARE_ACCOUNT_ID") || null,
+			CF_PROFILE: get("CF_PROFILE") || null,
+			WAKE_PRESET: get("WAKE_PRESET", "generic"),
+		},
+		// Arbitrary metadata, templates, commands and URLs can contain credentials: list keys only.
+		settingKeys: Object.keys(updates).sort(),
+		secretNames: [...secrets].sort(),
+		actions,
+		unverified: ["Cloudflare login, account visibility, resource existence, DNS, upstream authentication and deployment readiness"],
+		next: `List accounts with npx cf accounts list --json, then run init without --dry-run and with --account-id ID (or CLOUDFLARE_ACCOUNT_ID). For a tunnel zone, list tunnel zones --json first.`,
+	};
+}
+
 export async function init(o) {
+	if (o["dry-run"]) {
+		const plan = initPlan(o);
+		if (o.json) console.log(JSON.stringify(plan));
+		else {
+			console.log("Dry run: no files, secrets or resources changed; no network calls or stdin reads.");
+			console.log(JSON.stringify(plan, null, 2));
+		}
+		return;
+	}
 	const prevUpstream = C.fileConfig().A2A_UPSTREAM_URL || "";
 	const switched = applyFlags(o);
 	const upstreamSecrets = await upstreamTokenCheck(o, { upstreamChanged: (C.get("A2A_UPSTREAM_URL") || "") !== prevUpstream });

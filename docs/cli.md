@@ -76,6 +76,8 @@ Needs a Cloudflare login (`npx cf auth login --no-browser`). On a VPS where that
 
 `--skip-install` skips the Worker dependency install; use it only when the copied Worker already has its dependencies.
 
+Preview with `init --dry-run` before deploying. It validates local options and prints the planned configuration and actions without writing files, reading stdin, installing packages, contacting Cloudflare or the upstream, generating tokens, or deploying. Add `--json` for structured output. Secret inputs are listed by name only; arbitrary metadata, URL, template and command settings are listed by key only. Saved settings and environment overrides still apply. Login, account visibility, resource existence and upstream authentication remain unverified until execution. List accounts with `npx cf accounts list --json`, select one with `--account-id ID` or `CLOUDFLARE_ACCOUNT_ID`, then rerun without `--dry-run`. For `--tunnel`, list `tunnel zones --json` before selecting a zone. The preview includes planned tunnel actions and does not create a tunnel. `--json` on `init` requires `--dry-run`.
+
 `init` deploys the Worker and D1. `deploy` redeploys with the saved settings. Secrets already on the Worker stay, unless you export new values.
 
 Workers.dev subdomain registration uses the system `script` utility on macOS and Linux. It supports CLI runs started by automation without an outer terminal. An unexpected prompt times out and stops the terminal job. CLI shutdown signals (SIGINT, SIGTERM, SIGHUP) also stop the detached terminal job.
@@ -90,7 +92,7 @@ init [--hostname <host> | --workers-dev [--workers-dev-subdomain NAME]]
      [--pairing-approval human|agent|off] [--pbkdf2-iterations N]
      [--workers-logs on|off] [--mcp on|off] [--cron]
      [--manage-url URL] [--event-url URL] [--event-secret-stdin]
-     [--rotate-owner-token]
+     [--dry-run [--json]] [--rotate-owner-token]
      [--upstream URL [--upstream-card-url URL] [--upstream-token-stdin | --no-upstream-token]]
      [--worker-dir DIR] [--tunnel]
 ```
