@@ -420,3 +420,5 @@ use the stored task status, including when the displayed rows are limited by
 `-n`; outbound summaries use the latest recorded state in that peer/task’s full log. JSON output
 keeps its array shape; history rows with a known task state include `currentState`
 with `state` and `timestamp`.
+
+When hosted `wake test` or `wake set` returns `cloudflare-target-unsupported`, a service with verified import enabled can return a selected-agent `recovery_url`. Open it to **Import or manage your existing tunnel**, connect Cloudflare, authorize the exact existing route and Access pair, then test and save again. The CLI does not import, retry or change infrastructure automatically. Services without this recovery retain the public HTTPS/polling/self-hosted guidance. Keep Access and webhook authentication enabled.
