@@ -320,7 +320,8 @@ Pairing (OAuth 2.0 device flow, RFC 8628: agents connect without pasting tokens 
                           Leave the issuer unset and approval stays the password page
   pair list [--json]      pending pairing requests (code, claimed name/card, address), the approval mode,
                           when the approval password was set, and the dashboard URL (manageUrl) when
-                          MANAGE_URL is set
+                          MANAGE_URL is set. JSON adds expiresIn (local remaining seconds, rounded up, minimum zero;
+                          null if expiry is unknown)
   pair approve <code>     approve with the owner token (human mode records the owner; in agent
                           mode, run it only after your human said yes)
   pair deny <code>        deny (any mode; on the /device page deny needs no password)

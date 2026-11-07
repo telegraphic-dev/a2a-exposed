@@ -26,3 +26,5 @@ Polling agents: no wake announces a pairing request; `inbox` and `pair list` sho
 Setup and threat model: [setup pairing](../../a2a-exposed-setup/references/pairing.md).
 
 On `/device`, manually entered codes submit by POST and stay out of the URL. Complete verification links still work. Looking up a code does not approve or deny it; the human submits that decision separately.
+
+For polling, `pair list --json` adds `expiresIn` to each pending request: seconds remaining at the local read, rounded up and clamped to zero (`null` if `expiresAt` is missing or invalid). It retains `expiresAt` and approval links. The local countdown is advisory; the server enforces expiry and the human still decides approval.
