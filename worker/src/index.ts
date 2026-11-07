@@ -4068,9 +4068,9 @@ async function handleMcp(req: Request, ctx: TenantContext, ectx: ExecutionContex
 	return rpcError(id, M.ERR.METHOD_NOT_FOUND, `method not found: ${msg.method}`);
 }
 
-/** Hosted cards disappear when the agent is deleted. There is no purge binding, so the public max-age is short. Self-host has no such delete. */
+/** Hosted cards must not outlive deletion in a client or shared cache. Self-host has no such delete. */
 function cardCacheControl(ctx: TenantContext): string {
-	return ctx.mode === "host" ? "public, max-age=60" : "public, max-age=300";
+	return ctx.mode === "host" ? "no-store" : "public, max-age=300";
 }
 
 /** Same status and headers as the GET response, with an empty body. The body is discarded, not copied. */

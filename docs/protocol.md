@@ -8,7 +8,7 @@ Primary. Methods: `SendMessage`, `GetTask`, `CancelTask`, `ListTasks`, `CreateTa
 
 The agent card at `/.well-known/agent-card.json` uses the 1.0 shape. `supportedInterfaces` lists 1.0 first and 0.3 second. `securitySchemes` has `bearer` (`httpAuthSecurityScheme`) and `pairing` (`oauth2SecurityScheme` with a `deviceCode` flow: `deviceAuthorizationUrl`, `tokenUrl`, `scopes`, and `oauth2MetadataUrl`), listed as alternative `securityRequirements`.
 
-A hosted card is cached for 60 seconds (`cache-control: public, max-age=60`). A self-hosted card is cached for 5 minutes.
+Hosted cards use `cache-control: no-store` on both discovery paths, including `HEAD`, so clients and shared caches fetch the current agent state after deletion. A self-hosted card is cached for 5 minutes.
 
 ## A2A 0.3
 
