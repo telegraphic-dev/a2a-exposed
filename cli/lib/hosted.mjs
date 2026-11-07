@@ -88,7 +88,7 @@ async function request(origin, path, { token = "", method = "GET", body, fetchIm
 export async function capabilities(o = {}) {
 	const data = await request(originFor(o), "/api/v1/setup/capabilities");
 	if (!Array.isArray(data.scopes) || !Array.isArray(data.wake?.presets)) fail("unsupported", SETUP_UNSUPPORTED);
-	return { ok: true, code: "capabilities", next: "Select explicit scopes and a wake preset from this listing.", scopes: data.scopes.filter(s => SETUP_SCOPES.includes(s)), presets: data.wake.presets.filter(s => /^[a-z-]+$/.test(s)), upstream: data.upstream?.configuration === true && data.upstream?.verify === true, preflight: data.preflight === true, secret_reference: data.wake.secret_reference === true, wake_removal: data.wake.removal === true, secure_link_create: data.wake.secure_link_create === true };
+	return { ok: true, code: "capabilities", next: "Select explicit scopes and a wake preset from this listing.", scopes: data.scopes.filter(s => SETUP_SCOPES.includes(s)), presets: data.wake.presets.filter(s => /^[a-z-]+$/.test(s)), upstream: data.upstream?.configuration === true && data.upstream?.verify === true, preflight: data.preflight === true, secret_reference: data.wake.secret_reference === true, wake_removal: data.wake.removal === true, verified_import: data.wake.verified_import === true, secure_link_create: data.wake.secure_link_create === true };
 }
 
 export async function login(o = {}) {
@@ -293,7 +293,12 @@ export async function wake(sub, o = {}) {
 		"access-401": "Cloudflare Access refused the test. Check the selected Access service token and policy without disabling Access or hook authentication.",
 		"access-403": "Cloudflare Access refused the test. Check the selected Access service token and policy without disabling Access or hook authentication.",
 	};
-	return { ok, code, saved: result.saved === true, next: ok ? sub === "set" ? "Check the receiver for the test wake." : "The draft passed. Run wake set with the same inputs to test and save." : `Saved settings were not changed. ${recovery[code] || "Check the receiver, credentials and draft, then test again."}` };
+ // Accept only the fixed selected-agent path; never render arbitrary service text or URLs.
+ const importPath = `/app/agents/${name}/secure-link?import=1`;
+ const importRecovery = !ok && result.saved === false && code === "cloudflare-target-unsupported"
+  && result.recovery?.code === "verified-import" && result.recovery?.path === importPath;
+ const recoveryUrl = importRecovery ? new URL(importPath, origin).href : "";
+ return { ok, code, saved: result.saved === true, ...(recoveryUrl ? { recovery_url: recoveryUrl } : {}), next: ok ? sub === "set" ? "Check the receiver for the test wake." : "The draft passed. Run wake set with the same inputs to test and save." : `Saved settings were not changed. ${recoveryUrl ? `Import or manage your existing tunnel: ${recoveryUrl} — connect Cloudflare, check and authorize the existing tunnel, then test and save again. Keep Access and webhook authentication enabled; no import or retry was performed.` : recovery[code] || "Check the receiver, credentials and draft, then test again."}` };
 }
 
 /** Hosted upstream configuration uses only scoped setup or this agent's owner credential. */

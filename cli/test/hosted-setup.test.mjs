@@ -583,3 +583,47 @@ test("hosted wake failures give hosted recovery and never write or reflect servi
   assert.equal(fs.existsSync(log), false);
  } finally { f.clean(); }
 });
+
+test("verified-import recovery only accepts the exact selected-agent path and performs no retry", () => {
+ const expectedPath = '/app/agents/sample-agent/secure-link?import=1';
+ const cases = [
+  [{code:'verified-import',path:expectedPath}, true],
+  [{code:'verified-import',path:'https://evil.example'+expectedPath}, false],
+  [{code:'verified-import',path:'//evil.example'+expectedPath}, false],
+  [{code:'verified-import',path:'/app/agents/another-agent/secure-link?import=1'}, false],
+  [{code:'verified-import',path:expectedPath+'&secret=private-response'}, false],
+  [{code:'verified-import',path:expectedPath+'#private-response'}, false],
+  [{code:'unknown',path:expectedPath}, false],
+  [undefined,false],
+ ];
+ for (const [recovery,accepted] of cases) for (const sub of ['test','set']) {
+  const f=fixture();f.save('HOSTED_AGENT_NAME=sample-agent\n');
+  try {
+   const log=path.join(f.dir,'requests'), before=fs.readFileSync(f.config,'utf8');
+   const endpoint='https://control.example/api/v1/agents/sample-agent/wake';
+   const refusal={ok:false,saved:false,code:'cloudflare-target-unsupported',recovery,message:'private-response',proof:grant};
+   const r=f.run(['wake',sub,'--agent','sample-agent','--url','https://receiver.example/private-hook','--preset','hermes','--json'],{
+    [endpoint]:{status:200,body:sub==='set'?{version:7,...refusal}:{version:7}},
+    [endpoint+'/test']:{status:200,body:refusal},
+   },{WAKE_HMAC_SECRET:'private-hmac',A2A_TEST_FETCH_LOG:log});
+   assert.equal(r.status,1,r.stdout+r.stderr);
+   const result=JSON.parse(r.stdout);assert.equal(result.saved,false);
+   if(accepted){assert.equal(result.recovery_url,'https://control.example'+expectedPath);assert.match(result.next,/Import or manage your existing tunnel/);}
+   else {assert.equal(result.recovery_url,undefined);assert.match(result.next,/supported public HTTPS route, polling/);}
+   for(const hidden of ['evil.example','another-agent','private-response','private-hmac',grant,'private-hook']) assert.equal((r.stdout+r.stderr).includes(hidden),false);
+   assert.equal(fs.readFileSync(f.config,'utf8'),before);
+   const calls=fs.readFileSync(log,'utf8').trim().split('\n').map(JSON.parse);
+   assert.equal(calls.filter(c=>c.method!=='GET').length,1);
+  } finally {f.clean();}
+ }
+});
+
+test('capabilities exposes only a strict boolean verified-import switch', () => {
+ for (const value of [true,false,undefined,'true']) {
+  const f=fixture();f.save();
+  try {
+   const r=f.run(['hosted','capabilities','--json'],{'https://control.example/api/v1/setup/capabilities':{status:200,body:{...capabilities,wake:{...capabilities.wake,verified_import:value}}}});
+   assert.equal(r.status,0,r.stdout+r.stderr);assert.equal(JSON.parse(r.stdout).verified_import,value===true);
+  } finally {f.clean();}
+ }
+});

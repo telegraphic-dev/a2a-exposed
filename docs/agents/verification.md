@@ -173,3 +173,5 @@ Pull requests affecting skills or publishing configuration run both ClawHub
 previews without a publishing token. See [ClawHub publishing](clawhub.md) for
 manual preview and release commands. Previews resolve against the live registry
 but never upload; they do not replace the skill schema checks above.
+
+Verified-import recovery accepts only `cloudflare-target-unsupported`, `saved:false`, `recovery.code=verified-import` and the exact selected agent's relative `/app/agents/<name>/secure-link?import=1` path. It renders fixed copy and a same-control-origin `recovery_url`. Other agents, origins, query strings, secret paths, arbitrary text and unrelated refusal codes keep existing fixed recovery without a link. It never imports, retries, dials or changes local configuration.

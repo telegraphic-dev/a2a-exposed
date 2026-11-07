@@ -156,3 +156,5 @@ one trailing root dot and IDN labels to ASCII. Credentials, ports, non-root
 paths, queries, fragments, IP addresses and malformed labels receive distinct
 local validation reasons before any network request. Invalid hostname input
 is never echoed in the result.
+
+For hosted `cloudflare-target-unsupported`, use `recovery_url` only when the CLI returns one for the selected agent. It opens human-confirmed **Import or manage your existing tunnel** on that service; connect Cloudflare, verify the exact existing route and Access pair, then test and save. Do not create another tunnel, auto-import, retry a refused request, or weaken Access/signatures. Without that recovery, use the service's supported public HTTPS route, polling or an explicitly authorized self-hosted Worker.
