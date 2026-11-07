@@ -358,6 +358,7 @@ test("tunnel create on a workers.dev inbox: the account's only zone is picked an
 	const s = await tunnelEnv(t, { hostname: "" });
 	const r = await s.cli(["tunnel", "create"], { WAKE_WEBHOOK_KEY: "hooks-token" });
 	assert.equal(r.status, 0, r.stderr);
+	assert.match(r.stderr, /created: tunnel, DNS, Access app, token\nconnector: not running \(start it now\)\npersistent service: not installed \(optional\)/);
 	assert.match(r.stdout.trim(), /^https:\/\/wake-[a-z]+-[a-z]+-[0-9a-f]{4}\.example\.com\/hooks\/wake$/);
 	assert.match(r.stderr, /the account has one zone, example\.com: the wake hostname goes there \(the A2A endpoint URL is unchanged\)/);
 	assert.match(s.calls().find((c) => c.cmd.startsWith("zones list")).cmd, /--account-id acc1/);
@@ -568,10 +569,12 @@ test("status follows a tunnel through: no connector -> start cloudflared; connec
 	const raw = await s.cli(["status", "--json"], { STUB_CONNS: "0", STUB_TUNNEL_STATUS: "inactive" });
 	assert.equal(raw.status, 1);
 	assert.equal(JSON.parse(raw.stdout).tunnel.state, "never connected");
+	assert.equal(JSON.parse(raw.stdout).tunnel.persistence, "unknown");
 	r = await s.cli(["status"], { STUB_CONNS: "1" });
 	assert.equal(r.status, 0, r.stdout);
 	assert.match(r.stdout, /^wake: +webhook \(preset openclaw-wake, through the tunnel\); auth: bearer\/API key \+ Access service token/m);
 	assert.match(r.stdout, /^next step: +none: setup is complete/m);
+	assert.match(r.stdout, /^connector: +connected \(1\), persistence unknown$/m);
 	s.setPreview({ hasAccessServiceToken: false });
 	r = await s.cli(["status"], { STUB_CONNS: "1" });
 	assert.match(r.stdout, /Worker does not have the tunnel's wake secrets: run `npx -y a2a-exposed@latest --config-dir \S+ tunnel create` again/);

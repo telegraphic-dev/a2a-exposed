@@ -2,9 +2,11 @@
 // calls only), so an agent that was interrupted can resume from the printed next step. The CLI fetches the agent card
 // itself, so agents need no curl (some agent sandboxes flag *.dev URLs in shell commands).
 import dns from "node:dns";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { isIP } from "node:net";
 import path from "node:path";
+import os from "node:os";
 import { promisify } from "node:util";
 import * as C from "./config.mjs";
 import { runtimeInfo } from "./runtime.mjs";
@@ -14,6 +16,44 @@ import * as D from "./deploy.mjs";
 import { buildLayers, layerValue, usablePin } from "./layers.mjs";
 import * as T from "./tunnel.mjs";
 import { cacheFile, readCache, newer } from "./update.mjs";
+
+/** Best-effort local check only. A terminal-attached process using this exact token file is ephemeral.
+ * Never return process arguments (they may contain credentials), or infer persistence from remote connections. */
+export function connectorPersistence(tokenFile, { platform = process.platform, run = spawnSync, exists = fs.existsSync, home = os.homedir() } = {}) {
+	if (!["darwin", "linux"].includes(platform) || !tokenFile) return "unknown";
+	try {
+		const ps = run("ps", ["-axo", "tty=,comm=,args="], { encoding: "utf8", timeout: 2000, maxBuffer: 1024 * 1024 });
+		if (ps.status !== 0 || ps.error) return "unknown";
+		const fileForms = [tokenFile, C.shellQuote(tokenFile), '"' + tokenFile.replaceAll('"', '\\"') + '"'];
+		const foreground = ps.stdout.split("\n").some((line) => {
+			const row = line.trim().match(/^(\S+)\s+(\S+)\s+(.+)$/);
+			if (!row || row[1] === "-" || row[1].startsWith("?")) return false;
+			if (path.basename(row[2]) !== "cloudflared" || !/\btunnel\s+run\b/.test(row[3])) return false;
+			return ["--token-file ", "--token-file="].some((flag) => fileForms.some((file) =>
+				row[3].endsWith(flag + file) || row[3].includes(flag + file + " --")));
+		});
+		if (!foreground) return "unknown";
+		const serviceFiles = platform === "darwin"
+			? ["/Library/LaunchDaemons/com.cloudflare.cloudflared.plist", "/Library/LaunchAgents/com.cloudflare.cloudflared.plist", path.join(home, "Library/LaunchAgents/com.cloudflare.cloudflared.plist")]
+			: ["/etc/systemd/system/cloudflared.service", "/usr/lib/systemd/system/cloudflared.service", path.join(home, ".config/systemd/user/cloudflared.service")];
+		if (serviceFiles.some(exists)) return "unknown";
+		const service = platform === "darwin"
+			? run("launchctl", ["list"], { encoding: "utf8", timeout: 2000, maxBuffer: 1024 * 1024 })
+			: run("systemctl", ["list-unit-files", "--type=service", "--no-pager", "--no-legend"], { encoding: "utf8", timeout: 2000, maxBuffer: 1024 * 1024 });
+		if (service.status !== 0 || service.error || /cloudflared/i.test(service.stdout)) return "unknown";
+		if (platform === "linux") {
+			const user = run("systemctl", ["--user", "list-unit-files", "--type=service", "--no-pager", "--no-legend"], { encoding: "utf8", timeout: 2000, maxBuffer: 1024 * 1024 });
+			if (user.status !== 0 || user.error || /cloudflared/i.test(user.stdout)) return "unknown";
+		}
+		// This describes the observed terminal process, not every possible custom service.
+		return "ephemeral";
+	} catch { return "unknown"; }
+}
+
+export function connectorLine(t) {
+	const state = t.connections == null ? "unknown" : t.connections > 0 ? `connected (${t.connections})` : "not connected (0)";
+	return `${state}, ${t.persistence === "ephemeral" ? "ephemeral (local terminal connector; no cloudflared service found)" : "persistence unknown"}`;
+}
 
 const DOH_URL = "https://cloudflare-dns.com/dns-query";
 const LOOKUP_MS = 5000;
@@ -536,7 +576,8 @@ export async function collect(net = {}) {
 			const url = T.wakeUrl(tunnelHost || "?", C.get("A2A_TUNNEL_PATH") || "/");
 			s.tunnel = { hostname: tunnelHost, wakeUrl: url, origin: C.get("A2A_TUNNEL_ORIGIN"), complete: T.tunnelComplete(), tokenFileOk: T.tokenFileOk(),
 				tokenFile: C.get("A2A_TUNNEL_TOKEN_FILE") || "<config dir>/tunnel-token", workerUrlMatches: s.wake?.urlFingerprint === fingerprint(url),
-				secretsAt: Number(C.get("A2A_TUNNEL_SECRETS_AT")) || 0, connections: null };
+				secretsAt: Number(C.get("A2A_TUNNEL_SECRETS_AT")) || 0, connections: null,
+				persistence: connectorPersistence(C.get("A2A_TUNNEL_TOKEN_FILE")) };
 			if (haveCf && C.get("A2A_TUNNEL_ID")) {
 				try {
 					const t = T.cfCall(dir, ["tunnels", "get", C.get("A2A_TUNNEL_ID")], { allowNotFound: true });
@@ -638,6 +679,7 @@ export async function status(o) {
 			const t = s.tunnel;
 			rows.push(["tunnel", !t ? "none" : `${t.wakeUrl} -> ${t.origin || "?"}; ${!t.complete ? "INCOMPLETE" : t.tokenFileOk ? "set up" : "set up, but the connector token file is MISSING"}` +
 				(t.connections != null ? `; ${tunnelStateLabel(t.state)}, ${t.connections} connector connection(s)` : t.error ? `; state unknown (${t.error})` : "")]);
+			if (t) rows.push(["connector", connectorLine(t)]);
 			if (s.zones) rows.push(["zones", s.zones.length ? s.zones.join(", ") : "none on this account"]);
 			const addr = s.addresses;
 			if (addr) {

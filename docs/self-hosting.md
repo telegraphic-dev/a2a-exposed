@@ -98,6 +98,23 @@ The connector token is written to `<config dir>/tunnel-token` (chmod 600) and is
 cloudflared tunnel run --token-file ~/.config/a2a-exposed/tunnel-token
 ```
 
+`tunnel create` ends its diagnostics with `created: tunnel, DNS, Access app, token`,
+`connector: not running (start it now)`, and `persistent service: not installed (optional)`.
+These describe what creation does; it never starts cloudflared or installs a service.
+An existing setup is left intact when creation is repeated.
+
+`status` reports `connector: connected (N), persistence unknown` when Cloudflare
+reports connections. On macOS/Linux, a terminal-attached cloudflared process using
+this setup's exact token file is marked `ephemeral` if the local check finds no
+cloudflared service. This is a best-effort local observation; it does not establish
+persistence for custom services, other users, or remote connectors. JSON exposes `tunnel.persistence`
+as `ephemeral` or `unknown`; connection counts do not prove boot persistence.
+
+On macOS, `sudo cloudflared service install` needs an admin password at a terminal;
+do not run it unattended. Without admin access, keep
+`cloudflared tunnel run --token-file <file>` in a terminal, or use a user LaunchAgent. The LaunchAgent option has not been tested.
+Closing that terminal stops a foreground connector.
+
 Copy the token file to that machine if `init` ran elsewhere. Worker secrets show up in about 15 to 40 seconds. Wait about 30 seconds, then check again. For about a minute after `tunnel create`, while the connector reports 0 connections, `status` prints `waiting for the connector to connect`, tells you to start `cloudflared tunnel run --token-file …` now, and exits 0. After that minute, 0 connections is broken. A tunnel status of `inactive` means the connector has never connected.
 
 - `status` shows connector connections, eight layers (`PASS`, `FAIL`, or `SKIP`), and the next step. A failure names the missing or mismatched object. The Access layer says whether a service token is configured and does not print it.

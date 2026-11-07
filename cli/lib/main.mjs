@@ -193,6 +193,8 @@ anywhere on the account: the A2A endpoint itself can be on workers.dev or a cust
                                 Defaults: openclaw-* -> http://127.0.0.1:18789 /hooks/wake|agent, hermes -> :8644
                                 /webhooks/a2a-wake (override with --hermes-route NAME). Token -> <config dir>/tunnel-token (chmod 600).
                                 Worker secrets show up in about 15 to 40 seconds. Wait about 30 seconds and check again
+                                Creation prints resource, connector, and optional persistent-service states.
+                                status reports connections and ephemeral/unknown persistence; macOS service install needs an admin terminal.
   tunnel zones [--json]         list available Cloudflare zones before selecting --tunnel-zone
   tunnel status                 tunnel/Access/Worker state + probes (bare request blocked? connector up?)
                                 A network error says DNS may still be propagating; retry in 30 seconds
@@ -397,6 +399,8 @@ Self-hosted only. Hosted configs use hosted webhook settings or polling. Check s
                                 A finished tunnel creates nothing when you run it again. A partial tunnel stops and
                                 asks for tunnel rm. Prints the Access application name and ids, then how to undo it
                                 with tunnel rm. Worker secrets show up in about 15 to 40 seconds. Wait about 30 seconds.
+                                Creation prints resource, connector, and optional persistent-service states.
+                                status reports connections and ephemeral/unknown persistence; macOS service install needs an admin terminal.
   tunnel zones [--json]         List active zones before choosing --tunnel-zone; no resource changes.
   tunnel status                 Tunnel, Access, and Worker state, plus two probes.
                                 A network error says DNS may still be propagating; retry in 30 seconds.
