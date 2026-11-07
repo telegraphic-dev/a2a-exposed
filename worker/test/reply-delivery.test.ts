@@ -5,6 +5,7 @@ import { clearDirectoryCache } from "../src/directory.ts";
 import { dispatch, runOwnerRpc } from "../src/index.ts";
 import { hostedTenantContext, type DoNamespace, type KvNamespace, type TenantContext, type WorkerBindings } from "../src/tenancy.ts";
 import { d1 } from "./d1.ts";
+import { mockPushTransport } from "./push-transport-mock.ts";
 
 const MIGRATIONS = new URL("../migrations/", import.meta.url);
 const ectx = { waitUntil(_p: Promise<unknown>) {}, passThroughOnException() {} };
@@ -22,6 +23,8 @@ async function fixture(t: Parameters<typeof test>[1] extends (t: infer T) => unk
 	let directPosts = 0;
 	const cards: string[] = [];
 	let missingCard = false;
+	let redirectPush = false;
+	let pushRequests = 0;
 	let hold: Promise<void> | null = null;
 	let posted: (() => void) | null = null;
 	let aborted = false;
@@ -31,6 +34,10 @@ async function fixture(t: Parameters<typeof test>[1] extends (t: infer T) => unk
 			return { async fetch(req: Request) {
 				const ctx = byId.get(String(id));
 				if (!ctx) return new Response("missing", { status: 404 });
+				if (new URL(req.url).pathname === "/push") {
+					pushRequests++;
+					if (redirectPush) return new Response(null, { status: 307, headers: { location: "https://other.example.net/collect" } });
+				}
 				if (req.method === "GET" && new URL(req.url).pathname.startsWith("/.well-known/agent")) {
 					cards.push(new URL(req.url).pathname);
 					if (missingCard) return new Response("missing", { status: 404 });
@@ -73,7 +80,7 @@ async function fixture(t: Parameters<typeof test>[1] extends (t: infer T) => unk
 		assert.equal(r.status, 200, JSON.stringify(data));
 		return data.result.id as string;
 	};
-	return { a, b, dbA, dbB, owner, sendToBob, bobAtAlice, otherAtAlice: () => issue(a, ownerA, "other"), cards, missingCard() { missingCard = true; }, get directPosts() { return directPosts; }, get aborted() { return aborted; }, blockDirect() {
+	return { a, b, dbA, dbB, owner, sendToBob, bobAtAlice, otherAtAlice: () => issue(a, ownerA, "other"), cards, redirectPush() { redirectPush = true; }, missingCard() { missingCard = true; }, get pushRequests() { return pushRequests; }, get directPosts() { return directPosts; }, get aborted() { return aborted; }, blockDirect() {
 		let release!: () => void;
 		hold = new Promise<void>((resolve) => { release = resolve; });
 		const started = new Promise<void>((resolve) => { posted = resolve; });
@@ -127,6 +134,7 @@ test("push wins over paired direct delivery and a revoked inbound peer stores on
 		return originalFetch(input);
 	}) as typeof fetch;
 	t.after(() => { globalThis.fetch = originalFetch; });
+	mockPushTransport(t);
 	const pushedTask = await s.sendToBob("push question", "ctx-push", { id: "cfg", url: "https://push.example.net/update" });
 	const pushed = await s.owner(s.b, "acct-bob", "POST", "/owner/mcp/reply", { taskId: pushedTask, text: "push answer" });
 	assert.equal((pushed.body as any).structuredContent.method, "push");
@@ -265,17 +273,19 @@ test("push status only accepts an exact HTTP result in the output schema range",
 	const s = await fixture(t as never);
 	const originalFetch = globalThis.fetch;
 	t.after(() => { globalThis.fetch = originalFetch; });
+	mockPushTransport(t);
+	const { wakeNet } = await import("../src/wake-target.ts");
 	for (const value of [200, 307, 401, 599, 99, 600, 999, "HTTP 999", "prefix HTTP 401 suffix", "HTTP 401\n"]) {
-		globalThis.fetch = (async () => {
+		wakeNet.deliver = async () => {
 			if (typeof value === "string") throw value;
 			const response = new Response(null);
 			Object.defineProperty(response, "status", { value });
 			return response;
-		}) as typeof fetch;
+		};
 		const taskId = await s.sendToBob("status " + value, crypto.randomUUID(), { id: "cfg", url: "https://push.example.net/update" });
 		const result = await s.owner(s.b, "acct-bob", "POST", "/owner/mcp/reply", { taskId, text: "stored answer" });
 		const delivery = (result.body as any).structuredContent as Delivery;
-		assert.equal(delivery.httpStatus, typeof value === "number" && value >= 100 && value <= 599 ? value : undefined, String(value));
+		assert.equal(delivery.httpStatus, typeof value === "number" && value >= 100 && value <= 599 && !(value >= 300 && value < 400) ? value : undefined, String(value));
 		assert.equal(delivery.status, value === 200 ? "delivered" : "delivery-failed");
 		const stored = await s.dbB.prepare("SELECT state FROM tasks WHERE id = ?").bind(taskId).first() as { state: string };
 		assert.equal(stored.state, "completed");
@@ -291,4 +301,23 @@ test("direct reply refusal reports only the endpoint host", async (t) => {
 	assert.equal(delivery.status, "delivery-failed");
 	assert.match(delivery.detail, /peer endpoint alice\.example\.com refused/);
 	assert.doesNotMatch(JSON.stringify(result.body), /private-path|private-query|http:\/\//);
+});
+
+
+test("same-deployment push redirects are refused without public network delivery", async (t) => {
+	const s = await fixture(t as never);
+	s.redirectPush();
+	const originalFetch = globalThis.fetch;
+	let publicRequests = 0;
+	globalThis.fetch = (async () => { publicRequests++; throw new Error("unexpected public network delivery"); }) as typeof fetch;
+	t.after(() => { globalThis.fetch = originalFetch; });
+	const taskId = await s.sendToBob("internal push", "ctx-internal-push", { id: "cfg", url: s.a.PUBLIC_URL + "/push", token: "internal-test-token" });
+	const result = await s.owner(s.b, "acct-bob", "POST", "/owner/mcp/reply", { taskId, text: "stored answer" });
+	const delivery = (result.body as any).structuredContent;
+	assert.equal(delivery.status, "delivery-failed");
+	assert.equal(s.pushRequests, 1);
+	assert.equal(publicRequests, 0);
+	assert.equal(delivery.method, "push");
+	assert.equal(delivery.push[0].info, "push request failed");
+	assert.equal(s.directPosts, 0, "a rejected push does not trigger a second delivery method");
 });

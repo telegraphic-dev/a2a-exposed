@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import worker from "../src/index.ts";
 import { sha256 } from "../src/a2a.ts";
 import { d1 } from "./d1.ts";
+import { mockPushTransport } from "./push-transport-mock.ts";
 
 const BASE = "https://agent.example.com";
 
@@ -170,6 +171,7 @@ test("push results identify callbacks without URLs, and forced replies preserve 
 		attempted.push(String(url));
 		return new Response(null, { status: String(url).includes("first") ? 401 : 200 });
 	}) as typeof fetch;
+	mockPushTransport(t);
 	const ada = (await s.owner("POST", "/owner/peers", { label: "ada" })).token;
 	const first = "https://hooks.example.net/private/first?token=first-secret";
 	const second = "https://hooks.example.net/private/second?token=second-secret";
@@ -205,7 +207,8 @@ test("push results identify callbacks without URLs, and forced replies preserve 
 	assert.equal(attempted.length, count);
 	const after = await s.owner("GET", `/owner/history/${contextId}?n=1&from=ada`);
 	assert.deepEqual(after[0].currentState, history.at(-1).currentState);
-	globalThis.fetch = (async () => { throw new Error(`failed ${first}`); }) as typeof fetch;
+	const { wakeNet } = await import("../src/wake-target.ts");
+	wakeNet.deliver = async () => { throw new Error(`failed ${first}`); };
 	const failed = await s.owner("POST", `/owner/tasks/${taskId}/reply`, { text: "final", state: "completed" });
 	assert.doesNotMatch(JSON.stringify(failed.delivery), /first-secret|second-secret|private/);
 	assert.equal(failed.delivery.push[0].info, "push request failed");
@@ -225,4 +228,75 @@ test("limited outbound history reports the latest state for that peer only", asy
 	assert.deepEqual(rows[0].currentState, { state: "working", timestamp: "2026-11-07T01:00:00.000Z" });
 	assert.equal(rows[0].current_history_json, undefined);
 	assert.equal(rows[0].current_status_json, undefined);
+});
+
+test("push delivery pins public DNS and refuses redirects without disclosing credentials", async (t) => {
+	const s = setup();
+	t.after(s.restore);
+	const token = "notification-test-secret";
+	const credential = "push-auth-test-secret";
+	s.secrets.push(token, credential);
+	const calls: { url: string; init: RequestInit; target: { ip: string; hostname: string } }[] = [];
+	let status = 204;
+	mockPushTransport(t, async (url, init, target) => {
+		calls.push({ url, init, target });
+		return new Response(null, { status, headers: status === 204 ? {} : { location: "https://other.example.net/collect" } });
+	});
+	const ada = (await s.owner("POST", "/owner/peers", { label: "ada" })).token;
+	for (const version of ["0.3", "1.0"]) {
+		const sent = await s.call(ada, "message/send", {
+			message: { kind: "message", role: "user", messageId: crypto.randomUUID(), parts: [{ kind: "text", text: "hello" }] },
+		});
+		const taskId = sent.data.result.id;
+		await s.call(ada, "tasks/pushNotificationConfig/set", {
+			taskId, pushNotificationConfig: { id: "cfg", url: "https://hooks.example.net/update", token, authentication: { schemes: ["Bearer"], credentials: credential } },
+		}, { "A2A-Version": version });
+		for (status of [204, 301, 302, 303, 307, 308]) {
+			const before = calls.length;
+			const result = await s.owner("POST", `/owner/tasks/${taskId}/reply`, { text: `reply ${status}`, state: "working" });
+			assert.equal(calls.length, before + 1, "never follows the redirect");
+			const call = calls.at(-1)!;
+			assert.equal(call.url, "https://hooks.example.net/update");
+			assert.deepEqual(call.target, { ip: "1.2.3.4", hostname: "hooks.example.net" });
+			assert.equal(call.init.redirect, "manual");
+			assert.equal(call.init.method, "POST");
+			assert.ok(call.init.signal);
+			const headers = new Headers(call.init.headers);
+			assert.equal(headers.get("x-a2a-notification-token"), token);
+			assert.equal(headers.get("authorization"), `Bearer ${credential}`);
+			assert.equal(headers.get("content-type"), version === "1.0" ? "application/a2a+json" : "application/json");
+			const payload = JSON.parse(String(call.init.body));
+			assert.equal((version === "1.0" ? payload.task : payload).id, taskId);
+			assert.equal(result.delivery.push[0].ok, status === 204);
+			assert.equal(result.delivery.push[0].info, status === 204 ? "HTTP 204" : "push request failed");
+			const history = await s.owner("GET", `/owner/history/${sent.data.result.contextId}?from=ada`);
+			for (const secret of [token, credential]) {
+				hides(JSON.stringify(result), secret);
+				hides(JSON.stringify(history), secret);
+				hides(s.logs.join("\n"), secret);
+			}
+		}
+	}
+});
+
+test("push delivery fails closed on private, mixed and unavailable DNS", async (t) => {
+	const s = setup();
+	t.after(s.restore);
+	const originalFetch = globalThis.fetch;
+	t.after(() => { globalThis.fetch = originalFetch; });
+	let deliveries = 0;
+	mockPushTransport(t, async () => { deliveries++; return new Response(null, { status: 204 }); });
+	const ada = (await s.owner("POST", "/owner/peers", { label: "ada" })).token;
+	const sent = await s.call(ada, "message/send", {
+		message: { kind: "message", role: "user", messageId: crypto.randomUUID(), parts: [{ kind: "text", text: "hello" }] },
+		configuration: { pushNotificationConfig: { id: "cfg", url: "https://hooks.example.net/update", token: "dns-test-secret" } },
+	});
+	for (const answer of [["127.0.0.1"], ["1.2.3.4", "169.254.169.254"], ["fc00::1"], [], null]) {
+		globalThis.fetch = (async () => answer === null ? new Response(null, { status: 503 }) : Response.json({ Status: 0, Answer: answer.map((ip) => ({ type: ip.includes(":") ? 28 : 1, data: ip })) })) as typeof fetch;
+		const result = await s.owner("POST", `/owner/tasks/${sent.data.result.id}/reply`, { text: JSON.stringify(answer), state: "working" });
+		assert.equal(result.delivery.push[0].ok, false);
+		assert.equal(result.delivery.push[0].info, "push request failed");
+		assert.equal(result.task.status.state, "working", "failed delivery preserves the saved reply");
+	}
+	assert.equal(deliveries, 0, "no credentials or task body leave after a DNS refusal");
 });

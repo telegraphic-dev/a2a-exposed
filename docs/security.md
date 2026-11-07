@@ -66,7 +66,7 @@ Whoever holds the owner token can still issue peer tokens. Whoever controls the 
 
 ## Push notifications
 
-HTTPS only. Private and loopback targets are refused. Each push uses a per-task token, stored hashed. A connector `send` mints that token only when the peer card advertises `capabilities.pushNotifications`, points the peer at `POST /push`, and stores only the hash before the send. The plaintext token is not returned. The CLI still does this only with `--push`. Revoking that peer's label rejects a later push that presents the token from a task already sent. That push is HTTP 401 and is not stored.
+HTTPS only. Every external delivery checks public DNS and pins the connection to a checked address, with TLS verified for the target hostname. Redirects are refused, so notification tokens and authentication credentials stay at the registered URL. Responses are limited to 1 MiB and requests time out after 15 seconds (or the shorter reply deadline). Same-deployment hosted tenants are called internally and redirects are still refused. Cloudflare-hosted external targets cannot be reached through the pinned socket transport; use polling when push delivery fails. Private and loopback targets are refused. Each push uses a per-task token, stored hashed. A connector `send` mints that token only when the peer card advertises `capabilities.pushNotifications`, points the peer at `POST /push`, and stores only the hash before the send. The plaintext token is not returned. The CLI still does this only with `--push`. Revoking that peer's label rejects a later push that presents the token from a task already sent. That push is HTTP 401 and is not stored.
 
 ## Your account
 

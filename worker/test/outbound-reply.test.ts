@@ -15,6 +15,7 @@ import { clearDirectoryCache } from "../src/directory.ts";
 import { dispatch, runOwnerRpc } from "../src/index.ts";
 import { hostedTenantContext, resolveTenant, type DoNamespace, type KvNamespace, type TenantContext, type WorkerBindings } from "../src/tenancy.ts";
 import { d1 } from "./d1.ts";
+import { mockPushTransport } from "./push-transport-mock.ts";
 
 const MIGRATIONS = new URL("../migrations/", import.meta.url);
 const ectx = { waitUntil(_p: Promise<unknown>) {}, passThroughOnException() {} };
@@ -83,6 +84,7 @@ test("a public peer's reply is stored, and a follow-up keeps the conversation, b
 		console.log = origLog;
 	});
 
+	mockPushTransport(t);
 	const outputs: string[] = [];
 	const http = async (ctx: TenantContext, method: string, path: string, auth: string, json?: unknown) => {
 		const res = await dispatch(new Request(ctx.PUBLIC_URL + path, {

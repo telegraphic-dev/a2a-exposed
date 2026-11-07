@@ -154,7 +154,7 @@ async function doFetch(ctx: TenantContext, ectx: ExecutionContext, url: string, 
 			if (target.host === new URL(ctx.PUBLIC_URL).host) return handle(new Request(url, init), ctx, ectx);
 		} catch { /* PUBLIC_URL is not a URL: the target is remote */ }
 	}
-	// peerRpc, the peer card, and push delivery all come through here. A same-deployment tenant is an internal call.
+	// Operator-configured wake and legacy peer calls use this route. Same-deployment tenants stay internal.
 	const internal = await fetchTenant(ctx, target, init);
 	if (internal) return internal;
 	return fetch(url, { ...init, signal: init.signal ?? AbortSignal.timeout(15000) });
@@ -1235,7 +1235,7 @@ async function sendPush(ctx: TenantContext, ectx: ExecutionContext, task: Json, 
 	if (scheme && auth.credentials) headers["authorization"] = `${scheme} ${auth.credentials}`;
 	const body = v1 ? { task: A.publicTask(task, "1.0") } : A.publicTask(task, "0.3");
 	try {
-		const r = await doFetch(ctx, ectx, cfg.url, { method: "POST", headers, body: JSON.stringify(body), signal });
+		const r = await checkedPeerFetch(ctx, ectx, cfg.url, cfg.url, { method: "POST", headers, body: JSON.stringify(body), signal: signal ?? AbortSignal.timeout(15000) });
 		return [r.status >= 200 && r.status < 300, `HTTP ${r.status}`];
 	} catch {
 		return [false, "push request failed"];
