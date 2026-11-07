@@ -151,7 +151,13 @@ export async function list(o) {
 	const r = await ownerCall("GET", "/owner/pairing");
 	if (r.status !== 200) die(`could not list pairing requests: ${ownerError(r)}`);
 	const d = r.data;
-	if (o.json) return console.log(JSON.stringify(d, null, 2));
+	if (o.json) {
+		const now = Date.now();
+		return console.log(JSON.stringify({ ...d, pending: d.pending.map((p) => {
+			const expires = typeof p.expiresAt === "string" ? Date.parse(p.expiresAt) : NaN;
+			return { ...p, expiresIn: Number.isFinite(expires) ? Math.max(0, Math.ceil((expires - now) / 1000)) : null };
+		}) }, null, 2));
+	}
 	const how = d.mode === "off" ? "off (device-flow pairing disabled; `token issue` only)"
 		: d.mode === "agent" ? `agent (\`${CLI} pair approve <code>\` after your human says yes, or the ${d.verificationUri} page)`
 		: `human (the owner approves with the owner token, or on ${d.verificationUri} with the approval password)`;

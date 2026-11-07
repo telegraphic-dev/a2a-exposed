@@ -70,6 +70,35 @@ async function mockServer(t, { script = [], card = true, metadata = false } = {}
 	return { url: `http://127.0.0.1:${srv.address().port}`, seen };
 }
 
+test("pair list --json adds remaining seconds using one local snapshot, without changing requests", async (t) => {
+	const now = Date.parse("2026-11-07T18:00:00Z");
+	const pending = [
+		{ userCode: "WDJB-4827", expiresAt: "2026-11-07T18:01:00Z", verificationUriComplete: "https://inbox.example/device?user_code=WDJB-4827" },
+		{ userCode: "WDJB-4828", expiresAt: "2026-11-07T18:00:00.001Z" },
+		{ userCode: "WDJB-4829", expiresAt: "2026-11-07T18:00:00Z" },
+		{ userCode: "WDJB-4832", expiresAt: "2026-11-07T17:59:59Z" },
+		{ userCode: "WDJB-4833", expiresAt: "invalid" },
+		{ userCode: "WDJB-4834" },
+	];
+	const s = sandbox(t, { A2A_BASE_URL: "https://inbox.example", A2A_OWNER_TOKEN: "owner-test" });
+	const clock = path.join(s.dir, "clock.mjs");
+	fs.writeFileSync(clock, `Date.now = () => ${now};`);
+	const routes = path.join(s.dir, "routes.json"), log = path.join(s.dir, "fetch.log");
+	const data = { mode: "human", passwordSet: true, verificationUri: "https://inbox.example/device", pending };
+	fs.writeFileSync(routes, JSON.stringify({ "https://inbox.example/owner/pairing": { status: 200, body: data } }));
+	const r = await s.cli(["pair", "list", "--json"], { extraEnv: {
+		NODE_OPTIONS: `--import ${clock} --import ${path.join(HERE, "fetch-stub.mjs")}`,
+		A2A_TEST_FETCH_ROUTES: routes, A2A_TEST_FETCH_LOG: log,
+	} });
+	assert.equal(r.status, 0, r.stderr);
+	const result = JSON.parse(r.stdout);
+	assert.deepEqual(result.pending.map((p) => p.expiresIn), [60, 1, 0, 0, null, null]);
+	assert.deepEqual({ ...result, pending: result.pending.map(({ expiresIn, ...p }) => p) }, data);
+	const calls = fs.readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+	assert.deepEqual(calls.map((c) => [c.method, c.url]), [["GET", "https://inbox.example/owner/pairing"]]);
+	assert.ok(!(r.stdout + r.stderr).includes("owner-test"));
+});
+
 test("pairingClientName uses the card name, then the configured name, then the local alias", () => {
 	assert.equal(pairingClientName({ explicit: "Override", cardName: "tester-alpha", agentName: "Other", workerName: "worker", ownUrl: "https://northwind.example.com" }), "Override");
 	assert.equal(pairingClientName({ cardName: "tester-alpha", agentName: "Other", workerName: "worker", ownUrl: "https://northwind.example.com" }), "tester-alpha");

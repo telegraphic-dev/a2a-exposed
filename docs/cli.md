@@ -232,9 +232,11 @@ The owner token authenticates these commands.
 | `pair set-password --web [--ttl MIN] [--json]` | One-time link where a human sets the approval password. `--ttl` is 1 to 60 minutes (default 15). A new link invalidates the previous one |
 | `pair set-password` | The same, in a terminal, no echo. The human types the password there |
 | `pair set-oidc --issuer URL --client-id ID --subjects SUB[,SUB...] [--methods password,oidc] [--secret-stdin]` | Optional OpenID Connect on `/device` and the MCP consent page. Deploy uploads `APPROVAL_OIDC_CLIENT_SECRET` only when that variable is set in the environment you use for deploy. `--secret-stdin` checks one line and discards it. `config.env` keeps the issuer and client id |
-| `pair list [--json]` | Pending requests, the approval mode, when the password was set, and the dashboard URL when `MANAGE_URL` is set |
+| `pair list [--json]` | Pending requests, the approval mode, when the password was set, and the dashboard URL when `MANAGE_URL` is set. JSON includes `expiresIn` on each pending request |
 | `pair approve <code>` | Approves with the owner token. In human mode the decision is the owner's. In agent mode, run it only after the human says yes |
 | `pair deny <code>` | Any mode. On `/device`, deny needs no password |
+
+`pair list --json` preserves each request's `expiresAt` and adds `expiresIn`: remaining seconds calculated from the local clock when the list is printed, rounded up and clamped to zero. An absent or invalid `expiresAt` produces `null`. This also works with older Workers; it does not change or approve requests. The server enforces expiry independently, so a positive countdown does not guarantee that approval will succeed.
 
 ## Tokens and outbound peers
 
