@@ -13,7 +13,12 @@ const PLAIN_HEADERS = new Set([
 
 const HEADER_NAME = /^[A-Za-z0-9-]{1,64}$/;
 
+export const WAKE_RELAY_PROTOCOL_VERSION = 1;
+
 export interface WakeSettings {
+	transport?: "webhook" | "relay";
+	connectorId?: string;
+	generation?: number;
 	url: string;
 	preset: string;
 	keyHeader: string;
@@ -22,6 +27,9 @@ export interface WakeSettings {
 /** Blank webhook/signing credentials retain a saved value only for the same URL and authentication mode.
  * Callers validate public DNS before saving; the Worker enforces its delivery policy separately. */
 export interface WakeSaveInput {
+	transport?: "webhook" | "relay";
+	connectorId?: string;
+	generation?: number;
 	accountId: string;
 	name: string;
 	url: string;
@@ -38,7 +46,7 @@ export interface WakeSaveInput {
 
 export type WakeSave =
 	| { ok: true }
-	| { ok: false; error: "url" | "preset" | "header" | "key" | "unavailable" | "unreadable" | "conflict" };
+	| { ok: false; error: "transport" | "connector" | "url" | "preset" | "header" | "key" | "unavailable" | "unreadable" | "conflict" };
 
 interface TenantRow {
 	id: string;
@@ -87,6 +95,7 @@ export function wakeHeaderProblem(value: string): string {
 export function wakeSettingsOf(config: Record<string, string>): WakeSettings {
 	const preset = WAKE_PRESETS.includes(config.WAKE_PRESET as (typeof WAKE_PRESETS)[number]) ? config.WAKE_PRESET : "generic";
 	return {
+		...(config.WAKE_TRANSPORT === "relay" ? { transport: "relay" as const, connectorId: config.WAKE_CONNECTOR_ID || "default", generation: Number(config.WAKE_CONNECTOR_GENERATION || 0) } : {}),
 		url: config.WAKE_WEBHOOK_URL ?? "",
 		preset,
 		keyHeader: config.WAKE_KEY_HEADER ?? "",
@@ -110,7 +119,13 @@ export async function saveWakeSettings(
 ): Promise<WakeSave> {
 	const row = await tenantForAccount(db, input.accountId, input.name);
 	if (!row || (input.expectedVersion !== undefined && input.expectedVersion !== row.config_version)) return { ok: false, error: "conflict" };
+	const transport = input.transport ?? "webhook";
+	if (transport !== "webhook" && transport !== "relay") return { ok: false, error: "transport" };
+	const relay = transport === "relay";
+	if (relay && (input.connectorId !== "default" || !Number.isSafeInteger(input.generation) || input.generation! < 1)) return { ok: false, error: "connector" };
 	const url = input.url.trim();
+	if (relay && url) return { ok: false, error: "url" };
+	const enabled = relay || !!url;
 	const preset = input.preset.trim();
 	const keyHeader = input.keyHeader.trim();
 	const key = input.key.trim();
@@ -122,7 +137,7 @@ export async function saveWakeSettings(
 	if (wakeHeaderProblem(keyHeader)) return { ok: false, error: "header" };
 	if ([key, hmacSecret, accessClientId, accessClientSecret].some((value) => value.length > 4096 || /[\u0000-\u001f]/.test(value))) return { ok: false, error: "key" };
 	if (url && Boolean(accessClientId) !== Boolean(accessClientSecret)) return { ok: false, error: "key" };
-	if (url && preset === "openbot" && (key || keyHeader)) return { ok: false, error: keyHeader ? "header" : "key" };
+	if (enabled && preset === "openbot" && (key || keyHeader)) return { ok: false, error: keyHeader ? "header" : "key" };
 
 	const config = configFields(row.config_json);
 	const plaintext: WakeSecrets = {};
@@ -132,20 +147,20 @@ export async function saveWakeSettings(
 		delete config[secret];
 	}
 	// Read credentials before editing the public config. Ciphertext wins over legacy plaintext.
-	const same = config.WAKE_WEBHOOK_URL === url && config.WAKE_PRESET === preset;
+	const same = (relay ? config.WAKE_TRANSPORT === "relay" && config.WAKE_CONNECTOR_ID === input.connectorId : config.WAKE_TRANSPORT !== "relay" && config.WAKE_WEBHOOK_URL === url) && config.WAKE_PRESET === preset;
 	const sameKey = same && (config.WAKE_KEY_HEADER ?? "") === keyHeader;
 	let secretsEnc = row.secrets_enc;
 	const hasSecrets = !!secretsEnc || Object.keys(plaintext).length > 0;
-	if (hasSecrets || key || hmacSecret || accessClientId || accessClientSecret || (url && preset === "openbot")) {
+	if (hasSecrets || key || hmacSecret || accessClientId || accessClientSecret || (enabled && preset === "openbot")) {
 		const ikm = secretsKey.trim();
 		if (!ikm) return { ok: false, error: "unavailable" };
 		const current = secretsEnc ? await openWakeSecrets(ikm, row.id, secretsEnc) : { ...plaintext };
 		if (!current) return { ok: false, error: "unreadable" };
 		const before = JSON.stringify(current);
-		if (!url || !sameKey || preset === "openbot") delete current.WAKE_WEBHOOK_KEY;
-		if (!url || !same) delete current.WAKE_HMAC_SECRET;
+		if (!enabled || !sameKey || preset === "openbot") delete current.WAKE_WEBHOOK_KEY;
+		if (!enabled || !same) delete current.WAKE_HMAC_SECRET;
 		// Tunnel credentials never follow a destination change or a disabled wake.
-		if (!url || config.WAKE_WEBHOOK_URL !== url) {
+		if (relay || !url || config.WAKE_WEBHOOK_URL !== url) {
 			delete current.WAKE_ACCESS_CLIENT_ID;
 			delete current.WAKE_ACCESS_CLIENT_SECRET;
 		}
@@ -153,9 +168,9 @@ export async function saveWakeSettings(
 			current.WAKE_ACCESS_CLIENT_ID = accessClientId;
 			current.WAKE_ACCESS_CLIENT_SECRET = accessClientSecret;
 		}
-		if (url && key && preset !== "openbot") current.WAKE_WEBHOOK_KEY = key;
-		if (url && hmacSecret) current.WAKE_HMAC_SECRET = hmacSecret;
-		if (url && preset === "openbot" && !current.WAKE_HMAC_SECRET) return { ok: false, error: "key" };
+		if (enabled && key && preset !== "openbot") current.WAKE_WEBHOOK_KEY = key;
+		if (enabled && hmacSecret) current.WAKE_HMAC_SECRET = hmacSecret;
+		if (enabled && preset === "openbot" && !current.WAKE_HMAC_SECRET) return { ok: false, error: "key" };
 		// Preserve ciphertext on an unchanged edit and fail closed on every decrypt/seal error.
 		if (!secretsEnc || JSON.stringify(current) !== before) {
 			const sealed = await sealWakeSecrets(ikm, row.id, current);
@@ -165,8 +180,10 @@ export async function saveWakeSettings(
 	}
 	if (url) config.WAKE_WEBHOOK_URL = url;
 	else delete config.WAKE_WEBHOOK_URL;
+	if (relay) { config.WAKE_TRANSPORT = "relay"; config.WAKE_CONNECTOR_ID = input.connectorId!; config.WAKE_CONNECTOR_GENERATION = String(input.generation); }
+	else { delete config.WAKE_TRANSPORT; delete config.WAKE_CONNECTOR_ID; delete config.WAKE_CONNECTOR_GENERATION; }
 	config.WAKE_PRESET = preset;
-	if (keyHeader && url) config.WAKE_KEY_HEADER = keyHeader;
+	if (keyHeader && enabled) config.WAKE_KEY_HEADER = keyHeader;
 	else delete config.WAKE_KEY_HEADER;
 
 	const version = row.config_version + 1;

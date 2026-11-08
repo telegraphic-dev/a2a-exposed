@@ -8,7 +8,7 @@
 // Self-host never calls this.
 
 import { ID_RE } from "./a2a.ts";
-import { credentialIsMasked, previewHeaderPlain } from "./wake.ts";
+import { credentialIsMasked, previewHeaderPlain, relayWakeTestInput } from "./wake.ts";
 
 /** Account id. Slashes and dots are refused so the value cannot be a path. */
 export const ACCOUNT_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -178,6 +178,7 @@ const ROUTES: RouteDef[] = [
 	{ method: "DELETE", name: "DELETE /owner/outbound-peers/:alias", take: (s) => s.length === 3 && s[1] === "outbound-peers" && ALIAS.test(s[2]!) && s[2] !== "." && s[2] !== "..", search: noQuery, path: (s) => `/owner/outbound-peers/${s[2]}` },
 	{ method: "GET", name: "GET /owner/facade", take: (s) => s.length === 2 && s[1] === "facade", search: noQuery, path: () => "/owner/facade" },
 	{ method: "POST", name: "POST /owner/facade/verify", take: (s) => s.length === 3 && s[1] === "facade" && s[2] === "verify", search: noQuery, path: () => "/owner/facade/verify" },
+	...(["GET", "POST", "DELETE"] as const).map(method => ({ method, name: `${method} /owner/wake/relay`, take: (s: string[]) => s.length === 3 && s[1] === "wake" && s[2] === "relay", search: noQuery, path: () => "/owner/wake/relay" })),
 	{ method: "GET", name: "GET /owner/wake/preview", take: (s) => s.length === 3 && s[1] === "wake" && s[2] === "preview", search: noQuery, path: () => "/owner/wake/preview" },
 	{ method: "POST", name: "POST /owner/wake/test", take: (s) => s.length === 3 && s[1] === "wake" && s[2] === "test", search: noQuery, path: () => "/owner/wake/test" },
 	{ method: "GET", name: "GET /owner/contexts", take: (s) => s.length === 2 && s[1] === "contexts", search: noQuery, path: () => "/owner/contexts" },
@@ -292,9 +293,22 @@ function forwardBody(body: unknown): { ok: true; value: Record<string, string> }
  * PUT /owner/address-forward receives `{ cardUrl, hours? }`. POST /owner/peers/announce receives `{ to }` or `{ all: true }`,
  * and `reissue` with one alias. POST /owner/mcp/announce_address refuses `reissue` (code `reissue_owner_only`).
  * The pairing identity private key is not accepted on this RPC.
+ * POST /owner/wake/test optionally accepts only a validated, resolved relay draft.
  * Every other route accepts only an absent body.
  */
-export function ownerRpcBody(routeName: string, body: unknown): { ok: true; value?: Record<string, string> } | { ok: false; error: string; code?: string } {
+export function ownerRpcBody(routeName: string, body: unknown): { ok: true; value?: Record<string, unknown> } | { ok: false; error: string; code?: string } {
+	if (routeName === "POST /owner/wake/test" && body != null) {
+		const value = relayWakeTestInput(body);
+		return value ? { ok: true, value } : { ok: false, error: "invalid" };
+	}
+	if (routeName === "POST /owner/wake/relay" || routeName === "DELETE /owner/wake/relay") {
+		if (!body || typeof body !== "object" || Array.isArray(body)) return { ok: false, error: "body must be an object" };
+		const b = body as Record<string, unknown>;
+		const keys = Object.keys(b).sort().join(",");
+		if (routeName.startsWith("DELETE")) return keys === "generation" && Number.isSafeInteger(b.generation) && Number(b.generation) >= 0 ? { ok: true, value: { generation: b.generation } } : { ok: false, error: "generation is invalid" };
+		if (keys !== "configVersion,credentialHash,idempotencyKey" || typeof b.credentialHash !== "string" || !/^[a-f0-9]{64}$/.test(b.credentialHash) || typeof b.idempotencyKey !== "string" || !/^[A-Za-z0-9_-]{16,128}$/.test(b.idempotencyKey) || !Number.isSafeInteger(b.configVersion) || Number(b.configVersion) < 1) return { ok: false, error: "enrollment is invalid" };
+		return { ok: true, value: { configVersion: b.configVersion, credentialHash: b.credentialHash, idempotencyKey: b.idempotencyKey } };
+	}
 	if (routeName === "PUT /owner/outbound-peers/:alias") return outboundPeerBody(body);
 	if (routeName === "POST /owner/peers/announce") return announceBody(body, true);
 	if (routeName === "POST /owner/mcp/announce_address") return announceBody(body, false);

@@ -3,6 +3,21 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { accountIdOf, matchOwnerRpc, ownerResponseLeaks, ownerRpcBody, scrubOwnerClaims } from "../src/owner-rpc.ts";
 
+test("relay draft schema is shipped alongside the runtime and matches its field allowlist", async () => {
+	const { readFileSync } = await import("node:fs");
+	const schema = JSON.parse(readFileSync(new URL("../src/wake-relay-test.schema.json", import.meta.url), "utf8"));
+	const draft = { transport: "relay", connectorId: "default", generation: 1, credentialsMode: "resolved", preset: "generic" };
+	assert.equal(schema.additionalProperties, false);
+	assert.deepEqual(schema.required.sort(), Object.keys(draft).sort());
+	for (const key of schema.required) { const missing = { ...draft } as Record<string, unknown>; delete missing[key]; assert.equal(ownerRpcBody("POST /owner/wake/test", missing).ok, false); }
+	for (const key of Object.keys(schema.properties)) if (!(key in draft)) assert.equal(ownerRpcBody("POST /owner/wake/test", { ...draft, [key]: "" }).ok, true, key);
+	assert.equal(ownerRpcBody("POST /owner/wake/test", { ...draft, unexpected: "" }).ok, false);
+	for (const preset of schema.properties.preset.enum) assert.equal(ownerRpcBody("POST /owner/wake/test", { ...draft, preset }).ok, true);
+	const docs = readFileSync(new URL("../../docs/wake-relay.md", import.meta.url), "utf8");
+	const example = JSON.parse(docs.match(/```json\n([\s\S]*?)\n```/)![1]);
+	assert.equal(ownerRpcBody("POST /owner/wake/test", example).ok, true);
+});
+
 test("owner RPC allowlist is the management reads and the calls that do not return a secret", () => {
 	const ok = (method: string, path: string, query?: Record<string, string>) => {
 		const m = matchOwnerRpc(method, path, query);
@@ -85,7 +100,11 @@ test("owner RPC accepts a tool-argument body only on send, reply, and mark_worki
 	assert.equal(absent.ok && absent.value, undefined);
 	assert.equal(ownerRpcBody("GET /owner/peers", null).ok, true);
 	assert.deepEqual(ownerRpcBody("GET /owner/peers", { label: "bob" }), { ok: false, error: "this call takes no body" });
-	assert.deepEqual(ownerRpcBody("POST /owner/wake/test", {}), { ok: false, error: "this call takes no body" });
+	assert.deepEqual(ownerRpcBody("POST /owner/wake/test", {}), { ok: false, error: "invalid" });
+	const draft = { transport: "relay", connectorId: "default", generation: 1, credentialsMode: "resolved", preset: "generic", key: "dummy-key" };
+	assert.deepEqual(ownerRpcBody("POST /owner/wake/test", draft), { ok: true, value: draft });
+	assert.equal(ownerRpcBody("POST /owner/wake/test", undefined).ok, true);
+	for (const body of [{ ...draft, url: "https://example.com" }, { ...draft, credentialsMode: "saved" }, { ...draft, generation: "1" }, { ...draft, key: 42 }, { ...draft, keyHeader: "host" }, { ...draft, hmacSecret: "x".repeat(4097) }, { ...draft, keyPrefix: "bad\r\nheader" }]) assert.equal(ownerRpcBody("POST /owner/wake/test", body).ok, false);
 
 	const sent = ownerRpcBody("POST /owner/mcp/send", { to: "alpha", text: "status?", contextId: "ctx-1" });
 	assert.deepEqual(sent, { ok: true, value: { to: "alpha", text: "status?", contextId: "ctx-1" } });

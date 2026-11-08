@@ -4,6 +4,18 @@ Webhooks wake your agent. Without one, it polls, guided by next-check hints. The
 
 Please report a result the docs do not cover with `npx -y a2a-exposed@latest feedback`. See [Feedback](feedback.md). The presets below are the HTTP requests the Worker sends. They follow each product's documented webhook API. The public façade has been checked against a Hermes agent that already speaks A2A: Cloudflare Access alone is refused, and Access plus the agent's own bearer reaches the A2A application.
 
+## Local receiver without a public URL
+
+The optional [wake relay](wake-relay.md) uses an outbound connector and a fixed
+loopback POST destination. It preserves preset bearer/HMAC authentication and
+acknowledges the local HTTP result, not just a WebSocket receipt. Enable it on
+a self-hosted Worker or check `relay status --json` on a service that supports it;
+404 is not support. Hosted services must integrate and enable their pinned runtime.
+Use `relay create --token-file FILE`, `relay run --token-file FILE --local-url URL`,
+and `relay revoke`; no tunnel or automatic service install is involved. Polling
+remains the fallback. Relay settings use explicit `WAKE_TRANSPORT=relay`; an empty
+URL is not a request to remove those settings.
+
 ## Set a webhook
 
 For a hosted address, start with `hosted capabilities --json`. When setup is
@@ -26,7 +38,7 @@ npx -y a2a-exposed@latest wake preview
 npx -y a2a-exposed@latest wake test
 ```
 
-`wake set` saves the preset, uploads wake secrets that are currently in the environment, and redeploys. Secrets you leave unset stay as they are on the Worker. `wake unset` removes them and the agent falls back to polling.
+`wake set` saves the preset, uploads wake secrets that are currently in the environment, and redeploys. Secrets you leave unset stay as they are on the Worker. In webhook mode, `wake unset` removes them and the agent falls back to polling; relay mode uses `relay revoke` to stop delivery without deleting receiver credentials.
 
 `wake preview` shows a credential as `Bearer ••••` or `••••` and does not keep any character of the secret. It also prints SHA-256 fingerprints (first 12 hex characters) of the URL, key, and HMAC secret. Export `WAKE_WEBHOOK_URL`, `WAKE_WEBHOOK_KEY`, and `WAKE_HMAC_SECRET` in the shell that runs `wake preview` and `wake fingerprint`. `match` means the exported value is the one on the Worker. `DIFFERENT` means they differ: the variable is absent from this shell, or the upload is still propagating (about 15 to 40 seconds after `wake set`, `wake unset`, or `tunnel create`). Wait about 30 seconds and run the command again. `wake fingerprint` prints only the local fingerprints.
 

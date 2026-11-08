@@ -3,6 +3,7 @@
 // see deploy.env.example). Nothing account- or owner-specific is committed here.
 import { bindings, defineConfig, exports, triggers } from "cf/config";
 import * as selfHost from "./src/index.ts" with { type: "cf-worker" };
+import * as relayEntry from "./src/relay-entry.ts" with { type: "cf-worker" };
 import * as hostedEntry from "./src/hosted.ts" with { type: "cf-worker" };
 
 const e: Record<string, string | undefined> = (globalThis as any).process?.env ?? {};
@@ -28,6 +29,8 @@ const plain: Record<string, string> = {
 	PROVIDER_ORGANIZATION: v("A2A_PROVIDER_ORGANIZATION"),
 	PROVIDER_URL: v("A2A_PROVIDER_URL"),
 	DOCUMENTATION_URL: v("A2A_DOCUMENTATION_URL"),
+	WAKE_RELAY_ENABLED: v("A2A_WAKE_RELAY") === "1" ? "1" : "",
+	WAKE_TRANSPORT: v("WAKE_TRANSPORT"), // unset/webhook | relay
 	WAKE_PRESET: v("WAKE_PRESET") || "generic", // grok-bot | claude-code | openclaw-wake | openclaw-agent | hermes | openbot | mausbot | generic
 	WAKE_AGENT_ID: v("WAKE_AGENT_ID"), // openclaw presets (default "main")
 	WAKE_KEY_HEADER: v("WAKE_KEY_HEADER"), // generic preset (default "authorization")
@@ -71,6 +74,7 @@ const plain: Record<string, string> = {
 	EVENT_URL: v("EVENT_URL"),
 };
 const hosted = v("TENANCY") === "host";
+const relay = v("A2A_WAKE_RELAY") === "1";
 // Daily R2 snapshots. Unset: no binding and no extra cron, so a self-host deploy stays the single-tenant Worker.
 const backups = v("A2A_BACKUP_BUCKET") === "1";
 const envBindings: Record<string, any> = {
@@ -82,6 +86,7 @@ if (hosted) {
 	envBindings.TENANT_DO = bindings.durableObject({ worker: name, exportName: "TenantStore" });
 	envBindings.TENANT_DIRECTORY = bindings.kv();
 }
+if (relay) envBindings.WAKE_RELAY = bindings.durableObject({ worker: name, exportName: "WakeRelay" });
 // Optional service binding for OpenID Connect discovery, token, and JWKS when the issuer shares
 // the tenant zone. Unset: those calls use fetch. Set A2A_CONTROL_SERVICE to the issuer Worker's name
 // so a tenant on the same zone does not fetch the issuer through the public route.
@@ -116,8 +121,8 @@ export default defineConfig((ctx) => ({
 	worker: {
 		name,
 		compatibilityDate: "2026-10-06",
-		entrypoint: hosted ? hostedEntry : selfHost,
-		...(hosted ? { exports: { TenantStore: exports.durableObject({ storage: "sqlite" }) } } : {}),
+		entrypoint: hosted ? hostedEntry : relay ? relayEntry : selfHost,
+		...((hosted || relay) ? { exports: { ...(hosted ? { TenantStore: exports.durableObject({ storage: "sqlite" }) } : {}), ...(relay ? { WakeRelay: exports.durableObject({ storage: "sqlite" }) } : {}) } } : {}),
 		...(hostname ? { domains: [hostname] } : {}),
 		workersDev,
 		previewUrls: workersDev,

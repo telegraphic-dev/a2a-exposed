@@ -13,6 +13,7 @@ import * as hosted from "./hosted.mjs";
 import * as upd from "./update.mjs";
 import * as fb from "./feedback.mjs";
 import * as un from "./uninstall.mjs";
+import { relay } from "./relay.mjs";
 import { finishLink, createLink, linkOutput, linkUsage } from "./link-finish.mjs";
 
 const VERSION = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
@@ -180,7 +181,7 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
                                 mausbot: verify and enable the first sample in MausBot, then test again
   wake check [--local-url URL]   Hermes: require unsigned local 401/403, then Worker test 2xx (delivery only)
                                 Defaults to the saved tunnel origin/path; --json prints both checks
-  wake unset                    remove wake secrets (fall back to polling)
+  wake unset                    webhook transport: remove wake secrets (relay transport: use relay revoke)
                                 handler prompts save autonomous, review-all or escalate mode and owner notices;
                                 see docs/receiving-messages.md for setup and the every 6h webhook fallback
 
@@ -263,6 +264,20 @@ Status
                                 the app answered. \`status\` runs the same check
   url                           print the public base URL (exit 1 if none is configured)
   config                        print config (secrets masked) and its location
+
+Wake relay (optional Worker feature, no tunnel or service install)
+  relay create --token-file FILE [--config-version N]
+                                enroll/rotate; writes a NEW mode-600 credential file, never prints the secret
+  relay status [--json]          authenticated runtime capability and connection/enrollment status
+  relay revoke                  revoke the enrollment shown by status, close its current socket
+  relay run --local-url http://127.0.0.1:8644/webhooks/a2a-wake
+            (--token-file FILE | --token-env VAR) [--url wss://agent.example.com/relay/connect]
+                                foreground fixed-loopback connector; no JSON/stdout stream, safe diagnostics on stderr
+                                exit 0 on Ctrl-C/SIGTERM; exit 1 on setup/protocol/policy failure
+                                reconnect waits 500ms–30s; stop after 3 failed 10s handshakes
+                                busy/uncertain tests are unconfirmed: check receiver and inbox before retesting
+                                self-host deploy --wake-relay 1 --wake-transport relay enables it;
+                                application bearer/HMAC credentials still apply. See docs/wake-relay.md
 
 Inbox (owner side)
   inbox [--context C] [--from PEER] [--all] [--json]
@@ -459,6 +474,7 @@ const SPEC = {
 	status: { json: B, agent: S, "control-url": S },
 	env: { json: B },
 	export: { sql: B },
+	relay: { "token-file": S, "token-env": S, "local-url": S, url: S, json: B, "config-version": S },
 	upstream: { json: B },
 	connect: { alias: S, name: S, json: B, "no-wait": B, replace: B, force: B, "card-url": S },
 	// Internal hosted-service integration commands. Keep out of public help until the production flow is available.
@@ -546,6 +562,9 @@ export async function main(argv) {
 			if (sub === "verify" || sub === "check") return st.upstreamVerify(o);
 			throw new CliError(`unknown upstream action ${sub} (verify)`);
 		}
+		case "relay":
+			if (p.length !== 1) throw new CliError("usage: relay create|status|revoke|run");
+			return relay(p[0], o);
 		case "wake": return C.deploymentKind() === "hosted" || o.agent ? hosted.output(() => hosted.wake(p[0], o), o) : dep.wake(p[0], o);
 		case "url": {
 			const u = cmd.baseUrl();

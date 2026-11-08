@@ -7,7 +7,8 @@
 import { VERSION } from "./version.ts";
 import * as A from "./a2a.ts";
 import * as F from "./facade.ts";
-import { renderWake, mausbotConfigProblem, redact, cloudflareErrorHint, wakeUrlIsTunnelHost, defaultBusySeconds, defaultDebounceSeconds, defaultMaxPerHour, type WakeConfig, type WakeEvent } from "./wake.ts";
+import { relayFetch, relayTestOutcome, type RelayTestError } from "./relay-routing.ts";
+import { renderWake, relayWakeTestInput, mausbotConfigProblem, redact, cloudflareErrorHint, wakeUrlIsTunnelHost, defaultBusySeconds, defaultDebounceSeconds, defaultMaxPerHour, type WakeConfig, type WakeEvent } from "./wake.ts";
 import { fetchCheckedPeer, fetchCheckedWake } from "./wake-target.ts";
 import { withDeadline } from "./deadline.ts";
 import * as Addr from "./address.ts";
@@ -165,7 +166,7 @@ const preset = (ctx: TenantContext) => (ctx.WAKE_PRESET || "generic").trim();
 
 function wakeConfig(ctx: TenantContext): WakeConfig {
 	return {
-		preset: preset(ctx), url: ctx.WAKE_WEBHOOK_URL, key: ctx.WAKE_WEBHOOK_KEY, hmacSecret: ctx.WAKE_HMAC_SECRET,
+		transport: ctx.WAKE_TRANSPORT, preset: preset(ctx), url: ctx.WAKE_WEBHOOK_URL, key: ctx.WAKE_WEBHOOK_KEY, hmacSecret: ctx.WAKE_HMAC_SECRET,
 		agentId: ctx.WAKE_AGENT_ID, keyHeader: ctx.WAKE_KEY_HEADER, keyPrefix: ctx.WAKE_KEY_PREFIX,
 		bodyTemplate: ctx.WAKE_BODY_TEMPLATE, cliCommand: ctx.WAKE_CLI_COMMAND,
 		accessClientId: ctx.WAKE_ACCESS_CLIENT_ID, accessClientSecret: ctx.WAKE_ACCESS_CLIENT_SECRET,
@@ -182,7 +183,7 @@ function messageWake(kind: string): boolean {
 }
 
 function wakeHooked(ctx: TenantContext): boolean {
-	return !!(ctx.WAKE_WEBHOOK_URL || "").trim();
+	return ctx.WAKE_TRANSPORT === "relay" || !!(ctx.WAKE_WEBHOOK_URL || "").trim();
 }
 
 /**
@@ -251,13 +252,14 @@ async function noteWakeWrite(ectx: object): Promise<void> {
 	if (fn) await fn();
 }
 
-async function sendWake(ctx: TenantContext, ectx: ExecutionContext, payload: Json): Promise<{ status: number | null; info: string }> {
+async function sendWake(ctx: TenantContext, ectx: ExecutionContext, payload: Json): Promise<{ status: number | null; info: string; error?: RelayTestError }> {
 	const catchUp = !!payload.busy;
 	const delivered = { ...payload };
 	delete delivered.busy;
 	const ev: WakeEvent = { ...delivered, publicUrl: ctx.PUBLIC_URL };
 	let req;
 	try { req = await renderWake(wakeConfig(ctx), ev); } catch (e) {
+		if (ctx.WAKE_TRANSPORT === "relay") { await clearBusy(ctx, payload); return { status: null, error: "invalid", info: "invalid relay receiver configuration" }; }
 		log("wake_render_failed", { preset: preset(ctx), error: String(e).slice(0, 200) });
 		await clearBusy(ctx, payload);
 		return { status: null, info: "render failed: " + String(e).slice(0, 200) };
@@ -266,6 +268,18 @@ async function sendWake(ctx: TenantContext, ectx: ExecutionContext, payload: Jso
 		log("wake_skipped", { contextId: ev.contextId, reason: "WAKE_WEBHOOK_URL unset" });
 		await clearBusy(ctx, payload);
 		return { status: null, info: "WAKE_WEBHOOK_URL unset" };
+	}
+	if (ctx.WAKE_TRANSPORT === "relay") {
+		try {
+			const response = await relayFetch(ctx, "/deliver", { method: "POST", body: JSON.stringify({ body: req.body, headers: req.headers, ...(ctx.WAKE_CONNECTOR_GENERATION ? { enrollment: Number(ctx.WAKE_CONNECTOR_GENERATION) } : {}) }) });
+			const result = await response.json() as { status?: number; error?: string };
+			const outcome = relayTestOutcome(response, result);
+			const { status } = outcome;
+			if (status && status < 300) await armBusy(ctx, ectx, delivered, Date.now());
+			else await clearBusy(ctx, payload);
+			// A missing acknowledgment is uncertain: never retry the serialized request.
+			return { ...outcome, info: status ? `local HTTP ${status}` : result.error === "connector_offline" ? "connector offline" : "relay delivery unconfirmed" };
+		} catch { await clearBusy(ctx, payload); return { status: null, error: "unavailable", info: "relay delivery unconfirmed" }; }
 	}
 	try {
 		let r: Response;
@@ -2027,6 +2041,18 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 	const seg = path.split("/").filter(Boolean).slice(1); // after "owner"
 	const body = async () => { const raw = await readBody(req, ctx); return raw ? JSON.parse(raw) : {}; };
 
+	if (seg[0] === "wake" && seg[1] === "relay" && seg.length === 2 && !url.search) {
+		if (m === "GET") {
+			const response = await relayFetch(ctx, "/status");
+			return json({ ...await response.json() as object, configVersion: ctx.configVersion }, response.status);
+		}
+		if (m === "POST") {
+			const input = await body();
+			if (ctx.mode === "host" && input.configVersion !== ctx.configVersion) return json({ error: "conflict" }, 409);
+			return relayFetch(ctx, "/issue", { method: "POST", body: JSON.stringify(input) });
+		}
+		if (m === "DELETE") return relayFetch(ctx, "/revoke", { method: "POST", body: JSON.stringify(await body()) });
+	}
 	if (seg[0] === "summary" && !seg[1] && m === "GET") {
 		// Counts only. Unlike GET /owner/inbox this does not return message text or clear a pending wake.
 		const known = ["submitted", "working", "input-required", "completed", "failed", "rejected", "canceled"];
@@ -2437,8 +2463,33 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			request: req ? redact(req) : null });
 	}
 	if (seg[0] === "wake" && seg[1] === "test" && m === "POST") {
+		const raw = await readBody(req, ctx);
+		// Legacy owner HTTP clients send {} for the applied-settings probe. The RPC allowlist still rejects it.
+		if (raw && !/^\s*\{\s*\}\s*$/.test(raw)) {
+			let input: unknown;
+			try { input = JSON.parse(raw); } catch { return json({ error: "invalid" }, 400); }
+			const draft = relayWakeTestInput(input);
+			if (!draft) return json({ error: "invalid" }, 400);
+			const snapshot = await relayFetch(ctx, "/status");
+			if (!snapshot.ok) return json({ configured: true, transport: "relay", status: null, error: "unavailable" }, snapshot.status);
+			const connector = await snapshot.json() as { enrolled: boolean; generation: number };
+			if (!connector.enrolled || connector.generation !== draft.generation) return json({ preset: draft.preset, configured: true, transport: "relay", connector, status: null, error: connector.enrolled ? "stale_enrollment" : "revoked" }, 409);
+			let rendered;
+			try {
+				// Deliberately no wakeConfig(ctx): omitted/blank secrets mean absent, not saved-secret fallback.
+				rendered = await renderWake(draft, { contextId: "a2a-wake-test", taskId: "none", taskIds: [], from: "owner", preview: "", kind: "test", publicUrl: ctx.PUBLIC_URL });
+			} catch { return json({ error: "invalid" }, 400); }
+			if (!rendered) return json({ error: "invalid" }, 400);
+			// Compare the credential epoch again in the relay after rendering/signing has yielded.
+			const response = await relayFetch(ctx, "/deliver", { method: "POST", body: JSON.stringify({ body: rendered.body, headers: rendered.headers, enrollment: draft.generation }) });
+			const result = await response.json() as { status?: number; error?: string };
+
+			const outcome = relayTestOutcome(response, result);
+			const { status } = outcome;
+			return json({ preset: draft.preset, configured: true, transport: "relay", connector, ...outcome, info: status ? `local HTTP ${status}` : result.error === "connector_offline" ? "connector offline" : "relay delivery unconfirmed" }, result.error === "stale_enrollment" ? 409 : 200);
+		}
 		const res = await sendWake(ctx, ectx, { contextId: "a2a-wake-test", taskId: "none", taskIds: [], from: "owner", preview: "", kind: "test" });
-		return json({ preset: preset(ctx), configured: !!ctx.WAKE_WEBHOOK_URL, ...res });
+		return json({ preset: preset(ctx), configured: wakeHooked(ctx), transport: ctx.WAKE_TRANSPORT === "relay" ? "relay" : "webhook", ...(ctx.WAKE_TRANSPORT === "relay" ? { connector: await (await relayFetch(ctx, "/status")).json() } : {}), ...res });
 	}
 	if (seg[0] === "purge" && m === "POST") {
 		// delete conversation data for the given contexts (test cleanup)
@@ -4085,6 +4136,12 @@ async function handle(req: Request, ctx: TenantContext, ectx: ExecutionContext, 
 	const url = new URL(req.url);
 	const path = url.pathname;
 	try {
+		if (path === "/relay/connect") {
+			if (req.method !== "GET" || url.search || req.headers.has("origin")) return json({ error: "invalid relay upgrade" }, 400);
+			const response = await relayFetch(ctx, "/connect", { method: "GET", headers: req.headers });
+			if (response.status === 101 && ctx.WAKE_TRANSPORT === "relay") ectx.waitUntil(relayCatchUp(ctx, ectx));
+			return response;
+		}
 		if (req.method === "GET" && path === "/.well-known/agent-card.json")
 			return json(await publicCard(ctx), 200, { "access-control-allow-origin": "*", "cache-control": cardCacheControl(ctx) });
 		if (req.method === "GET" && path === "/.well-known/a2a-moved.json") {
@@ -4131,12 +4188,22 @@ async function handle(req: Request, ctx: TenantContext, ectx: ExecutionContext, 
 	}
 }
 
+/** Regenerate one fresh wake hint from authoritative inbox state; never replay a prior POST. */
+async function relayCatchUp(ctx: TenantContext, ectx: ExecutionContext): Promise<void> {
+	const pending = await ctx.DB.prepare("SELECT 1 AS n FROM tasks WHERE state IN ('submitted', 'working') LIMIT 1").first();
+	const wakes = await ctx.DB.prepare("SELECT 1 AS n FROM wakes WHERE pending_json IS NOT NULL LIMIT 1").first();
+	const outbound = await ctx.DB.prepare("SELECT 1 AS n FROM outbound WHERE updates_seen = 0 AND updates_json != '[]' LIMIT 1").first();
+	if ((pending || wakes || outbound) && await wakeBudgetOk(ctx)) await sendWake(ctx, ectx, { contextId: "relay-catchup", taskId: "none", taskIds: [], from: "", preview: "", kind: "catchup" });
+}
+
 /** Inbox for one already-resolved tenant: retired-host redirect, the handler, then an opportunistic wake flush. */
 export async function dispatch(req: Request, ctx: TenantContext, ectx: ExecutionContext): Promise<Response> {
 	const moved = A.movedResponse(req.url, ctx.PUBLIC_URL, ctx.RETIRED_HOSTNAMES);
 	if (moved) return new Response(moved.body || null, { status: moved.status, headers: moved.headers });
 	const res = await handle(req, ctx, ectx);
-	ectx.waitUntil(flushDue(ctx, ectx).catch((e) => log("flush_failed", { error: String(e).slice(0, 200) })));
+	// A diagnostic probe must not flush/consume pending inbox wakes as a side effect.
+	if (!(req.method === "POST" && /^\/owner\/wake\/test(?:\/|$)/.test(new URL(req.url).pathname)))
+		ectx.waitUntil(flushDue(ctx, ectx).catch((e) => log("flush_failed", { error: String(e).slice(0, 200) })));
 	return res;
 }
 
