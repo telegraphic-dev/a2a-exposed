@@ -10,6 +10,8 @@ import { fileURLToPath } from "node:url";
 import {
 	CONTROL_MIGRATIONS,
 	CONTROL_MIGRATIONS_DIR,
+	HTTP_RELAY_PROTOCOL_VERSION,
+	HTTP_RELAY_CAPABILITIES,
 	INBOX_MIGRATIONS,
 	PERMISSION_DELAYS_MS,
 	PERMISSION_TRIES,
@@ -97,6 +99,8 @@ const probe = `
 	if (!Array.isArray(core.CONTROL_MIGRATIONS) || core.CONTROL_MIGRATIONS[0]?.name !== "0001_auth.sql") process.exit(6);
 	if (!String(core.CONTROL_MIGRATIONS[0]?.sql).includes("CREATE TABLE")) process.exit(7);
 	if (!Array.isArray(core.INBOX_MIGRATIONS) || !core.INBOX_MIGRATIONS[0]?.sql.includes("CREATE TABLE")) process.exit(8);
+	if (core.HTTP_RELAY_PROTOCOL_VERSION !== 2 || JSON.stringify(core.HTTP_RELAY_CAPABILITIES) !== JSON.stringify(["http-response-v1", "response-stream-v1"])) process.exit(9);
+	if ("HttpRelay" in core || !Object.isFrozen(core.HTTP_RELAY_CAPABILITIES)) process.exit(10);
 `;
 
 const health: "/health" = routes.health;
@@ -137,10 +141,14 @@ test("the entry re-exports tenants, provisioning, routing, env, and migrations",
 			|| spec === "./sql.ts"
 			|| spec === "./migrations.ts"
 			|| spec === "./routes.ts"
+			|| spec === "./http-relay-metadata.ts"
 			|| spec === "./redact.ts";
 		assert.equal(allowed, true, spec);
 	}
 	assert.equal(workerFirst, true);
+	assert.equal(HTTP_RELAY_PROTOCOL_VERSION, 2);
+	assert.deepEqual(HTTP_RELAY_CAPABILITIES, ["http-response-v1", "response-stream-v1"]);
+	assert.equal(Object.isFrozen(HTTP_RELAY_CAPABILITIES), true);
 	assert.equal(health, "/health");
 	assert.equal(tenantsPath, "/api/v1/tenants");
 	assert.deepEqual(routes, { health: "/health", tenants: "/api/v1/tenants" });
