@@ -13,7 +13,8 @@
  * S>C cancel {type,id}. end uses next seq, requires no credit. At most one chunk
  * is in flight per response. Finite generic/card/JSON responses are bounded and
  * held until end, so a transport failure cannot publish a truncated success.
- * Only unencoded native A2A SSE is incremental: complete records preserve bytes,
+ * Only unencoded native A2A SSE is incremental: complete records preserve bytes
+ * except one optional initial upstream UTF-8 BOM (relay comments may precede it),
  * partial records stay bounded, transport comments detect idle disconnects, and
  * uncertainty becomes an original-id JSON-RPC error (never a task completion).
  * Credit follows response pull or bounded finite/partial-record assembly.
@@ -23,7 +24,7 @@
  */
 import { DurableObject } from "cloudflare:workers";
 import { timingSafeEqualStr } from "./a2a.ts";
-import { httpRelayRpcAllowed } from "./http-relay-routing.ts";
+import { httpRelayRpcAdmission } from "./http-relay-routing.ts";
 import { readHttpRelayBody } from "./http-relay-body.ts";
 
 export type HttpRelayProfile = "webhook" | "a2a";
@@ -34,7 +35,7 @@ export const HTTP_RELAY_PROTOCOL = "a2a-http-relay-v2";
 export const HTTP_RELAY_CAPABILITIES = ["http-response-v1", "response-stream-v1"];
 type State = { credentialHash: string | null; ingressHash: string | null; generation: number; profile: HttpRelayProfile | null; headers: string[]; enabled: boolean };
 type Attachment = { generation: number; profile: HttpRelayProfile; capabilities: string[]; ready: boolean };
-type Pending = { ws: WebSocket; generation: number; seq: number; credit: boolean; bytes: number; started: boolean; noBody: boolean; nativeRpc: boolean; rpcId: string | number | null; streaming: boolean; response?: { status: number; headers: HttpRelayHeaders }; chunks: Uint8Array[]; sseBuffer: Uint8Array; controller?: ReadableStreamDefaultController<Uint8Array>; resolve: (response: Response) => void; headerTimer: ReturnType<typeof setTimeout>; timer: ReturnType<typeof setTimeout>; heartbeat?: ReturnType<typeof setInterval>; detach: () => void };
+type Pending = { ws: WebSocket; generation: number; seq: number; credit: boolean; bytes: number; started: boolean; noBody: boolean; nativeRpc: boolean; rpcId: string | number | null; streaming: boolean; response?: { status: number; headers: HttpRelayHeaders }; chunks: Uint8Array[]; sseBuffer: Uint8Array; ssePrefixChecked?: boolean; controller?: ReadableStreamDefaultController<Uint8Array>; resolve: (response: Response) => void; headerTimer: ReturnType<typeof setTimeout>; timer: ReturnType<typeof setTimeout>; heartbeat?: ReturnType<typeof setInterval>; detach: () => void };
 const enc = new TextEncoder();
 const fail = (error: string, status = 503) => Response.json({ error }, { status, headers: { "cache-control": "no-store" } });
 const validProfile = (p: unknown): p is HttpRelayProfile => p === "webhook" || p === "a2a";
@@ -178,11 +179,11 @@ export class HttpRelay extends DurableObject {
 			try { body = await readBody(req); } catch (e) { return fail((e as Error).message === "size" ? "body_too_large" : "request_timeout", (e as Error).message === "size" ? 413 : 504); } finally { this.reading--; }
 			if (req.signal.aborted || this.state().generation !== s.generation || this.socket() !== ws) return fail("delivery_uncertain", 502);
 			if (target === "card" && body.length) return fail("invalid_body", 400);
-			if (target === "rpc" && !httpRelayRpcAllowed(body)) return fail("invalid_rpc", 400);
+			const admission = target === "rpc" ? httpRelayRpcAdmission(body) : undefined;
+			if (admission && !admission.ok) return Response.json({ jsonrpc: "2.0", id: admission.id, error: { code: admission.code, message: admission.message, data: { code: admission.reason } } }, { status: 400, headers: { "cache-control": "no-store" } });
 			const id = crypto.randomUUID();
 			const nativeRpc = target === "rpc" && s.profile === "a2a";
-			const sourceId: unknown = nativeRpc ? JSON.parse(new TextDecoder().decode(body)).id : null;
-			const rpcId = typeof sourceId === "string" || (typeof sourceId === "number" && Number.isFinite(sourceId)) ? sourceId : null;
+			const rpcId = admission?.id ?? null;
 			return new Promise<Response>(resolve => {
 				const abort = () => this.settle(id, "request_cancelled", 502, true);
 				const p: Pending = { ws, generation: s.generation, seq: 0, credit: false, bytes: 0, started: false, noBody: false, nativeRpc, rpcId, streaming: false, chunks: [], sseBuffer: new Uint8Array(), resolve, detach: () => req.signal.removeEventListener("abort", abort), headerTimer: setTimeout(() => this.settle(id, "delivery_timeout", 504, true), httpRelayLimits.headerMs), timer: setTimeout(() => this.settle(id, "delivery_timeout", 504, true), httpRelayLimits.streamMs) };
@@ -230,6 +231,18 @@ export class HttpRelay extends DurableObject {
 				p.bytes += body.length; p.seq++; p.credit = false;
 				if (!p.streaming) { p.chunks.push(body); this.credit(m.id, p); return; }
 				p.sseBuffer = joined([p.sseBuffer, body], p.sseBuffer.length + body.length);
+				// A heartbeat can precede upstream bytes. Strip only the upstream's
+				// initial UTF-8 BOM, otherwise it becomes a mid-stream SSE field prefix
+				// and hides the first data line. Retain at most two undecided bytes.
+				if (!p.ssePrefixChecked) {
+					const bom = [0xef, 0xbb, 0xbf];
+					const prefix = p.sseBuffer.subarray(0, 3);
+					if (prefix.every((byte, i) => byte === bom[i])) {
+						if (prefix.length < 3) { this.credit(m.id, p); return; }
+						p.sseBuffer = p.sseBuffer.slice(3);
+					}
+					p.ssePrefixChecked = true;
+				}
 				const boundary = completeSse(p.sseBuffer);
 				if (boundary) { p.controller!.enqueue(p.sseBuffer.slice(0, boundary)); p.sseBuffer = p.sseBuffer.slice(boundary); }
 				else this.credit(m.id, p);

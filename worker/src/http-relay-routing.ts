@@ -37,12 +37,22 @@ const rpcMethods = new Map([
 	["SendMessage", "send"], ["message/send", "send"], ["GetTask", "get"], ["tasks/get", "get"], ["CancelTask", "cancel"], ["tasks/cancel", "cancel"], ["ListTasks", "list"],
 	["SendStreamingMessage", "send"], ["message/stream", "send"], ["SubscribeToTask", "stream"], ["tasks/resubscribe", "stream"],
 ]);
+type RpcId = string | number | null;
+type RpcAdmission = { ok: true; id: RpcId } | { ok: false; id: RpcId; code: number; message: string; reason: string };
+/** Safe admission diagnostics only: never include method names, params or parser errors. */
+export function httpRelayRpcAdmission(bytes: Uint8Array): RpcAdmission {
+	let b;
+	try { b = JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes)); }
+	catch { return { ok: false, id: null, code: -32700, message: "Parse error", reason: "parse_error" }; }
+	if (!b || typeof b !== "object" || Array.isArray(b) || b.jsonrpc !== "2.0" || typeof b.method !== "string" || (b.id !== undefined && b.id !== null && typeof b.id !== "string" && !(typeof b.id === "number" && Number.isFinite(b.id)))) return { ok: false, id: null, code: -32600, message: "Invalid Request", reason: "invalid_request" };
+	const id: RpcId = b.id ?? null;
+	if (!rpcMethods.has(b.method)) return { ok: false, id, code: -32601, message: "Method not found", reason: "method_not_found" };
+	if (b.params !== undefined && (!b.params || typeof b.params !== "object" || Array.isArray(b.params))) return { ok: false, id, code: -32602, message: "Invalid params", reason: "invalid_params" };
+	if (F.wantsPush(rpcMethods.get(b.method)!, b.params)) return { ok: false, id, code: -32003, message: "Push notifications not supported", reason: "push_not_supported" };
+	return { ok: true, id };
+}
 export function httpRelayRpcAllowed(bytes: Uint8Array): boolean {
-	try {
-		const b = JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes));
-		if (!b || typeof b !== "object" || Array.isArray(b) || b.jsonrpc !== "2.0" || typeof b.method !== "string" || !rpcMethods.has(b.method)) return false;
-		return !F.wantsPush(rpcMethods.get(b.method)!, b.params);
-	} catch { return false; }
+	return httpRelayRpcAdmission(bytes).ok;
 }
 
 function modernScheme(s: F.Json): F.Json {
