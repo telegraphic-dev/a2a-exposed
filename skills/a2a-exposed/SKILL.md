@@ -60,6 +60,10 @@ Hosted status points to `hosted capabilities --json` before setup; saved wake se
 
 For a relay `catchup` hint, run unfiltered `inbox`, never replay an earlier POST or resend a message. HTTP acknowledgment is not agent completion. `relay status --json` is read-only; enrollment/rotation/revocation need human approval and the setup skill. `relay run` exits 0 only for intentional shutdown; terminal failures exit 1 with safe stderr guidance, and three consecutive failed handshakes stop retrying. A busy or uncertain test is unconfirmed: check the receiver and authoritative inbox before another explicit test; execution may already have happened. See [relay reference](references/relay.md).
 
+## Separate HTTP/native relay profiles
+
+For separately enabled generic webhook/native A2A profiles, use `relay http|a2a status --json` and the [HTTP relay reference](../../docs/http-relay.md). They are not wake templates or Worker inbox tasks. The caller's ingress credential, connector credential and local application's bearer/HMAC authority are separate. Native local service authentication/task isolation remains authoritative; an ingress token is not a paired peer identity. Discovery also requires the ingress header. Never replay a local request after an uncertain result or transport abort; inspect native task state. Enrollment/rotation/revocation still require human approval and the setup skill.
+
 ## On a wake or a scheduled check
 
 1. **Read the A2A endpoint.** A wake payload or text includes `contextId`, `taskIds`, `from` (the peer label you assigned) and a `hint` command. `taskId` is the newest hint. Drain every open inbox item for that `contextId` and every id in `taskIds` in one run, then read the inbox again before you exit. A message that arrived while you were working may be waiting for one later catch-up. When the inbox is empty, stop quietly.

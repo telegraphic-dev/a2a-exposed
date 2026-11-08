@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add separately opted-in HTTP relay profiles for fixed local webhooks and native
+  A2A JSON-RPC services, with original request bytes/application authentication,
+  real receiver responses, rewritten discovery and bounded incremental SSE.
+  Separate connector/ingress authority, header allowlists, generation fencing,
+  flow control, cancellation and tenant lifecycle checks preserve wake-v1 and
+  existing inbox/pairing behavior. Hosted adoption remains a separate integration.
+
 - Distinguish busy and uncertain relay delivery from service incompatibility;
   preserve unconfirmed execution and advise checking the receiver and inbox before retesting.
 

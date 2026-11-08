@@ -5,6 +5,15 @@ For the optional zero-dependency outbound connector, see [wake relay](wake-relay
 a fixed loopback receiver, and no global install. Self-hosted `init`/`deploy` accept
 `--wake-relay 1` and `--wake-transport relay|webhook`; the feature defaults off.
 
+For original webhook payloads or native A2A JSON-RPC responses/SSE, use the
+separate [HTTP relay profiles](http-relay.md): `relay http|a2a create|status|revoke|run`.
+`create` requires new `--token-file` and `--ingress-token-file` paths and accepts
+`--forward-headers` for explicit application-header forwarding. `run` uses a
+fixed loopback `--local-url`; `a2a` also accepts a fixed same-origin `--card-url`.
+Self-hosted `init`/`deploy --http-relay 1` opts into its distinct binding; it does
+not change wake-v1, inbox pairing or the Tunnel façade. Hosted availability is a
+separate capability, not implied by installing a newer CLI.
+
 Node 22.18+, zero dependencies. Nothing needs a global install:
 
 ```bash

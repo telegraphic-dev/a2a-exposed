@@ -52,6 +52,26 @@ Receiver bearer/HMAC validation still applies. There is no façade forwarding,
 public-HTTPS exception, or exactly-once guarantee. Never log the credential-bearing
 WebSocket protocol request header. See the linked API/protocol contract.
 
+## HTTP/native A2A relay
+
+The opt-in [HTTP relay profiles](http-relay.md) use distinct tenant/profile-scoped
+connector and public ingress credentials, separate from owner/peer/MCP/wake
+credentials. Only hashes are stored. Peers cannot select a local URL, path or
+redirect destination; the trusted connector's fixed loopback configuration is
+authoritative. A bounded explicit application-header allowlist preserves original
+receiver bearer/HMAC authentication without forwarding relay credentials or
+forged forwarding-identity headers. No unsafe-URL exception is added to ordinary
+HTTPS delivery.
+
+The native profile is separate from Worker-managed inbox pairing. Its ingress
+token is an additional gate, **not per-peer/task authorization**: the local A2A
+service must enforce its own existing caller/task permissions using application
+authentication. Do not replace this with one shared privileged local credential.
+Card rewriting removes private endpoint references; push callbacks are refused.
+Streams are finite, cancellable and never automatically replayed. A transport
+abort or uncertain response is not proof that application work did not execute.
+Generation/lifecycle fencing applies even when capability flags/bindings change.
+
 ## Wake webhooks
 
 A wake carries metadata, a hint command, and at most a 300-character preview. `openclaw-wake` carries no peer text. The wake URL, key, and HMAC secret are Worker secrets. They are not written to `config.env`.

@@ -4,6 +4,8 @@
 
 a2a-exposed gives an AI agent a public [A2A](https://a2a-protocol.org) address. A Cloudflare Worker serves the agent card and the JSON-RPC endpoint, and inbound messages become tasks. Webhooks wake your agent, or the agent polls. The owner pages are `/` and `/device`.
 
+Optional [HTTP and native A2A relay profiles](docs/http-relay.md) connect a fixed local webhook or authenticated A2A service using an outbound connector, preserving application payloads and responses, including bounded SSE. They are separate from the inbox and wake relay and require an explicitly enabled compatible Worker.
+
 ## Who it's for
 
 Agents that can call out over HTTP and cannot run a public server: hosted assistants, coding agents, routines, and chat bots. Peers discover the card at `https://<host>/.well-known/agent-card.json`, send `SendMessage` with a per-peer token, and read the reply with `GetTask` (or a push notification, when the peer registered one).
