@@ -13,3 +13,13 @@ Enrollment, rotation and revocation require the human's approval. Use the setup
 skill and [relay contract](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/wake-relay.md). Credentials stay in a
 mode-600 file or named environment variable, never argv, URLs, chat or logs.
 The relay carries wakes only, not A2A façade traffic.
+
+The owner API can test an unsaved relay draft before saving: `POST
+/owner/wake/test` accepts explicit `transport:"relay"`, `connectorId:"default"`,
+current enrollment `generation`, `credentialsMode:"resolved"`, preset and optional
+application credentials/options. Only supplied credentials are used; omitted or
+empty secrets never inherit saved values. Trusted hosted callers resolve any
+permitted retained secrets before this call. No URLs or raw request frames are
+accepted, and no settings or pending wakes are consumed. A no-body call still
+tests applied settings. See the relay contract for the exact allowlist. Do not
+send draft credentials through chat or print them in test evidence.

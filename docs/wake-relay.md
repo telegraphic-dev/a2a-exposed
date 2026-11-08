@@ -133,12 +133,57 @@ legacy webhook settings keep their existing shape. A blank secret retains an
 existing secret only for the same transport, connector identity, preset and
 authentication mode. Switching transport requires supplying credentials again.
 
-Save settings with the existing expected-version check, wait for the outbox to
-apply, then run the existing `POST /owner/wake/test` (no body). Its result adds
-`transport` and, for relay, a `connector` status snapshot; `status` is the actual
-local HTTP status or null when unconfirmed. It tests the **applied** settings,
-not an arbitrary unsaved credential/preset draft. If saving fails after enrollment,
-revoke that exact new enrollment epoch; do not overwrite another writer's settings.
+`POST /owner/wake/test` without a body continues to test the **applied** settings
+(the public owner HTTP API also retains the legacy empty-object `{}` form).
+To test an initial or edited relay draft **before saving**, send this owner-only
+body through the same HTTP route or trusted `TenantStore.owner()` call:
+
+```json
+{
+  "transport": "relay",
+  "connectorId": "default",
+  "generation": 1,
+  "credentialsMode": "resolved",
+  "preset": "generic",
+  "key": "dummy-receiver-key",
+  "hmacSecret": "dummy-receiver-signing-secret"
+}
+```
+
+`generation` is the current positive enrollment epoch, not the connection
+counter or config version. Required fields are exactly those shown above except
+`key` and `hmacSecret`, which are optional. Other optional string fields are
+`agentId`, `keyHeader`, `keyPrefix`, `bodyTemplate`, `cliCommand`,
+`accessClientId`, and `accessClientSecret`. An optional `url` must be empty;
+nonempty URLs, unknown fields, raw headers, methods, and frame bodies are refused.
+The preset must be in `WAKE_PRESETS`. The machine-readable
+[request schema](../worker/src/wake-relay-test.schema.json) ships with the Worker.
+Strings are bounded to 4096 characters (JSON body template: 65536); header
+values cannot contain control characters. The existing 1 MiB request limit,
+relay frame/body limits, and fixed connector destination still apply.
+
+`credentialsMode:"resolved"` explicitly means **use only this body's values**.
+Omitted or empty credentials are absent: the runtime never falls back to saved
+secrets. The trusted hosted caller must resolve a retained secret only when its
+existing saved-setting credential-retention rules permit it, or require fresh
+input. Do not send secret values to the browser, logs, or public errors. The
+runtime renders and signs one `kind:"test"` event from this draft, sends its
+exact bytes, and does not save settings, arm busy state, or flush/consume the
+pending wake queue. A no-body probe and the draft probe are distinct operations.
+
+Successful dispatch returns HTTP 200 with `{preset, configured:true,
+transport:"relay", connector, status, info}`. `connector` is the pre-dispatch
+status snapshot; `status` is the actual local HTTP status, or null when offline
+or unconfirmed. Treat only 2xx **local status** as test success. Invalid draft or
+render failure is HTTP 400; stale/revoked enrollment is 409 (checked both before
+render and at final dispatch); disabled feature is 404. No response returns the
+supplied credentials or receiver body. This additive owner API does not change
+WebSocket protocol v1 or its credential format.
+
+After testing, save with the existing expected-version check and wait for the
+outbox to apply. Enrollment, testing, and saving are separate operations. If
+saving fails after enrollment, revoke that exact new enrollment epoch; do not
+overwrite another writer's settings.
 
 ### WebSocket protocol v1
 

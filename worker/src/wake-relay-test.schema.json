@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Owner relay wake draft test",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["transport", "connectorId", "generation", "credentialsMode", "preset"],
+  "properties": {
+    "transport": { "const": "relay" },
+    "connectorId": { "const": "default" },
+    "generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+    "credentialsMode": { "const": "resolved" },
+    "url": { "const": "" },
+    "preset": { "enum": ["grok-bot", "claude-code", "openclaw-wake", "openclaw-agent", "hermes", "openbot", "mausbot", "generic"] },
+    "key": { "$ref": "#/$defs/text" },
+    "hmacSecret": { "$ref": "#/$defs/text" },
+    "agentId": { "$ref": "#/$defs/text" },
+    "keyHeader": { "type": "string", "maxLength": 64, "pattern": "^(?:$|(?!(?:[Hh][Oo][Ss][Tt]|[Cc][Oo][Nn][Nn][Ee][Cc][Tt][Ii][Oo][Nn]|[Uu][Pp][Gg][Rr][Aa][Dd][Ee]|[Cc][Oo][Nn][Tt][Ee][Nn][Tt]-[Ll][Ee][Nn][Gg][Tt][Hh]|[Tt][Rr][Aa][Nn][Ss][Ff][Ee][Rr]-[Ee][Nn][Cc][Oo][Dd][Ii][Nn][Gg]|[Pp][Rr][Oo][Xx][Yy]-.*|[Ss][Ee][Cc]-.*)$)[A-Za-z0-9-]{1,64})$" },
+    "keyPrefix": { "$ref": "#/$defs/text" },
+    "bodyTemplate": { "type": "string", "maxLength": 65536 },
+    "cliCommand": { "$ref": "#/$defs/text" },
+    "accessClientId": { "$ref": "#/$defs/text" },
+    "accessClientSecret": { "$ref": "#/$defs/text" }
+  },
+  "$defs": {
+    "text": { "type": "string", "maxLength": 4096, "pattern": "^[^\u0000-\u001f\u007f]*$" }
+  }
+}

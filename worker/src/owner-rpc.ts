@@ -8,7 +8,7 @@
 // Self-host never calls this.
 
 import { ID_RE } from "./a2a.ts";
-import { credentialIsMasked, previewHeaderPlain } from "./wake.ts";
+import { credentialIsMasked, previewHeaderPlain, relayWakeTestInput } from "./wake.ts";
 
 /** Account id. Slashes and dots are refused so the value cannot be a path. */
 export const ACCOUNT_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -293,9 +293,14 @@ function forwardBody(body: unknown): { ok: true; value: Record<string, string> }
  * PUT /owner/address-forward receives `{ cardUrl, hours? }`. POST /owner/peers/announce receives `{ to }` or `{ all: true }`,
  * and `reissue` with one alias. POST /owner/mcp/announce_address refuses `reissue` (code `reissue_owner_only`).
  * The pairing identity private key is not accepted on this RPC.
+ * POST /owner/wake/test optionally accepts only a validated, resolved relay draft.
  * Every other route accepts only an absent body.
  */
 export function ownerRpcBody(routeName: string, body: unknown): { ok: true; value?: Record<string, unknown> } | { ok: false; error: string; code?: string } {
+	if (routeName === "POST /owner/wake/test" && body != null) {
+		const value = relayWakeTestInput(body);
+		return value ? { ok: true, value } : { ok: false, error: "relay draft is invalid" };
+	}
 	if (routeName === "POST /owner/wake/relay" || routeName === "DELETE /owner/wake/relay") {
 		if (!body || typeof body !== "object" || Array.isArray(body)) return { ok: false, error: "body must be an object" };
 		const b = body as Record<string, unknown>;

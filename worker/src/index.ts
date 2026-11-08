@@ -8,7 +8,7 @@ import { VERSION } from "./version.ts";
 import * as A from "./a2a.ts";
 import * as F from "./facade.ts";
 import { relayFetch } from "./relay-routing.ts";
-import { renderWake, mausbotConfigProblem, redact, cloudflareErrorHint, wakeUrlIsTunnelHost, defaultBusySeconds, defaultDebounceSeconds, defaultMaxPerHour, type WakeConfig, type WakeEvent } from "./wake.ts";
+import { renderWake, relayWakeTestInput, mausbotConfigProblem, redact, cloudflareErrorHint, wakeUrlIsTunnelHost, defaultBusySeconds, defaultDebounceSeconds, defaultMaxPerHour, type WakeConfig, type WakeEvent } from "./wake.ts";
 import { fetchCheckedPeer, fetchCheckedWake } from "./wake-target.ts";
 import { withDeadline } from "./deadline.ts";
 import * as Addr from "./address.ts";
@@ -2461,6 +2461,30 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			request: req ? redact(req) : null });
 	}
 	if (seg[0] === "wake" && seg[1] === "test" && m === "POST") {
+		const raw = await readBody(req, ctx);
+		// Legacy owner HTTP clients send {} for the applied-settings probe. The RPC allowlist still rejects it.
+		if (raw && !/^\s*\{\s*\}\s*$/.test(raw)) {
+			let input: unknown;
+			try { input = JSON.parse(raw); } catch { return json({ error: "relay draft is invalid" }, 400); }
+			const draft = relayWakeTestInput(input);
+			if (!draft) return json({ error: "relay draft is invalid" }, 400);
+			const snapshot = await relayFetch(ctx, "/status");
+			if (!snapshot.ok) return snapshot;
+			const connector = await snapshot.json() as { enrolled: boolean; generation: number };
+			if (!connector.enrolled || connector.generation !== draft.generation) return json({ error: "stale_enrollment" }, 409);
+			let rendered;
+			try {
+				// Deliberately no wakeConfig(ctx): omitted/blank secrets mean absent, not saved-secret fallback.
+				rendered = await renderWake(draft, { contextId: "a2a-wake-test", taskId: "none", taskIds: [], from: "owner", preview: "", kind: "test", publicUrl: ctx.PUBLIC_URL });
+			} catch { return json({ error: "relay draft render failed" }, 400); }
+			if (!rendered) return json({ error: "relay draft render failed" }, 400);
+			// Compare the credential epoch again in the relay after rendering/signing has yielded.
+			const response = await relayFetch(ctx, "/deliver", { method: "POST", body: JSON.stringify({ body: rendered.body, headers: rendered.headers, enrollment: draft.generation }) });
+			const result = await response.json() as { status?: number; error?: string };
+			if (result.error === "stale_enrollment") return json({ error: "stale_enrollment" }, 409);
+			const status = response.ok && Number.isInteger(result.status) ? result.status! : null;
+			return json({ preset: draft.preset, configured: true, transport: "relay", connector, status, info: status ? `local HTTP ${status}` : result.error === "connector_offline" ? "connector offline" : "relay delivery unconfirmed" });
+		}
 		const res = await sendWake(ctx, ectx, { contextId: "a2a-wake-test", taskId: "none", taskIds: [], from: "owner", preview: "", kind: "test" });
 		return json({ preset: preset(ctx), configured: wakeHooked(ctx), transport: ctx.WAKE_TRANSPORT === "relay" ? "relay" : "webhook", ...(ctx.WAKE_TRANSPORT === "relay" ? { connector: await (await relayFetch(ctx, "/status")).json() } : {}), ...res });
 	}
@@ -4174,7 +4198,9 @@ export async function dispatch(req: Request, ctx: TenantContext, ectx: Execution
 	const moved = A.movedResponse(req.url, ctx.PUBLIC_URL, ctx.RETIRED_HOSTNAMES);
 	if (moved) return new Response(moved.body || null, { status: moved.status, headers: moved.headers });
 	const res = await handle(req, ctx, ectx);
-	ectx.waitUntil(flushDue(ctx, ectx).catch((e) => log("flush_failed", { error: String(e).slice(0, 200) })));
+	// A diagnostic probe must not flush/consume pending inbox wakes as a side effect.
+	if (!(req.method === "POST" && /^\/owner\/wake\/test(?:\/|$)/.test(new URL(req.url).pathname)))
+		ectx.waitUntil(flushDue(ctx, ectx).catch((e) => log("flush_failed", { error: String(e).slice(0, 200) })));
 	return res;
 }
 

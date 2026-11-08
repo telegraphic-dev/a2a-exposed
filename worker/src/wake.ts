@@ -48,6 +48,42 @@ export type WakeConfig = {
 	accessClientSecret?: string;
 };
 
+/** Owner-only unsaved relay probe. All credentials are resolved by the caller; never inherit saved secrets. */
+export type RelayWakeTestInput = {
+	transport: "relay";
+	connectorId: "default";
+	generation: number;
+	credentialsMode: "resolved";
+	url?: "";
+	preset: typeof PRESETS[number];
+	key?: string;
+	hmacSecret?: string;
+	agentId?: string;
+	keyHeader?: string;
+	keyPrefix?: string;
+	bodyTemplate?: string;
+	cliCommand?: string;
+	accessClientId?: string;
+	accessClientSecret?: string;
+};
+
+/** Shared by the trusted owner RPC allowlist and owner HTTP handler. No destinations or raw frames. */
+export function relayWakeTestInput(body: unknown): RelayWakeTestInput | null {
+	if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+	const b = body as Record<string, unknown>;
+	const strings = ["key", "hmacSecret", "agentId", "keyHeader", "keyPrefix", "bodyTemplate", "cliCommand", "accessClientId", "accessClientSecret"];
+	if (Object.keys(b).some(k => !["transport", "connectorId", "generation", "credentialsMode", "preset", "url", ...strings].includes(k))) return null;
+	if (b.url !== undefined && b.url !== "") return null;
+	if (b.transport !== "relay" || b.connectorId !== "default" || b.credentialsMode !== "resolved" || !Number.isSafeInteger(b.generation) || Number(b.generation) < 1 || !PRESETS.includes(b.preset as typeof PRESETS[number])) return null;
+	for (const k of strings) {
+		if (b[k] === undefined) continue;
+		if (typeof b[k] !== "string" || (b[k] as string).length > (k === "bodyTemplate" ? 65536 : 4096)) return null;
+		if (k !== "bodyTemplate" && /[\u0000-\u001f\u007f]/.test(b[k] as string)) return null;
+	}
+	if (b.keyHeader && (!/^[A-Za-z0-9-]{1,64}$/.test(b.keyHeader as string) || /^(host|connection|upgrade|content-length|transfer-encoding|proxy-.*|sec-.*)$/i.test(b.keyHeader as string))) return null;
+	return { ...b } as RelayWakeTestInput;
+}
+
 export type WakeRequest = { url: string; method: "POST"; headers: Record<string, string>; body: string };
 
 export const PRESETS = ["grok-bot", "claude-code", "openclaw-wake", "openclaw-agent", "hermes", "openbot", "mausbot", "generic"] as const;

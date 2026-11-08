@@ -70,14 +70,15 @@ export class WakeRelay extends DurableObject {
 			return new Response(null, { status: 101, webSocket: pair[0], headers: { "sec-websocket-protocol": "a2a-wake-v1" } });
 		}
 		if (path === "/deliver" && req.method === "POST") {
-			const s = this.state();
-			const ws = this.ctx.getWebSockets().find(w => w.readyState === 1 && w.deserializeAttachment()?.generation === s.generation);
-			if (!s.hash || !ws) return failure("connector_offline");
-			if (this.pending.size >= MAX_INFLIGHT) return failure("connector_busy");
 			const raw = await req.text();
 			if (new TextEncoder().encode(raw).length > MAX_FRAME) return failure("body_too_large", 413);
 			const { body, headers, enrollment } = JSON.parse(raw);
+			// Select authority only after body parsing yields; rotation/revocation must win.
+			const s = this.state();
 			if (enrollment !== undefined && enrollment !== s.enrollment) return failure("stale_enrollment", 409);
+			const ws = this.ctx.getWebSockets().find(w => w.readyState === 1 && w.deserializeAttachment()?.generation === s.generation);
+			if (!s.hash || !ws) return failure("connector_offline");
+			if (this.pending.size >= MAX_INFLIGHT) return failure("connector_busy");
 			if (typeof body !== "string" || new TextEncoder().encode(body).length > MAX_BODY) return failure("body_too_large", 413);
 			// No await between selecting authority and sending after body parsing.
 			if (this.state().generation !== s.generation) return failure("connector_offline");
