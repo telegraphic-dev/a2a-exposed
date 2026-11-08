@@ -68,7 +68,10 @@ token is an additional gate, **not per-peer/task authorization**: the local A2A
 service must enforce its own existing caller/task permissions using application
 authentication. Do not replace this with one shared privileged local credential.
 Card rewriting removes private endpoint references; push callbacks are refused.
-Streams are finite, cancellable and never automatically replayed. A transport
+Streams are finite, cancellable and never automatically replayed. Non-SSE
+responses are buffered within limits until complete; unencoded native SSE uses
+bounded transport comments and original-ID protocol errors for known transport
+uncertainty. These never assert application/task completion. A transport
 abort or uncertain response is not proof that application work did not execute.
 Generation/lifecycle fencing applies even when capability flags/bindings change.
 

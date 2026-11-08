@@ -7,7 +7,10 @@
   real receiver responses, rewritten discovery and bounded incremental SSE.
   Separate connector/ingress authority, header allowlists, generation fencing,
   flow control, cancellation and tenant lifecycle checks preserve wake-v1 and
-  existing inbox/pairing behavior. Hosted adoption remains a separate integration.
+  existing inbox/pairing behavior. Finite responses are bounded-buffered before
+  public headers; native unencoded SSE preserves complete application records,
+  adds bounded transport keepalives and reports known uncertainty as an
+  original-ID protocol error. Hosted adoption remains a separate integration.
 
 - Distinguish busy and uncertain relay delivery from service incompatibility;
   preserve unconfirmed execution and advise checking the receiver and inbox before retesting.

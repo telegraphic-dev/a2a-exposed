@@ -152,7 +152,16 @@ HTTP+JSON and gRPC are not advertised. Streaming is advertised only when the
 local card supports it and an online connector negotiates response streaming.
 The original Tunnel façade remains JSON-only.
 
-SSE is incremental: the client can receive an event before the service finishes.
+SSE is incremental for **unencoded native A2A `text/event-stream`**: the client
+can receive a complete event before the service finishes. Compressed/encoded
+native SSE is refused with HTTP 502 `unsupported_stream_encoding`; ordinary
+compressed finite webhook responses remain supported without decompression.
+Complete application records retain their bytes. The relay adds standard
+`: relay keepalive` comments at 100ms intervals while capacity exists (at most
+one queued comment), allowing idle client disconnects to be observed without
+inventing application events. A partial record stays bounded until complete;
+it is never completed using a relay comment or error.
+
 Aborting the public response propagates a transport cancellation to the local
 HTTP request; that is **not** an A2A task cancellation. Use the native CancelTask
 operation when work itself must be canceled. A lost connection or deadline may
@@ -163,19 +172,31 @@ leave application work running; never automatically replay a SendMessage.
 The relay returns the receiver's allowed HTTP status, headers and response body,
 not a successful-looking delivery acknowledgment. A local 401/403/4xx/5xx is an
 application response, not success. Protocol errors remain protocol errors.
+Generic webhook, card and non-SSE JSON responses are **finite and buffered** until
+the connector confirms their complete body, within the 1MiB/60s budget. They are
+not incremental HTTP streams; a mid-body failure returns 502 rather than exposing
+a truncated successful response. Only native A2A SSE is incremental.
 
 - No compatible online connector, or temporary saturation: non-success, normally
   HTTP 503. Nothing is queued for later forwarding.
-- Deadline before response headers: HTTP 504. Broken/uncertain forwarding:
-  HTTP 502. If a response has already started, a later failure terminates the
-  stream rather than replacing its status with a misleading JSON success.
+- Deadline before the public finite response: HTTP 504. Broken/uncertain finite
+  forwarding: HTTP 502. After native SSE has started, a known transport failure
+  discards an incomplete application record and emits a JSON-RPC error event
+  with the original request ID, code `-32603`, message `Relay delivery uncertain`
+  and a sanitized failure code in `error.data.code`, then closes the stream.
+  This does not fabricate a terminal task event or change successful application
+  records. Consumers must continue reading and handle protocol errors; bare EOF
+  is not proof that a native task completed. This is not a universal guarantee
+  that an infrastructure process death can be detected at the HTTP layer.
 - Disconnect, rotation, revocation and cancellation do not automatically retry
   a local request. It might already have executed. Inspect the receiver/task
   state before an explicitly approved retry.
-- Finite request, frame, response, concurrency and time budgets apply. This is
-  not an unlimited file-transfer or indefinitely running SSE tunnel. Exact
-  protocol limits live in `httpRelayLimits`; do not advertise an unlimited
-  stream because a short fixture works.
+- Budgets are four concurrent forwards per profile, 256KiB per request, 16KiB
+  per wire chunk, 1MiB per response and 60 seconds for response completion; local
+  response headers have a 10-second deadline. Complete finite response headers
+  may therefore be held until the response finishes. This is not an unlimited
+  file-transfer or indefinitely running SSE tunnel. Exact constants live in
+  `httpRelayLimits`.
 
 Run the connector in the foreground. Ctrl-C/SIGTERM stops it and aborts active
 local requests. Other failures use secret-free diagnostics and a nonzero exit;
