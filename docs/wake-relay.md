@@ -67,8 +67,11 @@ Revocation reads the enrollment generation, revokes that exact generation, and
 reads back the result. Rotation, revocation, and a newer connection fence old
 sockets and their acknowledgments. Only one connector is active per tenant.
 A connector replaced/revoked with close code 4001 exits instead of fighting the
-replacement. Other disconnections reconnect with bounded exponential backoff
-and full jitter (at most 30 seconds). No service is installed automatically.
+replacement. Protocol violations also stop the connector without retry: it sends
+client-compatible code 4008 for invalid relay frames and accepts server policy
+close codes 1008 or 4008 as terminal. Other disconnections reconnect with bounded
+exponential backoff and full jitter (at most 30 seconds). No service is installed
+automatically.
 
 ## Hosted integration contract
 

@@ -14,6 +14,10 @@ skill and [relay contract](https://github.com/telegraphic-dev/a2a-exposed/blob/m
 mode-600 file or named environment variable, never argv, URLs, chat or logs.
 The relay carries wakes only, not A2A façade traffic.
 
+The foreground connector stops on replacement/revocation (4001) or a protocol
+violation (1008/4008), rather than reconnecting. Invalid relay frames are rejected
+before local delivery; check the relay endpoint/configuration before restarting.
+
 The owner API can test an unsaved relay draft before saving: `POST
 /owner/wake/test` accepts explicit `transport:"relay"`, `connectorId:"default"`,
 current enrollment `generation`, `credentialsMode:"resolved"`, preset and optional

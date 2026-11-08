@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fix native Node relay connector shutdown on invalid frames, without retrying
+  protocol violations or forwarding rejected frames to the local receiver.
 - Add an optional tenant-scoped SQLite Durable Object wake relay and a
   zero-dependency foreground CLI connector, preserving local webhook bearer/HMAC
   authentication and actual HTTP acknowledgments.

@@ -31,13 +31,21 @@ export async function runConnector({ url, token, localUrl, signal, onReady = () 
 			const ws = new WebSocket(url, ['a2a-wake-v1', token]);
 			let generation, hello = false, ping;
 			const active = new Map();
-			const handshake = setTimeout(() => ws.close(), 10000);
-			const shutdown = () => { for (const a of active.values()) a.abort(); ws.close(); finish(); };
+			const handshake = setTimeout(() => close(), 10000);
+			const shutdown = () => close();
 			let finished = false;
 			const finish = () => { if (finished) return; finished = true; clearTimeout(handshake); clearInterval(ping); for (const a of active.values()) a.abort(); active.clear(); signal?.removeEventListener('abort', shutdown); resolve(); };
+			const close = (code, reason) => {
+				if (finished) return;
+				// Settle and abort local work even if socket cleanup throws. Never let a
+				// cleanup exception escape an event listener (including async message).
+				finish();
+				try { ws.close(code, reason); }
+				catch { try { ws.close(); } catch { /* Already settled; cleanup is best effort. */ } }
+			};
 			signal?.addEventListener('abort', shutdown, { once: true });
-			ws.addEventListener('close', e => { if (e.code === 4001 || e.code === 1008) permanent = true; finish(); });
-			ws.addEventListener('error', () => { ws.close(); finish(); });
+			ws.addEventListener('close', e => { if ([4001, 4008, 1008].includes(e.code)) permanent = true; finish(); });
+			ws.addEventListener('error', () => close());
 			ws.addEventListener('message', async e => {
 				if (finished) return;
 				try {
@@ -49,7 +57,7 @@ export async function runConnector({ url, token, localUrl, signal, onReady = () 
 						generation = m.generation; hello = true; attempt = 0; clearTimeout(handshake);
 						let pongAt = Date.now();
 						ws.addEventListener('message', ev => { if (ev.data === 'pong') pongAt = Date.now(); });
-						ping = setInterval(() => { if (Date.now() - pongAt > 75000) ws.close(); else if (ws.readyState === WebSocket.OPEN) ws.send('ping'); }, 25000);
+						ping = setInterval(() => { try { if (Date.now() - pongAt > 75000) close(); else if (ws.readyState === WebSocket.OPEN) ws.send('ping'); } catch { close(); } }, 25000);
 						onReady({ generation }); return;
 					}
 					if (!hello || m.generation !== generation || typeof m.id !== 'string' || !/^[0-9a-f-]{36}$/.test(m.id)) throw new Error();
@@ -66,8 +74,12 @@ export async function runConnector({ url, token, localUrl, signal, onReady = () 
 					try { const r = await fetch(localUrl, { method: 'POST', headers, body: m.body, redirect: 'manual', signal: abort.signal }); status = r.status; await r.body?.cancel(); }
 					catch { /* Execution may already have happened. Never retry the POST. */ }
 					finally { clearTimeout(timeout); active.delete(m.id); }
-					if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ v: 1, type: 'result', id: m.id, generation, status }));
-				} catch { permanent = true; ws.close(1008, 'invalid relay frame'); }
+					if (!finished && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ v: 1, type: 'result', id: m.id, generation, status }));
+				} catch {
+					permanent = true;
+					// Native Node/WHATWG clients allow only 1000 or 3000..4999.
+					close(4008, 'invalid relay frame');
+				}
 			});
 			if (signal?.aborted) shutdown();
 		});
