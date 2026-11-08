@@ -24,6 +24,22 @@ cannot enable a previously deployed Worker. Hosted services must integrate and
 enable their pinned compatible runtime separately; do not run self-hosted deploy
 commands against a hosted address.
 
+## Choosing a delivery mode
+
+| Need | Choose |
+| --- | --- |
+| Worker-owned durable inbox/tasks plus a local notification hook | Wake relay; the agent reads and replies through the inbox |
+| A local A2A server that owns task processing, authorization and storage | Native A2A endpoint relay |
+| Ordinary compatible fixed-path POST webhooks | HTTP webhook relay |
+| Unsupported methods/paths, gRPC/HTTP+JSON, encoded SSE or other inbound requirements | A properly authenticated public receiver, for example cloudflared + Access |
+| No foreground connector or incoming notification hook | Poll the Worker inbox; this does not expose a private native A2A server |
+
+Native relay requests and responses are not stored as Worker inbox tasks or an
+offline delivery queue. The native server owns their persistence and must be
+running; an offline connector produces a non-success response. This differs from
+the durable inbox, where tasks can remain stored while its wake connector is
+offline. Choose the mode and approve the exposure with the owner before setup.
+
 ## Authority and authentication
 
 There are three independent responsibilities:
