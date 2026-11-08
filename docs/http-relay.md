@@ -141,8 +141,10 @@ local service requires. Card discovery is:
 The public card points at the public relay JSON-RPC endpoint, not localhost,
 LAN/Tailnet hosts or a Tunnel URL. It describes the local application's security
 requirements plus the relay ingress API-key requirement. Rewriting removes
-private endpoint references and invalid signatures. An unavailable/incompatible
-card is a failure, not an invented promise of capabilities.
+private endpoint references and invalid signatures. OAuth scope identifiers are
+never renamed: cards with private/unsafe scope identifiers are refused rather
+than changing authorization semantics or leaking private addresses. An
+unavailable/incompatible card is a failure, not an invented promise of capabilities.
 
 JSON-RPC request IDs, application results, task IDs and protocol errors remain
 those of the native service. A native application's Send/Get/Cancel operations

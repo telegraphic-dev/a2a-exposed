@@ -67,6 +67,15 @@ export function httpRelayCard(up: F.Json, publicBase: string, streaming: boolean
 	// collapse two AND requirements into one. Rename unsafe names injectively
 	// before the facade's recursive scrub and use the same mapping below.
 	const entries = Object.entries(up.securitySchemes || {});
+	// OAuth scopes are application authorization identifiers, not display text.
+	// Reject unsafe identifiers instead of scrubbing them into different grants.
+	for (const [, raw] of entries) {
+		const flows = modernScheme(raw)?.oauth2SecurityScheme?.flows;
+		if (flows && typeof flows === "object") for (const flow of Object.values(flows) as F.Json[]) {
+			if (!flow?.scopes) continue;
+			if (typeof flow.scopes !== "object" || Array.isArray(flow.scopes) || Object.keys(flow.scopes).some(scope => F.scrubText(scope, o) !== scope)) throw new Error("invalid_card");
+		}
+	}
 	const reserved = new Set(entries.map(([name]) => name));
 	const names = new Map<string, string>(); let nextName = 0;
 	for (const [name] of entries) {
@@ -92,7 +101,7 @@ export function httpRelayCard(up: F.Json, publicBase: string, streaming: boolean
 		const requirement: Record<string, string[]> = Object.create(null);
 		for (const [name, value] of Object.entries(entries)) {
 			const scopes = nested ? (value as F.Json)?.list : value;
-			if (!names.has(name) || !Array.isArray(scopes) || !scopes.every(scope => typeof scope === "string") || (nested && (!value || typeof value !== "object" || Object.keys(value).join() !== "list"))) throw new Error("invalid_card");
+			if (!names.has(name) || !Array.isArray(scopes) || !scopes.every(scope => typeof scope === "string" && F.scrubText(scope, o) === scope) || (nested && (!value || typeof value !== "object" || Object.keys(value).join() !== "list"))) throw new Error("invalid_card");
 			requirement[names.get(name)!] = scopes;
 		}
 		return { ...requirement, [ingress]: [] };
