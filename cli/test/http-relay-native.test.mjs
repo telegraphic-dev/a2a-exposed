@@ -42,7 +42,7 @@ async function peer(t, onLocal = async (_req, res) => res.end('ok'), profile = '
 	server.listen(0, '127.0.0.1'); await once(server, 'listening');
 	t.after(async () => { for (const s of sockets) s.destroy(); server.closeAllConnections(); await new Promise(r => server.close(r)); });
 	const base = `127.0.0.1:${server.address().port}`;
-	return { url: `ws://${base}/relay/http/${profile}/connect`, localUrl: `http://${base}/fixed`, messages, send, server, connections: () => connections, localCalls: () => localCalls };
+	return { url: `ws://${base}/relay/http/${profile}/connect`, localUrl: `http://${base}/fixed`, messages, send, close(code, reason) { const body = Buffer.alloc(2); body.writeUInt16BE(code); wire.write(frame(8, Buffer.concat([body, Buffer.from(reason)]))); }, server, connections: () => connections, localCalls: () => localCalls };
 }
 function start(t, p, options = {}) {
 	const stop = new AbortController(); const result = runHttpConnector({ url: p.url, token: TOKEN, profile: 'webhook', localUrl: p.localUrl, signal: stop.signal, ...options });
@@ -134,6 +134,24 @@ test('actual CLI enrollment hashes distinct protected files before remote mutati
 	server.listen(0, '127.0.0.1'); await once(server, 'listening'); t.after(async () => { server.closeAllConnections(); await new Promise(r => server.close(r)); });
 	const child = spawn(process.execPath, [new URL('../bin/a2a-exposed.mjs', import.meta.url).pathname, 'relay', 'http', 'create', '--token-file', first, '--ingress-token-file', second, '--forward-headers', 'authorization,content-type,accept,x-hub-signature-256'], { cwd: dir, env: { ...process.env, A2A_CONFIG_DIR: dir, A2A_BASE_URL: `http://127.0.0.1:${server.address().port}`, A2A_OWNER_TOKEN: 'dummy-owner', DO_NOT_TRACK: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
 	let output = ''; child.stdout.on('data', c => output += c); child.stderr.on('data', c => output += c); const [code, signal] = await once(child, 'close'); assert.equal(code, 0, output); assert.equal(signal, null, output); assert.equal(calls, 2); assert.doesNotMatch(output, /a2ah_|a2ai_|dummy-owner/); assert.equal(JSON.parse(output).enrolled, true);
+});
+
+for (const scenario of [4001, 4008, 1008, 'v1', 'future', 'missing capability']) test(`actual CLI terminal recovery is fixed and secret-free: ${scenario}`, { timeout: 10000 }, async t => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'http-terminal-child-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+	const file = path.join(dir, 'token'); fs.writeFileSync(file, TOKEN, { mode: 0o600 });
+	const p = await peer(t, undefined, 'webhook', false);
+	const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(?:WAKE_|A2A_|CF_|CLOUDFLARE_)/.test(k)));
+	const child = spawn(process.execPath, [new URL('../bin/a2a-exposed.mjs', import.meta.url).pathname, 'relay', 'http', 'run', '--url', p.url, '--token-file', file, '--local-url', p.localUrl], { cwd: dir, env: { ...env, A2A_CONFIG_DIR: dir, DO_NOT_TRACK: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
+	t.after(() => { if (child.exitCode === null) child.kill('SIGKILL'); });
+	let output = ''; child.stdout.on('data', c => output += c); child.stderr.on('data', c => output += c);
+	await until(() => p.connections());
+	if (typeof scenario === 'number') p.close(scenario, 'upstream-private-secret https://private.example.com');
+	else p.send({ type: 'hello', profile: 'webhook', capabilities: scenario === 'missing capability' ? [] : CAPS, v: scenario === 'v1' ? 1 : scenario === 'future' ? 3 : 2 });
+	const [code, signal] = await once(child, 'close'); assert.equal(code, 1, output); assert.equal(signal, null);
+	assert.match(output, /relay http status/); assert.match(output, /compatib/i);
+	if (scenario === 4001) assert.match(output, /owner approval/);
+	assert.doesNotMatch(output, /upstream-private-secret|private\.example|a2ah_|a2ai_|127\.0\.0\.1|uncaught|unhandled/);
+	assert.equal(p.connections(), 1); assert.equal(p.localCalls(), 0);
 });
 
 test('actual CLI child malformed protocol exits cleanly even when native close throws', { timeout: 10000 }, async t => {

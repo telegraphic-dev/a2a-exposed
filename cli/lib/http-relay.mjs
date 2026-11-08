@@ -12,7 +12,8 @@ import http from 'node:http';
 import { createHash, randomBytes } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { CliError } from './a2a.mjs';
-import { owner, baseUrl } from './commands.mjs';
+import { owner, ownerTry, baseUrl } from './commands.mjs';
+import { get as configGet } from './config.mjs';
 import { protectedToken, reconnectDelay } from './relay.mjs';
 
 const PROTOCOL = 'a2a-http-relay-v2';
@@ -56,6 +57,7 @@ export async function runHttpConnector({ url, token, profile, localUrl, cardUrl,
 	if (card && card.origin !== local.origin) throw new CliError('card URL must share the fixed RPC loopback origin');
 	if (!/^a2ah_[A-Za-z0-9_-]{43}$/.test(token || '')) throw new CliError('invalid HTTP connector credential; use a fresh protected token file');
 	if (!localHeaders || typeof localHeaders !== 'object' || Array.isArray(localHeaders) || !headersValid(Object.entries(localHeaders))) throw new CliError('invalid fixed local headers');
+	const statusGuidance = `run relay ${profile === 'webhook' ? 'http' : 'a2a'} status and check Worker/connector v2 compatibility`;
 	let failures = 0, attempt = 0;
 	while (!signal?.aborted) {
 		let permanent, helloReceived = false;
@@ -76,10 +78,10 @@ export async function runHttpConnector({ url, token, profile, localUrl, cardUrl,
 				if (ws.bufferedAmount > 128 * 1024) { close(); return false; }
 				try { ws.send(JSON.stringify({ v: 2, generation, ...frame })); return true; } catch { close(); return false; }
 			};
-			const invalid = () => { permanent = 'HTTP relay invalid frame; check Worker/connector compatibility'; close(4008, 'invalid relay frame'); };
+			const invalid = () => { permanent = `HTTP relay invalid frame; ${statusGuidance}`; close(4008, 'invalid relay frame'); };
 			signal?.addEventListener('abort', stop, { once: true });
 			ws.addEventListener('error', () => close());
-			ws.addEventListener('close', e => { if (!finished && [4001, 4008, 1008].includes(e.code)) permanent = e.code === 4001 ? 'HTTP relay connector replaced or revoked' : 'HTTP relay policy rejection'; finish(); });
+			ws.addEventListener('close', e => { if (!finished && [4001, 4008, 1008].includes(e.code)) permanent = e.code === 4001 ? `HTTP relay connector replaced or revoked; ${statusGuidance}. Enrollment or rotation requires owner approval; do not automatically create again` : `HTTP relay policy rejection; ${statusGuidance} and approved relay settings`; finish(); });
 			ws.addEventListener('message', e => {
 				if (finished) return;
 				try {
@@ -143,7 +145,7 @@ export async function runHttpConnector({ url, token, profile, localUrl, cardUrl,
 			if (signal?.aborted) stop();
 		});
 		if (signal?.aborted) return; if (permanent) throw new CliError(permanent);
-		if (!helloReceived) { if (++failures >= 3) throw new CliError('HTTP relay handshake failed three consecutive times; check endpoint, capability and enrollment'); onDiagnostic('HTTP relay handshake failed; retrying with bounded backoff'); }
+		if (!helloReceived) { if (++failures >= 3) throw new CliError(`HTTP relay handshake failed three consecutive times; ${statusGuidance}, endpoint and enrollment`); onDiagnostic('HTTP relay handshake failed; retrying with bounded backoff'); }
 		try { await sleep(reconnectDelay(attempt++), undefined, { signal }); } catch { return; }
 	}
 }
@@ -159,18 +161,46 @@ export async function relayHttp(args, flags = {}) {
 		if (names.length > 16 || new Set(names).size !== names.length || !names.every(headerAllowed)) throw new CliError('--forward-headers must list up to 16 unique safe lowercase header names');
 		if (!flags['token-file'] || !flags['ingress-token-file']) throw new CliError('create requires two new protected files: --token-file and --ingress-token-file');
 		const fds = [], files = [flags['token-file'], flags['ingress-token-file']];
+		// Keep descriptors open until cleanup: a pathname may have been replaced
+		// while awaiting the owner response. Never unlink another file's inode.
+		const cleanup = () => {
+			for (const [i, fd] of fds.entries()) {
+				try { const held = fs.fstatSync(fd), current = fs.lstatSync(files[i]); if (held.dev === current.dev && held.ino === current.ino) fs.unlinkSync(files[i]); } catch { /* absent, replaced, or cleanup unavailable; never mask the diagnostic */ }
+			}
+		};
+		let uncertain = false, diagnostic = 'cannot reserve both new credential files; existing files are never overwritten';
 		try {
-			for (const file of files) { const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600); fds.push(fd); }
-		} catch { for (let i = 0; i < fds.length; i++) { fs.closeSync(fds[i]); fs.unlinkSync(files[i]); } throw new CliError('cannot reserve both new credential files; existing files are never overwritten'); }
-		try {
+			for (const file of files) fds.push(fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600));
+			diagnostic = 'HTTP relay owner configuration requires A2A_BASE_URL and A2A_OWNER_TOKEN; configure them before enrollment';
+			if (!baseUrl() || !configGet('A2A_OWNER_TOKEN')) throw new Error();
+			diagnostic = 'invalid HTTP relay owner configuration; check A2A_BASE_URL and A2A_OWNER_TOKEN before enrollment';
+			const endpoint = new URL(baseUrl());
+			if (!['http:', 'https:'].includes(endpoint.protocol) || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) throw new Error();
+			// Validate the exact header locally; fetch failures are otherwise ambiguous.
+			new Headers({ authorization: `Bearer ${configGet('A2A_OWNER_TOKEN')}` });
+			diagnostic = 'cannot write protected credential files; check local file permissions and storage before enrollment';
 			const token = 'a2ah_' + randomBytes(32).toString('base64url'), ingress = 'a2ai_' + randomBytes(32).toString('base64url');
 			for (const [i, value] of [token, ingress].entries()) { fs.fchmodSync(fds[i], 0o600); fs.writeFileSync(fds[i], value + '\n'); fs.fsyncSync(fds[i]); }
 			const hash = value => createHash('sha256').update(value).digest('hex');
-			const result = await owner('POST', path, { credentialHash: hash(token), ingressHash: hash(ingress), headers: names });
-			const current = await owner('GET', path); if (!current.enrolled || current.generation !== result.generation) throw new Error();
+			uncertain = true;
+			const response = await ownerTry('POST', path, { credentialHash: hash(token), ingressHash: hash(ingress), headers: names });
+			if (response.status >= 400 && response.status < 500) {
+				uncertain = false;
+				if (response.status === 404) diagnostic = 'HTTP relay enrollment rejected (404); enable HTTP relay on a compatible v2 Worker before retrying';
+				else if ([401, 403].includes(response.status)) diagnostic = 'HTTP relay enrollment rejected; check owner authentication and A2A_OWNER_TOKEN before retrying';
+				else if (response.status === 409) diagnostic = `HTTP relay enrollment rejected; run relay ${kind} status and resolve the conflict with owner approval before retrying`;
+				else diagnostic = 'HTTP relay enrollment rejected; check create options and compatible v2 Worker configuration before retrying';
+				throw new Error();
+			}
+			const result = response.data;
+			if (response.status < 200 || response.status >= 300 || !Number.isSafeInteger(result?.generation) || result.generation < 1) throw new Error();
+			const confirmation = await ownerTry('GET', path), current = confirmation.data;
+			if (confirmation.status !== 200 || current?.enrolled !== true || current.generation !== result.generation) throw new Error();
 			console.log(JSON.stringify({ enrolled: true, profile, generation: result.generation, tokenFile: files[0], ingressTokenFile: files[1] }));
-		} catch { throw new CliError('HTTP relay enrollment unconfirmed; protected files retained. Check status before rotating again'); }
-		finally { for (const fd of fds) fs.closeSync(fd); } return;
+		} catch {
+			if (uncertain) throw new CliError(`HTTP relay enrollment unconfirmed; protected files retained. Run relay ${kind} status to reconcile; do not create again or discard credentials without owner approval`);
+			cleanup(); throw new CliError(diagnostic);
+		} finally { for (const fd of fds) fs.closeSync(fd); } return;
 	}
 	if (action === 'run') {
 		if (!flags['token-file'] || !flags['local-url']) throw new CliError('run requires --token-file and --local-url');
