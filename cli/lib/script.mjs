@@ -42,7 +42,10 @@ function forwardShutdown(child) {
 	const onExit = () => stopScript(child);
 	for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
 		const handler = () => {
-			stopScript(child, signal);
+			// util-linux script may ignore SIGHUP in a detached environment.
+			// Terminate the PTY supervisor reliably in that case; the parent
+			// still exits with its original shutdown signal below.
+			stopScript(child, signal === "SIGHUP" ? "SIGTERM" : signal);
 			cleanup();
 			if (process.listenerCount(signal) === 0) process.kill(process.pid, signal);
 		};
