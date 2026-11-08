@@ -29,6 +29,7 @@ const plain: Record<string, string> = {
 	PROVIDER_ORGANIZATION: v("A2A_PROVIDER_ORGANIZATION"),
 	PROVIDER_URL: v("A2A_PROVIDER_URL"),
 	DOCUMENTATION_URL: v("A2A_DOCUMENTATION_URL"),
+	HTTP_RELAY_ENABLED: v("A2A_HTTP_RELAY") === "1" ? "1" : "",
 	WAKE_RELAY_ENABLED: v("A2A_WAKE_RELAY") === "1" ? "1" : "",
 	WAKE_TRANSPORT: v("WAKE_TRANSPORT"), // unset/webhook | relay
 	WAKE_PRESET: v("WAKE_PRESET") || "generic", // grok-bot | claude-code | openclaw-wake | openclaw-agent | hermes | openbot | mausbot | generic
@@ -75,6 +76,7 @@ const plain: Record<string, string> = {
 };
 const hosted = v("TENANCY") === "host";
 const relay = v("A2A_WAKE_RELAY") === "1";
+const httpRelay = v("A2A_HTTP_RELAY") === "1";
 // Daily R2 snapshots. Unset: no binding and no extra cron, so a self-host deploy stays the single-tenant Worker.
 const backups = v("A2A_BACKUP_BUCKET") === "1";
 const envBindings: Record<string, any> = {
@@ -86,6 +88,7 @@ if (hosted) {
 	envBindings.TENANT_DO = bindings.durableObject({ worker: name, exportName: "TenantStore" });
 	envBindings.TENANT_DIRECTORY = bindings.kv();
 }
+if (httpRelay) envBindings.HTTP_RELAY = bindings.durableObject({ worker: name, exportName: "HttpRelay" });
 if (relay) envBindings.WAKE_RELAY = bindings.durableObject({ worker: name, exportName: "WakeRelay" });
 // Optional service binding for OpenID Connect discovery, token, and JWKS when the issuer shares
 // the tenant zone. Unset: those calls use fetch. Set A2A_CONTROL_SERVICE to the issuer Worker's name
@@ -121,8 +124,9 @@ export default defineConfig((ctx) => ({
 	worker: {
 		name,
 		compatibilityDate: "2026-10-06",
-		entrypoint: hosted ? hostedEntry : relay ? relayEntry : selfHost,
-		...((hosted || relay) ? { exports: { ...(hosted ? { TenantStore: exports.durableObject({ storage: "sqlite" }) } : {}), ...(relay ? { WakeRelay: exports.durableObject({ storage: "sqlite" }) } : {}) } } : {}),
+		...(httpRelay ? { compatibilityFlags: ["enable_request_signal"] } : {}),
+		entrypoint: hosted ? hostedEntry : (relay || httpRelay) ? relayEntry : selfHost,
+		...((hosted || relay || httpRelay) ? { exports: { ...(hosted ? { TenantStore: exports.durableObject({ storage: "sqlite" }) } : {}), ...(relay ? { WakeRelay: exports.durableObject({ storage: "sqlite" }) } : {}), ...(httpRelay ? { HttpRelay: exports.durableObject({ storage: "sqlite" }) } : {}) } } : {}),
 		...(hostname ? { domains: [hostname] } : {}),
 		workersDev,
 		previewUrls: workersDev,

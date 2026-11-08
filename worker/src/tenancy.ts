@@ -69,6 +69,8 @@ export interface ControlFetcher {
 /** Bindings the Worker entry sees. Gate bindings are optional and empty by default. */
 export interface WorkerBindings extends ConfigFields {
 	DB: SqlDb;
+	HTTP_RELAY_ENABLED?: string;
+	HTTP_RELAY?: DoNamespace;
 	WAKE_RELAY_ENABLED?: string;
 	WAKE_RELAY?: DoNamespace;
 	PUBLIC_URL?: string;
@@ -137,7 +139,7 @@ export interface KvNamespace {
 /** Enough of a Durable Object namespace to address a tenant. `jurisdiction` is optional on older typings. */
 export interface DoNamespace {
 	idFromName(name: string): unknown;
-	get(id: unknown): { fetch(req: Request): Promise<Response> };
+	get(id: unknown): { fetch(req: Request, init?: RequestInit): Promise<Response> };
 	jurisdiction?(loc: string): DoNamespace;
 }
 
@@ -180,6 +182,7 @@ export interface FeatureGates {
 
 /** Pushed tenant row. Tests build a context from this; the Durable Object stores it. */
 export interface HostedOverlay {
+	httpRelayRegion?: DataRegion;
 	relayRegion?: DataRegion;
 	configVersion?: number;
 	id: string;
@@ -375,6 +378,8 @@ export class TenantContext implements ConfigFields {
 	readonly WAKE_CONNECTOR_GENERATION?: string;
 	readonly WAKE_TRANSPORT?: string;
 	readonly WAKE_WEBHOOK_URL?: string;
+	readonly httpRelayNamespace?: DoNamespace;
+	readonly httpRelayRegion?: DataRegion;
 	readonly relayNamespace?: DoNamespace;
 	readonly relayRegion?: DataRegion;
 	readonly WAKE_WEBHOOK_KEY?: string;
@@ -425,7 +430,7 @@ export class TenantContext implements ConfigFields {
 		gates: FeatureGates; limits: Record<string, unknown>; approval: Record<string, unknown>;
 		config: ConfigFields; ownerToken?: string; ownerTokenHash?: string; secretsKey?: string;
 		approvalClientSecret?: string; controlService?: ControlFetcher;
-		tenantDirectory?: KvNamespace; tenantNamespace?: DoNamespace; relayNamespace?: DoNamespace; relayRegion?: DataRegion;
+		tenantDirectory?: KvNamespace; tenantNamespace?: DoNamespace; relayNamespace?: DoNamespace; relayRegion?: DataRegion; httpRelayNamespace?: DoNamespace; httpRelayRegion?: DataRegion;
 	}) {
 		this.id = init.id;
 		this.configVersion = init.configVersion ?? 0;
@@ -443,6 +448,8 @@ export class TenantContext implements ConfigFields {
 		this.#controlService = init.controlService;
 		this.#tenantDirectory = init.tenantDirectory;
 		this.#tenantNamespace = init.tenantNamespace;
+		this.httpRelayNamespace = init.httpRelayNamespace;
+		this.httpRelayRegion = init.httpRelayRegion;
 		this.relayNamespace = init.relayNamespace;
 		this.relayRegion = init.relayRegion;
 		Object.assign(this, init.config);
@@ -532,6 +539,7 @@ export function resolveTenant(env: WorkerBindings, req?: Request): TenantContext
 		id: "", mode: "single", status: "active", db: env.DB, publicUrl, gates,
 		limits: {}, approval: {}, config: pickConfig(env, CONFIG_KEYS),
 		ownerToken: env.OWNER_TOKEN, secretsKey: undefined,
+		httpRelayNamespace: env.HTTP_RELAY_ENABLED === "1" ? env.HTTP_RELAY : undefined,
 		relayNamespace: env.WAKE_RELAY_ENABLED === "1" ? env.WAKE_RELAY : undefined,
 		approvalClientSecret: (env.APPROVAL_OIDC_CLIENT_SECRET || "").trim(),
 		controlService: env.CONTROL_SERVICE,
@@ -554,7 +562,7 @@ export function hostedTenantContext(env: WorkerBindings, overlay: HostedOverlay)
 	// Hosted approval is the pushed tenant object only. Worker APPROVAL_OIDC_* does not approve a tenant.
 	const approval = approvalFromRecord(overlay.approval);
 	return new TenantContext({
-		relayRegion: overlay.relayRegion, configVersion: overlay.configVersion, id: overlay.id, mode: "host", status: overlay.status || "active", db: overlay.db,
+		httpRelayRegion: overlay.httpRelayRegion, relayRegion: overlay.relayRegion, configVersion: overlay.configVersion, id: overlay.id, mode: "host", status: overlay.status || "active", db: overlay.db,
 		publicUrl: overlay.publicUrl, gates: { ...parsed.gates, approvalOidc: approval.gate },
 		limits: overlay.limits || {}, approval: approval.publicRecord,
 		config, ownerTokenHash: hash || undefined, secretsKey: parsed.secretsKey,
@@ -562,6 +570,7 @@ export function hostedTenantContext(env: WorkerBindings, overlay: HostedOverlay)
 		controlService: env.CONTROL_SERVICE,
 		tenantDirectory: env.TENANT_DIRECTORY,
 		tenantNamespace: env.TENANT_DO,
+		httpRelayNamespace: env.HTTP_RELAY_ENABLED === "1" ? env.HTTP_RELAY : undefined,
 		relayNamespace: env.WAKE_RELAY_ENABLED === "1" ? env.WAKE_RELAY : undefined,
 	});
 }

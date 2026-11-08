@@ -7,6 +7,7 @@
 import { VERSION } from "./version.ts";
 import * as A from "./a2a.ts";
 import * as F from "./facade.ts";
+import { routeHttpRelay, httpRelayFetch, httpRelayEnrollment, isHttpRelayProfile } from "./http-relay-routing.ts";
 import { relayFetch, relayTestOutcome, type RelayTestError } from "./relay-routing.ts";
 import { renderWake, relayWakeTestInput, mausbotConfigProblem, redact, cloudflareErrorHint, wakeUrlIsTunnelHost, defaultBusySeconds, defaultDebounceSeconds, defaultMaxPerHour, type WakeConfig, type WakeEvent } from "./wake.ts";
 import { fetchCheckedPeer, fetchCheckedWake } from "./wake-target.ts";
@@ -2041,6 +2042,20 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 	const seg = path.split("/").filter(Boolean).slice(1); // after "owner"
 	const body = async () => { const raw = await readBody(req, ctx); return raw ? JSON.parse(raw) : {}; };
 
+	if (seg[0] === "relay" && seg[1] === "http" && seg.length === 3 && isHttpRelayProfile(seg[2]) && path === `/owner/relay/http/${seg[2]}` && !url.search) {
+		const profile = seg[2];
+		if (m === "GET") return httpRelayFetch(ctx, profile, "/status");
+		if (m === "POST") {
+			const input = await body();
+			if (!httpRelayEnrollment(input)) return json({ error: "invalid_http_relay_enrollment" }, 400);
+			return httpRelayFetch(ctx, profile, "/enroll", { method: "POST", body: JSON.stringify({ ...input, profile }) });
+		}
+		if (m === "DELETE") {
+			const input = await body();
+			if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).join(",") !== "generation" || !Number.isSafeInteger(input.generation) || input.generation < 0) return json({ error: "generation is invalid" }, 400);
+			return httpRelayFetch(ctx, profile, "/disable", { method: "POST", body: JSON.stringify({ generation: input.generation }) });
+		}
+	}
 	if (seg[0] === "wake" && seg[1] === "relay" && seg.length === 2 && !url.search) {
 		if (m === "GET") {
 			const response = await relayFetch(ctx, "/status");
@@ -4136,6 +4151,8 @@ async function handle(req: Request, ctx: TenantContext, ectx: ExecutionContext, 
 	const url = new URL(req.url);
 	const path = url.pathname;
 	try {
+		const httpRelayResponse = await routeHttpRelay(req, ctx);
+		if (httpRelayResponse) return httpRelayResponse;
 		if (path === "/relay/connect") {
 			if (req.method !== "GET" || url.search || req.headers.has("origin")) return json({ error: "invalid relay upgrade" }, 400);
 			const response = await relayFetch(ctx, "/connect", { method: "GET", headers: req.headers });

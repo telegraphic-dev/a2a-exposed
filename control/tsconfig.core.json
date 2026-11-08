@@ -16,5 +16,5 @@
 		"outDir": "../dist/types",
 		"rootDir": ".."
 	},
-	"files": ["src/core/index.ts", "src/sql-raw.d.ts"]
+	"files": ["src/core/index.ts", "src/core/http-relay.ts", "src/sql-raw.d.ts"]
 }

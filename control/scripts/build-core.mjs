@@ -56,12 +56,13 @@ const sqlRaw = {
 
 const built = await esbuild.build({
 	absWorkingDir: controlRoot,
-	entryPoints: ["src/core/index.ts"],
+	entryPoints: { index: "src/core/index.ts", "http-relay": "src/core/http-relay.ts" },
+	external: ["cloudflare:workers"],
 	bundle: true,
 	format: "esm",
 	platform: "neutral",
 	target: "es2024",
-	outfile: path.join(dist, "index.js"),
+	outdir: dist,
 	plugins: [sqlRaw],
 	legalComments: "none",
 	logLevel: "warning",
@@ -114,13 +115,14 @@ function rewriteTsSpecifiers(text) {
 if (!fs.existsSync(entryDts)) fail("declaration entry was not emitted");
 
 const kept = new Set();
-const pending = [entryDts];
+const pending = [entryDts, path.join(typesRoot, "control/src/core/http-relay.d.ts")];
 while (pending.length > 0) {
 	const file = pending.pop();
 	if (!file || kept.has(file)) continue;
 	kept.add(file);
 	const text = fs.readFileSync(file, "utf8");
 	for (const spec of specifiers(text)) {
+		if (spec === "cloudflare:workers" && file === path.join(typesRoot, "worker/src/http-relay.d.ts")) continue;
 		if (!spec.startsWith(".")) fail(`${path.relative(repoRoot, file)} imports ${spec}`);
 		const resolved = resolveDts(file, spec);
 		if (!resolved) fail(`${path.relative(repoRoot, file)} imports missing ${spec}`);

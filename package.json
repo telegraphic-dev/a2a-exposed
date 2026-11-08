@@ -17,6 +17,11 @@
 			"types": "./dist/types/control/src/core/index.d.ts",
 			"import": "./dist/index.js",
 			"default": "./dist/index.js"
+		},
+		"./http-relay": {
+			"types": "./dist/types/control/src/core/http-relay.d.ts",
+			"import": "./dist/http-relay.js",
+			"default": "./dist/http-relay.js"
 		}
 	},
 	"files": [
