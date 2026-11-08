@@ -250,7 +250,12 @@ or their hashes.
 
 Hosted adoption requires the new SQLite export/binding, explicit capability
 flag, correct tenant/jurisdiction routing, lifecycle fencing and an integration
-using a released compatible core and CLI. Import the class from the Worker-only
+using a released compatible core and CLI. Enable incoming `Request.signal`
+(`enable_request_signal` for the supplied 2026-10-06 compatibility date) so caller
+disconnects propagate. The supplied self-host config opts in with HTTP relay;
+a hosted embedding must configure its own Worker likewise. See [Cloudflare's
+compatibility contract](https://developers.cloudflare.com/workers/configuration/compatibility-flags/#enable-requestsignal-for-incoming-requests).
+Import the class from the Worker-only
 `@a2a-exposed/control-core/http-relay` subpath; the main core entry keeps its
 plain-Node compatibility and exposes protocol/capability metadata without
 loading `cloudflare:workers`. This OSS implementation does not change hosted
