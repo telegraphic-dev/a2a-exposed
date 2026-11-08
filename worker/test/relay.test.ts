@@ -158,8 +158,8 @@ test("real local HTTP non-2xx, disconnect after execution and deadline stay unco
 });
 
 
-for (const header of ["host", "connection", "sec-example", "invalid_header"]) test(`workerd rejects malformed internal relay JSON and unsafe saved forwarding header ${header} before dispatch`, { timeout: 30000 }, async () => {
-	const r = await runtime(false, "", { WAKE_KEY_HEADER: header });
+for (const [header, key] of [["host", "dummy-app-key"], ["connection", "dummy-app-key"], ["sec-example", "dummy-app-key"], ["invalid_header", "dummy-app-key"], ["Authorization", "\u0100"]]) test(`workerd rejects malformed internal relay JSON and unsafe saved forwarding header ${header} before dispatch`, { timeout: 30000 }, async () => {
+	const r = await runtime(false, "", { WAKE_KEY_HEADER: header, WAKE_WEBHOOK_KEY: key });
 	try {
 		const ns = await r.mf.getDurableObjectNamespace("WAKE_RELAY"), stub = ns.get(ns.idFromName("wake-relay-v1:single:self"));
 		for (const path of ["/issue", "/revoke", "/deliver"]) {

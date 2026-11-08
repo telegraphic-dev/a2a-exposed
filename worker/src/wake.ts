@@ -72,7 +72,7 @@ export function relayHeadersValid(headers: unknown): headers is Record<string, s
 	if (!headers || typeof headers !== "object" || Array.isArray(headers)) return false;
 	let size = 0;
 	for (const [k, v] of Object.entries(headers)) {
-		if (typeof v !== "string" || !/^[A-Za-z0-9-]{1,64}$/.test(k) || /^(host|connection|upgrade|content-length|transfer-encoding|proxy-.*|sec-.*)$/i.test(k) || /[\u0000-\u001f\u007f]/.test(v)) return false;
+		if (typeof v !== "string" || !/^[A-Za-z0-9-]{1,64}$/.test(k) || /^(host|connection|upgrade|content-length|transfer-encoding|proxy-.*|sec-.*)$/i.test(k) || /[\u0000-\u001f\u007f\u0100-\uffff]/.test(v)) return false;
 		size += k.length + v.length;
 	}
 	return size <= 16384;
