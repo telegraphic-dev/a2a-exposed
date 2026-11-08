@@ -41,27 +41,46 @@ test("native RPC allows fixed operations and blocks push callbacks without modif
 });
 
 test("native cards retain local application security plus mandatory ingress, genuine stream bit, and actual 0.3 shape", () => {
-	const local = { name: "Native http://127.0.0.1:8123/rpc", description: "Agent at 127.0.0.1:8123", version: "1", supportedInterfaces: [{ url: "http://127.0.0.1:8123/rpc", protocolBinding: "JSONRPC", protocolVersion: "1.0" }, { url: "http://127.0.0.1:8123/grpc", protocolBinding: "GRPC", protocolVersion: "1.0" }], securitySchemes: { app: { httpAuthSecurityScheme: { scheme: "bearer" } } }, securityRequirements: [{ app: ["tasks:own"] }], capabilities: { streaming: true, pushNotifications: true }, skills: [{ id: "native", name: "native", description: "native", tags: [] }], signatures: [{ signature: "invalid-after-rewrite" }] };
+	const local = { name: "Native http://127.0.0.1:8123/rpc", description: "Agent at 127.0.0.1:8123", version: "1", supportedInterfaces: [{ url: "http://127.0.0.1:8123/rpc", protocolBinding: "JSONRPC", protocolVersion: "1.0" }, { url: "http://127.0.0.1:8123/grpc", protocolBinding: "GRPC", protocolVersion: "1.0" }], securitySchemes: { app: { httpAuthSecurityScheme: { scheme: "bearer" } } }, securityRequirements: [{ schemes: { app: { list: ["tasks:own"] } } }], capabilities: { streaming: true, pushNotifications: true }, skills: [{ id: "native", name: "native", description: "native", tags: [] }], signatures: [{ signature: "invalid-after-rewrite" }] };
 	const base = "https://agent.example.com/relay/a2a";
 	const card = httpRelayCard(local, base, true);
 	assert.equal(card.capabilities.streaming, true);
 	assert.equal(card.capabilities.pushNotifications, false);
 	assert.equal(card.signatures, undefined);
 	assert.deepEqual(card.supportedInterfaces, [{ url: base + "/", protocolBinding: "JSONRPC", protocolVersion: "1.0" }]);
-	assert.deepEqual(card.securityRequirements, [{ app: ["tasks:own"], relayIngress: [] }]);
+	assert.deepEqual(card.securityRequirements, [{ schemes: { app: { list: ["tasks:own"] }, relayIngress: { list: [] } } }]);
+	assert.equal(card.securitySchemes.relayIngress.apiKeySecurityScheme.location, "header");
+	assert.equal(card.securitySchemes.relayIngress.apiKeySecurityScheme.in, undefined);
 	assert.deepEqual(card.securitySchemes.app, local.securitySchemes.app);
 	assert.equal(card.securitySchemes.relayIngress.apiKeySecurityScheme.name, "X-A2A-Relay-Authorization");
 	assert.deepEqual(cardLeaks(card, base, ["http://127.0.0.1:8123"]), []);
 	assert.ok(!JSON.stringify(card).includes("127.0.0.1"));
 	assert.equal(httpRelayCard(local, base, false).capabilities.streaming, false);
 	assert.equal(httpRelayCard({ ...local, capabilities: { streaming: false } }, base, true).capabilities.streaming, false);
-	const legacy = httpRelayCard(local, base, true, true);
+	const legacy = httpRelayCard({ ...local, supportedInterfaces: [...local.supportedInterfaces, { url: "http://127.0.0.1:8123/rpc", protocolBinding: "JSONRPC", protocolVersion: "0.3" }] }, base, true, true);
 	assert.equal(legacy.protocolVersion, "0.3.0"); assert.equal(legacy.url, base + "/");
 	assert.equal(legacy.supportedInterfaces, undefined); assert.equal(legacy.securityRequirements, undefined);
-	assert.deepEqual(legacy.security, card.securityRequirements);
+	assert.deepEqual(legacy.security, [{ app: ["tasks:own"], relayIngress: [] }]);
+	assert.equal(legacy.securitySchemes.relayIngress.in, "header");
+	assert.equal(legacy.securitySchemes.relayIngress.location, undefined);
 	assert.deepEqual(legacy.securitySchemes.app, { type: "http", scheme: "bearer" });
 	assert.equal(legacy.securitySchemes.relayIngress.type, "apiKey");
 	assert.throws(() => httpRelayCard({ name: "gRPC only", supportedInterfaces: [{ protocolBinding: "GRPC", protocolVersion: "1.0" }] }, base, true), /invalid_card/);
+});
+
+test("card schema conversion preserves all authorization alternatives and scope lists", () => {
+	const base = "https://agent.example.com/relay/a2a";
+	const schemes = { bearer: { type: "http", scheme: "bearer" }, key: { type: "apiKey", in: "header", name: "X-App-Key" }, relayIngress: { type: "apiKey", in: "header", name: "X-Original-Key" } };
+	const security = [{ bearer: ["task:own"], key: [] }, { relayIngress: ["alternate"] }];
+	const legacy = { name: "native", protocolVersion: "0.3.0", url: "http://localhost/rpc", securitySchemes: schemes, security, capabilities: {}, skills: [] };
+	const modern = httpRelayCard(legacy, base, true);
+	assert.deepEqual(modern.securityRequirements, [{ schemes: { bearer: { list: ["task:own"] }, key: { list: [] }, relayIngress_: { list: [] } } }, { schemes: { relayIngress: { list: ["alternate"] }, relayIngress_: { list: [] } } }]);
+	assert.deepEqual(modern.securitySchemes.key, { apiKeySecurityScheme: { location: "header", name: "X-App-Key" } });
+	const roundtrip = httpRelayCard(modern, base, true, true);
+	// A new relay ingress scheme is required independently of the original ones.
+	assert.deepEqual(roundtrip.security, [{ bearer: ["task:own"], key: [], relayIngress_: [], relayIngress__: [] }, { relayIngress: ["alternate"], relayIngress_: [], relayIngress__: [] }]);
+	assert.deepEqual(roundtrip.securitySchemes.key, schemes.key);
+	for (const bad of [[{ absent: [] }], [{ bearer: "task:own" }], [{ schemes: { bearer: [] } }], [{ schemes: { bearer: { list: [42] } } }], [{ schemes: { bearer: { list: [], extra: true } } }]]) assert.throws(() => httpRelayCard({ ...legacy, security: bad }, base, true), /invalid_card/);
 });
 
 test("public HTTP routing fails closed without body reads and strips caller target metadata", async () => {

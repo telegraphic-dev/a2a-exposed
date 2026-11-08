@@ -48,31 +48,62 @@ export function httpRelayRpcAllowed(bytes: Uint8Array): boolean {
 function modernScheme(s: F.Json): F.Json {
 	if (!s || typeof s !== "object") return s;
 	if (s.type === "http") { const { type: _type, ...rest } = s; return { httpAuthSecurityScheme: rest }; }
-	if (s.type === "apiKey") { const { type: _type, ...rest } = s; return { apiKeySecurityScheme: rest }; }
+	if (s.type === "apiKey") { const { type: _type, in: location, ...rest } = s; return { apiKeySecurityScheme: { ...rest, location } }; }
 	if (s.type === "oauth2") { const { type: _type, ...rest } = s; return { oauth2SecurityScheme: rest }; }
 	if (s.type === "openIdConnect") { const { type: _type, ...rest } = s; return { openIdConnectSecurityScheme: rest }; }
 	return s;
 }
 function legacyScheme(s: F.Json): F.Json {
-	for (const [key, type] of [["httpAuthSecurityScheme", "http"], ["apiKeySecurityScheme", "apiKey"], ["oauth2SecurityScheme", "oauth2"], ["openIdConnectSecurityScheme", "openIdConnect"], ["mtlsSecurityScheme", "mutualTLS"]]) if (s?.[key]) return { type, ...s[key] };
+	if (s?.apiKeySecurityScheme) { const { location, ...rest } = s.apiKeySecurityScheme; return { type: "apiKey", ...rest, in: location }; }
+	for (const [key, type] of [["httpAuthSecurityScheme", "http"], ["oauth2SecurityScheme", "oauth2"], ["openIdConnectSecurityScheme", "openIdConnect"], ["mtlsSecurityScheme", "mutualTLS"]]) if (s?.[key]) return { type, ...s[key] };
 	return s;
 }
 export function httpRelayCard(up: F.Json, publicBase: string, streaming: boolean, legacy = false): F.Json {
 	if (!up || typeof up !== "object" || Array.isArray(up) || !F.upstreamJsonRpcVersions(up).length) throw new Error("invalid_card");
+	if (legacy && !F.upstreamJsonRpcVersions(up).includes("0.3")) throw new Error("unsupported_card_version");
 	const origins = [...new Set([...F.upstreamCardOrigins(up), "http://localhost", "http://127.0.0.1", "http://[::1]"])];
 	const o = { publicBase, upstreamOrigins: origins };
-	const schemes = Object.fromEntries(Object.entries(up.securitySchemes || {}).map(([name, scheme]) => [name, modernScheme(F.scrubDeep(scheme, o))]));
+	// Scheme identifiers are references, not prose. Lossy text scrubbing can
+	// collapse two AND requirements into one. Rename unsafe names injectively
+	// before the facade's recursive scrub and use the same mapping below.
+	const entries = Object.entries(up.securitySchemes || {});
+	const reserved = new Set(entries.map(([name]) => name));
+	const names = new Map<string, string>(); let nextName = 0;
+	for (const [name] of entries) {
+		let safe = name;
+		if (F.scrubText(name, o) !== name) {
+			do { safe = `relayApplication${nextName++}`; } while (reserved.has(safe) || F.scrubText(safe, o) !== safe);
+			reserved.add(safe);
+		}
+		names.set(name, safe);
+	}
+	const schemes = Object.fromEntries(entries.map(([name, scheme]) => [names.get(name)!, modernScheme(F.scrubDeep(scheme, o))]));
 	let ingress = "relayIngress"; while (Object.hasOwn(schemes, ingress)) ingress += "_";
-	schemes[ingress] = { apiKeySecurityScheme: { in: "header", name: "X-A2A-Relay-Authorization", description: "Bearer relay ingress token. Independent local application credentials and per-peer/task authorization are also required." } };
+	schemes[ingress] = { apiKeySecurityScheme: { location: "header", name: "X-A2A-Relay-Authorization", description: "Bearer relay ingress token. Independent local application credentials and per-peer/task authorization are also required." } };
 	const source = up.securityRequirements ?? up.security ?? [];
-	if (!Array.isArray(source) || source.some((v: unknown) => !v || typeof v !== "object" || Array.isArray(v))) throw new Error("invalid_card");
-	const requirements = (source.length ? source : [{}]).map((v: F.Json) => ({ ...F.scrubDeep(v, o), [ingress]: [] }));
+	if (!Array.isArray(source)) throw new Error("invalid_card");
+	// A requirement is an OR alternative; every scheme within it is required.
+	// v1 wraps each scope list, whereas 0.3 uses the scope array directly.
+	const flatRequirements = (source.length ? source : [{}]).map((v: F.Json) => {
+		if (!v || typeof v !== "object" || Array.isArray(v)) throw new Error("invalid_card");
+		const nested = Object.hasOwn(v, "schemes") && !Array.isArray(v.schemes);
+		const entries = nested ? v.schemes : v;
+		if (!entries || typeof entries !== "object" || Array.isArray(entries) || (nested && Object.keys(v).length !== 1)) throw new Error("invalid_card");
+		const requirement: Record<string, string[]> = Object.create(null);
+		for (const [name, value] of Object.entries(entries)) {
+			const scopes = nested ? (value as F.Json)?.list : value;
+			if (!names.has(name) || !Array.isArray(scopes) || !scopes.every(scope => typeof scope === "string") || (nested && (!value || typeof value !== "object" || Object.keys(value).join() !== "list"))) throw new Error("invalid_card");
+			requirement[names.get(name)!] = scopes;
+		}
+		return { ...requirement, [ingress]: [] };
+	});
+	const requirements = flatRequirements.map(v => ({ schemes: Object.fromEntries(Object.entries(v).map(([name, list]) => [name, { list }])) }));
 	const card = F.facadeCard({ upstream: up, config: {}, publicBase, upstreamOrigins: origins, securitySchemes: schemes, securityRequirements: requirements, defaults: { description: "Native A2A application", skills: [] } });
 	card.supportedInterfaces = F.upstreamJsonRpcVersions(up).map(version => ({ url: publicBase.replace(/\/$/, "") + "/", protocolBinding: "JSONRPC", protocolVersion: version }));
 	card.capabilities.streaming = up.capabilities?.streaming === true && streaming;
 	if (!legacy) return card;
 	const { supportedInterfaces: _interfaces, securityRequirements: _requirements, ...rest } = card;
-	return { ...rest, protocolVersion: "0.3.0", url: publicBase.replace(/\/$/, "") + "/", preferredTransport: "JSONRPC", additionalInterfaces: [{ url: publicBase.replace(/\/$/, "") + "/", transport: "JSONRPC" }], securitySchemes: Object.fromEntries(Object.entries(schemes).map(([name, scheme]) => [name, legacyScheme(scheme)])), security: requirements, supportsAuthenticatedExtendedCard: false, skills: card.skills.map((skill: F.Json) => ({ ...skill, tags: Array.isArray(skill.tags) ? skill.tags : [] })) };
+	return { ...rest, protocolVersion: "0.3.0", url: publicBase.replace(/\/$/, "") + "/", preferredTransport: "JSONRPC", additionalInterfaces: [{ url: publicBase.replace(/\/$/, "") + "/", transport: "JSONRPC" }], securitySchemes: Object.fromEntries(Object.entries(schemes).map(([name, scheme]) => [name, legacyScheme(scheme)])), security: flatRequirements, supportsAuthenticatedExtendedCard: false, skills: card.skills.map((skill: F.Json) => ({ ...skill, tags: Array.isArray(skill.tags) ? skill.tags : [] })) };
 }
 
 export async function routeHttpRelay(req: Request, ctx: TenantContext): Promise<Response | null> {

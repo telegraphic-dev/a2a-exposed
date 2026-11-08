@@ -113,6 +113,25 @@ test('workerd header deadline returns 504, aborts local receiver and never repla
 	} finally { stop.abort(); await connector; server.closeAllConnections(); await new Promise<void>(a => server.close(() => a())); await r.mf.dispose(); }
 });
 
+test('disable generation CAS preserves current authority; bodyless lifecycle disable always fences', { timeout: 15000 }, async () => {
+	const r = await runtime();
+	try {
+		const first = await r.enroll();
+		const current = await r.enroll();
+		const before = await (await r.call('/status')).json();
+		assert.equal((await r.call('/disable', { generation: first.generation })).status, 409);
+		assert.deepEqual(await (await r.call('/status')).json(), before);
+		assert.equal((await r.forward(current.ingress)).status, 503, 'current ingress remains authorized, but connector is offline');
+		assert.equal((await fetch(new URL('/disable', r.url), { method: 'POST' })).status, 200);
+		const disabled = await (await r.call('/status')).json() as any;
+		assert.equal(disabled.enabled, false); assert.equal(disabled.enrolled, false); assert.equal(disabled.generation, current.generation + 1);
+		assert.equal((await r.forward(current.ingress)).status, 401);
+		const reenrolled = await r.enroll();
+		assert.equal((await r.call('/disable', { generation: reenrolled.generation })).status, 200);
+		assert.equal((await r.forward(reenrolled.ingress)).status, 401);
+	} finally { await r.mf.dispose(); }
+});
+
 test('HTTP bridge qualification: post-header transport error must reject the native consumer, not cleanly truncate', { timeout: 15000 }, async () => {
 	const r = await runtime(), stop = new AbortController(); let connector: Promise<void> | undefined;
 	const server = createServer(async (req, res) => { for await (const c of req) void c; res.writeHead(200, { 'content-type': 'text/event-stream' }); res.write('data: incomplete\n\n'); const timer = setTimeout(() => res.destroy(), 100); res.on('close', () => clearTimeout(timer)); });

@@ -79,7 +79,7 @@ test("production Worker routes with native CLI create/run/revoke preserve binary
 		assert.equal((await publicCall("/relay/webhook?target=card", Buffer.from("{}"))).status, 400);
 		const card = await (await publicCall("/relay/a2a/.well-known/agent-card.json", undefined, nativeToken)).json() as any;
 		assert.equal(card.capabilities.streaming, true); assert.equal(card.capabilities.pushNotifications, false); assert.ok(!JSON.stringify(card).includes("127.0.0.1"));
-		assert.deepEqual(card.securityRequirements, [{ app: [], relayIngress: [] }]); assert.equal(card.supportedInterfaces[0].url, "https://agent.example.com/relay/a2a/");
+		assert.deepEqual(card.securityRequirements, [{ schemes: { app: { list: [] }, relayIngress: { list: [] } } }]); assert.equal(card.supportedInterfaces[0].url, "https://agent.example.com/relay/a2a/");
 		assert.equal((await fetch(new URL("/relay/a2a/.well-known/agent-card.json", r.url))).status, 401);
 		const alias = await (await publicCall("/relay/a2a/.well-known/agent.json", undefined, nativeToken)).json() as any; assert.equal(alias.protocolVersion, "0.3.0"); assert.equal(alias.supportedInterfaces, undefined);
 		const raw = Buffer.from('{ "jsonrpc":"2.0", "id":"original-id", "method":"tasks/get", "params":{"id":"foreign-task"} }');
