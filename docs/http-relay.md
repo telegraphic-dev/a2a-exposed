@@ -211,5 +211,8 @@ or their hashes.
 
 Hosted adoption requires the new SQLite export/binding, explicit capability
 flag, correct tenant/jurisdiction routing, lifecycle fencing and an integration
-using a released compatible core and CLI. This OSS implementation does not
-change hosted dashboard UI or activate these profiles on any hosted service.
+using a released compatible core and CLI. Import the class from the Worker-only
+`@a2a-exposed/control-core/http-relay` subpath; the main core entry keeps its
+plain-Node compatibility and exposes protocol/capability metadata without
+loading `cloudflare:workers`. This OSS implementation does not change hosted
+dashboard UI or activate these profiles on any hosted service.
