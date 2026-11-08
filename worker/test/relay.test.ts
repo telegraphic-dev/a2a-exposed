@@ -304,7 +304,7 @@ test("hosted owner RPC accepts only explicit resolved relay drafts without apply
 			const failed = await owner(draft); assert.equal(failed.status, 200); assert.equal(failed.body.status, status); assert.equal(failed.body.error, "local_http");
 		}
 		receiverStatus = 0;
-		assert.equal((await owner(draft)).body.error, "unavailable");
+		assert.equal((await owner(draft)).body.error, "uncertain");
 		ws.close(); await until(async () => !(await stub.owner({ accountId: "acct_draft", method: "GET", path: "/owner/wake/relay" })).body.connected);
 		const offline = await owner(draft); assert.equal(offline.body.error, "offline"); assert.equal(offline.body.status, null); assert.equal(offline.body.configured, true); assert.ok(offline.body.connector);
 		const reconnect = await r.mf.dispatchFetch("https://draft.agents.example.com/relay/connect", { headers: { upgrade: "websocket", "sec-websocket-protocol": `a2a-wake-v1, ${token}` } });
