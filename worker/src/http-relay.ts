@@ -18,6 +18,7 @@
  */
 import { DurableObject } from "cloudflare:workers";
 import { timingSafeEqualStr } from "./a2a.ts";
+import { httpRelayRpcAllowed } from "./http-relay-routing.ts";
 
 export type HttpRelayProfile = "webhook" | "a2a";
 export type HttpRelayTarget = "webhook" | "rpc" | "card";
@@ -114,7 +115,17 @@ export class HttpRelay extends DurableObject {
 			this.save({ ...input, generation: old.generation + 1, enabled: true }); this.fence(); return Response.json({ ok: true, ...this.status() });
 		}
 		if (path === "/disable" && req.method === "POST") {
-			const s = this.state(); this.save({ ...s, enabled: false, credentialHash: null, ingressHash: null, generation: s.generation + 1 }); this.fence(); return Response.json({ ok: true, ...this.status() });
+			let input: { generation?: number } | undefined;
+			try {
+				const bytes = await readBody(req);
+				if (bytes.length) {
+					input = JSON.parse(new TextDecoder().decode(bytes));
+					if (!input || !keys(input, "generation") || !Number.isSafeInteger(input.generation) || input.generation! < 0) return fail("invalid_revocation", 400);
+				}
+			} catch { return fail("invalid_revocation", 400); }
+			const s = this.state();
+			if (input && input.generation !== s.generation) return fail("generation_conflict", 409);
+			this.save({ ...s, enabled: false, credentialHash: null, ingressHash: null, generation: s.generation + 1 }); this.fence(); return Response.json({ ok: true, ...this.status() });
 		}
 		if (path === "/status" && req.method === "GET") return Response.json(this.status());
 		if (path === "/connect" && req.method === "GET") {
@@ -144,6 +155,7 @@ export class HttpRelay extends DurableObject {
 			try { body = await readBody(req); } catch (e) { return fail((e as Error).message === "size" ? "body_too_large" : "request_timeout", (e as Error).message === "size" ? 413 : 504); } finally { this.reading--; }
 			if (req.signal.aborted || this.state().generation !== s.generation || this.socket() !== ws) return fail("delivery_uncertain", 502);
 			if (target === "card" && body.length) return fail("invalid_body", 400);
+			if (target === "rpc" && !httpRelayRpcAllowed(body)) return fail("invalid_rpc", 400);
 			const id = crypto.randomUUID();
 			return new Promise<Response>(resolve => {
 				const abort = () => this.settle(id, "request_cancelled", 502, true);
