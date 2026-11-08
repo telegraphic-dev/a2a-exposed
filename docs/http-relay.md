@@ -29,9 +29,9 @@ commands against a hosted address.
 | Need | Choose |
 | --- | --- |
 | Worker-owned durable inbox/tasks plus a local notification hook | Wake relay; the agent reads and replies through the inbox |
-| A local A2A server that owns task processing, authorization and storage | Native A2A endpoint relay |
-| Ordinary compatible fixed-path POST webhooks | HTTP webhook relay |
-| Unsupported methods/paths, gRPC/HTTP+JSON, encoded SSE or other inbound requirements | A properly authenticated public receiver, for example cloudflared + Access |
+| A local A2A server that owns task processing, authorization and storage | Native A2A endpoint relay **for invited callers holding the shared ingress secret**, including discovery; not URL-only public discovery |
+| Ordinary compatible fixed-path POST webhooks | HTTP webhook relay **only if the sender can add `X-A2A-Relay-Authorization`**, in addition to its normal bearer/HMAC authentication |
+| Unsupported methods/paths, gRPC/HTTP+JSON, encoded SSE or senders unable to add the ingress header | A public HTTPS receiver with provider-compatible authentication, for example a Tunnel retaining the receiver's bearer/HMAC checks; use Access only if the sender can authenticate to it |
 | No foreground connector or incoming notification hook | Poll the Worker inbox; this does not expose a private native A2A server |
 
 Native relay requests and responses are not stored as Worker inbox tasks or an
@@ -80,6 +80,13 @@ and service installation require the owner's approval.
 
 ## Self-hosted setup
 
+Before enrollment, agree with the owner on the exact local service, profile,
+forwarded application headers and invited callers. Giving a caller the ingress
+secret grants transport access to that approved service, including native card
+discovery; the service must still enforce its own caller/task authorization.
+This is not anonymous or URL-only public exposure. Verify that every intended
+webhook sender or A2A client can set the dedicated ingress header.
+
 After confirming the target Cloudflare account and deployment changes:
 
 ```sh
@@ -107,9 +114,16 @@ a2a-exposed relay http run \
 
 `create` reserves **two new mode-600 regular files** before requesting remote
 authority. It refuses to overwrite an existing file. Only credential hashes are
-submitted and stored remotely; no secret is printed. Check status after an
-unconfirmed enrollment rather than automatically rotating again. Use new file
-names for an explicitly approved rotation.
+submitted and stored remotely; no secret is printed. Definite configuration or
+request rejection removes only files newly reserved by that attempt, so the same
+unused paths can be retried after fixing the stated problem. Uncertain delivery
+or a failed confirmation retains the files: check status and reconcile the
+receiver before an explicitly approved rotation, rather than automatically
+enrolling again. Use new file names for an approved rotation. Once its current
+generation and replacement connector are verified and the new ingress secret
+has been shared through the approved channel, retire the old credential files
+with owner approval. Rotation invalidates the old credentials immediately;
+local file deletion alone does not revoke remote authority.
 
 Configure the external sender to call `https://agent.example.com/relay/webhook`,
 supply the ingress header from protected storage, and supply the receiver's
@@ -119,8 +133,9 @@ by the relay, not delivered as application authentication.
 `--local-url` is trusted connector configuration: fixed HTTP loopback origin and
 path, without credentials, query or fragment. `localhost` is normalized to
 loopback. Peers cannot choose another URL, path, method or redirect destination.
-The connector does not follow redirects. This qualification does not include
-LAN/Tailnet addresses, HTTPS loopback, arbitrary paths or background services.
+The connector does not follow redirects. LAN/Tailnet addresses, HTTPS loopback
+and arbitrary paths are not supported. The CLI does not install a background
+service: keep this process and the receiver running for the endpoint to work.
 
 Only explicitly allowed application headers pass. The default allowlist is
 `content-type,accept`; include bearer/signature/content-encoding headers when
@@ -164,8 +179,18 @@ unavailable/incompatible card is a failure, not an invented promise of capabilit
 
 JSON-RPC request IDs, application results, task IDs and protocol errors remain
 those of the native service. A native application's Send/Get/Cancel operations
-are not Worker inbox operations. Push registration/configuration is refused:
-otherwise a caller could make the private service call an unsafe callback URL.
+are not Worker inbox operations. Supported RPC methods are `SendMessage`, `SendStreamingMessage`, `GetTask`,
+`CancelTask`, `ListTasks` and `SubscribeToTask`; legacy equivalents are
+`message/send`, `message/stream`, `tasks/get`, `tasks/cancel` and
+`tasks/resubscribe`. This allowlist admits requests, not capabilities: the local
+service must actually implement and advertise the selected operation. Push
+registration/configuration is refused because otherwise a caller could make the
+private service call an unsafe callback URL. Admission errors are sanitized
+JSON-RPC responses, preserving a structurally valid original ID where available:
+`parse_error` (-32700), `invalid_request` (-32600), `method_not_found` (-32601),
+`invalid_params` (-32602), or `push_not_supported` (-32003). These are relay
+rejections, not errors reported by the local service; no rejected request reaches
+the connector.
 HTTP+JSON and gRPC are not advertised. Streaming is advertised only when the
 local card supports it and an online connector negotiates response streaming.
 The original Tunnel façade remains JSON-only.
@@ -174,7 +199,10 @@ SSE is incremental for **unencoded native A2A `text/event-stream`**: the client
 can receive a complete event before the service finishes. Compressed/encoded
 native SSE is refused with HTTP 502 `unsupported_stream_encoding`; ordinary
 compressed finite webhook responses remain supported without decompression.
-Complete application records retain their bytes. The relay adds standard
+Complete application records retain their bytes except an optional initial
+upstream UTF-8 BOM, which is stripped before relay comments so it cannot become
+a mid-stream prefix that hides the first event. Interior BOMs are not removed.
+The relay adds standard
 `: relay keepalive` comments at 100ms intervals while capacity exists (at most
 one queued comment), allowing idle client disconnects to be observed without
 inventing application events. A partial record stays bounded until complete;
@@ -216,9 +244,28 @@ a truncated successful response. Only native A2A SSE is incremental.
   file-transfer or indefinitely running SSE tunnel. Exact constants live in
   `httpRelayLimits`.
 
-Run the connector in the foreground. Ctrl-C/SIGTERM stops it and aborts active
-local requests. Other failures use secret-free diagnostics and a nonzero exit;
-reconnects are bounded and never replay previous requests. Native Node 24 may
+### CLI output and process lifetime
+
+The CLI name `relay http` selects wire/owner profile `webhook`; `relay a2a`
+selects `a2a`. `create`, `status` and `revoke` always print one JSON object on
+stdout, whether or not `--json` is present. `create` reports the profile,
+generation and the two file paths, never their secrets. `status` reports
+`protocolVersion: 2`, enrollment, connection and negotiated capabilities. Before
+enrollment, `enabled: false` and an empty `capabilities` array are normal, not
+proof that protocol v2 is unsupported. An absent/disabled route returning 404
+requires an explicitly enabled compatible Worker, not repeated enrollment.
+`revoke` returns `ok: true` plus the resulting status fields; do not parse it as
+the differently shaped wake-v1 revocation result.
+
+`run` has no JSON/stdout readiness stream, including with `--json`. Observe
+`status` from another process. Its optional `--url` defaults to the configured
+`A2A_BASE_URL`, converted to WebSocket, plus `/relay/http/webhook/connect` or
+`/relay/http/a2a/connect`. No background service is installed: keep the process
+and local receiver running. Ctrl-C/SIGTERM exits 0 and aborts active local
+requests; setup/protocol/policy errors exit 1 with secret-free stderr recovery
+guidance. Reconnect delays are bounded from 500ms to 30s and stop after three
+consecutive failed 10-second handshakes; a successful handshake resets that
+budget. Reconnection never replays previous requests. Native Node 24 may
 internally duplicate a rejected HTTP 401 WebSocket upgrade: a bounded number of
 constructor attempts is not a promise of one wire request per attempt.
 
@@ -231,32 +278,23 @@ Revoke each enrolled profile before removing relay resources. Rotation and
 revocation fence old sockets/generations and ingress credentials. Hosted tenant
 suspension/deletion must fence both profiles in their pinned jurisdiction;
 flag/binding loss cannot silently declare old authority safe or resurrect it.
-Reactivation requires fresh enrollment.
+Reactivation requires fresh enrollment, with owner approval:
 
-## Protocol and hosted integration
+1. Run `relay http status --json` (or `relay a2a status --json`) and inspect the
+   protocol, generation and enrollment before changing anything. A policy error
+   needs a compatible CLI/Worker; replacement may mean another intended
+   connector is already running. Do not automatically take over its authority.
+2. After the owner approves recovery, run the matching `create` command above
+   with two **new** file paths; this enrolls/rotates that profile.
+3. Restart the matching foreground `run` with the new connector file and original
+   fixed receiver configuration. Share the new ingress secret only with approved
+   callers; verify status and a fresh authorized request. Do not retry an earlier
+   uncertain POST as a health check.
+4. Retire old local files only after the replacement is verified. Revocation
+   does not delete files or install/restart a process for you.
 
-`HttpRelay` uses a separate version-2 protocol and namespace from `WakeRelay` v1.
-It negotiates HTTP responses and response streaming, uses fixed target enums
-rather than URLs in frames, and bounds flow through sequenced chunks and credit.
-A wake-v1 connector cannot stand in for an HTTP-v2 connector. A stale or
-unsupported version must fail closed before calling the local receiver.
+## Contributor reference
 
-The Worker owner routes are `GET|POST|DELETE /owner/relay/http/webhook` and
-`GET|POST|DELETE /owner/relay/http/a2a`. The existing owner authentication and
-trusted hosted RPC ownership checks apply. Only SHA-256 credential hashes and a
-bounded header allowlist belong in enrollment requests; a caller-supplied tenant
-name or account ID is not evidence of ownership. Status never discloses tokens
-or their hashes.
-
-Hosted adoption requires the new SQLite export/binding, explicit capability
-flag, correct tenant/jurisdiction routing, lifecycle fencing and an integration
-using a released compatible core and CLI. Enable incoming `Request.signal`
-(`enable_request_signal` for the supplied 2026-10-06 compatibility date) so caller
-disconnects propagate. The supplied self-host config opts in with HTTP relay;
-a hosted embedding must configure its own Worker likewise. See [Cloudflare's
-compatibility contract](https://developers.cloudflare.com/workers/configuration/compatibility-flags/#enable-requestsignal-for-incoming-requests).
-Import the class from the Worker-only
-`@a2a-exposed/control-core/http-relay` subpath; the main core entry keeps its
-plain-Node compatibility and exposes protocol/capability metadata without
-loading `cloudflare:workers`. This OSS implementation does not change hosted
-dashboard UI or activate these profiles on any hosted service.
+For protocol internals and hosted embedding requirements, see
+[HTTP relay integration](http-relay-integration.md). Hosted activation and
+deployed qualification are separate from this OSS feature.

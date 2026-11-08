@@ -285,11 +285,16 @@ HTTP endpoint relays (separate opt-in Worker feature; --http-relay 1 on init/dep
                                 enroll/rotate; reserves two NEW mode-600 credential files; no inline secrets
   relay http|a2a status [--json]  nonsecret enrollment and connection readiness
   relay http|a2a revoke          fence this profile and disconnect its connector
-  relay http|a2a run --url wss://agent.example.com/relay/http/PROFILE/connect
-             --token-file FILE --local-url http://127.0.0.1:8644/fixed [--card-url URL]
+  relay http|a2a run --token-file FILE --local-url http://127.0.0.1:8644/fixed
+             [--url wss://agent.example.com/relay/http/PROFILE/connect] [--card-url URL]
              [--local-headers-file FILE]
+                                --url defaults from A2A_BASE_URL; CLI http maps to wire PROFILE webhook
                                 fixed loopback receiver; a2a profile uses optional same-origin card URL
+                                create/status/revoke always print JSON; run is silent on stdout
+                                foreground only: keep running; exit 0 on Ctrl-C/SIGTERM, 1 on failure
+                                retries 500ms-30s; stops after 3 failed 10s handshakes
                                 ingress callers need X-A2A-Relay-Authorization: Bearer <ingress token>
+                                required for discovery too: invited callers, not URL-only public access
                                 --forward-headers explicitly allows original app bearer/signature headers
                                 local app owns per-peer/task authorization; shared ingress is NOT peer auth
                                 native A2A is separate from Worker inbox/pairing/facade. No push callbacks.

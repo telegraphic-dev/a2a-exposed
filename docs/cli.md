@@ -10,6 +10,20 @@ separate [HTTP relay profiles](http-relay.md): `relay http|a2a create|status|rev
 `create` requires new `--token-file` and `--ingress-token-file` paths and accepts
 `--forward-headers` for explicit application-header forwarding. `run` uses a
 fixed loopback `--local-url`; `a2a` also accepts a fixed same-origin `--card-url`.
+`--url` is optional and defaults from `A2A_BASE_URL`; CLI `http` maps to owner/wire
+profile `webhook`. `create`, `status` and `revoke` always output JSON, with or
+without `--json`; HTTP revocation returns `ok` plus status fields, not wake-v1
+revocation output. Before enrollment, protocol-v2 status can legitimately have
+`enabled:false` and empty negotiated capabilities. `run` has no stdout/JSON
+readiness stream: keep it in the foreground and inspect status separately. It
+exits 0 on intentional shutdown, 1 on failure, and stops after three consecutive
+failed 10-second handshakes with 500ms-30s reconnect delays.
+
+Both profiles require the dedicated ingress-secret header; native discovery is
+for invited callers, not URL-only public discovery. Webhook providers unable to
+add this header need a provider-compatible authenticated receiver instead. See
+[output and recovery](http-relay.md#cli-output-and-process-lifetime) for protected
+file cleanup, uncertain enrollment and explicitly approved rotation/recovery.
 Application credentials remain independent; only unencoded native A2A SSE is
 incremental. Finite responses are bounded-buffered to avoid publishing truncated
 success; known SSE transport uncertainty emits an original-ID protocol error,

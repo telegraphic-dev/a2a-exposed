@@ -11,6 +11,14 @@
   public headers; native unencoded SSE preserves complete application records,
   adds bounded transport keepalives and reports known uncertainty as an
   original-ID protocol error. Hosted adoption remains a separate integration.
+- Distinguish definite HTTP enrollment/configuration rejection from uncertain
+  delivery, clean only newly reserved files on definite failure, and give safe
+  recovery guidance without overwriting credentials or automatically rotating.
+- Protect native SSE first-event delivery when an initial upstream UTF-8 BOM
+  arrives after keepalives, and return distinct original-ID RPC admission errors.
+- Clarify invited-caller/custom-header prerequisites, JSON output, foreground
+  process lifetime, credential retirement and explicit recovery; move hosted
+  embedding details into the contributor reference.
 
 - Distinguish busy and uncertain relay delivery from service incompatibility;
   preserve unconfirmed execution and advise checking the receiver and inbox before retesting.
