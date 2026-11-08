@@ -100,7 +100,7 @@ test("owner RPC accepts a tool-argument body only on send, reply, and mark_worki
 	assert.equal(absent.ok && absent.value, undefined);
 	assert.equal(ownerRpcBody("GET /owner/peers", null).ok, true);
 	assert.deepEqual(ownerRpcBody("GET /owner/peers", { label: "bob" }), { ok: false, error: "this call takes no body" });
-	assert.deepEqual(ownerRpcBody("POST /owner/wake/test", {}), { ok: false, error: "relay draft is invalid" });
+	assert.deepEqual(ownerRpcBody("POST /owner/wake/test", {}), { ok: false, error: "invalid" });
 	const draft = { transport: "relay", connectorId: "default", generation: 1, credentialsMode: "resolved", preset: "generic", key: "dummy-key" };
 	assert.deepEqual(ownerRpcBody("POST /owner/wake/test", draft), { ok: true, value: draft });
 	assert.equal(ownerRpcBody("POST /owner/wake/test", undefined).ok, true);

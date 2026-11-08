@@ -272,7 +272,9 @@ Wake relay (optional Worker feature, no tunnel or service install)
   relay revoke                  revoke the enrollment shown by status, close its current socket
   relay run --local-url http://127.0.0.1:8644/webhooks/a2a-wake
             (--token-file FILE | --token-env VAR) [--url wss://agent.example.com/relay/connect]
-                                foreground connector, fixed loopback POST destination, jitter reconnect, Ctrl-C exits
+                                foreground fixed-loopback connector; no JSON/stdout stream, safe diagnostics on stderr
+                                exit 0 on Ctrl-C/SIGTERM; exit 1 on setup/protocol/policy failure
+                                reconnect waits 500ms–30s; stop after 3 failed 10s handshakes
                                 self-host deploy --wake-relay 1 --wake-transport relay enables it;
                                 application bearer/HMAC credentials still apply. See docs/wake-relay.md
 

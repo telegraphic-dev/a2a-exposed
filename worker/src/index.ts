@@ -7,7 +7,7 @@
 import { VERSION } from "./version.ts";
 import * as A from "./a2a.ts";
 import * as F from "./facade.ts";
-import { relayFetch } from "./relay-routing.ts";
+import { relayFetch, relayTestOutcome, type RelayTestError } from "./relay-routing.ts";
 import { renderWake, relayWakeTestInput, mausbotConfigProblem, redact, cloudflareErrorHint, wakeUrlIsTunnelHost, defaultBusySeconds, defaultDebounceSeconds, defaultMaxPerHour, type WakeConfig, type WakeEvent } from "./wake.ts";
 import { fetchCheckedPeer, fetchCheckedWake } from "./wake-target.ts";
 import { withDeadline } from "./deadline.ts";
@@ -252,13 +252,14 @@ async function noteWakeWrite(ectx: object): Promise<void> {
 	if (fn) await fn();
 }
 
-async function sendWake(ctx: TenantContext, ectx: ExecutionContext, payload: Json): Promise<{ status: number | null; info: string }> {
+async function sendWake(ctx: TenantContext, ectx: ExecutionContext, payload: Json): Promise<{ status: number | null; info: string; error?: RelayTestError }> {
 	const catchUp = !!payload.busy;
 	const delivered = { ...payload };
 	delete delivered.busy;
 	const ev: WakeEvent = { ...delivered, publicUrl: ctx.PUBLIC_URL };
 	let req;
 	try { req = await renderWake(wakeConfig(ctx), ev); } catch (e) {
+		if (ctx.WAKE_TRANSPORT === "relay") { await clearBusy(ctx, payload); return { status: null, error: "invalid", info: "invalid relay receiver configuration" }; }
 		log("wake_render_failed", { preset: preset(ctx), error: String(e).slice(0, 200) });
 		await clearBusy(ctx, payload);
 		return { status: null, info: "render failed: " + String(e).slice(0, 200) };
@@ -272,12 +273,13 @@ async function sendWake(ctx: TenantContext, ectx: ExecutionContext, payload: Jso
 		try {
 			const response = await relayFetch(ctx, "/deliver", { method: "POST", body: JSON.stringify({ body: req.body, headers: req.headers, ...(ctx.WAKE_CONNECTOR_GENERATION ? { enrollment: Number(ctx.WAKE_CONNECTOR_GENERATION) } : {}) }) });
 			const result = await response.json() as { status?: number; error?: string };
-			const status = response.ok && Number.isInteger(result.status) ? result.status! : null;
+			const outcome = relayTestOutcome(response, result);
+			const { status } = outcome;
 			if (status && status < 300) await armBusy(ctx, ectx, delivered, Date.now());
 			else await clearBusy(ctx, payload);
 			// A missing acknowledgment is uncertain: never retry the serialized request.
-			return { status, info: status ? `local HTTP ${status}` : result.error === "connector_offline" ? "connector offline" : "relay delivery unconfirmed" };
-		} catch { await clearBusy(ctx, payload); return { status: null, info: "relay delivery unconfirmed" }; }
+			return { ...outcome, info: status ? `local HTTP ${status}` : result.error === "connector_offline" ? "connector offline" : "relay delivery unconfirmed" };
+		} catch { await clearBusy(ctx, payload); return { status: null, error: "unavailable", info: "relay delivery unconfirmed" }; }
 	}
 	try {
 		let r: Response;
@@ -2465,25 +2467,26 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 		// Legacy owner HTTP clients send {} for the applied-settings probe. The RPC allowlist still rejects it.
 		if (raw && !/^\s*\{\s*\}\s*$/.test(raw)) {
 			let input: unknown;
-			try { input = JSON.parse(raw); } catch { return json({ error: "relay draft is invalid" }, 400); }
+			try { input = JSON.parse(raw); } catch { return json({ error: "invalid" }, 400); }
 			const draft = relayWakeTestInput(input);
-			if (!draft) return json({ error: "relay draft is invalid" }, 400);
+			if (!draft) return json({ error: "invalid" }, 400);
 			const snapshot = await relayFetch(ctx, "/status");
-			if (!snapshot.ok) return snapshot;
+			if (!snapshot.ok) return json({ configured: true, transport: "relay", status: null, error: "unavailable" }, snapshot.status);
 			const connector = await snapshot.json() as { enrolled: boolean; generation: number };
-			if (!connector.enrolled || connector.generation !== draft.generation) return json({ error: "stale_enrollment" }, 409);
+			if (!connector.enrolled || connector.generation !== draft.generation) return json({ preset: draft.preset, configured: true, transport: "relay", connector, status: null, error: connector.enrolled ? "stale_enrollment" : "revoked" }, 409);
 			let rendered;
 			try {
 				// Deliberately no wakeConfig(ctx): omitted/blank secrets mean absent, not saved-secret fallback.
 				rendered = await renderWake(draft, { contextId: "a2a-wake-test", taskId: "none", taskIds: [], from: "owner", preview: "", kind: "test", publicUrl: ctx.PUBLIC_URL });
-			} catch { return json({ error: "relay draft render failed" }, 400); }
-			if (!rendered) return json({ error: "relay draft render failed" }, 400);
+			} catch { return json({ error: "invalid" }, 400); }
+			if (!rendered) return json({ error: "invalid" }, 400);
 			// Compare the credential epoch again in the relay after rendering/signing has yielded.
 			const response = await relayFetch(ctx, "/deliver", { method: "POST", body: JSON.stringify({ body: rendered.body, headers: rendered.headers, enrollment: draft.generation }) });
 			const result = await response.json() as { status?: number; error?: string };
-			if (result.error === "stale_enrollment") return json({ error: "stale_enrollment" }, 409);
-			const status = response.ok && Number.isInteger(result.status) ? result.status! : null;
-			return json({ preset: draft.preset, configured: true, transport: "relay", connector, status, info: status ? `local HTTP ${status}` : result.error === "connector_offline" ? "connector offline" : "relay delivery unconfirmed" });
+
+			const outcome = relayTestOutcome(response, result);
+			const { status } = outcome;
+			return json({ preset: draft.preset, configured: true, transport: "relay", connector, ...outcome, info: status ? `local HTTP ${status}` : result.error === "connector_offline" ? "connector offline" : "relay delivery unconfirmed" }, result.error === "stale_enrollment" ? 409 : 200);
 		}
 		const res = await sendWake(ctx, ectx, { contextId: "a2a-wake-test", taskId: "none", taskIds: [], from: "owner", preview: "", kind: "test" });
 		return json({ preset: preset(ctx), configured: wakeHooked(ctx), transport: ctx.WAKE_TRANSPORT === "relay" ? "relay" : "webhook", ...(ctx.WAKE_TRANSPORT === "relay" ? { connector: await (await relayFetch(ctx, "/status")).json() } : {}), ...res });

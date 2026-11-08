@@ -67,6 +67,17 @@ export type RelayWakeTestInput = {
 	accessClientSecret?: string;
 };
 
+/** Same bounded forwarding-header policy as the connector; never send an unusable saved configuration. */
+export function relayHeadersValid(headers: unknown): headers is Record<string, string> {
+	if (!headers || typeof headers !== "object" || Array.isArray(headers)) return false;
+	let size = 0;
+	for (const [k, v] of Object.entries(headers)) {
+		if (typeof v !== "string" || !/^[A-Za-z0-9-]{1,64}$/.test(k) || /^(host|connection|upgrade|content-length|transfer-encoding|proxy-.*|sec-.*)$/i.test(k) || /[\u0000-\u001f\u007f]/.test(v)) return false;
+		size += k.length + v.length;
+	}
+	return size <= 16384;
+}
+
 /** Shared by the trusted owner RPC allowlist and owner HTTP handler. No destinations or raw frames. */
 export function relayWakeTestInput(body: unknown): RelayWakeTestInput | null {
 	if (!body || typeof body !== "object" || Array.isArray(body)) return null;
@@ -311,6 +322,7 @@ export async function renderWake(cfg: WakeConfig, ev: WakeEvent, opts: { nowMs?:
 		}
 	}
 	addAccessHeaders(headers, cfg);
+	if (cfg.transport === "relay" && !relayHeadersValid(headers)) throw new Error("invalid relay forwarding headers; check receiver header configuration");
 	return { url: cfg.url || "", method: "POST", headers, body };
 }
 

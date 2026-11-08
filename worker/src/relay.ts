@@ -1,6 +1,7 @@
 // Narrow wake carrier, not an HTTP tunnel. Only the resolved tenant can reach control/dispatch.
 import { DurableObject } from "cloudflare:workers";
 import { timingSafeEqualStr } from "./a2a.ts";
+import { relayHeadersValid } from "./wake.ts";
 
 export const WAKE_RELAY_PROTOCOL_VERSION = 1;
 const MAX_FRAME = 128 * 1024;
@@ -31,7 +32,8 @@ export class WakeRelay extends DurableObject {
 	async fetch(req: Request): Promise<Response> {
 		const path = new URL(req.url).pathname;
 		if (path === "/issue" && req.method === "POST") {
-			const input = await req.json() as { credentialHash?: string; idempotencyKey?: string };
+			const input = await req.json().catch(() => null) as { credentialHash?: string; idempotencyKey?: string } | null;
+			if (!input || typeof input !== "object") return failure("invalid_enrollment", 400);
 			if (!/^[a-f0-9]{64}$/.test(input.credentialHash || "") || !/^[a-zA-Z0-9_-]{16,128}$/.test(input.idempotencyKey || "")) return failure("invalid_enrollment", 400);
 			const s = this.state();
 			if (!s.active) return failure("relay_inactive", 409);
@@ -48,13 +50,14 @@ export class WakeRelay extends DurableObject {
 			this.ctx.storage.sql.exec("UPDATE relay SET hash=NULL, idem=NULL, active=?, enrollment=enrollment+1, generation=generation+1 WHERE id=1", path === "/enable" ? 1 : 0); this.fence(); return reply({ ok: true });
 		}
 		if (path === "/revoke" && req.method === "POST") {
-			const input = await req.json() as { generation?: number };
+			const input = await req.json().catch(() => null) as { generation?: number } | null;
+			if (!input || typeof input !== "object") return failure("invalid_revocation", 400);
 			if (input.generation !== this.state().enrollment) return failure("conflict", 409);
 			this.ctx.storage.sql.exec("UPDATE relay SET hash=NULL, idem=NULL, enrollment=enrollment+1, generation=generation+1 WHERE id=1"); this.fence(); return reply({ revoked: true, generation: this.state().enrollment });
 		}
 		if (path === "/status" && req.method === "GET") {
 			const s = this.state();
-			return reply({ enabled: true, protocolVersion: WAKE_RELAY_PROTOCOL_VERSION, transport: "relay", connectorId: "default", enrolled: !!s.hash, generation: s.enrollment, connectionGeneration: s.generation, connected: this.ctx.getWebSockets().some(ws => ws.readyState === 1 && ws.deserializeAttachment()?.generation === s.generation) });
+			return reply({ enabled: !!s.active, protocolVersion: WAKE_RELAY_PROTOCOL_VERSION, transport: "relay", connectorId: "default", enrolled: !!s.hash, generation: s.enrollment, connectionGeneration: s.generation, connected: this.ctx.getWebSockets().some(ws => ws.readyState === 1 && ws.deserializeAttachment()?.generation === s.generation) });
 		}
 		if (path === "/connect" && req.method === "GET") {
 			const protocols = (req.headers.get("sec-websocket-protocol") || "").split(",").map(s => s.trim());
@@ -72,12 +75,16 @@ export class WakeRelay extends DurableObject {
 		if (path === "/deliver" && req.method === "POST") {
 			const raw = await req.text();
 			if (new TextEncoder().encode(raw).length > MAX_FRAME) return failure("body_too_large", 413);
-			const { body, headers, enrollment } = JSON.parse(raw);
+			let input;
+			try { input = JSON.parse(raw); } catch { return failure("invalid_delivery", 400); }
+			if (!input || typeof input !== "object" || !relayHeadersValid(input.headers)) return failure("invalid_delivery", 400);
+			const { body, headers, enrollment } = input;
 			// Select authority only after body parsing yields; rotation/revocation must win.
 			const s = this.state();
 			if (enrollment !== undefined && enrollment !== s.enrollment) return failure("stale_enrollment", 409);
 			const ws = this.ctx.getWebSockets().find(w => w.readyState === 1 && w.deserializeAttachment()?.generation === s.generation);
-			if (!s.hash || !ws) return failure("connector_offline");
+			if (!s.hash) return failure("relay_revoked");
+			if (!ws) return failure("connector_offline");
 			if (this.pending.size >= MAX_INFLIGHT) return failure("connector_busy");
 			if (typeof body !== "string" || new TextEncoder().encode(body).length > MAX_BODY) return failure("body_too_large", 413);
 			// No await between selecting authority and sending after body parsing.
@@ -87,7 +94,7 @@ export class WakeRelay extends DurableObject {
 			return new Promise(resolve => {
 				const timer = setTimeout(() => {
 					try { ws.send(JSON.stringify({ v: 1, type: "cancel", id, generation: s.generation })); } catch { /* disconnected */ }
-					finish(failure("delivery_uncertain", 504));
+					finish(failure("delivery_timeout", 504));
 				}, DEADLINE_MS);
 				const finish = (response: Response) => { clearTimeout(timer); this.pending.delete(id); resolve(response); };
 				this.pending.set(id, { socket: ws, generation: s.generation, finish });

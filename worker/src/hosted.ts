@@ -154,6 +154,20 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 		});
 	}
 
+	// Region is persisted before owner enrollment, including unsaved webhook→relay drafts.
+	// Its presence survives binding/flag loss and proves relay authority may exist.
+	async #relayAuthorityPossible(): Promise<boolean> {
+		return !!this.#row && (this.env.WAKE_RELAY_ENABLED === "1" || this.#row.config.WAKE_TRANSPORT === "relay" || await this.ctx.storage.get("wake_relay_region") !== undefined);
+	}
+
+	async #fenceRelay(path: "/enable" | "/disable"): Promise<void> {
+		if (!await this.#relayAuthorityPossible()) return;
+		const tenant = await this.#tenant();
+		if (!tenant?.relayNamespace || tenant.relayRegion === undefined) throw new Error("relay lifecycle fence unavailable; restore relay binding, flag and region before retrying");
+		const response = await relayFetch(tenant, path, { method: "POST" });
+		if (!response.ok) throw new Error("relay lifecycle fence failed");
+	}
+
 	async #tenant(fallbackOrigin = "") {
 		const row = this.#row;
 		if (!row) return null;
@@ -279,13 +293,19 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 	 * push does not roll the row backwards. The first accepted push creates `tenant_config` and then runs migrations.
 	 */
 	async pushConfig(body: TenantConfigPush): Promise<{ version: number; applied: boolean }> {
-		return await this.ctx.blockConcurrencyWhile(async () => {
+		const result = await this.ctx.blockConcurrencyWhile(async () => {
 			checkPush(body);
 			const deleted = await (this.ctx.storage as unknown as { get(key: string): Promise<unknown> }).get("tenant_deleted");
 			// deleteStorage leaves this key after wiping SQL. A later push must not recreate the agent.
 			if (deleted != null) return { version: 0, applied: false };
 			const current = this.#row ?? readRow(this.#sql);
 			if (current && body.version <= current.version) {
+				// Recover a fence even when retrying the already-applied active configuration.
+				if (await this.ctx.storage.get("wake_relay_fence_pending")) {
+					try { await this.#fenceRelay(current.status === "active" ? "/enable" : "/disable"); }
+					catch { return { fenceError: "relay lifecycle fence unavailable; restore relay binding, flag and region before retrying" }; }
+					await this.ctx.storage.delete("wake_relay_fence_pending");
+				}
 				// A previous push may have stored this version and then failed while migrating. Catch up; don't rewrite the row.
 				migrateDo(this.#sql, this.#tx, MIGRATIONS);
 				this.#row = current;
@@ -309,15 +329,13 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 				secretsEnc,
 			};
 			// Fence separate relay authority before accepting a suspension/deletion or reactivation.
-			if (current && (body.status !== "active" || current.status !== "active")) {
-				const tenant = await this.#tenant();
-				if (tenant?.relayNamespace && tenant.relayRegion !== undefined) {
-					const response = await relayFetch(tenant, body.status === "active" ? "/enable" : "/disable", { method: "POST" });
-					if (!response.ok) throw new Error("relay lifecycle fence failed");
-				}
+			if (current && (body.status !== "active" || current.status !== "active" || await this.ctx.storage.get("wake_relay_fence_pending"))) {
+				if (await this.#relayAuthorityPossible()) await this.ctx.storage.put("wake_relay_fence_pending", true);
+				try { await this.#fenceRelay(body.status === "active" ? "/enable" : "/disable"); }
+				catch { return { fenceError: "relay lifecycle fence unavailable; restore relay binding, flag and region before retrying" }; }
 			}
 			const now = new Date().toISOString();
-			this.#tx(() => {
+			try { this.#tx(() => {
 				this.#sql.exec(CREATE_CONFIG);
 				this.#sql.exec(
 					`INSERT INTO tenant_config (id, version, tenant_id, name, status, config_json, limits_json, approval_json, owner_token_hash, secrets_enc, updated_at)
@@ -330,16 +348,20 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 					JSON.stringify(storedConfig), JSON.stringify(limits), JSON.stringify(approval),
 					next.ownerTokenHash, next.secretsEnc, now,
 				);
-			});
+			}); } catch { return { fenceError: "tenant config transaction failed; retry the config push" }; }
 			try {
 				migrateDo(this.#sql, this.#tx, MIGRATIONS);
 			} finally {
 				// Remember the row even if a migration throws, so a later request is not stuck on the empty-object 404.
 				this.#row = readRow(this.#sql) ?? next;
 			}
+			await this.ctx.storage.delete("wake_relay_fence_pending");
 			await this.#enqueueArm(false);
 			return { version: this.#row.version, applied: true };
 		});
+		// A recoverable deployment error must not break the DO concurrency gate/reset the object.
+		if ("fenceError" in result) throw new Error(result.fenceError);
+		return result;
 	}
 
 	/** No secrets. Tests use this to show a 404 did not create application tables. */
@@ -352,18 +374,15 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 	 * Not an owner HTTP route. Self-host never calls it.
 	 */
 	async deleteStorage(): Promise<{ deleted: true }> {
-		return await this.ctx.blockConcurrencyWhile(async () => {
+		const result = await this.ctx.blockConcurrencyWhile(async () => {
 			const storage = this.ctx.storage as unknown as {
 				deleteAlarm(): Promise<void>;
 				deleteAll(): Promise<void>;
 				put(key: string, value: string): Promise<void>;
 			};
 			const tenantId = this.#row?.tenantId ?? null;
-			const tenant = await this.#tenant();
-			if (tenant?.relayNamespace && tenant.relayRegion !== undefined) {
-				const response = await relayFetch(tenant, "/disable", { method: "POST" });
-				if (!response.ok) throw new Error("relay deletion fence failed");
-			}
+			try { await this.#fenceRelay("/disable"); }
+			catch { return { fenceError: "relay lifecycle fence unavailable; restore relay binding, flag and region before retrying" }; }
 			await storage.deleteAlarm();
 			await storage.deleteAll();
 			const left = readRow(this.#sql);
@@ -372,8 +391,10 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 			await storage.put("tenant_deleted", "1");
 			this.#row = null;
 			console.log(JSON.stringify({ ts: new Date().toISOString(), event: "tenant_storage_deleted", tenant: tenantId }));
-			return { deleted: true };
+			return { deleted: true as const };
 		});
+		if ("fenceError" in result) throw new Error(result.fenceError);
+		return result;
 	}
 
 	/** SQL dump of the application tables. Refuses an object that has no config row. */

@@ -66,12 +66,29 @@ a2a-exposed relay status --json
 Revocation reads the enrollment generation, revokes that exact generation, and
 reads back the result. Rotation, revocation, and a newer connection fence old
 sockets and their acknowledgments. Only one connector is active per tenant.
-A connector replaced/revoked with close code 4001 exits instead of fighting the
-replacement. Protocol violations also stop the connector without retry: it sends
-client-compatible code 4008 for invalid relay frames and accepts server policy
-close codes 1008 or 4008 as terminal. Other disconnections reconnect with bounded
-exponential backoff and full jitter (at most 30 seconds). No service is installed
-automatically.
+`run` is a foreground process, not a JSON event stream: stdout stays empty,
+including with `--json`; fixed, secret-free diagnostics go to stderr. Intentional
+Ctrl-C/SIGINT or SIGTERM shutdown exits **0**. Invalid setup, malformed frames,
+policy rejection (1008/4008), and replacement/revocation (4001) exit **1** with a
+recovery hint. Do not automatically restart a revoked/replaced connector; check
+status and obtain approval before enrolling again. Invalid frames use
+client-compatible close code 4008. URL values, credential values and raw server
+close/error text are never echoed in these diagnostics.
+
+Other disconnections reconnect with exponential backoff and jitter, waiting at
+least **500 ms** and at most **30 seconds** per attempt. A healthy `hello` resets
+both backoff and consecutive handshake failures. Each handshake has a **10-second**
+hello deadline. A failed upgrade or hello timeout produces a safe diagnostic;
+**three consecutive failed handshakes** stop with exit 1. Native WebSocket does
+not expose the upgrade's HTTP status: wrong/revoked credentials, disabled runtime
+capability and transient network errors therefore share this bounded retry budget,
+not a guessed authentication classification. Check endpoint, capability and
+credential enrollment before restarting. No service is installed automatically.
+
+Clock-skewed expired frames and temporary local concurrency saturation return an
+unconfirmed result without a POST or permanent shutdown. Future deadlines are
+clamped to at most ten seconds of local execution; server cancellation remains
+authoritative. Synchronize the connector clock if wakes remain unconfirmed.
 
 ## Hosted integration contract
 
@@ -96,7 +113,18 @@ repository does not update a hosted service or establish a production deployment
 - Suspension/deleting config pushes and `deleteStorage()` revoke and close the
   separate relay before completing. Reactivation requires fresh enrollment.
   Tenant deletion retains its existing tombstone; a stale directory entry and
-  a late config push cannot reconnect the deleted tenant.
+  a late config push cannot reconnect the deleted tenant. Before enrollment the
+  tenant persists its relay jurisdiction as an authority-possible marker, even
+  while applied transport is still webhook (unsaved relay drafts). Lifecycle
+  fencing is required whenever that marker exists, relay transport is configured,
+  or the runtime relay flag is enabled. Missing binding, flag or jurisdiction
+  fails the lifecycle operation **without advancing stored version/status or
+  deleting tenant storage**; restore them and retry the fence. This policy is
+  conservative: removing a binding/flag never proves that authority was revoked.
+  Webhook tenants never enabled for relay and without a marker remain unaffected.
+  If a fence succeeds but the following config transaction fails, a subsequent
+  active config push re-enables the relay without reviving old enrollment. Fresh
+  enrollment is required after this recovery as well as after reactivation.
 
 ### Owner API
 
@@ -177,9 +205,19 @@ pending wake queue. A no-body probe and the draft probe are distinct operations.
 Successful dispatch returns HTTP 200 with `{preset, configured:true,
 transport:"relay", connector, status, info}`. `connector` is the pre-dispatch
 status snapshot; `status` is the actual local HTTP status, or null when offline
-or unconfirmed. Treat only 2xx **local status** as test success. Invalid draft or
-render failure is HTTP 400; stale/revoked enrollment is 409 (checked both before
-render and at final dispatch); disabled feature is 404. No response returns the
+or unconfirmed. Treat only 2xx **local status** as test success; successful
+responses omit `error`. Failures include a machine-readable `error`, preserved
+through owner HTTP and trusted owner RPC: `offline`, `timeout`, `revoked`,
+`stale_enrollment`, `invalid`, `local_http`, or `unavailable`. Never parse `info`
+for recovery decisions. `status` retains actual local HTTP values, including 401
+and 500 (`error:"local_http"`); transport failures have `status:null`.
+`connector_offline` maps to `offline`, an actual relay delivery deadline to
+`timeout`, missing enrollment to `revoked`, and an old epoch to
+`stale_enrollment`. Saturation, disconnected/uncertain delivery and unknown relay
+failures map to `unavailable`. Configured/transport/connector metadata is retained
+when available. Invalid draft or render failure is HTTP 400 (`invalid`);
+stale/revoked enrollment is 409 (checked both before render and at final dispatch);
+disabled feature is 404. No response returns the
 supplied credentials or receiver body. This additive owner API does not change
 WebSocket protocol v1 or its credential format.
 

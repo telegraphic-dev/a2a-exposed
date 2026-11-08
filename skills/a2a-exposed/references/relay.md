@@ -17,6 +17,16 @@ The relay carries wakes only, not A2A façade traffic.
 The foreground connector stops on replacement/revocation (4001) or a protocol
 violation (1008/4008), rather than reconnecting. Invalid relay frames are rejected
 before local delivery; check the relay endpoint/configuration before restarting.
+`run` emits no stdout/JSON stream. Intentional SIGINT/SIGTERM exits 0; setup,
+protocol/policy/revocation failures exit 1 with secret-free stderr guidance.
+Reconnect waits 500ms–30s, never zero. Three consecutive failed upgrades or
+10-second hello timeouts stop with exit 1; a healthy hello resets the budget.
+Native WebSocket hides handshake HTTP status, so check endpoint, capability and
+enrollment rather than assuming every failure is authentication. Expired/skewed
+frames and temporary concurrency saturation fail that delivery, not the socket.
+Owner draft tests expose canonical `error` codes: `offline`, `timeout`, `revoked`,
+`stale_enrollment`, `invalid`, `local_http`, `unavailable`; success omits `error`.
+Keep the numeric local HTTP `status` (including 401/500); never parse `info`.
 
 The owner API can test an unsaved relay draft before saving: `POST
 /owner/wake/test` accepts explicit `transport:"relay"`, `connectorId:"default"`,

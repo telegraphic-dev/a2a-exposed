@@ -21,7 +21,7 @@ function frame(opcode, value) {
 const cases = [
 	['malformed JSON', () => ['not-json']],
 	['invalid schema', () => [JSON.stringify({ v: 1, type: 'hello', generation: 1, unexpected: true })]],
-	['expired wake deadline', () => [JSON.stringify({ v: 1, type: 'hello', generation: 1 }), JSON.stringify({ v: 1, type: 'wake', generation: 1, id: '00000000-0000-4000-8000-000000000000', deadline: Date.now() - 1, headers: {}, body: '{}' })]],
+	['hostile host forwarding header', () => [JSON.stringify({ v: 1, type: 'hello', generation: 1 }), JSON.stringify({ v: 1, type: 'wake', generation: 1, id: '00000000-0000-4000-8000-000000000001', deadline: Date.now() + 10000, headers: { host: 'example.com' }, body: '{}' })]],
 	['close throws', () => ['not-json'], 'fault'],
 	... [1008, 4001, 4008].map(code => [`server close ${code}`, () => [], code]),
 ];
@@ -77,7 +77,9 @@ for (const [name, messages, mode] of cases) test(`native CLI exits cleanly witho
 	const timer = setTimeout(() => child.kill('SIGKILL'), 5000);
 	const [code, signal] = await once(child, 'close'); clearTimeout(timer);
 	assert.doesNotMatch(output, /InvalidAccessError|uncaught|unhandled|injected close failure/i);
-	assert.equal(signal, null, output); assert.equal(code, 0, output);
+	assert.equal(signal, null, output); assert.equal(code, 1, output);
+	assert.match(output, /relay .*?(invalid frame|replaced or revoked|policy rejection)/);
+	assert.doesNotMatch(output, /a2ar_|TEST_RELAY_TOKEN/);
 	assert.equal(connections, 1, 'protocol rejection must not reconnect');
 	assert.equal(posts, 0, 'invalid frames must not reach the local receiver');
 	assert.equal(closeCode, typeof mode === 'number' ? mode : mode === 'fault' ? 1005 : 4008);

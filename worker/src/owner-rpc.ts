@@ -299,7 +299,7 @@ function forwardBody(body: unknown): { ok: true; value: Record<string, string> }
 export function ownerRpcBody(routeName: string, body: unknown): { ok: true; value?: Record<string, unknown> } | { ok: false; error: string; code?: string } {
 	if (routeName === "POST /owner/wake/test" && body != null) {
 		const value = relayWakeTestInput(body);
-		return value ? { ok: true, value } : { ok: false, error: "relay draft is invalid" };
+		return value ? { ok: true, value } : { ok: false, error: "invalid" };
 	}
 	if (routeName === "POST /owner/wake/relay" || routeName === "DELETE /owner/wake/relay") {
 		if (!body || typeof body !== "object" || Array.isArray(body)) return { ok: false, error: "body must be an object" };
