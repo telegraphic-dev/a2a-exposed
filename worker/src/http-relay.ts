@@ -10,9 +10,14 @@
  * C>S start {type,id,status,headers}; C>S chunk {type,id,seq,body:base64};
  * C>S end {type,id,seq}; C>S error {type,id,code:'local_failure'|'timeout'}.
  * S>C credit {type,id,seq} grants EXACTLY one <=16KiB chunk (seq starts 0).
- * S>C cancel {type,id}. end uses next seq, requires no credit. Credit is issued
- * only by response ReadableStream.pull, with zero prefetch. At most one chunk
- * is in flight per response. ping/pong are transport keepalive strings.
+ * S>C cancel {type,id}. end uses next seq, requires no credit. At most one chunk
+ * is in flight per response. Finite generic/card/JSON responses are bounded and
+ * held until end, so a transport failure cannot publish a truncated success.
+ * Only unencoded native A2A SSE is incremental: complete records preserve bytes,
+ * partial records stay bounded, transport comments detect idle disconnects, and
+ * uncertainty becomes an original-id JSON-RPC error (never a task completion).
+ * Credit follows response pull or bounded finite/partial-record assembly.
+ * ping/pong are connector transport keepalive strings.
  * Requests are never persisted/replayed. Hibernated sockets retain generation,
  * profile and negotiated capabilities; any orphaned response fences the socket.
  */
@@ -28,7 +33,7 @@ export const HTTP_RELAY_PROTOCOL = "a2a-http-relay-v2";
 export const HTTP_RELAY_CAPABILITIES = ["http-response-v1", "response-stream-v1"];
 type State = { credentialHash: string | null; ingressHash: string | null; generation: number; profile: HttpRelayProfile | null; headers: string[]; enabled: boolean };
 type Attachment = { generation: number; profile: HttpRelayProfile; capabilities: string[]; ready: boolean };
-type Pending = { ws: WebSocket; generation: number; seq: number; credit: boolean; bytes: number; started: boolean; noBody: boolean; controller?: ReadableStreamDefaultController<Uint8Array>; resolve: (response: Response) => void; headerTimer: ReturnType<typeof setTimeout>; timer: ReturnType<typeof setTimeout>; detach: () => void };
+type Pending = { ws: WebSocket; generation: number; seq: number; credit: boolean; bytes: number; started: boolean; noBody: boolean; nativeRpc: boolean; rpcId: string | number | null; streaming: boolean; response?: { status: number; headers: HttpRelayHeaders }; chunks: Uint8Array[]; sseBuffer: Uint8Array; controller?: ReadableStreamDefaultController<Uint8Array>; resolve: (response: Response) => void; headerTimer: ReturnType<typeof setTimeout>; timer: ReturnType<typeof setTimeout>; heartbeat?: ReturnType<typeof setInterval>; detach: () => void };
 const enc = new TextEncoder();
 const fail = (error: string, status = 503) => Response.json({ error }, { status, headers: { "cache-control": "no-store" } });
 const validProfile = (p: unknown): p is HttpRelayProfile => p === "webhook" || p === "a2a";
@@ -74,6 +79,24 @@ async function readBody(req: Request): Promise<Uint8Array> {
 		for (const c of chunks) { result.set(c, offset); offset += c.length; } return result;
 	} finally { if (timer !== undefined) clearTimeout(timer); reader.releaseLock(); }
 }
+function joined(chunks: Uint8Array[], size: number): Uint8Array {
+	const bytes = new Uint8Array(size); let offset = 0;
+	for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+	return bytes;
+}
+// Forward complete SSE records only. A partial application event must not be
+// completed by a proxy heartbeat/error after the local transport fails.
+function completeSse(bytes: Uint8Array, final = false): number {
+	let line = 0, boundary = 0;
+	for (let i = 0; i < bytes.length;) {
+		if (bytes[i] !== 10 && bytes[i] !== 13) { i++; continue; }
+		if (bytes[i] === 13 && i + 1 === bytes.length && !final) break;
+		const next = i + (bytes[i] === 13 && bytes[i + 1] === 10 ? 2 : 1);
+		if (line === i) boundary = next;
+		line = next; i = next;
+	}
+	return boundary;
+}
 export class HttpRelay extends DurableObject {
 	pending = new Map<string, Pending>();
 	// Only tolerate bounded late frames for requests explicitly cancelled on this socket.
@@ -92,13 +115,25 @@ export class HttpRelay extends DurableObject {
 	send(ws: WebSocket, generation: number, frame: Record<string, unknown>): void { ws.send(JSON.stringify({ v: 2, generation, ...frame })); }
 	settle(id: string, error?: string, status = 502, cancel = false): void {
 		const p = this.pending.get(id); if (!p) return;
-		this.pending.delete(id); clearTimeout(p.timer); clearTimeout(p.headerTimer); p.detach();
+		this.pending.delete(id); clearTimeout(p.timer); clearTimeout(p.headerTimer); if (p.heartbeat !== undefined) clearInterval(p.heartbeat); p.detach();
 		if (cancel) {
 			this.cancelled.set(id, p.ws); if (this.cancelled.size > 64) this.cancelled.delete(this.cancelled.keys().next().value!);
 			try { this.send(p.ws, p.generation, { type: "cancel", id }); } catch { /* uncertain */ }
 		}
-		if (error) { if (p.started) p.controller?.error(new Error(error)); else p.resolve(fail(error, status)); }
-		else p.controller?.close();
+		if (!p.streaming) {
+			if (error) p.resolve(fail(error, status));
+			else if (p.response) p.resolve(new Response(p.noBody ? null : joined(p.chunks, p.bytes), { ...p.response, encodeBody: "manual" }));
+			return;
+		}
+		try {
+			if (error) p.controller?.enqueue(enc.encode(`data: ${JSON.stringify({ jsonrpc: "2.0", id: p.rpcId, error: { code: -32603, message: "Relay delivery uncertain", data: { code: error } } })}\n\n`));
+			p.controller?.close();
+		} catch { /* The downstream stream may already be cancelled. */ }
+	}
+	credit(id: string, p: Pending): void {
+		if (!this.pending.has(id) || p.credit) return;
+		p.credit = true;
+		try { this.send(p.ws, p.generation, { type: "credit", id, seq: p.seq }); } catch { this.settle(id, "delivery_uncertain"); }
 	}
 	fence(): void {
 		for (const id of this.pending.keys()) this.settle(id, "delivery_uncertain", 502, true);
@@ -157,9 +192,12 @@ export class HttpRelay extends DurableObject {
 			if (target === "card" && body.length) return fail("invalid_body", 400);
 			if (target === "rpc" && !httpRelayRpcAllowed(body)) return fail("invalid_rpc", 400);
 			const id = crypto.randomUUID();
+			const nativeRpc = target === "rpc" && s.profile === "a2a";
+			const sourceId: unknown = nativeRpc ? JSON.parse(new TextDecoder().decode(body)).id : null;
+			const rpcId = typeof sourceId === "string" || (typeof sourceId === "number" && Number.isFinite(sourceId)) ? sourceId : null;
 			return new Promise<Response>(resolve => {
 				const abort = () => this.settle(id, "request_cancelled", 502, true);
-				const p: Pending = { ws, generation: s.generation, seq: 0, credit: false, bytes: 0, started: false, noBody: false, resolve, detach: () => req.signal.removeEventListener("abort", abort), headerTimer: setTimeout(() => this.settle(id, "delivery_timeout", 504, true), httpRelayLimits.headerMs), timer: setTimeout(() => this.settle(id, "delivery_timeout", 504, true), httpRelayLimits.streamMs) };
+				const p: Pending = { ws, generation: s.generation, seq: 0, credit: false, bytes: 0, started: false, noBody: false, nativeRpc, rpcId, streaming: false, chunks: [], sseBuffer: new Uint8Array(), resolve, detach: () => req.signal.removeEventListener("abort", abort), headerTimer: setTimeout(() => this.settle(id, "delivery_timeout", 504, true), httpRelayLimits.headerMs), timer: setTimeout(() => this.settle(id, "delivery_timeout", 504, true), httpRelayLimits.streamMs) };
 				this.pending.set(id, p); req.signal.addEventListener("abort", abort, { once: true });
 				try { this.send(ws, s.generation, { type: "request", id, target, method, headers, body: encode(body), timeoutMs: httpRelayLimits.streamMs, deadline: Date.now() + httpRelayLimits.streamMs }); } catch { this.settle(id, "delivery_uncertain"); }
 			});
@@ -180,18 +218,43 @@ export class HttpRelay extends DurableObject {
 			if (p.ws !== ws || p.generation !== a.generation) throw new Error();
 			if (m.type === "start" && keys(m, "v,type,generation,id,status,headers") && !p.started && Number.isInteger(m.status) && m.status >= 200 && m.status <= 599 && !(m.status >= 300 && m.status < 400) && headerPairs(m.headers)) {
 				clearTimeout(p.headerTimer); p.started = true; p.noBody = m.status === 204 || m.status === 205;
+				p.response = { status: m.status, headers: m.headers };
+				const responseHeaders = new Headers(m.headers);
+				const nativeSse = !p.noBody && p.nativeRpc && (responseHeaders.get("content-type") || "").split(";", 1)[0].trim().toLowerCase() === "text/event-stream";
+				if (nativeSse && responseHeaders.has("content-encoding")) { this.settle(m.id, "unsupported_stream_encoding", 502, true); return; }
+				p.streaming = nativeSse;
+				if (!p.streaming) { this.credit(m.id, p); return; }
 				const stream = new ReadableStream<Uint8Array>({
-					start: c => { p.controller = c; },
-					pull: () => { if (!this.pending.has(m.id) || p.credit) return; p.credit = true; try { this.send(ws, p.generation, { type: "credit", id: m.id, seq: p.seq }); } catch { this.settle(m.id, "delivery_uncertain"); } },
+					start: c => {
+						p.controller = c;
+						// SSE comments are transport keepalives, never application events.
+						// At most one may queue; complete application records below remain
+						// byte-for-byte intact even when their wire chunks split mid-line.
+						p.heartbeat = setInterval(() => { if (c.desiredSize !== null && c.desiredSize >= 0) c.enqueue(enc.encode(": relay keepalive\n\n")); }, 100);
+					},
+					pull: () => this.credit(m.id, p),
 					cancel: () => this.settle(m.id, "request_cancelled", 502, true),
 				}, { highWaterMark: 0 });
-				p.resolve(new Response(p.noBody ? null : stream, { status: m.status, headers: m.headers, encodeBody: "manual" })); return;
+				p.resolve(new Response(stream, { ...p.response, encodeBody: "manual" })); return;
 			}
 			if (m.type === "chunk" && keys(m, "v,type,generation,id,seq,body") && p.started && !p.noBody && p.credit && m.seq === p.seq) {
 				const body = decode(m.body, httpRelayLimits.chunkBytes); if (!body.length || p.bytes + body.length > httpRelayLimits.responseBytes) throw new Error();
-				p.bytes += body.length; p.seq++; p.credit = false; p.controller!.enqueue(body); return;
+				p.bytes += body.length; p.seq++; p.credit = false;
+				if (!p.streaming) { p.chunks.push(body); this.credit(m.id, p); return; }
+				p.sseBuffer = joined([p.sseBuffer, body], p.sseBuffer.length + body.length);
+				const boundary = completeSse(p.sseBuffer);
+				if (boundary) { p.controller!.enqueue(p.sseBuffer.slice(0, boundary)); p.sseBuffer = p.sseBuffer.slice(boundary); }
+				else this.credit(m.id, p);
+				return;
 			}
-			if (m.type === "end" && keys(m, "v,type,generation,id,seq") && p.started && m.seq === p.seq) { this.settle(m.id); return; }
+			if (m.type === "end" && keys(m, "v,type,generation,id,seq") && p.started && m.seq === p.seq) {
+				if (p.streaming && p.sseBuffer.length) {
+					const boundary = completeSse(p.sseBuffer, true);
+					if (boundary) p.controller!.enqueue(p.sseBuffer.slice(0, boundary));
+					if (boundary !== p.sseBuffer.length) { this.settle(m.id, "delivery_uncertain"); return; }
+				}
+				this.settle(m.id); return;
+			}
 			if (m.type === "error" && keys(m, "v,type,generation,id,code") && ["local_failure", "timeout"].includes(m.code)) { this.settle(m.id, m.code === "timeout" ? "delivery_timeout" : "delivery_uncertain", m.code === "timeout" ? 504 : 502); return; }
 			throw new Error();
 		} catch { try { ws.close(4008, "invalid relay frame"); } catch { /* closed */ } this.cleanup(ws); }

@@ -125,13 +125,35 @@ export async function routeHttpRelay(req: Request, ctx: TenantContext): Promise<
 	for (const name of Array.from(headers.keys())) if (/^x-a2a-/i.test(name) && name !== "x-a2a-relay-authorization") headers.delete(name);
 	headers.set("x-a2a-relay-target", card ? "card" : rpc ? "rpc" : "webhook");
 	headers.set("x-a2a-relay-method", card ? "GET" : "POST");
+	// Older workerd incoming signals carry IGNORE_FOR_SUBREQUESTS. Bridge to
+	// an ordinary signal and retain it until native SSE consumption ends.
+	// Together with SSE comments this propagates real HTTP disconnects while
+	// the local service is idle, not just when it eventually writes again.
+	const controller = new AbortController();
+	const abort = () => controller.abort();
+	req.signal.addEventListener("abort", abort, { once: true });
+	if (req.signal.aborted) abort();
+	const detach = () => req.signal.removeEventListener("abort", abort);
 	try {
-		const response = await httpRelayFetch(ctx, webhook ? "webhook" : "a2a", "/forward", { method: "POST", headers, body: card ? null : req.body, signal: req.signal });
-		if (!card || !response.ok) return response;
+		const response = await httpRelayFetch(ctx, webhook ? "webhook" : "a2a", "/forward", { method: "POST", headers, body: card ? null : req.body, signal: controller.signal });
+		if (!card || !response.ok) {
+			if (!rpc || (response.headers.get("content-type") || "").split(";", 1)[0].trim().toLowerCase() !== "text/event-stream" || response.headers.has("content-encoding") || !response.body) { detach(); return response; }
+			const reader = response.body.getReader();
+			const cleanup = detach;
+			const body = new ReadableStream<Uint8Array>({
+				async pull(c) {
+					try { const { value, done } = await reader.read(); if (done) { cleanup(); c.close(); } else c.enqueue(value); }
+					catch (e) { cleanup(); controller.abort(); c.error(e); }
+				},
+				async cancel() { cleanup(); controller.abort(); await reader.cancel().catch(() => {}); },
+			}, { highWaterMark: 0 });
+			return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers, encodeBody: "manual" });
+		}
+		detach();
 		const bytes = await capped(response.body, 256 * 1024);
 		const status = await httpRelayFetch(ctx, "a2a", "/status");
 		const ready = await status.json() as { connected?: boolean; capabilities?: string[] };
 		const rewritten = httpRelayCard(JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes)), ctx.PUBLIC_URL.replace(/\/$/, "") + "/relay/a2a", ready.connected === true && ready.capabilities?.includes("response-stream-v1") === true, path.endsWith("/agent.json"));
 		return Response.json(rewritten, { headers: { "cache-control": "no-store" } });
-	} catch { return fail("http_relay_unavailable", 502); }
+	} catch { detach(); controller.abort(); return fail("http_relay_unavailable", 502); }
 }
