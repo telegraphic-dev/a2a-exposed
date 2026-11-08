@@ -25,7 +25,10 @@ Native WebSocket hides handshake HTTP status, so check endpoint, capability and
 enrollment rather than assuming every failure is authentication. Expired/skewed
 frames and temporary concurrency saturation fail that delivery, not the socket.
 Owner draft tests expose canonical `error` codes: `offline`, `timeout`, `revoked`,
-`stale_enrollment`, `invalid`, `local_http`, `unavailable`; success omits `error`.
+`stale_enrollment`, `invalid`, `local_http`, `busy`, `uncertain`, `unavailable`; success omits `error`.
+`busy` means temporary backpressure; `uncertain` means a POST may have executed.
+Check the connector, receiver and authoritative inbox before explicitly retesting;
+never automatically replay an unconfirmed execution.
 Keep the numeric local HTTP `status` (including 401/500); never parse `info`.
 
 The owner API can test an unsaved relay draft before saving: `POST

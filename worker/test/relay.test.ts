@@ -144,14 +144,15 @@ test("real local HTTP non-2xx, disconnect after execution and deadline stay unco
 		await until(async () => (await (await r.call("/owner/wake/relay")).json() as any).connected);
 		const rejected = await (await r.call("/owner/wake/test", "POST")).json() as any; assert.equal(rejected.status, 403); assert.equal(rejected.error, "local_http");
 		mode = "disconnect";
-		assert.equal((await (await r.call("/owner/wake/test", "POST")).json() as any).status, null);
+		const disconnected = await (await r.call("/owner/wake/test", "POST")).json() as any;
+		assert.equal(disconnected.status, null); assert.equal(disconnected.error, "uncertain");
 		await new Promise(a => setTimeout(a, 100)); assert.equal(count, 2, "uncertain execution was not retried");
 		mode = "timeout";
 		const started = Date.now();
 		const waiting = Array.from({ length: 4 }, () => r.call("/owner/wake/test", "POST"));
 		await until(() => count === 6);
 		const saturated = await (await r.call("/owner/wake/test", "POST")).json() as any;
-		assert.equal(saturated.status, null); assert.ok(Date.now() - started < 5000, "bounded concurrency rejects instead of queuing");
+		assert.equal(saturated.status, null); assert.equal(saturated.error, "busy"); assert.ok(Date.now() - started < 5000, "bounded concurrency rejects instead of queuing");
 		for (const response of await Promise.all(waiting)) assert.equal((await response.json() as any).status, null);
 		assert.ok(Date.now() - started >= 9000); assert.equal(count, 6);
 	} finally { stop.abort(); await connector; server.closeAllConnections(); await new Promise<void>(a => server.close(() => a())); await r.mf.dispose(); }

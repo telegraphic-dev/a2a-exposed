@@ -208,13 +208,16 @@ status snapshot; `status` is the actual local HTTP status, or null when offline
 or unconfirmed. Treat only 2xx **local status** as test success; successful
 responses omit `error`. Failures include a machine-readable `error`, preserved
 through owner HTTP and trusted owner RPC: `offline`, `timeout`, `revoked`,
-`stale_enrollment`, `invalid`, `local_http`, or `unavailable`. Never parse `info`
+`stale_enrollment`, `invalid`, `local_http`, `busy`, `uncertain`, or `unavailable`. Never parse `info`
 for recovery decisions. `status` retains actual local HTTP values, including 401
 and 500 (`error:"local_http"`); transport failures have `status:null`.
 `connector_offline` maps to `offline`, an actual relay delivery deadline to
 `timeout`, missing enrollment to `revoked`, and an old epoch to
-`stale_enrollment`. Saturation, disconnected/uncertain delivery and unknown relay
-failures map to `unavailable`. Configured/transport/connector metadata is retained
+`stale_enrollment`. Saturation maps to `busy`; disconnected/uncertain delivery
+maps to `uncertain`, which means the local POST may already have executed. Check
+the connector, receiver and authoritative inbox before another explicit test;
+never infer that replay is safe. Only unknown relay failures map to `unavailable`.
+Configured/transport/connector metadata is retained
 when available. Invalid draft or render failure is HTTP 400 (`invalid`);
 stale/revoked enrollment is 409 (checked both before render and at final dispatch);
 disabled feature is 404. No response returns the

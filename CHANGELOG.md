@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Distinguish busy and uncertain relay delivery from service incompatibility;
+  preserve unconfirmed execution and advise checking the receiver and inbox before retesting.
+
 - Make relay setup, protocol/policy failures and replacement/revocation actionable
   nonzero exits with sanitized diagnostics; bound failed handshakes and enforce
   a 500ms reconnect floor. Clock skew and temporary saturation fail only delivery.

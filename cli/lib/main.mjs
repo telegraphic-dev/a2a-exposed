@@ -275,6 +275,7 @@ Wake relay (optional Worker feature, no tunnel or service install)
                                 foreground fixed-loopback connector; no JSON/stdout stream, safe diagnostics on stderr
                                 exit 0 on Ctrl-C/SIGTERM; exit 1 on setup/protocol/policy failure
                                 reconnect waits 500ms–30s; stop after 3 failed 10s handshakes
+                                busy/uncertain tests are unconfirmed: check receiver and inbox before retesting
                                 self-host deploy --wake-relay 1 --wake-transport relay enables it;
                                 application bearer/HMAC credentials still apply. See docs/wake-relay.md
 
