@@ -108,3 +108,5 @@ export { CONTROL_MIGRATIONS, CONTROL_MIGRATIONS_DIR } from "./migrations.ts";
 export type { ControlMigration } from "./migrations.ts";
 
 export { redact, sanitized } from "./redact.ts";
+// Pure metadata is safe in Node; the Worker class is exported by the /http-relay subpath.
+export { HTTP_RELAY_PROTOCOL_VERSION, HTTP_RELAY_CAPABILITIES } from "./http-relay-metadata.ts";

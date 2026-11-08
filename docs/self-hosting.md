@@ -8,6 +8,13 @@ This page is the self-hosted path: the A2A endpoint in your Cloudflare account, 
 
 The client table is in [Getting started](getting-started.md#clients).
 
+For an outbound-only alternative to a receiver Tunnel, see the separate
+[HTTP/native A2A relay](http-relay.md). Explicit `--http-relay 1` deployment opt-in
+adds a bounded fixed-loopback transport for original webhooks or a local A2A
+JSON-RPC service, including responses/SSE. It does not convert the existing
+Tunnel façade into a streaming proxy or bypass native application authentication.
+The original wake-only connector remains a separate feature.
+
 `init` deploys one A2A endpoint. Pass `--hostname` for your own domain, or omit it to serve on `*.workers.dev`. Password setup guidance appears only when password approval is enabled; OIDC-only endpoints omit it.
 
 Secrets go in the environment or a chmod-600 file, never on the command line or in chat:

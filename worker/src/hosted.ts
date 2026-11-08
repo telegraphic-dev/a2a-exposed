@@ -12,6 +12,7 @@
 // The daily backup cron runs only when BACKUP_BUCKET is bound, and it returns before any flush.
 // OpenID Connect approval, when the issuer, client id, client secret, and allowlist are set, uses the same pages.
 import { relayFetch } from "./relay-routing.ts";
+import { httpRelayObject, httpRelayProfiles } from "./http-relay-routing.ts";
 import { DurableObject } from "cloudflare:workers";
 import worker, { cronFlush, dispatch, nextCronAt, onWakeWrite, runOwnerRpc } from "./index.ts";
 import { accountIdOf, type OwnerRpcRequest, type OwnerRpcResult } from "./owner-rpc.ts";
@@ -26,6 +27,7 @@ import { WAKE_SECRET_KEYS, omitSealedSecrets, openWakeSecrets } from "./wake-sec
 export { clearDirectoryCache, directoryKey, lookupDirectory, parseDirectoryEntry, pinDirectoryRegion, tenantNameFromHost, tenantRegion, TENANT_NAME } from "./directory.ts";
 export type { DirectoryEntry };
 export { WakeRelay } from "./relay.ts";
+export { HttpRelay } from "./http-relay.ts";
 
 const JSON_HDR = { "content-type": "application/json", "cache-control": "no-store" };
 const notFound = () => Response.json({ error: "no such agent" }, { status: 404, headers: JSON_HDR });
@@ -160,7 +162,27 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 		return !!this.#row && (this.env.WAKE_RELAY_ENABLED === "1" || this.#row.config.WAKE_TRANSPORT === "relay" || await this.ctx.storage.get("wake_relay_region") !== undefined);
 	}
 
+	async #httpRelayAuthorityPossible(): Promise<boolean> {
+		return !!this.#row && (this.env.HTTP_RELAY_ENABLED === "1" || await this.ctx.storage.get("http_relay_region") !== undefined);
+	}
+
+	async #fenceHttpRelay(): Promise<void> {
+		if (!await this.#httpRelayAuthorityPossible()) return;
+		// Do not gate revocation on HTTP_RELAY_ENABLED: a deployment flag cannot erase authority.
+		await this.#tenant(); // pin the region before first use, including unsaved enrollment drafts
+		const saved = await this.ctx.storage.get<string>("http_relay_region");
+		if (!this.#row || !this.env.HTTP_RELAY || (saved !== "default" && saved !== "eu" && saved !== "fedramp")) throw new Error("HTTP relay lifecycle fence unavailable");
+		const region: DataRegion = saved === "default" ? "" : saved;
+		for (const profile of httpRelayProfiles) {
+			const stub = httpRelayObject(this.env.HTTP_RELAY, "host", this.#row.tenantId, region, profile);
+			const response = await stub.fetch(new Request("https://http-relay.internal/disable", { method: "POST" }));
+			if (!response.ok) throw new Error("HTTP relay lifecycle fence failed");
+		}
+	}
+
 	async #fenceRelay(path: "/enable" | "/disable"): Promise<void> {
+		// Reactivation never reenables native authority: the owner must explicitly reenroll.
+		await this.#fenceHttpRelay();
 		if (!await this.#relayAuthorityPossible()) return;
 		const tenant = await this.#tenant();
 		if (!tenant?.relayNamespace || tenant.relayRegion === undefined) throw new Error("relay lifecycle fence unavailable; restore relay binding, flag and region before retrying");
@@ -199,8 +221,20 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 				}
 			}
 		}
+		let httpRelayRegion: DataRegion | undefined;
+		if (this.env.HTTP_RELAY_ENABLED === "1" && this.env.HTTP_RELAY) {
+			let saved = await this.ctx.storage.get<string>("http_relay_region");
+			if (saved === undefined && this.env.TENANT_DIRECTORY) {
+				const entry = parseDirectoryEntry(await this.env.TENANT_DIRECTORY.get(`tenant:${row.name}`, "json"));
+				if (entry?.id === row.tenantId && ["default", "eu", "fedramp"].includes(entry.region)) {
+					saved = entry.region;
+					await this.ctx.storage.put("http_relay_region", saved);
+				}
+			}
+			if (saved === "default" || saved === "eu" || saved === "fedramp") httpRelayRegion = saved === "default" ? "" : saved;
+		}
 		return hostedTenantContext(this.env, {
-			relayRegion, configVersion: row.version, id: row.tenantId, db: this.#db, publicUrl, ownerTokenHash: row.ownerTokenHash,
+			httpRelayRegion, relayRegion, configVersion: row.version, id: row.tenantId, db: this.#db, publicUrl, ownerTokenHash: row.ownerTokenHash,
 			config, limits: row.limits, approval: row.approval, status: row.status,
 		});
 	}
@@ -330,7 +364,7 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 			};
 			// Fence separate relay authority before accepting a suspension/deletion or reactivation.
 			if (current && (body.status !== "active" || current.status !== "active" || await this.ctx.storage.get("wake_relay_fence_pending"))) {
-				if (await this.#relayAuthorityPossible()) await this.ctx.storage.put("wake_relay_fence_pending", true);
+				if (await this.#relayAuthorityPossible() || await this.#httpRelayAuthorityPossible()) await this.ctx.storage.put("wake_relay_fence_pending", true);
 				try { await this.#fenceRelay(body.status === "active" ? "/enable" : "/disable"); }
 				catch { return { fenceError: "relay lifecycle fence unavailable; restore relay binding, flag and region before retrying" }; }
 			}
@@ -436,6 +470,16 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 	 * An object with no config row answers 404 and writes nothing.
 	 */
 	async owner(input: OwnerRpcRequest): Promise<OwnerRpcResult> {
+		if (input && /^\/owner\/relay\/http\/(webhook|a2a)$/.test(input.path || "") && (input.method === "POST" || input.method === "DELETE")) {
+			return this.ctx.blockConcurrencyWhile(async () => {
+				try { return await this.#owner(input); }
+				catch { return { status: 503, body: { error: "HTTP relay management unavailable" } }; }
+			});
+		}
+		return this.#owner(input);
+	}
+
+	async #owner(input: OwnerRpcRequest): Promise<OwnerRpcResult> {
 		if (!this.#row) {
 			const accountId = accountIdOf(input && typeof input === "object" ? (input as { accountId?: unknown }).accountId : undefined);
 			if (!accountId) {
@@ -451,6 +495,17 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 	}
 
 	async fetch(req: Request): Promise<Response> {
+		if (/^\/owner\/relay\/http\/(webhook|a2a)$/.test(new URL(req.url).pathname) && (req.method === "POST" || req.method === "DELETE")) {
+			// Serialize enrollment with suspend/delete: an old active snapshot cannot reenroll after a fence.
+			return this.ctx.blockConcurrencyWhile(async () => {
+				try { return await this.#fetch(req); }
+				catch { return Response.json({ error: "HTTP relay management unavailable" }, { status: 503 }); }
+			});
+		}
+		return this.#fetch(req);
+	}
+
+	async #fetch(req: Request): Promise<Response> {
 		const row = this.#row;
 		if (!row) return notFound();
 		if (row.status !== "active") {

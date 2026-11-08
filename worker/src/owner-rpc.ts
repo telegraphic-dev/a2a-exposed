@@ -7,6 +7,7 @@
 // POST /owner/mcp/send, reply, mark_working, poll_outbound, and cancel_outbound take a checked argument object. A peer token is not one of those arguments.
 // Self-host never calls this.
 
+import { httpRelayEnrollment } from "./http-relay-routing.ts";
 import { ID_RE } from "./a2a.ts";
 import { credentialIsMasked, previewHeaderPlain, relayWakeTestInput } from "./wake.ts";
 
@@ -178,6 +179,7 @@ const ROUTES: RouteDef[] = [
 	{ method: "DELETE", name: "DELETE /owner/outbound-peers/:alias", take: (s) => s.length === 3 && s[1] === "outbound-peers" && ALIAS.test(s[2]!) && s[2] !== "." && s[2] !== "..", search: noQuery, path: (s) => `/owner/outbound-peers/${s[2]}` },
 	{ method: "GET", name: "GET /owner/facade", take: (s) => s.length === 2 && s[1] === "facade", search: noQuery, path: () => "/owner/facade" },
 	{ method: "POST", name: "POST /owner/facade/verify", take: (s) => s.length === 3 && s[1] === "facade" && s[2] === "verify", search: noQuery, path: () => "/owner/facade/verify" },
+	...(["GET", "POST", "DELETE"] as const).map(method => ({ method, name: `${method} /owner/relay/http/:profile`, take: (s: string[]) => s.length === 4 && s[1] === "relay" && s[2] === "http" && (s[3] === "webhook" || s[3] === "a2a"), search: noQuery, path: (s: string[]) => `/owner/relay/http/${s[3]}` })),
 	...(["GET", "POST", "DELETE"] as const).map(method => ({ method, name: `${method} /owner/wake/relay`, take: (s: string[]) => s.length === 3 && s[1] === "wake" && s[2] === "relay", search: noQuery, path: () => "/owner/wake/relay" })),
 	{ method: "GET", name: "GET /owner/wake/preview", take: (s) => s.length === 3 && s[1] === "wake" && s[2] === "preview", search: noQuery, path: () => "/owner/wake/preview" },
 	{ method: "POST", name: "POST /owner/wake/test", take: (s) => s.length === 3 && s[1] === "wake" && s[2] === "test", search: noQuery, path: () => "/owner/wake/test" },
@@ -297,6 +299,12 @@ function forwardBody(body: unknown): { ok: true; value: Record<string, string> }
  * Every other route accepts only an absent body.
  */
 export function ownerRpcBody(routeName: string, body: unknown): { ok: true; value?: Record<string, unknown> } | { ok: false; error: string; code?: string } {
+	if (routeName === "DELETE /owner/relay/http/:profile") {
+		if (!body || typeof body !== "object" || Array.isArray(body)) return { ok: false, error: "generation is invalid" };
+		const b = body as Record<string, unknown>;
+		return Object.keys(b).join(",") === "generation" && Number.isSafeInteger(b.generation) && Number(b.generation) >= 0 ? { ok: true, value: { generation: b.generation } } : { ok: false, error: "generation is invalid" };
+	}
+	if (routeName === "POST /owner/relay/http/:profile") return httpRelayEnrollment(body) ? { ok: true, value: { ...body } } : { ok: false, error: "invalid_http_relay_enrollment" };
 	if (routeName === "POST /owner/wake/test" && body != null) {
 		const value = relayWakeTestInput(body);
 		return value ? { ok: true, value } : { ok: false, error: "invalid" };

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://a2a-exposed.dev/schemas/http-relay-enrollment.json",
+  "title": "HTTP relay owner enrollment (profile is selected by the owner route)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["credentialHash", "ingressHash", "headers"],
+  "properties": {
+    "credentialHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "ingressHash": { "type": "string", "pattern": "^[a-f0-9]{64}$", "description": "Must differ from credentialHash. SHA256 of a distinct a2ai_ ingress token." },
+    "headers": {
+      "type": "array",
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[a-z0-9!#$%&'*+.^_`|~-]{1,64}$", "not": { "pattern": "^(?:host|content-length|cookie|set-cookie|location|via|connection|keep-alive|proxy-.*|transfer-encoding|te|trailer|upgrade|expect|origin|sec-.*|cf-.*|x-forwarded-.*|forwarded|x-a2a-.*|x-owner-.*)$" } },
+      "description": "Only explicitly listed application headers are forwarded; normally content-type, accept, authorization and application-specific signature headers. Ingress authentication is never a local application credential."
+    }
+  }
+}

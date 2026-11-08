@@ -14,6 +14,7 @@ import * as upd from "./update.mjs";
 import * as fb from "./feedback.mjs";
 import * as un from "./uninstall.mjs";
 import { relay } from "./relay.mjs";
+import { relayHttp } from "./http-relay.mjs";
 import { finishLink, createLink, linkOutput, linkUsage } from "./link-finish.mjs";
 
 const VERSION = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
@@ -279,6 +280,25 @@ Wake relay (optional Worker feature, no tunnel or service install)
                                 self-host deploy --wake-relay 1 --wake-transport relay enables it;
                                 application bearer/HMAC credentials still apply. See docs/wake-relay.md
 
+HTTP endpoint relays (separate opt-in Worker feature; --http-relay 1 on init/deploy)
+  relay http|a2a create --token-file FILE --ingress-token-file FILE [--forward-headers LIST]
+                                enroll/rotate; reserves two NEW mode-600 credential files; no inline secrets
+  relay http|a2a status [--json]  nonsecret enrollment and connection readiness
+  relay http|a2a revoke          fence this profile and disconnect its connector
+  relay http|a2a run --token-file FILE --local-url http://127.0.0.1:8644/fixed
+             [--url wss://agent.example.com/relay/http/PROFILE/connect] [--card-url URL]
+             [--local-headers-file FILE]
+                                --url defaults from A2A_BASE_URL; CLI http maps to wire PROFILE webhook
+                                fixed loopback receiver; a2a profile uses optional same-origin card URL
+                                create/status/revoke always print JSON; run is silent on stdout
+                                foreground only: keep running; exit 0 on Ctrl-C/SIGTERM, 1 on failure
+                                retries 500ms-30s; stops after 3 failed 10s handshakes
+                                ingress callers need X-A2A-Relay-Authorization: Bearer <ingress token>
+                                required for discovery too: invited callers, not URL-only public access
+                                --forward-headers explicitly allows original app bearer/signature headers
+                                local app owns per-peer/task authorization; shared ingress is NOT peer auth
+                                native A2A is separate from Worker inbox/pairing/facade. No push callbacks.
+
 Inbox (owner side)
   inbox [--context C] [--from PEER] [--all] [--json]
                                            unhandled inbound tasks, and a reply to a message you sent until
@@ -474,7 +494,7 @@ const SPEC = {
 	status: { json: B, agent: S, "control-url": S },
 	env: { json: B },
 	export: { sql: B },
-	relay: { "token-file": S, "token-env": S, "local-url": S, url: S, json: B, "config-version": S },
+	relay: { "forward-headers": S, "ingress-token-file": S, "local-headers-file": S, "card-url": S, "token-file": S, "token-env": S, "local-url": S, url: S, json: B, "config-version": S },
 	upstream: { json: B },
 	connect: { alias: S, name: S, json: B, "no-wait": B, replace: B, force: B, "card-url": S },
 	// Internal hosted-service integration commands. Keep out of public help until the production flow is available.
@@ -563,6 +583,7 @@ export async function main(argv) {
 			throw new CliError(`unknown upstream action ${sub} (verify)`);
 		}
 		case "relay":
+			if (p[0] === "http" || p[0] === "a2a") return relayHttp(p, o);
 			if (p.length !== 1) throw new CliError("usage: relay create|status|revoke|run");
 			return relay(p[0], o);
 		case "wake": return C.deploymentKind() === "hosted" || o.agent ? hosted.output(() => hosted.wake(p[0], o), o) : dep.wake(p[0], o);
