@@ -186,7 +186,8 @@ are not Worker inbox operations. Supported RPC methods are `SendMessage`, `SendS
 service must actually implement and advertise the selected operation. Push
 registration/configuration is refused because otherwise a caller could make the
 private service call an unsafe callback URL. Admission errors are sanitized
-JSON-RPC responses, preserving a structurally valid original ID where available:
+JSON-RPC responses with HTTP 400 and `Cache-Control: no-store`, preserving a
+structurally valid original ID where available (otherwise `id: null`):
 `parse_error` (-32700), `invalid_request` (-32600), `method_not_found` (-32601),
 `invalid_params` (-32602), or `push_not_supported` (-32003). These are relay
 rejections, not errors reported by the local service; no rejected request reaches
