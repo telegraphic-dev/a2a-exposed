@@ -146,3 +146,32 @@ test("security: authenticated DO admission blocks push before dispatch and prese
 		assert.deepEqual(requests[0].headers, [["authorization", "Bearer dummy-app"], ["content-type", "application/json"]]);
 	} finally { socket?.close(); await mf.dispose(); }
 });
+
+test("security: stalled uploads time out without forwarding collected bytes in either profile", { timeout: 30000 }, async () => {
+	const mf = await relayRuntime(); const sockets: any[] = []; const uploads: ReadableStream[] = [];
+	try {
+		const ns = await mf.getDurableObjectNamespace("HTTP_RELAY");
+		await Promise.all(["webhook", "a2a"].map(async profile => {
+			const stub = ns.get(ns.idFromName(`upload-timeout-${profile}`));
+			await stub.fetch("https://http-relay.internal/enroll", { method: "POST", body: JSON.stringify({ credentialHash: hash(connector), ingressHash: hash(ingress), headers: [], profile }) });
+			const upgraded = await stub.fetch("https://http-relay.internal/connect", { headers: { upgrade: "websocket", "sec-websocket-protocol": `a2a-http-relay-v2, ${connector}` } });
+			const socket = upgraded.webSocket!; sockets.push(socket); let requests = 0;
+			socket.addEventListener("message", (event: any) => {
+				const m = JSON.parse(event.data);
+				if (m.type === "hello") socket.send(JSON.stringify({ ...m, type: "ready" }));
+				if (m.type === "request") {
+					requests++;
+					socket.send(JSON.stringify({ v: 2, generation: m.generation, type: "start", id: m.id, status: 204, headers: [] }));
+					socket.send(JSON.stringify({ v: 2, generation: m.generation, type: "end", id: m.id, seq: 0 }));
+				}
+			}); socket.accept();
+			const deadline = Date.now() + 5000;
+			while (!(await (await stub.fetch("https://http-relay.internal/status")).json() as any).connected) { assert.ok(Date.now() < deadline); await new Promise(r => setTimeout(r, 10)); }
+			const body = new ReadableStream<Uint8Array>({ start(c) { c.enqueue(new TextEncoder().encode('{"jsonrpc":"2.0","id":7,"method":"GetTask","params":{"id":"x"}}')); } }); uploads.push(body);
+			const response = await stub.fetch("https://http-relay.internal/forward", { method: "POST", headers: { "x-a2a-relay-authorization": `Bearer ${ingress}`, "x-a2a-relay-target": profile === "webhook" ? "webhook" : "rpc", "x-a2a-relay-method": "POST" }, body, duplex: "half" } as RequestInit);
+			assert.equal(response.status, 504, profile);
+			assert.deepEqual(await response.json(), { error: "request_timeout" });
+			assert.equal(requests, 0, "timeout must not dispatch even a valid-looking prefix");
+		}));
+	} finally { for (const socket of sockets) socket.close(); for (const body of uploads) if (!body.locked) await body.cancel().catch(() => {}); await mf.dispose(); }
+});

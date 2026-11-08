@@ -24,6 +24,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { timingSafeEqualStr } from "./a2a.ts";
 import { httpRelayRpcAllowed } from "./http-relay-routing.ts";
+import { readHttpRelayBody } from "./http-relay-body.ts";
 
 export type HttpRelayProfile = "webhook" | "a2a";
 export type HttpRelayTarget = "webhook" | "rpc" | "card";
@@ -65,20 +66,7 @@ function decode(value: unknown, limit: number): Uint8Array {
 	if (out.length > limit || encode(out) !== value) throw new Error("invalid body");
 	return out;
 }
-async function readBody(req: Request): Promise<Uint8Array> {
-	const reader = req.body?.getReader(); if (!reader) return new Uint8Array();
-	const chunks: Uint8Array[] = []; let size = 0;
-	let timer: ReturnType<typeof setTimeout> | undefined;
-	const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => { void reader.cancel().catch(() => {}); reject(new Error("timeout")); }, httpRelayLimits.headerMs); });
-	try {
-		while (true) {
-			const { value, done } = await Promise.race([reader.read(), timeout]); if (done) break;
-			size += value.length; if (size > httpRelayLimits.requestBytes) { void reader.cancel().catch(() => {}); throw new Error("size"); } chunks.push(value);
-		}
-		const result = new Uint8Array(size); let offset = 0;
-		for (const c of chunks) { result.set(c, offset); offset += c.length; } return result;
-	} finally { if (timer !== undefined) clearTimeout(timer); reader.releaseLock(); }
-}
+const readBody = (req: Request): Promise<Uint8Array> => readHttpRelayBody(req, httpRelayLimits);
 function joined(chunks: Uint8Array[], size: number): Uint8Array {
 	const bytes = new Uint8Array(size); let offset = 0;
 	for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
