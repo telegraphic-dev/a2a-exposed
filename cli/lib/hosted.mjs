@@ -54,9 +54,13 @@ async function request(origin, path, { token = "", method = "GET", body, fetchIm
 	if (discovery && response.status === 404) fail("unsupported", SETUP_UNSUPPORTED);
 	if (!data || typeof data !== "object" || Array.isArray(data)) fail("invalid_response", "The hosted service returned an invalid setup response.");
 	if (!response.ok && path.includes("/wake/relay")) {
-		const known = ["invalid_grant", "insufficient_scope", "conflict", "invalid_reference", "confirmation", "offline", "unavailable", "not_found", "draft", "body"];
-		const code = known.includes(data.error) ? data.error : `http_${response.status}`;
-		fail(code, "Relay setup was refused or unconfirmed. Run relay wake status --agent NAME --json and hosted capabilities --json, then check the receiver and approved scopes. A receipt may be spent; do not automatically repeat a test or save.");
+		const known = ["invalid_grant", "insufficient_scope", "conflict", "invalid_reference", "confirmation", "offline", "unavailable", "not_found", "draft", "body", "local_http", "timeout", "busy", "uncertain", "stale_enrollment", "revoked"];
+		const supplied = typeof data.error === "string" ? data.error : data.code;
+		const code = known.includes(supplied) ? supplied : `http_${response.status}`;
+		const next = "Relay setup was refused or unconfirmed. Run relay wake status --agent NAME --json and hosted capabilities --json, then check the receiver and approved scopes. A receipt may be spent; do not automatically repeat a test or save.";
+		const error = new CliError(next);
+		error.result = { ok: false, code, next, ...(Number.isInteger(data.localStatus) && data.localStatus >= 100 && data.localStatus <= 599 ? { localStatus: data.localStatus } : {}) };
+		throw error;
 	}
 	if (!response.ok) {
 		if (wakeRequest && [401, 403, 404].includes(response.status)) {
