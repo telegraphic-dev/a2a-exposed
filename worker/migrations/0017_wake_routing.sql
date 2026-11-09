@@ -17,3 +17,11 @@ CREATE TABLE IF NOT EXISTS wake_dedup (
   PRIMARY KEY (kind, peer, ref)
 );
 CREATE INDEX IF NOT EXISTS messages_message_id ON messages(message_id);
+-- One stored send per peer and message id. The claim is taken in the same transaction as the task.
+CREATE TABLE IF NOT EXISTS message_claims (
+  peer TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  claim_token TEXT NOT NULL,
+  PRIMARY KEY (peer, message_id)
+);

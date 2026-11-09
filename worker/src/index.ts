@@ -82,33 +82,52 @@ function claimContextStmt(ctx: TenantContext, contextId: string, peer: string, t
 	).bind(contextId, peer, ts);
 }
 
-/** A new task is stored only when this peer owns the context. Runs in the same batch as `claimContextStmt`. */
-function saveTaskIfOwnerStmt(ctx: TenantContext, t: Json) {
+/** One attempt to store this peer's message id. A concurrent retry keeps the first claim. */
+function claimMessageStmt(ctx: TenantContext, peer: string, messageId: string, taskId: string, token: string, contextId: string) {
+	return ctx.DB.prepare(
+		`INSERT INTO message_claims (peer, message_id, task_id, claim_token)
+		 SELECT ?1, ?2, ?3, ?4
+		 WHERE EXISTS (SELECT 1 FROM conversation_owners WHERE context_id = ?5 AND peer = ?1)
+		 ON CONFLICT(peer, message_id) DO NOTHING`,
+	).bind(peer, messageId, taskId, token, contextId);
+}
+
+function saveTaskIfClaimStmt(ctx: TenantContext, t: Json, messageId: string, token: string) {
 	return ctx.DB.prepare(
 		`INSERT INTO tasks (id, context_id, peer, state, protocol, created_at, updated_at, status_json, artifacts_json, metadata_json, push_configs_json)
 		 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11
 		 WHERE EXISTS (SELECT 1 FROM conversation_owners WHERE context_id = ?2 AND peer = ?3)
+		   AND EXISTS (SELECT 1 FROM message_claims WHERE peer = ?3 AND message_id = ?12 AND claim_token = ?13)
 		 ON CONFLICT(id) DO UPDATE SET state=?4, updated_at=?7, status_json=?8, artifacts_json=?9, metadata_json=?10, push_configs_json=?11
-		 WHERE EXISTS (SELECT 1 FROM conversation_owners WHERE context_id = ?2 AND peer = ?3)`,
+		 WHERE EXISTS (SELECT 1 FROM conversation_owners WHERE context_id = ?2 AND peer = ?3)
+		   AND EXISTS (SELECT 1 FROM message_claims WHERE peer = ?3 AND message_id = ?12 AND claim_token = ?13)`,
 	).bind(t.id, t.contextId, t._peer, t.status.state, t._protocol, t._createdAt, A.nowIso(), JSON.stringify(t.status),
-		JSON.stringify(t.artifacts || []), t.metadata ? JSON.stringify(t.metadata) : null, JSON.stringify(t._push || []));
+		JSON.stringify(t.artifacts || []), t.metadata ? JSON.stringify(t.metadata) : null, JSON.stringify(t._push || []), messageId, token);
 }
 
-function msgIfOwnerStmt(ctx: TenantContext, t: Json, m: Json) {
+function updateTaskIfClaimStmt(ctx: TenantContext, t: Json, messageId: string, token: string) {
+	return ctx.DB.prepare(
+		`UPDATE tasks SET state=?1, updated_at=?2, status_json=?3, artifacts_json=?4, metadata_json=?5, push_configs_json=?6
+		 WHERE id=?7 AND EXISTS (SELECT 1 FROM message_claims WHERE peer=?8 AND message_id=?9 AND claim_token=?10)`,
+	).bind(t.status.state, A.nowIso(), JSON.stringify(t.status), JSON.stringify(t.artifacts || []),
+		t.metadata ? JSON.stringify(t.metadata) : null, JSON.stringify(t._push || []), t.id, t._peer, messageId, token);
+}
+
+function msgIfClaimStmt(ctx: TenantContext, t: Json, m: Json, token: string) {
 	return ctx.DB.prepare(
 		`INSERT INTO messages (message_id, task_id, context_id, role, ts, message_json)
 		 SELECT ?1, ?2, ?3, ?4, ?5, ?6
-		 WHERE EXISTS (SELECT 1 FROM conversation_owners WHERE context_id = ?3 AND peer = ?7)`,
-	).bind(m.messageId, t.id, t.contextId, m.role, A.nowIso(), JSON.stringify(m), t._peer);
+		 WHERE EXISTS (SELECT 1 FROM message_claims WHERE peer = ?7 AND message_id = ?1 AND claim_token = ?8)`,
+	).bind(m.messageId, t.id, t.contextId, m.role, A.nowIso(), JSON.stringify(m), t._peer, token);
 }
 
-function histIfOwnerStmt(ctx: TenantContext, contextId: string, e: Json, owner: string) {
+function histIfClaimStmt(ctx: TenantContext, contextId: string, e: Json, owner: string, messageId: string, token: string) {
 	return ctx.DB.prepare(
 		`INSERT INTO history (context_id, ts, dir, peer, task_id, role, state, event, text, data_json)
 		 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10
-		 WHERE EXISTS (SELECT 1 FROM conversation_owners WHERE context_id = ?1 AND peer = ?11)`,
+		 WHERE EXISTS (SELECT 1 FROM message_claims WHERE peer = ?11 AND message_id = ?12 AND claim_token = ?13)`,
 	).bind(contextId, e.ts || A.nowIso(), e.dir || "local", e.peer ?? null, e.taskId ?? null, e.role ?? null, e.state ?? null,
-		e.event ?? null, e.text ?? null, e.data !== undefined ? JSON.stringify(e.data) : null, owner);
+		e.event ?? null, e.text ?? null, e.data !== undefined ? JSON.stringify(e.data) : null, owner, messageId, token);
 }
 
 // ------------------------------------------------------------------ self-aware fetch (a Worker cannot reliably fetch its own custom domain)
@@ -973,20 +992,40 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
 	// Keep the loop marker on the task even when it was supplied only on the message.
 	if (directReply) task.metadata = { ...(task.metadata || {}), [DIRECT_REPLY_META]: params.metadata?.[DIRECT_REPLY_META] || msg.metadata?.[DIRECT_REPLY_META] };
 	const preview = A.textOf(msg);
-	if (creating) {
-		const stored = await ctx.DB.batch([
+	const claimToken = A.newId();
+	const history = { dir: "in", peer: label, taskId: task.id, role: "user", text: preview, data: { messageId: msg.messageId } };
+	const stored = creating
+		? await ctx.DB.batch([
 			claimContextStmt(ctx, contextId, label, ts),
-			saveTaskIfOwnerStmt(ctx, task),
-			msgIfOwnerStmt(ctx, task, msg),
-			histIfOwnerStmt(ctx, contextId, { dir: "in", peer: label, taskId: task.id, role: "user", text: preview, data: { messageId: msg.messageId } }, label),
+			claimMessageStmt(ctx, label, msg.messageId, task.id, claimToken, contextId),
+			saveTaskIfClaimStmt(ctx, task, msg.messageId, claimToken),
+			msgIfClaimStmt(ctx, task, msg, claimToken),
+			histIfClaimStmt(ctx, contextId, history, label, msg.messageId, claimToken),
+		])
+		: await ctx.DB.batch([
+			claimMessageStmt(ctx, label, msg.messageId, task.id, claimToken, contextId),
+			updateTaskIfClaimStmt(ctx, task, msg.messageId, claimToken),
+			msgIfClaimStmt(ctx, task, msg, claimToken),
+			histIfClaimStmt(ctx, contextId, history, label, msg.messageId, claimToken),
 		]);
-		const wrote = stored[1]?.meta?.changes ?? 0;
-		if (wrote < 1) throw new RpcError(-32602, UNKNOWN_CONTEXT);
-	} else {
-		await ctx.DB.batch([
-			saveTaskStmt(ctx, task), msgStmt(ctx, task, msg),
-			histStmt(ctx, contextId, { dir: "in", peer: label, taskId: task.id, role: "user", text: preview, data: { messageId: msg.messageId } }),
-		]);
+	const held: Json = await ctx.DB.prepare(
+		"SELECT task_id, claim_token FROM message_claims WHERE peer = ? AND message_id = ?",
+	).bind(label, msg.messageId).first();
+	if (!held || typeof held.task_id !== "string" || typeof held.claim_token !== "string") throw new RpcError(-32602, UNKNOWN_CONTEXT);
+	// Another attempt stored this message id. Return that task and do not wake again.
+	if (held.claim_token !== claimToken) {
+		const winner = await loadTask(ctx, held.task_id);
+		if (!winner || winner._peer !== label) throw new RpcError(-32603, "Internal error");
+		const again = await routeInbound(ctx, label, winner.contextId, routed.fields.wake, routed.fields.intent, "", true);
+		await recordRoute(ctx, again.decision, "inbound");
+		const won = A.publicTask(winner, version, conf.historyLength);
+		return version.startsWith("1") ? { task: won } : won;
+	}
+	const taskWrite = creating ? stored[2]?.meta?.changes ?? 0 : stored[1]?.meta?.changes ?? 0;
+	if (creating && taskWrite < 1) {
+		await ctx.DB.prepare("DELETE FROM message_claims WHERE peer = ? AND message_id = ? AND claim_token = ?")
+			.bind(label, msg.messageId, claimToken).run();
+		throw new RpcError(-32602, UNKNOWN_CONTEXT);
 	}
 	log("message_received", { peer: label, contextId, taskId: task.id, chars: preview.length, version });
 	// Direct replies are stored for history, not scheduled as new work.
@@ -1964,10 +2003,11 @@ async function handlePush(req: Request, ctx: TenantContext, ectx: ExecutionConte
 		histStmt(ctx, rec.context_id, { dir: "in", peer: rec.peer, taskId, event: "push", state, text }),
 	]);
 	log("push_received", { peer: rec.peer, taskId, state });
-	const priorUpdate = updates.length > 1 ? pushUpdateView(updates[updates.length - 2]?.payload) : null;
-	const sameText = !!priorUpdate && statusText(priorUpdate.text) === statusText(text) && (priorUpdate.state ?? "") === (state ?? "");
+	// Identical payloads only. File bytes and URIs are part of the body, so a new file under the same name still wakes.
+	const priorPayload = updates.length > 1 ? updates[updates.length - 2]?.payload : undefined;
+	const samePayload = priorPayload !== undefined && await A.sha256(JSON.stringify(priorPayload)) === await A.sha256(JSON.stringify(body));
 	const pushDecision = decideRoute({
-		mode: routingMode(ctx.WAKE_ROUTING), wake: null, intent: null, duplicate: sameText, idle: false, unchanged: false,
+		mode: routingMode(ctx.WAKE_ROUTING), wake: null, intent: null, duplicate: samePayload, idle: false, unchanged: false,
 	});
 	await recordRoute(ctx, pushDecision, "outbound_update");
 	if (pushDecision.deliver) await wake(ctx, ectx, rec.context_id, taskId, rec.peer, `[update on outbound task: ${state}] ${text}`, "outbound_update");

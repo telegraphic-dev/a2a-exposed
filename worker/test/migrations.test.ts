@@ -57,7 +57,7 @@ test("migration files: NNNN_name.sql, unique numbers, no gaps, 0002_wake_budget 
 test("fresh database: every migration applies in order; a second run applies nothing", () => {
 	const db = new DatabaseSync(":memory:");
 	assert.deepEqual(applyMigrations(db), [...FILES].sort(byNumber));
-	for (const t of ["peers", "tasks", "wakes", "wake_budget", "device_requests", "pairing_rate", "settings", "facade_owners", "oauth_clients", "oauth_codes", "mcp_grants", "outbound_peers", "oauth_client_metadata", "oidc_txns", "conversation_owners", "reply_deliveries", "wake_routing", "wake_dedup"]) assert.ok(tables(db).includes(t), t);
+	for (const t of ["peers", "tasks", "wakes", "wake_budget", "device_requests", "pairing_rate", "settings", "facade_owners", "oauth_clients", "oauth_codes", "mcp_grants", "outbound_peers", "oauth_client_metadata", "oidc_txns", "conversation_owners", "reply_deliveries", "wake_routing", "wake_dedup", "message_claims"]) assert.ok(tables(db).includes(t), t);
 	assert.ok(columns(db, "peers").includes("source"));
 	assert.ok(columns(db, "peers").includes("identity_key"));
 	assert.ok(columns(db, "peers").includes("card_url"));

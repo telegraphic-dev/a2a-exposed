@@ -299,3 +299,47 @@ test("a repeated push does not wake twice", async (t) => {
 	const stored = env.DB.db.prepare("SELECT updates_json FROM outbound WHERE task_id = 'task-push'").get() as { updates_json: string };
 	assert.equal(JSON.parse(stored.updates_json).length, 3);
 });
+
+test("concurrent retries of one message id store one task and wake once", async (t) => {
+	const env = envFor();
+	const h = harness(env);
+	t.after(h.restore);
+	const token = ((await h.call("POST", "/owner/peers", { label: "ada" })).data as { token: string }).token;
+	const peer = `Bearer ${token}`;
+	const body = message("once", { contextId: "ctx-race", message: { "a2a.exposed/wake": "always" } }, "msg-race");
+	const [a, b] = await Promise.all([h.call("POST", "/", body, peer), h.call("POST", "/", body, peer)]);
+	assert.equal(a.status, 200, JSON.stringify(a.data));
+	assert.equal(b.status, 200, JSON.stringify(b.data));
+	assert.equal(taskIdOf(a.data), taskIdOf(b.data));
+	assert.equal(h.sent.length, 1);
+	const tasks = env.DB.db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE context_id = 'ctx-race'").get() as { n: number };
+	const msgs = env.DB.db.prepare("SELECT COUNT(*) AS n FROM messages WHERE message_id = 'msg-race'").get() as { n: number };
+	const claims = env.DB.db.prepare("SELECT COUNT(*) AS n FROM message_claims WHERE peer = 'ada' AND message_id = 'msg-race'").get() as { n: number };
+	assert.equal(tasks.n, 1);
+	assert.equal(msgs.n, 1);
+	assert.equal(claims.n, 1);
+});
+
+test("a push with the same filename and different bytes still wakes", async (t) => {
+	const env = envFor();
+	const h = harness(env);
+	t.after(h.restore);
+	const token = "push-token-file";
+	await env.DB.prepare(
+		`INSERT INTO outbound (task_id, context_id, peer, endpoint, protocol, push_token_hash, sent_at, updates_json, updates_seen)
+		 VALUES ('task-file', 'ctx-file', 'ada', 'https://ada.example.net/', '0.3', ?, '2026-01-01T00:00:00.000Z', '[]', 0)`,
+	).bind(await sha256(token)).run();
+	const auth = `Bearer ${token}`;
+	const file = (bytes: string) => ({
+		task: {
+			id: "task-file", contextId: "ctx-file",
+			status: { state: "working", message: { parts: [{ kind: "file", file: { name: "note.txt", bytes } }] } },
+		},
+	});
+	assert.equal((await h.call("POST", "/push", file("aaa"), auth)).status, 200);
+	assert.equal(h.sent.length, 1);
+	assert.equal((await h.call("POST", "/push", file("bbb"), auth)).status, 200);
+	assert.equal(h.sent.length, 2, "different file bytes are not a duplicate");
+	assert.equal((await h.call("POST", "/push", file("bbb"), auth)).status, 200);
+	assert.equal(h.sent.length, 2, "the same payload does not wake again");
+});

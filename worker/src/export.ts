@@ -17,7 +17,7 @@ export const EXPORT_TABLES = [
 	"rate", "wake_budget", "device_requests", "pairing_rate", "settings",
 	"facade_owners", "oauth_clients", "oauth_codes", "mcp_grants",
 	"outbound_peers", "oauth_client_metadata", "oidc_txns", "conversation_owners", "reply_deliveries",
-	"wake_routing", "wake_dedup",
+	"wake_routing", "wake_dedup", "message_claims",
 ] as const;
 
 export type ExportTable = (typeof EXPORT_TABLES)[number];
