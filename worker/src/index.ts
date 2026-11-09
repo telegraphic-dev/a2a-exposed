@@ -10,6 +10,7 @@ import * as F from "./facade.ts";
 import { routeHttpRelay, httpRelayFetch, httpRelayEnrollment, isHttpRelayProfile } from "./http-relay-routing.ts";
 import { relayFetch, relayTestOutcome, type RelayTestError } from "./relay-routing.ts";
 import { renderWake, relayWakeTestInput, mausbotConfigProblem, redact, cloudflareErrorHint, wakeUrlIsTunnelHost, defaultBusySeconds, defaultDebounceSeconds, defaultMaxPerHour, type WakeConfig, type WakeEvent } from "./wake.ts";
+import { decideRoute, readRouteFields, routingMode, statusText, type RouteDecision } from "./wake-route.ts";
 import { fetchCheckedPeer, fetchCheckedWake } from "./wake-target.ts";
 import { withDeadline } from "./deadline.ts";
 import * as Addr from "./address.ts";
@@ -411,7 +412,8 @@ async function requeueWake(ctx: TenantContext, ectx: ExecutionContext, payload: 
 	await noteWakeWrite(ectx);
 }
 
-async function wake(ctx: TenantContext, ectx: ExecutionContext, contextId: string, taskId: string, from: string, preview: string, kind = "inbound") {
+async function wake(ctx: TenantContext, ectx: ExecutionContext, contextId: string, taskId: string, from: string, preview: string, kind = "inbound", opts?: { defer?: boolean }) {
+	const defer = opts?.defer === true;
 	const payload: Json = { contextId, taskId, taskIds: [taskId], from, preview: preview.slice(0, 300), kind,
 		...(preset(ctx) === "mausbot" ? { deliveryId: crypto.randomUUID() } : {}) };
 	const now = Date.now(), deb = debounceMs(ctx);
@@ -431,8 +433,13 @@ async function wake(ctx: TenantContext, ectx: ExecutionContext, contextId: strin
 	let claimed = false;
 	if (!row) {
 		const r = await ctx.DB.prepare("INSERT INTO wakes (context_id, peer, last_sent_ms) VALUES (?, ?, ?) ON CONFLICT DO NOTHING").bind(contextId, peer, now).run();
-		claimed = r.meta.changes === 1;
-	} else if (!suppress && !row.pending_json && now - row.last_sent_ms >= deb) {
+		if (r.meta.changes === 1) {
+			claimed = !defer;
+			if (defer) row = { peer, last_sent_ms: now, pending_json: null };
+		} else if (defer) {
+			row = await ctx.DB.prepare("SELECT * FROM wakes WHERE context_id = ? AND peer = ?").bind(contextId, peer).first();
+		}
+	} else if (!defer && !suppress && !row.pending_json && now - row.last_sent_ms >= deb) {
 		const r = await ctx.DB.prepare("UPDATE wakes SET last_sent_ms = ? WHERE context_id = ? AND peer = ? AND last_sent_ms = ? AND pending_json IS NULL")
 			.bind(now, contextId, peer, row.last_sent_ms).run();
 		claimed = r.meta.changes === 1;
@@ -453,8 +460,16 @@ async function wake(ctx: TenantContext, ectx: ExecutionContext, contextId: strin
 	const keeping = !!(prev?.busy && busyActive(ctx, ectx, cur, now) && !prev?.attempts);
 	payload.taskIds = [...new Set([...(prev?.taskIds || []), taskId])];
 	if (hold || keeping) payload.busy = 1;
-	await ctx.DB.prepare("UPDATE wakes SET pending_json = ?, pending_since_ms = COALESCE(pending_since_ms, ?) WHERE context_id = ? AND peer = ?")
-		.bind(JSON.stringify(payload), now, contextId, curPeer).run();
+	// A changed status starts its own debounce window when nothing is already waiting.
+	// Later status in that window joins it. The window does not move.
+	const startBatch = defer && !payload.busy && !prev && now - sentAt >= deb;
+	if (startBatch) {
+		await ctx.DB.prepare("UPDATE wakes SET pending_json = ?, pending_since_ms = COALESCE(pending_since_ms, ?), last_sent_ms = ? WHERE context_id = ? AND peer = ?")
+			.bind(JSON.stringify(payload), now, now, contextId, curPeer).run();
+	} else {
+		await ctx.DB.prepare("UPDATE wakes SET pending_json = ?, pending_since_ms = COALESCE(pending_since_ms, ?) WHERE context_id = ? AND peer = ?")
+			.bind(JSON.stringify(payload), now, contextId, curPeer).run();
+	}
 	// The pending row exists now. A hosted alarm is set in this turn, including when the delay is too long for waitUntil.
 	await noteWakeWrite(ectx);
 	// A busy hold is taken only when an alarm or the minute cron will flush the catch-up.
@@ -463,7 +478,7 @@ async function wake(ctx: TenantContext, ectx: ExecutionContext, contextId: strin
 		log("wake_absorbed", { contextId, kind, tasks: payload.taskIds.length });
 		return;
 	}
-	const delay = Math.max(0, (cur?.last_sent_ms || now) + deb - now) + 100;
+	const delay = Math.max(0, (startBatch ? now : (Number(cur?.last_sent_ms) || now)) + deb - now) + 100;
 	// waitUntil can outlive the response by ~30s. Longer windows are flushed by a later request, the optional
 	// single-inbox cron, or the registered alarm (set above).
 	if (delay <= 25000) ectx.waitUntil(new Promise((res) => setTimeout(res, delay)).then(() => flushWake(ctx, ectx, contextId, curPeer)));
@@ -508,6 +523,7 @@ export async function cronFlush(ctx: TenantContext, ectx: ExecutionContext): Pro
 	await ctx.DB.batch([
 		ctx.DB.prepare("DELETE FROM rate WHERE minute < ?").bind(Math.floor(now / 60000) - 5),
 		ctx.DB.prepare("DELETE FROM wake_budget WHERE hour < ?").bind(Math.floor(now / 3600000) - 24),
+		ctx.DB.prepare("DELETE FROM wake_routing WHERE hour < ?").bind(Math.floor(now / 3600000) - 24 * 14),
 		...pairingCleanup(ctx, now),
 		ctx.DB.prepare("DELETE FROM oauth_codes WHERE expires_ms < ?").bind(now),
 	]);
@@ -843,9 +859,93 @@ function pubCfg(taskId: string, cfg: Json, version: string): Json {
 
 type Rpc = (p: Json, label: string, version: string, ctx: TenantContext, ectx: ExecutionContext) => Promise<Json>;
 
+const ROUTING_KEEP_HOURS = 24 * 14;
+
+async function recordRoute(ctx: TenantContext, decision: RouteDecision, kind: "inbound" | "outbound_update"): Promise<void> {
+	log("wake_route", {
+		kind, mode: decision.mode, decision: decision.decision, action: decision.action,
+		proposed: decision.proposed, wake: decision.wake, intent: decision.intent,
+	});
+	try {
+		const hour = Math.floor(Date.now() / 3600000);
+		await ctx.DB.prepare(
+			`INSERT INTO wake_routing (hour, decision, action, count) VALUES (?, ?, ?, 1)
+			 ON CONFLICT(hour, decision, action) DO UPDATE SET count = count + 1`,
+		).bind(hour, decision.decision, decision.action).run();
+	} catch {
+		log("wake_route_failed", { kind, decision: decision.decision, action: decision.action });
+	}
+}
+
+async function routingReport(ctx: TenantContext): Promise<Json> {
+	const since = Math.floor(Date.now() / 3600000) - ROUTING_KEEP_HOURS;
+	const rows = await ctx.DB.prepare(
+		"SELECT hour, decision, action, count FROM wake_routing WHERE hour >= ? ORDER BY hour, decision, action",
+	).bind(since).all();
+	const counts = ((rows.results || []) as Json[]).map((row) => ({
+		hour: Number(row.hour), decision: String(row.decision), action: String(row.action), count: Number(row.count),
+	})).filter((row) => Number.isSafeInteger(row.hour) && Number.isSafeInteger(row.count) && row.count >= 0);
+	let wakes = 0, suppressed = 0, shadow = 0;
+	for (const row of counts) {
+		if (row.action === "suppress") suppressed += row.count;
+		else if (row.action === "shadow") shadow += row.count;
+		else wakes += row.count;
+	}
+	return { mode: routingMode(ctx.WAKE_ROUTING), wakes, suppressed, shadow, counts };
+}
+
+async function dedupFingerprint(ctx: TenantContext, kind: string, peer: string, ref: string): Promise<string | null> {
+	const row: Json = await ctx.DB.prepare("SELECT fingerprint FROM wake_dedup WHERE kind = ? AND peer = ? AND ref = ?").bind(kind, peer, ref).first();
+	return typeof row?.fingerprint === "string" ? row.fingerprint : null;
+}
+
+async function saveDedup(ctx: TenantContext, kind: string, peer: string, ref: string, fingerprint: string): Promise<void> {
+	await ctx.DB.prepare(
+		`INSERT INTO wake_dedup (kind, peer, ref, fingerprint) VALUES (?, ?, ?, ?)
+		 ON CONFLICT(kind, peer, ref) DO UPDATE SET fingerprint = excluded.fingerprint`,
+	).bind(kind, peer, ref, fingerprint).run();
+}
+
+/** Task id already stored for this peer's message id, when a retry repeats it. */
+async function messageTaskId(ctx: TenantContext, peer: string, messageId: string): Promise<string | null> {
+	const row: Json = await ctx.DB.prepare(
+		`SELECT m.task_id FROM messages m JOIN tasks t ON t.id = m.task_id
+		 WHERE m.message_id = ? AND t.peer = ? ORDER BY m.seq LIMIT 1`,
+	).bind(messageId, peer).first();
+	return typeof row?.task_id === "string" ? row.task_id : null;
+}
+
+async function routeInbound(ctx: TenantContext, peer: string, contextId: string, wake: "auto" | "always" | "never" | null, intent: "handoff" | "blocker" | "question" | "status" | "ack" | null, text: string, duplicate: boolean): Promise<{ decision: RouteDecision; fingerprint: string }> {
+	let idle = false;
+	let unchanged = false;
+	let fingerprint = "";
+	if (!duplicate && intent === "status") {
+		const normalized = statusText(text);
+		if (!normalized) idle = true;
+		else {
+			fingerprint = await A.sha256(normalized);
+			unchanged = await dedupFingerprint(ctx, "status", peer, contextId) === fingerprint;
+		}
+	}
+	return { decision: decideRoute({ mode: routingMode(ctx.WAKE_ROUTING), wake, intent, duplicate, idle, unchanged }), fingerprint };
+}
+
 const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
 	const msg = A.normMessage(params.message);
 	if (msg.role !== "user") throw new RpcError(-32602, "message.role must be user");
+	const routed = readRouteFields(msg.metadata, params.metadata);
+	if (!routed.ok) throw new RpcError(-32602, `Invalid params: ${routed.error}`);
+	const priorId = await messageTaskId(ctx, label, msg.messageId);
+	if (priorId) {
+		const prior = await loadTask(ctx, priorId);
+		if (prior && prior._peer === label) {
+			const again = await routeInbound(ctx, label, prior.contextId, routed.fields.wake, routed.fields.intent, "", true);
+			await recordRoute(ctx, again.decision, "inbound");
+			const conf = params.configuration || {};
+			const pt = A.publicTask(prior, version, conf.historyLength);
+			return version.startsWith("1") ? { task: pt } : pt;
+		}
+	}
 	const directReply = directReplyParams(params);
 	const conf = params.configuration || {};
 	const push = conf.taskPushNotificationConfig || conf.pushNotificationConfig;
@@ -890,7 +990,12 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
 	}
 	log("message_received", { peer: label, contextId, taskId: task.id, chars: preview.length, version });
 	// Direct replies are stored for history, not scheduled as new work.
-	if (!directReply) await wake(ctx, ectx, contextId, task.id, label, preview);
+	if (!directReply) {
+		const routedNow = await routeInbound(ctx, label, contextId, routed.fields.wake, routed.fields.intent, preview, false);
+		if (routedNow.fingerprint) await saveDedup(ctx, "status", label, contextId, routedNow.fingerprint);
+		await recordRoute(ctx, routedNow.decision, "inbound");
+		if (routedNow.decision.deliver) await wake(ctx, ectx, contextId, task.id, label, preview, "inbound", routedNow.decision.batch ? { defer: true } : undefined);
+	}
 	const pt = A.publicTask(task, version, conf.historyLength);
 	return version.startsWith("1") ? { task: pt } : pt;
 };
@@ -1859,7 +1964,13 @@ async function handlePush(req: Request, ctx: TenantContext, ectx: ExecutionConte
 		histStmt(ctx, rec.context_id, { dir: "in", peer: rec.peer, taskId, event: "push", state, text }),
 	]);
 	log("push_received", { peer: rec.peer, taskId, state });
-	await wake(ctx, ectx, rec.context_id, taskId, rec.peer, `[update on outbound task: ${state}] ${text}`, "outbound_update");
+	const priorUpdate = updates.length > 1 ? pushUpdateView(updates[updates.length - 2]?.payload) : null;
+	const sameText = !!priorUpdate && statusText(priorUpdate.text) === statusText(text) && (priorUpdate.state ?? "") === (state ?? "");
+	const pushDecision = decideRoute({
+		mode: routingMode(ctx.WAKE_ROUTING), wake: null, intent: null, duplicate: sameText, idle: false, unchanged: false,
+	});
+	await recordRoute(ctx, pushDecision, "outbound_update");
+	if (pushDecision.deliver) await wake(ctx, ectx, rec.context_id, taskId, rec.peer, `[update on outbound task: ${state}] ${text}`, "outbound_update");
 	return json({ ok: true });
 }
 
@@ -2056,6 +2167,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			return httpRelayFetch(ctx, profile, "/disable", { method: "POST", body: JSON.stringify({ generation: input.generation }) });
 		}
 	}
+	if (seg[0] === "wake" && seg[1] === "routing" && seg.length === 2 && !url.search && m === "GET") return json(await routingReport(ctx));
 	if (seg[0] === "wake" && seg[1] === "relay" && seg.length === 2 && !url.search) {
 		if (m === "GET") {
 			const response = await relayFetch(ctx, "/status");
@@ -3892,6 +4004,14 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 			const callerContext = a.contextId ? A.checkId(argStr(a, "contextId"), "contextId") : "";
 			if (callerContext) msg.contextId = callerContext;
 			if (a.taskId) msg.taskId = A.checkId(argStr(a, "taskId"), "taskId");
+			const wake = argStr(a, "wake", false);
+			const intent = argStr(a, "intent", false);
+			if (wake && wake !== "auto" && wake !== "always" && wake !== "never") throw new ToolError("wake must be auto, always, or never");
+			if (intent && intent !== "handoff" && intent !== "blocker" && intent !== "question" && intent !== "status" && intent !== "ack") throw new ToolError("intent must be handoff, blocker, question, status, or ack");
+			const metadata: Json = {};
+			if (wake) metadata["a2a.exposed/wake"] = wake;
+			if (intent) metadata["a2a.exposed/intent"] = intent;
+			if (wake || intent) msg.metadata = metadata;
 			// A conforming peer rejects SendMessage when push is attached and the card does not advertise it.
 			const caps = card && typeof card === "object" ? card.capabilities : null;
 			const pushOn = !!(caps && typeof caps === "object" && caps.pushNotifications === true);

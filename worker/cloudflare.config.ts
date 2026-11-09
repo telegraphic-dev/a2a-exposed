@@ -41,6 +41,9 @@ const plain: Record<string, string> = {
 	WAKE_DEBOUNCE_SECONDS: v("WAKE_DEBOUNCE_SECONDS"),
 	WAKE_BUSY_SECONDS: v("WAKE_BUSY_SECONDS"),
 	WAKE_MAX_PER_HOUR: v("WAKE_MAX_PER_HOUR"),
+	// shadow (default, also any value other than enforce) records auto suppressions and still wakes.
+	// enforce stores ack and idle or unchanged status without a wake, and batches a changed status.
+	WAKE_ROUTING: v("WAKE_ROUTING"),
 	// Visible at runtime so a busy catch-up is held only when this minute cron will flush it.
 	ENABLE_CRON: v("A2A_ENABLE_CRON") === "1" ? "1" : "",
 	MAX_BODY: v("A2A_MAX_BODY"),

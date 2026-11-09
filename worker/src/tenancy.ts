@@ -36,6 +36,8 @@ export const CONFIG_KEYS = [
 	"WAKE_WEBHOOK_URL", "WAKE_WEBHOOK_KEY", "WAKE_HMAC_SECRET", "WAKE_ACCESS_CLIENT_ID", "WAKE_ACCESS_CLIENT_SECRET",
 	"WAKE_CONNECTOR_ID", "WAKE_CONNECTOR_GENERATION", "WAKE_TRANSPORT", "WAKE_PRESET", "WAKE_AGENT_ID", "WAKE_KEY_HEADER", "WAKE_KEY_PREFIX", "WAKE_BODY_TEMPLATE", "WAKE_CLI_COMMAND",
 	"WAKE_DEBOUNCE_SECONDS", "WAKE_BUSY_SECONDS", "WAKE_MAX_PER_HOUR",
+	/** shadow (default) records proposed suppression and still wakes. enforce applies it. */
+	"WAKE_ROUTING",
 	/** "1" when this self-host deploy has the minute cron. Hosted flushes from the inbox alarm instead. */
 	"ENABLE_CRON",
 	"MAX_BODY", "RATE_PER_MIN",
@@ -395,6 +397,7 @@ export class TenantContext implements ConfigFields {
 	readonly WAKE_DEBOUNCE_SECONDS?: string;
 	readonly WAKE_BUSY_SECONDS?: string;
 	readonly WAKE_MAX_PER_HOUR?: string;
+	readonly WAKE_ROUTING?: string;
 	readonly ENABLE_CRON?: string;
 	readonly MAX_BODY?: string;
 	readonly RATE_PER_MIN?: string;

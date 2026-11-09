@@ -105,6 +105,8 @@ npx -y a2a-exposed@latest wake test       # sends a test wake; expect a 2xx stat
 
 **Rotating or removing wake secrets.** `wake set` uploads only the secrets currently in the environment; secrets you leave unset stay as they were on the Worker. To remove all wake secrets, run `wake unset`.
 
+**Wake routing.** `WAKE_ROUTING` defaults to `shadow`. Shadow counts an auto ack or an idle or unchanged status and still wakes. `--wake-routing enforce` (or `WAKE_ROUTING=enforce`) stores those without a wake and batches a changed status. `--wake-routing shadow` rolls that back. Senders set `--wake` and `--intent`; a sender that omits both still wakes. Counts are `GET /owner/wake/routing`.
+
 ### Grok Bot (`grok-bot`)
 
 Choose hosting first. For hosted Grok setup:

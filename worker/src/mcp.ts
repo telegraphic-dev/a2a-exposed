@@ -5,6 +5,7 @@ import { esc } from "./pairing.ts";
 import { isPrivateHost } from "./a2a.ts";
 import { feedbackToolDescription, ISSUE_REPO } from "./feedback.ts";
 import { derivePeerKey } from "./tenancy.ts";
+import { INTENTS, WAKE_MODES } from "./wake-route.ts";
 
 export const SCOPE = "inbox";
 /** Modern (stateless, per-request _meta) versions: no initialize, server/discover, resultType, Mcp-Method / Mcp-Name headers. */
@@ -353,8 +354,12 @@ export const TOOLS: { name: string; title: string; description: string; inputSch
 			httpStatus: { type: "integer", minimum: 100, maximum: 599 }, detail: str("Safe delivery summary"),
 		}, required: ["taskId", "state", "status", "method", "detail"], additionalProperties: false } },
 	{ name: "send", title: "Send to peer", annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
-		description: `Send a message to a peer agent (alias from list_peers; only peers synced to this A2A endpoint with \`peers sync\`). When the peer's card advertises push notifications, the peer is asked to push its reply here, which then shows in history and in the inbox. Otherwise check the task with poll_outbound. Pass contextId to continue a conversation, taskId to answer a peer's input-required task. The conversation id stays the one returned. Returns the peer's task. Ask your human before sending anything consequential or private. ${RULES}`,
-		inputSchema: { type: "object", properties: { to: str("Peer alias"), text: str("Message text"), contextId: str("Continue this conversation"), taskId: str("Continue this peer task") }, required: ["to", "text"], additionalProperties: false } },
+		description: `Send a message to a peer agent (alias from list_peers; only peers synced to this A2A endpoint with \`peers sync\`). Set intent on every send. wake auto asks the peer to apply routing before it wakes: handoff, blocker, and question wake; ack and an idle or unchanged status are stored without a wake once the peer enforces routing. wake always asks for an immediate wake, still subject to that peer's authorization and rate limits. wake never stores the message and does not wake the peer. Omit both fields only for a legacy peer that expects today's wake. Do not send an acknowledgement-only message, and do not answer an ack with another ack. When the peer's card advertises push notifications, the peer is asked to push its reply here, which then shows in history and in the inbox. Otherwise check the task with poll_outbound. Pass contextId to continue a conversation, taskId to answer a peer's input-required task. The conversation id stays the one returned. Returns the peer's task. Ask your human before sending anything consequential or private. ${RULES}`,
+		inputSchema: { type: "object", properties: {
+			to: str("Peer alias"), text: str("Message text"), contextId: str("Continue this conversation"), taskId: str("Continue this peer task"),
+			wake: str("When the peer should wake. auto routes, always wakes, never only stores.", { enum: [...WAKE_MODES] }),
+			intent: str("Why this message exists. Pick one. An ack is not a reply.", { enum: [...INTENTS] }),
+		}, required: ["to", "text"], additionalProperties: false } },
 	{ name: "poll_outbound", title: "Check a sent task", annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 		description: `Fetch the current state of a task you sent to a peer (from send) and record it in the history. ${RULES}`,
 		inputSchema: { type: "object", properties: { taskId: str("Task id returned by send") }, required: ["taskId"], additionalProperties: false } },
