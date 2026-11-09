@@ -413,5 +413,15 @@ export async function relayWake(sub, o = {}) {
   }
   const ok = result.ok === true && (sub === 'save' ? result.saved === true : result.removed === true) && result.version === version + 1;
   return { ok, code: ok ? sub === 'save' ? 'saved' : 'removed' : 'unconfirmed', ...(Number.isSafeInteger(result.version) ? { version: result.version } : {}), next: ok ? sub === 'save' ? 'Relay wake saved. Verify a real message receipt and inbox reply.' : 'Relay wake removed; inbox messages remain. Revoke the connector separately with relay revoke.' : 'Read relay wake status before retrying; a receipt is single-use and saved settings may already have changed.' };
- } finally { if (fd !== undefined) fs.closeSync(fd); }
+ } finally {
+  if (fd !== undefined) {
+   // A refused/failed test must not strand an empty reservation. Never remove a
+   // replacement path, or a nonempty file whose remote outcome needs reconciling.
+   try {
+    const reserved = fs.fstatSync(fd), current = fs.lstatSync(o['receipt-file']);
+    if (reserved.size === 0 && reserved.ino === current.ino && reserved.dev === current.dev) fs.unlinkSync(o['receipt-file']);
+   } catch { /* Preserve any path that cannot be proved to be our empty file. */ }
+   fs.closeSync(fd);
+  }
+ }
 }

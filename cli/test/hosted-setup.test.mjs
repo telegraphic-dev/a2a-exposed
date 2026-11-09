@@ -642,6 +642,9 @@ test('hosted relay file test/save validates explicit choices and never renders s
   for(const value of [receipt,signing,owner,grant]) assert.ok(!(tested.stdout+tested.stderr).includes(value));
   const calls=fs.readFileSync(log,'utf8').trim().split('\n').map(JSON.parse);const body=JSON.parse(calls.at(-1).body);assert.deepEqual(body,{version:7,generation:2,connectorId:'default',preset:'hermes',keyHeader:'',key:'',hmacSecret:signing});
   assert.equal(f.run(args,replies).status,1);assert.equal(fs.readFileSync(file,'utf8').trim(),receipt);
+  const failedFile=path.join(f.dir,'failed-receipt');
+  const refused=f.run(args.map(x=>x===file?failedFile:x),{...replies,[endpoint+'/test']:{status:409,body:{ok:false,code:'local_http',secret:signing}}});
+  assert.equal(refused.status,1);assert.equal(fs.existsSync(failedFile),false);assert.ok(!refused.stdout.includes(signing));assert.match(JSON.parse(refused.stdout).next,/relay wake status/);
   const save=['relay','wake','save','--agent','sample-agent','--config-version','7','--receipt-file',file,'--json'];
   const missing=f.run(save,replies);assert.equal(missing.status,1);assert.equal(JSON.parse(missing.stdout).code,'confirmation');
   const saved=f.run([...save,'--confirm'],{...replies,[endpoint]:{status:200,body:{ok:true,saved:true,version:8,secretReference:receipt}}});assert.equal(saved.status,0,saved.stdout);assert.equal(JSON.parse(saved.stdout).code,'saved');assert.ok(!saved.stdout.includes(receipt));
