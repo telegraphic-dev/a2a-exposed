@@ -191,6 +191,9 @@ test("legacy, never, always, auto, dedup, and shadow metrics", async (t) => {
 	const body = report.data as { mode: string; shadow: number; counts: { decision: string; action: string }[] };
 	assert.equal(body.mode, "shadow");
 	assert.ok(body.shadow >= 1);
+	assert.equal(body.delivered, h.sent.length);
+	assert.ok(body.decided > body.delivered, "suppressed decisions are not deliveries");
+	assert.equal(body.counts.some((row: { decision: string }) => row.decision === "invocation"), false);
 	assert.ok(body.counts.some((row) => row.decision === "ack" && row.action === "shadow"));
 	assert.equal((await h.call("GET", "/owner/wake/routing", undefined, peer)).status, 401);
 	for (const row of routes(h.logs)) {
@@ -254,10 +257,15 @@ test("enforce batches changed status into one wake", async (t) => {
 			ids.push(taskIdOf(res.data));
 		}
 		assert.equal(h.sent.length, 0, "changed status waits for the debounce");
+		const pending = await h.call("GET", "/owner/wake/routing");
+		assert.equal((pending.data as { delivered: number }).delivered, 0);
+		assert.ok((pending.data as { counts: { action: string }[] }).counts.some((row) => row.action === "batch"));
 		offset += 31_000;
 		await h.call("GET", "/health");
 		assert.equal(h.sent.length, 1);
 		assert.deepEqual(h.sent[0].taskIds, ids);
+		const flushed = await h.call("GET", "/owner/wake/routing");
+		assert.equal((flushed.data as { delivered: number }).delivered, 1);
 	} finally {
 		Date.now = realNow;
 	}
@@ -342,4 +350,31 @@ test("a push with the same filename and different bytes still wakes", async (t) 
 	assert.equal(h.sent.length, 2, "different file bytes are not a duplicate");
 	assert.equal((await h.call("POST", "/push", file("bbb"), auth)).status, 200);
 	assert.equal(h.sent.length, 2, "the same payload does not wake again");
+});
+
+test("purge drops message claims and status fingerprints", async (t) => {
+	const env = envFor({ WAKE_ROUTING: "enforce" });
+	const h = harness(env);
+	t.after(h.restore);
+	const token = ((await h.call("POST", "/owner/peers", { label: "ada" })).data as { token: string }).token;
+	const peer = `Bearer ${token}`;
+	const first = await h.call("POST", "/", message("building", {
+		contextId: "ctx-purge", message: { "a2a.exposed/wake": "auto", "a2a.exposed/intent": "status" },
+	}, "msg-purge"), peer);
+	assert.equal(first.status, 200, JSON.stringify(first.data));
+	const purged = await h.call("POST", "/owner/purge", { contexts: ["ctx-purge"] });
+	assert.equal(purged.status, 200, JSON.stringify(purged.data));
+	const claims = env.DB.db.prepare("SELECT COUNT(*) AS n FROM message_claims WHERE message_id = 'msg-purge'").get() as { n: number };
+	const fps = env.DB.db.prepare("SELECT COUNT(*) AS n FROM wake_dedup WHERE ref = 'ctx-purge'").get() as { n: number };
+	assert.equal(claims.n, 0);
+	assert.equal(fps.n, 0);
+	const before = h.sent.length;
+	const retried = await h.call("POST", "/", message("building", {
+		contextId: "ctx-purge", message: { "a2a.exposed/wake": "auto", "a2a.exposed/intent": "status" },
+	}, "msg-purge"), peer);
+	assert.equal(retried.status, 200, JSON.stringify(retried.data));
+	assert.equal((retried.data as { error?: { code?: number } }).error, undefined);
+	assert.notEqual(taskIdOf(retried.data), taskIdOf(first.data));
+	assert.notEqual(routes(h.logs).at(-1).decision, "status_unchanged");
+	assert.ok(h.sent.length > before, "the same status text wakes again after purge");
 });

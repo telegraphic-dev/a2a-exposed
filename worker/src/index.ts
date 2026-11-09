@@ -296,7 +296,7 @@ async function sendWake(ctx: TenantContext, ectx: ExecutionContext, payload: Jso
 			const result = await response.json() as { status?: number; error?: string };
 			const outcome = relayTestOutcome(response, result);
 			const { status } = outcome;
-			if (status && status < 300) await armBusy(ctx, ectx, delivered, Date.now());
+			if (status && status < 300) { await armBusy(ctx, ectx, delivered, Date.now()); await recordDelivered(ctx); }
 			else await clearBusy(ctx, payload);
 			// A missing acknowledgment is uncertain: never retry the serialized request.
 			return { ...outcome, info: status ? `local HTTP ${status}` : result.error === "connector_offline" ? "connector offline" : "relay delivery unconfirmed" };
@@ -323,7 +323,7 @@ async function sendWake(ctx: TenantContext, ectx: ExecutionContext, payload: Jso
 			tunnel: !!(ctx.WAKE_ACCESS_CLIENT_ID && ctx.WAKE_ACCESS_CLIENT_SECRET) || wakeUrlIsTunnelHost(req.url),
 		});
 		log("wake_sent", { preset: preset(ctx), contextId: ev.contextId, taskId: ev.taskId, status: r.status, ...(catchUp ? { catchUp: true } : {}), ...(hint ? { hint } : {}) });
-		if (r.ok) await armBusy(ctx, ectx, delivered, Date.now());
+		if (r.ok) { await armBusy(ctx, ectx, delivered, Date.now()); await recordDelivered(ctx); }
 		else if (r.status === 429 || r.status === 503) {
 			// Retry-After owns the next POST. Drop the busy window so the retry is not held behind it.
 			await clearBusy(ctx, payload);
@@ -896,21 +896,37 @@ async function recordRoute(ctx: TenantContext, decision: RouteDecision, kind: "i
 	}
 }
 
+async function recordDelivered(ctx: TenantContext): Promise<void> {
+	try {
+		const hour = Math.floor(Date.now() / 3600000);
+		await ctx.DB.prepare(
+			`INSERT INTO wake_routing (hour, decision, action, count) VALUES (?, 'invocation', 'delivered', 1)
+			 ON CONFLICT(hour, decision, action) DO UPDATE SET count = count + 1`,
+		).bind(hour).run();
+	} catch {
+		log("wake_route_failed", { decision: "invocation", action: "delivered" });
+	}
+}
 async function routingReport(ctx: TenantContext): Promise<Json> {
 	const since = Math.floor(Date.now() / 3600000) - ROUTING_KEEP_HOURS;
 	const rows = await ctx.DB.prepare(
 		"SELECT hour, decision, action, count FROM wake_routing WHERE hour >= ? ORDER BY hour, decision, action",
 	).bind(since).all();
-	const counts = ((rows.results || []) as Json[]).map((row) => ({
+	const all = ((rows.results || []) as Json[]).map((row) => ({
 		hour: Number(row.hour), decision: String(row.decision), action: String(row.action), count: Number(row.count),
 	})).filter((row) => Number.isSafeInteger(row.hour) && Number.isSafeInteger(row.count) && row.count >= 0);
-	let wakes = 0, suppressed = 0, shadow = 0;
-	for (const row of counts) {
+	let decided = 0, suppressed = 0, shadow = 0, delivered = 0;
+	const counts = [];
+	for (const row of all) {
+		if (row.decision === "invocation" && row.action === "delivered") { delivered += row.count; continue; }
+		counts.push(row);
+		decided += row.count;
 		if (row.action === "suppress") suppressed += row.count;
 		else if (row.action === "shadow") shadow += row.count;
-		else wakes += row.count;
 	}
-	return { mode: routingMode(ctx.WAKE_ROUTING), wakes, suppressed, shadow, counts };
+	// `counts` and `decided` are routing decisions. A batch is counted before the webhook is sent.
+	// `delivered` is a successful webhook or relay send. Measure savings from `delivered`.
+	return { mode: routingMode(ctx.WAKE_ROUTING), decided, delivered, suppressed, shadow, counts };
 }
 
 async function dedupFingerprint(ctx: TenantContext, kind: string, peer: string, ref: string): Promise<string | null> {
@@ -2665,7 +2681,10 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 		let n = 0;
 		for (const c of b.contexts) {
 			A.checkId(c, "contextId");
+			// Claims and status fingerprints have no context column. Remove them before the tasks they point at.
 			const res = await ctx.DB.batch([
+				ctx.DB.prepare("DELETE FROM message_claims WHERE task_id IN (SELECT id FROM tasks WHERE context_id = ?)").bind(c),
+				ctx.DB.prepare("DELETE FROM wake_dedup WHERE ref = ? OR ref IN (SELECT id FROM tasks WHERE context_id = ?)").bind(c, c),
 				ctx.DB.prepare("DELETE FROM messages WHERE context_id = ?").bind(c),
 				ctx.DB.prepare("DELETE FROM tasks WHERE context_id = ?").bind(c),
 				ctx.DB.prepare("DELETE FROM history WHERE context_id = ?").bind(c),
