@@ -46,6 +46,18 @@ const readStdin = () => fs.readFileSync(0, "utf8");
 // ---------------------------------------------------------------- inbound side
 /** Safety ceiling for `inbox`. Past this the command errors instead of returning a short list. */
 export const INBOX_MAX_PAGES = 10000;
+const WAKE_MODES = ["auto", "always", "never"];
+const INTENTS = ["handoff", "blocker", "question", "status", "ack"];
+
+/** Metadata for `message/send`. Omitted fields stay off the message so a legacy peer keeps today's wake. */
+export function routingMetadata(wake, intent) {
+	if (wake != null && wake !== "" && !WAKE_MODES.includes(wake)) die(`--wake must be ${WAKE_MODES.join(", ")}`);
+	if (intent != null && intent !== "" && !INTENTS.includes(intent)) die(`--intent must be ${INTENTS.join(", ")}`);
+	const metadata = {};
+	if (wake) metadata["a2a.exposed/wake"] = wake;
+	if (intent) metadata["a2a.exposed/intent"] = intent;
+	return Object.keys(metadata).length ? metadata : undefined;
+}
 
 /** Follow inbox cursors until they end. A repeated cursor stops. Past maxPages the command errors. */
 export async function followInbox(load, maxPages = INBOX_MAX_PAGES) {
@@ -342,6 +354,8 @@ export async function send(o) {
 	if (!v1) msg.kind = "message";
 	if (o.context) msg.contextId = checkId(o.context, "contextId");
 	if (o.task) msg.taskId = checkId(o.task, "taskId");
+	const metadata = routingMetadata(o.wake, o.intent);
+	if (metadata) msg.metadata = metadata;
 	const conf = v1 ? { returnImmediately: true } : { blocking: false };
 	let pushToken = null;
 	if (o.push) {

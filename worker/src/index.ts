@@ -10,6 +10,7 @@ import * as F from "./facade.ts";
 import { routeHttpRelay, httpRelayFetch, httpRelayEnrollment, isHttpRelayProfile } from "./http-relay-routing.ts";
 import { relayFetch, relayTestOutcome, type RelayTestError } from "./relay-routing.ts";
 import { renderWake, relayWakeTestInput, mausbotConfigProblem, redact, cloudflareErrorHint, wakeUrlIsTunnelHost, defaultBusySeconds, defaultDebounceSeconds, defaultMaxPerHour, type WakeConfig, type WakeEvent } from "./wake.ts";
+import { decideRoute, readRouteFields, routingMode, statusText, type RouteDecision } from "./wake-route.ts";
 import { fetchCheckedPeer, fetchCheckedWake } from "./wake-target.ts";
 import { withDeadline } from "./deadline.ts";
 import * as Addr from "./address.ts";
@@ -81,33 +82,52 @@ function claimContextStmt(ctx: TenantContext, contextId: string, peer: string, t
 	).bind(contextId, peer, ts);
 }
 
-/** A new task is stored only when this peer owns the context. Runs in the same batch as `claimContextStmt`. */
-function saveTaskIfOwnerStmt(ctx: TenantContext, t: Json) {
+/** One attempt to store this peer's message id. A concurrent retry keeps the first claim. */
+function claimMessageStmt(ctx: TenantContext, peer: string, messageId: string, taskId: string, token: string, contextId: string) {
+	return ctx.DB.prepare(
+		`INSERT INTO message_claims (peer, message_id, task_id, claim_token)
+		 SELECT ?1, ?2, ?3, ?4
+		 WHERE EXISTS (SELECT 1 FROM conversation_owners WHERE context_id = ?5 AND peer = ?1)
+		 ON CONFLICT(peer, message_id) DO NOTHING`,
+	).bind(peer, messageId, taskId, token, contextId);
+}
+
+function saveTaskIfClaimStmt(ctx: TenantContext, t: Json, messageId: string, token: string) {
 	return ctx.DB.prepare(
 		`INSERT INTO tasks (id, context_id, peer, state, protocol, created_at, updated_at, status_json, artifacts_json, metadata_json, push_configs_json)
 		 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11
 		 WHERE EXISTS (SELECT 1 FROM conversation_owners WHERE context_id = ?2 AND peer = ?3)
+		   AND EXISTS (SELECT 1 FROM message_claims WHERE peer = ?3 AND message_id = ?12 AND claim_token = ?13)
 		 ON CONFLICT(id) DO UPDATE SET state=?4, updated_at=?7, status_json=?8, artifacts_json=?9, metadata_json=?10, push_configs_json=?11
-		 WHERE EXISTS (SELECT 1 FROM conversation_owners WHERE context_id = ?2 AND peer = ?3)`,
+		 WHERE EXISTS (SELECT 1 FROM conversation_owners WHERE context_id = ?2 AND peer = ?3)
+		   AND EXISTS (SELECT 1 FROM message_claims WHERE peer = ?3 AND message_id = ?12 AND claim_token = ?13)`,
 	).bind(t.id, t.contextId, t._peer, t.status.state, t._protocol, t._createdAt, A.nowIso(), JSON.stringify(t.status),
-		JSON.stringify(t.artifacts || []), t.metadata ? JSON.stringify(t.metadata) : null, JSON.stringify(t._push || []));
+		JSON.stringify(t.artifacts || []), t.metadata ? JSON.stringify(t.metadata) : null, JSON.stringify(t._push || []), messageId, token);
 }
 
-function msgIfOwnerStmt(ctx: TenantContext, t: Json, m: Json) {
+function updateTaskIfClaimStmt(ctx: TenantContext, t: Json, messageId: string, token: string) {
+	return ctx.DB.prepare(
+		`UPDATE tasks SET state=?1, updated_at=?2, status_json=?3, artifacts_json=?4, metadata_json=?5, push_configs_json=?6
+		 WHERE id=?7 AND EXISTS (SELECT 1 FROM message_claims WHERE peer=?8 AND message_id=?9 AND claim_token=?10)`,
+	).bind(t.status.state, A.nowIso(), JSON.stringify(t.status), JSON.stringify(t.artifacts || []),
+		t.metadata ? JSON.stringify(t.metadata) : null, JSON.stringify(t._push || []), t.id, t._peer, messageId, token);
+}
+
+function msgIfClaimStmt(ctx: TenantContext, t: Json, m: Json, token: string) {
 	return ctx.DB.prepare(
 		`INSERT INTO messages (message_id, task_id, context_id, role, ts, message_json)
 		 SELECT ?1, ?2, ?3, ?4, ?5, ?6
-		 WHERE EXISTS (SELECT 1 FROM conversation_owners WHERE context_id = ?3 AND peer = ?7)`,
-	).bind(m.messageId, t.id, t.contextId, m.role, A.nowIso(), JSON.stringify(m), t._peer);
+		 WHERE EXISTS (SELECT 1 FROM message_claims WHERE peer = ?7 AND message_id = ?1 AND claim_token = ?8)`,
+	).bind(m.messageId, t.id, t.contextId, m.role, A.nowIso(), JSON.stringify(m), t._peer, token);
 }
 
-function histIfOwnerStmt(ctx: TenantContext, contextId: string, e: Json, owner: string) {
+function histIfClaimStmt(ctx: TenantContext, contextId: string, e: Json, owner: string, messageId: string, token: string) {
 	return ctx.DB.prepare(
 		`INSERT INTO history (context_id, ts, dir, peer, task_id, role, state, event, text, data_json)
 		 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10
-		 WHERE EXISTS (SELECT 1 FROM conversation_owners WHERE context_id = ?1 AND peer = ?11)`,
+		 WHERE EXISTS (SELECT 1 FROM message_claims WHERE peer = ?11 AND message_id = ?12 AND claim_token = ?13)`,
 	).bind(contextId, e.ts || A.nowIso(), e.dir || "local", e.peer ?? null, e.taskId ?? null, e.role ?? null, e.state ?? null,
-		e.event ?? null, e.text ?? null, e.data !== undefined ? JSON.stringify(e.data) : null, owner);
+		e.event ?? null, e.text ?? null, e.data !== undefined ? JSON.stringify(e.data) : null, owner, messageId, token);
 }
 
 // ------------------------------------------------------------------ self-aware fetch (a Worker cannot reliably fetch its own custom domain)
@@ -276,7 +296,7 @@ async function sendWake(ctx: TenantContext, ectx: ExecutionContext, payload: Jso
 			const result = await response.json() as { status?: number; error?: string };
 			const outcome = relayTestOutcome(response, result);
 			const { status } = outcome;
-			if (status && status < 300) await armBusy(ctx, ectx, delivered, Date.now());
+			if (status && status < 300) { await armBusy(ctx, ectx, delivered, Date.now()); await recordDelivered(ctx); }
 			else await clearBusy(ctx, payload);
 			// A missing acknowledgment is uncertain: never retry the serialized request.
 			return { ...outcome, info: status ? `local HTTP ${status}` : result.error === "connector_offline" ? "connector offline" : "relay delivery unconfirmed" };
@@ -303,7 +323,7 @@ async function sendWake(ctx: TenantContext, ectx: ExecutionContext, payload: Jso
 			tunnel: !!(ctx.WAKE_ACCESS_CLIENT_ID && ctx.WAKE_ACCESS_CLIENT_SECRET) || wakeUrlIsTunnelHost(req.url),
 		});
 		log("wake_sent", { preset: preset(ctx), contextId: ev.contextId, taskId: ev.taskId, status: r.status, ...(catchUp ? { catchUp: true } : {}), ...(hint ? { hint } : {}) });
-		if (r.ok) await armBusy(ctx, ectx, delivered, Date.now());
+		if (r.ok) { await armBusy(ctx, ectx, delivered, Date.now()); await recordDelivered(ctx); }
 		else if (r.status === 429 || r.status === 503) {
 			// Retry-After owns the next POST. Drop the busy window so the retry is not held behind it.
 			await clearBusy(ctx, payload);
@@ -411,7 +431,8 @@ async function requeueWake(ctx: TenantContext, ectx: ExecutionContext, payload: 
 	await noteWakeWrite(ectx);
 }
 
-async function wake(ctx: TenantContext, ectx: ExecutionContext, contextId: string, taskId: string, from: string, preview: string, kind = "inbound") {
+async function wake(ctx: TenantContext, ectx: ExecutionContext, contextId: string, taskId: string, from: string, preview: string, kind = "inbound", opts?: { defer?: boolean }) {
+	const defer = opts?.defer === true;
 	const payload: Json = { contextId, taskId, taskIds: [taskId], from, preview: preview.slice(0, 300), kind,
 		...(preset(ctx) === "mausbot" ? { deliveryId: crypto.randomUUID() } : {}) };
 	const now = Date.now(), deb = debounceMs(ctx);
@@ -431,8 +452,13 @@ async function wake(ctx: TenantContext, ectx: ExecutionContext, contextId: strin
 	let claimed = false;
 	if (!row) {
 		const r = await ctx.DB.prepare("INSERT INTO wakes (context_id, peer, last_sent_ms) VALUES (?, ?, ?) ON CONFLICT DO NOTHING").bind(contextId, peer, now).run();
-		claimed = r.meta.changes === 1;
-	} else if (!suppress && !row.pending_json && now - row.last_sent_ms >= deb) {
+		if (r.meta.changes === 1) {
+			claimed = !defer;
+			if (defer) row = { peer, last_sent_ms: now, pending_json: null };
+		} else if (defer) {
+			row = await ctx.DB.prepare("SELECT * FROM wakes WHERE context_id = ? AND peer = ?").bind(contextId, peer).first();
+		}
+	} else if (!defer && !suppress && !row.pending_json && now - row.last_sent_ms >= deb) {
 		const r = await ctx.DB.prepare("UPDATE wakes SET last_sent_ms = ? WHERE context_id = ? AND peer = ? AND last_sent_ms = ? AND pending_json IS NULL")
 			.bind(now, contextId, peer, row.last_sent_ms).run();
 		claimed = r.meta.changes === 1;
@@ -453,8 +479,16 @@ async function wake(ctx: TenantContext, ectx: ExecutionContext, contextId: strin
 	const keeping = !!(prev?.busy && busyActive(ctx, ectx, cur, now) && !prev?.attempts);
 	payload.taskIds = [...new Set([...(prev?.taskIds || []), taskId])];
 	if (hold || keeping) payload.busy = 1;
-	await ctx.DB.prepare("UPDATE wakes SET pending_json = ?, pending_since_ms = COALESCE(pending_since_ms, ?) WHERE context_id = ? AND peer = ?")
-		.bind(JSON.stringify(payload), now, contextId, curPeer).run();
+	// A changed status starts its own debounce window when nothing is already waiting.
+	// Later status in that window joins it. The window does not move.
+	const startBatch = defer && !payload.busy && !prev && now - sentAt >= deb;
+	if (startBatch) {
+		await ctx.DB.prepare("UPDATE wakes SET pending_json = ?, pending_since_ms = COALESCE(pending_since_ms, ?), last_sent_ms = ? WHERE context_id = ? AND peer = ?")
+			.bind(JSON.stringify(payload), now, now, contextId, curPeer).run();
+	} else {
+		await ctx.DB.prepare("UPDATE wakes SET pending_json = ?, pending_since_ms = COALESCE(pending_since_ms, ?) WHERE context_id = ? AND peer = ?")
+			.bind(JSON.stringify(payload), now, contextId, curPeer).run();
+	}
 	// The pending row exists now. A hosted alarm is set in this turn, including when the delay is too long for waitUntil.
 	await noteWakeWrite(ectx);
 	// A busy hold is taken only when an alarm or the minute cron will flush the catch-up.
@@ -463,7 +497,7 @@ async function wake(ctx: TenantContext, ectx: ExecutionContext, contextId: strin
 		log("wake_absorbed", { contextId, kind, tasks: payload.taskIds.length });
 		return;
 	}
-	const delay = Math.max(0, (cur?.last_sent_ms || now) + deb - now) + 100;
+	const delay = Math.max(0, (startBatch ? now : (Number(cur?.last_sent_ms) || now)) + deb - now) + 100;
 	// waitUntil can outlive the response by ~30s. Longer windows are flushed by a later request, the optional
 	// single-inbox cron, or the registered alarm (set above).
 	if (delay <= 25000) ectx.waitUntil(new Promise((res) => setTimeout(res, delay)).then(() => flushWake(ctx, ectx, contextId, curPeer)));
@@ -508,6 +542,7 @@ export async function cronFlush(ctx: TenantContext, ectx: ExecutionContext): Pro
 	await ctx.DB.batch([
 		ctx.DB.prepare("DELETE FROM rate WHERE minute < ?").bind(Math.floor(now / 60000) - 5),
 		ctx.DB.prepare("DELETE FROM wake_budget WHERE hour < ?").bind(Math.floor(now / 3600000) - 24),
+		ctx.DB.prepare("DELETE FROM wake_routing WHERE hour < ?").bind(Math.floor(now / 3600000) - 24 * 14),
 		...pairingCleanup(ctx, now),
 		ctx.DB.prepare("DELETE FROM oauth_codes WHERE expires_ms < ?").bind(now),
 	]);
@@ -843,9 +878,109 @@ function pubCfg(taskId: string, cfg: Json, version: string): Json {
 
 type Rpc = (p: Json, label: string, version: string, ctx: TenantContext, ectx: ExecutionContext) => Promise<Json>;
 
+const ROUTING_KEEP_HOURS = 24 * 14;
+
+async function recordRoute(ctx: TenantContext, decision: RouteDecision, kind: "inbound" | "outbound_update"): Promise<void> {
+	log("wake_route", {
+		kind, mode: decision.mode, decision: decision.decision, action: decision.action,
+		proposed: decision.proposed, wake: decision.wake, intent: decision.intent,
+	});
+	try {
+		const hour = Math.floor(Date.now() / 3600000);
+		await ctx.DB.prepare(
+			`INSERT INTO wake_routing (hour, decision, action, count) VALUES (?, ?, ?, 1)
+			 ON CONFLICT(hour, decision, action) DO UPDATE SET count = count + 1`,
+		).bind(hour, decision.decision, decision.action).run();
+	} catch {
+		log("wake_route_failed", { kind, decision: decision.decision, action: decision.action });
+	}
+}
+
+async function recordDelivered(ctx: TenantContext): Promise<void> {
+	try {
+		const hour = Math.floor(Date.now() / 3600000);
+		await ctx.DB.prepare(
+			`INSERT INTO wake_routing (hour, decision, action, count) VALUES (?, 'invocation', 'delivered', 1)
+			 ON CONFLICT(hour, decision, action) DO UPDATE SET count = count + 1`,
+		).bind(hour).run();
+	} catch {
+		log("wake_route_failed", { decision: "invocation", action: "delivered" });
+	}
+}
+async function routingReport(ctx: TenantContext): Promise<Json> {
+	const since = Math.floor(Date.now() / 3600000) - ROUTING_KEEP_HOURS;
+	const rows = await ctx.DB.prepare(
+		"SELECT hour, decision, action, count FROM wake_routing WHERE hour >= ? ORDER BY hour, decision, action",
+	).bind(since).all();
+	const all = ((rows.results || []) as Json[]).map((row) => ({
+		hour: Number(row.hour), decision: String(row.decision), action: String(row.action), count: Number(row.count),
+	})).filter((row) => Number.isSafeInteger(row.hour) && Number.isSafeInteger(row.count) && row.count >= 0);
+	let decided = 0, suppressed = 0, shadow = 0, delivered = 0;
+	const counts = [];
+	for (const row of all) {
+		if (row.decision === "invocation" && row.action === "delivered") { delivered += row.count; continue; }
+		counts.push(row);
+		decided += row.count;
+		if (row.action === "suppress") suppressed += row.count;
+		else if (row.action === "shadow") shadow += row.count;
+	}
+	// `counts` and `decided` are routing decisions. A batch is counted before the webhook is sent.
+	// `delivered` is a successful webhook or relay send. Measure savings from `delivered`.
+	return { mode: routingMode(ctx.WAKE_ROUTING), decided, delivered, suppressed, shadow, counts };
+}
+
+async function dedupFingerprint(ctx: TenantContext, kind: string, peer: string, ref: string): Promise<string | null> {
+	const row: Json = await ctx.DB.prepare("SELECT fingerprint FROM wake_dedup WHERE kind = ? AND peer = ? AND ref = ?").bind(kind, peer, ref).first();
+	return typeof row?.fingerprint === "string" ? row.fingerprint : null;
+}
+
+async function saveDedup(ctx: TenantContext, kind: string, peer: string, ref: string, fingerprint: string): Promise<void> {
+	await ctx.DB.prepare(
+		`INSERT INTO wake_dedup (kind, peer, ref, fingerprint) VALUES (?, ?, ?, ?)
+		 ON CONFLICT(kind, peer, ref) DO UPDATE SET fingerprint = excluded.fingerprint`,
+	).bind(kind, peer, ref, fingerprint).run();
+}
+
+/** Task id already stored for this peer's message id, when a retry repeats it. */
+async function messageTaskId(ctx: TenantContext, peer: string, messageId: string): Promise<string | null> {
+	const row: Json = await ctx.DB.prepare(
+		`SELECT m.task_id FROM messages m JOIN tasks t ON t.id = m.task_id
+		 WHERE m.message_id = ? AND t.peer = ? ORDER BY m.seq LIMIT 1`,
+	).bind(messageId, peer).first();
+	return typeof row?.task_id === "string" ? row.task_id : null;
+}
+
+async function routeInbound(ctx: TenantContext, peer: string, contextId: string, wake: "auto" | "always" | "never" | null, intent: "handoff" | "blocker" | "question" | "status" | "ack" | null, text: string, duplicate: boolean): Promise<{ decision: RouteDecision; fingerprint: string }> {
+	let idle = false;
+	let unchanged = false;
+	let fingerprint = "";
+	if (!duplicate && intent === "status") {
+		const normalized = statusText(text);
+		if (!normalized) idle = true;
+		else {
+			fingerprint = await A.sha256(normalized);
+			unchanged = await dedupFingerprint(ctx, "status", peer, contextId) === fingerprint;
+		}
+	}
+	return { decision: decideRoute({ mode: routingMode(ctx.WAKE_ROUTING), wake, intent, duplicate, idle, unchanged }), fingerprint };
+}
+
 const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
 	const msg = A.normMessage(params.message);
 	if (msg.role !== "user") throw new RpcError(-32602, "message.role must be user");
+	const routed = readRouteFields(msg.metadata, params.metadata);
+	if (!routed.ok) throw new RpcError(-32602, `Invalid params: ${routed.error}`);
+	const priorId = await messageTaskId(ctx, label, msg.messageId);
+	if (priorId) {
+		const prior = await loadTask(ctx, priorId);
+		if (prior && prior._peer === label) {
+			const again = await routeInbound(ctx, label, prior.contextId, routed.fields.wake, routed.fields.intent, "", true);
+			await recordRoute(ctx, again.decision, "inbound");
+			const conf = params.configuration || {};
+			const pt = A.publicTask(prior, version, conf.historyLength);
+			return version.startsWith("1") ? { task: pt } : pt;
+		}
+	}
 	const directReply = directReplyParams(params);
 	const conf = params.configuration || {};
 	const push = conf.taskPushNotificationConfig || conf.pushNotificationConfig;
@@ -873,24 +1008,49 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
 	// Keep the loop marker on the task even when it was supplied only on the message.
 	if (directReply) task.metadata = { ...(task.metadata || {}), [DIRECT_REPLY_META]: params.metadata?.[DIRECT_REPLY_META] || msg.metadata?.[DIRECT_REPLY_META] };
 	const preview = A.textOf(msg);
-	if (creating) {
-		const stored = await ctx.DB.batch([
+	const claimToken = A.newId();
+	const history = { dir: "in", peer: label, taskId: task.id, role: "user", text: preview, data: { messageId: msg.messageId } };
+	const stored = creating
+		? await ctx.DB.batch([
 			claimContextStmt(ctx, contextId, label, ts),
-			saveTaskIfOwnerStmt(ctx, task),
-			msgIfOwnerStmt(ctx, task, msg),
-			histIfOwnerStmt(ctx, contextId, { dir: "in", peer: label, taskId: task.id, role: "user", text: preview, data: { messageId: msg.messageId } }, label),
+			claimMessageStmt(ctx, label, msg.messageId, task.id, claimToken, contextId),
+			saveTaskIfClaimStmt(ctx, task, msg.messageId, claimToken),
+			msgIfClaimStmt(ctx, task, msg, claimToken),
+			histIfClaimStmt(ctx, contextId, history, label, msg.messageId, claimToken),
+		])
+		: await ctx.DB.batch([
+			claimMessageStmt(ctx, label, msg.messageId, task.id, claimToken, contextId),
+			updateTaskIfClaimStmt(ctx, task, msg.messageId, claimToken),
+			msgIfClaimStmt(ctx, task, msg, claimToken),
+			histIfClaimStmt(ctx, contextId, history, label, msg.messageId, claimToken),
 		]);
-		const wrote = stored[1]?.meta?.changes ?? 0;
-		if (wrote < 1) throw new RpcError(-32602, UNKNOWN_CONTEXT);
-	} else {
-		await ctx.DB.batch([
-			saveTaskStmt(ctx, task), msgStmt(ctx, task, msg),
-			histStmt(ctx, contextId, { dir: "in", peer: label, taskId: task.id, role: "user", text: preview, data: { messageId: msg.messageId } }),
-		]);
+	const held: Json = await ctx.DB.prepare(
+		"SELECT task_id, claim_token FROM message_claims WHERE peer = ? AND message_id = ?",
+	).bind(label, msg.messageId).first();
+	if (!held || typeof held.task_id !== "string" || typeof held.claim_token !== "string") throw new RpcError(-32602, UNKNOWN_CONTEXT);
+	// Another attempt stored this message id. Return that task and do not wake again.
+	if (held.claim_token !== claimToken) {
+		const winner = await loadTask(ctx, held.task_id);
+		if (!winner || winner._peer !== label) throw new RpcError(-32603, "Internal error");
+		const again = await routeInbound(ctx, label, winner.contextId, routed.fields.wake, routed.fields.intent, "", true);
+		await recordRoute(ctx, again.decision, "inbound");
+		const won = A.publicTask(winner, version, conf.historyLength);
+		return version.startsWith("1") ? { task: won } : won;
+	}
+	const taskWrite = creating ? stored[2]?.meta?.changes ?? 0 : stored[1]?.meta?.changes ?? 0;
+	if (creating && taskWrite < 1) {
+		await ctx.DB.prepare("DELETE FROM message_claims WHERE peer = ? AND message_id = ? AND claim_token = ?")
+			.bind(label, msg.messageId, claimToken).run();
+		throw new RpcError(-32602, UNKNOWN_CONTEXT);
 	}
 	log("message_received", { peer: label, contextId, taskId: task.id, chars: preview.length, version });
 	// Direct replies are stored for history, not scheduled as new work.
-	if (!directReply) await wake(ctx, ectx, contextId, task.id, label, preview);
+	if (!directReply) {
+		const routedNow = await routeInbound(ctx, label, contextId, routed.fields.wake, routed.fields.intent, preview, false);
+		if (routedNow.fingerprint) await saveDedup(ctx, "status", label, contextId, routedNow.fingerprint);
+		await recordRoute(ctx, routedNow.decision, "inbound");
+		if (routedNow.decision.deliver) await wake(ctx, ectx, contextId, task.id, label, preview, "inbound", routedNow.decision.batch ? { defer: true } : undefined);
+	}
 	const pt = A.publicTask(task, version, conf.historyLength);
 	return version.startsWith("1") ? { task: pt } : pt;
 };
@@ -1859,7 +2019,14 @@ async function handlePush(req: Request, ctx: TenantContext, ectx: ExecutionConte
 		histStmt(ctx, rec.context_id, { dir: "in", peer: rec.peer, taskId, event: "push", state, text }),
 	]);
 	log("push_received", { peer: rec.peer, taskId, state });
-	await wake(ctx, ectx, rec.context_id, taskId, rec.peer, `[update on outbound task: ${state}] ${text}`, "outbound_update");
+	// Identical payloads only. File bytes and URIs are part of the body, so a new file under the same name still wakes.
+	const priorPayload = updates.length > 1 ? updates[updates.length - 2]?.payload : undefined;
+	const samePayload = priorPayload !== undefined && await A.sha256(JSON.stringify(priorPayload)) === await A.sha256(JSON.stringify(body));
+	const pushDecision = decideRoute({
+		mode: routingMode(ctx.WAKE_ROUTING), wake: null, intent: null, duplicate: samePayload, idle: false, unchanged: false,
+	});
+	await recordRoute(ctx, pushDecision, "outbound_update");
+	if (pushDecision.deliver) await wake(ctx, ectx, rec.context_id, taskId, rec.peer, `[update on outbound task: ${state}] ${text}`, "outbound_update");
 	return json({ ok: true });
 }
 
@@ -2056,6 +2223,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			return httpRelayFetch(ctx, profile, "/disable", { method: "POST", body: JSON.stringify({ generation: input.generation }) });
 		}
 	}
+	if (seg[0] === "wake" && seg[1] === "routing" && seg.length === 2 && !url.search && m === "GET") return json(await routingReport(ctx));
 	if (seg[0] === "wake" && seg[1] === "relay" && seg.length === 2 && !url.search) {
 		if (m === "GET") {
 			const response = await relayFetch(ctx, "/status");
@@ -2513,7 +2681,10 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 		let n = 0;
 		for (const c of b.contexts) {
 			A.checkId(c, "contextId");
+			// Claims and status fingerprints have no context column. Remove them before the tasks they point at.
 			const res = await ctx.DB.batch([
+				ctx.DB.prepare("DELETE FROM message_claims WHERE task_id IN (SELECT id FROM tasks WHERE context_id = ?)").bind(c),
+				ctx.DB.prepare("DELETE FROM wake_dedup WHERE ref = ? OR ref IN (SELECT id FROM tasks WHERE context_id = ?)").bind(c, c),
 				ctx.DB.prepare("DELETE FROM messages WHERE context_id = ?").bind(c),
 				ctx.DB.prepare("DELETE FROM tasks WHERE context_id = ?").bind(c),
 				ctx.DB.prepare("DELETE FROM history WHERE context_id = ?").bind(c),
@@ -3892,6 +4063,14 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 			const callerContext = a.contextId ? A.checkId(argStr(a, "contextId"), "contextId") : "";
 			if (callerContext) msg.contextId = callerContext;
 			if (a.taskId) msg.taskId = A.checkId(argStr(a, "taskId"), "taskId");
+			const wake = argStr(a, "wake", false);
+			const intent = argStr(a, "intent", false);
+			if (wake && wake !== "auto" && wake !== "always" && wake !== "never") throw new ToolError("wake must be auto, always, or never");
+			if (intent && intent !== "handoff" && intent !== "blocker" && intent !== "question" && intent !== "status" && intent !== "ack") throw new ToolError("intent must be handoff, blocker, question, status, or ack");
+			const metadata: Json = {};
+			if (wake) metadata["a2a.exposed/wake"] = wake;
+			if (intent) metadata["a2a.exposed/intent"] = intent;
+			if (wake || intent) msg.metadata = metadata;
 			// A conforming peer rejects SendMessage when push is attached and the card does not advertise it.
 			const caps = card && typeof card === "object" ? card.capabilities : null;
 			const pushOn = !!(caps && typeof caps === "object" && caps.pushNotifications === true);

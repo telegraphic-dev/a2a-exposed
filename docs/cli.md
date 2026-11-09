@@ -285,7 +285,7 @@ The owner token authenticates these commands.
 | `peers sync [alias...]` / `peers unsync <alias>` | Upload peers so the MCP connector can send to them. URL and token are encrypted on the Worker with a key derived from the owner token. Re-run after `connect`, a token change, or an owner-token rotation |
 | `peer announce (--to <alias> \| --all) [--reissue] [--json]` | Tell synced peers this inbox's current https card URL. They switch only after the card proves the same pairing identity. A peer that does not support this keeps the current pairing. A revoked return token stays revoked unless `--to` and `--reissue`. The return token is not printed. Run `peers sync` first |
 | `peer forward --to <card-url> [--hours N]` / `peer forward --off` | On the inbox you are leaving, forward a direct reply to the new card and answer with a moved pointer. `--hours` is 1 to 720 (default 168) |
-| `send --to <alias\|url> [--text T \| stdin] [--context C] [--task T] [--push] [--proto 0.3\|1.0]` | Send. The CLI reads the peer card and prefers A2A 1.0 |
+| `send --to <alias\|url> [--text T \| stdin] [--context C] [--task T] [--push] [--wake auto\|always\|never] [--intent handoff\|blocker\|question\|status\|ack] [--proto 0.3\|1.0]` | Send. The CLI reads the peer card and prefers A2A 1.0. Set `--intent` on every send. `--wake auto` wakes a handoff, blocker, or question. An ack, and an idle or unchanged status, stay stored once the peer enforces routing. A changed status is batched. `--wake always` asks for an immediate wake, still subject to that peer's authorization and rate limits. `--wake never` only stores the message. Omit both flags for a legacy send: the peer wakes as before. Do not send an acknowledgement-only message, and do not answer an ack |
 | `poll --to <alias\|url> <taskId> [--proto 0.3\|1.0]` | Fetch a task you sent |
 | `outbound <taskId>` | Stored state, including pushed updates |
 
@@ -321,6 +321,7 @@ One A2A endpoint has one owner token, saved by `init` in `config.env`. That toke
 | `WAKE_CLI_COMMAND` | Command in wake hints |
 | `WAKE_PRESET`, `WAKE_AGENT_ID`, `WAKE_KEY_HEADER`, `WAKE_KEY_PREFIX`, `WAKE_BODY_TEMPLATE` | Wake shape. Usually set by flags |
 | `WAKE_DEBOUNCE_SECONDS`, `WAKE_BUSY_SECONDS`, `WAKE_MAX_PER_HOUR` | Debounce, busy cool-down, and hourly cap. `WAKE_BUSY_SECONDS=0` disables the cool-down |
+| `WAKE_ROUTING` | `shadow` (default) or `enforce`. Shadow counts auto wakes that would be skipped and still wakes. Enforce stores an ack and an idle or unchanged status without a wake, and batches a changed status. `shadow` rolls `enforce` back |
 | `UPSTREAM_TOKEN` | Façade only. Bearer presented to the private agent |
 | `UPSTREAM_ACCESS_CLIENT_ID` / `UPSTREAM_ACCESS_CLIENT_SECRET` | Façade only. Access service token for the upstream tunnel |
 | `PEER_<ALIAS>_TOKEN` | Outbound peer token. Overrides the saved value |

@@ -180,6 +180,7 @@ const ROUTES: RouteDef[] = [
 	{ method: "GET", name: "GET /owner/facade", take: (s) => s.length === 2 && s[1] === "facade", search: noQuery, path: () => "/owner/facade" },
 	{ method: "POST", name: "POST /owner/facade/verify", take: (s) => s.length === 3 && s[1] === "facade" && s[2] === "verify", search: noQuery, path: () => "/owner/facade/verify" },
 	...(["GET", "POST", "DELETE"] as const).map(method => ({ method, name: `${method} /owner/relay/http/:profile`, take: (s: string[]) => s.length === 4 && s[1] === "relay" && s[2] === "http" && (s[3] === "webhook" || s[3] === "a2a"), search: noQuery, path: (s: string[]) => `/owner/relay/http/${s[3]}` })),
+	{ method: "GET", name: "GET /owner/wake/routing", take: (s) => s.length === 3 && s[1] === "wake" && s[2] === "routing", search: noQuery, path: () => "/owner/wake/routing" },
 	...(["GET", "POST", "DELETE"] as const).map(method => ({ method, name: `${method} /owner/wake/relay`, take: (s: string[]) => s.length === 3 && s[1] === "wake" && s[2] === "relay", search: noQuery, path: () => "/owner/wake/relay" })),
 	{ method: "GET", name: "GET /owner/wake/preview", take: (s) => s.length === 3 && s[1] === "wake" && s[2] === "preview", search: noQuery, path: () => "/owner/wake/preview" },
 	{ method: "POST", name: "POST /owner/wake/test", take: (s) => s.length === 3 && s[1] === "wake" && s[2] === "test", search: noQuery, path: () => "/owner/wake/test" },
@@ -207,7 +208,7 @@ const TEXT_MAX = 100_000;
 const REPLY_STATES = new Set(["completed", "input-required", "working", "failed", "rejected"]);
 
 const MCP_ARGS: Record<string, { required: readonly string[]; optional: readonly string[] }> = {
-	"POST /owner/mcp/send": { required: ["to", "text"], optional: ["contextId", "taskId"] },
+	"POST /owner/mcp/send": { required: ["to", "text"], optional: ["contextId", "taskId", "wake", "intent"] },
 	"POST /owner/mcp/reply": { required: ["taskId", "text"], optional: ["state"] },
 	"POST /owner/mcp/poll_outbound": { required: ["taskId"], optional: [] },
 	"POST /owner/mcp/cancel_outbound": { required: ["taskId"], optional: [] },
@@ -222,6 +223,8 @@ function mcpArgOk(key: string, value: string): string | null {
 		return null;
 	}
 	if (key === "taskId" || key === "contextId") return idOk(value) ? null : `${key} is invalid`;
+	if (key === "wake") return value === "auto" || value === "always" || value === "never" ? null : "wake is invalid";
+	if (key === "intent") return value === "handoff" || value === "blocker" || value === "question" || value === "status" || value === "ack" ? null : "intent is invalid";
 	if (key === "state") return REPLY_STATES.has(value) ? null : "state is invalid";
 	return "body is not allowed";
 }

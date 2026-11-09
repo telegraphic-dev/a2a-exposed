@@ -54,7 +54,7 @@ const DEPLOY_KEYS = [
 	"A2A_AGENT_NAME", "A2A_AGENT_DESCRIPTION", "A2A_AGENT_VERSION", "A2A_AGENT_SKILLS",
 	"A2A_PROVIDER_ORGANIZATION", "A2A_PROVIDER_URL", "A2A_DOCUMENTATION_URL",
 	"A2A_HTTP_RELAY", "A2A_WAKE_RELAY", "WAKE_TRANSPORT", "WAKE_PRESET", "WAKE_AGENT_ID", "WAKE_KEY_HEADER", "WAKE_KEY_PREFIX", "WAKE_BODY_TEMPLATE", "WAKE_CLI_COMMAND",
-	"WAKE_DEBOUNCE_SECONDS", "WAKE_BUSY_SECONDS", "WAKE_MAX_PER_HOUR", "A2A_MAX_BODY", "A2A_RATE_PER_MIN", "A2A_ENABLE_CRON",
+	"WAKE_DEBOUNCE_SECONDS", "WAKE_BUSY_SECONDS", "WAKE_MAX_PER_HOUR", "WAKE_ROUTING", "A2A_MAX_BODY", "A2A_RATE_PER_MIN", "A2A_ENABLE_CRON",
 	"A2A_WORKERS_DEV_SUBDOMAIN", "A2A_RETIRED_HOSTNAMES", "PAIRING_APPROVAL", "A2A_PBKDF2_ITERATIONS", "A2A_WORKERS_LOGS", "A2A_MCP",
 	"A2A_UPSTREAM_URL", "A2A_UPSTREAM_CARD_URL",
 	"APPROVAL_OIDC_ISSUER", "APPROVAL_OIDC_CLIENT_ID", "APPROVAL_OIDC_ALLOWED_SUBJECTS", "APPROVAL_METHODS",
@@ -68,6 +68,7 @@ const FLAG_KEYS = {
 	"http-relay": "A2A_HTTP_RELAY", "wake-relay": "A2A_WAKE_RELAY", "wake-transport": "WAKE_TRANSPORT",
 	preset: "WAKE_PRESET", "agent-id": "WAKE_AGENT_ID", "key-header": "WAKE_KEY_HEADER", "key-prefix": "WAKE_KEY_PREFIX",
 	"body-template": "WAKE_BODY_TEMPLATE", "cli-command": "WAKE_CLI_COMMAND", debounce: "WAKE_DEBOUNCE_SECONDS", busy: "WAKE_BUSY_SECONDS", "max-per-hour": "WAKE_MAX_PER_HOUR",
+	"wake-routing": "WAKE_ROUTING",
 	"pairing-approval": "PAIRING_APPROVAL", "pbkdf2-iterations": "A2A_PBKDF2_ITERATIONS", "workers-logs": "A2A_WORKERS_LOGS", mcp: "A2A_MCP",
 	upstream: "A2A_UPSTREAM_URL", "upstream-card-url": "A2A_UPSTREAM_CARD_URL",
 	"manage-url": "MANAGE_URL", "event-url": "EVENT_URL",
@@ -256,6 +257,7 @@ function applyFlags(o, { persist = true } = {}) {
 	if (upd.A2A_HTTP_RELAY && !["0", "1"].includes(upd.A2A_HTTP_RELAY)) die("--http-relay must be 0 or 1");
 	if (upd.A2A_WAKE_RELAY && !["0", "1"].includes(upd.A2A_WAKE_RELAY)) die("--wake-relay must be 0 or 1");
 	if (upd.WAKE_PRESET && !PRESETS.includes(upd.WAKE_PRESET)) die(`unknown preset ${upd.WAKE_PRESET} (${PRESETS.join(" | ")})`);
+	if (upd.WAKE_ROUTING !== undefined && !["shadow", "enforce"].includes(upd.WAKE_ROUTING)) die("--wake-routing must be shadow or enforce");
 	for (const [flag, key] of [["upstream", "A2A_UPSTREAM_URL"], ["upstream-card-url", "A2A_UPSTREAM_CARD_URL"]]) {
 		if (upd[key] === undefined) continue;
 		if (["", "none", "off"].includes(String(upd[key]).trim().toLowerCase())) {

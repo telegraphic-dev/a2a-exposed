@@ -25,14 +25,20 @@ for (const legacy of [false, true]) test(`delayed initial BOM survives keepalive
 	const mf = new Miniflare(convertV4MiniflareOptions({ name: "http-relay-sdk", modules: true, script: built.outputFiles[0].text, compatibilityDate: "2026-10-06", compatibilityFlags: ["enable_request_signal"], d1Databases: ["DB"], durableObjects: { HTTP_RELAY: { className: "HttpRelay", useSQLite: true } }, bindings: { OWNER_TOKEN: "fixture-owner", PUBLIC_URL: publicOrigin, HTTP_RELAY_ENABLED: "1", MCP: "off" } }));
 	const dir = mkdtempSync(join(tmpdir(), "http-relay-official-sdk-"));
 	let mode = "bom", completed = 0, aborted = 0;
+	let abortClosed = () => {};
+	const abortSawClose = new Promise<void>(resolve => { abortClosed = resolve; });
 	const server = createServer(async (req, res) => {
 		const chunks: Buffer[] = []; for await (const c of req) chunks.push(c);
-		const input = JSON.parse(Buffer.concat(chunks).toString());
+		const raw = Buffer.concat(chunks);
+		const input = JSON.parse(raw.toString());
 		const task = { id: "first-task", contextId: "context", status: { state: legacy ? "working" : "TASK_STATE_WORKING" }, ...(legacy ? { kind: "task" } : {}) };
 		const record = `data: ${JSON.stringify({ jsonrpc: "2.0", id: input.id, result: legacy ? task : { task } })}\n\n`;
 		res.writeHead(200, { "content-type": "text/event-stream" }); res.flushHeaders();
 		const timers: ReturnType<typeof setTimeout>[] = [];
 		const later = (ms: number, fn: () => void) => timers.push(setTimeout(fn, ms));
+		// The abort case stays open until the client disconnects. Ending it on a timer races the abort under load.
+		const hold = raw.includes('"messageId":"abort"');
+		res.on("close", () => { timers.forEach(clearTimeout); if (!res.writableEnded) { aborted++; if (hold) abortClosed(); } });
 		if (mode === "empty") { later(350, () => res.end()); return; }
 		const bytes = Buffer.from((mode === "plain" ? "" : "\ufeff") + record);
 		// Separate the BOM bytes and data-line prefix across native HTTP writes.
@@ -40,8 +46,7 @@ for (const legacy of [false, true]) test(`delayed initial BOM survives keepalive
 		later(340, () => res.write(bytes.subarray(1, 2)));
 		later(380, () => res.write(bytes.subarray(2, 12)));
 		later(420, () => res.write(bytes.subarray(12)));
-		later(850, () => { completed++; res.end(); });
-		res.on("close", () => { timers.forEach(clearTimeout); if (!res.writableEnded) aborted++; });
+		if (!hold) later(850, () => { completed++; res.end(); });
 	});
 	server.listen(0, "127.0.0.1"); await once(server, "listening");
 	const fixture = { base: `http://127.0.0.1:${(server.address() as any).port}`, async close() { server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); } };
@@ -85,7 +90,8 @@ for (const legacy of [false, true]) test(`delayed initial BOM survives keepalive
 		const stream = client.sendMessageStream(SendMessageRequest.fromJSON({ message: { messageId: "abort", role: "ROLE_USER" } }), { signal: abort.signal });
 		assert.equal((await stream.next()).done, false); abort.abort();
 		try { await stream.next(); } catch {}
-		const end = Date.now() + 2500; while (!aborted && Date.now() < end) await delay(20);
+		const closed = await Promise.race([abortSawClose.then(() => true), delay(10000).then(() => false)]);
+		assert.equal(closed, true, "client abort must close the local response");
 		assert.equal(aborted, 1);
 		t.diagnostic("@a2a-js/sdk@1.3.0: delayed split BOM first event, no-BOM prefix, native abort passed");
 	} finally {

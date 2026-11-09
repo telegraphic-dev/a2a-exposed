@@ -88,6 +88,7 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
        [--agent-name N] [--agent-description D] [--agent-skills JSON]
        [--provider-organization O --provider-url U] [--preset P] [--worker-name W] [--d1-name D]
        [--account-id ID] [--cf-profile NAME] [--cli-command CMD] [--debounce S] [--busy S] [--max-per-hour N]
+       [--wake-routing shadow|enforce]
        [--pairing-approval human|agent|off] [--pbkdf2-iterations N] [--workers-logs on|off] [--mcp on|off] [--cron]
        [--manage-url URL] [--event-url URL] [--event-secret-stdin]
        [--dry-run [--json]] [--rotate-owner-token]
@@ -157,7 +158,7 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
                                                <config dir>/worker). The config dir is --config-dir / A2A_CONFIG_DIR
   deploy [same flags]           redeploy with saved settings (secrets persist); tag the Worker version as a2a-exposed-<version>
   wake set [--preset P] [--agent-id A] [--key-header H] [--key-prefix X] [--body-template JSON]
-           [--cli-command CMD] [--debounce S] [--busy S] [--max-per-hour N]
+           [--cli-command CMD] [--debounce S] [--busy S] [--max-per-hour N] [--wake-routing shadow|enforce]
                                 self-hosted: save wake settings, upload wake secrets from env, and redeploy
                                 hosted config: use the saved address and owner token to test then save; no deploy
                                 hosted CLI: list hosted capabilities --json for presets; scoped setup selects --agent from hosted list --json
@@ -169,6 +170,10 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
                                                300 for claude-code, 180 for the others
                                 --max-per-hour  hourly cap; 0 or unset is unlimited, except Claude Code,
                                                which defaults to 25 when this is unset
+                                --wake-routing shadow (default) or enforce. shadow counts the wakes auto
+                                               would skip and still wakes. enforce stores an ack and an idle
+                                               or unchanged status without a wake, and batches a changed status.
+                                               Set shadow again to roll enforce back
   wake preview                  rendered wake request (a credential is Bearer •••• or ••••, none of the secret)
                                 openbot includes a sample delivery ID and canonical signing-input description
                                 + sha256 fingerprints of the uploaded URL/key/HMAC secret; compared with
@@ -403,7 +408,15 @@ Outbound (agents you call)
                           (default 168, max 720)
                           a token variable set in the environment overrides config.env; when a peer token
                           differs between the two, connect/send/poll/peers/status warn (values never shown)
-  send --to <alias|url> [--text T | stdin] [--context C] [--task T] [--push] [--proto 0.3|1.0]
+  send --to <alias|url> [--text T | stdin] [--context C] [--task T] [--push]
+                          [--wake auto|always|never] [--intent handoff|blocker|question|status|ack]
+                          [--proto 0.3|1.0]
+                          Set intent on every send. auto wakes a handoff, blocker, or question.
+                          An ack, and an idle or unchanged status, stay stored. A changed status
+                          is batched. always asks for an immediate wake, still subject to the
+                          peer's authorization and rate limits. never only stores the message.
+                          Omit both for a legacy sender: the peer wakes as before. Do not send
+                          an acknowledgement-only message, and do not answer an ack with an ack.
   poll --to <alias|url> <taskId> [--proto 0.3|1.0]
                           send/poll need only peer config; owner history/task storage is optional.
                           Storage failures warn on stderr; the peer response still prints and exits 0
@@ -508,7 +521,7 @@ const SPEC = {
 	token: { rotate: B },
 	peers: { "token-env": S, "token-stdin": B },
 	peer: { to: S, all: B, reissue: B, hours: S, off: B, json: B },
-	send: { to: S, text: S, context: S, task: S, push: B, proto: S },
+	send: { to: S, text: S, context: S, task: S, push: B, proto: S, wake: S, intent: S },
 	poll: { to: S, proto: S },
 	status: { json: B, agent: S, "control-url": S },
 	env: { json: B },
