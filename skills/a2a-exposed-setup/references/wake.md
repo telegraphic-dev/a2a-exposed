@@ -492,3 +492,25 @@ never retries automatically or saves a reference on this refusal.
 When `hosted capabilities --json` advertises `preflight`, check `hosted names --name NAME --json` anonymously before device approval. It checks only the supplied name and reserves nothing. Approve a read-only `agents:read` grant with `login --machine NAME --scopes agents:read`, then read `hosted capacity --json` for account room and `hosted list --json` for your hosted agents. Reading capacity does not assign a plan or reserve room. Approve creation scopes only when ready; existing `agents:create` access can also read capacity. `hosted create --name NAME --json` repeats advertised preflight checks before POST, and the server still enforces name uniqueness and account limits atomically. A concurrent creation can invalidate the earlier result.
 
 Hosted MCP offers `name_availability` and `creation_capacity` when supported. The latter reports only the creation room this connection can use, without account totals or other agents. These tools do not spend the connection's creation allowance. Account-wide counts require the separate setup read grant. All commands use explicit names and JSON outcomes; no credentials belong in arguments or printed output.
+
+
+### Hosted relay drafts without browser secret entry
+
+When `hosted capabilities --json` advertises `relay: true`, select the agent with
+`hosted list --json` and use `relay wake status --agent NAME --json` before acting.
+Test with explicit `--config-version N --connector-id default --generation G --preset P`,
+protected application-secret files/environment/stdin, and a new `--receipt-file FILE`.
+`relay wake save --agent NAME --config-version N --receipt-file FILE --confirm --json`
+saves the exact passing draft without another test or secret paste. The receipt file
+is mode 600, contains no application secret and expires after five minutes. It is
+single-use, including failed saves. Retests invalidate earlier passes; uncertain
+delivery must be checked at the local receiver and inbox before any explicit retry.
+Approved `wake:test,wake:write` setup scopes or this selected agent's owner credential
+are required. Human device approval and explicit save confirmation remain required.
+MCP accepts only scoped receipt `secretReference`, `agent`, `confirmed:true` and
+optional `clear:true`; never raw credentials or draft overrides. Prepare removal with
+`relay wake prepare --clear --config-version N --receipt-file NEW_FILE --confirm`.
+`relay wake remove --config-version N --confirm` removes wake settings; `relay revoke`
+separately closes connector authority. A missing capability stays on the service's
+supported dashboard or polling path, never an implicit deploy. Full flags and limits:
+[relay workflow](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/wake-relay.md#hosted-relay-wake-setup-with-protected-files).

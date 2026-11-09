@@ -627,3 +627,41 @@ test('capabilities exposes only a strict boolean verified-import switch', () => 
   } finally {f.clean();}
  }
 });
+
+test('hosted relay file test/save validates explicit choices and never renders secrets or receipts', () => {
+ const f=fixture();f.save('HOSTED_AGENT_NAME=sample-agent\n');
+ const endpoint='https://control.example/api/v1/agents/sample-agent/wake/relay';
+ const receipt='a2arr_'+'c'.repeat(64), signing='fixture-signing-secret-do-not-print';
+ const file=path.join(f.dir,'relay.receipt'), hmac=path.join(f.dir,'hmac');fs.writeFileSync(hmac,signing,{mode:0o600});
+ const replies={'https://control.example/api/v1/setup/capabilities':{status:200,body:{...capabilities,wake:{...capabilities.wake,relay:true}}},[endpoint]:{status:200,body:{ok:true,protocolVersion:1,version:7,transport:'webhook',preset:'generic',connector:{connectorId:'default',generation:2,connected:true},token:owner}},[endpoint+'/test']:{status:200,body:{ok:true,version:7,expires_in:300,secretReference:receipt,secret:signing}}};
+ const args=['relay','wake','test','--agent','sample-agent','--config-version','7','--generation','2','--connector-id','default','--preset','hermes','--hmac-secret-file',hmac,'--receipt-file',file,'--json'];
+ try {
+  const status=f.run(['relay','wake','status','--agent','sample-agent','--json'],replies);assert.equal(status.status,0,status.stdout+status.stderr);assert.equal(JSON.parse(status.stdout).connector.generation,2);assert.ok(!status.stdout.includes(owner));
+  const log=path.join(f.dir,'relay.log');const tested=f.run(args,replies,{A2A_TEST_FETCH_LOG:log});assert.equal(tested.status,0,tested.stdout+tested.stderr);
+  assert.equal(fs.statSync(file).mode&0o777,0o600);assert.equal(fs.readFileSync(file,'utf8').trim(),receipt);
+  for(const value of [receipt,signing,owner,grant]) assert.ok(!(tested.stdout+tested.stderr).includes(value));
+  const calls=fs.readFileSync(log,'utf8').trim().split('\n').map(JSON.parse);const body=JSON.parse(calls.at(-1).body);assert.deepEqual(body,{version:7,generation:2,connectorId:'default',preset:'hermes',keyHeader:'',key:'',hmacSecret:signing});
+  assert.equal(f.run(args,replies).status,1);assert.equal(fs.readFileSync(file,'utf8').trim(),receipt);
+  const failedFile=path.join(f.dir,'failed-receipt');
+  const refused=f.run(args.map(x=>x===file?failedFile:x),{...replies,[endpoint+'/test']:{status:409,body:{ok:false,code:'local_http',localStatus:401,secret:signing}}});
+  assert.equal(refused.status,1);assert.equal(JSON.parse(refused.stdout).code,'local_http');assert.equal(JSON.parse(refused.stdout).localStatus,401);assert.equal(fs.existsSync(failedFile),false);assert.ok(!refused.stdout.includes(signing));assert.match(JSON.parse(refused.stdout).next,/relay wake status/);
+  const save=['relay','wake','save','--agent','sample-agent','--config-version','7','--receipt-file',file,'--json'];
+  const missing=f.run(save,replies);assert.equal(missing.status,1);assert.equal(JSON.parse(missing.stdout).code,'confirmation');
+  const saved=f.run([...save,'--confirm'],{...replies,[endpoint]:{status:200,body:{ok:true,saved:true,version:8,secretReference:receipt}}});assert.equal(saved.status,0,saved.stdout);assert.equal(JSON.parse(saved.stdout).code,'saved');assert.ok(!saved.stdout.includes(receipt));
+  fs.chmodSync(file,0o644);assert.equal(JSON.parse(f.run([...save,'--confirm'],replies).stdout).code,'receipt_file');fs.chmodSync(file,0o600);
+  const link=path.join(f.dir,'receipt-link');fs.symlinkSync(file,link);assert.equal(JSON.parse(f.run([...save.map(x=>x===file?link:x),'--confirm'],replies).stdout).ok,false);
+  for (const pair of [['--config-version','7'],['--generation','2'],['--connector-id','default'],['--preset','hermes']]) {
+   const invalid=args.filter((value,index)=>index!==args.indexOf(pair[0])&&index!==args.indexOf(pair[0])+1);assert.equal(f.run(invalid,replies).status,1);
+  }
+ } finally { f.clean(); }
+});
+
+test('hosted relay removal and MCP removal receipt are distinct from connector revoke', () => {
+ const f=fixture();f.save('HOSTED_AGENT_NAME=sample-agent\n');const endpoint='https://control.example/api/v1/agents/sample-agent/wake/relay';
+ const replies={'https://control.example/api/v1/setup/capabilities':{status:200,body:{...capabilities,wake:{...capabilities.wake,relay:true}}},[endpoint]:{status:200,body:{ok:true,removed:true,version:8}},[endpoint+'/reference']:{status:200,body:{ok:true,secretReference:'a2arr_'+'e'.repeat(64),expires_in:300,version:7,clear:true}}};
+ try {
+  const result=f.run(['relay','wake','remove','--agent','sample-agent','--config-version','7','--confirm','--json'],replies);assert.equal(result.status,0,result.stdout);assert.match(JSON.parse(result.stdout).next,/Revoke.*separately/);
+  const file=path.join(f.dir,'removal-receipt');const prepared=f.run(['relay','wake','prepare','--clear','--confirm','--agent','sample-agent','--config-version','7','--receipt-file',file,'--json'],replies);assert.equal(prepared.status,0,prepared.stdout);assert.match(fs.readFileSync(file,'utf8'),/^a2arr_/);assert.ok(!prepared.stdout.includes('a2arr_'));
+  const unsupported=f.run(['relay','wake','status','--agent','sample-agent','--json']);assert.equal(unsupported.status,1);assert.equal(JSON.parse(unsupported.stdout).code,'unsupported');
+ } finally { f.clean(); }
+});

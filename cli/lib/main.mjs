@@ -280,6 +280,25 @@ Wake relay (optional Worker feature, no tunnel or service install)
                                 self-host deploy --wake-relay 1 --wake-transport relay enables it;
                                 application bearer/HMAC credentials still apply. See docs/wake-relay.md
 
+Hosted relay wake configuration (only on services advertising wake.relay)
+  relay wake status --agent NAME [--json]
+                                read config version, connector id/generation and connection status
+  relay wake test --agent NAME --config-version N --connector-id default --generation N
+            --preset PRESET --receipt-file NEW_FILE [--hmac-secret-file FILE | --hmac-secret-env VAR]
+            [--key-file FILE | --key-env VAR | --key-stdin] [--key-header HEADER] [--json]
+                                test without saving; store a five-minute single-use receipt mode 600
+  relay wake save --agent NAME --config-version N --receipt-file FILE --confirm [--json]
+                                save exactly the tested settings; no new delivery or secret entry
+  relay wake remove --agent NAME --config-version N --confirm [--receipt-file FILE] [--json]
+                                remove the saved wake; connector revocation remains relay revoke
+  relay wake prepare --agent NAME --config-version N --clear --receipt-file NEW_FILE --confirm [--json]
+                                prepare a five-minute MCP removal reference
+  Select NAME with hosted list --json and PRESET with hosted capabilities --json.
+  These commands accept --control-url ORIGIN and use approved hosted setup scopes
+  wake:test,wake:write or that agent's owner credential. Read status before each change.
+  MCP set_wake accepts the protected receipt as secretReference with confirmed:true,
+  and clear:true for removal; never pass raw application/connector credentials to MCP.
+
 HTTP endpoint relays (separate opt-in Worker feature; --http-relay 1 on init/deploy)
   relay http|a2a create --token-file FILE --ingress-token-file FILE [--forward-headers LIST]
                                 enroll/rotate; reserves two NEW mode-600 credential files; no inline secrets
@@ -494,7 +513,7 @@ const SPEC = {
 	status: { json: B, agent: S, "control-url": S },
 	env: { json: B },
 	export: { sql: B },
-	relay: { "forward-headers": S, "ingress-token-file": S, "local-headers-file": S, "card-url": S, "token-file": S, "token-env": S, "local-url": S, url: S, json: B, "config-version": S },
+	relay: { agent: S, "control-url": S, preset: S, "key-header": S, "key-file": S, "key-env": S, "key-stdin": B, "hmac-secret-file": S, "hmac-secret-env": S, "receipt-file": S, generation: S, "connector-id": S, confirm: B, clear: B, "forward-headers": S, "ingress-token-file": S, "local-headers-file": S, "card-url": S, "token-file": S, "token-env": S, "local-url": S, url: S, json: B, "config-version": S },
 	upstream: { json: B },
 	connect: { alias: S, name: S, json: B, "no-wait": B, replace: B, force: B, "card-url": S },
 	// Internal hosted-service integration commands. Keep out of public help until the production flow is available.
@@ -583,6 +602,7 @@ export async function main(argv) {
 			throw new CliError(`unknown upstream action ${sub} (verify)`);
 		}
 		case "relay":
+			if (p[0] === "wake" && p.length === 2) return hosted.output(() => hosted.relayWake(p[1], o), o);
 			if (p[0] === "http" || p[0] === "a2a") return relayHttp(p, o);
 			if (p.length !== 1) throw new CliError("usage: relay create|status|revoke|run");
 			return relay(p[0], o);

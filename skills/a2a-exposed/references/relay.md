@@ -40,3 +40,16 @@ permitted retained secrets before this call. No URLs or raw request frames are
 accepted, and no settings or pending wakes are consumed. A no-body call still
 tests applied settings. See the relay contract for the exact allowlist. Do not
 send draft credentials through chat or print them in test evidence.
+
+
+Hosted services advertising `relay: true` in `hosted capabilities --json` support
+`relay wake status --agent NAME --json`, then `test` with explicit `--config-version`,
+`--connector-id`, `--generation`, `--preset`, protected application inputs and a new
+`--receipt-file`. `relay wake save` takes that protected file, the same config version
+and explicit `--confirm`. A receipt expires after five minutes and is single-use;
+failed retests invalidate old passes. Test does not save; save sends no new test.
+Use `relay wake remove --config-version N --confirm` to remove settings separately
+from connector `relay revoke`. For MCP, only a scoped CLI receipt can be passed as
+`secretReference` with `confirmed:true` (and `clear:true` for a prepared removal).
+Never send application/connector secrets or draft overrides through MCP. See the
+[protected-file workflow](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/wake-relay.md#hosted-relay-wake-setup-with-protected-files).

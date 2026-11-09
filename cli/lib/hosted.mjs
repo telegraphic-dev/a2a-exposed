@@ -36,7 +36,7 @@ function originFor(o = {}) {
 async function request(origin, path, { token = "", method = "GET", body, fetchImpl = fetch } = {}) {
 	let response, data;
 	const discovery = method === "GET" && path === "/api/v1/setup/capabilities";
-	const wakeRequest = /^\/api\/v1\/agents\/[^/]+\/wake(?:\/test)?$/.test(path);
+	const wakeRequest = /^\/api\/v1\/agents\/[^/]+\/wake(?:\/(?:test|relay(?:\/(?:test|reference))?))?$/.test(path);
 	try {
 		response = await fetchImpl(`${origin}${path}`, {
 			method, redirect: "error", signal: AbortSignal.timeout(30_000),
@@ -53,6 +53,15 @@ async function request(origin, path, { token = "", method = "GET", body, fetchIm
 	} catch { fail("unavailable", "Hosted setup did not answer with JSON. Check the service and try again. Do not repeat a create request until hosted list confirms its result."); }
 	if (discovery && response.status === 404) fail("unsupported", SETUP_UNSUPPORTED);
 	if (!data || typeof data !== "object" || Array.isArray(data)) fail("invalid_response", "The hosted service returned an invalid setup response.");
+	if (!response.ok && path.includes("/wake/relay")) {
+		const known = ["invalid_grant", "insufficient_scope", "conflict", "invalid_reference", "confirmation", "offline", "unavailable", "not_found", "draft", "body", "local_http", "timeout", "busy", "uncertain", "stale_enrollment", "revoked"];
+		const supplied = typeof data.error === "string" ? data.error : data.code;
+		const code = known.includes(supplied) ? supplied : `http_${response.status}`;
+		const next = "Relay setup was refused or unconfirmed. Run relay wake status --agent NAME --json and hosted capabilities --json, then check the receiver and approved scopes. A receipt may be spent; do not automatically repeat a test or save.";
+		const error = new CliError(next);
+		error.result = { ok: false, code, next, ...(Number.isInteger(data.localStatus) && data.localStatus >= 100 && data.localStatus <= 599 ? { localStatus: data.localStatus } : {}) };
+		throw error;
+	}
 	if (!response.ok) {
 		if (wakeRequest && [401, 403, 404].includes(response.status)) {
 			const code = ["invalid_grant", "insufficient_scope"].includes(data.error) ? data.error : `http_${response.status}`;
@@ -71,7 +80,7 @@ async function request(origin, path, { token = "", method = "GET", body, fetchIm
 			error.result = { ok: false, code: "too_many_references", next, ...(message ? { message } : {}), ...(seconds === undefined ? {} : { retry_after: seconds }) };
 			throw error;
 		}
-		const known = ["taken", "limit", "invalid_name", "reserved_name", "invalid_grant", "insufficient_scope", "conflict", "unavailable", "not_found", "test", "signing", "unreadable", "preset", "url", "header", "access", "invalid_reference", "body"];
+		const known = ["taken", "limit", "invalid_name", "reserved_name", "invalid_grant", "insufficient_scope", "conflict", "unavailable", "not_found", "test", "signing", "unreadable", "preset", "url", "header", "access", "invalid_reference", "body", "confirmation", "offline", "draft"];
 		const code = known.includes(data.error) ? data.error : `http_${response.status}`;
 		const next = code === "taken" || code === "reserved_name" ? "Choose another --name using hosted names --name NAME --json before creating."
 			: code === "limit" ? "The account is at its agent limit. Read hosted capacity --json and review account plans."
@@ -88,7 +97,7 @@ async function request(origin, path, { token = "", method = "GET", body, fetchIm
 export async function capabilities(o = {}) {
 	const data = await request(originFor(o), "/api/v1/setup/capabilities");
 	if (!Array.isArray(data.scopes) || !Array.isArray(data.wake?.presets)) fail("unsupported", SETUP_UNSUPPORTED);
-	return { ok: true, code: "capabilities", next: "Select explicit scopes and a wake preset from this listing.", scopes: data.scopes.filter(s => SETUP_SCOPES.includes(s)), presets: data.wake.presets.filter(s => /^[a-z-]+$/.test(s)), upstream: data.upstream?.configuration === true && data.upstream?.verify === true, preflight: data.preflight === true, secret_reference: data.wake.secret_reference === true, wake_removal: data.wake.removal === true, verified_import: data.wake.verified_import === true, secure_link_create: data.wake.secure_link_create === true };
+	return { ok: true, code: "capabilities", next: "Select explicit scopes and a wake preset from this listing.", scopes: data.scopes.filter(s => SETUP_SCOPES.includes(s)), presets: data.wake.presets.filter(s => /^[a-z-]+$/.test(s)), upstream: data.upstream?.configuration === true && data.upstream?.verify === true, preflight: data.preflight === true, secret_reference: data.wake.secret_reference === true, relay: data.wake.relay === true, wake_removal: data.wake.removal === true, verified_import: data.wake.verified_import === true, secure_link_create: data.wake.secure_link_create === true };
 }
 
 export async function login(o = {}) {
@@ -162,9 +171,12 @@ function secret(o, name, envName) {
 	let value = "";
 	try {
 		if (file) {
-			const stat = fs.lstatSync(file);
-			if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o077) || stat.size > 4098) fail("secret_file", `--${name}-file needs a regular protected file (chmod 600), at most 4098 bytes.`);
-			value = fs.readFileSync(file, "utf8").replace(/\r?\n$/, "");
+			const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+			try {
+				const stat = fs.fstatSync(fd);
+				if (!stat.isFile() || (stat.mode & 0o077) || stat.size > 4098 || process.getuid && stat.uid !== process.getuid()) fail("secret_file", `--${name}-file needs an owner-readable regular protected file (chmod 600), at most 4098 bytes.`);
+				value = fs.readFileSync(fd, "utf8").replace(/\r?\n$/, "");
+			} finally { fs.closeSync(fd); }
 		} else if (stdin) {
 			if (process.stdin.isTTY) fail("secret_stdin", "Pipe the key on stdin; terminal prompts are not supported.");
 			value = fs.readFileSync(0, "utf8").replace(/\r?\n$/, "");
@@ -345,4 +357,75 @@ export async function output(run, o = {}) {
 		console.log(o.json ? JSON.stringify(result) : `${result.code}: ${result.next}${result.message ? `\nmessage: ${result.message}` : ""}`);
 		process.exitCode = 1;
 	}
+}
+
+/** Hosted relay drafts use opaque receipts; application secrets never enter browser fields or output. */
+export async function relayWake(sub, o = {}) {
+ const listing = 'Run relay wake status --agent NAME --json and hosted capabilities --json to select the current version, connector generation and preset.';
+ if (!['status', 'test', 'save', 'remove', 'prepare'].includes(sub)) fail('usage', 'Use relay wake status|test|save|remove|prepare. ' + listing);
+ const base = ['agent','control-url','json'];
+ const perAction = { status: [], test: ['config-version','generation','connector-id','preset','key-header','key-file','key-env','key-stdin','hmac-secret-file','hmac-secret-env','receipt-file'], save: ['config-version','receipt-file','confirm'], remove: ['config-version','receipt-file','confirm'], prepare: ['config-version','clear','receipt-file','confirm'] };
+ if (Object.keys(o).some(key => ![...base, ...perAction[sub]].includes(key))) fail('usage', 'Use only the options for this relay wake operation shown in --help. ' + listing);
+ const integer = (value, label) => {
+  if (!/^[1-9][0-9]*$/.test(String(value ?? '')) || !Number.isSafeInteger(Number(value))) fail(label, `Pass --${label} N explicitly. ` + listing);
+  return Number(value);
+ };
+ const version = sub === 'status' ? undefined : integer(o['config-version'], 'config-version');
+ if (['save','remove','prepare'].includes(sub) && o.confirm !== true) fail('confirmation', 'Review this exact relay change, then pass --confirm. No operation was sent. ' + listing);
+ if (sub === 'prepare' && o.clear !== true) fail('usage', 'Use relay wake prepare --clear --confirm for a removal receipt; relay wake test prepares a save receipt. ' + listing);
+ if (['test','save','prepare'].includes(sub) && !o['receipt-file']) fail('receipt_file', 'Pass --receipt-file FILE in a private directory. Test/prepare create a new mode-600 file; save reads it.');
+ const generation = sub === 'test' ? integer(o.generation, 'generation') : undefined;
+ if (sub === 'test' && (o['connector-id'] !== 'default' || !o.preset)) fail('connector', 'Pass --connector-id default and an explicit --preset. ' + listing);
+ let body = sub === 'status' ? undefined : { version };
+ if (sub === 'test') body = { version, generation, connectorId: o['connector-id'], preset: o.preset, keyHeader: o['key-header'] ?? '', key: secret(o, 'key', 'WAKE_WEBHOOK_KEY'), hmacSecret: secret(o, 'hmac-secret', 'WAKE_HMAC_SECRET') };
+ const readReceipt = () => {
+  let fd;
+  try {
+   fd = fs.openSync(o['receipt-file'], fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+   const stat = fs.fstatSync(fd);
+   if (!stat.isFile() || stat.mode & 0o077 || stat.size > 128 || process.getuid && stat.uid !== process.getuid()) throw new Error();
+   const value = fs.readFileSync(fd, 'utf8').trim();
+   if (!/^a2arr_[a-f0-9]{64}$/.test(value)) throw new Error();
+   return value;
+  } catch { fail('receipt_file', 'Use the regular owner-readable mode-600 receipt file from relay wake test or relay wake prepare. ' + listing); }
+  finally { if (fd !== undefined) fs.closeSync(fd); }
+ };
+ if (sub === 'save' || sub === 'remove' && o['receipt-file']) body = { version, confirmed: true, secretReference: readReceipt() };
+ if (sub === 'remove' && !o['receipt-file']) body = { version, confirmed: true };
+ if (sub === 'prepare') body = { version, confirmed: true, clear: true };
+ let fd;
+ // Reserve locally before sending a test; existing files and symlinks are never overwritten.
+ if (sub === 'test' || sub === 'prepare') {
+  try { fd = fs.openSync(o['receipt-file'], fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600); }
+  catch { fail('receipt_file', 'Choose a new --receipt-file in a private writable directory; existing files are never overwritten.'); }
+ }
+ try {
+  const { origin, token, name } = wakeCredential(o);
+  const available = await capabilities({ 'control-url': origin });
+  if (!available.relay) fail('unsupported', 'This hosted service does not advertise relay wake setup. Use its supported dashboard or polling; do not deploy or change a hosted Worker.');
+  if (sub === 'test' && !available.presets.includes(o.preset)) fail('preset', 'Select --preset from hosted capabilities --json.');
+  const path = `/api/v1/agents/${encodeURIComponent(name)}/wake/relay`;
+  const result = await request(origin, path + (sub === 'test' ? '/test' : sub === 'prepare' ? '/reference' : ''), { token, method: sub === 'status' ? 'GET' : sub === 'save' ? 'PUT' : sub === 'remove' ? 'DELETE' : 'POST', body });
+  if (sub === 'status') {
+   if (result.protocolVersion !== 1 || !Number.isSafeInteger(result.version) || result.version < 1 || !['relay','webhook'].includes(result.transport) || result.connector !== null && (result.connector?.connectorId !== 'default' || !Number.isSafeInteger(result.connector?.generation) || result.connector.generation < 1 || typeof result.connector?.connected !== 'boolean')) fail('invalid_response', 'The service returned no valid relay capability/status. ' + listing);
+   return { ok: true, code: 'relay_status', version: result.version, transport: result.transport, ...(available.presets.includes(result.preset) ? { preset: result.preset } : {}), connector: result.connector === null ? null : { connectorId: 'default', generation: result.connector.generation, connected: result.connector.connected }, next: 'Review these settings before test, save or removal. Connector revocation is separate: relay revoke.' };
+  }
+  if (sub === 'test' || sub === 'prepare') {
+   if (result.ok !== true || result.version !== version || !/^a2arr_[a-f0-9]{64}$/.test(result.secretReference ?? '') || result.expires_in !== 300) fail('invalid_response', 'No valid relay receipt returned. Check the receiver before repeating a test; no settings were saved.');
+   fs.writeFileSync(fd, result.secretReference + '\n'); fs.fsyncSync(fd);
+   return { ok: true, code: sub === 'test' ? 'tested' : 'prepared', version, expires_in: 300, next: sub === 'test' ? 'Test passed. Within five minutes, review and run relay wake save with this --receipt-file, --config-version and --confirm; or pass its opaque value to MCP set_wake with confirmed:true. No settings were saved yet.' : 'Within five minutes use relay wake remove --receipt-file FILE --config-version N --confirm, or MCP set_wake with clear:true, confirmed:true and the opaque receipt as secretReference. Connector revocation is separate.' };
+  }
+  const ok = result.ok === true && (sub === 'save' ? result.saved === true : result.removed === true) && result.version === version + 1;
+  return { ok, code: ok ? sub === 'save' ? 'saved' : 'removed' : 'unconfirmed', ...(Number.isSafeInteger(result.version) ? { version: result.version } : {}), next: ok ? sub === 'save' ? 'Relay wake saved. Verify a real message receipt and inbox reply.' : 'Relay wake removed; inbox messages remain. Revoke the connector separately with relay revoke.' : 'Read relay wake status before retrying; a receipt is single-use and saved settings may already have changed.' };
+ } finally {
+  if (fd !== undefined) {
+   // A refused/failed test must not strand an empty reservation. Never remove a
+   // replacement path, or a nonempty file whose remote outcome needs reconciling.
+   try {
+    const reserved = fs.fstatSync(fd), current = fs.lstatSync(o['receipt-file']);
+    if (reserved.size === 0 && reserved.ino === current.ino && reserved.dev === current.dev) fs.unlinkSync(o['receipt-file']);
+   } catch { /* Preserve any path that cannot be proved to be our empty file. */ }
+   fs.closeSync(fd);
+  }
+ }
 }
