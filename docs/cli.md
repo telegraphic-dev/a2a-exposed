@@ -460,3 +460,57 @@ keeps its array shape; history rows with a known task state include `currentStat
 with `state` and `timestamp`.
 
 When hosted `wake test` or `wake set` returns `cloudflare-target-unsupported`, a service with verified import enabled can return a selected-agent `recovery_url`. Open it to **Import or manage your existing tunnel**, connect Cloudflare, authorize the exact existing route and Access pair, then test and save again. The CLI does not import, retry or change infrastructure automatically. Services without this recovery retain the public HTTPS/polling/self-hosted guidance. Keep Access and webhook authentication enabled.
+
+
+## Hosted relay wake setup with protected files
+
+Use this flow only when `hosted capabilities --json` reports `relay: true`.
+Select the agent with `hosted list --json`, then list its current config version,
+connector id, enrollment generation and connection status:
+
+```sh
+npx -y a2a-exposed@latest relay wake status --agent NAME --json
+npx -y a2a-exposed@latest relay wake test --agent NAME --config-version N \
+  --connector-id default --generation G --preset hermes \
+  --hmac-secret-file ./hermes-signing-secret --receipt-file ./relay-receipt --json
+npx -y a2a-exposed@latest relay wake save --agent NAME --config-version N \
+  --receipt-file ./relay-receipt --confirm --json
+```
+
+Choose the preset from `hosted capabilities --json`. The connector must already
+be enrolled and running. Use the service-pinned published CLI when qualifying a
+hosted release. These commands use an approved setup grant with `wake:test` and
+`wake:write`, or the selected agent's owner credential. Deliberate device approval
+still belongs to the human. `--control-url ORIGIN` selects the service explicitly.
+Do not deploy a hosted Worker to enable a missing capability.
+
+Application secrets use mode-600 regular files or named environment variables
+(`--hmac-secret-env VAR`, `--key-env VAR`); unsigned presets also accept
+`--key-file FILE` or `--key-stdin` and `--key-header HEADER`. Never put secret
+values in arguments or browser fields. The test creates a **new** mode-600
+receipt file and saves no settings. An existing file is never overwritten.
+A passing receipt binds the exact account, agent, config version, connector
+identity/enrollment generation and tested application settings for five minutes.
+Save requires explicit `--confirm`, consumes the receipt once and sends no
+second test. Expired, changed, revoked or superseded receipts fail closed;
+a failed retest invalidates the old pass. Check the local receiver and inbox
+before an explicit retry after unconfirmed delivery. No test is automatically replayed.
+
+To remove saved relay settings, first read the current version, then run:
+
+```sh
+npx -y a2a-exposed@latest relay wake remove --agent NAME --config-version N --confirm --json
+```
+
+Removal stops notifications but retains inbox messages and connector enrollment.
+Use `relay revoke` separately to revoke connector authority. Removal works with
+an offline or already revoked connector. It does not delete a Cloudflare Tunnel.
+
+For MCP, a scoped CLI receipt can be supplied as `set_wake`'s `secretReference`
+with the selected `agent` and `confirmed: true`. Omit URL, preset and credentials;
+the receipt selects the exact tested draft. Both the setup grant and the MCP
+client's agent access must remain valid. An owner-token receipt cannot be
+shared with MCP. For removal, prepare a fresh receipt with
+`relay wake prepare --agent NAME --config-version N --clear --confirm --receipt-file NEW_FILE --json`,
+then use `set_wake` with `clear: true`, `confirmed: true` and that `secretReference`.
+No raw application or connector credential belongs in MCP or chat.
