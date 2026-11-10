@@ -7,6 +7,7 @@ import { createServer } from "node:http";
 import { once } from "node:events";
 import { createHash, randomBytes } from "node:crypto";
 import { runHttpConnector } from "../../cli/lib/http-relay.mjs";
+import { fetch } from "./fresh-connection-fetch.ts";
 
 const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 const delay = (ms: number) => new Promise(r => setTimeout(r, ms));

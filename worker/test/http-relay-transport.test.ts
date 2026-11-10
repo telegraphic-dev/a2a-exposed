@@ -9,6 +9,7 @@ import { gzipSync } from 'node:zlib';
 import { runHttpConnector } from '../../cli/lib/http-relay.mjs';
 import { AgentCard, SendMessageRequest } from '@a2a-js/sdk';
 import { ClientFactory, JsonRpcTransportFactory } from '@a2a-js/sdk/client';
+import { fetch } from './fresh-connection-fetch.ts';
 
 const hash = (s: string) => createHash('sha256').update(s).digest('hex');
 const delay = (n: number) => new Promise(r => setTimeout(r, n));

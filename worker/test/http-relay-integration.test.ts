@@ -11,13 +11,17 @@ import { once } from "node:events";
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
+import { fetch } from "./fresh-connection-fetch.ts";
 const execute = promisify(execFile);
 const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 async function until(check: () => boolean | Promise<boolean>, ms = 8000) { const end = Date.now() + ms; while (Date.now() < end) { if (await check()) return; await new Promise(r => setTimeout(r, 20)); } throw new Error("condition not reached"); }
 
 async function runtime(hosted = false, persistence = "", enabled = true, bound = true) {
 	const built = await build({ ...(hosted ? { stdin: { contents: `import { TenantStore as Base } from "./src/hosted.ts";
-export { default, HttpRelay } from "./src/hosted.ts";
+import hosted from "./src/hosted.ts";
+export { HttpRelay } from "./src/hosted.ts";
+// Plain loopback fetches name their tenant in x-fixture-tenant (dispatchFetch cannot send Connection: close).
+export default { ...hosted, fetch(req, env, ctx) { const tenant = req.headers.get("x-fixture-tenant"); if (!tenant) return hosted.fetch(req, env, ctx); const u = new URL(req.url); u.hostname = tenant + ".agents.example.com"; u.port = ""; u.protocol = "https:"; return hosted.fetch(new Request(u, req), env, ctx); } };
 export class TenantStore extends Base {
  async checkedPush(body) { try { return { value: await this.pushConfig(body) }; } catch { return { error: 'fence failed' }; } }
  async checkedDelete() { try { return { value: await this.deleteStorage() }; } catch { return { error: 'fence failed' }; } }
@@ -117,7 +121,7 @@ test("hosted public HTTP ingress isolates tenants and profiles, rotates old toke
 				assert.equal((await stub.owner({ accountId: "acct_http", method: "POST", path: `/owner/relay/http/${profile}`, body: { credentialHash: hash(connector), ingressHash: hash(ingress), headers: ["authorization", "content-type"] } })).status, 200);
 			}
 		}
-		const post = (name: string, profile: string, token: string) => r.mf.dispatchFetch(`https://${name}.agents.example.com/relay/${profile === "webhook" ? "webhook" : "a2a"}`, { method: "POST", headers: { "x-a2a-relay-authorization": `Bearer ${token}` }, body: "{}" });
+		const post = (name: string, profile: string, token: string) => fetch(new URL(`/relay/${profile === "webhook" ? "webhook" : "a2a"}`, r.url), { method: "POST", headers: { "x-fixture-tenant": name, "x-a2a-relay-authorization": `Bearer ${token}` }, body: "{}" });
 		for (const [key, token] of tokens) {
 			const [name, profile] = key.split(":"); assert.equal((await post(name, profile, token.ingress)).status, 503);
 			assert.equal((await post(name === "first" ? "second" : "first", profile, token.ingress)).status, 401);
@@ -129,7 +133,7 @@ test("hosted public HTTP ingress isolates tenants and profiles, rotates old toke
 		const rotated = await stub.owner({ accountId: "acct_http", method: "POST", path: "/owner/relay/http/webhook", body: { credentialHash: hash("new-connector"), ingressHash: hash("new-ingress"), headers: ["authorization"] } }); assert.equal(rotated.status, 200);
 		assert.ok(rotated.body.generation > generation); assert.equal((await post("first", "webhook", old.ingress)).status, 401);
 		const rejected = await r.mf.dispatchFetch("https://first.agents.example.com/relay/http/webhook/connect", { headers: { upgrade: "websocket", "sec-websocket-protocol": `a2a-http-relay-v2, ${old.connector}` } }); assert.equal(rejected.status, 401);
-		for (const path of ["/owner//relay/http/a2a", "/owner/relay/http/a2a/"]) assert.equal((await r.mf.dispatchFetch(`https://first.agents.example.com${path}`, { method: "POST", headers: { authorization: "Bearer dummy-owner" }, body: JSON.stringify({ credentialHash: "a".repeat(64), ingressHash: "b".repeat(64), headers: [] }) })).status, 404);
+		for (const path of ["/owner//relay/http/a2a", "/owner/relay/http/a2a/"]) assert.equal((await fetch(new URL(path, r.url), { method: "POST", headers: { "x-fixture-tenant": "first", authorization: "Bearer dummy-owner" }, body: JSON.stringify({ credentialHash: "a".repeat(64), ingressHash: "b".repeat(64), headers: [] }) })).status, 404);
 	} finally { for (const socket of sockets) socket.close(); await r.mf.dispose(); }
 });
 
