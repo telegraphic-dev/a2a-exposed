@@ -22,7 +22,8 @@
 		"esbuild": "^0.28.2",
 		"miniflare": "^5.20261006.0-alpha",
 		"typescript": "^7.0.2",
-		"vite": "^8.3.4"
+		"vite": "^8.3.4",
+		"ws": "^8.21.0"
 	},
 	"dependencies": {
 		"tunnelfetch": "1.13.0"
