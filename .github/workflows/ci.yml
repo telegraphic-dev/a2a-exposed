@@ -64,19 +64,6 @@ jobs:
         working-directory: worker
         run: npx cf build
 
-      - name: CLI - tests
-        working-directory: cli
-        run: mkdir -p ../coverage && npm run test:coverage
-
-      - name: Publish cli coverage
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: coverage-cli
-          path: coverage/cli.lcov
-          if-no-files-found: error
-          retention-days: 14
-
       - name: Skills - discovery
         run: |
           # strip colors: the skills CLI colors output even without a TTY
@@ -104,6 +91,37 @@ jobs:
 
       - name: Plugin - claude plugin validate
         run: node scripts/check-claude-plugin.mjs
+
+  # Its own job so the CLI suite runs alongside the Worker suite instead of after it.
+  # The CLI tests import Worker sources, so they still need the Worker install.
+  cli:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22 # latest 22.x; the Worker sources the CLI tests import need 22.18+
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+
+      - name: Worker - install
+        working-directory: worker
+        run: npm ci --no-audit --no-fund
+
+      - name: CLI - tests
+        working-directory: cli
+        run: mkdir -p ../coverage && npm run test:coverage
+
+      - name: Publish cli coverage
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-cli
+          path: coverage/cli.lcov
+          if-no-files-found: error
+          retention-days: 14
+
       - name: CLI - npm pack (dry run)
         working-directory: cli
         run: |

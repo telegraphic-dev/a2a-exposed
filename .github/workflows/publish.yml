@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write # GitHub release
   id-token: write # npm provenance / trusted publishing (OIDC)
+  actions: read # the CI gate reads the CI runs for the tagged commit
 
 concurrency:
   group: publish-${{ github.ref }}
@@ -46,24 +47,44 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Worker - install, test, typecheck, build
+      # The test suites already ran in CI on this exact commit. Publishing requires that
+      # CI run to have succeeded instead of running every suite a second time. A CI run
+      # that is still going (the tag usually follows the merge) is awaited.
+      - name: Require green CI for the tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        run: |
+          deadline=$(( $(date +%s) + 1800 ))
+          while :; do
+            runs="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SHA&per_page=100" --jq '[.workflow_runs[] | {id, status, conclusion, event, url: .html_url}]')"
+            if [[ "$(jq '[.[] | select(.status == "completed" and .conclusion == "success")] | length' <<<"$runs")" -gt 0 ]]; then
+              jq -r '.[] | select(.status == "completed" and .conclusion == "success") | "CI succeeded for \(env.SHA): \(.url)"' <<<"$runs"; exit 0
+            fi
+            pending="$(jq '[.[] | select(.status != "completed")] | length' <<<"$runs")"
+            if [[ "$pending" -eq 0 && "$(jq length <<<"$runs")" -gt 0 ]]; then
+              jq -r '.[] | "CI \(.conclusion) for \(env.SHA): \(.url)"' <<<"$runs"
+              echo "::error::CI did not succeed for $SHA; fix or re-run CI on main, then re-run this workflow"; exit 1
+            fi
+            if (( $(date +%s) > deadline )); then
+              echo "::error::no successful CI run for $SHA within 30 minutes; push the tag on a main commit that CI has run on"; exit 1
+            fi
+            echo "waiting for CI on $SHA ($pending running)"; sleep 20
+          done
+
+      - name: Worker - install, typecheck, build
         working-directory: worker
         run: |
           npm ci --no-audit --no-fund
-          npm test
+          node scripts/stamp-version.mjs
           npx cf workers types
           npx tsc --noEmit
           npx cf build
 
-      - name: CLI - tests
-        working-directory: cli
-        run: npm test
-
-      - name: Control - install, test, typecheck, build
+      - name: Control - install, typecheck, build
         working-directory: control
         run: |
           npm ci --no-audit --no-fund
-          npm test
           npx cf workers types
           npx tsc --noEmit
           npm run build
