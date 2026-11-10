@@ -12,6 +12,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
+import NodeWebSocket from "ws";
+
+// Local workerd keeps the TCP connection open after a server-initiated close handshake on a
+// hibernatable socket, so a client's close event waits for its own timeout (about 10s with the
+// built-in WebSocket, 30s with Miniflare's). These clients stop waiting shortly after the close
+// frame arrives. The reported code is still the server's own frame; 1006 if none arrived.
+const CLOSE_TIMEOUT_MS = 250;
+function client(url: string, protocols: string[], headers?: Record<string, string>) {
+	const ws = new NodeWebSocket(url, protocols, { closeTimeout: CLOSE_TIMEOUT_MS, headers });
+	ws.on("error", () => { /* surfaced by the open/close waits */ });
+	return ws;
+}
+function closed(ws: NodeWebSocket): Promise<{ code: number; reason: string }> {
+	return new Promise(resolve => ws.once("close", (code, reason) => resolve({ code, reason: String(reason) })));
+}
 
 async function until(check: () => boolean | Promise<boolean>, timeout = 5000) {
 	const end = Date.now() + timeout;
@@ -19,9 +34,9 @@ async function until(check: () => boolean | Promise<boolean>, timeout = 5000) {
 	throw new Error("condition did not become true");
 }
 async function socket(url: URL, token: string) {
-	const ws = new WebSocket(new URL("/relay/connect", url).href.replace("http:", "ws:"), ["a2a-wake-v1", token]);
+	const ws = client(new URL("/relay/connect", url).href.replace("http:", "ws:"), ["a2a-wake-v1", token]);
 	const messages: any[] = [];
-	ws.addEventListener("message", e => { if (e.data !== "pong") messages.push(JSON.parse(String(e.data))); });
+	ws.on("message", data => { const text = String(data); if (text !== "pong") messages.push(JSON.parse(text)); });
 	await Promise.race([once(ws, "open"), once(ws, "error").then(() => { throw new Error("websocket handshake refused"); }), new Promise((_, reject) => { const timer = setTimeout(() => reject(new Error("websocket handshake timeout")), 5000); timer.unref(); })]); await until(() => messages.length > 0);
 	return { ws, messages };
 }
@@ -96,7 +111,7 @@ test("real workerd relay and native connector acknowledge the local webhook, fen
 
 
 test("workerd rejects credentials, malformed/oversized frames, fences connected rotation and stale acks", { timeout: 45000 }, async () => {
-	const r = await runtime(); const sockets: WebSocket[] = [];
+	const r = await runtime(); const sockets: NodeWebSocket[] = [];
 	try {
 		for (const token of ["dummy-owner", "a2amcp_dummy", "a2ar_" + "x".repeat(43)]) {
 			const response = await r.mf.dispatchFetch("https://agent.example.com/relay/connect", { headers: { upgrade: "websocket", "sec-websocket-protocol": `a2a-wake-v1, ${token}` } });
@@ -106,22 +121,22 @@ test("workerd rejects credentials, malformed/oversized frames, fences connected 
 		const issued = await r.enroll();
 		const first = await socket(r.url, issued.token); sockets.push(first.ws);
 		const firstGeneration = first.messages[0].generation;
-		const closed = once(first.ws, "close");
+		const replaced = closed(first.ws);
 		const second = await socket(r.url, issued.token); sockets.push(second.ws);
-		assert.equal((await closed)[0].code, 4001);
+		assert.equal((await replaced).code, 4001);
 		assert.ok(second.messages[0].generation > firstGeneration);
 		const pending = r.call("/owner/wake/test", "POST");
 		await until(() => second.messages.some(m => m.type === "wake"));
 		const wake = second.messages.find(m => m.type === "wake");
-		const invalid = once(second.ws, "close");
+		const invalid = closed(second.ws);
 		second.ws.send(JSON.stringify({ v: 1, type: "result", id: wake.id, generation: firstGeneration, status: 200 }));
-		assert.equal((await invalid)[0].code, 1008);
+		assert.equal((await invalid).code, 1008);
 		assert.equal((await (await pending).json() as any).status, null);
 		for (const frame of ["not-json", "x".repeat(1025), JSON.stringify({ v: 1, type: "result", generation: 1, id: "bad", status: 200, url: "http://127.0.0.1/admin" })]) {
-			const c = await socket(r.url, issued.token); sockets.push(c.ws); const closing = once(c.ws, "close"); c.ws.send(frame); assert.equal((await closing)[0].code, 1008);
+			const c = await socket(r.url, issued.token); sockets.push(c.ws); const closing = closed(c.ws); c.ws.send(frame); assert.equal((await closing).code, 1008);
 		}
-		const current = await socket(r.url, issued.token); sockets.push(current.ws); const rotating = once(current.ws, "close");
-		await r.enroll(); assert.equal((await rotating)[0].code, 4001);
+		const current = await socket(r.url, issued.token); sockets.push(current.ws); const rotating = closed(current.ws);
+		await r.enroll(); assert.equal((await rotating).code, 4001);
 		const refused = await r.mf.dispatchFetch("https://agent.example.com/relay/connect", { headers: { upgrade: "websocket", "sec-websocket-protocol": `a2a-wake-v1, ${issued.token}` } });
 		assert.equal(refused.status, 401);
 		const { runConnector } = await import("../../cli/lib/relay.mjs");
@@ -197,20 +212,24 @@ test("hosted public routing isolates tenants and suspension/deletion fence the s
 		assert.equal((await (await call("bobby", "/owner/wake/relay")).json() as any).enrolled, false);
 		const upgrade = (name: string) => r.mf.dispatchFetch(`https://${name}.agents.example.com/relay/connect`, { headers: { upgrade: "websocket", "sec-websocket-protocol": `a2a-wake-v1, ${token}` } });
 		assert.equal((await upgrade("bobby")).status, 401, "credential cannot substitute tenants");
-		const connected = await upgrade("alice"); assert.equal(connected.status, 101);
-		const ws = connected.webSocket!; ws.accept(); sockets.push(ws);
-		ws.addEventListener("close", () => ws.close());
-		const closing = once(ws as any, "close");
+		// The same public route through the runtime's socket, so the close wait is short (see client()).
+		const open = async (name: string) => {
+			const ws = client(new URL("/relay/connect", r.url).href.replace("http:", "ws:"), ["a2a-wake-v1", token], { host: `${name}.agents.example.com` });
+			let status = 0; ws.once("upgrade", res => { status = res.statusCode ?? 0; });
+			await once(ws, "open"); sockets.push(ws);
+			return { ws, status };
+		};
+		const connected = await open("alice"); assert.equal(connected.status, 101);
+		const closing = closed(connected.ws);
 		await tenants.alice.stub.pushConfig({ ...tenants.alice.config, version: 2, status: "suspended" });
-		assert.equal((await closing)[0].code, 4001);
+		assert.equal((await closing).code, 4001);
 		assert.notEqual((await upgrade("alice")).status, 101, "cached directory cannot bypass tenant suspension");
 		await tenants.alice.stub.pushConfig({ ...tenants.alice.config, version: 3 });
 		assert.equal((await upgrade("alice")).status, 401, "reactivation does not revive revoked enrollment");
 		assert.equal((await call("alice", "/owner/wake/relay", "POST", { ...body, idempotencyKey: randomBytes(24).toString("base64url"), configVersion: 3 })).status, 200);
-		const again = await upgrade("alice"); again.webSocket!.accept(); sockets.push(again.webSocket);
-		again.webSocket!.addEventListener("close", () => again.webSocket!.close());
-		const deleted = once(again.webSocket as any, "close");
-		await tenants.alice.stub.deleteStorage(); assert.equal((await deleted)[0].code, 4001);
+		const again = await open("alice"); assert.equal(again.status, 101);
+		const deleted = closed(again.ws);
+		await tenants.alice.stub.deleteStorage(); assert.equal((await deleted).code, 4001);
 		assert.notEqual((await upgrade("alice")).status, 101);
 		assert.equal((await tenants.alice.stub.pushConfig({ ...tenants.alice.config, version: 4 })).applied, false);
 		assert.equal((await call("bobby", "/issue", "POST", body)).status, 404);
@@ -391,7 +410,7 @@ test("unrelated webhook tenants never enabled for relay retain normal lifecycle 
 });
 
 test("workerd restart recovers hashed enrollment and durable pending inbox; revoked token remains refused", { timeout: 120000 }, async () => {
-	const dir = mkdtempSync(join(tmpdir(), "relay-runtime-reset-")); let r = await runtime(false, dir); let ws: WebSocket | undefined;
+	const dir = mkdtempSync(join(tmpdir(), "relay-runtime-reset-")); let r = await runtime(false, dir); let ws: NodeWebSocket | undefined;
 	try {
 		const issued = await r.enroll();
 		const peer = await (await r.call("/owner/peers", "POST", "dummy-owner", { label: "ada" })).json() as any;
