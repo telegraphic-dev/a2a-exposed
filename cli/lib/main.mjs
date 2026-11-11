@@ -162,6 +162,11 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
                                 self-hosted: save wake settings, upload wake secrets from env, and redeploy
                                 hosted config: use the saved address and owner token to test then save; no deploy
                                 hosted CLI: list hosted capabilities --json for presets; scoped setup selects --agent from hosted list --json
+                                use the same --config-dir DIR for login and hosted create (requires agents:create agents:owner-token).
+                                hosted wake prepare/test/set and relay wake test read secrets only with explicit
+                                --key-file|--key-env|--key-stdin, --hmac-secret-file|--hmac-secret-env, or
+                                --access-client-id-file|--access-client-id-env and --access-client-secret-file|--access-client-secret-env.
+                                Ambient WAKE_* credentials are ignored; --key-env WAKE_WEBHOOK_KEY opts in.
                                 mausbot: HTTPS /hooks/<endpointId> + WAKE_WEBHOOK_KEY Bearer auth from protected env
                                 openbot: human supplies WAKE_HMAC_SECRET via protected env/secret storage, never chat or argv
                                 the Worker refuses unsigned openbot wakes (a webhook key is not a signing secret)

@@ -357,17 +357,26 @@ scopes you need with `login --machine NAME --scopes "agents:create agents:owner-
 The CLI saves the scoped setup grant in the protected configuration; it never prints it.
 `hosted list --json` lists agents before selection. `hosted create --name NAME --json` saves
 the new agent's owner credential locally without returning it in output. Use a separate
-`--config-dir` for each agent; creation refuses to overwrite an existing deployment.
+`--config-dir` for each agent; pass that same directory to `login` and every subsequent command. Creation refuses to overwrite an existing deployment.
 
 Use `wake preview --agent NAME --json` to inspect the settings, then `wake test` or `wake set`
-with explicit `--url` and `--preset`. `set` tests before saving. Webhook is the default for
+with explicit `--url` and `--preset`. `set` tests before saving. Hosted upstream verify returns `not_configured` when the agent address was cleared; save an address with `hosted upstream set` before verifying. Webhook is the default for
 OpenClaw and Hermes; use polling if there is no public webhook. A tunnel needs its separate
 Cloudflare authorization. When capabilities advertises `wake_removal`, read `wake preview --agent NAME --json`, then run `wake remove --agent NAME --version N --json` with the version you selected; `wake unset` is an alias. Removal sends no test webhook. A stale version fails; already absent settings return `already_removed` without another change. Older services keep removal on the agent's Wake settings page.
 
 Read secrets through `--key-file`, `--key-env` or `--key-stdin`; signing secrets through
 `--hmac-secret-file` or `--hmac-secret-env`; Access pairs through the corresponding
 `--access-client-id-file|--access-client-id-env` and
-`--access-client-secret-file|--access-client-secret-env`. Protected files must be regular
+`--access-client-secret-file|--access-client-secret-env`.
+
+Hosted `wake prepare`, `wake test`, `wake set` and `relay wake test` never read ambient
+`WAKE_WEBHOOK_KEY`, `WAKE_HMAC_SECRET` or `WAKE_ACCESS_CLIENT_*` credentials.
+Name each source explicitly, for example `--key-env WAKE_WEBHOOK_KEY` and
+`--hmac-secret-env WAKE_HMAC_SECRET`. A signing-secret file does not add an
+ambient bearer key or Access pair. Self-hosted deploy and tunnel commands keep
+their documented environment inputs.
+
+Protected files must be regular
 files with no group or other permissions. No secret belongs in an argument value.
 
 When capabilities lists `secret_reference: true`, `wake set` uploads the draft for a
