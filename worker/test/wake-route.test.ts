@@ -404,6 +404,68 @@ test("a labelled push follows the sender's wake and intent fields", async (t) =>
 	assert.equal((await h.call("POST", "/push", invalid, auth)).status, 200, "invalid metadata does not reject the push");
 	assert.equal(h.sent.length, 1, "invalid labels fall back to the empty-working rule");
 	assert.equal(routes(h.logs).at(-1).decision, "status_idle");
+	const taskNever = {
+		task: {
+			id: "task-label", contextId: "ctx-label",
+			metadata: { "a2a.exposed/wake": "never" },
+			status: { state: "working", message: { parts: [{ kind: "text", text: "still going" }] } },
+		},
+	};
+	assert.equal((await h.call("POST", "/push", taskNever, auth)).status, 200);
+	assert.equal(h.sent.length, 1, "task-level never is kept when the status message has no metadata");
+	assert.equal(routes(h.logs).at(-1).decision, "never");
+	const messageWins = {
+		task: {
+			id: "task-label", contextId: "ctx-label",
+			metadata: { "a2a.exposed/intent": "ack" },
+			status: { state: "completed", message: { metadata: { "a2a.exposed/wake": "always" } } },
+		},
+	};
+	assert.equal((await h.call("POST", "/push", messageWins, auth)).status, 200);
+	assert.equal(h.sent.length, 2, "message wake is combined with task intent and always still wakes");
+	assert.equal(routes(h.logs).at(-1).decision, "always");
+	const conflict = {
+		task: {
+			id: "task-label", contextId: "ctx-label",
+			metadata: { "a2a.exposed/wake": "never" },
+			status: { state: "completed", message: { metadata: { "a2a.exposed/wake": "always" } } },
+		},
+	};
+	assert.equal((await h.call("POST", "/push", conflict, auth)).status, 200, "conflicting metadata does not reject the push");
+	assert.equal(h.sent.length, 3, "conflicting labels fall back to unlabelled rules");
+	assert.equal(routes(h.logs).at(-1).decision, "legacy");
+});
+
+test("enforce batches a labelled status push instead of waking immediately", async (t) => {
+	const realNow = Date.now;
+	let offset = 0;
+	Date.now = () => realNow() + offset;
+	const env = envFor({ WAKE_ROUTING: "enforce", WAKE_DEBOUNCE_SECONDS: "30", WAKE_BUSY_SECONDS: "0", ENABLE_CRON: "1" });
+	const h = harness(env);
+	t.after(() => { Date.now = realNow; h.restore(); });
+	try {
+		const token = "push-token-batch";
+		await env.DB.prepare(
+			`INSERT INTO outbound (task_id, context_id, peer, endpoint, protocol, push_token_hash, sent_at, updates_json, updates_seen)
+			 VALUES ('task-batch', 'ctx-batch-push', 'ada', 'https://ada.example.net/', '0.3', ?, '2026-01-01T00:00:00.000Z', '[]', 0)`,
+		).bind(await sha256(token)).run();
+		const auth = `Bearer ${token}`;
+		const status = (text: string) => ({
+			task: {
+				id: "task-batch", contextId: "ctx-batch-push",
+				status: { state: "working", message: { parts: [{ kind: "text", text }], metadata: { "a2a.exposed/intent": "status" } } },
+			},
+		});
+		assert.equal((await h.call("POST", "/push", status("one"), auth)).status, 200);
+		assert.equal((await h.call("POST", "/push", status("two"), auth)).status, 200);
+		assert.equal(h.sent.length, 0, "changed status waits for the debounce");
+		assert.ok(routes(h.logs).some((row) => row.decision === "status" && row.action === "batch"));
+		offset += 31_000;
+		await h.call("GET", "/health");
+		assert.equal(h.sent.length, 1);
+	} finally {
+		Date.now = realNow;
+	}
 });
 
 test("concurrent retries of one message id store one task and wake once", async (t) => {

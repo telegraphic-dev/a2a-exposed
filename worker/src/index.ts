@@ -1992,16 +1992,20 @@ function pushUpdateView(body: Json): { state: string | null; text: string } {
 	return { state, text: chunks.filter(Boolean).join("\n") };
 }
 
-/** Route labels on a push, when the sender put them on the status message, the message, or the task. */
-function pushRouteMeta(body: Json): unknown {
-	if (!body || typeof body !== "object") return undefined;
+/** Message-level and task-level metadata on a push. Message fields win when both are present and agree; a conflict is rejected by readRouteFields. */
+function pushRouteSources(body: Json): { messageMeta: unknown; taskMeta: unknown } {
+	if (!body || typeof body !== "object") return { messageMeta: undefined, taskMeta: undefined };
 	const inner: Json = body.task || body.statusUpdate || body.artifactUpdate || body.message || body;
-	if (!inner || typeof inner !== "object") return undefined;
+	if (!inner || typeof inner !== "object") return { messageMeta: undefined, taskMeta: undefined };
 	const statusMessage = inner.status && typeof inner.status === "object" ? inner.status.message : undefined;
-	if (statusMessage && typeof statusMessage === "object") return statusMessage.metadata;
-	if (inner.message && typeof inner.message === "object") return inner.message.metadata;
-	if (inner.kind === "message") return inner.metadata;
-	return inner.metadata;
+	const message = statusMessage && typeof statusMessage === "object" ? statusMessage
+		: inner.message && typeof inner.message === "object" ? inner.message
+		: inner.kind === "message" ? inner
+		: null;
+	return {
+		messageMeta: message && typeof message === "object" ? message.metadata : undefined,
+		taskMeta: inner.kind === "message" ? undefined : inner.metadata,
+	};
 }
 
 /** A file or artifact part means this is not an empty working ping. */
@@ -2050,7 +2054,8 @@ async function handlePush(req: Request, ctx: TenantContext, ectx: ExecutionConte
 	// Identical payloads only. File bytes and URIs are part of the body, so a new file under the same name still wakes.
 	const priorPayload = updates.length > 1 ? updates[updates.length - 2]?.payload : undefined;
 	const samePayload = priorPayload !== undefined && await A.sha256(JSON.stringify(priorPayload)) === await A.sha256(JSON.stringify(body));
-	const labelled = readRouteFields(pushRouteMeta(body), undefined);
+	const sources = pushRouteSources(body);
+	const labelled = readRouteFields(sources.messageMeta, sources.taskMeta);
 	const fields = labelled.ok ? labelled.fields : { wake: null, intent: null };
 	const idleWorking = isIdleWorkingPush(view.state, view.text, pushCarriesFile(body));
 	const pushDecision = decideRoute({
@@ -2062,7 +2067,7 @@ async function handlePush(req: Request, ctx: TenantContext, ectx: ExecutionConte
 		unchanged: false,
 	});
 	await recordRoute(ctx, pushDecision, "outbound_update");
-	if (pushDecision.deliver) await wake(ctx, ectx, rec.context_id, taskId, rec.peer, `[update on outbound task: ${state}] ${text}`, "outbound_update");
+	if (pushDecision.deliver) await wake(ctx, ectx, rec.context_id, taskId, rec.peer, `[update on outbound task: ${state}] ${text}`, "outbound_update", pushDecision.batch ? { defer: true } : undefined);
 	return json({ ok: true });
 }
 
