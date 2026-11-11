@@ -533,7 +533,7 @@ test("two-entry hosted config supports Grok preview, set and test without setup 
    const credentials = source === "environment" ? { A2A_BASE_URL: "https://example-agent.a2a.exposed", A2A_OWNER_TOKEN: owner } : {};
    for (const command of ["preview", "set", "test"]) {
     const log = path.join(f.dir, `${source}-${command}.requests`);
-    const r = f.run(["wake", command, ...(command === "set" ? ["--preset", "grok-bot"] : []), "--json"], {
+    const r = f.run(["wake", command, ...(command === "set" ? ["--preset", "grok-bot"] : []), ...(command === "preview" ? [] : ["--key-env", "WAKE_WEBHOOK_KEY"]), "--json"], {
      "https://a2a.exposed/api/v1/setup/capabilities": { status: 200, body: { ...capabilities, wake: { presets: ["grok-bot"], secret_reference: true } } },
      "https://a2a.exposed/api/v1/agents/example-agent/wake": { status: 200, body: { version: 3, preset: "grok-bot", url: "https://receiver.example/private-hook?key=hidden-query", ok: true, saved: true, code: "204" } },
     }, { ...credentials, WAKE_WEBHOOK_URL: "https://receiver.example/private-hook?key=hidden-query", WAKE_WEBHOOK_KEY: "hidden-wake-key", A2A_TEST_FETCH_LOG: log });
@@ -637,7 +637,7 @@ test('hosted relay file test/save validates explicit choices and never renders s
  const args=['relay','wake','test','--agent','sample-agent','--config-version','7','--generation','2','--connector-id','default','--preset','hermes','--hmac-secret-file',hmac,'--receipt-file',file,'--json'];
  try {
   const status=f.run(['relay','wake','status','--agent','sample-agent','--json'],replies);assert.equal(status.status,0,status.stdout+status.stderr);assert.equal(JSON.parse(status.stdout).connector.generation,2);assert.ok(!status.stdout.includes(owner));
-  const log=path.join(f.dir,'relay.log');const tested=f.run(args,replies,{A2A_TEST_FETCH_LOG:log});assert.equal(tested.status,0,tested.stdout+tested.stderr);
+  const log=path.join(f.dir,'relay.log');const tested=f.run(args,replies,{A2A_TEST_FETCH_LOG:log,WAKE_WEBHOOK_KEY:'ambient-key-must-not-send',WAKE_HMAC_SECRET:'ambient-hmac-must-not-send'});assert.equal(tested.status,0,tested.stdout+tested.stderr);
   assert.equal(fs.statSync(file).mode&0o777,0o600);assert.equal(fs.readFileSync(file,'utf8').trim(),receipt);
   for(const value of [receipt,signing,owner,grant]) assert.ok(!(tested.stdout+tested.stderr).includes(value));
   const calls=fs.readFileSync(log,'utf8').trim().split('\n').map(JSON.parse);const body=JSON.parse(calls.at(-1).body);assert.deepEqual(body,{version:7,generation:2,connectorId:'default',preset:'hermes',keyHeader:'',key:'',hmacSecret:signing});
@@ -663,5 +663,53 @@ test('hosted relay removal and MCP removal receipt are distinct from connector r
   const result=f.run(['relay','wake','remove','--agent','sample-agent','--config-version','7','--confirm','--json'],replies);assert.equal(result.status,0,result.stdout);assert.match(JSON.parse(result.stdout).next,/Revoke.*separately/);
   const file=path.join(f.dir,'removal-receipt');const prepared=f.run(['relay','wake','prepare','--clear','--confirm','--agent','sample-agent','--config-version','7','--receipt-file',file,'--json'],replies);assert.equal(prepared.status,0,prepared.stdout);assert.match(fs.readFileSync(file,'utf8'),/^a2arr_/);assert.ok(!prepared.stdout.includes('a2arr_'));
   const unsupported=f.run(['relay','wake','status','--agent','sample-agent','--json']);assert.equal(unsupported.status,1);assert.equal(JSON.parse(unsupported.stdout).code,'unsupported');
+ } finally { f.clean(); }
+});
+
+test("hosted wake drafts read only explicitly selected secret sources", () => {
+ const endpoint = "https://control.example/api/v1/agents/sample-agent/wake";
+ for (const sub of ["prepare", "test", "set"]) {
+  for (const source of ["none", "env", "file"]) {
+   const f = fixture(); f.save("HOSTED_AGENT_NAME=sample-agent\n");
+   try {
+    const log = path.join(f.dir, "requests"), signingFile = path.join(f.dir, "signing");
+    fs.writeFileSync(signingFile, "file-signing", { mode: 0o600 });
+    const args = ["wake", sub, "--agent", "sample-agent", "--url", "https://receiver.example/wake", "--preset", "generic", "--json"];
+    if (sub === "prepare") args.push("--reference-file", path.join(f.dir, "reference"));
+    if (source === "env") args.push("--key-env", "WAKE_WEBHOOK_KEY", "--hmac-secret-env", "WAKE_HMAC_SECRET", "--access-client-id-env", "WAKE_ACCESS_CLIENT_ID", "--access-client-secret-env", "WAKE_ACCESS_CLIENT_SECRET");
+    if (source === "file") args.push("--hmac-secret-file", signingFile);
+    const result = f.run(args, {
+     "https://control.example/api/v1/setup/capabilities": { status: 200, body: { ...capabilities, wake: { ...capabilities.wake, secret_reference: sub === "prepare" } } },
+     [endpoint]: { status: 200, body: { version: 7, ok: true, saved: true } },
+     [endpoint + "/test"]: { status: 200, body: { ok: true } },
+     [endpoint + "/reference"]: { status: 200, body: { reference: "a2awr_" + "d".repeat(64) } },
+    }, { A2A_TEST_FETCH_LOG: log, WAKE_WEBHOOK_KEY: "ambient-key", WAKE_HMAC_SECRET: "ambient-signing", WAKE_ACCESS_CLIENT_ID: "ambient-id", WAKE_ACCESS_CLIENT_SECRET: "ambient-access" });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    const calls = fs.readFileSync(log, "utf8").trim().split("\n").map(JSON.parse);
+    const writes = calls.filter(call => call.method !== "GET");
+    assert.equal(writes.length, 1);
+    const body = JSON.parse(writes[0].body);
+    assert.equal(body.key, source === "env" ? "ambient-key" : "");
+    assert.equal(body.hmacSecret, source === "env" ? "ambient-signing" : source === "file" ? "file-signing" : "");
+    assert.equal(body.accessClientId, source === "env" ? "ambient-id" : "");
+    assert.equal(body.accessClientSecret, source === "env" ? "ambient-access" : "");
+    for (const hidden of ["ambient-key", "ambient-signing", "ambient-id", "ambient-access", "file-signing"]) assert.ok(!(result.stdout + result.stderr).includes(hidden));
+   } finally { f.clean(); }
+  }
+ }
+});
+
+test("hosted wake explicit environment sources fail promptly when missing or ambiguous", () => {
+ const f = fixture(); f.save("HOSTED_AGENT_NAME=sample-agent\n");
+ try {
+  for (const flags of [["--key-env", "MISSING_FIXTURE_KEY"], ["--hmac-secret-env", "MISSING_FIXTURE_HMAC"], ["--key-env", "FIXTURE_KEY", "--key-file", "unused"]]) {
+   const log = path.join(f.dir, "requests"); fs.writeFileSync(log, "");
+   const result = f.run(["wake", "test", "--agent", "sample-agent", "--url", "https://receiver.example/wake", "--preset", "generic", "--json", ...flags], {
+    "https://control.example/api/v1/agents/sample-agent/wake": { status: 200, body: { version: 7 } },
+   }, { A2A_TEST_FETCH_LOG: log, FIXTURE_KEY: "fixture-key" });
+   assert.equal(result.status, 1);
+   assert.ok(["secret_input", "secret_source"].includes(JSON.parse(result.stdout).code));
+   assert.equal(fs.readFileSync(log, "utf8").trim().split("\n").map(JSON.parse).filter(call => call.method !== "GET").length, 0);
+  }
  } finally { f.clean(); }
 });

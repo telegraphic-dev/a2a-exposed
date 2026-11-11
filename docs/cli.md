@@ -367,7 +367,16 @@ Cloudflare authorization. When capabilities advertises `wake_removal`, read `wak
 Read secrets through `--key-file`, `--key-env` or `--key-stdin`; signing secrets through
 `--hmac-secret-file` or `--hmac-secret-env`; Access pairs through the corresponding
 `--access-client-id-file|--access-client-id-env` and
-`--access-client-secret-file|--access-client-secret-env`. Protected files must be regular
+`--access-client-secret-file|--access-client-secret-env`.
+
+Hosted `wake prepare`, `wake test`, `wake set` and `relay wake test` never read ambient
+`WAKE_WEBHOOK_KEY`, `WAKE_HMAC_SECRET` or `WAKE_ACCESS_CLIENT_*` credentials.
+Name each source explicitly, for example `--key-env WAKE_WEBHOOK_KEY` and
+`--hmac-secret-env WAKE_HMAC_SECRET`. A signing-secret file does not add an
+ambient bearer key or Access pair. Self-hosted deploy and tunnel commands keep
+their documented environment inputs.
+
+Protected files must be regular
 files with no group or other permissions. No secret belongs in an argument value.
 
 When capabilities lists `secret_reference: true`, `wake set` uploads the draft for a

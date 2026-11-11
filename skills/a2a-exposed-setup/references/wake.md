@@ -460,6 +460,13 @@ Keys use `--key-file`, `--key-env` or `--key-stdin`. Signing secrets use
 `--hmac-secret-file` or `--hmac-secret-env`. Access credentials use
 `--access-client-id-file|--access-client-id-env` and
 `--access-client-secret-file|--access-client-secret-env`. Never pass secret values in argv.
+Hosted `wake prepare`, `wake test`, `wake set` and `relay wake test` never read ambient
+`WAKE_WEBHOOK_KEY`, `WAKE_HMAC_SECRET` or `WAKE_ACCESS_CLIENT_*` credentials.
+Name each source explicitly, for example `--key-env WAKE_WEBHOOK_KEY` and
+`--hmac-secret-env WAKE_HMAC_SECRET`. A signing-secret file does not add an
+ambient bearer key or Access pair. Self-hosted deploy and tunnel commands keep
+their documented environment inputs.
+
 When capabilities reports `secret_reference`, `wake prepare --agent NAME --url URL
 --preset P --reference-file FILE --json` writes a single-use ten-minute reference to a
 new mode-600 file without printing it. Consume it using `wake set --agent NAME

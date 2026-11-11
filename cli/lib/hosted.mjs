@@ -165,7 +165,7 @@ export async function create(o = {}) {
 	return { ok: true, code: "created", next: "Run wake set with an explicit URL and preset, reading credentials from protected files or named environment variables.", name, base_url: base };
 }
 
-function secret(o, name, envName) {
+function secret(o, name, envName = "") {
 	const file = o[`${name}-file`], env = o[`${name}-env`], stdin = name === "key" && o["key-stdin"];
 	if ([file, env, stdin].filter(Boolean).length > 1) fail("secret_source", `Choose one --${name}-file or --${name}-env${name === "key" ? " or --key-stdin" : ""}.`);
 	let value = "";
@@ -180,7 +180,7 @@ function secret(o, name, envName) {
 		} else if (stdin) {
 			if (process.stdin.isTTY) fail("secret_stdin", "Pipe the key on stdin; terminal prompts are not supported.");
 			value = fs.readFileSync(0, "utf8").replace(/\r?\n$/, "");
-		} else value = process.env[env || envName] || "";
+		} else value = env || envName ? process.env[env || envName] || "" : "";
 	} catch (error) { if (error.result) throw error; fail("secret_file", `Could not read --${name}-file; check its path and permissions.`); }
 	if (!printable(value) || ((file || env || stdin) && !value)) fail("secret_input", `The ${name} credential must contain 1–4096 printable characters.`);
 	return value;
@@ -277,7 +277,7 @@ export async function wake(sub, o = {}) {
 	if (problem) fail("url", "Pass --url with a public HTTPS webhook URL without credentials. Use polling if no public webhook is available.");
 	const available = await capabilities({ "control-url": origin });
 	if (!available.presets.includes(preset)) fail("preset", "Select --preset from hosted capabilities --json.");
-	const draft = { version: current.version, url, preset, keyHeader: o["key-header"] ?? current.keyHeader ?? "", key: secret(o, "key", "WAKE_WEBHOOK_KEY"), hmacSecret: secret(o, "hmac-secret", "WAKE_HMAC_SECRET"), accessClientId: secret(o, "access-client-id", "WAKE_ACCESS_CLIENT_ID"), accessClientSecret: secret(o, "access-client-secret", "WAKE_ACCESS_CLIENT_SECRET") };
+	const draft = { version: current.version, url, preset, keyHeader: o["key-header"] ?? current.keyHeader ?? "", key: secret(o, "key"), hmacSecret: secret(o, "hmac-secret"), accessClientId: secret(o, "access-client-id"), accessClientSecret: secret(o, "access-client-secret") };
 	if (Boolean(draft.accessClientId) !== Boolean(draft.accessClientSecret)) fail("access", "Supply both Access credentials through protected files or named environment variables.");
 	let body = draft;
 	if (sub === "prepare" || (sub === "set" && available.secret_reference && token.startsWith("a2asg_"))) {
@@ -377,7 +377,7 @@ export async function relayWake(sub, o = {}) {
  const generation = sub === 'test' ? integer(o.generation, 'generation') : undefined;
  if (sub === 'test' && (o['connector-id'] !== 'default' || !o.preset)) fail('connector', 'Pass --connector-id default and an explicit --preset. ' + listing);
  let body = sub === 'status' ? undefined : { version };
- if (sub === 'test') body = { version, generation, connectorId: o['connector-id'], preset: o.preset, keyHeader: o['key-header'] ?? '', key: secret(o, 'key', 'WAKE_WEBHOOK_KEY'), hmacSecret: secret(o, 'hmac-secret', 'WAKE_HMAC_SECRET') };
+ if (sub === 'test') body = { version, generation, connectorId: o['connector-id'], preset: o.preset, keyHeader: o['key-header'] ?? '', key: secret(o, 'key'), hmacSecret: secret(o, 'hmac-secret') };
  const readReceipt = () => {
   let fd;
   try {
