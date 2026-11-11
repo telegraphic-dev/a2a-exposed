@@ -6,7 +6,7 @@ import { CliError, upstreamUrlProblem } from "./a2a.mjs";
 
 export const SETUP_SCOPES = ["agents:read", "agents:create", "agents:owner-token", "wake:write", "wake:test", "upstream:write", "upstream:test"];
 const SETUP_UNSUPPORTED = "This service does not expose scoped hosted setup capabilities. Check the --control-url service origin. Use the service dashboard to create an agent and configure Wake settings, or hosted MCP create_agent/set_wake with human confirmation and secret entry. Do not run init or deploy to repair a hosted address; no setup approval was requested.";
-const NEXT = "Run hosted capabilities --json to list scopes and presets; login --machine NAME --scopes SCOPES to approve setup.";
+const NEXT = "Run hosted capabilities --json to list scopes and presets; login --machine NAME --scopes SCOPES to approve setup. Use the same --config-dir DIR for login and subsequent hosted commands.";
 const fail = (code, next) => { const error = new CliError(next); error.result = { ok: false, code, next }; throw error; };
 const printable = value => typeof value === "string" && value.length <= 4096 && !/[\x00-\x1f\x7f]/.test(value);
 
@@ -80,9 +80,11 @@ async function request(origin, path, { token = "", method = "GET", body, fetchIm
 			error.result = { ok: false, code: "too_many_references", next, ...(message ? { message } : {}), ...(seconds === undefined ? {} : { retry_after: seconds }) };
 			throw error;
 		}
-		const known = ["taken", "limit", "invalid_name", "reserved_name", "invalid_grant", "insufficient_scope", "conflict", "unavailable", "not_found", "test", "signing", "unreadable", "preset", "url", "header", "access", "invalid_reference", "body", "confirmation", "offline", "draft"];
+		const known = ["taken", "limit", "invalid_name", "reserved_name", "invalid_grant", "insufficient_scope", "conflict", "unavailable", "not_found", "test", "signing", "unreadable", "preset", "url", "header", "access", "invalid_reference", "body", "confirmation", "offline", "draft", "not_configured"];
 		const code = known.includes(data.error) ? data.error : `http_${response.status}`;
-		const next = code === "taken" || code === "reserved_name" ? "Choose another --name using hosted names --name NAME --json before creating."
+		const next = code === "insufficient_scope" && path === "/api/v1/tenants" ? 'Creating an agent requires agents:create and agents:owner-token. Run hosted capabilities --json, then login --machine NAME --scopes "agents:create agents:owner-token" using the same --config-dir DIR as hosted create.'
+			: code === "not_configured" ? "No agent address is saved. Run hosted upstream preview --agent NAME --json, then hosted upstream set with its version and explicit credentials before verifying."
+			: code === "taken" || code === "reserved_name" ? "Choose another --name using hosted names --name NAME --json before creating."
 			: code === "limit" ? "The account is at its agent limit. Read hosted capacity --json and review account plans."
 			: code === "conflict" && path.includes("/upstream") ? "Upstream settings changed. Run hosted upstream preview --agent NAME --json, then repeat with its explicit --version."
 			: code === "conflict" ? "Wake settings changed. Run wake preview --json, then test the draft again."
@@ -294,9 +296,11 @@ export async function wake(sub, o = {}) {
 	}
 	const result = await request(origin, sub === "test" ? `${path}/test` : path, { token, method: sub === "test" ? "POST" : "PUT", body });
 	// Do not print proofs, arbitrary service text, webhook URLs or unexpected fields.
-	const code = typeof result.code === "string" && /^(?:[1-5][0-9]{2}|access-40[13]|none|timeout|tls|private|dns|dns-missing|transport-delivery|transport-native|transport-socket|cloudflare-target-unsupported|connection|failed|unreadable|signing)$/.test(result.code) ? result.code : result.saved === true ? "saved" : "failed";
+	const code = typeof result.code === "string" && /^(?:[1-5][0-9]{2}|access-40[13]|none|timeout|tls|private|dns|dns-missing|transport-delivery|transport-native|transport-socket|cloudflare-target-unsupported|tunnel_down|imported-route-mismatch|connection|failed|unreadable|signing)$/.test(result.code) ? result.code : result.saved === true ? "saved" : "failed";
 	const ok = result.ok === true && (sub !== "set" || result.saved === true);
 	const recovery = {
+  "tunnel_down": "The tunnel has no running connector. Start or restart cloudflared on the receiver machine, then test again. Do not re-import or rotate the Access secret.",
+  "imported-route-mismatch": "The URL differs from the imported route. Use the exact imported URL or review its authorization in dashboard Wake settings; no re-import or test was performed.",
 		"cloudflare-target-unsupported": "This hosted service cannot deliver to this Cloudflare-proxied webhook. Choose a supported public HTTPS route, polling, or an explicitly authorized self-hosted Worker; do not create another tunnel or weaken Access or hook authentication.",
 		"transport-socket": "The hosted service could not connect using its public-HTTPS socket transport. Check hosted route compatibility before changing the receiver. An owner-created Cloudflare Tunnel can pass local checks and still be unreachable by this transport; do not weaken Access or hook authentication.",
 		"dns": "The hosted service could not resolve the webhook hostname. Check its public DNS before testing again.",
@@ -331,6 +335,7 @@ export async function upstream(sub, o = {}) {
 	const path = `/api/v1/agents/${encodeURIComponent(name)}/upstream`;
 	const current = await request(origin, path, { token });
 	if (!Number.isSafeInteger(current.version) || typeof current.configured !== "boolean") fail("invalid_response", "No valid upstream version was returned. Run hosted upstream preview --agent NAME --json before retrying.");
+	if (sub === "verify" && !current.configured) fail("not_configured", "No agent address is saved. Run hosted upstream preview --agent NAME --json, then hosted upstream set with its version and explicit credentials before verifying.");
 	if (sub === "preview") return { ok: true, code: "upstream", version: current.version, configured: current.configured, next: "Review this version, then pass --version N to set, clear or verify. Addresses and credentials are never printed." };
 
 	if (Number(o.version) !== current.version) fail("conflict", "Upstream settings changed. Run hosted upstream preview --agent NAME --json, review the version and repeat the explicit operation.");

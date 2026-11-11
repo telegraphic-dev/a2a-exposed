@@ -195,6 +195,8 @@ test("hosted draft failures give fixed layer guidance without retries, saves or 
 		["transport-socket", /socket transport.*route compatibility.*local checks/],
 		["cloudflare-target-unsupported", /cannot deliver.*supported public HTTPS route, polling.*do not create another tunnel/],
 		["dns", /resolve.*public DNS/],
+  ["tunnel_down", /Start or restart cloudflared/],
+  ["imported-route-mismatch", /URL differs from the imported route/],
 		["dns-missing", /resolve.*public DNS/],
 		["tls", /TLS.*certificate.*verification enabled/],
 		["access-401", /Access refused.*service token and policy.*without disabling/],
@@ -711,5 +713,37 @@ test("hosted wake explicit environment sources fail promptly when missing or amb
    assert.ok(["secret_input", "secret_source"].includes(JSON.parse(result.stdout).code));
    assert.equal(fs.readFileSync(log, "utf8").trim().split("\n").map(JSON.parse).filter(call => call.method !== "GET").length, 0);
   }
+ } finally { f.clean(); }
+});
+
+test("hosted creation scope and config-directory errors name the explicit recovery", () => {
+ const f = fixture();
+ try {
+  const missing = f.run(["hosted", "create", "--name", "sample-agent", "--json"]);
+  assert.equal(JSON.parse(missing.stdout).code, "login_required");
+  assert.match(JSON.parse(missing.stdout).next, /same --config-dir DIR/);
+  f.save();
+  const refused = f.run(["hosted", "create", "--name", "sample-agent", "--json"], {
+   "https://control.example/api/v1/tenants": { status: 403, body: { error: "insufficient_scope", message: owner } },
+  });
+  assert.equal(refused.status, 1);
+  assert.equal(JSON.parse(refused.stdout).code, "insufficient_scope");
+  assert.match(JSON.parse(refused.stdout).next, /login --machine NAME --scopes "agents:create agents:owner-token"/);
+  assert.ok(!(refused.stdout + refused.stderr).includes(owner));
+ } finally { f.clean(); }
+});
+
+test("hosted upstream verify reports a cleared address without sending a probe", () => {
+ const f = fixture(); f.save();
+ try {
+  const log = path.join(f.dir, "requests");
+  const result = f.run(["hosted", "upstream", "verify", "--agent", "sample-agent", "--version", "7", "--json"], {
+   "https://control.example/api/v1/setup/capabilities": { status: 200, body: { ...capabilities, upstream: { configuration: true, verify: true } } },
+   "https://control.example/api/v1/agents/sample-agent/upstream": { status: 200, body: { version: 7, configured: false } },
+  }, { A2A_TEST_FETCH_LOG: log });
+  assert.equal(result.status, 1);
+  assert.equal(JSON.parse(result.stdout).code, "not_configured");
+  assert.match(JSON.parse(result.stdout).next, /hosted upstream set/);
+  assert.equal(fs.readFileSync(log, "utf8").trim().split("\n").map(JSON.parse).filter(call => call.method !== "GET").length, 0);
  } finally { f.clean(); }
 });

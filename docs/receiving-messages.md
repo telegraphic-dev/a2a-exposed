@@ -407,3 +407,5 @@ peers use an internal Durable Object call and are not affected. The peer can sti
 Long text: `printf '%s' "$TEXT" | npx -y a2a-exposed@latest reply <taskId> --stdin`. Terminal states (`completed`, `rejected`, `failed`, `canceled`) stay unless you pass `--force`.
 
 Day-to-day rules for the agent are in the [operate skill](../skills/a2a-exposed/SKILL.md).
+
+Wake diagnostics identify a Cloudflare Access refusal only when the response has an Access header or Access page marker. An origin 401 or 403 remains a receiver refusal; check its signing secret, clock or bearer key.

@@ -348,7 +348,7 @@ export function wakeUrlIsTunnelHost(url: string): boolean {
 
 /** Short explanation of a Cloudflare edge error page (e.g. "error code: 1033"), for wake test output.
  *  `tunnel` selects the 1016 wording: a tunnel hostname's DNS record, or a webhook host that failed to resolve. */
-export function cloudflareErrorHint(status: number, body: string, opts?: { tunnel?: boolean }): string {
+export function cloudflareErrorHint(status: number, body: string, opts?: { tunnel?: boolean; accessHeader?: boolean; location?: string }): string {
 	const code = cloudflareErrorCode(body);
 	const known: Record<string, string> = {
 		"1033": "Cloudflare Tunnel has no running connector (start cloudflared on the agent's machine)",
@@ -358,7 +358,7 @@ export function cloudflareErrorHint(status: number, body: string, opts?: { tunne
 		"1010": "blocked by a Cloudflare security rule",
 	};
 	if (code) return `Cloudflare error ${code}${known[code] ? ": " + known[code] : ""}`;
-	if ((status === 401 || status === 403) && /cloudflareaccess|access denied|Forbidden/i.test(body || ""))
+	if ((status === 401 || status === 403) && (opts?.accessHeader || /cloudflareaccess\.com|\/cdn-cgi\/access\//i.test(opts?.location || "") || /cloudflareaccess\.com|\/cdn-cgi\/access\/|Cloudflare Access/i.test(body || "")))
 		return "blocked by Cloudflare Access (missing or wrong service token)";
 	return "";
 }

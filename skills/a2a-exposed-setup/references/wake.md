@@ -449,7 +449,7 @@ npx -y a2a-exposed@latest wake set --preset generic \
 List choices with `hosted capabilities --json`, approve explicit scopes with
 `login --machine NAME --scopes SCOPES --json`, then `hosted list --json`.
 `hosted create --name NAME --json` saves the new owner credential mode 600; use a separate
-config directory per agent. `wake preview|test|set --agent NAME --json` reads, tests or
+config directory per agent, passing the same `--config-dir DIR` to login and creation. Creation needs both `agents:create` and `agents:owner-token`. `wake preview|test|set --agent NAME --json` reads, tests or
 tests then saves. Provide URL and preset explicitly. For OpenClaw and Hermes, first
 check the [delivery preflight](#delivery-preflight): preset availability does not
 prove reachability. Production hosted wakes cannot currently reach Cloudflare

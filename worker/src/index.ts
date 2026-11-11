@@ -321,6 +321,8 @@ async function sendWake(ctx: TenantContext, ectx: ExecutionContext, payload: Jso
 		// explain Cloudflare edge errors (tunnel connector down, Access block) without echoing the body
 		const hint = r.ok ? "" : cloudflareErrorHint(r.status, (await r.text().catch(() => "")).slice(0, 4096), {
 			tunnel: !!(ctx.WAKE_ACCESS_CLIENT_ID && ctx.WAKE_ACCESS_CLIENT_SECRET) || wakeUrlIsTunnelHost(req.url),
+   accessHeader: [...r.headers.keys()].some(name => name.toLowerCase().startsWith("cf-access-")),
+   location: r.headers.get("location") || "",
 		});
 		log("wake_sent", { preset: preset(ctx), contextId: ev.contextId, taskId: ev.taskId, status: r.status, ...(catchUp ? { catchUp: true } : {}), ...(hint ? { hint } : {}) });
 		if (r.ok) { await armBusy(ctx, ectx, delivered, Date.now()); await recordDelivered(ctx); }
