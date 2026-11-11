@@ -10,7 +10,7 @@ import * as F from "./facade.ts";
 import { routeHttpRelay, httpRelayFetch, httpRelayEnrollment, isHttpRelayProfile } from "./http-relay-routing.ts";
 import { relayFetch, relayTestOutcome, type RelayTestError } from "./relay-routing.ts";
 import { renderWake, relayWakeTestInput, mausbotConfigProblem, redact, cloudflareErrorHint, wakeUrlIsTunnelHost, defaultBusySeconds, defaultDebounceSeconds, defaultMaxPerHour, type WakeConfig, type WakeEvent } from "./wake.ts";
-import { decideRoute, readRouteFields, routingMode, statusText, type RouteDecision } from "./wake-route.ts";
+import { decideRoute, isIdleWorkingPush, readRouteFields, routingMode, statusText, type RouteDecision } from "./wake-route.ts";
 import { fetchCheckedPeer, fetchCheckedWake } from "./wake-target.ts";
 import { withDeadline } from "./deadline.ts";
 import * as Addr from "./address.ts";
@@ -1917,14 +1917,18 @@ async function deliverReplyMessage(ctx: TenantContext, ectx: ExecutionContext, t
 		const [endpoint, version] = M.pickEndpoint(base, cardUsed);
 		if (new URL(endpoint).origin !== new URL(base).origin) throw new ToolError("peer card endpoint refused: it is on a different origin");
 		const v1 = version.startsWith("1");
+		const routeMeta: Json = { [DIRECT_REPLY_META]: { taskId: task.id, messageId: message.messageId, state } };
+		const srcMeta = message.metadata && typeof message.metadata === "object" ? message.metadata as Json : null;
+		if (srcMeta?.["a2a.exposed/wake"]) routeMeta["a2a.exposed/wake"] = srcMeta["a2a.exposed/wake"];
+		if (srcMeta?.["a2a.exposed/intent"]) routeMeta["a2a.exposed/intent"] = srcMeta["a2a.exposed/intent"];
 		const direct: Json = {
 			messageId: message.messageId, role: v1 ? "ROLE_USER" : "user", contextId: task.contextId,
 			referenceTaskIds: [task.id],
 			parts: v1 ? [{ text }] : [{ kind: "text", text }],
-			metadata: { [DIRECT_REPLY_META]: { taskId: task.id, messageId: message.messageId, state } },
+			metadata: routeMeta,
 		};
 		if (!v1) direct.kind = "message";
-		const directMetadata = { [DIRECT_REPLY_META]: { taskId: task.id, messageId: message.messageId, state } };
+		const directMetadata = routeMeta;
 		const headers: Record<string, string> = {
 			"content-type": "application/json", accept: "application/json", "a2a-version": v1 ? "1.0" : "0.3",
 			authorization: `Bearer ${peer.token}`,
@@ -1988,6 +1992,34 @@ function pushUpdateView(body: Json): { state: string | null; text: string } {
 	return { state, text: chunks.filter(Boolean).join("\n") };
 }
 
+/** Message-level and task-level metadata on a push. Message fields win when both are present and agree; a conflict is rejected by readRouteFields. */
+function pushRouteSources(body: Json): { messageMeta: unknown; taskMeta: unknown } {
+	if (!body || typeof body !== "object") return { messageMeta: undefined, taskMeta: undefined };
+	const inner: Json = body.task || body.statusUpdate || body.artifactUpdate || body.message || body;
+	if (!inner || typeof inner !== "object") return { messageMeta: undefined, taskMeta: undefined };
+	const statusMessage = inner.status && typeof inner.status === "object" ? inner.status.message : undefined;
+	const message = statusMessage && typeof statusMessage === "object" ? statusMessage
+		: inner.message && typeof inner.message === "object" ? inner.message
+		: inner.kind === "message" ? inner
+		: null;
+	return {
+		messageMeta: message && typeof message === "object" ? message.metadata : undefined,
+		taskMeta: inner.kind === "message" ? undefined : inner.metadata,
+	};
+}
+
+/** A file or artifact part means this is not an empty working ping. */
+function pushCarriesFile(value: unknown, depth = 0): boolean {
+	if (!value || typeof value !== "object" || depth > 6) return false;
+	if (Array.isArray(value)) return value.some((item) => pushCarriesFile(item, depth + 1));
+	const rec = value as Record<string, unknown>;
+	if (rec.kind === "file" || (rec.file && typeof rec.file === "object")) return true;
+	for (const key of ["parts", "message", "status", "artifact", "artifacts", "task", "statusUpdate", "artifactUpdate"]) {
+		if (key in rec && pushCarriesFile(rec[key], depth + 1)) return true;
+	}
+	return false;
+}
+
 async function handlePush(req: Request, ctx: TenantContext, ectx: ExecutionContext): Promise<Response> {
 	let body: Json;
 	try { body = JSON.parse(await readBody(req, ctx)); } catch (e) {
@@ -2022,11 +2054,20 @@ async function handlePush(req: Request, ctx: TenantContext, ectx: ExecutionConte
 	// Identical payloads only. File bytes and URIs are part of the body, so a new file under the same name still wakes.
 	const priorPayload = updates.length > 1 ? updates[updates.length - 2]?.payload : undefined;
 	const samePayload = priorPayload !== undefined && await A.sha256(JSON.stringify(priorPayload)) === await A.sha256(JSON.stringify(body));
+	const sources = pushRouteSources(body);
+	const labelled = readRouteFields(sources.messageMeta, sources.taskMeta);
+	const fields = labelled.ok ? labelled.fields : { wake: null, intent: null };
+	const idleWorking = isIdleWorkingPush(view.state, view.text, pushCarriesFile(body));
 	const pushDecision = decideRoute({
-		mode: routingMode(ctx.WAKE_ROUTING), wake: null, intent: null, duplicate: samePayload, idle: false, unchanged: false,
+		mode: routingMode(ctx.WAKE_ROUTING),
+		wake: fields.wake ?? (idleWorking ? "auto" : null),
+		intent: fields.intent ?? (idleWorking ? "status" : null),
+		duplicate: samePayload,
+		idle: fields.intent === "status" ? !statusText(view.text) : idleWorking,
+		unchanged: false,
 	});
 	await recordRoute(ctx, pushDecision, "outbound_update");
-	if (pushDecision.deliver) await wake(ctx, ectx, rec.context_id, taskId, rec.peer, `[update on outbound task: ${state}] ${text}`, "outbound_update");
+	if (pushDecision.deliver) await wake(ctx, ectx, rec.context_id, taskId, rec.peer, `[update on outbound task: ${state}] ${text}`, "outbound_update", pushDecision.batch ? { defer: true } : undefined);
 	return json({ ok: true });
 }
 
@@ -2367,7 +2408,17 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			}
 			if (previous) return json({ error: "this reply is already being delivered; retry to read its result" }, 409);
 			if (A.TERMINAL.has(t.status.state) && !b.force) return json({ error: `task is already ${t.status.state}` }, 409);
-			const msg = { kind: "message", role: "agent", messageId: A.newId(), contextId: t.contextId, taskId: t.id, parts: [{ kind: "text", text: b.text }] };
+			const msg: Json = { kind: "message", role: "agent", messageId: A.newId(), contextId: t.contextId, taskId: t.id, parts: [{ kind: "text", text: b.text }] };
+			const routeMeta: Json = {};
+			if (b.wake !== undefined && b.wake !== null && b.wake !== "") {
+				if (b.wake !== "auto" && b.wake !== "always" && b.wake !== "never") return json({ error: "wake must be auto, always, or never" }, 400);
+				routeMeta["a2a.exposed/wake"] = b.wake;
+			}
+			if (b.intent !== undefined && b.intent !== null && b.intent !== "") {
+				if (b.intent !== "handoff" && b.intent !== "blocker" && b.intent !== "question" && b.intent !== "status" && b.intent !== "ack") return json({ error: "intent must be handoff, blocker, question, status, or ack" }, 400);
+				routeMeta["a2a.exposed/intent"] = b.intent;
+			}
+			if (Object.keys(routeMeta).length) msg.metadata = routeMeta;
 			const now = A.nowIso();
 			const claimed = await ctx.DB.prepare(
 				"INSERT INTO reply_deliveries (delivery_key, task_id, message_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
@@ -4041,7 +4092,11 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 		}
 		case "reply": {
 			const state = argStr(a, "state", false) || "completed";
-			const r = must(await ownerCall(ctx, ectx, "POST", `/owner/tasks/${enc(A.checkId(argStr(a, "taskId"), "taskId"))}/reply`, { text: argStr(a, "text"), state }));
+			const wake = argStr(a, "wake", false);
+			const intent = argStr(a, "intent", false);
+			if (wake && wake !== "auto" && wake !== "always" && wake !== "never") throw new ToolError("wake must be auto, always, or never");
+			if (intent && intent !== "handoff" && intent !== "blocker" && intent !== "question" && intent !== "status" && intent !== "ack") throw new ToolError("intent must be handoff, blocker, question, status, or ack");
+			const r = must(await ownerCall(ctx, ectx, "POST", `/owner/tasks/${enc(A.checkId(argStr(a, "taskId"), "taskId"))}/reply`, { text: argStr(a, "text"), state, ...(wake ? { wake } : {}), ...(intent ? { intent } : {}) }));
 			const d: ReplyDelivery = r.delivery;
 			const where = d.target ? `${d.target.alias ? `**${d.target.alias}** at ` : ""}\`${d.target.host}\`` : "the task";
 			const http = d.httpStatus ? ` (HTTP ${d.httpStatus})` : "";

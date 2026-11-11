@@ -133,6 +133,10 @@ test("owner RPC accepts a tool-argument body only on send, reply, and mark_worki
 	assert.deepEqual(ownerRpcBody("POST /owner/mcp/send", { to: "alpha", text: "hi", token: "tok-alpha" }), { ok: false, error: "body is not allowed" });
 	assert.deepEqual(ownerRpcBody("POST /owner/mcp/send", { to: "alpha", text: "hi", url: "https://evil.example" }), { ok: false, error: "body is not allowed" });
 	assert.deepEqual(ownerRpcBody("POST /owner/mcp/reply", { taskId: "task-1", text: "done", state: "canceled" }), { ok: false, error: "state is invalid" });
+	assert.deepEqual(ownerRpcBody("POST /owner/mcp/reply", { taskId: "task-1", text: "done", wake: "auto", intent: "status" }), {
+		ok: true, value: { taskId: "task-1", text: "done", wake: "auto", intent: "status" },
+	});
+	assert.deepEqual(ownerRpcBody("POST /owner/mcp/reply", { taskId: "task-1", text: "done", wake: "later" }), { ok: false, error: "wake is invalid" });
 	assert.deepEqual(ownerRpcBody("POST /owner/mcp/reply", { taskId: "task-1", text: "done", force: true }), { ok: false, error: "body is not allowed" });
 	assert.deepEqual(ownerRpcBody("POST /owner/mcp/mark_working", { taskId: ".." }), { ok: false, error: "taskId is invalid" });
 	assert.deepEqual(ownerRpcBody("POST /owner/mcp/mark_working", { taskId: "task-1", text: "no" }), { ok: false, error: "body is not allowed" });

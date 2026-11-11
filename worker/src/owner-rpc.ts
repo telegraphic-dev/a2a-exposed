@@ -209,7 +209,7 @@ const REPLY_STATES = new Set(["completed", "input-required", "working", "failed"
 
 const MCP_ARGS: Record<string, { required: readonly string[]; optional: readonly string[] }> = {
 	"POST /owner/mcp/send": { required: ["to", "text"], optional: ["contextId", "taskId", "wake", "intent"] },
-	"POST /owner/mcp/reply": { required: ["taskId", "text"], optional: ["state"] },
+	"POST /owner/mcp/reply": { required: ["taskId", "text"], optional: ["state", "wake", "intent"] },
 	"POST /owner/mcp/poll_outbound": { required: ["taskId"], optional: [] },
 	"POST /owner/mcp/cancel_outbound": { required: ["taskId"], optional: [] },
 	"POST /owner/mcp/mark_working": { required: ["taskId"], optional: [] },

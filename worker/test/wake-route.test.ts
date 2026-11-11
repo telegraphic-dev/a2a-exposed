@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import worker from "../src/index.ts";
 import { sha256 } from "../src/a2a.ts";
 import { d1 } from "./d1.ts";
-import { decideRoute, readRouteFields, routingMode, statusText } from "../src/wake-route.ts";
+import { decideRoute, isIdleWorkingPush, readRouteFields, routingMode, statusText } from "../src/wake-route.ts";
 import { TOOLS } from "../src/mcp.ts";
 
 const BASE = "https://agent.example.com";
@@ -14,6 +14,11 @@ test("routing rules are deterministic", () => {
 	assert.equal(routingMode("nope"), "shadow");
 	assert.equal(routingMode("enforce"), "enforce");
 	assert.equal(statusText("  still   working \n"), "still working");
+	assert.equal(isIdleWorkingPush("working", "", false), true);
+	assert.equal(isIdleWorkingPush("TASK_STATE_WORKING", "  ", false), true);
+	assert.equal(isIdleWorkingPush("working", "still going", false), false);
+	assert.equal(isIdleWorkingPush("working", "", true), false);
+	assert.equal(isIdleWorkingPush("completed", "", false), false);
 	assert.deepEqual(readRouteFields(undefined, undefined), { ok: true, fields: { wake: null, intent: null } });
 	assert.equal(readRouteFields({ "a2a.exposed/wake": "later" }, undefined).ok, false);
 	assert.equal(readRouteFields({ "a2a.exposed/wake": "auto" }, { "a2a.exposed/wake": "never" }).ok, false);
@@ -306,6 +311,161 @@ test("a repeated push does not wake twice", async (t) => {
 	assert.equal(h.sent.length, 2);
 	const stored = env.DB.db.prepare("SELECT updates_json FROM outbound WHERE task_id = 'task-push'").get() as { updates_json: string };
 	assert.equal(JSON.parse(stored.updates_json).length, 3);
+});
+
+test("an empty working push is an idle status: shadow still wakes, enforce does not", async (t) => {
+	const token = "push-token-idle";
+	const empty = { task: { id: "task-idle", contextId: "ctx-idle-push", status: { state: "working" } } };
+	const emptyV1 = { task: { id: "task-idle", contextId: "ctx-idle-push", status: { state: "TASK_STATE_WORKING" } } };
+	const withText = { task: { id: "task-idle", contextId: "ctx-idle-push", status: { state: "working", message: { parts: [{ kind: "text", text: "still going" }] } } } };
+	const completed = { task: { id: "task-idle", contextId: "ctx-idle-push", status: { state: "completed" } } };
+
+	const shadow = envFor();
+	const hs = harness(shadow);
+	t.after(hs.restore);
+	await shadow.DB.prepare(
+		`INSERT INTO outbound (task_id, context_id, peer, endpoint, protocol, push_token_hash, sent_at, updates_json, updates_seen)
+		 VALUES ('task-idle', 'ctx-idle-push', 'ada', 'https://ada.example.net/', '0.3', ?, '2026-01-01T00:00:00.000Z', '[]', 0)`,
+	).bind(await sha256(token)).run();
+	const auth = `Bearer ${token}`;
+	assert.equal((await hs.call("POST", "/push", empty, auth)).status, 200);
+	assert.equal(hs.sent.length, 1, "shadow still wakes an empty working push");
+	assert.equal(routes(hs.logs).at(-1).decision, "status_idle");
+	assert.equal(routes(hs.logs).at(-1).action, "shadow");
+	const shadowReport = await hs.call("GET", "/owner/wake/routing");
+	assert.equal((shadowReport.data as { mode?: string }).mode, "shadow");
+	assert.ok(((shadowReport.data as { counts?: { decision: string; action: string; count: number }[] }).counts || [])
+		.some((row) => row.decision === "status_idle" && row.action === "shadow" && row.count >= 1));
+
+	const env = envFor({ WAKE_ROUTING: "enforce" });
+	const h = harness(env);
+	t.after(h.restore);
+	await env.DB.prepare(
+		`INSERT INTO outbound (task_id, context_id, peer, endpoint, protocol, push_token_hash, sent_at, updates_json, updates_seen)
+		 VALUES ('task-idle', 'ctx-idle-push', 'ada', 'https://ada.example.net/', '0.3', ?, '2026-01-01T00:00:00.000Z', '[]', 0)`,
+	).bind(await sha256(token)).run();
+	assert.equal((await h.call("POST", "/push", empty, auth)).status, 200);
+	assert.equal(h.sent.length, 0, "enforce does not wake an empty working push");
+	assert.equal(routes(h.logs).at(-1).decision, "status_idle");
+	assert.equal(routes(h.logs).at(-1).action, "suppress");
+	assert.equal((await h.call("POST", "/push", emptyV1, auth)).status, 200);
+	assert.equal(h.sent.length, 0, "the v1 working spelling is also idle");
+	assert.equal((await h.call("POST", "/push", withText, auth)).status, 200);
+	assert.equal(h.sent.length, 1, "a working push with text still wakes");
+	assert.equal(routes(h.logs).at(-1).decision, "legacy");
+	const withFile = { task: { id: "task-idle", contextId: "ctx-idle-push", status: { state: "working", message: { parts: [{ kind: "file", file: { name: "note.txt", bytes: "aaa" } }] } } } };
+	assert.equal((await h.call("POST", "/push", withFile, auth)).status, 200);
+	assert.equal(h.sent.length, 2, "a working push with a file still wakes");
+	assert.equal((await h.call("POST", "/push", completed, auth)).status, 200);
+	assert.equal(h.sent.length, 3, "an empty completed push still wakes");
+	const stored = env.DB.db.prepare("SELECT updates_json FROM outbound WHERE task_id = 'task-idle'").get() as { updates_json: string };
+	assert.equal(JSON.parse(stored.updates_json).length, 5);
+	const report = await h.call("GET", "/owner/wake/routing");
+	assert.equal((report.data as { mode?: string }).mode, "enforce");
+	assert.ok(((report.data as { counts?: { decision: string; action: string; count: number }[] }).counts || [])
+		.some((row) => row.decision === "status_idle" && row.action === "suppress" && row.count >= 1));
+});
+
+test("a labelled push follows the sender's wake and intent fields", async (t) => {
+	const env = envFor({ WAKE_ROUTING: "enforce" });
+	const h = harness(env);
+	t.after(h.restore);
+	const token = "push-token-label";
+	await env.DB.prepare(
+		`INSERT INTO outbound (task_id, context_id, peer, endpoint, protocol, push_token_hash, sent_at, updates_json, updates_seen)
+		 VALUES ('task-label', 'ctx-label', 'ada', 'https://ada.example.net/', '0.3', ?, '2026-01-01T00:00:00.000Z', '[]', 0)`,
+	).bind(await sha256(token)).run();
+	const auth = `Bearer ${token}`;
+	const ack = {
+		task: {
+			id: "task-label", contextId: "ctx-label",
+			status: { state: "working", message: { parts: [{ kind: "text", text: "ok" }], metadata: { "a2a.exposed/intent": "ack" } } },
+		},
+	};
+	assert.equal((await h.call("POST", "/push", ack, auth)).status, 200);
+	assert.equal(h.sent.length, 0, "an ack-labelled push does not wake in enforce");
+	assert.equal(routes(h.logs).at(-1).decision, "ack");
+	assert.equal(routes(h.logs).at(-1).action, "suppress");
+	const always = {
+		task: {
+			id: "task-label", contextId: "ctx-label",
+			status: { state: "working", message: { metadata: { "a2a.exposed/wake": "always" } } },
+		},
+	};
+	assert.equal((await h.call("POST", "/push", always, auth)).status, 200);
+	assert.equal(h.sent.length, 1, "always still wakes an empty working push");
+	assert.equal(routes(h.logs).at(-1).decision, "always");
+	const invalid = {
+		task: {
+			id: "task-label", contextId: "ctx-label",
+			status: { state: "working", message: { metadata: { "a2a.exposed/intent": "ping" } } },
+		},
+	};
+	assert.equal((await h.call("POST", "/push", invalid, auth)).status, 200, "invalid metadata does not reject the push");
+	assert.equal(h.sent.length, 1, "invalid labels fall back to the empty-working rule");
+	assert.equal(routes(h.logs).at(-1).decision, "status_idle");
+	const taskNever = {
+		task: {
+			id: "task-label", contextId: "ctx-label",
+			metadata: { "a2a.exposed/wake": "never" },
+			status: { state: "working", message: { parts: [{ kind: "text", text: "still going" }] } },
+		},
+	};
+	assert.equal((await h.call("POST", "/push", taskNever, auth)).status, 200);
+	assert.equal(h.sent.length, 1, "task-level never is kept when the status message has no metadata");
+	assert.equal(routes(h.logs).at(-1).decision, "never");
+	const messageWins = {
+		task: {
+			id: "task-label", contextId: "ctx-label",
+			metadata: { "a2a.exposed/intent": "ack" },
+			status: { state: "completed", message: { metadata: { "a2a.exposed/wake": "always" } } },
+		},
+	};
+	assert.equal((await h.call("POST", "/push", messageWins, auth)).status, 200);
+	assert.equal(h.sent.length, 2, "message wake is combined with task intent and always still wakes");
+	assert.equal(routes(h.logs).at(-1).decision, "always");
+	const conflict = {
+		task: {
+			id: "task-label", contextId: "ctx-label",
+			metadata: { "a2a.exposed/wake": "never" },
+			status: { state: "completed", message: { metadata: { "a2a.exposed/wake": "always" } } },
+		},
+	};
+	assert.equal((await h.call("POST", "/push", conflict, auth)).status, 200, "conflicting metadata does not reject the push");
+	assert.equal(h.sent.length, 3, "conflicting labels fall back to unlabelled rules");
+	assert.equal(routes(h.logs).at(-1).decision, "legacy");
+});
+
+test("enforce batches a labelled status push instead of waking immediately", async (t) => {
+	const realNow = Date.now;
+	let offset = 0;
+	Date.now = () => realNow() + offset;
+	const env = envFor({ WAKE_ROUTING: "enforce", WAKE_DEBOUNCE_SECONDS: "30", WAKE_BUSY_SECONDS: "0", ENABLE_CRON: "1" });
+	const h = harness(env);
+	t.after(() => { Date.now = realNow; h.restore(); });
+	try {
+		const token = "push-token-batch";
+		await env.DB.prepare(
+			`INSERT INTO outbound (task_id, context_id, peer, endpoint, protocol, push_token_hash, sent_at, updates_json, updates_seen)
+			 VALUES ('task-batch', 'ctx-batch-push', 'ada', 'https://ada.example.net/', '0.3', ?, '2026-01-01T00:00:00.000Z', '[]', 0)`,
+		).bind(await sha256(token)).run();
+		const auth = `Bearer ${token}`;
+		const status = (text: string) => ({
+			task: {
+				id: "task-batch", contextId: "ctx-batch-push",
+				status: { state: "working", message: { parts: [{ kind: "text", text }], metadata: { "a2a.exposed/intent": "status" } } },
+			},
+		});
+		assert.equal((await h.call("POST", "/push", status("one"), auth)).status, 200);
+		assert.equal((await h.call("POST", "/push", status("two"), auth)).status, 200);
+		assert.equal(h.sent.length, 0, "changed status waits for the debounce");
+		assert.ok(routes(h.logs).some((row) => row.decision === "status" && row.action === "batch"));
+		offset += 31_000;
+		await h.call("GET", "/health");
+		assert.equal(h.sent.length, 1);
+	} finally {
+		Date.now = realNow;
+	}
 });
 
 test("concurrent retries of one message id store one task and wake once", async (t) => {
