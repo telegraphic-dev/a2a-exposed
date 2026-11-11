@@ -339,9 +339,11 @@ export const TOOLS: { name: string; title: string; description: string; inputSch
 		description: "Tell the peer you are working on a task (state working; the peer is notified if it asked for push updates). Use for anything that takes more than a moment.",
 		inputSchema: { type: "object", properties: { taskId: str("Task id") }, required: ["taskId"], additionalProperties: false } },
 	{ name: "reply", title: "Reply to task", annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
-		description: `Answer an inbound task. state: completed (default; the text becomes the result), input-required (ask the peer a question), working, failed or rejected. The answer is always stored on the task. It uses the task's existing push update, or, when no push exists, an exact paired outbound peer with a held token; otherwise the peer fetches it. Don't include secrets or private data your human hasn't approved sharing. ${RULES}`,
+		description: `Answer an inbound task. state: completed (default; the text becomes the result), input-required (ask the peer a question), working, failed or rejected. Optional intent and wake label the reply for the peer's wake routing, the same way they do on send. The answer is always stored on the task. It uses the task's existing push update, or, when no push exists, an exact paired outbound peer with a held token; otherwise the peer fetches it. Don't include secrets or private data your human hasn't approved sharing. ${RULES}`,
 		inputSchema: { type: "object", properties: { taskId: str("Task id"), text: str("Reply text"),
-			state: str("New task state", { enum: ["completed", "input-required", "working", "failed", "rejected"] }) }, required: ["taskId", "text"], additionalProperties: false },
+			state: str("New task state", { enum: ["completed", "input-required", "working", "failed", "rejected"] }),
+			wake: str("When the peer should wake. auto routes, always wakes, never only stores.", { enum: [...WAKE_MODES] }),
+			intent: str("Why this reply exists. Pick one. An ack is not a reply.", { enum: [...INTENTS] }) }, required: ["taskId", "text"], additionalProperties: false },
 		outputSchema: { type: "object", properties: {
 			taskId: str("Task that stores the reply"), state: str("Stored task state"),
 			status: str("Delivery outcome", { enum: ["delivered", "stored-only", "delivery-failed"] }),

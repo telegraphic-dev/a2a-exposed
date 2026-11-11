@@ -145,3 +145,9 @@ export function decideRoute(input: RouteInput): RouteDecision {
 	}
 	return { ...base, deliver: true, batch: false, decision: "auto_unspecified", proposed: "wake", action: "wake" };
 }
+
+/** Empty working status, including the v1 spelling, with no file or artifact parts. */
+export function isIdleWorkingPush(state: string | null | undefined, text: string, hasFile: boolean): boolean {
+	const plain = state === "TASK_STATE_WORKING" ? "working" : state;
+	return plain === "working" && !statusText(text) && !hasFile;
+}
