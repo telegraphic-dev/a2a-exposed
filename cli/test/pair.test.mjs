@@ -12,22 +12,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseEnv } from "../lib/config.mjs";
 import { deploySecretsFromEnv } from "../lib/deploy.mjs";
-import { pairBackLine, pairBackTarget } from "../lib/a2a.mjs";
 import { deviceEndpointsFromCard, hostAlias, pairingClientName, passwordRecord } from "../lib/pair.mjs";
 import { spawnScript } from "../lib/script.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const BIN = path.join(HERE, "..", "bin", "a2a-exposed.mjs");
 const GRANT = "urn:ietf:params:oauth:grant-type:device_code";
-
-test("pairBackLine prints a public https connect command and refuses unsafe claimed URLs", () => {
-	assert.equal(pairBackTarget("https://peer.example.com/.well-known/agent-card.json"), "https://peer.example.com/.well-known/agent-card.json");
-	for (const bad of ["https://user:secret@peer.example.com/card", "https://127.0.0.1/card", "https://box.ts.net/card", "https://peer.example.com/card?token=secret", "http://peer.example.com/card", "not a url"])
-		assert.equal(pairBackTarget(bad), "");
-	assert.match(pairBackLine("https://peer.example.com/card"), /connect https:\/\/peer\.example\.com\/card/);
-	assert.match(pairBackLine("https://127.0.0.1/card"), /<their-public-base-or-card-url>/);
-	assert.match(pairBackLine(""), /do not approve it yourself/);
-});
 
 function sandbox(t, cfg = {}) {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "a2a-pair-test-"));
@@ -378,15 +368,10 @@ test("connect against the real Worker (agent approval): pair list, pair approve,
 	assert.match(r.stdout, /approval password: NOT SET: run `npx -y a2a-exposed@latest --config-dir \S+ pair set-password --web`/);
 	assert.match(r.stdout, new RegExp(`^--- ${code}  "Client Bot" \\(claimed, untrusted\\)`, "m"));
 	assert.match(r.stdout, /card: https:\/\/client\.example\.com\/\.well-known\/agent-card\.json/);
-	assert.match(r.stdout, /connect https:\/\/client\.example\.com\/\.well-known\/agent-card\.json/);
-	assert.match(r.stdout, /Pairing is one-directional/);
 	assert.match(r.stdout, /never approve on your own/);
 	r = await ownerSide.cli(["pair", "approve", code.toLowerCase()]);
 	assert.equal(r.status, 0, r.stderr);
 	assert.match(r.stdout, new RegExp(`^approved ${code} \\("Client Bot"\\): the agent collects its token on its next poll, as peer "Client-Bot"`));
-	assert.match(r.stdout, /Pairing is one-directional/);
-	assert.match(r.stdout, /connect https:\/\/client\.example\.com\/\.well-known\/agent-card\.json/);
-	assert.match(r.stdout, /do not approve it yourself/);
 
 	r = await client.cli(["connect", w.url]);
 	assert.equal(r.status, 0, r.stderr);
@@ -395,9 +380,6 @@ test("connect against the real Worker (agent approval): pair list, pair approve,
 	assert.match(tok, /^a2aow_/);
 	r = await ownerSide.cli(["token", "list"]);
 	assert.match(r.stdout, new RegExp(`^Client-Bot\\tcreated=\\S+\\tactive\\tvia pairing: code ${code}, "Client Bot"$`, "m"));
-	assert.match(r.stdout, /Pairing is one-directional/);
-	assert.match(r.stdout, /connect <their-public-base-or-card-url>/);
-	assert.match(r.stdout, /approval output/);
 	// the stored token works for A2A calls
 	const rpc = await fetch(w.url + "/", { method: "POST", headers: { authorization: `Bearer ${tok}`, "content-type": "application/json", "a2a-version": "1.0" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "GetTask", params: { id: "none" } }) });
 	assert.equal((await rpc.json()).error.code, -32001);

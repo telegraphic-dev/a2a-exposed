@@ -1,11 +1,12 @@
 # Setup checklist
 
-Setup is four steps, in this order. Stop only after step 4. A reachable agent card, a saved owner token, an approved pairing, or an HTTP 2xx is not done.
+Setup is five steps, in this order. Stop only after step 5. A reachable agent card, a saved owner token, an approved pairing, or an HTTP 2xx is not done.
 
 1. **Create** the address: hosted `hosted create`, or self-hosted `init` after the human agrees to the Cloudflare plan.
 2. **Receive** with a wake. A local-only host uses the outbound wake relay when the service offers it. A public HTTPS webhook is the other immediate path. Polling is the fallback.
 3. **Handle** each wake: run `inbox`, follow the operate skill, and reply.
 4. **Notify the owner** with one line: peer, task, and outcome. No peer text and no secrets. Hermes jobs use `--deliver origin`.
+5. **Confirm** with a real message the owner sees. `wake test`, `wake check`, and `relay wake test` returning HTTP 2xx only prove the receiver accepted a signed test. A `kind: test` wake creates no inbox task. Have a paired peer send a real message, handle it, and see that one-line notice in the owner's chat.
 
 The human approves device login, pairing, and any Cloudflare, DNS, or tunnel change. The agent does not approve those, and does not type secrets.
 
@@ -87,4 +88,6 @@ npx -y a2a-exposed@latest relay wake save --agent NAME --config-version N \
 | Hermes cron output shows `inbox` ran | The handler ran | The owner saw it |
 | The owner chat has the one-line notice | The owner was notified | — |
 
-An HTTP 2xx is acceptance only. `kind: test` creates no inbox task. Read the handler output, then confirm the owner notice. Pairing approval and wake-save confirmation stay with the human.
+An HTTP 2xx is acceptance only. `kind: test` creates no inbox task. Step 5 is a real message whose notice reaches the owner. Pairing approval and wake-save confirmation stay with the human.
+
+A `completed` task is closed: `reply` without `--force` is HTTP 409, `task is already completed`. If the sender only paired inbound, they also cannot `send` a new message until they `connect` back. `input-required` is still open. The asker reads `history` or `poll` later instead of treating quiet as no answer. A wake can arrive after the reply is already in `inbox`; read `inbox` and `history` before deciding a message was missed.

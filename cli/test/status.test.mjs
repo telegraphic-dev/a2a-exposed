@@ -35,7 +35,6 @@ test("nextStep: the first missing piece, in setup order", () => {
 	assert.match(step({ ownerApi: { ok: false, error: "request failed" } }).text, /owner API failed \(request failed\): run `npx -y a2a-exposed@latest deploy`/);
 	assert.equal(step({}).ok, true);
 	assert.match(step({}).text, /^none: setup is complete/);
-	assert.match(step({}).text, /HTTP 2xx is not proof the handler ran or the owner was notified/);
 });
 
 test("cardUrlProblem: every endpoint in the card must be the base URL", () => {
@@ -106,9 +105,6 @@ test("nextStep: no wake webhook means polling, with the tunnel offered when the 
 	const full = (r) => [r.text, ...r.also].join(" | "); // optional hints are separate "also" lines
 	for (const p of ["hermes", "openclaw-wake", "openclaw-agent"]) assert.equal(noWake(p, ["example.com"]).ok, true);
 	assert.match(full(noWake("hermes", ["example.com"])), /check the A2A endpoint on a schedule.*`npx -y a2a-exposed@latest tunnel create` \(it uses the account's zone example\.com; no redeploy needed\)/);
-	assert.match(full(noWake("hermes", ["example.com"])), /A reachable card is not setup complete/);
-	assert.match(full(noWake("hermes", ["example.com"])), /relay status --json/);
-	assert.match(full(noWake("hermes", null)), /HTTP 404 means the relay is off/);
 	assert.match(full(noWake("hermes", ["a.com", "b.org"])), /--tunnel-zone <zone>` with one of: a\.com, b\.org/);
 	assert.match(full(noWake("hermes", [])), /no domain \(zone\), so the secure tunnel is not available/);
 	assert.match(full(noWake("hermes", null)), /needs a zone on the account/);

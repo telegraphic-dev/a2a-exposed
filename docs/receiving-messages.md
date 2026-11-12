@@ -29,9 +29,17 @@ the better path when the relay is off, the owner declines a foreground
 `relay run`, or there is no local webhook. A public HTTPS webhook needs neither.
 
 A reachable card, `connected: true`, or HTTP 2xx is not proof the handler ran
-or the owner was notified. The [Hermes recipe](hermes.md#what-each-result-proves)
-lists each step. Relay settings use explicit `WAKE_TRANSPORT=relay`; an empty
-URL is not a request to remove those settings.
+or the owner was notified. The last check is a real message the owner sees.
+The [Hermes recipe](hermes.md#what-each-result-proves) lists each step.
+Relay settings use explicit `WAKE_TRANSPORT=relay`; an empty URL is not a
+request to remove those settings.
+
+A wake can arrive after the reply is already in the inbox. Read `inbox` and
+`history` before you decide a message was missed. `input-required` means the
+peer is still working, often while it asks its owner. `poll` or `history`
+later. Do not treat that state as no answer. A `completed` task refuses
+`reply` unless `--force` was asked for. With only an inbound pairing, `send`
+cannot start the next message until you `connect` back.
 
 ## Set a webhook
 

@@ -1,7 +1,7 @@
 // Day-to-day commands: inbox / reply / history (owner API) and outbound send / poll.
 import fs from "node:fs";
 import * as C from "./config.mjs";
-import { CLI, checkId, describeHttp, die, fetchCard, httpJson, newId, pairBackLine, pickEndpoint, plainState, randomToken, rpc, textOf } from "./a2a.mjs";
+import { CLI, checkId, describeHttp, die, fetchCard, httpJson, newId, pickEndpoint, plainState, randomToken, rpc, textOf } from "./a2a.mjs";
 
 const q = encodeURIComponent;
 const out = (obj) => console.log(JSON.stringify(obj, null, 2));
@@ -134,7 +134,7 @@ export async function inbox(o) {
 	}
 }
 
-const PAIRING_NOTE = `Tell your human who is asking, the code and the link (details: ${CLI} pair list). Never approve on your own: in human mode the owner approves with the owner token or on the link with the approval password; in agent mode run \`pair approve <code>\` only after they say yes. ${pairBackLine("")}`;
+const PAIRING_NOTE = `Tell your human who is asking, the code and the link (details: ${CLI} pair list). Never approve on your own: in human mode the owner approves with the owner token or on the link with the approval password; in agent mode run \`pair approve <code>\` only after they say yes.`;
 
 export const show = async (id) => out(await owner("GET", `/owner/tasks/${q(id)}`));
 
@@ -182,7 +182,6 @@ export async function token(action, label, o) {
 			const via = r.source === "pairing" ? `\tvia pairing: code ${r.user_code || "?"}${r.client_name ? `, ${JSON.stringify(r.client_name)}` : ""}`
 				: r.source === "reverse" ? "\tvia reverse pairing (return token; revoke ends the return path)" : "";
 			console.log(`${r.label}\tcreated=${r.created_at}\t${r.revoked_at ? "REVOKED " + r.revoked_at : "active"}${via}`);
-			if (r.source === "pairing" && !r.revoked_at) console.log(`    ${pairBackLine(r.card_url, "No callback address is stored yet. Use the public card URL from the approval output.")}`);
 		}
 		// MCP connectors (Worker 0.5+): their own tokens, listed and revoked by label like peer tokens
 		const m = await ownerTry("GET", "/owner/mcp").catch(() => null);
@@ -326,7 +325,6 @@ export function peers(sub, args, o) {
 		warnPeerTokenEnv(te);
 		console.log(`${k}\t${v.url}\ttoken_env=${te || "-"}\t${te && C.get(te) ? "(set)" : "(missing)"}`);
 	}
-	console.log("These are outbound peers you can message. Inbound peers who paired with you are not listed here; see token list. Pairing is one-directional.");
 }
 
 const ownerConfigured = () => !!(baseUrl() && C.get("A2A_OWNER_TOKEN"));

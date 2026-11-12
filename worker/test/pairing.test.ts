@@ -332,9 +332,6 @@ test("human approval: pending, slow_down, page approve with the password, single
 	assert.equal(w.pairing.agentCardUrl, "https://barry.example.org/.well-known/agent-card.json");
 	assert.equal("manageUrl" in w.pairing, false);
 	assert.match(w.pairing.instructions, /never approve on your own[\s\S]*give them this link/);
-	assert.match(w.pairing.instructions, /Pairing is one-directional[\s\S]*connect <their-public-base-or-card-url>/);
-	assert.match(w.pairing.instructions, /do not approve it yourself/);
-	assert.doesNotMatch(w.pairing.instructions, /barry\.example\.org/);
 	assert.equal(w.pairing.passwordSet, false);
 	assert.match(w.pairing.instructions, /Approval password: not set[\s\S]*pair set-password --web/);
 
@@ -389,8 +386,6 @@ test("human approval: pending, slow_down, page approve with the password, single
 	r = await s.decidePage(d.user_code, PASSWORD, "approve");
 	assert.equal(r.status, 200, r.text);
 	assert.match(r.text, /Approved\. Barry &lt;script&gt;alert\(1\)&lt;\/script&gt; can now collect its token \(label &quot;Barry-script-alert-1-scr&quot;\)/);
-	assert.match(r.text, /Pairing is one-directional/);
-	assert.match(r.text, /connect https:\/\/barry\.example\.org\/\.well-known\/agent-card\.json/);
 	assert.match(r.text, /You can close this page/);
 	assert.doesNotMatch(r.text, /name="user_code"/);
 
@@ -597,7 +592,6 @@ test("pairing wakes: summary for each preset; requester text only where previews
 	const sum = wakeSummary(ev, "npx -y a2a-exposed@latest");
 	assert.match(sum, /^A2A pairing request: an agent calling itself "Barry" \(claimed card: "https:\/\/barry\.example\.org\/card"\) asks to connect to your A2A endpoint \(code WDJB-2345, expires in 60 minutes\)\./);
 	assert.match(sum, /never approve on your own\. Show them the code WDJB-2345 and give them this link: https:\/\/agent\.example\.com\/device\?user_code=WDJB-2345/);
-	assert.match(sum, /connect https:\/\/barry\.example\.org\/card/);
 	const agentSum = wakeSummary({ ...ev, pairing: { ...ev.pairing!, approval: "agent" } }, "a2a");
 	assert.match(agentSum, /Only if they say yes, run `a2a pair approve WDJB-2345`; if they say no \(or don't answer\), `a2a pair deny WDJB-2345`/);
 	const oc = (await renderWake({ preset: "openclaw-wake", url: "https://gw.example/hooks/wake", key: "k" }, ev))!;

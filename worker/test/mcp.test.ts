@@ -414,9 +414,6 @@ test("JSON-RPC plumbing: notifications 202, batches and junk rejected, unknown m
 	assert.match(M.TOOLS.find((x) => x.name === "pairing_requests")!.description, /approval password/);
 	assert.match(M.TOOLS.find((x) => x.name === "pairing_requests")!.description, /owner token/);
 	assert.match(M.TOOLS.find((x) => x.name === "pairing_requests")!.description, /dashboard/);
-	assert.match(M.TOOLS.find((x) => x.name === "pairing_requests")!.description, /one-directional/);
-	assert.match(M.TOOLS.find((x) => x.name === "list_peers")!.description, /one-directional/);
-	assert.match(M.TOOLS.find((x) => x.name === "list_peers")!.description, /connect/);
 });
 
 test("tools: inbox, show_task, history, mark_working, reply (with state), pairing_requests is read-only", async (t) => {

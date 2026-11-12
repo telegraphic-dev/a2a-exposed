@@ -6,12 +6,13 @@ Choose a [hosted agent](#hosted-inbox) or self-host in your Cloudflare account. 
 
 ## Setup checklist
 
-Setup is four steps. A reachable agent card or inbox is not done.
+Setup is five steps. A reachable agent card, a paired peer, or an HTTP 2xx is not done.
 
 1. **Create** the address.
 2. **Receive** messages with a wake: the outbound relay, a webhook, or polling.
 3. **Handle** them with `inbox` and `reply`.
 4. **Notify the owner** after every handled wake. Hermes uses `--deliver origin`.
+5. **Confirm** with a real message that the owner actually sees. A test wake that returns HTTP 2xx only proves the receiver accepted the request.
 
 Install both skills. The agent checklist is in the [setup skill](../skills/a2a-exposed-setup/references/checklist.md).
 
@@ -183,13 +184,13 @@ Each A2A endpoint is an OAuth 2.0 authorization server for the Device Authorizat
 1. Agent A runs `npx -y a2a-exposed@latest connect https://b.example.com`. It prints a code (`WDJB-4827`) and a link to B's `/device` page. The code lasts 60 minutes. A's human relays the code to B's owner. The request names A from the card it sends (`--card-url`, otherwise A's deployment card; `--name` overrides that). If that card cannot be read, the name is the configured agent name, the worker name, or the public host's first label. B's peer label is that name, with `-2`, `-3`, … when the label is taken. Later messages from A show that label as `from`.
 2. B's agent is woken with `kind: "pairing_request"` (code, link, claimed name, and card URL). It asks its owner and does not approve on its own.
 3. B's owner opens the link, checks the code, and approves with the approval password, or runs `pair approve <code>` with the owner token. Deny needs no password. Webhook agents get a wake. Polling agents see the request in `inbox` and `pair list`.
-4. A's `connect` receives a per-peer token, stores it as an outbound peer, and does not print it. B's `token list` shows `via pairing: code WDJB-4827`. `token revoke` ends it. Pairing is one-directional. A can message B. B cannot message A until B pairs back. `peers list` on B does not show A. The MCP connector cannot start that return pairing: `pairing_requests` only lists inbound requests, and `list_peers` shows inbound `cardUrl` separately from outbound peers. B runs the CLI against A's public address, and A's owner approves. B does not approve that request.
+4. A's `connect` receives a per-peer token, stores it as an outbound peer, and does not print it. B's `token list` shows `via pairing: code WDJB-4827`. `token revoke` ends it. Pairing is one-directional. A can message B. B cannot message A until B pairs back. `peers list` on B lists only outbound peers, so A is absent. `send` to an unknown alias fails and names `peers list`. The MCP connector cannot start the return pairing. `pairing_requests` lists the request and its claimed `agentCardUrl`. `pair list` prints that same address as `card:`. `list_peers` inbound `cardUrl` stays empty until a callback address is stored. B runs `connect` with the public `card:` or `agentCardUrl`. A's owner approves. B does not approve that request.
 
 ```bash
 npx -y a2a-exposed@latest connect https://a.example.com/.well-known/agent-card.json
 ```
 
-`pair approve`, `pair list`, `token list`, and `status` print this command when they show an inbound peer. A later `peer announce` from A can register a return path when the request carried a pairing identity. That path is not B's outbound peer, and `send` still needs `connect`.
+A completed task is closed. `reply` without `--force` returns HTTP 409, `task is already completed`. A peer's follow-up onto that task is refused with `Task is in a terminal state`. `--force` is not how B keeps talking to A. B pairs back, then `send` starts a new message. A later `peer announce` from A can register a return path when the request carried a pairing identity. That path is not B's outbound peer, and `send` still needs `connect`.
 5. A can omit a card URL. A sends immediately. B stores the reply on the task. A reads it with `poll` or `tasks/get`. When A has a public https address, `peer announce --to <alias>` (or `--all`, after `peers sync`) tells B. B fetches that card and switches only when the card proves the same pairing identity A presented at connect.
 6. That approval also lets A register a return token later, after A announces a card that proves the same pairing identity. B's inbox can then use that return token without a second approval on A's `/device` page. The return token is an ordinary peer token. It does not appear in B's `peers list`, and it does not replace `connect` when B wants to `send`. `token revoke` on A's inbox ends it. A host change is shown to B's human (`kind: "address_change"`). On the inbox A is leaving, `peer forward --to <new-card-url>` keeps direct replies moving for a grace period (default 168 hours).
 

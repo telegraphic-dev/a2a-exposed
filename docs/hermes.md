@@ -1,8 +1,8 @@
 # Hermes wake recipe
 
-A reachable inbox is not setup. Finish all four steps: create the address,
-receive wakes, handle them, and notify the owner. This page is the receive
-and handle path for Hermes. The route name is `a2a-wake`, its path is
+A reachable inbox is not setup. Finish all five steps: create the address,
+receive wakes, handle them, notify the owner, and confirm with a real
+message the owner sees. This page is the receive and handle path for Hermes. The route name is `a2a-wake`, its path is
 `/webhooks/a2a-wake`, and the fallback cron job is `a2a-inbox`. For another
 route, pass `--hermes-route NAME` and use that same name in the Hermes
 subscription. The default local origin is `http://127.0.0.1:8644`.
@@ -102,10 +102,11 @@ the Worker.
 | `relay wake test` succeeds, or a signed `wake test` returns HTTP 2xx | The receiver accepted the signed request | The handler ran or the owner was notified |
 | `relay wake save --confirm`, then `transport: relay` and `preset: hermes` | Those tested settings are stored | A later message was handled |
 | Cron output shows `inbox` | The handler ran | The owner saw the result |
-| The origin chat has the one-line notice | The owner was notified | — |
+| The origin chat has the one-line notice | The owner was notified for that wake | Setup is finished |
+| A real peer message is handled and the owner sees the notice | Setup is complete | — |
 
 An HTTP 2xx is not proof the work was handled. A `kind: test` wake creates
-no inbox task. Read the cron output, then the owner chat.
+no inbox task. The last check is a real message, then the owner chat.
 
 ## Publish only the wake route
 
