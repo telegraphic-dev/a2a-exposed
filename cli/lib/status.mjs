@@ -10,7 +10,7 @@ import os from "node:os";
 import { promisify } from "node:util";
 import * as C from "./config.mjs";
 import { runtimeInfo } from "./runtime.mjs";
-import { CLI, cardUrlProblem, cfErrorCode, describeHttp, die, fingerprint, httpJson, isPrivateHost } from "./a2a.mjs";
+import { CLI, cardUrlProblem, cfErrorCode, describeHttp, die, fingerprint, httpJson, isPrivateHost, pairBackLine, pairBackTarget } from "./a2a.mjs";
 import { baseUrl, owner, ownerTry } from "./commands.mjs";
 import * as D from "./deploy.mjs";
 import { buildLayers, layerValue, usablePin } from "./layers.mjs";
@@ -331,7 +331,7 @@ export function nextStep(s) {
 	if (addr && Array.isArray(addr.announcePending) && addr.announcePending.length)
 		n.also.push(`an address announcement is still pending: run \`${CLI} peer announce --all\``);
 	if (addr && Array.isArray(addr.inboundNoAddress) && addr.inboundNoAddress.length)
-		n.also.push("paired peers with no callback keep replies on the task until they announce an address");
+		n.also.push(`paired peers with no callback keep replies on the task until they announce an address. ${pairBackLine("")}`);
 	return sh.length ? { ...n, also: [...n.also, ...sh] } : n;
 }
 
@@ -348,8 +348,9 @@ function nextStepCore(s) {
 		if (!s.wake) return done(`the hosted endpoint is reachable and its owner credential is accepted. Wake preview is unavailable; delivery is unverified. ${discover}`, [fallback]);
 		if (s.wake.configured) return done(`the hosted endpoint is reachable and wake settings are saved; status does not test delivery. ${discover}`, [fallback,
 			`When supported, read \`${CLI} wake preview --json\` for the saved agent before an authorized draft test, then verify an inbox-and-reply run.`]);
-		return done(`the hosted endpoint is reachable; no webhook is configured. ${discover}`, [fallback,
-			"Check hook support and hosted route compatibility, then offer webhook or polling with its interval and cost before configuring either. Do not provision a self-hosted tunnel for this address."]);
+		return done(`the hosted endpoint is reachable; no webhook is configured, so setup is not done. ${discover}`, [fallback,
+			"If this machine has no public HTTPS address the hosted service can reach (loopback, a private network, or only a Cloudflare Tunnel hostname), run `hosted capabilities --json`. When it reports relay:true, offer the outbound wake relay (`relay wake status`) before a tunnel or polling.",
+			"Otherwise check hook support and hosted route compatibility, then offer webhook or polling with its interval and cost before configuring either. Do not provision a self-hosted tunnel for this address."]);
 	}
 	if (!s.deployed) return fail(`nothing is deployed from ${path.dirname(s.configFile)}. Run \`${CLI} init\` (see the quick start). Another deployment? Set A2A_CONFIG_DIR.`);
 	if (s.baseUrlEnv)
@@ -402,7 +403,7 @@ function nextStepCore(s) {
 			also.push(`last failed peer call: ${fc.lastFailure.reason}${fc.lastFailure.status ? ` (HTTP ${fc.lastFailure.status})` : ""} at ${fc.lastFailure.at}; the live check passes now`);
 		if (s.pairing && s.pairing.mode === "human" && !s.pairing.passwordSet)
 			also.push(`peers can't connect yet: run \`${CLI} pair set-password --web\` and send your human the one-time link (or they run \`${CLI} pair set-password\` in a terminal); never set it yourself`);
-		if (s.pairing && s.pairing.pending) also.push(`${s.pairing.pending} pending pairing request(s): \`${CLI} pair list\`, then tell your human (never approve on your own)`);
+		if (s.pairing && s.pairing.pending) also.push(`${s.pairing.pending} pending pairing request(s): \`${CLI} pair list\`, then tell your human (never approve on your own). ${pairBackLine(s.pairing.pairBackUrl)}`);
 		return done(`none: the façade is up and forwards paired peers' A2A calls to the upstream. Peers connect with \`${C.DEFAULT_CLI_COMMAND} connect ${s.baseUrl}\``, also);
 	}
 	const t = s.tunnel;
@@ -428,7 +429,7 @@ function nextStepCore(s) {
 	if (s.pairing && s.pairing.mode === "human" && !s.pairing.passwordSet)
 		also.push(`peers can't connect yet: run \`${CLI} pair set-password --web\` and send your human the one-time link (or they run \`${CLI} pair set-password\` in a terminal); never set it yourself`);
 	if (s.pairing && s.pairing.pending)
-		also.push(`${s.pairing.pending} pending pairing request(s): \`${CLI} pair list\`, then tell your human (never approve on your own)`);
+		also.push(`${s.pairing.pending} pending pairing request(s): \`${CLI} pair list\`, then tell your human (never approve on your own). ${pairBackLine(s.pairing.pairBackUrl)}`);
 	const done2 = (text, extra = []) => done(text, [...extra, ...also]);
 	if (!s.wake.configured) {
 		const poll = "the agent must check the A2A endpoint on a schedule (Hermes and OpenClaw have copy-paste commands in the setup references)";
@@ -440,9 +441,10 @@ function nextStepCore(s) {
 			: z.length === 1 ? `for immediate wakes to a local-only webhook, run \`${CLI} tunnel create\` (it uses the account's zone ${z[0]}; no redeploy needed)`
 			: `for immediate wakes to a local-only webhook, run \`${CLI} tunnel create --tunnel-zone <zone>\` with one of: ${z.join(", ")} (no redeploy needed)`;
 		const pub = s.wake.preset === "generic" ? `a public webhook: export WAKE_WEBHOOK_URL (and a key), then \`${CLI} wake set\`` : "";
-		return done2(`no wake webhook, so ${poll}.`, [`optional: ${tunnel}`, ...(pub ? [`optional: ${pub}`] : [])]);
+		return done2(`no wake webhook, so ${poll}. A reachable card is not setup complete.`, [`optional: ${tunnel}`, ...(pub ? [`optional: ${pub}`] : []),
+			`If this host is local-only or has no public webhook address, run \`${CLI} relay status --json\`. protocolVersion 1 means the outbound wake relay is available; offer it before a tunnel. HTTP 404 means the relay is off.`]);
 	}
-	return done2(`none: setup is complete. Check a real wake with \`${CLI} wake test\`.`,
+	return done2(`none: setup is complete only after a wake is handled. Run \`${CLI} wake test\` to check delivery. HTTP 2xx is not proof the handler ran or the owner was notified.`,
 		[`peers connect with \`${C.DEFAULT_CLI_COMMAND} connect ${s.baseUrl}\` (your human approves each one); \`${CLI} token issue <peer>\` is the manual fallback`]);
 }
 
@@ -549,6 +551,7 @@ export async function collect(net = {}) {
 					if (pr && typeof pr === "object" && ["human", "agent", "off"].includes(pr.mode))
 						s.pairing = { mode: pr.mode, passwordSet: !!pr.passwordSet, passwordSetAt: pr.passwordSetAt || null, passwordSetVia: pr.passwordSetVia || null,
 							setupLinkExpiresAt: pr.setupLinkExpiresAt || null, pending: (pr.pending || []).length,
+							pairBackUrl: (pr.pending || []).map((p) => pairBackTarget(p.agentCardUrl)).find(Boolean) || "",
 							...(typeof pr.oidcIssuer === "string" && pr.oidcIssuer ? { oidcIssuer: pr.oidcIssuer } : {}),
 							...(typeof pr.manageUrl === "string" && pr.manageUrl ? { manageUrl: pr.manageUrl } : {}) };
 				} catch { /* older Worker (no pairing yet): leave unknown */ }

@@ -2,11 +2,25 @@
 
 Choose a [hosted agent](#hosted-inbox) or self-host in your Cloudflare account. Hosted is the first choice when you have no Cloudflare account or no preference.
 
-Before configuration, choose webhook or polling as well as hosting. Webhook is recommended for OpenClaw and Hermes when the host has a public HTTPS route; use a tunnel for a local host only when the endpoint can deliver to it.
+<a id="setup-checklist"></a>
 
-For local-only webhooks, always compare both paths: tunnel + webhook gives near-instant message and pairing wakes, but needs a Cloudflare zone, one-time Zero Trust setup, DNS/Access objects and a running `cloudflared`; polling needs none of those and works on workers.dev alone, but takes minutes and consumes cron agent runs. Polling checks must surface pairing codes from `inbox`, since they receive no pairing-request wake. For a self-hosted endpoint with an existing zone, recommend tunnel + webhook with a slow cron fallback (`every 6h`); the inbox can stay on workers.dev because the wake hostname is separate. With no zone, or if DNS/tunnel changes are declined, recommend polling and say why.
+## Setup checklist
 
-Production hosted wakes cannot currently reach Cloudflare Tunnel hostnames, so offer polling or self-hosting for that case. Agree on the polling interval and cost before creating a job. Install both the operating and setup skills; see the [delivery preflight](../skills/a2a-exposed-setup/references/wake.md#delivery-preflight).
+Setup is four steps. A reachable agent card or inbox is not done.
+
+1. **Create** the address.
+2. **Receive** messages with a wake: the outbound relay, a webhook, or polling.
+3. **Handle** them with `inbox` and `reply`.
+4. **Notify the owner** after every handled wake. Hermes uses `--deliver origin`.
+
+Install both skills. The agent checklist is in the [setup skill](../skills/a2a-exposed-setup/references/checklist.md).
+
+You are local-only, or you have no public address, when the webhook is on loopback or a private network, you have no public HTTPS URL, or the only public route is a Cloudflare Tunnel hostname and the inbox is hosted. `status` says this when the endpoint is reachable and no webhook is configured. In that case, offer the [outbound wake relay](wake-relay.md) first when it is available:
+
+- Hosted: `npx -y a2a-exposed@latest hosted capabilities --json` reports `relay: true`.
+- Self-hosted: `npx -y a2a-exposed@latest relay status --json` reports `enabled: true` and `protocolVersion: 1`. HTTP 404 means the relay is off.
+
+`enrolled: false` only means no connector is enrolled yet. A tunnel is the better immediate path for a **self-hosted** inbox when the account already has a zone and the human accepts DNS, Access, and `cloudflared`. Polling is the better path when the relay is unavailable, the human declines a foreground `relay run`, or there is no local webhook. Agree on the polling interval and cost first. Polling checks must surface pairing codes from `inbox`. Production hosted wakes cannot reach Cloudflare Tunnel hostnames, so do not create a tunnel for a hosted inbox. Webhook remains the path when the receiver already has a public HTTPS URL the inbox can call.
 
 For Claude Code cloud sessions, start with the [hosted connector](mcp.md#hosted-connector). It needs no skill install, Node, or Cloudflare login.
 
@@ -27,7 +41,7 @@ flowchart LR
     subgraph CF["Your Cloudflare account"]
         W["Worker<br/>agent card + JSON-RPC"] <--> D[("D1")]
     end
-    W -- "wake webhook" --> A["Your agent"]
+    W -- "wake webhook or outbound relay" --> A["Your agent"]
     A -. "or a scheduled A2A endpoint check" .-> W
     A -- "npx -y a2a-exposed@latest" --> W
 ```
@@ -61,11 +75,13 @@ npx -y a2a-exposed@latest wake set --agent example-agent --url https://receiver.
 
 Use the name you chose and a protected secret file. The CLI saves its setup grant and
 the new owner credential locally, without printing either. No token transfer or browser
-automation is needed. Use a separate `--config-dir` for each agent. Webhook is the default
-for OpenClaw and Hermes when the hosted service can reach the receiver. Production
-hosted wakes cannot currently reach Cloudflare Tunnel hostnames; choose another
-supported public HTTPS route, polling, or explicitly authorized self-hosting before
-creating tunnel resources. An advertised preset does not prove route compatibility.
+automation is needed. Use a separate `--config-dir` for each agent. A reachable card
+is not done: configure a wake next. When this host is local-only, or hosted
+capabilities report `relay: true` and you have no public HTTPS address, use the
+[relay checklist](../skills/a2a-exposed-setup/references/checklist.md) before a tunnel
+or polling. Webhook is the path when the hosted service can reach a public HTTPS
+receiver. Production hosted wakes cannot currently reach Cloudflare Tunnel
+hostnames. An advertised preset does not prove route compatibility.
 See [hosted setup](cli.md#hosted-setup-from-the-cli) for secret
 inputs, result codes, available references for MCP and service capabilities.
 
@@ -167,9 +183,15 @@ Each A2A endpoint is an OAuth 2.0 authorization server for the Device Authorizat
 1. Agent A runs `npx -y a2a-exposed@latest connect https://b.example.com`. It prints a code (`WDJB-4827`) and a link to B's `/device` page. The code lasts 60 minutes. A's human relays the code to B's owner. The request names A from the card it sends (`--card-url`, otherwise A's deployment card; `--name` overrides that). If that card cannot be read, the name is the configured agent name, the worker name, or the public host's first label. B's peer label is that name, with `-2`, `-3`, … when the label is taken. Later messages from A show that label as `from`.
 2. B's agent is woken with `kind: "pairing_request"` (code, link, claimed name, and card URL). It asks its owner and does not approve on its own.
 3. B's owner opens the link, checks the code, and approves with the approval password, or runs `pair approve <code>` with the owner token. Deny needs no password. Webhook agents get a wake. Polling agents see the request in `inbox` and `pair list`.
-4. A's `connect` receives a per-peer token, stores it as an outbound peer, and does not print it. B's `token list` shows `via pairing: code WDJB-4827`. `token revoke` ends it.
+4. A's `connect` receives a per-peer token, stores it as an outbound peer, and does not print it. B's `token list` shows `via pairing: code WDJB-4827`. `token revoke` ends it. Pairing is one-directional. A can message B. B cannot message A until B pairs back. `peers list` on B does not show A. The MCP connector cannot start that return pairing: `pairing_requests` only lists inbound requests, and `list_peers` shows inbound `cardUrl` separately from outbound peers. B runs the CLI against A's public address, and A's owner approves. B does not approve that request.
+
+```bash
+npx -y a2a-exposed@latest connect https://a.example.com/.well-known/agent-card.json
+```
+
+`pair approve`, `pair list`, `token list`, and `status` print this command when they show an inbound peer. A later `peer announce` from A can register a return path when the request carried a pairing identity. That path is not B's outbound peer, and `send` still needs `connect`.
 5. A can omit a card URL. A sends immediately. B stores the reply on the task. A reads it with `poll` or `tasks/get`. When A has a public https address, `peer announce --to <alias>` (or `--all`, after `peers sync`) tells B. B fetches that card and switches only when the card proves the same pairing identity A presented at connect.
-6. That approval also lets A register a return token for B. B can then call A back without a second approval on A's `/device` page. The return token is an ordinary peer token. `token revoke` on A's inbox ends it. A host change is shown to B's human (`kind: "address_change"`). On the inbox A is leaving, `peer forward --to <new-card-url>` keeps direct replies moving for a grace period (default 168 hours).
+6. That approval also lets A register a return token later, after A announces a card that proves the same pairing identity. B's inbox can then use that return token without a second approval on A's `/device` page. The return token is an ordinary peer token. It does not appear in B's `peers list`, and it does not replace `connect` when B wants to `send`. `token revoke` on A's inbox ends it. A host change is shown to B's human (`kind: "address_change"`). On the inbox A is leaving, `peer forward --to <new-card-url>` keeps direct replies moving for a grace period (default 168 hours).
 
 Set the password once, before the first approval:
 

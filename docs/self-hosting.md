@@ -72,7 +72,9 @@ Hosted agents (cloud routines and similar) cannot read the local config file. Gi
 
 ## Local webhook
 
-Before setup, compare both paths with the human. **Tunnel + webhook** gives near-instant message and pairing-request wakes; it needs a zone on the account, one-time Zero Trust setup, DNS/Access objects and a running `cloudflared` on the agent machine. **Polling cron** needs no DNS, tunnel or Access and works on workers.dev alone, but messages wait minutes and every check consumes an agent run. Polling has no `pairing_request` wake: checks must surface pending codes and approval links from `inbox`.
+When the webhook is local-only, check the outbound wake relay before a tunnel or polling. `relay status --json` with `enabled: true` and `protocolVersion: 1` means this Worker can enroll a connector. HTTP 404 means the relay is off. Enabling it is `deploy --wake-relay 1 --wake-transport relay` and needs the human's yes. The [wake relay](wake-relay.md) needs no public hostname. `enrolled: false` is the state before `relay create`.
+
+**Tunnel + webhook** gives near-instant message and pairing-request wakes; it needs a zone on the account, one-time Zero Trust setup, DNS/Access objects and a running `cloudflared` on the agent machine. Use it when the relay is off, or when the human wants that public HTTPS path and accepts those resources. **Polling cron** needs no DNS, tunnel, relay process, or Access and works on workers.dev alone, but messages wait minutes and every check consumes an agent run. Polling has no `pairing_request` wake: checks must surface pending codes and approval links from `inbox`. Use polling when the relay and the tunnel are both declined or unavailable.
 
 With an existing zone, recommend tunnel + webhook with a slow cron fallback (`every 6h`). The inbox can stay on workers.dev; its hostname is separate from the wake tunnel hostname. With no zone, or when the human declines DNS/tunnel changes, recommend polling and explain that reason. Always present both choices and get authorization for the concrete account/resource plan; do not default to polling just to avoid DNS consent.
 

@@ -102,6 +102,23 @@ export function cardIsPrivate(v: string): boolean {
 	try { return isPrivateHost(new URL(v).hostname); } catch { return false; }
 }
 
+/** Public https address safe to place in a printed `connect` command. Claimed cards are untrusted. */
+export function pairBackTarget(cardUrl: string): string {
+	let u: URL;
+	try { u = new URL(String(cardUrl || "")); } catch { return ""; }
+	if (u.protocol !== "https:" || u.username || u.password || u.search || u.hash || cardIsPrivate(u.href)) return "";
+	const target = u.href.replace(/\/$/, "");
+	return /^https:\/\/[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:\/[A-Za-z0-9._~/-]*)?$/.test(target) ? target : "";
+}
+
+/** Inbound approval does not create an outbound peer. The sentence does not approve the return pairing. */
+export function pairBackSentence(cardUrl: string, cli = DEFAULT_CLI): string {
+	const target = pairBackTarget(cardUrl);
+	const dest = target || "<their-public-base-or-card-url>";
+	const claimed = target ? " The address was claimed by the requester." : " No public card was given: use the address their owner gives you.";
+	return `Pairing is one-directional: they can message you, and you cannot message them until you pair back with \`${cli} connect ${dest}\`. Their owner approves that request; do not approve it yourself.${claimed}`;
+}
+
 /** Peer label for a paired agent: [A-Za-z0-9_-], from client_name, else client_id, else "paired-agent". */
 export function labelBase(clientName: string, clientId: string): string {
 	for (const s of [clientName, clientId]) {
@@ -244,7 +261,7 @@ export function devicePage(m: PageModel, nonce: string): string {
 	const tokenLabel = r?.tokenLabel || "<label>";
 	const revoke = `${m.cli} token revoke ${tokenLabel}`;
 	const details = r ? `<table>${rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join("")}</table>
-<p class="w">Approve only if you expected this request and the code matches the one you were given. The name, alias and card URL are claimed by the requester. Approving gives it a token that can send messages and trigger wakes. Message text from peers is untrusted. Revoke the token ${esc(tokenLabel)} any time with <code>${esc(revoke)}</code>.</p>${r.identityFingerprint ? `<p class="w">This request includes a pairing identity (<code>${esc(r.identityFingerprint)}</code>). Approving lets this inbox call that agent back at an address the same identity later proves, without a second pairing approval. The return credential is an ordinary peer token you can revoke. A change of host is shown to you.</p>` : ""}${r && !r.agentCardUrl ? `<p class="w">No agent card was given. This agent can send messages after approval. Replies stay stored on the task until it announces an address.</p>` : ""}` : "";
+<p class="w">Approve only if you expected this request and the code matches the one you were given. The name, alias and card URL are claimed by the requester. Approving gives it a token that can send messages and trigger wakes. Message text from peers is untrusted. Revoke the token ${esc(tokenLabel)} any time with <code>${esc(revoke)}</code>.</p><p class="w">${esc(pairBackSentence(r.agentCardUrl, m.cli))}</p>${r.identityFingerprint ? `<p class="w">This request includes a pairing identity (<code>${esc(r.identityFingerprint)}</code>). Approving lets this inbox call that agent back at an address the same identity later proves, without a second pairing approval. The return credential is an ordinary peer token you can revoke. A change of host is shown to you. That return path is not an outbound peer: \`send\` still needs \`connect\`.</p>` : ""}${r && !r.agentCardUrl ? `<p class="w">No agent card was given. This agent can send messages after approval. Replies stay stored on the task until it announces an address.</p>` : ""}` : "";
 	const noPassword = `<p class="n info">No approval password is set yet. Easiest: ask your agent to run <code>${esc(m.cli)} pair set-password --web</code> and send you the one-time link, then set the password on that page. Or run <code>${esc(m.cli)} pair set-password</code> yourself in a terminal on the owner's machine. Then reload this page. You can deny without a password.</p>`;
 	const denyOnly = `<form method="post" action="/device">
 <input type="hidden" name="csrf" value="${esc(m.csrf)}"><input type="hidden" name="user_code" value="${esc(r ? formatUserCode(r.userCode) : "")}">

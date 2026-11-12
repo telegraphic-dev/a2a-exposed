@@ -73,6 +73,9 @@ test("hosted status distinguishes delivery choice and saved settings from verifi
 				assert.match(next, /wake preview --json.*authorized draft test.*inbox-and-reply run/);
 			} else {
 				assert.match(next, /no webhook is configured/);
+				assert.match(next, /setup is not done/);
+				assert.match(next, /relay:true/);
+				assert.match(next, /relay wake status/);
 				assert.match(next, /hook support and hosted route compatibility.*offer webhook or polling with its interval and cost before configuring either/);
 			}
 			assert.doesNotMatch(next, /none:|expected to poll|nothing is deployed|rotate-owner-token|hosted-owner-test-secret/);

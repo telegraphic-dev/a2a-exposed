@@ -1,8 +1,8 @@
 # Wake relay operations
 
-Use `relay status --json` for authenticated runtime capability, enrollment epoch
-and connection status. A 404 means unsupported or disabled. Do not assume a
-hosted service runs the latest OSS version.
+Offer the relay first when the host is local-only or has no public address the inbox can call. `hosted capabilities --json` reports `relay: true`, or `relay status --json` reports `enabled: true` and `protocolVersion` 1. `enrolled: false` means no connector yet. A 404 means unsupported or disabled. A tunnel is for a self-hosted inbox with a zone. Polling is for a missing relay, no local receiver, or a declined foreground `relay run`. Do not assume a hosted service runs the latest OSS version.
+
+A reachable card proves the inbox answers. `connected: true` proves the connector is up. HTTP 2xx proves the local receiver accepted the signed POST. None of those prove the handler ran or the owner was notified. See the [setup checklist](../../a2a-exposed-setup/references/checklist.md).
 
 A `catchup` hint asks for unfiltered `inbox`. The inbox remains authoritative;
 duplicate hints can follow uncertain delivery. Never resend a message merely

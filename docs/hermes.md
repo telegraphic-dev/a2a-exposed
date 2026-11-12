@@ -1,10 +1,34 @@
 # Hermes wake recipe
 
-Use this recipe for a self-hosted A2A endpoint and a local Hermes gateway.
-The route name is `a2a-wake`, its path is `/webhooks/a2a-wake`, and the
-fallback cron job is `a2a-inbox`. For another route, pass `--hermes-route NAME`
-and use that same name in the Hermes subscription. The default local origin
-is `http://127.0.0.1:8644`.
+A reachable inbox is not setup. Finish all four steps: create the address,
+receive wakes, handle them, and notify the owner. This page is the receive
+and handle path for Hermes. The route name is `a2a-wake`, its path is
+`/webhooks/a2a-wake`, and the fallback cron job is `a2a-inbox`. For another
+route, pass `--hermes-route NAME` and use that same name in the Hermes
+subscription. The default local origin is `http://127.0.0.1:8644`.
+
+## Which path
+
+You are local-only, or you have no public address, when the gateway listens
+on loopback, you have no public HTTPS URL, or the only public name is a
+Cloudflare Tunnel hostname and the inbox is hosted. `status` says the
+endpoint is reachable and no webhook is configured.
+
+Check the relay before a tunnel or polling:
+
+- Hosted: `npx -y a2a-exposed@latest hosted capabilities --json` with `relay: true`.
+- Self-hosted: `npx -y a2a-exposed@latest relay status --json` with `enabled: true` and `protocolVersion: 1`. HTTP 404 means it is off. `enrolled: false` is normal before `relay create`.
+
+Use the relay in that local-only case when the check succeeds. Use a tunnel
+when the inbox is self-hosted, the account has a zone, and the human accepts
+DNS, Access, and `cloudflared`. Do not create a tunnel for a hosted inbox:
+production hosted wakes cannot reach Cloudflare Tunnel hostnames. Use polling
+when the relay is off, the human declines a foreground `relay run`, or Hermes
+has no webhook. Agree on the interval and cost. Keep the cron at `every 6h`
+as a fallback when the relay or a webhook is the fast path.
+
+The human approves device login, pairing, and any Cloudflare change. The
+agent does not approve those and does not type the signing secret.
 
 ## Prepare the receiver
 
@@ -28,11 +52,69 @@ arguments, shell history and captured output. Do not recreate an existing
 subscription: use its existing secret. Keep the slow cron fallback enabled.
 See the [Hermes webhook documentation](https://hermes-agent.nousresearch.com/docs/user-guide/messaging/webhooks).
 
+## Outbound relay
+
+Use this when the checks above say the relay is available. Enable
+`WEBHOOK_ENABLED=true` before the gateway is serving the route. The human
+stores the subscription signing secret in a new mode-600 file, for example
+`/private/hermes-signing-secret`. The CLI reads that file. Do not pass the
+secret as an argument.
+
+`relay run` stays in the foreground and installs nothing. Use a new token
+file. `relay create` refuses to overwrite an existing file.
+
+```bash
+npx -y a2a-exposed@latest relay status --json
+npx -y a2a-exposed@latest relay create --token-file /private/wake-relay.token
+npx -y a2a-exposed@latest relay run --token-file /private/wake-relay.token \
+  --local-url http://127.0.0.1:8644/webhooks/a2a-wake
+```
+
+In another terminal, test the unsaved draft and then save it. Replace `NAME`,
+`N`, and `G` with `relay wake status` (`version`, `connector.generation`).
+The preset comes from `hosted capabilities --json`. Test creates
+`/private/relay-receipt` and saves nothing. Save needs `--confirm`, uses that
+receipt once, and does not send another test. Scopes `wake:test` and
+`wake:write` are approved by the human at device login.
+
+```bash
+npx -y a2a-exposed@latest relay wake status --agent NAME --json
+npx -y a2a-exposed@latest relay wake test --agent NAME --config-version N \
+  --connector-id default --generation G --preset hermes \
+  --hmac-secret-file /private/hermes-signing-secret \
+  --receipt-file /private/relay-receipt --json
+npx -y a2a-exposed@latest relay wake save --agent NAME --config-version N \
+  --receipt-file /private/relay-receipt --confirm --json
+```
+
+Do not use `wake check` for this draft. `wake check` requires local
+`WAKE_PRESET=hermes`, and its signed half tests the wake already saved on
+the Worker.
+
+## What each result proves
+
+| What you see | It proves | It does not prove |
+| --- | --- | --- |
+| `status` card and owner API OK | The inbox is reachable and the owner credential works | A wake exists, a handler ran, or the owner was told |
+| `enabled: true`, `protocolVersion: 1`, `enrolled: false` | The Worker can enroll a connector | A connector is connected |
+| `connected: true` | The outbound connector is connected | Hermes accepted a signed wake |
+| Unsigned POST to the local route returns 401 or 403 | The receiver is checking a signature | A signed wake was delivered |
+| `relay wake test` succeeds, or a signed `wake test` returns HTTP 2xx | The receiver accepted the signed request | The handler ran or the owner was notified |
+| `relay wake save --confirm`, then `transport: relay` and `preset: hermes` | Those tested settings are stored | A later message was handled |
+| Cron output shows `inbox` | The handler ran | The owner saw the result |
+| The origin chat has the one-line notice | The owner was notified | — |
+
+An HTTP 2xx is not proof the work was handled. A `kind: test` wake creates
+no inbox task. Read the cron output, then the owner chat.
+
 ## Publish only the wake route
 
-The human authorizes Cloudflare account, DNS, Tunnel and Access changes.
-Start with an existing self-hosted deployment and the Hermes preset. If its
-preset differs, configure it first with `wake set --preset hermes`.
+Use this for a self-hosted inbox when the human wants a public HTTPS wake
+and the account has a zone. Skip it for a hosted inbox, and skip it when
+the relay section above is the path. The human authorizes Cloudflare
+account, DNS, Tunnel and Access changes. Start with an existing self-hosted
+deployment and the Hermes preset. If its preset differs, configure it first
+with `wake set --preset hermes`.
 Inspect the current settings and available zones, then select a zone explicitly:
 
 ```bash

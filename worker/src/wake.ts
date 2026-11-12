@@ -1,6 +1,6 @@
 // Wake presets: how the Worker pokes the agent when something lands in the inbox.
 // Pure functions (Web Crypto only) so they run in Workers and in Node's test runner.
-import { DEFAULT_CLI } from "./pairing.ts";
+import { DEFAULT_CLI, pairBackSentence } from "./pairing.ts";
 
 export type WakeEvent = {
 	contextId: string;
@@ -143,13 +143,15 @@ export function pairingInstructions(p: PairingInfo, cli: string): string {
 	const readiness = p.passwordSet === false && p.passwordEnabled !== false
 		? ` Approval password: not set. To approve pairing on /device with a password, run: ${cli} pair set-password --web. Send the one-time setup link privately to your human; they set the password themselves. Never open the page or ask for the password.` : "";
 	const dash = p.manageUrl ? ` The dashboard page for this request is ${p.manageUrl}.` : "";
-	return p.approval === "human"
+	const body = p.approval === "human"
 		? `Ask your human; never approve on your own. Show them the code ${p.userCode} and give them this link: ${p.verificationUriComplete} . ` +
 			`They approve there with their approval password, or with \`${cli} pair approve ${p.userCode}\` (the owner token), after checking the code with the other agent's owner. Deny with \`${cli} pair deny ${p.userCode}\`. Details: \`${cli} pair list\`.` +
 			dash + readiness
 		: `Ask your human; never approve on your own. Show them the code ${p.userCode}, who is asking, and the link ${p.verificationUriComplete} . ` +
 			`Only if they say yes, run \`${cli} pair approve ${p.userCode}\`; if they say no (or don't answer), \`${cli} pair deny ${p.userCode}\`.` +
 			dash + readiness;
+	// The claimed card stays out of this string. openclaw-wake treats the summary as a trusted system event.
+	return `${body} Pairing is one-directional: after approval they can message you, and you cannot message them until you pair back with \`${cli} connect <their-public-base-or-card-url>\`. Their owner approves that request; do not approve it yourself.`;
 }
 
 function hintFor(ev: WakeEvent, cli: string): string {
@@ -173,6 +175,7 @@ export function wakeSummary(ev: WakeEvent, cli: string, withPreview = true): str
 		return [
 			`A2A pairing request: ${who} asks to connect to your A2A endpoint (code ${p.userCode}, expires in ${Math.round(p.expiresIn / 60)} minutes).`,
 			pairingInstructions(p, cli),
+			...(withPreview ? [pairBackSentence(p.agentCardUrl, cli)] : []),
 			`The name and card URL are claimed by the requester (untrusted). Nothing happens unless the request is approved.`,
 		].join("\n");
 	}

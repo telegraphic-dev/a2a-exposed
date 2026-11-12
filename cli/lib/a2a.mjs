@@ -40,6 +40,24 @@ export function isPrivateHost(host) {
 	return false;
 }
 
+/** Public https card or base URL safe to print inside a `connect` command. Claimed pairing URLs are untrusted. */
+export function pairBackTarget(cardUrl) {
+	let u;
+	try { u = new URL(String(cardUrl || "")); } catch { return ""; }
+	if (u.protocol !== "https:" || u.username || u.password || u.search || u.hash || isPrivateHost(u.hostname)) return "";
+	const target = u.href.replace(/\/$/, "");
+	return /^https:\/\/[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:\/[A-Za-z0-9._~/-]*)?$/.test(target) ? target : "";
+}
+
+/** Inbound approval does not create an outbound peer. This text never approves the return pairing.
+ *  `missing` explains a URL that is not safe to print. Token list has no claimed card after redemption. */
+export function pairBackLine(cardUrl, missing = "No public card was given: use the address their owner gives you.") {
+	const target = pairBackTarget(cardUrl);
+	const dest = target || "<their-public-base-or-card-url>";
+	const note = target ? " The address was claimed by the requester." : ` ${missing}`;
+	return `Pairing is one-directional: they can message you, and you cannot message them until you pair back with \`${CLI} connect ${dest}\`. Their owner approves that request; do not approve it yourself.${note}`;
+}
+
 /** Problem with an upstream URL for proxy mode ("" when fine): the Worker calls it from Cloudflare, so it must be https
  *  on a public hostname (a Cloudflare Tunnel hostname behind Access), never a Tailnet / LAN / localhost address. */
 export function upstreamUrlProblem(v) {

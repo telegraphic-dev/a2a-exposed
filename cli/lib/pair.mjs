@@ -5,7 +5,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import * as C from "./config.mjs";
-import { CLI, describeHttp, die, fetchCard, httpJson, isPrivateHost, pickEndpoint } from "./a2a.mjs";
+import { CLI, describeHttp, die, fetchCard, httpJson, isPrivateHost, pairBackLine, pickEndpoint } from "./a2a.mjs";
 import { baseUrl, peerToken, warnPeerTokenEnv } from "./commands.mjs";
 import { publicIdentityForConnect } from "./address.mjs";
 
@@ -178,6 +178,7 @@ export async function list(o) {
 		if (p.identityFingerprint) console.log(`    identity: ${p.identityFingerprint}`);
 		if (!p.agentCardUrl) console.log("    no callback address yet: replies stay on the task until this agent announces one");
 		console.log(`    link: ${p.verificationUriComplete}`);
+		console.log(`    ${pairBackLine(p.agentCardUrl)}`);
 	}
 	console.log(`Ask your human about each request; never approve on your own.`);
 }
@@ -187,7 +188,7 @@ export async function decide(action, code) {
 	if (r.status !== 200) die(ownerError(r));
 	const d = r.data;
 	if (action === "deny") return console.log(`denied ${d.userCode}${d.clientName ? ` (${JSON.stringify(d.clientName)})` : ""}: no token is issued`);
-	console.log(`approved ${d.userCode}${d.clientName ? ` (${JSON.stringify(d.clientName)})` : ""}: the agent collects its token on its next poll, as peer "${d.label}"${d.replaced ? " (its old token stops working)" : ""}. Revoke any time: ${CLI} token revoke ${d.label}`);
+	console.log(`approved ${d.userCode}${d.clientName ? ` (${JSON.stringify(d.clientName)})` : ""}: the agent collects its token on its next poll, as peer "${d.label}"${d.replaced ? " (its old token stops working)" : ""}. Revoke any time: ${CLI} token revoke ${d.label}. ${pairBackLine(d.agentCardUrl)}`);
 }
 
 // ---------------------------------------------------------------- client: connect to another inbox
