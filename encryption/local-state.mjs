@@ -8,8 +8,8 @@ import { CipherSuite, HkdfSha256 } from "@hpke/core";
 import { DhkemX25519HkdfSha256 } from "@hpke/dhkem-x25519";
 import { Chacha20Poly1305 } from "@hpke/chacha20poly1305";
 import { nativeCredentialOperation } from "./native-store.mjs";
-import { sealBackup, openBackup, MAX_BACKUP_FILE, BackupError } from "./backup.mjs";
-import { generateIdentity, verifyBundle, canonicalJSON, parseJSON, seal } from "./index.mjs";
+import { sealBackup, openBackup, MAX_BACKUP_FILE, BackupError, validateBackupPassphrase } from "./backup.mjs";
+import { generateIdentity, rotateEncryptionKey, verifyBundle, canonicalJSON, parseJSON, seal } from "./index.mjs";
 
 const suite = new CipherSuite({ kem: new DhkemX25519HkdfSha256(), kdf: new HkdfSha256(), aead: new Chacha20Poly1305() });
 const b64 = value => Buffer.from(value).toString("base64url");
@@ -70,10 +70,15 @@ function privateWrite(file, value) {
  protect(file);
  // Persist directory entries where the platform supports directory fsync. The recovery intent
  // remains authoritative if the filesystem or native provider has an uncertain outcome.
- let parent;
- try { parent = fs.openSync(path.dirname(file), "r"); fs.fsyncSync(parent); }
- catch (error) { if (process.platform !== "win32" && !["EINVAL", "ENOTSUP", "EBADF"].includes(error.code)) throw error; }
- finally { if (parent !== undefined) fs.closeSync(parent); }
+ return syncDirectory(path.dirname(file));
+}
+function syncDirectory(directory) {
+ if (process.platform === "win32") return false; // No tested portable directory fsync on Windows.
+ let fd;
+ try { fd = fs.openSync(directory, "r"); fs.fsyncSync(fd); return true; }
+ catch (error) { if (["EINVAL", "ENOTSUP", "EBADF"].includes(error.code)) return false; throw error; }
+ finally { if (fd !== undefined) fs.closeSync(fd); }
+
 }
 async function serialize(identity) {
  return JSON.stringify({ v: 1, signing: b64(await crypto.subtle.exportKey("pkcs8", identity.signingKey)), encryption: b64(await suite.kem.serializePrivateKey(identity.encryptionKey)) });
@@ -142,14 +147,22 @@ async function validateSnapshot(snapshot, { checkCredentials = true } = {}) {
   const bundles = new Map(), operations = new Map();
   for (const row of rows.key_operations) {
    const op = parseJSON(row.public_json);
-   if (!exact(op, ["v", "kind", "id", "identityId", "bundle", "store", "namespace", "account", "fileRef", "created_ms"]) || op.v !== 1 || op.kind !== "initialize" || op.id !== row.id || row.kind !== "initialize" || !UUID.test(op.id) || !UUID.test(op.identityId) || !UUID.test(op.namespace) || !["file", "keychain"].includes(op.store) || op.account !== op.identityId + "/" + op.bundle?.keyId || op.fileRef !== op.identityId + ".key" || !Number.isSafeInteger(op.created_ms) || op.created_ms < 0 || !Number.isSafeInteger(row.revision) || row.revision < 0 || !["committed", "orphan-retained", "observed-absent"].includes(row.state) || hash("a2a-exposed local key operation v1", op) !== row.digest || operations.has(op.identityId)) invalid();
+   const opFields = ["v", "kind", "id", "identityId", "bundle", "store", "namespace", "account", "fileRef", "created_ms", ...(op.kind === "rotate" ? ["previousId", "previousBundleDigest"] : [])];
+   if (!exact(op, opFields) || op.v !== 1 || !["initialize", "rotate"].includes(op.kind) || op.id !== row.id || row.kind !== op.kind || !UUID.test(op.id) || !UUID.test(op.identityId) || !UUID.test(op.namespace) || !["file", "keychain"].includes(op.store) || op.account !== op.identityId + "/" + op.bundle?.keyId || op.fileRef !== op.identityId + ".key" || !Number.isSafeInteger(op.created_ms) || op.created_ms < 0 || !Number.isSafeInteger(row.revision) || row.revision < 0 || !["committed", "orphan-retained", "observed-absent"].includes(row.state) || hash("a2a-exposed local key operation v1", op) !== row.digest || operations.has(op.identityId)) invalid();
    await verifyBundle(op.bundle, { cardUrl: op.bundle.cardUrl, identityKey: op.bundle.identityKey });
    bundles.set(op.identityId, op.bundle); operations.set(op.identityId, row);
+  }
+  for (const opRow of operations.values()) {
+   const op = parseJSON(opRow.public_json);
+   if (op.kind === "rotate") {
+    const prior = bundles.get(op.previousId);
+    if (!prior || prior.identityKey !== op.bundle.identityKey || prior.cardUrl !== op.bundle.cardUrl || prior.keyId === op.bundle.keyId || hash("a2a-exposed sealed bundle v1", prior) !== op.previousBundleDigest) invalid();
+   }
   }
   for (const [id, row] of operations) if (row.state === "committed" && !rows.identities.some(identity => identity.id === id)) invalid();
   for (const row of rows.identities) {
    const bundle = parseJSON(row.bundle), opRow = operations.get(row.id), op = opRow && parseJSON(opRow.public_json);
-   if (!op || opRow.state !== "committed" || canonicalJSON(bundle) !== canonicalJSON(op.bundle) || row.store !== op.store || row.credential_namespace !== op.namespace || !["local-only", "archive-only"].includes(row.live_state)) invalid();
+   if (!op || opRow.state !== "committed" || canonicalJSON(bundle) !== canonicalJSON(op.bundle) || row.store !== op.store || row.credential_namespace !== op.namespace || !["local-only", "retired", "archive-only"].includes(row.live_state)) invalid();
   }
   const seen = new Set();
   for (const credential of checkCredentials ? snapshot.credentials : []) {
@@ -207,12 +220,18 @@ export async function restoreBackup({ source, destination, passphrase, store, ac
    state.db.exec("COMMIT"); validateSchema(state.db);
   } catch (error) { try { state.db.exec("ROLLBACK"); } catch {} throw error; }
   finally { state.close(); }
+  const sqliteFd = fs.openSync(path.join(stage, "encryption/state.sqlite"), "r");
+  try { fs.fsyncSync(sqliteFd); } finally { fs.closeSync(sqliteFd); }
+  let directorySynced = syncDirectory(path.join(stage, "encryption"));
   // Parent was exclusively reserved above. The canonical encryption path appears
   // only after all rows/credentials have been validated and written successfully.
   fs.renameSync(path.join(stage, "encryption"), path.join(destination, "encryption")); installed = true;
+  directorySynced = syncDirectory(destination) && directorySynced;
   fs.rmdirSync(stage); stage = null;
+  directorySynced = syncDirectory(destination) && directorySynced;
+  directorySynced = syncDirectory(path.dirname(destination)) && directorySynced;
   const readback = new LocalState(destination);
-  try { return { ok: true, config_identity: readback.configId(), source_config_identity: snapshot.configIdentity, archive_only: true, replay_rollback_acknowledged: true, identities: snapshot.rows.identities.length, next: "Restored keys and pins are archive-only. Live delivery stays paused; a new receiving identity and independent peer verification are required before later enrollment." }; }
+  try { return { ok: true, durability: directorySynced ? "file-and-directory-sync-completed" : "directory-sync-unverified", config_identity: readback.configId(), source_config_identity: snapshot.configIdentity, archive_only: true, replay_rollback_acknowledged: true, identities: snapshot.rows.identities.length, next: "Restored keys and pins are archive-only. Live delivery stays paused; a new receiving identity and independent peer verification are required before later enrollment." }; }
   finally { readback.close(); }
  } catch (error) {
   if (targetCreated) fail(installed ? "restore_installed_readback_failed" : "restore_staging_incomplete", "The new private destination is retained for inspection. Nothing was merged into another configuration; do not overwrite or retry over it.");
@@ -303,9 +322,57 @@ export class LocalState {
    fail("key_store_unavailable");
   }
  }
+ rotationPlan(id) {
+  const row = this.row(id);
+  if (this.db.prepare("SELECT value FROM meta WHERE key='restore_paused'").get()?.value === "1") fail("restore_archive_only");
+  if (row.live_state !== "local-only") fail("key_retired", "Select the current local identity from keys status --json; retired keys remain for archives only.");
+  if (this.db.prepare("SELECT id FROM key_operations WHERE state IN ('prepared','writing','secret-written','uncertain') LIMIT 1").get()) fail("initialization_pending", "Reconcile the exact pending key operation from keys status --json before planning another key change.");
+  const latest = this.db.prepare("SELECT id,digest,state,revision FROM key_operations ORDER BY rowid DESC LIMIT 1").get();
+  const plan = { configIdentity: this.configId(), action: "rotate-receiving-key", previousId: id, previousBundleDigest: hash("a2a-exposed sealed bundle v1", parseJSON(row.bundle)), keyStore: row.store, latestOperation: latest ? { ...latest } : null };
+  return { ok: true, plan, approval_digest: hash("a2a-exposed local rotation approval v1", plan), next: "Ask the human to approve this exact local key-rotation plan. Old decryption keys are retained; peer trust is not automatically changed." };
+ }
+ async rotateLocal({ id: previousId, approvalDigest, ownerApproved = false, allowOsConsent = false, now = Date.now() }) {
+  if (ownerApproved !== true) fail("owner_approval_required", "List the exact local rotation plan and obtain human approval; no key change was made.");
+  if (!Number.isSafeInteger(now) || now < 0) fail("clock_invalid");
+  const plan = this.rotationPlan(previousId);
+  if (plan.approval_digest !== approvalDigest) fail("approval_stale");
+  const previous = this.row(previousId);
+  if (previous.store === "keychain" && allowOsConsent !== true) fail("key_store_consent");
+  const identity = await rotateEncryptionKey(await this.loadIdentity(previousId, { allowOsConsent }), now);
+  const value = await serialize(identity), id = randomUUID(), namespace = randomUUID(), opId = randomUUID();
+  const operation = { v: 1, kind: "rotate", id: opId, identityId: id, bundle: identity.bundle, store: previous.store, namespace, account: id + "/" + identity.bundle.keyId, fileRef: id + ".key", created_ms: now, previousId, previousBundleDigest: plan.plan.previousBundleDigest };
+  const digest = hash("a2a-exposed local key operation v1", operation);
+  await this.locked(async () => {
+   if (this.rotationPlan(previousId).approval_digest !== approvalDigest) fail("approval_stale");
+   this.db.prepare("INSERT INTO key_operations(id,kind,public_json,digest,state,created_ms,owner_pid) VALUES(?,?,?,?,?,?,?)").run(opId, "rotate", canonicalJSON(operation), digest, "prepared", now, process.pid);
+  });
+  inflight.add(opId);
+  try {
+   this.db.prepare("UPDATE key_operations SET state='writing',revision=revision+1 WHERE id=?").run(opId);
+   if (previous.store === "file") privateWrite(path.join(this.root, operation.fileRef), value + "\n");
+   else await this.keyring({ op: "set", namespace, account: operation.account, value }, allowOsConsent, pid => this.db.prepare("UPDATE key_operations SET broker_pid=?,revision=revision+1 WHERE id=?").run(pid, opId));
+   this.db.prepare("UPDATE key_operations SET state='secret-written',revision=revision+1 WHERE id=?").run(opId);
+   return await this.locked(async () => {
+    const current = this.row(previousId);
+    if (current.live_state !== "local-only" || hash("a2a-exposed sealed bundle v1", parseJSON(current.bundle)) !== operation.previousBundleDigest) fail("approval_stale");
+    this.db.prepare("UPDATE identities SET live_state='retired' WHERE id=?").run(previousId);
+    this.db.prepare("INSERT INTO identities VALUES(?,?,?,?,?,?)").run(id, canonicalJSON(identity.bundle), previous.store, namespace, "local-only", now);
+    this.db.prepare("UPDATE key_operations SET state='committed',revision=revision+1 WHERE id=?").run(opId);
+    return { ok: true, id, previous_id: previousId, bundle: identity.bundle, key_store: previous.store, old_key_retained: true, next: "The new receiving key is local only. Existing peer pins are held until a new exact proposal is approved; old keys remain available for archive opening." };
+   });
+  } catch {
+   try { this.db.prepare("UPDATE key_operations SET state='uncertain',revision=revision+1 WHERE id=? AND state<>'committed'").run(opId); } catch {}
+   const error = new LocalStateError("rotation_uncertain", "The new private key may have been written. Inspect keys status --json and reconcile its exact intent; do not repeat rotation or delete old keys.");
+   error.details = { operation_id: opId, operation_digest: digest }; throw error;
+  } finally { inflight.delete(opId); }
+ }
+
  async createBackup({ destination, passphrase, allowOsConsent = false }) {
   this.ready();
   if (typeof destination !== "string" || !path.isAbsolute(destination)) fail("backup_destination", "Choose a new absolute backup file path; existing files are never overwritten.");
+  validateBackupPassphrase(passphrase);
+  try { fs.lstatSync(destination); fail("backup_destination_exists", "Choose a new backup file path; existing files and symlinks are never overwritten."); }
+  catch (error) { if (error.code !== "ENOENT") throw error; }
   let source;
   try {
    // A separate read transaction provides one consistent public-state snapshot even
@@ -341,8 +408,10 @@ export class LocalState {
    await validateSnapshot(snapshot);
    const encrypted = sealBackup(snapshot, passphrase);
    source.exec("COMMIT"); source.close(); source = null;
-   privateWrite(destination, encrypted);
-   return { ok: true, config_identity: snapshot.configIdentity, identities: rows.identities.length, archived_credentials: credentials.filter(row => row.value !== null).length, observed_absent_credentials: credentials.filter(row => row.value === null).length, next: "Keep this encrypted file and its passphrase separately. Restore only into a new private directory; restored keys are archive-only." };
+   let directorySynced;
+   try { directorySynced = privateWrite(destination, encrypted); }
+   catch (error) { if (error.code === "EEXIST") fail("backup_destination_exists", "The backup destination now exists. Choose a new file path; no existing file was overwritten."); throw error; }
+   return { ok: true, durability: directorySynced ? "file-and-directory-sync-completed" : "directory-sync-unverified", config_identity: snapshot.configIdentity, identities: rows.identities.length, archived_credentials: credentials.filter(row => row.value !== null).length, observed_absent_credentials: credentials.filter(row => row.value === null).length, next: "Keep this encrypted file and its passphrase separately. Restore only into a new private directory; restored keys are archive-only." };
   } finally { try { source?.exec("ROLLBACK"); source?.close(); } catch {} }
  }
 
@@ -378,7 +447,7 @@ export class LocalState {
  async reconcileInitialization({ operationId, expectedDigest, action, approvalDigest, ownerApproved = false, allowOsConsent = false }) {
   if (ownerApproved !== true || !["adopt", "abandon-if-absent"].includes(action)) fail("owner_approval_required", "List recovery intents with keys status --json, then select an exact operation/digest and explicit recovery action approved by the human.");
   this.ready();
-  const row = this.db.prepare("SELECT * FROM key_operations WHERE id=? AND kind='initialize'").get(operationId);
+  const row = this.db.prepare("SELECT * FROM key_operations WHERE id=? AND kind IN ('initialize','rotate')").get(operationId);
   if (!row || row.digest !== expectedDigest || row.state === "committed" || !Number.isSafeInteger(row.revision) || recoveryApproval(this.configId(), row, action) !== approvalDigest) fail("approval_stale", "Run keys status --json; the recovery intent or its state changed.");
   if (inflight.has(operationId)) fail("operation_in_progress", "The original initialization is still running; inspect keys status --json after it exits.");
   if (["prepared", "writing", "secret-written"].includes(row.state) && row.owner_pid !== process.pid) {
@@ -389,7 +458,11 @@ export class LocalState {
    catch (error) { if (error instanceof LocalStateError || error.code !== "ESRCH") throw new LocalStateError("operation_in_progress"); }
   }
   const op = JSON.parse(row.public_json);
-  if (hash("a2a-exposed local key operation v1", op) !== expectedDigest || !UUID.test(op.identityId) || op.fileRef !== op.identityId + ".key" || !UUID.test(op.namespace) || op.account !== op.identityId + "/" + op.bundle?.keyId || !["file", "keychain"].includes(op.store)) fail("state_corrupt");
+  if (hash("a2a-exposed local key operation v1", op) !== expectedDigest || !UUID.test(op.identityId) || op.fileRef !== op.identityId + ".key" || !UUID.test(op.namespace) || op.account !== op.identityId + "/" + op.bundle?.keyId || !["file", "keychain"].includes(op.store) || op.kind !== row.kind) fail("state_corrupt");
+  if (op.kind === "rotate") {
+   const prior = parseJSON(this.row(op.previousId).bundle);
+   if (hash("a2a-exposed sealed bundle v1", prior) !== op.previousBundleDigest || prior.identityKey !== op.bundle.identityKey || prior.cardUrl !== op.bundle.cardUrl || prior.keyId === op.bundle.keyId) fail("state_corrupt");
+  }
   // All provider reads and key checks occur outside the write transaction. The final
   // mutation must compare the approved state/revision again, including no-op-looking results.
   const transition = state => {
@@ -415,10 +488,13 @@ export class LocalState {
   const identity = await deserialize(value, op.bundle);
   await seal({ identity, recipient: op.bundle, binding: { contextId: randomUUID(), messageId: randomUUID(), taskId: null, role: "user", state: null, kind: "message" }, content: { purpose: "recover-local-key-check" } });
   return this.locked(async () => {
-   if (this.db.prepare("SELECT id FROM identities LIMIT 1").get()) {
+   const prior = op.kind === "rotate" ? this.row(op.previousId) : null;
+   const canRotate = prior && prior.live_state === "local-only" && hash("a2a-exposed sealed bundle v1", parseJSON(prior.bundle)) === op.previousBundleDigest;
+   if ((op.kind === "rotate" && !canRotate) || (op.kind !== "rotate" && this.db.prepare("SELECT id FROM identities LIMIT 1").get())) {
     transition("orphan-retained");
     return { ok: true, operation_id: operationId, retained_orphan: true, next: "Another identity is active. This older credential remains tracked for archive/recovery; no active identity or trust was replaced." };
    }
+   if (canRotate) this.db.prepare("UPDATE identities SET live_state='retired' WHERE id=?").run(op.previousId);
    this.db.prepare("INSERT INTO identities VALUES(?,?,?,?,?,?)").run(op.identityId, JSON.stringify(op.bundle), op.store, op.namespace, "local-only", op.created_ms);
    transition("committed");
    return { ok: true, id: op.identityId, operation_id: operationId, recovered: true, bundle: op.bundle, next: "The original local key was recovered; no replacement, enrollment or pairing change occurred." };
@@ -438,9 +514,11 @@ export class LocalState {
   const proposalRows = this.db.prepare("SELECT rowid AS cursor,digest,proposal,state FROM proposals WHERE peer=? AND state='pending' AND rowid>? ORDER BY rowid LIMIT ?").all(peer, proposalCursor, limit + 1);
   const proposals = proposalRows.slice(0, limit).map(x => ({ digest: x.digest, proposal: JSON.parse(x.proposal), state: x.state }));
   const pending = this.db.prepare("SELECT digest FROM proposals WHERE peer=? AND state='pending' LIMIT 1").get(peer);
+  const currentKey = current && this.row(current.localId);
+  const keyPending = currentKey && (currentKey.live_state !== "local-only" || this.db.prepare("SELECT id FROM key_operations WHERE kind='rotate' AND state IN ('prepared','writing','secret-written','uncertain') AND json_extract(public_json,'$.previousId')=? LIMIT 1").get(current.localId));
   const historyRows = this.db.prepare("SELECT version,record,digest,approved_ms FROM trust_history WHERE peer=? AND version>? ORDER BY version LIMIT ?").all(peer, historyVersion, limit + 1);
   const history = historyRows.slice(0, limit).map(x => ({ version: x.version, record: JSON.parse(x.record), digest: x.digest, approved_ms: x.approved_ms }));
-  return { ok: true, config_identity: this.configId(), peer, current, history, next_proposal_cursor: proposalRows.length > limit ? proposalRows[limit - 1].cursor : null, next_history_version: historyRows.length > limit ? historyRows[limit - 1].version : null, live_state: this.db.prepare("SELECT value FROM meta WHERE key='restore_paused'").get()?.value === "1" ? "archive-only" : pending ? "change-pending" : current?.state || "unpinned", pairing: "not-checked", policies: [...POLICIES], verification_choices: ["tofu", "independent"], current_digest: row ? hash("a2a-exposed sealed trust record v1", current) : "none", current_version: row?.version || 0, proposals };
+  return { ok: true, config_identity: this.configId(), peer, current, history, next_proposal_cursor: proposalRows.length > limit ? proposalRows[limit - 1].cursor : null, next_history_version: historyRows.length > limit ? historyRows[limit - 1].version : null, live_state: this.db.prepare("SELECT value FROM meta WHERE key='restore_paused'").get()?.value === "1" ? "archive-only" : (pending || keyPending) ? "change-pending" : current?.state || "unpinned", pairing: "not-checked", policies: [...POLICIES], verification_choices: ["tofu", "independent"], current_digest: row ? hash("a2a-exposed sealed trust record v1", current) : "none", current_version: row?.version || 0, proposals };
  }
  async propose({ peer, localId, bundle, pairingIdentity, expectedCurrent, policy, verification, operation = "enroll", now = Date.now() }) {
   if (typeof peer !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(peer) || !KEY.test(pairingIdentity || "") || !POLICIES.includes(policy) || !["tofu", "independent"].includes(verification) || !["enroll", "rotate", "re-pair", "policy", "verify", "revoke"].includes(operation)) fail("proposal_inputs", "Run peer keys inspect --to ALIAS --json, then supply explicit policy, verification, pairing identity and expected current digest.");
@@ -448,6 +526,7 @@ export class LocalState {
   return this.locked(async () => {
    const local = this.row(localId), current = this.inspect(peer);
    if (expectedCurrent !== current.current_digest) fail("approval_stale", "Run peer keys inspect --to ALIAS --json; the full trust record changed.");
+   if (local.live_state !== "local-only") fail("key_retired");
    const localBundle = JSON.parse(local.bundle);
    const proposal = { v: 1, configIdentity: this.configId(), localIdentity: localBundle.identityKey, localKeyId: localBundle.keyId, localBundleDigest: hash("a2a-exposed sealed bundle v1", localBundle), localId, peer, peerEndpoint: bundle.cardUrl, pairingIdentity, currentRecordDigest: current.current_digest, currentRecordVersion: current.current_version, newBundleDigest: hash("a2a-exposed sealed bundle v1", bundle), newBundle: bundle, newPolicy: policy, operation, verificationDecision: verification, proposalNonce: b64(randomBytes(32)) };
    const digest = hash("a2a-exposed sealed trust proposal v1", proposal);
@@ -461,11 +540,13 @@ export class LocalState {
    const row = this.db.prepare("SELECT * FROM proposals WHERE digest=? AND peer=? AND state='pending'").get(digest, peer), current = this.inspect(peer);
    if (!row || expectedCurrent !== current.current_digest || row.expected_digest !== current.current_digest || row.expected_version !== current.current_version) fail("approval_stale", "Run peer keys inspect --to ALIAS --json and approve the current exact proposal.");
    const proposal = JSON.parse(row.proposal);
+   if (this.row(proposal.localId).live_state !== "local-only") fail("key_retired");
    if (hash("a2a-exposed sealed trust proposal v1", proposal) !== digest || hash("a2a-exposed sealed bundle v1", JSON.parse(this.row(proposal.localId).bundle)) !== proposal.localBundleDigest) fail("approval_stale");
    if (proposal.verificationDecision === "independent" && (independentVerified !== true || verifiedProposalDigest !== digest)) fail("independent_verification_required", "Compare the locally computed safety code through another trusted channel; a hosted comparison is not independent verification.");
-   const identityChanged = current.current && (current.current.bundle.identityKey !== proposal.newBundle.identityKey || current.current.pairingIdentity !== proposal.pairingIdentity || current.current.localId !== proposal.localId);
+   const identityChanged = current.current && (current.current.bundle.identityKey !== proposal.newBundle.identityKey || current.current.pairingIdentity !== proposal.pairingIdentity || parseJSON(this.row(current.current.localId).bundle).identityKey !== proposal.localIdentity);
+   const localKeyChanged = current.current && current.current.localKeyId !== proposal.localKeyId;
    if (identityChanged && rePairVerified !== true) fail("re_pair_required", "Complete a separately human-approved pairing and re-verify the identity before approving this proposal.");
-   if (identityChanged && (proposal.verificationDecision !== "independent" || independentVerified !== true || verifiedProposalDigest !== digest)) fail("independent_verification_required", "Identity changes require a new independent-verification proposal and comparison of that exact proposal's safety code after human-approved re-pairing.");
+   if ((identityChanged || localKeyChanged) && (proposal.verificationDecision !== "independent" || independentVerified !== true || verifiedProposalDigest !== digest)) fail("independent_verification_required", "Identity changes require a new independent-verification proposal and comparison of that exact proposal's safety code after human-approved re-pairing.");
    const version = current.current_version + 1;
    const record = { v: 1, configIdentity: this.configId(), localId: proposal.localId, localKeyId: proposal.localKeyId, localBundleDigest: proposal.localBundleDigest, peer, peerEndpoint: proposal.peerEndpoint, pairingIdentity: proposal.pairingIdentity, bundle: proposal.newBundle, policy: proposal.newPolicy, verification: proposal.verificationDecision, state: proposal.operation === "revoke" ? "revoked" : proposal.verificationDecision === "independent" ? "independently-verified" : "tofu-pinned", version };
    this.db.prepare("INSERT INTO trust_history VALUES(?,?,?,?,?)").run(peer, version, JSON.stringify(record), hash("a2a-exposed sealed trust record v1", record), Date.now());
@@ -477,7 +558,9 @@ export class LocalState {
  }
  async reject({ peer, digest }) { return this.locked(async () => { const result = this.db.prepare("UPDATE proposals SET state='rejected' WHERE peer=? AND digest=? AND state='pending'").run(peer, digest); if (!result.changes) fail("approval_stale"); return { ok: true, peer, digest, rejected: true }; }); }
  safetyCode(localId, peer, { proposalDigest } = {}) {
-  const local = JSON.parse(this.row(localId).bundle), inspection = this.inspect(peer);
+  const localRow = this.row(localId);
+  if (localRow.live_state !== "local-only") fail("key_retired");
+  const local = JSON.parse(localRow.bundle), inspection = this.inspect(peer);
   let other, verification, source;
   if (proposalDigest) {
    const row = this.db.prepare("SELECT proposal,expected_digest FROM proposals WHERE digest=? AND peer=? AND state='pending'").get(proposalDigest, peer);
@@ -500,7 +583,7 @@ export class LocalState {
 }
 
 // Public surface returns fixed recovery errors. Private provider/SQLite/JSON strings never escape.
-for (const name of ["status", "createBackup", "initialize", "reconcileInitialization", "loadIdentity", "inspect", "propose", "approve", "reject", "safetyCode"]) {
+for (const name of ["status", "rotationPlan", "rotateLocal", "createBackup", "initialize", "reconcileInitialization", "loadIdentity", "inspect", "propose", "approve", "reject", "safetyCode"]) {
  const action = LocalState.prototype[name];
  LocalState.prototype[name] = action.constructor.name === "AsyncFunction"
   ? async function (...args) { try { return await action.apply(this, args); } catch (error) { throw stateError(error); } }

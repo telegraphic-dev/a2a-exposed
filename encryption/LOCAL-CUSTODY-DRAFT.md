@@ -111,3 +111,29 @@ inspection show archive-only, and live-use loads remain refused. No automatic
 resend or delivery happens. A future separate fresh receiving identity and peer
 re-verification flow is required before live enrollment; it is not implemented.
 This is a local API checkpoint, with no working backup/restore CLI command yet.
+
+## Local receiving-key rotation
+
+`rotationPlan(id)` lists the exact current key/store and an action-specific
+approval digest bound to config, previous bundle and latest operation revision.
+`rotateLocal({id,approvalDigest,ownerApproved:true,allowOsConsent})` retains the
+Ed25519 identity and old X25519 keys, generates a fresh receiving key, and follows
+the same durable intent/write/commit/reconciliation rules as initialization.
+Concurrent plans produce only one successor. A failed write never retires the
+old current key; uncertain writes hold further rotation until exact recovery.
+Retired rows cannot authorize new trust proposals/approvals or safety-code claims.
+Existing peer bindings stay held after rotation until a new independently
+verified local-key proposal is approved; rotation grants no remote pairing.
+Backups include both old and new private keys, and restores retain them under
+the archive-only hold. There is no key deletion API or live key advertisement.
+
+Backup preflight checks the passphrase and destination existence before any
+credential read; a racing exclusive-create failure is backup_destination_exists.
+Restore syncs the SQLite file and staging directory, then the promoted directory
+and its parents where directory fsync is supported. Results distinguish
+file-and-directory-sync-completed from directory-sync-unverified. These record
+completed system calls, not proof of hardware power-loss durability. Unsupported
+platform directory sync remains unverified. A sync/I/O failure after promotion
+returns restore_installed_readback_failed and retains the archive-only target;
+it must not suggest an automatic overwrite/retry. Native/Windows durability and
+real power-loss behavior are untested.

@@ -69,3 +69,17 @@ test('failed staged install preserves a protected archive-only store and never r
  const staged=new LocalState(path.join(destination,stage),{write:true});t.after(()=>staged.close());assert.equal(staged.status().archive_only,true);await assert.rejects(initialized(staged),{code:'restore_archive_only'});
  assert.equal(fs.statSync(path.join(destination,stage)).mode&0o777,0o700);
 });
+
+test('backup preflights invalid password and existing output before any mock credential read',async t=>{
+ const values=new Map();let gets=0;const keyring=async input=>{const key=input.namespace+input.account;if(input.op==='set'){values.set(key,input.value);return;}gets++;return values.get(key)??null;};
+ const {state,backup}=fixture(t,{keyring});await state.initialize({store:'keychain',allowOsConsent:true,cardUrl:'https://local.example.com/card'});
+ await assert.rejects(state.createBackup({destination:backup,passphrase:Buffer.from('short'),allowOsConsent:true}),{code:'passphrase_input'});assert.equal(gets,0);
+ fs.writeFileSync(backup,'keep',{mode:0o600});await assert.rejects(state.createBackup({destination:backup,passphrase,allowOsConsent:true}),{code:'backup_destination_exists'});assert.equal(gets,0);assert.equal(fs.readFileSync(backup,'utf8'),'keep');
+});
+test('restore syncs promoted directory and reports uncertain post-promotion I/O failure',async t=>{
+ const {state,backup,destination}=fixture(t);await initialized(state);await state.createBackup({destination:backup,passphrase});
+ const sync=fs.fsyncSync;let sawCanonical=false;
+ fs.fsyncSync=fd=>{if(fs.existsSync(path.join(destination,'encryption/state.sqlite'))){sawCanonical=true;throw Object.assign(Error('synthetic sync failure'),{code:'EIO'});}return sync(fd);};
+ try{await assert.rejects(restoreBackup({source:backup,destination,passphrase,store:'file',acknowledgeReplayRollback:true}),{code:'restore_installed_readback_failed'});}finally{fs.fsyncSync=sync;}
+ assert.equal(sawCanonical,true);const restored=new LocalState(destination);t.after(()=>restored.close());assert.equal(restored.status().archive_only,true);
+});

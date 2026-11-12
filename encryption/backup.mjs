@@ -15,6 +15,7 @@ function passphraseBytes(input) {
  if (value.length < 12) { value.fill(0); fail("passphrase_input"); }
  return value;
 }
+export function validateBackupPassphrase(input) { const value = passphraseBytes(input); value.fill(0); return true; }
 const b64 = value => Buffer.from(value).toString("base64url");
 function raw(value, size, max) {
  if (typeof value !== "string" || value.length > Math.ceil((size || max) * 4 / 3) || !/^[A-Za-z0-9_-]+$/.test(value)) fail();

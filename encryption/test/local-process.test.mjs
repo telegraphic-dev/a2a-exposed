@@ -11,8 +11,8 @@ function fixture(t) {
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'a2a-custody-process-'));
  t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));return dir;
 }
-function child(t,dir,mode) {
- const proc=fork(fileURLToPath(new URL('./fixtures/local-process.mjs',import.meta.url)),[dir,mode],{execArgv:[],stdio:['ignore','ignore','ignore','ipc']});
+function child(t,dir,mode,localId) {
+ const proc=fork(fileURLToPath(new URL('./fixtures/local-process.mjs',import.meta.url)),[dir,mode,...(localId?[localId]:[])],{execArgv:[],stdio:['ignore','ignore','ignore','ipc']});
  t.after(()=>{if(proc.exitCode===null && proc.signalCode===null)proc.kill('SIGKILL');});
  const messages=[];let resolveReady;
  const ready=new Promise(resolve=>resolveReady=resolve);
@@ -73,4 +73,12 @@ test('earlier unreleased schema is refused without automatic migration',async t=
  const dir=fixture(t),state=new LocalState(dir,{create:true});state.db.exec('PRAGMA user_version=1');state.close();
  const file=path.join(dir,'encryption/state.sqlite'),before=fs.readFileSync(file);
  assert.throws(()=>new LocalState(dir,{create:true}),{code:'state_version_unsupported'});assert.deepEqual(fs.readFileSync(file),before);
+});
+
+
+test('two processes rotating the same approved key plan create only one successor',{timeout:15000},async t=>{
+ const dir=fixture(t),state=new LocalState(dir,{create:true});t.after(()=>state.close());const original=await state.initialize({store:'file',cardUrl:'https://local.example.com/card'});
+ const a=child(t,dir,'rotate',original.id),b=child(t,dir,'rotate',original.id);await Promise.all([a.ready,b.ready]);a.proc.send('start');b.proc.send('start');
+ const results=await Promise.all([a.exited,b.exited]);assert.ok(results.every(x=>x.code===0));const replies=results.flatMap(x=>x.messages).filter(x=>!x.ready);assert.equal(replies.filter(x=>x.ok).length,1);assert.ok(['initialization_pending','key_retired','approval_stale'].includes(replies.find(x=>!x.ok).code));
+ const status=state.status();assert.equal(status.identities.length,2);assert.equal(status.operations.length,2);assert.equal(status.identities.filter(x=>x.live_state==='local-only').length,1);assert.equal(status.identities.filter(x=>x.live_state==='retired').length,1);assert.equal(fs.readdirSync(state.root).filter(x=>x.endsWith('.key')).length,2);
 });

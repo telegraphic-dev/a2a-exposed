@@ -28,5 +28,5 @@ Run `npm ci --ignore-scripts` and `npm test` in this directory. Pack with
 
 The separate `./local-state` API is an incomplete local custody/trust checkpoint.
 See [local custody contracts](LOCAL-CUSTODY-DRAFT.md) for protected local backup
-and archive-only restore APIs. No CLI enrollment, rotation, replay/outbox
-consumption or live encrypted transport is enabled.
+and archive-only restore APIs. Local receiving-key rotation retains old keys under exact explicit approval.
+No CLI enrollment, replay/outbox consumption or live encrypted transport is enabled.

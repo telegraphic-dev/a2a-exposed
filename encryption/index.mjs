@@ -131,6 +131,16 @@ async function generateIdentityRaw(cardUrl, now = Date.now()) {
  const bundle = { ...body, signature: await sign(signing.privateKey, encode("a2a-exposed sealed key v1\n" + canonicalJSON(body))) };
  return { signingKey: signing.privateKey, encryptionKey: encryption.privateKey, bundle };
 }
+async function rotateEncryptionKeyRaw(identity, now = Date.now()) {
+ clock(now);
+ await verifyBundle(identity.bundle, { cardUrl: identity.bundle.cardUrl, identityKey: identity.bundle.identityKey, now });
+ const encryption = await suite.kem.generateKeyPair();
+ const body = { ...bundleBody(identity.bundle), encryptionKey: b64(await suite.kem.serializePublicKey(encryption.publicKey)), notBefore: new Date(now).toISOString() };
+ body.keyId = await digest(raw(body.encryptionKey, 32));
+ const bundle = { ...body, signature: await sign(identity.signingKey, encode("a2a-exposed sealed key v1\n" + canonicalJSON(body))) };
+ await verifyBundle(bundle, { cardUrl: body.cardUrl, identityKey: body.identityKey, now });
+ return { signingKey: identity.signingKey, encryptionKey: encryption.privateKey, bundle };
+}
 async function commitment(nonce, content) {
  const bytes = encode(canonicalJSON(content)), salt = raw(nonce, 32);
  const joined = new Uint8Array(salt.length + bytes.length); joined.set(salt); joined.set(bytes, salt.length);
@@ -198,5 +208,6 @@ async function safeCall(action) {
 }
 export const verifyBundle = (...args) => safeCall(() => verifyBundleRaw(...args));
 export const generateIdentity = (...args) => safeCall(() => generateIdentityRaw(...args));
+export const rotateEncryptionKey = (...args) => safeCall(() => rotateEncryptionKeyRaw(...args));
 export const seal = (...args) => safeCall(() => sealRaw(...args));
 export const open = (...args) => safeCall(() => openRaw(...args));
