@@ -8,6 +8,7 @@ import { CipherSuite, HkdfSha256 } from "@hpke/core";
 import { DhkemX25519HkdfSha256 } from "@hpke/dhkem-x25519";
 import { Chacha20Poly1305 } from "@hpke/chacha20poly1305";
 import { nativeCredentialOperation } from "./native-store.mjs";
+import { sealBackup, openBackup, MAX_BACKUP_FILE, BackupError } from "./backup.mjs";
 import { generateIdentity, verifyBundle, canonicalJSON, parseJSON, seal } from "./index.mjs";
 
 const suite = new CipherSuite({ kem: new DhkemX25519HkdfSha256(), kdf: new HkdfSha256(), aead: new Chacha20Poly1305() });
@@ -25,6 +26,7 @@ const fail = (code, next) => { throw new LocalStateError(code, next); };
 const copy = value => JSON.parse(JSON.stringify(value));
 function stateError(error) {
  if (error instanceof LocalStateError) return error;
+ if (error instanceof BackupError) return new LocalStateError(error.code, "The encrypted backup could not be validated. Check the protected passphrase source and use a trusted matching backup; nothing was installed.");
  if ([5, 6].includes(error?.errcode)) return new LocalStateError("state_busy", "Another local process holds the store. Read keys status --json after it finishes; no automatic retry or replacement was made.");
  if (error?.code === "ERR_SQLITE_ERROR" || error instanceof SyntaxError) return new LocalStateError("state_corrupt", "Local state could not be read safely. Preserve it and use a matching version or trusted backup; do not initialize over it.");
  if (["native_outcome_unknown", "native_process_unreaped", "key_store_unavailable", "key_store_consent"].includes(error?.code)) return new LocalStateError(error.code, "Read keys status --json and reconcile the exact pending key operation before retrying; no native write/deletion outcome is assumed.");
@@ -107,6 +109,117 @@ CREATE TABLE IF NOT EXISTS proposals(digest TEXT PRIMARY KEY,peer TEXT NOT NULL,
 CREATE TABLE IF NOT EXISTS replay(local_id TEXT NOT NULL,sender TEXT NOT NULL,message_id TEXT NOT NULL,digest TEXT NOT NULL,context TEXT NOT NULL,task_id TEXT,created_ms INTEGER NOT NULL,PRIMARY KEY(local_id,sender,message_id));
 CREATE TABLE IF NOT EXISTS deliveries(id TEXT PRIMARY KEY,local_id TEXT NOT NULL,sender TEXT NOT NULL,message_id TEXT NOT NULL,envelope TEXT NOT NULL,state TEXT NOT NULL,created_ms INTEGER NOT NULL);
 `;
+const SNAPSHOT_TABLES = ["meta", "key_operations", "identities", "trust", "trust_history", "proposals", "replay", "deliveries"];
+const exact = (value, fields) => value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).sort().join() === [...fields].sort().join();
+async function checkPrivate(value, bundle) {
+ const identity = await deserialize(value, bundle);
+ await seal({ identity, recipient: bundle, binding: { contextId: randomUUID(), messageId: randomUUID(), taskId: null, role: "user", state: null, kind: "message" }, content: { purpose: "backup-key-check" } });
+}
+async function validateSnapshot(snapshot, { checkCredentials = true } = {}) {
+ const invalid = () => fail("backup_snapshot_invalid", "The backup failed local schema/key validation. Nothing was installed; preserve the original file and use a trusted matching backup.");
+ if (!exact(snapshot, ["format", "v", "schema", "configIdentity", "createdMs", "rows", "credentials"]) || snapshot.format !== "a2a-exposed custody snapshot" || snapshot.v !== 1 || snapshot.schema !== SCHEMA_VERSION || !UUID.test(snapshot.configIdentity || "") || !Number.isSafeInteger(snapshot.createdMs) || snapshot.createdMs < 0 || !exact(snapshot.rows, SNAPSHOT_TABLES) || !Array.isArray(snapshot.credentials) || snapshot.credentials.length > 5000) invalid();
+ const db = new DatabaseSync(":memory:");
+ try {
+  db.exec(SCHEMA);
+  let total = 0;
+  for (const table of SNAPSHOT_TABLES) {
+   const rows = snapshot.rows[table], columns = db.prepare(`PRAGMA table_info(${table})`).all();
+   if (!Array.isArray(rows) || rows.length > 5000 || (total += rows.length) > 20000) invalid();
+   const insert = db.prepare(`INSERT INTO ${table} VALUES(${columns.map(() => "?").join(",")})`);
+   for (const row of rows) {
+    if (!exact(row, columns.map(x => x.name))) invalid();
+    for (const column of columns) {
+     const value = row[column.name];
+     if (value === null) { if (column.notnull || column.pk) invalid(); }
+     else if (column.type === "INTEGER" ? !Number.isSafeInteger(value) : typeof value !== "string" || Buffer.byteLength(value) > 1024 * 1024) invalid();
+    }
+    insert.run(...columns.map(column => row[column.name]));
+   }
+  }
+  const rows = snapshot.rows;
+  const config = rows.meta.find(row => row.key === "config_id");
+  if (config?.value !== snapshot.configIdentity || rows.meta.some(row => !["config_id", "restore_source_config", "restore_paused", "restore_created_ms", "restore_source_operations"].includes(row.key))) invalid();
+  const bundles = new Map(), operations = new Map();
+  for (const row of rows.key_operations) {
+   const op = parseJSON(row.public_json);
+   if (!exact(op, ["v", "kind", "id", "identityId", "bundle", "store", "namespace", "account", "fileRef", "created_ms"]) || op.v !== 1 || op.kind !== "initialize" || op.id !== row.id || row.kind !== "initialize" || !UUID.test(op.id) || !UUID.test(op.identityId) || !UUID.test(op.namespace) || !["file", "keychain"].includes(op.store) || op.account !== op.identityId + "/" + op.bundle?.keyId || op.fileRef !== op.identityId + ".key" || !Number.isSafeInteger(op.created_ms) || op.created_ms < 0 || !Number.isSafeInteger(row.revision) || row.revision < 0 || !["committed", "orphan-retained", "observed-absent"].includes(row.state) || hash("a2a-exposed local key operation v1", op) !== row.digest || operations.has(op.identityId)) invalid();
+   await verifyBundle(op.bundle, { cardUrl: op.bundle.cardUrl, identityKey: op.bundle.identityKey });
+   bundles.set(op.identityId, op.bundle); operations.set(op.identityId, row);
+  }
+  for (const [id, row] of operations) if (row.state === "committed" && !rows.identities.some(identity => identity.id === id)) invalid();
+  for (const row of rows.identities) {
+   const bundle = parseJSON(row.bundle), opRow = operations.get(row.id), op = opRow && parseJSON(opRow.public_json);
+   if (!op || opRow.state !== "committed" || canonicalJSON(bundle) !== canonicalJSON(op.bundle) || row.store !== op.store || row.credential_namespace !== op.namespace || !["local-only", "archive-only"].includes(row.live_state)) invalid();
+  }
+  const seen = new Set();
+  for (const credential of checkCredentials ? snapshot.credentials : []) {
+   if (!exact(credential, ["id", "value"]) || !bundles.has(credential.id) || seen.has(credential.id)) invalid();
+   seen.add(credential.id);
+   if (credential.value === null) { if (operations.get(credential.id).state !== "observed-absent") invalid(); }
+   else { if (typeof credential.value !== "string" || Buffer.byteLength(credential.value) > 16384) invalid(); await checkPrivate(credential.value, bundles.get(credential.id)); }
+  }
+  if (checkCredentials && seen.size !== operations.size) invalid();
+  for (const row of [...rows.trust, ...rows.trust_history]) {
+   const record = parseJSON(row.record);
+   if (record.peer !== row.peer || record.version !== row.version || !bundles.has(record.localId) || !POLICIES.includes(record.policy)) invalid();
+   await verifyBundle(record.bundle, { cardUrl: record.bundle.cardUrl, identityKey: record.bundle.identityKey });
+   if (row.digest && hash("a2a-exposed sealed trust record v1", record) !== row.digest) invalid();
+  }
+  for (const row of rows.proposals) if (hash("a2a-exposed sealed trust proposal v1", parseJSON(row.proposal)) !== row.digest) invalid();
+ } catch (error) { if (error instanceof LocalStateError) throw error; invalid(); }
+ finally { db.close(); }
+}
+
+// Restores only into a newly reserved private directory. No OS credential writes.
+export async function restoreBackup({ source, destination, passphrase, store, acknowledgeReplayRollback = false }) {
+ let stage, targetCreated = false, installed = false;
+ try {
+  if (acknowledgeReplayRollback !== true) fail("restore_ack_required", "Restore can roll back replay history. Explicitly acknowledge this and use a new directory; restored keys remain archive-only.");
+  if (store !== "file") fail("restore_store", "This checkpoint supports explicit restore store file only. No native credential write or fallback is performed.");
+  if (typeof source !== "string" || !path.isAbsolute(source) || typeof destination !== "string" || !path.isAbsolute(destination)) fail("restore_paths", "Supply protected source-file and new absolute destination-directory paths.");
+  if (fs.existsSync(destination)) fail("restore_destination_exists", "Choose a new nonexistent directory; restore never merges or overwrites existing state.");
+  const snapshot = openBackup(privateRead(source, MAX_BACKUP_FILE), passphrase);
+  await validateSnapshot(snapshot); // Validate every key/row before creating target state.
+  fs.mkdirSync(destination, { mode: 0o700 }); targetCreated = true; protect(destination);
+  stage = fs.mkdtempSync(path.join(destination, ".restore-")); protect(stage);
+  const state = new LocalState(stage, { create: true });
+  try {
+   // Persist the archive-only hold before any private file is created. A crash
+   // rolling back row import must never leave a usable fresh staging store.
+   state.db.prepare("INSERT INTO meta VALUES('restore_paused','1')").run();
+   state.db.exec("BEGIN IMMEDIATE");
+   const newConfig = randomUUID(), rows = snapshot.rows;
+   // Operational approvals/pins from a rolled-back copy cannot become live state.
+   const meta = [{ key: "config_id", value: newConfig }, { key: "restore_source_config", value: snapshot.configIdentity }, { key: "restore_paused", value: "1" }, { key: "restore_created_ms", value: String(Date.now()) }, { key: "restore_source_operations", value: hash("a2a-exposed restored source operations v1", rows.key_operations) }];
+   state.db.exec("DELETE FROM meta");
+   for (const table of SNAPSHOT_TABLES) {
+    let records = table === "meta" ? meta : rows[table];
+    if (table === "identities") records = records.map(row => ({ ...row, store: "file", live_state: "archive-only" }));
+    if (table === "key_operations") records = records.map(row => {
+     const op = { ...parseJSON(row.public_json), store: "file" };
+     return { ...row, public_json: canonicalJSON(op), digest: hash("a2a-exposed local key operation v1", op), revision: row.revision + 1, owner_pid: 0, broker_pid: null };
+    });
+    const columns = state.db.prepare(`PRAGMA table_info(${table})`).all().map(column => column.name);
+    const insert = state.db.prepare(`INSERT INTO ${table} VALUES(${columns.map(() => "?").join(",")})`);
+    for (const row of records) insert.run(...columns.map(column => row[column]));
+   }
+   for (const credential of snapshot.credentials) if (credential.value !== null) privateWrite(path.join(state.root, credential.id + ".key"), credential.value + "\n");
+   state.db.exec("COMMIT"); validateSchema(state.db);
+  } catch (error) { try { state.db.exec("ROLLBACK"); } catch {} throw error; }
+  finally { state.close(); }
+  // Parent was exclusively reserved above. The canonical encryption path appears
+  // only after all rows/credentials have been validated and written successfully.
+  fs.renameSync(path.join(stage, "encryption"), path.join(destination, "encryption")); installed = true;
+  fs.rmdirSync(stage); stage = null;
+  const readback = new LocalState(destination);
+  try { return { ok: true, config_identity: readback.configId(), source_config_identity: snapshot.configIdentity, archive_only: true, replay_rollback_acknowledged: true, identities: snapshot.rows.identities.length, next: "Restored keys and pins are archive-only. Live delivery stays paused; a new receiving identity and independent peer verification are required before later enrollment." }; }
+  finally { readback.close(); }
+ } catch (error) {
+  if (targetCreated) fail(installed ? "restore_installed_readback_failed" : "restore_staging_incomplete", "The new private destination is retained for inspection. Nothing was merged into another configuration; do not overwrite or retry over it.");
+  throw stateError(error);
+ }
+}
+
 function validateSchema(db) {
  const expected = new DatabaseSync(":memory:");
  try {
@@ -158,6 +271,7 @@ export class LocalState {
  configId() { this.ready(); return this.db.prepare("SELECT value FROM meta WHERE key='config_id'").get().value; }
  async locked(action) {
   this.ready(); if (!this.writable) fail("state_readonly");
+  if (this.db.prepare("SELECT value FROM meta WHERE key='restore_paused'").get()?.value === "1") fail("restore_archive_only", "Restored state cannot authorize live keys or trust. Keep it for archives; create a separate fresh receiving identity and re-verify peers.");
   const previous = queues.get(this.root) || Promise.resolve(); let release;
   const own = new Promise(resolve => { release = resolve; }), tail = previous.then(() => own); queues.set(this.root, tail);
   await previous;
@@ -172,7 +286,7 @@ export class LocalState {
   const identities = rows.slice(0, limit).map(row => ({ id: row.id, bundle: JSON.parse(row.bundle), key_store: row.store, live_state: row.live_state, created_ms: row.created_ms }));
   const opRows = this.db.prepare("SELECT rowid AS cursor,id,public_json,digest,state,created_ms,broker_pid,revision FROM key_operations WHERE rowid>? ORDER BY rowid LIMIT ?").all(operationCursor, limit + 1);
   const operations = opRows.slice(0, limit).map(row => ({ id: row.id, operation: JSON.parse(row.public_json), digest: row.digest, state: row.state, created_ms: row.created_ms, broker_pid: row.broker_pid, revision: row.revision, recovery_choices: row.state === "committed" ? [] : ["adopt", "abandon-if-absent"].map(action => ({ action, approval_digest: recoveryApproval(this.configId(), row, action) })) }));
-  return { ok: true, configured: Boolean(this.db.prepare("SELECT id FROM identities LIMIT 1").get()), config_identity: this.configId(), identities, operations, next_identity_cursor: rows.length > limit ? rows[limit - 1].cursor : null, next_operation_cursor: opRows.length > limit ? opRows[limit - 1].cursor : null, next: "Continue listings with the returned cursors. For pending key creation, reconcile the exact operation/digest; do not repeat initialization." };
+  return { ok: true, configured: Boolean(this.db.prepare("SELECT id FROM identities LIMIT 1").get()), config_identity: this.configId(), archive_only: this.db.prepare("SELECT value FROM meta WHERE key='restore_paused'").get()?.value === "1", identities, operations, next_identity_cursor: rows.length > limit ? rows[limit - 1].cursor : null, next_operation_cursor: opRows.length > limit ? opRows[limit - 1].cursor : null, next: "Continue listings with the returned cursors. For pending key creation, reconcile the exact operation/digest; do not repeat initialization." };
  }
 
  row(id) { this.ready(); const row = this.db.prepare("SELECT * FROM identities WHERE id=?").get(id); if (!row) fail("key_unknown", "Select an exact identity ID from keys status --json."); return row; }
@@ -189,6 +303,49 @@ export class LocalState {
    fail("key_store_unavailable");
   }
  }
+ async createBackup({ destination, passphrase, allowOsConsent = false }) {
+  this.ready();
+  if (typeof destination !== "string" || !path.isAbsolute(destination)) fail("backup_destination", "Choose a new absolute backup file path; existing files are never overwritten.");
+  let source;
+  try {
+   // A separate read transaction provides one consistent public-state snapshot even
+   // while another process proposes trust changes. Key references are immutable.
+   source = new DatabaseSync(path.join(this.root, "state.sqlite"), { readOnly: true });
+   source.exec("PRAGMA busy_timeout=5000; BEGIN"); validateSchema(source);
+   const rows = {};
+   for (const table of SNAPSHOT_TABLES) {
+    rows[table] = source.prepare(`SELECT * FROM ${table} LIMIT 5001`).all().map(row => ({ ...row }));
+    if (rows[table].length > 5000) fail("backup_too_large");
+   }
+   if (rows.key_operations.some(row => !["committed", "orphan-retained", "observed-absent"].includes(row.state))) fail("backup_recovery_required", "Run keys status --json and reconcile pending key creation before backing up. No incomplete backup was written.");
+   const snapshot = { format: "a2a-exposed custody snapshot", v: 1, schema: SCHEMA_VERSION, configIdentity: rows.meta.find(row => row.key === "config_id")?.value, createdMs: Date.now(), rows, credentials: [] };
+   await validateSnapshot(snapshot, { checkCredentials: false }); // Refuse corrupt paths/references before credential access.
+   const credentials = snapshot.credentials;
+   for (const row of rows.key_operations) {
+    const operation = JSON.parse(row.public_json);
+    if (row.broker_pid) {
+     try { process.kill(row.broker_pid, 0); fail("operation_in_progress"); }
+     catch (error) { if (error instanceof LocalStateError || error.code !== "ESRCH") throw new LocalStateError("operation_in_progress"); }
+    }
+    let value;
+    if (operation.store === "keychain") {
+     if (allowOsConsent !== true) fail("key_store_consent");
+     value = await this.keyring({ op: "get", namespace: operation.namespace, account: operation.account }, allowOsConsent);
+    } else {
+     try { value = privateRead(path.join(this.root, operation.fileRef)); }
+     catch (error) { if (error.code !== "ENOENT") throw error; value = null; }
+    }
+    if (value == null && row.state !== "observed-absent") fail("key_lost");
+    credentials.push({ id: operation.identityId, value: value ?? null });
+   }
+   await validateSnapshot(snapshot);
+   const encrypted = sealBackup(snapshot, passphrase);
+   source.exec("COMMIT"); source.close(); source = null;
+   privateWrite(destination, encrypted);
+   return { ok: true, config_identity: snapshot.configIdentity, identities: rows.identities.length, archived_credentials: credentials.filter(row => row.value !== null).length, observed_absent_credentials: credentials.filter(row => row.value === null).length, next: "Keep this encrypted file and its passphrase separately. Restore only into a new private directory; restored keys are archive-only." };
+  } finally { try { source?.exec("ROLLBACK"); source?.close(); } catch {} }
+ }
+
  async initialize({ store, cardUrl, allowOsConsent = false, now = Date.now() }) {
   if (!["file", "keychain"].includes(store)) fail("key_store", "Select --store from keys stores --json; no store is chosen automatically.");
   if (store === "keychain" && allowOsConsent !== true) fail("key_store_consent", "OS credential access needs explicit true consent; use the file store for unattended operation. Run keys stores --json.");
@@ -283,7 +440,7 @@ export class LocalState {
   const pending = this.db.prepare("SELECT digest FROM proposals WHERE peer=? AND state='pending' LIMIT 1").get(peer);
   const historyRows = this.db.prepare("SELECT version,record,digest,approved_ms FROM trust_history WHERE peer=? AND version>? ORDER BY version LIMIT ?").all(peer, historyVersion, limit + 1);
   const history = historyRows.slice(0, limit).map(x => ({ version: x.version, record: JSON.parse(x.record), digest: x.digest, approved_ms: x.approved_ms }));
-  return { ok: true, config_identity: this.configId(), peer, current, history, next_proposal_cursor: proposalRows.length > limit ? proposalRows[limit - 1].cursor : null, next_history_version: historyRows.length > limit ? historyRows[limit - 1].version : null, live_state: pending ? "change-pending" : current?.state || "unpinned", pairing: "not-checked", policies: [...POLICIES], verification_choices: ["tofu", "independent"], current_digest: row ? hash("a2a-exposed sealed trust record v1", current) : "none", current_version: row?.version || 0, proposals };
+  return { ok: true, config_identity: this.configId(), peer, current, history, next_proposal_cursor: proposalRows.length > limit ? proposalRows[limit - 1].cursor : null, next_history_version: historyRows.length > limit ? historyRows[limit - 1].version : null, live_state: this.db.prepare("SELECT value FROM meta WHERE key='restore_paused'").get()?.value === "1" ? "archive-only" : pending ? "change-pending" : current?.state || "unpinned", pairing: "not-checked", policies: [...POLICIES], verification_choices: ["tofu", "independent"], current_digest: row ? hash("a2a-exposed sealed trust record v1", current) : "none", current_version: row?.version || 0, proposals };
  }
  async propose({ peer, localId, bundle, pairingIdentity, expectedCurrent, policy, verification, operation = "enroll", now = Date.now() }) {
   if (typeof peer !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(peer) || !KEY.test(pairingIdentity || "") || !POLICIES.includes(policy) || !["tofu", "independent"].includes(verification) || !["enroll", "rotate", "re-pair", "policy", "verify", "revoke"].includes(operation)) fail("proposal_inputs", "Run peer keys inspect --to ALIAS --json, then supply explicit policy, verification, pairing identity and expected current digest.");
@@ -343,7 +500,7 @@ export class LocalState {
 }
 
 // Public surface returns fixed recovery errors. Private provider/SQLite/JSON strings never escape.
-for (const name of ["status", "initialize", "reconcileInitialization", "loadIdentity", "inspect", "propose", "approve", "reject", "safetyCode"]) {
+for (const name of ["status", "createBackup", "initialize", "reconcileInitialization", "loadIdentity", "inspect", "propose", "approve", "reject", "safetyCode"]) {
  const action = LocalState.prototype[name];
  LocalState.prototype[name] = action.constructor.name === "AsyncFunction"
   ? async function (...args) { try { return await action.apply(this, args); } catch (error) { throw stateError(error); } }

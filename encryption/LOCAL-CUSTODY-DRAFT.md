@@ -1,8 +1,8 @@
 # Local custody/trust API — implementation checkpoint
 
 This branch adds a local-state API, not CLI enrollment or encrypted transport.
-Backup/restore, retained local encryption-key rotation, authenticated delivery
-ledger/outbox consumption and the complete CLI/stdio MCP flow are still pending.
+Retained local encryption-key rotation, authenticated delivery ledger/outbox
+consumption and the complete CLI/stdio MCP flow are still pending.
 The current SQLite table stubs are not a replay/delivery implementation.
 
 `stores()` lists explicit choices without creating credentials. `LocalState`
@@ -65,8 +65,8 @@ structure and integrity are checked without migration or replacement. Public
 status/proposal/history listings have explicit bounded continuation inputs.
 
 The isolated backup byte-format primitive uses bounded scrypt and authenticated
-AES-GCM. It does not yet export/restore the local store or enable restored live
-keys. Cross-process tests cover racing initialization and process death after a
+AES-GCM. The local store snapshot API described below uses it; it never enables restored
+live keys. Cross-process tests cover racing initialization and process death after a
 mock credential write; native lifecycle tests use simulated child processes only.
 
 Recovery approval is action-specific. Each operation listing includes a monotonic
@@ -79,3 +79,35 @@ final SQLite transaction compares the original state/revision/digest before
 changing it. A stale adoption rolls back any identity insertion. List and obtain
 a new approval rather than reusing an earlier one. The unreleased schema is now
 version 2; earlier draft stores are preserved and refused, never auto-migrated.
+
+
+## Protected backup and archive-only restore API
+
+`state.createBackup({destination,passphrase,allowOsConsent})` takes a separate
+consistent SQLite read transaction, validates bounded static-table rows and all
+private/public key pairs, encrypts them, then writes a new exclusive protected
+file. Passphrase is an in-process Uint8Array from a protected source, never a
+command argument or tool-visible field. Credentials stay out of public output.
+Known lost keys and unresolved credential writes refuse backup. An explicitly
+observed-absent credential remains catalogued and counted as absent; the backup
+cannot recover a credential written after that observation/snapshot.
+
+`restoreBackup({source,destination,passphrase,store:"file",
+acknowledgeReplayRollback:true})` requires a new destination, explicit file-store
+selection and replay-rollback acknowledgment. Native restores are unsupported;
+there is no silent store fallback. Validate every decrypted row and available
+key before creating a target directory. Import uses a private staging directory
+with a durably recorded archive-only hold before private writes, then atomically
+installs the canonical encryption directory. A failed/interrupted stage remains
+protected for inspection; never overwrite it on retry. Existing targets are
+never merged. The encrypted source backup remains the recovery source.
+
+The restored config gets a fresh config UUID and records its source UUID and
+public operation provenance hash. Private keys, historical pins, proposals,
+replay rows and pending delivery IDs are retained; original provider credentials
+are converted to explicitly selected protected files. The global restore hold
+blocks key initialization, recovery actions and trust writes; identity rows and
+inspection show archive-only, and live-use loads remain refused. No automatic
+resend or delivery happens. A future separate fresh receiving identity and peer
+re-verification flow is required before live enrollment; it is not implemented.
+This is a local API checkpoint, with no working backup/restore CLI command yet.

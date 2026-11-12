@@ -24,9 +24,9 @@ function raw(value, size, max) {
 }
 function keyFor(passphrase, salt) { return scryptSync(passphrase, salt, 32, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }); }
 export function sealBackup(snapshot, passphrase) {
- let password, key;
+ let password, key, plaintext;
  try {
-  const plaintext = Buffer.from(canonicalJSON(snapshot));
+  plaintext = Buffer.from(canonicalJSON(snapshot));
   if (plaintext.length > MAX_BACKUP_PLAINTEXT) fail("backup_too_large");
   password = passphraseBytes(passphrase);
   const salt = randomBytes(32), nonce = randomBytes(12);
@@ -38,7 +38,7 @@ export function sealBackup(snapshot, passphrase) {
   if (Buffer.byteLength(text) > MAX_BACKUP_FILE) fail("backup_too_large");
   return text + "\n";
  } catch (error) { if (error instanceof BackupError) throw error; fail(); }
- finally { password?.fill(0); key?.fill(0); }
+ finally { password?.fill(0); key?.fill(0); plaintext?.fill(0); }
 }
 export function openBackup(text, passphrase) {
  let password, key, plaintext;

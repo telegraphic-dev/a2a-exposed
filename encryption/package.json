@@ -15,7 +15,9 @@
     "local-state.mjs",
     "keyring-worker.mjs",
     "native-store.mjs",
-    "backup.mjs"
+    "backup.mjs",
+    "LOCAL-CUSTODY-DRAFT.md",
+    "DEPENDENCIES.md"
   ],
   "scripts": {
     "test": "node --test test/*.test.mjs",
