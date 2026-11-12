@@ -127,3 +127,17 @@ test('binary keys and nonces refuse own getters and extra fields without invokin
  const fake=Object.create(Buffer.prototype);Object.defineProperty(fake,'length',{get(){calls++;return 32;}});refuse(()=>createContinuationRecords(fake,nonce,binding));
  assert.equal(calls,0);
 });
+
+
+test('file-only finalization authenticates only in its diagnosing process, including unchanged checks',()=>{
+ const f=setup();f.members=f.members.map(m=>f.c.bindMember({...Object.fromEntries(Object.entries(m).filter(([k])=>!['credential_mac','process_mac'].includes(k))),credential_source:'file'},'synthetic-file'));
+ f.plan=f.c.bindPlan({baseline_revision:0,source_mac:f.source_mac,plan_nonce:d(40),members:f.members,excluded_aliases:['omitted']});f.attestation=f.c.bindAttestation(f.plan,f.evidence);f.intent=f.c.bindIntent(id(22),f.plan,f.attestation);
+ const canonical=value=>Array.isArray(value)?'['+value.map(canonical).join(',')+']':value&&typeof value==='object'?'{'+Object.keys(value).sort().map(k=>JSON.stringify(k)+':'+canonical(value[k])).join(',')+'}':JSON.stringify(value);
+ const B=[binding.root,binding.config_identity,binding.epoch,binding.set_id],Q=f.members.map(m=>[m.grant_id,createHmac('sha256',key).update('sealed continuation member v1\n'+canonical([B,m])).digest('base64url')]);
+ const input=fields(f,{kind:'finalize',source_mac:f.source_mac,current_member_macs:Q},{action:'finalize-exact-set',checkpoint:'R',state:'ready'}),old=f.c.bindReconciliation(f.intent,input);
+ assert.deepEqual(f.c.authenticateReconciliation(f.intent,old),old);assert.equal(f.c.assertUnchanged(f.intent,old,old),true);
+ const restarted=createContinuationRecords(key,Buffer.alloc(32,9),binding);refuse(()=>restarted.authenticateReconciliation(f.intent,old));refuse(()=>restarted.assertUnchanged(f.intent,old,old));
+ const fresh=restarted.bindReconciliation(f.intent,input);assert.deepEqual(restarted.authenticateReconciliation(f.intent,fresh),fresh);assert.equal(restarted.assertUnchanged(f.intent,fresh,fresh),true);assert.notEqual(old.process_mac,fresh.process_mac);assert.notEqual(old.mac,fresh.mac);
+ refuse(()=>restarted.authenticateReconciliation(f.intent,{...old,process_mac:fresh.process_mac}));refuse(()=>restarted.authenticateReconciliation(f.intent,{...fresh,payload:{...fresh.payload,approval_nonce:d(99)}}));
+ const missing=copy(fresh);delete missing.process_mac;refuse(()=>restarted.authenticateReconciliation(f.intent,missing));
+});

@@ -106,7 +106,8 @@ human approval, independent comparison or current authority. Fresh-use checks
 apply a bounded comparison lifetime; expired intents remain inspectable for
 no-grant abandonment. Abandonment distinguishes absent, empty and nonempty values
 in both original sources. Its observations bind the diagnosing process, including
-file-only plans. A restarted process can diagnose missing old environment values
+file-only plans and finalization. The reconciliation MAC authenticates both its
+payload and an explicit process commitment. A restarted process can diagnose missing old environment values
 for abandonment, but cannot reuse the old process's reconciliation approval.
 Finalize-shaped records require the exact ready set, original source/member
 commitments and the environment process binding. Structural validity alone never

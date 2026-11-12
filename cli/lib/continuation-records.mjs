@@ -40,7 +40,7 @@ function member(m){
  if(m.credential_source==='file'){if(m.process_mac!==null)fail();}else digest(m.process_mac);
  if(typeof m.endpoint!=='string')fail();let url;try{url=new URL(m.endpoint);}catch{fail();}if(url.href!==m.endpoint||url.protocol!=='https:'||url.username||url.password||url.search||url.hash)fail();
 }
-function packet(v){exact(v,['payload','mac']);digest(v.mac);}
+function packet(v){exact(v,['payload','process_mac','mac']);digest(v.process_mac);digest(v.mac);}
 
 export function createContinuationRecords(keyBytes,processNonce,binding){
  const key=bytes(keyBytes),nonce=bytes(processNonce).toString('base64url'),b=clone(binding);
@@ -96,7 +96,7 @@ export function createContinuationRecords(keyBytes,processNonce,binding){
   if(x.action==='finish-abandon'){if(!['I','C'].includes(x.authority_checkpoint)||state!=='void')fail();}
   else if(x.action==='finalize-exact-set'){if(x.authority_checkpoint!=='R'||state!=='ready'||x.observations?.kind!=='finalize')fail();}
   else if(!(x.authority_checkpoint==='I'&&x.sdk_row===null||['S','C'].includes(x.authority_checkpoint)&&state==='staged'||x.authority_checkpoint==='R'&&state==='ready'))fail();
-  if(x.action!=='finalize-exact-set'&&x.observations?.kind!=='no-grant-abandon')fail();observations(x.observations,intent);compareMac(value.mac,H('sealed continuation reconcile v1',x));
+  if(x.action!=='finalize-exact-set'&&x.observations?.kind!=='no-grant-abandon')fail();observations(x.observations,intent);compareMac(value.process_mac,H('sealed continuation reconcile process v1',[B,intent.id,nonce]));compareMac(value.mac,H('sealed continuation reconcile v2',[x,value.process_mac]));
  }
  return{
   sourceMac(input){const s=clone(input);exact(s,['configEnv','peers']);for(const v of Object.values(s))if(v!==null&&typeof v!=='string')fail();return H('sealed continuation source v1',[b.root,b.config_identity,b.epoch,[['config.env',s.configEnv!==null,s.configEnv],['peers.json',s.peers!==null,s.peers]]]);},
@@ -111,7 +111,7 @@ export function createContinuationRecords(keyBytes,processNonce,binding){
   assertFresh(value,now){value=clone(value);intentRecord(value);integer(now);const a=value.attestation.attestation;if(now<a.created_ms||now>=a.expires_ms)fail('continuation_attestation_expired');return value;},
   observeAbandonment(value,input){value=clone(value);intentRecord(value);const v=clone(input);exact(v,['source_mac','environment','fileValues']);digest(v.source_mac);for(const obj of [v.environment,v.fileValues]){if(!obj||Array.isArray(obj)||typeof obj!=='object')fail();for(const val of Object.values(obj))if(typeof val!=='string')fail();}
    const result={kind:'no-grant-abandon',source_mac:v.source_mac,members:value.record.plan.members.map(m=>({grant_id:m.grant_id,original_member_mac:memberMac(m),process_status:m.credential_source==='file'?'not-applicable':m.process_mac===processMac(m)?'same':'unavailable',current_process_mac:H('sealed continuation abandon process v1',[b.root,b.config_identity,b.epoch,value.id,nonce]),environment:abandonValue(value.id,m,'environment',Object.hasOwn(v.environment,m.credential_variable)?v.environment[m.credential_variable]:null),file:abandonValue(value.id,m,'file',Object.hasOwn(v.fileValues,m.credential_variable)?v.fileValues[m.credential_variable]:null)}))};observations(result,value);return result;},
-  bindReconciliation(value,input){value=clone(value);intentRecord(value);const x=clone(input);const result={payload:x,mac:H('sealed continuation reconcile v1',x)};reconciliationRecord(result,value);return result;},
+  bindReconciliation(value,input){value=clone(value);intentRecord(value);const x=clone(input),process_mac=H('sealed continuation reconcile process v1',[B,value.id,nonce]);const result={payload:x,process_mac,mac:H('sealed continuation reconcile v2',[x,process_mac])};reconciliationRecord(result,value);return result;},
   authenticateReconciliation(value,approval){value=clone(value);intentRecord(value);approval=clone(approval);reconciliationRecord(approval,value);return approval;},
   assertUnchanged(value,approval,current){value=clone(value);intentRecord(value);approval=clone(approval);current=clone(current);reconciliationRecord(approval,value);reconciliationRecord(current,value);same(approval,current);return true;}
  };
