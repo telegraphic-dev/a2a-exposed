@@ -125,9 +125,46 @@ selected tokens are privileged in-memory inputs and must never be tool output.
 
 These modules are not imported by a CLI command, Worker, MCP route or SDK adapter.
 They create no file, credential, grant or approval and perform no network call.
-Authority leases, authenticated membership and human provenance, durable intent
+Host authority integration, authenticated membership and human provenance, durable intent
 storage, the continuation coordinator and admission remain unfinished. Comparing
 snapshots does not prevent an undetectable change-and-restore between reads.
+
+## Internal local pairing authority
+
+`cli/lib/pairing-authority.mjs` is a private POSIX-only coordinator for cooperating
+local host writers. No CLI command, MCP/Worker route or SDK adapter imports it.
+It requires a private configuration directory and explicit UUID configuration
+identity. Initialization exclusively reserves private SQLite and marker files;
+partial initialization is preserved and refused rather than reset on retry.
+Diagnostics reveal state and revisions without source bytes or recovery keys.
+
+A SQLite write lease serializes cooperating readers and writers. A synchronous
+writer must supply the current revision. The authority commits a pending intent
+before calling the writer, then commits the new source fingerprint only after
+success. A crash or failed callback can leave changed source files and a pending
+intent; an error never promises rollback of those files. Async readers/writers,
+stale revisions, source drift and exhausted revisions refuse. Methods on a source view refuse after the synchronous callback returns; callers
+remain responsible for any source text or credentials they copy from that view.
+
+Operations bind the requested and resolved root, marker and database file
+instances before and after path I/O. Root replacement, alias retargeting and
+identical-byte file replacement refuse. The source reader validates the actual
+bounded bytes it parses against the authority fingerprint under the same lease.
+Suspended authority refuses source snapshots and grant-facing reads.
+
+Read-only recovery planning lists an exact quarantine action and keyed approval
+token bound to revision, intent, source observations and file instances. Applying
+it requires those explicit values plus human approval supplied by the host.
+Quarantine retains files and suspends grants; it never resumes authorization.
+Reverification and resume are unimplemented. Supplying `ownerApproved` is a
+caller attestation, not evidence that a human approved.
+
+These primitives do not establish authenticated pairing membership, independent
+human comparison or current host authorization. They do not wire existing host
+writers into the lease, protect against a malicious same-user process, or prevent
+undetectable change-and-restore between observations. Native Windows validation,
+OS credential-store acceptance, host-grant backup, durable continuation storage,
+the coordinator and live transport acceptance remain unfinished.
 
 ## Remaining integration boundaries
 
