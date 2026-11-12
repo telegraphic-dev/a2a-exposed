@@ -2,11 +2,6 @@
 
 ## Unreleased
 
-- Add internal local SDK maintenance transactions and immutable staged host-grant
-  records. These records grant no live authority and enable no messaging route.
-  Unreleased schema 6 preserves/refuses older drafts; nonempty host-grant history
-  deliberately refuses backup/restore until archival semantics are implemented.
-
 - Add separately opted-in HTTP relay profiles for fixed local webhooks and native
   A2A JSON-RPC services, with original request bytes/application authentication,
   real receiver responses, rewritten discovery and bounded incremental SSE.
