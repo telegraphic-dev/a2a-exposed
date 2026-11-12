@@ -224,6 +224,7 @@ export async function status(o = {}) {
 }
 
 export async function wake(sub, o = {}) {
+	if (Object.keys(o).some(key => /^access-client-(?:id|secret)(?:-|$)/.test(key))) fail("access_options_removed", "Hosted wake Access credential options were removed. Run hosted capabilities --json, then use Import your existing tunnel or Create secure link in dashboard Wake settings. Facade hosted upstream options are unchanged.");
 	if (!["preview", "test", "set", "prepare", "remove", "unset"].includes(sub)) fail("usage", "Use wake preview|test|set|prepare|remove. List presets with hosted capabilities --json.");
 	const removing = sub === "remove" || sub === "unset";
  const preparingRemoval = sub === "prepare" && o.clear === true;
@@ -279,8 +280,7 @@ export async function wake(sub, o = {}) {
 	if (problem) fail("url", "Pass --url with a public HTTPS webhook URL without credentials. Use polling if no public webhook is available.");
 	const available = await capabilities({ "control-url": origin });
 	if (!available.presets.includes(preset)) fail("preset", "Select --preset from hosted capabilities --json.");
-	const draft = { version: current.version, url, preset, keyHeader: o["key-header"] ?? current.keyHeader ?? "", key: secret(o, "key"), hmacSecret: secret(o, "hmac-secret"), accessClientId: secret(o, "access-client-id"), accessClientSecret: secret(o, "access-client-secret") };
-	if (Boolean(draft.accessClientId) !== Boolean(draft.accessClientSecret)) fail("access", "Supply both Access credentials through protected files or named environment variables.");
+	const draft = { version: current.version, url, preset, keyHeader: o["key-header"] ?? current.keyHeader ?? "", key: secret(o, "key"), hmacSecret: secret(o, "hmac-secret") };
 	let body = draft;
 	if (sub === "prepare" || (sub === "set" && available.secret_reference && token.startsWith("a2asg_"))) {
 		if (!available.secret_reference) fail("unsupported", "This service does not support wake references. Use wake set or browser confirmation.");

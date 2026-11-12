@@ -1,7 +1,7 @@
 # Agent contributor guide
 
 This public repository, `telegraphic-dev/a2a-exposed`, provides a Cloudflare
-A2A endpoint Worker, the zero-dependency `a2a-exposed` CLI, MCP, two agent
+A2A endpoint Worker, the `a2a-exposed` CLI, MCP, two agent
 skills, and `@a2a-exposed/control-core`. The hosted service pins its releases;
 a package release does not update that service. User documentation lives in
 [docs/](docs/README.md); this file guides contributors with no prior context.
@@ -18,7 +18,9 @@ a package release does not update that service. User documentation lives in
    tenant isolation and the security invariants below.
 5. Both migration directories are append-only: add a unique numbered migration;
    never edit an existing migration or reuse its number.
-6. Keep `cli/` dependency-free, and keep `control/` out of its package.
+6. Keep CLI runtime dependencies limited to the approved standalone
+   `@a2a-exposed/encryption` package, with HPKE dependencies isolated there.
+   Keep `control/` out of the CLI package.
 7. Start from up-to-date `main`, use a branch, and open a PR against `main`.
    Keep dependency bumps separate from feature work.
 8. Run the complete local suite before pushing, including the storage matrix.
@@ -34,6 +36,8 @@ a package release does not update that service. User documentation lives in
 Use Node **22.18+**, npm, Python 3 with venv/pip, and Git. There is no root
 workspace install and no CLI dependency install. Install locked dependencies
 with `npm ci --no-audit --no-fund` separately in `worker/` and `control/`.
+Use `npm ci --ignore-scripts --no-audit --no-fund` in `encryption/` for its
+isolated local primitive tests; it does not enable encrypted traffic.
 Install control dependencies before packing the root library: its build uses
 `control/node_modules`. Check `node --version` before diagnosing test failures.
 
@@ -90,6 +94,7 @@ and dummy local secrets; it is not deployment authorization.
 | `control/migrations/` | Control schema, independent from inbox schema |
 | `control/public/` | Neutral static shell/assets; generated inbox bundle is ignored |
 | `cli/bin/`, `cli/lib/`, `cli/test/` | Node ESM executable, commands, tests |
+| `encryption/` | Standalone local encryption primitive foundation; no traffic integration |
 | `skills/` | Shared setup and operate skills, plus their references |
 | `scripts/` | Repository hygiene and skill/plugin consistency checks |
 | `.github/workflows/` | PR/main CI and tag-triggered publishing |

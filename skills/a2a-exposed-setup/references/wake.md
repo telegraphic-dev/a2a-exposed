@@ -51,7 +51,7 @@ just to avoid asking for DNS consent. Present both choices even when one is
 recommended; explain the concrete resources and wait for authorization before
 creating them. A public webhook that is already reachable needs no tunnel.
 
-Check hosting compatibility before account steps. A hosted endpoint does not imply hosted delivery can reach a local tunnel. Production a2a.exposed cannot currently deliver wakes to Cloudflare Tunnel hostnames. Do not create a tunnel or Access app by hand to work around this. Offer polling or an explicitly authorized self-hosted endpoint instead. For other public HTTPS routes, verify a test wake before claiming delivery works.
+Check hosting compatibility before account steps. A hosted endpoint does not imply hosted delivery can reach a local tunnel. For Cloudflare Tunnel hostnames, run `hosted capabilities --json`, then use dashboard **Import your existing tunnel** or **Create secure link** to authorize the route before testing. Do not create Access resources by hand as a workaround. Without a supported authorized route, offer polling or an explicitly authorized self-hosted endpoint instead. For other public HTTPS routes, verify a test wake before claiming delivery works.
 
 | Command or tool | Hosted config | Self-hosted config |
 | --- | --- | --- |
@@ -218,7 +218,7 @@ Before step 1, complete the [delivery preflight](#delivery-preflight), agree on 
    ```json5
    { hooks: { enabled: true, token: "<new random token>", path: "/hooks", allowedAgentIds: ["main"] } }
    ```
-2. **Reachability and hosting:** the gateway listens on `127.0.0.1:18789` by default, so the Worker can't reach it directly. Complete the [delivery preflight](#delivery-preflight) before changing gateway config or creating a tunnel. For self-hosting, offer the secure tunnel below, another HTTPS reverse proxy, or polling. Production hosted wakes cannot currently reach Cloudflare Tunnel hostnames: offer another supported public HTTPS route, polling, or explicitly authorized self-hosting. An advertised OpenClaw preset does not establish route compatibility; do not create a Tunnel/Access app for an incompatible hosted route.
+2. **Reachability and hosting:** the gateway listens on `127.0.0.1:18789` by default, so the Worker can't reach it directly. Complete the [delivery preflight](#delivery-preflight) before changing gateway config or creating a tunnel. For self-hosting, offer the secure tunnel below, another HTTPS reverse proxy, or polling. For hosted Cloudflare Tunnel routes, discover `hosted capabilities --json` and use dashboard Import your existing tunnel or Create secure link before testing. An advertised OpenClaw preset does not establish route compatibility; use polling when no supported authorized route is available.
 3. **OpenClaw behind local cloudflared:** keep the gateway bound to loopback and keep the dedicated hooks bearer token. Add only the local connector address `127.0.0.1` to `gateway.trustedProxies`; untrusted forwarded traffic can return `403 proxy_attribution_required`. Do not broaden this to all proxies or change gateway authentication to `trusted-proxy` mode for a bearer-authenticated wake hook. Restart/reload the gateway as its installed version requires, then test the hook through the tunnel. See [OpenClaw proxy attribution](https://docs.openclaw.ai/gateway/trusted-proxy-auth).
 4. Pick a preset:
    - **`openclaw-wake`** POSTs `<gateway>/hooks/wake` with `{"text": ..., "mode": "now", "agentId": "main"}`. This wakes the main session. OpenClaw treats wake text as a trusted system event, so this preset sends **no peer text**: only the peer label, ids, and the hint.
@@ -452,14 +452,16 @@ List choices with `hosted capabilities --json`, approve explicit scopes with
 config directory per agent, passing the same `--config-dir DIR` to login and creation. Creation needs both `agents:create` and `agents:owner-token`. `wake preview|test|set --agent NAME --json` reads, tests or
 tests then saves. Provide URL and preset explicitly. For OpenClaw and Hermes, first
 check the [delivery preflight](#delivery-preflight): preset availability does not
-prove reachability. Production hosted wakes cannot currently reach Cloudflare
-Tunnel hostnames. Do not create a tunnel for that route; offer another supported
-public HTTPS receiver, polling, or explicitly authorized self-hosting.
+prove reachability. Cloudflare Tunnel routes need dashboard **Import your existing
+tunnel** or **Create secure link** authorization; list availability with
+`hosted capabilities --json` before testing. Offer polling when no supported
+authorized route is available.
 
 Keys use `--key-file`, `--key-env` or `--key-stdin`. Signing secrets use
-`--hmac-secret-file` or `--hmac-secret-env`. Access credentials use
-`--access-client-id-file|--access-client-id-env` and
-`--access-client-secret-file|--access-client-secret-env`. Never pass secret values in argv.
+`--hmac-secret-file` or `--hmac-secret-env`. Hosted wakes do not accept hand-typed
+Access credentials. Run `hosted capabilities --json`, then use **Import your existing
+tunnel** or **Create secure link** in dashboard Wake settings to authorize Access.
+Facade upstream Access options remain available. Never pass secret values in argv.
 Hosted `wake prepare`, `wake test`, `wake set` and `relay wake test` never read ambient
 `WAKE_WEBHOOK_KEY`, `WAKE_HMAC_SECRET` or `WAKE_ACCESS_CLIENT_*` credentials.
 Name each source explicitly, for example `--key-env WAKE_WEBHOOK_KEY` and

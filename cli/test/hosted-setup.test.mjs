@@ -678,7 +678,7 @@ test("hosted wake drafts read only explicitly selected secret sources", () => {
     fs.writeFileSync(signingFile, "file-signing", { mode: 0o600 });
     const args = ["wake", sub, "--agent", "sample-agent", "--url", "https://receiver.example/wake", "--preset", "generic", "--json"];
     if (sub === "prepare") args.push("--reference-file", path.join(f.dir, "reference"));
-    if (source === "env") args.push("--key-env", "WAKE_WEBHOOK_KEY", "--hmac-secret-env", "WAKE_HMAC_SECRET", "--access-client-id-env", "WAKE_ACCESS_CLIENT_ID", "--access-client-secret-env", "WAKE_ACCESS_CLIENT_SECRET");
+    if (source === "env") args.push("--key-env", "WAKE_WEBHOOK_KEY", "--hmac-secret-env", "WAKE_HMAC_SECRET");
     if (source === "file") args.push("--hmac-secret-file", signingFile);
     const result = f.run(args, {
      "https://control.example/api/v1/setup/capabilities": { status: 200, body: { ...capabilities, wake: { ...capabilities.wake, secret_reference: sub === "prepare" } } },
@@ -693,8 +693,8 @@ test("hosted wake drafts read only explicitly selected secret sources", () => {
     const body = JSON.parse(writes[0].body);
     assert.equal(body.key, source === "env" ? "ambient-key" : "");
     assert.equal(body.hmacSecret, source === "env" ? "ambient-signing" : source === "file" ? "file-signing" : "");
-    assert.equal(body.accessClientId, source === "env" ? "ambient-id" : "");
-    assert.equal(body.accessClientSecret, source === "env" ? "ambient-access" : "");
+    assert.equal(Object.hasOwn(body, "accessClientId"), false);
+    assert.equal(Object.hasOwn(body, "accessClientSecret"), false);
     for (const hidden of ["ambient-key", "ambient-signing", "ambient-id", "ambient-access", "file-signing"]) assert.ok(!(result.stdout + result.stderr).includes(hidden));
    } finally { f.clean(); }
   }
@@ -745,5 +745,22 @@ test("hosted upstream verify reports a cleared address without sending a probe",
   assert.equal(JSON.parse(result.stdout).code, "not_configured");
   assert.match(JSON.parse(result.stdout).next, /hosted upstream set/);
   assert.equal(fs.readFileSync(log, "utf8").trim().split("\n").map(JSON.parse).filter(call => call.method !== "GET").length, 0);
+ } finally { f.clean(); }
+});
+
+// Obsolete options must fail before discovery, secret reads, or any provider call.
+test("hosted wake rejects obsolete Access inputs before network with actionable guidance", () => {
+ const f = fixture(); f.save("HOSTED_AGENT_NAME=sample-agent\n");
+ try {
+  for (const command of [["wake","test"],["wake","prepare"],["wake","set"]]) {
+   for (const kind of ["id", "secret"]) for (const source of ["file", "env"]) {
+    const log=path.join(f.dir,"obsolete-requests"); fs.writeFileSync(log,"");
+    const result=f.run([...command,"--agent","sample-agent","--access-client-"+kind+"-"+source,"nonexistent-source","--json"],{}, {A2A_TEST_FETCH_LOG:log});
+    assert.equal(result.status,1,result.stdout+result.stderr);
+    assert.equal(JSON.parse(result.stdout).code,"access_options_removed");
+    assert.match(JSON.parse(result.stdout).next,/hosted capabilities --json.*Import your existing tunnel.*Create secure link/);
+    assert.equal(fs.readFileSync(log,"utf8"),"");
+   }
+  }
  } finally { f.clean(); }
 });

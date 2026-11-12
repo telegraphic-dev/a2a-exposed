@@ -59,4 +59,11 @@ test("every a2a-exposed flag named in skills/ is in --help", () => {
 	assert.ok(helpFlags.has("skip-install"));
 	assert.doesNotMatch(help.stdout, /hosted link (?:create|finish)|CONTROL_URL|CONTROL_TOKEN/);
 	assert.match(help.stdout, /claude mcp add --transport http a2a-exposed/);
+	const hostedWake = help.stdout.split("  wake preview|test|set --agent")[1].split("  wake prepare --agent")[0];
+	assert.doesNotMatch(hostedWake, /--access-client-(?:id|secret)/);
+	assert.match(hostedWake, /hosted capabilities --json.*human.*dashboard.*Import your existing tunnel or Create secure link/s);
+	const upstream = help.stdout.split("  hosted upstream preview|set|clear|verify")[1].split("  hosted create")[0];
+	assert.match(upstream, /--access-client-id-file.*--access-client-id-env/s);
+	assert.match(upstream, /--access-client-secret-file.*--access-client-secret-env/s);
+
 });

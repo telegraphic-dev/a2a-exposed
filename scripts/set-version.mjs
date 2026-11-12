@@ -26,7 +26,7 @@ function replace(text, pattern, rel) {
 	return text.replace(pattern, `$1${version}$2`);
 }
 const topVersion = /^(\s*"version"\s*:\s*")[^"]*(")/m;
-for (const dir of ["", "cli", "worker", "control"]) {
+for (const dir of ["", "cli", "worker", "control", "encryption"]) {
 	const rel = path.join(dir, "package.json");
 	const pkg = JSON.parse(fs.readFileSync(path.join(root, rel), "utf8"));
 	if (Object.hasOwn(pkg, "version")) update(rel, (text) => replace(text, topVersion, rel));

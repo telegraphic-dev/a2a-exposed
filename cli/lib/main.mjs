@@ -59,8 +59,9 @@ Hosted setup:
                                 authorize the exact existing route and Access pair, then test and save again
                                 no automatic import or retry; without recovery use supported HTTPS, polling,
                                 or an explicitly authorized self-hosted Worker; keep Access and hook auth enabled
-                                secrets: --key-file, --key-env, --key-stdin, --hmac-secret-file, --hmac-secret-env,
-                                --access-client-id-file, --access-client-id-env and --access-client-secret-file, --access-client-secret-env
+                                secrets: --key-file|--key-env|--key-stdin; --hmac-secret-file|--hmac-secret-env
+                                hosted capabilities --json lists route support; the human uses dashboard
+                                Import your existing tunnel or Create secure link to authorize Access
   wake prepare --agent NAME --url URL --preset P --reference-file FILE --json
                                 when the service lists secret_reference, upload the draft and save a
                                 ten-minute single-use reference in a new protected file; never print it
@@ -164,8 +165,8 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
                                 hosted CLI: list hosted capabilities --json for presets; scoped setup selects --agent from hosted list --json
                                 use the same --config-dir DIR for login and hosted create (requires agents:create agents:owner-token).
                                 hosted wake prepare/test/set and relay wake test read secrets only with explicit
-                                --key-file|--key-env|--key-stdin, --hmac-secret-file|--hmac-secret-env, or
-                                --access-client-id-file|--access-client-id-env and --access-client-secret-file|--access-client-secret-env.
+                                --key-file|--key-env|--key-stdin or --hmac-secret-file|--hmac-secret-env.
+                                Hosted Access keys use dashboard Import your existing tunnel or Create secure link.
                                 Ambient WAKE_* credentials are ignored; --key-env WAKE_WEBHOOK_KEY opts in.
                                 mausbot: HTTPS /hooks/<endpointId> + WAKE_WEBHOOK_KEY Bearer auth from protected env
                                 openbot: human supplies WAKE_HMAC_SECRET via protected env/secret storage, never chat or argv

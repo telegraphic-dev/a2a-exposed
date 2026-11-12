@@ -9,6 +9,7 @@ a focused test is useful during editing but does not replace it.
 
 ```bash
 node --version
+(cd encryption && npm ci --ignore-scripts --no-audit --no-fund && npm test && npm pack --dry-run)
 (cd worker && npm ci --no-audit --no-fund)
 (cd control && npm ci --no-audit --no-fund)
 npm run lint

@@ -24,6 +24,7 @@ export function statusLabels(text) {
 
 function runChecks() {
 const cliVersion = json("cli/package.json").version;
+if (json("encryption/package.json").version !== cliVersion) fail("encryption/package.json version differs from cli/package.json");
 const plugin = json("plugin.json");
 const manifests = [
 	"plugin.json",

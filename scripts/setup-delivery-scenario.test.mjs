@@ -19,8 +19,8 @@ test("fresh hosted OpenClaw: companion and both delivery options precede any pol
 	assert.match(preflight, /Webhook \(recommended for OpenClaw and Hermes\)/);
 	assert.match(preflight, /Polling \(fallback\)/);
 	assert.match(preflight, /interval.*consume time or quota/s);
-	assert.match(preflight, /Production a2a.exposed cannot currently deliver wakes to Cloudflare Tunnel/);
-	assert.match(preflight, /Offer polling or an explicitly authorized self-hosted endpoint/);
+	assert.match(preflight, /hosted capabilities --json.*Import your existing tunnel.*Create secure link/s);
+	assert.match(preflight, /offer polling or an explicitly authorized self-hosted endpoint/);
 	assert.ok(wake.indexOf("## Delivery preflight") < wake.indexOf("hermes cron create"));
 	assert.ok(wake.indexOf("## Delivery preflight") < wake.indexOf("openclaw cron add"));
 });
