@@ -25,3 +25,7 @@ opened, content is visible to the local agent/model provider.
 
 Run `npm ci --ignore-scripts` and `npm test` in this directory. Pack with
 `npm pack --dry-run`; no release or deployment is performed. Node 22.18+.
+
+The separate `./local-state` API is an incomplete local custody/trust checkpoint.
+See [local custody contracts](LOCAL-CUSTODY-DRAFT.md); no CLI enrollment, backup,
+rotation, replay/outbox consumption or live encrypted transport is enabled.
