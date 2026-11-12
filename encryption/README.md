@@ -16,8 +16,8 @@ not authorization or replay storage: it does not validate the integration
 message/snapshot union or content/header semantics, so it must not deliver to a
 model directly. Object-form `open` cannot recover duplicate JSON names lost by
 an upstream parser; validate bounded raw transport JSON before using that form.
-No archive/history API, durable delivery, keychain, pin approval or backup is
-implemented in this foundation. Invalid caller-supplied clock values are refused.
+The top-level primitive does not implement archive/history, durable delivery or
+trust authorization. Invalid caller-supplied clock values are refused.
 
 Static keys do not provide forward secrecy. Lost keys can make old history
 unreadable. Host operators still observe routing, timing, state and size. Once
@@ -25,3 +25,8 @@ opened, content is visible to the local agent/model provider.
 
 Run `npm ci --ignore-scripts` and `npm test` in this directory. Pack with
 `npm pack --dry-run`; no release or deployment is performed. Node 22.18+.
+
+The separate `./local-state` API is an incomplete local custody/trust checkpoint.
+See [local custody contracts](LOCAL-CUSTODY-DRAFT.md) for protected local backup
+and archive-only restore APIs. Local receiving-key rotation retains old keys under exact explicit approval.
+No CLI enrollment, replay/outbox consumption or live encrypted transport is enabled.

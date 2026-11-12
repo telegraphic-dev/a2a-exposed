@@ -3,12 +3,44 @@
   "version": "0.8.51",
   "description": "Local sealed A2A envelope primitives. Protocol review draft; transport integration is not enabled.",
   "type": "module",
-  "exports": { ".": "./index.mjs" },
-  "files": ["index.mjs", "README.md", "LICENSE"],
-  "scripts": {"test": "node --test test/*.test.mjs", "prepack": "node -e \"require('fs').copyFileSync('../LICENSE','LICENSE')\""},
-  "engines": {"node": ">=22.18"},
-  "dependencies": {"@hpke/core": "1.10.1", "@hpke/dhkem-x25519": "1.8.1", "@hpke/chacha20poly1305": "1.8.1"},
-  "repository": {"type": "git", "url": "git+https://github.com/telegraphic-dev/a2a-exposed.git", "directory": "encryption"},
+  "exports": {
+    ".": "./index.mjs",
+    "./local-state": "./local-state.mjs",
+    "./backup": "./backup.mjs"
+  },
+  "files": [
+    "index.mjs",
+    "README.md",
+    "LICENSE",
+    "local-state.mjs",
+    "keyring-worker.mjs",
+    "native-store.mjs",
+    "backup.mjs",
+    "LOCAL-CUSTODY-DRAFT.md",
+    "DEPENDENCIES.md"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "prepack": "node -e \"require('fs').copyFileSync('../LICENSE','LICENSE')\""
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "dependencies": {
+    "@hpke/chacha20poly1305": "1.8.1",
+    "@hpke/core": "1.10.1",
+    "@hpke/dhkem-x25519": "1.8.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/telegraphic-dev/a2a-exposed.git",
+    "directory": "encryption"
+  },
   "license": "MIT",
-  "publishConfig": {"access": "public"}
+  "publishConfig": {
+    "access": "public"
+  },
+  "optionalDependencies": {
+    "@napi-rs/keyring": "2.1.2"
+  }
 }

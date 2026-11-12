@@ -207,7 +207,7 @@ Compare all groups through a separate trusted channel. This is a user comparison
 code, not server attestation; automated equality via the same relay is not verification.
 
 Backup is a versioned encrypted local file. Draft format: strict JSON
-`{v:1,kdf:"scrypt",N:32768,r:8,p:1,salt,nonce,ct}` with random 32-byte salt,
+`{format:"a2a-exposed local backup",v:1,kdf:"scrypt",N:32768,r:8,p:1,salt,nonce,ct}` with random 32-byte salt,
 12-byte AES-256-GCM nonce and base64url ciphertext+16-byte tag; AAD is canonical
 JSON of all fields except ct. Derive 32 bytes from UTF-8 passphrase without
 Unicode normalization. Reject parameters outside the fixed v1 tuple before
@@ -290,7 +290,7 @@ is recovered; no hosted timestamp can approve a baseline.
 
 Backup input is valid UTF-8; strip exactly one final LF (and its preceding CR),
 with no other whitespace/Unicode normalization. Maximum backup file is 32 MiB;
-maximum decrypted snapshot is 24 MiB with fixed schema/count limits checked
+maximum decrypted snapshot is 16 MiB with fixed schema/count limits checked
 before import. Set scrypt maxmem explicitly to 64 MiB for N=32768,r=8,p=1.
 Refuse oversized/incorrect-parameter files before KDF work; never allocate from
 untrusted numeric fields. Windows file mode requires an explicit current-user
