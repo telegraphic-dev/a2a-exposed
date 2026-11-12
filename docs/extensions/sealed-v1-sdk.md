@@ -91,6 +91,44 @@ before creating a target. Empty-host backups still restore archive-only. Host
 grant archival, host authority integration and the continuation coordinator
 remain unfinished; these internal methods enable no CLI/MCP/Worker route.
 
+## Internal continuation codecs and source snapshots
+
+`cli/lib/continuation-records.mjs` is a private, synchronous codec. Its keyed,
+domain-separated records bind an exact root/configuration/epoch/set, ordered
+membership and exclusions, source fingerprint, credential source, trust version,
+comparison evidence, intent and reconciliation observations. Canonical encoding
+refuses accessors, hidden fields, sparse arrays and noncanonical digest encodings.
+Tokens and compared safety codes are represented by keyed commitments in records.
+Caller inputs are copied before use.
+
+The attestation codec authenticates caller-supplied evidence; it does not prove
+human approval, independent comparison or current authority. Fresh-use checks
+apply a bounded comparison lifetime; expired intents remain inspectable for
+no-grant abandonment. Abandonment distinguishes absent, empty and nonempty values
+in both original sources. Its observations bind the diagnosing process, including
+file-only plans and finalization. The reconciliation MAC authenticates both its
+payload and an explicit process commitment. A restarted process can diagnose missing old environment values
+for abandonment, but cannot reuse the old process's reconciliation approval.
+Finalize-shaped records require the exact ready set, original source/member
+commitments and the environment process binding. Structural validity alone never
+authorizes finalization or any external effect.
+
+`cli/lib/continuation-sources.mjs` snapshots explicitly supplied bounded UTF-8
+bytes and environment objects. It performs no file or environment reads. Strict
+literal parsing rejects malformed, duplicate or ambiguous source entries instead
+of silently normalizing them. Inventory selection requires a complete, sorted
+partition of selected and excluded aliases and unambiguous explicit credential
+variables. Nonempty environment values take precedence over file values; an
+empty environment value permits the file value. Legacy pairing metadata supplies
+no verified identity, endpoint or approval evidence. Private source texts and
+selected tokens are privileged in-memory inputs and must never be tool output.
+
+These modules are not imported by a CLI command, Worker, MCP route or SDK adapter.
+They create no file, credential, grant or approval and perform no network call.
+Authority leases, authenticated membership and human provenance, durable intent
+storage, the continuation coordinator and admission remain unfinished. Comparing
+snapshots does not prevent an undetectable change-and-restore between reads.
+
 ## Remaining integration boundaries
 
 Pairing identity and extension activation are privileged caller attestations in
