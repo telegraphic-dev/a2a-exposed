@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add isolated internal continuation tables with retained immutable intents,
+  complete authenticated membership, single-use attestation consumption and
+  guarded prepared-to-set-committed storage writes. Physical authority remains
+  schema 2; human approval, authority/SDK integration and grant admission stay disabled.
+
 - Add separately opted-in HTTP relay profiles for fixed local webhooks and native
   A2A JSON-RPC services, with original request bytes/application authentication,
   real receiver responses, rewritten discovery and bounded incremental SSE.
