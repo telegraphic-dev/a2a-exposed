@@ -72,3 +72,15 @@ by verified revisions, then commit the whole assignment/delivery/chain batch.
 It returns stable delivery IDs and verified chain state separately from untrusted
 routing state. Gaps/forks/failure do not partially publish new work. It remains a
 privileged local API; no Worker/CLI/MCP messaging route enables it yet.
+
+
+`./transport` provides a privileged sealed-only JSON-RPC client for explicit local
+hosts. It takes a fresh local pairing/credential callback, approved endpoint,
+fixed protocol and a card matching the approved bundle. Send releases a prepared
+ciphertext once; polling uses a locally signed assignment. Activation echo is
+required on every response, redirects are refused, and failures never trigger a
+new ID, version or plaintext retry. Results contain IDs/state and truthful send
+privacy facts, not plaintext or credentials. Tests use synthetic fetch/provider
+fixtures. Actual saved-pairing CLI wiring, Worker routing, native platforms and
+production traffic remain unimplemented/unaccepted; this export enables none of
+those automatically.

@@ -11,7 +11,8 @@
     "./carriers": "./carriers.mjs",
     "./assignment": "./assignment.mjs",
     "./ledger": "./ledger.mjs",
-    "./tasks": "./tasks.mjs"
+    "./tasks": "./tasks.mjs",
+    "./transport": "./transport.mjs"
   },
   "files": [
     "index.mjs",
@@ -28,7 +29,8 @@
     "schemas/",
     "assignment.mjs",
     "ledger.mjs",
-    "tasks.mjs"
+    "tasks.mjs",
+    "transport.mjs"
   ],
   "scripts": {
     "test": "node --test test/*.test.mjs",

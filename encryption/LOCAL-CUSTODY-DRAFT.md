@@ -229,3 +229,11 @@ and receipt signatures against current bundles; a repeated receipt must equal
 the immutable saved one. It does not backdate now or expose an archive-mode flag.
 First unassigned requests/receipts still use live admission freshness, and every
 incoming agent envelope still passes the current-time live freshness checks.
+
+
+Transport proposals may include the exact peerEndpoint independently of the key
+bundle cardUrl, on the same canonical HTTPS origin. This endpoint is part of the
+human-approved proposal/record digest; a discovered interface cannot silently
+replace it. Bundle input is synchronously cloned before asynchronous verification.
+Existing omitted-endpoint SDK calls keep cardUrl as their endpoint and require a
+new explicit proposal before using another protocol path.
