@@ -33,3 +33,4 @@ alias/a2a-over-webhook/LICENSE
 *.log
 .DS_Store
 .skills-ref-venv/
+encryption/LICENSE

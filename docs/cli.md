@@ -365,9 +365,9 @@ OpenClaw and Hermes; use polling if there is no public webhook. A tunnel needs i
 Cloudflare authorization. When capabilities advertises `wake_removal`, read `wake preview --agent NAME --json`, then run `wake remove --agent NAME --version N --json` with the version you selected; `wake unset` is an alias. Removal sends no test webhook. A stale version fails; already absent settings return `already_removed` without another change. Older services keep removal on the agent's Wake settings page.
 
 Read secrets through `--key-file`, `--key-env` or `--key-stdin`; signing secrets through
-`--hmac-secret-file` or `--hmac-secret-env`; Access pairs through the corresponding
-`--access-client-id-file|--access-client-id-env` and
-`--access-client-secret-file|--access-client-secret-env`.
+`--hmac-secret-file` or `--hmac-secret-env`. Hosted wakes do not accept hand-typed
+Access credentials. Run `hosted capabilities --json`, then use **Import your existing
+tunnel** or **Create secure link** in dashboard Wake settings to authorize Access.
 
 Hosted `wake prepare`, `wake test`, `wake set` and `relay wake test` never read ambient
 `WAKE_WEBHOOK_KEY`, `WAKE_HMAC_SECRET` or `WAKE_ACCESS_CLIENT_*` credentials.

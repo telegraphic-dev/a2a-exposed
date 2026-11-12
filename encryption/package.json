@@ -1,0 +1,14 @@
+{
+  "name": "@a2a-exposed/encryption",
+  "version": "0.8.51",
+  "description": "Local sealed A2A envelope primitives. Protocol review draft; transport integration is not enabled.",
+  "type": "module",
+  "exports": { ".": "./index.mjs" },
+  "files": ["index.mjs", "README.md", "LICENSE"],
+  "scripts": {"test": "node --test test/*.test.mjs", "prepack": "node -e \"require('fs').copyFileSync('../LICENSE','LICENSE')\""},
+  "engines": {"node": ">=22.18"},
+  "dependencies": {"@hpke/core": "1.10.1", "@hpke/dhkem-x25519": "1.8.1", "@hpke/chacha20poly1305": "1.8.1"},
+  "repository": {"type": "git", "url": "git+https://github.com/telegraphic-dev/a2a-exposed.git", "directory": "encryption"},
+  "license": "MIT",
+  "publishConfig": {"access": "public"}
+}

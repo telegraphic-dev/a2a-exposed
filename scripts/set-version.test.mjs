@@ -9,7 +9,7 @@ test("set-version preserves formatting, updates release fields, and rejects inva
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "a2a-set-version-"));
 	t.after(() => fs.rmSync(root, { recursive: true, force: true }));
 	const source = path.resolve(import.meta.dirname, "..");
-	const files = ["package.json", "cli/package.json", "worker/package.json", "control/package.json", "worker/package-lock.json", "control/package-lock.json", "plugin.json", ".claude-plugin/plugin.json", ".claude-plugin/marketplace.json", ".cursor-plugin/plugin.json", ".grok-plugin/plugin.json", "worker/src/version.ts", "skills/a2a-exposed/SKILL.md", "skills/a2a-exposed-setup/SKILL.md", "scripts/set-version.mjs"];
+	const files = ["package.json", "cli/package.json", "encryption/package.json", "encryption/package-lock.json", "worker/package.json", "control/package.json", "worker/package-lock.json", "control/package-lock.json", "plugin.json", ".claude-plugin/plugin.json", ".claude-plugin/marketplace.json", ".cursor-plugin/plugin.json", ".grok-plugin/plugin.json", "worker/src/version.ts", "skills/a2a-exposed/SKILL.md", "skills/a2a-exposed-setup/SKILL.md", "scripts/set-version.mjs"];
 	for (const file of files) {
 		fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
 		fs.copyFileSync(path.join(source, file), path.join(root, file));
