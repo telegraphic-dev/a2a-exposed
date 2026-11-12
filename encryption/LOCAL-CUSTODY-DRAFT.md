@@ -229,3 +229,27 @@ and receipt signatures against current bundles; a repeated receipt must equal
 the immutable saved one. It does not backdate now or expose an archive-mode flag.
 First unassigned requests/receipts still use live admission freshness, and every
 incoming agent envelope still passes the current-time live freshness checks.
+
+
+Transport proposals may include the exact peerEndpoint independently of the key
+bundle cardUrl, on the same canonical HTTPS origin. This endpoint is part of the
+human-approved proposal/record digest; a discovered interface cannot silently
+replace it. Bundle input is synchronously cloned before asynchronous verification.
+Existing omitted-endpoint SDK calls keep cardUrl as their endpoint and require a
+new explicit proposal before using another protocol path.
+
+
+LocalState.locked may take a trusted authorizationGuard plus withAuthorizationLease.
+Both must be functions and must be provided together. The host lease precedes the
+DB queue, encloses the complete transaction, and must coordinate every actual
+pairing-store writer. The synchronous guard returns literal true before writes
+and after the action await immediately before COMMIT; failure rolls back. The
+Task transport supplies this guard from its fresh local pairing reader, including
+effective credential and endpoint, rather than reusing a captured verified flag.
+No actual cross-process pairing store or public approval proof is added here.
+
+The host pairing snapshot includes a nonnegative safe-integer revision. Every
+revocation, restoration or credential-generation change increments it under the
+same host lease, even if token bytes later match again. Final guard comparison
+includes this revision to reject in-flight revoke/restore ABA changes. The real
+store must persist/enforce that monotonicity; a synthetic reader does not prove it.

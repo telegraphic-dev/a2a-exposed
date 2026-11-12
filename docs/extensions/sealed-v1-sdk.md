@@ -2,7 +2,8 @@
 
 These contracts refine the [review draft](sealed-v1.md). The local SDK exposes
 content/carrier codecs, signed task assignments and a persistent ciphertext
-ledger. CLI, MCP and Worker messaging do not use these APIs. Encryption remains
+ledger, plus a privileged sealed-only JSON-RPC adapter. CLI, MCP and Worker
+messaging do not use these APIs. Encryption remains
 disabled; host authorization, transport integration and platform acceptance are
 required before enabling traffic.
 
@@ -47,12 +48,23 @@ atomically committing assignment, delivery and chain state. Verified revisions
 determine snapshot order. Older snapshots remain history-only; unsequenced new
 messages cannot be inserted around a terminal snapshot.
 
+## Explicit sealed-only transport
+
+`./transport` sends only previously prepared ciphertext to the exact approved
+HTTPS endpoint and fixed protocol. It requires the pinned public bundle, fresh
+local grant/credential revision and a host authorization lease. Every response
+must confirm extension activation. Redirects, plaintext responses, retries and
+protocol fallback are refused. Send and poll acceptance recheck authorization
+before writes and COMMIT. Tests use synthetic HTTP/provider fixtures; the real
+CLI pairing writer lock and platform integration remain unfinished. See the
+[adapter host contract](sealed-v1-integration.md#sealed-only-json-rpc-client-adapter).
+
 ## Remaining integration boundaries
 
 Pairing identity and extension activation are privileged caller attestations in
 this SDK. A reviewed host must supply current authorization before transport,
-acceptance, publication and local consumption. The SDK invokes no network or
-model callbacks. Read/ack gives stable at-least-once delivery IDs and does not
+acceptance, publication and local consumption. The codecs and ledger invoke no network or
+model callbacks; only the explicitly constructed transport adapter invokes fetch. Read/ack gives stable at-least-once delivery IDs and does not
 promise exactly-once external effects.
 
 The unreleased local schema changes from version 2 to 5. Older draft stores are

@@ -222,7 +222,8 @@ export class DeliveryLedger{
   }
   return receipt;
  }
- async acceptTask({localId,peer,requestMessageId,rawTask,protocol,activatedExtension,pairingIdentity,pairingVerified=false,allowOsConsent=false,now=Date.now()}={}){
+ async acceptTask({localId,peer,requestMessageId,rawTask,protocol,activatedExtension,pairingIdentity,pairingVerified=false,allowOsConsent=false,authorizationGuard,withAuthorizationLease,now=Date.now()}={}){
+  if((authorizationGuard!==undefined||withAuthorizationLease!==undefined)&&(typeof authorizationGuard!=='function'||typeof withAuthorizationLease!=='function'))fail('authorization_guard_invalid');
   const task=readTaskCarrier(rawTask,protocol);if(activatedExtension!==EXTENSION)fail('extension_not_activated');
   const attestation={pairingIdentity,pairingVerified},pin=this.resolve(localId,peer,attestation),outbound=this.outboundRow(pin,requestMessageId),request=validateEnvelopeStructure(outbound.envelope);
   if(outbound.reference_digest!==null||outbound.task_id!==null||outbound.context!==task.contextId||outbound.protocol!==protocol||!['transmitting','unknown','rejected','transport-accepted','peer-assigned'].includes(outbound.state)||request.header.role!=='user'||request.header.kind!=='message'||request.header.taskId!==null||request.header.messageId!==requestMessageId||request.header.contextId!==task.contextId||await envelopeDigest(request)!==outbound.digest)fail('request_binding_mismatch');
@@ -261,7 +262,7 @@ export class DeliveryLedger{
    const deliveries=verified.map(item=>this.#queueVerifiedResponse(pin,item.envelope,item.content,item.digest,now));
    const head=this.state.db.prepare('SELECT revision,digest,state,terminal FROM chains WHERE local_identity=? AND peer_identity=? AND context=? AND task_id=? AND author_identity=?').get(pin.localIdentity,pin.peerIdentity,task.contextId,task.taskId,pin.peerIdentity);
    return {ok:true,taskId:task.taskId,contextId:task.contextId,assignmentAuthenticated:true,deliveries,currentPeerState:head?{revision:head.revision,digest:head.digest,state:head.state,terminal:head.terminal===1}:null,transportRoutingState:task.routingState,transportStateAuthenticated:false,next:'Only signed contiguous snapshots establish peer state. Content remains durably queued and untrusted until explicit local read/consumption; no network request or model callback was made.'};
-  });
+  },{authorizationGuard,withAuthorizationLease});
  }
 
  listDeliveries({limit=20,cursor=0}={}){

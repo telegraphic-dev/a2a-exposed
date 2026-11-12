@@ -347,3 +347,95 @@ original assigned request digest, which must already be locally approved. A
 new response cannot be matched merely because it has a valid key, a shared
 context or a first-seen message ID. Reordering/co-carrying responses and receipts
 for distinct requests in one context must therefore fail correlation.
+
+## Sealed-only JSON-RPC client adapter
+
+The isolated `SealedJsonRpcClient` sends only an existing locally prepared user
+request; preparation/trust approval remain separate. It never fetches a new card,
+approves a key, switches protocol/endpoint or sends plaintext. `LocalState.propose`
+accepts peerEndpoint separately from the signed key-card URL, validates canonical
+HTTPS on the same origin, and includes the exact RPC path in the proposal/record
+digest. Omitting it retains the earlier SDK default of the card URL; a real client
+must approve the actual RPC endpoint rather than silently replace that default.
+Cross-origin RPC interfaces are unsupported by this client profile.
+
+The host supplies a synchronous fresh pairing snapshot with exactly
+`{identity,endpoint,token,verified:true,revision}`. This is a privileged local saved-grant
+attestation, never peer-supplied data or an approval mechanism. The eventual CLI
+host must derive it from its protected human-authorized pairing and effective
+credential; imported credentials are not automatically proof of an approved grant.
+That saved-pairing integration is not implemented by this adapter.
+
+Discovery requires one sealed-v1 AgentExtension with required false and params
+exactly `{bundle:SIGNED_PUBLIC_BUNDLE,responseKind:"task"}`; optional description
+is bounded. The bundle must equal the current approved pin. The selected fixed
+JSONRPC protocol/interface URL must equal the independently approved endpoint.
+The packaged capability schema describes discovery only and grants no trust.
+Cards declaring another sealed version do not trigger fallback.
+
+Each send/poll uses A2A-Extensions; 0.3 also sends X-A2A-Extensions and requires
+both corresponding echoes. When both response headers appear, sealed URI sets
+must agree; unrelated extension differences do not conflict. Missing/unsupported
+activation, Message-only responses, mismatched JSON-RPC IDs, raw duplicate keys,
+invalid UTF-8, oversized bodies and non-JSON responses refuse. Redirects are
+never followed. Responses are bounded to 1 MiB; TLS checks stay with the default
+fetch implementation and are never bypassed. No retry loop exists.
+
+A send commits its one-time transmission authorization before submitting cached
+ciphertext. The original local pin and pairing/credential are rechecked before
+submission and response acceptance. Polling selects the original locally signed
+assignment instead of accepting a server-supplied task ID. Task bodies enter
+acceptTask only after per-request negotiation/raw RPC validation. No plaintext
+history is uploaded to the owner API; no model callback is made.
+
+Send results use the existing typed transport envelope and details.privacy.
+Pre-submission refusal is unknown/not-sent readability; submitted validated
+sealed bytes are false/sealed even when delivery is unknown. A repeated attempt
+whose old submitted path cannot be established is unknown/unknown, never a new
+sealed-send claim. All failures have retryable false. Acknowledgment/delivery
+state remains separate from readability and model consumption.
+
+The tests inject a synthetic fetch transport and use protected temporary local
+states on both sides. They do not establish real HTTP/provider/platform, Worker
+routing/card advertisement, production installation, CLI/MCP wiring or release
+acceptance. Those gates remain in force; no service capability is enabled.
+
+
+### Adapter commit authorization and routing restrictions
+
+The transport constructor also requires withPairingLease(run). The privileged
+host must acquire its configuration-wide pairing/credential authorization lease,
+await run(), and release only after it resolves/rejects. Every local grant/token/
+endpoint mutation path must participate in that same lock or equivalent revision
+protocol. Acquiring this lease precedes the local SQLite queue, avoiding reverse
+lock ordering. This callback is never supplied through peer JSON or model flags.
+A fake/no-op callback in synthetic tests is not a real cross-process pairing lock;
+the actual CLI pairing store implementation remains an acceptance gate.
+
+acceptTask receives a private synchronous authorizationGuard and that lease. The
+current exact grant, verified state, effective credential, endpoint and pin are
+re-read inside BEGIN IMMEDIATE before writes and again immediately before COMMIT,
+after all crypto/key awaits and the action await. A failed guard rolls back the
+whole acceptance transaction. Lease callbacks must invoke/await the transaction
+once; missing, fire-and-forget and asynchronous-guard forms fail closed. This
+also applies to receipt-only send responses and previously pinned assignments.
+
+Concurrent failures re-read the original ID's current outbound state. If another
+caller acquired transmission authority, the loser reports unknown delivery and
+unknown/unknown readability rather than stale not-sent. One caller still obtains
+ciphertext/submits; no failure starts a second request or plaintext fallback.
+
+This bounded client refuses nonempty/invalid interface tenant values and unknown
+selected-interface routing fields before transmission. Empty tenant denotes the
+ordinary unscoped interface; real tenant routing is unsupported. Selected modern
+interfaces must explicitly declare the exact protocol and JSONRPC binding. Legacy
+0.3 main URLs honor preferredTransport (JSONRPC only, default when absent) and
+protocolVersion (0.3/0.3.0 only, default only without modern-only contradictions).
+An explicit additionalInterfaces JSONRPC entry may select its approved URL.
+A legacy URL cannot override an explicit HTTP+JSON binding or a 1.0-only version.
+
+The host pairing snapshot includes a nonnegative safe-integer revision. Every
+revocation, restoration or credential-generation change increments it under the
+same host lease, even if token bytes later match again. Final guard comparison
+includes this revision to reject in-flight revoke/restore ABA changes. The real
+store must persist/enforce that monotonicity; a synthetic reader does not prove it.

@@ -292,15 +292,34 @@ export class LocalState {
  close() { this.db?.close(); this.db = null; }
  ready() { if (!this.db) fail("keys_unconfigured", "Run keys stores --json, then keys init with an explicit --store and --card-url in this config directory."); }
  configId() { this.ready(); return this.db.prepare("SELECT value FROM meta WHERE key='config_id'").get().value; }
- async locked(action) {
-  this.ready(); if (!this.writable) fail("state_readonly");
-  if (this.db.prepare("SELECT value FROM meta WHERE key='restore_paused'").get()?.value === "1") fail("restore_archive_only", "Restored state cannot authorize live keys or trust. Keep it for archives; create a separate fresh receiving identity and re-verify peers.");
-  const previous = queues.get(this.root) || Promise.resolve(); let release;
-  const own = new Promise(resolve => { release = resolve; }), tail = previous.then(() => own); queues.set(this.root, tail);
-  await previous;
-  try { this.db.exec("BEGIN IMMEDIATE"); const result = await action(); this.db.exec("COMMIT"); return result; }
-  catch (error) { try { this.db.exec("ROLLBACK"); } catch {} if (error instanceof LocalStateError) throw error; fail("state_unavailable"); }
-  finally { release(); if (queues.get(this.root) === tail) queues.delete(this.root); }
+ async locked(action, { authorizationGuard, withAuthorizationLease } = {}) {
+  const guarded = authorizationGuard !== undefined || withAuthorizationLease !== undefined;
+  if (guarded && (typeof authorizationGuard !== "function" || typeof withAuthorizationLease !== "function")) fail("authorization_guard_invalid");
+  let runs = 0, leaseActive = true, committed = false, finalResult, pending;
+  const run = async () => {
+   this.ready(); if (!this.writable) fail("state_readonly");
+   if (this.db.prepare("SELECT value FROM meta WHERE key='restore_paused'").get()?.value === "1") fail("restore_archive_only", "Restored state cannot authorize live keys or trust. Keep it for archives; create a separate fresh receiving identity and re-verify peers.");
+   const check = () => {
+    if (!guarded) return;
+    if (!leaseActive || runs !== 1) fail("authorization_guard_invalid");
+    const approved = authorizationGuard();
+    if (approved !== true) { if (approved instanceof Promise) approved.catch(() => {}); fail("authorization_changed", "The current local authorization changed; no new delivery was committed."); }
+   };
+   const previous = queues.get(this.root) || Promise.resolve(); let release;
+   const own = new Promise(resolve => { release = resolve; }), tail = previous.then(() => own); queues.set(this.root, tail);
+   await previous;
+   try { this.db.exec("BEGIN IMMEDIATE"); check(); const result = await action(); check(); this.db.exec("COMMIT"); committed = true; finalResult = result; return result; }
+   catch (error) { try { this.db.exec("ROLLBACK"); } catch {} if (error instanceof LocalStateError) throw error; fail("state_unavailable"); }
+   finally { release(); if (queues.get(this.root) === tail) queues.delete(this.root); }
+  };
+  // Host lock must precede the local DB queue and stay held until run has committed/rolled back.
+  const invoke = () => { if (++runs !== 1) fail("authorization_guard_invalid"); pending = run(); return pending; };
+  if (!guarded) return invoke();
+  try { await withAuthorizationLease(invoke); }
+  catch (error) { leaseActive = false; if (pending) await pending.catch(() => {}); throw error; }
+  leaseActive = false; if (pending) await pending;
+  if (runs !== 1 || !committed) fail("authorization_guard_invalid");
+  return finalResult;
  }
  status({ limit = 20, identityCursor = 0, operationCursor = 0 } = {}) {
   pageInputs(limit, identityCursor); pageInputs(limit, operationCursor);
@@ -526,7 +545,9 @@ export class LocalState {
   const history = historyRows.slice(0, limit).map(x => ({ version: x.version, record: JSON.parse(x.record), digest: x.digest, approved_ms: x.approved_ms }));
   return { ok: true, config_identity: this.configId(), peer, current, history, next_proposal_cursor: proposalRows.length > limit ? proposalRows[limit - 1].cursor : null, next_history_version: historyRows.length > limit ? historyRows[limit - 1].version : null, live_state: this.db.prepare("SELECT value FROM meta WHERE key='restore_paused'").get()?.value === "1" ? "archive-only" : (pending || keyPending) ? "change-pending" : current?.state || "unpinned", pairing: "not-checked", policies: [...POLICIES], verification_choices: ["tofu", "independent"], current_digest: row ? hash("a2a-exposed sealed trust record v1", current) : "none", current_version: row?.version || 0, proposals };
  }
- async propose({ peer, localId, bundle, pairingIdentity, expectedCurrent, policy, verification, operation = "enroll", now = Date.now() }) {
+ async propose({ peer, localId, bundle, peerEndpoint, pairingIdentity, expectedCurrent, policy, verification, operation = "enroll", now = Date.now() }) {
+  bundle = parseJSON(canonicalJSON(bundle));if(peerEndpoint===undefined)peerEndpoint=bundle.cardUrl;
+  try { if(typeof peerEndpoint!=="string")fail("proposal_endpoint");const endpoint = new URL(peerEndpoint);if(endpoint.href!==peerEndpoint||endpoint.protocol!=="https:"||endpoint.username||endpoint.password||endpoint.hash||endpoint.search||endpoint.origin!==new URL(bundle.cardUrl).origin)fail("proposal_endpoint", "Supply the exact canonical HTTPS JSON-RPC endpoint on the approved key-card origin."); } catch { fail("proposal_endpoint", "Supply the exact canonical HTTPS JSON-RPC endpoint on the approved key-card origin."); }
   if (typeof peer !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(peer) || !KEY.test(pairingIdentity || "") || !POLICIES.includes(policy) || !["tofu", "independent"].includes(verification) || !["enroll", "rotate", "re-pair", "policy", "verify", "revoke"].includes(operation)) fail("proposal_inputs", "Run peer keys inspect --to ALIAS --json, then supply explicit policy, verification, pairing identity and expected current digest.");
   await verifyBundle(bundle, { cardUrl: bundle.cardUrl, identityKey: bundle.identityKey, now });
   return this.locked(async () => {
@@ -534,7 +555,7 @@ export class LocalState {
    if (expectedCurrent !== current.current_digest) fail("approval_stale", "Run peer keys inspect --to ALIAS --json; the full trust record changed.");
    if (local.live_state !== "local-only") fail("key_retired");
    const localBundle = JSON.parse(local.bundle);
-   const proposal = { v: 1, configIdentity: this.configId(), localIdentity: localBundle.identityKey, localKeyId: localBundle.keyId, localBundleDigest: hash("a2a-exposed sealed bundle v1", localBundle), localId, peer, peerEndpoint: bundle.cardUrl, pairingIdentity, currentRecordDigest: current.current_digest, currentRecordVersion: current.current_version, newBundleDigest: hash("a2a-exposed sealed bundle v1", bundle), newBundle: bundle, newPolicy: policy, operation, verificationDecision: verification, proposalNonce: b64(randomBytes(32)) };
+   const proposal = { v: 1, configIdentity: this.configId(), localIdentity: localBundle.identityKey, localKeyId: localBundle.keyId, localBundleDigest: hash("a2a-exposed sealed bundle v1", localBundle), localId, peer, peerEndpoint, pairingIdentity, currentRecordDigest: current.current_digest, currentRecordVersion: current.current_version, newBundleDigest: hash("a2a-exposed sealed bundle v1", bundle), newBundle: bundle, newPolicy: policy, operation, verificationDecision: verification, proposalNonce: b64(randomBytes(32)) };
    const digest = hash("a2a-exposed sealed trust proposal v1", proposal);
    this.db.prepare("INSERT INTO proposals VALUES(?,?,?,?,?,?)").run(digest, peer, current.current_digest, current.current_version, JSON.stringify(proposal), "pending");
    return { ok: true, peer, digest, proposal, next: "The proposal grants no trust. Ask the human to approve this exact digest after any required independent verification." };

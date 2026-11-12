@@ -72,3 +72,30 @@ by verified revisions, then commit the whole assignment/delivery/chain batch.
 It returns stable delivery IDs and verified chain state separately from untrusted
 routing state. Gaps/forks/failure do not partially publish new work. It remains a
 privileged local API; no Worker/CLI/MCP messaging route enables it yet.
+
+
+`./transport` provides a privileged sealed-only JSON-RPC client for explicit local
+hosts. It takes a fresh local pairing/credential callback, approved endpoint,
+fixed protocol and a card matching the approved bundle. Send releases a prepared
+ciphertext once; polling uses a locally signed assignment. Activation echo is
+required on every response, redirects are refused, and failures never trigger a
+new ID, version or plaintext retry. Results contain IDs/state and truthful send
+privacy facts, not plaintext or credentials. Tests use synthetic fetch/provider
+fixtures. Actual saved-pairing CLI wiring, Worker routing, native platforms and
+production traffic remain unimplemented/unaccepted; this export enables none of
+those automatically.
+
+
+Transport hosts must provide withPairingLease(run) as well as the fresh pairing
+reader. The host coordinates all pairing/credential writers; guarded acceptance
+rechecks authorization before writes and COMMIT. Unsupported tenant routing and
+contradictory legacy interfaces are refused. Concurrent send failures inspect the
+current original-ID state and never label another caller's attempt not-sent.
+The real CLI pairing-store lock remains unimplemented and is not validated by
+synthetic no-op lease fixtures.
+
+The host pairing snapshot includes a nonnegative safe-integer revision. Every
+revocation, restoration or credential-generation change increments it under the
+same host lease, even if token bytes later match again. Final guard comparison
+includes this revision to reject in-flight revoke/restore ABA changes. The real
+store must persist/enforce that monotonicity; a synthetic reader does not prove it.

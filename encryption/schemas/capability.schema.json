@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://a2a.exposed/ext/sealed/v1/capability.schema.json",
+  "description": "Discovery shape only. Runtime requires full equality to the current locally approved bundle and a separately approved same-origin RPC endpoint; a card never approves trust. Bundle signatures/key derivation/URLs/dates need runtime checks.",
+  "type": "object",
+  "properties": {
+    "uri": {
+      "const": "https://a2a.exposed/ext/sealed/v1"
+    },
+    "required": {
+      "const": false
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 4096
+    },
+    "params": {
+      "type": "object",
+      "properties": {
+        "bundle": {
+          "type": "object",
+          "properties": {
+            "v": {
+              "const": 1
+            },
+            "suite": {
+              "const": "HPKE-X25519-SHA256-ChaCha20Poly1305"
+            },
+            "cardUrl": {
+              "type": "string",
+              "maxLength": 2048,
+              "pattern": "^https://"
+            },
+            "identityKey": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
+            },
+            "encryptionKey": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
+            },
+            "keyId": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
+            },
+            "notBefore": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$"
+            },
+            "signature": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{85}[AQgw]$"
+            }
+          },
+          "required": [
+            "v",
+            "suite",
+            "cardUrl",
+            "identityKey",
+            "encryptionKey",
+            "keyId",
+            "notBefore",
+            "signature"
+          ],
+          "additionalProperties": false
+        },
+        "responseKind": {
+          "const": "task"
+        }
+      },
+      "required": [
+        "bundle",
+        "responseKind"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "uri",
+    "required",
+    "params"
+  ],
+  "additionalProperties": false
+}

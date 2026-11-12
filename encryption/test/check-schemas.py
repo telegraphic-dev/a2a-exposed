@@ -66,3 +66,19 @@ if "taskCarriers" in fixtures:
             assert not task_validator.is_valid(value), mutation
             task_negative += 1
     print(json.dumps({"taskPositive": task_positive, "taskStructuralNegative": task_negative}))
+
+if "capability" in fixtures:
+    schema = json.loads((root / "capability.schema.json").read_text())
+    Draft202012Validator.check_schema(schema)
+    validator = Draft202012Validator(schema, registry=registry)
+    validator.validate(fixtures["capability"])
+    cases = [dict(fixtures["capability"], extra="refuse")]
+    for kind in ["bundle-extra", "response-kind", "version"]:
+        value = json.loads(json.dumps(fixtures["capability"]))
+        if kind == "bundle-extra": value["params"]["bundle"]["extra"] = "refuse"
+        elif kind == "response-kind": value["params"]["responseKind"] = "message"
+        else: value["uri"] = value["uri"].replace("/v1", "/v2")
+        cases.append(value)
+    for value in cases:
+        assert not validator.is_valid(value)
+    print(json.dumps({"capabilityPositive": 1, "capabilityNegative": len(cases)}))
