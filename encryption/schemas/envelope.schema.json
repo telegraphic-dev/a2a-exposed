@@ -1,0 +1,188 @@
+{
+  "type": "object",
+  "properties": {
+    "v": {
+      "const": 1
+    },
+    "suite": {
+      "const": "HPKE-X25519-SHA256-ChaCha20Poly1305"
+    },
+    "header": {
+      "type": "object",
+      "properties": {
+        "from": {
+          "type": "object",
+          "properties": {
+            "cardUrl": {
+              "type": "string"
+            },
+            "identityKey": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{43}$"
+            },
+            "keyId": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{43}$"
+            }
+          },
+          "required": [
+            "cardUrl",
+            "identityKey",
+            "keyId"
+          ],
+          "additionalProperties": false
+        },
+        "to": {
+          "type": "object",
+          "properties": {
+            "cardUrl": {
+              "type": "string"
+            },
+            "identityKey": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{43}$"
+            },
+            "keyId": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{43}$"
+            }
+          },
+          "required": [
+            "cardUrl",
+            "identityKey",
+            "keyId"
+          ],
+          "additionalProperties": false
+        },
+        "contextId": {
+          "type": "string",
+          "pattern": "^[!-~]{1,200}$"
+        },
+        "messageId": {
+          "type": "string",
+          "pattern": "^[!-~]{1,200}$"
+        },
+        "taskId": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^[!-~]{1,200}$"
+            }
+          ]
+        },
+        "role": {
+          "enum": [
+            "user",
+            "agent"
+          ]
+        },
+        "state": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "enum": [
+                "submitted",
+                "working",
+                "input-required",
+                "completed",
+                "failed",
+                "canceled",
+                "rejected",
+                "auth-required"
+              ]
+            }
+          ]
+        },
+        "kind": {
+          "enum": [
+            "message",
+            "status",
+            "artifact"
+          ]
+        },
+        "sentAt": {
+          "type": "string",
+          "pattern": "^(?:[0-9]{4}|[+-][0-9]{6})-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+        },
+        "commitment": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        }
+      },
+      "required": [
+        "from",
+        "to",
+        "contextId",
+        "messageId",
+        "taskId",
+        "role",
+        "state",
+        "kind",
+        "sentAt",
+        "commitment"
+      ],
+      "additionalProperties": false
+    },
+    "recipient": {
+      "type": "object",
+      "properties": {
+        "enc": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        },
+        "ct": {
+          "type": "string",
+          "minLength": 22,
+          "maxLength": 409622,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        }
+      },
+      "required": [
+        "enc",
+        "ct"
+      ],
+      "additionalProperties": false
+    },
+    "sender": {
+      "type": "object",
+      "properties": {
+        "enc": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        },
+        "ct": {
+          "type": "string",
+          "minLength": 22,
+          "maxLength": 409622,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        }
+      },
+      "required": [
+        "enc",
+        "ct"
+      ],
+      "additionalProperties": false
+    },
+    "signature": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{86}$"
+    }
+  },
+  "required": [
+    "v",
+    "suite",
+    "header",
+    "recipient",
+    "sender",
+    "signature"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://a2a.exposed/ext/sealed/v1/envelope.schema.json",
+  "description": "Primitive envelope schema. Signature, canonical bytes, timestamp freshness and exact caller binding require runtime verification. Reserved artifact kind cannot be delivered by the content profile."
+}

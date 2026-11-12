@@ -29,4 +29,46 @@ Run `npm ci --ignore-scripts` and `npm test` in this directory. Pack with
 The separate `./local-state` API is an incomplete local custody/trust checkpoint.
 See [local custody contracts](LOCAL-CUSTODY-DRAFT.md) for protected local backup
 and archive-only restore APIs. Local receiving-key rotation retains old keys under exact explicit approval.
-No CLI enrollment, replay/outbox consumption or live encrypted transport is enabled.
+No live CLI enrollment or encrypted transport is enabled. Privileged local replay/outbox APIs are described below.
+
+
+`./content` validates the exact supported plaintext union and losslessly maps
+supported inline parts between A2A 0.3/1.0 without fetching file URIs.
+`./carriers` checks structural message carriers/bindings only. See packaged
+`schemas/` and the [SDK integration contract](../docs/extensions/sealed-v1-sdk.md).
+Neither API replaces signatures, local
+trust, assignment, replay/chain checks or model-delivery authorization. No CLI
+message path uses them yet.
+
+
+`./assignment` verifies request/response correlation and signed task assignment
+primitives. Receipt-bearing codecs preserve the control receipt separately from
+ciphertext. They do not establish durable acceptance/model consumption;
+use the local ledger and reviewed host authorization before publication/delivery.
+
+
+`./ledger` adds local durable initial-request acceptance: cached assignment,
+replay and ciphertext outbox commit together before a receipt is returned.
+Delivery/publication reads and acknowledgments are separate local operations;
+there is no network/model callback. Pairing/activation are trusted caller
+attestations until a reviewed transport adapter exists. Local outbound preparation,
+one-time transmission authorization, correlated response acceptance, follow-ups
+and consecutive snapshot chains are implemented without network callbacks.
+See [the local sender contract](LOCAL-CUSTODY-DRAFT.md#local-sender-response-and-chain-api).
+Actual messaging, semantic restore and real platform acceptance
+remain gated.
+
+
+`./tasks` extracts exact raw 0.3/1.0 Task wrappers and history without ordinary
+normalizers. It preserves sealed events and assignment controls, rejects outer
+plaintext/artifacts and conflicting bindings, and marks routing state and history
+order unverified. This parser does not authenticate receipts, reconstruct chains
+or deliver content; the privileged ledger and future transport adapter must do so.
+
+
+`DeliveryLedger.acceptTask` connects this extraction to the local cryptographic
+and transaction gates: verify receipts/signatures, open content, order snapshots
+by verified revisions, then commit the whole assignment/delivery/chain batch.
+It returns stable delivery IDs and verified chain state separately from untrusted
+routing state. Gaps/forks/failure do not partially publish new work. It remains a
+privileged local API; no Worker/CLI/MCP messaging route enables it yet.

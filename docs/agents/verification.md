@@ -73,6 +73,8 @@ python3 -m venv .skills-ref-venv
 .skills-ref-venv/bin/skills-ref validate skills/a2a-exposed-setup
 .skills-ref-venv/bin/python scripts/check-skill-metadata.py
 .skills-ref-venv/bin/python scripts/check-plugin-schemas.py
+node encryption/test/schema-fixtures.mjs /tmp/sealed-schema-fixtures.json
+.skills-ref-venv/bin/python encryption/test/check-schemas.py /tmp/sealed-schema-fixtures.json
 node scripts/check-skill-plugin.mjs
 node scripts/check-claude-plugin.mjs
 ```

@@ -97,9 +97,10 @@ function card(value) {
  // DNS/SSRF checks are the transport's responsibility. Key bundles never cause a fetch.
 }
 function peer(value) { fields(value, ["cardUrl", "identityKey", "keyId"]); card(value.cardUrl); raw(value.identityKey, 32); raw(value.keyId, 32); }
+export function validatePeerStructure(value) { const copy = parseJSON(canonicalJSON(value)); peer(copy); return copy; }
 const identityOf = bundle => ({ cardUrl: bundle.cardUrl, identityKey: bundle.identityKey, keyId: bundle.keyId });
-function header(value, now) {
- clock(now);
+function header(value, now, fresh = true) {
+ if (fresh) clock(now);
  fields(value, ["from", "to", "contextId", "messageId", "taskId", "role", "state", "kind", "sentAt", "commitment"]);
  peer(value.from); peer(value.to);
  for (const id of [value.contextId, value.messageId]) if (typeof id !== "string" || !/^[\x21-\x7e]{1,200}$/.test(id)) refuse();
@@ -108,7 +109,21 @@ function header(value, now) {
  if (value.state !== null && !["submitted", "working", "input-required", "completed", "failed", "canceled", "rejected", "auth-required"].includes(value.state)) refuse();
  if (value.taskId === null && (value.role !== "user" || value.kind !== "message" || value.state !== null)) refuse();
  timestamp(value.sentAt); raw(value.commitment, 32);
- if (Date.parse(value.sentAt) < now - 30 * 86400000 || Date.parse(value.sentAt) > now + 300000) refuse("replay");
+ if (fresh && (Date.parse(value.sentAt) < now - 30 * 86400000 || Date.parse(value.sentAt) > now + 300000)) refuse("replay");
+}
+export function validateEnvelopeStructure(value) {
+ // Clone before asynchronous users can observe it. This checks structure/bytes,
+ // not signature authenticity, freshness, local trust or replay authorization.
+ const envelope = typeof value === "string" ? parseJSON(value) : parseJSON(canonicalJSON(value));
+ fields(envelope, ["v", "suite", "header", "recipient", "sender", "signature"]);
+ if (envelope.v !== 1 || envelope.suite !== SUITE) refuse("extension_unsupported");
+ header(envelope.header, undefined, false);
+ for (const copy of [envelope.recipient, envelope.sender]) {
+  fields(copy, ["enc", "ct"]); raw(copy.enc, 32); const ct = raw(copy.ct);
+  if (ct.length < 16 || ct.length > MAX_PLAINTEXT + 16) refuse("content_too_large");
+ }
+ raw(envelope.signature, 64);
+ return envelope;
 }
 function bundleBody(bundle) { const { signature, ...body } = bundle; return body; }
 function envelopeBody(envelope) { const { signature, ...body } = envelope; return body; }
@@ -167,26 +182,27 @@ async function sealRaw({ identity, recipient, binding, content, now = Date.now()
  await open({ envelope, identity, sender: identity.bundle, recipient, expected: binding, purpose: "sender", now });
  return envelope;
 }
+async function verifyEnvelopeSignatureRaw({ envelope, sender, recipient, now = Date.now() }) {
+ envelope = validateEnvelopeStructure(envelope); sender = parseJSON(canonicalJSON(sender)); recipient = parseJSON(canonicalJSON(recipient));
+ header(envelope.header, now);
+ if (canonicalJSON(envelope.header.from) !== canonicalJSON(identityOf(sender)) || canonicalJSON(envelope.header.to) !== canonicalJSON(identityOf(recipient))) refuse("key_changed");
+ await verifyBundle(sender, { cardUrl: sender.cardUrl, identityKey: sender.identityKey, now });
+ await verifyBundle(recipient, { cardUrl: recipient.cardUrl, identityKey: recipient.identityKey, now });
+ await verify(sender.identityKey, envelope.signature, encode("a2a-exposed sealed envelope v1\n" + canonicalJSON(envelopeBody(envelope))));
+ return { envelope, sender, recipient };
+}
 async function openRaw({ envelope, identity, sender, recipient, expected, purpose = "recipient", now = Date.now() }) {
  try {
-  if (typeof envelope === "string") envelope = parseJSON(envelope);
-  fields(envelope, ["v", "suite", "header", "recipient", "sender", "signature"]);
-  if (envelope.v !== 1 || envelope.suite !== SUITE) refuse("extension_unsupported");
+  // Capture caller-owned public objects and private key references before awaiting.
+  identity = { bundle: parseJSON(canonicalJSON(identity.bundle)), encryptionKey: identity.encryptionKey };
+  expected = parseJSON(canonicalJSON(expected));
   if (!["recipient", "sender"].includes(purpose)) refuse();
-  header(envelope.header, now);
-  // Exact expected bindings are mandatory. An unassigned initial task must be pinned by the ledger.
   fields(expected, ["contextId", "messageId", "taskId", "role", "state", "kind"]);
+  const verified = await verifyEnvelopeSignatureRaw({ envelope, sender, recipient, now });
+  ({ envelope, sender, recipient } = verified);
   for (const key of Object.keys(expected)) if (expected[key] !== envelope.header[key]) refuse();
-  if (canonicalJSON(envelope.header.from) !== canonicalJSON(identityOf(sender)) || canonicalJSON(envelope.header.to) !== canonicalJSON(identityOf(recipient))) refuse("key_changed");
   const own = purpose === "sender" ? sender : recipient;
   if (canonicalJSON(identityOf(identity.bundle)) !== canonicalJSON(identityOf(own))) refuse("key_lost");
-  await verifyBundle(sender, { cardUrl: sender.cardUrl, identityKey: sender.identityKey, now });
-  await verifyBundle(recipient, { cardUrl: recipient.cardUrl, identityKey: recipient.identityKey, now });
-  for (const copy of [envelope.recipient, envelope.sender]) {
-   fields(copy, ["enc", "ct"]); raw(copy.enc, 32); const ct = raw(copy.ct);
-   if (ct.length < 16 || ct.length > MAX_PLAINTEXT + 16) refuse("content_too_large");
-  }
-  await verify(sender.identityKey, envelope.signature, encode("a2a-exposed sealed envelope v1\n" + canonicalJSON(envelopeBody(envelope))));
   const copy = envelope[purpose];
   const context = await suite.createRecipientContext({ recipientKey: identity.encryptionKey, enc: raw(copy.enc, 32), info: encode("a2a-exposed sealed v1 " + purpose) });
   const plaintext = await context.open(raw(copy.ct), encode(canonicalJSON(envelope.header)));
@@ -210,4 +226,5 @@ export const verifyBundle = (...args) => safeCall(() => verifyBundleRaw(...args)
 export const generateIdentity = (...args) => safeCall(() => generateIdentityRaw(...args));
 export const rotateEncryptionKey = (...args) => safeCall(() => rotateEncryptionKeyRaw(...args));
 export const seal = (...args) => safeCall(() => sealRaw(...args));
+export const verifyEnvelopeSignature = (...args) => safeCall(() => verifyEnvelopeSignatureRaw(...args));
 export const open = (...args) => safeCall(() => openRaw(...args));

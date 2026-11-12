@@ -154,10 +154,10 @@ The endpoint's model provider can read content after local opening.
 
 ## Review status and integration revision
 
-The first AX review found nine integration blockers. This specification remains
-an unfrozen draft. [Integration contracts](sealed-v1-integration.md) resolves the
-proposed task assignment, carrier, ordering, durable delivery, archive, custody
-and error contracts for a second review. Those contracts are not implemented by
-the isolated primitives package. No encrypted traffic, card advertisement or
-CLI encryption dependency is enabled by the foundation PR. CLI inclusion is
-part of the later integrated client, after the package/protocol review gate.
+This specification remains an unfrozen draft.
+[Local SDK integration contracts](sealed-v1-sdk.md) describe the content,
+carrier, assignment, replay and ciphertext outbox APIs. Host authorization,
+transport integration, semantic archive restore and real platform acceptance
+remain required. No encrypted traffic, card advertisement or CLI encryption
+dependency is enabled. CLI inclusion belongs to the later integrated client,
+after the package/protocol review gate.

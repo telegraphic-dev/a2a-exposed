@@ -1,0 +1,546 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://a2a.exposed/ext/sealed/v1/content.schema.json",
+  "description": "Exact canonical decrypted content shape. UTF-8 size, canonical base64 bits, unique artifact IDs and signed header/author/state agreement are additionally checked by the runtime; this schema grants no trust/replay authorization.",
+  "$defs": {
+    "message": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "message"
+        },
+        "authorRole": {
+          "enum": [
+            "user",
+            "agent"
+          ]
+        },
+        "parts": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "text"
+                  },
+                  "text": {
+                    "type": "string",
+                    "maxLength": 200000
+                  },
+                  "mediaType": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "type": "string",
+                        "maxLength": 256
+                      }
+                    ]
+                  },
+                  "metadata": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "text",
+                  "mediaType",
+                  "metadata"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "data"
+                  },
+                  "data": {
+                    "type": "object"
+                  },
+                  "mediaType": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "type": "string",
+                        "maxLength": 256
+                      }
+                    ]
+                  },
+                  "metadata": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data",
+                  "mediaType",
+                  "metadata"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "file"
+                  },
+                  "file": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "anyOf": [
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "type": "string",
+                            "maxLength": 512
+                          }
+                        ]
+                      },
+                      "bytes": {
+                        "type": "string",
+                        "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "bytes"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "mediaType": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "type": "string",
+                        "maxLength": 256
+                      }
+                    ]
+                  },
+                  "metadata": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "file",
+                  "mediaType",
+                  "metadata"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "extensions": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          }
+        },
+        "referenceTaskIds": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "string",
+            "pattern": "^[!-~]{1,200}$"
+          }
+        },
+        "requestDigest": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        }
+      },
+      "required": [
+        "kind",
+        "authorRole",
+        "parts",
+        "metadata",
+        "extensions",
+        "referenceTaskIds"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "authorRole": {
+                "const": "agent"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "requestDigest"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "requestDigest"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "snapshot": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "snapshot"
+        },
+        "authorRole": {
+          "enum": [
+            "user",
+            "agent"
+          ]
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "previousDigest": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{43}$"
+            }
+          ]
+        },
+        "state": {
+          "enum": [
+            "submitted",
+            "working",
+            "input-required",
+            "completed",
+            "failed",
+            "canceled",
+            "rejected",
+            "auth-required"
+          ]
+        },
+        "statusMessage": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/message"
+            }
+          ]
+        },
+        "artifacts": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "properties": {
+              "artifactId": {
+                "type": "string",
+                "pattern": "^[!-~]{1,200}$"
+              },
+              "name": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "string",
+                    "maxLength": 512
+                  }
+                ]
+              },
+              "description": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "string",
+                    "maxLength": 4000
+                  }
+                ]
+              },
+              "parts": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 100,
+                "items": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "const": "text"
+                        },
+                        "text": {
+                          "type": "string",
+                          "maxLength": 200000
+                        },
+                        "mediaType": {
+                          "anyOf": [
+                            {
+                              "type": "null"
+                            },
+                            {
+                              "type": "string",
+                              "maxLength": 256
+                            }
+                          ]
+                        },
+                        "metadata": {
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "text",
+                        "mediaType",
+                        "metadata"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "const": "data"
+                        },
+                        "data": {
+                          "type": "object"
+                        },
+                        "mediaType": {
+                          "anyOf": [
+                            {
+                              "type": "null"
+                            },
+                            {
+                              "type": "string",
+                              "maxLength": 256
+                            }
+                          ]
+                        },
+                        "metadata": {
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "data",
+                        "mediaType",
+                        "metadata"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "const": "file"
+                        },
+                        "file": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "anyOf": [
+                                {
+                                  "type": "null"
+                                },
+                                {
+                                  "type": "string",
+                                  "maxLength": 512
+                                }
+                              ]
+                            },
+                            "bytes": {
+                              "type": "string",
+                              "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "bytes"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "mediaType": {
+                          "anyOf": [
+                            {
+                              "type": "null"
+                            },
+                            {
+                              "type": "string",
+                              "maxLength": 256
+                            }
+                          ]
+                        },
+                        "metadata": {
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "file",
+                        "mediaType",
+                        "metadata"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "metadata": {
+                "type": "object"
+              },
+              "extensions": {
+                "type": "array",
+                "maxItems": 100,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                }
+              }
+            },
+            "required": [
+              "artifactId",
+              "name",
+              "description",
+              "parts",
+              "metadata",
+              "extensions"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "terminal": {
+          "type": "boolean"
+        },
+        "requestDigest": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        }
+      },
+      "required": [
+        "kind",
+        "authorRole",
+        "revision",
+        "previousDigest",
+        "state",
+        "statusMessage",
+        "artifacts",
+        "metadata",
+        "terminal"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "revision": {
+                "const": 0
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "previousDigest": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "previousDigest": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{43}$"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "enum": [
+                  "completed",
+                  "failed",
+                  "canceled",
+                  "rejected"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "terminal": {
+                "const": true
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "terminal": {
+                "const": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "authorRole": {
+                "const": "agent"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "requestDigest"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "requestDigest"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/message"
+    },
+    {
+      "$ref": "#/$defs/snapshot"
+    }
+  ]
+}

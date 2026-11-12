@@ -6,7 +6,12 @@
   "exports": {
     ".": "./index.mjs",
     "./local-state": "./local-state.mjs",
-    "./backup": "./backup.mjs"
+    "./backup": "./backup.mjs",
+    "./content": "./content.mjs",
+    "./carriers": "./carriers.mjs",
+    "./assignment": "./assignment.mjs",
+    "./ledger": "./ledger.mjs",
+    "./tasks": "./tasks.mjs"
   },
   "files": [
     "index.mjs",
@@ -17,7 +22,13 @@
     "native-store.mjs",
     "backup.mjs",
     "LOCAL-CUSTODY-DRAFT.md",
-    "DEPENDENCIES.md"
+    "DEPENDENCIES.md",
+    "content.mjs",
+    "carriers.mjs",
+    "schemas/",
+    "assignment.mjs",
+    "ledger.mjs",
+    "tasks.mjs"
   ],
   "scripts": {
     "test": "node --test test/*.test.mjs",
