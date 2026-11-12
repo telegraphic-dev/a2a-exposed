@@ -651,7 +651,7 @@ must approve the actual RPC endpoint rather than silently replace that default.
 Cross-origin RPC interfaces are unsupported by this client profile.
 
 The host supplies a synchronous fresh pairing snapshot with exactly
-`{identity,endpoint,token,verified:true}`. This is a privileged local saved-grant
+`{identity,endpoint,token,verified:true,revision}`. This is a privileged local saved-grant
 attestation, never peer-supplied data or an approval mechanism. The eventual CLI
 host must derive it from its protected human-authorized pairing and effective
 credential; imported credentials are not automatically proof of an approved grant.
@@ -690,3 +690,43 @@ The tests inject a synthetic fetch transport and use protected temporary local
 states on both sides. They do not establish real HTTP/provider/platform, Worker
 routing/card advertisement, production installation, CLI/MCP wiring or release
 acceptance. Those gates remain in force; no service capability is enabled.
+
+
+### Adapter commit authorization and routing restrictions
+
+The transport constructor also requires withPairingLease(run). The privileged
+host must acquire its configuration-wide pairing/credential authorization lease,
+await run(), and release only after it resolves/rejects. Every local grant/token/
+endpoint mutation path must participate in that same lock or equivalent revision
+protocol. Acquiring this lease precedes the local SQLite queue, avoiding reverse
+lock ordering. This callback is never supplied through peer JSON or model flags.
+A fake/no-op callback in synthetic tests is not a real cross-process pairing lock;
+the actual CLI pairing store implementation remains an acceptance gate.
+
+acceptTask receives a private synchronous authorizationGuard and that lease. The
+current exact grant, verified state, effective credential, endpoint and pin are
+re-read inside BEGIN IMMEDIATE before writes and again immediately before COMMIT,
+after all crypto/key awaits and the action await. A failed guard rolls back the
+whole acceptance transaction. Lease callbacks must invoke/await the transaction
+once; missing, fire-and-forget and asynchronous-guard forms fail closed. This
+also applies to receipt-only send responses and previously pinned assignments.
+
+Concurrent failures re-read the original ID's current outbound state. If another
+caller acquired transmission authority, the loser reports unknown delivery and
+unknown/unknown readability rather than stale not-sent. One caller still obtains
+ciphertext/submits; no failure starts a second request or plaintext fallback.
+
+This bounded client refuses nonempty/invalid interface tenant values and unknown
+selected-interface routing fields before transmission. Empty tenant denotes the
+ordinary unscoped interface; real tenant routing is unsupported. Selected modern
+interfaces must explicitly declare the exact protocol and JSONRPC binding. Legacy
+0.3 main URLs honor preferredTransport (JSONRPC only, default when absent) and
+protocolVersion (0.3/0.3.0 only, default only without modern-only contradictions).
+An explicit additionalInterfaces JSONRPC entry may select its approved URL.
+A legacy URL cannot override an explicit HTTP+JSON binding or a 1.0-only version.
+
+The host pairing snapshot includes a nonnegative safe-integer revision. Every
+revocation, restoration or credential-generation change increments it under the
+same host lease, even if token bytes later match again. Final guard comparison
+includes this revision to reject in-flight revoke/restore ABA changes. The real
+store must persist/enforce that monotonicity; a synthetic reader does not prove it.

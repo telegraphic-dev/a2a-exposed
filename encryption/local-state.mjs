@@ -292,15 +292,34 @@ export class LocalState {
  close() { this.db?.close(); this.db = null; }
  ready() { if (!this.db) fail("keys_unconfigured", "Run keys stores --json, then keys init with an explicit --store and --card-url in this config directory."); }
  configId() { this.ready(); return this.db.prepare("SELECT value FROM meta WHERE key='config_id'").get().value; }
- async locked(action) {
-  this.ready(); if (!this.writable) fail("state_readonly");
-  if (this.db.prepare("SELECT value FROM meta WHERE key='restore_paused'").get()?.value === "1") fail("restore_archive_only", "Restored state cannot authorize live keys or trust. Keep it for archives; create a separate fresh receiving identity and re-verify peers.");
-  const previous = queues.get(this.root) || Promise.resolve(); let release;
-  const own = new Promise(resolve => { release = resolve; }), tail = previous.then(() => own); queues.set(this.root, tail);
-  await previous;
-  try { this.db.exec("BEGIN IMMEDIATE"); const result = await action(); this.db.exec("COMMIT"); return result; }
-  catch (error) { try { this.db.exec("ROLLBACK"); } catch {} if (error instanceof LocalStateError) throw error; fail("state_unavailable"); }
-  finally { release(); if (queues.get(this.root) === tail) queues.delete(this.root); }
+ async locked(action, { authorizationGuard, withAuthorizationLease } = {}) {
+  const guarded = authorizationGuard !== undefined || withAuthorizationLease !== undefined;
+  if (guarded && (typeof authorizationGuard !== "function" || typeof withAuthorizationLease !== "function")) fail("authorization_guard_invalid");
+  let runs = 0, leaseActive = true, committed = false, finalResult, pending;
+  const run = async () => {
+   this.ready(); if (!this.writable) fail("state_readonly");
+   if (this.db.prepare("SELECT value FROM meta WHERE key='restore_paused'").get()?.value === "1") fail("restore_archive_only", "Restored state cannot authorize live keys or trust. Keep it for archives; create a separate fresh receiving identity and re-verify peers.");
+   const check = () => {
+    if (!guarded) return;
+    if (!leaseActive || runs !== 1) fail("authorization_guard_invalid");
+    const approved = authorizationGuard();
+    if (approved !== true) { if (approved instanceof Promise) approved.catch(() => {}); fail("authorization_changed", "The current local authorization changed; no new delivery was committed."); }
+   };
+   const previous = queues.get(this.root) || Promise.resolve(); let release;
+   const own = new Promise(resolve => { release = resolve; }), tail = previous.then(() => own); queues.set(this.root, tail);
+   await previous;
+   try { this.db.exec("BEGIN IMMEDIATE"); check(); const result = await action(); check(); this.db.exec("COMMIT"); committed = true; finalResult = result; return result; }
+   catch (error) { try { this.db.exec("ROLLBACK"); } catch {} if (error instanceof LocalStateError) throw error; fail("state_unavailable"); }
+   finally { release(); if (queues.get(this.root) === tail) queues.delete(this.root); }
+  };
+  // Host lock must precede the local DB queue and stay held until run has committed/rolled back.
+  const invoke = () => { if (++runs !== 1) fail("authorization_guard_invalid"); pending = run(); return pending; };
+  if (!guarded) return invoke();
+  try { await withAuthorizationLease(invoke); }
+  catch (error) { leaseActive = false; if (pending) await pending.catch(() => {}); throw error; }
+  leaseActive = false; if (pending) await pending;
+  if (runs !== 1 || !committed) fail("authorization_guard_invalid");
+  return finalResult;
  }
  status({ limit = 20, identityCursor = 0, operationCursor = 0 } = {}) {
   pageInputs(limit, identityCursor); pageInputs(limit, operationCursor);
