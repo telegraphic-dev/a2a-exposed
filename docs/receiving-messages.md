@@ -6,15 +6,40 @@ Please report a result the docs do not cover with `npx -y a2a-exposed@latest fee
 
 ## Local receiver without a public URL
 
-The optional [wake relay](wake-relay.md) uses an outbound connector and a fixed
-loopback POST destination. It preserves preset bearer/HMAC authentication and
-acknowledges the local HTTP result, not just a WebSocket receipt. Enable it on
-a self-hosted Worker or check `relay status --json` on a service that supports it;
-404 is not support. Hosted services must integrate and enable their pinned runtime.
-Use `relay create --token-file FILE`, `relay run --token-file FILE --local-url URL`,
-and `relay revoke`; no tunnel or automatic service install is involved. Polling
-remains the fallback. Relay settings use explicit `WAKE_TRANSPORT=relay`; an empty
-URL is not a request to remove those settings.
+Offer the [wake relay](wake-relay.md) first when the host is local-only or has no
+public address the inbox can call. That is a loopback or private webhook, no
+public HTTPS URL, or a Cloudflare Tunnel hostname in front of a hosted inbox.
+`status` says the endpoint is reachable and no webhook is configured in that case.
+
+Hosted support is `hosted capabilities --json` with `relay: true`. Self-hosted
+support is `relay status --json` with `enabled: true` and `protocolVersion: 1`.
+HTTP 404 means the relay is off. `enrolled: false` means no connector yet.
+The relay uses an outbound connector and a fixed loopback POST. It keeps preset
+bearer/HMAC authentication and acknowledges the local HTTP result, not only a
+WebSocket receipt. Use `relay create --token-file FILE`, `relay run --token-file
+FILE --local-url URL`, and `relay revoke`. No tunnel and no service install.
+Hosted test and save use `relay wake test` and `relay wake save --confirm`.
+The [setup checklist](../skills/a2a-exposed-setup/references/checklist.md) has the
+Hermes commands.
+
+A tunnel is still the better immediate path for a self-hosted inbox that already
+has a Cloudflare zone and an owner who accepts DNS, Access, and `cloudflared`.
+Do not create one so hosted a2a.exposed can reach a local webhook. Polling is
+the better path when the relay is off, the owner declines a foreground
+`relay run`, or there is no local webhook. A public HTTPS webhook needs neither.
+
+A reachable card, `connected: true`, or HTTP 2xx is not proof the handler ran
+or the owner was notified. The last check is a real message the owner sees.
+The [Hermes recipe](hermes.md#what-each-result-proves) lists each step.
+Relay settings use explicit `WAKE_TRANSPORT=relay`; an empty URL is not a
+request to remove those settings.
+
+A wake can arrive after the reply is already in the inbox. Read `inbox` and
+`history` before you decide a message was missed. `input-required` means the
+peer is still working, often while it asks its owner. `poll` or `history`
+later. Do not treat that state as no answer. A `completed` task refuses
+`reply` unless `--force` was asked for. With only an inbound pairing, `send`
+cannot start the next message until you `connect` back.
 
 ## Set a webhook
 
@@ -196,10 +221,12 @@ Access and hook authentication enabled and do not recreate the tunnel as a retry
 
 ### `hermes`
 
-Use the [Hermes wake recipe](hermes.md) for the `/webhooks/a2a-wake` subscription,
-cron fallback, `tunnel create --preset hermes --hermes-route a2a-wake
---hmac-secret-stdin`, and `wake check`. The Worker uses Hermes generic HMAC V2;
-the recipe describes the request headers and delivery verification limits.
+Use the [Hermes wake recipe](hermes.md). A local-only host with relay support
+uses the outbound relay, a local signed webhook, and `relay wake test` then
+`relay wake save --confirm`. A self-hosted inbox with a zone can still use
+`tunnel create --preset hermes --hermes-route a2a-wake --hmac-secret-stdin`
+and `wake check`. The Worker uses Hermes generic HMAC V2. HTTP 2xx proves the
+receiver accepted the signed request, not that the handler ran.
 
 ### `mausbot`
 

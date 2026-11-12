@@ -6,6 +6,25 @@ connection; it needs no public webhook hostname, Cloudflare Tunnel, inbound port
 service install, or Cloudflare API credential. This is not a façade transport or a
 general HTTP/network tunnel. Existing HTTPS/Tunnel wakes remain unchanged.
 
+Offer it first when the agent host is local-only or has no public address the
+inbox can call: a loopback or private webhook, no public HTTPS URL, or only a
+Cloudflare Tunnel hostname in front of a hosted inbox. Hosted support is
+`hosted capabilities --json` with `relay: true`. Self-hosted support is
+`relay status --json` with `enabled: true` and `protocolVersion: 1`. HTTP 404
+means the relay is off. `enrolled: false` means no connector is enrolled yet.
+
+A tunnel remains the better path for a self-hosted inbox whose account already
+has a zone and whose owner accepts DNS, Access, and `cloudflared`. Do not create
+a tunnel so hosted a2a.exposed can reach a local webhook. Polling remains the
+better path when the relay is off, the owner declines this foreground process,
+or the agent has no local webhook. A public HTTPS webhook needs neither.
+
+`connected: true` proves the connector is up. A following HTTP 2xx proves the
+local receiver accepted that signed POST. Neither proves the agent handled the
+inbox or notified the owner. The [Hermes recipe](hermes.md#what-each-result-proves)
+walks through each result. The [setup checklist](../skills/a2a-exposed-setup/references/checklist.md)
+is the short path.
+
 ## Self-hosted setup
 
 Use Node 22.18 or newer. Enable the feature when deploying your own Worker:

@@ -2,7 +2,11 @@
 
 [![npm](https://img.shields.io/npm/v/a2a-exposed)](https://www.npmjs.com/package/a2a-exposed) [![CI](https://github.com/telegraphic-dev/a2a-exposed/actions/workflows/ci.yml/badge.svg)](https://github.com/telegraphic-dev/a2a-exposed/actions/workflows/ci.yml)
 
-a2a-exposed gives an AI agent a public [A2A](https://a2a-protocol.org) address. A Cloudflare Worker serves the agent card and the JSON-RPC endpoint, and inbound messages become tasks. Webhooks wake your agent, or the agent polls. The owner pages are `/` and `/device`.
+a2a-exposed gives an AI agent a public [A2A](https://a2a-protocol.org) address. A Cloudflare Worker serves the agent card and the JSON-RPC endpoint, and inbound messages become tasks. Webhooks wake your agent, an outbound relay delivers those wakes to a local receiver, or the agent polls. The owner pages are `/` and `/device`.
+
+Setup is five steps: create the address, receive messages, handle them, notify the owner, and confirm with a real message the owner sees. A reachable agent card is not the end. When the agent host is local-only or has no public HTTPS address, offer the [outbound wake relay](docs/wake-relay.md) when `hosted capabilities --json` reports `relay: true` or `relay status --json` reports protocol version 1. A tunnel or polling is the alternative when the relay is off or the owner chooses it. The checklist is in [Getting started](docs/getting-started.md#setup-checklist).
+
+Pairing is one-directional. Approving a peer lets them message you. To message them, run `connect` with their public address. Their owner approves that request. See [Connect another agent](docs/getting-started.md#connect-another-agent).
 
 Optional [HTTP and native A2A relay profiles](docs/http-relay.md) connect a fixed local webhook or authenticated A2A service using an outbound connector, preserving application payloads and responses, including bounded SSE. They are separate from the inbox and wake relay and require an explicitly enabled compatible Worker. Callers must be able to send a dedicated ingress-secret header, including for native card discovery; this is not URL-only public access.
 

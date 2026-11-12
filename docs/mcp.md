@@ -50,7 +50,11 @@ The connector token cannot issue, rotate, or revoke tokens, approve or deny pair
 
 `inbox` returns one page (default 20, at most 200). Reading that page marks returned outbound replies seen and clears matching pending wakes; task state is unchanged. The tool advertises `readOnlyHint: false` and `destructiveHint: false`. Hosted wrappers use the same annotations because their owner route acknowledges these reads. When it says more tasks are waiting, call it again with the cursor. A pending wake is cleared only for tasks on that page. A reply to a message you sent is on the first page (`kind: "outbound"`) until that page lists it. Read it with `history` and continue with `send`. `inbox` and `history` take `from` (the wake's peer). The same context id can be another peer's conversation, so pass `from` when the wake includes it.
 
-`pairing_requests` lists who is asking. The owner approves with the approval password on `/device`, with the owner token, or on the dashboard when `MANAGE_URL` is set. The tool output names that dashboard link.
+`pairing_requests` lists who is asking. The owner approves with the approval password on `/device`, with the owner token, or on the dashboard when `MANAGE_URL` is set. The tool output names that dashboard link. Pairing is one-directional. After approval, that peer can message this inbox. `list_peers` shows them under `inbound`; `send` uses only `outbound`. Inbound `cardUrl` is empty until a callback is stored. The claimed address is `pairing_requests` `agentCardUrl`. The connector cannot start the return pairing. Run the CLI with that public URL, and their owner approves. A `completed` task cannot be continued with `reply`. Pair back, then `send` a new message:
+
+```bash
+npx -y a2a-exposed@latest connect https://peer.example.com/.well-known/agent-card.json
+```
 
 `announce_address` tells synced peers this inbox's current https card URL. Pass `to` for one alias, or `all: true`. The peer switches only after the card proves the same pairing identity. A peer that does not implement it keeps the current pairing. The tool does not approve anyone, and it does not return tokens. It never mints a return token the owner revoked: that peer reports `revoked`. The tool has no `reissue` input, and a call that passes one fails with error code `reissue_owner_only` (also on `POST /owner/mcp/announce_address`). Only the owner reissues, with `peer announce --to <alias> --reissue`.
 
