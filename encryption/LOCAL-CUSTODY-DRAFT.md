@@ -1,9 +1,9 @@
 # Local custody/trust API — implementation checkpoint
 
-This branch adds a local-state API, not CLI enrollment or encrypted transport.
-Retained local encryption-key rotation, authenticated delivery ledger/outbox
-consumption and the complete CLI/stdio MCP flow are still pending.
-The current SQLite table stubs are not a replay/delivery implementation.
+The local-state and delivery-ledger APIs support custody, retained receiving-key
+rotation and local replay/outbox operations. CLI enrollment, encrypted transport
+and the complete CLI/stdio MCP flow remain pending. Privileged caller attestations
+require a reviewed host integration before enabling traffic.
 
 `stores()` lists explicit choices without creating credentials. `LocalState`
 opens an existing database read-only by default; `create:true` initializes a new
@@ -77,8 +77,8 @@ operation, state, revision and action; it is invalid after any transition, even
 when the state name is unchanged. After provider reads and key self-checks, the
 final SQLite transaction compares the original state/revision/digest before
 changing it. A stale adoption rolls back any identity insertion. List and obtain
-a new approval rather than reusing an earlier one. The unreleased schema is now
-version 2; earlier draft stores are preserved and refused, never auto-migrated.
+a new approval rather than reusing an earlier one. The unreleased schema is
+version 5; earlier draft stores are preserved and refused, never auto-migrated.
 
 
 ## Protected backup and archive-only restore API
@@ -137,3 +137,95 @@ platform directory sync remains unverified. A sync/I/O failure after promotion
 returns restore_installed_readback_failed and retains the archive-only target;
 it must not suggest an automatic overwrite/retry. Native/Windows durability and
 real power-loss behavior are untested.
+
+## Durable initial-request receiver API
+
+The unreleased local-state schema is version 5 for assignment/provenance and
+outbound/chain tables; earlier drafts remain preserved/refused, not migrated.
+`DeliveryLedger` is a privileged local API with no HTTP/model callback. Its
+pairingVerified/pairingIdentity/activation arguments are trusted local-transport
+attestations, never peer-controlled fields or permission grants. The real client
+adapter must derive them from existing human-authorized pairing and negotiated
+transport; that adapter/traffic path is not implemented here.
+
+`receiveInitial` verifies public signature/bindings before credential access,
+opens the request and prepares its signed assignment, then rechecks the exact
+current pin and atomically commits replay, assignment, ciphertext delivery and
+provenance. No computed receipt escapes a failed commit. Namespace uses the
+stable local signing identity plus peer identity/message ID, surviving X25519
+rotation. Exact duplicates reuse the original receipt/ackId/deliveryId; changed
+context/digest/task or conflicting task assignment refuses. A stable local/peer/task ID binds exactly one initial request/context, enforced both by a transaction check and database uniqueness across contexts. New pending trust or
+revocation during verification prevents commit. SQLite contains ciphertext and
+public provenance, not opened content.
+
+Pending receipt publication and model consumption are distinct. Cached receipt
+preparation requires current pairing/trust and never re-signs a new assignment.
+Transport acceptance does not claim peer receipt. Delivery reads are explicit,
+untrusted and at-least-once with a stable ID; only explicit consumed acknowledgment
+closes the local outbox. No exactly-once external-effect guarantee is made.
+Revoked/pending/rotated trust holds live reads and publication, while historical
+rows remain. Restored archive-only state lists those rows but cannot create,
+consume or acknowledge live work. Backups retain new ledger rows as encrypted
+archive state; full semantic/interop restore audit is still an acceptance gate.
+## Local sender, response and chain API
+
+These methods remain isolated SDK algorithms; no CLI/Worker transport is enabled.
+`prepareRequest` commits a self-opened encrypted request before returning its ID;
+`beginTransmission` commits transmitting before releasing the cached ciphertext
+once. A crash or timeout leaves unknown delivery, never permission for automatic
+re-send/new-ID/plaintext fallback. `recordTransport` retains provisional transport
+IDs separately; only a verified immutable peer assignment grants task authority.
+`acceptAssignment` pins that assignment and can hold a co-carried later snapshot
+while complete signed history is obtained; `acceptResponse` requires a previously
+pinned assignment and an inner digest of the exact locally prepared request.
+Acceptance and readback share an answered-request validator: the cached row must
+have user-request provenance (null reference_digest), an attempted state, exact
+current trust/key and digest, and a cached role=user/kind=message envelope whose
+IDs and sender/recipient match. An outgoing agent response is never a request
+being answered, even when both task directions share context/task strings.
+The local adapter must validate actual Task wrappers before attesting their IDs.
+
+`receiveFollowup` requires the existing inbound assignment, exact context/task and
+protocol. It queues ciphertext/provenance/replay atomically; duplicate packets keep
+the same local delivery ID. `prepareResponse` binds the exact accepted request
+and commits its ciphertext before transmission. Full snapshots start at revision
+zero, then bind the previous signed envelope digest. Snapshot head and outgoing
+ciphertext share a transaction, and concurrent creators compare the original
+head. Accepted snapshots must be consecutive; gaps refuse as provenance_incomplete,
+forks/terminal resurrection refuse, and older accepted snapshots read history-only.
+Terminal heads reject new follow-ups. These checks do not establish real adapter,
+Task-history ordering, multi-process sender, semantic restore or live traffic
+acceptance; those remain separate gates.
+
+
+## Local Task reconstruction
+
+`acceptTask` accepts an exact raw Task for an explicitly selected cached initial
+request. It validates any receipt and all public signatures before loading keys,
+opens agent events, and orders snapshots by commitment-checked revisions.
+One transaction binds the immutable assignment and queues the entire verified
+batch with replay/provenance/chain state. An incomplete or forked chain, changed
+trust or failed commit leaves no partial new assignment/delivery/head. Cached
+history user messages must be actual attempted local user requests; response-to-
+response correlation remains refused. Omitted Task artifacts are empty; present
+artifacts must still be an empty array. Routing-only cancellation cannot replace
+currentPeerState, which is derived from signed local chain state. The result
+returns IDs, not plaintext or model consumption. No actual network adapter calls
+this isolated API yet; archive/native/traffic/release gates remain.
+
+
+Task import does not place ordinary agent messages on the snapshot chain. A new
+unsequenced message is held with task_terminal if the known head or incoming
+verified batch is terminal, regardless of server array order or poll grouping.
+The whole rejected batch rolls back, including any new assignment. Previously
+accepted duplicate IDs remain stable; this does not infer their chronology from
+sentAt. Terminal content belongs inside a signed full snapshot. Separate archive
+opening remains unavailable and cannot authorize live delivery.
+
+A locally retained, exact current-pin assignment remains valid for fresh
+follow-ups after the initial envelope's 30-day admission window. The closed
+retained-cache path checks request bytes/digest/purpose/provenance and both request
+and receipt signatures against current bundles; a repeated receipt must equal
+the immutable saved one. It does not backdate now or expose an archive-mode flag.
+First unassigned requests/receipts still use live admission freshness, and every
+incoming agent envelope still passes the current-time live freshness checks.

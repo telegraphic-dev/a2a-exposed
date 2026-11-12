@@ -1,0 +1,73 @@
+{
+  "type": "object",
+  "properties": {
+    "v": {
+      "const": 1
+    },
+    "kind": {
+      "const": "assignment"
+    },
+    "requestDigest": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43}$"
+    },
+    "from": {
+      "$ref": "https://a2a.exposed/ext/sealed/v1/envelope.schema.json#/properties/header/properties/from"
+    },
+    "to": {
+      "$ref": "https://a2a.exposed/ext/sealed/v1/envelope.schema.json#/properties/header/properties/from"
+    },
+    "contextId": {
+      "type": "string",
+      "pattern": "^[!-~]{1,200}$"
+    },
+    "requestMessageId": {
+      "type": "string",
+      "pattern": "^[!-~]{1,200}$"
+    },
+    "taskId": {
+      "type": "string",
+      "pattern": "^[!-~]{1,200}$"
+    },
+    "responseKind": {
+      "const": "task"
+    },
+    "responseDigest": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        }
+      ]
+    },
+    "ackId": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+    },
+    "signature": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{86}$"
+    }
+  },
+  "required": [
+    "v",
+    "kind",
+    "requestDigest",
+    "from",
+    "to",
+    "contextId",
+    "requestMessageId",
+    "taskId",
+    "responseKind",
+    "responseDigest",
+    "ackId",
+    "signature"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://a2a.exposed/ext/sealed/v1/assignment.schema.json",
+  "description": "Signed assignment receipt structure. Runtime verifies exact request/task/endpoint binding, canonical bytes and Ed25519 signature; durable acceptance requires the local transaction."
+}

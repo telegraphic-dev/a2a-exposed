@@ -1,0 +1,195 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://a2a.exposed/ext/sealed/v1/message-carrier.schema.json",
+  "description": "Exact message carriers for supported 0.3 and 1.0 sealed paths. Runtime additionally compares every binding to the signed header. Assignment receipts are a separate pending schema/gate.",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "message"
+        },
+        "messageId": {
+          "type": "string",
+          "pattern": "^[!-~]{1,200}$"
+        },
+        "contextId": {
+          "type": "string",
+          "pattern": "^[!-~]{1,200}$"
+        },
+        "taskId": {
+          "type": "string",
+          "pattern": "^[!-~]{1,200}$"
+        },
+        "role": {
+          "enum": [
+            "user",
+            "agent"
+          ]
+        },
+        "parts": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "data"
+              },
+              "data": {
+                "$ref": "https://a2a.exposed/ext/sealed/v1/envelope.schema.json",
+                "properties": {
+                  "header": {
+                    "properties": {
+                      "kind": {
+                        "enum": [
+                          "message",
+                          "status"
+                        ]
+                      }
+                    }
+                  }
+                }
+              },
+              "metadata": {
+                "type": "object",
+                "properties": {
+                  "https://a2a.exposed/ext/sealed/v1": {
+                    "type": "object",
+                    "properties": {
+                      "v": {
+                        "const": 1
+                      }
+                    },
+                    "required": [
+                      "v"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "https://a2a.exposed/ext/sealed/v1"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "kind",
+              "data",
+              "metadata"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "extensions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {
+            "const": "https://a2a.exposed/ext/sealed/v1"
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "messageId",
+        "contextId",
+        "role",
+        "parts",
+        "extensions"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "messageId": {
+          "type": "string",
+          "pattern": "^[!-~]{1,200}$"
+        },
+        "contextId": {
+          "type": "string",
+          "pattern": "^[!-~]{1,200}$"
+        },
+        "taskId": {
+          "type": "string",
+          "pattern": "^[!-~]{1,200}$"
+        },
+        "role": {
+          "enum": [
+            "ROLE_USER",
+            "ROLE_AGENT"
+          ]
+        },
+        "parts": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {
+            "type": "object",
+            "properties": {
+              "data": {
+                "$ref": "https://a2a.exposed/ext/sealed/v1/envelope.schema.json",
+                "properties": {
+                  "header": {
+                    "properties": {
+                      "kind": {
+                        "enum": [
+                          "message",
+                          "status"
+                        ]
+                      }
+                    }
+                  }
+                }
+              },
+              "metadata": {
+                "type": "object",
+                "properties": {
+                  "https://a2a.exposed/ext/sealed/v1": {
+                    "type": "object",
+                    "properties": {
+                      "v": {
+                        "const": 1
+                      }
+                    },
+                    "required": [
+                      "v"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "https://a2a.exposed/ext/sealed/v1"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "data",
+              "metadata"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "extensions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {
+            "const": "https://a2a.exposed/ext/sealed/v1"
+          }
+        }
+      },
+      "required": [
+        "messageId",
+        "contextId",
+        "role",
+        "parts",
+        "extensions"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}

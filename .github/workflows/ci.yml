@@ -38,6 +38,8 @@ jobs:
         working-directory: encryption
       - run: npm test && npm pack --dry-run
         working-directory: encryption
+      - run: python3 -m venv /tmp/sealed-schema-venv && /tmp/sealed-schema-venv/bin/pip install jsonschema
+      - run: node encryption/test/schema-fixtures.mjs /tmp/sealed-schema-fixtures.json && /tmp/sealed-schema-venv/bin/python encryption/test/check-schemas.py /tmp/sealed-schema-fixtures.json
 
   test:
     runs-on: ubuntu-latest

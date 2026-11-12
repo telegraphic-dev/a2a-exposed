@@ -103,7 +103,7 @@ export async function stores() {
  return { ok: true, stores: [{ id: "file", available: true, private_keys: "protected local files", unattended: true }, { id: "keychain", available: native, backend: process.platform === "linux" ? "secret-service (no kernel fallback)" : process.platform === "darwin" ? "macOS Keychain" : "Windows Credential Manager", readiness: "not probed; owner authorization may be required", unattended: false }], next: "Select --store file or keychain explicitly; keychain never silently falls back." };
 }
 
-const SCHEMA_VERSION = 2; // Unreleased checkpoint change; older local drafts are preserved, never migrated.
+const SCHEMA_VERSION = 5; // Unreleased checkpoint change; older local drafts are preserved, never migrated.
 const recoveryApproval = (configId, row, action) => hash("a2a-exposed local recovery approval v1", { configId, operationId: row.id, operationDigest: row.digest, state: row.state, revision: row.revision, action });
 const SCHEMA = `CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS key_operations(id TEXT PRIMARY KEY,kind TEXT NOT NULL,public_json TEXT NOT NULL,digest TEXT NOT NULL,state TEXT NOT NULL,created_ms INTEGER NOT NULL,owner_pid INTEGER NOT NULL,broker_pid INTEGER,revision INTEGER NOT NULL DEFAULT 0);
@@ -113,8 +113,12 @@ CREATE TABLE IF NOT EXISTS trust_history(peer TEXT NOT NULL,version INTEGER NOT 
 CREATE TABLE IF NOT EXISTS proposals(digest TEXT PRIMARY KEY,peer TEXT NOT NULL,expected_digest TEXT NOT NULL,expected_version INTEGER NOT NULL,proposal TEXT NOT NULL,state TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS replay(local_id TEXT NOT NULL,sender TEXT NOT NULL,message_id TEXT NOT NULL,digest TEXT NOT NULL,context TEXT NOT NULL,task_id TEXT,created_ms INTEGER NOT NULL,PRIMARY KEY(local_id,sender,message_id));
 CREATE TABLE IF NOT EXISTS deliveries(id TEXT PRIMARY KEY,local_id TEXT NOT NULL,sender TEXT NOT NULL,message_id TEXT NOT NULL,envelope TEXT NOT NULL,state TEXT NOT NULL,created_ms INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS assignments(local_identity TEXT NOT NULL,peer_identity TEXT NOT NULL,request_message_id TEXT NOT NULL,direction TEXT NOT NULL,ack_id TEXT NOT NULL,peer TEXT NOT NULL,context TEXT NOT NULL,request_digest TEXT NOT NULL,task_id TEXT NOT NULL,receipt TEXT NOT NULL,protocol TEXT NOT NULL,trust_digest TEXT NOT NULL,local_key_id TEXT NOT NULL,ack_state TEXT NOT NULL,PRIMARY KEY(local_identity,peer_identity,request_message_id,direction),UNIQUE(local_identity,peer_identity,task_id,direction));
+CREATE TABLE IF NOT EXISTS delivery_provenance(id TEXT PRIMARY KEY,peer TEXT NOT NULL,trust_digest TEXT NOT NULL,trust_version INTEGER NOT NULL,local_key_id TEXT NOT NULL,envelope_digest TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS outbound(local_identity TEXT NOT NULL,peer_identity TEXT NOT NULL,message_id TEXT NOT NULL,peer TEXT NOT NULL,context TEXT NOT NULL,task_id TEXT,digest TEXT NOT NULL,envelope TEXT NOT NULL,trust_digest TEXT NOT NULL,local_key_id TEXT NOT NULL,reference_digest TEXT,state TEXT NOT NULL,transport_task_id TEXT,protocol TEXT NOT NULL,created_ms INTEGER NOT NULL,PRIMARY KEY(local_identity,peer_identity,message_id));
+CREATE TABLE IF NOT EXISTS chains(local_identity TEXT NOT NULL,peer_identity TEXT NOT NULL,context TEXT NOT NULL,task_id TEXT NOT NULL,author_identity TEXT NOT NULL,revision INTEGER NOT NULL,digest TEXT NOT NULL,state TEXT NOT NULL,terminal INTEGER NOT NULL,PRIMARY KEY(local_identity,peer_identity,context,task_id,author_identity));
 `;
-const SNAPSHOT_TABLES = ["meta", "key_operations", "identities", "trust", "trust_history", "proposals", "replay", "deliveries"];
+const SNAPSHOT_TABLES = ["meta", "key_operations", "identities", "trust", "trust_history", "proposals", "replay", "deliveries", "assignments", "delivery_provenance", "outbound", "chains"];
 const exact = (value, fields) => value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).sort().join() === [...fields].sort().join();
 async function checkPrivate(value, bundle) {
  const identity = await deserialize(value, bundle);

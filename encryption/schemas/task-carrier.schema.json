@@ -1,0 +1,247 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://a2a.exposed/ext/sealed/v1/task-carrier.schema.json",
+  "description": "Structural Task wrappers only. Runtime additionally checks raw duplicate keys, size, calendar validity, context/task and status/header agreement, conflicting duplicate IDs and immutable receipt equality. Schema and extraction do not authenticate content, array ordering or routing state.",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[!-~]{1,200}$"
+        },
+        "contextId": {
+          "type": "string",
+          "pattern": "^[!-~]{1,200}$"
+        },
+        "status": {
+          "type": "object",
+          "properties": {
+            "state": {
+              "enum": [
+                "submitted",
+                "working",
+                "input-required",
+                "completed",
+                "failed",
+                "canceled",
+                "rejected",
+                "auth-required"
+              ]
+            },
+            "message": {
+              "allOf": [
+                {
+                  "oneOf": [
+                    {
+                      "$ref": "https://a2a.exposed/ext/sealed/v1/message-carrier.schema.json#/oneOf/0"
+                    },
+                    {
+                      "$ref": "https://a2a.exposed/ext/sealed/v1/receipt-carrier.schema.json#/oneOf/0"
+                    },
+                    {
+                      "$ref": "https://a2a.exposed/ext/sealed/v1/assigned-carrier.schema.json#/oneOf/0"
+                    }
+                  ]
+                },
+                {
+                  "properties": {
+                    "role": {
+                      "const": "agent"
+                    }
+                  }
+                }
+              ]
+            },
+            "timestamp": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d(?:\\.\\d{1,9})?Z$"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "additionalProperties": false
+        },
+        "artifacts": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "history": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "https://a2a.exposed/ext/sealed/v1/message-carrier.schema.json#/oneOf/0"
+              },
+              {
+                "$ref": "https://a2a.exposed/ext/sealed/v1/receipt-carrier.schema.json#/oneOf/0"
+              },
+              {
+                "$ref": "https://a2a.exposed/ext/sealed/v1/assigned-carrier.schema.json#/oneOf/0"
+              }
+            ]
+          }
+        },
+        "metadata": {
+          "oneOf": [
+            {
+              "type": "object",
+              "maxProperties": 0
+            },
+            {
+              "type": "object",
+              "properties": {
+                "https://a2a.exposed/ext/sealed/v1": {
+                  "type": "object",
+                  "properties": {
+                    "v": {
+                      "const": 1
+                    }
+                  },
+                  "required": [
+                    "v"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "https://a2a.exposed/ext/sealed/v1"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "kind": {
+          "const": "task"
+        }
+      },
+      "required": [
+        "id",
+        "contextId",
+        "status",
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[!-~]{1,200}$"
+        },
+        "contextId": {
+          "type": "string",
+          "pattern": "^[!-~]{1,200}$"
+        },
+        "status": {
+          "type": "object",
+          "properties": {
+            "state": {
+              "enum": [
+                "TASK_STATE_SUBMITTED",
+                "TASK_STATE_WORKING",
+                "TASK_STATE_INPUT_REQUIRED",
+                "TASK_STATE_COMPLETED",
+                "TASK_STATE_FAILED",
+                "TASK_STATE_CANCELED",
+                "TASK_STATE_REJECTED",
+                "TASK_STATE_AUTH_REQUIRED"
+              ]
+            },
+            "message": {
+              "allOf": [
+                {
+                  "oneOf": [
+                    {
+                      "$ref": "https://a2a.exposed/ext/sealed/v1/message-carrier.schema.json#/oneOf/1"
+                    },
+                    {
+                      "$ref": "https://a2a.exposed/ext/sealed/v1/receipt-carrier.schema.json#/oneOf/1"
+                    },
+                    {
+                      "$ref": "https://a2a.exposed/ext/sealed/v1/assigned-carrier.schema.json#/oneOf/1"
+                    }
+                  ]
+                },
+                {
+                  "properties": {
+                    "role": {
+                      "const": "ROLE_AGENT"
+                    }
+                  }
+                }
+              ]
+            },
+            "timestamp": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d(?:\\.\\d{1,9})?Z$"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "additionalProperties": false
+        },
+        "artifacts": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "history": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "https://a2a.exposed/ext/sealed/v1/message-carrier.schema.json#/oneOf/1"
+              },
+              {
+                "$ref": "https://a2a.exposed/ext/sealed/v1/receipt-carrier.schema.json#/oneOf/1"
+              },
+              {
+                "$ref": "https://a2a.exposed/ext/sealed/v1/assigned-carrier.schema.json#/oneOf/1"
+              }
+            ]
+          }
+        },
+        "metadata": {
+          "oneOf": [
+            {
+              "type": "object",
+              "maxProperties": 0
+            },
+            {
+              "type": "object",
+              "properties": {
+                "https://a2a.exposed/ext/sealed/v1": {
+                  "type": "object",
+                  "properties": {
+                    "v": {
+                      "const": 1
+                    }
+                  },
+                  "required": [
+                    "v"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "https://a2a.exposed/ext/sealed/v1"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "contextId",
+        "status"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}
