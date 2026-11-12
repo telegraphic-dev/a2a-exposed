@@ -53,8 +53,9 @@ export function canonicalJSON(value, depth = 0) {
 }
 // JSON.parse first establishes grammar. Then a bounded token walk rejects duplicate members
 // before normalisation could erase a signed/unsigned disagreement.
-export function parseJSON(text) {
- if (typeof text !== "string" || Buffer.byteLength(text) > 1024 * 1024) refuse("content_too_large");
+export function parseJSON(text, maxBytes = 1024 * 1024) {
+ if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 32 * 1024 * 1024) refuse("content_too_large");
+ if (typeof text !== "string" || Buffer.byteLength(text) > maxBytes) refuse("content_too_large");
  let value; try { value = JSON.parse(text); } catch { refuse(); }
  const tokens = text.match(/"(?:[^"\\]|\\.)*"|[{}\[\]:,]|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null/g) || [];
  let offset = 0;

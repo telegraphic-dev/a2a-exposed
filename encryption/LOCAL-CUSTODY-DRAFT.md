@@ -47,3 +47,24 @@ status/SQLite, file modes/symlinks/loss, explicit stores/consent, exact approval
 independent/re-pair holds, concurrent proposals and retained trust history.
 No native keychain entries, server credentials, pairing grants or live resources
 were touched. Public protocol/privacy acceptance remains a later gate.
+
+Initialization commits a public recovery intent before the first external write.
+An uncertain outcome blocks new initialization until an explicit exact-digest
+reconciliation; an absent observation retains the old intent for late completion.
+Adoption self-checks the original credential and never replaces an active identity.
+The native broker PID is committed before private pipe input, and reconciliation
+refuses a still-running broker. Timeout handling waits for exit/close, escalates
+termination, and reports an unreaped process as unknown rather than success.
+
+Safety-code inspection accepts the exact pending proposal digest before approval;
+without it a pending change refuses to show the old code. Independent approval
+also binds the compared proposal digest. Identity replacement requires both
+separately approved re-pairing and independent re-verification. Literal boolean
+OS consent is checked at both custody and broker boundaries. Schema version,
+structure and integrity are checked without migration or replacement. Public
+status/proposal/history listings have explicit bounded continuation inputs.
+
+The isolated backup byte-format primitive uses bounded scrypt and authenticated
+AES-GCM. It does not yet export/restore the local store or enable restored live
+keys. Cross-process tests cover racing initialization and process death after a
+mock credential write; native lifecycle tests use simulated child processes only.

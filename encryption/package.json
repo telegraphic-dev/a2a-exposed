@@ -5,14 +5,17 @@
   "type": "module",
   "exports": {
     ".": "./index.mjs",
-    "./local-state": "./local-state.mjs"
+    "./local-state": "./local-state.mjs",
+    "./backup": "./backup.mjs"
   },
   "files": [
     "index.mjs",
     "README.md",
     "LICENSE",
     "local-state.mjs",
-    "keyring-worker.mjs"
+    "keyring-worker.mjs",
+    "native-store.mjs",
+    "backup.mjs"
   ],
   "scripts": {
     "test": "node --test test/*.test.mjs",
