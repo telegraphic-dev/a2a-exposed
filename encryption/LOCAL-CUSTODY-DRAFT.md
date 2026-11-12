@@ -68,3 +68,14 @@ The isolated backup byte-format primitive uses bounded scrypt and authenticated
 AES-GCM. It does not yet export/restore the local store or enable restored live
 keys. Cross-process tests cover racing initialization and process death after a
 mock credential write; native lifecycle tests use simulated child processes only.
+
+Recovery approval is action-specific. Each operation listing includes a monotonic
+revision and `recovery_choices` with the approval digest for adopt or
+abandon-if-absent. Pass the exact listed `approvalDigest` alongside the immutable
+operation digest and explicit human approval. The digest binds configuration,
+operation, state, revision and action; it is invalid after any transition, even
+when the state name is unchanged. After provider reads and key self-checks, the
+final SQLite transaction compares the original state/revision/digest before
+changing it. A stale adoption rolls back any identity insertion. List and obtain
+a new approval rather than reusing an earlier one. The unreleased schema is now
+version 2; earlier draft stores are preserved and refused, never auto-migrated.

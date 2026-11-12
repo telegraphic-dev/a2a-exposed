@@ -12,6 +12,7 @@ function fixture(t) {
  const state = new LocalState(dir, { create: true });
  t.after(() => { state.close(); fs.rmSync(dir, { recursive: true, force: true }); }); return { state, dir };
 }
+const recoveryDigest = (state,id,action) => state.status().operations.find(x=>x.id===id).recovery_choices.find(x=>x.action===action).approval_digest;
 const init = state => state.initialize({ store: "file", cardUrl: "https://local.example.com/card" });
 
 test("read-only discovery does not create state or private credentials", async t => {
@@ -120,8 +121,8 @@ test("file initialization failure remains tracked and blocks duplicate creation 
  await assert.rejects(init(state),{code:"initialization_pending"});
  assert.equal(state.status().operations.length,1);
  state.db.exec("DROP TRIGGER fail_init");state.close();const recovered=new LocalState(dir,{write:true});t.after(()=>recovered.close());
- await assert.rejects(recovered.reconcileInitialization({operationId:original.id,expectedDigest:"wrong",action:"adopt",ownerApproved:true}),{code:"approval_stale"});
- const result=await recovered.reconcileInitialization({operationId:original.id,expectedDigest:original.digest,action:"adopt",ownerApproved:true});
+ await assert.rejects(recovered.reconcileInitialization({operationId:original.id,expectedDigest:"wrong",action:"adopt",approvalDigest:recoveryDigest(recovered,original.id,"adopt"),ownerApproved:true}),{code:"approval_stale"});
+ const result=await recovered.reconcileInitialization({operationId:original.id,expectedDigest:original.digest,action:"adopt",approvalDigest:recoveryDigest(recovered,original.id,"adopt"),ownerApproved:true});
  assert.equal(result.id,original.operation.identityId);assert.equal(recovered.status().operations[0].state,"committed");
  assert.equal(fs.readdirSync(path.join(dir,"encryption")).filter(x=>x.endsWith('.key')).length,1);
 });
@@ -133,9 +134,9 @@ test("mock native late success stays catalogued and recovery never replaces an a
  await assert.rejects(state.initialize({store:'keychain',cardUrl:'https://local.example.com/card',allowOsConsent:true}),{code:'initialization_uncertain'});
  const intent=state.status().operations[0];assert.equal(intent.operation.store,'keychain');
  await assert.rejects(init(state),{code:'initialization_pending'});
- await state.reconcileInitialization({operationId:intent.id,expectedDigest:intent.digest,action:'abandon-if-absent',ownerApproved:true,allowOsConsent:true});
+ await state.reconcileInitialization({operationId:intent.id,expectedDigest:intent.digest,action:'abandon-if-absent',approvalDigest:recoveryDigest(state,intent.id,'abandon-if-absent'),ownerApproved:true,allowOsConsent:true});
  const active=await init(state);values.set(late.key,late.value);
- const result=await state.reconcileInitialization({operationId:intent.id,expectedDigest:intent.digest,action:'adopt',ownerApproved:true,allowOsConsent:true});
+ const result=await state.reconcileInitialization({operationId:intent.id,expectedDigest:intent.digest,action:'adopt',approvalDigest:recoveryDigest(state,intent.id,'adopt'),ownerApproved:true,allowOsConsent:true});
  assert.equal(result.retained_orphan,true);assert.equal(state.status().identities[0].id,active.id);
  assert.equal(state.status().operations.find(x=>x.id===intent.id).state,'orphan-retained');assert.equal(values.size,1);
 });
@@ -200,6 +201,6 @@ test('reconciliation refuses a recorded broker that is still alive',async t=>{
  await assert.rejects(init(state),{code:'initialization_uncertain'});
  const op=state.status().operations[0];
  state.db.prepare('UPDATE key_operations SET broker_pid=? WHERE id=?').run(process.pid,op.id);
- await assert.rejects(state.reconcileInitialization({operationId:op.id,expectedDigest:op.digest,action:'adopt',ownerApproved:true}),{code:'operation_in_progress'});
+ await assert.rejects(state.reconcileInitialization({operationId:op.id,expectedDigest:op.digest,action:'adopt',approvalDigest:recoveryDigest(state,op.id,'adopt'),ownerApproved:true}),{code:'operation_in_progress'});
  assert.equal(state.status().identities.length,0);
 });

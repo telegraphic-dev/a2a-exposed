@@ -96,8 +96,10 @@ export async function stores() {
  return { ok: true, stores: [{ id: "file", available: true, private_keys: "protected local files", unattended: true }, { id: "keychain", available: native, backend: process.platform === "linux" ? "secret-service (no kernel fallback)" : process.platform === "darwin" ? "macOS Keychain" : "Windows Credential Manager", readiness: "not probed; owner authorization may be required", unattended: false }], next: "Select --store file or keychain explicitly; keychain never silently falls back." };
 }
 
+const SCHEMA_VERSION = 2; // Unreleased checkpoint change; older local drafts are preserved, never migrated.
+const recoveryApproval = (configId, row, action) => hash("a2a-exposed local recovery approval v1", { configId, operationId: row.id, operationDigest: row.digest, state: row.state, revision: row.revision, action });
 const SCHEMA = `CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS key_operations(id TEXT PRIMARY KEY,kind TEXT NOT NULL,public_json TEXT NOT NULL,digest TEXT NOT NULL,state TEXT NOT NULL,created_ms INTEGER NOT NULL,owner_pid INTEGER NOT NULL,broker_pid INTEGER);
+CREATE TABLE IF NOT EXISTS key_operations(id TEXT PRIMARY KEY,kind TEXT NOT NULL,public_json TEXT NOT NULL,digest TEXT NOT NULL,state TEXT NOT NULL,created_ms INTEGER NOT NULL,owner_pid INTEGER NOT NULL,broker_pid INTEGER,revision INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS identities(id TEXT PRIMARY KEY,bundle TEXT NOT NULL,store TEXT NOT NULL,credential_namespace TEXT NOT NULL,live_state TEXT NOT NULL,created_ms INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS trust(peer TEXT PRIMARY KEY,version INTEGER NOT NULL,record TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS trust_history(peer TEXT NOT NULL,version INTEGER NOT NULL,record TEXT NOT NULL,digest TEXT NOT NULL,approved_ms INTEGER NOT NULL,PRIMARY KEY(peer,version));
@@ -139,12 +141,12 @@ export class LocalState {
      if (version === 0 && objects === 0) {
       this.db.exec(SCHEMA);
       this.db.prepare("INSERT INTO meta VALUES('config_id',?)").run(randomUUID());
-      this.db.exec("PRAGMA user_version=1");
-     } else if (version !== 1) fail("state_version_unsupported", "Use the matching local-state version or restore a trusted backup to a new directory; existing state was not replaced.");
+      this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`);
+     } else if (version !== SCHEMA_VERSION) fail("state_version_unsupported", "Use the matching local-state version or restore a trusted backup to a new directory; existing state was not replaced.");
      this.db.exec("COMMIT");
     } catch (error) { try { this.db.exec("ROLLBACK"); } catch {} throw error; }
    }
-   if (this.db.prepare("PRAGMA user_version").get().user_version !== 1) fail("state_version_unsupported", "Use the matching CLI/local-state version; no automatic migration or replacement was performed.");
+   if (this.db.prepare("PRAGMA user_version").get().user_version !== SCHEMA_VERSION) fail("state_version_unsupported", "Use the matching CLI/local-state version; no automatic migration or replacement was performed.");
    validateSchema(this.db);
    if (!UUID.test(this.db.prepare("SELECT value FROM meta WHERE key='config_id'").get()?.value || "")) fail("state_corrupt");
    if (write) this.db.exec("PRAGMA foreign_keys=ON;");
@@ -168,8 +170,8 @@ export class LocalState {
   if (!this.db) return { ok: true, configured: false, identities: [], operations: [], next: "Run keys stores --json before keys init." };
   const rows = this.db.prepare("SELECT rowid AS cursor,id,bundle,store,live_state,created_ms FROM identities WHERE rowid>? ORDER BY rowid LIMIT ?").all(identityCursor, limit + 1);
   const identities = rows.slice(0, limit).map(row => ({ id: row.id, bundle: JSON.parse(row.bundle), key_store: row.store, live_state: row.live_state, created_ms: row.created_ms }));
-  const opRows = this.db.prepare("SELECT rowid AS cursor,id,public_json,digest,state,created_ms,broker_pid FROM key_operations WHERE rowid>? ORDER BY rowid LIMIT ?").all(operationCursor, limit + 1);
-  const operations = opRows.slice(0, limit).map(row => ({ id: row.id, operation: JSON.parse(row.public_json), digest: row.digest, state: row.state, created_ms: row.created_ms, broker_pid: row.broker_pid }));
+  const opRows = this.db.prepare("SELECT rowid AS cursor,id,public_json,digest,state,created_ms,broker_pid,revision FROM key_operations WHERE rowid>? ORDER BY rowid LIMIT ?").all(operationCursor, limit + 1);
+  const operations = opRows.slice(0, limit).map(row => ({ id: row.id, operation: JSON.parse(row.public_json), digest: row.digest, state: row.state, created_ms: row.created_ms, broker_pid: row.broker_pid, revision: row.revision, recovery_choices: row.state === "committed" ? [] : ["adopt", "abandon-if-absent"].map(action => ({ action, approval_digest: recoveryApproval(this.configId(), row, action) })) }));
   return { ok: true, configured: Boolean(this.db.prepare("SELECT id FROM identities LIMIT 1").get()), config_identity: this.configId(), identities, operations, next_identity_cursor: rows.length > limit ? rows[limit - 1].cursor : null, next_operation_cursor: opRows.length > limit ? opRows[limit - 1].cursor : null, next: "Continue listings with the returned cursors. For pending key creation, reconcile the exact operation/digest; do not repeat initialization." };
  }
 
@@ -201,28 +203,28 @@ export class LocalState {
   });
   inflight.add(opId);
   try {
-   this.db.prepare("UPDATE key_operations SET state='writing' WHERE id=?").run(opId);
+   this.db.prepare("UPDATE key_operations SET state='writing',revision=revision+1 WHERE id=?").run(opId);
    if (store === "file") privateWrite(path.join(this.root, operation.fileRef), value + "\n");
-   else await this.keyring({ op: "set", namespace, account: operation.account, value }, allowOsConsent, pid => this.db.prepare("UPDATE key_operations SET broker_pid=? WHERE id=?").run(pid, opId));
-   this.db.prepare("UPDATE key_operations SET state='secret-written' WHERE id=?").run(opId);
+   else await this.keyring({ op: "set", namespace, account: operation.account, value }, allowOsConsent, pid => this.db.prepare("UPDATE key_operations SET broker_pid=?,revision=revision+1 WHERE id=?").run(pid, opId));
+   this.db.prepare("UPDATE key_operations SET state='secret-written',revision=revision+1 WHERE id=?").run(opId);
    return await this.locked(async () => {
     this.db.prepare("INSERT INTO identities VALUES(?,?,?,?,?,?)").run(id, JSON.stringify(identity.bundle), store, namespace, "local-only", now);
-    this.db.prepare("UPDATE key_operations SET state='committed' WHERE id=?").run(opId);
+    this.db.prepare("UPDATE key_operations SET state='committed',revision=revision+1 WHERE id=?").run(opId);
     return { ok: true, id, bundle: identity.bundle, key_store: store, live_state: "local-only", operation_id: opId, next: "Fresh keys remain local; no Worker enrollment or pairing trust was changed." };
    });
   } catch {
-   try { this.db.prepare("UPDATE key_operations SET state='uncertain' WHERE id=? AND state<>'committed'").run(opId); } catch {}
+   try { this.db.prepare("UPDATE key_operations SET state='uncertain',revision=revision+1 WHERE id=? AND state<>'committed'").run(opId); } catch {}
    const error = new LocalStateError("initialization_uncertain", "Key creation may have written local credentials. Run keys status --json and recover this exact intent; do not repeat initialization or delete keys automatically.");
    error.details = { operation_id: opId, operation_digest: digest, key_store: store }; throw error;
   } finally { inflight.delete(opId); }
  }
- async reconcileInitialization({ operationId, expectedDigest, action, ownerApproved = false, allowOsConsent = false }) {
+ async reconcileInitialization({ operationId, expectedDigest, action, approvalDigest, ownerApproved = false, allowOsConsent = false }) {
   if (ownerApproved !== true || !["adopt", "abandon-if-absent"].includes(action)) fail("owner_approval_required", "List recovery intents with keys status --json, then select an exact operation/digest and explicit recovery action approved by the human.");
   this.ready();
   const row = this.db.prepare("SELECT * FROM key_operations WHERE id=? AND kind='initialize'").get(operationId);
-  if (!row || row.digest !== expectedDigest || row.state === "committed") fail("approval_stale", "Run keys status --json; the recovery intent or its state changed.");
+  if (!row || row.digest !== expectedDigest || row.state === "committed" || !Number.isSafeInteger(row.revision) || recoveryApproval(this.configId(), row, action) !== approvalDigest) fail("approval_stale", "Run keys status --json; the recovery intent or its state changed.");
   if (inflight.has(operationId)) fail("operation_in_progress", "The original initialization is still running; inspect keys status --json after it exits.");
-  if (["prepared", "writing"].includes(row.state) && row.owner_pid !== process.pid) {
+  if (["prepared", "writing", "secret-written"].includes(row.state) && row.owner_pid !== process.pid) {
    try { process.kill(row.owner_pid, 0); fail("operation_in_progress"); } catch (error) { if (error instanceof LocalStateError || error.code !== "ESRCH") throw new LocalStateError("operation_in_progress"); }
   }
   if (row.broker_pid) {
@@ -231,6 +233,12 @@ export class LocalState {
   }
   const op = JSON.parse(row.public_json);
   if (hash("a2a-exposed local key operation v1", op) !== expectedDigest || !UUID.test(op.identityId) || op.fileRef !== op.identityId + ".key" || !UUID.test(op.namespace) || op.account !== op.identityId + "/" + op.bundle?.keyId || !["file", "keychain"].includes(op.store)) fail("state_corrupt");
+  // All provider reads and key checks occur outside the write transaction. The final
+  // mutation must compare the approved state/revision again, including no-op-looking results.
+  const transition = state => {
+   const result = this.db.prepare("UPDATE key_operations SET state=?,revision=revision+1 WHERE id=? AND digest=? AND state=? AND revision=?").run(state, operationId, expectedDigest, row.state, row.revision);
+   if (result.changes !== 1) fail("approval_stale", "The recovery state changed while credentials were inspected. Run keys status --json and obtain approval of a new action-specific recovery digest.");
+  };
   let value;
   if (op.store === "keychain") {
    if (allowOsConsent !== true) fail("key_store_consent");
@@ -242,7 +250,7 @@ export class LocalState {
   if (value === null || value === undefined) {
    if (action !== "abandon-if-absent") fail("key_lost", "The recorded key is absent at this observation. Choose abandon-if-absent explicitly to permit a new initialization; the old intent remains catalogued for late native completion.");
    return this.locked(async () => {
-    this.db.prepare("UPDATE key_operations SET state='observed-absent' WHERE id=? AND digest=?").run(operationId, expectedDigest);
+    transition("observed-absent");
     return { ok: true, operation_id: operationId, observed_absent: true, retained_intent: true, next: "No credential was deleted. The retained intent can be inspected again if a late native write appears." };
    });
   }
@@ -250,14 +258,12 @@ export class LocalState {
   const identity = await deserialize(value, op.bundle);
   await seal({ identity, recipient: op.bundle, binding: { contextId: randomUUID(), messageId: randomUUID(), taskId: null, role: "user", state: null, kind: "message" }, content: { purpose: "recover-local-key-check" } });
   return this.locked(async () => {
-   const current = this.db.prepare("SELECT state,digest FROM key_operations WHERE id=?").get(operationId);
-   if (!current || current.digest !== expectedDigest || current.state === "committed") fail("approval_stale");
    if (this.db.prepare("SELECT id FROM identities LIMIT 1").get()) {
-    this.db.prepare("UPDATE key_operations SET state='orphan-retained' WHERE id=?").run(operationId);
+    transition("orphan-retained");
     return { ok: true, operation_id: operationId, retained_orphan: true, next: "Another identity is active. This older credential remains tracked for archive/recovery; no active identity or trust was replaced." };
    }
    this.db.prepare("INSERT INTO identities VALUES(?,?,?,?,?,?)").run(op.identityId, JSON.stringify(op.bundle), op.store, op.namespace, "local-only", op.created_ms);
-   this.db.prepare("UPDATE key_operations SET state='committed' WHERE id=?").run(operationId);
+   transition("committed");
    return { ok: true, id: op.identityId, operation_id: operationId, recovered: true, bundle: op.bundle, next: "The original local key was recovered; no replacement, enrollment or pairing change occurred." };
   });
  }
