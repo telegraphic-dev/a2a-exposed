@@ -59,6 +59,38 @@ before writes and COMMIT. Tests use synthetic HTTP/provider fixtures; the real
 CLI pairing writer lock and platform integration remain unfinished. See the
 [adapter host contract](sealed-v1-integration.md#sealed-only-json-rpc-client-adapter).
 
+## Internal maintenance and staged grant records
+
+`LocalState._withMaintenanceQueue` is an internal coordinator mechanism. A host
+must acquire its authority lease before the shared in-process SDK queue. The
+callback can commit distinct SQLite transactions while retaining that queue;
+ordinary SDK writers wait until it exits. Synchronous authority checks run on
+entry, transaction boundaries and exit. Queue reentry, escaped transaction
+handles, open transactions at callback exit, read-only stores and archive holds
+refuse. A failed later stage rolls back only its open transaction; earlier
+committed stages remain durable. An uncertain COMMIT never implies rollback.
+
+The queue is not a cross-process writer lock. An idle interval between SQLite
+transactions permits another process to write. A future host must coordinate
+all pairing, credential and SDK writers under the same real authority lease.
+The stage-aware exit check may validate an already committed host transition;
+it cannot permit another SDK write after authority has been released.
+
+Within a live maintenance transaction, `stageGrant`, `inspectGrant` and
+`transitionGrant` operate on exact immutable configuration/intent/set/epoch/
+revision/MAC bindings. SQL constraints also enforce canonical UUID/base64url
+encoding, generation uniqueness and retained monotonic states: staged to ready
+or void, then ready to void. Void history cannot be deleted or resurrected by
+replacement. A ready record is coordination metadata; it grants no pairing,
+trust, admission, publication or delivery authority.
+
+Schema 6 preserves and refuses older draft stores without migration. A store
+with any host-grant history, including void rows, refuses backup before private
+credential reads or output creation. Restore refuses imported host-grant rows
+before creating a target. Empty-host backups still restore archive-only. Host
+grant archival, host authority integration and the continuation coordinator
+remain unfinished; these internal methods enable no CLI/MCP/Worker route.
+
 ## Remaining integration boundaries
 
 Pairing identity and extension activation are privileged caller attestations in
@@ -67,7 +99,7 @@ acceptance, publication and local consumption. The codecs and ledger invoke no n
 model callbacks; only the explicitly constructed transport adapter invokes fetch. Read/ack gives stable at-least-once delivery IDs and does not
 promise exactly-once external effects.
 
-The unreleased local schema changes from version 2 to 5. Older draft stores are
+The unreleased local schema changes from version 2 to 6. Older draft stores are
 preserved and refused rather than migrated. Backup restores remain archive-only;
 semantic ledger restore, live continuation, native credential-store acceptance
 and real Windows validation remain outside this slice. See the
