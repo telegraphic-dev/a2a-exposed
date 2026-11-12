@@ -99,3 +99,10 @@ revocation, restoration or credential-generation change increments it under the
 same host lease, even if token bytes later match again. Final guard comparison
 includes this revision to reject in-flight revoke/restore ABA changes. The real
 store must persist/enforce that monotonicity; a synthetic reader does not prove it.
+
+
+The internal maintenance queue retains in-process SDK ordering across separate
+SQLite commits and stages immutable host-grant metadata. It does not supply a
+cross-process authority lock or make ready records eligible for live traffic.
+Schema 6 refuses older draft stores without migration; nonempty host-grant
+history currently blocks backup/restore. See the [maintenance contract](../docs/extensions/sealed-v1-sdk.md#internal-maintenance-and-staged-grant-records).

@@ -78,7 +78,7 @@ when the state name is unchanged. After provider reads and key self-checks, the
 final SQLite transaction compares the original state/revision/digest before
 changing it. A stale adoption rolls back any identity insertion. List and obtain
 a new approval rather than reusing an earlier one. The unreleased schema is
-version 5; earlier draft stores are preserved and refused, never auto-migrated.
+version 6; earlier draft stores are preserved and refused, never auto-migrated.
 
 
 ## Protected backup and archive-only restore API
@@ -140,8 +140,8 @@ real power-loss behavior are untested.
 
 ## Durable initial-request receiver API
 
-The unreleased local-state schema is version 5 for assignment/provenance and
-outbound/chain tables; earlier drafts remain preserved/refused, not migrated.
+The unreleased local-state schema is version 6 for SDK host-grant staging,
+assignment/provenance and outbound/chain tables; earlier drafts remain preserved/refused, not migrated.
 `DeliveryLedger` is a privileged local API with no HTTP/model callback. Its
 pairingVerified/pairingIdentity/activation arguments are trusted local-transport
 attestations, never peer-controlled fields or permission grants. The real client
@@ -253,3 +253,11 @@ revocation, restoration or credential-generation change increments it under the
 same host lease, even if token bytes later match again. Final guard comparison
 includes this revision to reject in-flight revoke/restore ABA changes. The real
 store must persist/enforce that monotonicity; a synthetic reader does not prove it.
+
+
+Schema 6 host-grant rows are internal coordination metadata, not admission. Older
+draft databases are preserved/refused without migration. Nonempty host-grant
+history (including void records) currently refuses backup/restore before private
+credential access or output/destination creation; nothing is silently omitted.
+Empty-host custody snapshots retain archive-only restore. Full host-grant archive
+semantics and live coordinator integration need separate review.

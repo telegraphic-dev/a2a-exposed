@@ -1,5 +1,6 @@
 // Local-only custody/trust foundation. These APIs do not enroll a Worker or send traffic.
 import fs from "node:fs";
+import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
@@ -14,7 +15,20 @@ import { generateIdentity, rotateEncryptionKey, verifyBundle, canonicalJSON, par
 const suite = new CipherSuite({ kem: new DhkemX25519HkdfSha256(), kdf: new HkdfSha256(), aead: new Chacha20Poly1305() });
 const b64 = value => Buffer.from(value).toString("base64url");
 const hash = (label, value) => createHash("sha256").update(label + "\n" + canonicalJSON(value)).digest("base64url");
-const queues = new Map();
+const queues = new Map(), queueContexts = new AsyncLocalStorage(), maintenanceOwners = new WeakMap();
+function refuseQueueReentry(root, maintenance = false) {
+ if ((queueContexts.getStore() || []).some(c => c.active && (maintenance || c.kind === "maintenance" || c.root === root))) fail("state_queue_reentry");
+}
+async function acquireQueue(root) {
+ const previous = queues.get(root) || Promise.resolve(); let release;
+ const own = new Promise(resolve => { release = resolve; }), tail = previous.then(() => own); queues.set(root, tail);
+ await previous;
+ return () => { release(); if (queues.get(root) === tail) queues.delete(root); };
+}
+async function inQueueContext(context, action) {
+ try { return await queueContexts.run([...(queueContexts.getStore() || []), context], action); }
+ finally { context.active = false; }
+}
 const inflight = new Set();
 const UUID = /^[a-f0-9-]{36}$/;
 const KEY = /^[A-Za-z0-9_-]{43}$/;
@@ -103,8 +117,20 @@ export async function stores() {
  return { ok: true, stores: [{ id: "file", available: true, private_keys: "protected local files", unattended: true }, { id: "keychain", available: native, backend: process.platform === "linux" ? "secret-service (no kernel fallback)" : process.platform === "darwin" ? "macOS Keychain" : "Windows Credential Manager", readiness: "not probed; owner authorization may be required", unattended: false }], next: "Select --store file or keychain explicitly; keychain never silently falls back." };
 }
 
-const SCHEMA_VERSION = 5; // Unreleased checkpoint change; older local drafts are preserved, never migrated.
+const SCHEMA_VERSION = 6; // Unreleased checkpoint change; older local drafts are preserved, never migrated.
 const recoveryApproval = (configId, row, action) => hash("a2a-exposed local recovery approval v1", { configId, operationId: row.id, operationDigest: row.digest, state: row.state, revision: row.revision, action });
+const hostUUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
+const HOST_FIELDS = ["config_id", "intent_id", "set_id", "epoch", "target_revision", "membership_mac"];
+const sqlUUID = c => `length(CAST(${c} AS BLOB))=36 AND length(${c})=36 AND substr(${c},9,1)='-' AND substr(${c},14,1)='-' AND substr(${c},19,1)='-' AND substr(${c},24,1)='-' AND substr(${c},15,1)='4' AND substr(${c},20,1) IN ('8','9','a','b') AND length(replace(${c},'-',''))=32 AND replace(${c},'-','') NOT GLOB '*[^0-9a-f]*'`;
+function hostGrantBinding(value) {
+ try {
+  const r = parseJSON(canonicalJSON(value));
+  if (!r || Array.isArray(r) || Object.keys(r).sort().join() !== [...HOST_FIELDS].sort().join()) fail("host_grant_invalid");
+  for (const key of ["config_id", "intent_id", "set_id", "epoch"]) if (typeof r[key] !== "string" || !hostUUID.test(r[key])) fail("host_grant_invalid");
+  if (!Number.isSafeInteger(r.target_revision) || r.target_revision < 1 || typeof r.membership_mac !== "string" || !KEY.test(r.membership_mac) || Buffer.from(r.membership_mac,"base64url").toString("base64url") !== r.membership_mac) fail("host_grant_invalid");
+  return r;
+ } catch { fail("host_grant_invalid"); }
+}
 const SCHEMA = `CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS key_operations(id TEXT PRIMARY KEY,kind TEXT NOT NULL,public_json TEXT NOT NULL,digest TEXT NOT NULL,state TEXT NOT NULL,created_ms INTEGER NOT NULL,owner_pid INTEGER NOT NULL,broker_pid INTEGER,revision INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS identities(id TEXT PRIMARY KEY,bundle TEXT NOT NULL,store TEXT NOT NULL,credential_namespace TEXT NOT NULL,live_state TEXT NOT NULL,created_ms INTEGER NOT NULL);
@@ -117,8 +143,15 @@ CREATE TABLE IF NOT EXISTS assignments(local_identity TEXT NOT NULL,peer_identit
 CREATE TABLE IF NOT EXISTS delivery_provenance(id TEXT PRIMARY KEY,peer TEXT NOT NULL,trust_digest TEXT NOT NULL,trust_version INTEGER NOT NULL,local_key_id TEXT NOT NULL,envelope_digest TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS outbound(local_identity TEXT NOT NULL,peer_identity TEXT NOT NULL,message_id TEXT NOT NULL,peer TEXT NOT NULL,context TEXT NOT NULL,task_id TEXT,digest TEXT NOT NULL,envelope TEXT NOT NULL,trust_digest TEXT NOT NULL,local_key_id TEXT NOT NULL,reference_digest TEXT,state TEXT NOT NULL,transport_task_id TEXT,protocol TEXT NOT NULL,created_ms INTEGER NOT NULL,PRIMARY KEY(local_identity,peer_identity,message_id));
 CREATE TABLE IF NOT EXISTS chains(local_identity TEXT NOT NULL,peer_identity TEXT NOT NULL,context TEXT NOT NULL,task_id TEXT NOT NULL,author_identity TEXT NOT NULL,revision INTEGER NOT NULL,digest TEXT NOT NULL,state TEXT NOT NULL,terminal INTEGER NOT NULL,PRIMARY KEY(local_identity,peer_identity,context,task_id,author_identity));
+CREATE TABLE IF NOT EXISTS host_grant_sets(config_id TEXT NOT NULL CHECK(${sqlUUID("config_id")}),intent_id TEXT PRIMARY KEY NOT NULL CHECK(${sqlUUID("intent_id")}),set_id TEXT NOT NULL UNIQUE CHECK(${sqlUUID("set_id")}),epoch TEXT NOT NULL CHECK(${sqlUUID("epoch")}),target_revision INTEGER NOT NULL CHECK(typeof(target_revision)='integer' AND target_revision>=1 AND target_revision<=9007199254740991),membership_mac TEXT NOT NULL CHECK(length(CAST(membership_mac AS BLOB))=43 AND length(membership_mac)=43 AND membership_mac NOT GLOB '*[^A-Za-z0-9_-]*' AND substr(membership_mac,43,1) IN ('A','E','I','M','Q','U','Y','c','g','k','o','s','w','0','4','8')),state TEXT NOT NULL CHECK(state IN ('staged','ready','void')),UNIQUE(config_id,epoch,target_revision));
+CREATE TRIGGER IF NOT EXISTS host_grant_noreplace BEFORE INSERT ON host_grant_sets WHEN EXISTS(SELECT 1 FROM host_grant_sets WHERE intent_id=NEW.intent_id OR set_id=NEW.set_id OR (config_id=NEW.config_id AND epoch=NEW.epoch AND target_revision=NEW.target_revision)) BEGIN SELECT RAISE(ABORT,'host_grant_conflict'); END;
+CREATE TRIGGER IF NOT EXISTS host_grant_initial BEFORE INSERT ON host_grant_sets WHEN NEW.state<>'staged' BEGIN SELECT RAISE(ABORT,'host_grant_initial'); END;
+CREATE TRIGGER IF NOT EXISTS host_grant_config BEFORE INSERT ON host_grant_sets WHEN NEW.config_id IS NOT (SELECT value FROM meta WHERE key='config_id') BEGIN SELECT RAISE(ABORT,'host_grant_config'); END;
+CREATE TRIGGER IF NOT EXISTS host_grant_immutable BEFORE UPDATE OF config_id,intent_id,set_id,epoch,target_revision,membership_mac ON host_grant_sets BEGIN SELECT RAISE(ABORT,'host_grant_immutable'); END;
+CREATE TRIGGER IF NOT EXISTS host_grant_retained BEFORE DELETE ON host_grant_sets BEGIN SELECT RAISE(ABORT,'host_grant_retained'); END;
+CREATE TRIGGER IF NOT EXISTS host_grant_transition BEFORE UPDATE OF state ON host_grant_sets WHEN NOT ((OLD.state='staged' AND NEW.state IN ('ready','void')) OR (OLD.state='ready' AND NEW.state='void')) BEGIN SELECT RAISE(ABORT,'host_grant_transition'); END;
 `;
-const SNAPSHOT_TABLES = ["meta", "key_operations", "identities", "trust", "trust_history", "proposals", "replay", "deliveries", "assignments", "delivery_provenance", "outbound", "chains"];
+const SNAPSHOT_TABLES = ["meta", "key_operations", "identities", "trust", "trust_history", "proposals", "replay", "deliveries", "assignments", "delivery_provenance", "outbound", "chains", "host_grant_sets"];
 const exact = (value, fields) => value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).sort().join() === [...fields].sort().join();
 async function checkPrivate(value, bundle) {
  const identity = await deserialize(value, bundle);
@@ -127,6 +160,8 @@ async function checkPrivate(value, bundle) {
 async function validateSnapshot(snapshot, { checkCredentials = true } = {}) {
  const invalid = () => fail("backup_snapshot_invalid", "The backup failed local schema/key validation. Nothing was installed; preserve the original file and use a trusted matching backup.");
  if (!exact(snapshot, ["format", "v", "schema", "configIdentity", "createdMs", "rows", "credentials"]) || snapshot.format !== "a2a-exposed custody snapshot" || snapshot.v !== 1 || snapshot.schema !== SCHEMA_VERSION || !UUID.test(snapshot.configIdentity || "") || !Number.isSafeInteger(snapshot.createdMs) || snapshot.createdMs < 0 || !exact(snapshot.rows, SNAPSHOT_TABLES) || !Array.isArray(snapshot.credentials) || snapshot.credentials.length > 5000) invalid();
+ if (!Array.isArray(snapshot.rows.host_grant_sets)) invalid();
+ if (snapshot.rows.host_grant_sets.length) fail("backup_host_grants_unsupported", "Host grant archival is not supported in this draft. Preserve the original store; no output/destination was created and no credential provider was accessed.");
  const db = new DatabaseSync(":memory:");
  try {
   db.exec(SCHEMA);
@@ -289,28 +324,33 @@ export class LocalState {
   } catch (error) { try { this.db?.close(); } catch {} this.db = null; throw stateError(error); }
  }
 
- close() { this.db?.close(); this.db = null; }
+ close() { if (maintenanceOwners.has(this)) fail("maintenance_queue_active"); this.db?.close(); this.db = null; }
  ready() { if (!this.db) fail("keys_unconfigured", "Run keys stores --json, then keys init with an explicit --store and --card-url in this config directory."); }
  configId() { this.ready(); return this.db.prepare("SELECT value FROM meta WHERE key='config_id'").get().value; }
  async locked(action, { authorizationGuard, withAuthorizationLease } = {}) {
+  refuseQueueReentry(this.root);
   const guarded = authorizationGuard !== undefined || withAuthorizationLease !== undefined;
   if (guarded && (typeof authorizationGuard !== "function" || typeof withAuthorizationLease !== "function")) fail("authorization_guard_invalid");
   let runs = 0, leaseActive = true, committed = false, finalResult, pending;
   const run = async () => {
    this.ready(); if (!this.writable) fail("state_readonly");
    if (this.db.prepare("SELECT value FROM meta WHERE key='restore_paused'").get()?.value === "1") fail("restore_archive_only", "Restored state cannot authorize live keys or trust. Keep it for archives; create a separate fresh receiving identity and re-verify peers.");
+   const root = this.root, db = this.db;
    const check = () => {
+    this.ready(); if (this.root !== root || this.db !== db || !this.writable) fail("state_changed");
+    if (db.prepare("SELECT value FROM meta WHERE key='restore_paused'").get()?.value === "1") fail("restore_archive_only");
     if (!guarded) return;
     if (!leaseActive || runs !== 1) fail("authorization_guard_invalid");
     const approved = authorizationGuard();
     if (approved !== true) { if (approved instanceof Promise) approved.catch(() => {}); fail("authorization_changed", "The current local authorization changed; no new delivery was committed."); }
    };
-   const previous = queues.get(this.root) || Promise.resolve(); let release;
-   const own = new Promise(resolve => { release = resolve; }), tail = previous.then(() => own); queues.set(this.root, tail);
-   await previous;
-   try { this.db.exec("BEGIN IMMEDIATE"); check(); const result = await action(); check(); this.db.exec("COMMIT"); committed = true; finalResult = result; return result; }
-   catch (error) { try { this.db.exec("ROLLBACK"); } catch {} if (error instanceof LocalStateError) throw error; fail("state_unavailable"); }
-   finally { release(); if (queues.get(this.root) === tail) queues.delete(this.root); }
+   const release = await acquireQueue(root), context = { root, kind: "transaction", active: true };
+   try {
+    return await inQueueContext(context, async () => {
+     try { db.exec("BEGIN IMMEDIATE"); check(); const result = await action(); check(); db.exec("COMMIT"); committed = true; finalResult = result; return result; }
+     catch (error) { try { db.exec("ROLLBACK"); } catch {} if (error instanceof LocalStateError) throw error; fail("state_unavailable"); }
+    });
+   } finally { release(); }
   };
   // Host lock must precede the local DB queue and stay held until run has committed/rolled back.
   const invoke = () => { if (++runs !== 1) fail("authorization_guard_invalid"); pending = run(); return pending; };
@@ -320,6 +360,74 @@ export class LocalState {
   leaseActive = false; if (pending) await pending;
   if (runs !== 1 || !committed) fail("authorization_guard_invalid");
   return finalResult;
+ }
+ // Internal coordinator mechanism, not an approval/admission API. Host authority must precede this queue.
+ async _withMaintenanceQueue({ assertAuthority, withAuthorityLease } = {}, action) {
+  try {
+   refuseQueueReentry(this.root, true);
+   if (typeof assertAuthority !== "function" || typeof withAuthorityLease !== "function" || typeof action !== "function") fail("maintenance_queue_invalid");
+   this.ready(); if (!this.writable) fail("state_readonly");
+   const root = this.root, db = this.db, config = this.configId();
+   let runs = 0, authorityActive = true, pending, completed = false, finalResult;
+   const run = () => {
+    if (++runs !== 1 || !authorityActive) fail("maintenance_queue_invalid");
+    pending = (async () => {
+     const release = await acquireQueue(root), context = { root, kind: "maintenance", active: true }; let live = true, transaction = false;
+     const state = () => {
+      if (!live) fail("maintenance_queue_expired");
+      if (this.root !== root || this.db !== db || this.writable !== true || db.prepare("SELECT value FROM meta WHERE key='config_id'").get()?.value !== config) fail("maintenance_state_changed");
+      if (db.prepare("SELECT value FROM meta WHERE key='restore_paused'").get()?.value === "1") fail("restore_archive_only");
+     };
+     const check = (stage = "transaction") => {
+      state(); if (!authorityActive || runs !== 1) fail("maintenance_queue_invalid");
+      const approved = assertAuthority(stage);
+      if (approved !== true) { if (approved instanceof Promise) approved.catch(() => {}); fail("maintenance_authorization_changed"); }
+      state();
+     };
+     const view = Object.freeze({
+      begin: () => { check(); if (transaction) fail("maintenance_transaction_state"); try { db.exec("BEGIN IMMEDIATE"); transaction = true; check(); } catch (error) { try { db.exec("ROLLBACK"); } catch {} transaction = false; throw error; } },
+      commit: () => { check(); if (!transaction) fail("maintenance_transaction_state"); db.exec("COMMIT"); transaction = false; check(); },
+      rollback: () => { state(); if (!transaction) fail("maintenance_transaction_state"); db.exec("ROLLBACK"); transaction = false; },
+      transactionState: () => { state(); return transaction ? "open" : "idle"; },
+      stageGrant: input => {
+       if (!live) fail("maintenance_queue_expired"); const r = hostGrantBinding(input); check(); if (!transaction) fail("maintenance_transaction_state"); if (r.config_id !== config) fail("host_grant_config");
+       const existing = db.prepare("SELECT * FROM host_grant_sets WHERE intent_id=?").get(r.intent_id);
+       if (existing) { if (existing.state !== "staged" || HOST_FIELDS.some(k => existing[k] !== r[k])) fail("host_grant_conflict"); return { ...existing }; }
+       if (db.prepare("SELECT 1 FROM host_grant_sets WHERE set_id=? OR (config_id=? AND epoch=? AND target_revision=?)").get(r.set_id,r.config_id,r.epoch,r.target_revision)) fail("host_grant_conflict");
+       db.prepare("INSERT INTO host_grant_sets VALUES(?,?,?,?,?,?,'staged')").run(...HOST_FIELDS.map(k => r[k])); return { ...r, state: "staged" };
+      },
+      inspectGrant: intentId => {
+       if (!live) fail("maintenance_queue_expired"); if (typeof intentId !== "string" || !hostUUID.test(intentId)) fail("host_grant_invalid"); check(); if (!transaction) fail("maintenance_transaction_state");
+       const r = db.prepare("SELECT * FROM host_grant_sets WHERE intent_id=?").get(intentId); if (!r) return null;
+       const { state: phase, ...binding } = { ...r }; hostGrantBinding(binding); if (binding.config_id !== config || !["staged","ready","void"].includes(phase)) fail("host_grant_invalid"); return { ...r };
+      },
+      transitionGrant: (input, expected, next) => {
+       if (!live) fail("maintenance_queue_expired"); const r = hostGrantBinding(input); check(); if (!transaction) fail("maintenance_transaction_state"); if (r.config_id !== config) fail("host_grant_config");
+       if (!(expected === "staged" && ["ready","void"].includes(next) || expected === "ready" && next === "void")) fail("host_grant_transition");
+       const changed = db.prepare("UPDATE host_grant_sets SET state=? WHERE config_id=? AND intent_id=? AND set_id=? AND epoch=? AND target_revision=? AND membership_mac=? AND state=?").run(next,...HOST_FIELDS.map(k => r[k]),expected).changes;
+       if (changed !== 1) fail("host_grant_stale"); return { ...r, state: next };
+      }
+     });
+     try {
+      return await inQueueContext(context, async () => {
+       check("entry"); maintenanceOwners.set(this, context);
+       const result = await action(view);
+       if (transaction) fail("maintenance_transaction_open");
+       check("exit");
+       completed = true; finalResult = result; return result;
+      });
+     } finally {
+      live = false; try { db.exec("ROLLBACK"); } catch {} maintenanceOwners.delete(this); release();
+     }
+    })();
+    return pending;
+   };
+   try { await withAuthorityLease(run); }
+   catch (error) { authorityActive = false; if (pending) await pending.catch(() => {}); throw error; }
+   authorityActive = false; if (pending) await pending;
+   if (runs !== 1 || !completed) fail("maintenance_queue_invalid");
+   return finalResult;
+  } catch (error) { throw stateError(error); }
  }
  status({ limit = 20, identityCursor = 0, operationCursor = 0 } = {}) {
   pageInputs(limit, identityCursor); pageInputs(limit, operationCursor);
