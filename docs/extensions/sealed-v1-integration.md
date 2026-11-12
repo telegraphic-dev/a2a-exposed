@@ -5,127 +5,6 @@ later integration, not features of the isolated primitives package. They must
 pass protocol/cryptographic implementation review before any encrypted traffic.
 Conflicting earlier draft prose is superseded here.
 
-## Optional installation and lazy loading
-
-The base `a2a-exposed` CLI remains runtime dependency-free. The endpoint Worker
-adds no encryption dependencies; its existing `tunnelfetch` dependency is
-unrelated to this extension. Neither lists `@a2a-exposed/encryption` or any hpke-js package as a regular
-dependency. Encryption is a separate, explicit optional install; a self-hoster
-who never uses it installs no encryption or HPKE packages. HPKE runtime
-dependencies belong only to `@a2a-exposed/encryption`.
-
-The integrated CLI must import the encryption package lazily, only when an
-encryption operation is requested. Ordinary plaintext commands and help must
-work without it. A missing package must fail promptly, before encryption work
-or network traffic, with a clear error and an explicit install command for the
-supported CLI installation mode. It must never silently fall back to plaintext
-or install packages implicitly during send, read, status or doctor. Only the
-explicit enable operation described below may install the optional package.
-Installation instructions and isolated
-installed-package tests for each supported mode are required before exposing
-encrypted CLI commands. An optional peer dependency may describe compatibility;
-it must not make the package part of the default install.
-
-The CLI provides local setup/discovery and the optional loader. Encrypted
-send/read commands remain unavailable; local stdio MCP exposes setup/discovery only. These
-contracts do not claim encrypted message delivery.
-
-## One-command enablement and agent discovery
-
-Local setup interface: `a2a-exposed encryption enable`.
-One explicit invocation installs the compatible optional package into the selected
-local configuration and sets up local keys. Local stdio MCP offers the same
-operation and typed result for file-backed setup; native OS consent remains a
-human local-CLI action. No private keys go to the hosted service. Remote MCP
-cannot enable local custody or claim end-to-end encryption; it returns guidance
-to the local CLI or local stdio MCP. Enablement never approves a peer, changes a
-pairing, or counts as independent verification.
-
-The command supports noninteractive execution: configuration directory, key
-store and any required consent have explicit parameters or named configuration
-inputs. Read-only JSON discovery lists supported stores and current setup before
-action. Missing choices fail promptly with the listing command and the exact
-next invocation. OS consent remains an explicit human decision. Installation or
-key-store failure leaves an inspectable, recoverable state and must not report
-success or generate a replacement identity on retry. Repeating enable preserves
-an existing identity. Installation modes (including npx) need durable package
-resolution tests; a successful install that the next process cannot load fails
-acceptance.
-
-Both OSS SKILL.md files must mention optional encryption and when to suggest it:
-when the user asks to keep message content private from the relay/service, or a
-peer requires it. Describe the local-client requirement and privacy limits.
-Do not suggest that a skill installation itself installs encryption or that
-ordinary hosted MCP keeps plaintext private from the service.
-
-CLI status and doctor, in text and JSON, report:
-
-| State | Meaning | Next action |
-| --- | --- | --- |
-| off | Optional package is absent | Exact enable command for this configuration |
-| available | Package can load, but local setup is incomplete or disabled | Exact enable command, or diagnostic-led recovery for existing/unusable state |
-| on | Local setup is enabled and usable | Peer-specific trust and delivery checks still apply |
-
-These are local setup states, never a blanket privacy claim for every message.
-Key-store failure is an explicit diagnostic, not a healthy on state. Status and
-doctor remain read-only and work without the package.
-
-Setup/discovery has a separate exact JSON envelope:
-`{ok,code,operation,configIdentity,setupState,setupOutcome,diagnostics,next}`.
-operation is `enable`, `status` or `doctor`; configIdentity is the selected local
-configuration UUID, or null before local state exists. setupState is the
-`off`/`available`/`on` state above. setupOutcome is `no-change`, `enabled` or
-`recovery-required`; diagnostics is a bounded array of `{code,next}` with safe
-fixed codes and explicit recovery guidance. Status/doctor always use no-change
-and never install, create keys or access OS credentials. A failed enable reports
-ok false and recovery-required when partial installation/key creation needs
-reconciliation; it reports no-change when nothing changed. Existing keys with
-setup incomplete remain available, never on. The result never contains private
-keys, secret paths, passphrases or credential values. Remote MCP refuses enable
-with local-client-required guidance in this setup envelope; it cannot invent
-local readiness or configuration identity. Such remote refusals use null for
-setupState/configIdentity, no-change for setupOutcome, and local-client-required
-in diagnostics; local discovery reports off/available/on when it has evidence; an unreadable
-package/configuration reports null with an explicit diagnostic, never guessed
-readiness. CLI failures exit 1; MCP uses
-isError true with that same structured result. This is a draft result contract,
-not evidence that encrypted message delivery is implemented.
-
-MCP send results disclose whether the service could read that message's content,
-with a structured server-readable indicator and concise prose. Distinguish
-plaintext/server-readable, sealed locally, and unknown; do not turn transport
-acceptance into a claim of peer opening or verified identity. Remote MCP
-plaintext sends remain explicitly server-readable. Required encryption refuses
-unsupported remote paths and never silently downgrades.
-
-The agent card extension advertises implemented protocol support and supported
-Task response paths only after integration gates pass. Discovery is capability
-information, never trust approval. A required peer with a missing local package
-fails before transmitting content and names the exact enable command for the
-selected installation mode/configuration; it never sends plaintext first.
-
-## Integration phases and acceptance
-
-1. Foundation: keep the base CLI free of runtime dependencies and the Worker
-   free of encryption dependencies. Preserve isolated primitive review and keep
-   encrypted traffic disabled. Specify optional installation, setup states and
-   privacy wording in this draft.
-2. Local custody and setup: implement explicit one-command CLI/local stdio MCP
-   enablement, read-only JSON choice discovery, idempotent setup and recovery.
-   Test missing/invalid inputs, denied consent, interrupted installation, missing
-   stores and restart/retry without key loss or replacement. Retain all custody
-   and trust review gates.
-3. Transport and discovery: integrate lazy loading, required-peer refusal,
-   per-message MCP privacy results, status/doctor states, both OSS skills and
-   truthful card advertisement in the same feature delivery. Test base commands
-   without the package, each installation mode across fresh processes, local
-   MCP parity, unsupported remote MCP, failed setup and zero plaintext fallback.
-4. Acceptance: verify off/available/on and all refusal/recovery wording with
-   Claudia before merge or publication. Run the complete protocol, privacy,
-   custody, archive/replay, storage and client matrix plus exact-head review;
-   discoverability does not relax any encrypted-traffic gate. Nothing in this
-   draft authorizes a release or deployment.
-
 ## Task assignment and receipts (F1)
 
 A new sender chooses cryptographically random UUIDv4 context/message IDs (at
@@ -381,7 +260,7 @@ private decryption key can expose that endpoint's copies; metadata/deletion,
 timing/size, compromised local endpoints and model providers remain outside E2E.
 
 For JSON-RPC, use -32602 for known malformed/unsupported/required input rejection,
-HTTP 200, with error.data exactly `{code,operation,deliveryStatus,retryable,next,details}`.
+HTTP 200, with error.data exactly `{code,operation,deliveryStatus,retryable,next}`.
 Authentication/rate/body-size errors retain their existing transport handling.
 Safe string codes include invalid_envelope, approval_stale and state_unavailable
 in addition to the base draft. Known rejected input has deliveryStatus rejected;
@@ -422,35 +301,13 @@ remains unimplemented and has no support claim.
 
 Before-send validation/self-open/persistence failure reports deliveryStatus
 not-sent; accepted transport but missing echo reports unknown and retryable false.
-The following envelope is for transport/trust/archive operations only; setup
-and discovery use the separate enable/status/doctor envelope above. Here
-operation is send, reply, read, inspect, propose, approve, recover, backup or restore;
+operation is send, reply, read, inspect, propose, approve, backup or restore;
 deliveryStatus is not-sent, rejected, unknown, transport-accepted,
 locally-opened or locally-acknowledged. Success/readback is exactly
-`{ok:true,code,operation,deliveryStatus,next,details}`; failure is exactly
-`{ok:false,code,operation,deliveryStatus,retryable,next,details}`. details is a
-bounded object containing public identifiers and safe enumerated result facts,
-including the per-message privacy object below; never plaintext, private keys,
-credential values or secret paths. A trust/archive result may use empty details.
-For example, `{ok:false,code:"approval_stale",operation:"approve",
-deliveryStatus:"not-sent",retryable:false,next:"Run peer keys inspect --to ALIAS --json and approve the current exact proposal.",details:{}}`.
-
-Every send/reply result, including failure, has `details.privacy` exactly
-`{serverReadable,contentMode}`. serverReadable is JSON true, false or the string
-`"unknown"`; contentMode is plaintext, sealed, unknown or not-sent. true means
-the actual outbound content was server-readable plaintext (including remote MCP
-plaintext sends); false is allowed only for locally validated sealed content
-actually submitted without plaintext fallback. This does not attest peer opening
-or peer verification. An untransmitted refusal uses contentMode not-sent and
-serverReadable unknown: no content was sent, so no sealed-send claim is made.
-After transmission, a timeout may have deliveryStatus unknown while readability
-is still known from the actual submitted bytes (true/plaintext or false/sealed).
-If those bytes/path cannot be established, use unknown/unknown. Readability never
-implies delivery, and unknown delivery never authorizes a fresh-message retry.
-JSON-RPC error.data carries these same details for send/reply errors; CLI and MCP
-retain them on both successful and failed results. For batch/history results,
-associate a separate privacy object with each message ID in details.messages;
-do not collapse messages with different privacy states to one blanket label.
+`{ok:true,code,operation,deliveryStatus,next,details}` with public identifiers only;
+failure is `{ok:false,code,operation,deliveryStatus,retryable,next}`. For example,
+`{ok:false,code:"approval_stale",operation:"approve",deliveryStatus:"not-sent",
+retryable:false,next:"Run peer keys inspect --to ALIAS --json and approve the current exact proposal."}`.
 CLI delivery outbox discovery uses `delivery list --json`; acknowledgment uses
 `delivery ack --delivery-id ID --json`. Neither changes pairing/trust policy.
 Finite safe-integer clock milliseconds are mandatory for primitives; callers
@@ -481,163 +338,15 @@ history so a first poll can recover the full verified assignment; missing
 receipts keep the response held. Co-carried content Message IDs follow the
 envelope's signed messageId; receipt-only IDs equal ackId.
 
-Both agent-authored integration content variants require requestDigest of the
-exact locally recorded user request being answered (initial or follow-up).
-User-authored initial and follow-up content omit this member; it is never null.
-A user follow-up instead requires a locally authenticated assignment matching
-its signed context/task and peer identities. Neither referenceTaskIds nor a
-Worker-proposed task ID grants that authority. A later agent response identifies
-the particular user request's signed-envelope digest and must also match the
-already authenticated assignment and snapshot chain.
-
-## Exact content and structural message-carrier checkpoint
-
-The package includes Draft 2020-12 schemas in `encryption/schemas/` for primitive
-envelopes, decrypted content and the two message carrier versions. Schemas are
-packaged files, not yet an advertised/served extension or traffic acceptance.
-Runtime verification additionally enforces canonical bytes, UTF-8 size, key and
-signature checks, header bindings, unique artifact IDs and cross-field agreement.
-
-Canonical supported parts have an explicit kind, nullable mediaType and metadata
-object. Text adds text; data adds an object-valued data member; file adds exactly
-`file:{name:string|null,bytes:canonicalBase64}`. Files are inline only. Original
-0.3 file.name/mimeType/bytes map to canonical name/mediaType/bytes; 1.0
-filename/mediaType/raw map to the same values. Text/data mediaType and metadata
-are retained in both directions, including empty inline files and empty names.
-Missing optional media/name fields map to null, and missing metadata to an empty
-object. Unknown, mixed, URI, non-JSON or oversized representations refuse before
-sealing; they are never silently stripped, truncated or fetched. Each message or
-artifact has 1..100 parts, and snapshot artifacts have unique IDs.
-
-The current content validator supports role-matched message/task-poll carriers.
-Owner-direct wire-user/logical-agent replies remain refused until their separate
-authenticated request mapping is implemented and reviewed. Artifact delta and
-streaming paths remain unsupported. Snapshot shape validates revision/linkage,
-terminal/state and nested authorship, but only the future ledger can authorize a
-chain or make a delivery current. Structural message-carrier extraction returns
-the envelope only; it does not authenticate, decrypt, approve trust or deliver.
-Assignment receipt primitives are defined below. Task wrappers, persisted chain
-ordering/replay/outbox and actual Worker/CLI messaging integration remain pending
-and gate all traffic.
-
-## Assignment primitive and correlation checkpoint
-
-Agent-authored message/snapshot content includes the canonical 32-byte
-requestDigest. User-authored content omits it; an agent snapshot's nested status
-message carries the same digest. The content validator checks its shape and,
-when given the locally expected request digest, exact equality. This closes the
-cross-request content mapping before any message is delivered.
-
-`createAssignment` verifies/opens the initial user request and validates content
-before signing. A co-carried response must self-open the creator's archive copy,
-match task/context/peer bindings and contain that exact requestDigest. The signer
-self-verifies its receipt signature. `verifyAssignment` checks the pinned public
-bundles, exact request/ciphertext digest and task binding, response digest when
-present, and Ed25519 signature. Live verification retains freshness checks;
-archive receipt verification is an explicit separate purpose and creates no work.
-`openAssignedResponse` also verifies/decrypts the response and checks its inner
-requestDigest. All returned peer content remains untrusted data.
-
-These are local cryptographic primitives. A computed receipt is not a model
-consumption acknowledgment or durable-acceptance proof by itself. Do not publish
-it until the future local assignment/replay/outbox transaction commits. A
-malicious endpoint can lie about its persistence; the profile does not certify
-another endpoint's disk. Lost/rolled-back state still needs archive-only restore.
-
-Receipt-only carriers use the immutable null-response assignment, fixed text
-`[encrypted request accepted]`, ackId/context/task and outer agent role; no
-peer-supplied text or extra fields are accepted. Co-carried carriers require a
-non-null responseDigest matching the full sealed envelope and exact outer/header
-bindings. Their parser returns both envelope and receipt; the ordinary envelope
-parser refuses that metadata rather than silently discarding it. Signature/trust
-verification remains separate from structural extraction. Packaged assignment,
-receipt-carrier and assigned-carrier schemas cover these exact wire shapes.
-Task wrappers, persisted assignment/chain ordering, replay/outbox and Worker/CLI
-message paths remain pending; no encrypted traffic is enabled by this checkpoint.
-
-
-## Isolated local delivery algorithms
-
-The separate privileged SDK now implements initial and follow-up receiver
-acceptance, persistent outbound ciphertext, single-use transmission authorization,
-peer-signed assignment pinning, correlated responses and consecutive full-snapshot
-chains. See [local custody/delivery API](../../encryption/LOCAL-CUSTODY-DRAFT.md).
-This implements the local transaction portion of the requirements above; it does
-not integrate them with actual Worker/CLI/MCP message paths or Task wrappers.
-Caller pairing/activation attestations must come from a reviewed local adapter.
-No encrypted traffic, exactly-once model effects, native-platform acceptance or
-complete archive semantics are established by these isolated algorithms.
-
-
-## Raw Task wrapper extraction
-
-The isolated `./tasks` API accepts raw Task JSON, not JSON-RPC envelopes or
-Message-only responses. `readTaskCarrier` parses duplicate-safe raw JSON before
-normalizers, bounded to 1 MiB and 1000 history entries. 0.3 kind fields and 1.0
-roles/states remain distinct; IDs are never truncated. Outer artifacts may be omitted or
-empty; a present non-array/nonempty value refuses. Metadata may only be empty or the fixed v1 extension marker, and status
-may contain only routing state, an optional sealed/control Message and an
-optional UTC timestamp. Receipt-only status and a missing status Message remain
-routing-only information, never proof of peer state or model consumption.
-
-Nested context/task bindings and current signed snapshot header state must match
-the wrapper; initial null-task user messages are allowed only in history. User
-status snapshots/direct replies are unsupported. Unknown fields, plaintext or URI
-parts, mixed versions, conflicting duplicate messages and changed immutable
-assignment receipts refuse. Identical ciphertext may appear with its receipt in
-history and without that metadata in status; the original receipt is retained.
-Timestamp validity is checked but timestamps and supplied history order never
-establish provenance. The result labels authentication unverified and history
-order untrusted, preserving events for later signature/pin/assignment/chain
-validation. No Worker, CLI or MCP message path invokes this isolated parser yet.
-
-
-## Local Task-to-ledger reconstruction
-
-`DeliveryLedger.acceptTask` connects raw Task extraction to the privileged local
-ledger, without an HTTP/model callback or real client integration. The caller
-selects the original initial request ID and supplies locally established pairing
-and activation attestations. A provisional server task ID cannot grant authority:
-a new assignment requires its peer-signed receipt bound to that cached attempted
-user request. Subsequent polling may use the locally pinned immutable assignment
-when its original receipt is absent from a truncated response.
-
-All raw wrappers, public signatures and any supplied receipt are checked before
-credential access. User history entries must exactly match attempted local cached
-requests. Agent events are decrypted and commitment/content checked, then snapshots
-are ordered by their verified revisions, never server timestamps/array order.
-Assignment, replay, queued ciphertext/provenance and complete snapshot heads commit
-in one transaction. Gaps, forks, wrong request digests, trust changes or commit
-failure return no new delivery IDs and roll back the complete new batch. Previously
-committed work is retained. No automatic re-send follows a failed poll/import.
-
-The result contains stable delivery IDs and currentPeerState from the local
-verified chain, not plaintext. Transport routing state is reported separately as
-unauthenticated; unsigned cancellation or a receipt-only Task never creates peer
-state. Explicit read/consumption remains separate, and older accepted snapshots
-stay history-only. Real transport negotiation, live/native platforms, archive
-opening/full restore semantics and release acceptance remain required gates.
-
-
-### Terminal grouping and long-lived assigned tasks
-
-Ordinary top-level agent messages have no authenticated position on the snapshot
-chain. Task import therefore holds any newly discovered such message when either
-the existing head or incoming verified batch is terminal. It rejects the whole
-new batch rather than infer chronology from sorting, timestamps or packet grouping.
-Already accepted duplicate message IDs retain their stable delivery/readback;
-new terminal content uses the encrypted statusMessage inside a signed snapshot.
-
-The initial live-envelope age limit does not expire an exact locally retained
-assignment. A private retained-cache verifier rechecks the cached user request's
-purpose/bytes/digest/current pin and both request/receipt signatures, without
-reapplying the original send-age cutoff. Repeated receipt bytes must match exactly.
-This path is unavailable to a first unassigned stale request or new receipt and
-never changes now for incoming content. Fresh follow-up replies pass the same
-current-time envelope checks through both Task import and direct acceptance;
-stale/future incoming responses still refuse. No general archive/admission bypass
-or actual network transport is enabled.
-
+Both integration content variants have a required `requestDigest`: null for an
+initial user request and the exact canonical signed-envelope digest of the
+request being answered for agent-authored content. A local receiver of a response
+must match it against its pending sent-request ledger entry as well as context,
+authenticated assignment and snapshot chain. For a user follow-up it names the
+original assigned request digest, which must already be locally approved. A
+new response cannot be matched merely because it has a valid key, a shared
+context or a first-seen message ID. Reordering/co-carrying responses and receipts
+for distinct requests in one context must therefore fail correlation.
 
 ## Sealed-only JSON-RPC client adapter
 
