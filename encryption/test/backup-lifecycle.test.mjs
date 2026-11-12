@@ -58,6 +58,23 @@ test('mock native credentials require explicit consent for backup, restore conve
  await state.createBackup({destination:backup,passphrase,allowOsConsent:true});const count=calls.length;await restoreBackup({source:backup,destination,passphrase,store:'file',acknowledgeReplayRollback:true});assert.equal(calls.length,count);
  const archive=new LocalState(destination);t.after(()=>archive.close());assert.equal(archive.status().identities[0].key_store,'file');await archive.loadIdentity(archive.status().identities[0].id);
 });
+test('committed native initialization and rotation backups ignore reused broker PIDs',async t=>{
+ const values=new Map();const keyring=async(input,consent,onBrokerStart)=>{const key=input.namespace+input.account;if(input.op==='set'){onBrokerStart(process.pid);values.set(key,input.value);return;}return values.get(key)??null;};
+ const {state,backup,destination}=fixture(t,{keyring});const first=await state.initialize({store:'keychain',allowOsConsent:true,cardUrl:'https://local.example.com/card'});
+ const second=await state.rotateLocal({id:first.id,approvalDigest:state.rotationPlan(first.id).approval_digest,ownerApproved:true,allowOsConsent:true});
+ const operations=state.status().operations;assert.equal(operations.length,2);assert.ok(operations.every(row=>row.state==='committed'&&row.broker_pid===process.pid));
+ const result=await state.createBackup({destination:backup,passphrase,allowOsConsent:true});assert.equal(result.archived_credentials,2);
+ await restoreBackup({source:backup,destination,passphrase,store:'file',acknowledgeReplayRollback:true});const archive=new LocalState(destination);t.after(()=>archive.close());
+ await archive.loadIdentity(first.id);await archive.loadIdentity(second.id);assert.equal(archive.status().archive_only,true);
+});
+test('retained unresolved native operations still fence live broker PIDs before backup reads',async t=>{
+ for(const operationState of ['orphan-retained','observed-absent']){
+  let gets=0;const keyring=async(input,consent,onBrokerStart)=>{if(input.op==='set'){onBrokerStart(process.pid);throw Error('synthetic uncertain broker');}gets++;return null;};
+  const {state,backup}=fixture(t,{keyring});await assert.rejects(state.initialize({store:'keychain',allowOsConsent:true,cardUrl:'https://local.example.com/card'}),{code:'initialization_uncertain'});
+  state.db.prepare('UPDATE key_operations SET state=?,revision=revision+1').run(operationState);
+  await assert.rejects(state.createBackup({destination:backup,passphrase,allowOsConsent:true}),{code:'operation_in_progress'});assert.equal(gets,0);assert.ok(!fs.existsSync(backup));
+ }
+});
 
 test('failed staged install preserves a protected archive-only store and never replaces a concurrent target',async t=>{
  const {state,backup,destination}=fixture(t);await initialized(state);await state.createBackup({destination:backup,passphrase});

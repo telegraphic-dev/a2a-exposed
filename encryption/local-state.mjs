@@ -390,7 +390,9 @@ export class LocalState {
    const credentials = snapshot.credentials;
    for (const row of rows.key_operations) {
     const operation = JSON.parse(row.public_json);
-    if (row.broker_pid) {
+    // Committed operations already confirmed broker exit; its historical PID may
+    // now name an unrelated process. Retained unresolved outcomes stay fenced.
+    if (row.state !== "committed" && row.broker_pid) {
      try { process.kill(row.broker_pid, 0); fail("operation_in_progress"); }
      catch (error) { if (error instanceof LocalStateError || error.code !== "ESRCH") throw new LocalStateError("operation_in_progress"); }
     }
