@@ -44,7 +44,7 @@ function permissions(file, directory = false) {
   if ((stat.mode & 0o077) || stat.uid !== process.getuid()) fail("key_store_permissions", "Use an owner-only key directory (0700) and files (0600), then run keys status --json.");
  } else {
   // Require a current-user-only ACL. Do not assume chmod protects Windows files.
-  const script = "$p=[Console]::In.ReadToEnd();$me=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value;$a=Get-Acl -LiteralPath $p;$bad=@($a.Access | Where-Object {$_.AccessControlType -eq 'Allow' -and $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -notin @($me,'S-1-5-18')});if($bad.Count -gt 0){exit 1}";
+  const script = "$ErrorActionPreference='Stop';try{$p=[Console]::In.ReadToEnd();$me=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value;$a=Get-Acl -LiteralPath $p;if($null -eq $a){exit 1};$bad=@($a.Access | Where-Object {$_.AccessControlType -eq 'Allow' -and $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -notin @($me,'S-1-5-18')});if($bad.Count -gt 0){exit 1};exit 0}catch{exit 1}";
   try { execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { input: file, stdio: ["pipe", "ignore", "ignore"], timeout: 5000 }); }
   catch { fail("key_store_permissions", "Use a current-user-only Windows ACL; then run keys stores --json. No fallback was selected."); }
  }
@@ -53,7 +53,7 @@ function permissions(file, directory = false) {
 function protect(file) {
  if (process.platform !== "win32") fs.chmodSync(file, fs.statSync(file).isDirectory() ? 0o700 : 0o600);
  else {
-  const script = "$p=[Console]::In.ReadToEnd();$me=[System.Security.Principal.WindowsIdentity]::GetCurrent().User;$a=Get-Acl -LiteralPath $p;$a.SetAccessRuleProtection($true,$false);foreach($r in @($a.Access)){$a.RemoveAccessRuleAll($r)};$a.SetOwner($me);$r=New-Object System.Security.AccessControl.FileSystemAccessRule($me,'FullControl','Allow');$a.AddAccessRule($r);Set-Acl -LiteralPath $p -AclObject $a";
+  const script = "$ErrorActionPreference='Stop';try{$p=[Console]::In.ReadToEnd();$me=[System.Security.Principal.WindowsIdentity]::GetCurrent().User;$a=Get-Acl -LiteralPath $p;if($null -eq $a){exit 1};$a.SetAccessRuleProtection($true,$false);foreach($r in @($a.Access)){$a.RemoveAccessRuleAll($r)};$a.SetOwner($me);$r=New-Object System.Security.AccessControl.FileSystemAccessRule($me,'FullControl','Allow');$a.AddAccessRule($r);Set-Acl -LiteralPath $p -AclObject $a;exit 0}catch{exit 1}";
   try { execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { input: file, stdio: ["pipe", "ignore", "ignore"], timeout: 5000 }); }
   catch { fail("key_store_permissions"); }
  }
