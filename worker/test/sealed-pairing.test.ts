@@ -11,7 +11,7 @@ import worker from "../src/index.ts";
 import { d1 } from "./d1.ts";
 import { verifyPublicBundle } from "../src/sealed-keys.ts";
 const root=fileURLToPath(new URL("../../",import.meta.url));
-test("two local CLIs pin the exact human-approved bundles and refuse plaintext",async t=>{
+test("two local CLIs pair, seal and locally open messages while both servers store only ciphertext",async t=>{
  const tmp=fs.mkdtempSync(path.join(os.tmpdir(),"sealed-pairing-"));t.after(()=>fs.rmSync(tmp,{recursive:true,force:true}));
  const envs:Record<string,any>={},dirs:Record<string,string>={},ids:Record<string,string>={},bundles:Record<string,any>={},records:any[]=[];
  for(const name of ["alice","bob"]){
@@ -52,7 +52,7 @@ test("two local CLIs pin the exact human-approved bundles and refuse plaintext",
  }
  publishError=null;
  const storeOnly=await cli("alice",["send","--to","unpaired","--text","never sent"],false);
- assert.equal(storeOnly.code,1);assert.match(storeOnly.err,/config directory has local keys/);assert.match(storeOnly.err,/separate --config-dir/);
+ assert.equal(storeOnly.code,1);assert.match(storeOnly.err,/disabled/);
  const args=["connect","https://bob.example.com","--alias","bob","--sealed-key-id",ids.alice,"--no-wait","--json"];
  const pending=await cli("alice",args);assert.equal(pending.code,0,pending.err);
  const lines=pending.out.trim().split("\n").map((s:string)=>JSON.parse(s)),code=lines.find((x:any)=>x.status==="authorization_pending").user_code;
@@ -75,7 +75,47 @@ test("two local CLIs pin the exact human-approved bundles and refuse plaintext",
  assert.deepEqual(p.requester,bundles.alice);assert.deepEqual(p.responder,bundles.bob);
  const pinned=await cli("bob",["keys","pin","--id",ids.bob,"--peer",p.peer,"--user-code",p.userCode,"--json"]);assert.equal(pinned.code,0,pinned.err);assert.equal(JSON.parse(pinned.out).safety_code,pin.safety_code);
  const restart=await cli("bob",["keys","code","--id",ids.bob,"--peer",p.peer,"--json"]);assert.equal(restart.code,0,restart.err);assert.equal(JSON.parse(restart.out).code,pin.safety_code);
- const send=await cli("alice",["send","--to","bob","--text","must not leave this process"],false);assert.equal(send.code,1);assert.match(send.err,/No plaintext/);assert.match(send.err,/Peer bob has pinned keys/);
+ const send=await cli("alice",["send","--to","bob","--text","must not leave this process"],false);assert.equal(send.code,1);assert.match(send.err,/disabled/);
+ // Both supported wire versions use the same HPKE envelope and local pins.
+ for(const proto of ["0.3","1.0"]){
+  const secret="fixture-private-text-"+proto+"-"+crypto.randomUUID();
+  const result=await cli("alice",["send","--to","bob","--text",secret,"--proto",proto]);
+  assert.equal(result.code,0,result.err);const sent=JSON.parse(result.out);
+  assert.equal(sent.serverReadable,false);assert.equal(sent.senderHistorySaved,true);
+  const inbox=await cli("bob",["inbox","--json"]);assert.equal(inbox.code,0,inbox.err);
+  const opened=JSON.parse(inbox.out).find((x:any)=>x.taskId===sent.taskId);
+  assert.equal(opened.text,secret);assert.equal(opened.locallyOpened,true);assert.equal(opened.taskStateAuthenticated,false);
+  for(const name of ["alice","bob"]){
+   const history=await cli(name,["history",sent.contextId,"--json"]);assert.equal(history.code,0,history.err);
+   assert.ok(JSON.parse(history.out).some((x:any)=>x.text===secret&&x.locallyOpened));
+   // Inspect every persisted table, including messages/history/wake/outbound state.
+   const tables:any=await envs[name].DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
+   for(const table of tables.results){
+    assert.match(table.name,/^[A-Za-z0-9_]+$/);
+    const rows=await envs[name].DB.prepare(`SELECT * FROM "${table.name}"`).all();
+    assert.equal(JSON.stringify(rows).includes(secret),false,`${name}.${table.name} leaked plaintext`);
+   }
+  }
+  assert.equal(JSON.stringify(records).includes(secret),false,"plaintext never enters a request body");
+  const wire=records.findLast((x:any)=>x.name==="bob"&&x.path==="/"&&JSON.parse(x.body||"{}").params?.message)?.body;
+  const request=JSON.parse(wire),message=request.params.message;
+  const token=fs.readFileSync(path.join(dirs.alice,"config.env"),"utf8").match(/^PEER_BOB_TOKEN=(.+)$/m)![1];
+  const call=async(payload:any,enabled=true)=>{envs.bob.A2A_SEALED_ENABLED=enabled?"1":"";const res=await dispatch("bob",new Request("https://bob.example.com/",{method:"POST",headers:{authorization:`Bearer ${token}`,"content-type":"application/json","A2A-Version":proto,"A2A-Extensions":"https://a2a.exposed/ext/sealed/v1"},body:JSON.stringify(payload)}));return res.json()as any;};
+  assert.ok(!(await call(request)).error,"same bytes are idempotent");
+  const mutated=structuredClone(request);mutated.params.message.parts.push(proto==="0.3"?{kind:"text",text:"leak"}:{text:"leak"});assert.ok((await call(mutated)).error);
+  const tampered=structuredClone(request);tampered.params.message.parts[0].data.signature="A".repeat(86);assert.ok((await call(tampered)).error);
+  const wrongContext=structuredClone(request);wrongContext.params.message.contextId="another-context";assert.ok((await call(wrongContext)).error);
+  const downgradeRequest=structuredClone(request);downgradeRequest.params.message={messageId:crypto.randomUUID(),role:"user",parts:[{kind:"text",text:"leak"}]};assert.ok((await call(downgradeRequest)).error);
+  assert.ok((await call(request,false)).error);envs.bob.A2A_SEALED_ENABLED="1";
+  assert.equal((await owner("bob",`/owner/tasks/${sent.taskId}/reply`,"POST",{text:"must not leak",state:"completed"})).status,409);
+  const offInbox=await cli("bob",["inbox","--json"],false);assert.equal(offInbox.code,1);assert.equal(offInbox.out.includes(secret),false);
+  // Ciphertext alteration at rest refuses opening; never returns a partial plaintext result.
+  const stored:any=await envs.bob.DB.prepare("SELECT seq,message_json FROM messages WHERE task_id=?").bind(sent.taskId).first();
+  const corrupt=JSON.parse(stored.message_json);corrupt.parts[0].data.sender.ct="AAAA";
+  await envs.bob.DB.prepare("UPDATE messages SET message_json=? WHERE seq=?").bind(JSON.stringify(corrupt),stored.seq).run();
+  const bad=await cli("bob",["inbox","--json"]);assert.equal(bad.code,1);assert.equal(bad.out.includes(secret),false);
+  await envs.bob.DB.prepare("UPDATE messages SET message_json=? WHERE seq=?").bind(stored.message_json,stored.seq).run();
+ }
  const downgrade=await cli("alice",["connect","https://bob.example.com","--alias","bob","--no-wait"]);assert.equal(downgrade.code,1);assert.match(downgrade.err,/pinned encryption keys/);
  assert.equal((await cli("bob",["keys","pin","--id",ids.bob,"--peer",p.peer,"--user-code","WRONG","--json"])).code,1);
  for(const name of ["alice","bob"]){const value=JSON.parse(fs.readFileSync(path.join(dirs[name],"encryption",ids[name]+".key"),"utf8"));for(const secret of [value.signing,value.encryption]){assert.equal(JSON.stringify(records).includes(secret),false);assert.equal(JSON.stringify([pending,connected,pinned,restart]).includes(secret),false);}}

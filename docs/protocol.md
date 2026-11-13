@@ -171,3 +171,7 @@ by default; the Worker uses only WebCrypto public-key verification and stores
 no local private key. The separate encryption identity is never uploaded through
 `/owner/identity`. Initial public bundle publication is immutable; key replacement
 requires the separate follow-up design.
+
+Local encrypted CLI fixtures use the disabled sealed extension and preserve
+signed ciphertext-only carriers. See [local keys and pairing](local-key-pairing.md#local-encrypted-cli-messages)
+for the public routing fields, local verification and task-state limitations.

@@ -986,12 +986,26 @@ async function routeInbound(ctx: TenantContext, peer: string, contextId: string,
 const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
 	const msg = A.normMessage(params.message);
 	if (msg.role !== "user") throw new RpcError(-32602, "message.role must be user");
+ const sealedPeer: Json = await ctx.DB.prepare("SELECT sealed_requester,sealed_responder FROM peers WHERE label=? AND revoked_at IS NULL").bind(label).first();
+ let sealed: Json = null;
+ if (sealedPeer?.sealed_requester || msg.extensions?.includes(SealedKeys.SEALED_URI)) {
+  if (ctx.A2A_SEALED_ENABLED !== "1" || !sealedPeer?.sealed_requester) throw new RpcError(-32602, "Encrypted traffic is disabled or pairing is not pinned; no plaintext fallback");
+  try {
+   // Reject extra outer fields before normMessage can discard them.
+   const raw = params.message;
+   const allowed = ["kind","role","messageId","contextId","taskId","parts","extensions"];
+   if (Object.keys(raw).some(k => !allowed.includes(k)) || Object.keys(params).some(k => !["message","configuration"].includes(k)) || Object.keys(params.configuration || {}).some(k => !["blocking","returnImmediately"].includes(k))) throw Error();
+   for (const part of raw.parts) if (Object.keys(part).some(k => !["kind","data","metadata"].includes(k))) throw Error();
+   sealed = await SealedKeys.verifyMessage(msg, JSON.parse(sealedPeer.sealed_requester), JSON.parse(sealedPeer.sealed_responder));
+  } catch { throw new RpcError(-32602, "Invalid encrypted message; no plaintext fallback"); }
+ }
 	const routed = readRouteFields(msg.metadata, params.metadata);
 	if (!routed.ok) throw new RpcError(-32602, `Invalid params: ${routed.error}`);
 	const priorId = await messageTaskId(ctx, label, msg.messageId);
 	if (priorId) {
 		const prior = await loadTask(ctx, priorId);
 		if (prior && prior._peer === label) {
+   if (sealed && !prior.history.some((m: Json) => m.messageId === msg.messageId && SealedKeys.canonical(m) === SealedKeys.canonical(msg))) throw new RpcError(-32602, "Encrypted message ID already used with different bytes");
 			const again = await routeInbound(ctx, label, prior.contextId, routed.fields.wake, routed.fields.intent, "", true);
 			await recordRoute(ctx, again.decision, "inbound");
 			const conf = params.configuration || {};
@@ -1018,16 +1032,16 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
 	// and the first task are one batch, so the task is stored only when this peer's owner row is present.
 	const creating = !task;
 	if (!task) task = { id: A.newId(), contextId, status: { state: "submitted", timestamp: ts }, artifacts: [], history: [], _peer: label, _protocol: version, _createdAt: ts, _push: [] };
-	msg.contextId = contextId; msg.taskId = task.id;
+	msg.contextId = contextId; if (!sealed) msg.taskId = task.id;
 	task.history.push(msg);
 	task.status = { state: directReply ? "completed" : "submitted", timestamp: ts };
 	if (pushCfg) task._push = [...task._push.filter((c: Json) => c.id !== pushCfg.id), pushCfg];
 	if (params.metadata && typeof params.metadata === "object") task.metadata = { ...(task.metadata || {}), ...params.metadata };
 	// Keep the loop marker on the task even when it was supplied only on the message.
 	if (directReply) task.metadata = { ...(task.metadata || {}), [DIRECT_REPLY_META]: params.metadata?.[DIRECT_REPLY_META] || msg.metadata?.[DIRECT_REPLY_META] };
-	const preview = A.textOf(msg);
+	const preview = sealed ? "[encrypted message]" : A.textOf(msg);
 	const claimToken = A.newId();
-	const history = { dir: "in", peer: label, taskId: task.id, role: "user", text: preview, data: { messageId: msg.messageId } };
+	const history = { dir: "in", peer: label, taskId: task.id, role: "user", text: preview, data: { messageId: msg.messageId, ...(sealed ? { sealed } : {}) } };
 	const stored = creating
 		? await ctx.DB.batch([
 			claimContextStmt(ctx, contextId, label, ts),
@@ -1261,9 +1275,11 @@ async function handleRpc(req: Request, ctx: TenantContext, ectx: ExecutionContex
 	// Address updates stay on this inbox. A façade still proxies every other method.
 	if (op !== "address" && proxy) return await proxyRpc(req, ctx, { raw, rid, method, op, version, params, label, ip });
 	try {
-		const result = await HANDLERS[op](params, label, version, ctx, ectx);
+		const activated = req.headers.get("A2A-Extensions")?.split(",").map(s => s.trim()).includes(SealedKeys.SEALED_URI);
+  if (op === "send" && params.message?.extensions?.includes(SealedKeys.SEALED_URI) && !activated) throw new RpcError(-32602, "Activate the sealed extension before sending");
+  const result = await HANDLERS[op](params, label, version, ctx, ectx);
 		log("rpc_ok", { peer: label, method, ip });
-		return json({ jsonrpc: "2.0", id: rid, result });
+		return json({ jsonrpc: "2.0", id: rid, result }, 200, activated && ctx.A2A_SEALED_ENABLED === "1" ? { "A2A-Extensions": SealedKeys.SEALED_URI } : {});
 	} catch (e: any) {
 		if (e instanceof RpcError) { log("rpc_error", { peer: label, method, code: e.code, msg: e.message }); return err(e.code, e.message); }
 		if (e instanceof A.InvalidParams) { log("rpc_invalid", { peer: label, method, msg: e.message }); return err(-32602, `Invalid params: ${e.message}`); }
@@ -1639,7 +1655,7 @@ async function publicCard(ctx: TenantContext): Promise<Json> {
 	}
  if (ctx.A2A_SEALED_ENABLED === "1") {
   const row: Json = await ctx.DB.prepare("SELECT value FROM settings WHERE key = ?").bind(SealedKeys.SEALED_KEY_SETTING).first();
-  if (row) extensions.push({ uri: SealedKeys.SEALED_URI, required: false, description: "Local key pairing draft; encrypted traffic disabled", params: { pairingBundle: JSON.parse(row.value) } });
+  if (row) extensions.push({ uri: SealedKeys.SEALED_URI, required: false, description: "Local encrypted CLI draft", params: { pairingBundle: JSON.parse(row.value), cliSeal: true } });
  }
 	const forward = await activeForward(ctx);
 	if (forward) extensions.push(Addr.movedExtension(forward.cardUrl, new Date(forward.untilMs).toISOString()));
@@ -2342,7 +2358,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 		for (const r of page) {
 			const t = await loadTask(ctx, r.id);
 			const lastUser = [...t.history].reverse().find((x: Json) => x.role === "user") || {};
-			out.push({ taskId: t.id, contextId: t.contextId, from: t._peer, state: t.status.state, updated: t.status.timestamp, text: A.textOf(lastUser) });
+			out.push({ taskId: t.id, contextId: t.contextId, from: t._peer, state: t.status.state, updated: t.status.timestamp, text: SealedKeys.envelopeOf(lastUser) ? "[encrypted message]" : A.textOf(lastUser), ...(SealedKeys.envelopeOf(lastUser) ? { sealed: SealedKeys.envelopeOf(lastUser) } : {}) });
 		}
 		// A reply to a message this agent sent. The first page carries it, up to the same limit, so a later
 		// page does not repeat it and the inbound cursor stays the inbound page. It stays in the default
@@ -2405,6 +2421,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			return json({ task: ownerTaskView(t), push: await notifyPeer(ctx, ectx, t) });
 		}
 		if (seg[2] === "reply" && m === "POST") {
+   if (t.history.some((msg: Json) => SealedKeys.envelopeOf(msg))) return json({ error: "This task requires a local encrypted response; plaintext reply is disabled" }, 409);
 			const b = await body();
 			const state = b.state || "completed";
 			if (!["completed", "input-required", "failed", "rejected", "working"].includes(state)) return json({ error: "bad state" }, 400);

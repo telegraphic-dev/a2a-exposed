@@ -94,7 +94,7 @@ async function inboxRows(o) {
 }
 
 export async function inbox(o) {
-	const rows = await inboxRows(o);
+	const rows = await (await import("./sealed-cli.mjs")).openRows(await inboxRows(o), o);
 	// pending pairing requests: polling agents get no pairing wake, so the inbox shows them too (not with --context:
 	// that is one conversation). An older Worker without pairing: nothing to show.
 	let pairing = [];
@@ -158,7 +158,7 @@ export async function reply(id, o) {
 export async function history(ctx, o) {
 	const qs = new URLSearchParams({ n: String(Number(o.n || 50)) });
 	if (o.from) qs.set("from", o.from);
-	const rows = await owner("GET", `/owner/history/${q(ctx)}?${qs}`);
+	const rows = await (await import("./sealed-cli.mjs")).openRows(await owner("GET", `/owner/history/${q(ctx)}?${qs}`), o);
 	if (o.json) return out(rows);
 	const states = new Map();
 	const peers = new Map(rows.filter((e) => e.task_id && e.peer).map((e) => [e.task_id, e.peer]));
@@ -270,6 +270,7 @@ async function peersRemote(sub, args) {
 	for (const alias of list) {
 		const pe = all[alias];
 		if (!pe) die(`unknown peer alias ${JSON.stringify(alias)} (see: ${CLI} peers list)`);
+  if (pe.sealed) die("Pinned peers require local encrypted CLI send; remote MCP cannot hold local keys. No peer was synced.");
 		const tok = peerToken(pe.token_env);
 		const r = await ownerTry("PUT", `/owner/outbound-peers/${q(alias)}`, { url: pe.url.replace(/\/$/, ""), ...(tok ? { token: tok } : {}) });
 		if (r.status === 404) die(`this Worker has no MCP support yet: redeploy (${CLI} deploy) and try again`);
@@ -342,8 +343,7 @@ async function logHistory(ctx, entry) {
 }
 
 export async function send(o) {
- if (o.to && C.loadPeers()[o.to]?.sealed?.policy === "required") die(`Peer ${o.to} has pinned keys; encrypted sending is not available yet. No plaintext was sent.`);
- if (fs.existsSync(C.CONFIG_DIR + "/encryption/state.sqlite")) die("This config directory has local keys (keys init), so ordinary send is off here. Use a separate --config-dir for ordinary sends. No plaintext was sent.");
+ if (fs.existsSync(C.CONFIG_DIR + "/encryption/state.sqlite") || Object.values(C.loadPeers()).some(p => p.sealed?.policy === "required")) return (await import("./sealed-cli.mjs")).send(o);
 	if (!o.to) die("--to required");
 	// The callback authenticates against the token saved through the owner API.
 	if (o.push && !ownerConfigured()) die("--push needs A2A_BASE_URL and A2A_OWNER_TOKEN (your Worker); configure both or omit --push and poll instead");

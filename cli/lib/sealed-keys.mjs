@@ -17,7 +17,9 @@ export async function sdk() {
   const primitives = await import(pathToFileURL(require.resolve("@a2a-exposed/encryption")).href);
   const state = await import(pathToFileURL(require.resolve("@a2a-exposed/encryption/local-state")).href);
   if (typeof state.localSafetyCode !== "function") throw Error("matching package required");
-  return { ...primitives, ...state };
+  const carriers = await import(pathToFileURL(require.resolve("@a2a-exposed/encryption/carriers")).href);
+  const content = await import(pathToFileURL(require.resolve("@a2a-exposed/encryption/content")).href);
+  return { ...primitives, ...state, ...carriers, ...content };
  } catch { fail(`Install the matching optional @a2a-exposed/encryption package in this config directory before keys init; run ${CLI} keys stores --json afterward. No keys or network requests were created.`); }
 }
 async function owner(method, route, body) {

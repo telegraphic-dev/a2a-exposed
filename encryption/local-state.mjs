@@ -709,7 +709,7 @@ export class LocalState {
  }
  async loadIdentity(id, { allowOsConsent = false, purpose = "archive" } = {}) {
   const row = this.row(id);
-  if (purpose !== "archive") fail("traffic_disabled", "Encrypted traffic is not enabled by local custody initialization.");
+  if (purpose !== "archive" && !(purpose === "traffic" && process.env.A2A_SEALED_ENABLED === "1" && row.live_state === "local-only" && this.status().archive_only === false)) fail("traffic_disabled", "Encrypted traffic requires the approved local test flag and an active, unrestored identity.");
   const identity = await deserialize(await this.privateGet(row, allowOsConsent), JSON.parse(row.bundle));
   await seal({ identity, recipient: identity.bundle, binding: { contextId: randomUUID(), messageId: randomUUID(), taskId: null, role: "user", state: null, kind: "message" }, content: { purpose: "local-key-pair-check" } });
   return identity;

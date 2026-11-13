@@ -92,3 +92,14 @@ keys, `key_comparison` then `authorization_pending`, and `keys_pinned` then
 `connected`. Parse each line separately.
 The path remains disabled and does not yet send encrypted messages. See
 [local keys and pairing](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/local-key-pairing.md).
+
+### Local encrypted CLI fixtures
+
+`A2A_SEALED_ENABLED=1` stays reserved for approved local tests. After local keys
+and exact human-approved pins are established, `send --to ALIAS` seals locally;
+`inbox` and `history` open locally. List aliases with `peers list` and key IDs with
+`keys status --json` first. For keychain keys, pass `--allow-os-consent` explicitly
+on send/read. Changed or missing pins, keys or capabilities refuse without
+plaintext fallback. Do not resend an uncertain delivery; inspect its original
+context/message IDs. Plaintext replies and remote MCP sync of pinned peers are
+refused. See [local keys and pairing](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/local-key-pairing.md).

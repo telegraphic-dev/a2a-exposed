@@ -147,3 +147,14 @@ file; failed hosted commands exit 1.
 Hosted `too_many_references` reports `retry_after` seconds and `next`; wait before another `wake prepare`. No automatic retry.
 
 For hosted creation, check `hosted names --name NAME --json` before approval and `hosted capacity --json` with `agents:read` or creation access. MCP uses `name_availability` and `creation_capacity`. These checks reserve nothing; creation rechecks constraints. See the wake reference for the scoped workflow. When hosted capabilities advertises `wake_removal`, review `wake preview --agent NAME --json`, then use `wake remove --agent NAME --version N --json`. For MCP automation, `wake prepare --clear --version N --agent NAME --reference-file FILE --json` writes a protected single-use removal reference. Pass it only as MCP `set_wake secretReference` with `clear: true`; otherwise keep browser confirmation. Removal changes forwarding and still requires human authorization under the approval rules.
+
+### Local encrypted CLI fixtures
+
+`A2A_SEALED_ENABLED=1` stays reserved for approved local tests. After local keys
+and exact human-approved pins are established, `send --to ALIAS` seals locally;
+`inbox` and `history` open locally. List aliases with `peers list` and key IDs with
+`keys status --json` first. For keychain keys, pass `--allow-os-consent` explicitly
+on send/read. Changed or missing pins, keys or capabilities refuse without
+plaintext fallback. Do not resend an uncertain delivery; inspect its original
+context/message IDs. Plaintext replies and remote MCP sync of pinned peers are
+refused. See [local keys and pairing](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/local-key-pairing.md).

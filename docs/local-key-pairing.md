@@ -1,11 +1,11 @@
 # Local keys and pairing
 
 Local encryption is disabled by default. `A2A_SEALED_ENABLED=1` is reserved for
-explicitly approved local tests until enablement is approved. Setting it enables
-key pairing only in this change; sending encrypted messages is not implemented.
+explicitly approved local tests until enablement is approved. It enables key pairing and local encrypted CLI send/inbox/history in approved
+fixtures.
 Do not configure it on a real inbox yet.
 
-The local CLI loads `@a2a-exposed/encryption` only for key commands. Install the
+The local CLI loads `@a2a-exposed/encryption` only for key commands and locally encrypted send/read. Install the
 matching package in the selected config directory. Select a separate directory
 for each agent. The ordinary CLI has no new runtime dependency.
 
@@ -58,10 +58,51 @@ approving inbox owner to revoke it with `token revoke LABEL` (select the label
 with `keys pairings --json`) and tell the other owner. This change does not provide an independent-verification
 approval ceremony or rotation command.
 
-Once a local key store exists, this intermediate change refuses ordinary `send`
-before sending any plaintext, including when the test flag is unset. This also
-protects against a deleted or replaced peer mirror. Until encrypted transport is
-implemented, use a separate config directory for ordinary server-readable sends. The Worker never imports the optional HPKE package.
+## Local encrypted CLI messages
+
+After both local pins are imported, the connecting side can send with the existing
+human-approved credential:
+
+```sh
+npx -y a2a-exposed@latest peers list
+npx -y a2a-exposed@latest send --to bob --text "fixture message"
+npx -y a2a-exposed@latest inbox --json
+npx -y a2a-exposed@latest history CONTEXT_ID --json
+```
+
+Run inbox/history in the receiving agent's config directory; sender history also
+opens the sender's encrypted copy. The CLI seals the content with HPKE for both
+the receiver and sender, signs its public context/message/task binding, and sends
+one ciphertext-only data part. A2A 0.3 and 1.0 use the same envelope. The Worker
+checks the signature against the exact approved public bundles without holding
+private keys or importing HPKE. It stores ciphertext and public routing metadata.
+Wakes and server previews contain `[encrypted message]`. The CLI verifies the
+pinned sender and recipient and opens content locally; JSON marks it
+`locallyOpened: true`. Message content remains untrusted peer data.
+
+Context/message IDs and any caller-supplied task ID are signed. The initial
+server-assigned task ID and server state are routing hints; this path does not
+claim a recipient-signed task assignment or exactly-once model consumption.
+Reading history repeatedly does not consume or execute the message. Freshness is
+limited to 30 days by the envelope verifier. Local state, key changes or missing
+keys can prevent reads; preserve the original store rather than creating new keys.
+
+Use `--allow-os-consent` explicitly on send, inbox or history for a keychain key.
+Without it, keychain reads fail promptly; OS authorization is never automatic.
+There is no file-store fallback. A local OS prompt may still need a human.
+
+Once a local key store exists, ordinary plaintext `send` is refused, including
+when the test flag is unset or the peer mirror is removed. Missing pins, changed
+capabilities, endpoints or bundles, a disabled Worker, malformed content and bad
+signatures all refuse; no plaintext retry occurs. An uncertain network outcome
+prints the original context and message IDs: inspect recipient inbox/history
+before considering any new send. A successful delivery with failed sender-history
+storage is reported as delivered; do not resend it.
+
+Encrypted send does not accept `--push`, `--wake` or `--intent` in this path.
+Plaintext owner replies on encrypted tasks and syncing pinned peers to remote MCP
+are refused. Local stdio MCP and encrypted responses are separate follow-ups.
+Use a separate config directory for ordinary server-readable sends.
 
 Follow-ups: signer rotation #379, further approval ceremonies #380,
 quarantine/invalidation #381, uncertain-failure recovery #382, populated-store

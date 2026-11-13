@@ -66,8 +66,8 @@ export function upstreamCardUrlProblem(card, upstream) {
 }
 export const randomToken = (bytes = 32) => crypto.randomBytes(bytes).toString("base64url");
 
-export async function httpJson(url, { method, body, headers = {}, timeout = 30000 } = {}) {
-	const init = { method: method || (body === undefined ? "GET" : "POST"), headers: { accept: "application/json", ...headers }, signal: AbortSignal.timeout(timeout) };
+export async function httpJson(url, { method, body, headers = {}, timeout = 30000, redirect = "follow" } = {}) {
+	const init = { redirect, method: method || (body === undefined ? "GET" : "POST"), headers: { accept: "application/json", ...headers }, signal: AbortSignal.timeout(timeout) };
 	if (body !== undefined) {
 		init.headers["content-type"] = "application/json";
 		init.body = JSON.stringify(body);
