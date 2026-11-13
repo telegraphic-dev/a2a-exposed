@@ -532,21 +532,23 @@ No raw application or connector credential belongs in MCP or chat.
 
 ## Local key pairing
 
-The disabled local-key path provides `keys stores`, `keys init`, `keys status`,
+The local-key path is disabled by default and provides `keys stores`, `keys init`, `keys status`,
 `keys publish`, `keys pairings`, `keys pin` and `keys code`, all with JSON output.
 `connect --sealed-key-id ID` binds local public keys to existing human pairing
 approval. See [local keys and pairing](local-key-pairing.md) for exact inputs,
 optional package installation, custody choices and refusal behavior. Encrypted
-message traffic requires the approved local test flag. Local `send` seals;
+message traffic requires exact `A2A_SEALED_ENABLED=1` in each local CLI/MCP
+process and separately on each inbox Worker, after owner approval. Local `send` seals;
 `inbox` and `history` open locally.
 
 ## Local stdio MCP
 
 `a2a-exposed --config-dir DIR mcp [--allow-os-consent]` serves local
 `list_peers`, `send`, `inbox` and `history` tools over stdin/stdout. Use
-`list_peers` before selecting the send alias. Encryption remains disabled except
-for approved local fixtures using `A2A_SEALED_ENABLED=1`; no plaintext fallback
-is available. OS consent is a startup choice, never a tool parameter. See the
+`list_peers` before selecting the send alias. Encryption is off by default. Only exact
+`A2A_SEALED_ENABLED=1` enables it in this local process; each inbox Worker needs
+its own setting and owner approval. `true`, `yes` and whitespace do not enable
+it. Production stays off until separately approved. No plaintext fallback is available. OS consent is a startup choice, never a tool parameter. See the
 [MCP local setup and limits](mcp.md#local-stdio-sendread).
 
 ## Pairing and delivery diagnostics

@@ -1,9 +1,12 @@
 # Local keys and pairing
 
-Local encryption is disabled by default. `A2A_SEALED_ENABLED=1` is reserved for
-explicitly approved local tests until enablement is approved. It enables key pairing and local encrypted CLI send/inbox/history in approved
-fixtures, including local stdio MCP send/read.
-Do not configure it on a real inbox yet.
+Local encryption is disabled by default. After the owner approves an environment,
+set `A2A_SEALED_ENABLED=1` separately in each local CLI or MCP process and on each
+inbox Worker. A hosted Worker passes this setting to its tenants; tenant overrides
+are operator-managed, with no dashboard or tenant-owner API control. Production
+must leave it unset until its owner explicitly approves production enablement.
+Only the exact value `1` enables encryption; `true`, `yes` and whitespace do not.
+Setting the Worker flag does not configure the local CLI or MCP process.
 
 The local CLI loads `@a2a-exposed/encryption` only for key commands and locally encrypted send/read. Install the
 matching package in the selected config directory. Select a separate directory
@@ -98,12 +101,18 @@ Without it, keychain reads fail promptly; OS authorization is never automatic.
 There is no file-store fallback. A local OS prompt may still need a human.
 
 Once a local key store exists, ordinary plaintext `send` is refused, including
-when the test flag is unset or the peer mirror is removed. Missing pins, changed
+when the encryption flag is unset or the peer mirror is removed. Missing pins, changed
 capabilities, endpoints or bundles, a disabled Worker, malformed content and bad
 signatures all refuse; no plaintext retry occurs. An uncertain network outcome
 prints the original context and message IDs. Ask the recipient's owner to check
 their local inbox/history for that message ID before considering any new send. A successful delivery with failed sender-history
 storage is reported as delivered; do not resend it.
+
+A recipient that explicitly refuses because its encryption is off or this peer
+has no approved keys gets a specific local message and next step; no plaintext
+is sent. Ask the recipient owner to check the setting or existing pairing
+before any new attempt. Other errors still leave delivery unconfirmed, so
+preserve the original IDs and check recipient history before any new send.
 
 Encrypted text is limited to 200000 Unicode characters and 307072 UTF-8 bytes for canonical content, including JSON structure and escaping. Both limits are checked before private-key access, for `--text` and piped stdin.
 

@@ -90,12 +90,12 @@ pairing: ask the approving inbox owner to `token revoke LABEL` (list labels with
 `connect --json` emits newline-delimited JSON, one object per step: with local
 keys, `key_comparison` then `authorization_pending`, and `keys_pinned` then
 `connected`. Parse each line separately.
-The path is disabled by default; approved local tests can seal/send and open locally. See
+The path is disabled by default; owner-approved environments can seal/send and open locally. See
 [local keys and pairing](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/local-key-pairing.md).
 
 ### Local encrypted CLI fixtures
 
-`A2A_SEALED_ENABLED=1` stays reserved for approved local tests. After local keys
+After owner approval, set exact `A2A_SEALED_ENABLED=1` in each local CLI/MCP process and separately on each inbox Worker. Worker enablement does not configure the local process; `true`, `yes` and whitespace do not enable it. Production stays off until separately approved. After local keys
 and exact human-approved pins are established, `send --to ALIAS` seals locally;
 `inbox` and `history` open locally. List aliases with `peers list --json` and key IDs with
 `keys status --json` first. For keychain keys, pass `--allow-os-consent` explicitly
@@ -106,18 +106,19 @@ refused. See [local keys and pairing](https://github.com/telegraphic-dev/a2a-exp
 
 ## Local stdio send/read
 
-For approved encryption fixtures, `a2a-exposed --config-dir DIR mcp` provides
+For owner-approved encryption environments, `a2a-exposed --config-dir DIR mcp` provides
 `list_peers`, `send`, `inbox`, `history` through the same local CLI path.
 Use `list_peers`, select a pinned alias, then `send` with explicit `to`/`text`.
 Read history and continue with `send` plus `contextId`; no `reply` tool exists.
-Private keys and credentials stay local. Encryption remains disabled except
-for explicit `A2A_SEALED_ENABLED=1` fixtures. Do not enable real inboxes.
+Private keys and credentials stay local. Encryption remains disabled by default; each local process and inbox Worker
+needs its own exact `A2A_SEALED_ENABLED=1`, with owner approval.
 Server-readable content is withheld; rejected rows retain safe recovery guidance.
 Keychain consent is a startup option, not model input. Never automatically
 resend after uncertain delivery. Details: [local MCP](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/mcp.md#local-stdio-sendread).
 
-For contributor validation of the disabled local path, use the
+For contributor validation of the local path, use the
 [two-agent acceptance checklist](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/agents/sealed-acceptance.md).
 The one `A2A_SEALED_ENABLED=1` switch must be set explicitly on both fixture CLIs
-and Workers; it does not enable hosted accounts. Fixture success does not verify
+and Workers. A hosted Worker passes the explicit flag to its tenants; this
+does not configure either local process. Fixture success does not verify
 real desktop MCP clients, browser approvals or live keychain prompts.

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import * as C from "./config.mjs";
 import { CliError, checkId, fetchCard, httpJson, newId, pickEndpoint } from "./a2a.mjs";
 import { owner, peerToken } from "./commands.mjs";
-import { gate, sdk, URI } from "./sealed-keys.mjs";
+import { gate, sdk, URI, encryptionDisabled, peerKeysChanged } from "./sealed-keys.mjs";
 const fail = (message, code = "verification_failed") => { const error = new CliError(message); error.code = code; throw error; };
 const binding = h => Object.fromEntries(["contextId", "messageId", "taskId", "role", "state", "kind"].map(k => [k, h[k]]));
 const sealedFailure = "Encrypted operation refused. Inspect keys status --json and the original pairing; preserve the original task/context IDs. No plaintext fallback or automatic retry.";
@@ -19,6 +19,7 @@ async function paired(peer, o, action) {
   return await action({ api, record, identity, recheck });
  } catch (error) {
   if (error instanceof CliError) throw error;
+  if (["key_lost", "key_unknown"].includes(error?.code)) fail("Restore the original private key from its protected backup or original OS keychain. Inspect keys status --json; do not run keys init or replace the key. No plaintext fallback.", error.code);
   if (error?.code === "key_store_consent") fail("This identity uses the OS keychain. Re-run this send/read with --allow-os-consent only when a human can answer the OS authorization prompt. No store fallback or plaintext retry.", "key_store_consent");
   // LocalStateError.next is fixed recovery guidance; crypto/provider text never escapes.
   fail(error?.next || sealedFailure, error?.code || "verification_failed");
@@ -36,7 +37,7 @@ async function readInput() {
  return Buffer.concat(chunks).toString("utf8");
 }
 export async function send(o, { emit = value => console.log(JSON.stringify(value, null, 2)) } = {}) {
- if (process.env.A2A_SEALED_ENABLED !== "1") fail("This config directory has local keys or pinned peers, so ordinary send is off here. Local encryption is disabled; A2A_SEALED_ENABLED=1 is reserved for approved local tests. Use a separate --config-dir for ordinary sends. No plaintext was sent.");
+ if (process.env.A2A_SEALED_ENABLED !== "1") fail(encryptionDisabled + " Use a separate --config-dir for ordinary sends. No plaintext was sent.");
  gate();
  if (!o.to || !C.loadPeers()[o.to]?.sealed) fail("This config directory has local keys. Select a pinned alias with peers list --json; complete human-approved connect first. Use a separate --config-dir for ordinary sends. No plaintext was sent.");
  if (o.text === undefined && process.stdin.isTTY) fail("Encrypted send requires --text TEXT or piped stdin; no terminal prompt is used. Nothing was sent.");
@@ -58,7 +59,7 @@ export async function send(o, { emit = value => console.log(JSON.stringify(value
  return paired(o.to, o, async ({ api, record, identity, recheck }) => {
   const card = await fetchCard(pe.url), [url, protocol] = pickEndpoint(pe.url, card, o.proto);
   const advertised = card?.capabilities?.extensions?.filter(e => e.uri === URI);
-  if (!["0.3", "1.0"].includes(protocol) || url !== record.peerEndpoint || advertised?.length !== 1 || advertised[0].params?.cliSeal !== true || api.canonicalJSON(advertised[0].params.pairingBundle) !== api.canonicalJSON(record.bundle)) fail("Peer encryption capability, pinned bundle or endpoint changed. Preserve the pairing and ask its owner; no plaintext was sent.");
+  if (!["0.3", "1.0"].includes(protocol) || url !== record.peerEndpoint || advertised?.length !== 1 || advertised[0].params?.cliSeal !== true || api.canonicalJSON(advertised[0].params.pairingBundle) !== api.canonicalJSON(record.bundle)) fail(peerKeysChanged + " Check the published encryption capability and endpoint with the peer owner too. No plaintext was sent.", "key_changed");
   if (taskId && !contextId) {
    // A task's routing context is server-supplied, not an authenticated assignment.
    // Resolve it before signing instead of silently creating a different conversation.
@@ -80,6 +81,15 @@ export async function send(o, { emit = value => console.log(JSON.stringify(value
    response = await httpJson(url, { redirect: "error", maxResponseBytes: 1024 * 1024, body: { jsonrpc: "2.0", id: b.messageId, method: protocol === "1.0" ? "SendMessage" : "message/send", params: { message, configuration: protocol === "1.0" ? { returnImmediately: true, historyLength: 1 } : { blocking: false, historyLength: 1 } } }, headers: { authorization: `Bearer ${token}`, "A2A-Version": protocol, "A2A-Extensions": URI, ...(protocol === "0.3" ? { "X-A2A-Extensions": URI } : {}) } });
   } catch { fail("Encrypted delivery outcome is unknown. Do not resend. Ask the recipient's owner to check inbox/history for context " + b.contextId + " and message " + b.messageId + ". No plaintext fallback."); }
   const { status, data, headers } = response;
+  if (status === 200 && data?.jsonrpc === "2.0" && data.id === b.messageId && !Object.hasOwn(data, "result") && data.error?.code === -32602 && typeof data.error.message === "string") {
+   // Peer text is untrusted. Map only the two documented pre-storage refusal reasons.
+   const refusals = {
+    encryption_disabled: "The recipient inbox refused the encrypted message because encryption is disabled there. Nothing was delivered. Ask the recipient's owner to check their inbox encryption setting; on hosted inboxes, the service operator controls this setting. No plaintext was sent. Do not retry automatically.",
+    peer_keys_missing: "The recipient inbox refused the encrypted message because this peer has no approved encryption keys there. Nothing was delivered. Inspect keys status --json and keys pairings --json and ask the recipient's owner to check the existing human-approved key pairing. No plaintext was sent. Do not retry automatically.",
+   };
+   const reason = data.error.data?.reason;
+   if (typeof reason === "string" && Object.hasOwn(refusals, reason)) fail(refusals[reason], "recipient_" + reason);
+  }
   if (status !== 200 || data?.jsonrpc !== "2.0" || data.id !== b.messageId || data.error || headers?.get("A2A-Extensions") !== URI) fail("Encrypted delivery was not confirmed. Do not resend automatically. Ask the recipient's owner to check history for context " + b.contextId + " and message " + b.messageId + ". No plaintext fallback.");
   const task = protocol === "1.0" ? data.result?.task : data.result;
   if (!task?.id || task.contextId !== b.contextId || !task.history?.some(m => { try { return api.canonicalJSON(api.readMessageCarrier(api.canonicalJSON(m), protocol)) === api.canonicalJSON(envelope); } catch { return false; } })) fail("Encrypted task routing response is invalid; delivery may have occurred. Preserve context " + b.contextId + " and message " + b.messageId + "; do not resend.");
@@ -122,7 +132,16 @@ export async function openRows(rows, o, { historical = false, markFailure = true
   } catch (error) {
    const codes = { replay: "too_old", key_lost: "key_missing", key_unknown: "key_missing", key_changed: "key_changed", no_pin: "no_pin", key_store_consent: "os_consent_required", binding_mismatch: "binding_mismatch", plaintext_from_pinned_peer: "plaintext_from_pinned_peer" };
    const reason = process.env.A2A_SEALED_ENABLED !== "1" ? "encryption_disabled" : codes[error?.code] || "verification_failed";
-   const next = reason === "os_consent_required" ? "Re-run with --allow-os-consent when a human can answer the OS authorization prompt." : reason === "too_old" ? "Read this context with history CONTEXT --json for verified historical content; this does not admit live work." : reason === "encryption_disabled" ? "Local encryption needs the approved test flag; use a separate --config-dir for ordinary sends. No plaintext fallback." : "Preserve the original keys and pairing; inspect keys status --json. No plaintext fallback.";
+   const next = ({
+    os_consent_required: "Re-run with --allow-os-consent when a human can answer the OS authorization prompt.",
+    too_old: "Read this context with history CONTEXT --json for verified historical content; this does not admit live work.",
+    encryption_disabled: encryptionDisabled,
+    key_missing: "Restore the original private key from its protected backup or original OS keychain. Inspect keys status --json; do not run keys init or replace the key. No plaintext fallback.",
+    key_changed: peerKeysChanged,
+    no_pin: "Run keys status --json and keys pairings --json, then complete the existing human-approved pairing for this peer. Do not change trust automatically. No plaintext fallback.",
+    binding_mismatch: "The encrypted message does not match this task or conversation. Preserve the original task/context IDs and ask the sender owner to check them; do not move or retry the message. No plaintext fallback.",
+    plaintext_from_pinned_peer: "Ask the peer owner to use their approved encrypted client for this pinned pairing. Do not accept a plaintext retry.",
+   })[reason] || "Preserve the original keys and pairing; inspect keys status --json. No plaintext fallback.";
    // Do not echo unverified text, data or provider errors, even in JSON mode.
    out.push({ taskId: row.taskId ?? row.task_id ?? null, contextId: row.contextId ?? row.context_id ?? null, from: peer, encrypted: reason !== "plaintext_from_pinned_peer", locallyOpened: false, reason, next, text: reason === "plaintext_from_pinned_peer" ? "[unencrypted message refused from pinned peer]" : `[encrypted message unavailable: ${reason}]` });
    if (markFailure) process.exitCode = 1;
