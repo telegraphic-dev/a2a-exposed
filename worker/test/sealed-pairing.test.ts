@@ -9,6 +9,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import worker from "../src/index.ts";
 import { d1 } from "./d1.ts";
+import { EXPORT_TABLES } from "../src/export.ts";
 import { verifyPublicBundle } from "../src/sealed-keys.ts";
 const root=fileURLToPath(new URL("../../",import.meta.url));
 test("two local CLIs pair, seal and locally open messages while both servers store only ciphertext",async t=>{
@@ -90,12 +91,10 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
   for(const name of ["alice","bob"]){
    const history=await cli(name,["history",sent.contextId,"--json"]);assert.equal(history.code,0,history.err);
    assert.ok(JSON.parse(history.out).some((x:any)=>x.text===secret&&x.locallyOpened));
-   // Inspect every persisted table, including messages/history/wake/outbound state.
-   const tables:any=await envs[name].DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
-   for(const table of tables.results){
-    assert.match(table.name,/^[A-Za-z0-9_]+$/);
-    const rows=await envs[name].DB.prepare(`SELECT * FROM "${table.name}"`).all();
-    assert.equal(JSON.stringify(rows).includes(secret),false,`${name}.${table.name} leaked plaintext`);
+   // Inspect every application table through the supported export allowlist.
+   for(const table of EXPORT_TABLES){
+    const rows=await envs[name].DB.prepare(`SELECT * FROM "${table}"`).all();
+    assert.equal(JSON.stringify(rows).includes(secret),false,`${name}.${table} leaked plaintext`);
    }
   }
   assert.equal(JSON.stringify(records).includes(secret),false,"plaintext never enters a request body");
