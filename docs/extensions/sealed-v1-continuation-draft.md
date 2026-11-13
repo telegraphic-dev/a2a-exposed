@@ -1182,10 +1182,27 @@ rows, select a trusted signer, prove human approval or anchor a physical file.
 Synthetic SQL fixtures can satisfy these structural checks without a valid
 signature; future readers must still authenticate receipts and retained plans.
 
-No physical initializer, authority reader, command, privileged adapter or grant
-path imports this module. Schema-2/3 behavior stays separate. Authenticated
-schema-4 reading and current-signer selection, plan consumption, enrollment CAS,
-all-writer invalidation, adoption audit, human ceremony and eligibility remain
+The internal `initializeFreshContinuationProvenanceAuthority` entry point in
+`pairing-authority.mjs` creates this format only when both authority files are
+absent. It exclusively reserves owner-only files, checks root/marker/database
+instances across I/O, parses the exact source bytes, and commits a suspended
+revision-zero row bound to the canonical root with a random recovery key and
+epoch. Final readback compares the complete created row in a fresh transaction.
+Partial initialization and uncertain commit/publication outcomes retain their
+files and refuse retries; there is no overwrite, adoption, migration or reset.
+
+`inspectFreshContinuationProvenanceAuthority` opens the database read-only and
+checks the anchored file instances, exact inventory, canonical root bytes and
+fresh authority row within a transaction. Every continuation/provenance table
+must be empty. It returns only a frozen suspended status and source-drift flag;
+keys, hashes and filesystem paths stay private. Any selected signer, advanced
+revision or retained history refuses, including structurally valid synthetic
+rows. This fresh diagnostic does not authenticate provenance or select a signer.
+
+No command, privileged adapter or grant path calls these entry points.
+Schema-2/3 behavior stays separate. Authenticated nonempty schema-4 reading and
+current-signer selection, plan consumption, enrollment CAS, all-writer
+invalidation, adoption audit, human ceremony and eligibility remain
 unimplemented. Existing schema-3 history is never promoted by these helpers.
 
 ### Disabled exact fresh provenance inventory

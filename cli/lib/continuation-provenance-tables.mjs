@@ -1,6 +1,6 @@
 // Disabled fresh-store table foundation for a future authority schema.
 // Hidden row identifiers are absent so REPLACE cannot evict retained history.
-// No command, authority initializer, signer adapter or admission path imports it.
+// The fresh schema-4 installer uses this; no command, signer adapter or admission.
 // SQL retention/bindings do not authenticate a key or establish human approval.
 import {installContinuationTables} from './continuation-tables.mjs';
 
@@ -17,7 +17,7 @@ const retained=t=>`CREATE TRIGGER ${t}_immutable BEFORE UPDATE ON ${t} BEGIN SEL
 
 // Install all continuation and provenance tables ONLY into an empty database in
 // a caller-held transaction. No authority row, version stamp or migration.
-// A future anchored initializer must supply schema inventory authentication and
+// The anchored initializer must supply schema inventory validation and
 // atomically bind the current enrollment/epoch; these rows alone cannot do so.
 export function installContinuationProvenanceTables(db){
  if(db.isTransaction!==true)fail('continuation_provenance_transaction_required');

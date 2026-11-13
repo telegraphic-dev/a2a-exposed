@@ -2,6 +2,7 @@
 // Only cooperating local host writers may call mutate. No grant/credential/approval is created here.
 import {createContinuationSourceSnapshot,ContinuationSourceError} from './continuation-sources.mjs';
 import {installContinuationTables,prepareContinuationIntent,readContinuationIntent,commitContinuationMembers} from './continuation-tables.mjs';
+import {installContinuationProvenanceAuthority,assertContinuationProvenanceAuthorityInventory} from './continuation-provenance-authority.mjs';
 import {createContinuationRecords} from './continuation-records.mjs';
 import fs from 'node:fs';import path from 'node:path';import{createHash,createHmac,randomBytes,timingSafeEqual,randomUUID,createPublicKey,verify}from'node:crypto';import{createRequire}from'node:module';
 const require=createRequire(import.meta.url),UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
@@ -15,7 +16,7 @@ function sources(root){const hash=createHash('sha256').update('a2a-exposed local
 function close(db){try{db?.close();}catch{fail('authority_unavailable');}}
 function exists(file){try{fs.lstatSync(file);return true;}catch(error){if(error.code==='ENOENT')return false;throw error;}}
 function marker(p){check(p.marker);let value;try{value=JSON.parse(read(p.marker,4096).toString('utf8'));}catch{fail('authority_marker_invalid');}if(!value||Object.keys(value).sort().join(',')!=='configIdentity,v'||value.v!==1||!UUID.test(value.configIdentity||''))fail('authority_marker_invalid');return value;}
-function open(p,{readonly=false,schema=2}={}){check(p.db);const {DatabaseSync}=require('node:sqlite'),db=new DatabaseSync(p.db,{readOnly:readonly});try{db.exec('PRAGMA busy_timeout=50; PRAGMA trusted_schema=OFF; PRAGMA foreign_keys=ON;');if(db.prepare('PRAGMA user_version').get().user_version!==schema||db.prepare("SELECT type FROM sqlite_schema WHERE name='authority'").get()?.type!=='table'||db.prepare('PRAGMA table_info(authority)').all().map(r=>r.name).join(',')!==('id,config_id,revision,source_hash,pending,suspended,recovery_key'+(schema===3?',suspension_epoch,active_set':'')))fail('authority_schema');return db;}catch(error){db.close();throw error;}}
+function open(p,{readonly=false,schema=2}={}){check(p.db);const {DatabaseSync}=require('node:sqlite'),db=new DatabaseSync(p.db,{readOnly:readonly});try{db.exec('PRAGMA busy_timeout=50; PRAGMA trusted_schema=OFF; PRAGMA foreign_keys=ON;');if(db.prepare('PRAGMA user_version').get().user_version!==schema||db.prepare("SELECT type FROM sqlite_schema WHERE name='authority'").get()?.type!=='table'||db.prepare('PRAGMA table_info(authority)').all().map(r=>r.name).join(',')!==(schema===4?'id,config_id,canonical_root,revision,source_hash,pending,suspended,recovery_key,suspension_epoch,active_set,current_signer_id':'id,config_id,revision,source_hash,pending,suspended,recovery_key'+(schema===3?',suspension_epoch,active_set':'')))fail('authority_schema');return db;}catch(error){db.close();throw error;}}
 function row(db,configIdentity,schema=2){if(schema===3)assertContinuationAuthorityInventory(db);const r=db.prepare('SELECT * FROM authority WHERE id=1').get();if(!r||db.prepare('SELECT COUNT(*) AS n FROM authority').get().n!==1||r.config_id!==configIdentity||!UUID.test(r.config_id)||!Number.isSafeInteger(r.revision)||r.revision<0||!(/^[A-Za-z0-9_-]{43}$/).test(r.source_hash)||r.pending!==null&&!UUID.test(r.pending)||![0,1].includes(r.suspended)||typeof r.recovery_key!=='string'||!(/^[A-Za-z0-9_-]{43}$/).test(r.recovery_key)||Buffer.from(r.recovery_key,'base64url').toString('base64url')!==r.recovery_key)fail('authority_state_invalid');if(schema===3)validateContinuationAuthorityRow(db,r);return r;}
 function matching(p,r,{allowSuspended=false}={}){if(r.pending!==null)fail('authority_write_pending');if(sources(p.root)!==r.source_hash)fail('authority_external_change');if(r.suspended&&!allowSuspended)fail('authority_reverification_required');}
 function state(p,expected){if(!exists(p.db)&&!exists(p.marker))fail('authority_missing');if(!exists(p.db)||!exists(p.marker))fail('authority_initialization_incomplete');const m=marker(p);if(m.configIdentity!==expected)fail('authority_identity_mismatch');return m;}
@@ -51,12 +52,14 @@ function initializeAuthority(configDir,{configIdentity}={},schema=2){
  try{
   if(typeof configIdentity!=='string'||!UUID.test(configIdentity))fail('authority_identity_required');const p=locations(configDir),held=heldLease(p);if(held){assertAnchor(p,held.anchor);fail('authority_already_exists');}
   const anchor=partialAnchor(p,configIdentity);if(exists(p.db)||exists(p.marker))fail('authority_already_exists');assertPartial(p,anchor);
-  const fingerprint=sources(p.root);if(schema===3)strictSourceSnapshot(p.root,fingerprint);assertPartial(p,anchor);anchor.dbInstance=createPrivate(p.db);assertPartial(p,anchor);
+  const fingerprint=sources(p.root);if(schema>=3)strictSourceSnapshot(p.root,fingerprint);assertPartial(p,anchor);anchor.dbInstance=createPrivate(p.db);assertPartial(p,anchor);
   const {DatabaseSync}=require('node:sqlite');db=new DatabaseSync(p.db);assertPartial(p,anchor);db.exec('PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; BEGIN IMMEDIATE');assertPartial(p,anchor);
-  if(schema===3){db.exec('PRAGMA trusted_schema=OFF');installContinuationAuthority(db);}else db.exec('CREATE TABLE authority(id INTEGER PRIMARY KEY CHECK(id=1),config_id TEXT NOT NULL,revision INTEGER NOT NULL,source_hash TEXT NOT NULL,pending TEXT,suspended INTEGER NOT NULL,recovery_key TEXT NOT NULL); PRAGMA user_version=2;');
-  if(schema===3)db.prepare('INSERT INTO authority VALUES(1,?,0,?,NULL,1,?,?,NULL)').run(configIdentity,fingerprint,randomBytes(32).toString('base64url'),randomUUID());
-  else db.prepare('INSERT INTO authority VALUES(1,?,0,?,NULL,0,?)').run(configIdentity,fingerprint,randomBytes(32).toString('base64url'));assertPartial(p,anchor);db.exec('COMMIT');assertPartial(p,anchor);
-  anchor.markerInstance=createPrivate(p.marker,JSON.stringify({v:1,configIdentity})+'\n');assertAnchor(p,anchor);if(sources(p.root)!==fingerprint)fail('authority_external_change');const final=row(db,configIdentity,schema);if(final.revision!==0||final.pending!==null||final.suspended!==(schema===3?1:0)||final.source_hash!==fingerprint)fail('authority_changed');assertAnchor(p,anchor);
+  if(schema>=3){db.exec('PRAGMA trusted_schema=OFF');if(schema===4)installContinuationProvenanceAuthority(db);else installContinuationAuthority(db);}else db.exec('CREATE TABLE authority(id INTEGER PRIMARY KEY CHECK(id=1),config_id TEXT NOT NULL,revision INTEGER NOT NULL,source_hash TEXT NOT NULL,pending TEXT,suspended INTEGER NOT NULL,recovery_key TEXT NOT NULL); PRAGMA user_version=2;');
+  if(schema===4)db.prepare('INSERT INTO authority VALUES(1,?,?,0,?,NULL,1,?,?,NULL,NULL)').run(configIdentity,p.root,fingerprint,randomBytes(32).toString('base64url'),randomUUID());
+  else if(schema===3)db.prepare('INSERT INTO authority VALUES(1,?,0,?,NULL,1,?,?,NULL)').run(configIdentity,fingerprint,randomBytes(32).toString('base64url'),randomUUID());
+  else db.prepare('INSERT INTO authority VALUES(1,?,0,?,NULL,0,?)').run(configIdentity,fingerprint,randomBytes(32).toString('base64url'));const initialized=schema===4?freshProvenanceRow(db,p,configIdentity):null;assertPartial(p,anchor);db.exec('COMMIT');assertPartial(p,anchor);
+  anchor.markerInstance=createPrivate(p.marker,JSON.stringify({v:1,configIdentity})+'\n');assertAnchor(p,anchor);if(sources(p.root)!==fingerprint)fail('authority_external_change');if(schema===4)db.exec('BEGIN');const final=schema===4?freshProvenanceRow(db,p,configIdentity):row(db,configIdentity,schema);if(schema===4&&JSON.stringify(final)!==JSON.stringify(initialized))fail('authority_changed');if(final.revision!==0||final.pending!==null||final.suspended!==(schema>=3?1:0)||final.source_hash!==fingerprint)fail('authority_changed');assertAnchor(p,anchor);
+  if(schema===4){db.exec('ROLLBACK');assertAnchor(p,anchor);}
   return{ok:true,configIdentity,revision:0};
  }catch(error){try{db?.exec('ROLLBACK');}catch{}throw mapped(error);}finally{close(db);}
 }
@@ -227,6 +230,31 @@ export function initializeContinuationAuthority(configDir,options={}){return ini
 export function inspectContinuationAuthority(configDir,{configIdentity}={}){
  let db;try{const p=locations(configDir),anchor=operationAnchor(p,configIdentity);db=open(p,{readonly:true,schema:3});db.exec('BEGIN');assertAnchor(p,anchor);const r=row(db,configIdentity,3),sourceMismatch=sources(p.root)!==r.source_hash;authenticateContinuationAuthority(db,r,p);assertAnchor(p,anchor);return{...continuationPublic(r),sourceMismatch};}catch(error){throw mapped(error);}finally{try{db?.exec('ROLLBACK');}catch{}close(db);}
 }
+
+// Disabled fresh-only physical schema-4 foundation. No CLI, writer, signer
+// selection or grant path calls these APIs. Nonempty history always refuses;
+// this diagnostic never authenticates retained provenance or authorizes a grant.
+function freshProvenanceRow(db,p,configIdentity){
+ assertContinuationProvenanceAuthorityInventory(db);
+ const r=db.prepare('SELECT *,CAST(canonical_root AS BLOB) AS root_bytes FROM main.authority WHERE id=1').get();
+ if(!r||db.prepare('SELECT COUNT(*) n FROM main.authority').get().n!==1)fail('authority_state_invalid');
+ let root;try{root=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(r.root_bytes);}catch{fail('authority_state_invalid');}
+ if(r.config_id!==configIdentity||!UUID.test(r.config_id)||root!==r.canonical_root||root!==p.root||r.revision!==0||!canonicalDigest(r.source_hash)||!canonicalDigest(r.recovery_key)||!UUID.test(r.suspension_epoch)||r.pending!==null||r.active_set!==null||r.current_signer_id!==null||r.suspended!==1)fail('authority_fresh_required');
+ for(const table of ['continuation_attestations','continuation_intents','grant_sets','grant_members','continuation_signer_enrollments','continuation_enrollment_plans','continuation_decision_receipts'])if(db.prepare(`SELECT COUNT(*) n FROM main.${table}`).get().n!==0)fail('authority_fresh_required');
+ return r;
+}
+export function initializeFreshContinuationProvenanceAuthority(configDir,options={}){return initializeAuthority(configDir,options,4);}
+export function inspectFreshContinuationProvenanceAuthority(configDir,{configIdentity}={}){
+ let db;
+ try{
+  const p=locations(configDir),anchor=operationAnchor(p,configIdentity);
+  db=open(p,{readonly:true,schema:4});db.exec('BEGIN');assertAnchor(p,anchor);
+  const before=freshProvenanceRow(db,p,configIdentity),sourceMismatch=sources(p.root)!==before.source_hash;
+  const after=freshProvenanceRow(db,p,configIdentity);if(JSON.stringify(before)!==JSON.stringify(after))fail('authority_changed');assertAnchor(p,anchor);db.exec('ROLLBACK');assertAnchor(p,anchor);
+  return Object.freeze({schema:4,configIdentity:before.config_id,revision:0,epoch:before.suspension_epoch,suspended:true,currentSigner:null,intentId:null,activeSet:null,sourceMismatch});
+ }catch(error){throw mapped(error);}finally{try{db?.exec('ROLLBACK');}catch{}close(db);}
+}
+
 function authenticateContinuationAuthority(db,r,p){
  for(const [setId,intentId] of r.pending!==null?[[db.prepare('SELECT set_id FROM continuation_intents WHERE id=?').get(r.pending).set_id,r.pending]]:r.active_set!==null?[[r.active_set,db.prepare('SELECT intent_id FROM grant_sets WHERE id=?').get(r.active_set).intent_id]]:[]){const records=createContinuationRecords(Buffer.from(r.recovery_key,'base64url'),continuationProcessNonce,{root:p.root,config_identity:r.config_id,epoch:r.suspension_epoch,set_id:setId});readContinuationIntent(db,records,intentId);}
 }
