@@ -12,7 +12,6 @@ import { createServer } from "node:http";
 import { createHash } from "node:crypto";
 import { AgentCard, SendMessageRequest } from "@a2a-js/sdk";
 import { ClientFactory, JsonRpcTransportFactory } from "@a2a-js/sdk/client";
-import { fetch } from "./fresh-connection-fetch.ts";
 import { relayPhase } from "./relay-phase.ts";
 const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
 const execute = promisify(execFile);
@@ -80,7 +79,11 @@ for (const legacy of [false, true]) test(`delayed initial BOM survives keepalive
 			const req = new Request(input, init); const url = new URL(req.url);
 			assert.equal(url.origin, publicOrigin, "SDK must use the rewritten public endpoint, not the receiver");
 			const headers = new Headers(req.headers); headers.set("x-a2a-relay-authorization", `Bearer ${ingress}`);
-			return fetch(new Request(new URL(url.pathname + url.search, local), { method: req.method, headers, body: req.body, signal: AbortSignal.any([req.signal, t.signal]), duplex: "half" } as RequestInit));
+			// Node 22 ties a copied Request signal's controller to that Request.
+			// Forward the SDK's original signal, not the temporary req.signal: GC
+			// after response headers would otherwise silently detach cancellation.
+			const signal = init?.signal ?? (input instanceof Request ? input.signal : t.signal);
+			return fetch(new URL(url.pathname + url.search, local), { method: req.method, headers, body: req.body, signal: AbortSignal.any([signal, t.signal]), duplex: "half" } as RequestInit);
 		};
 		const client = await new ClientFactory({ transports: [new JsonRpcTransportFactory({ fetchImpl: publicFetch, legacyCompat: { enabled: true } })] }).createFromAgentCard(AgentCard.fromJSON({ name: "fixture", supportedInterfaces: [{ url: publicOrigin + "/relay/a2a/", protocolBinding: "JSONRPC", protocolVersion: legacy ? "0.3" : "1.0" }], capabilities: { streaming: true }, skills: [] }));
 		for (mode of ["bom", "plain"]) {
@@ -95,7 +98,11 @@ for (const legacy of [false, true]) test(`delayed initial BOM survives keepalive
 		mode = "bom";
 		const abort = new AbortController();
 		const stream = client.sendMessageStream(SendMessageRequest.fromJSON({ message: { messageId: "abort", role: "ROLE_USER" } }), { signal: abort.signal });
-		assert.equal((await wait("abort: first SDK event", stream.next())).done, false); abort.abort();
+		assert.equal((await wait("abort: first SDK event", stream.next())).done, false);
+		// In the GC regression subprocess, collect the temporary normalized Request
+		// after headers/first event have arrived but before aborting the SDK signal.
+		if (globalThis.gc) for (let i = 0; i < 5; i++) { await delay(0); globalThis.gc(); }
+		abort.abort();
 		// Consume only the SDK rejection here; a phase timeout must still fail the test.
 		await wait("abort: SDK iterator settlement", stream.next().catch(() => undefined));
 		await wait("abort: local response closed", abortSawClose);
@@ -113,6 +120,22 @@ for (const legacy of [false, true]) test(`delayed initial BOM survives keepalive
 			try { await wait("fixture shutdown", fixture.close()); }
 			finally { try { await wait("Worker shutdown", mf.dispose()); } finally { rmSync(dir, { recursive: true, force: true }); } }
 		}
+	}
+});
+
+// Force the formerly intermittent lifetime bug on every normal suite run.
+// Select only the SDK cases in the subprocess, so this wrapper cannot recurse.
+test("SDK fixture abort survives garbage collection of normalized Requests", { timeout: 45000 }, async t => {
+	const root = resolve(process.env.HTTP_RELAY_WORKER_ROOT || ".");
+	try {
+		const result = await execute(process.execPath, ["--expose-gc", "--import", resolve(root, "test/register-hooks.mjs"), "--test", "--test-name-pattern=^delayed initial BOM", resolve(root, "test/http-relay-bom.test.ts")], { cwd: root, timeout: 40000 });
+		assert.match(result.stdout, /# tests 2/);
+		assert.match(result.stdout, /# pass 2/);
+		t.diagnostic("forced Request GC: original SDK abort reaches the receiver on protocols 1.0 and 0.3");
+	} catch (error) {
+		t.diagnostic((error as any).stdout || "no subprocess stdout");
+		t.diagnostic((error as any).stderr || "no subprocess stderr");
+		throw error;
 	}
 });
 
