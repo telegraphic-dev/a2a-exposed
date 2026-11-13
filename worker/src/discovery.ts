@@ -204,3 +204,39 @@ export function linkHeader(docs: string): string {
 }
 
 export const NOINDEX = "noindex, nofollow";
+
+// ------------------------------------------------------------------ Agent Skills discovery index (#349)
+
+export const SKILLS_SCHEMA = "https://schemas.agentskills.io/discovery/0.2.0/schema.json";
+
+/** Where the SKILL.md files of a release live: the repository at the release tag, so a self-hosted v0.8.x install
+ *  links the v0.8.x skills whose bytes match the digests. */
+export const skillsRepoBase = (version: string): string =>
+	`https://raw.githubusercontent.com/telegraphic-dev/a2a-exposed/v${encodeURIComponent(version)}/skills`;
+
+/** SKILLS_BASE_URL as an https base with no trailing slash (credentials, query, and fragment rejected), else the
+ *  release tag in the repository. Hosted sets it to https://a2a.exposed/.well-known/agent-skills: same bytes. */
+export function skillsBase(v: string | undefined, version: string): string {
+	const s = (v || "").trim();
+	if (s) {
+		try {
+			const u = new URL(s);
+			if (u.protocol === "https:" && !u.username && !u.password && !u.search && !u.hash) return (u.origin + u.pathname).replace(/\/+$/, "");
+		} catch { /* fall through */ }
+	}
+	return skillsRepoBase(version);
+}
+
+export type SkillEntry = { name: string; description: string; digest: string };
+
+/** GET /.well-known/agent-skills/index.json: the canonical skills by absolute, version-pinned URL. Only the index is
+ *  served; the SKILL.md bodies stay at their canonical home. */
+export function skillsIndex(skills: readonly SkillEntry[], base: string): { $schema: string; skills: Record<string, string>[] } {
+	return { $schema: SKILLS_SCHEMA, skills: skills.map((s) => ({ name: s.name, type: "skill-md", description: s.description, url: `${base}/${s.name}/SKILL.md`, digest: s.digest })) };
+}
+
+/** The canonical URL a /.well-known/agent-skills/<name>/SKILL.md request on the agent redirects to, or null. */
+export function skillRedirect(path: string, skills: readonly SkillEntry[], base: string): string | null {
+	const m = /^\/\.well-known\/agent-skills\/([a-z0-9-]{1,64})\/SKILL\.md$/.exec(path);
+	return m && skills.some((s) => s.name === m[1]) ? `${base}/${m[1]}/SKILL.md` : null;
+}

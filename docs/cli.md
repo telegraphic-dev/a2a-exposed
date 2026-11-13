@@ -312,6 +312,7 @@ One A2A endpoint has one owner token, saved by `init` in `config.env`. That toke
 | `A2A_DOCUMENTATION_URL` | Public https documentation link on the agent card |
 | `A2A_ROBOTS_POLICY` | `allow` (default) or `disallow`: `robots.txt` serves `Disallow: /` and every response gets `X-Robots-Tag: noindex, nofollow` |
 | `A2A_CONTENT_SIGNAL` | `Content-Signal` in `robots.txt` and on `GET /`. Default `search=yes, ai-input=yes, ai-train=no` |
+| `A2A_SKILLS_BASE_URL` | https base of the `SKILL.md` files that `/.well-known/agent-skills/index.json` links. Default: the release tag on GitHub |
 | `A2A_DISCOVERY_DOCS_ORIGIN` | https origin of the connect playbook and setup skill linked from `GET /`, `/index.md`, and `/llms.txt`. Default `https://a2a.exposed` |
 | `A2A_NO_UPDATE_CHECK` | `1` turns off the daily npm update notice. `DO_NOT_TRACK=1` does the same |
 | `CLOUDFLARE_API_TOKEN` | API token when browser login is blocked |

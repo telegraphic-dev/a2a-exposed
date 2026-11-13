@@ -2,6 +2,7 @@
 // wake webhook captured. Run: npm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { VERSION } from "../src/version.ts";
 import worker, { runOwnerRpc } from "../src/index.ts";
 import { DASHBOARD_ACTOR_HEADER } from "../src/owner-rpc.ts";
 import { resolveTenant } from "../src/tenancy.ts";
@@ -984,6 +985,37 @@ test("robots.txt, sitemap.xml, Link and Content-Signal headers (scanner level 1)
 	for (const [method, path] of [["HEAD", "/"], ["GET", "/.well-known/agent-card.json"], ["GET", "/nope"], ["GET", "/device"], ["POST", "/"]])
 		assert.equal((await staging.call(method, path)).headers.get("x-robots-tag"), "noindex, nofollow", `${method} ${path}`);
 	assert.equal((await staging.call("HEAD", "/")).headers.get("content-signal"), "search=no, ai-input=no, ai-train=no");
+});
+
+test("agent skills index: canonical skills by version-pinned URL and digest; SKILL.md redirects, never served", async (t) => {
+	const s = setup(); t.after(s.restore);
+	const idx = await s.call("GET", "/.well-known/agent-skills/index.json");
+	assert.equal(idx.status, 200);
+	assert.match(idx.headers.get("content-type") || "", /^application\/json/);
+	assert.equal(idx.headers.get("access-control-allow-origin"), "*");
+	assert.equal(idx.data.$schema, "https://schemas.agentskills.io/discovery/0.2.0/schema.json");
+	assert.deepEqual(idx.data.skills.map((k: any) => k.name), ["a2a-exposed", "a2a-exposed-setup"]);
+	for (const k of idx.data.skills) {
+		assert.deepEqual(Object.keys(k).sort(), ["description", "digest", "name", "type", "url"]);
+		assert.equal(k.type, "skill-md");
+		assert.equal(k.url, `https://raw.githubusercontent.com/telegraphic-dev/a2a-exposed/v${VERSION}/skills/${k.name}/SKILL.md`);
+		assert.match(k.digest, /^sha256:[0-9a-f]{64}$/);
+	}
+	const head = await s.call("HEAD", "/.well-known/agent-skills/index.json");
+	assert.equal(head.status, 200);
+	assert.equal(head.text, "");
+	const md = await s.call("GET", "/.well-known/agent-skills/a2a-exposed-setup/SKILL.md");
+	assert.equal(md.status, 302);
+	assert.equal(md.headers.get("location"), idx.data.skills[1].url);
+	assert.equal(md.text, "", "the Worker never serves a skill body");
+	for (const path of ["/.well-known/agent-skills/other/SKILL.md", "/.well-known/agent-skills/a2a-exposed/references/connect.md", "/.well-known/agent-skills/", "/.well-known/agent-skills/index.json/"])
+		assert.equal((await s.call("GET", path)).status, 404, path);
+
+	const hosted = setup({ SKILLS_BASE_URL: "https://a2a.exposed/.well-known/agent-skills/" }); t.after(hosted.restore);
+	const h = await hosted.call("GET", "/.well-known/agent-skills/index.json");
+	assert.equal(h.data.skills[0].url, "https://a2a.exposed/.well-known/agent-skills/a2a-exposed/SKILL.md");
+	assert.equal(h.data.skills[0].digest, idx.data.skills[0].digest, "same bytes, same digest");
+	assert.equal((await hosted.call("GET", "/.well-known/agent-skills/a2a-exposed/SKILL.md")).headers.get("location"), h.data.skills[0].url);
 });
 
 test("owner summary counts tasks and pending pairing requests without their text", async (t) => {

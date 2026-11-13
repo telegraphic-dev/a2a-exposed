@@ -39,6 +39,8 @@ export const CONFIG_KEYS = [
 	"ROBOTS_POLICY",
 	/** Content-Signal in robots.txt and on GET / (default search=yes, ai-input=yes, ai-train=no). */
 	"CONTENT_SIGNAL",
+	/** Optional https base of the canonical SKILL.md files listed by /.well-known/agent-skills/index.json (default: the release tag on GitHub). */
+	"SKILLS_BASE_URL",
 	"WAKE_WEBHOOK_URL", "WAKE_WEBHOOK_KEY", "WAKE_HMAC_SECRET", "WAKE_ACCESS_CLIENT_ID", "WAKE_ACCESS_CLIENT_SECRET",
 	"WAKE_CONNECTOR_ID", "WAKE_CONNECTOR_GENERATION", "WAKE_TRANSPORT", "WAKE_PRESET", "WAKE_AGENT_ID", "WAKE_KEY_HEADER", "WAKE_KEY_PREFIX", "WAKE_BODY_TEMPLATE", "WAKE_CLI_COMMAND",
 	"WAKE_DEBOUNCE_SECONDS", "WAKE_BUSY_SECONDS", "WAKE_MAX_PER_HOUR",
@@ -69,7 +71,8 @@ export type ConfigFields = { [K in ConfigKey]?: string };
  */
 // DISCOVERY_DOCS_ORIGIN: the hosted Worker links every tenant's GET / to its own site (staging to staging).
 // ROBOTS_POLICY and CONTENT_SIGNAL: the hosted Worker sets the platform default (staging: disallow); a tenant overlay may override.
-const HOSTED_PLATFORM_DEFAULTS: readonly ConfigKey[] = ["MAX_BODY", "RATE_PER_MIN", "PBKDF2_ITERATIONS", "MCP", "PAIRING_APPROVAL", "DISCOVERY_DOCS_ORIGIN", "ROBOTS_POLICY", "CONTENT_SIGNAL"];
+// SKILLS_BASE_URL: the hosted Worker lists the skills its site serves at the same pin (same bytes, same digests).
+const HOSTED_PLATFORM_DEFAULTS: readonly ConfigKey[] = ["MAX_BODY", "RATE_PER_MIN", "PBKDF2_ITERATIONS", "MCP", "PAIRING_APPROVAL", "DISCOVERY_DOCS_ORIGIN", "ROBOTS_POLICY", "CONTENT_SIGNAL", "SKILLS_BASE_URL"];
 
 /** Worker-to-Worker fetch. Present when the deploy sets `A2A_CONTROL_SERVICE`. */
 export interface ControlFetcher {
@@ -387,6 +390,7 @@ export class TenantContext implements ConfigFields {
 	readonly DISCOVERY_DOCS_ORIGIN?: string;
 	readonly ROBOTS_POLICY?: string;
 	readonly CONTENT_SIGNAL?: string;
+	readonly SKILLS_BASE_URL?: string;
 	readonly WAKE_CONNECTOR_ID?: string;
 	readonly WAKE_CONNECTOR_GENERATION?: string;
 	readonly WAKE_TRANSPORT?: string;
