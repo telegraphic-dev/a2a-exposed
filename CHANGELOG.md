@@ -2,10 +2,6 @@
 
 ## Unreleased
 
-- Add a disabled fresh-only schema-4 authority/provenance foundation with exact
-  inventory validation and structural current-signer/receipt bindings. No
-  physical adoption, enrollment, human approval or encryption enablement.
-
 - Add separately opted-in HTTP relay profiles for fixed local webhooks and native
   A2A JSON-RPC services, with original request bytes/application authentication,
   real receiver responses, rewritten discovery and bounded incremental SSE.

@@ -54,7 +54,12 @@ test('nonempty/partial version-zero stores refuse without adoption or reset',t=>
 test('missing transaction and unsafe connection pragmas refuse before changes',t=>{
  const db=fresh(t);db.exec('ROLLBACK');assert.throws(()=>install(db),{code:'continuation_authority_transaction_required'});
  for(const [name,value]of [['foreign_keys',0],['trusted_schema',1],['ignore_check_constraints',1],['writable_schema',1]]){
-  db.exec(`PRAGMA ${name}=${value}; BEGIN`);assert.throws(()=>install(db),{code:'continuation_authority_connection_invalid'});assert.equal(schema(db).length,0);
+  db.exec(`PRAGMA ${name}=${value}; BEGIN`);
+  // Newer Node SQLite defensive mode can refuse writable_schema=ON. Test the
+  // effective connection state: an ignored unsafe request leaves a safe DB.
+  const effective=db.prepare(`PRAGMA ${name}`).get()[name];
+  if(effective===value){assert.throws(()=>install(db),{code:'continuation_authority_connection_invalid'});assert.equal(schema(db).length,0);}
+  else{assert.equal(name,'writable_schema');assert.equal(effective,0);install(db);assert.deepEqual(inspect(db),expected);}
   db.exec(`ROLLBACK; PRAGMA ${name}=${1-value}`);
  }
  db.exec('BEGIN');install(db);
@@ -85,7 +90,9 @@ for(const sql of ['DROP TRIGGER authority_signer_epoch','DROP INDEX continuation
  });
 test('reader refuses altered version, connection state, TEMP shadow or attached database',t=>{
  for(const sql of ['PRAGMA user_version=3','PRAGMA ignore_check_constraints=ON','PRAGMA trusted_schema=ON','PRAGMA writable_schema=ON','CREATE TEMP TABLE authority(id INTEGER)',"ATTACH ':memory:' AS other"]){
-  const {db}=fixture(t);db.exec(sql);assert.throws(()=>inspect(db),e=>e.code?.startsWith('continuation_authority_'));
+  const {db}=fixture(t);db.exec(sql);
+  if(sql==='PRAGMA writable_schema=ON'&&db.prepare('PRAGMA writable_schema').get().writable_schema===0)assert.deepEqual(inspect(db),expected);
+  else assert.throws(()=>inspect(db),e=>e.code?.startsWith('continuation_authority_'));
  }
  const {db}=fixture(t);db.exec('COMMIT; PRAGMA foreign_keys=OFF; BEGIN');assert.throws(()=>inspect(db),{code:'continuation_authority_connection_invalid'});
 });
