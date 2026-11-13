@@ -106,3 +106,11 @@ SQLite commits and stages immutable host-grant metadata. It does not supply a
 cross-process authority lock or make ready records eligible for live traffic.
 Schema 6 refuses older draft stores without migration; nonempty host-grant
 history currently blocks backup/restore. See the [maintenance contract](../docs/extensions/sealed-v1-sdk.md#internal-maintenance-and-staged-grant-records).
+
+The disabled continuation storage foundation also has private historical signer-plan
+metadata diagnosis. It authenticates each plan at its original creation time and
+preserves its original epoch, revision and signer identity after planning state
+changes. Freshness in that inventory describes time only; it does not select a
+current signer or make a plan applicable. Normal plan reads still require the
+current authority binding and an unexpired plan. No physical nonempty authority
+reader, enrollment application or command uses this historical inventory yet.

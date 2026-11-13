@@ -139,3 +139,63 @@ test('a fresh plan identity cannot replace retained history through an explicit 
  assert.throws(()=>f.db.prepare(`INSERT OR REPLACE INTO continuation_enrollment_plans(rowid,${keys.join(',')}) VALUES(1,${keys.map(()=>'?').join(',')})`).run(...Object.values(values)));
  assert.equal(count(f),1);assert.deepEqual(read(f),f.plan);
 });
+
+const historical=(f,now=3000)=>f.store.diagnoseRetained(f.db,now);
+test('historical inventory preserves original bindings across synthetic epoch and revision changes',t=>{
+ const f=fixture(t);retain(f);
+ const nextAuthority={...f.authority,epoch:id(8),revision:1};
+ const signer={version:1,id:id(9),config_identity:nextAuthority.config_identity,canonical_root:nextAuthority.canonical_root,epoch:nextAuthority.epoch,...publicKey()};
+ const {version,...enrollment}=signer,keys=Object.keys(enrollment);
+ f.db.prepare(`INSERT INTO continuation_signer_enrollments(${keys.join(',')}) VALUES(${keys.map(()=>'?').join(',')})`).run(...Object.values(enrollment));
+ const replacement=planContinuationSignerChange({id:id(7),operation:'replace',authority:nextAuthority,current_signer:signer,candidate:publicKey(),created_ms:1500,expires_ms:2500});
+ f.store.retain(f.db,replacement,nextAuthority,signer,1500);
+ const removal=planContinuationSignerChange({id:id(6),operation:'remove',authority:nextAuthority,current_signer:signer,candidate:null,created_ms:1500,expires_ms:2500});
+ f.store.retain(f.db,removal,nextAuthority,signer,1500);
+ const before=f.db.prepare('SELECT * FROM continuation_enrollment_plans ORDER BY id').all();
+ assert.throws(()=>f.store.read(f.db,f.plan.id,nextAuthority,signer,1500),{code:'continuation_enrollment_plan_stale'});
+ assert.throws(()=>f.store.diagnose(f.db,nextAuthority,signer,3000),{code:'continuation_enrollment_plan_stale'});
+ const result=historical(f);
+ assert.deepEqual(result.map(p=>[p.id,p.operation,p.epoch,p.baselineRevision,p.currentSignerId]),[[id(4),'initial',id(2),0,null],[id(6),'remove',id(8),1,id(9)],[id(7),'replace',id(8),1,id(9)]]);
+ assert.ok(Object.isFrozen(result)&&result.every(Object.isFrozen));assert.ok(result.every(p=>p.status==='expired'));
+ assert.equal(result[1].candidateFingerprint,null);
+ const text=JSON.stringify(result);for(const secret of [f.authority.canonical_root,f.plan.candidate.public_key_spki,signer.public_key_spki,'storage_mac','record','current:true','applicable'])assert.ok(!text.includes(secret));
+ assert.deepEqual(f.db.prepare('SELECT * FROM continuation_enrollment_plans ORDER BY id').all(),before);
+});
+test('historical freshness is metadata only and never makes expired reads applicable',t=>{
+ const f=fixture(t);retain(f);
+ for(const [now,status] of [[999,'not-yet-valid'],[1000,'fresh'],[1999,'fresh'],[2000,'expired'],[Number.MAX_SAFE_INTEGER,'expired']])assert.equal(historical(f,now)[0].status,status);
+ for(const now of [undefined,null,-1,NaN,Infinity,1.5,'1000'])refuses(()=>f.store.diagnoseRetained(f.db,now));
+ for(const now of [999,2000])refuses(()=>read(f,now));
+ f.db.exec('ROLLBACK');assert.throws(()=>historical(f),{code:'continuation_enrollment_transaction_required'});
+ f.db.exec('PRAGMA foreign_keys=OFF; BEGIN');assert.throws(()=>historical(f),{code:'continuation_enrollment_foreign_keys_required'});
+});
+test('historical diagnosis refuses a mixed inventory with one corrupt original binding',t=>{
+ for(const change of ['mac','column','record','created','noncanonical']){
+  const f=fixture(t);retain(f);
+  const second=planContinuationSignerChange({id:id(5),operation:'initial',authority:f.authority,current_signer:null,candidate:publicKey(),created_ms:1000,expires_ms:2000});f.store.retain(f.db,second,f.authority,null,1000);unguard(f.db);
+  if(change==='mac')f.db.prepare('UPDATE continuation_enrollment_plans SET storage_mac=? WHERE id=?').run(Buffer.alloc(32,7).toString('base64url'),id(5));
+  if(change==='column')f.db.prepare('UPDATE continuation_enrollment_plans SET epoch=? WHERE id=?').run(id(99),id(5));
+  if(change==='record')f.db.prepare('UPDATE continuation_enrollment_plans SET record=? WHERE id=?').run('{}',id(5));
+  if(change==='created')f.db.prepare('UPDATE continuation_enrollment_plans SET created_ms=? WHERE id=?').run(999,id(5));
+  if(change==='noncanonical'){const record=' '+JSON.stringify(second),mac=createHmac('sha256',key()).update('a2a-exposed continuation enrollment storage v1\n'+record).digest('base64url');f.db.prepare('UPDATE continuation_enrollment_plans SET record=?,storage_mac=? WHERE id=?').run(record,mac,id(5));}
+  const before=f.db.prepare('SELECT * FROM continuation_enrollment_plans ORDER BY id').all();refuses(()=>historical(f));assert.deepEqual(f.db.prepare('SELECT * FROM continuation_enrollment_plans ORDER BY id').all(),before);
+ }
+});
+test('historical noninitial plans authenticate retained original signer bytes',t=>{
+ const f=fixture(t,'replace');retain(f);assert.equal(historical(f)[0].currentSignerId,f.signer.id);
+ for(const {name}of f.db.prepare("SELECT name FROM sqlite_schema WHERE type='trigger' AND tbl_name='continuation_signer_enrollments'").all())f.db.exec(`DROP TRIGGER ${name}`);
+ const other=publicKey();f.db.prepare('UPDATE continuation_signer_enrollments SET public_key_spki=?,fingerprint=?').run(other.public_key_spki,other.fingerprint);
+ assert.throws(()=>historical(f),{code:'continuation_enrollment_row_mismatch'});
+});
+test('historical authentication refuses wrong storage keys and malformed exact UTF-8',t=>{
+ const f=fixture(t,'initial',':memory:','/synthetic/\uFFFD');retain(f);
+ assert.throws(()=>createContinuationEnrollmentStorage(Buffer.alloc(32,9)).diagnoseRetained(f.db,3000),{code:'continuation_enrollment_storage_mac_mismatch'});
+ unguard(f.db);const original=Buffer.from(f.authority.canonical_root),at=original.indexOf(Buffer.from('\uFFFD'));
+ f.db.prepare('UPDATE continuation_enrollment_plans SET canonical_root=CAST(? AS TEXT)').run(Buffer.concat([original.subarray(0,at),Buffer.from([255]),original.subarray(at+3)]));refuses(()=>historical(f));
+});
+test('expired historical inventory survives process restart without rewriting the store',t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'a2a-historical-plans-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));const file=path.join(dir,'state.sqlite'),f=fixture(t,'replace',file);retain(f);f.db.exec('COMMIT; BEGIN');
+ const expected=historical(f),before=fs.readFileSync(file);
+ const script=`import{DatabaseSync}from'node:sqlite';import{createContinuationEnrollmentStorage}from${JSON.stringify(new URL('../lib/continuation-enrollment-storage.mjs',import.meta.url).href)};const d=new DatabaseSync(process.argv[1],{readOnly:true});d.exec('PRAGMA foreign_keys=ON; BEGIN');console.log(JSON.stringify(createContinuationEnrollmentStorage(Buffer.alloc(32,1)).diagnoseRetained(d,3000)));d.exec('ROLLBACK');d.close();`;
+ const child=spawnSync(process.execPath,['--input-type=module','-e',script,file],{encoding:'utf8',timeout:10000,env:{DO_NOT_TRACK:'1'}});assert.equal(child.status,0,child.stderr);assert.deepEqual(JSON.parse(child.stdout),expected);assert.deepEqual(fs.readFileSync(file),before);
+});

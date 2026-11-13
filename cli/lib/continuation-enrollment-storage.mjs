@@ -40,7 +40,7 @@ export function createContinuationEnrollmentStorage(recoveryKey){
   const record=JSON.stringify(plan);if(Buffer.byteLength(record)>1048576)fail();
   return{id:plan.id,config_identity:plan.authority.config_identity,canonical_root:plan.authority.canonical_root,epoch:plan.authority.epoch,baseline_revision:plan.authority.revision,current_signer_id:plan.current_signer?.id??null,operation:plan.operation,created_ms:plan.created_ms,expires_ms:plan.expires_ms,record,storage_mac:mac(record)};
  }
- function read(db,id,currentAuthority,currentSigner,now){
+ function stored(db,id,now,historical=false){
   transaction(db);
   if(typeof id!=='string'||!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(id))fail();
   const result=db.prepare('SELECT *,CAST(record AS BLOB) AS record_bytes,CAST(canonical_root AS BLOB) AS root_bytes FROM continuation_enrollment_plans WHERE id=?').get(id);
@@ -50,8 +50,12 @@ export function createContinuationEnrollmentStorage(recoveryKey){
   if(typeof stored.record!=='string'||Buffer.byteLength(stored.record)>1048576||typeof stored.storage_mac!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(stored.storage_mac)||Buffer.from(stored.storage_mac,'base64url').toString('base64url')!==stored.storage_mac)fail();
   if(!timingSafeEqual(Buffer.from(stored.storage_mac,'base64url'),Buffer.from(mac(stored.record),'base64url')))fail('continuation_enrollment_storage_mac_mismatch');
   let parsed;try{parsed=JSON.parse(stored.record);}catch{fail();}
-  const plan=assertContinuationSignerChange(parsed,currentAuthority,currentSigner,now);
+  const plan=assertContinuationSignerChange(parsed,parsed?.authority,parsed?.current_signer,historical?parsed?.created_ms:now);
   equal(stored,row(plan));enrolled(db,plan);return plan;
+ }
+ function read(db,id,currentAuthority,currentSigner,now){
+  const plan=stored(db,id,now);
+  return assertContinuationSignerChange(plan,currentAuthority,currentSigner,now);
  }
  function retain(db,value,currentAuthority,currentSigner,now){
   transaction(db);
@@ -80,7 +84,19 @@ export function createContinuationEnrollmentStorage(recoveryKey){
    return Object.freeze({id:plan.id,operation:plan.operation,candidateFingerprint:plan.candidate?.fingerprint??null,planDigest:plan.plan_digest,createdMs:plan.created_ms,expiresMs:plan.expires_ms,status:now<plan.created_ms?'not-yet-valid':now>=plan.expires_ms?'expired':'fresh'});
   }));
  }
+ // Private historical inventory for future reconciliation after revision/epoch
+ // changes. Authenticate each ORIGINAL binding at its creation instant, never
+ // against a caller-selected current signer. No current/applicable claim is made.
+ // Physical authority/namespace authentication remains the anchored caller's job.
+ function diagnoseRetained(db,now){
+  transaction(db);
+  if(!Number.isSafeInteger(now)||now<0)fail();
+  return Object.freeze(db.prepare('SELECT id FROM continuation_enrollment_plans ORDER BY id COLLATE BINARY').all().map(row=>{
+   const plan=stored(db,row.id,undefined,true);
+   return Object.freeze({id:plan.id,operation:plan.operation,configIdentity:plan.authority.config_identity,epoch:plan.authority.epoch,baselineRevision:plan.authority.revision,currentSignerId:plan.current_signer?.id??null,candidateFingerprint:plan.candidate?.fingerprint??null,planDigest:plan.plan_digest,createdMs:plan.created_ms,expiresMs:plan.expires_ms,status:now<plan.created_ms?'not-yet-valid':now>=plan.expires_ms?'expired':'fresh'});
+  }));
+ }
  // No consume/apply operation: a future human-authorized authority CAS must
  // reserve this retained identity once and rotate epoch/revision atomically.
- return Object.freeze({read,retain,diagnose});
+ return Object.freeze({read,retain,diagnose,diagnoseRetained});
 }
