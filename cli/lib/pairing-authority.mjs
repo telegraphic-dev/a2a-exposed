@@ -1,7 +1,7 @@
 // Internal optional-encryption authority store; no CLI command activates it yet.
 // Only cooperating local host writers may call mutate. No grant/credential/approval is created here.
 import {createContinuationSourceSnapshot,ContinuationSourceError} from './continuation-sources.mjs';
-import {installContinuationTables,prepareContinuationIntent,readContinuationIntent} from './continuation-tables.mjs';
+import {installContinuationTables,prepareContinuationIntent,readContinuationIntent,commitContinuationMembers} from './continuation-tables.mjs';
 import {createContinuationRecords} from './continuation-records.mjs';
 import fs from 'node:fs';import path from 'node:path';import{createHash,createHmac,randomBytes,timingSafeEqual,randomUUID}from'node:crypto';import{createRequire}from'node:module';
 const require=createRequire(import.meta.url),UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
@@ -202,7 +202,7 @@ function authenticateContinuationAuthority(db,r,p){
 function own(value,key){const d=value&&Object.getOwnPropertyDescriptor(value,key);if(!d||!Object.hasOwn(d,'value'))fail('authority_continuation_invalid');return d.value;}
 // One physical connection, separate explicit FULL transactions. The private view
 // is for the future coordinator; it does not expose raw SQL or an allowSuspended
-// grant lease. Only the nonauthorizing I checkpoint is implemented in this slice.
+// grant lease. Only nonauthorizing I/S/C checkpoints are implemented here.
 export async function withContinuationAuthorityMaintenance(configDir,{configIdentity}={},action){
  let db,live=false,p,registered=false,current=null,attempted=null,preparedCheck=null;
  try{
@@ -216,6 +216,14 @@ export async function withContinuationAuthorityMaintenance(configDir,{configIden
    if(sources(p.root)!==r.source_hash)fail('authority_external_change');assertAnchor(p,anchor);return r;
   }
   function codec(setId){const r=guard();if(typeof setId!=='string'||!UUID.test(setId))fail('authority_continuation_invalid');return createContinuationRecords(Buffer.from(r.recovery_key,'base64url'),continuationProcessNonce,{root:p.root,config_identity:configIdentity,epoch:r.suspension_epoch,set_id:setId});}
+  function sourceCheck(records,intent,before,environment,now){
+   const capturedAt=Date.now(),plan=intent.record.plan;
+   return()=>{const elapsed=Date.now()-capturedAt;if(elapsed<0)fail('authority_clock_regression');records.assertFresh(intent,now+elapsed);
+    const source=strictSourceSnapshot(p.root,before.source_hash);if(records.sourceMac(source.sourceTexts())!==plan.source_mac)fail('authority_external_change');
+    const selected=source.select({selected:plan.members.map(m=>m.alias).sort((a,b)=>Buffer.compare(Buffer.from(a),Buffer.from(b))),excluded:plan.excluded_aliases},environment);
+    for(const member of plan.members){const actual=selected.find(s=>s.alias===member.alias);const {credential_mac,process_mac,...unbound}=member,expected=records.bindMember({...unbound,credential_source:actual.credential_source},actual.token);if(new URL(actual.legacy_url).href!==member.endpoint||actual.credential_variable!==member.credential_variable||actual.credential_source!==member.credential_source||credential_mac!==expected.credential_mac||process_mac!==expected.process_mac)fail('authority_continuation_changed');}
+    guard();};
+  }
   const authenticated=r=>authenticateContinuationAuthority(db,r,p);
   const view=Object.freeze({
    begin(){guard(false);if(db.isTransaction)fail('authority_transaction_open');db.exec('BEGIN IMMEDIATE');current=null;try{current=row(db,configIdentity,3);guard();authenticated(current);}catch(error){try{db.exec('ROLLBACK');}catch{}current=null;throw error;}},
@@ -231,16 +239,41 @@ export async function withContinuationAuthorityMaintenance(configDir,{configIden
     const before=guard();if(before.pending!==null||before.active_set!==null||before.suspended!==1)fail('authority_write_pending');
     const setId=own(own(own(input,'record'),'plan'),'set_id'),records=codec(setId),intent=records.assertFresh(input,now),plan=intent.record.plan;
     if(plan.baseline_revision!==before.revision||plan.target_revision!==before.revision+1||before.revision===Number.MAX_SAFE_INTEGER)fail('authority_revision_stale');
-    const capturedAt=Date.now(),checkPlan=()=>{const elapsed=Date.now()-capturedAt;if(elapsed<0)fail('authority_clock_regression');records.assertFresh(intent,now+elapsed);
-    const source=strictSourceSnapshot(p.root,before.source_hash);if(records.sourceMac(source.sourceTexts())!==plan.source_mac)fail('authority_external_change');
-    const selected=source.select({selected:plan.members.map(m=>m.alias).sort((a,b)=>Buffer.compare(Buffer.from(a),Buffer.from(b))),excluded:plan.excluded_aliases},environment);
-    for(const member of plan.members){const actual=selected.find(s=>s.alias===member.alias);const {credential_mac,process_mac,...unbound}=member,expected=records.bindMember({...unbound,credential_source:actual.credential_source},actual.token);if(new URL(actual.legacy_url).href!==member.endpoint||actual.credential_variable!==member.credential_variable||actual.credential_source!==member.credential_source||credential_mac!==expected.credential_mac||process_mac!==expected.process_mac)fail('authority_continuation_changed');}
-    guard();};checkPlan();
+    const checkPlan=sourceCheck(records,intent,before,environment,now);checkPlan();
     guard();attempted={intentId:intent.id,setId};db.exec('SAVEPOINT authority_prepare');try{
      prepareContinuationIntent(db,records,intent,now);
      const changed=db.prepare('UPDATE authority SET revision=?,pending=?,active_set=NULL,suspended=1 WHERE id=1 AND config_id=? AND revision=? AND pending IS NULL AND active_set IS NULL AND suspended=1 AND suspension_epoch=? AND source_hash=?').run(plan.target_revision,intent.id,configIdentity,before.revision,before.suspension_epoch,before.source_hash).changes;
      if(changed!==1)fail('authority_changed');current=row(db,configIdentity,3);guard();authenticated(current);db.exec('RELEASE authority_prepare');preparedCheck=checkPlan;return continuationPublic(current);
     }catch(error){try{db.exec('ROLLBACK TO authority_prepare; RELEASE authority_prepare');current=before;}catch{fail('authority_rollback_unknown');}throw error;}
+   },
+   // Phase 2 starts only from a durable I. Own authority BEFORE acquiring the
+   // SDK queue, commit S before C, and release the queue before reacquiring A.
+   // This does not implement R/E, recovery, human approval or grant admission.
+   async stageIntent(input,sdk,{environment=process.env,now=Date.now()}={}){
+    const before=guard();if(preparedCheck!==null||before.pending===null||before.active_set!==null||before.suspended!==1)fail('authority_stage_state');
+    const records=codec(own(own(own(input,'record'),'plan'),'set_id')),intent=records.assertFresh(input,now),plan=intent.record.plan;
+    const stored=readContinuationIntent(db,records,intent.id);
+    if(before.pending!==intent.id||before.revision!==plan.target_revision||stored.state!=='prepared'||stored.intent.intent_mac!==intent.intent_mac)fail('authority_stage_state');
+    if(typeof sdk?._withMaintenanceQueue!=='function')fail('authority_sdk_required');
+    const checkPlan=sourceCheck(records,intent,before,environment,now);checkPlan();attempted={intentId:intent.id,setId:plan.set_id};
+    const binding={config_id:configIdentity,intent_id:intent.id,set_id:plan.set_id,epoch:plan.epoch,target_revision:plan.target_revision,membership_mac:intent.record.membership_mac};
+    const fields=['alias','endpoint','pairing_identity','trust_record_digest','trust_record_version','local_id','local_bundle_digest','peer_bundle_digest','policy','verification'];
+    const members=plan.members.map(m=>Object.fromEntries(fields.map(k=>[k,m[k]])));let committed=false,scope=true,witness;
+    const exactC=()=>JSON.stringify([row(db,configIdentity,3),db.prepare('SELECT * FROM continuation_intents WHERE id=?').get(intent.id),db.prepare('SELECT * FROM grant_sets WHERE id=?').get(plan.set_id),db.prepare('SELECT * FROM grant_members WHERE set_id=? ORDER BY grant_id COLLATE BINARY').all(plan.set_id)]);
+    try{
+     await sdk._withMaintenanceQueue({withAuthorityLease:async run=>{guard();return await run();},assertAuthority:stage=>{
+      if(!scope)return false;
+      if(committed){if(stage!=='exit'||db.isTransaction)return false;guard(false);return witness===exactC();}
+      guard();checkPlan();return true;
+     }},async q=>{
+      q.begin();if(q.inspectGrant(intent.id)!==null)fail('authority_stage_reconciliation_required');
+      if(await q.assertReadiness(members)!==true)fail('authority_sdk_readiness');checkPlan();
+      q.stageGrant(binding);q.commit(); // S is durable; a later failure retains it.
+      checkPlan();commitContinuationMembers(db,records,intent);current=row(db,configIdentity,3);authenticated(current);
+      preparedCheck=checkPlan;witness=exactC();view.commit();committed=true; // C, still suspended.
+     });
+     if(!committed)fail('authority_stage_incomplete');return{...continuationPublic(guard(false)),checkpoint:'C'};
+    }finally{scope=false;}
    }
   });
   guard(false);const result=await action(view);if(db.isTransaction)fail('authority_transaction_open');guard(false);return result;

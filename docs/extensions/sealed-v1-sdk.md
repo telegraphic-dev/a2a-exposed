@@ -191,6 +191,8 @@ outer transaction. Their installer accepts only an empty version-zero database.
 The default physical authority remains schema 2. A separate internal
 [fresh schema-3 authority foundation](sealed-v1-continuation-draft.md#fresh-physical-schema-3-authority-foundation)
 adds the real epoch/active-set row, anchored maintenance transactions and an atomic
-non-authorizing I checkpoint. It starts and remains suspended. SDK phase
-coordination, privileged human provenance, readiness, writer integration,
+non-authorizing I checkpoint. It starts and remains suspended. An isolated
+[readiness and suspended phase-2 adapter](sealed-v1-continuation-draft.md#isolated-readiness-and-suspended-phase-2-coordinator)
+adds file-key readiness and durable S/C without eligibility. Final phase
+coordination, privileged human provenance, writer integration,
 reconciliation and grant admission remain unfinished. No command uses these APIs.

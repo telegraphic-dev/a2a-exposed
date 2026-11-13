@@ -702,7 +702,7 @@ these writes to its real authority-row revision/pending/epoch/active-set CAS,
 validate source/environment/readiness and human provenance, and follow every
 reviewed authority-to-SDK phase. None of those checks is supplied by a caller's
 ability to MAC a record. The separate schema-3 initializer/reader and I-checkpoint maintenance foundation
-are described below. The SDK phase adapter, all writers, reconciliation, human
+are described below. The Final SDK/authority phase coordination, all writers, reconciliation, human
 comparison, admission, archive/platform/privacy and traffic/release gates remain unfinished. No command imports these primitives.
 
 
@@ -748,10 +748,61 @@ with the attempted intent/set IDs, without retrying or promising rollback of a
 previous commit.
 
 This is storage and maintenance groundwork, not the full I/S/C/R/E coordinator.
+The isolated phase-2 adapter below adds nonauthorizing S/C after durable I.
 The codec's ability to MAC synthetic comparison records does not establish human
-provenance, SDK trust or readiness. No privileged human adapter or SDK phase
+provenance, SDK trust or readiness. No privileged human adapter or eligibility phase
 adapter is wired here; prepareIntent is not a public approval operation. Tests
 use synthetic comparisons and credentials only. Epoch rotation on quarantine,
 all writer invalidation, SDK staging/ready/final exclusion, active-set eligibility,
 reconciliation and admission remain required before activation. No method here
 clears suspension, resumes a grant or sends encrypted traffic.
+
+
+### Isolated readiness and suspended phase-2 coordinator
+
+The private SDK maintenance view adds async assertReadiness for an exact bounded
+aggregate of expected alias, endpoint, pairing identity, trust digest/version,
+local identity/bundle digest, peer bundle digest and required/independent policy.
+It requires a live authority guard and reserved SDK transaction. Current trust
+SQL/JSON/version and every binding must match, with independently-verified state;
+revoked, TOFU, off and server-readable records refuse even if their digest matches.
+Pending proposals for selected peers and any noncommitted key operation hold the
+aggregate. This conservatively includes abandoned key-operation records pending
+separately reviewed reconciliation. Retired/lost keys and restored archive state
+also refuse. Bundle signatures and the private file key pair are verified locally.
+Every member is rechecked after provider awaits; all private files are reread
+before returning. Input snapshots reject getters, unknown fields and duplicate
+aliases/identities. Observed clock regression refuses. No trust row or approval
+is created, and no private key, trust digest or membership MAC is returned.
+
+This readiness profile permits protected file keys only. Native credential stores
+refuse before a provider call, with no OS consent prompt or silent file fallback.
+It is an internal prerequisite, not human-comparison provenance or a promise that
+readiness remains true after its reserved SDK transaction ends. Existing SDK
+connection/root checks do not establish physical SDK namespace ownership; the
+remaining host/platform integration must supply that before activation.
+
+The authority maintenance view adds async stageIntent for phase 2 only. The caller
+must already own an authority BEGIN IMMEDIATE on a durable exact I checkpoint.
+Uncommitted preparation, a different intent, an existing SDK stage or a completed C
+refuse rather than resume automatically. The method authenticates the entire intent,
+rechecks current exact sources/environment/process binding and approval freshness,
+and acquires the SDK queue while retaining authority. Inside SDK BEGIN IMMEDIATE
+it runs readiness, inserts the exact host binding and commits S. It then records the
+complete authority member aggregate and commits C while the SDK queue stays held.
+The queue exit checks the exact durable authority C witness without acquiring a
+new authority transaction. The queue is released before any later authority BEGIN.
+
+C remains suspended, pending and without an active set. A raw cross-process SDK
+writer can run in the S-to-C gap: C confers no eligibility, and the future R/E
+phase must reread all readiness under its own reserved transaction. The adapter
+does not make the ready transition, clear suspension or admit a grant. SDK or
+authority commit/close errors retain original IDs and unknown checkpoint status;
+I, S or C may be durable. There is no retry, rewind or automatic reconciliation.
+
+Tests use real physical authority and SDK stores with synthetic human attestations.
+They exercise readiness holds, changed environment after awaits, independent-process
+lock ordering and pre/post S/C COMMIT faults. No command imports the coordinator.
+The initial I primitive still lacks trusted human provenance and pre-I SDK readiness
+integration; R/E, quarantine epoch rotation, all-writer invalidation, reconciliation,
+admission, native/platform/archive/privacy and traffic/release acceptance remain.
