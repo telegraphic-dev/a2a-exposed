@@ -1031,3 +1031,30 @@ adapter must independently verify the fingerprint and obtain human approval.
 The future writer must consume the exact plan once, recheck across awaits and
 rotate epoch/revision while clearing membership atomically. Durable storage,
 schema adoption, privileged apply and admission remain unimplemented.
+
+### Disabled provenance table foundation
+
+The internal `cli/lib/continuation-provenance-tables.mjs` installer creates
+continuation tables plus append-only signer enrollment and decision receipt
+tables in an empty, caller-owned SQLite transaction. Existing, partial and
+versioned databases refuse without modification. It does not stamp a schema
+version, create an authority row, migrate a schema-3 store or open a file.
+An installation failure rolls back all tables in its savepoint.
+
+Receipts reference the exact enrollment identity, configuration, canonical root,
+epoch and fingerprint together, and one prepared intent with the same plan,
+set, revisions, attestation bytes and original validity window. Decision, intent
+and set identities are single-use. Retention triggers refuse updates, deletion
+and replacement; equal-key reenrollment needs a new enrollment identity and
+epoch while preserving prior records. SQL enforces bounded canonical scalar
+encodings and requires foreign keys.
+
+These are relational storage constraints, not signature verification or human
+authorization. Raw SQL can insert structurally valid synthetic signatures.
+The future authenticated reader must reverify canonical key bytes, fingerprint,
+signature, signed decision identity and all SQL/record bindings using the receipt
+codec. The anchored writer must consume provenance with its intent and authority
+CAS in one transaction, enforce epoch rotation and recheck after awaits. No
+command or authority initializer calls this installer; schema adoption, current
+enrollment selection, human approval, persistence wiring and admission remain
+unimplemented. Tests use synthetic private fixtures and make no activation claim.
