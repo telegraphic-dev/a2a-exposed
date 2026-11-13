@@ -32,7 +32,7 @@ export interface SqlStmt {
 export const CONFIG_KEYS = [
 	"RETIRED_HOSTNAMES",
 	"AGENT_NAME", "AGENT_DESCRIPTION", "AGENT_VERSION", "AGENT_SKILLS",
-	"PROVIDER_ORGANIZATION", "PROVIDER_URL", "DOCUMENTATION_URL",
+	"PROVIDER_ORGANIZATION", "PROVIDER_URL", "DOCUMENTATION_URL", "AGENT_ICON_URL",
 	/** Optional https origin of the connect playbook and setup skill linked from GET / (default https://a2a.exposed). */
 	"DISCOVERY_DOCS_ORIGIN",
 	/** allow (default) | disallow: robots.txt Disallow: / plus X-Robots-Tag: noindex, nofollow on every response (staging). */
@@ -387,6 +387,7 @@ export class TenantContext implements ConfigFields {
 	readonly PROVIDER_ORGANIZATION?: string;
 	readonly PROVIDER_URL?: string;
 	readonly DOCUMENTATION_URL?: string;
+	readonly AGENT_ICON_URL?: string;
 	readonly DISCOVERY_DOCS_ORIGIN?: string;
 	readonly ROBOTS_POLICY?: string;
 	readonly CONTENT_SIGNAL?: string;

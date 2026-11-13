@@ -1050,6 +1050,51 @@ test("GET /.well-known/api-catalog and /auth.md: RFC 9727 catalog and the short 
 	assert.ok(!oa.includes("/mcp") && !oa.includes("/oauth/device_authorization"));
 });
 
+test("card depth and doc links: documentationUrl, examples, iconUrl, working docs in OAuth metadata and the 401", async (t) => {
+	const CONNECT = "https://a2a.exposed/.well-known/agent-skills/a2a-exposed/references/connect.md";
+	const SETUP = "https://a2a.exposed/.well-known/agent-skills/a2a-exposed-setup/SKILL.md";
+	const s = setup(); t.after(s.restore);
+	const as = (await s.call("GET", "/.well-known/oauth-authorization-server")).data;
+	const prm = (await s.call("GET", "/.well-known/oauth-protected-resource")).data;
+	const mcpPrm = (await s.call("GET", "/.well-known/oauth-protected-resource/mcp")).data;
+	assert.equal(as.service_documentation, CONNECT);
+	assert.equal(prm.resource_documentation, CONNECT);
+	assert.equal(mcpPrm.resource_documentation, "https://a2a.exposed/docs/hosted-mcp");
+	for (const u of [as.service_documentation, prm.resource_documentation, mcpPrm.resource_documentation]) assert.doesNotMatch(u, /github\.com\/.*#/);
+	assert.equal(as.agent_auth, undefined, "no agent self-registration metadata");
+	for (const path of ["/.well-known/agent-card.json", "/.well-known/agent.json"]) {
+		const card = (await s.call("GET", path)).data;
+		assert.equal(card.documentationUrl, `${BASE}/index.md`, path);
+		assert.deepEqual(card.skills[0].examples, ["Hello, can you help me with …?", "Reply when you have an answer; I will poll GetTask."], path);
+		assert.equal(card.iconUrl, undefined, path);
+		assert.equal(card.provider, undefined, "provider only when both settings are set");
+	}
+	const r = await s.call("POST", "/", { json: { jsonrpc: "2.0", id: 1, method: "GetTask", params: { id: "x" } } });
+	assert.equal(r.status, 401);
+	assert.equal(r.data.error.data.pairing.docs, CONNECT);
+	assert.equal(r.data.error.data.pairing.exposeYourself, SETUP);
+	s.restore();
+
+	const custom = setup({ DOCUMENTATION_URL: "https://docs.example.org/", AGENT_ICON_URL: "https://cdn.example.org/icon.png",
+		AGENT_SKILLS: JSON.stringify([{ id: "x", name: "X", description: "d", tags: [] }]), DISCOVERY_DOCS_ORIGIN: "https://staging.example.com" }); t.after(custom.restore);
+	const c = (await custom.call("GET", "/.well-known/agent-card.json")).data;
+	assert.equal(c.documentationUrl, "https://docs.example.org/", "the operator's link wins");
+	assert.equal(c.iconUrl, "https://cdn.example.org/icon.png");
+	assert.equal(c.skills[0].examples, undefined, "operator skills are passed through unchanged");
+	assert.equal((await custom.call("GET", "/.well-known/oauth-authorization-server")).data.service_documentation,
+		"https://staging.example.com/.well-known/agent-skills/a2a-exposed/references/connect.md");
+	assert.equal((await custom.call("GET", "/.well-known/oauth-protected-resource/mcp")).data.resource_documentation, "https://staging.example.com/docs/hosted-mcp");
+	assert.equal((await custom.call("POST", "/", { json: { jsonrpc: "2.0", id: 1, method: "GetTask", params: { id: "x" } } })).data.error.data.pairing.exposeYourself,
+		"https://staging.example.com/.well-known/agent-skills/a2a-exposed-setup/SKILL.md");
+	custom.restore();
+
+	for (const icon of ["http://cdn.example.org/icon.png", "https://jean.tail1234.ts.net/icon.png", "https://192.168.1.2/icon.png", "https://u:p@cdn.example.org/i.png", "not a url"]) {
+		const bad = setup({ AGENT_ICON_URL: icon }); t.after(bad.restore);
+		assert.equal((await bad.call("GET", "/.well-known/agent-card.json")).data.iconUrl, undefined, icon);
+		bad.restore();
+	}
+});
+
 test("owner summary counts tasks and pending pairing requests without their text", async (t) => {
 	const s = setup(); t.after(s.restore);
 	const started = await s.start();

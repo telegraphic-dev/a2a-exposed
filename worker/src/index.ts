@@ -633,6 +633,7 @@ function agentSkills(ctx: TenantContext): Json[] {
 		id: "general", name: "General requests",
 		description: "Accepts requests from other agents and replies asynchronously (poll GetTask or register a push notification config).",
 		tags: ["assistant", "async"],
+		examples: ["Hello, can you help me with …?", "Reply when you have an answer; I will poll GetTask."],
 	}];
 }
 
@@ -670,6 +671,16 @@ function securitySchemes(ctx: TenantContext): Json {
 	return schemes;
 }
 
+/** An operator-set https URL that names no private network, else undefined. */
+function httpsPublicUrl(v: string | undefined, o: F.RewriteOptions): string | undefined {
+	const u = F.publicUrlOrNothing((v || "").trim(), o);
+	if (!u) return undefined;
+	try { const p = new URL(u); return p.protocol === "https:" && !p.username && !p.password ? u : undefined; } catch { return undefined; }
+}
+
+/** Where a visiting agent reads how to connect (the canonical playbook) and how to get its own address. */
+const discoveryDocs = (ctx: TenantContext) => D.docsLinks(D.docsOrigin(ctx.DISCOVERY_DOCS_ORIGIN));
+
 /** Inbox-mode card from the AGENT_* settings. URL fields and free text that name a private network (an operator who
  *  pasted a Tailnet or localhost link) are scrubbed by the same rules as the façade card (see facade.ts). */
 function inboxCard(ctx: TenantContext): Json {
@@ -695,8 +706,10 @@ function inboxCard(ctx: TenantContext): Json {
 	card.description = F.scrubText(card.description, o);
 	const provUrl = F.publicUrlOrNothing(ctx.PROVIDER_URL, o);
 	if (ctx.PROVIDER_ORGANIZATION && provUrl) card.provider = { organization: F.scrubText(ctx.PROVIDER_ORGANIZATION, o), url: provUrl };
-	const doc = F.publicUrlOrNothing(ctx.DOCUMENTATION_URL, o);
-	if (doc) card.documentationUrl = doc;
+	// documentationUrl: the operator's public link, else this agent's own short connect page (it links the canonical skill)
+	card.documentationUrl = F.publicUrlOrNothing(ctx.DOCUMENTATION_URL, o) || `${base}/index.md`;
+	const icon = httpsPublicUrl(ctx.AGENT_ICON_URL, o);
+	if (icon) card.iconUrl = icon;
 	return F.scrubDeep(card, o); // catch-all over every field and key (the public base itself passes unchanged)
 }
 
@@ -814,7 +827,7 @@ function agentCard03(ctx: TenantContext, c: Json): Json {
 function protectedResourceMetadata(ctx: TenantContext): Json {
 	const u = oauthUrls(ctx);
 	return { resource: u.issuer + "/", authorization_servers: [u.issuer], bearer_methods_supported: ["header"], scopes_supported: ["a2a"],
-		resource_name: ctx.AGENT_NAME || "A2A Agent", resource_documentation: "https://github.com/telegraphic-dev/a2a-exposed#connecting-agents-device-flow" };
+		resource_name: ctx.AGENT_NAME || "A2A Agent", resource_documentation: discoveryDocs(ctx).connect };
 }
 
 // ------------------------------------------------------------------ JSON-RPC
@@ -1199,7 +1212,8 @@ function unauthorized(ctx: TenantContext, hadToken: boolean, rid: Json = null): 
 		code: -32000,
 		message: `${what} ${hadToken ? "Get a new one" : "No token? Get one"} with the OAuth 2.0 device flow (RFC 8628): POST client_name and agent_card_url to ${u.device}, show the user_code and verification_uri_complete to your human, then poll ${u.token} until this agent's owner approves.`,
 		data: { pairing: { grant_type: P.DEVICE_GRANT, device_authorization_endpoint: u.device, token_endpoint: u.token,
-			authorization_server_metadata: u.metadata, approval: pairingMode(ctx), cli: `${P.DEFAULT_CLI} connect ${u.issuer}` } },
+			authorization_server_metadata: u.metadata, approval: pairingMode(ctx), cli: `${P.DEFAULT_CLI} connect ${u.issuer}`,
+			docs: discoveryDocs(ctx).connect, exposeYourself: discoveryDocs(ctx).exposeYourself } },
 	} }, 401, { "www-authenticate": www });
 }
 
@@ -2804,7 +2818,7 @@ function oauthMetadata(ctx: TenantContext): Json {
 		grant_types_supported: [...(pairing ? [P.DEVICE_GRANT] : []), ...(mcp ? ["authorization_code", "refresh_token"] : [])],
 		response_types_supported: mcp ? ["code"] : [], token_endpoint_auth_methods_supported: ["none"],
 		scopes_supported: [...(pairing ? ["a2a"] : []), ...(mcp ? [M.SCOPE, "offline_access"] : [])],
-		service_documentation: "https://github.com/telegraphic-dev/a2a-exposed#connecting-agents-device-flow",
+		service_documentation: discoveryDocs(ctx).connect,
 	};
 }
 
@@ -3501,7 +3515,7 @@ async function mcpServerCard(ctx: TenantContext): Promise<Response> {
 function mcpResourceMetadata(ctx: TenantContext): Json {
 	const u = oauthUrls(ctx);
 	return { resource: u.mcp, authorization_servers: [u.issuer], bearer_methods_supported: ["header"], scopes_supported: [M.SCOPE],
-		resource_name: `${ctx.AGENT_NAME || "A2A endpoint"} (MCP)`, resource_documentation: "https://github.com/telegraphic-dev/a2a-exposed#mcp-connector" };
+		resource_name: `${ctx.AGENT_NAME || "A2A endpoint"} (MCP)`, resource_documentation: `${D.docsOrigin(ctx.DISCOVERY_DOCS_ORIGIN)}/docs/hosted-mcp` };
 }
 
 /** Why an outbound peer URL is refused (empty: fine). https only, no private / internal hosts. */
