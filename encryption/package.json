@@ -1,6 +1,6 @@
 {
   "name": "@a2a-exposed/encryption",
-  "version": "0.8.51",
+  "version": "0.8.52",
   "description": "Local sealed A2A envelope primitives. Protocol review draft; transport integration is not enabled.",
   "type": "module",
   "exports": {
