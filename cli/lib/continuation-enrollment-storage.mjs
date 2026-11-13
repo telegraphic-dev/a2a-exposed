@@ -1,5 +1,5 @@
 // Disabled private plan retention, never signer enrollment or human approval.
-// The future anchored caller owns the key, current state and outer transaction.
+// The anchored caller owns the key, current state and outer transaction.
 import {createHmac,timingSafeEqual} from 'node:crypto';
 import {assertContinuationSignerChange} from './continuation-enrollment-plan.mjs';
 
@@ -32,7 +32,7 @@ function keySnapshot(value){
 
 // A private HMAC authenticates retained planning bytes. The public plan digest
 // alone cannot do that. Neither value proves the human approved this plan.
-// No command or physical authority initializer imports this module.
+// No command or physical authority initializer calls this module.
 export function createContinuationEnrollmentStorage(recoveryKey){
  const key=keySnapshot(recoveryKey);
  const mac=record=>createHmac('sha256',key).update('a2a-exposed continuation enrollment storage v1\n'+record).digest('base64url');
