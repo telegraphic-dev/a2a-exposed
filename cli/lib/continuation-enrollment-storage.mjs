@@ -69,7 +69,18 @@ export function createContinuationEnrollmentStorage(recoveryKey){
    throw error;
   }
  }
+ // Diagnosis authenticates every retained plan at its own creation instant,
+ // including expired plans. It never returns an applicable plan or bypasses
+ // the fresh-time check in read/retain. One bad row refuses the whole result.
+ function diagnose(db,currentAuthority,currentSigner,now){
+  transaction(db);
+  if(!Number.isSafeInteger(now)||now<0)fail();
+  return Object.freeze(db.prepare('SELECT id,created_ms FROM continuation_enrollment_plans ORDER BY id COLLATE BINARY').all().map(row=>{
+   const plan=read(db,row.id,currentAuthority,currentSigner,row.created_ms);
+   return Object.freeze({id:plan.id,operation:plan.operation,candidateFingerprint:plan.candidate?.fingerprint??null,planDigest:plan.plan_digest,createdMs:plan.created_ms,expiresMs:plan.expires_ms,status:now<plan.created_ms?'not-yet-valid':now>=plan.expires_ms?'expired':'fresh'});
+  }));
+ }
  // No consume/apply operation: a future human-authorized authority CAS must
  // reserve this retained identity once and rotate epoch/revision atomically.
- return Object.freeze({read,retain});
+ return Object.freeze({read,retain,diagnose});
 }

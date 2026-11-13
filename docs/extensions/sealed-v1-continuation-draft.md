@@ -1260,3 +1260,30 @@ enrolled or selected, no plan is consumed, and no human decision is recorded.
 Replacement/removal, nonempty signer/provenance reading, enrollment apply,
 privileged custody/ceremony, adoption and live admission remain unimplemented.
 No command, human adapter or grant/traffic path calls these APIs.
+
+### Disabled retained initial-plan diagnosis
+
+`diagnoseInitialContinuationSignerPlans` reads the complete initial-plan
+inventory in one anchored, read-only schema-4 transaction. Every retained row
+must pass its private storage MAC, strict plan codec, complete SQL/JSON binding
+and original physical authority binding. It authenticates each plan at its own
+creation instant to preserve diagnosis after expiry; the separate fresh-plan
+reader still refuses expired and not-yet-valid plans. One invalid row refuses
+the whole inventory, without returning a partial list or repairing storage.
+
+The result contains immutable metadata sorted by original plan ID: candidate
+fingerprint, public plan digest, creation/expiry times and `fresh`, `expired`
+or `not-yet-valid` relative to an explicit safe-integer clock. It omits private
+plan bytes, canonical root, public key DER, recovery key, source fingerprint and
+storage MAC. Status is a diagnostic classification, never authority to enroll,
+sign, approve, consume or admit a grant. The snapshot can precede another
+writer's later commit; it is not a live lease or an assertion that no later plan
+exists. It refuses source drift, namespace/schema changes, advanced authority,
+all enrolled signers and all continuation/receipt/grant history.
+
+No command, MCP tool, human adapter, signer selection, migration, plan
+consumption, authority update or traffic path calls this diagnostic. The
+revision-zero authority remains suspended. An uncertain retain operation must
+keep its original ID; expiry does not justify replacing that identity or
+assuming rollback. Nonempty signer/receipt authentication and human-authorized
+enrollment remain separate work.

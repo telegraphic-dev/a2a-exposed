@@ -299,6 +299,27 @@ function anchoredInitialSignerPlan(configDir,options,write){
 export function retainInitialContinuationSignerPlan(configDir,options={}){return anchoredInitialSignerPlan(configDir,options,true);}
 export function readInitialContinuationSignerPlan(configDir,options={}){return anchoredInitialSignerPlan(configDir,options,false);}
 
+// Disabled read-only uncertainty diagnosis. Expiry does not erase retained
+// identities; these metadata are never an applicable plan or human approval.
+export function diagnoseInitialContinuationSignerPlans(configDir,{configIdentity,now}={}){
+ let db;
+ try{
+  const p=locations(configDir),anchor=operationAnchor(p,configIdentity);
+  db=open(p,{readonly:true,schema:4});db.exec('BEGIN');assertAnchor(p,anchor);
+  const before=freshProvenanceRow(db,p,configIdentity,{plans:true});
+  const guard=()=>{
+   assertAnchor(p,anchor);
+   if(JSON.stringify(freshProvenanceRow(db,p,configIdentity,{plans:true}))!==JSON.stringify(before))fail('authority_changed');
+   strictSourceSnapshot(p.root,before.source_hash);assertAnchor(p,anchor);
+  };
+  guard();
+  const storage=createContinuationEnrollmentStorage(Buffer.from(before.recovery_key,'base64url'));
+  const plans=storage.diagnose(db,initialSignerAuthority(before,p),null,now);
+  guard();db.exec('ROLLBACK');assertAnchor(p,anchor);
+  return Object.freeze({schema:4,configIdentity,revision:0,epoch:before.suspension_epoch,suspended:true,currentSigner:null,plans});
+ }catch(error){throw mapped(error);}finally{try{db?.exec('ROLLBACK');}catch{}close(db);}
+}
+
 function authenticateContinuationAuthority(db,r,p){
  for(const [setId,intentId] of r.pending!==null?[[db.prepare('SELECT set_id FROM continuation_intents WHERE id=?').get(r.pending).set_id,r.pending]]:r.active_set!==null?[[r.active_set,db.prepare('SELECT intent_id FROM grant_sets WHERE id=?').get(r.active_set).intent_id]]:[]){const records=createContinuationRecords(Buffer.from(r.recovery_key,'base64url'),continuationProcessNonce,{root:p.root,config_identity:r.config_id,epoch:r.suspension_epoch,set_id:setId});readContinuationIntent(db,records,intentId);}
 }
