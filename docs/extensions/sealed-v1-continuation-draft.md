@@ -6,7 +6,9 @@ does not change the approved quarantine implementation or permit encrypted traff
 Review this proposal before implementing a schema upgrade or exposing resume.
 The integration contract remains in [sealed-v1-integration.md](sealed-v1-integration.md).
 Current shipped-in-source boundaries are listed in the [internal SDK contract](sealed-v1-sdk.md).
-The schema-3 coordinator below is proposed; the merged authority remains schema 2.
+The complete schema-3 coordinator below remains proposed. The default authority
+initializer remains schema 2; an isolated fresh schema-3 initializer and I-checkpoint
+maintenance foundation are described below.
 This draft does not establish authenticated membership or human approval provenance.
 
 ## Representation
@@ -653,8 +655,8 @@ credential-provider read or output/destination creation, including void rows;
 records are never silently omitted or revived. Empty-host schema-6 snapshots
 continue the existing archive-only restore profile. A separately reviewed archive
 format is required for operational host-grant history. This deliberate draft hold
-must be resolved before complete lifecycle/release acceptance. No authority-schema-3
-intents, real maintenance adapter, human decision, current trust/source readiness,
+must be resolved before complete lifecycle/release acceptance. No full authority/SDK phase
+coordinator, human decision, current trust/source readiness,
 all-writer/namespace integration, replay/admission, traffic or release is enabled.
 
 
@@ -664,9 +666,9 @@ all-writer/namespace integration, replay/admission, traffic or release is enable
 as isolated internal storage primitives. Its installer requires an empty,
 version-zero database inside a caller-owned transaction with foreign keys enabled.
 It does not set a schema version, initialize a physical authority store or migrate
-schema 2. The physical pairing authority still creates and accepts schema 2 only.
-The schema-3 authority row, suspension epoch, active-set binding and namespace/lease
-integration remain unimplemented.
+schema 2. The default physical pairing authority still creates and accepts schema 2 only.
+The separate fresh initializer below installs these tables with a physical
+schema-3 authority row. The default schema-2 initializer remains unchanged.
 
 STRICT tables constrain canonical UUIDs and MAC encodings, safe revisions,
 attestation validity windows, states and unique member aliases/identities/variables.
@@ -699,6 +701,57 @@ row alone never grants admission. The future coordinator must atomically bind
 these writes to its real authority-row revision/pending/epoch/active-set CAS,
 validate source/environment/readiness and human provenance, and follow every
 reviewed authority-to-SDK phase. None of those checks is supplied by a caller's
-ability to MAC a record. The real schema-3 initializer/reader, maintenance adapter,
-all writers, reconciliation, human comparison, admission, archive/platform/privacy
-and traffic/release gates remain unfinished. No command imports these primitives.
+ability to MAC a record. The separate schema-3 initializer/reader and I-checkpoint maintenance foundation
+are described below. The SDK phase adapter, all writers, reconciliation, human
+comparison, admission, archive/platform/privacy and traffic/release gates remain unfinished. No command imports these primitives.
+
+
+### Fresh physical schema-3 authority foundation
+
+The internal initializeContinuationAuthority entry point creates a fresh protected
+POSIX authority database and marker using the existing exclusive-file and namespace
+anchors. It installs the continuation tables and a STRICT authority row with a
+random suspension_epoch, active_set null, revision zero and suspension set. It
+refuses existing or incomplete stores; schema 1/2 is never migrated or reset.
+The original schema-2 initializer and readers/writers remain separate and refuse
+schema 3. No command calls the new entry points.
+
+The schema-3 reader checks identity, canonical epoch, pending-intent cardinality,
+epoch/revision binding and active-set/intent state agreement. Pending or active
+records are authenticated against the real private recovery key and canonical
+root. Public diagnostics expose IDs and suspension/source-mismatch state, never
+source hashes, MACs, credentials or the recovery key. SQL guards retain the
+authority identity and history and constrain pending/active bindings. Privileged
+raw SQL is not an admission or human-approval boundary.
+
+withContinuationAuthorityMaintenance owns one anchored physical connection and
+explicit synchronous BEGIN IMMEDIATE, FULL COMMIT and rollback operations across
+its callback. It shares writer exclusion with the legacy authority lease and
+refuses same-configuration reentry. It can inspect suspended state; it cannot
+produce an ordinary grant lease. Its source view and keyed record methods expire
+when their scopes end. Exact parsed source bytes are compared to the real authority
+fingerprint, and changed namespaces or sources refuse. An idle connection provides
+no cross-process SQL lock.
+
+The private prepareIntent primitive implements only the nonauthorizing I checkpoint.
+It authenticates the supplied immutable plan/attestation with the actual store key,
+checks freshness and the current epoch/revision/root/config, partitions the exact
+protected peer inventory, and compares endpoints, explicit variables and current
+file/environment credentials. Environment records bind a fresh process-instance
+nonce that is neither persisted nor reconstructed from a PID. The attestation
+consumption, prepared intent and authority revision/pending/suspension CAS share
+one transaction. Current source/environment and approval freshness are rechecked
+before I COMMIT, including after callback awaits; observed clock regression refuses.
+No active set is created. A savepoint protects the caller's
+transaction; the caller still owns the durable commit. Errors retain uncertainty
+with the attempted intent/set IDs, without retrying or promising rollback of a
+previous commit.
+
+This is storage and maintenance groundwork, not the full I/S/C/R/E coordinator.
+The codec's ability to MAC synthetic comparison records does not establish human
+provenance, SDK trust or readiness. No privileged human adapter or SDK phase
+adapter is wired here; prepareIntent is not a public approval operation. Tests
+use synthetic comparisons and credentials only. Epoch rotation on quarantine,
+all writer invalidation, SDK staging/ready/final exclusion, active-set eligibility,
+reconciliation and admission remain required before activation. No method here
+clears suspension, resumes a grant or sends encrypted traffic.
