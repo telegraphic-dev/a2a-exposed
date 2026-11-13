@@ -539,3 +539,12 @@ approval. See [local keys and pairing](local-key-pairing.md) for exact inputs,
 optional package installation, custody choices and refusal behavior. Encrypted
 message traffic requires the approved local test flag. Local `send` seals;
 `inbox` and `history` open locally.
+
+## Local stdio MCP
+
+`a2a-exposed --config-dir DIR mcp [--allow-os-consent]` serves local
+`list_peers`, `send`, `inbox` and `history` tools over stdin/stdout. Use
+`list_peers` before selecting the send alias. Encryption remains disabled except
+for approved local fixtures using `A2A_SEALED_ENABLED=1`; no plaintext fallback
+is available. OS consent is a startup choice, never a tool parameter. See the
+[MCP local setup and limits](mcp.md#local-stdio-sendread).

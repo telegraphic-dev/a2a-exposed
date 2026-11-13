@@ -1,6 +1,74 @@
-# MCP connector
+# MCP connectors
 
 The Worker is a remote [MCP](https://modelcontextprotocol.io) server at `https://<your Worker URL>/mcp` (Streamable HTTP). An MCP client uses the A2A endpoint with no CLI, Node, or owner token in the client.
+
+## Local stdio send/read
+
+`a2a-exposed mcp` runs on the agent's computer, reads newline-delimited JSON-RPC
+from stdin, and writes only MCP messages to stdout. It opens no listening port.
+It uses the same selected config directory, human-approved peer credentials,
+local pins and encryption path as the CLI. It does not sync credentials or keys
+to a remote MCP server. Remote connectors below remain server-readable.
+
+Local encryption remains **disabled by default**. `A2A_SEALED_ENABLED=1` is only
+for explicitly approved local fixtures; do not set it on a real inbox yet.
+First install the matching optional encryption package and complete
+[local key pairing](local-key-pairing.md) in a separate fixture config directory.
+Then configure a local MCP client with this executable and argument array:
+
+```json
+{
+  "command": "npx",
+  "args": ["-y", "a2a-exposed@latest", "--config-dir", "/absolute/path/to/fixture-config", "mcp"]
+}
+```
+
+Configure credentials through the protected config file or named environment
+variables, never tool arguments. A keychain identity needs `--allow-os-consent`
+on the server's startup command, and a human may need to answer the OS prompt.
+Tools cannot grant consent, choose a key store or fall back to file keys.
+
+| Tool | Inputs | Result |
+| --- | --- | --- |
+| `list_peers` | none | Local aliases, pin mirror and whether a credential is configured; no tokens |
+| `send` | `to`, `text` (up to 200000 characters within the encrypted content byte limit); optional `contextId`, `taskId`, `protocol` (`0.3` or `1.0`) | Locally sealed delivery and sender-history status, plus original IDs |
+| `inbox` | optional `contextId`, `from`, `all` | All matching open pages (or retained rows with `all`), with verified content opened locally |
+| `history` | `contextId`; optional `from`, `limit` (1–200, default 50) | Verified sent/received history after process restart |
+
+Use `list_peers` before selecting an alias for `send`. Send requires an active
+local pin and the existing human-paired credential; it never sends plaintext,
+including to unpinned peers. For continuation, read `history` and pass the same
+`contextId` to `send`. Local MCP provides no `reply`, pairing approval, trust
+change, token administration, push registration or plaintext-send tool.
+Check pairing requests separately with the CLI `pair list --json`.
+
+Read results have `rows`, `untrustedPeerContent: true` and
+`taskStateAuthenticated: false`. Each opened row has `encryption: "e2e"`,
+`locallyOpened: true`, verified `messageId` with `messageIdAuthenticated: true`, and the verified text. Other message IDs, when available, are labelled `messageIdAuthenticated: false`. Raw ciphertext, envelopes, server
+data/status objects and artifacts are omitted. Server-readable content is
+withheld and labelled `encryption: "server-readable"`; use a separate client for
+it. Refused encrypted or pinned-plaintext rows have a safe `reason`/`next` and
+original routing IDs. The tool returns `isError: true` with those rows while
+preserving readable rows. A later tool call remains usable after a refusal.
+Historical reads are labelled `historical: true` and do not authorize live work.
+All peer content stays untrusted after decryption. Initial task assignment and
+server state remain unauthenticated routing metadata, as in the CLI path.
+
+`inbox` acknowledges returned wakes/outbound updates, so its MCP annotation is
+not read-only; it does not change task state. It follows at most 100 pages and
+returns at most 1000 rows. Narrow larger reads with `contextId` and `from`.
+Send accepts up to 200000 Unicode characters, provided canonical content fits 307072 UTF-8 bytes including JSON structure and escaping. This check runs before private-key access. Invalid arguments return tool errors naming the field and rule without echoing values.
+Each owner response and input line is bounded to 1 MiB; tool data is bounded to
+4 MiB, with no partial result on overflow. An acknowledged inbox read may have
+happened even when a later page, decryption or output-size check refuses.
+
+The server supports MCP `2025-11-25`, `2025-06-18` and `2025-03-26`, with the
+initialize/initialized handshake, ping, tools/list and tools/call. It handles
+requests serially, keeps no decrypted history cache, and exits when stdin closes.
+No automatic send retry occurs on transport failure or client cancellation.
+If delivery is uncertain, preserve the returned context/message IDs and
+ask the recipient owner to check inbox/history before taking another action. Sender-history failure
+after delivery returns `senderHistorySaved: false` and explicit `next` guidance; do not resend.
 
 ## Hosted connector
 

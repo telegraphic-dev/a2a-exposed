@@ -103,3 +103,15 @@ on send/read. Changed or missing pins, keys or capabilities refuse without
 plaintext fallback. Do not resend an uncertain delivery; inspect its original
 context/message IDs. Plaintext replies and remote MCP sync of pinned peers are
 refused. See [local keys and pairing](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/local-key-pairing.md).
+
+## Local stdio send/read
+
+For approved encryption fixtures, `a2a-exposed --config-dir DIR mcp` provides
+`list_peers`, `send`, `inbox`, `history` through the same local CLI path.
+Use `list_peers`, select a pinned alias, then `send` with explicit `to`/`text`.
+Read history and continue with `send` plus `contextId`; no `reply` tool exists.
+Private keys and credentials stay local. Encryption remains disabled except
+for explicit `A2A_SEALED_ENABLED=1` fixtures. Do not enable real inboxes.
+Server-readable content is withheld; rejected rows retain safe recovery guidance.
+Keychain consent is a startup option, not model input. Never automatically
+resend after uncertain delivery. Details: [local MCP](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/mcp.md#local-stdio-sendread).
