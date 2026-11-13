@@ -1,5 +1,6 @@
-// Isolated schema-3 continuation table primitives. The physical authority remains
-// schema 2. No caller wires these tables to a command, approval or grant lease.
+// Isolated schema-3 continuation table primitives. The default authority remains
+// schema 2; the separate fresh schema-3 foundation never admits a grant. No command
+// or human-approval adapter uses these tables.
 // Privileged host code must own the connection/transaction, source checks and
 // authority->SDK ordering. These functions do not establish human provenance.
 export class ContinuationStoreError extends Error {

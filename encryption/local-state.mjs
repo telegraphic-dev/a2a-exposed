@@ -121,6 +121,20 @@ const SCHEMA_VERSION = 6; // Unreleased checkpoint change; older local drafts ar
 const recoveryApproval = (configId, row, action) => hash("a2a-exposed local recovery approval v1", { configId, operationId: row.id, operationDigest: row.digest, state: row.state, revision: row.revision, action });
 const hostUUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const HOST_FIELDS = ["config_id", "intent_id", "set_id", "epoch", "target_revision", "membership_mac"];
+const READINESS_FIELDS = ["alias", "endpoint", "pairing_identity", "trust_record_digest", "trust_record_version", "local_id", "local_bundle_digest", "peer_bundle_digest", "policy", "verification"];
+function readinessMembers(input) {
+ try {
+  const members = parseJSON(canonicalJSON(input));
+  if (!Array.isArray(members) || !members.length || members.length > 1000) fail("host_readiness_invalid");
+  for (const m of members) {
+   if (!exact(m, READINESS_FIELDS) || typeof m.alias !== "string" || !/^[A-Za-z0-9_-]{1,80}$/.test(m.alias) || !hostUUID.test(m.local_id) || !Number.isSafeInteger(m.trust_record_version) || m.trust_record_version < 1 || m.policy !== "required" || m.verification !== "independent") fail("host_readiness_invalid");
+   for (const k of ["pairing_identity", "trust_record_digest", "local_bundle_digest", "peer_bundle_digest"]) if (typeof m[k] !== "string" || !KEY.test(m[k]) || Buffer.from(m[k], "base64url").toString("base64url") !== m[k]) fail("host_readiness_invalid");
+   const u = new URL(m.endpoint); if (u.href !== m.endpoint || u.protocol !== "https:" || u.username || u.password || u.search || u.hash) fail("host_readiness_invalid");
+  }
+  for (const k of ["alias", "pairing_identity"]) if (new Set(members.map(m => m[k])).size !== members.length) fail("host_readiness_invalid");
+  return members;
+ } catch { fail("host_readiness_invalid"); }
+}
 const sqlUUID = c => `length(CAST(${c} AS BLOB))=36 AND length(${c})=36 AND substr(${c},9,1)='-' AND substr(${c},14,1)='-' AND substr(${c},19,1)='-' AND substr(${c},24,1)='-' AND substr(${c},15,1)='4' AND substr(${c},20,1) IN ('8','9','a','b') AND length(replace(${c},'-',''))=32 AND replace(${c},'-','') NOT GLOB '*[^0-9a-f]*'`;
 function hostGrantBinding(value) {
  try {
@@ -389,6 +403,42 @@ export class LocalState {
       commit: () => { check(); if (!transaction) fail("maintenance_transaction_state"); db.exec("COMMIT"); transaction = false; check(); },
       rollback: () => { state(); if (!transaction) fail("maintenance_transaction_state"); db.exec("ROLLBACK"); transaction = false; },
       transactionState: () => { state(); return transaction ? "open" : "idle"; },
+      // Private read-only prerequisite, never human provenance or admission.
+      // The caller retains BEGIN IMMEDIATE throughout every await. Native
+      // credentials remain gated: no OS prompt is initiated by maintenance.
+      assertReadiness: async input => {
+       if (!live) fail("maintenance_queue_expired"); const members = readinessMembers(input);
+       const started = Date.now();
+       const inspect = () => {
+        check(); if (!transaction || !db.isTransaction) fail("maintenance_transaction_state");
+        if (Date.now() < started) fail("host_readiness_clock");
+        if (db.prepare("SELECT 1 FROM key_operations WHERE state!='committed' LIMIT 1").get()) fail("host_readiness_pending");
+        return members.map(m => {
+         if (db.prepare("SELECT 1 FROM proposals WHERE peer=? AND state='pending' LIMIT 1").get(m.alias)) fail("host_readiness_pending");
+         const row = db.prepare("SELECT * FROM trust WHERE peer=?").get(m.alias);
+         if (!row || row.version !== m.trust_record_version) fail("host_readiness_changed");
+         const r = parseJSON(row.record);
+         if (!exact(r, ["v", "configIdentity", "localId", "localKeyId", "localBundleDigest", "peer", "peerEndpoint", "pairingIdentity", "bundle", "policy", "verification", "state", "version"]) || r.v !== 1 || r.configIdentity !== config || r.peer !== m.alias || r.version !== row.version || hash("a2a-exposed sealed trust record v1", r) !== m.trust_record_digest || r.localId !== m.local_id || r.peerEndpoint !== m.endpoint || r.pairingIdentity !== m.pairing_identity || r.localBundleDigest !== m.local_bundle_digest || r.policy !== "required" || r.verification !== "independent" || r.state !== "independently-verified" || hash("a2a-exposed sealed bundle v1", r.bundle) !== m.peer_bundle_digest) fail("host_readiness_changed");
+         const key = db.prepare("SELECT * FROM identities WHERE id=?").get(m.local_id);
+         if (!key || key.live_state !== "local-only") fail("host_readiness_key");
+         const bundle = parseJSON(key.bundle);
+         if (hash("a2a-exposed sealed bundle v1", bundle) !== m.local_bundle_digest || bundle.keyId !== r.localKeyId || bundle.identityKey === r.bundle.identityKey || new URL(r.bundle.cardUrl).origin !== new URL(m.endpoint).origin) fail("host_readiness_changed");
+         if (key.store !== "file") fail("host_readiness_native_gated");
+         return { key: { ...key }, bundle, peerBundle: r.bundle };
+        });
+       };
+       const baseline = inspect(), privateValues = [];
+       for (const entry of baseline) {
+        await verifyBundle(entry.bundle, { cardUrl: entry.bundle.cardUrl, identityKey: entry.bundle.identityKey });
+        await verifyBundle(entry.peerBundle, { cardUrl: entry.peerBundle.cardUrl, identityKey: entry.peerBundle.identityKey });
+        const privateValue = await this.privateGet(entry.key, false);
+        await checkPrivate(privateValue, entry.bundle); privateValues.push(privateValue);
+        // Re-read the complete aggregate, not just the peer whose I/O finished.
+        if (canonicalJSON(inspect()) !== canonicalJSON(baseline)) fail("host_readiness_changed");
+       }
+       for (let n = 0; n < baseline.length; n++) if (privateRead(path.join(root, baseline[n].key.id + ".key")) !== privateValues[n]) fail("host_readiness_key");
+       inspect(); return true;
+      },
       stageGrant: input => {
        if (!live) fail("maintenance_queue_expired"); const r = hostGrantBinding(input); check(); if (!transaction) fail("maintenance_transaction_state"); if (r.config_id !== config) fail("host_grant_config");
        const existing = db.prepare("SELECT * FROM host_grant_sets WHERE intent_id=?").get(r.intent_id);
