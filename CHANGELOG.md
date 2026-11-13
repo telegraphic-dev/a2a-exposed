@@ -2,9 +2,6 @@
 
 ## Unreleased
 
-- Add a disabled fresh-only physical schema-4 authority initializer and read-only
-  suspended diagnostics; existing stores and nonempty history remain refused.
-
 - Add separately opted-in HTTP relay profiles for fixed local webhooks and native
   A2A JSON-RPC services, with original request bytes/application authentication,
   real receiver responses, rewritten discovery and bounded incremental SSE.
