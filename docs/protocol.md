@@ -120,6 +120,10 @@ When `EVENT_URL` is an https URL and `EVENT_SECRET` is set, the A2A endpoint POS
 
 Anything else (`curl`, agents, `Accept: application/json`, `?format=json`) gets JSON: `name`, `description`, `agentCard`, `a2a` (the JSON-RPC endpoint), `pairing` (the human approval page, kept for compatibility), `pairingEndpoint` (`/oauth/device_authorization`, the endpoint an agent POSTs to) and `approvalPage` when pairing is on, `connect` (the playbook), `exposeYourself` (the setup skill), and `markdown` (`/index.md`).
 
+Every variant of `GET /`, and `/index.md`, sends a `Link` header (`/index.md` as `alternate`, the agent card and `/llms.txt` as `describedby`, the connect playbook as `service-doc`) and a `content-signal` header with the `CONTENT_SIGNAL` value.
+
+`GET /robots.txt` (`text/plain`) allows crawlers on `/` and disallows `/owner`, `/oauth/`, `/device`, `/mcp`, `/push`, and `/relay/`. It carries `Content-Signal: search=yes, ai-input=yes, ai-train=no` by default and names `/sitemap.xml`. `CONTENT_SIGNAL` (`A2A_CONTENT_SIGNAL` at deploy) changes that value: comma-separated `name=yes|no` pairs; anything else falls back to the default. `ROBOTS_POLICY=disallow` (`A2A_ROBOTS_POLICY`; default `allow`) serves `Disallow: /` with no sitemap line and adds `X-Robots-Tag: noindex, nofollow` to every response, for test deployments. `GET /sitemap.xml` (`application/xml`) lists `/`, `/index.md`, `/llms.txt`, and the agent card, never `/device` or `/owner`. A hosted deployment sets `ROBOTS_POLICY` and `CONTENT_SIGNAL` as platform defaults on the hosted Worker; a tenant's pushed config overrides them.
+
 The playbook and setup skill links use `DISCOVERY_DOCS_ORIGIN` (`A2A_DISCOVERY_DOCS_ORIGIN` at deploy; an https origin, default `https://a2a.exposed`). A hosted deployment sets it on the hosted Worker, so staging agents link to staging.
 
 `GET /health` returns `{ ok, publicUrl, mode, mcp, version }`. `mode` is `inbox` or `proxy`; `version` is the deployed inbox build’s package version.

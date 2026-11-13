@@ -153,3 +153,54 @@ export const markdownHeaders = (): Record<string, string> => ({
 export const llmsHeaders = (): Record<string, string> => ({
 	"content-type": "text/plain; charset=utf-8", "cache-control": "no-cache", "x-content-type-options": "nosniff",
 });
+
+// ------------------------------------------------------------------ crawlers: robots.txt, sitemap.xml, Link (#348)
+
+/** Default Content-Signal: search and answering with this page are fine; training on it is not. */
+export const DEFAULT_CONTENT_SIGNAL = "search=yes, ai-input=yes, ai-train=no";
+
+/** CONTENT_SIGNAL as one safe line: comma-separated `name=yes|no` pairs, else the default. */
+export function contentSignal(v: string | undefined): string {
+	const s = (v || "").trim();
+	if (!s) return DEFAULT_CONTENT_SIGNAL;
+	const parts = s.split(",").map((p) => p.trim().toLowerCase()).filter(Boolean);
+	if (!parts.length || parts.length > 10 || !parts.every((p) => /^[a-z][a-z0-9-]{0,31}\s*=\s*(?:yes|no)$/.test(p))) return DEFAULT_CONTENT_SIGNAL;
+	return parts.map((p) => p.replace(/\s*=\s*/, "=")).join(", ");
+}
+
+/** ROBOTS_POLICY=disallow asks crawlers to stay away (staging); anything else allows them. */
+export const robotsDisallow = (v: string | undefined): boolean => (v || "").trim().toLowerCase() === "disallow";
+
+/** Paths crawlers have no business in: owner API, OAuth and approval pages, MCP, push, relay. */
+const ROBOTS_DISALLOW = ["/owner", "/oauth/", "/device", "/mcp", "/push", "/relay/"];
+
+export function robotsTxt(base: string, disallow: boolean, signal: string): string {
+	const rules = disallow ? ["Disallow: /"] : ["Allow: /", ...ROBOTS_DISALLOW.map((p) => `Disallow: ${p}`)];
+	return [
+		"# A2A agent endpoint served by a2a-exposed. Agents: start at /index.md or /.well-known/agent-card.json",
+		"User-agent: *", ...rules,
+		`Content-Signal: ${signal}`,
+		...(disallow ? [] : [`Sitemap: ${base}/sitemap.xml`]),
+	].join("\n") + "\n";
+}
+
+const xmlEsc = (s: string) => s.replace(/[<>&'"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", '"': "&quot;" }[c]!));
+
+/** The public pages only; never /device or /owner. No lastmod: the card has no change time to report. */
+export function sitemapXml(base: string): string {
+	const urls = ["/", "/index.md", "/llms.txt", "/.well-known/agent-card.json"];
+	return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
+		urls.map((p) => `<url><loc>${xmlEsc(base + p)}</loc></url>\n`).join("") + `</urlset>\n`;
+}
+
+/** Link header for GET / (every variant) and /index.md. api-catalog is added once /.well-known/api-catalog exists. */
+export function linkHeader(docs: string): string {
+	return [
+		`</index.md>; rel="alternate"; type="text/markdown"`,
+		`</.well-known/agent-card.json>; rel="describedby"; type="application/json"`,
+		`</llms.txt>; rel="describedby"; type="text/plain"`,
+		`<${docsLinks(docs).connect}>; rel="service-doc"; type="text/markdown"`,
+	].join(", ");
+}
+
+export const NOINDEX = "noindex, nofollow";
