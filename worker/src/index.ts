@@ -994,7 +994,7 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
    // Reject extra outer fields before normMessage can discard them.
    const raw = params.message;
    const allowed = ["kind","role","messageId","contextId","taskId","parts","extensions"];
-   if (Object.keys(raw).some(k => !allowed.includes(k)) || Object.keys(params).some(k => !["message","configuration"].includes(k)) || Object.keys(params.configuration || {}).some(k => !["blocking","returnImmediately"].includes(k))) throw Error();
+   if (Object.keys(raw).some(k => !allowed.includes(k)) || Object.keys(params).some(k => !["message","configuration"].includes(k)) || Object.keys(params.configuration || {}).some(k => !["blocking","returnImmediately","historyLength"].includes(k) || k === "historyLength" && params.configuration[k] !== 1)) throw Error();
    for (const part of raw.parts) if (Object.keys(part).some(k => !["kind","data","metadata"].includes(k))) throw Error();
    sealed = await SealedKeys.verifyMessage(msg, JSON.parse(sealedPeer.sealed_requester), JSON.parse(sealedPeer.sealed_responder));
   } catch { throw new RpcError(-32602, "Invalid encrypted message; no plaintext fallback"); }

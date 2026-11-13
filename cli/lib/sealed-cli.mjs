@@ -24,6 +24,17 @@ async function paired(peer, o, action) {
   fail(error?.next || sealedFailure, error?.code || "verification_failed");
  } finally { store.close(); }
 }
+async function readInput() {
+ const chunks = []; let size = 0;
+ try {
+  for await (const chunk of process.stdin) {
+   size += Buffer.byteLength(chunk);
+   if (size > 300 * 1024) fail("Encrypted input is too large. Nothing was sent.");
+   chunks.push(Buffer.from(chunk));
+  }
+ } catch (error) { if (error instanceof CliError) throw error; fail("Could not read piped input. Nothing was sent."); }
+ return Buffer.concat(chunks).toString("utf8");
+}
 export async function send(o) {
  if (process.env.A2A_SEALED_ENABLED !== "1") fail("This config directory has local keys or pinned peers, so ordinary send is off here. Local encryption is disabled; A2A_SEALED_ENABLED=1 is reserved for approved local tests. Use a separate --config-dir for ordinary sends. No plaintext was sent.");
  gate();
@@ -32,13 +43,24 @@ export async function send(o) {
  if (o.push || o.wake || o.intent) fail("Encrypted send does not support --push, --wake or --intent yet; nothing was sent.");
  const pe = C.loadPeers()[o.to], token = peerToken(pe.token_env);
  if (!token) fail("The paired peer token is missing; inspect peers list --json. No plaintext was sent.");
- const text = o.text ?? fs.readFileSync(0, "utf8");
+ const text = o.text ?? await readInput();
  if (!text) fail("Encrypted send requires non-empty --text TEXT or piped stdin. Nothing was sent.");
- const contextId = o.context ? checkId(o.context, "contextId") : newId(), taskId = o.task ? checkId(o.task, "taskId") : null;
+ const taskId = o.task ? checkId(o.task, "taskId") : null;
+ let contextId = o.context ? checkId(o.context, "contextId") : taskId ? null : newId();
  return paired(o.to, o, async ({ api, record, identity, recheck }) => {
   const card = await fetchCard(pe.url), [url, protocol] = pickEndpoint(pe.url, card, o.proto);
   const advertised = card?.capabilities?.extensions?.filter(e => e.uri === URI);
   if (!["0.3", "1.0"].includes(protocol) || url !== record.peerEndpoint || advertised?.length !== 1 || advertised[0].params?.cliSeal !== true || api.canonicalJSON(advertised[0].params.pairingBundle) !== api.canonicalJSON(record.bundle)) fail("Peer encryption capability, pinned bundle or endpoint changed. Preserve the pairing and ask its owner; no plaintext was sent.");
+  if (taskId && !contextId) {
+   // A task's routing context is server-supplied, not an authenticated assignment.
+   // Resolve it before signing instead of silently creating a different conversation.
+   const id = newId();
+   let resolved;
+   try { resolved = await httpJson(url, { redirect: "error", maxResponseBytes: 1024 * 1024, body: { jsonrpc: "2.0", id, method: protocol === "1.0" ? "GetTask" : "tasks/get", params: { id: taskId, historyLength: 0 } }, headers: { authorization: `Bearer ${token}`, "A2A-Version": protocol, "A2A-Extensions": URI } }); }
+   catch { fail("Could not read the task context. Nothing was sent. Inspect the original task and pass its --context explicitly."); }
+   if (resolved.status !== 200 || resolved.data?.jsonrpc !== "2.0" || resolved.data?.id !== id || resolved.data.error || resolved.data.result?.id !== taskId) fail("Could not read the task context. Nothing was sent. Inspect the original task and pass its --context explicitly.");
+   contextId = checkId(resolved.data.result.contextId, "task contextId");
+  }
   const b = { contextId, messageId: newId(), taskId, role: "user", state: null, kind: "message" };
   const content = api.validateContent({ kind: "message", authorRole: "user", parts: [{ kind: "text", text, mediaType: null, metadata: {} }], metadata: {}, extensions: [], referenceTaskIds: [] }, b);
   const envelope = await api.seal({ identity, recipient: record.bundle, binding: b, content });
@@ -47,7 +69,7 @@ export async function send(o) {
   const message = api.makeMessageCarrier(envelope, protocol);
   let response;
   try {
-   response = await httpJson(url, { redirect: "error", maxResponseBytes: 1024 * 1024, body: { jsonrpc: "2.0", id: b.messageId, method: protocol === "1.0" ? "SendMessage" : "message/send", params: { message, configuration: protocol === "1.0" ? { returnImmediately: true } : { blocking: false } } }, headers: { authorization: `Bearer ${token}`, "A2A-Version": protocol, "A2A-Extensions": URI, ...(protocol === "0.3" ? { "X-A2A-Extensions": URI } : {}) } });
+   response = await httpJson(url, { redirect: "error", maxResponseBytes: 1024 * 1024, body: { jsonrpc: "2.0", id: b.messageId, method: protocol === "1.0" ? "SendMessage" : "message/send", params: { message, configuration: protocol === "1.0" ? { returnImmediately: true, historyLength: 1 } : { blocking: false, historyLength: 1 } } }, headers: { authorization: `Bearer ${token}`, "A2A-Version": protocol, "A2A-Extensions": URI, ...(protocol === "0.3" ? { "X-A2A-Extensions": URI } : {}) } });
   } catch { fail("Encrypted delivery outcome is unknown. Do not resend. Ask the recipient's owner to check inbox/history for context " + b.contextId + " and message " + b.messageId + ". No plaintext fallback."); }
   const { status, data, headers } = response;
   if (status !== 200 || data?.jsonrpc !== "2.0" || data.id !== b.messageId || data.error || headers?.get("A2A-Extensions") !== URI) fail("Encrypted delivery was not confirmed. Do not resend automatically. Ask the recipient's owner to check history for context " + b.contextId + " and message " + b.messageId + ". No plaintext fallback.");
@@ -92,7 +114,7 @@ export async function openRows(rows, o, { historical = false } = {}) {
    const reason = process.env.A2A_SEALED_ENABLED !== "1" ? "encryption_disabled" : codes[error?.code] || "verification_failed";
    const next = reason === "os_consent_required" ? "Re-run with --allow-os-consent when a human can answer the OS authorization prompt." : reason === "too_old" ? "Read this context with history CONTEXT --json for verified historical content; this does not admit live work." : reason === "encryption_disabled" ? "Local encryption needs the approved test flag; use a separate --config-dir for ordinary sends. No plaintext fallback." : "Preserve the original keys and pairing; inspect keys status --json. No plaintext fallback.";
    // Do not echo unverified text, data or provider errors, even in JSON mode.
-   out.push({ taskId: row.taskId ?? row.task_id ?? null, contextId: row.contextId ?? row.context_id ?? null, from: peer, encrypted: true, locallyOpened: false, reason, next, text: `[encrypted message unavailable: ${reason}]` });
+   out.push({ taskId: row.taskId ?? row.task_id ?? null, contextId: row.contextId ?? row.context_id ?? null, from: peer, encrypted: reason !== "plaintext_from_pinned_peer", locallyOpened: false, reason, next, text: reason === "plaintext_from_pinned_peer" ? "[unencrypted message refused from pinned peer]" : `[encrypted message unavailable: ${reason}]` });
    process.exitCode = 1;
   }
  }

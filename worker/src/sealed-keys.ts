@@ -43,7 +43,14 @@ export async function verifyMessage(message: any, requester: any, responder: any
  if (canonical(h.from) !== canonical(identity(requester)) || canonical(h.to) !== canonical(identity(responder)) || h.role !== "user" || h.kind !== "message" || h.state !== null || h.contextId !== message.contextId || h.messageId !== message.messageId || h.taskId !== (message.taskId ?? null)) bad();
  for (const id of [h.contextId, h.messageId, ...(h.taskId === null ? [] : [h.taskId])]) if (typeof id !== "string" || !/^[A-Za-z0-9._:-]{1,128}$/.test(id)) bad();
  if (typeof h.sentAt !== "string" || !Number.isFinite(Date.parse(h.sentAt)) || new Date(h.sentAt).toISOString() !== h.sentAt || Date.parse(h.sentAt) > Date.now() + 300000 || Date.parse(h.sentAt) < Date.now() - 30 * 86400000) bad();
- const bytes = (v: any, size?: number) => { const b = typeof v === "string" ? b64urlDecode(v) : null; if (!b || b64urlEncode(b) !== v || size !== undefined && b.length !== size) bad(); return b!; };
+ const bytes = (v: any, size?: number) => {
+  const max = Math.ceil((size ?? (300 * 1024 + 16)) * 4 / 3);
+  if (typeof v !== "string" || v.length > max || !/^[A-Za-z0-9_-]+$/.test(v)) bad();
+  let b: Uint8Array;
+  try { const raw = atob(v.replace(/-/g,"+").replace(/_/g,"/") + "=".repeat((4-v.length%4)%4)); b = Uint8Array.from(raw, c => c.charCodeAt(0)); } catch { bad(); }
+  if ((size !== undefined && b!.length !== size) || b64urlEncode(b!) !== v) bad();
+  return b!;
+ };
  bytes(h.commitment, 32);
  for (const copy of [e.recipient, e.sender]) {
   if (!exact(copy, ["enc", "ct"])) bad();

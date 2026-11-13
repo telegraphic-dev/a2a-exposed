@@ -624,7 +624,7 @@ export class LocalState {
 
  async initialize({ store, cardUrl, allowOsConsent = false, now = Date.now() }) {
   if (!["file", "keychain"].includes(store)) fail("key_store", "Select --store from keys stores --json; no store is chosen automatically.");
-  if (store === "keychain" && allowOsConsent !== true) fail("key_store_consent", "OS credential access needs explicit true consent; use the file store for unattended operation. Run keys stores --json.");
+  if (store === "keychain" && allowOsConsent !== true) fail("key_store_consent", "Pass --allow-os-consent when a human can answer an OS prompt, or use --store file for unattended operation. Run keys stores --json.");
   const identity = await generateIdentity(cardUrl, now), value = await serialize(identity), id = randomUUID(), namespace = randomUUID(), opId = randomUUID();
   const operation = { v: 1, kind: "initialize", id: opId, identityId: id, bundle: identity.bundle, store, namespace, account: id + "/" + identity.bundle.keyId, fileRef: id + ".key", created_ms: now };
   const digest = hash("a2a-exposed local key operation v1", operation);

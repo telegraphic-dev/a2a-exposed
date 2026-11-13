@@ -16,7 +16,7 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
  const tmp=fs.mkdtempSync(path.join(os.tmpdir(),"sealed-pairing-"));t.after(()=>fs.rmSync(tmp,{recursive:true,force:true}));
  const envs:Record<string,any>={},dirs:Record<string,string>={},ids:Record<string,string>={},bundles:Record<string,any>={},records:any[]=[];
  for(const name of ["alice","bob"]){
-  envs[name]={DB:d1(new URL("../migrations/",import.meta.url)),PUBLIC_URL:`https://${name}.example.com`,OWNER_TOKEN:"dummy-owner",AGENT_NAME:name,A2A_SEALED_ENABLED:"1"};
+  envs[name]={DB:d1(new URL("../migrations/",import.meta.url)),PUBLIC_URL:`https://${name}.example.com`,OWNER_TOKEN:"dummy-owner",AGENT_NAME:name,A2A_SEALED_ENABLED:"1",WAKE_BUSY_SECONDS:"0",WAKE_DEBOUNCE_SECONDS:"0"};
   dirs[name]=path.join(tmp,name);fs.mkdirSync(dirs[name],{mode:0o700});fs.mkdirSync(path.join(dirs[name],"node_modules/@a2a-exposed"),{recursive:true});
   fs.symlinkSync(path.join(root,"encryption"),path.join(dirs[name],"node_modules/@a2a-exposed/encryption"));
   fs.writeFileSync(path.join(dirs[name],"config.env"),`A2A_BASE_URL=https://${name}.example.com\nA2A_OWNER_TOKEN=dummy-owner\n`,{mode:0o600});
@@ -35,12 +35,12 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
  const hook=path.join(tmp,"fetch.mjs"),port=(server.address()as any).port;
  fs.writeFileSync(hook,`if(process.env.FIXTURE_OLD_INIT){const now=Date.now()-40*86400000;Date.now=()=>now;}const original=globalThis.fetch;globalThis.fetch=(url,init={})=>{const u=new URL(url);if(!/^(alice|bob)\\.example\\.com$/.test(u.hostname))throw Error('nonfixture network refused');const headers=new Headers(init.headers);headers.set('x-test-agent',u.hostname.split('.')[0]);return original('http://127.0.0.1:${port}'+u.pathname+u.search,{...init,headers});};`);
  const clean=Object.fromEntries(Object.entries(process.env).filter(([k])=>!/^(A2A_|PEER_|WAKE_|CF_|CLOUDFLARE_|UPSTREAM_|APPROVAL_|EVENT_|HOSTED_)/.test(k)));
- const cli=(name:string,args:string[],enabled=true):Promise<any>=>new Promise(resolve=>{
-  const ch=spawn(process.execPath,["--import",hook,path.join(root,"cli/bin/a2a-exposed.mjs"),...args],{env:{...clean,A2A_CONFIG_DIR:dirs[name],A2A_SEALED_ENABLED:enabled?"1":"",DO_NOT_TRACK:"1",A2A_NO_UPDATE_CHECK:"1",...(args[0]==="keys"&&args[1]==="init"?{FIXTURE_OLD_INIT:"1"}:{})},stdio:["ignore","pipe","pipe"]});let out="",err="";ch.stdout.on("data",b=>out+=b);ch.stderr.on("data",b=>err+=b);ch.on("close",code=>resolve({code,out,err}));
+ const cli=(name:string,args:string[],enabled=true,input?:string):Promise<any>=>new Promise(resolve=>{
+  const ch=spawn(process.execPath,["--import",hook,path.join(root,"cli/bin/a2a-exposed.mjs"),...args],{env:{...clean,A2A_CONFIG_DIR:dirs[name],A2A_SEALED_ENABLED:enabled?"1":"",DO_NOT_TRACK:"1",A2A_NO_UPDATE_CHECK:"1",...(args[0]==="keys"&&args[1]==="init"?{FIXTURE_OLD_INIT:"1"}:{})},stdio:[input===undefined?"ignore":"pipe","pipe","pipe"]});if(input!==undefined){ch.stdin?.on("error",()=>{});ch.stdin?.end(input);}let out="",err="";ch.stdout.on("data",b=>out+=b);ch.stderr.on("data",b=>err+=b);ch.on("close",code=>resolve({code,out,err}));
  });
  for(const name of ["alice","bob"]){
   const stores=await cli(name,["keys","stores","--json"]);assert.equal(stores.code,0,stores.err);
-  const noConsent=await cli(name,["keys","init","--store","keychain","--card-url",`https://${name}.example.com/.well-known/agent-card.json`,"--json"]);assert.equal(noConsent.code,1);assert.match(noConsent.err,/consent/);
+  const noConsent=await cli(name,["keys","init","--store","keychain","--card-url",`https://${name}.example.com/.well-known/agent-card.json`,"--json"]);assert.equal(noConsent.code,1);assert.match(noConsent.err,/--allow-os-consent/);
   const off=await cli(name,["keys","stores","--json"],false);assert.equal(off.code,1);assert.match(off.err,/disabled/);
   const init=await cli(name,["keys","init","--store","file","--card-url",`https://${name}.example.com/.well-known/agent-card.json`,"--json"]);assert.equal(init.code,0,init.err);
   const data=JSON.parse(init.out);ids[name]=data.id;bundles[name]=data.bundle;
@@ -110,8 +110,16 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
   assert.ok((await call(request,false)).error);envs.bob.A2A_SEALED_ENABLED="1";
   assert.equal((await owner("bob",`/owner/tasks/${sent.taskId}/reply`,"POST",{text:"must not leak",state:"completed"})).status,409);
   const offInbox=await cli("bob",["inbox","--json"],false);assert.equal(offInbox.code,1);assert.equal(offInbox.out.includes(secret),false);
+  // Task-only routing must reuse the existing context; responses stay bounded as history grows.
+  for(const explicit of [false,true]){
+   const large="large-fixture-"+"x".repeat(198980);
+   const continued=await cli("alice",["send","--to","bob","--task",sent.taskId,...(explicit?["--context",sent.contextId]:[]),"--proto",proto],true,large);
+   assert.equal(continued.code,0,continued.err);const follow=JSON.parse(continued.out);assert.equal(follow.contextId,sent.contextId);assert.equal(follow.taskId,sent.taskId);assert.equal(follow.senderHistorySaved,true);
+   assert.equal(JSON.stringify(records).includes(large),false);
+   const latest=JSON.parse(records.findLast((x:any)=>x.name==="bob"&&x.path==="/"&&JSON.parse(x.body||"{}").params?.message).body);assert.equal(latest.params.configuration.historyLength,1);
+  }
   // Ciphertext alteration at rest refuses opening; never returns a partial plaintext result.
-  const stored:any=await envs.bob.DB.prepare("SELECT seq,message_json FROM messages WHERE task_id=?").bind(sent.taskId).first();
+  const stored:any=await envs.bob.DB.prepare("SELECT seq,message_json FROM messages WHERE task_id=? ORDER BY seq DESC LIMIT 1").bind(sent.taskId).first();
   const corrupt=JSON.parse(stored.message_json);corrupt.parts[0].data.sender.ct="AAAA";
   await envs.bob.DB.prepare("UPDATE messages SET message_json=? WHERE seq=?").bind(JSON.stringify(corrupt),stored.seq).run();
   const bad=await cli("bob",["inbox","--json"]);assert.equal(bad.code,1);assert.equal(bad.out.includes(secret),false);
@@ -130,7 +138,7 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
   await envs.bob.DB.prepare("UPDATE messages SET message_json=? WHERE seq=?").bind(stored.message_json,stored.seq).run();
   // Mixed rows: a refused plaintext downgrade cannot hide the valid encrypted history.
   assert.equal((await owner("bob","/owner/history","POST",{contextId:sent.contextId,dir:"in",peer:p.peer,taskId:sent.taskId,text:"untrusted plaintext downgrade"})).status,200);
-  const mixed=await cli("bob",["history",sent.contextId,"--json"]);assert.equal(mixed.code,1);const mixedRows=JSON.parse(mixed.out);assert.ok(mixedRows.some((x:any)=>x.text===secret&&x.locallyOpened));assert.ok(mixedRows.some((x:any)=>x.reason==="plaintext_from_pinned_peer"));assert.equal(mixed.out.includes("untrusted plaintext downgrade"),false);
+  const mixed=await cli("bob",["history",sent.contextId,"--json"]);assert.equal(mixed.code,1);const mixedRows=JSON.parse(mixed.out);assert.ok(mixedRows.some((x:any)=>x.text===secret&&x.locallyOpened));assert.ok(mixedRows.some((x:any)=>x.reason==="plaintext_from_pinned_peer"&&x.encrypted===false));assert.equal(mixed.out.includes("untrusted plaintext downgrade"),false);
 
  }
  const downgrade=await cli("alice",["connect","https://bob.example.com","--alias","bob","--no-wait"]);assert.equal(downgrade.code,1);assert.match(downgrade.err,/pinned encryption keys/);

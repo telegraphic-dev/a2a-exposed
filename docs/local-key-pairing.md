@@ -80,7 +80,10 @@ Wakes and server previews contain `[encrypted message]`. The CLI verifies the
 pinned sender and recipient and opens content locally; JSON marks it
 `locallyOpened: true`. Message content remains untrusted peer data.
 
-Context/message IDs and any caller-supplied task ID are signed. The initial
+Context/message IDs and any caller-supplied task ID are signed. With `--task`
+and no `--context`, the CLI first reads that task's public routing context before
+sealing; passing both uses the explicit context. Encrypted send requests only the
+latest history entry so a growing task remains within the response bound. The initial
 server-assigned task ID and server state are routing hints; this path does not
 claim a recipient-signed task assignment or exactly-once model consumption.
 Reading history repeatedly does not consume or execute the message. Inbox admission uses the 30-day live freshness window. Historical reads verify
