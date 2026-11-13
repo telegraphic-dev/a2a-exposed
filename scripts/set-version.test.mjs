@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,7 +10,7 @@ test("set-version preserves formatting, updates release fields, and rejects inva
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "a2a-set-version-"));
 	t.after(() => fs.rmSync(root, { recursive: true, force: true }));
 	const source = path.resolve(import.meta.dirname, "..");
-	const files = ["package.json", "cli/package.json", "encryption/package.json", "encryption/package-lock.json", "worker/package.json", "control/package.json", "worker/package-lock.json", "control/package-lock.json", "plugin.json", ".claude-plugin/plugin.json", ".claude-plugin/marketplace.json", ".cursor-plugin/plugin.json", ".grok-plugin/plugin.json", "worker/src/version.ts", "skills/a2a-exposed/SKILL.md", "skills/a2a-exposed-setup/SKILL.md", "scripts/set-version.mjs"];
+	const files = ["package.json", "cli/package.json", "encryption/package.json", "encryption/package-lock.json", "worker/package.json", "control/package.json", "worker/package-lock.json", "control/package-lock.json", "plugin.json", ".claude-plugin/plugin.json", ".claude-plugin/marketplace.json", ".cursor-plugin/plugin.json", ".grok-plugin/plugin.json", "worker/src/version.ts", "skills/a2a-exposed/SKILL.md", "skills/a2a-exposed-setup/SKILL.md", "scripts/set-version.mjs", "worker/scripts/skills-index.mjs", "worker/src/skills-index.ts"];
 	for (const file of files) {
 		fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
 		fs.copyFileSync(path.join(source, file), path.join(root, file));
@@ -28,8 +29,14 @@ test("set-version preserves formatting, updates release fields, and rejects inva
 	for (const version of ["1.2.3", "2.0.0-rc.1+build.42"]) {
 		assert.equal(run(version).status, 0);
 		for (const [file, text] of before) {
-			const expected = file === "scripts/set-version.mjs" ? text : text.replaceAll(originalVersion, version);
+			if (file === "worker/src/skills-index.ts") continue; // digests change with the bytes: checked below
+			const expected = file === "scripts/set-version.mjs" || file === "worker/scripts/skills-index.mjs" ? text : text.replaceAll(originalVersion, version);
 			assert.equal(read(file), expected, file);
+		}
+		const index = read("worker/src/skills-index.ts");
+		for (const skill of ["a2a-exposed", "a2a-exposed-setup"]) {
+			const digest = "sha256:" + crypto.createHash("sha256").update(fs.readFileSync(path.join(root, "skills", skill, "SKILL.md"))).digest("hex");
+			assert.ok(index.includes(`"digest": "${digest}"`), `skills index digest of ${skill} follows the new SKILL.md bytes`);
 		}
 		const doc = JSON.parse(read("package-lock.json"));
 		assert.equal(doc.version, version);

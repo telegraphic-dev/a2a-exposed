@@ -51,4 +51,7 @@ for (const skill of fs.readdirSync(path.join(root, "skills"))) {
 }
 update("worker/src/version.ts", (text) => replace(text, /(export const VERSION = ")[^"]*(")/, "worker/src/version.ts"));
 for (const [file, text] of changes) fs.writeFileSync(file, text);
+// The skills index digests the SKILL.md bytes, which now carry the new metadata.version.
+const { writeSkillsIndex } = await import(new URL("../worker/scripts/skills-index.mjs", import.meta.url).href);
+writeSkillsIndex(root);
 console.log(`Release version set to ${version}`);

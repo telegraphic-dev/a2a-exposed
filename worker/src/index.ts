@@ -16,6 +16,7 @@ import { withDeadline } from "./deadline.ts";
 import * as Addr from "./address.ts";
 import * as P from "./pairing.ts";
 import * as D from "./discovery.ts";
+import { SKILLS } from "./skills-index.ts";
 import * as M from "./mcp.ts";
 import { lookupDirectory, pinDirectoryRegion, tenantNameFromHost, tenantRegion } from "./directory.ts";
 import { accountIdOf, DASHBOARD_ACTOR_HEADER, matchOwnerRpc, ownerResponseLeaks, ownerRpcBody, REISSUE_OWNER_ONLY, REISSUE_OWNER_ONLY_MESSAGE, scrubOwnerClaims, type OwnerRpcRequest, type OwnerRpcResult } from "./owner-rpc.ts";
@@ -3461,6 +3462,16 @@ function crawlerDoc(ctx: TenantContext, kind: "robots" | "sitemap"): Response {
 		: new Response(D.sitemapXml(base), { status: 200, headers: { ...headers, "content-type": "application/xml; charset=utf-8" } });
 }
 
+/** GET /.well-known/agent-skills/index.json (the canonical skills by version-pinned URL and digest) and a 302 from
+ *  /.well-known/agent-skills/<name>/SKILL.md to that URL. The SKILL.md bodies are never bundled here. */
+function skillsDoc(ctx: TenantContext, path: string): Response {
+	const base = D.skillsBase(ctx.SKILLS_BASE_URL, VERSION);
+	const headers = { "access-control-allow-origin": "*", "cache-control": "public, max-age=300" };
+	if (path === "/.well-known/agent-skills/index.json") return json(D.skillsIndex(SKILLS, base), 200, headers);
+	const to = D.skillRedirect(path, SKILLS, base);
+	return to ? new Response(null, { status: 302, headers: { ...headers, location: to } }) : json({ error: "not found" }, 404);
+}
+
 /** GET /index.md and GET /llms.txt: the Markdown connect page and its llms.txt form. HEAD is answered by handle(). */
 async function discoveryDoc(ctx: TenantContext, kind: "markdown" | "llms"): Promise<Response> {
 	const { model } = await connectModel(ctx);
@@ -4479,6 +4490,7 @@ async function handle(req: Request, ctx: TenantContext, ectx: ExecutionContext, 
 		if (req.method === "GET" && path === "/llms.txt") return await discoveryDoc(ctx, "llms");
 		if (req.method === "GET" && path === "/robots.txt") return crawlerDoc(ctx, "robots");
 		if (req.method === "GET" && path === "/sitemap.xml") return crawlerDoc(ctx, "sitemap");
+		if (req.method === "GET" && path.startsWith("/.well-known/agent-skills/")) return skillsDoc(ctx, path);
 		return json({ error: "not found" }, 404);
 	} catch (e: any) {
 		if (e instanceof HttpError) return json({ error: e.message }, e.status);
