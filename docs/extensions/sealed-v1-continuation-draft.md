@@ -1102,7 +1102,9 @@ with exactly id, config_identity, canonical_root, epoch, baseline_revision,
 current_signer_id, operation, created_ms, expires_ms, record and storage_mac.
 The current signer references retained enrollment history; initial plans have no
 current signer. Identity, operation, revision and validity constraints apply in
-SQL, and rows cannot be updated, deleted or replaced. Reads authenticate actual
+SQL. The strict table has no implicit rowid; rows cannot be updated, deleted or
+replaced, including replacement through an explicit rowid collision with a fresh
+plan ID. Reads authenticate actual
 stored bytes with fatal UTF-8 decoding, revalidate the complete plan and its original deadline against
 caller-supplied current authority/signer, compare every SQL column, and compare
 all retained current-enrollment columns. Wrong keys, altered records, stale

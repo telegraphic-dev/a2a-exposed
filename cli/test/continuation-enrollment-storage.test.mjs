@@ -68,7 +68,7 @@ test('noninitial plans require exact retained current signer bytes and identity'
 });
 test('retained identity cannot be updated, deleted or replaced',t=>{
  const f=fixture(t);retain(f);const row=f.db.prepare('SELECT * FROM continuation_enrollment_plans').get(),keys=Object.keys(row);
- assert.throws(()=>retain(f));assert.throws(()=>f.db.exec('UPDATE continuation_enrollment_plans SET rowid=rowid'));assert.throws(()=>f.db.exec('DELETE FROM continuation_enrollment_plans'));
+ assert.throws(()=>retain(f));assert.throws(()=>f.db.exec('UPDATE continuation_enrollment_plans SET expires_ms=expires_ms+1'));assert.throws(()=>f.db.exec('DELETE FROM continuation_enrollment_plans'));
  assert.throws(()=>f.db.prepare(`INSERT OR REPLACE INTO continuation_enrollment_plans(${keys.join(',')}) VALUES(${keys.map(()=>'?').join(',')})`).run(...Object.values(row)));
  assert.equal(count(f),1);assert.deepEqual(read(f),f.plan);
 });
@@ -132,4 +132,10 @@ test('invalid UTF-8 in retained current enrollment refuses even when decoded tex
  const bytes=Buffer.from(f.signer.canonical_root),at=bytes.indexOf(Buffer.from('\uFFFD'));
  f.db.prepare('UPDATE continuation_signer_enrollments SET canonical_root=CAST(? AS TEXT)').run(Buffer.concat([bytes.subarray(0,at),Buffer.from([255]),bytes.subarray(at+3)]));
  refuses(()=>read(f));
+});
+test('a fresh plan identity cannot replace retained history through an explicit rowid collision',t=>{
+ const f=fixture(t);retain(f);assert.equal(f.db.prepare('PRAGMA recursive_triggers').get().recursive_triggers,0);
+ const stored=f.db.prepare('SELECT * FROM continuation_enrollment_plans').get(),keys=Object.keys(stored),values={...stored,id:id(99)};
+ assert.throws(()=>f.db.prepare(`INSERT OR REPLACE INTO continuation_enrollment_plans(rowid,${keys.join(',')}) VALUES(1,${keys.map(()=>'?').join(',')})`).run(...Object.values(values)));
+ assert.equal(count(f),1);assert.deepEqual(read(f),f.plan);
 });

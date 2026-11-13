@@ -46,7 +46,7 @@ export function installContinuationProvenanceTables(db){
    record TEXT NOT NULL CHECK(length(CAST(record AS BLOB)) BETWEEN 2 AND 1048576),
    storage_mac TEXT NOT NULL CHECK(${digest('storage_mac')}),
    CHECK((operation='initial' AND current_signer_id IS NULL) OR (operation IN ('replace','remove') AND current_signer_id IS NOT NULL))
-  ) STRICT;
+  ) STRICT, WITHOUT ROWID;
   CREATE TABLE continuation_decision_receipts(
    decision_id TEXT PRIMARY KEY CHECK(${uuid('decision_id')}),
    enrollment_id TEXT NOT NULL CHECK(${uuid('enrollment_id')}),
