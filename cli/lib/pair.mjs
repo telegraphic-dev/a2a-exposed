@@ -322,26 +322,38 @@ async function tokenWorks(base, card, token) {
 }
 
 export async function connect(target, o) {
+ const sealed = o["sealed-key-id"] ? await import("./sealed-keys.mjs") : null;
+ if (sealed) { sealed.gate(); await sealed.selected(o["sealed-key-id"]); }
 	const emit = (obj, text) => (o.json ? console.log(JSON.stringify(obj)) : console.error(text));
 	if (o.alias !== undefined && !/^[A-Za-z0-9_-]{1,32}$/.test(o.alias)) die("--alias must be [A-Za-z0-9_-]{1,32}");
 	const replace = !!(o.replace || o.force);
 	const { base, card, ep } = await discover(target);
+ const preparedSealed = sealed ? await sealed.prepareConnect(o["sealed-key-id"], base, card) : null;
 	const alias = o.alias || slug(card && card.name) || slug(new URL(base).hostname.split(".")[0]) || "peer";
 	const peers = C.loadPeers();
+	if (peers[alias]?.sealed && !preparedSealed) die("This peer has pinned encryption keys; resume with --sealed-key-id from keys status --json. No plaintext re-pairing is allowed.");
 	const tokenEnv = (peers[alias] && peers[alias].token_env) || C.peerTokenVar(alias);
 	if (peers[alias] && peers[alias].url !== base) die(`peer alias "${alias}" is already used for ${peers[alias].url}; pass --alias <another>`);
 	const peerName = (card && card.name) || base;
+ if (preparedSealed) {
+  const { api } = await sealed.selected(preparedSealed.id), store = new api.LocalState(C.CONFIG_DIR);
+  try {
+   const current = store.inspect(alias).current;
+   if (current && (current.localId !== preparedSealed.id || current.peerEndpoint !== preparedSealed.endpoint || api.canonicalJSON(current.bundle) !== api.canonicalJSON(preparedSealed.peerBundle))) die("Peer keys changed; communication is held. This draft does not approve replacement keys.");
+  } finally { store.close(); }
+ }
 	// the exact command to run again: same target, same alias (also when it was derived), same flags
 	const rerun = (extra = {}) => {
 		const f = { "no-wait": !!o["no-wait"], ...extra };
-		return [CLI, "connect", shq(target), "--alias", alias, o.name ? `--name ${shq(o.name)}` : "", replace ? "--replace" : "", f["no-wait"] ? "--no-wait" : "", o.json ? "--json" : ""].filter(Boolean).join(" ");
+		return [CLI, "connect", shq(target), "--alias", alias, o.name ? `--name ${shq(o.name)}` : "", replace ? "--replace" : "", f["no-wait"] ? "--no-wait" : "", o.json ? "--json" : "", o["sealed-key-id"] ? `--sealed-key-id ${shq(o["sealed-key-id"])}` : ""].filter(Boolean).join(" ");
 	};
 	const oldLabel = peers[alias] && peers[alias].paired && peers[alias].paired.label;
 
 	let st = loadState(alias);
 	if (st && st.base !== base) { dropState(alias); st = null; }
 	const resumed = !!st;
-	if (st && Date.now() >= st.expiresAt) {
+ if (st && (!!st.sealed !== !!preparedSealed || st.sealed && JSON.stringify(st.sealed) !== JSON.stringify(preparedSealed))) die("Pairing options or public keys changed. Resume with the original key ID and unchanged peer card; no new request was created.");
+	if (st && !st.redemption && Date.now() >= st.expiresAt) {
 		// never start a new request silently: a new code means a new approval prompt for the peer's owner
 		dropState(alias);
 		die(`the earlier pairing request to ${peerName} (code ${st.userCode}) expired before it was approved; nothing was stored.
@@ -360,13 +372,15 @@ A different agent at the same URL? Pass another --alias.`);
 		`Resuming the pairing request to ${peerName} (code ${st.userCode}, link ${st.verificationUriComplete}).`);
 	else {
 		const own = baseUrl();
-		const sentCard = cardUrlToSend(o["card-url"], own, o.json);
+		const sentCard = preparedSealed ? preparedSealed.localBundle.cardUrl : cardUrlToSend(o["card-url"], own, o.json);
+  if (preparedSealed && o["card-url"] && o["card-url"] !== sentCard) die("--card-url differs from the selected local key; inspect keys status --json.");
 		// The name is the card this request actually names. --card-url (a Tailnet card, before a public
 		// deployment exists) wins. With no override, read this deployment's card, including an http one.
 		const nameUrl = sentCard || (!o["card-url"] && /^https?:\/\//.test(own || "") ? `${own.replace(/\/$/, "")}/.well-known/agent-card.json` : "");
 		const params = { client_name: pairingClientName({ explicit: o.name, cardName: await readCardName(nameUrl), agentName: C.get("A2A_AGENT_NAME"), workerName: C.get("A2A_WORKER_NAME"), ownUrl: own }), client_id: C.get("A2A_WORKER_NAME") || alias };
-		const identity = await publicIdentityForConnect();
+		const identity = preparedSealed ? null : await publicIdentityForConnect();
 		if (identity) params.agent_identity = identity;
+  if (preparedSealed) Object.assign(params, preparedSealed.params);
 		if (sentCard) params.agent_card_url = sentCard;
 		// replacing: present the old token, so a peer that supports it swaps the token under the same label (no orphan)
 		const r = await postForm(ep.device, params, replace && oldToken ? oldToken : null);
@@ -379,8 +393,9 @@ A different agent at the same URL? Pass another --alias.`);
 		st = { base, alias, device: ep.device, token: ep.token, deviceCode: r.data.device_code, userCode: r.data.user_code,
 			verificationUri: r.data.verification_uri || "", verificationUriComplete: r.data.verification_uri_complete || r.data.verification_uri || "",
 			interval: Math.max(1, Number(r.data.interval) || 5), expiresAt: Date.now() + (Number(r.data.expires_in) || 3600) * 1000,
-			replacesLabel: r.data.replaces_label || null, replacing: replace && !!oldToken };
+			replacesLabel: r.data.replaces_label || null, replacing: replace && !!oldToken, ...(preparedSealed ? { sealed: preparedSealed } : {}) };
 		saveState(alias, st); // chmod 600: the device code is a bearer secret until it is redeemed
+  if (preparedSealed) emit({ status: "key_comparison", safety_code: preparedSealed.safetyPreview, verification: "tofu", independently_verified: false, encrypted_traffic: false }, `Local safety code: ${preparedSealed.safetyPreview}\nTrust on first use; not independently verified. Compare through another trusted channel. Encrypted traffic remains disabled.`);
 		const mins = Math.round((st.expiresAt - Date.now()) / 60000);
 		const swap = !st.replacing ? "" : st.replacesLabel
 			? ` On approval the peer replaces our token "${st.replacesLabel}" (the old one stops working).`
@@ -394,13 +409,20 @@ A different agent at the same URL? Pass another --alias.`);
 Show this code and link to your human. They confirm the code with the owner of ${peerName}, who approves it on that page (expires in ${mins} minutes).${swap}`);
 	}
 
-	const finish = (r) => {
+	const finish = async (r) => {
+  if (st.sealed) {
+   const { api } = await sealed.selected(st.sealed.id);
+   if (api.canonicalJSON(r.data.sealed_peer_bundle) !== api.canonicalJSON(st.sealed.peerBundle)) die("Pairing key readback differs. No peer token or pin was installed; preserve the original request.");
+   st.redemption = r.data; saveState(alias, st);
+   const pinned = await sealed.pinPairing({ id: st.sealed.id, peer: alias, bundle: st.sealed.peerBundle, localBundle: st.sealed.localBundle, endpoint: st.sealed.endpoint });
+   emit({ status: "keys_pinned", ...pinned }, `Keys pinned for ${alias}. Safety code: ${pinned.safety_code}\nTrust on first use; not independently verified. Encrypted traffic remains disabled.`);
+  }
 		if (r.data.token_type && !/^bearer$/i.test(r.data.token_type)) die(`unexpected token_type ${r.data.token_type}`);
 		C.saveConfig({ [tokenEnv]: r.data.access_token });
 		// a stale PEER_<ALIAS>_TOKEN in the environment would keep winning over the token just saved (on stderr, also with --json)
 		const envOverrides = warnPeerTokenEnv(tokenEnv, true);
 		const label = r.data.peer_label || null;
-		peers[alias] = { url: base, token_env: tokenEnv, token_stored: true, paired: { userCode: st.userCode, at: new Date().toISOString(), ...(label ? { label } : {}) } };
+		peers[alias] = { url: base, token_env: tokenEnv, token_stored: true, ...(st.sealed ? { sealed: { localId: st.sealed.id, keyId: st.sealed.peerBundle.keyId, policy: "required" } } : {}), paired: { userCode: st.userCode, at: new Date().toISOString(), ...(label ? { label } : {}) } };
 		C.savePeers(peers);
 		dropState(alias);
 		const orphan = st.replacing && !r.data.replaced ? (st.replacesLabel || oldLabel || null) : null;
@@ -419,6 +441,7 @@ Send a message: ${CLI} send --to ${alias} --text "..."`);
 		die(`pairing with ${peerName} failed: ${r.data.error_description || err || `HTTP ${r.status}`}`);
 	};
 
+ if (st.redemption) return finish({ data: st.redemption });
 	if (o["no-wait"]) {
 		// a resumed request checks once, so `--no-wait` can be re-run to see whether it was approved
 		if (resumed) {

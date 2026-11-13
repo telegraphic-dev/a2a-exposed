@@ -29,6 +29,22 @@ Usage: npx -y a2a-exposed@latest <command> [options]
 Setup options: --skip-install skips dependency installation when dependencies already exist.
 Local option and missing-deployment errors appear before Node version guidance; deployment still requires Node 22.18+.
 
+Local key pairing draft (disabled by default; no encrypted traffic yet):
+  keys stores --json          list optional local key stores before init
+  keys init --store file|keychain --card-url URL --json
+                                fresh local keys; keychain requires --allow-os-consent
+  keys status --json          list local key IDs and public bundles; no private keys
+  keys publish --id ID --json publish only the selected public bundle to this inbox
+  connect URL --sealed-key-id ID --alias ALIAS --no-wait --json
+                                existing human pairing approval binds the exact public bundles
+  keys pairings --json        list active approved inbound pairings before pinning
+  keys pin --id ID --peer LABEL --user-code CODE --json
+                                import that exact approval as trust on first use (TOFU)
+  keys code --id ID --peer ALIAS --json
+                                compute safety code locally; compare through another trusted channel
+  Install matching optional @a2a-exposed/encryption in the config directory first.
+  A2A_SEALED_ENABLED=1 is reserved for approved local tests until enablement approval.
+
 Hosted setup:
   hosted capabilities --json   list setup scopes, wake presets and service capabilities
                                 unsupported/404: check --control-url; use dashboard or hosted MCP with human confirmation
@@ -518,6 +534,7 @@ const deployOpts = {
 	"workers-dev": B, "workers-dev-subdomain": S, "upstream-token-stdin": B, "no-upstream-token": B, "event-secret-stdin": B,
 };
 const SPEC = {
+ keys: { id: S, peer: S, store: S, "card-url": S, "user-code": S, "allow-os-consent": B, json: B },
 	hosted: { url: S, version: S, "upstream-token-file": S, "upstream-token-env": S, "access-client-id-file": S, "access-client-id-env": S, "access-client-secret-file": S, "access-client-secret-env": S, name: S, json: B, agent: S, hostname: S, origin: S, path: S, preset: S, "control-url": S, "secret-file": S, "secret-env": S, "secret-from": S, "hermes-home": S, route: S, "token-file": S, "no-run": B },
 	init: { ...deployOpts, ...tunnelOpts, tunnel: B, "dry-run": B, json: B }, deploy: deployOpts,
 	wake: { ...deployOpts, "local-url": S, json: B, url: S, "reference-file": S, "reference-env": S, clear: B, version: S, agent: S, "control-url": S, "key-header": S, "key-file": S, "key-env": S, "key-stdin": B, "hmac-secret-file": S, "hmac-secret-env": S, "access-client-id-file": S, "access-client-id-env": S, "access-client-secret-file": S, "access-client-secret-env": S }, tunnel: { ...tunnelOpts, preset: S, "hermes-route": S, "hmac-secret-stdin": B, json: B },
@@ -534,7 +551,7 @@ const SPEC = {
 	export: { sql: B },
 	relay: { agent: S, "control-url": S, preset: S, "key-header": S, "key-file": S, "key-env": S, "key-stdin": B, "hmac-secret-file": S, "hmac-secret-env": S, "receipt-file": S, generation: S, "connector-id": S, confirm: B, clear: B, "forward-headers": S, "ingress-token-file": S, "local-headers-file": S, "card-url": S, "token-file": S, "token-env": S, "local-url": S, url: S, json: B, "config-version": S },
 	upstream: { json: B },
-	connect: { alias: S, name: S, json: B, "no-wait": B, replace: B, force: B, "card-url": S },
+	connect: { "sealed-key-id": S, alias: S, name: S, json: B, "no-wait": B, replace: B, force: B, "card-url": S },
 	// Internal hosted-service integration commands. Keep out of public help until the production flow is available.
 	signup: { "control-url": S, json: B },
 	login: { "control-url": S, json: B, machine: S, scopes: S },
@@ -592,6 +609,13 @@ export async function main(argv) {
 	const { values: o, positionals: p } = parsed;
 	if (o["worker-dir"] !== undefined) o.dir = o["worker-dir"];
 	switch (name) {
+  case "keys": {
+   try { return await (await import("./sealed-keys.mjs")).command(p, o); }
+   catch (error) {
+    if (error.constructor?.name === "LocalStateError" || error.name === "EncryptionError") throw new CliError(`${error.code}: ${error.next || "Key verification failed. Run keys status --json; preserve the original keys and pairing."}`);
+    throw error;
+   }
+  }
 		case "env":
 			if (p.length) throw new CliError("env takes no arguments; use --config-dir DIR to select a directory");
 			return console.log(o.json ? JSON.stringify({ A2A_CONFIG_DIR: C.CONFIG_DIR }) : `export A2A_CONFIG_DIR=${C.shellQuote(C.CONFIG_DIR)}`);

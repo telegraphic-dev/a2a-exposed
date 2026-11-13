@@ -529,3 +529,12 @@ shared with MCP. For removal, prepare a fresh receipt with
 `relay wake prepare --agent NAME --config-version N --clear --confirm --receipt-file NEW_FILE --json`,
 then use `set_wake` with `clear: true`, `confirmed: true` and that `secretReference`.
 No raw application or connector credential belongs in MCP or chat.
+
+## Local key pairing
+
+The disabled local-key path provides `keys stores`, `keys init`, `keys status`,
+`keys publish`, `keys pairings`, `keys pin` and `keys code`, all with JSON output.
+`connect --sealed-key-id ID` binds local public keys to existing human pairing
+approval. See [local keys and pairing](local-key-pairing.md) for exact inputs,
+optional package installation, custody choices and refusal behavior. Encrypted
+message traffic remains disabled.

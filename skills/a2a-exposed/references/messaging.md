@@ -76,3 +76,11 @@ Reading an inbox page marks returned reply snapshots seen and clears matching pe
 Direct A2A replies marked `a2a.exposed/reply-delivery` are stored as completed tasks without a new-work wake. Read them in `history` or `inbox --all`; they do not need an answer.
 
 With the self-hosted MCP connector, `poll_outbound` reads a sent task and `cancel_outbound` asks the recorded peer to cancel it. Both use the peer token stored on the endpoint and record the returned state in history. The peer can refuse cancellation; ask the human before canceling consequential work. JSON-RPC errors show the code and message without a misleading HTTP 200.
+
+Local key pairing uses `connect --sealed-key-id ID`; first list local IDs with
+`keys status --json`. It retains existing human device approval and pins exact
+public bundles as trust on first use. `keys pairings --json` lists approved inbound
+requests before `keys pin --id ID --peer LABEL --user-code CODE --json`.
+`keys code --id ID --peer ALIAS --json` computes a local comparison code.
+The path remains disabled and does not yet send encrypted messages. See
+[local keys and pairing](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/local-key-pairing.md).

@@ -19,6 +19,7 @@ import m0014 from "../../../worker/migrations/0014_peer_address.sql?raw";
 import m0015 from "../../../worker/migrations/0015_outbound_source.sql?raw";
 import m0016 from "../../../worker/migrations/0016_wake_busy.sql?raw";
 import m0017 from "../../../worker/migrations/0017_wake_routing.sql?raw";
+import m0018 from "../../../worker/migrations/0018_sealed_pairing.sql?raw";
 
 export type { InboxMigration };
 
@@ -40,4 +41,5 @@ export const INBOX_MIGRATIONS: InboxMigration[] = [
 	{ name: "0015_outbound_source.sql", sql: m0015 },
 	{ name: "0016_wake_busy.sql", sql: m0016 },
 	{ name: "0017_wake_routing.sql", sql: m0017 },
+ { name: "0018_sealed_pairing.sql", sql: m0018 },
 ];

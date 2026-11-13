@@ -342,6 +342,7 @@ async function logHistory(ctx, entry) {
 }
 
 export async function send(o) {
+ if (fs.existsSync(C.CONFIG_DIR + "/encryption/state.sqlite") || o.to && C.loadPeers()[o.to]?.sealed?.policy === "required") die("This pairing requires local encrypted transport, which is not enabled in this draft. No plaintext was sent.");
 	if (!o.to) die("--to required");
 	// The callback authenticates against the token saved through the owner API.
 	if (o.push && !ownerConfigured()) die("--push needs A2A_BASE_URL and A2A_OWNER_TOKEN (your Worker); configure both or omit --push and poll instead");

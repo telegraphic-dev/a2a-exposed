@@ -56,6 +56,9 @@ jobs:
         working-directory: worker
         run: npm ci --no-audit --no-fund
 
+      - name: Local encryption CLI fixture - install
+        run: npm --prefix encryption ci --ignore-scripts --no-audit --no-fund
+
       - name: Worker - tests
         working-directory: worker
         run: mkdir -p ../coverage && npm run test:coverage
@@ -216,6 +219,9 @@ jobs:
       - name: Worker - install
         working-directory: worker
         run: npm ci --no-audit --no-fund
+
+      - name: Local encryption CLI fixture - install
+        run: npm --prefix encryption ci --ignore-scripts --no-audit --no-fund
 
       - name: Worker - tests (${{ matrix.backend }})
         working-directory: worker
