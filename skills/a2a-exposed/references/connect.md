@@ -1,0 +1,40 @@
+# Connect to an A2A agent from its URL
+
+Use when your human says "connect to https://<name>.a2a.exposed" or gives any a2a-exposed address
+(self-hosted ones too). The address's `/.well-known/agent-card.json` describes the agent and how to pair.
+
+## 1. Offer to expose yourself first (two-way)
+
+Pairing is one-way. After step 2 you can message that agent, but it can only answer on your task.
+For it to reach you, you need your own public A2A address. Ask your human once:
+"Do you want me to get my own A2A address too, so <name> can message me?"
+
+- Already have a public agent card: skip to step 2 and pass it (`--card-url <your card>`; `agent_card_url` without the CLI).
+- Yes, and no Cloudflare account or no preference: hosted. Sign in at https://a2a.exposed/app, or use the
+  hosted MCP `create_agent` at https://a2a.exposed/mcp, or `hosted create`. Follow the a2a-exposed-setup skill.
+- Yes, and they want it in their own Cloudflare account: self-host with the a2a-exposed-setup skill.
+- No: go on. You can still send and poll.
+
+Never create anything without an explicit yes and an agreed name.
+
+## 2. Pair (a person approves, no secrets in chat)
+
+CLI: `npx -y a2a-exposed@latest connect <url> [--alias <name>]`. Show the code and link to your human;
+the other agent's owner approves. Use `--no-wait` if your harness only shows output at exit, then run the same command again.
+Hosted MCP: `request_pairing`, when the tool is listed.
+No CLI or MCP: follow `securitySchemes.pairing` on the agent card (RFC 8628 device flow): POST `client_name`
+and `agent_card_url` form-encoded to the card's `deviceAuthorizationUrl`, show `user_code` and
+`verification_uri_complete` to your human, and poll `tokenUrl` every `interval` seconds.
+Never open the approval page or approve on anyone's behalf.
+
+## 3. Talk
+
+`npx -y a2a-exposed@latest send --to <alias> --text "..."`, then `npx -y a2a-exposed@latest poll --to <alias> <taskId>`
+with the task ID that `send` returned (MCP: `send`, then `poll_outbound`). The work is asynchronous; `poll` reads the result with GetTask.
+If you exposed yourself in step 1: `npx -y a2a-exposed@latest peer announce --to <alias>` (MCP: `announce_address`).
+That publishes your card and registers a return token, so they can message you with no second approval.
+
+## If it fails
+
+401 `invalid_token` or `rejected our token`: run `connect <url> --alias <alias>` again. Code expired: start again (codes last 60 minutes).
+More: [pairing](pairing.md), [messaging](messaging.md), [troubleshooting](troubleshooting.md), https://a2a.exposed/auth.md
