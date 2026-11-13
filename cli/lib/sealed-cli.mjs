@@ -89,7 +89,7 @@ export async function openRows(rows, o, { historical = false } = {}) {
   } catch (error) {
    const codes = { replay: "too_old", key_lost: "key_missing", key_unknown: "key_missing", key_changed: "key_changed", no_pin: "no_pin", key_store_consent: "os_consent_required", binding_mismatch: "binding_mismatch", plaintext_from_pinned_peer: "plaintext_from_pinned_peer" };
    const reason = process.env.A2A_SEALED_ENABLED !== "1" ? "encryption_disabled" : codes[error?.code] || "verification_failed";
-   const next = reason === "os_consent_required" ? "Re-run with --allow-os-consent when a human can answer the OS authorization prompt." : "Preserve the original keys and pairing; inspect keys status --json. No plaintext fallback.";
+   const next = reason === "os_consent_required" ? "Re-run with --allow-os-consent when a human can answer the OS authorization prompt." : reason === "too_old" ? "Read this context with history CONTEXT --json for verified historical content; this does not admit live work." : reason === "encryption_disabled" ? "Local encryption needs the approved test flag; use a separate --config-dir for ordinary sends. No plaintext fallback." : "Preserve the original keys and pairing; inspect keys status --json. No plaintext fallback.";
    // Do not echo unverified text, data or provider errors, even in JSON mode.
    out.push({ taskId: row.taskId ?? row.task_id ?? null, contextId: row.contextId ?? row.context_id ?? null, from: peer, encrypted: true, locallyOpened: false, reason, next, text: `[encrypted message unavailable: ${reason}]` });
    process.exitCode = 1;

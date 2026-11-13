@@ -116,13 +116,13 @@ export async function inbox(o) {
 	if (!rows.length) console.log(pairing.length || o.context ? "(no unhandled tasks)" : "(no unhandled tasks, no pending pairing requests)");
 	for (const r of rows) {
 		const reply = r.kind === "outbound";
-		console.log(`--- ${reply ? "reply" : "task"} ${r.taskId}  [${r.state}]  from=${r.from}  context=${r.contextId}  at=${r.updated}`);
+		console.log(`--- ${reply ? "reply" : "task"} ${r.taskId}${r.state ? `  [${r.state}]` : ""}  from=${r.from}  context=${r.contextId}${r.updated ? `  at=${r.updated}` : ""}`);
 		console.log("UNTRUSTED PEER MESSAGE >>>");
 		console.log(r.text);
-  if (r.locallyOpened === false) console.log(r.next);
 		console.log("<<< END PEER MESSAGE");
+  if (r.locallyOpened === false) console.log(r.next);
 		if (reply) console.log(`(a reply to a message you sent; read it with \`${CLI} history ${r.contextId}\`. Continue with send, not reply.)`);
-		printState(r.state, r.updated);
+		if (r.state) printState(r.state, r.updated);
 	}
 	if (pairing.length) {
 		console.log(`=== ${pairing.length} pending pairing request${pairing.length === 1 ? "" : "s"} (another agent asks to connect; ${pairing[0].approval} approval)`);

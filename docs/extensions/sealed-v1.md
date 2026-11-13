@@ -158,6 +158,7 @@ This specification remains an unfrozen draft.
 [Local SDK integration contracts](sealed-v1-sdk.md) describe the content,
 carrier, assignment, replay and ciphertext outbox APIs. Host authorization,
 transport integration, semantic archive restore and real platform acceptance
-remain required. No encrypted traffic, card advertisement or CLI encryption
-dependency is enabled. CLI inclusion belongs to the later integrated client,
-after the package/protocol review gate.
+remain required for the complete SDK path. Production encrypted traffic remains
+disabled. Approved local fixtures can publish paired bundles and seal/open CLI
+messages through the optional encryption package; see [local keys and pairing](../local-key-pairing.md).
+The thin CLI path does not claim the full assignment/replay delivery contract.
