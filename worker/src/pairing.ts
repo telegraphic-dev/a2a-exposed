@@ -265,12 +265,13 @@ export function devicePage(m: PageModel, nonce: string): string {
 	return pageShell(`Connect an agent to ${m.agentName}`, nonce, `${notice}${details}${form}${oidcForm}${ask}`);
 }
 
-/** The shared page frame: no scripts, no external assets, one nonce'd style block. `title` is escaped here. */
+/** The shared page frame: no scripts, no external assets, one nonce'd style block. `title` is escaped here.
+ * The heading and content sit in one `<main>` landmark so screen readers can jump to the page content. */
 export function pageShell(title: string, nonce: string, body: string, head = ""): string {
 	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer">${head}
 <title>${esc(title)}</title><style nonce="${nonce}">
 ${pageStyle()}
-</style></head><body><h1>${esc(title)}</h1>${body}</body></html>`;
+</style></head><body><main><h1>${esc(title)}</h1>${body}</main></body></html>`;
 }
 
 export type LandingModel = {
