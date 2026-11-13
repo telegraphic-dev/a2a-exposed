@@ -1058,3 +1058,32 @@ CAS in one transaction, enforce epoch rotation and recheck after awaits. No
 command or authority initializer calls this installer; schema adoption, current
 enrollment selection, human approval, persistence wiring and admission remain
 unimplemented. Tests use synthetic private fixtures and make no activation claim.
+
+### Disabled authenticated provenance storage
+
+The internal `cli/lib/continuation-provenance-storage.mjs` primitives read retained
+receipts and prepare an intent plus its signed receipt in one caller-owned
+transaction. Preparation verifies the canonical signature, authenticated intent,
+original validity window and exact stored enrollment before writing. It inserts
+and consumes the attestation with the intent, stores the receipt, then reads and
+verifies the complete result. A receipt insertion or readback failure rolls back
+that entire savepoint while preserving earlier caller work. The outer transaction
+remains uncommitted; repeating preparation refuses instead of replacing history.
+
+Reads authenticate every intent/attestation/member row through the existing
+codec, reverify the actual stored signature and compare every stored enrollment
+column with the supplied current enrollment. Missing or synthetic provenance,
+changed signature/key/decision/bindings, expiry and clock regression refuse.
+These are fresh-checkpoint reads; this interface does not implement live admission
+beyond the ceremony deadline. Its sensitive return values are private storage
+data, not public diagnostics or proof of an actual human ceremony.
+
+The future anchored authority reader must select the current enrollment, rather
+than accepting a retained enrollment identity from a request. The future writer
+must perform its authority compare-and-swap in the same outer transaction and
+supply source, namespace, epoch, SDK readiness and lock-order checks. These storage
+primitives cannot establish that trust boundary. They do not create enrollments,
+select a signer, open a physical store, stamp/adopt a schema, commit authority,
+change suspension, make grants eligible or send traffic. No command, initializer
+or runtime authority caller imports them. Human custody/ceremony, anchored schema
+and adoption, eligibility/admission and lifecycle acceptance remain unfinished.
