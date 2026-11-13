@@ -1155,6 +1155,39 @@ existing store nor supplies the separately versioned anchored authority adoption
 current-signer selection, receipt consumption or human adapter. Encryption stays
 disabled.
 
+### Disabled schema-4 authority/provenance foundation
+
+`cli/lib/continuation-provenance-authority.mjs` installs a separate schema-4
+format into an empty version-zero database in a caller-held transaction. It
+combines the retained continuation, enrollment-plan, signer and decision-receipt
+tables with an authority table. Installation creates no authority or signer row,
+opens no file and provides no migration, adoption or reset. DDL and the version
+stamp share one savepoint; failure rolls them back without ending the caller's
+transaction. A failed rollback reports uncertainty for the caller to preserve.
+
+The authority starts suspended with no current signer, pending intent or active
+set. A composite foreign key binds its current signer to the retained enrollment's
+configuration, canonical root and epoch. A structural signer/epoch change requires
+an exact one-step revision increase, a different epoch, no old or new pending
+intent, and a suspended result with no active set. Pending and active pointers
+require the matching retained decision receipt; an active pointer also requires
+the exact eligible intent/set binding. Authority identity is retained and has no
+hidden row identifier through which replacement could evict it.
+
+The separate read-only inventory assertion checks version 4 and the complete
+SQLite table/index/trigger text against an independent in-memory installation.
+It rejects TEMP/attached namespaces, foreign-keys-off, trusted-schema-on,
+ignored CHECK constraints and writable-schema mode. It does not authenticate
+rows, select a trusted signer, prove human approval or anchor a physical file.
+Synthetic SQL fixtures can satisfy these structural checks without a valid
+signature; future readers must still authenticate receipts and retained plans.
+
+No physical initializer, authority reader, command, privileged adapter or grant
+path imports this module. Schema-2/3 behavior stays separate. Authenticated
+schema-4 reading and current-signer selection, plan consumption, enrollment CAS,
+all-writer invalidation, adoption audit, human ceremony and eligibility remain
+unimplemented. Existing schema-3 history is never promoted by these helpers.
+
 ### Disabled exact fresh provenance inventory
 
 The internal `cli/lib/continuation-provenance-inventory.mjs` check compares the
