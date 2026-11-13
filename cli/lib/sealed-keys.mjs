@@ -8,7 +8,7 @@ import { baseUrl } from "./commands.mjs";
 export const URI = "https://a2a.exposed/ext/sealed/v1";
 const fail = message => { throw new CliError(message); };
 export function gate() {
- if (process.env.A2A_SEALED_ENABLED !== "1") fail("Local encryption is disabled. This draft requires maintainer enablement approval; ordinary commands remain server-readable.");
+ if (process.env.A2A_SEALED_ENABLED !== "1") fail("Local encryption is disabled. A2A_SEALED_ENABLED=1 is reserved for approved local tests; see docs/local-key-pairing.md.");
 }
 export async function sdk() {
  gate();
@@ -24,7 +24,7 @@ async function owner(method, route, body) {
  const base = baseUrl(), token = C.get("A2A_OWNER_TOKEN");
  if (!base || !token) fail("Select a configured inbox with --config-dir; A2A_BASE_URL and A2A_OWNER_TOKEN are required.");
  const r = await httpJson(base + route, { method, body, headers: { authorization: `Bearer ${token}` } });
- if (r.status !== 200) fail(`Local key pairing request failed (HTTP ${r.status}); check the inbox flag and matching Worker version. No private key was sent.`);
+ if (r.status !== 200) fail(`Local key pairing request failed (HTTP ${r.status}): ${r.data?.error || "request refused"}.${r.status === 404 ? " Check the inbox flag and matching Worker version." : ""} No private key was sent.`);
  return r.data;
 }
 export async function selected(id) {
@@ -45,7 +45,7 @@ export async function pinPairing({ id, peer, bundle, localBundle, endpoint }) {
  try {
   const old = store.inspect(peer);
   if (old.current) {
-   if (old.current.localId !== id || old.current.peerEndpoint !== endpoint || api.canonicalJSON(old.current.bundle) !== api.canonicalJSON(bundle)) fail("Peer keys changed. Communication is held; key replacement is not supported by this draft.");
+   if (old.current.localId !== id || old.current.peerEndpoint !== endpoint || api.canonicalJSON(old.current.bundle) !== api.canonicalJSON(bundle)) fail("The peer's published keys changed. Ask its owner whether they changed them; do not continue until they confirm. Communication is held; key replacement is not supported yet.");
   } else {
    const proposal = await store.propose({ peer, localId: id, bundle, peerEndpoint: endpoint, pairingIdentity: bundle.identityKey, expectedCurrent: old.current_digest, policy: "required", verification: "tofu" });
    // This adapter is called only after successful device redemption or an explicit
@@ -59,7 +59,7 @@ export async function prepareConnect(id, base, card) {
  const { api, bundle } = await selected(id);
  const extensions = card?.capabilities?.extensions;
  const matches = Array.isArray(extensions) ? extensions.filter(e => e.uri === URI) : [];
- if (matches.length !== 1) fail("Peer does not advertise the local-key pairing draft; nothing was requested. No plaintext fallback.");
+ if (matches.length !== 1) fail("Peer does not advertise the local-key pairing protocol; nothing was requested. No plaintext fallback.");
  const other = matches[0].params?.pairingBundle;
  try { await api.verifyBundle(other, { cardUrl: new URL("/.well-known/agent-card.json", base).href, identityKey: other?.identityKey }); }
  catch { fail("Peer public-key verification failed. Preserve the original pairing; no token was redeemed and no plaintext fallback is allowed."); }
@@ -100,7 +100,7 @@ export async function command(p, o) {
    if (action === "init") result = await store.initialize({ store: o.store, cardUrl: o["card-url"], allowOsConsent: o["allow-os-consent"] === true });
    if (action === "status") result = store.status();
    if (action === "code") {
-    if (!o.id || !o.peer) fail("keys code requires --id from keys status --json and --peer from keys pairings --json.");
+    if (!o.id || !o.peer) fail("keys code requires --id from keys status --json and --peer ALIAS (connecting side) or LABEL from keys pairings --json (approving side).");
     result = store.safetyCode(o.id, o.peer);
    }
   } finally { store.close(); }

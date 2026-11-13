@@ -339,7 +339,7 @@ export async function connect(target, o) {
   const { api } = await sealed.selected(preparedSealed.id), store = new api.LocalState(C.CONFIG_DIR);
   try {
    const current = store.inspect(alias).current;
-   if (current && (current.localId !== preparedSealed.id || current.peerEndpoint !== preparedSealed.endpoint || api.canonicalJSON(current.bundle) !== api.canonicalJSON(preparedSealed.peerBundle))) die("Peer keys changed; communication is held. This draft does not approve replacement keys.");
+   if (current && (current.localId !== preparedSealed.id || current.peerEndpoint !== preparedSealed.endpoint || api.canonicalJSON(current.bundle) !== api.canonicalJSON(preparedSealed.peerBundle))) die("The peer's published keys changed. Ask its owner whether they changed them; do not continue until they confirm. Communication is held; replacement keys are not supported yet.");
   } finally { store.close(); }
  }
 	// the exact command to run again: same target, same alias (also when it was derived), same flags
@@ -352,7 +352,7 @@ export async function connect(target, o) {
 	let st = loadState(alias);
 	if (st && st.base !== base) { dropState(alias); st = null; }
 	const resumed = !!st;
- if (st && (!!st.sealed !== !!preparedSealed || st.sealed && JSON.stringify(st.sealed) !== JSON.stringify(preparedSealed))) die("Pairing options or public keys changed. Resume with the original key ID and unchanged peer card; no new request was created.");
+ if (st && (!!st.sealed !== !!preparedSealed || st.sealed && JSON.stringify(st.sealed) !== JSON.stringify(preparedSealed))) die("Pairing options or public keys changed. Check the original key ID with keys status --json and ask the peer owner whether their published keys changed; do not continue until they confirm. No new request was created.");
 	if (st && !st.redemption && Date.now() >= st.expiresAt) {
 		// never start a new request silently: a new code means a new approval prompt for the peer's owner
 		dropState(alias);
@@ -368,6 +368,8 @@ To replace it anyway (for example after a leak), run: ${rerun({})} --replace
 A different agent at the same URL? Pass another --alias.`);
 		if (works === false && !o.json) console.error(`note: peer "${alias}" rejects the stored token (HTTP 401: revoked or rotated); requesting a new one.`);
 	}
+ const mismatchNext = "If any group differs, do not use this pairing. Ask the approving inbox owner to revoke it with token revoke LABEL (select LABEL with keys pairings --json), and tell the other owner.";
+ if (preparedSealed) emit({ status: "key_comparison", safety_code: preparedSealed.safetyPreview, verification: "tofu", independently_verified: false, encrypted_traffic: false, next: mismatchNext }, `Local safety code: ${preparedSealed.safetyPreview}\nTrust on first use; not independently verified. Compare through another trusted channel. ${mismatchNext} Encrypted traffic remains disabled.`);
 	if (st) emit({ status: "authorization_pending", resumed: true, alias, user_code: st.userCode, verification_uri: st.verificationUri, verification_uri_complete: st.verificationUriComplete, expires_in: Math.round((st.expiresAt - Date.now()) / 1000) },
 		`Resuming the pairing request to ${peerName} (code ${st.userCode}, link ${st.verificationUriComplete}).`);
 	else {
@@ -395,7 +397,7 @@ A different agent at the same URL? Pass another --alias.`);
 			interval: Math.max(1, Number(r.data.interval) || 5), expiresAt: Date.now() + (Number(r.data.expires_in) || 3600) * 1000,
 			replacesLabel: r.data.replaces_label || null, replacing: replace && !!oldToken, ...(preparedSealed ? { sealed: preparedSealed } : {}) };
 		saveState(alias, st); // chmod 600: the device code is a bearer secret until it is redeemed
-  if (preparedSealed) emit({ status: "key_comparison", safety_code: preparedSealed.safetyPreview, verification: "tofu", independently_verified: false, encrypted_traffic: false }, `Local safety code: ${preparedSealed.safetyPreview}\nTrust on first use; not independently verified. Compare through another trusted channel. Encrypted traffic remains disabled.`);
+
 		const mins = Math.round((st.expiresAt - Date.now()) / 60000);
 		const swap = !st.replacing ? "" : st.replacesLabel
 			? ` On approval the peer replaces our token "${st.replacesLabel}" (the old one stops working).`
@@ -415,7 +417,7 @@ Show this code and link to your human. They confirm the code with the owner of $
    if (api.canonicalJSON(r.data.sealed_peer_bundle) !== api.canonicalJSON(st.sealed.peerBundle)) die("Pairing key readback differs. No peer token or pin was installed; preserve the original request.");
    st.redemption = r.data; saveState(alias, st);
    const pinned = await sealed.pinPairing({ id: st.sealed.id, peer: alias, bundle: st.sealed.peerBundle, localBundle: st.sealed.localBundle, endpoint: st.sealed.endpoint });
-   emit({ status: "keys_pinned", ...pinned }, `Keys pinned for ${alias}. Safety code: ${pinned.safety_code}\nTrust on first use; not independently verified. Encrypted traffic remains disabled.`);
+   emit({ status: "keys_pinned", ...pinned, next: mismatchNext }, `Keys pinned for ${alias}. Safety code: ${pinned.safety_code}\nTrust on first use; not independently verified. Compare through another trusted channel. ${mismatchNext} Encrypted traffic remains disabled.`);
   }
 		if (r.data.token_type && !/^bearer$/i.test(r.data.token_type)) die(`unexpected token_type ${r.data.token_type}`);
 		C.saveConfig({ [tokenEnv]: r.data.access_token });

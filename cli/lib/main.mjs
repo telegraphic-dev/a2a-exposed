@@ -33,6 +33,7 @@ Local key pairing draft (disabled by default; no encrypted traffic yet):
   keys stores --json          list optional local key stores before init
   keys init --store file|keychain --card-url URL --json
                                 fresh local keys; keychain requires --allow-os-consent
+                                turns off ordinary send in this config directory
   keys status --json          list local key IDs and public bundles; no private keys
   keys publish --id ID --json publish only the selected public bundle to this inbox
   connect URL --sealed-key-id ID --alias ALIAS --no-wait --json
@@ -40,8 +41,11 @@ Local key pairing draft (disabled by default; no encrypted traffic yet):
   keys pairings --json        list active approved inbound pairings before pinning
   keys pin --id ID --peer LABEL --user-code CODE --json
                                 import that exact approval as trust on first use (TOFU)
-  keys code --id ID --peer ALIAS --json
-                                compute safety code locally; compare through another trusted channel
+  keys code --id ID --peer ALIAS_OR_LABEL --json
+                                ALIAS on connecting side; LABEL from keys pairings on approving side
+                                compare safety code through another trusted channel
+  If codes differ: do not use the pairing; ask approving owner to token revoke LABEL
+  (select LABEL with keys pairings --json), and tell the other owner.
   Install matching optional @a2a-exposed/encryption in the config directory first.
   A2A_SEALED_ENABLED=1 is reserved for approved local tests until enablement approval.
 

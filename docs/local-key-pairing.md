@@ -31,7 +31,9 @@ bundles with its pending device code. The existing human pairing approval
 accepts that request. Re-run the same connect command after approval to collect
 the token and pin the peer locally. A changed or removed card bundle refuses the
 continuation; there is no plaintext fallback. Preserve pending state after an
-uncertain result, and inspect the original approval before retrying.
+uncertain result. Use keys pairings --json on the approving inbox to inspect the
+original approval. Abandoning a stuck pending request is not supported yet;
+recovery commands are tracked in #382.
 
 The receiving owner imports the approved request into their own local pins:
 
@@ -51,7 +53,9 @@ The CLI computes the same safety code on both computers from both public
 identities, key IDs and card URLs. It labels the pin **trust on first use (TOFU)**,
 with `independently_verified: false`. Hosted pairing approval alone does not prove
 that the service relayed authentic keys. Compare the complete code through a
-separate trusted channel. This change does not provide an independent-verification
+separate trusted channel. If any group differs, do not use this pairing: ask the
+approving inbox owner to revoke it with `token revoke LABEL` (select the label
+with `keys pairings --json`) and tell the other owner. This change does not provide an independent-verification
 approval ceremony or rotation command.
 
 Once a local key store exists, this intermediate change refuses ordinary `send`
@@ -63,3 +67,8 @@ Follow-ups: signer rotation #379, further approval ceremonies #380,
 quarantine/invalidation #381, uncertain-failure recovery #382, populated-store
 backup/restore #383, broader hardening scans #384. No release or deployment is
 part of the local test workflow.
+
+`connect --json` emits newline-delimited JSON, one object per step. With local
+keys, `key_comparison` precedes `authorization_pending` (also on resume), and
+`keys_pinned` precedes `connected`. Parse each line separately. For `keys code`,
+use the connecting side's ALIAS or the approving side's LABEL from `keys pairings`.

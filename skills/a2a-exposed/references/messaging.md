@@ -82,5 +82,13 @@ Local key pairing uses `connect --sealed-key-id ID`; first list local IDs with
 public bundles as trust on first use. `keys pairings --json` lists approved inbound
 requests before `keys pin --id ID --peer LABEL --user-code CODE --json`.
 `keys code --id ID --peer ALIAS --json` computes a local comparison code.
+Use the connecting side's ALIAS or the approving side's LABEL from `keys pairings`.
+Compare through a separate trusted channel. If codes differ, do not use the
+pairing: ask the approving inbox owner to `token revoke LABEL` (list labels with
+`keys pairings --json`) and tell the other owner. `keys init` turns off ordinary
+`send` in this config directory; use a separate `--config-dir` for ordinary sends.
+`connect --json` emits newline-delimited JSON, one object per step: with local
+keys, `key_comparison` then `authorization_pending`, and `keys_pinned` then
+`connected`. Parse each line separately.
 The path remains disabled and does not yet send encrypted messages. See
 [local keys and pairing](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/local-key-pairing.md).

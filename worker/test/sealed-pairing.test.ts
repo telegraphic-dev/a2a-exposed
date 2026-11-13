@@ -22,8 +22,10 @@ test("two local CLIs pin the exact human-approved bundles and refuse plaintext",
  }
  const dispatch=async(name:string,request:Request)=>{const pending:Promise<any>[]=[];const res=await worker.fetch(request,envs[name],{waitUntil:(p:Promise<any>)=>pending.push(p),passThroughOnException(){}} as any);await Promise.allSettled(pending);return res;};
  const owner=(name:string,route:string,method="GET",body?:any)=>dispatch(name,new Request(`https://${name}.example.com${route}`,{method,headers:{authorization:"Bearer dummy-owner","content-type":"application/json"},...(body===undefined?{}:{body:JSON.stringify(body)})}));
+ let publishError:{status:number,error:string}|null=null;
  const server=http.createServer(async(req,res)=>{try{
   const name=String(req.headers["x-test-agent"]);let body="";for await(const chunk of req)body+=chunk;records.push({name,path:req.url,body});
+  if(publishError && req.url==="/owner/sealed-key" && req.method==="PUT"){res.writeHead(publishError.status,{"content-type":"application/json"});res.end(JSON.stringify({error:publishError.error}));return;}
   const headers=new Headers();for(const [k,v]of Object.entries(req.headers))if(typeof v==="string"&&!["host","x-test-agent","connection"].includes(k))headers.set(k,v);
   const result=await dispatch(name,new Request(`https://${name}.example.com${req.url}`,{method:req.method,headers,...(["GET","HEAD"].includes(req.method!)?{}:{body})}));
   res.writeHead(result.status,Object.fromEntries(result.headers));res.end(await result.text());
@@ -43,10 +45,22 @@ test("two local CLIs pin the exact human-approved bundles and refuse plaintext",
   const pub=await cli(name,["keys","publish","--id",data.id,"--json"]);assert.equal(pub.code,0,pub.err);
   assert.equal((await owner(name,"/owner/identity").then(r=>r.json())as any).publicKey,null);
  }
+ for(const error of [{status:409,error:"sealed key already exists; rotation is not supported"},{status:400,error:"send public fields only"},{status:404,error:"not found"}]){
+  publishError=error;const result=await cli("alice",["keys","publish","--id",ids.alice,"--json"]);
+  assert.equal(result.code,1);assert.ok(result.err.includes(error.error),result.err);
+  assert.equal(result.err.includes("matching Worker version"),error.status===404);
+ }
+ publishError=null;
+ const storeOnly=await cli("alice",["send","--to","unpaired","--text","never sent"],false);
+ assert.equal(storeOnly.code,1);assert.match(storeOnly.err,/config directory has local keys/);assert.match(storeOnly.err,/separate --config-dir/);
  const args=["connect","https://bob.example.com","--alias","bob","--sealed-key-id",ids.alice,"--no-wait","--json"];
  const pending=await cli("alice",args);assert.equal(pending.code,0,pending.err);
  const lines=pending.out.trim().split("\n").map((s:string)=>JSON.parse(s)),code=lines.find((x:any)=>x.status==="authorization_pending").user_code;
  assert.equal(lines.find((x:any)=>x.status==="key_comparison").independently_verified,false);
+ assert.match(lines.find((x:any)=>x.status==="key_comparison").next,/token revoke LABEL/);
+ const resumed=await cli("alice",args);assert.equal(resumed.code,0,resumed.err);
+ const resumedLines=resumed.out.trim().split("\n").map((s:string)=>JSON.parse(s));
+ assert.equal(resumedLines[0].status,"key_comparison");assert.equal(resumedLines[0].safety_code,lines[0].safety_code);
  assert.equal(fs.existsSync(path.join(dirs.alice,"peers.json")),false);
  assert.equal((await owner("bob",`/owner/pairing/${code}/approve`,"POST",{})).status,200);
  // A changed discovery bundle must not redeem the approved token or change local trust.
@@ -61,7 +75,7 @@ test("two local CLIs pin the exact human-approved bundles and refuse plaintext",
  assert.deepEqual(p.requester,bundles.alice);assert.deepEqual(p.responder,bundles.bob);
  const pinned=await cli("bob",["keys","pin","--id",ids.bob,"--peer",p.peer,"--user-code",p.userCode,"--json"]);assert.equal(pinned.code,0,pinned.err);assert.equal(JSON.parse(pinned.out).safety_code,pin.safety_code);
  const restart=await cli("bob",["keys","code","--id",ids.bob,"--peer",p.peer,"--json"]);assert.equal(restart.code,0,restart.err);assert.equal(JSON.parse(restart.out).code,pin.safety_code);
- const send=await cli("alice",["send","--to","bob","--text","must not leave this process"],false);assert.equal(send.code,1);assert.match(send.err,/No plaintext/);
+ const send=await cli("alice",["send","--to","bob","--text","must not leave this process"],false);assert.equal(send.code,1);assert.match(send.err,/No plaintext/);assert.match(send.err,/Peer bob has pinned keys/);
  const downgrade=await cli("alice",["connect","https://bob.example.com","--alias","bob","--no-wait"]);assert.equal(downgrade.code,1);assert.match(downgrade.err,/pinned encryption keys/);
  assert.equal((await cli("bob",["keys","pin","--id",ids.bob,"--peer",p.peer,"--user-code","WRONG","--json"])).code,1);
  for(const name of ["alice","bob"]){const value=JSON.parse(fs.readFileSync(path.join(dirs[name],"encryption",ids[name]+".key"),"utf8"));for(const secret of [value.signing,value.encryption]){assert.equal(JSON.stringify(records).includes(secret),false);assert.equal(JSON.stringify([pending,connected,pinned,restart]).includes(secret),false);}}
