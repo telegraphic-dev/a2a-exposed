@@ -115,3 +115,9 @@ for explicit `A2A_SEALED_ENABLED=1` fixtures. Do not enable real inboxes.
 Server-readable content is withheld; rejected rows retain safe recovery guidance.
 Keychain consent is a startup option, not model input. Never automatically
 resend after uncertain delivery. Details: [local MCP](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/mcp.md#local-stdio-sendread).
+
+For contributor validation of the disabled local path, use the
+[two-agent acceptance checklist](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/agents/sealed-acceptance.md).
+The one `A2A_SEALED_ENABLED=1` switch must be set explicitly on both fixture CLIs
+and Workers; it does not enable hosted accounts. Fixture success does not verify
+real desktop MCP clients, browser approvals or live keychain prompts.

@@ -121,6 +121,12 @@ create/finish command before any network request.
 `cli/test/link-finish.test.mjs` covers these boundaries for create and finish,
 including expiry before approval and local timeout without secret transfer.
 
+## Local encrypted-path acceptance
+
+Run the [two-agent acceptance checklist](sealed-acceptance.md) for local key,
+pairing, CLI and stdio MCP changes. Preserve the logs with the exact commit and
+report any real-client, browser approval or keychain steps that were not run.
+
 ## Manual QA
 
 For affected pages, use local

@@ -101,8 +101,8 @@ Once a local key store exists, ordinary plaintext `send` is refused, including
 when the test flag is unset or the peer mirror is removed. Missing pins, changed
 capabilities, endpoints or bundles, a disabled Worker, malformed content and bad
 signatures all refuse; no plaintext retry occurs. An uncertain network outcome
-prints the original context and message IDs: inspect recipient inbox/history
-before considering any new send. A successful delivery with failed sender-history
+prints the original context and message IDs. Ask the recipient's owner to check
+their local inbox/history for that message ID before considering any new send. A successful delivery with failed sender-history
 storage is reported as delivered; do not resend it.
 
 Encrypted text is limited to 200000 Unicode characters and 307072 UTF-8 bytes for canonical content, including JSON structure and escaping. Both limits are checked before private-key access, for `--text` and piped stdin.
@@ -125,3 +125,18 @@ use the connecting side's ALIAS or the approving side's LABEL from `keys pairing
 Encrypted `send` prints JSON with `taskId`, `contextId`, `messageId`, `encrypted`,
 `serverReadable`, `senderHistorySaved` and `taskStateAuthenticated`. These fields
 describe local sealing and storage; the server task state is not authenticated.
+
+## Acceptance before enablement
+
+Use the existing `A2A_SEALED_ENABLED` switch on both local CLI processes and both
+fixture Workers. Only the literal value `1` enables this path. An unset switch
+on either side refuses encrypted traffic. Setting it on a CLI does not configure
+a Worker or enable a hosted account. There is no second enablement flag and no
+plaintext fallback. Real inbox enablement still requires explicit approval.
+
+Contributors can reproduce the complete local path with the
+[acceptance checklist](agents/sealed-acceptance.md). It uses two disposable local
+agents, real CLI and stdio processes, and the real Worker with fixture storage.
+It does not deploy resources, approve a real pairing, or use an owner's account.
+The fixture simulates the human approval boundary; it does not verify a browser
+approval or an operating-system keychain prompt.
