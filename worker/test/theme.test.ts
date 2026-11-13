@@ -19,6 +19,16 @@ test("the neutral theme is inlined once and loads nothing", () => {
 	assert.equal(/<link|<script|<img|url\s*\(|@import/i.test(html), false);
 });
 
+test("the page frame puts the heading and content in one main landmark", () => {
+	const html = pageShell("Approve <pairing>", "nonce-2", "<p>Code ABCD-1234</p><form method=\"post\"><button>Approve</button></form>");
+	assert.equal((html.match(/<main>/g) || []).length, 1);
+	assert.equal((html.match(/<\/main>/g) || []).length, 1);
+	assert.match(html, /<body><main><h1>Approve &lt;pairing&gt;<\/h1><p>Code ABCD-1234<\/p><form method="post"><button>Approve<\/button><\/form><\/main><\/body><\/html>$/);
+	// The style block and its nonce stay in the head, outside the landmark.
+	assert.match(html, /<head>[\s\S]*<style nonce="nonce-2">[\s\S]*<\/style><\/head><body><main>/);
+	assert.equal((html.match(/<style/g) || []).length, 1);
+});
+
 test("WORKER_THEME replaces the module only when the CSS stays inline", () => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "inbox-theme-"));
 	const file = path.join(dir, "theme.css");
