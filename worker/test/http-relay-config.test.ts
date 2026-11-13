@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { build } from "esbuild";
 
-test("HTTP relay deployment configuration is opt-in and independently composes hosted and wake bindings", async () => {
+test("deployment configuration composes hosted and relay bindings with explicit encryption opt-in", async () => {
 	const built = await build({ entryPoints: ["cloudflare.config.ts"], bundle: true, write: false, format: "cjs", platform: "neutral", plugins: [{ name: "config-contract", setup(b) {
 		b.onResolve({ filter: /^cf\/config$/ }, () => ({ path: "config", namespace: "fixture" }));
 		b.onResolve({ filter: /^\.\/src\/(index|relay-entry|hosted)\.ts$/ }, a => ({ path: a.path, namespace: "fixture" }));
@@ -16,5 +16,11 @@ test("HTTP relay deployment configuration is opt-in and independently composes h
 	const combined = config({ A2A_HTTP_RELAY: "1", A2A_WAKE_RELAY: "1", TENANCY: "host" }); assert.equal(combined.entrypoint.selected, "./src/hosted.ts"); assert.ok(combined.exports.HttpRelay); assert.ok(combined.exports.WakeRelay); assert.ok(combined.exports.TenantStore);
 	const wakeOnly = config({ A2A_WAKE_RELAY: "1" }); assert.equal(wakeOnly.env.HTTP_RELAY, undefined); assert.ok(wakeOnly.exports.WakeRelay);
 	for (const value of ["0", "true", "yes"]) assert.equal(config({ A2A_HTTP_RELAY: value }).env.HTTP_RELAY, undefined);
+	for (const mode of [{}, { TENANCY: "host" }]) {
+		assert.equal(config(mode).env.A2A_SEALED_ENABLED, undefined);
+		assert.equal(config({ ...mode, A2A_SEALED_ENABLED: "0" }).env.A2A_SEALED_ENABLED, undefined);
+		assert.equal(config({ ...mode, A2A_SEALED_ENABLED: "1" }).env.A2A_SEALED_ENABLED.value, "1");
+		for (const value of ["true", "yes", " 1", "1 "]) assert.throws(() => config({ ...mode, A2A_SEALED_ENABLED: value }), /must be exactly 1.*0\/unset.*owner approval/);
+	}
 	const core = readFileSync("../control/src/core/http-relay-metadata.ts", "utf8"); assert.match(core, /HTTP_RELAY_PROTOCOL_VERSION = 2/); assert.match(core, /response-stream-v1/);
 });

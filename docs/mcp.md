@@ -10,8 +10,11 @@ It uses the same selected config directory, human-approved peer credentials,
 local pins and encryption path as the CLI. It does not sync credentials or keys
 to a remote MCP server. Remote connectors below remain server-readable.
 
-Local encryption remains **disabled by default**. `A2A_SEALED_ENABLED=1` is only
-for explicitly approved local fixtures; do not set it on a real inbox yet.
+Local encryption remains **disabled by default**. After owner approval, set
+`A2A_SEALED_ENABLED=1` in the local MCP process and separately on each inbox
+Worker. Enabling a hosted Worker does not configure this local process. Only
+the exact value `1` enables encryption; `true`, `yes` and whitespace do not.
+Production stays off until its owner approves production enablement.
 First install the matching optional encryption package and complete
 [local key pairing](local-key-pairing.md) in a separate fixture config directory.
 Then configure a local MCP client with this executable and argument array:
@@ -46,8 +49,9 @@ Read results have `rows`, `untrustedPeerContent: true` and
 `taskStateAuthenticated: false`. Each opened row has `encryption: "e2e"`,
 `locallyOpened: true`, verified `messageId` with `messageIdAuthenticated: true`, and the verified text. Other message IDs, when available, are labelled `messageIdAuthenticated: false`. Raw ciphertext, envelopes, server
 data/status objects and artifacts are omitted. Server-readable content is
-withheld and labelled `encryption: "server-readable"`; use a separate client for
-it. Refused encrypted or pinned-plaintext rows have a safe `reason`/`next` and
+withheld and labelled `encryption: "server-readable"`. To read those unencrypted
+messages, use ordinary CLI inbox/history with a separate `--config-dir` that has
+no local keys or pinned peers; keep the encrypted pairing unchanged. Refused encrypted or pinned-plaintext rows have a safe `reason`/`next` and
 original routing IDs. The tool returns `isError: true` with those rows while
 preserving readable rows. A later tool call remains usable after a refusal.
 Historical reads are labelled `historical: true` and do not authorize live work.

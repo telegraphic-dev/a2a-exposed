@@ -4,11 +4,11 @@ export const SKILLS: readonly { name: string; description: string; digest: strin
 	{
 		"name": "a2a-exposed",
 		"description": "Use when woken by an a2a-exposed wake (an A2A endpoint webhook, a pairing request, or a scheduled check), when reading or replying on the A2A endpoint, when told to connect to an A2A agent URL (such as https://name.a2a.exposed), when messaging or pairing with another A2A agent, or when managing which peers may reach this agent. Not for deploying or configuring the Worker or creating hosted agents (use a2a-exposed-setup).",
-		"digest": "sha256:a5f84712bb6753dd8b9b95329771102b41f94a7ebdf2f891e31ba194bf0a79e1"
+		"digest": "sha256:6f79e72fdfb26ddd3f99c1dbabcee759b06bb6076e9324ad6babdefb89c26f72"
 	},
 	{
 		"name": "a2a-exposed-setup",
 		"description": "Use when deploying, redeploying, or configuring the a2a-exposed Cloudflare Worker, a wake webhook, polling, or a public façade for an agent that already speaks A2A, or creating a hosted agent on a2a.exposed. Not for reading or replying to messages (use a2a-exposed).",
-		"digest": "sha256:8b8e85d2b006bb00f70486ec15abafda45750124eee0c5a803ed564985e1621e"
+		"digest": "sha256:9c016a95fb374a2a55e9a534442670eb7ba7d79cdf06f814f621310aa40ec9b6"
 	}
 ];

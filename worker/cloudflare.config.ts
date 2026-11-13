@@ -9,6 +9,8 @@ import * as hostedEntry from "./src/hosted.ts" with { type: "cf-worker" };
 const e: Record<string, string | undefined> = (globalThis as any).process?.env ?? {};
 const v = (k: string) => (e[k] ?? "").trim();
 
+if (e.A2A_SEALED_ENABLED && !["0", "1"].includes(e.A2A_SEALED_ENABLED)) throw new Error("A2A_SEALED_ENABLED must be exactly 1 to enable encryption, or 0/unset to keep it off. Do not use true, yes or whitespace. Enable a deployment only with owner approval.");
+
 const name = v("A2A_WORKER_NAME") || "a2a-exposed";
 const hostname = v("A2A_HOSTNAME"); // e.g. agent.example.com (on a zone in your account)
 // No hostname: serve on <name>.<account subdomain>.workers.dev instead of a custom domain (and the other way round:
@@ -34,6 +36,8 @@ const plain: Record<string, string> = {
 	ROBOTS_POLICY: v("A2A_ROBOTS_POLICY"), // allow (default) | disallow: robots.txt Disallow: / and X-Robots-Tag: noindex, nofollow
 	CONTENT_SIGNAL: v("A2A_CONTENT_SIGNAL"), // robots.txt Content-Signal (default search=yes, ai-input=yes, ai-train=no)
 	SKILLS_BASE_URL: v("A2A_SKILLS_BASE_URL"), // https base of the SKILL.md files the skills index links (default: the release tag on GitHub)
+	// Explicit operator opt-in; a hosted tenant inherits this flag unless its operator config overrides it.
+	A2A_SEALED_ENABLED: e.A2A_SEALED_ENABLED === "1" ? "1" : "",
 	HTTP_RELAY_ENABLED: v("A2A_HTTP_RELAY") === "1" ? "1" : "",
 	WAKE_RELAY_ENABLED: v("A2A_WAKE_RELAY") === "1" ? "1" : "",
 	WAKE_TRANSPORT: v("WAKE_TRANSPORT"), // unset/webhook | relay

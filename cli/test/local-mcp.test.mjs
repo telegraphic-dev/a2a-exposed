@@ -58,6 +58,7 @@ test("projection strips ciphertext, server structures and refused plaintext", ()
  const hidden = projectRow(raw);
  assert.equal(hidden.taskId, "task"); assert.equal(hidden.contextId, "context");
  assert.equal(hidden.reason, "server_readable_content_withheld");
+ assert.match(hidden.next, /ordinary inbox\/history.*separate --config-dir.*no local keys or pinned peers/);
  for (const value of ["plaintext downgrade", "ciphertext", "secret"]) assert.equal(JSON.stringify(hidden).includes(value), false);
  const opened = projectRow({ ...raw, text: "verified", messageId: "verified-message", messageIdAuthenticated: true, locallyOpened: true, encrypted: true, historical: true });
  assert.equal(opened.messageId, "verified-message"); assert.equal(opened.messageIdAuthenticated, true);
@@ -93,7 +94,9 @@ test("real CLI preserves stdout framing, blocks disabled sends and creates no co
  const lines = result.stdout.trim().split("\n").map(s => JSON.parse(s));
  assert.equal(lines.length, 3); assert.equal(lines[1].result.isError, true);
  assert.match(lines[1].result.content[0].text, /disabled/);
- assert.deepEqual(lines[2].result.structuredContent, { peers: [], encryptionEnabled: false });
+ assert.deepEqual(lines[2].result.structuredContent.peers, []);
+ assert.equal(lines[2].result.structuredContent.encryptionEnabled, false);
+ assert.match(lines[2].result.structuredContent.next, /local CLI or MCP process.*inbox Worker.*exact value 1/);
  assert.equal(fs.existsSync(config), false);
  const invalid = spawnSync(process.execPath, [bin, "--config-dir", config, "mcp", "--token", "must-not-echo"], { env, encoding: "utf8", timeout: 10000 });
  assert.equal(invalid.status, 1);assert.equal(invalid.stdout, "");assert.equal(invalid.stderr.includes("must-not-echo"), false);

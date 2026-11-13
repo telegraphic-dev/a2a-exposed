@@ -4,7 +4,7 @@ import { once } from "node:events";
 import * as C from "./config.mjs";
 import { CliError, checkId, httpJson } from "./a2a.mjs";
 import { followInbox } from "./commands.mjs";
-import { gate } from "./sealed-keys.mjs";
+import { gate, encryptionDisabled } from "./sealed-keys.mjs";
 import { send, openRows } from "./sealed-cli.mjs";
 
 const VERSION = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
@@ -64,12 +64,12 @@ export function projectRow(row) {
  else {
   result.text = "[message content withheld]";
   result.reason = row.locallyOpened === false ? row.reason : "server_readable_content_withheld";
-  result.next = row.locallyOpened === false ? row.next : "Use a separate server-readable client for this content. No plaintext fallback.";
+  result.next = row.locallyOpened === false ? row.next : "This message was not encrypted by the sender. To read it, use ordinary inbox/history with a separate --config-dir that has no local keys or pinned peers. Keep this encrypted pairing unchanged.";
  }
  return result;
 }
 export async function callTool(name, args, options = {}) {
- if (name === "list_peers") return { peers: Object.entries(C.loadPeers()).map(([alias, p]) => ({ alias, pinned: p.sealed?.policy === "required", credentialConfigured: !!(p.token_env && C.get(p.token_env)) })), encryptionEnabled: process.env.A2A_SEALED_ENABLED === "1" };
+ if (name === "list_peers") return { peers: Object.entries(C.loadPeers()).map(([alias, p]) => ({ alias, pinned: p.sealed?.policy === "required", credentialConfigured: !!(p.token_env && C.get(p.token_env)) })), encryptionEnabled: process.env.A2A_SEALED_ENABLED === "1", ...(process.env.A2A_SEALED_ENABLED === "1" ? {} : { next: encryptionDisabled }) };
  gate();
  if (name === "send") {
   const result = await send({ to: args.to, text: args.text, context: args.contextId, task: args.taskId, proto: args.protocol, "allow-os-consent": options["allow-os-consent"] === true }, { emit() {} });

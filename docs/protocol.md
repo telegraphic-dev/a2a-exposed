@@ -164,10 +164,11 @@ Authenticated with the owner token. A missing or invalid owner credential return
 
 ## Local public-key pairing
 
-The disabled [local key pairing path](local-key-pairing.md) adds signed public
+The default-off [local key pairing path](local-key-pairing.md) adds signed public
 bundles to device authorization and pins the exact approved bundles locally.
-Pairing alone sends no messages. Approved local fixtures can seal and open CLI
-messages with `A2A_SEALED_ENABLED=1`; it is unset by default; the Worker uses only WebCrypto public-key verification and stores
+Pairing alone sends no messages. Owner-approved environments can seal and open CLI
+messages with exact `A2A_SEALED_ENABLED=1` in each local process and separately
+on each inbox Worker; it is unset by default; the Worker uses only WebCrypto public-key verification and stores
 no local private key. The separate encryption identity is never uploaded through
 `/owner/identity`. Initial public bundle publication is immutable; key replacement
 requires the separate follow-up design.

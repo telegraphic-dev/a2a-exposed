@@ -64,7 +64,7 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
  for(const flag of ["true","yes","0"," 1"]){
   const before=records.length;
   const disabled=await cli("alice",["keys","stores","--json"],flag);
-  assert.equal(disabled.code,1);assert.match(disabled.err,/disabled/);
+  assert.equal(disabled.code,1);assert.match(disabled.err,/disabled/);assert.match(disabled.err,/local CLI or MCP process.*inbox Worker.*exact value 1/);
   assert.equal(records.length,before,"nonliteral flag must not reach a Worker");
   envs.bob.A2A_SEALED_ENABLED=flag;
   assert.equal((await owner("bob","/owner/sealed-key")).status,404);
@@ -123,9 +123,13 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
   const tampered=structuredClone(request);tampered.params.message.parts[0].data.signature="A".repeat(86);assert.ok((await call(tampered)).error);
   const wrongContext=structuredClone(request);wrongContext.params.message.contextId="another-context";assert.ok((await call(wrongContext)).error);
   const downgradeRequest=structuredClone(request);downgradeRequest.params.message={messageId:crypto.randomUUID(),role:"user",parts:[{kind:"text",text:"leak"}]};assert.ok((await call(downgradeRequest)).error);
-  assert.ok((await call(request,false)).error);envs.bob.A2A_SEALED_ENABLED="1";
+  assert.match((await call(request,false)).error.message,/disabled on this inbox.*Ask its owner/);envs.bob.A2A_SEALED_ENABLED="1";
   assert.equal((await owner("bob",`/owner/tasks/${sent.taskId}/reply`,"POST",{text:"must not leak",state:"completed"})).status,409);
   const offInbox=await cli("bob",["inbox","--json"],false);assert.equal(offInbox.code,1);assert.equal(offInbox.out.includes(secret),false);
+  const wrongRowContext="mismatched-binding-"+proto;
+  assert.equal((await owner("bob","/owner/history","POST",{contextId:wrongRowContext,dir:"in",peer:p.peer,taskId:sent.taskId,role:"user",text:"[encrypted message]",data:{sealed:message.parts[0].data}})).status,200);
+  const wrongRow=await cli("bob",["history",wrongRowContext,"--json"]);assert.equal(wrongRow.code,1);
+  assert.ok(JSON.parse(wrongRow.out).some((r:any)=>r.reason==="binding_mismatch" && /original task\/context IDs.*sender owner/.test(r.next)));
   // Task-only routing must reuse the existing context; responses stay bounded as history grows.
   for(const explicit of [false,true]){
    const large="large-fixture-"+"x".repeat(198980);
@@ -154,6 +158,7 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
   try {
    const before=records.filter((r:any)=>r.path==="/"&&JSON.parse(r.body||"{}").params?.message).length;
    const missing=await cli("bob",["history",mcpContext,"--json"]);assert.equal(missing.code,1);assert.equal(missing.out.includes(mcpSecret),false);
+   assert.ok(JSON.parse(missing.out).some((r:any)=>r.reason==="key_missing" && /Restore the original private key.*do not run keys init/.test(r.next)));
    const missingMcp=await mcp("bob","history",{contextId:mcpContext});assert.equal(missingMcp.isError,true);assert.equal(JSON.stringify(missingMcp).includes(mcpSecret),false);
    assert.equal(fs.existsSync(bobKey),false,"a read must not generate replacement private material");
    assert.equal(records.filter((r:any)=>r.path==="/"&&JSON.parse(r.body||"{}").params?.message).length,before);

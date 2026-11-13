@@ -54,7 +54,8 @@ Local encrypted CLI draft (disabled by default):
   If codes differ: do not use the pairing; ask approving owner to token revoke LABEL
   (select LABEL with keys pairings --json), and tell the other owner.
   Install matching optional @a2a-exposed/encryption in the config directory first.
-  A2A_SEALED_ENABLED=1 is reserved for approved local tests until enablement approval.
+  Encryption is off by default. After owner approval, set A2A_SEALED_ENABLED=1
+  in each local CLI/MCP process and separately on each inbox Worker. Only exact 1 enables it.
 
 Hosted setup:
   hosted capabilities --json   list setup scopes, wake presets and service capabilities
@@ -109,7 +110,7 @@ Local MCP (stdio; local encryption remains disabled by default)
                                 tools: list_peers, send, inbox, history; use list_peers before send
                                 uses --config-dir DIR; credentials/keys stay local
                                 sends only to pinned peers through the encrypted CLI path
-                                A2A_SEALED_ENABLED=1 is for approved local fixtures only
+                                after owner approval, set exact A2A_SEALED_ENABLED=1 here and on the inbox Worker
                                 inbox acknowledges wakes; use all:true or history to revisit rows
                                 repeated cursor: narrow contextId/from or use history
                                 keychain access needs this startup flag and a human OS prompt

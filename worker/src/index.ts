@@ -1015,7 +1015,8 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
  const sealedPeer: Json = await ctx.DB.prepare("SELECT sealed_requester,sealed_responder FROM peers WHERE label=? AND revoked_at IS NULL").bind(label).first();
  let sealed: Json = null;
  if (sealedPeer?.sealed_requester || msg.extensions?.includes(SealedKeys.SEALED_URI)) {
-  if (ctx.A2A_SEALED_ENABLED !== "1" || !sealedPeer?.sealed_requester) throw new RpcError(-32602, "Encrypted traffic is disabled or pairing is not pinned; no plaintext fallback");
+  if (ctx.A2A_SEALED_ENABLED !== "1") throw new RpcError(-32602, "Encrypted messaging is disabled on this inbox. Ask its owner to check the inbox encryption setting. No plaintext fallback.");
+  if (!sealedPeer?.sealed_requester) throw new RpcError(-32602, "This peer has no approved encryption keys on this inbox. Complete the existing human-approved key pairing first. No plaintext fallback.");
   try {
    // Reject extra outer fields before normMessage can discard them.
    const raw = params.message;
@@ -2975,7 +2976,7 @@ async function deviceAuthorization(req: Request, ctx: TenantContext, ectx: Execu
 	}
  let sealedRequester: string | null = null, sealedResponder: string | null = null;
  if (p.sealed_bundle || p.sealed_responder_key_id) {
-  if (ctx.A2A_SEALED_ENABLED !== "1") return oauthError("invalid_request", "sealed pairing is disabled");
+  if (ctx.A2A_SEALED_ENABLED !== "1") return oauthError("invalid_request", "Encrypted key pairing is disabled on this inbox. Ask its owner to check the inbox encryption setting; no pairing request was created.");
   try {
    const requester = await SealedKeys.verifyPublicBundle(JSON.parse(p.sealed_bundle), cardUrl);
    const row: Json = await ctx.DB.prepare("SELECT value FROM settings WHERE key = ?").bind(SealedKeys.SEALED_KEY_SETTING).first();
@@ -3044,7 +3045,7 @@ async function tokenEndpoint(req: Request, ctx: TenantContext): Promise<Response
 	const r: Json = await ctx.DB.prepare("SELECT * FROM device_requests WHERE device_hash = ?").bind(hash).first();
 	if (!r) return oauthError("invalid_grant", "unknown, already used, or expired device_code");
 	if (now >= r.expires_ms) return oauthError("expired_token", "the device_code expired; start again");
- if (r.sealed_requester && ctx.A2A_SEALED_ENABLED !== "1") return oauthError("temporarily_unavailable", "sealed pairing is disabled; preserve the original request");
+ if (r.sealed_requester && ctx.A2A_SEALED_ENABLED !== "1") return oauthError("temporarily_unavailable", "Encrypted key pairing is disabled on this inbox. Ask its owner to check the inbox encryption setting, then resume the original pairing request; do not create another request.");
 	if (r.status === "denied") {
 		await ctx.DB.prepare("DELETE FROM device_requests WHERE device_hash = ?").bind(hash).run();
 		return oauthError("access_denied", "the agent owner denied this request");
