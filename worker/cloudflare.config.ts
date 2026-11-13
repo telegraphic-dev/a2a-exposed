@@ -30,6 +30,8 @@ const plain: Record<string, string> = {
 	PROVIDER_URL: v("A2A_PROVIDER_URL"),
 	DOCUMENTATION_URL: v("A2A_DOCUMENTATION_URL"),
 	DISCOVERY_DOCS_ORIGIN: v("A2A_DISCOVERY_DOCS_ORIGIN"), // where GET / links the connect playbook (default https://a2a.exposed)
+	ROBOTS_POLICY: v("A2A_ROBOTS_POLICY"), // allow (default) | disallow: robots.txt Disallow: / and X-Robots-Tag: noindex, nofollow
+	CONTENT_SIGNAL: v("A2A_CONTENT_SIGNAL"), // robots.txt Content-Signal (default search=yes, ai-input=yes, ai-train=no)
 	HTTP_RELAY_ENABLED: v("A2A_HTTP_RELAY") === "1" ? "1" : "",
 	WAKE_RELAY_ENABLED: v("A2A_WAKE_RELAY") === "1" ? "1" : "",
 	WAKE_TRANSPORT: v("WAKE_TRANSPORT"), // unset/webhook | relay

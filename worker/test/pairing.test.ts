@@ -939,9 +939,51 @@ test("GET / with Accept: text/markdown, /index.md and /llms.txt: the connect pag
 	assert.equal(headRoot.headers.get("content-type"), "text/markdown; charset=utf-8");
 	assert.equal((await s.call("POST", "/index.md")).status, 404);
 	const staging = setup({ DISCOVERY_DOCS_ORIGIN: "https://staging.example.com" }); t.after(staging.restore);
+	assert.match((await staging.call("HEAD", "/")).headers.get("link")!, /<https:\/\/staging\.example\.com\/[^>]+connect\.md>; rel="service-doc"/);
 	const sm = await staging.call("GET", "/index.md");
 	assert.ok(sm.text.includes("https://staging.example.com/.well-known/agent-skills/a2a-exposed/references/connect.md"));
 	assert.equal((await staging.call("GET", "/")).data.connect, "https://staging.example.com/.well-known/agent-skills/a2a-exposed/references/connect.md");
+});
+
+test("robots.txt, sitemap.xml, Link and Content-Signal headers (scanner level 1)", async (t) => {
+	const s = setup(); t.after(s.restore);
+	const r = await s.call("GET", "/robots.txt");
+	assert.equal(r.status, 200);
+	assert.equal(r.headers.get("content-type"), "text/plain; charset=utf-8");
+	assert.equal(r.text.split("\n").filter((l) => /^(User-agent|Content-Signal|Sitemap):/.test(l)).length, 3);
+	assert.match(r.text, /^Content-Signal: search=yes, ai-input=yes, ai-train=no$/m);
+	assert.match(r.text, new RegExp(`^Sitemap: ${BASE}/sitemap\\.xml$`, "m"));
+	assert.match(r.text, /^Disallow: \/owner$/m);
+	const sm = await s.call("GET", "/sitemap.xml");
+	assert.equal(sm.status, 200);
+	assert.equal(sm.headers.get("content-type"), "application/xml; charset=utf-8");
+	assert.ok(sm.text.includes(`<loc>${BASE}/index.md</loc>`) && !sm.text.includes("/device"));
+	for (const [path, accept] of [["/", "text/html"], ["/", "application/json"], ["/", "text/markdown"], ["/index.md", ""]]) {
+		for (const method of ["GET", "HEAD"]) {
+			const h = await s.call(method, path, accept ? { headers: { accept } } : {});
+			const link = h.headers.get("link") || "";
+			assert.match(link, /rel="alternate"/, `${method} ${path} ${accept}`);
+			assert.match(link, /rel="describedby"/, `${method} ${path} ${accept}`);
+			assert.match(link, /rel="service-doc"/, `${method} ${path} ${accept}`);
+			assert.equal(h.headers.get("content-signal"), "search=yes, ai-input=yes, ai-train=no", `${method} ${path} ${accept}`);
+			assert.equal(h.headers.get("x-robots-tag"), null, "allowed by default");
+		}
+	}
+	for (const path of ["/robots.txt", "/sitemap.xml"]) {
+		const h = await s.call("HEAD", path);
+		assert.equal(h.status, 200, path);
+		assert.equal(h.text, "", path);
+	}
+	assert.equal((await s.call("GET", "/.well-known/security.txt")).status, 404);
+
+	const staging = setup({ ROBOTS_POLICY: "disallow", CONTENT_SIGNAL: "search=no, ai-input=no, ai-train=no" }); t.after(staging.restore);
+	const deny = await staging.call("GET", "/robots.txt");
+	assert.match(deny.text, /^Disallow: \/$/m);
+	assert.doesNotMatch(deny.text, /^Sitemap:/m);
+	assert.match(deny.text, /^Content-Signal: search=no, ai-input=no, ai-train=no$/m);
+	for (const [method, path] of [["HEAD", "/"], ["GET", "/.well-known/agent-card.json"], ["GET", "/nope"], ["GET", "/device"], ["POST", "/"]])
+		assert.equal((await staging.call(method, path)).headers.get("x-robots-tag"), "noindex, nofollow", `${method} ${path}`);
+	assert.equal((await staging.call("HEAD", "/")).headers.get("content-signal"), "search=no, ai-input=no, ai-train=no");
 });
 
 test("owner summary counts tasks and pending pairing requests without their text", async (t) => {

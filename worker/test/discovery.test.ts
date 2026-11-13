@@ -104,3 +104,45 @@ test("rootJsonLinks: pairing fields only when pairing is on", () => {
 	assert.equal(off.pairingEndpoint, undefined);
 	assert.equal(off.approvalPage, undefined);
 });
+
+test("contentSignal: name=yes|no pairs only, normalized; anything else is the default", () => {
+	assert.equal(D.contentSignal(undefined), "search=yes, ai-input=yes, ai-train=no");
+	assert.equal(D.contentSignal("search=yes,ai-input=no , AI-Train = yes"), "search=yes, ai-input=no, ai-train=yes");
+	assert.equal(D.contentSignal("search=yes\nSitemap: https://evil.example/x"), D.DEFAULT_CONTENT_SIGNAL);
+	assert.equal(D.contentSignal("search=maybe"), D.DEFAULT_CONTENT_SIGNAL);
+	assert.equal(D.contentSignal(" , "), D.DEFAULT_CONTENT_SIGNAL);
+});
+
+test("robotsTxt: allow lists the private paths and the sitemap; disallow blocks everything", () => {
+	const allow = D.robotsTxt("https://example-peer.a2a.exposed", false, D.DEFAULT_CONTENT_SIGNAL);
+	assert.equal(allow, [
+		"# A2A agent endpoint served by a2a-exposed. Agents: start at /index.md or /.well-known/agent-card.json",
+		"User-agent: *", "Allow: /", "Disallow: /owner", "Disallow: /oauth/", "Disallow: /device", "Disallow: /mcp", "Disallow: /push", "Disallow: /relay/",
+		"Content-Signal: search=yes, ai-input=yes, ai-train=no", "Sitemap: https://example-peer.a2a.exposed/sitemap.xml", "",
+	].join("\n"));
+	assert.equal(allow.split("\n").filter((l) => /^(User-agent|Content-Signal|Sitemap):/.test(l)).length, 3);
+	const deny = D.robotsTxt("https://example-peer.a2a.exposed", true, "ai-train=no");
+	assert.match(deny, /^Disallow: \/$/m);
+	assert.doesNotMatch(deny, /^Allow:/m);
+	assert.match(deny, /^Content-Signal: ai-train=no$/m);
+	assert.equal(D.robotsDisallow("Disallow"), true);
+	assert.equal(D.robotsDisallow("allow"), false);
+	assert.equal(D.robotsDisallow(undefined), false);
+});
+
+test("sitemapXml: public pages only, XML-escaped", () => {
+	const x = D.sitemapXml("https://example-peer.a2a.exposed");
+	assert.ok(x.startsWith(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">`));
+	for (const p of ["/", "/index.md", "/llms.txt", "/.well-known/agent-card.json"]) assert.ok(x.includes(`<loc>https://example-peer.a2a.exposed${p}</loc>`), p);
+	for (const p of ["/device", "/owner", "lastmod"]) assert.ok(!x.includes(p), p);
+	assert.ok(D.sitemapXml("https://a.example/x&y").includes("x&amp;y"));
+});
+
+test("linkHeader: alternate, describedby and service-doc; no api-catalog yet", () => {
+	const l = D.linkHeader("https://staging.example.com");
+	assert.ok(l.includes(`</index.md>; rel="alternate"; type="text/markdown"`));
+	assert.ok(l.includes(`</.well-known/agent-card.json>; rel="describedby"; type="application/json"`));
+	assert.ok(l.includes(`</llms.txt>; rel="describedby"; type="text/plain"`));
+	assert.ok(l.includes(`<https://staging.example.com/.well-known/agent-skills/a2a-exposed/references/connect.md>; rel="service-doc"; type="text/markdown"`));
+	assert.ok(!l.includes("api-catalog"));
+});

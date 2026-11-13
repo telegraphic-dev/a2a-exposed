@@ -3433,9 +3433,10 @@ async function landing(req: Request, ctx: TenantContext, url: URL): Promise<Resp
 	const format = D.rootFormat(req.headers.get("accept"), url.searchParams.get("format"));
 	const { card, model } = await connectModel(ctx);
 	const cardUrl = ctx.PUBLIC_URL + "/.well-known/agent-card.json";
-	if (format === "markdown") return new Response(D.connectMarkdown(model), { status: 200, headers: D.markdownHeaders() });
+	const discovery = rootDiscoveryHeaders(ctx, model);
+	if (format === "markdown") return new Response(D.connectMarkdown(model), { status: 200, headers: { ...D.markdownHeaders(), ...discovery } });
 	if (format === "json") return json({ name: card.name, description: card.description, agentCard: cardUrl, a2a: ctx.PUBLIC_URL + "/",
-		pairing: pairingOn(ctx) ? ctx.PUBLIC_URL + "/device" : undefined, ...D.rootJsonLinks(model) }, 200, { vary: "accept" });
+		pairing: pairingOn(ctx) ? ctx.PUBLIC_URL + "/device" : undefined, ...D.rootJsonLinks(model) }, 200, { vary: "accept", ...discovery });
 	const versions = [...new Set<string>((card.supportedInterfaces || []).map((i: any) => String(i?.protocolVersion || "")).filter(Boolean))];
 	const skills = (Array.isArray(card.skills) ? card.skills : []).filter((k: any) => k && (k.name || k.id))
 		.map((k: any) => ({ name: String(k.name || k.id), description: typeof k.description === "string" ? k.description : undefined }));
@@ -3443,14 +3444,28 @@ async function landing(req: Request, ctx: TenantContext, url: URL): Promise<Resp
 	const links = D.docsLinks(model.docs);
 	const page = P.landingPage({ name: model.name, description: model.description,
 		base: ctx.PUBLIC_URL, versions, skills, pairing: model.pairing, proxy: proxyMode(ctx), connectDoc: links.connect, exposeDoc: links.exposeYourself }, nonce);
-	return new Response(req.method === "HEAD" ? null : page, { status: 200, headers: P.landingHeaders(nonce) });
+	return new Response(req.method === "HEAD" ? null : page, { status: 200, headers: { ...P.landingHeaders(nonce), ...discovery } });
+}
+
+/** Link (alternate, describedby, service-doc) and Content-Signal on every variant of GET / and on /index.md. */
+function rootDiscoveryHeaders(ctx: TenantContext, model: D.ConnectModel): Record<string, string> {
+	return { link: D.linkHeader(model.docs), "content-signal": D.contentSignal(ctx.CONTENT_SIGNAL) };
+}
+
+/** GET /robots.txt and GET /sitemap.xml. robots.txt follows ROBOTS_POLICY and CONTENT_SIGNAL; the sitemap lists public pages only. */
+function crawlerDoc(ctx: TenantContext, kind: "robots" | "sitemap"): Response {
+	const base = ctx.PUBLIC_URL.replace(/\/$/, "");
+	const headers = { "cache-control": "public, max-age=300", "x-content-type-options": "nosniff" };
+	return kind === "robots"
+		? new Response(D.robotsTxt(base, D.robotsDisallow(ctx.ROBOTS_POLICY), D.contentSignal(ctx.CONTENT_SIGNAL)), { status: 200, headers: { ...headers, "content-type": "text/plain; charset=utf-8" } })
+		: new Response(D.sitemapXml(base), { status: 200, headers: { ...headers, "content-type": "application/xml; charset=utf-8" } });
 }
 
 /** GET /index.md and GET /llms.txt: the Markdown connect page and its llms.txt form. HEAD is answered by handle(). */
 async function discoveryDoc(ctx: TenantContext, kind: "markdown" | "llms"): Promise<Response> {
 	const { model } = await connectModel(ctx);
 	return kind === "markdown"
-		? new Response(D.connectMarkdown(model), { status: 200, headers: D.markdownHeaders() })
+		? new Response(D.connectMarkdown(model), { status: 200, headers: { ...D.markdownHeaders(), ...rootDiscoveryHeaders(ctx, model) } })
 		: new Response(D.llmsTxt(model), { status: 200, headers: D.llmsHeaders() });
 }
 
@@ -4453,6 +4468,8 @@ async function handle(req: Request, ctx: TenantContext, ectx: ExecutionContext, 
 		if ((req.method === "GET" || req.method === "HEAD") && path === "/") return await landing(req, ctx, url);
 		if (req.method === "GET" && path === "/index.md") return await discoveryDoc(ctx, "markdown");
 		if (req.method === "GET" && path === "/llms.txt") return await discoveryDoc(ctx, "llms");
+		if (req.method === "GET" && path === "/robots.txt") return crawlerDoc(ctx, "robots");
+		if (req.method === "GET" && path === "/sitemap.xml") return crawlerDoc(ctx, "sitemap");
 		return json({ error: "not found" }, 404);
 	} catch (e: any) {
 		if (e instanceof HttpError) return json({ error: e.message }, e.status);
@@ -4470,11 +4487,20 @@ async function relayCatchUp(ctx: TenantContext, ectx: ExecutionContext): Promise
 	if ((pending || wakes || outbound) && await wakeBudgetOk(ctx)) await sendWake(ctx, ectx, { contextId: "relay-catchup", taskId: "none", taskIds: [], from: "", preview: "", kind: "catchup" });
 }
 
+/** ROBOTS_POLICY=disallow: X-Robots-Tag on every response. A WebSocket upgrade (101) is passed through untouched. */
+function noindex(ctx: TenantContext, res: Response): Response {
+	if (!D.robotsDisallow(ctx.ROBOTS_POLICY) || res.status === 101 || (res as any).webSocket) return res;
+	try { res.headers.set("x-robots-tag", D.NOINDEX); return res; } catch { /* immutable headers: copy below */ }
+	const out = new Response(res.body, { status: res.status, statusText: res.statusText, headers: res.headers });
+	out.headers.set("x-robots-tag", D.NOINDEX);
+	return out;
+}
+
 /** Inbox for one already-resolved tenant: retired-host redirect, the handler, then an opportunistic wake flush. */
 export async function dispatch(req: Request, ctx: TenantContext, ectx: ExecutionContext): Promise<Response> {
 	const moved = A.movedResponse(req.url, ctx.PUBLIC_URL, ctx.RETIRED_HOSTNAMES);
 	if (moved) return new Response(moved.body || null, { status: moved.status, headers: moved.headers });
-	const res = await handle(req, ctx, ectx);
+	const res = noindex(ctx, await handle(req, ctx, ectx));
 	// A diagnostic probe must not flush/consume pending inbox wakes as a side effect.
 	if (!(req.method === "POST" && /^\/owner\/wake\/test(?:\/|$)/.test(new URL(req.url).pathname)))
 		ectx.waitUntil(flushDue(ctx, ectx).catch((e) => log("flush_failed", { error: String(e).slice(0, 200) })));
