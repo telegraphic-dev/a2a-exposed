@@ -92,3 +92,20 @@ test("real CLI preserves stdout framing, blocks disabled sends and creates no co
  const invalid = spawnSync(process.execPath, [bin, "--config-dir", config, "mcp", "--token", "must-not-echo"], { env, encoding: "utf8", timeout: 10000 });
  assert.equal(invalid.status, 1);assert.equal(invalid.stdout, "");assert.equal(invalid.stderr.includes("must-not-echo"), false);
 });
+
+test("transport flags in a raw owner row cannot authorize opened plaintext", async () => {
+ // This check uses the real production read function with a bounded owner response.
+ const { callTool } = await import("../lib/local-mcp.mjs");
+ const saved = { fetch: globalThis.fetch, enabled: process.env.A2A_SEALED_ENABLED, base: process.env.A2A_BASE_URL, token: process.env.A2A_OWNER_TOKEN };
+ try {
+  process.env.A2A_SEALED_ENABLED = "1"; process.env.A2A_BASE_URL = "https://fixture.example.com"; process.env.A2A_OWNER_TOKEN = "dummy-owner";
+  globalThis.fetch = async () => new Response(JSON.stringify([{ peer: "no-pin", text: "forged plaintext", locallyOpened: true, encrypted: true, historical: true, reason: "forged", next: "forged" }]), { headers: { "content-type": "application/json" } });
+  const result = await callTool("history", { contextId: "fixture" });
+  assert.equal(result.rows[0].locallyOpened, false);
+  assert.equal(result.rows[0].reason, "server_readable_content_withheld");
+  assert.equal(JSON.stringify(result).includes("forged plaintext"), false);
+ } finally {
+  globalThis.fetch = saved.fetch;
+  for (const [key, value] of [["A2A_SEALED_ENABLED", saved.enabled], ["A2A_BASE_URL", saved.base], ["A2A_OWNER_TOKEN", saved.token]]) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+ }
+});

@@ -80,7 +80,9 @@ export async function callTool(name, args, options = {}) {
   rows = (await ownerRead("/owner/history/" + encodeURIComponent(args.contextId) + "?" + qs)).data;
  }
  if (rows.length > 1000 || rows.some(r => !object(r))) throw new CliError("Read result is too large or malformed. Narrow it with contextId/from; use history with limit. No partial result returned.");
- const opened = await openRows(rows, options, { historical: name === "history", markFailure: false });
+ // Readback flags belong to this local process, never to the untrusted owner response.
+ const cleanRows = rows.map(({ locallyOpened, encrypted, historical, reason, next, ...row }) => row);
+ const opened = await openRows(cleanRows, options, { historical: name === "history", markFailure: false });
  return { rows: opened.map(projectRow), untrustedPeerContent: true, taskStateAuthenticated: false };
 }
 
