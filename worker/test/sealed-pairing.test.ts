@@ -36,8 +36,8 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
  fs.writeFileSync(hook,`if(process.env.FIXTURE_OLD_INIT){const now=Date.now()-40*86400000;Date.now=()=>now;}const original=globalThis.fetch;globalThis.fetch=(url,init={})=>{const u=new URL(url);if(!/^(alice|bob)\\.example\\.com$/.test(u.hostname))throw Error('nonfixture network refused');const headers=new Headers(init.headers);headers.set('x-test-agent',u.hostname.split('.')[0]);return original('http://127.0.0.1:${port}'+u.pathname+u.search,{...init,headers});};`);
  const mcpOutputs:any[]=[];
  const clean=Object.fromEntries(Object.entries(process.env).filter(([k])=>!/^(A2A_|PEER_|WAKE_|CF_|CLOUDFLARE_|UPSTREAM_|APPROVAL_|EVENT_|HOSTED_)/.test(k)));
- const cli=(name:string,args:string[],enabled=true,input?:string):Promise<any>=>new Promise(resolve=>{
-  const ch=spawn(process.execPath,["--import",hook,path.join(root,"cli/bin/a2a-exposed.mjs"),...args],{env:{...clean,A2A_CONFIG_DIR:dirs[name],A2A_SEALED_ENABLED:enabled?"1":"",DO_NOT_TRACK:"1",A2A_NO_UPDATE_CHECK:"1",...(args[0]==="keys"&&args[1]==="init"?{FIXTURE_OLD_INIT:"1"}:{})},stdio:[input===undefined?"ignore":"pipe","pipe","pipe"]});if(input!==undefined){ch.stdin?.on("error",()=>{});ch.stdin?.end(input);}let out="",err="";ch.stdout.on("data",b=>out+=b);ch.stderr.on("data",b=>err+=b);ch.on("close",code=>resolve({code,out,err}));
+ const cli=(name:string,args:string[],enabled:boolean|string=true,input?:string):Promise<any>=>new Promise(resolve=>{
+  const ch=spawn(process.execPath,["--import",hook,path.join(root,"cli/bin/a2a-exposed.mjs"),...args],{env:{...clean,A2A_CONFIG_DIR:dirs[name],A2A_SEALED_ENABLED:typeof enabled==="string"?enabled:enabled?"1":"",DO_NOT_TRACK:"1",A2A_NO_UPDATE_CHECK:"1",...(args[0]==="keys"&&args[1]==="init"?{FIXTURE_OLD_INIT:"1"}:{})},stdio:[input===undefined?"ignore":"pipe","pipe","pipe"]});if(input!==undefined){ch.stdin?.on("error",()=>{});ch.stdin?.end(input);}let out="",err="";ch.stdout.on("data",b=>out+=b);ch.stderr.on("data",b=>err+=b);ch.on("close",code=>resolve({code,out,err}));
  });
  const mcp=async(name:string,tool:string,args:any,enabled=true)=>{
   const frames=[{jsonrpc:"2.0",id:1,method:"initialize",params:{protocolVersion:"2025-11-25",capabilities:{},clientInfo:{name:"fixture",version:"1"}}},{jsonrpc:"2.0",method:"notifications/initialized"},{jsonrpc:"2.0",id:2,method:"tools/call",params:{name:tool,arguments:args}}];
@@ -61,6 +61,15 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
   assert.equal(result.err.includes("matching Worker version"),error.status===404);
  }
  publishError=null;
+ for(const flag of ["true","yes","0"," 1"]){
+  const before=records.length;
+  const disabled=await cli("alice",["keys","stores","--json"],flag);
+  assert.equal(disabled.code,1);assert.match(disabled.err,/disabled/);
+  assert.equal(records.length,before,"nonliteral flag must not reach a Worker");
+  envs.bob.A2A_SEALED_ENABLED=flag;
+  assert.equal((await owner("bob","/owner/sealed-key")).status,404);
+ }
+ envs.bob.A2A_SEALED_ENABLED="1";
  const storeOnly=await cli("alice",["send","--to","unpaired","--text","never sent"],false);
  assert.equal(storeOnly.code,1);assert.match(storeOnly.err,/disabled/);
  const args=["connect","https://bob.example.com","--alias","bob","--sealed-key-id",ids.alice,"--no-wait","--json"];
@@ -139,6 +148,18 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
    const mcpHistory=await mcp(name,"history",{contextId:mcpContext,from:name==="alice"?"bob":p.peer,limit:200});assert.ok(!mcpHistory.isError,JSON.stringify(mcpHistory));assert.ok(mcpHistory.structuredContent.rows.some((r:any)=>r.text===mcpSecret&&r.historical));
    for(const table of EXPORT_TABLES){assert.equal(JSON.stringify(await envs[name].DB.prepare(`SELECT * FROM "${table}"`).all()).includes(mcpSecret),false,`${name}.${table}`);}
   }
+  // Missing private material cannot cause a replacement key, network send or plaintext retry.
+  const bobKey=path.join(dirs.bob,"encryption",ids.bob+".key"),bobBytes=fs.readFileSync(bobKey);
+  fs.renameSync(bobKey,bobKey+".held");
+  try {
+   const before=records.filter((r:any)=>r.path==="/"&&JSON.parse(r.body||"{}").params?.message).length;
+   const missing=await cli("bob",["history",mcpContext,"--json"]);assert.equal(missing.code,1);assert.equal(missing.out.includes(mcpSecret),false);
+   const missingMcp=await mcp("bob","history",{contextId:mcpContext});assert.equal(missingMcp.isError,true);assert.equal(JSON.stringify(missingMcp).includes(mcpSecret),false);
+   assert.equal(fs.existsSync(bobKey),false,"a read must not generate replacement private material");
+   assert.equal(records.filter((r:any)=>r.path==="/"&&JSON.parse(r.body||"{}").params?.message).length,before);
+  } finally { fs.renameSync(bobKey+".held",bobKey); }
+  assert.deepEqual(fs.readFileSync(bobKey),bobBytes);
+  const restored=await mcp("bob","history",{contextId:mcpContext});assert.ok(!restored.isError);assert.ok(restored.structuredContent.rows.some((r:any)=>r.text===mcpSecret&&r.locallyOpened));
   const configPath=path.join(dirs.alice,"config.env"),savedConfig=fs.readFileSync(configPath,"utf8");
   fs.writeFileSync(configPath,savedConfig.replace(/^A2A_OWNER_TOKEN=.*$/m,"A2A_OWNER_TOKEN="));
   try { const warning=await mcp("alice","send",{to:"bob",text:mcpSecret,protocol:proto});assert.equal(warning.structuredContent.senderHistorySaved,false);assert.match(warning.structuredContent.next,/delivered.*Do not resend/); }

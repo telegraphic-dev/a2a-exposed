@@ -128,7 +128,7 @@ test("owner pagination follows each cursor and refuses a repeated cursor without
   const result = await callTool("inbox", { contextId: "fixture" });
   assert.deepEqual(cursors, [null, "next"]);assert.equal(result.rows.length, 2);assert.ok(result.rows.every(r => r.text === "[message content withheld]"));
   globalThis.fetch = async () => new Response("[]", { headers: { "x-a2a-next-cursor": "repeated" } });
-  await assert.rejects(callTool("inbox", {}), /cursor repeated/);
+  await assert.rejects(callTool("inbox", {}), /cursor repeated.*contextId\/from.*history.*all:true/);
  } finally {
   globalThis.fetch = saved.fetch;
   for (const [key, value] of [["A2A_SEALED_ENABLED", saved.enabled], ["A2A_BASE_URL", saved.base], ["A2A_OWNER_TOKEN", saved.token]]) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }

@@ -110,6 +110,8 @@ Local MCP (stdio; local encryption remains disabled by default)
                                 uses --config-dir DIR; credentials/keys stay local
                                 sends only to pinned peers through the encrypted CLI path
                                 A2A_SEALED_ENABLED=1 is for approved local fixtures only
+                                inbox acknowledges wakes; use all:true or history to revisit rows
+                                repeated cursor: narrow contextId/from or use history
                                 keychain access needs this startup flag and a human OS prompt
                                 no pairing, trust changes, plaintext sends or automatic retries
 

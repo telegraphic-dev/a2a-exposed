@@ -70,6 +70,11 @@ If delivery is uncertain, preserve the returned context/message IDs and
 ask the recipient owner to check inbox/history before taking another action. Sender-history failure
 after delivery returns `senderHistorySaved: false` and explicit `next` guidance; do not resend.
 
+Returned inbox wakes are acknowledged even if a later page fails. Use `inbox`
+with `all: true` or `history` with the context ID to read those rows again. If a
+cursor repeats, narrow by `contextId`/`from` or use `history`; do not loop
+automatically on the same inbox request.
+
 ## Hosted connector
 
 When the CLI cannot run (no Node, or a sandbox), connect https://a2a.exposed/mcp. Sign-in is the owner identity. The owner token stays on the A2A endpoint. Claude Code cloud sessions use the checklist below.
