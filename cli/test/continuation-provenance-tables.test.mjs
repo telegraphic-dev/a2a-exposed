@@ -55,7 +55,7 @@ test('installer failure after continuation tables rolls back its entire savepoin
 test('enrollments and receipts cannot be overwritten, replaced or deleted',t=>{
  const f=fixture(t);write(f);
  for(const [table,row] of [['continuation_signer_enrollments',f.enrollment],['continuation_decision_receipts',f.receipt]]){
-  assert.throws(()=>f.db.exec(`DELETE FROM ${table}`));assert.throws(()=>f.db.exec(`UPDATE ${table} SET rowid=rowid`));
+  assert.throws(()=>f.db.exec(`DELETE FROM ${table}`));assert.throws(()=>f.db.exec(`UPDATE ${table} SET epoch=epoch`));
   for(const verb of ['INSERT','INSERT OR REPLACE'])assert.throws(()=>insert(f.db,table,row,verb));assert.equal(count(f.db,table),1);
  }
 });
@@ -93,4 +93,15 @@ test('receipt and intent rollback together and survive independent process resta
  const script=`import{DatabaseSync}from'node:sqlite';const d=new DatabaseSync(process.argv[1]);d.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=10');let locked=false;try{d.exec('BEGIN IMMEDIATE')}catch(e){locked=/locked|busy/.test(e.message)}console.log(JSON.stringify({locked,n:d.prepare('SELECT COUNT(*) n FROM continuation_decision_receipts').get().n}));d.close();`;
  const read=()=>{const r=spawnSync(process.execPath,['--input-type=module','-e',script,file],{encoding:'utf8',timeout:10000,env:{DO_NOT_TRACK:'1'}});assert.equal(r.status,0,r.stderr);return JSON.parse(r.stdout);};
  f.db.exec('BEGIN IMMEDIATE');write(f);assert.deepEqual(read(),{locked:true,n:0});f.db.exec('COMMIT');assert.deepEqual(read(),{locked:false,n:1});
+});
+
+for(const table of ['continuation_signer_enrollments','continuation_decision_receipts'])test(`retained ${table} exposes no hidden replacement identity`,t=>{
+ const f=fixture(t);write(f);const before=f.db.prepare(`SELECT * FROM ${table}`).all();
+ for(const alias of ['rowid','_rowid_','oid']){
+  assert.throws(()=>f.db.prepare(`SELECT ${alias} FROM ${table}`).all(),/no such column/);
+  const row=before[0],keys=Object.keys(row);
+  assert.throws(()=>f.db.prepare(`INSERT OR REPLACE INTO ${table}(${alias},${keys.join(',')}) VALUES(1,${keys.map(()=>'?').join(',')})`).run(...Object.values(row)),/no column named/);
+  assert.throws(()=>f.db.exec(`UPDATE ${table} SET ${alias}=99`),/no such column/);
+ }
+ assert.deepEqual(f.db.prepare(`SELECT * FROM ${table}`).all(),before);
 });
