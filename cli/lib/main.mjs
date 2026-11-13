@@ -29,7 +29,7 @@ Usage: npx -y a2a-exposed@latest <command> [options]
 Setup options: --skip-install skips dependency installation when dependencies already exist.
 Local option and missing-deployment errors appear before Node version guidance; deployment still requires Node 22.18+.
 
-Local key pairing draft (disabled by default; no encrypted traffic yet):
+Local encrypted CLI draft (disabled by default):
   keys stores --json          list optional local key stores before init
   keys init --store file|keychain --card-url URL --json
                                 fresh local keys; keychain requires --allow-os-consent
@@ -44,6 +44,12 @@ Local key pairing draft (disabled by default; no encrypted traffic yet):
   keys code --id ID --peer ALIAS_OR_LABEL --json
                                 ALIAS on connecting side; LABEL from keys pairings on approving side
                                 compare safety code through another trusted channel
+  peers list --json           list aliases and whether their keys are pinned
+  send --to ALIAS --text TEXT [--allow-os-consent]
+                                seal for the pinned peer; no plaintext fallback
+                                encrypted sends refuse --push, --wake and --intent
+  inbox --json / history CONTEXT --json
+                                open locally; --allow-os-consent permits keychain access
   If codes differ: do not use the pairing; ask approving owner to token revoke LABEL
   (select LABEL with keys pairings --json), and tell the other owner.
   Install matching optional @a2a-exposed/encryption in the config directory first.
@@ -542,13 +548,13 @@ const SPEC = {
 	hosted: { url: S, version: S, "upstream-token-file": S, "upstream-token-env": S, "access-client-id-file": S, "access-client-id-env": S, "access-client-secret-file": S, "access-client-secret-env": S, name: S, json: B, agent: S, hostname: S, origin: S, path: S, preset: S, "control-url": S, "secret-file": S, "secret-env": S, "secret-from": S, "hermes-home": S, route: S, "token-file": S, "no-run": B },
 	init: { ...deployOpts, ...tunnelOpts, tunnel: B, "dry-run": B, json: B }, deploy: deployOpts,
 	wake: { ...deployOpts, "local-url": S, json: B, url: S, "reference-file": S, "reference-env": S, clear: B, version: S, agent: S, "control-url": S, "key-header": S, "key-file": S, "key-env": S, "key-stdin": B, "hmac-secret-file": S, "hmac-secret-env": S, "access-client-id-file": S, "access-client-id-env": S, "access-client-secret-file": S, "access-client-secret-env": S }, tunnel: { ...tunnelOpts, preset: S, "hermes-route": S, "hmac-secret-stdin": B, json: B },
-	inbox: { context: S, from: S, all: B, json: B },
+	inbox: { context: S, from: S, all: B, json: B, "allow-os-consent": B },
 	reply: { text: S, stdin: B, state: { type: "string", default: "completed" }, artifact: B, "artifact-name": { type: "string", default: "response" }, force: B },
-	history: { from: S, n: { type: "string", short: "n", default: "50" }, json: B },
+	history: { "allow-os-consent": B, from: S, n: { type: "string", short: "n", default: "50" }, json: B },
 	token: { rotate: B },
-	peers: { "token-env": S, "token-stdin": B },
+	peers: { "token-env": S, "token-stdin": B, json: B },
 	peer: { to: S, all: B, reissue: B, hours: S, off: B, json: B },
-	send: { to: S, text: S, context: S, task: S, push: B, proto: S, wake: S, intent: S },
+	send: { "allow-os-consent": B, to: S, text: S, context: S, task: S, push: B, proto: S, wake: S, intent: S },
 	poll: { to: S, proto: S },
 	status: { json: B, agent: S, "control-url": S },
 	env: { json: B },

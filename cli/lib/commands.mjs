@@ -94,7 +94,7 @@ async function inboxRows(o) {
 }
 
 export async function inbox(o) {
-	const rows = await inboxRows(o);
+	const rows = await (await import("./sealed-cli.mjs")).openRows(await inboxRows(o), o);
 	// pending pairing requests: polling agents get no pairing wake, so the inbox shows them too (not with --context:
 	// that is one conversation). An older Worker without pairing: nothing to show.
 	let pairing = [];
@@ -116,12 +116,13 @@ export async function inbox(o) {
 	if (!rows.length) console.log(pairing.length || o.context ? "(no unhandled tasks)" : "(no unhandled tasks, no pending pairing requests)");
 	for (const r of rows) {
 		const reply = r.kind === "outbound";
-		console.log(`--- ${reply ? "reply" : "task"} ${r.taskId}  [${r.state}]  from=${r.from}  context=${r.contextId}  at=${r.updated}`);
+		console.log(`--- ${reply ? "reply" : "task"} ${r.taskId}${r.state ? `  [${r.state}]` : ""}  from=${r.from}  context=${r.contextId}${r.updated ? `  at=${r.updated}` : ""}`);
 		console.log("UNTRUSTED PEER MESSAGE >>>");
 		console.log(r.text);
 		console.log("<<< END PEER MESSAGE");
+  if (r.locallyOpened === false) console.log(r.next);
 		if (reply) console.log(`(a reply to a message you sent; read it with \`${CLI} history ${r.contextId}\`. Continue with send, not reply.)`);
-		printState(r.state, r.updated);
+		if (r.state) printState(r.state, r.updated);
 	}
 	if (pairing.length) {
 		console.log(`=== ${pairing.length} pending pairing request${pairing.length === 1 ? "" : "s"} (another agent asks to connect; ${pairing[0].approval} approval)`);
@@ -158,14 +159,14 @@ export async function reply(id, o) {
 export async function history(ctx, o) {
 	const qs = new URLSearchParams({ n: String(Number(o.n || 50)) });
 	if (o.from) qs.set("from", o.from);
-	const rows = await owner("GET", `/owner/history/${q(ctx)}?${qs}`);
+	const rows = await (await import("./sealed-cli.mjs")).openRows(await owner("GET", `/owner/history/${q(ctx)}?${qs}`), o, { historical: true });
 	if (o.json) return out(rows);
 	const states = new Map();
 	const peers = new Map(rows.filter((e) => e.task_id && e.peer).map((e) => [e.task_id, e.peer]));
 	for (const e of rows) {
 		const tag = [e.event, e.state || e.role].filter(Boolean).join("/");
 		const forced = e.data?.forced ? `forced: ${e.data.previousState} → ${e.data.state}; ` : "";
-		console.log(`${e.ts} ${(e.dir || "").padEnd(5)} ${(e.peer || "-").padEnd(10)} ${e.task_id || "-"} ${tag}: ${forced}${(e.text || "").slice(0, 400)}`);
+		console.log(`${e.ts || "-"} ${(e.dir || "").padEnd(5)} ${(e.peer || e.from || "-").padEnd(10)} ${e.task_id || e.taskId || "-"} ${tag}: ${forced}${(e.text || "").slice(0, 400)}${e.locallyOpened === false ? " " + e.next : ""}`);
 		if (e.currentState?.state || e.state) states.set(`${e.peer || peers.get(e.task_id) || "-"}/${e.task_id || "-"}`, e.currentState || { state: e.state, timestamp: e.ts });
 	}
 	for (const [task, status] of states) printState(status.state, status.timestamp, states.size > 1 ? task : "");
@@ -267,6 +268,7 @@ async function peersRemote(sub, args) {
 	const all = C.loadPeers();
 	const list = args.length ? args : Object.keys(all);
 	if (!list.length) die(`no peers to sync: add one first (${CLI} connect <url> or peers add)`);
+	if (fs.existsSync(C.CONFIG_DIR + "/encryption/state.sqlite") || list.some(alias => all[alias]?.sealed)) die("Pinned local encryption requires local CLI send; remote MCP cannot hold local keys. No peer was synced.");
 	for (const alias of list) {
 		const pe = all[alias];
 		if (!pe) die(`unknown peer alias ${JSON.stringify(alias)} (see: ${CLI} peers list)`);
@@ -320,6 +322,7 @@ export function peers(sub, args, o) {
 		if (drop.length) C.saveConfig(Object.fromEntries(drop.map((k) => [k, null])));
 		return console.log(`removed ${alias}${drop.length ? ` (and ${drop.join(", ")} from ${C.CONFIG_FILE})` : ""}`);
 	}
+	if (o.json) return out(Object.entries(all).map(([alias, v]) => ({ alias, url: v.url, token_env: v.token_env || null, token_set: !!(v.token_env && C.get(v.token_env)), pinned: v.sealed?.policy === "required" })));
 	for (const [k, v] of Object.entries(all)) {
 		const te = v.token_env || "";
 		warnPeerTokenEnv(te);
@@ -342,8 +345,7 @@ async function logHistory(ctx, entry) {
 }
 
 export async function send(o) {
- if (o.to && C.loadPeers()[o.to]?.sealed?.policy === "required") die(`Peer ${o.to} has pinned keys; encrypted sending is not available yet. No plaintext was sent.`);
- if (fs.existsSync(C.CONFIG_DIR + "/encryption/state.sqlite")) die("This config directory has local keys (keys init), so ordinary send is off here. Use a separate --config-dir for ordinary sends. No plaintext was sent.");
+ if (fs.existsSync(C.CONFIG_DIR + "/encryption/state.sqlite") || Object.values(C.loadPeers()).some(p => p.sealed?.policy === "required")) return (await import("./sealed-cli.mjs")).send(o);
 	if (!o.to) die("--to required");
 	// The callback authenticates against the token saved through the owner API.
 	if (o.push && !ownerConfigured()) die("--push needs A2A_BASE_URL and A2A_OWNER_TOKEN (your Worker); configure both or omit --push and poll instead");

@@ -17,7 +17,9 @@ export async function sdk() {
   const primitives = await import(pathToFileURL(require.resolve("@a2a-exposed/encryption")).href);
   const state = await import(pathToFileURL(require.resolve("@a2a-exposed/encryption/local-state")).href);
   if (typeof state.localSafetyCode !== "function") throw Error("matching package required");
-  return { ...primitives, ...state };
+  const carriers = await import(pathToFileURL(require.resolve("@a2a-exposed/encryption/carriers")).href);
+  const content = await import(pathToFileURL(require.resolve("@a2a-exposed/encryption/content")).href);
+  return { ...primitives, ...state, ...carriers, ...content };
  } catch { fail(`Install the matching optional @a2a-exposed/encryption package in this config directory before keys init; run ${CLI} keys stores --json afterward. No keys or network requests were created.`); }
 }
 async function owner(method, route, body) {
@@ -52,7 +54,7 @@ export async function pinPairing({ id, peer, bundle, localBundle, endpoint }) {
    // owner-side import of that approved request, bound to both exact bundles.
    await store.approve({ peer, digest: proposal.digest, expectedCurrent: old.current_digest, ownerApproved: true });
   }
-  return { peer, local_id: id, key_id: bundle.keyId, verification: "tofu", independently_verified: false, safety_code: store.safetyCode(id, peer).code, encrypted_traffic: false };
+  return { peer, local_id: id, key_id: bundle.keyId, verification: "tofu", independently_verified: false, safety_code: store.safetyCode(id, peer).code, traffic_requires_test_flag: true };
  } finally { store.close(); }
 }
 export async function prepareConnect(id, base, card) {
@@ -82,7 +84,7 @@ export async function command(p, o) {
   const { bundle } = await selected(o.id);
   const data = await owner("PUT", "/owner/sealed-key", bundle);
   if (api.canonicalJSON(data.bundle) !== api.canonicalJSON(bundle)) fail("Public-key publication readback differs; preserve keys and stop.");
-  result = { published: true, id: o.id, key_id: bundle.keyId, encrypted_traffic: false };
+  result = { published: true, id: o.id, key_id: bundle.keyId, traffic_requires_test_flag: true };
  } else if (action === "pin") {
   if (!o.peer || !o["user-code"] || !o.id) fail("Select --peer and --user-code from keys pairings --json and --id from keys status --json.");
   const data = await owner("GET", "/owner/sealed-pairings");
