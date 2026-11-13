@@ -1330,5 +1330,32 @@ binding, freshness, approval or applicability claim. Original expiry, revision,
 epoch and signer identities remain unchanged; normal reads and retention still
 require fresh time and exact current binding. The caller owns the transaction,
 physical namespace authentication and any future human-authorized operation.
-No physical reader, command, enrollment application or traffic path calls this
-API. It neither consumes a plan nor changes authority or enables encryption.
+The initial-only anchored read below calls this API and separately checks its
+physical binding. No command, enrollment application or traffic path calls it.
+It neither consumes a plan nor changes authority or enables encryption.
+
+
+### Disabled anchored exact retained initial-plan read
+
+`readRetainedInitialContinuationSignerPlan` in `pairing-authority.mjs` reads one
+original initial plan by explicit configuration identity and original plan UUID.
+It uses an anchored read-only schema-4 transaction, authenticates the private
+storage MAC and complete original plan, and checks its binding against the
+physical revision-zero suspended authority at the plan's creation instant.
+Source drift, changed namespace, schema changes, advanced authority and any
+signer/continuation/receipt/grant history refuse. The selected plan alone is
+authenticated; this read does not replace complete inventory diagnosis.
+
+There is no clock input or deadline extension. The original expiry and identity
+remain intact, and fresh reads still refuse expired plans. The detached, deeply
+frozen private result includes the canonical root and public key DER and must
+remain outside model/tool diagnostics. Missing or corrupt records refuse without
+repair, retry, substitution or writes. Namespace and source guards run before
+and after the lookup, with a final namespace check after read-transaction
+rollback. A failed or uncertain retain can use its original UUID after restart
+without assuming that expiry means rollback.
+
+No command, MCP tool, enrollment application, human adapter or traffic path
+calls this API. It records no approval, consumes no plan, selects no signer and
+does not enable encryption or admit grants. Nonempty authority authentication
+and human-authorized enrollment remain separate work.

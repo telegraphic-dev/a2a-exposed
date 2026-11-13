@@ -60,7 +60,8 @@ export function createContinuationEnrollmentStorage(recoveryKey){
  // Exact original bytes for future uncertainty reconciliation. Authenticate at
  // creation, even after expiry or authority rotation; NEVER an applicable plan.
  // This private result includes the root and key DER, so it must not be returned
- // through model/tool diagnostics. No physical reader or apply path calls it.
+ // through model/tool diagnostics. The anchored initial-only reader separately
+ // authenticates its physical authority binding; no apply path calls it.
  function readRetained(db,id){
   const plan=stored(db,id,undefined,true);
   Object.freeze(plan.authority);if(plan.current_signer!==null)Object.freeze(plan.current_signer);
