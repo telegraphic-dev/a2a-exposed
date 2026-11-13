@@ -1287,3 +1287,28 @@ revision-zero authority remains suspended. An uncertain retain operation must
 keep its original ID; expiry does not justify replacing that identity or
 assuming rollback. Nonempty signer/receipt authentication and human-authorized
 enrollment remain separate work.
+
+### Disabled historical plan binding comparison
+
+The private enrollment-storage `diagnoseBindings` API compares every retained
+plan to one strictly validated, detached authority/signer snapshot supplied by
+its caller. It authenticates all original retained records and signer bytes
+before returning a complete, immutable ID-sorted metadata list. A corrupt row
+refuses the whole result even when that row does not match the supplied binding.
+Original epoch, revision and signer identities remain intact.
+
+`bindingMatches` compares the entire canonical authority and signer binding,
+including suspension, active-set and pending-intent state, signer ID, canonical
+key DER and fingerprint. Time classification remains separate: an expired plan
+can match, and a fresh plan can refer to a different binding. Invalid bindings,
+unfinished intents and invalid clocks refuse even when the inventory is empty.
+Output omits roots, key DER, private planning bytes and storage MACs. The plain
+historical inventory keeps its existing shape and makes no binding comparison.
+
+The caller still must authenticate its physical authority and current signer,
+then recheck them before a future operation. A model-supplied matching object is
+not current authority, human approval, plan consumption or enrollment permission.
+This API neither selects a signer nor declares any plan applicable. Fresh reads
+still enforce exact current binding and original expiry. No physical authority
+reader, command, human adapter, enrollment application or traffic path calls this
+comparison. It writes no rows and leaves encryption disabled.

@@ -1,7 +1,7 @@
 // Disabled private plan retention, never signer enrollment or human approval.
 // The anchored caller owns the key, current state and outer transaction.
 import {createHmac,timingSafeEqual} from 'node:crypto';
-import {assertContinuationSignerChange} from './continuation-enrollment-plan.mjs';
+import {assertContinuationSignerChange,snapshotContinuationSignerBinding} from './continuation-enrollment-plan.mjs';
 
 export class ContinuationEnrollmentStorageError extends Error {
  constructor(code='continuation_enrollment_storage_invalid'){super(code);this.code=code;}
@@ -88,15 +88,24 @@ export function createContinuationEnrollmentStorage(recoveryKey){
  // changes. Authenticate each ORIGINAL binding at its creation instant, never
  // against a caller-selected current signer. No current/applicable claim is made.
  // Physical authority/namespace authentication remains the anchored caller's job.
- function diagnoseRetained(db,now){
+ function diagnoseRetained(db,now,binding){
   transaction(db);
   if(!Number.isSafeInteger(now)||now<0)fail();
   return Object.freeze(db.prepare('SELECT id FROM continuation_enrollment_plans ORDER BY id COLLATE BINARY').all().map(row=>{
    const plan=stored(db,row.id,undefined,true);
-   return Object.freeze({id:plan.id,operation:plan.operation,configIdentity:plan.authority.config_identity,epoch:plan.authority.epoch,baselineRevision:plan.authority.revision,currentSignerId:plan.current_signer?.id??null,candidateFingerprint:plan.candidate?.fingerprint??null,planDigest:plan.plan_digest,createdMs:plan.created_ms,expiresMs:plan.expires_ms,status:now<plan.created_ms?'not-yet-valid':now>=plan.expires_ms?'expired':'fresh'});
+   return Object.freeze({id:plan.id,operation:plan.operation,configIdentity:plan.authority.config_identity,epoch:plan.authority.epoch,baselineRevision:plan.authority.revision,currentSignerId:plan.current_signer?.id??null,candidateFingerprint:plan.candidate?.fingerprint??null,planDigest:plan.plan_digest,createdMs:plan.created_ms,expiresMs:plan.expires_ms,status:now<plan.created_ms?'not-yet-valid':now>=plan.expires_ms?'expired':'fresh',...(binding===undefined?{}:{bindingMatches:JSON.stringify(plan.authority)===JSON.stringify(binding.authority)&&JSON.stringify(plan.current_signer)===JSON.stringify(binding.current_signer)})});
   }));
+ }
+ // Compare ORIGINAL authenticated plans with one strictly snapshotted caller
+ // binding. Time freshness and binding equality remain independent metadata.
+ // The caller still owes anchored authority authentication and a fresh recheck;
+ // equality is never enrollment permission, human approval or live admission.
+ function diagnoseBindings(db,currentAuthority,currentSigner,now){
+  transaction(db);
+  const binding=snapshotContinuationSignerBinding(currentAuthority,currentSigner);
+  return diagnoseRetained(db,now,binding);
  }
  // No consume/apply operation: a future human-authorized authority CAS must
  // reserve this retained identity once and rotate epoch/revision atomically.
- return Object.freeze({read,retain,diagnose,diagnoseRetained});
+ return Object.freeze({read,retain,diagnose,diagnoseRetained:(db,now)=>diagnoseRetained(db,now),diagnoseBindings});
 }
