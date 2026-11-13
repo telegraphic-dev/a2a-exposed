@@ -117,6 +117,13 @@ export async function stores() {
  return { ok: true, stores: [{ id: "file", available: true, private_keys: "protected local files", unattended: true }, { id: "keychain", available: native, backend: process.platform === "linux" ? "secret-service (no kernel fallback)" : process.platform === "darwin" ? "macOS Keychain" : "Windows Credential Manager", readiness: "not probed; owner authorization may be required", unattended: false }], next: "Select --store file or keychain explicitly; keychain never silently falls back." };
 }
 
+function localSafetyCode(local, other) {
+  const tuples = [local, other].map(x => ({ cardUrl: x.cardUrl, identityKey: x.identityKey, keyId: x.keyId })).sort((a, b) => Buffer.compare(Buffer.from(a.identityKey, "base64url"), Buffer.from(b.identityKey, "base64url")) || a.cardUrl.localeCompare(b.cardUrl));
+  const bytes = createHash("sha256").update("a2a-exposed sealed safety v1\n" + canonicalJSON(tuples)).digest("hex");
+  const digits = (BigInt("0x" + bytes) % (10n ** 60n)).toString().padStart(60, "0");
+  return digits.match(/.{5}/g).join(" ");
+}
+
 const SCHEMA_VERSION = 6; // Unreleased checkpoint change; older local drafts are preserved, never migrated.
 const recoveryApproval = (configId, row, action) => hash("a2a-exposed local recovery approval v1", { configId, operationId: row.id, operationDigest: row.digest, state: row.state, revision: row.revision, action });
 const hostUUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
@@ -403,6 +410,7 @@ export class LocalState {
       commit: () => { check(); if (!transaction) fail("maintenance_transaction_state"); db.exec("COMMIT"); transaction = false; check(); },
       rollback: () => { state(); if (!transaction) fail("maintenance_transaction_state"); db.exec("ROLLBACK"); transaction = false; },
       transactionState: () => { state(); return transaction ? "open" : "idle"; },
+      configurationIdentity: () => { check(); return config; },
       // Private read-only prerequisite, never human provenance or admission.
       // The caller retains BEGIN IMMEDIATE throughout every await. Native
       // credentials remain gated: no OS prompt is initiated by maintenance.
@@ -438,6 +446,22 @@ export class LocalState {
        }
        for (let n = 0; n < baseline.length; n++) if (privateRead(path.join(root, baseline[n].key.id + ".key")) !== privateValues[n]) fail("host_readiness_key");
        inspect(); return true;
+      },
+      // Exact approved-proposal/current-record lineage and local comparison.
+      // This verifies data consistency only; the host separately verifies its
+      // privileged human decision signature. No booleans mint approval here.
+      compareApproved: (input, proposalDigests) => {
+       const members = readinessMembers(input); let digests;
+       try { digests = parseJSON(canonicalJSON(proposalDigests)); } catch { fail("host_comparison_invalid"); }
+       if (!Array.isArray(digests) || digests.length !== members.length || new Set(digests).size !== digests.length || digests.some(d => typeof d !== "string" || !KEY.test(d) || Buffer.from(d,"base64url").toString("base64url") !== d)) fail("host_comparison_invalid");
+       check(); if (!transaction || !db.isTransaction) fail("maintenance_transaction_state");
+       return members.map((m, n) => {
+        const row = db.prepare("SELECT * FROM proposals WHERE digest=? AND peer=? AND state='approved'").get(digests[n], m.alias), trust = db.prepare("SELECT * FROM trust WHERE peer=?").get(m.alias), key = db.prepare("SELECT * FROM identities WHERE id=?").get(m.local_id);
+        if (!row || !trust || !key) fail("host_comparison_changed");
+        const p = parseJSON(row.proposal), r = parseJSON(trust.record), local = parseJSON(key.bundle);
+        if (!exact(p,["v","configIdentity","localIdentity","localKeyId","localBundleDigest","localId","peer","peerEndpoint","pairingIdentity","currentRecordDigest","currentRecordVersion","newBundleDigest","newBundle","newPolicy","operation","verificationDecision","proposalNonce"]) || p.v !== 1 || hash("a2a-exposed sealed trust proposal v1",p) !== digests[n] || row.expected_digest !== p.currentRecordDigest || row.expected_version !== p.currentRecordVersion || p.currentRecordVersion + 1 !== m.trust_record_version || trust.version !== m.trust_record_version || r.version !== m.trust_record_version || hash("a2a-exposed sealed trust record v1",r) !== m.trust_record_digest || p.configIdentity !== config || p.localId !== m.local_id || p.localIdentity !== local.identityKey || p.localKeyId !== local.keyId || p.localBundleDigest !== m.local_bundle_digest || p.peer !== m.alias || p.peerEndpoint !== m.endpoint || p.pairingIdentity !== m.pairing_identity || p.newBundleDigest !== m.peer_bundle_digest || hash("a2a-exposed sealed bundle v1",p.newBundle) !== m.peer_bundle_digest || canonicalJSON(p.newBundle) !== canonicalJSON(r.bundle) || p.newPolicy !== "required" || p.verificationDecision !== "independent" || !["enroll","rotate","re-pair","policy","verify"].includes(p.operation)) fail("host_comparison_changed");
+        return { approved_proposal_digest: digests[n], compared_safety_code: localSafetyCode(local, r.bundle), current_trust_digest: m.trust_record_digest, current_trust_version: m.trust_record_version };
+       });
       },
       stageGrant: input => {
        if (!live) fail("maintenance_queue_expired"); const r = hostGrantBinding(input); check(); if (!transaction) fail("maintenance_transaction_state"); if (r.config_id !== config) fail("host_grant_config");
@@ -760,10 +784,8 @@ export class LocalState {
    other = current.bundle; verification = current.verification; source = "current";
   }
   if (local.identityKey === other.identityKey) fail("same_identity");
-  const tuples = [local, other].map(x => ({ cardUrl: x.cardUrl, identityKey: x.identityKey, keyId: x.keyId })).sort((a, b) => Buffer.compare(Buffer.from(a.identityKey, "base64url"), Buffer.from(b.identityKey, "base64url")) || a.cardUrl.localeCompare(b.cardUrl));
-  const bytes = createHash("sha256").update("a2a-exposed sealed safety v1\n" + canonicalJSON(tuples)).digest("hex");
-  const digits = (BigInt("0x" + bytes) % (10n ** 60n)).toString().padStart(60, "0");
-  return { ok: true, config_identity: this.configId(), local_id: localId, peer, source, ...(proposalDigest ? { proposal_digest: proposalDigest } : {}), code: digits.match(/.{5}/g).join(" "), verification, next: "Compare every group through another trusted channel. This read-only code grants no trust; approve only its exact proposal digest." };
+  const code = localSafetyCode(local, other);
+  return { ok: true, config_identity: this.configId(), local_id: localId, peer, source, ...(proposalDigest ? { proposal_digest: proposalDigest } : {}), code, verification, next: "Compare every group through another trusted channel. This read-only code grants no trust; approve only its exact proposal digest." };
  }
 }
 

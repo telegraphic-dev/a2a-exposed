@@ -834,3 +834,63 @@ refuse: there is no automatic retry, resumption, rewind or reconciliation. The
 ability to bind a synthetic attestation is still not proof of human comparison.
 No command invokes this method; grant admission, human provenance, pre-I readiness,
 E, quarantine/writer integration and lifecycle acceptance remain unfinished.
+
+
+### Verification-only human receipt and pre-intent readiness profile
+
+The private `prepareVerifiedIntent` path verifies a signed decision and exact
+approved-proposal lineage before committing a suspended I checkpoint. No command,
+model tool or approval screen invokes it. It does not provision a signer, enroll
+a verification key, migrate existing stores, make a set eligible or send traffic.
+The separate low-level `prepareIntent` storage primitive still accepts synthetic
+attestations for tests; its presence is never evidence of a human decision.
+
+This isolated profile expects a canonical Ed25519 SPKI PEM public key in the
+protected `continuation-human-key.pem` file under the anchored configuration root.
+It must be provisioned independently by a future trusted local human adapter;
+request inputs cannot select or supply a verification key. The code provides no
+key generation, signing, enrollment or replacement operation. Missing, symlinked,
+permissive, malformed or non-Ed25519 key files refuse. A local process with authority
+to replace that protected trust root is privileged; this is not a sandbox against
+such a process. Key enrollment and the adapter's authentic human-comparison and
+aggregate-review ceremony remain pre-activation requirements.
+
+The signature is canonical base64url of the 64 Ed25519 signature bytes over the
+UTF-8 bytes of `a2a-exposed continuation human decision v1`, a newline, and the
+canonical immutable attestation JSON. That attestation binds the complete plan
+MAC, configuration, root, epoch, decision ID, ordered per-member comparison MACs
+and validity window. The trusted signer must independently confirm comparison
+for every selected peer and review the entire plan, including exclusions, exact
+endpoints and required policy. Signing arbitrary model-supplied bytes would not
+meet this contract. A valid signature records that local signer's decision;
+it does not prove a remote person's identity or comparison through another channel.
+No signing private key is read, generated or returned by maintenance.
+
+The coordinator takes authority before the SDK queue and reserves both SQLite
+transactions. SDK aggregate readiness completes under those reservations before
+I. `compareApproved` resolves each attested digest to an approved proposal for
+that exact member and checks its canonical digest, expected old trust digest and
+version, resulting trust version, configuration, identity/key tuples, endpoint,
+pairing identity, bundle and required/independent policy. It recomputes safety
+codes locally and the coordinator compares the resulting entire attestation MAC.
+Missing, changed, rejected, swapped or obsolete proposals refuse; SDK approval
+booleans alone cannot replace the separate signed decision. The comparison reader
+is private consistency checking and does not itself establish human provenance.
+
+Key bytes and file identity, current source/environment, process binding and
+approval freshness are rechecked after SDK awaits and immediately before I COMMIT.
+Both reserved transactions stay held through that authority commit. Only the
+intent/attestation/revision CAS is written; the SDK transaction is read-only and
+rolls back after I, with no staged grant. The attestation is consumed once by the
+existing I transaction. Commit, rollback or close uncertainty retains original
+intent/set IDs and never automatically retries. I stays suspended, pending and
+without an active set.
+
+This profile does not persist the signature or signer identity in schema-3 rows.
+A later eligibility or reconciliation implementation must reverify the signed
+receipt and protected trust root; an I row alone cannot distinguish this path
+from synthetic storage preparation. Durable provenance/recovery representation,
+the privileged signer/approval interface, pairing-decision issuance, final E,
+all-writer invalidation and platform/archive/namespace/traffic acceptance remain
+unfinished. This draft must not be used to claim complete human approval or
+production readiness.
