@@ -1087,3 +1087,39 @@ select a signer, open a physical store, stamp/adopt a schema, commit authority,
 change suspension, make grants eligible or send traffic. No command, initializer
 or runtime authority caller imports them. Human custody/ceremony, anchored schema
 and adoption, eligibility/admission and lifecycle acceptance remain unfinished.
+
+### Disabled authenticated signer-change plan retention
+
+The internal `cli/lib/continuation-enrollment-storage.mjs` module retains the
+strict signer-change codec's fixed-order JSON bytes with a private HMAC-SHA256.
+The domain is `a2a-exposed continuation enrollment storage v1`, followed by a
+newline and those exact JSON bytes. The public plan digest is not substituted
+for private storage authentication. The caller supplies the private authority
+recovery key; the module snapshots its 32 bytes and never returns it.
+
+The fresh-only provenance table installer adds `continuation_enrollment_plans`
+with exactly id, config_identity, canonical_root, epoch, baseline_revision,
+current_signer_id, operation, created_ms, expires_ms, record and storage_mac.
+The current signer references retained enrollment history; initial plans have no
+current signer. Identity, operation, revision and validity constraints apply in
+SQL. The strict table has no implicit rowid; rows cannot be updated, deleted or
+replaced, including replacement through an explicit rowid collision with a fresh
+plan ID. Reads authenticate actual
+stored bytes with fatal UTF-8 decoding, revalidate the complete plan and its original deadline against
+caller-supplied current authority/signer, compare every SQL column, and compare
+all retained current-enrollment columns. Wrong keys, altered records, stale
+state, noncanonical JSON, duplicate fields and missing enrollments refuse.
+
+Retention runs inside a caller-held foreign-key-enabled transaction. A savepoint
+rolls back insertion and readback together while preserving earlier caller work;
+the caller controls the outer commit. Independent-process tests check visibility
+before/after commit and authenticate the retained plan after reopening. Test
+signers and state are synthetic, with no human ceremony or custody acceptance.
+
+This module does not select the current signer, apply or consume a plan, enroll
+a key, rotate authority, sign a decision or admit grants. The future anchored
+caller must obtain current state independently and implement single consumption,
+human authorization and authority revision/epoch CAS in the same transaction.
+No physical initializer, command or runtime admission path imports this module;
+existing schema-1/2/3 stores remain preserved and unadopted. Retained planning
+bytes and private MACs stay outside model/tool output and public diagnostics.

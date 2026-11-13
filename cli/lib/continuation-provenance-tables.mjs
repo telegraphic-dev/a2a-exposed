@@ -33,6 +33,20 @@ export function installContinuationProvenanceTables(db){
    fingerprint TEXT NOT NULL CHECK(${digest('fingerprint')}),
    UNIQUE(id,config_identity,canonical_root,epoch,fingerprint)
   ) STRICT;
+  CREATE TABLE continuation_enrollment_plans(
+   id TEXT PRIMARY KEY CHECK(${uuid('id')}),
+   config_identity TEXT NOT NULL CHECK(${uuid('config_identity')}),
+   canonical_root TEXT NOT NULL CHECK(length(CAST(canonical_root AS BLOB)) BETWEEN 1 AND 4096 AND instr(canonical_root,char(0))=0),
+   epoch TEXT NOT NULL CHECK(${uuid('epoch')}),
+   baseline_revision INTEGER NOT NULL CHECK(${integer('baseline_revision')} AND baseline_revision<9007199254740991),
+   current_signer_id TEXT REFERENCES continuation_signer_enrollments(id),
+   operation TEXT NOT NULL CHECK(operation IN ('initial','replace','remove')),
+   created_ms INTEGER NOT NULL CHECK(${integer('created_ms')}),
+   expires_ms INTEGER NOT NULL CHECK(${integer('expires_ms')} AND expires_ms>created_ms AND expires_ms-created_ms<=600000),
+   record TEXT NOT NULL CHECK(length(CAST(record AS BLOB)) BETWEEN 2 AND 1048576),
+   storage_mac TEXT NOT NULL CHECK(${digest('storage_mac')}),
+   CHECK((operation='initial' AND current_signer_id IS NULL) OR (operation IN ('replace','remove') AND current_signer_id IS NOT NULL))
+  ) STRICT, WITHOUT ROWID;
   CREATE TABLE continuation_decision_receipts(
    decision_id TEXT PRIMARY KEY CHECK(${uuid('decision_id')}),
    enrollment_id TEXT NOT NULL CHECK(${uuid('enrollment_id')}),
@@ -53,7 +67,11 @@ export function installContinuationProvenanceTables(db){
     REFERENCES continuation_signer_enrollments(id,config_identity,canonical_root,epoch,fingerprint)
   ) STRICT;
   ${retained('continuation_signer_enrollments')}
+  ${retained('continuation_enrollment_plans')}
   ${retained('continuation_decision_receipts')}
+  CREATE TRIGGER continuation_enrollment_plans_noreplace BEFORE INSERT ON continuation_enrollment_plans
+   WHEN EXISTS(SELECT 1 FROM continuation_enrollment_plans WHERE id=NEW.id)
+   BEGIN SELECT RAISE(ABORT,'provenance retained'); END;
   CREATE TRIGGER continuation_signer_enrollments_noreplace BEFORE INSERT ON continuation_signer_enrollments
    WHEN EXISTS(SELECT 1 FROM continuation_signer_enrollments WHERE id=NEW.id OR epoch=NEW.epoch)
    BEGIN SELECT RAISE(ABORT,'provenance retained'); END;
