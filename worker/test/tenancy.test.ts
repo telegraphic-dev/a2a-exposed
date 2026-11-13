@@ -3,7 +3,7 @@
 import { VERSION } from "../src/version.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import worker from "../src/index.ts";
+import worker, { dispatch } from "../src/index.ts";
 import { sha256 } from "../src/a2a.ts";
 import { openPeerToken, openPeerTokenWithKey, sealPeerToken, sealPeerTokenWithKey } from "../src/mcp.ts";
 import { hostedTenantContext, namespaceForRegion, parseGates, publicManageUrl, resolveTenant, type WorkerBindings } from "../src/tenancy.ts";
@@ -206,6 +206,44 @@ test("hosted config does not inherit Worker secrets; operational caps do inherit
 		id: "ten_a", db: dummy, publicUrl: "https://a.example.com", config: { RATE_PER_MIN: "10" },
 	});
 	assert.equal(capped.RATE_PER_MIN, "10");
+});
+
+test("hosted sealed flag inherits only explicit platform config and preserves tenant overrides", () => {
+	const overlay = { id: "ten_a", db: dummy, publicUrl: "https://a.example.com" };
+	assert.equal(hostedTenantContext(selfEnv(), overlay).A2A_SEALED_ENABLED, undefined);
+	for (const value of ["", "0", "1", "true"]) {
+		const env = selfEnv({ A2A_SEALED_ENABLED: value });
+		assert.equal(hostedTenantContext(env, overlay).A2A_SEALED_ENABLED, value);
+		assert.equal(hostedTenantContext(env, { ...overlay, config: {} }).A2A_SEALED_ENABLED, value);
+		for (const override of ["", "0", "1"]) {
+			assert.equal(hostedTenantContext(env, {
+				...overlay, config: { A2A_SEALED_ENABLED: override },
+			}).A2A_SEALED_ENABLED, override);
+		}
+	}
+	assert.equal(hostedTenantContext(selfEnv(), {
+		...overlay, config: { A2A_SEALED_ENABLED: "1" },
+	}).A2A_SEALED_ENABLED, "1");
+});
+
+test("hosted sealed owner route stays off by default and requires the exact inherited or overridden flag", async () => {
+	const db = d1(new URL("../migrations/", import.meta.url));
+	const ownerTokenHash = await sha256("tenant-owner");
+	for (const [platform, override, expected] of [
+		[undefined, undefined, 404], ["", undefined, 404], ["0", undefined, 404],
+		["true", undefined, 404], ["1", undefined, 200], ["1", "0", 404],
+		["1", "", 404], [undefined, "1", 200],
+	] as const) {
+		const ctx = hostedTenantContext(selfEnv({ A2A_SEALED_ENABLED: platform }), {
+			id: "ten_a", db, publicUrl: BASE, ownerTokenHash,
+			config: override === undefined ? {} : { A2A_SEALED_ENABLED: override },
+		});
+		const res = await dispatch(new Request(BASE + "/owner/sealed-key", {
+			headers: { authorization: "Bearer tenant-owner" },
+		}), ctx, { waitUntil() {}, passThroughOnException() {} } as any);
+		assert.equal(res.status, expected, `platform=${platform}, tenant=${override}`);
+		if (expected === 200) assert.deepEqual(await res.json(), { bundle: null });
+	}
 });
 
 test("DATA_REGION selects a DO jurisdiction only for eu and fedramp", () => {
