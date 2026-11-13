@@ -99,7 +99,11 @@ function machineLinks(m: ConnectModel): { label: string; href: string }[] {
 	const out = [
 		{ label: "agent card", href: "/.well-known/agent-card.json" },
 		{ label: "legacy card", href: "/.well-known/agent.json" },
+		{ label: "skills index", href: "/.well-known/agent-skills/index.json" },
+		{ label: "API catalog", href: "/.well-known/api-catalog" },
+		{ label: "authentication", href: "/auth.md" },
 	];
+	if (m.mcp) out.push({ label: "MCP server card", href: "/.well-known/mcp/server-card.json" });
 	if (m.oauthMetadata) out.push({ label: "OAuth metadata", href: "/.well-known/oauth-authorization-server" });
 	return out;
 }

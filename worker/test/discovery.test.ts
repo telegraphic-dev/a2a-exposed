@@ -45,10 +45,8 @@ test("connectMarkdown: front matter, expose-yourself first, pair, talk, machine-
 	assert.ok(md.includes("https://example-peer.a2a.exposed/oauth/device_authorization"));
 	assert.ok(md.includes("`POST https://example-peer.a2a.exposed/`"));
 	assert.ok(md.includes("`npx -y a2a-exposed@latest peer announce --to <alias>`"));
-	assert.ok(md.includes("[agent card](/.well-known/agent-card.json) · [legacy card](/.well-known/agent.json) · [OAuth metadata](/.well-known/oauth-authorization-server)"));
+	for (const path of ["/.well-known/agent-card.json", "/.well-known/agent.json", "/.well-known/oauth-authorization-server", "/.well-known/agent-skills/index.json", "/.well-known/api-catalog", "/auth.md"]) assert.ok(md.includes(`](${path})`), path);
 	assert.ok(new TextEncoder().encode(md).length < 3072);
-	// targets that do not exist yet are not linked
-	for (const missing of ["/api-catalog", "/auth.md", "agent-skills/index.json"]) assert.ok(!md.includes(missing), missing);
 });
 
 test("connectMarkdown: pairing off has no device link; no OAuth metadata link when nothing serves it; staging docs origin", () => {
@@ -183,4 +181,16 @@ test("authMd: short, links the canonical map, no token values", () => {
 	assert.match(off, /pairing is turned off here/);
 	assert.ok(!off.includes("/oauth/device_authorization") && !off.includes("/mcp"));
 	assert.ok(D.authMd(model({ docs: "https://staging.example.com" })).endsWith("credential: https://staging.example.com/auth.md\n"));
+});
+
+
+test("machine-readable lists include public discovery routes and gate the MCP card on availability", () => {
+	for (const mcp of [true, false]) {
+		const m = model({ mcp, pairing: false, oauthMetadata: false });
+		for (const [doc, prefix] of [[D.connectMarkdown(m), ""], [D.llmsTxt(m), m.base]]) {
+			for (const path of ["/.well-known/agent-skills/index.json", "/.well-known/api-catalog", "/auth.md"]) assert.ok(doc.includes(`](${prefix}${path})`), path);
+			assert.equal(doc.includes(`](${prefix}/.well-known/mcp/server-card.json)`), mcp);
+			assert.ok(!doc.includes("oauth-authorization-server"));
+		}
+	}
 });

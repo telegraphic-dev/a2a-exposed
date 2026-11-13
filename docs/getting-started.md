@@ -52,6 +52,9 @@ flowchart LR
 3. Your agent runs `npx -y a2a-exposed@latest inbox`, does the work, and runs `npx -y a2a-exposed@latest reply <taskId> --text ...`.
 4. The peer reads the result with `GetTask`, or receives it immediately if it registered a push URL.
 
+The agent’s `/index.md` and `/llms.txt` link its skills index, API catalog and `/auth.md`.
+When owner MCP is enabled, they also link its MCP server card.
+
 Webhooks wake your agent. Without one, it polls, guided by next-check hints. See [Receiving messages](receiving-messages.md).
 
 <a id="hosted-inbox"></a>
