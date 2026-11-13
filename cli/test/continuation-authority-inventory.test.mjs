@@ -63,3 +63,32 @@ for(const sql of [
  try{await assert.rejects(maintain(dir,v=>{v.begin();assert.fail('changed namespace admitted');}),{code:'authority_schema'});}finally{DatabaseSync.prototype.exec=exec;}
  assert.equal(injected,true);assert.deepEqual(fs.readFileSync(file(dir)),before);assert.equal(inspect(dir).suspended,true);
 });
+
+for(const pragma of ['ignore_check_constraints','writable_schema'])for(const stage of ['before-begin','after-await'])test('physical maintenance rechecks effective '+pragma+' '+stage,async t=>{
+ const dir=fixture(t),before=fs.readFileSync(file(dir)),exec=DatabaseSync.prototype.exec;
+ let connection,effective,finalPragma;const close=DatabaseSync.prototype.close;
+ DatabaseSync.prototype.close=function(...args){if(this===connection)finalPragma=this.prepare(`PRAGMA ${pragma}`).get()[pragma];return close.apply(this,args);};
+ DatabaseSync.prototype.exec=function(value,...args){
+  const result=exec.call(this,value,...args);
+  if(value==='PRAGMA synchronous=FULL'){
+   connection=this;
+   if(stage==='before-begin'){exec.call(this,`PRAGMA ${pragma}=ON`);effective=this.prepare(`PRAGMA ${pragma}`).get()[pragma];}
+  }
+  return result;
+ };
+ try{
+  const action=maintain(dir,async v=>{
+   if(stage==='after-await'){
+    v.begin();v.commit();await Promise.resolve();
+    exec.call(connection,`PRAGMA ${pragma}=ON`);effective=connection.prepare(`PRAGMA ${pragma}`).get()[pragma];
+   }
+   v.begin();assert.equal(effective,0,'unsafe connection admitted');v.rollback();
+  });
+  // Some supported Node versions refuse writable_schema=ON in defensive mode.
+  // Assert the effective state, never infer safety from pragma request success.
+  try{await action;assert.equal(effective,0);}
+  catch(error){assert.equal(effective,1);assert.equal(error.code,'authority_schema');}
+  assert.equal(finalPragma,effective);
+ }finally{DatabaseSync.prototype.exec=exec;DatabaseSync.prototype.close=close;}
+ assert.deepEqual(fs.readFileSync(file(dir)),before);assert.equal(inspect(dir).suspended,true);
+});

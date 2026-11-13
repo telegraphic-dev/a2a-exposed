@@ -62,6 +62,8 @@ test('empty or incomplete stores refuse without installing or adopting anything'
 test('schema check explicitly does not authenticate row data',t=>{
  const db=fixture(t);db.exec('PRAGMA ignore_check_constraints=ON');
  db.prepare('INSERT INTO continuation_signer_enrollments VALUES(?,?,?,?,?,?)').run('synthetic','synthetic','synthetic','synthetic','synthetic','synthetic');
+ assert.throws(()=>inspect(db),{code:'continuation_inventory_connection_invalid'});
+ db.exec('PRAGMA ignore_check_constraints=OFF');
  assert.deepEqual(inspect(db),{version:1,format:'fresh-continuation-provenance'});
  assert.equal(db.prepare('SELECT COUNT(*) n FROM continuation_signer_enrollments').get().n,1);
 });
@@ -74,4 +76,15 @@ test('physical read-only connection leaves candidate file bytes unchanged',t=>{
   db.exec('PRAGMA foreign_keys=ON; PRAGMA trusted_schema=OFF; BEGIN');inspect(db);db.exec('COMMIT');
  }finally{db.close();}
  assert.deepEqual(fs.readFileSync(file),before);assert.deepEqual(fs.readdirSync(directory),['candidate.sqlite']);
+});
+
+for(const pragma of ['ignore_check_constraints','writable_schema'])test('unsafe connection refuses without repair: '+pragma,t=>{
+ const db=fixture(t);inspect(db);db.exec(`PRAGMA ${pragma}=ON`);
+ const effective=db.prepare(`PRAGMA ${pragma}`).get()[pragma];
+ const before=schema(db),changes=db.prepare('SELECT total_changes() n').get().n;
+ if(effective===1)assert.throws(()=>inspect(db),{code:'continuation_inventory_connection_invalid'});
+ else assert.deepEqual(inspect(db),{version:1,format:'fresh-continuation-provenance'});
+ assert.equal(db.prepare(`PRAGMA ${pragma}`).get()[pragma],effective);
+ assert.deepEqual(schema(db),before);assert.equal(db.prepare('SELECT total_changes() n').get().n,changes);assert.equal(db.isTransaction,true);
+ db.exec(`PRAGMA ${pragma}=OFF`);inspect(db);
 });
