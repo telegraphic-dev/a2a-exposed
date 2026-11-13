@@ -62,3 +62,18 @@ test('all members and earlier private files are rechecked after the last member 
  s.privateGet=async function(...args){const result=await get.apply(this,args);if(++calls===2)fs.renameSync(path.join(s.root,local.id+'.key'),path.join(s.root,'synthetic-held.key'));return result;};
  await assert.rejects(ready(s,m,async q=>{await q.assertReadiness([m,second]);q.rollback();}));assert.equal(calls,2);
 });
+
+
+test('approved comparison captures exact members, refuses missing/duplicate/cross-peer evidence and expires with its view',async t=>{
+ const {s,m,p,local}=await fixture(t);let escaped;
+ await s._withMaintenanceQueue(host,async q=>{q.begin();escaped=q;assert.equal(await q.assertReadiness([m]),true);const [c]=q.compareApproved([m],[p.digest]);assert.equal(c.approved_proposal_digest,p.digest);assert.equal(c.compared_safety_code,s.safetyCode(local.id,'peer').code);assert.equal(c.current_trust_digest,m.trust_record_digest);
+ for(const ds of [[],[p.digest,p.digest],[Buffer.alloc(32,3).toString('base64url')],[true]])assert.throws(()=>q.compareApproved([m],ds));
+ let getter=false;const ds=[];Object.defineProperty(ds,'0',{enumerable:true,get(){getter=true;return p.digest;}});assert.throws(()=>q.compareApproved([m],ds));assert.equal(getter,false);q.rollback();assert.throws(()=>q.compareApproved([m],[p.digest]),{code:'maintenance_transaction_state'});
+ });assert.throws(()=>escaped.compareApproved([m],[p.digest]),{code:'maintenance_queue_expired'});
+});
+test('two peer comparisons preserve member order and reject swapping individually approved proposals',async t=>{
+ const {s,m,p,local}=await fixture(t),remote=await generateIdentity('https://other.example.com/card');
+ const second=await s.propose({peer:'other',localId:local.id,bundle:remote.bundle,pairingIdentity:Buffer.alloc(32,9).toString('base64url'),expectedCurrent:'none',policy:'required',verification:'independent'}),a=await s.approve({peer:'other',digest:second.digest,expectedCurrent:'none',ownerApproved:true,independentVerified:true,verifiedProposalDigest:second.digest});
+ const other={...m,alias:'other',endpoint:remote.bundle.cardUrl,pairing_identity:a.record.pairingIdentity,trust_record_digest:a.digest,peer_bundle_digest:hash('a2a-exposed sealed bundle v1',remote.bundle)};
+ await s._withMaintenanceQueue(host,async q=>{q.begin();assert.equal(await q.assertReadiness([m,other]),true);assert.deepEqual(q.compareApproved([m,other],[p.digest,second.digest]).map(c=>c.current_trust_digest),[m.trust_record_digest,other.trust_record_digest]);assert.throws(()=>q.compareApproved([m,other],[second.digest,p.digest]),{code:'host_comparison_changed'});q.rollback();});
+});

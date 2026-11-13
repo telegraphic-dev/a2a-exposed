@@ -3,7 +3,7 @@
 import {createContinuationSourceSnapshot,ContinuationSourceError} from './continuation-sources.mjs';
 import {installContinuationTables,prepareContinuationIntent,readContinuationIntent,commitContinuationMembers} from './continuation-tables.mjs';
 import {createContinuationRecords} from './continuation-records.mjs';
-import fs from 'node:fs';import path from 'node:path';import{createHash,createHmac,randomBytes,timingSafeEqual,randomUUID}from'node:crypto';import{createRequire}from'node:module';
+import fs from 'node:fs';import path from 'node:path';import{createHash,createHmac,randomBytes,timingSafeEqual,randomUUID,createPublicKey,verify}from'node:crypto';import{createRequire}from'node:module';
 const require=createRequire(import.meta.url),UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 export class PairingAuthorityError extends Error{constructor(code){super(code);this.code=code;this.next=code.startsWith('authority_recovery')?'Read planPairingAuthorityRecovery for this configuration, obtain human approval of that exact plan, and use its listed revision, intent, action and approval token. Quarantine never resumes grants.':code==='authority_reverification_required'?'Keep grant authorization suspended. Fresh saved-grant verification and explicit resume are not implemented; do not reset authority or resend.':'Preserve the original pairing/configuration and authority files. Inspect authority status and original encrypted message IDs; do not regenerate, resend or assume a failed operation rolled back.';}}
 const fail=code=>{throw new PairingAuthorityError(code);};
@@ -190,6 +190,19 @@ function strictSourceSnapshot(root,expectedHash){
   return createContinuationSourceSnapshot({configEnv:buffers.get('config.env'),peers:buffers.get('peers.json')});
  }catch(error){if(error instanceof ContinuationSourceError)fail('authority_source_invalid');throw error;}finally{for(const bytes of buffers.values())bytes?.fill(0);}
 }
+// Verification-only draft profile. This code never creates a key or signs a
+// decision. The protected trust root must be provisioned by the future trusted
+// local human adapter, independently of model/peer-controlled request inputs.
+function humanDecisionCheck(root,records,intent,signature){
+ const file=path.join(root,'continuation-human-key.pem');
+ if(typeof signature!=='string'||!/^[A-Za-z0-9_-]{86}$/.test(signature)||Buffer.from(signature,'base64url').toString('base64url')!==signature)fail('authority_human_signature_required');
+ const instance=check(file),bytes=read(file,4096),text=bytes.toString('utf8');let key;
+ try{key=createPublicKey(text);}catch{fail('authority_human_key_invalid');}
+ if(key.asymmetricKeyType!=='ed25519'||text!==key.export({type:'spki',format:'pem'}))fail('authority_human_key_invalid');
+ const message=Buffer.from('a2a-exposed continuation human decision v1\n'+records.authorityRows(intent).attestation.record);
+ if(!verify(null,message,key,Buffer.from(signature,'base64url')))fail('authority_human_signature_invalid');
+ return()=>{if(!sameInstance(check(file),instance)||!read(file,4096).equals(bytes))fail('authority_human_key_changed');};
+}
 function continuationPublic(r){return Object.freeze({schema:3,configIdentity:r.config_id,revision:r.revision,epoch:r.suspension_epoch,activeSet:r.active_set,intentId:r.pending,suspended:r.suspended===1});}
 // No migration/adoption/reset option. Existing schema-1/2 files stay byte-for-byte.
 export function initializeContinuationAuthority(configDir,options={}){return initializeAuthority(configDir,options,3);}
@@ -245,6 +258,39 @@ export async function withContinuationAuthorityMaintenance(configDir,{configIden
      const changed=db.prepare('UPDATE authority SET revision=?,pending=?,active_set=NULL,suspended=1 WHERE id=1 AND config_id=? AND revision=? AND pending IS NULL AND active_set IS NULL AND suspended=1 AND suspension_epoch=? AND source_hash=?').run(plan.target_revision,intent.id,configIdentity,before.revision,before.suspension_epoch,before.source_hash).changes;
      if(changed!==1)fail('authority_changed');current=row(db,configIdentity,3);guard();authenticated(current);db.exec('RELEASE authority_prepare');preparedCheck=checkPlan;return continuationPublic(current);
     }catch(error){try{db.exec('ROLLBACK TO authority_prepare; RELEASE authority_prepare');current=before;}catch{fail('authority_rollback_unknown');}throw error;}
+   },
+   // Draft privileged pre-I path. A signature is evidence from a separately
+   // provisioned local signer, never proof of remote identity. No command or UI
+   // provisions that signer/trust root; all traffic and eligibility remain off.
+   async prepareVerifiedIntent(input,sdk,{signature,environment=process.env,now=Date.now()}={}){
+    const before=guard();if(preparedCheck!==null||before.pending!==null||before.active_set!==null||before.suspended!==1)fail('authority_write_pending');
+    const records=codec(own(own(own(input,'record'),'plan'),'set_id')),intent=records.assertFresh(input,now),plan=intent.record.plan;
+    if(plan.baseline_revision!==before.revision||plan.target_revision!==before.revision+1)fail('authority_revision_stale');
+    const checkHuman=humanDecisionCheck(p.root,records,intent,signature),checkPlan=sourceCheck(records,intent,before,environment,now);
+    if(typeof sdk?._withMaintenanceQueue!=='function')fail('authority_sdk_required');
+    const fields=['alias','endpoint','pairing_identity','trust_record_digest','trust_record_version','local_id','local_bundle_digest','peer_bundle_digest','policy','verification'];
+    const members=plan.members.map(m=>Object.fromEntries(fields.map(k=>[k,m[k]])));let scope=true,committed=false,witness;
+    const checkAll=()=>{checkHuman();checkPlan();};checkAll();attempted={intentId:intent.id,setId:plan.set_id};
+    try{
+     await sdk._withMaintenanceQueue({withAuthorityLease:async run=>{guard();return await run();},assertAuthority:stage=>{
+      if(!scope)return false;
+      if(committed){if(stage!=='exit'||db.isTransaction)return false;checkHuman();guard(false);return witness===JSON.stringify(row(db,configIdentity,3));}
+      guard();checkAll();return true;
+     }},async q=>{
+      q.begin();if(q.configurationIdentity()!==configIdentity)fail('authority_sdk_config');
+      if(q.inspectGrant(intent.id)!==null)fail('authority_stage_reconciliation_required');
+      if(await q.assertReadiness(members)!==true)fail('authority_sdk_readiness');checkAll();
+      const a=intent.attestation.attestation,comparisons=q.compareApproved(members,a.comparisons.map(c=>c.approved_proposal_digest)).map((c,n)=>({grant_id:plan.members[n].grant_id,...c}));
+      const actual=records.bindAttestation({plan,membership_mac:intent.record.membership_mac,plan_mac:intent.record.plan_mac},{id:a.id,decision_id:a.decision_id,created_ms:a.created_ms,expires_ms:a.expires_ms,comparisons});
+      if(actual.attestation_mac!==intent.record.attestation_mac)fail('authority_human_comparison_changed');
+      checkAll();view.prepareIntent(intent,{environment,now});
+      // Both reserved transactions remain held through the authority I COMMIT.
+      // No SDK write is made; releasing readiness early is forbidden.
+      preparedCheck=()=>{checkAll();if(q.transactionState()!=='open')fail('authority_sdk_readiness');};
+      witness=JSON.stringify(row(db,configIdentity,3));view.commit();committed=true;q.rollback();
+     });
+     if(!committed)fail('authority_prepare_incomplete');return{...continuationPublic(guard(false)),checkpoint:'I'};
+    }finally{scope=false;}
    },
    // Phase 2 starts only from a durable I. Own authority BEFORE acquiring the
    // SDK queue, commit S before C, and release the queue before reacquiring A.
