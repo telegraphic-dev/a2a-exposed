@@ -311,5 +311,13 @@ export async function withContinuationAuthorityMaintenance(configDir,{configIden
    }
   });
   guard(false);const result=await action(view);if(db.isTransaction)fail('authority_transaction_open');guard(false);return result;
- }catch(error){const result=mapped(error);if(attempted)Object.assign(result,attempted,{checkpoint:'unknown'});throw result;}finally{live=false;let rollbackFailed=false;try{if(db?.isTransaction)db.exec('ROLLBACK');}catch{rollbackFailed=true;}if(registered)activeLeases.delete(p.root);close(db);if(rollbackFailed)fail('authority_rollback_unknown');}
+ }catch(error){const result=mapped(error);if(attempted)Object.assign(result,attempted,{checkpoint:'unknown'});throw result;}finally{
+  live=false;let cleanupError;
+  try{if(db?.isTransaction)db.exec('ROLLBACK');}catch{cleanupError=new PairingAuthorityError('authority_rollback_unknown');}
+  if(registered)activeLeases.delete(p.root);
+  try{close(db);}catch(error){cleanupError??=mapped(error);}
+  // A cleanup failure may follow a durable checkpoint. It must not discard
+  // its original IDs merely because it is thrown outside the action catch.
+  if(cleanupError){if(attempted)Object.assign(cleanupError,attempted,{checkpoint:'unknown'});throw cleanupError;}
+ }
 }

@@ -827,7 +827,8 @@ reacquiring authority. No final E transition is implemented. A future phase-3
 coordinator must extend that reserved window through its reviewed E CAS/COMMIT;
 it cannot treat this method's result as readiness that remains valid after release.
 
-A pre/post R COMMIT failure retains public intent/set IDs and an unknown outcome.
+A pre/post R COMMIT or final cleanup failure retains public intent/set IDs and an
+unknown outcome, including an authority close failure thrown after durable R.
 R may already be durable even if the method throws. Existing ready/void rows
 refuse: there is no automatic retry, resumption, rewind or reconciliation. The
 ability to bind a synthetic attestation is still not proof of human comparison.
