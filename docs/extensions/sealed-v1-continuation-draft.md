@@ -1005,3 +1005,29 @@ the attestation, not the receipt wrapper: matching wrapper fields alone cannot
 prove single consumption, current enrollment or a human ceremony. Schema-3 rows
 and a verification-key file cannot supply those guarantees. Durable provenance,
 the privileged human adapter and admission remain unimplemented.
+
+### Disabled signer-change planning codec
+
+The internal `cli/lib/continuation-enrollment-plan.mjs` codec constructs a
+read-only plan for an explicit `initial`, `replace` or `remove` operation. It
+binds a caller-supplied authority snapshot, current enrolled signer (or absence),
+candidate canonical Ed25519 public key and fingerprint, operation UUID and
+original validity window. Initial enrollment requires no current signer;
+replacement and removal require one. Removal has no candidate. Equal-key
+replacement remains a distinct operation requiring a fresh plan identity.
+
+The plan includes the exact configuration/root/epoch, revision, suspension and
+active membership. Pending continuation intents refuse instead of being
+reconciled or superseded. Rechecking compares the complete current snapshot and
+signer record, rejects expiry and clock regression, and preserves the original
+window. Invalid, ambiguous or noncanonical records fail with fixed error codes.
+
+The domain-separated SHA-256 plan digest is public consistency data, never
+human authorization or an authenticated storage record. Anyone can construct a
+plan from supplied public inputs. No command calls this codec and it performs
+no enrollment, signing, storage mutation, source discovery or grant transition.
+The future authority reader must authenticate and anchor its inputs; the trusted
+adapter must independently verify the fingerprint and obtain human approval.
+The future writer must consume the exact plan once, recheck across awaits and
+rotate epoch/revision while clearing membership atomically. Durable storage,
+schema adoption, privileged apply and admission remain unimplemented.
