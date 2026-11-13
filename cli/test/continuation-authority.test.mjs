@@ -81,7 +81,7 @@ test('SQL constraints refuse replacement, unsuspended-empty state, invalid epoch
  const dir=fixture(t);raw(dir,db=>{db.exec('PRAGMA foreign_keys=ON');for(const sql of ["DELETE FROM authority","INSERT OR REPLACE INTO authority SELECT * FROM authority","UPDATE authority SET suspended=0","UPDATE authority SET suspension_epoch='invalid'",`UPDATE authority SET pending='${id(99)}'`,"UPDATE authority SET revision=-1","UPDATE authority SET recovery_key='invalid'"])assert.throws(()=>db.exec(sql));});assert.equal(inspectContinuationAuthority(dir,options).revision,0);
 });
 test('authenticated maintenance read detects bypassed immutable intent corruption',async t=>{
- const dir=fixture(t);await maintain(dir,v=>{v.begin();v.prepareIntent(intent(v),{environment:{},now:1000});v.commit();});raw(dir,db=>{db.exec('DROP TRIGGER continuation_intents_immutable');db.prepare('UPDATE continuation_intents SET intent_mac=?').run(digest(99));});await assert.rejects(maintain(dir,v=>{v.begin();}),{code:'authority_unavailable'});
+ const dir=fixture(t);await maintain(dir,v=>{v.begin();v.prepareIntent(intent(v),{environment:{},now:1000});v.commit();});raw(dir,db=>{const sql=db.prepare("SELECT sql FROM sqlite_schema WHERE name='continuation_intents_immutable'").get().sql;db.exec('DROP TRIGGER continuation_intents_immutable');db.prepare('UPDATE continuation_intents SET intent_mac=?').run(digest(99));db.exec(sql);});await assert.rejects(maintain(dir,v=>{v.begin();}),{code:'authority_unavailable'});
 });
 
 test('real pre/post I COMMIT faults expose uncertainty and retain only the durable checkpoint',async t=>{
@@ -106,7 +106,7 @@ test('foreign process cannot prepare an environment-bound persisted plan',async 
  const r=spawnSync(process.execPath,['--input-type=module','-e',script],{input:JSON.stringify({dir,options,i,environment}),encoding:'utf8',timeout:10000,env:{DO_NOT_TRACK:'1'}});assert.equal(r.status,0,r.stderr);assert.equal(r.stdout.trim(),'authority_continuation_changed');assert.equal(inspectContinuationAuthority(dir,options).revision,0);
 });
 test('continuation inspection authenticates pending intent data without printing private MACs',async t=>{
- const dir=fixture(t);await maintain(dir,v=>{v.begin();v.prepareIntent(intent(v),{environment:{},now:1000});v.commit();});raw(dir,db=>{db.exec('DROP TRIGGER continuation_intents_immutable');db.prepare('UPDATE continuation_intents SET intent_mac=?').run(digest(99));});assert.throws(()=>inspectContinuationAuthority(dir,options),{code:'authority_unavailable'});
+ const dir=fixture(t);await maintain(dir,v=>{v.begin();v.prepareIntent(intent(v),{environment:{},now:1000});v.commit();});raw(dir,db=>{const sql=db.prepare("SELECT sql FROM sqlite_schema WHERE name='continuation_intents_immutable'").get().sql;db.exec('DROP TRIGGER continuation_intents_immutable');db.prepare('UPDATE continuation_intents SET intent_mac=?').run(digest(99));db.exec(sql);});assert.throws(()=>inspectContinuationAuthority(dir,options),{code:'authority_unavailable'});
 });
 
 test('I COMMIT rechecks environment after awaits and refuses expired approval or clock regression',async t=>{

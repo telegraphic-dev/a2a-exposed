@@ -716,6 +716,17 @@ refuses existing or incomplete stores; schema 1/2 is never migrated or reset.
 The original schema-2 initializer and readers/writers remain separate and refuse
 schema 3. No command calls the new entry points.
 
+The schema-3 reader first compares all main-schema tables, indexes and triggers,
+including their SQL text, against an independently initialized in-memory store of
+this exact disabled format. Extra, missing or changed objects, TEMP objects,
+attached databases, a different version, disabled foreign keys or trusted-schema
+mode refuse as `authority_schema`. Inspection and each maintenance authority read
+recheck the inventory, including between transactions after an await. Candidate
+SQL is never executed to construct the reference and a refusal does not rewrite
+or adopt the store. Equivalent but differently stored SQL also refuses. This
+checks schema shape; it does not authenticate row data or establish provenance.
+The signer/provenance foundation has its own inventory and is not adopted here.
+
 The schema-3 reader checks identity, canonical epoch, pending-intent cardinality,
 epoch/revision binding and active-set/intent state agreement. Pending or active
 records are authenticated against the real private recovery key and canonical
