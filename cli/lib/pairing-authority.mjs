@@ -3,7 +3,7 @@
 import {createContinuationSourceSnapshot,ContinuationSourceError} from './continuation-sources.mjs';
 import {installContinuationTables,prepareContinuationIntent,readContinuationIntent,commitContinuationMembers} from './continuation-tables.mjs';
 import {installContinuationProvenanceAuthority,assertContinuationProvenanceAuthorityInventory} from './continuation-provenance-authority.mjs';
-import {planContinuationSignerChange} from './continuation-enrollment-plan.mjs';
+import {planContinuationSignerChange,assertContinuationSignerChange} from './continuation-enrollment-plan.mjs';
 import {createContinuationEnrollmentStorage} from './continuation-enrollment-storage.mjs';
 import {createContinuationRecords} from './continuation-records.mjs';
 import fs from 'node:fs';import path from 'node:path';import{createHash,createHmac,randomBytes,timingSafeEqual,randomUUID,createPublicKey,verify}from'node:crypto';import{createRequire}from'node:module';
@@ -260,7 +260,8 @@ export function inspectFreshContinuationProvenanceAuthority(configDir,{configIde
 // Disabled private anchored initial-plan retention. No signer enrollment/apply,
 // human approval, schema adoption or grant admission is provided by these APIs.
 function initialSignerAuthority(r,p){return{config_identity:r.config_id,canonical_root:p.root,epoch:r.suspension_epoch,revision:0,suspended:true,active_set_id:null,pending_intent_id:null};}
-function anchoredInitialSignerPlan(configDir,options,write){
+function anchoredInitialSignerPlan(configDir,options,mode){
+ const write=mode==='retain';
  let db,registered=false,p;
  try{
   const {configIdentity,id,now}=options;
@@ -280,6 +281,11 @@ function anchoredInitialSignerPlan(configDir,options,write){
   if(write){
    const plan=planContinuationSignerChange({id,operation:'initial',authority,current_signer:null,candidate:options.candidate,created_ms:now,expires_ms:options.expiresMs});
    result=storage.retain(db,plan,authority,null,now);
+  }else if(mode==='retained'){
+   result=storage.readRetained(db,id);
+   // Original-time validation still binds the exact retained plan to this
+   // anchored initial authority. Expiry is not approval or applicability.
+   assertContinuationSignerChange(result,authority,null,result.created_ms);
   }else result=storage.read(db,id,authority,null,now);
   guard();
   db.exec(write?'COMMIT':'ROLLBACK');assertAnchor(p,anchor);
@@ -296,8 +302,11 @@ function anchoredInitialSignerPlan(configDir,options,write){
   return result;
  }catch(error){throw mapped(error);}finally{if(registered)activeLeases.delete(p.root);try{db?.exec('ROLLBACK');}catch{}close(db);}
 }
-export function retainInitialContinuationSignerPlan(configDir,options={}){return anchoredInitialSignerPlan(configDir,options,true);}
-export function readInitialContinuationSignerPlan(configDir,options={}){return anchoredInitialSignerPlan(configDir,options,false);}
+export function retainInitialContinuationSignerPlan(configDir,options={}){return anchoredInitialSignerPlan(configDir,options,'retain');}
+export function readInitialContinuationSignerPlan(configDir,options={}){return anchoredInitialSignerPlan(configDir,options,'fresh');}
+// Private original-ID reconciliation only, even after the original deadline.
+// No clock input, current-signer selection or applicable-plan claim.
+export function readRetainedInitialContinuationSignerPlan(configDir,{configIdentity,id}={}){return anchoredInitialSignerPlan(configDir,{configIdentity,id},'retained');}
 
 // Disabled read-only uncertainty diagnosis. Expiry does not erase retained
 // identities; these metadata are never an applicable plan or human approval.
