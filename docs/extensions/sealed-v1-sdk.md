@@ -179,3 +179,15 @@ preserved and refused rather than migrated. Backup restores remain archive-only;
 semantic ledger restore, live continuation, native credential-store acceptance
 and real Windows validation remain outside this slice. See the
 [local custody contract](../../encryption/LOCAL-CUSTODY-DRAFT.md).
+
+
+## Isolated continuation table storage
+
+The internal [continuation table primitives](sealed-v1-continuation-draft.md#isolated-authority-continuation-tables)
+retain authenticated immutable intents, complete member sets and single-use
+attestations in caller-owned SQLite transactions. They enforce row/JSON/MAC
+agreement and exact prepared-to-set-committed comparisons, without committing the
+outer transaction. Their installer accepts only an empty version-zero database.
+The physical authority remains schema 2; schema-3 authority identity/epoch and
+pending/active-set integration, privileged human approval, source/SDK readiness,
+reconciliation and grant admission remain unfinished. No command uses the module.

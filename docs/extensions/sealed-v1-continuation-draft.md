@@ -656,3 +656,49 @@ format is required for operational host-grant history. This deliberate draft hol
 must be resolved before complete lifecycle/release acceptance. No authority-schema-3
 intents, real maintenance adapter, human decision, current trust/source readiness,
 all-writer/namespace integration, replay/admission, traffic or release is enabled.
+
+
+### Isolated authority continuation tables
+
+`cli/lib/continuation-tables.mjs` implements the four proposed continuation tables
+as isolated internal storage primitives. Its installer requires an empty,
+version-zero database inside a caller-owned transaction with foreign keys enabled.
+It does not set a schema version, initialize a physical authority store or migrate
+schema 2. The physical pairing authority still creates and accepts schema 2 only.
+The schema-3 authority row, suspension epoch, active-set binding and namespace/lease
+integration remain unimplemented.
+
+STRICT tables constrain canonical UUIDs and MAC encodings, safe revisions,
+attestation validity windows, states and unique member aliases/identities/variables.
+A partial unique index and insertion guard retain the single pending intent even
+against INSERT OR REPLACE. Triggers retain all history, freeze immutable bindings,
+limit state transitions and allow attestation consumption only once for its exact
+prepared plan/epoch. Canonical JSON and keyed authenticity are checked by the
+reader, not inferred from SQL syntax constraints.
+
+The private codec's authorityRows projection authenticates an entire immutable
+intent and produces canonical SQL records and member MACs. readContinuationIntent
+checks every repeated SQL/JSON/MAC field, the exact consumed attestation, complete
+member cardinality/order, set binding and state agreement. It returns private MAC
+material and must never feed model/tool output. It can inspect authenticated
+expired history; that is not permission to use an expired approval.
+
+prepareContinuationIntent checks freshness and records/consumes the complete
+attestation and prepared intent. commitContinuationMembers requires the exact
+prepared immutable intent, inserts the entire set/member aggregate, and compares
+its original ID, MAC, epoch, target revision, set and state before changing state
+to set-committed. Savepoints retain the caller's outer transaction and roll back
+partial storage writes on failure. They never commit the caller's transaction.
+Independent-process tests cover reserved-lock exclusion and retained I/C record
+checkpoints after process exit. These are storage tests, not a completed physical
+host coordinator or proof of source/human/SDK readiness.
+
+No eligible/finalize/abandon API is exposed. Privileged raw SQL is not sandboxed
+and can still perform the schema's declared state transitions; an eligible SQL
+row alone never grants admission. The future coordinator must atomically bind
+these writes to its real authority-row revision/pending/epoch/active-set CAS,
+validate source/environment/readiness and human provenance, and follow every
+reviewed authority-to-SDK phase. None of those checks is supplied by a caller's
+ability to MAC a record. The real schema-3 initializer/reader, maintenance adapter,
+all writers, reconciliation, human comparison, admission, archive/platform/privacy
+and traffic/release gates remain unfinished. No command imports these primitives.
