@@ -16,7 +16,7 @@ function close(db){try{db?.close();}catch{fail('authority_unavailable');}}
 function exists(file){try{fs.lstatSync(file);return true;}catch(error){if(error.code==='ENOENT')return false;throw error;}}
 function marker(p){check(p.marker);let value;try{value=JSON.parse(read(p.marker,4096).toString('utf8'));}catch{fail('authority_marker_invalid');}if(!value||Object.keys(value).sort().join(',')!=='configIdentity,v'||value.v!==1||!UUID.test(value.configIdentity||''))fail('authority_marker_invalid');return value;}
 function open(p,{readonly=false,schema=2}={}){check(p.db);const {DatabaseSync}=require('node:sqlite'),db=new DatabaseSync(p.db,{readOnly:readonly});try{db.exec('PRAGMA busy_timeout=50; PRAGMA trusted_schema=OFF; PRAGMA foreign_keys=ON;');if(db.prepare('PRAGMA user_version').get().user_version!==schema||db.prepare("SELECT type FROM sqlite_schema WHERE name='authority'").get()?.type!=='table'||db.prepare('PRAGMA table_info(authority)').all().map(r=>r.name).join(',')!==('id,config_id,revision,source_hash,pending,suspended,recovery_key'+(schema===3?',suspension_epoch,active_set':'')))fail('authority_schema');return db;}catch(error){db.close();throw error;}}
-function row(db,configIdentity,schema=2){const r=db.prepare('SELECT * FROM authority WHERE id=1').get();if(!r||db.prepare('SELECT COUNT(*) AS n FROM authority').get().n!==1||r.config_id!==configIdentity||!UUID.test(r.config_id)||!Number.isSafeInteger(r.revision)||r.revision<0||!(/^[A-Za-z0-9_-]{43}$/).test(r.source_hash)||r.pending!==null&&!UUID.test(r.pending)||![0,1].includes(r.suspended)||typeof r.recovery_key!=='string'||!(/^[A-Za-z0-9_-]{43}$/).test(r.recovery_key)||Buffer.from(r.recovery_key,'base64url').toString('base64url')!==r.recovery_key)fail('authority_state_invalid');if(schema===3)validateContinuationAuthorityRow(db,r);return r;}
+function row(db,configIdentity,schema=2){if(schema===3)assertContinuationAuthorityInventory(db);const r=db.prepare('SELECT * FROM authority WHERE id=1').get();if(!r||db.prepare('SELECT COUNT(*) AS n FROM authority').get().n!==1||r.config_id!==configIdentity||!UUID.test(r.config_id)||!Number.isSafeInteger(r.revision)||r.revision<0||!(/^[A-Za-z0-9_-]{43}$/).test(r.source_hash)||r.pending!==null&&!UUID.test(r.pending)||![0,1].includes(r.suspended)||typeof r.recovery_key!=='string'||!(/^[A-Za-z0-9_-]{43}$/).test(r.recovery_key)||Buffer.from(r.recovery_key,'base64url').toString('base64url')!==r.recovery_key)fail('authority_state_invalid');if(schema===3)validateContinuationAuthorityRow(db,r);return r;}
 function matching(p,r,{allowSuspended=false}={}){if(r.pending!==null)fail('authority_write_pending');if(sources(p.root)!==r.source_hash)fail('authority_external_change');if(r.suspended&&!allowSuspended)fail('authority_reverification_required');}
 function state(p,expected){if(!exists(p.db)&&!exists(p.marker))fail('authority_missing');if(!exists(p.db)||!exists(p.marker))fail('authority_initialization_incomplete');const m=marker(p);if(m.configIdentity!==expected)fail('authority_identity_mismatch');return m;}
 function sameInstance(a,b){return a.dev===b.dev&&a.ino===b.ino;}
@@ -53,7 +53,7 @@ function initializeAuthority(configDir,{configIdentity}={},schema=2){
   const anchor=partialAnchor(p,configIdentity);if(exists(p.db)||exists(p.marker))fail('authority_already_exists');assertPartial(p,anchor);
   const fingerprint=sources(p.root);if(schema===3)strictSourceSnapshot(p.root,fingerprint);assertPartial(p,anchor);anchor.dbInstance=createPrivate(p.db);assertPartial(p,anchor);
   const {DatabaseSync}=require('node:sqlite');db=new DatabaseSync(p.db);assertPartial(p,anchor);db.exec('PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; BEGIN IMMEDIATE');assertPartial(p,anchor);
-  if(schema===3)installContinuationAuthority(db);else db.exec('CREATE TABLE authority(id INTEGER PRIMARY KEY CHECK(id=1),config_id TEXT NOT NULL,revision INTEGER NOT NULL,source_hash TEXT NOT NULL,pending TEXT,suspended INTEGER NOT NULL,recovery_key TEXT NOT NULL); PRAGMA user_version=2;');
+  if(schema===3){db.exec('PRAGMA trusted_schema=OFF');installContinuationAuthority(db);}else db.exec('CREATE TABLE authority(id INTEGER PRIMARY KEY CHECK(id=1),config_id TEXT NOT NULL,revision INTEGER NOT NULL,source_hash TEXT NOT NULL,pending TEXT,suspended INTEGER NOT NULL,recovery_key TEXT NOT NULL); PRAGMA user_version=2;');
   if(schema===3)db.prepare('INSERT INTO authority VALUES(1,?,0,?,NULL,1,?,?,NULL)').run(configIdentity,fingerprint,randomBytes(32).toString('base64url'),randomUUID());
   else db.prepare('INSERT INTO authority VALUES(1,?,0,?,NULL,0,?)').run(configIdentity,fingerprint,randomBytes(32).toString('base64url'));assertPartial(p,anchor);db.exec('COMMIT');assertPartial(p,anchor);
   anchor.markerInstance=createPrivate(p.marker,JSON.stringify({v:1,configIdentity})+'\n');assertAnchor(p,anchor);if(sources(p.root)!==fingerprint)fail('authority_external_change');const final=row(db,configIdentity,schema);if(final.revision!==0||final.pending!==null||final.suspended!==(schema===3?1:0)||final.source_hash!==fingerprint)fail('authority_changed');assertAnchor(p,anchor);
@@ -176,6 +176,23 @@ function installContinuationAuthority(db){
  CREATE TRIGGER authority_pending BEFORE UPDATE ON authority WHEN NEW.pending IS NOT NULL AND NOT EXISTS(SELECT 1 FROM continuation_intents WHERE id=NEW.pending AND epoch=NEW.suspension_epoch AND target_revision=NEW.revision AND state IN ('prepared','set-committed')) BEGIN SELECT RAISE(ABORT,'authority pending binding'); END;
  CREATE TRIGGER authority_active BEFORE UPDATE ON authority WHEN NEW.active_set IS NOT NULL AND NOT EXISTS(SELECT 1 FROM grant_sets s JOIN continuation_intents i ON i.id=s.intent_id WHERE s.id=NEW.active_set AND s.epoch=NEW.suspension_epoch AND s.target_revision=NEW.revision AND s.state='eligible' AND i.state='eligible' AND NEW.pending IS NULL AND NEW.suspended=0) BEGIN SELECT RAISE(ABORT,'authority active binding'); END;
  PRAGMA user_version=3;`);
+}
+// Exact schema for this disabled physical foundation only. Build the reference
+// independently in memory; candidate SQL is never executed or adopted. Row
+// authentication and physical namespace anchoring remain separate requirements.
+let continuationAuthorityInventory;
+const continuationSchema=db=>JSON.stringify(db.prepare('SELECT type,name,tbl_name,sql FROM main.sqlite_schema ORDER BY type,name').all());
+function assertContinuationAuthorityInventory(db){
+ if(db.prepare('PRAGMA main.user_version').get().user_version!==3||db.prepare('PRAGMA foreign_keys').get().foreign_keys!==1||db.prepare('PRAGMA trusted_schema').get().trusted_schema!==0)fail('authority_schema');
+ if(db.prepare('SELECT COUNT(*) n FROM temp.sqlite_schema').get().n!==0||db.prepare('PRAGMA database_list').all().some(r=>!['main','temp'].includes(r.name)))fail('authority_schema');
+ if(continuationAuthorityInventory===undefined){
+  const {DatabaseSync}=require('node:sqlite'),reference=new DatabaseSync(':memory:');
+  try{
+   reference.exec('PRAGMA foreign_keys=ON; PRAGMA trusted_schema=OFF; BEGIN IMMEDIATE');
+   installContinuationAuthority(reference);continuationAuthorityInventory=continuationSchema(reference);
+  }finally{reference.close();}
+ }
+ if(continuationSchema(db)!==continuationAuthorityInventory)fail('authority_schema');
 }
 function validateContinuationAuthorityRow(db,r){
  if(!UUID.test(r.suspension_epoch||'')||r.active_set!==null&&!UUID.test(r.active_set)||!canonicalDigest(r.source_hash)||r.suspended===1&&r.active_set!==null||r.suspended===0&&(r.active_set===null||r.pending!==null))fail('authority_state_invalid');
