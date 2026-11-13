@@ -45,6 +45,12 @@ function signer(value,a){
  publicKey({public_key_spki:s.public_key_spki,fingerprint:s.fingerprint});
  for(const k of ['config_identity','canonical_root','epoch'])if(s[k]!==a[k])fail('continuation_enrollment_binding_mismatch');return s;
 }
+// Snapshot a planning binding only. Its caller must authenticate the physical
+// authority/current signer; validation cannot establish their source or currency.
+export function snapshotContinuationSignerBinding(currentAuthority,currentSigner){
+ const a=authority(currentAuthority),s=signer(currentSigner,a);
+ return Object.freeze({authority:Object.freeze(a),current_signer:s===null?null:Object.freeze(s)});
+}
 const text=value=>JSON.stringify(value);
 const digest=value=>createHash('sha256').update('a2a-exposed continuation signer change plan v1\n'+text(value)).digest('base64url');
 
@@ -68,7 +74,7 @@ export function assertContinuationSignerChange(value,currentAuthority,currentSig
  const {version,plan_digest,...input}=p,expected=planContinuationSignerChange(input);
  if(expected.plan_digest!==plan_digest)fail('continuation_enrollment_plan_mismatch');
  integer(now);if(now<p.created_ms||now>=p.expires_ms)fail('continuation_enrollment_plan_expired');
- const a=authority(currentAuthority),s=signer(currentSigner,a);
+ const {authority:a,current_signer:s}=snapshotContinuationSignerBinding(currentAuthority,currentSigner);
  if(text(a)!==text(expected.authority)||text(s)!==text(expected.current_signer))fail('continuation_enrollment_plan_stale');
  return expected;
 }

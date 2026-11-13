@@ -114,3 +114,7 @@ changes. Freshness in that inventory describes time only; it does not select a
 current signer or make a plan applicable. Normal plan reads still require the
 current authority binding and an unexpired plan. No physical nonempty authority
 reader, enrollment application or command uses this historical inventory yet.
+The private `diagnoseBindings` inventory also compares every original plan to a
+strictly snapshotted caller binding. `bindingMatches` and time freshness are
+independent metadata; equality does not authenticate that caller as the current
+authority, prove approval or make a plan applicable.
