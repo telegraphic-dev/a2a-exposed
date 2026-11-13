@@ -46,7 +46,7 @@ export async function send(o) {
   const message = api.makeMessageCarrier(envelope, protocol);
   let response;
   try {
-   response = await httpJson(url, { redirect: "error", body: { jsonrpc: "2.0", id: b.messageId, method: protocol === "1.0" ? "SendMessage" : "message/send", params: { message, configuration: protocol === "1.0" ? { returnImmediately: true } : { blocking: false } } }, headers: { authorization: `Bearer ${token}`, "A2A-Version": protocol, "A2A-Extensions": URI, ...(protocol === "0.3" ? { "X-A2A-Extensions": URI } : {}) } });
+   response = await httpJson(url, { redirect: "error", maxResponseBytes: 1024 * 1024, body: { jsonrpc: "2.0", id: b.messageId, method: protocol === "1.0" ? "SendMessage" : "message/send", params: { message, configuration: protocol === "1.0" ? { returnImmediately: true } : { blocking: false } } }, headers: { authorization: `Bearer ${token}`, "A2A-Version": protocol, "A2A-Extensions": URI, ...(protocol === "0.3" ? { "X-A2A-Extensions": URI } : {}) } });
   } catch { fail("Encrypted delivery outcome is unknown. Do not resend. Ask the recipient's owner to check inbox/history for context " + b.contextId + " and message " + b.messageId + ". No plaintext fallback."); }
   const { status, data, headers } = response;
   if (status !== 200 || data?.jsonrpc !== "2.0" || data.id !== b.messageId || data.error || headers?.get("A2A-Extensions") !== URI) fail("Encrypted delivery was not confirmed. Do not resend automatically. Ask the recipient's owner to check history for context " + b.contextId + " and message " + b.messageId + ". No plaintext fallback.");

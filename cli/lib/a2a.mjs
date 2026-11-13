@@ -66,7 +66,7 @@ export function upstreamCardUrlProblem(card, upstream) {
 }
 export const randomToken = (bytes = 32) => crypto.randomBytes(bytes).toString("base64url");
 
-export async function httpJson(url, { method, body, headers = {}, timeout = 30000, redirect = "follow" } = {}) {
+export async function httpJson(url, { method, body, headers = {}, timeout = 30000, redirect = "follow", maxResponseBytes = 0 } = {}) {
 	const init = { redirect, method: method || (body === undefined ? "GET" : "POST"), headers: { accept: "application/json", ...headers }, signal: AbortSignal.timeout(timeout) };
 	if (body !== undefined) {
 		init.headers["content-type"] = "application/json";
@@ -75,7 +75,15 @@ export async function httpJson(url, { method, body, headers = {}, timeout = 3000
 	let r;
 	try { r = await fetch(url, init); }
 	catch (e) { die(`request to ${new URL(url).origin} failed: ${e?.cause?.code || e?.cause?.message || e?.message || e}`); }
-	const text = await r.text();
+ let text;
+ if (maxResponseBytes) {
+  const declared = r.headers.get("content-length");
+  if (declared && (!/^\d+$/.test(declared) || Number(declared) > maxResponseBytes)) { await r.body?.cancel(); die("Peer response is too large"); }
+  const reader = r.body?.getReader(), chunks = []; let size = 0;
+  try { if (reader) for (;;) { const { done, value } = await reader.read(); if (done) break; size += value.byteLength; if (size > maxResponseBytes) die("Peer response is too large"); chunks.push(value); } }
+  finally { if (reader) { try { await reader.cancel(); } catch {} reader.releaseLock(); } }
+  text = Buffer.concat(chunks).toString("utf8");
+ } else text = await r.text();
 	let data = text;
 	try { data = text ? JSON.parse(text) : null; } catch { /* keep text */ }
 	return { status: r.status, data, headers: r.headers };
