@@ -64,7 +64,7 @@ After both local pins are imported, the connecting side can send with the existi
 human-approved credential:
 
 ```sh
-npx -y a2a-exposed@latest peers list
+npx -y a2a-exposed@latest peers list --json
 npx -y a2a-exposed@latest send --to bob --text "fixture message"
 npx -y a2a-exposed@latest inbox --json
 npx -y a2a-exposed@latest history CONTEXT_ID --json
@@ -83,8 +83,11 @@ pinned sender and recipient and opens content locally; JSON marks it
 Context/message IDs and any caller-supplied task ID are signed. The initial
 server-assigned task ID and server state are routing hints; this path does not
 claim a recipient-signed task assignment or exactly-once model consumption.
-Reading history repeatedly does not consume or execute the message. Freshness is
-limited to 30 days by the envelope verifier. Local state, key changes or missing
+Reading history repeatedly does not consume or execute the message. Inbox admission uses the 30-day live freshness window. Historical reads verify
+the signature and ciphertext at the signed time without granting live/replay
+authorization, and are labelled `historical: true`. Unreadable rows return a safe
+reason and their task/context IDs while other rows remain readable; the command
+exits 1 if any row is refused. Local state, key changes or missing
 keys can prevent reads; preserve the original store rather than creating new keys.
 
 Use `--allow-os-consent` explicitly on send, inbox or history for a keychain key.
@@ -113,3 +116,7 @@ part of the local test workflow.
 keys, `key_comparison` precedes `authorization_pending` (also on resume), and
 `keys_pinned` precedes `connected`. Parse each line separately. For `keys code`,
 use the connecting side's ALIAS or the approving side's LABEL from `keys pairings`.
+
+Encrypted `send` prints JSON with `taskId`, `contextId`, `messageId`, `encrypted`,
+`serverReadable`, `senderHistorySaved` and `taskStateAuthenticated`. These fields
+describe local sealing and storage; the server task state is not authenticated.

@@ -45,7 +45,9 @@ Local encrypted CLI draft (disabled by default):
                                 ALIAS on connecting side; LABEL from keys pairings on approving side
                                 compare safety code through another trusted channel
   peers list --json           list aliases and whether their keys are pinned
-  send --to ALIAS --text TEXT  seal for the pinned peer; no plaintext fallback
+  send --to ALIAS --text TEXT [--allow-os-consent]
+                                seal for the pinned peer; no plaintext fallback
+                                encrypted sends refuse --push, --wake and --intent
   inbox --json / history CONTEXT --json
                                 open locally; --allow-os-consent permits keychain access
   If codes differ: do not use the pairing; ask approving owner to token revoke LABEL

@@ -90,7 +90,7 @@ pairing: ask the approving inbox owner to `token revoke LABEL` (list labels with
 `connect --json` emits newline-delimited JSON, one object per step: with local
 keys, `key_comparison` then `authorization_pending`, and `keys_pinned` then
 `connected`. Parse each line separately.
-The path remains disabled and does not yet send encrypted messages. See
+The path is disabled by default; approved local tests can seal/send and open locally. See
 [local keys and pairing](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/local-key-pairing.md).
 
 ### Local encrypted CLI fixtures

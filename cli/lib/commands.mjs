@@ -119,6 +119,7 @@ export async function inbox(o) {
 		console.log(`--- ${reply ? "reply" : "task"} ${r.taskId}  [${r.state}]  from=${r.from}  context=${r.contextId}  at=${r.updated}`);
 		console.log("UNTRUSTED PEER MESSAGE >>>");
 		console.log(r.text);
+  if (r.locallyOpened === false) console.log(r.next);
 		console.log("<<< END PEER MESSAGE");
 		if (reply) console.log(`(a reply to a message you sent; read it with \`${CLI} history ${r.contextId}\`. Continue with send, not reply.)`);
 		printState(r.state, r.updated);
@@ -158,14 +159,14 @@ export async function reply(id, o) {
 export async function history(ctx, o) {
 	const qs = new URLSearchParams({ n: String(Number(o.n || 50)) });
 	if (o.from) qs.set("from", o.from);
-	const rows = await (await import("./sealed-cli.mjs")).openRows(await owner("GET", `/owner/history/${q(ctx)}?${qs}`), o);
+	const rows = await (await import("./sealed-cli.mjs")).openRows(await owner("GET", `/owner/history/${q(ctx)}?${qs}`), o, { historical: true });
 	if (o.json) return out(rows);
 	const states = new Map();
 	const peers = new Map(rows.filter((e) => e.task_id && e.peer).map((e) => [e.task_id, e.peer]));
 	for (const e of rows) {
 		const tag = [e.event, e.state || e.role].filter(Boolean).join("/");
 		const forced = e.data?.forced ? `forced: ${e.data.previousState} → ${e.data.state}; ` : "";
-		console.log(`${e.ts} ${(e.dir || "").padEnd(5)} ${(e.peer || "-").padEnd(10)} ${e.task_id || "-"} ${tag}: ${forced}${(e.text || "").slice(0, 400)}`);
+		console.log(`${e.ts || "-"} ${(e.dir || "").padEnd(5)} ${(e.peer || e.from || "-").padEnd(10)} ${e.task_id || e.taskId || "-"} ${tag}: ${forced}${(e.text || "").slice(0, 400)}${e.locallyOpened === false ? " " + e.next : ""}`);
 		if (e.currentState?.state || e.state) states.set(`${e.peer || peers.get(e.task_id) || "-"}/${e.task_id || "-"}`, e.currentState || { state: e.state, timestamp: e.ts });
 	}
 	for (const [task, status] of states) printState(status.state, status.timestamp, states.size > 1 ? task : "");

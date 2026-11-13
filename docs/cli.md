@@ -537,4 +537,5 @@ The disabled local-key path provides `keys stores`, `keys init`, `keys status`,
 `connect --sealed-key-id ID` binds local public keys to existing human pairing
 approval. See [local keys and pairing](local-key-pairing.md) for exact inputs,
 optional package installation, custody choices and refusal behavior. Encrypted
-message traffic remains disabled.
+message traffic requires the approved local test flag. Local `send` seals;
+`inbox` and `history` open locally.
