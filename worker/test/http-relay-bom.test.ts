@@ -12,10 +12,14 @@ import { createServer } from "node:http";
 import { createHash } from "node:crypto";
 import { AgentCard, SendMessageRequest } from "@a2a-js/sdk";
 import { ClientFactory, JsonRpcTransportFactory } from "@a2a-js/sdk/client";
+import { fetch } from "./fresh-connection-fetch.ts";
+import { relayPhase } from "./relay-phase.ts";
 const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
 const execute = promisify(execFile);
 
 for (const legacy of [false, true]) test(`delayed initial BOM survives keepalive: official A2A SDK 1.3 / protocol ${legacy ? "0.3" : "1.0"} through actual Worker and native CLI`, { timeout: 45000 }, async t => {
+	let diagnostics = "", phase = "startup";
+	const wait = <T>(name: string, work: Promise<T>, ms = 8000) => { phase = name; return relayPhase(name, work, ms, () => `completed=${completed}, aborted=${aborted}, connectorExit=${child?.exitCode}, connectorSignal=${child?.signalCode}, stderr=${diagnostics.slice(-2000)}`); };
 	const root = resolve(process.env.HTTP_RELAY_WORKER_ROOT || ".");
 	const built = await build({ absWorkingDir: root, entryPoints: ["src/relay-entry.ts"], bundle: true, write: false, format: "esm", platform: "neutral", external: ["cloudflare:*"], plugins: [{ name: "sql", setup(b) {
 		b.onResolve({ filter: /\.sql\?raw$/ }, a => ({ path: new URL(a.path.replace("?raw", ""), `file://${a.resolveDir}/`).pathname, namespace: "sql" }));
@@ -52,20 +56,23 @@ for (const legacy of [false, true]) test(`delayed initial BOM survives keepalive
 	const fixture = { base: `http://127.0.0.1:${(server.address() as any).port}`, async close() { server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); } };
 	let child: ReturnType<typeof spawn> | undefined;
 	try {
-		const db = await mf.getD1Database("DB");
+		const db = await wait("Worker D1 startup", mf.getD1Database("DB"), 12000);
 		for (const file of readdirSync(join(root, "migrations")).filter(n => n.endsWith(".sql")).sort()) await db.exec(readFileSync(join(root, "migrations", file), "utf8").replace(/--[^\n]*/g, "").replace(/\n/g, " "));
-		const local = await mf.ready;
+		const local = await wait("Worker ready", mf.ready);
 		const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(A2A_|WAKE_|CF_|CLOUDFLARE_|PEER_|UPSTREAM_|APPROVAL_|EVENT_|FEEDBACK_|CONTROL_|HOSTED_|HTTP_RELAY_|NODE_OPTIONS$)/.test(key))), A2A_CONFIG_DIR: dir, A2A_BASE_URL: local.origin, A2A_OWNER_TOKEN: "fixture-owner", DO_NOT_TRACK: "1" };
 		const cli = resolve(process.env.HTTP_RELAY_CLI || "../cli/bin/a2a-exposed.mjs");
 		const tokenFile = join(dir, "connector"), ingressFile = join(dir, "ingress");
 		await execute(process.execPath, [cli, "relay", "a2a", "create", "--token-file", tokenFile, "--ingress-token-file", ingressFile, "--forward-headers", "content-type,accept,authorization,a2a-version,last-event-id"], { env, cwd: dir, timeout: 10000 });
 		child = spawn(process.execPath, [cli, "relay", "a2a", "run", "--url", new URL("/relay/http/a2a/connect", local).href.replace("http:", "ws:"), "--token-file", tokenFile, "--local-url", fixture.base + "/rpc"], { env, cwd: dir, stdio: ["ignore", "pipe", "pipe"] });
-		let diagnostics = ""; child.stderr!.on("data", chunk => { diagnostics += chunk; });
+		child.stdout!.resume(); child.stderr!.on("data", chunk => { diagnostics += chunk; });
 		const deadline = Date.now() + 8000;
 		for (;;) {
 			assert.equal(child.exitCode, null, `connector exited: ${diagnostics}`);
-			const status = await fetch(new URL("/owner/relay/http/a2a", local), { headers: { authorization: "Bearer fixture-owner" } });
-			if ((await status.json() as any).connected) break;
+			const connected = await wait("connector readiness", (async () => {
+				const status = await fetch(new URL("/owner/relay/http/a2a", local), { headers: { authorization: "Bearer fixture-owner" }, signal: t.signal });
+				return (await status.json() as any).connected;
+			})());
+			if (connected) break;
 			assert.ok(Date.now() < deadline, "connector must become ready"); await new Promise(r => setTimeout(r, 20));
 		}
 		const ingress = readFileSync(ingressFile, "utf8").trim();
@@ -73,30 +80,39 @@ for (const legacy of [false, true]) test(`delayed initial BOM survives keepalive
 			const req = new Request(input, init); const url = new URL(req.url);
 			assert.equal(url.origin, publicOrigin, "SDK must use the rewritten public endpoint, not the receiver");
 			const headers = new Headers(req.headers); headers.set("x-a2a-relay-authorization", `Bearer ${ingress}`);
-			return fetch(new Request(new URL(url.pathname + url.search, local), { method: req.method, headers, body: req.body, signal: req.signal, duplex: "half" } as RequestInit));
+			return fetch(new Request(new URL(url.pathname + url.search, local), { method: req.method, headers, body: req.body, signal: AbortSignal.any([req.signal, t.signal]), duplex: "half" } as RequestInit));
 		};
 		const client = await new ClientFactory({ transports: [new JsonRpcTransportFactory({ fetchImpl: publicFetch, legacyCompat: { enabled: true } })] }).createFromAgentCard(AgentCard.fromJSON({ name: "fixture", supportedInterfaces: [{ url: publicOrigin + "/relay/a2a/", protocolBinding: "JSONRPC", protocolVersion: legacy ? "0.3" : "1.0" }], capabilities: { streaming: true }, skills: [] }));
 		for (mode of ["bom", "plain"]) {
 			const before = completed;
 			const stream = client.sendMessageStream(SendMessageRequest.fromJSON({ message: { messageId: "bom-probe", role: "ROLE_USER", parts: [{ text: "fixture" }] } }));
-			const first = await stream.next();
+			const first = await wait(`${mode}: first SDK event`, stream.next());
 			assert.equal(first.done, false, "initial BOM must not hide the first application event");
 			assert.equal(first.value?.payload?.value.id, "first-task");
 			assert.equal(completed, before, "first application event arrives before receiver completion");
-			assert.equal((await stream.next()).done, true);
+			assert.equal((await wait(`${mode}: SDK completion`, stream.next())).done, true);
 		}
 		mode = "bom";
 		const abort = new AbortController();
 		const stream = client.sendMessageStream(SendMessageRequest.fromJSON({ message: { messageId: "abort", role: "ROLE_USER" } }), { signal: abort.signal });
-		assert.equal((await stream.next()).done, false); abort.abort();
-		try { await stream.next(); } catch {}
-		const closed = await Promise.race([abortSawClose.then(() => true), delay(10000).then(() => false)]);
-		assert.equal(closed, true, "client abort must close the local response");
+		assert.equal((await wait("abort: first SDK event", stream.next())).done, false); abort.abort();
+		// Consume only the SDK rejection here; a phase timeout must still fail the test.
+		await wait("abort: SDK iterator settlement", stream.next().catch(() => undefined));
+		await wait("abort: local response closed", abortSawClose);
 		assert.equal(aborted, 1);
 		t.diagnostic("@a2a-js/sdk@1.3.0: delayed split BOM first event, no-BOM prefix, native abort passed");
 	} finally {
-		if (child && child.exitCode === null) { child.kill("SIGTERM"); await once(child, "exit"); }
-		await fixture.close(); await mf.dispose(); rmSync(dir, { recursive: true, force: true });
+		t.diagnostic(`last phase: ${phase}; completed=${completed}; aborted=${aborted}`);
+		try {
+			if (child && child.exitCode === null && child.signalCode === null) {
+				const exited = once(child, "exit"); child.kill("SIGTERM");
+				try { await wait("connector shutdown", exited, 12000); }
+				finally { if (child.exitCode === null && child.signalCode === null) { child.kill("SIGKILL"); await relayPhase("connector forced shutdown", exited, 2000); } }
+			}
+		} finally {
+			try { await wait("fixture shutdown", fixture.close()); }
+			finally { try { await wait("Worker shutdown", mf.dispose()); } finally { rmSync(dir, { recursive: true, force: true }); } }
+		}
 	}
 });
 

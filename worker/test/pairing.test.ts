@@ -809,11 +809,6 @@ test("password setup link: expiry, mismatch, too short, CSRF, a new link invalid
 	assert.match(r.post.text, /this link is now used up/, "the 5th bad submission burns the link");
 	assert.equal((await setupFlow(s, cur.url, PASSWORD)).post.status, 404);
 	assert.equal(s.DB.db.prepare("SELECT COUNT(*) AS n FROM settings WHERE key = 'approval_password'").get()!.n, 0);
-	// rate limit per IP (page loads and submissions)
-	const l = (await s.owner("POST", "/owner/pairing/password-link", {})).data;
-	for (let i = 0; i < 20; i++) await s.call("GET", "/device/setup?t=nope", { ip: "192.0.2.200" });
-	const limited = await s.call("GET", new URL(l.url).pathname + new URL(l.url).search, { ip: "192.0.2.200" });
-	assert.equal(limited.status, 429);
 	// pairing off: the link still works while MCP is on (the connector consent needs the password), not with both off
 	s.env.PAIRING_APPROVAL = "off";
 	assert.equal((await s.owner("POST", "/owner/pairing/password-link", {})).status, 200);
@@ -821,6 +816,25 @@ test("password setup link: expiry, mismatch, too short, CSRF, a new link invalid
 	s.env.MCP = "off";
 	assert.equal((await s.owner("POST", "/owner/pairing/password-link", {})).status, 409);
 	assert.equal((await s.call("GET", "/device/setup?t=x")).status, 404);
+});
+
+test("password setup link: page loads and submissions share a fixed IP limit that resets at the window boundary", async (t) => {
+	// One millisecond before a known boundary: real D1/DO latency cannot move this clock.
+	let now = Date.UTC(2026, 0, 1, 0, 9, 59, 999);
+	t.mock.method(Date, "now", () => now);
+	const s = setup(); t.after(s.restore);
+	const link = (await s.owner("POST", "/owner/pairing/password-link", {})).data;
+	const path = new URL(link.url).pathname + new URL(link.url).search;
+	const ip = "192.0.2.200";
+	for (let i = 0; i < 20; i++) {
+		assert.equal((await s.call(i % 2 ? "POST" : "GET", "/device/setup?t=nope", { ip })).status, i % 2 ? 403 : 404);
+	}
+	assert.equal((await s.call("GET", path, { ip })).status, 429, "21st lookup in the same window is refused");
+	assert.equal((await s.call("POST", path, { ip })).status, 429, "submissions use the same exhausted counter");
+	now++;
+	assert.equal((await s.call("GET", path, { ip })).status, 200, "the valid link works in the next window");
+	for (let i = 1; i < 20; i++) assert.equal((await s.call("GET", "/device/setup?t=nope", { ip })).status, 404);
+	assert.equal((await s.call("GET", path, { ip })).status, 429, "the new window has its own 20-request budget");
 });
 
 test("PBKDF2 iterations: stored per hash, tunable from 50,000 to 100,000; the web setup uses the deployment's count", async (t) => {
