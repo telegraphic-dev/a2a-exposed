@@ -480,6 +480,16 @@ test("proxy mode: the landing page shows the rewritten card (upstream name and s
 	const j = await s.call("GET", "/");
 	assert.equal(j.data.name, "Jean");
 	assert.ok(!JSON.stringify(j.data).includes("ts.net"));
+	assert.equal(j.data.pairingEndpoint, `${new URL(j.data.a2a).origin}/oauth/device_authorization`);
+	// the Markdown and llms.txt pages for agents: same steps in façade mode, no private URL, not an inbox
+	for (const r of [await s.call("GET", "/", { headers: { accept: "text/markdown" } }), await s.call("GET", "/index.md"), await s.call("GET", "/llms.txt")]) {
+		assert.equal(r.status, 200);
+		assert.match(r.text, /# Jean\n/);
+		assert.match(r.text, /one-way/);
+		assert.match(r.text, /A2A JSON-RPC/);
+		for (const leak of ["ts.net", "tail1234", "localhost", "agent-upstream", "192.168.", "100.101."]) assert.ok(!r.text.includes(leak), leak);
+		assert.ok(!r.text.includes("inbox"), "a façade isn't an inbox");
+	}
 });
 
 // ------------------------------------------------------------------ upstream auth, failure reasons, owner verify

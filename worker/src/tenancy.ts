@@ -33,6 +33,8 @@ export const CONFIG_KEYS = [
 	"RETIRED_HOSTNAMES",
 	"AGENT_NAME", "AGENT_DESCRIPTION", "AGENT_VERSION", "AGENT_SKILLS",
 	"PROVIDER_ORGANIZATION", "PROVIDER_URL", "DOCUMENTATION_URL",
+	/** Optional https origin of the connect playbook and setup skill linked from GET / (default https://a2a.exposed). */
+	"DISCOVERY_DOCS_ORIGIN",
 	"WAKE_WEBHOOK_URL", "WAKE_WEBHOOK_KEY", "WAKE_HMAC_SECRET", "WAKE_ACCESS_CLIENT_ID", "WAKE_ACCESS_CLIENT_SECRET",
 	"WAKE_CONNECTOR_ID", "WAKE_CONNECTOR_GENERATION", "WAKE_TRANSPORT", "WAKE_PRESET", "WAKE_AGENT_ID", "WAKE_KEY_HEADER", "WAKE_KEY_PREFIX", "WAKE_BODY_TEMPLATE", "WAKE_CLI_COMMAND",
 	"WAKE_DEBOUNCE_SECONDS", "WAKE_BUSY_SECONDS", "WAKE_MAX_PER_HOUR",
@@ -61,7 +63,8 @@ export type ConfigFields = { [K in ConfigKey]?: string };
  * fields come from decrypting `secrets_enc`. A plaintext copy in the pushed
  * config is used only when that ciphertext is absent.
  */
-const HOSTED_PLATFORM_DEFAULTS: readonly ConfigKey[] = ["MAX_BODY", "RATE_PER_MIN", "PBKDF2_ITERATIONS", "MCP", "PAIRING_APPROVAL"];
+// DISCOVERY_DOCS_ORIGIN: the hosted Worker links every tenant's GET / to its own site (staging to staging).
+const HOSTED_PLATFORM_DEFAULTS: readonly ConfigKey[] = ["MAX_BODY", "RATE_PER_MIN", "PBKDF2_ITERATIONS", "MCP", "PAIRING_APPROVAL", "DISCOVERY_DOCS_ORIGIN"];
 
 /** Worker-to-Worker fetch. Present when the deploy sets `A2A_CONTROL_SERVICE`. */
 export interface ControlFetcher {
@@ -376,6 +379,7 @@ export class TenantContext implements ConfigFields {
 	readonly PROVIDER_ORGANIZATION?: string;
 	readonly PROVIDER_URL?: string;
 	readonly DOCUMENTATION_URL?: string;
+	readonly DISCOVERY_DOCS_ORIGIN?: string;
 	readonly WAKE_CONNECTOR_ID?: string;
 	readonly WAKE_CONNECTOR_GENERATION?: string;
 	readonly WAKE_TRANSPORT?: string;

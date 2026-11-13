@@ -266,8 +266,8 @@ export function devicePage(m: PageModel, nonce: string): string {
 }
 
 /** The shared page frame: no scripts, no external assets, one nonce'd style block. `title` is escaped here. */
-export function pageShell(title: string, nonce: string, body: string): string {
-	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer">
+export function pageShell(title: string, nonce: string, body: string, head = ""): string {
+	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer">${head}
 <title>${esc(title)}</title><style nonce="${nonce}">
 ${pageStyle()}
 </style></head><body><h1>${esc(title)}</h1>${body}</body></html>`;
@@ -281,6 +281,8 @@ export type LandingModel = {
 	skills: { name: string; description?: string }[];
 	pairing: boolean; // device-flow pairing is on (/device exists)
 	proxy: boolean; // façade for an existing A2A agent (vs. the webhook inbox)
+	connectDoc?: string; // the connect playbook (https)
+	exposeDoc?: string; // the setup skill: get your own A2A address (https)
 };
 
 /** GET / in a browser: what this URL is and how to connect. Same frame and CSP as /device (no scripts, no external assets). Everything comes from the public card, so nothing private leaks here either. */
@@ -291,9 +293,12 @@ export function landingPage(m: LandingModel, nonce: string): string {
 	const skills = m.skills.length
 		? `<h2>Skills</h2><ul>${m.skills.slice(0, 20).map((k) => `<li><b>${esc(k.name)}</b>${k.description ? ` &ndash; ${esc(k.description)}` : ""}</li>`).join("")}</ul>${m.skills.length > 20 ? `<p class="w">&hellip;and ${m.skills.length - 20} more in the agent card.</p>` : ""}`
 		: "";
+	const twoWay = m.exposeDoc
+		? `<p>Want it to reach you too? Pairing is one-way. Get your own A2A address first: <a href="${esc(m.exposeDoc)}">hosted or self-hosted</a>.${m.connectDoc ? ` Step by step: <a href="${esc(m.connectDoc)}">connect playbook</a>.` : ""}</p>`
+		: "";
 	const connect = m.pairing
-		? `<h2>Connect your agent</h2><p>Agents get a bearer token through the OAuth device flow: your agent asks, and this agent's owner approves the request on the <a href="/device">pairing page</a>. No secrets go through chat. With the a2a-exposed CLI, your agent runs:</p><p><code>${DEFAULT_CLI} connect ${esc(m.base)}</code></p>`
-		: `<h2>Connect your agent</h2><p>Pairing is turned off here: ask this agent's operator for a bearer token.</p>`;
+		? `<h2>Connect your agent</h2>${twoWay}<p>Agents get a bearer token through the OAuth device flow: your agent asks, and this agent's owner approves the request on the <a href="/device">pairing page</a>. No secrets go through chat. With the a2a-exposed CLI, your agent runs:</p><p><code>${DEFAULT_CLI} connect ${esc(m.base)}</code></p>`
+		: `<h2>Connect your agent</h2>${twoWay}<p>Pairing is turned off here: ask this agent's operator for a bearer token.</p>`;
 	return pageShell(m.name, nonce, `${desc}
 <p class="n info">This is an <a href="https://a2a-protocol.org/">A2A (Agent2Agent)</a> endpoint for agents.${m.proxy ? "" : " Messages are stored for its owner, and the agent is woken."}</p>
 <table>
@@ -303,7 +308,8 @@ export function landingPage(m: LandingModel, nonce: string): string {
 <tr><th>Authentication</th><td>Bearer token${m.pairing ? ` (<a href="/device">pairing page</a>)` : ""}</td></tr>
 </table>
 ${skills}${connect}
-<footer class="w">Served by <a href="https://github.com/telegraphic-dev/a2a-exposed">a2a-exposed</a>.</footer>`);
+<footer class="w">Served by <a href="https://github.com/telegraphic-dev/a2a-exposed">a2a-exposed</a>.</footer>`,
+		`<link rel="alternate" type="text/markdown" href="/index.md">`);
 }
 
 /** Security headers for the landing page: the /device CSP minus forms, cacheable for a few minutes (no per-visitor state). */
