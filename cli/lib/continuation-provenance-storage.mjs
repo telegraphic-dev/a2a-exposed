@@ -15,6 +15,10 @@ function transaction(db){
 function equal(actual,expected){
  if(!actual||Object.keys(actual).sort().join(',')!==Object.keys(expected).sort().join(',')||Object.keys(expected).some(k=>actual[k]!==expected[k]))fail('continuation_provenance_row_mismatch');
 }
+function exactText(bytes,value){
+ try{if(new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(bytes)!==value)fail('continuation_provenance_text_invalid');}
+ catch{fail('continuation_provenance_text_invalid');}
+}
 function snapshotEnrollment(value){
  if(!value||Object.getPrototypeOf(value)!==Object.prototype)fail('continuation_provenance_row_mismatch');
  // Preserve descriptors for the strict codec to reject getters/hidden/unknown
@@ -25,7 +29,9 @@ function enrollmentRow(db,enrollment){
  // The receipt codec strictly validates and snapshots enrollment before this
  // function is called. Compare every stored column, including canonical key DER.
  const {version,...expected}=enrollment;
- equal(db.prepare('SELECT * FROM continuation_signer_enrollments WHERE id=?').get(expected.id),expected);
+ const row=db.prepare('SELECT *,CAST(canonical_root AS BLOB) AS root_bytes FROM continuation_signer_enrollments WHERE id=?').get(expected.id);
+ if(!row)fail('continuation_provenance_row_mismatch');
+ const {root_bytes,...stored}=row;exactText(root_bytes,stored.canonical_root);equal(stored,expected);
 }
 function storedReceipt(receipt){const {version,...row}=receipt;return row;}
 
@@ -36,7 +42,10 @@ export function readContinuationProvenance(db,records,id,currentEnrollment,now){
  transaction(db);
  currentEnrollment=snapshotEnrollment(currentEnrollment);
  const current=readContinuationIntent(db,records,id);
- const rows=db.prepare('SELECT * FROM continuation_decision_receipts WHERE intent_id=?').all(current.intent.id);
+ const rows=db.prepare('SELECT *,CAST(attestation AS BLOB) AS attestation_bytes,CAST(canonical_root AS BLOB) AS root_bytes FROM continuation_decision_receipts WHERE intent_id=?').all(current.intent.id).map(row=>{
+  const {attestation_bytes,root_bytes,...stored}=row;
+  exactText(attestation_bytes,stored.attestation);exactText(root_bytes,stored.canonical_root);return stored;
+ });
  if(rows.length!==1)fail('continuation_provenance_receipt_missing');
  const receipt=verifyContinuationDecisionReceipt(records,current.intent,currentEnrollment,{version:1,...rows[0]},now);
  enrollmentRow(db,currentEnrollment);

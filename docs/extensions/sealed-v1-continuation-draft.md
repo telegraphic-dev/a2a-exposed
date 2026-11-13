@@ -1074,6 +1074,12 @@ Reads authenticate every intent/attestation/member row through the existing
 codec, reverify the actual stored signature and compare every stored enrollment
 column with the supplied current enrollment. Missing or synthetic provenance,
 changed signature/key/decision/bindings, expiry and clock regression refuse.
+Intent, attestation and member JSON, receipt attestation/root, and enrollment root
+are read together with their stored BLOB bytes and decoded with fatal UTF-8.
+Malformed bytes refuse even when SQLite's replacement-decoded text matches an
+authenticated literal replacement character. Valid Unicode, including literal
+replacement and BOM characters inside a root, remains accepted. Reads never
+repair damaged storage or rewrite it to match the decoded text.
 These are fresh-checkpoint reads; this interface does not implement live admission
 beyond the ceremony deadline. Its sensitive return values are private storage
 data, not public diagnostics or proof of an actual human ceremony.

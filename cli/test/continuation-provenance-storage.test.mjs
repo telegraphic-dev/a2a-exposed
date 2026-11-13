@@ -16,17 +16,17 @@ import {prepareContinuationProvenance,readContinuationProvenance} from '../lib/c
 const id=n=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
 const digest=n=>Buffer.alloc(32,n).toString('base64url');
 const clone=x=>JSON.parse(JSON.stringify(x));
-function fixture(t,file=':memory:'){
+function fixture(t,file=':memory:',root='/synthetic/private'){
  const db=new DatabaseSync(file);t.after(()=>db.close());db.exec('PRAGMA foreign_keys=ON; PRAGMA trusted_schema=OFF; PRAGMA synchronous=FULL; BEGIN IMMEDIATE');install(db);db.exec('COMMIT; BEGIN IMMEDIATE');
- const records=createContinuationRecords(Buffer.alloc(32,1),Buffer.alloc(32,2),{root:'/synthetic/private',config_identity:id(1),epoch:id(2),set_id:id(3)});
+ const records=createContinuationRecords(Buffer.alloc(32,1),Buffer.alloc(32,2),{root,config_identity:id(1),epoch:id(2),set_id:id(3)});
  const member=records.bindMember({grant_id:id(4),pairing_identity:digest(4),alias:'synthetic',endpoint:'https://example.com/',credential_variable:'PEER_SYNTHETIC_TOKEN',credential_source:'file',trust_record_digest:digest(5),trust_record_version:1,local_id:id(6),local_bundle_digest:digest(6),peer_bundle_digest:digest(7),policy:'required',verification:'independent',pairing_provenance:'local-adoption',pairing_decision_id:id(7)},'synthetic-token');
  const plan=records.bindPlan({baseline_revision:0,source_mac:records.sourceMac({configEnv:null,peers:null}),plan_nonce:digest(8),members:[member],excluded_aliases:['excluded']});
  const attestation=records.bindAttestation(plan,{id:id(9),decision_id:id(10),created_ms:1000,expires_ms:2000,comparisons:[{grant_id:member.grant_id,approved_proposal_digest:digest(9),compared_safety_code:Array(12).fill('12345').join(' '),current_trust_digest:member.trust_record_digest,current_trust_version:1}]});
  const intent=records.bindIntent(id(11),plan,attestation),{publicKey,privateKey}=generateKeyPairSync('ed25519');
  const der=publicKey.export({type:'spki',format:'der'}),fingerprint=createHash('sha256').update(der).digest('base64url');
- const enrollment={version:1,id:id(12),config_identity:id(1),canonical_root:'/synthetic/private',epoch:id(2),public_key_spki:der.toString('base64url'),fingerprint};
+ const enrollment={version:1,id:id(12),config_identity:id(1),canonical_root:root,epoch:id(2),public_key_spki:der.toString('base64url'),fingerprint};
  const text=records.authorityRows(intent).attestation.record;
- const receipt={version:1,decision_id:id(10),enrollment_id:id(12),signer_fingerprint:fingerprint,attestation:text,signature:sign(null,Buffer.from('a2a-exposed continuation human decision v1\n'+text),privateKey).toString('base64url'),intent_id:id(11),config_identity:id(1),canonical_root:'/synthetic/private',epoch:id(2),baseline_revision:0,target_revision:1,plan_mac:plan.plan_mac,set_id:id(3),created_ms:1000,expires_ms:2000};
+ const receipt={version:1,decision_id:id(10),enrollment_id:id(12),signer_fingerprint:fingerprint,attestation:text,signature:sign(null,Buffer.from('a2a-exposed continuation human decision v1\n'+text),privateKey).toString('base64url'),intent_id:id(11),config_identity:id(1),canonical_root:root,epoch:id(2),baseline_revision:0,target_revision:1,plan_mac:plan.plan_mac,set_id:id(3),created_ms:1000,expires_ms:2000};
  const verify=(e=enrollment,r=receipt,i=intent,now=1000)=>verifyContinuationDecisionReceipt(records,i,e,r,now);
  const {version,...row}=enrollment;const keys=Object.keys(row);db.prepare(`INSERT INTO continuation_signer_enrollments(${keys.join(',')}) VALUES(${keys.map(()=>'?').join(',')})`).run(...Object.values(row));db.exec('COMMIT; BEGIN IMMEDIATE');return{db,records,intent,enrollment,receipt,privateKey,verify};
 }
@@ -64,7 +64,7 @@ test('failure inserting receipt rolls back intent and consumed attestation but p
 });
 test('post-write authenticated read failure rolls back the complete savepoint',t=>{
  const f=fixture(t);let writes=false;
- const wrapped={get isTransaction(){return f.db.isTransaction;},exec:q=>f.db.exec(q),prepare(q){if(q.startsWith('INSERT INTO continuation_decision_receipts'))writes=true;if(writes&&q.startsWith('SELECT * FROM continuation_decision_receipts'))throw Error('synthetic read fault');return f.db.prepare(q);}};
+ const wrapped={get isTransaction(){return f.db.isTransaction;},exec:q=>f.db.exec(q),prepare(q){if(q.startsWith('INSERT INTO continuation_decision_receipts'))writes=true;if(writes&&q.startsWith('SELECT ')&&q.includes(' FROM continuation_decision_receipts'))throw Error('synthetic read fault');return f.db.prepare(q);}};
  assert.throws(()=>prepareContinuationProvenance(wrapped,f.records,f.intent,f.enrollment,f.receipt,1000),/synthetic read fault/);
  for(const table of ['continuation_intents','continuation_attestations','continuation_decision_receipts'])assert.equal(count(f,table),0);
  assert.equal(f.db.isTransaction,true);
@@ -106,4 +106,47 @@ test('enrollment proxy cannot substitute property reads after descriptor validat
  assert.throws(()=>prepareContinuationProvenance(f.db,f.records,f.intent,proxy,receipt,1000),{code:'continuation_provenance_row_mismatch'});
  assert.equal(gets,0);assert.equal(count(f,'continuation_intents'),0);prepare(f);
  assert.throws(()=>readContinuationProvenance(f.db,f.records,f.intent.id,proxy,1000));assert.equal(gets,0);
+});
+
+// A valid U+FFFD in authenticated input is distinct from a corrupt byte that
+// Node's SQLite text conversion would silently replace with that character.
+for(const [table,column] of [
+ ['continuation_intents','record'],
+ ['continuation_attestations','record'],
+ ['continuation_decision_receipts','attestation'],
+ ['continuation_decision_receipts','canonical_root'],
+ ['continuation_signer_enrollments','canonical_root'],
+])for(const malformed of ['ff','c0','e282'])test(`retained ${table}.${column} refuses lossy UTF-8 ${malformed}`,t=>{
+ const f=fixture(t,':memory:','/synthetic/\ufffd');prepare(f);
+ const original=f.db.prepare(`SELECT ${column} text,CAST(${column} AS BLOB) bytes FROM ${table}`).get();
+ const marker=Buffer.from('\ufffd'),offset=Buffer.from(original.bytes).indexOf(marker);assert.ok(offset>=0);
+ const damaged=Buffer.concat([original.bytes.subarray(0,offset),Buffer.from(malformed,'hex'),original.bytes.subarray(offset+marker.length)]);
+ assert.equal(damaged.toString('utf8'),original.text);
+ dropGuards(f.db,table);f.db.exec('COMMIT; PRAGMA foreign_keys=OFF; BEGIN IMMEDIATE');
+ f.db.prepare(`UPDATE ${table} SET ${column}=CAST(? AS TEXT)`).run(damaged);
+ f.db.exec('COMMIT; PRAGMA foreign_keys=ON; BEGIN IMMEDIATE');
+ assert.equal(f.db.prepare(`SELECT ${column} text FROM ${table}`).get().text,original.text);
+ const before=f.db.prepare('SELECT total_changes() n').get().n;
+ assert.throws(()=>read(f),e=>['continuation_store_invalid','continuation_provenance_text_invalid'].includes(e?.code));
+ assert.equal(f.db.isTransaction,true);assert.equal(f.db.prepare('SELECT total_changes() n').get().n,before);
+ assert.deepEqual(Buffer.from(f.db.prepare(`SELECT CAST(${column} AS BLOB) bytes FROM ${table}`).get().bytes),damaged);
+});
+test('valid non-ASCII and literal replacement characters remain authenticated after reopen',t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'a2a-provenance-unicode-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const file=path.join(dir,'state.sqlite'),f=fixture(t,file,'/synthetic/\ufeffpříliš/日本/\ufffd');prepare(f);commitContinuationMembers(f.db,f.records,f.intent);f.db.exec('COMMIT');
+ const before=fs.readFileSync(file),other=new DatabaseSync(file,{readOnly:true});
+ try{
+  other.exec('PRAGMA foreign_keys=ON; PRAGMA trusted_schema=OFF; BEGIN');
+  const result=readContinuationProvenance(other,f.records,f.intent.id,f.enrollment,1000);
+  assert.deepEqual(result.receipt,f.receipt);assert.equal(result.state,'set-committed');other.exec('COMMIT');
+ }finally{other.close();}
+ assert.deepEqual(fs.readFileSync(file),before);
+});
+test('lossy enrollment text refuses preparation before any receipt or intent mutation',t=>{
+ const f=fixture(t,':memory:','/synthetic/\ufffd');
+ dropGuards(f.db,'continuation_signer_enrollments');
+ f.db.prepare("UPDATE continuation_signer_enrollments SET canonical_root=CAST(? AS TEXT)").run(Buffer.concat([Buffer.from('/synthetic/'),Buffer.from([255])]));
+ assert.throws(()=>prepare(f),{code:'continuation_provenance_text_invalid'});
+ for(const table of ['continuation_intents','continuation_attestations','continuation_decision_receipts'])assert.equal(count(f,table),0);
+ assert.equal(f.db.isTransaction,true);
 });

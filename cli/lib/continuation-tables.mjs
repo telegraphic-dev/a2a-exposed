@@ -73,6 +73,15 @@ function insert(db,table,row,extra={}){const value={...row,...extra},keys=Object
 function equalRows(actual,expected,additional=[]){
  if(!actual||Object.keys(actual).sort().join(',')!==[...Object.keys(expected),...additional].sort().join(',')||Object.keys(expected).some(k=>actual[k]!==expected[k]))fail('continuation_row_mismatch');
 }
+function storedText(row){
+ if(!row)return row;
+ const {record_bytes,...stored}=row;
+ // Authenticate the bytes SQLite stores, not Node's replacement-decoded view.
+ // ignoreBOM preserves a literal BOM for the existing exact JSON checks.
+ try{if(new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(record_bytes)!==stored.record)fail();}
+ catch{fail();}
+ return stored;
+}
 function parse(text){if(typeof text!=='string'||Buffer.byteLength(text)>1048576)fail();try{return JSON.parse(text);}catch{fail();}}
 function savepoint(db,fn){transaction(db);db.exec('SAVEPOINT continuation_write');try{const result=fn();db.exec('RELEASE continuation_write');return result;}catch(error){try{db.exec('ROLLBACK TO continuation_write; RELEASE continuation_write');}catch{fail('continuation_rollback_unknown');}throw error;}}
 
@@ -80,14 +89,14 @@ function savepoint(db,fn){transaction(db);db.exec('SAVEPOINT continuation_write'
 // it to tool/model output. A valid bundle does not establish current readiness.
 export function readContinuationIntent(db,records,id){
  transaction(db);
- const i=db.prepare('SELECT * FROM continuation_intents WHERE id=?').get(id);if(!i)fail('continuation_intent_missing');
- const record=parse(i.record),attestations=db.prepare('SELECT * FROM continuation_attestations WHERE consumed_intent=?').all(id);if(attestations.length!==1)fail('continuation_row_mismatch');
+ const i=storedText(db.prepare('SELECT *,CAST(record AS BLOB) AS record_bytes FROM continuation_intents WHERE id=?').get(id));if(!i)fail('continuation_intent_missing');
+ const record=parse(i.record),attestations=db.prepare('SELECT *,CAST(record AS BLOB) AS record_bytes FROM continuation_attestations WHERE consumed_intent=?').all(id).map(storedText);if(attestations.length!==1)fail('continuation_row_mismatch');
  const a=attestations[0],intent={id:i.id,record,intent_mac:i.intent_mac,attestation:{attestation:parse(a.record),attestation_mac:a.attestation_mac}},expected=records.authorityRows(intent);
  equalRows(i,expected.intent,['state']);equalRows(a,expected.attestation,['consumed_intent']);
  if(a.consumed_intent!==i.id||!['prepared','set-committed','eligible','aborted'].includes(i.state))fail('continuation_row_mismatch');
  const sets=db.prepare('SELECT * FROM grant_sets WHERE intent_id=? OR id=?').all(id,expected.set.id);
  if(sets.length>1)fail('continuation_row_mismatch');
- const set=sets[0]||null,members=db.prepare('SELECT * FROM grant_members WHERE set_id=? ORDER BY grant_id COLLATE BINARY').all(expected.set.id);
+ const set=sets[0]||null,members=db.prepare('SELECT *,CAST(record AS BLOB) AS record_bytes FROM grant_members WHERE set_id=? ORDER BY grant_id COLLATE BINARY').all(expected.set.id).map(storedText);
  if(set){equalRows(set,expected.set,['state']);if(!['committed','eligible','void'].includes(set.state)||members.length!==expected.members.length)fail('continuation_row_mismatch');for(let n=0;n<members.length;n++)equalRows(members[n],expected.members[n]);}
  else if(members.length)fail('continuation_row_mismatch');
  if(i.state==='prepared'&&set||i.state==='set-committed'&&set?.state!=='committed'||i.state==='eligible'&&set?.state!=='eligible'||i.state==='aborted'&&set&&set.state!=='void')fail('continuation_row_mismatch');
