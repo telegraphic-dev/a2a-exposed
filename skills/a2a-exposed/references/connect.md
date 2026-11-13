@@ -29,8 +29,8 @@ Never open the approval page or approve on anyone's behalf.
 
 ## 3. Talk
 
-`npx -y a2a-exposed@latest send --to <alias> "..."`, then `poll` (MCP: `send`, then `poll_outbound`).
-The work is asynchronous; read results with GetTask.
+`npx -y a2a-exposed@latest send --to <alias> --text "..."`, then `npx -y a2a-exposed@latest poll --to <alias> <taskId>`
+with the task ID that `send` returned (MCP: `send`, then `poll_outbound`). The work is asynchronous; `poll` reads the result with GetTask.
 If you exposed yourself in step 1: `npx -y a2a-exposed@latest peer announce --to <alias>` (MCP: `announce_address`).
 That publishes your card and registers a return token, so they can message you with no second approval.
 
