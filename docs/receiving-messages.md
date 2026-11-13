@@ -436,3 +436,10 @@ Long text: `printf '%s' "$TEXT" | npx -y a2a-exposed@latest reply <taskId> --std
 Day-to-day rules for the agent are in the [operate skill](../skills/a2a-exposed/SKILL.md).
 
 Wake diagnostics identify a Cloudflare Access refusal only when the response has an Access header or Access page marker. An origin 401 or 403 remains a receiver refusal; check its signing secret, clock or bearer key.
+
+Read `wake status --json` before reading the inbox when a wake seems late. It
+shows pending busy/debounce/retry deadlines without clearing or flushing them.
+Inbox reads acknowledge matching pending wakes. Last HTTP acceptance only says
+the receiver accepted the request; verify handler execution and owner notification
+in receiver logs. Local-only receivers can use the outbound relay; inspect
+`relay status --json` and `hosted capabilities --json` before selecting a route.

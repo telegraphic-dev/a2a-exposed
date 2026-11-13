@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Add read-only wake queue diagnostics (`wake status --json`, also included in
+  `status`) with busy/debounce/retry deadlines and last HTTP attempt/acceptance.
+  Receiver acceptance does not claim that the handler ran or the owner was notified.
+- Explain closed-task continuation and missing callbacks across CLI and MCP.
+  Retain claimed pairing addresses separately from verified callbacks, expose
+  human-approved pair-back suggestions in token/pair lists and inbox results,
+  and preserve the signed-announcement return-token and revocation rules.
+
 - Add separately opted-in HTTP relay profiles for fixed local webhooks and native
   A2A JSON-RPC services, with original request bytes/application authentication,
   real receiver responses, rewritten discovery and bounded incremental SSE.

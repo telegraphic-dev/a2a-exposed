@@ -218,6 +218,7 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
                                                would skip and still wakes. enforce stores an ack and an idle
                                                or unchanged status without a wake, and batches a changed status.
                                                Set shadow again to roll enforce back
+  wake status [--json]          read pending/retrying wakes and last HTTP acceptance; does not clear them
   wake preview                  rendered wake request (a credential is Bearer •••• or ••••, none of the secret)
                                 openbot includes a sample delivery ID and canonical signing-input description
                                 + sha256 fingerprints of the uploaded URL/key/HMAC secret; compared with
@@ -425,20 +426,20 @@ Pairing (OAuth 2.0 device flow, RFC 8628: agents connect without pasting tokens 
                           when the approval password was set, and the dashboard URL (manageUrl) when
                           MANAGE_URL is set. JSON adds expiresIn (local remaining seconds, rounded up, minimum zero;
                           null if expiry is unknown)
-  pair approve <code>     approve with the owner token (human mode records the owner; in agent
+  pair approve <code> [--json]  approve with the owner token (human mode records the owner; in agent
                           mode, run it only after your human said yes)
-  pair deny <code>        deny (any mode; on the /device page deny needs no password)
+  pair deny <code> [--json]     deny (any mode; on the /device page deny needs no password)
 
 Inbound peer tokens (one per peer label; paired agents get one too)
   token issue <label>     print a new token once (fails if the label is active); manual fallback to \`connect\`
   token rotate <label>    replace the label's token
-  token list | token revoke <label>        list shows how each token was created (pairing: code + date)
+  token list [--json] | token revoke <label>        list shows how each token was created (pairing: code + date)
                                            and MCP connectors (label mcp-*); revoke works for both;
                                            revoke of an unknown label exits 1
 
 Outbound (agents you call)
   peers add <alias> <url> [--token-env VAR | --token-stdin]
-  peers list | peers rm <alias>
+  peers list [--json] | peers rm <alias>
   peers sync [alias...] | peers unsync <alias>
                           upload peers (URL + token, encrypted on the Worker) so the MCP connector can send to
                           them; default: all peers. Re-run after connect, token changes or an owner-token rotation
@@ -564,7 +565,7 @@ const SPEC = {
 	inbox: { context: S, from: S, all: B, json: B, "allow-os-consent": B },
 	reply: { text: S, stdin: B, state: { type: "string", default: "completed" }, artifact: B, "artifact-name": { type: "string", default: "response" }, force: B },
 	history: { "allow-os-consent": B, from: S, n: { type: "string", short: "n", default: "50" }, json: B },
-	token: { rotate: B },
+	token: { rotate: B, json: B },
 	peers: { "token-env": S, "token-stdin": B, json: B },
 	peer: { to: S, all: B, reissue: B, hours: S, off: B, json: B },
 	send: { "allow-os-consent": B, to: S, text: S, context: S, task: S, push: B, proto: S, wake: S, intent: S },
@@ -676,7 +677,10 @@ export async function main(argv) {
 			if (p[0] === "http" || p[0] === "a2a") return relayHttp(p, o);
 			if (p.length !== 1) throw new CliError("usage: relay create|status|revoke|run");
 			return relay(p[0], o);
-		case "wake": return C.deploymentKind() === "hosted" || o.agent ? hosted.output(() => hosted.wake(p[0], o), o) : dep.wake(p[0], o);
+		case "wake": {
+			if (p[0] === "status") return cmd.wakeStatus(o);
+			return C.deploymentKind() === "hosted" || o.agent ? hosted.output(() => hosted.wake(p[0], o), o) : dep.wake(p[0], o);
+		}
 		case "url": {
 			const u = cmd.baseUrl();
 			if (!u) throw new CliError(`no base URL configured in ${C.CONFIG_FILE}: run \`${CLI} init\` (or pass --config-dir / A2A_CONFIG_DIR for another deployment)`);
@@ -725,7 +729,7 @@ export async function main(argv) {
 			if (sub === "set-password") return pair.setPassword(o);
 			if (sub === "set-oidc") return pair.setOidc(o, p.slice(1));
 			if (sub === "list") return pair.list(o);
-			if (sub === "approve" || sub === "deny") return pair.decide(sub, need(p[1], `pair ${sub} <code>`));
+			if (sub === "approve" || sub === "deny") return pair.decide(sub, need(p[1], `pair ${sub} <code>`), o);
 			throw new CliError(`unknown pair action ${sub} (set-password|set-oidc|list|approve|deny)`);
 		}
 		case "send": return cmd.send(o);

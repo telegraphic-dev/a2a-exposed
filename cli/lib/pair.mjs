@@ -151,6 +151,10 @@ export async function list(o) {
 	const r = await ownerCall("GET", "/owner/pairing");
 	if (r.status !== 200) die(`could not list pairing requests: ${ownerError(r)}`);
 	const d = r.data;
+	try {
+		const peers = await ownerCall("GET", "/owner/peers");
+		if (peers.status === 200 && Array.isArray(peers.data)) d.inboundOnly = peers.data.filter(p => !p.revoked_at && p.continuation && p.continuation.kind !== "send");
+	} catch { /* pairing still works on old endpoints */ }
 	if (o.json) {
 		const now = Date.now();
 		return console.log(JSON.stringify({ ...d, pending: d.pending.map((p) => {
@@ -171,6 +175,7 @@ export async function list(o) {
 		if (d.setupLinkExpiresAt) console.log(`setup link: one is open until ${d.setupLinkExpiresAt} (a new \`pair set-password --web\` replaces it)`);
 		if (d.manageUrl) console.log(`dashboard: ${d.manageUrl}`);
 	}
+	for (const peer of d.inboundOnly || []) console.log(`inbound-only ${peer.label}: ${peer.continuation.next}${peer.continuation.command ? " Command after human approval: " + peer.continuation.command : ""}`);
 	if (!d.pending.length) return console.log("(no pending pairing requests)");
 	for (const p of d.pending) {
 		console.log(`--- ${p.userCode}  ${JSON.stringify(p.clientName || p.clientId || "(no name)")} (claimed, untrusted)  expires ${p.expiresAt}${p.replacesLabel ? `  replaces the active token "${p.replacesLabel}"` : ""}`);
@@ -182,12 +187,17 @@ export async function list(o) {
 	console.log(`Ask your human about each request; never approve on your own.`);
 }
 
-export async function decide(action, code) {
+export async function decide(action, code, o = {}) {
 	const r = await ownerCall("POST", `/owner/pairing/${encodeURIComponent(code)}/${action}`, {});
 	if (r.status !== 200) die(ownerError(r));
 	const d = r.data;
+	if (o.json) return console.log(JSON.stringify(d));
 	if (action === "deny") return console.log(`denied ${d.userCode}${d.clientName ? ` (${JSON.stringify(d.clientName)})` : ""}: no token is issued`);
 	console.log(`approved ${d.userCode}${d.clientName ? ` (${JSON.stringify(d.clientName)})` : ""}: the agent collects its token on its next poll, as peer "${d.label}"${d.replaced ? " (its old token stops working)" : ""}. Revoke any time: ${CLI} token revoke ${d.label}`);
+	if (d.continuation) {
+		console.log(d.continuation.note);
+		if (d.continuation.command) console.log(`Fallback after human approval: ${d.continuation.command} (claimed address; verify with the peer owner first).`);
+	}
 }
 
 // ---------------------------------------------------------------- client: connect to another inbox

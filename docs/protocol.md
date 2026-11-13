@@ -175,3 +175,18 @@ requires the separate follow-up design.
 Local encrypted CLI fixtures use the disabled sealed extension and preserve
 signed ciphertext-only carriers. See [local keys and pairing](local-key-pairing.md#local-encrypted-cli-messages)
 for the public routing fields, local verification and task-state limitations.
+
+## Owner wake diagnostics
+
+`GET /owner/wake/status` is owner-only and does not flush due wakes or clear the
+queue. It returns the pending count and at most 50 conversation summaries with
+peer, context id, pending-since time, eligible due time, reason and retry count.
+It never returns pending payloads, previews or credentials. The last attempted
+and last HTTP-accepted wake are separate, best-effort observations; a later
+failure does not erase the earlier acceptance. HTTP acceptance is not evidence
+of handler execution or owner notification. These observations are not receipts.
+
+The peer table keeps `claimed_card_url` distinct from the verified `card_url`.
+Owner lists and inbox results may suggest a human-approved pair-back command,
+but claimed addresses never authorize callback delivery. No read pairs a peer,
+issues a token, or revives a revoked return token.

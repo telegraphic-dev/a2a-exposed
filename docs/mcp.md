@@ -192,3 +192,10 @@ setup grant and the OAuth agent grant must remain valid. The reference's tested 
 is saved without another browser page. Without a reference, use the browser confirmation.
 See [hosted CLI setup](cli.md#hosted-setup-from-the-cli) for commands. Reference support
 is currently available when advertised by service capabilities. The owner token stays local to the CLI and never enters MCP.
+
+Inbound `list_peers` and inbox rows include `continuation` guidance when the
+endpoint supports it. It distinguishes a usable callback from a claimed
+pair-back address or a missing address announcement. Verify any claimed address
+with the owner and ask the human before pairing. The connector cannot approve
+pairing. A closed-task reply explains how to read history and continue with
+`send`; it does not overwrite the stored answer.

@@ -266,9 +266,9 @@ The owner token authenticates these commands.
 | `pair set-password --web [--ttl MIN] [--json]` | One-time link where a human sets the approval password. `--ttl` is 1 to 60 minutes (default 15). A new link invalidates the previous one |
 | `pair set-password` | The same, in a terminal, no echo. The human types the password there |
 | `pair set-oidc --issuer URL --client-id ID --subjects SUB[,SUB...] [--methods password,oidc] [--secret-stdin]` | Optional OpenID Connect on `/device` and the MCP consent page. Deploy uploads `APPROVAL_OIDC_CLIENT_SECRET` only when that variable is set in the environment you use for deploy. `--secret-stdin` checks one line and discards it. `config.env` keeps the issuer and client id |
-| `pair list [--json]` | Pending requests, the approval mode, when the password was set, and the dashboard URL when `MANAGE_URL` is set. JSON includes `expiresIn` on each pending request |
-| `pair approve <code>` | Approves with the owner token. In human mode the decision is the owner's. In agent mode, run it only after the human says yes |
-| `pair deny <code>` | Any mode. On `/device`, deny needs no password |
+| `pair list [--json]` | Inbound-only callback guidance (`inboundOnly` in JSON), pending requests, the approval mode, when the password was set, and the dashboard URL when `MANAGE_URL` is set. JSON includes `expiresIn` on each pending request |
+| `pair approve <code> [--json]` | Approves with the owner token. In human mode the decision is the owner's. In agent mode, run it only after the human says yes |
+| `pair deny <code> [--json]` | Any mode. On `/device`, deny needs no password |
 
 `pair list --json` preserves each request's `expiresAt` and adds `expiresIn`: remaining seconds calculated from the local clock when the list is printed, rounded up and clamped to zero. An absent or invalid `expiresAt` produces `null`. This also works with older Workers; it does not change or approve requests. The server enforces expiry independently, so a positive countdown does not guarantee that approval will succeed.
 
@@ -278,7 +278,7 @@ The owner token authenticates these commands.
 | --- | --- |
 | `token issue <label>` | Print a new peer token once. Fails if the label is active. Manual fallback to `connect` |
 | `token rotate <label>` | Replace that label's token |
-| `token list` | Labels, how each was created (pairing code and date, or a reverse pairing), and MCP connectors (`mcp-*`) |
+| `token list [--json]` | Labels, how each was created (pairing code and date, or a reverse pairing), and MCP connectors (`mcp-*`) |
 | `token revoke <label>` | Immediate. A later push reply to a task already sent is rejected. Works for peer labels and MCP connectors. An unknown label exits 1 |
 | `peers add <alias> <url> [--token-env VAR \| --token-stdin]` | Store an outbound peer. The token is `PEER_<ALIAS>_TOKEN` in the config file |
 | `peers list` / `peers rm <alias>` | List or remove |
@@ -548,3 +548,34 @@ message traffic requires the approved local test flag. Local `send` seals;
 for approved local fixtures using `A2A_SEALED_ENABLED=1`; no plaintext fallback
 is available. OS consent is a startup choice, never a tool parameter. See the
 [MCP local setup and limits](mcp.md#local-stdio-sendread).
+
+## Pairing and delivery diagnostics
+
+`token list --json` lists inbound labels and MCP connectors without credentials.
+Active inbound labels include `continuation`: `send` means a usable outbound
+callback is stored, `pair-back` includes a claimed card and an exact `connect
+... --no-wait` command for human review, and `announce-address` means the peer
+owner must announce an address. Claimed cards never become delivery targets
+without the existing verified announcement or an explicit pairing. Revoked
+labels have no continuation suggestion. CLI `peers list --json` lists local
+outbound aliases; remote MCP `list_peers` lists synced outbound aliases.
+
+A closed-task reply fails with `task_closed` and leaves its saved answer intact.
+Read its history, then continue with `send` and the same context id. Pair back
+only with human approval when there is no callback. `--force` remains an explicit
+change to the old task; it is not a continuation command.
+
+`wake status [--json]` uses the selected config directory and owner credential.
+It reads `/owner/wake/status` without flushing or acknowledging the queue. The
+result contains `pendingCount`, at most 50 pending conversations sorted by due
+time, their `reason` (`debounce`, `busy`, `retry`), `dueAt` and retry `attempts`.
+Due time is the earliest eligible time; cron or the hosted alarm may deliver later.
+`lastAttempt` and `lastAccepted` contain only timestamp, HTTP status and transport.
+They are unknown until this Worker version records an attempt. Historical HTTP
+acceptance does not prove that the current settings work, that the signature was
+verified, that the handler ran or that the owner was notified. Check receiver
+logs and verify a real inbox-and-reply run. No automatic test is sent.
+
+`status --json` adds `wakeDelivery` when the endpoint supports it; older endpoints
+leave it unknown. For hosted setup selected by `--agent`, use `wake preview
+--agent NAME --json`; `wake status` instead uses an existing local owner config.

@@ -327,6 +327,7 @@ export function nextStep(s) {
 	if (s.deployment !== "hosted" && s.workerVersion && s.latestVersion && newer(s.latestVersion, s.workerVersion) && !newer(s.workerVersion, version))
 		n.also.push(`a2a-exposed ${s.latestVersion} is available: run ${CLI} deploy`);
 	const sh = (s.peerTokenShadowed || []).map((k) => `${k} is set in the environment and overrides the different peer token saved in ${s.configFile} (e.g. a stale value from before \`connect\` stored a new one): send/poll use the environment value. Unset ${k} where it is set to use the saved token`);
+	if (!s.upstream && s.wake && !s.wake.configured) n.also.push(`For a local-only receiver, an outbound relay can avoid an inbound tunnel. Inspect ${CLI} relay status --json and hosted capabilities --json before choosing a supported route; configuring it needs human approval.`);
 	const addr = s.addresses;
 	if (addr && Array.isArray(addr.announcePending) && addr.announcePending.length)
 		n.also.push(`an address announcement is still pending: run \`${CLI} peer announce --all\``);
@@ -515,7 +516,7 @@ export async function collect(net = {}) {
 		card: { ok: false, error: "not checked" }, ownerApi: { ok: false, error: "not checked" }, wake: null, tunnel: null, zones: null, pairing: null,
 		upstream: C.get("A2A_UPSTREAM_URL") || null, facade: null, upstreamVerify: null, upstreamVerifyError: "", facadePeerAuth: null,
 		upstreamNoToken: C.get("A2A_UPSTREAM_NO_TOKEN") === "1", localUpstreamToken: fingerprint(process.env.UPSTREAM_TOKEN),
-		peerTokenShadowed: shadowedPeerTokens(), addresses: null,
+		peerTokenShadowed: shadowedPeerTokens(), addresses: null, wakeDelivery: null,
 		mcp: "unknown", health: null, workerVersion: null, cliVersion: D.VERSION, latestVersion: readCache(cacheFile())?.latest || null,
 	};
 	if (s.deployment === "hosted") { s.deployed = true; s.urlKind = "hosted"; }
@@ -544,6 +545,7 @@ export async function collect(net = {}) {
 				}
 			}
 			if (s.ownerApi.ok) {
+				try { const w = await ownerTry("GET", "/owner/wake/status"); if (w.status === 200) s.wakeDelivery = w.data; } catch { /* old or unreachable endpoint: unknown */ }
 				try {
 					const pr = await owner("GET", "/owner/pairing");
 					if (pr && typeof pr === "object" && ["human", "agent", "off"].includes(pr.mode))
@@ -676,6 +678,7 @@ export async function status(o) {
 				}
 			}
 			rows.push(["wake", wakeLine(s)]);
+			if (s.wakeDelivery) rows.push(["wake delivery", `${s.wakeDelivery.pendingCount} pending conversation(s); last receiver acceptance ${s.wakeDelivery.lastAccepted?.at || "unknown"}; handler execution and owner notification unverified. ${CLI} wake status --json`]);
 			const t = s.tunnel;
 			rows.push(["tunnel", !t ? "none" : `${t.wakeUrl} -> ${t.origin || "?"}; ${!t.complete ? "INCOMPLETE" : t.tokenFileOk ? "set up" : "set up, but the connector token file is MISSING"}` +
 				(t.connections != null ? `; ${tunnelStateLabel(t.state)}, ${t.connections} connector connection(s)` : t.error ? `; state unknown (${t.error})` : "")]);

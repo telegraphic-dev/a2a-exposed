@@ -62,3 +62,14 @@ test("inbox ends each task with its current state and timestamp without changing
 	assert.ok(r.stdout.endsWith(`current state: working (${ts})\n`));
 	assert.deepEqual(JSON.parse(cli(["inbox", "--context", "ctx", "--json"], rows).stdout), rows);
 });
+
+test("wake status prints queue and honest receiver acceptance, with JSON for agents", t => {
+	const cli = fixture(t);
+	const data = { configured: true, transport: "webhook", pendingCount: 1, pending: [{ peer: "ada", contextId: "ctx", reason: "retry", attempts: 2, dueAt: ts }], lastAttempt: { at: ts, httpStatus: 503 }, lastAccepted: null, next: "Handler execution and owner notification are unverified; check receiver logs." };
+	const result = cli(["wake", "status"], data);
+	assert.equal(result.status, 0, result.stderr);
+	assert.match(result.stdout, /1 pending conversation.*\nada\/ctx: retry/);
+	assert.match(result.stdout, /last receiver acceptance: unknown/);
+	assert.match(result.stdout, /unverified/);
+	assert.deepEqual(JSON.parse(cli(["wake", "status", "--json"], data).stdout), data);
+});

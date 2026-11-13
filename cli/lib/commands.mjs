@@ -93,6 +93,20 @@ async function inboxRows(o) {
 	});
 }
 
+export async function wakeStatus(o) {
+	if (o.agent) die("wake status uses the selected local config and owner credential; omit --agent and select --config-dir. For hosted setup use wake preview --agent NAME --json.");
+	const r = await ownerTry("GET", "/owner/wake/status");
+	if (r.status === 404) die("this endpoint predates wake status; use wake preview and receiver logs, then ask the owner about upgrading");
+	if (r.status !== 200) die(`could not read wake status: ${describeHttp(r.status, r.data)}`);
+	if (o.json) return out(r.data);
+	const d = r.data;
+	console.log(`wake: ${d.configured ? d.transport : "not configured"}; ${d.pendingCount} pending conversation(s)`);
+	for (const row of d.pending || []) console.log(`${row.peer}/${row.contextId}: ${row.reason}, due ${row.dueAt}; ${row.attempts} retry attempt(s)`);
+	console.log(`last attempt: ${d.lastAttempt ? `${d.lastAttempt.at}, HTTP ${d.lastAttempt.httpStatus ?? "unknown"}` : "unknown"}`);
+	console.log(`last receiver acceptance: ${d.lastAccepted?.at || "unknown"}`);
+	console.log(d.next);
+}
+
 export async function inbox(o) {
 	const rows = await (await import("./sealed-cli.mjs")).openRows(await inboxRows(o), o);
 	// pending pairing requests: polling agents get no pairing wake, so the inbox shows them too (not with --context:
@@ -122,6 +136,7 @@ export async function inbox(o) {
 		console.log("<<< END PEER MESSAGE");
   if (r.locallyOpened === false) console.log(r.next);
 		if (reply) console.log(`(a reply to a message you sent; read it with \`${CLI} history ${r.contextId}\`. Continue with send, not reply.)`);
+		if (r.continuation?.kind !== "send" && r.continuation?.next) console.log(`${r.continuation.next}${r.continuation.command ? " Command after human approval: " + r.continuation.command : ""}`);
 		if (r.state) printState(r.state, r.updated);
 	}
 	if (pairing.length) {
@@ -179,10 +194,17 @@ export async function contexts() {
 // ---------------------------------------------------------------- inbound peer tokens (one per peer label)
 export async function token(action, label, o) {
 	if (action === "list") {
-		for (const r of await owner("GET", "/owner/peers")) {
+		const rows = await owner("GET", "/owner/peers");
+		if (o.json) {
+			const m = await ownerTry("GET", "/owner/mcp").catch(() => null);
+			const grants = m?.status === 200 && Array.isArray(m.data?.grants) ? m.data.grants : [];
+			return out([...rows, ...grants.map(g => ({ label: g.label, created_at: g.created_at, revoked_at: g.revoked_at, kind: "mcp", client_name: g.client_name, redirect_host: g.redirect_host, last_used_at: g.last_used_at }))]);
+		}
+		for (const r of rows) {
 			const via = r.source === "pairing" ? `\tvia pairing: code ${r.user_code || "?"}${r.client_name ? `, ${JSON.stringify(r.client_name)}` : ""}`
 				: r.source === "reverse" ? "\tvia reverse pairing (return token; revoke ends the return path)" : "";
 			console.log(`${r.label}\tcreated=${r.created_at}\t${r.revoked_at ? "REVOKED " + r.revoked_at : "active"}${via}`);
+			if (r.continuation) console.log(`  ${r.continuation.next}${r.continuation.command ? " Command after human approval: " + r.continuation.command : ""}`);
 		}
 		// MCP connectors (Worker 0.5+): their own tokens, listed and revoked by label like peer tokens
 		const m = await ownerTry("GET", "/owner/mcp").catch(() => null);
