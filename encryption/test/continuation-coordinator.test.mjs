@@ -62,3 +62,37 @@ test('physical authority precedes SDK lock and stays reserved across the S to C 
 test('an SDK adapter that omits its callback cannot report a completed checkpoint',async t=>{
  const f=await fixture(t);await assert.rejects(f.maintain(v=>{v.begin();return v.stageIntent(f.intent,{_withMaintenanceQueue:async()=>{}},{environment:f.environment});}));assert.deepEqual(phase(f),{intent:'prepared',sdk:null,sets:0});
 });
+
+async function ready(f,sdk=f.sdk){return f.maintain(v=>{v.begin();return v.readyIntent(f.intent,sdk,{environment:f.environment});});}
+test('C to R rechecks ready in a fresh reserved transaction and retains authority suspension',async t=>{
+ const f=await fixture(t);await stage(f);const r=await ready(f);assert.equal(r.checkpoint,'R');assert.equal(r.suspended,true);assert.equal(r.activeSet,null);assert.equal(r.intentId,f.intent.id);assert.deepEqual(phase(f),{intent:'set-committed',sdk:'ready',sets:1});
+ await assert.rejects(ready(f));assert.deepEqual(phase(f),{intent:'set-committed',sdk:'ready',sets:1});
+});
+test('R requires durable C and exact SDK staged binding',async t=>{
+ for(const mode of ['I','missing','different']){const f=await fixture(t);if(mode!=='I')await stage(f);if(mode==='missing'){f.sdk.db.exec('DROP TRIGGER host_grant_retained');f.sdk.db.prepare('DELETE FROM host_grant_sets').run();}if(mode==='different'){f.sdk.db.exec('DROP TRIGGER host_grant_immutable');f.sdk.db.prepare('UPDATE host_grant_sets SET membership_mac=?').run(Buffer.alloc(32,5).toString('base64url'));}await assert.rejects(ready(f));assert.equal(f.inspect().suspended,true);assert.notEqual(phase(f).sdk,'ready');}
+});
+test('pre/post R COMMIT failure retains C with staged or ready SDK and unknown checkpoint',async t=>{
+ for(const when of ['before','after']){const f=await fixture(t);await stage(f);const exec=f.sdk.db.exec;f.sdk.db.exec=function(sql,...args){if(sql==='COMMIT'&&when==='before')throw Error('synthetic R commit');const r=exec.call(this,sql,...args);if(sql==='COMMIT'&&when==='after')throw Error('synthetic R commit');return r;};try{await assert.rejects(ready(f),e=>e.intentId===f.intent.id&&e.setId===f.intent.record.plan.set_id&&e.checkpoint==='unknown');}finally{f.sdk.db.exec=exec;}assert.deepEqual(phase(f),{intent:'set-committed',sdk:when==='after'?'ready':'staged',sets:1});assert.equal(f.inspect().suspended,true);}
+});
+test('SDK mutation in R commit gap is observed in the new reserved snapshot',async t=>{
+ for(const mode of ['proposal','trust','binding','void']){const f=await fixture(t);await stage(f);const exec=f.sdk.db.exec;let gap=false,mutated=false;f.sdk.db.exec=function(sql,...args){const r=exec.call(this,sql,...args);if(sql==='COMMIT'){gap=true;const script="import{DatabaseSync}from'node:sqlite';const d=new DatabaseSync(process.argv[1]);d.exec(process.argv[2]);d.close();";const change=mode==='proposal'?"UPDATE proposals SET state='pending'":mode==='trust'?"UPDATE trust SET version=version+1":mode==='void'?"UPDATE host_grant_sets SET state='void'":"DROP TRIGGER host_grant_immutable; UPDATE host_grant_sets SET target_revision=target_revision+1";const child=spawnSync(process.execPath,['--input-type=module','-e',script,path.join(f.sdk.root,'state.sqlite'),change],{encoding:'utf8',timeout:5000,env:{DO_NOT_TRACK:'1'}});assert.equal(child.status,0,child.stderr);mutated=true;}return r;};try{await assert.rejects(ready(f));}finally{f.sdk.db.exec=exec;}assert.equal(gap,true);assert.equal(mutated,true);assert.equal(phase(f).intent,'set-committed');assert.equal(f.inspect().activeSet,null);assert.equal(f.inspect().suspended,true);}
+});
+test('authority and SDK reserved locks cover both readiness passes at R',async t=>{
+ const f=await fixture(t);await stage(f);const get=f.sdk.privateGet;let passes=0;
+ f.sdk.privateGet=async function(...args){passes++;const script="import{DatabaseSync}from'node:sqlite';let r=[];for(const file of process.argv.slice(1)){const d=new DatabaseSync(file);d.exec('PRAGMA busy_timeout=30');try{d.exec('BEGIN IMMEDIATE;ROLLBACK');r.push(true);}catch(e){if(![5,6].includes(e.errcode))throw e;r.push(false);}finally{d.close();}}console.log(JSON.stringify(r));";const child=spawnSync(process.execPath,['--input-type=module','-e',script,path.join(f.dir,'pairing-authority.sqlite'),path.join(f.sdk.root,'state.sqlite')],{encoding:'utf8',timeout:5000,env:{DO_NOT_TRACK:'1'}});assert.equal(child.status,0,child.stderr);assert.deepEqual(JSON.parse(child.stdout),[false,false]);return get.apply(this,args);};
+ await ready(f);assert.equal(passes,2);assert.equal(f.inspect().suspended,true);
+});
+test('environment drift before or after R refuses without eligibility',async t=>{
+ for(const edge of ['readiness','R']){const f=await fixture(t,{source:'environment'});await stage(f);if(edge==='readiness'){const get=f.sdk.privateGet;f.sdk.privateGet=async function(...args){const r=await get.apply(this,args);f.environment.PEER_TOKEN='changed';return r;};}else{const exec=f.sdk.db.exec;f.sdk.db.exec=function(sql,...args){const r=exec.call(this,sql,...args);if(sql==='COMMIT')f.environment.PEER_TOKEN='changed';return r;};}await assert.rejects(ready(f));assert.equal(phase(f).sdk,edge==='R'?'ready':'staged');assert.equal(f.inspect().suspended,true);}
+});
+test('R adapter omission and queue reentry refuse without false completion',async t=>{
+ const f=await fixture(t);await stage(f);await assert.rejects(ready(f,{_withMaintenanceQueue:async()=>{}}));await f.sdk.locked(async()=>{await assert.rejects(ready(f));});assert.deepEqual(phase(f),{intent:'set-committed',sdk:'staged',sets:1});
+});
+
+test('final read-only rollback failures cannot report R success or eligibility',async t=>{
+ for(const side of ['authority','sdk'])for(const when of ['before','after']){const f=await fixture(t);await stage(f);const exec=DatabaseSync.prototype.exec;let injected=false;DatabaseSync.prototype.exec=function(sql,...args){const match=sql==='ROLLBACK'&&(side==='sdk'?this===f.sdk.db:this!==f.sdk.db)&&!injected;if(match){injected=true;if(when==='before')throw Error('synthetic rollback');}const r=exec.call(this,sql,...args);if(match&&when==='after')throw Error('synthetic rollback');return r;};try{await assert.rejects(ready(f),e=>e.intentId===f.intent.id&&e.checkpoint==='unknown');}finally{DatabaseSync.prototype.exec=exec;}assert.equal(injected,true);assert.equal(f.sdk.db.isTransaction,false);assert.deepEqual(phase(f),{intent:'set-committed',sdk:'ready',sets:1});assert.equal(f.inspect().suspended,true);}
+});
+
+test('authority close failures after durable R retain original IDs and unknown outcome',async t=>{
+ for(const when of ['before','after']){const f=await fixture(t);await stage(f);const close=DatabaseSync.prototype.close;let injected=false,failedDB;DatabaseSync.prototype.close=function(...args){if(this!==f.sdk.db&&!injected){injected=true;failedDB=this;if(when==='before')throw Error('synthetic close');const r=close.apply(this,args);throw Error('synthetic close after');}return close.apply(this,args);};try{await assert.rejects(ready(f),e=>e.intentId===f.intent.id&&e.setId===f.intent.record.plan.set_id&&e.checkpoint==='unknown');}finally{DatabaseSync.prototype.close=close;try{failedDB?.close();}catch{}}assert.equal(injected,true);assert.deepEqual(phase(f),{intent:'set-committed',sdk:'ready',sets:1});assert.equal(f.inspect().suspended,true);}
+});
