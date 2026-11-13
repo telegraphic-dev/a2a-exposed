@@ -678,7 +678,10 @@ export async function main(argv) {
 			if (p.length !== 1) throw new CliError("usage: relay create|status|revoke|run");
 			return relay(p[0], o);
 		case "wake": {
-			if (p[0] === "status") return cmd.wakeStatus(o);
+			if (p[0] === "status") {
+				if (p.length !== 1 || Object.keys(o).some(key => key !== "json")) throw new CliError("usage: wake status [--json] (select the owner config with --config-dir; hosted setup: wake preview --agent NAME --json)");
+				return cmd.wakeStatus(o);
+			}
 			return C.deploymentKind() === "hosted" || o.agent ? hosted.output(() => hosted.wake(p[0], o), o) : dep.wake(p[0], o);
 		}
 		case "url": {
