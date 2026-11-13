@@ -118,3 +118,8 @@ The private `diagnoseBindings` inventory also compares every original plan to a
 strictly snapshotted caller binding. `bindingMatches` and time freshness are
 independent metadata; equality does not authenticate that caller as the current
 authority, prove approval or make a plan applicable.
+The private `readRetained` lookup preserves exact original planning bytes for
+future uncertainty reconciliation, including expired plans. It authenticates
+only the explicitly selected ID and returns deeply frozen private data, never
+diagnostic output or an applicable plan. Fresh reads keep their original gates;
+no physical authority reader, command or enrollment writer calls this lookup.
