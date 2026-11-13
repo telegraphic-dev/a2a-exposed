@@ -1,5 +1,5 @@
 // Disabled schema-4 foundation, separate from the physical schema-3 authority.
-// No initializer, command, enrollment adapter or admission path imports this.
+// Only the fresh-only physical initializer imports this; no command or admission.
 // SQL bindings establish shape, never human approval or row authentication.
 import {createRequire} from 'node:module';
 import {installContinuationProvenanceTables} from './continuation-provenance-tables.mjs';
