@@ -927,6 +927,12 @@ test("GET / with Accept: text/markdown, /index.md and /llms.txt: the connect pag
 	assert.equal(llms.headers.get("content-type"), "text/plain; charset=utf-8");
 	assert.ok(llms.text.startsWith("# Barry"));
 	for (const leak of ["192.168.", "tail1234", "ts.net"]) assert.ok(!llms.text.includes(leak), leak);
+	// Every new discovery link resolves on the same agent, and llms.txt keeps absolute URLs.
+	for (const path of ["/.well-known/agent-skills/index.json", "/.well-known/api-catalog", "/auth.md", "/.well-known/mcp/server-card.json"]) {
+		assert.ok(md.text.includes(`](${path})`), path);
+		assert.ok(llms.text.includes(`](${BASE}${path})`), path);
+		assert.equal((await s.call("GET", path)).status, 200, path);
+	}
 	for (const path of ["/index.md", "/llms.txt"]) {
 		const g = await s.call("GET", path);
 		const h = await s.call("HEAD", path);
