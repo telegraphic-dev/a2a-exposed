@@ -985,3 +985,23 @@ and before/after-commit failures. Public diagnostics exclude signatures, attesta
 MACs, private keys, credentials and raw source bytes. UI implementation must receive
 desktop/mobile and relevant-state review before merge. No traffic or eligibility
 is enabled by accepting this design.
+
+### Disabled decision-receipt codec
+
+The internal `cli/lib/continuation-receipt.mjs` codec verifies a detached receipt
+against an authenticated, unexpired continuation intent and a caller-supplied
+enrollment record. It checks the canonical Ed25519 SPKI DER key and SHA-256
+fingerprint, the existing human-decision signature domain, the exact canonical
+attestation bytes and every duplicated plan, consumer and enrollment field.
+Unknown fields, accessors, alternative base64url encodings and changed bindings
+refuse. Its output contains sensitive receipt data for future private storage;
+it is not a public diagnostic.
+
+This codec performs no enrollment, signing, persistence, key discovery or grant
+transition, and no command calls it. The future authority transaction must supply
+the current anchored enrollment, enforce epoch rotation on enrollment changes,
+and bind a receipt to its sole consuming intent atomically. The signature covers
+the attestation, not the receipt wrapper: matching wrapper fields alone cannot
+prove single consumption, current enrollment or a human ceremony. Schema-3 rows
+and a verification-key file cannot supply those guarantees. Durable provenance,
+the privileged human adapter and admission remain unimplemented.
