@@ -15,6 +15,7 @@ import { fetchCheckedPeer, fetchCheckedWake } from "./wake-target.ts";
 import { withDeadline } from "./deadline.ts";
 import * as Addr from "./address.ts";
 import * as P from "./pairing.ts";
+import * as D from "./discovery.ts";
 import * as M from "./mcp.ts";
 import { lookupDirectory, pinDirectoryRegion, tenantNameFromHost, tenantRegion } from "./directory.ts";
 import { accountIdOf, DASHBOARD_ACTOR_HEADER, matchOwnerRpc, ownerResponseLeaks, ownerRpcBody, REISSUE_OWNER_ONLY, REISSUE_OWNER_ONLY_MESSAGE, scrubOwnerClaims, type OwnerRpcRequest, type OwnerRpcResult } from "./owner-rpc.ts";
@@ -3418,21 +3419,39 @@ async function ownerPairing(req: Request, ctx: TenantContext, ectx: ExecutionCon
 }
 
 // ------------------------------------------------------------------ landing (GET /)
-/** A browser (Accept: text/html) gets a small HTML page; anything else (curl, agents, Accept: application/json, ?format=json) the JSON it always got. Built from the served (rewritten) card, so it shows exactly what the card shows. */
-async function landing(req: Request, ctx: TenantContext, url: URL): Promise<Response> {
-	const accept = req.headers.get("accept") || "";
-	const html = url.searchParams.get("format") !== "json" && /\btext\/html\b/i.test(accept);
+/** The connect model every root representation is built from: the served (rewritten, scrubbed) card plus settings. */
+async function connectModel(ctx: TenantContext): Promise<{ card: any; model: D.ConnectModel }> {
 	const card: any = await publicCard(ctx);
+	return { card, model: { name: String(card.name || ctx.AGENT_NAME || "A2A agent"), description: typeof card.description === "string" ? card.description : undefined,
+		base: ctx.PUBLIC_URL.replace(/\/$/, ""), docs: D.docsOrigin(ctx.DISCOVERY_DOCS_ORIGIN), pairing: pairingOn(ctx), oauthMetadata: pairingOn(ctx) || mcpOn(ctx) } };
+}
+
+/** A browser (Accept: text/html) gets a small HTML page; an agent that asks for text/markdown the connect steps in
+ *  Markdown; anything else (curl, Accept: application/json, ?format=json) the JSON it always got, with links added.
+ *  Built from the served (rewritten) card, so it shows exactly what the card shows. */
+async function landing(req: Request, ctx: TenantContext, url: URL): Promise<Response> {
+	const format = D.rootFormat(req.headers.get("accept"), url.searchParams.get("format"));
+	const { card, model } = await connectModel(ctx);
 	const cardUrl = ctx.PUBLIC_URL + "/.well-known/agent-card.json";
-	if (!html) return json({ name: card.name, description: card.description, agentCard: cardUrl, a2a: ctx.PUBLIC_URL + "/",
-		pairing: pairingOn(ctx) ? ctx.PUBLIC_URL + "/device" : undefined }, 200, { vary: "accept" });
+	if (format === "markdown") return new Response(D.connectMarkdown(model), { status: 200, headers: D.markdownHeaders() });
+	if (format === "json") return json({ name: card.name, description: card.description, agentCard: cardUrl, a2a: ctx.PUBLIC_URL + "/",
+		pairing: pairingOn(ctx) ? ctx.PUBLIC_URL + "/device" : undefined, ...D.rootJsonLinks(model) }, 200, { vary: "accept" });
 	const versions = [...new Set<string>((card.supportedInterfaces || []).map((i: any) => String(i?.protocolVersion || "")).filter(Boolean))];
 	const skills = (Array.isArray(card.skills) ? card.skills : []).filter((k: any) => k && (k.name || k.id))
 		.map((k: any) => ({ name: String(k.name || k.id), description: typeof k.description === "string" ? k.description : undefined }));
 	const nonce = P.randomB64();
-	const page = P.landingPage({ name: String(card.name || ctx.AGENT_NAME || "A2A agent"), description: typeof card.description === "string" ? card.description : undefined,
-		base: ctx.PUBLIC_URL, versions, skills, pairing: pairingOn(ctx), proxy: proxyMode(ctx) }, nonce);
+	const links = D.docsLinks(model.docs);
+	const page = P.landingPage({ name: model.name, description: model.description,
+		base: ctx.PUBLIC_URL, versions, skills, pairing: model.pairing, proxy: proxyMode(ctx), connectDoc: links.connect, exposeDoc: links.exposeYourself }, nonce);
 	return new Response(req.method === "HEAD" ? null : page, { status: 200, headers: P.landingHeaders(nonce) });
+}
+
+/** GET /index.md and GET /llms.txt: the Markdown connect page and its llms.txt form. HEAD is answered by handle(). */
+async function discoveryDoc(ctx: TenantContext, kind: "markdown" | "llms"): Promise<Response> {
+	const { model } = await connectModel(ctx);
+	return kind === "markdown"
+		? new Response(D.connectMarkdown(model), { status: 200, headers: D.markdownHeaders() })
+		: new Response(D.llmsTxt(model), { status: 200, headers: D.llmsHeaders() });
 }
 
 // ------------------------------------------------------------------ router
@@ -4432,6 +4451,8 @@ async function handle(req: Request, ctx: TenantContext, ectx: ExecutionContext, 
 		if (req.method === "POST" && path === "/push") return await handlePush(req, ctx, ectx);
 		if (path === "/owner" || path.startsWith("/owner/")) return await handleOwner(req, ctx, ectx, path, url, false, head);
 		if ((req.method === "GET" || req.method === "HEAD") && path === "/") return await landing(req, ctx, url);
+		if (req.method === "GET" && path === "/index.md") return await discoveryDoc(ctx, "markdown");
+		if (req.method === "GET" && path === "/llms.txt") return await discoveryDoc(ctx, "llms");
 		return json({ error: "not found" }, 404);
 	} catch (e: any) {
 		if (e instanceof HttpError) return json({ error: e.message }, e.status);

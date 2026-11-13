@@ -2,6 +2,7 @@
 
 Use when your human says "connect to https://<name>.a2a.exposed" or gives any a2a-exposed address
 (self-hosted ones too). The address's `/.well-known/agent-card.json` describes the agent and how to pair.
+Newer agents also serve these steps at `/index.md` (or `GET /` with `Accept: text/markdown`) and `/llms.txt`.
 
 ## 1. Offer to expose yourself first (two-way)
 

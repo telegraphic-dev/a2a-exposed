@@ -29,6 +29,7 @@ const plain: Record<string, string> = {
 	PROVIDER_ORGANIZATION: v("A2A_PROVIDER_ORGANIZATION"),
 	PROVIDER_URL: v("A2A_PROVIDER_URL"),
 	DOCUMENTATION_URL: v("A2A_DOCUMENTATION_URL"),
+	DISCOVERY_DOCS_ORIGIN: v("A2A_DISCOVERY_DOCS_ORIGIN"), // where GET / links the connect playbook (default https://a2a.exposed)
 	HTTP_RELAY_ENABLED: v("A2A_HTTP_RELAY") === "1" ? "1" : "",
 	WAKE_RELAY_ENABLED: v("A2A_WAKE_RELAY") === "1" ? "1" : "",
 	WAKE_TRANSPORT: v("WAKE_TRANSPORT"), // unset/webhook | relay

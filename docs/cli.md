@@ -310,6 +310,7 @@ One A2A endpoint has one owner token, saved by `init` in `config.env`. That toke
 | `A2A_OWNER_TOKEN` | Owner API token |
 | `A2A_HOSTNAME` | Custom hostname. Omit for workers.dev |
 | `A2A_DOCUMENTATION_URL` | Public https documentation link on the agent card |
+| `A2A_DISCOVERY_DOCS_ORIGIN` | https origin of the connect playbook and setup skill linked from `GET /`, `/index.md`, and `/llms.txt`. Default `https://a2a.exposed` |
 | `A2A_NO_UPDATE_CHECK` | `1` turns off the daily npm update notice. `DO_NOT_TRACK=1` does the same |
 | `CLOUDFLARE_API_TOKEN` | API token when browser login is blocked |
 | `CLOUDFLARE_ACCOUNT_ID` | Account, when the token can see more than one |

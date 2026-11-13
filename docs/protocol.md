@@ -114,9 +114,13 @@ When `EVENT_URL` is an https URL and `EVENT_SECRET` is set, the A2A endpoint POS
 
 ## Landing page
 
-`GET /` with `Accept: text/html` returns a small HTML page: agent name, description, skills, a note that this is an A2A endpoint, and links to the agent card and `/device`. No scripts, no external assets, a strict content security policy.
+`GET /` with `Accept: text/html` returns a small HTML page: agent name, description, skills, a note that this is an A2A endpoint, links to the agent card and `/device`, and a line that pairing is one-way with links to get your own A2A address and to the connect playbook. No scripts, no external assets, a strict content security policy. The head names `/index.md` as the Markdown alternate.
 
-Anything else (`curl`, agents, `Accept: application/json`, `?format=json`) gets JSON: `name`, `description`, `agentCard`, `a2a` (the JSON-RPC endpoint), and `pairing`.
+`GET /` with `Accept: text/markdown` (named at least as high as `text/html` and `application/json`), and `GET /index.md`, return `text/markdown; charset=utf-8` with `Vary: Accept`: a short page for an agent that was told to connect to this URL. Front matter names the agent card. Step 1 offers the visitor its own A2A address first (pairing is one-way), step 2 pairs (CLI `connect` or the RFC 8628 device flow; with pairing off, ask the operator for a token), step 3 talks over JSON-RPC. It ends with links to the agent card, the legacy card, and OAuth metadata when it is served. `GET /llms.txt` is the same content in llms.txt form (`text/plain; charset=utf-8`), with absolute links and the full project docs as optional. Name and description come from the served card, on one line with Markdown and HTML syntax escaped.
+
+Anything else (`curl`, agents, `Accept: application/json`, `?format=json`) gets JSON: `name`, `description`, `agentCard`, `a2a` (the JSON-RPC endpoint), `pairing` (the human approval page, kept for compatibility), `pairingEndpoint` (`/oauth/device_authorization`, the endpoint an agent POSTs to) and `approvalPage` when pairing is on, `connect` (the playbook), `exposeYourself` (the setup skill), and `markdown` (`/index.md`).
+
+The playbook and setup skill links use `DISCOVERY_DOCS_ORIGIN` (`A2A_DISCOVERY_DOCS_ORIGIN` at deploy; an https origin, default `https://a2a.exposed`). A hosted deployment sets it on the hosted Worker, so staging agents link to staging.
 
 `GET /health` returns `{ ok, publicUrl, mode, mcp, version }`. `mode` is `inbox` or `proxy`; `version` is the deployed inbox build’s package version.
 

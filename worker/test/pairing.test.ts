@@ -850,7 +850,12 @@ test("GET /: a browser gets an HTML landing page (strict CSP, no scripts); curl/
 	assert.match(csp, /frame-ancestors 'none'/);
 	assert.equal(h.headers.get("vary"), "accept");
 	assert.equal(h.headers.get("x-frame-options"), "DENY");
-	assert.ok(!/<script|<link|<img|<iframe|src=/i.test(h.text), "no scripts or external assets");
+	assert.ok(!/<script|<img|<iframe|src=/i.test(h.text), "no scripts or external assets");
+	assert.deepEqual(h.text.match(/<link[^>]*>/g), [`<link rel="alternate" type="text/markdown" href="/index.md">`], "only the Markdown alternate, which loads nothing");
+	assert.equal(h.text.match(/one-way/g)?.length, 1);
+	assert.ok(h.text.includes(`<a href="https://a2a.exposed/.well-known/agent-skills/a2a-exposed-setup/SKILL.md">hosted or self-hosted</a>`));
+	assert.ok(h.text.includes(`<a href="https://a2a.exposed/.well-known/agent-skills/a2a-exposed/references/connect.md">connect playbook</a>`));
+	assert.ok(h.text.indexOf("one-way") < h.text.indexOf("Agents get a bearer token"), "two-way offer comes before the pairing steps");
 	assert.ok(h.text.includes("Barry &lt;b&gt;&amp; Co&lt;/b&gt;") && !h.text.includes("<b>&"), "name escaped");
 	assert.ok(h.text.includes("Answers questions about &lt;bricks&gt;."));
 	assert.match(h.text, /A2A \(Agent2Agent\)<\/a> endpoint/);
@@ -869,6 +874,11 @@ test("GET /: a browser gets an HTML landing page (strict CSP, no scripts); curl/
 		assert.equal(j.data.agentCard, `${BASE}/.well-known/agent-card.json`);
 		assert.equal(j.data.a2a, `${BASE}/`);
 		assert.equal(j.data.pairing, `${BASE}/device`);
+		assert.equal(j.data.pairingEndpoint, `${BASE}/oauth/device_authorization`);
+		assert.equal(j.data.approvalPage, `${BASE}/device`);
+		assert.equal(j.data.connect, "https://a2a.exposed/.well-known/agent-skills/a2a-exposed/references/connect.md");
+		assert.equal(j.data.exposeYourself, "https://a2a.exposed/.well-known/agent-skills/a2a-exposed-setup/SKILL.md");
+		assert.equal(j.data.markdown, `${BASE}/index.md`);
 	}
 	const f = await s.call("GET", "/?format=json", { headers: { accept: "text/html" } });
 	assert.equal(f.data.agentCard, `${BASE}/.well-known/agent-card.json`);
@@ -882,7 +892,56 @@ test("GET / with pairing off: no /device link, says to ask the operator", async 
 	const h = await s.call("GET", "/", { headers: { accept: "text/html" } });
 	assert.ok(!h.text.includes(`href="/device"`));
 	assert.match(h.text, /ask this agent's operator for a bearer token/);
-	assert.equal((await s.call("GET", "/")).data.pairing, undefined);
+	assert.match(h.text, /one-way/);
+	const j = (await s.call("GET", "/")).data;
+	assert.equal(j.pairing, undefined);
+	assert.equal(j.pairingEndpoint, undefined);
+	assert.equal(j.approvalPage, undefined);
+	assert.equal(typeof j.connect, "string");
+	const md = await s.call("GET", "/index.md");
+	assert.ok(!md.text.includes("/device"), "no device link in Markdown");
+	assert.match(md.text, /Ask this agent's operator for a token/);
+	const llms = await s.call("GET", "/llms.txt");
+	assert.ok(!llms.text.includes("/oauth/device_authorization"));
+});
+
+test("GET / with Accept: text/markdown, /index.md and /llms.txt: the connect page for agents", async (t) => {
+	const s = setup({ AGENT_NAME: "Barry <b>& Co</b>", AGENT_DESCRIPTION: "Ask me. Admin at http://192.168.1.2/admin and https://jean.tail1234.ts.net/x" }); t.after(s.restore);
+	for (const accept of ["text/markdown", "text/markdown, text/html;q=0.9", "application/json, text/markdown"]) {
+		const r = await s.call("GET", "/", { headers: { accept } });
+		assert.equal(r.status, 200, accept);
+		assert.equal(r.headers.get("content-type"), "text/markdown; charset=utf-8", accept);
+		assert.equal(r.headers.get("vary"), "accept");
+		assert.ok(new TextEncoder().encode(r.text).length < 3072);
+		assert.match(r.text.split("\n").find((l) => /^1\. /.test(l))!, /two-way/);
+	}
+	const md = await s.call("GET", "/index.md");
+	assert.equal(md.status, 200);
+	assert.equal(md.headers.get("content-type"), "text/markdown; charset=utf-8");
+	assert.ok(md.text.startsWith(`---\nagent-card: ${BASE}/.well-known/agent-card.json\n---\n# Barry \\<b\\>& Co\\</b\\>\n`), md.text.slice(0, 200));
+	assert.ok(md.text.includes(`npx -y a2a-exposed@latest connect ${BASE}`));
+	for (const leak of ["192.168.", "tail1234", "ts.net"]) assert.ok(!md.text.includes(leak), leak);
+	const llms = await s.call("GET", "/llms.txt");
+	assert.equal(llms.status, 200);
+	assert.equal(llms.headers.get("content-type"), "text/plain; charset=utf-8");
+	assert.ok(llms.text.startsWith("# Barry"));
+	for (const leak of ["192.168.", "tail1234", "ts.net"]) assert.ok(!llms.text.includes(leak), leak);
+	for (const path of ["/index.md", "/llms.txt"]) {
+		const g = await s.call("GET", path);
+		const h = await s.call("HEAD", path);
+		assert.equal(h.status, 200, path);
+		assert.equal(h.text, "", path);
+		assert.equal(h.headers.get("content-type"), g.headers.get("content-type"), path);
+		assert.equal(h.headers.get("cache-control"), g.headers.get("cache-control"), path);
+	}
+	const headRoot = await s.call("HEAD", "/", { headers: { accept: "text/markdown" } });
+	assert.equal(headRoot.text, "");
+	assert.equal(headRoot.headers.get("content-type"), "text/markdown; charset=utf-8");
+	assert.equal((await s.call("POST", "/index.md")).status, 404);
+	const staging = setup({ DISCOVERY_DOCS_ORIGIN: "https://staging.example.com" }); t.after(staging.restore);
+	const sm = await staging.call("GET", "/index.md");
+	assert.ok(sm.text.includes("https://staging.example.com/.well-known/agent-skills/a2a-exposed/references/connect.md"));
+	assert.equal((await staging.call("GET", "/")).data.connect, "https://staging.example.com/.well-known/agent-skills/a2a-exposed/references/connect.md");
 });
 
 test("owner summary counts tasks and pending pairing requests without their text", async (t) => {
