@@ -310,7 +310,7 @@ export function readRetainedInitialContinuationSignerPlan(configDir,{configIdent
 
 // Disabled read-only uncertainty diagnosis. Expiry does not erase retained
 // identities; these metadata are never an applicable plan or human approval.
-export function diagnoseInitialContinuationSignerPlans(configDir,{configIdentity,now}={}){
+function diagnoseInitialSignerPlans(configDir,{configIdentity,now}={},bindings=false){
  let db;
  try{
   const p=locations(configDir),anchor=operationAnchor(p,configIdentity);
@@ -323,11 +323,18 @@ export function diagnoseInitialContinuationSignerPlans(configDir,{configIdentity
   };
   guard();
   const storage=createContinuationEnrollmentStorage(Buffer.from(before.recovery_key,'base64url'));
-  const plans=storage.diagnose(db,initialSignerAuthority(before,p),null,now);
+  const plans=bindings?storage.diagnoseBindings(db,initialSignerAuthority(before,p),null,now):storage.diagnose(db,initialSignerAuthority(before,p),null,now);
   guard();db.exec('ROLLBACK');assertAnchor(p,anchor);
   return Object.freeze({schema:4,configIdentity,revision:0,epoch:before.suspension_epoch,suspended:true,currentSigner:null,plans});
  }catch(error){throw mapped(error);}finally{try{db?.exec('ROLLBACK');}catch{}close(db);}
 }
+
+export function diagnoseInitialContinuationSignerPlans(configDir,options={}){return diagnoseInitialSignerPlans(configDir,options);}
+// Historical metadata compared against the anchored INITIAL binding, including
+// authenticated plans that no longer match. No caller supplies the comparison
+// authority; bindingMatches and time status never establish applicability.
+// Nonempty signer/receipt history and advanced physical authority still refuse.
+export function diagnoseRetainedInitialContinuationSignerPlans(configDir,options={}){return diagnoseInitialSignerPlans(configDir,options,true);}
 
 function authenticateContinuationAuthority(db,r,p){
  for(const [setId,intentId] of r.pending!==null?[[db.prepare('SELECT set_id FROM continuation_intents WHERE id=?').get(r.pending).set_id,r.pending]]:r.active_set!==null?[[r.active_set,db.prepare('SELECT intent_id FROM grant_sets WHERE id=?').get(r.active_set).intent_id]]:[]){const records=createContinuationRecords(Buffer.from(r.recovery_key,'base64url'),continuationProcessNonce,{root:p.root,config_identity:r.config_id,epoch:r.suspension_epoch,set_id:setId});readContinuationIntent(db,records,intentId);}

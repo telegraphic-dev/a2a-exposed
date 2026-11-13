@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add disabled anchored historical initial signer-plan comparison, preserving
+  authenticated nonmatching identities separately from time freshness. Physical
+  authority remains initial-only and suspended; no enrollment or traffic enables.
+
 - Add separately opted-in HTTP relay profiles for fixed local webhooks and native
   A2A JSON-RPC services, with original request bytes/application authentication,
   real receiver responses, rewritten discovery and bounded incremental SSE.
