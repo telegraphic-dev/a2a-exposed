@@ -196,6 +196,7 @@ export async function decide(action, code, o = {}) {
 	console.log(`approved ${d.userCode}${d.clientName ? ` (${JSON.stringify(d.clientName)})` : ""}: the agent collects its token on its next poll, as peer "${d.label}"${d.replaced ? " (its old token stops working)" : ""}. Revoke any time: ${CLI} token revoke ${d.label}`);
 	if (d.continuation) {
 		console.log(d.continuation.note);
+		if (d.continuation.next) console.log(d.continuation.next);
 		if (d.continuation.command) console.log(`Fallback after human approval: ${d.continuation.command} (claimed address; verify with the peer owner first).`);
 	}
 }

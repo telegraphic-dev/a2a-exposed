@@ -1305,7 +1305,7 @@ test("pair-back suggestions retain the claimed card without using it as a verifi
 	const approved = await s.owner("POST", `/owner/pairing/${started.data.user_code}/approve`, {});
 	assert.equal(approved.status, 200);
 	assert.equal(approved.data.continuation.kind, "pair-back");
-	assert.match(approved.data.continuation.command, /connect 'https:\/\/barry.example.org\/\.well-known\/agent-card.json' --no-wait/);
+	assert.match(approved.data.continuation.command, /connect 'https:\/\/barry.example.org\/\.well-known\/agent-card.json' --alias [A-Za-z0-9_-]+ --no-wait/);
 	assert.match(approved.data.continuation.note, /signed address announcement/);
 	const token = await s.poll(started.data.device_code);
 	assert.equal(token.status, 200);
@@ -1313,7 +1313,7 @@ test("pair-back suggestions retain the claimed card without using it as a verifi
 	const peer = peers.data.find((p: any) => p.label === token.data.peer_label);
 	assert.equal(peer.card_url, null, "claimed card does not authorize delivery");
 	assert.equal(peer.continuation.claimedCardUrl, "https://barry.example.org/.well-known/agent-card.json");
-	assert.match(peer.continuation.next, /Ask your human/);
+	assert.match(peer.continuation.next, /ask your human/);
 	assert.doesNotMatch(JSON.stringify(peers.data), /a2aow_|owner-secret|hook-key/);
 	assert.deepEqual((await s.owner("GET", "/owner/outbound-peers")).data, []);
 	await s.owner("DELETE", `/owner/peers/${token.data.peer_label}`);

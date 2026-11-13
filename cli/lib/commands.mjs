@@ -94,16 +94,19 @@ async function inboxRows(o) {
 }
 
 export async function wakeStatus(o) {
-	if (o.agent) die("wake status uses the selected local config and owner credential; omit --agent and select --config-dir. For hosted setup use wake preview --agent NAME --json.");
 	const r = await ownerTry("GET", "/owner/wake/status");
 	if (r.status === 404) die("this endpoint predates wake status; use wake preview and receiver logs, then ask the owner about upgrading");
 	if (r.status !== 200) die(`could not read wake status: ${describeHttp(r.status, r.data)}`);
 	if (o.json) return out(r.data);
 	const d = r.data;
 	console.log(`wake: ${d.configured ? d.transport : "not configured"}; ${d.pendingCount} pending conversation(s)`);
-	for (const row of d.pending || []) console.log(`${row.peer}/${row.contextId}: ${row.reason}, due ${row.dueAt}; ${row.attempts} retry attempt(s)`);
+	for (const row of d.pending || []) console.log(`${row.peer}/${row.contextId}: ${row.reason}, eligible from ${row.dueAt}${row.reason === "retry" ? `; ${row.attempts} retry attempt(s)` : ""}`);
+	if ((d.pending || []).length) console.log("busy = cooling down after the last wake; debounce = batching new messages; retry = retrying an HTTP 429/503 response.");
+	if (d.pendingCount > (d.pending || []).length) console.log(`Showing the first ${(d.pending || []).length} of ${d.pendingCount} pending conversations.`);
 	console.log(`last attempt: ${d.lastAttempt ? `${d.lastAttempt.at}, HTTP ${d.lastAttempt.httpStatus ?? "unknown"}` : "unknown"}`);
 	console.log(`last receiver acceptance: ${d.lastAccepted?.at || "unknown"}`);
+	if (d.lastAttempt && d.lastAttempt.httpStatus === null) console.log("The last attempt has no confirmed HTTP result. Check receiver logs before retrying.");
+	else if (d.lastAttempt && (d.lastAttempt.httpStatus < 200 || d.lastAttempt.httpStatus >= 300)) console.log(`The last attempt was not accepted (HTTP ${d.lastAttempt.httpStatus}). See pending eligible times for any scheduled retry; check receiver logs.`);
 	console.log(d.next);
 }
 
@@ -127,6 +130,7 @@ export async function inbox(o) {
 		if (pairing.length) console.error(JSON.stringify({ pendingPairingRequests: pairing.length, ...(manageUrl ? { manageUrl } : {}), requests: pairing.map(({ userCode, clientName, clientId, verificationUriComplete, expiresAt, approval }) => ({ userCode, clientName: clientName || clientId || null, verificationUriComplete, expiresAt, approval })), instructions: PAIRING_NOTE }));
 		return;
 	}
+	const guidedPeers = new Set();
 	if (!rows.length) console.log(pairing.length || o.context ? "(no unhandled tasks)" : "(no unhandled tasks, no pending pairing requests)");
 	for (const r of rows) {
 		const reply = r.kind === "outbound";
@@ -136,7 +140,10 @@ export async function inbox(o) {
 		console.log("<<< END PEER MESSAGE");
   if (r.locallyOpened === false) console.log(r.next);
 		if (reply) console.log(`(a reply to a message you sent; read it with \`${CLI} history ${r.contextId}\`. Continue with send, not reply.)`);
-		if (r.continuation?.kind !== "send" && r.continuation?.next) console.log(`${r.continuation.next}${r.continuation.command ? " Command after human approval: " + r.continuation.command : ""}`);
+		if (!guidedPeers.has(r.from) && r.continuation?.kind !== "send" && r.continuation?.next) {
+			console.log(`${r.continuation.next}${r.continuation.command ? " Command after human approval: " + r.continuation.command : ""}`);
+			guidedPeers.add(r.from);
+		}
 		if (r.state) printState(r.state, r.updated);
 	}
 	if (pairing.length) {

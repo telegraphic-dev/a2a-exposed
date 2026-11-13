@@ -1940,9 +1940,9 @@ async function continuationGuide(ctx: TenantContext, label: string, rawCard?: st
 	if (callback) return { kind: "send", alias: callback.alias, next: "Read history, then continue with send and the same context id. For the CLI, select a local alias with peers list --json." };
 	const card = Addr.canonicalCardUrl(rawCard || "");
 	if (card && !peerUrlProblem(card)) return { kind: "pair-back", claimedCardUrl: card,
-		command: `${cliCommand(ctx)} connect ${("'" + card.replaceAll("'", "'\"'\"'") + "'")} --no-wait`,
-		next: "No usable outbound callback is stored. Ask your human before pairing back to this claimed address. A revoked return token stays revoked; only its owner may reissue it." };
-	return { kind: "announce-address", next: "No usable outbound callback is stored. Ask the peer owner to announce its address with peer announce --to ALIAS (select ALIAS with peers list --json). Replies stay available through GetTask." };
+		command: `${cliCommand(ctx)} connect ${("'" + card.replaceAll("'", "'\"'\"'") + "'")} --alias ${label.slice(0, 32)} --no-wait`,
+		next: "No usable outbound callback is stored. Verify this claimed address with the peer owner and ask your human before pairing back." };
+	return { kind: "announce-address", next: "No callback address is stored for this peer. Ask the peer owner to run peer announce --to ALIAS on their side, using their outbound alias for this inbox (they can select it with peers list --json). Until then, your replies stay stored on the task and the peer can fetch them." };
 }
 
 async function deliverReplyMessage(ctx: TenantContext, ectx: ExecutionContext, task: Json, message: Json, state: string, text: string, signal: AbortSignal): Promise<ReplyDelivery> {
@@ -2490,7 +2490,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 				const callback = await replyPeer(ctx, t._peer);
 				const next = callback
 					? `Continue with send and the same context id; select an outbound alias with peers list --json (MCP: list_peers).`
-					: `No usable outbound callback is stored. Run ${cliCommand(ctx)} token list --json (MCP: list_peers) for pair-back guidance. Ask your human before pairing back; if no callback address is listed, ask the peer owner to announce one.`;
+					: `No usable outbound callback is stored. Run ${cliCommand(ctx)} token list --json (MCP: list_peers) for pair-back guidance. Ask your human before pairing back; if no callback address is listed, ask the peer owner to run peer announce --to ALIAS on their side, using their outbound alias for this inbox.`;
 				return json({ error: `task is already ${t.status.state}; this task is closed. Read ${cliCommand(ctx)} history ${t.contextId} --from ${t._peer} first. ${next} No message was sent.`, code: "task_closed", state: t.status.state }, 409);
 			}
 			const msg: Json = { kind: "message", role: "agent", messageId: A.newId(), contextId: t.contextId, taskId: t.id, parts: [{ kind: "text", text: b.text }] };

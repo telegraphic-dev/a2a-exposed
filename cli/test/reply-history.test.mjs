@@ -73,3 +73,17 @@ test("wake status prints queue and honest receiver acceptance, with JSON for age
 	assert.match(result.stdout, /unverified/);
 	assert.deepEqual(JSON.parse(cli(["wake", "status", "--json"], data).stdout), data);
 });
+
+test("inbox prints callback guidance once per peer while preserving every task", t => {
+	const cli = fixture(t);
+	const continuation = { kind: "announce-address", next: "Ask the peer owner to run peer announce on their side." };
+	const rows = [
+		{ taskId: "task-1", from: "ada", state: "submitted", text: "one", continuation },
+		{ taskId: "task-2", from: "ada", state: "submitted", text: "two", continuation },
+		{ taskId: "task-3", from: "bob", state: "submitted", text: "three", continuation },
+	];
+	const result = cli(["inbox", "--context", "ctx"], rows);
+	assert.equal(result.status, 0, result.stderr);
+	assert.equal((result.stdout.match(/Ask the peer owner/g) || []).length, 2);
+	assert.equal((result.stdout.match(/current state: submitted/g) || []).length, 3);
+});
