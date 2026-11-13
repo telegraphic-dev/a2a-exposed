@@ -176,10 +176,46 @@ test("discovery: 401 with resource metadata, RFC 9728 + RFC 8414 metadata for th
 	assert.equal((await s.call("GET", "/health")).data.mcp, true);
 });
 
+test("MCP server card: owner-only card for /mcp with the versions the server negotiates", async (t) => {
+	const s = setup(); t.after(s.restore);
+	const r = await s.call("GET", "/.well-known/mcp/server-card.json");
+	assert.equal(r.status, 200, r.text);
+	assert.equal(r.headers.get("content-type"), "application/mcp-server-card+json");
+	assert.equal(r.headers.get("access-control-allow-origin"), "*");
+	assert.equal(r.headers.get("cache-control"), "public, max-age=300", "self-host: same cache rule as the agent card");
+	assert.deepEqual(r.data, {
+		$schema: "https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json",
+		name: "exposed.a2a/inbox",
+		title: "Test Inbox inbox (owner only)",
+		description: "Tools for this A2A agent's owner only: inbox, history, reply, send, pairing requests. Peers do not use this; they pair and use A2A at /.",
+		version: WORKER_VERSION,
+		websiteUrl: "https://a2a.exposed/docs/hosted-mcp",
+		repository: { url: "https://github.com/telegraphic-dev/a2a-exposed", source: "github" },
+		remotes: [{ type: "streamable-http", url: `${BASE}/mcp`, supportedProtocolVersions: M.PROTOCOL_VERSIONS }],
+	});
+	assert.match(r.data.description, /owner/);
+	assert.ok(r.data.remotes[0].url.endsWith("/mcp"));
+	const head = await s.call("HEAD", "/.well-known/mcp/server-card.json");
+	assert.equal(head.status, 200);
+	assert.equal(head.headers.get("content-type"), "application/mcp-server-card+json");
+	assert.equal(head.text, "");
+	assert.equal((await s.call("POST", "/.well-known/mcp/server-card.json")).status, 404);
+	s.restore();
+	// staging docs origin; a hostile agent name stays one capped line
+	const st = setup({ DISCOVERY_DOCS_ORIGIN: "https://staging.example.com/x", AGENT_NAME: `Evil\n# Title ${"x".repeat(200)}` }); t.after(st.restore);
+	const card = (await st.call("GET", "/.well-known/mcp/server-card.json")).data;
+	assert.equal(card.websiteUrl, "https://staging.example.com/docs/hosted-mcp");
+	assert.doesNotMatch(card.title, /\n/);
+	assert.ok(card.title.length <= 100 + " inbox (owner only)".length, card.title);
+	assert.match(card.title, /… inbox \(owner only\)$/);
+});
+
 test("MCP=off and proxy mode: /mcp and the connector OAuth endpoints are 404", async (t) => {
 	for (const over of [{ MCP: "off" }, { UPSTREAM_URL: "https://upstream.example.org" }]) {
 		const s = setup(over); t.after(s.restore);
 		assert.equal((await s.mcp("a2amcp_x", "ping")).status, 404);
+		assert.equal((await s.call("GET", "/.well-known/mcp/server-card.json")).status, 404);
+		assert.equal((await s.call("HEAD", "/.well-known/mcp/server-card.json")).status, 404);
 		assert.equal((await s.register()).status, 404);
 		assert.equal((await s.call("GET", "/oauth/authorize?client_id=x")).status, 404);
 		assert.equal((await s.call("GET", "/.well-known/oauth-protected-resource/mcp")).status, 404);
