@@ -128,7 +128,7 @@ for (const legacy of [false, true]) test(`delayed initial BOM survives keepalive
 test("SDK fixture abort survives garbage collection of normalized Requests", { timeout: 45000 }, async t => {
 	const root = resolve(process.env.HTTP_RELAY_WORKER_ROOT || ".");
 	try {
-		const result = await execute(process.execPath, ["--expose-gc", "--import", resolve(root, "test/register-hooks.mjs"), "--test", "--test-name-pattern=^delayed initial BOM", resolve(root, "test/http-relay-bom.test.ts")], { cwd: root, timeout: 40000 });
+		const result = await execute(process.execPath, ["--expose-gc", "--import", resolve(root, "test/register-hooks.mjs"), "--test", "--test-reporter=tap", "--test-name-pattern=^delayed initial BOM", resolve(root, "test/http-relay-bom.test.ts")], { cwd: root, timeout: 40000, env: Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(NODE_TEST_|NODE_OPTIONS$)/.test(key))) });
 		assert.match(result.stdout, /# tests 2/);
 		assert.match(result.stdout, /# pass 2/);
 		t.diagnostic("forced Request GC: original SDK abort reaches the receiver on protocols 1.0 and 0.3");
