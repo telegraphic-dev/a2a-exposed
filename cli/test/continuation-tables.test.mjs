@@ -115,3 +115,12 @@ for(const table of continuationTableNames)test(`retained ${table} exposes no hid
  assert.deepEqual(f.db.prepare(`SELECT * FROM ${table}`).all(),before);
  assert.equal(read(f).state,'set-committed');
 });
+
+for(const malformed of ['ff','c0','e282'])test(`member JSON rejects malformed UTF-8 ${malformed} before decoded-row comparison`,t=>{
+ const f=fixture(t);prepare(f);commit(f);dropGuards(f.db,'grant_members');
+ const original=f.db.prepare('SELECT grant_id,record FROM grant_members LIMIT 1').get();
+ const bytes=Buffer.from(original.record),offset=bytes.indexOf(Buffer.from('peer_4'));
+ assert.ok(offset>=0);const damaged=Buffer.concat([bytes.subarray(0,offset),Buffer.from(malformed,'hex'),bytes.subarray(offset+1)]);
+ f.db.prepare('UPDATE grant_members SET record=CAST(? AS TEXT) WHERE grant_id=?').run(damaged,original.grant_id);
+ assert.throws(()=>read(f),{code:'continuation_store_invalid'});assert.equal(f.db.isTransaction,true);
+});
