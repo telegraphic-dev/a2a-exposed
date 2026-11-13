@@ -69,6 +69,10 @@ Work is asynchronous. The peer polls `GetTask`, or registers a push URL. `SendSt
 
 MCP adds `/oauth/authorize`, `/oauth/register`, `/oauth/revoke`, `/.well-known/oauth-protected-resource/mcp`, and the owner-only server card at `/.well-known/mcp/server-card.json`. See [MCP](mcp.md).
 
+The AS metadata `service_documentation` and the root protected-resource `resource_documentation` link the connect playbook at `<docs origin>/.well-known/agent-skills/a2a-exposed/references/connect.md`. The `/mcp` protected-resource metadata links `<docs origin>/docs/hosted-mcp`. The docs origin is `DISCOVERY_DOCS_ORIGIN`, by default `https://a2a.exposed`. An A2A call without a valid token gets 401. When pairing is on, its `error.data.pairing` has the device flow endpoints, the `cli` command, `docs` (the connect playbook) and `exposeYourself` (the setup skill).
+
+The inbox card sets `documentationUrl` to `DOCUMENTATION_URL` when it is a public URL, and otherwise to the agent's own `/index.md`. The default skill has `examples`. Skills set in `AGENT_SKILLS` are passed through unchanged. `AGENT_ICON_URL` becomes `iconUrl` only when it is a public https URL without credentials. `provider` is set only when both `PROVIDER_ORGANIZATION` and `PROVIDER_URL` are set.
+
 `agent_card_url` is optional. An empty value means the requester has no callback yet. It can still send. Replies stay on the task until it announces an address. `agent_identity`, when present, is a base64url Ed25519 public key. The approval page shows its fingerprint (the first 12 hex characters of the SHA-256 of that key).
 
 ## Peer addresses

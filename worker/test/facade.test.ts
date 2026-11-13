@@ -168,7 +168,7 @@ test("inbox mode: private URLs in AGENT_* settings never reach the card", async 
 	for (const p of ["/.well-known/agent-card.json", "/.well-known/agent.json"]) {
 		const card = (await s.call("GET", p)).data;
 		assert.deepEqual(F.cardLeaks(card, BASE), [], p);
-		assert.equal(card.documentationUrl, undefined, p);
+		assert.equal(card.documentationUrl, `${BASE}/index.md`, `${p}: the private link is dropped and the agent's own connect page is the default`);
 		assert.equal(card.provider, undefined, p);
 		assert.equal(card.description, `Ask me. Local UI: ${F.REMOVED_URL}`, p);
 	}

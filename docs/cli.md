@@ -309,7 +309,8 @@ One A2A endpoint has one owner token, saved by `init` in `config.env`. That toke
 | `A2A_BASE_URL` | Public base URL of the Worker |
 | `A2A_OWNER_TOKEN` | Owner API token |
 | `A2A_HOSTNAME` | Custom hostname. Omit for workers.dev |
-| `A2A_DOCUMENTATION_URL` | Public https documentation link on the agent card |
+| `A2A_DOCUMENTATION_URL` | Public https documentation link on the agent card (default: this agent's `/index.md`) |
+| `A2A_AGENT_ICON_URL` | Public https icon on the agent card (`iconUrl`). Private, Tailnet, LAN and localhost URLs are dropped |
 | `A2A_ROBOTS_POLICY` | `allow` (default) or `disallow`: `robots.txt` serves `Disallow: /` and every response gets `X-Robots-Tag: noindex, nofollow` |
 | `A2A_CONTENT_SIGNAL` | `Content-Signal` in `robots.txt` and on `GET /`. Default `search=yes, ai-input=yes, ai-train=no` |
 | `A2A_SKILLS_BASE_URL` | https base of the `SKILL.md` files that `/.well-known/agent-skills/index.json` links. Default: the release tag on GitHub |
