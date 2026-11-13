@@ -1123,3 +1123,17 @@ human authorization and authority revision/epoch CAS in the same transaction.
 No physical initializer, command or runtime admission path imports this module;
 existing schema-1/2/3 stores remain preserved and unadopted. Retained planning
 bytes and private MACs stay outside model/tool output and public diagnostics.
+
+### Disabled retained-table identity hardening
+
+The fresh-only continuation and provenance installers use `STRICT, WITHOUT ROWID`
+for intents, grant sets, grant members, attestations, signer enrollments, decision
+receipts and signer-change plans. Retained rows have only their declared keys:
+`rowid`, `_rowid_` and `oid` cannot select, update or replace a row through a hidden
+identity. Existing retention, uniqueness, foreign-key and state-transition guards
+still apply to declared keys, including `INSERT OR REPLACE`.
+
+This changes only fresh disabled table foundations. It neither migrates an
+existing store nor supplies the separately versioned anchored authority adoption,
+current-signer selection, receipt consumption or human adapter. Encryption stays
+disabled.

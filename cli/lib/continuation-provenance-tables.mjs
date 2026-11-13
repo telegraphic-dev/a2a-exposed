@@ -1,4 +1,5 @@
 // Disabled fresh-store table foundation for a future authority schema.
+// Hidden row identifiers are absent so REPLACE cannot evict retained history.
 // No command, authority initializer, signer adapter or admission path imports it.
 // SQL retention/bindings do not authenticate a key or establish human approval.
 import {installContinuationTables} from './continuation-tables.mjs';
@@ -32,7 +33,7 @@ export function installContinuationProvenanceTables(db){
    public_key_spki TEXT NOT NULL CHECK(${encoded('public_key_spki',59,'AEIMQUYcgkosw048')}),
    fingerprint TEXT NOT NULL CHECK(${digest('fingerprint')}),
    UNIQUE(id,config_identity,canonical_root,epoch,fingerprint)
-  ) STRICT;
+  ) STRICT, WITHOUT ROWID;
   CREATE TABLE continuation_enrollment_plans(
    id TEXT PRIMARY KEY CHECK(${uuid('id')}),
    config_identity TEXT NOT NULL CHECK(${uuid('config_identity')}),
@@ -65,7 +66,7 @@ export function installContinuationProvenanceTables(db){
    signature TEXT NOT NULL CHECK(${encoded('signature',86,'AQgw')}),
    FOREIGN KEY(enrollment_id,config_identity,canonical_root,epoch,signer_fingerprint)
     REFERENCES continuation_signer_enrollments(id,config_identity,canonical_root,epoch,fingerprint)
-  ) STRICT;
+  ) STRICT, WITHOUT ROWID;
   ${retained('continuation_signer_enrollments')}
   ${retained('continuation_enrollment_plans')}
   ${retained('continuation_decision_receipts')}

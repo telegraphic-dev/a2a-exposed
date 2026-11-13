@@ -80,7 +80,7 @@ test('aborted history is retained, cannot be resurrected and cannot supply a new
  const f=fixture(t);prepare(f);commit(f);f.db.exec("UPDATE grant_sets SET state='void'; UPDATE continuation_intents SET state='aborted'");assert.equal(read(f).state,'aborted');assert.throws(()=>commit(f),{code:'continuation_compare_failed'});assert.throws(()=>f.db.exec("UPDATE continuation_intents SET state='prepared'"));assert.throws(()=>prepare(f));assert.equal(count(f,'continuation_intents'),1);
 });
 for(const [table,column,value] of [['continuation_intents','epoch',id(98)],['continuation_intents','plan_mac',digest(98)],['continuation_intents','target_revision',2],['grant_sets','epoch',id(98)],['grant_sets','membership_mac',digest(98)],['grant_members','alias','swapped'],['grant_members','member_mac',digest(98)],['continuation_attestations','expires_ms',500000],['continuation_attestations','attestation_mac',digest(98)],['continuation_attestations','consumed_intent',null]])test(`authenticated read detects bypassed ${table}.${column} corruption`,t=>{
- const f=fixture(t);prepare(f);commit(f);dropGuards(f.db,table);if(column==='target_revision')f.db.exec('PRAGMA ignore_check_constraints=ON');f.db.prepare(`UPDATE ${table} SET ${column}=? WHERE rowid=(SELECT rowid FROM ${table} LIMIT 1)`).run(value);assert.throws(()=>read(f),e=>e.code?.startsWith('continuation_'));
+ const f=fixture(t);prepare(f);commit(f);dropGuards(f.db,table);if(column==='target_revision')f.db.exec('PRAGMA ignore_check_constraints=ON');const key=table==='grant_members'?'grant_id':'id';f.db.prepare(`UPDATE ${table} SET ${column}=? WHERE ${key}=(SELECT ${key} FROM ${table} LIMIT 1)`).run(value);assert.throws(()=>read(f),e=>e.code?.startsWith('continuation_'));
 });
 test('complete cardinality refuses missing/extra members and cross-record JSON substitutions',t=>{
  const f=fixture(t);prepare(f);commit(f);dropGuards(f.db,'grant_members');const first=f.db.prepare('SELECT * FROM grant_members LIMIT 1').get();f.db.prepare('DELETE FROM grant_members WHERE grant_id=?').run(first.grant_id);assert.throws(()=>read(f),{code:'continuation_row_mismatch'});insert(f.db,'grant_members',first);
@@ -101,4 +101,17 @@ for(const phase of ['prepared','set-committed'])test(`independent process exit r
  const tables=new URL('../lib/continuation-tables.mjs',import.meta.url).href,codec=new URL('../lib/continuation-records.mjs',import.meta.url).href;
  const script=`import fs from 'node:fs';import{DatabaseSync}from'node:sqlite';import{createContinuationRecords}from ${JSON.stringify(codec)};import{prepareContinuationIntent,commitContinuationMembers}from ${JSON.stringify(tables)};const p=JSON.parse(fs.readFileSync(0,'utf8')),db=new DatabaseSync(p.file),records=createContinuationRecords(Buffer.alloc(32,1),Buffer.alloc(32,2),p.binding);db.exec('PRAGMA foreign_keys=ON; PRAGMA synchronous=FULL; BEGIN IMMEDIATE');prepareContinuationIntent(db,records,p.intent,1000);db.exec('COMMIT');if(p.phase==='set-committed'){db.exec('BEGIN IMMEDIATE');commitContinuationMembers(db,records,p.intent);db.exec('COMMIT');}db.exec('BEGIN IMMEDIATE');process.exit(17);`;
  const result=spawnSync(process.execPath,['--input-type=module','-e',script],{input:JSON.stringify({file,intent:f.intent,binding:f.binding,phase}),encoding:'utf8',timeout:10000,env:{DO_NOT_TRACK:'1'}});assert.equal(result.status,17,result.stderr);f.db.exec('BEGIN IMMEDIATE');assert.equal(read(f).state,phase);assert.equal(count(f,'grant_members'),phase==='prepared'?0:2);assert.equal(count(f,'continuation_attestations'),1);
+});
+
+for(const table of continuationTableNames)test(`retained ${table} exposes no hidden replacement identity`,t=>{
+ const f=fixture(t);prepare(f);commit(f);
+ const before=f.db.prepare(`SELECT * FROM ${table}`).all();
+ for(const alias of ['rowid','_rowid_','oid']){
+  assert.throws(()=>f.db.prepare(`SELECT ${alias} FROM ${table}`).all(),/no such column/);
+  const row=before[0],keys=Object.keys(row);
+  assert.throws(()=>f.db.prepare(`INSERT OR REPLACE INTO ${table}(${alias},${keys.join(',')}) VALUES(1,${keys.map(()=>'?').join(',')})`).run(...Object.values(row)),/no column named/);
+  assert.throws(()=>f.db.exec(`UPDATE ${table} SET ${alias}=99`),/no such column/);
+ }
+ assert.deepEqual(f.db.prepare(`SELECT * FROM ${table}`).all(),before);
+ assert.equal(read(f).state,'set-committed');
 });

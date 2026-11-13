@@ -1,6 +1,7 @@
 // Isolated schema-3 continuation table primitives. The default authority remains
 // schema 2; the separate fresh schema-3 foundation never admits a grant. No command
 // or human-approval adapter uses these tables.
+// Hidden row identifiers are absent so REPLACE cannot evict retained history.
 // Privileged host code must own the connection/transaction, source checks and
 // authority->SDK ordering. These functions do not establish human provenance.
 export class ContinuationStoreError extends Error {
@@ -29,13 +30,13 @@ export function installContinuationTables(db){
  set_id TEXT NOT NULL UNIQUE CHECK(${uuid('set_id')}), plan_mac TEXT NOT NULL CHECK(${digest('plan_mac')}),
  intent_mac TEXT NOT NULL CHECK(${digest('intent_mac')}), state TEXT NOT NULL CHECK(state IN ('prepared','set-committed','eligible','aborted')),
  record TEXT NOT NULL CHECK(${json('record')})
- ) STRICT;
+ ) STRICT, WITHOUT ROWID;
  CREATE UNIQUE INDEX continuation_one_pending ON continuation_intents((1)) WHERE state IN ('prepared','set-committed');
  CREATE TABLE grant_sets(
  id TEXT PRIMARY KEY CHECK(${uuid('id')}), intent_id TEXT NOT NULL UNIQUE REFERENCES continuation_intents(id),
  epoch TEXT NOT NULL CHECK(${uuid('epoch')}), target_revision INTEGER NOT NULL CHECK(${integer('target_revision')} AND target_revision>0),
  membership_mac TEXT NOT NULL CHECK(${digest('membership_mac')}), state TEXT NOT NULL CHECK(state IN ('committed','eligible','void'))
- ) STRICT;
+ ) STRICT, WITHOUT ROWID;
  CREATE TABLE grant_members(
  set_id TEXT NOT NULL REFERENCES grant_sets(id), grant_id TEXT NOT NULL CHECK(${uuid('grant_id')}),
  pairing_identity TEXT NOT NULL CHECK(${digest('pairing_identity')}),
@@ -43,14 +44,14 @@ export function installContinuationTables(db){
  credential_variable TEXT NOT NULL CHECK(length(CAST(credential_variable AS BLOB))=length(credential_variable) AND length(credential_variable) BETWEEN 1 AND 128 AND substr(credential_variable,1,1) GLOB '[A-Za-z_]' AND credential_variable NOT GLOB '*[^A-Za-z0-9_]*'),
  record TEXT NOT NULL CHECK(${json('record')}), member_mac TEXT NOT NULL CHECK(${digest('member_mac')}),
  PRIMARY KEY(set_id,grant_id), UNIQUE(set_id,alias), UNIQUE(set_id,pairing_identity), UNIQUE(set_id,credential_variable)
- ) STRICT;
+ ) STRICT, WITHOUT ROWID;
  CREATE TABLE continuation_attestations(
  id TEXT PRIMARY KEY CHECK(${uuid('id')}), plan_mac TEXT NOT NULL UNIQUE CHECK(${digest('plan_mac')}),
  epoch TEXT NOT NULL CHECK(${uuid('epoch')}), created_ms INTEGER NOT NULL CHECK(${integer('created_ms')}),
  expires_ms INTEGER NOT NULL CHECK(${integer('expires_ms')} AND expires_ms>created_ms AND expires_ms-created_ms<=600000),
  consumed_intent TEXT UNIQUE REFERENCES continuation_intents(id), attestation_mac TEXT NOT NULL CHECK(${digest('attestation_mac')}),
  record TEXT NOT NULL CHECK(${json('record')})
- ) STRICT;
+ ) STRICT, WITHOUT ROWID;
  ${immutable('continuation_intents',['id','epoch','baseline_revision','target_revision','set_id','plan_mac','intent_mac','record'])}
  ${immutable('grant_sets',['id','intent_id','epoch','target_revision','membership_mac'])}
  ${immutable('grant_members',['set_id','grant_id','pairing_identity','alias','credential_variable','record','member_mac'])}
