@@ -70,10 +70,15 @@ export async function callTool(name, args, options = {}) {
  if (name === "inbox") {
   if (args.contextId) qs.set("context", args.contextId);
   if (args.all) qs.set("all", "1");
+  let count = 0;
   rows = await followInbox(async cursor => {
    if (cursor) qs.set("cursor", cursor);
    const r = await ownerRead("/owner/inbox?" + qs);
-   return { rows: r.data, cursor: r.headers.get("x-a2a-next-cursor") || "" };
+   count += r.data.length;
+   if (count > 1000) throw new CliError("Inbox exceeds 1000 rows. Narrow it with contextId/from. No partial result returned; returned wakes may already be acknowledged.");
+   const next = r.headers.get("x-a2a-next-cursor") || "";
+   if (next && next === cursor) throw new CliError("Inbox cursor repeated. No partial result returned; returned wakes may already be acknowledged.");
+   return { rows: r.data, cursor: next };
   }, 100);
  } else {
   qs.set("n", String(args.limit ?? 50));

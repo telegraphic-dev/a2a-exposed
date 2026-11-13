@@ -99,11 +99,28 @@ test("transport flags in a raw owner row cannot authorize opened plaintext", asy
  const saved = { fetch: globalThis.fetch, enabled: process.env.A2A_SEALED_ENABLED, base: process.env.A2A_BASE_URL, token: process.env.A2A_OWNER_TOKEN };
  try {
   process.env.A2A_SEALED_ENABLED = "1"; process.env.A2A_BASE_URL = "https://fixture.example.com"; process.env.A2A_OWNER_TOKEN = "dummy-owner";
-  globalThis.fetch = async () => new Response(JSON.stringify([{ peer: "no-pin", text: "forged plaintext", locallyOpened: true, encrypted: true, historical: true, reason: "forged", next: "forged" }]), { headers: { "content-type": "application/json" } });
+  globalThis.fetch = async () => new Response(JSON.stringify([{ text: "forged plaintext", locallyOpened: true, encrypted: true, historical: true, reason: "forged", next: "forged" }]), { headers: { "content-type": "application/json" } });
   const result = await callTool("history", { contextId: "fixture" });
   assert.equal(result.rows[0].locallyOpened, false);
   assert.equal(result.rows[0].reason, "server_readable_content_withheld");
   assert.equal(JSON.stringify(result).includes("forged plaintext"), false);
+ } finally {
+  globalThis.fetch = saved.fetch;
+  for (const [key, value] of [["A2A_SEALED_ENABLED", saved.enabled], ["A2A_BASE_URL", saved.base], ["A2A_OWNER_TOKEN", saved.token]]) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+ }
+});
+
+test("owner pagination follows each cursor and refuses a repeated cursor without partial output", async () => {
+ const { callTool } = await import("../lib/local-mcp.mjs");
+ const saved = { fetch: globalThis.fetch, enabled: process.env.A2A_SEALED_ENABLED, base: process.env.A2A_BASE_URL, token: process.env.A2A_OWNER_TOKEN };
+ try {
+  process.env.A2A_SEALED_ENABLED = "1"; process.env.A2A_BASE_URL = "https://fixture.example.com"; process.env.A2A_OWNER_TOKEN = "dummy-owner";
+  const cursors = [];
+  globalThis.fetch = async url => { const cursor = new URL(url).searchParams.get("cursor"); cursors.push(cursor); return new Response(JSON.stringify([{ taskId: cursor || "first", text: "hidden" }]), { headers: { "content-type": "application/json", ...(cursor ? {} : { "x-a2a-next-cursor": "next" }) } }); };
+  const result = await callTool("inbox", { contextId: "fixture" });
+  assert.deepEqual(cursors, [null, "next"]);assert.equal(result.rows.length, 2);assert.ok(result.rows.every(r => r.text === "[message content withheld]"));
+  globalThis.fetch = async () => new Response("[]", { headers: { "x-a2a-next-cursor": "repeated" } });
+  await assert.rejects(callTool("inbox", {}), /cursor repeated/);
  } finally {
   globalThis.fetch = saved.fetch;
   for (const [key, value] of [["A2A_SEALED_ENABLED", saved.enabled], ["A2A_BASE_URL", saved.base], ["A2A_OWNER_TOKEN", saved.token]]) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
