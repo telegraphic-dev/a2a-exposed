@@ -1137,3 +1137,25 @@ This changes only fresh disabled table foundations. It neither migrates an
 existing store nor supplies the separately versioned anchored authority adoption,
 current-signer selection, receipt consumption or human adapter. Encryption stays
 disabled.
+
+### Disabled exact fresh provenance inventory
+
+The internal `cli/lib/continuation-provenance-inventory.mjs` check compares the
+complete main SQLite schema with an independent in-memory installation of the
+fresh continuation/provenance format. It checks exact SQLite schema text and
+implicit indexes, rather than accepting matching names or columns. Missing or
+changed guards, additional tables/indexes/views/triggers, TEMP objects and
+attached databases refuse. Equivalent but differently written schema SQL also
+refuses; this is a deliberately exact format check.
+
+The caller must hold a transaction with foreign keys enabled and trusted-schema
+execution disabled. Only the unstamped fresh format (`user_version=0`) is
+accepted, so existing authority schemas refuse without reset or migration. The
+candidate is read only; the reference installation uses a separate in-memory
+database. Tests include a physical read-only connection with unchanged file bytes.
+
+This validates schema shape only. A matching inventory does not authenticate
+rows, file identity, current signer, receipts or a human decision. An anchored
+authority format must define its own complete inventory, data validation and
+adoption boundary. No command, initializer, enrollment writer or admission path
+calls this check; schema adoption and encryption remain disabled.
