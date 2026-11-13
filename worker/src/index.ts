@@ -3454,6 +3454,14 @@ async function discoveryDoc(ctx: TenantContext, kind: "markdown" | "llms"): Prom
 		: new Response(D.llmsTxt(model), { status: 200, headers: D.llmsHeaders() });
 }
 
+/** GET /.well-known/mcp/server-card.json (only while MCP is on): the owner MCP's server card. HEAD is answered by
+ *  handle(). Same cache rule as the agent card, since it names the agent. */
+async function mcpServerCard(ctx: TenantContext): Promise<Response> {
+	const { model } = await connectModel(ctx);
+	return json(M.serverCard({ base: model.base, docs: model.docs, name: model.name, version: VERSION }), 200,
+		{ "content-type": M.SERVER_CARD_TYPE, "access-control-allow-origin": "*", "cache-control": cardCacheControl(ctx) });
+}
+
 // ------------------------------------------------------------------ router
 // ------------------------------------------------------------------ remote MCP server (/mcp) + its OAuth 2.1 authorization server
 // The MCP token is its own credential (mcp_grants): never a peer token (A2A) and never the owner token (/owner/*). Tools run a
@@ -4428,6 +4436,7 @@ async function handle(req: Request, ctx: TenantContext, ectx: ExecutionContext, 
 		if (path === "/mcp") return mcpOn(ctx) ? await handleMcp(req, ctx, ectx, url) : json({ error: "not_found", error_description: "the MCP server is turned off on this A2A endpoint (MCP=off)" }, 404);
 		if (mcpOn(ctx)) {
 			if (req.method === "GET" && path === "/.well-known/oauth-protected-resource/mcp") return json(mcpResourceMetadata(ctx), 200, { "access-control-allow-origin": "*" });
+			if (req.method === "GET" && path === "/.well-known/mcp/server-card.json") return await mcpServerCard(ctx);
 			if (req.method === "GET" && path === "/.well-known/oauth-authorization-server") return json(oauthMetadata(ctx), 200, { "access-control-allow-origin": "*" });
 			if (req.method === "POST" && path === "/oauth/register") return await registerClient(req, ctx);
 			if (req.method === "GET" && path === "/oauth/authorize/oidc/callback") return await mcpOidcCallback(req, ctx, url, head);

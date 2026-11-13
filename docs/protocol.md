@@ -67,7 +67,7 @@ Work is asynchronous. The peer polls `GetTask`, or registers a push URL. `SendSt
 | Metadata | `/.well-known/oauth-authorization-server` (RFC 8414) |
 | Protected resource | `/.well-known/oauth-protected-resource` |
 
-MCP adds `/oauth/authorize`, `/oauth/register`, `/oauth/revoke`, and `/.well-known/oauth-protected-resource/mcp`. See [MCP](mcp.md).
+MCP adds `/oauth/authorize`, `/oauth/register`, `/oauth/revoke`, `/.well-known/oauth-protected-resource/mcp`, and the owner-only server card at `/.well-known/mcp/server-card.json`. See [MCP](mcp.md).
 
 `agent_card_url` is optional. An empty value means the requester has no callback yet. It can still send. Replies stay on the task until it announces an address. `agent_identity`, when present, is a base64url Ed25519 public key. The approval page shows its fingerprint (the first 12 hex characters of the SHA-256 of that key).
 

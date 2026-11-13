@@ -99,6 +99,8 @@ OAuth 2.1 authorization code with PKCE (S256 only). Endpoints:
 | Register | `POST /oauth/register` |
 | Revoke | `POST /oauth/revoke` (RFC 7009) |
 
+A visiting agent can read `GET /.well-known/mcp/server-card.json` (MCP Server Card, an emerging draft; `application/mcp-server-card+json`, CORS `*`). It names the `/mcp` URL, the protocol versions the server negotiates, and says the tools are for this agent's owner only: peers pair and use A2A at `/`. It is 404 with `MCP=off` and in proxy mode.
+
 A 401 carries `WWW-Authenticate` with `resource_metadata`. Authorization responses include `iss` (RFC 9207). The `resource` parameter is checked against the MCP URL.
 
 Every client needs the owner's approval password on the consent page (the same lockout counters as `/device`), or a verified OpenID Connect sign-in when that is configured. The page has no scripts, a strict content security policy, and CSRF protection. It warns when the client returns to a local program. When OpenID Connect is configured, the consent page allows that issuer's origin and the client's redirect origin in `form-action`. An authorization endpoint on a different origin is refused.
