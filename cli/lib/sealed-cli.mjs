@@ -32,13 +32,14 @@ export async function send(o) {
  if (o.push || o.wake || o.intent) fail("Encrypted send does not support --push, --wake or --intent yet; nothing was sent.");
  const pe = C.loadPeers()[o.to], token = peerToken(pe.token_env);
  if (!token) fail("The paired peer token is missing; inspect peers list --json. No plaintext was sent.");
+ const text = o.text ?? fs.readFileSync(0, "utf8");
+ if (!text) fail("Encrypted send requires non-empty --text TEXT or piped stdin. Nothing was sent.");
+ const contextId = o.context ? checkId(o.context, "contextId") : newId(), taskId = o.task ? checkId(o.task, "taskId") : null;
  return paired(o.to, o, async ({ api, record, identity, recheck }) => {
   const card = await fetchCard(pe.url), [url, protocol] = pickEndpoint(pe.url, card, o.proto);
   const advertised = card?.capabilities?.extensions?.filter(e => e.uri === URI);
   if (!["0.3", "1.0"].includes(protocol) || url !== record.peerEndpoint || advertised?.length !== 1 || advertised[0].params?.cliSeal !== true || api.canonicalJSON(advertised[0].params.pairingBundle) !== api.canonicalJSON(record.bundle)) fail("Peer encryption capability, pinned bundle or endpoint changed. Preserve the pairing and ask its owner; no plaintext was sent.");
-  const text = o.text ?? fs.readFileSync(0, "utf8");
-  if (!text) fail("Encrypted send requires non-empty --text TEXT or piped stdin. Nothing was sent.");
-  const b = { contextId: o.context ? checkId(o.context, "contextId") : newId(), messageId: newId(), taskId: o.task ? checkId(o.task, "taskId") : null, role: "user", state: null, kind: "message" };
+  const b = { contextId, messageId: newId(), taskId, role: "user", state: null, kind: "message" };
   const content = api.validateContent({ kind: "message", authorRole: "user", parts: [{ kind: "text", text, mediaType: null, metadata: {} }], metadata: {}, extensions: [], referenceTaskIds: [] }, b);
   const envelope = await api.seal({ identity, recipient: record.bundle, binding: b, content });
   recheck();
