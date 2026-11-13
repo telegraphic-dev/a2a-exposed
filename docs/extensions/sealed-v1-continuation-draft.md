@@ -894,3 +894,94 @@ the privileged signer/approval interface, pairing-decision issuance, final E,
 all-writer invalidation and platform/archive/namespace/traffic acceptance remain
 unfinished. This draft must not be used to claim complete human approval or
 production readiness.
+
+### Proposed signer enrollment and durable human-decision boundary
+
+This section proposes the next contract; it adds no implementation, command,
+key, enrollment, signature or grant. Review it before replacing the verification-only
+profile above. Existing schema-3 intent rows cannot be promoted on the assumption
+that they came from a human. The schema change and human interface require their
+own implementation, tests and reviews.
+
+The trusted local human adapter owns signer custody and the comparison/review
+ceremony. Maintenance, model tools and peer messages never generate or select
+its signing key, submit arbitrary bytes for signing, or assert that a human
+compared a code. The adapter independently reads the anchored authority, complete
+peer inventory and current SDK proposals/trust, recomputes the exact aggregate
+plan and each safety code, and presents every selected member and exclusion to
+the human. An approval covers exactly that snapshot, never a partial set or a
+union of previous approvals. Rejection, expiry, changed inputs or a canceled
+ceremony produces no signature and changes no authority state.
+
+Signer custody is outside the maintenance configuration, SDK store, exported
+backup and model-visible credential environment. The adapter must provide an
+explicit human authorization event before signing; a generic callback, boolean,
+stdin text or model-issued invocation is not that event. The platform mechanism
+and its failure behavior must be reviewed before implementation can claim this
+boundary. An unsupported or unattended adapter refuses, with no file-key or
+approval-boolean fallback. This remains a privileged-host boundary, not a sandbox
+against a process able to replace the adapter or its trusted authority data.
+
+Enrollment has a read-only planning step before its separate human-authorized
+apply step. The plan lists the current signer (or absence), candidate public-key
+fingerprint, configuration identity, canonical root, suspension epoch, baseline
+revision and the exact operation (initial enrollment, replacement or removal).
+The human verifies the candidate fingerprint through the trusted adapter. Apply
+requires that exact plan identity and expected revision; unknown, stale, expired,
+already consumed or ambiguous plans fail without opening a terminal menu. No
+operation discovers a key from peer/model data or replaces an existing key as an
+implicit side effect. Private key material never appears in command arguments.
+
+The canonical public-key fingerprint is SHA-256 of its canonical Ed25519 SPKI DER
+bytes, encoded as a canonical 32-byte base64url value. This hashes public material
+only. The first enrollment, replacement and removal all keep authority suspended,
+clear active membership, rotate the suspension epoch and advance the revision in
+one authority transaction. They invalidate prior plans and human decisions even
+when a replacement has the same fingerprint. A recovery path cannot silently
+restore a removed signer or resurrect an earlier epoch. Signer replacement is a
+new human decision, not authorization granted by possession of the old key alone.
+
+Durable provenance requires a separately versioned authority representation.
+The new representation stores the canonical public verification key and enrollment
+identity with the authority binding, plus an immutable decision receipt containing:
+
+- Receipt version, decision UUID, signer enrollment UUID and public fingerprint.
+- The exact canonical attestation bytes and canonical 64-byte Ed25519 signature.
+- Configuration/root/epoch, baseline/target revisions and plan/set identifiers
+  and validity window, all checked against the signed attestation and its plan.
+- The single consuming intent identity, written atomically with its I checkpoint;
+  the signature covers the attestation, while this transaction and the existing
+  authenticated intent bind its sole consumer.
+
+The signature domain and attestation encoding remain those specified above;
+duplicate fields, unknown fields, alternative encodings and SQL/JSON disagreement
+refuse. An authenticated reference to an arbitrary receipt is insufficient:
+eligibility and reconciliation reverify the actual signature under the exact
+currently enrolled public key, recompute the attestation/plan bindings, and require
+the exact consuming intent. A synthetic I checkpoint or missing receipt is never
+human-approved. A receipt does not itself grant SDK trust or prove independent
+comparison by a remote person.
+
+Enrollment and receipt storage must share authority-before-SDK lock ordering and
+namespace/lease checks with continuation maintenance. Recheck enrollment identity,
+key bytes, epoch, revision, sources, complete membership, validity and SDK readiness
+after awaits and before the authority commit. Failure uncertainty retains the
+original operation/receipt/intent IDs; no retry creates a substitute approval.
+The original validity window applies through eligibility commit. Later live
+admission checks the committed provenance and current authorization state; it does
+not treat the expired ceremony deadline as a new approval or silently extend it.
+
+Schema-3 stores remain preserved and refused by this new representation until a
+separately reviewed adoption/reverification flow exists. No in-place reset or
+automatic migration supplies missing human provenance. Verification-key file
+mirrors, if retained for compatibility, must match the transactional enrollment
+record and anchored file identity; mismatch suspends/refuses rather than selecting
+whichever key verifies a supplied signature.
+
+Acceptance includes real independent-process enrollment/continuation races,
+replaced namespaces and keys, copied or stale receipts, cross-configuration/epoch
+replay, equal-key reenrollment, missing/synthetic provenance, expiry/clock regression,
+and before/after-commit failures. Public diagnostics exclude signatures, attestation
+MACs, private keys, credentials and raw source bytes. UI implementation must receive
+desktop/mobile and relevant-state review before merge. No traffic or eligibility
+is enabled by accepting this design.
