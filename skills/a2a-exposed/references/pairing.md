@@ -28,3 +28,13 @@ Setup and threat model: [setup pairing](../../a2a-exposed-setup/references/pairi
 On `/device`, manually entered codes submit by POST and stay out of the URL. Complete verification links still work. Looking up a code does not approve or deny it; the human submits that decision separately.
 
 For polling, `pair list --json` adds `expiresIn` to each pending request: seconds remaining at the local read, rounded up and clamped to zero (`null` if `expiresAt` is missing or invalid). It retains `expiresAt` and approval links. The local countdown is advisory; the server enforces expiry and the human still decides approval.
+
+## Pair-back diagnostics
+
+`token list --json` and `pair list --json` expose callback continuation guidance.
+The existing signed-announcement return-token flow can cover both directions
+with one approval. If it did not create a usable callback, a claimed address may
+be offered with an exact `connect ... --no-wait` command. Verify it with the peer
+owner and get human approval before using it. No claimed card authorizes a
+callback, and no read reissues a revoked token. A peer without a claimed or
+verified address must announce one before a callback can work.

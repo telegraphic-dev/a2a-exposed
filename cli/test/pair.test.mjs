@@ -95,7 +95,7 @@ test("pair list --json adds remaining seconds using one local snapshot, without 
 	assert.deepEqual(result.pending.map((p) => p.expiresIn), [60, 1, 0, 0, null, null]);
 	assert.deepEqual({ ...result, pending: result.pending.map(({ expiresIn, ...p }) => p) }, data);
 	const calls = fs.readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line));
-	assert.deepEqual(calls.map((c) => [c.method, c.url]), [["GET", "https://inbox.example/owner/pairing"]]);
+	assert.deepEqual(calls.map((c) => [c.method, c.url]), [["GET", "https://inbox.example/owner/pairing"], ["GET", "https://inbox.example/owner/peers"]]);
 	assert.ok(!(r.stdout + r.stderr).includes("owner-test"));
 });
 

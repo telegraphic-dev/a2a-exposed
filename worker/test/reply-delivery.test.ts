@@ -321,3 +321,24 @@ test("same-deployment push redirects are refused without public network delivery
 	assert.equal(delivery.push[0].info, "push request failed");
 	assert.equal(s.directPosts, 0, "a rejected push does not trigger a second delivery method");
 });
+
+test("closed tasks name continuation and missing pairing without sending or forcing a second answer", async t => {
+	const s = await fixture(t as never);
+	const taskId = await s.sendToBob("closed-question", "ctx-closed");
+	await s.owner(s.b, "acct-bob", "POST", "/owner/mcp/reply", { taskId, text: "answer", state: "completed" });
+	const closedReply = async () => {
+		const response = await dispatch(new Request(s.b.PUBLIC_URL + `/owner/tasks/${taskId}/reply`, { method: "POST", headers: { authorization: "Bearer owner-bob", "content-type": "application/json" }, body: JSON.stringify({ text: "different", state: "completed" }) }), s.b, ectx as never);
+		return { status: response.status, body: await response.json() as any };
+	};
+	const count = s.directPosts;
+	const closed = await closedReply();
+	assert.equal(closed.status, 409);
+	assert.match(String(closed.body.error), /closed.*history.*Continue with send/);
+	assert.equal(closed.body.code, "task_closed");
+	assert.equal(s.directPosts, count);
+	await s.owner(s.b, "acct-bob", "DELETE", "/owner/outbound-peers/alice");
+	const missing = await closedReply();
+	assert.equal(missing.status, 409);
+	assert.match(String(missing.body.error), /token list --json.*human before pairing back/);
+	assert.equal(s.directPosts, count);
+});

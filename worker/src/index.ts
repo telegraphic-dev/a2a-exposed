@@ -4,6 +4,7 @@
 // Worker serves a rewritten agent card and device-flow pairing, and forwards authenticated JSON-RPC to the upstream.
 // Handlers take a TenantContext (tenancy.ts) built from the Worker bindings. With the hosted gates unset, that
 // context is the single self-host tenant and behaviour matches a Worker that read env.* directly.
+import { attemptView, pendingView } from "./wake-status.ts";
 import { VERSION } from "./version.ts";
 import * as A from "./a2a.ts";
 import * as F from "./facade.ts";
@@ -277,6 +278,31 @@ async function noteWakeWrite(ectx: object): Promise<void> {
 }
 
 async function sendWake(ctx: TenantContext, ectx: ExecutionContext, payload: Json): Promise<{ status: number | null; info: string; error?: RelayTestError }> {
+	const result = await attemptWake(ctx, ectx, payload);
+	if (!wakeHooked(ctx)) return result;
+	const value = JSON.stringify({ at: new Date(Date.now()).toISOString(), httpStatus: result.status, transport: ctx.WAKE_TRANSPORT === "relay" ? "relay" : "webhook" });
+	try {
+		const keys = ["wake_last_attempt", ...(result.status !== null && result.status >= 200 && result.status < 300 ? ["wake_last_accepted"] : [])];
+		await ctx.DB.batch(keys.map(key => ctx.DB.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE json_extract(excluded.value, '$.at') >= json_extract(settings.value, '$.at')").bind(key, value)));
+	} catch { log("wake_diagnostics_unavailable", {}); }
+	return result;
+}
+
+async function wakeStatus(ctx: TenantContext): Promise<Json> {
+	const [rows, totals, settings] = await ctx.DB.batch([
+		ctx.DB.prepare(`SELECT context_id, peer, pending_since_ms, pending_json, (${WAKE_DUE_SQL}) AS due_ms FROM wakes WHERE pending_json IS NOT NULL ORDER BY due_ms, context_id, peer LIMIT 50`).bind(debounceMs(ctx)),
+		ctx.DB.prepare("SELECT COUNT(*) AS n FROM wakes WHERE pending_json IS NOT NULL"),
+		ctx.DB.prepare("SELECT key, value FROM settings WHERE key IN ('wake_last_attempt', 'wake_last_accepted')"),
+	]);
+	const total = totals.results?.[0] as Json;
+	const snapshots: Json = {};
+	for (const row of settings.results as Json[]) snapshots[row.key] = attemptView(row.value);
+	return { configured: wakeHooked(ctx), transport: ctx.WAKE_TRANSPORT === "relay" ? "relay" : "webhook", pendingCount: Number(total?.n || 0),
+		pending: (rows.results as Json[]).map(pendingView), lastAttempt: snapshots.wake_last_attempt || null, lastAccepted: snapshots.wake_last_accepted || null,
+		next: "HTTP success records receiver acceptance only. Signature verification, handler execution and owner notification are unverified; check receiver logs. Reading inbox clears matching pending wakes." };
+}
+
+async function attemptWake(ctx: TenantContext, ectx: ExecutionContext, payload: Json): Promise<{ status: number | null; info: string; error?: RelayTestError }> {
 	const catchUp = !!payload.busy;
 	const delivered = { ...payload };
 	delete delivered.busy;
@@ -1908,6 +1934,17 @@ async function replyPeer(ctx: TenantContext, label: string): Promise<{ alias: st
 	return token ? { alias: row.alias, url: row.url, token, identityKey: Addr.cleanPublicKey(row.identity_key), announced: row.source === "announce" } : null;
 }
 
+/** Reads never pair or revive a revoked return token. A claimed card is only a human-reviewable suggestion. */
+async function continuationGuide(ctx: TenantContext, label: string, rawCard?: string): Promise<Json> {
+	const callback = await replyPeer(ctx, label);
+	if (callback) return { kind: "send", alias: callback.alias, next: "Read history, then continue with send and the same context id. For the CLI, select a local alias with peers list --json." };
+	const card = Addr.canonicalCardUrl(rawCard || "");
+	if (card && !peerUrlProblem(card)) return { kind: "pair-back", claimedCardUrl: card,
+		command: `${cliCommand(ctx)} connect ${("'" + card.replaceAll("'", "'\"'\"'") + "'")} --alias ${label.slice(0, 32)} --no-wait`,
+		next: "No usable outbound callback is stored. Verify this claimed address with the peer owner and ask your human before pairing back." };
+	return { kind: "announce-address", next: "No callback address is stored for this peer. Ask the peer owner to run peer announce --to ALIAS on their side, using their outbound alias for this inbox (they can select it with peers list --json). Until then, your replies stay stored on the task and the peer can fetch them." };
+}
+
 async function deliverReplyMessage(ctx: TenantContext, ectx: ExecutionContext, task: Json, message: Json, state: string, text: string, signal: AbortSignal): Promise<ReplyDelivery> {
 	if (task._push?.length) {
 		const pushed = await notifyPeer(ctx, ectx, task, signal);
@@ -2359,7 +2396,8 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 		for (const r of page) {
 			const t = await loadTask(ctx, r.id);
 			const lastUser = [...t.history].reverse().find((x: Json) => x.role === "user") || {};
-			out.push({ taskId: t.id, contextId: t.contextId, from: t._peer, state: t.status.state, updated: t.status.timestamp, text: SealedKeys.envelopeOf(lastUser) ? "[encrypted message]" : A.textOf(lastUser), ...(SealedKeys.envelopeOf(lastUser) ? { sealed: SealedKeys.envelopeOf(lastUser) } : {}) });
+			const peerAddress: Json = await ctx.DB.prepare("SELECT card_url, claimed_card_url FROM peers WHERE label = ? AND revoked_at IS NULL").bind(t._peer).first();
+			out.push({ continuation: await continuationGuide(ctx, t._peer, peerAddress?.card_url || peerAddress?.claimed_card_url), taskId: t.id, contextId: t.contextId, from: t._peer, state: t.status.state, updated: t.status.timestamp, text: SealedKeys.envelopeOf(lastUser) ? "[encrypted message]" : A.textOf(lastUser), ...(SealedKeys.envelopeOf(lastUser) ? { sealed: SealedKeys.envelopeOf(lastUser) } : {}) });
 		}
 		// A reply to a message this agent sent. The first page carries it, up to the same limit, so a later
 		// page does not repeat it and the inbound cursor stays the inbound page. It stays in the default
@@ -2448,7 +2486,13 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 				previous = null;
 			}
 			if (previous) return json({ error: "this reply is already being delivered; retry to read its result" }, 409);
-			if (A.TERMINAL.has(t.status.state) && !b.force) return json({ error: `task is already ${t.status.state}` }, 409);
+			if (A.TERMINAL.has(t.status.state) && !b.force) {
+				const callback = await replyPeer(ctx, t._peer);
+				const next = callback
+					? `Continue with send and the same context id; select an outbound alias with peers list --json (MCP: list_peers).`
+					: `No usable outbound callback is stored. Run ${cliCommand(ctx)} token list --json (MCP: list_peers) for pair-back guidance. Ask your human before pairing back; if no callback address is listed, ask the peer owner to run peer announce --to ALIAS on their side, using their outbound alias for this inbox.`;
+				return json({ error: `task is already ${t.status.state}; this task is closed. Read ${cliCommand(ctx)} history ${t.contextId} --from ${t._peer} first. ${next} No message was sent.`, code: "task_closed", state: t.status.state }, 409);
+			}
 			const msg: Json = { kind: "message", role: "agent", messageId: A.newId(), contextId: t.contextId, taskId: t.id, parts: [{ kind: "text", text: b.text }] };
 			const routeMeta: Json = {};
 			if (b.wake !== undefined && b.wake !== null && b.wake !== "") {
@@ -2630,8 +2674,9 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 	}
 	if (seg[0] === "peers") {
 		if (m === "GET") {
-			const rows = await ctx.DB.prepare("SELECT label, created_at, revoked_at, source, user_code, client_name, card_url FROM peers ORDER BY created_at").all();
-			return json((rows.results as Json[]).map((r) => ({ label: r.label, created_at: r.created_at, revoked_at: r.revoked_at, source: r.source, user_code: r.user_code ? P.formatUserCode(r.user_code) : null, client_name: r.client_name, card_url: r.card_url || null })));
+			const rows = await ctx.DB.prepare("SELECT label, created_at, revoked_at, source, user_code, client_name, card_url, claimed_card_url FROM peers ORDER BY created_at").all();
+			return json(await Promise.all((rows.results as Json[]).map(async (r) => ({ label: r.label, created_at: r.created_at, revoked_at: r.revoked_at, source: r.source, user_code: r.user_code ? P.formatUserCode(r.user_code) : null, client_name: r.client_name, card_url: r.card_url || null,
+					continuation: r.revoked_at ? null : await continuationGuide(ctx, r.label, r.card_url || r.claimed_card_url) }))));
 		}
 		if (m === "POST" && !seg[1]) {
 			const b = await body();
@@ -2739,6 +2784,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 		if (!proxyMode(ctx)) return json({ mode: "inbox", ok: false, reason: "not_proxy_mode", detail: "this Worker is an A2A endpoint (no UPSTREAM_URL): nothing to verify" }, 409);
 		return json({ mode: "proxy", ...(await verifyUpstream(ctx)) });
 	}
+	if (seg[0] === "wake" && seg[1] === "status" && !seg[2] && m === "GET") return json(await wakeStatus(ctx));
 	if (seg[0] === "wake" && seg[1] === "preview" && m === "GET") {
 		// rendered wake request for a sample event, credentials shown as Bearer •••• or ••••, plus short sha256 fingerprints of the
 		// uploaded secrets so the owner can compare them with local values without revealing them
@@ -3019,8 +3065,8 @@ async function tokenEndpoint(req: Request, ctx: TenantContext): Promise<Response
 	// re-pairing (approved as a replacement): the new token takes over the label only if the presented token is still the
 	// one on that label (hash match). A rotate or revoke in between leaves u.meta.changes = 0.
 	if (r.replaces_label && r.replaces_hash && r.label === r.replaces_label) {
-		const u = await ctx.DB.prepare("UPDATE peers SET token_hash = ?, created_at = ?, source = 'pairing', user_code = ?, client_name = ?, identity_key = COALESCE(?, identity_key), sealed_requester = ?, sealed_responder = ? WHERE label = ? AND token_hash = ? AND revoked_at IS NULL")
-			.bind(await A.sha256(token), A.nowIso(), r.user_code, r.client_name || r.client_id || null, r.identity_key || null, r.sealed_requester || null, r.sealed_responder || null, r.replaces_label, r.replaces_hash).run();
+		const u = await ctx.DB.prepare("UPDATE peers SET token_hash = ?, created_at = ?, source = 'pairing', user_code = ?, client_name = ?, identity_key = COALESCE(?, identity_key), sealed_requester = ?, sealed_responder = ?, claimed_card_url = ? WHERE label = ? AND token_hash = ? AND revoked_at IS NULL")
+			.bind(await A.sha256(token), A.nowIso(), r.user_code, r.client_name || r.client_id || null, r.identity_key || null, r.sealed_requester || null, r.sealed_responder || null, r.agent_card_url || null, r.replaces_label, r.replaces_hash).run();
 		if (u.meta.changes === 1) {
 			await ctx.DB.prepare("DELETE FROM device_requests WHERE device_hash = ?").bind(hash).run();
 			log("pairing_redeemed", { ip, label: r.replaces_label, userCode: P.formatUserCode(r.user_code), replaced: true });
@@ -3032,8 +3078,8 @@ async function tokenEndpoint(req: Request, ctx: TenantContext): Promise<Response
 		: r.label ? await freeLabel(ctx, P.labelBase(r.client_name || "", r.client_id || "")) : P.labelBase(r.client_name || "", r.client_id || "");
 	for (let i = 0; i < 5; i++) {
 		try {
-			await ctx.DB.prepare("INSERT INTO peers (label, token_hash, created_at, source, user_code, client_name, identity_key, sealed_requester, sealed_responder) VALUES (?, ?, ?, 'pairing', ?, ?, ?, ?, ?)")
-				.bind(label, await A.sha256(token), A.nowIso(), r.user_code, r.client_name || r.client_id || null, r.identity_key || null, r.sealed_requester || null, r.sealed_responder || null).run();
+			await ctx.DB.prepare("INSERT INTO peers (label, token_hash, created_at, source, user_code, client_name, identity_key, sealed_requester, sealed_responder, claimed_card_url) VALUES (?, ?, ?, 'pairing', ?, ?, ?, ?, ?, ?)")
+				.bind(label, await A.sha256(token), A.nowIso(), r.user_code, r.client_name || r.client_id || null, r.identity_key || null, r.sealed_requester || null, r.sealed_responder || null, r.agent_card_url || null).run();
 			break;
 		} catch (e) {
 			if (i === 4) throw e;
@@ -3488,7 +3534,9 @@ async function ownerPairing(req: Request, ctx: TenantContext, ectx: ExecutionCon
 		const d = await decide(ctx, ectx, code, approve, by);
 		if (!d.ok) return json({ error: d.error }, 409);
 		return json({ ok: true, decision: approve ? "approved" : "denied", userCode: P.formatUserCode(code), label: d.label || null,
-			clientName: d.request.client_name || d.request.client_id || null, replaced: !!d.replaced });
+			clientName: d.request.client_name || d.request.client_id || null, replaced: !!d.replaced,
+			...(approve ? { continuation: { ...(await continuationGuide(ctx, d.label!, d.request.agent_card_url)),
+				note: "Wait for token collection and the signed address announcement, then check token list --json; the existing return-token flow can provide both directions without another approval." } } : {}) });
 	}
 	return json({ error: "not found" }, 404);
 }
@@ -4329,7 +4377,7 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 			const inRows = must(await ownerCall(ctx, ectx, "GET", "/owner/peers")).filter((r: Json) => !r.revoked_at);
 			return M.toolText(`Outbound peers (send works with these) and inbound labels (agents holding a token for this A2A endpoint). Names are claimed by the peers. A paired peer with no card URL has no callback yet: replies stay on the task until that peer announces an address.`,
 				{ outbound: outRows.map((r: Json) => ({ alias: r.alias, url: r.url, hasToken: r.has_token })),
-					inbound: inRows.map((r: Json) => ({ label: r.label, source: r.source, clientName: r.client_name, since: r.created_at, cardUrl: r.card_url || null })) });
+					inbound: inRows.map((r: Json) => ({ label: r.label, source: r.source, clientName: r.client_name, since: r.created_at, cardUrl: r.card_url || null, continuation: r.continuation })) });
 		}
 		case "pairing_requests": {
 			if (!pairingOn(ctx)) return "Device-flow pairing is off on this A2A endpoint (PAIRING_APPROVAL=off): there are no pairing requests.";
@@ -4603,7 +4651,7 @@ export async function dispatch(req: Request, ctx: TenantContext, ectx: Execution
 	if (moved) return new Response(moved.body || null, { status: moved.status, headers: moved.headers });
 	const res = noindex(ctx, await handle(req, ctx, ectx));
 	// A diagnostic probe must not flush/consume pending inbox wakes as a side effect.
-	if (!(req.method === "POST" && /^\/owner\/wake\/test(?:\/|$)/.test(new URL(req.url).pathname)))
+	if (!((req.method === "POST" && /^\/owner\/wake\/test(?:\/|$)/.test(new URL(req.url).pathname)) || (["GET", "HEAD"].includes(req.method) && new URL(req.url).pathname === "/owner/wake/status")))
 		ectx.waitUntil(flushDue(ctx, ectx).catch((e) => log("flush_failed", { error: String(e).slice(0, 200) })));
 	return res;
 }
