@@ -73,6 +73,7 @@ export type ConnectModel = {
 	docs: string; // docsOrigin(DISCOVERY_DOCS_ORIGIN)
 	pairing: boolean; // device-flow pairing is on
 	oauthMetadata: boolean; // /.well-known/oauth-authorization-server is served (pairing or MCP on)
+	mcp?: boolean; // the owner MCP at /mcp is on (not MCP=off, not proxy mode)
 };
 
 const NAME_MAX = 100;
@@ -146,8 +147,52 @@ export function rootJsonLinks(m: ConnectModel): Record<string, string | undefine
 	};
 }
 
+/** RFC 9727 media type of /.well-known/api-catalog: a linkset (RFC 9264) with the API catalog profile. */
+export const API_CATALOG_TYPE = 'application/linkset+json; profile="https://www.rfc-editor.org/info/rfc9727"';
+
+type CatalogLink = { href: string; type: string };
+
+/** GET /.well-known/api-catalog (RFC 9727): one anchor per API this agent serves. The A2A JSON-RPC API at / always;
+ *  the owner MCP at /mcp only while MCP is on. Each OAuth metadata link only where that document is served. */
+export function apiCatalog(m: ConnectModel): { linkset: Record<string, string | CatalogLink[]>[] } {
+	const links = docsLinks(m.docs);
+	const root: Record<string, string | CatalogLink[]> = {
+		anchor: `${m.base}/`,
+		"service-desc": [{ href: `${m.base}/.well-known/agent-card.json`, type: "application/json" }],
+		"service-doc": [{ href: `${m.base}/index.md`, type: "text/markdown" }, { href: links.connect, type: "text/markdown" }],
+	};
+	if (m.pairing) root.describedby = [{ href: `${m.base}/.well-known/oauth-protected-resource`, type: "application/json" }];
+	const linkset = [root];
+	if (m.mcp) linkset.push({
+		anchor: `${m.base}/mcp`,
+		"service-desc": [{ href: `${m.base}/.well-known/mcp/server-card.json`, type: "application/json" }],
+		describedby: [{ href: `${m.base}/.well-known/oauth-protected-resource/mcp`, type: "application/json" }],
+	});
+	return { linkset };
+}
+
+/** GET /auth.md and /.well-known/auth.md: how a visitor gets a credential for this agent, in a few lines. It names
+ *  endpoints and commands only, never a token value, and links the full a2a.exposed credential map. Under 1 KB. */
+export function authMd(m: ConnectModel): string {
+	const name = mdText(m.name, NAME_MAX) || "A2A agent";
+	const peers = m.pairing
+		? `- Peers: per-peer bearer token from the RFC 8628 device flow at ${m.base}/oauth/device_authorization\n` +
+			`  (metadata: /.well-known/oauth-authorization-server). A person (this agent's owner) approves. Codes last 60 minutes.\n` +
+			`- CLI: \`${DEFAULT_CLI} connect ${m.base}\` (stores the token, never prints it).\n`
+		: `- Peers: pairing is turned off here. Ask this agent's operator for a per-peer bearer token.\n`;
+	const owner = m.mcp ? `- Owner tools (\`/mcp\`, scope \`inbox\`) are for this agent's owner only.\n` : "";
+	return `# auth.md: ${name}\n\n${peers}${owner}` +
+		`- Never paste tokens in chat. Revoke: the owner runs \`token revoke <label>\`.\n` +
+		`Full map of every a2a.exposed credential: ${m.docs}/auth.md\n`;
+}
+
 export const markdownHeaders = (): Record<string, string> => ({
 	"content-type": "text/markdown; charset=utf-8", "cache-control": "no-cache", vary: "accept", "x-content-type-options": "nosniff",
+});
+
+/** auth.md is one representation (no content negotiation), so no Vary. CORS * like the other public discovery files. */
+export const authMdHeaders = (): Record<string, string> => ({
+	"content-type": "text/markdown; charset=utf-8", "cache-control": "no-cache", "access-control-allow-origin": "*", "x-content-type-options": "nosniff",
 });
 
 export const llmsHeaders = (): Record<string, string> => ({
@@ -193,10 +238,11 @@ export function sitemapXml(base: string): string {
 		urls.map((p) => `<url><loc>${xmlEsc(base + p)}</loc></url>\n`).join("") + `</urlset>\n`;
 }
 
-/** Link header for GET / (every variant) and /index.md. api-catalog is added once /.well-known/api-catalog exists. */
+/** Link header for GET / (every variant) and /index.md, including the RFC 9727 api-catalog relation. */
 export function linkHeader(docs: string): string {
 	return [
 		`</index.md>; rel="alternate"; type="text/markdown"`,
+		`</.well-known/api-catalog>; rel="api-catalog"; type="application/linkset+json"`,
 		`</.well-known/agent-card.json>; rel="describedby"; type="application/json"`,
 		`</llms.txt>; rel="describedby"; type="text/plain"`,
 		`<${docsLinks(docs).connect}>; rel="service-doc"; type="text/markdown"`,

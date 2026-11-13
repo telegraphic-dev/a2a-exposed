@@ -1018,6 +1018,38 @@ test("agent skills index: canonical skills by version-pinned URL and digest; SKI
 	assert.equal((await hosted.call("GET", "/.well-known/agent-skills/a2a-exposed/SKILL.md")).headers.get("location"), h.data.skills[0].url);
 });
 
+test("GET /.well-known/api-catalog and /auth.md: RFC 9727 catalog and the short auth.md", async (t) => {
+	const s = setup({ AGENT_NAME: "Barry" }); t.after(s.restore);
+	const c = await s.call("GET", "/.well-known/api-catalog");
+	assert.equal(c.status, 200);
+	assert.match(c.headers.get("content-type")!, /^application\/linkset\+json/);
+	assert.equal(c.headers.get("access-control-allow-origin"), "*");
+	assert.ok(c.data.linkset[0]["service-desc"][0].href.endsWith("agent-card.json"));
+	assert.deepEqual(c.data.linkset.map((a: any) => a.anchor), [`${BASE}/`, `${BASE}/mcp`]);
+	for (const path of ["/auth.md", "/.well-known/auth.md"]) {
+		const a = await s.call("GET", path);
+		assert.equal(a.status, 200, path);
+		assert.equal(a.headers.get("content-type"), "text/markdown; charset=utf-8");
+		assert.equal(a.text.split("\n")[0], "# auth.md: Barry");
+		assert.ok(a.text.includes("https://a2a.exposed/auth.md"));
+		assert.ok(new TextEncoder().encode(a.text).length < 1024);
+	}
+	for (const path of ["/.well-known/api-catalog", "/auth.md", "/.well-known/auth.md"]) {
+		const g = await s.call("GET", path);
+		const h = await s.call("HEAD", path);
+		assert.equal(h.status, 200, path);
+		assert.equal(h.text, "", path);
+		assert.equal(h.headers.get("content-type"), g.headers.get("content-type"), path);
+		assert.equal((await s.call("POST", path)).status, 404, path);
+	}
+	const off = setup({ MCP: "off", PAIRING_APPROVAL: "off" }); t.after(off.restore);
+	const oc = (await off.call("GET", "/.well-known/api-catalog")).data;
+	assert.equal(oc.linkset.length, 1, "MCP=off: only the A2A anchor");
+	assert.equal(oc.linkset[0].describedby, undefined);
+	const oa = (await off.call("GET", "/auth.md")).text;
+	assert.ok(!oa.includes("/mcp") && !oa.includes("/oauth/device_authorization"));
+});
+
 test("owner summary counts tasks and pending pairing requests without their text", async (t) => {
 	const s = setup(); t.after(s.restore);
 	const started = await s.start();

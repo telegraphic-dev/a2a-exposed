@@ -3424,7 +3424,7 @@ async function ownerPairing(req: Request, ctx: TenantContext, ectx: ExecutionCon
 async function connectModel(ctx: TenantContext): Promise<{ card: any; model: D.ConnectModel }> {
 	const card: any = await publicCard(ctx);
 	return { card, model: { name: String(card.name || ctx.AGENT_NAME || "A2A agent"), description: typeof card.description === "string" ? card.description : undefined,
-		base: ctx.PUBLIC_URL.replace(/\/$/, ""), docs: D.docsOrigin(ctx.DISCOVERY_DOCS_ORIGIN), pairing: pairingOn(ctx), oauthMetadata: pairingOn(ctx) || mcpOn(ctx) } };
+		base: ctx.PUBLIC_URL.replace(/\/$/, ""), docs: D.docsOrigin(ctx.DISCOVERY_DOCS_ORIGIN), pairing: pairingOn(ctx), oauthMetadata: pairingOn(ctx) || mcpOn(ctx), mcp: mcpOn(ctx) } };
 }
 
 /** A browser (Accept: text/html) gets a small HTML page; an agent that asks for text/markdown the connect steps in
@@ -3472,9 +3472,13 @@ function skillsDoc(ctx: TenantContext, path: string): Response {
 	return to ? new Response(null, { status: 302, headers: { ...headers, location: to } }) : json({ error: "not found" }, 404);
 }
 
-/** GET /index.md and GET /llms.txt: the Markdown connect page and its llms.txt form. HEAD is answered by handle(). */
-async function discoveryDoc(ctx: TenantContext, kind: "markdown" | "llms"): Promise<Response> {
+/** GET /index.md, /llms.txt, /.well-known/api-catalog (RFC 9727) and /auth.md: the Markdown connect page, its llms.txt
+ *  form, the API catalog and the short auth.md. HEAD is answered by handle(). */
+async function discoveryDoc(ctx: TenantContext, kind: "markdown" | "llms" | "catalog" | "auth"): Promise<Response> {
 	const { model } = await connectModel(ctx);
+	if (kind === "catalog") return json(D.apiCatalog(model), 200,
+		{ "content-type": D.API_CATALOG_TYPE, "access-control-allow-origin": "*", "cache-control": cardCacheControl(ctx) });
+	if (kind === "auth") return new Response(D.authMd(model), { status: 200, headers: D.authMdHeaders() });
 	return kind === "markdown"
 		? new Response(D.connectMarkdown(model), { status: 200, headers: { ...D.markdownHeaders(), ...rootDiscoveryHeaders(ctx, model) } })
 		: new Response(D.llmsTxt(model), { status: 200, headers: D.llmsHeaders() });
@@ -4491,6 +4495,8 @@ async function handle(req: Request, ctx: TenantContext, ectx: ExecutionContext, 
 		if (req.method === "GET" && path === "/robots.txt") return crawlerDoc(ctx, "robots");
 		if (req.method === "GET" && path === "/sitemap.xml") return crawlerDoc(ctx, "sitemap");
 		if (req.method === "GET" && path.startsWith("/.well-known/agent-skills/")) return skillsDoc(ctx, path);
+		if (req.method === "GET" && path === "/.well-known/api-catalog") return await discoveryDoc(ctx, "catalog");
+		if (req.method === "GET" && (path === "/auth.md" || path === "/.well-known/auth.md")) return await discoveryDoc(ctx, "auth");
 		return json({ error: "not found" }, 404);
 	} catch (e: any) {
 		if (e instanceof HttpError) return json({ error: e.message }, e.status);

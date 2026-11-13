@@ -138,11 +138,49 @@ test("sitemapXml: public pages only, XML-escaped", () => {
 	assert.ok(D.sitemapXml("https://a.example/x&y").includes("x&amp;y"));
 });
 
-test("linkHeader: alternate, describedby and service-doc; no api-catalog yet", () => {
+test("linkHeader: alternate, api-catalog, describedby and service-doc", () => {
 	const l = D.linkHeader("https://staging.example.com");
 	assert.ok(l.includes(`</index.md>; rel="alternate"; type="text/markdown"`));
 	assert.ok(l.includes(`</.well-known/agent-card.json>; rel="describedby"; type="application/json"`));
 	assert.ok(l.includes(`</llms.txt>; rel="describedby"; type="text/plain"`));
 	assert.ok(l.includes(`<https://staging.example.com/.well-known/agent-skills/a2a-exposed/references/connect.md>; rel="service-doc"; type="text/markdown"`));
-	assert.ok(!l.includes("api-catalog"));
+	assert.ok(l.includes(`</.well-known/api-catalog>; rel="api-catalog"; type="application/linkset+json"`));
+});
+
+test("apiCatalog: the RFC 9727 linkset from the issue, MCP anchor only while MCP is on", () => {
+	const base = "https://example-peer.a2a.exposed";
+	assert.deepEqual(D.apiCatalog(model({ mcp: true })), { linkset: [
+		{ anchor: `${base}/`,
+			"service-desc": [{ href: `${base}/.well-known/agent-card.json`, type: "application/json" }],
+			"service-doc": [{ href: `${base}/index.md`, type: "text/markdown" },
+				{ href: "https://a2a.exposed/.well-known/agent-skills/a2a-exposed/references/connect.md", type: "text/markdown" }],
+			describedby: [{ href: `${base}/.well-known/oauth-protected-resource`, type: "application/json" }] },
+		{ anchor: `${base}/mcp`,
+			"service-desc": [{ href: `${base}/.well-known/mcp/server-card.json`, type: "application/json" }],
+			describedby: [{ href: `${base}/.well-known/oauth-protected-resource/mcp`, type: "application/json" }] },
+	] });
+	const noMcp = D.apiCatalog(model({ mcp: false }));
+	assert.equal(noMcp.linkset.length, 1);
+	assert.equal(D.apiCatalog(model()).linkset.length, 1, "mcp unset counts as off");
+	assert.equal(D.apiCatalog(model({ pairing: false })).linkset[0].describedby, undefined, "no link to a metadata document that is not served");
+	assert.match(D.API_CATALOG_TYPE, /^application\/linkset\+json;/);
+});
+
+test("authMd: short, links the canonical map, no token values", () => {
+	const md = D.authMd(model({ mcp: true }));
+	assert.equal(md, "# auth.md: example-peer\n\n" +
+		"- Peers: per-peer bearer token from the RFC 8628 device flow at https://example-peer.a2a.exposed/oauth/device_authorization\n" +
+		"  (metadata: /.well-known/oauth-authorization-server). A person (this agent's owner) approves. Codes last 60 minutes.\n" +
+		"- CLI: `npx -y a2a-exposed@latest connect https://example-peer.a2a.exposed` (stores the token, never prints it).\n" +
+		"- Owner tools (`/mcp`, scope `inbox`) are for this agent's owner only.\n" +
+		"- Never paste tokens in chat. Revoke: the owner runs `token revoke <label>`.\n" +
+		"Full map of every a2a.exposed credential: https://a2a.exposed/auth.md\n");
+	assert.ok(new TextEncoder().encode(md).length < 1024);
+	const long = D.authMd(model({ name: `${"n".repeat(300)}\n# injected`, mcp: true }));
+	assert.ok(new TextEncoder().encode(long).length < 1024, "a long name stays under 1 KB");
+	assert.equal(long.split("\n").filter((l) => l.startsWith("#")).length, 1, "the name cannot add a heading");
+	const off = D.authMd(model({ pairing: false, mcp: false }));
+	assert.match(off, /pairing is turned off here/);
+	assert.ok(!off.includes("/oauth/device_authorization") && !off.includes("/mcp"));
+	assert.ok(D.authMd(model({ docs: "https://staging.example.com" })).endsWith("credential: https://staging.example.com/auth.md\n"));
 });
