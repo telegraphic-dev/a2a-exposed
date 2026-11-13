@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add disabled internal authenticated provenance storage: prepare a signed receipt
+  with its consuming intent atomically and reverify retained signature/enrollment
+  bindings on fresh-checkpoint reads. No command, schema adoption or grant activation.
+
 - Add separately opted-in HTTP relay profiles for fixed local webhooks and native
   A2A JSON-RPC services, with original request bytes/application authentication,
   real receiver responses, rewritten discovery and bounded incremental SSE.
