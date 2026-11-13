@@ -32,7 +32,8 @@ type Json = any;
 
 class RpcError extends Error {
 	code: number;
-	constructor(code: number, msg: string) { super(msg); this.code = code; }
+	data?: { reason: "encryption_disabled" | "peer_keys_missing" };
+	constructor(code: number, msg: string, data?: RpcError["data"]) { super(msg); this.code = code; this.data = data; }
 }
 class HttpError extends Error {
 	status: number;
@@ -1015,8 +1016,8 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
  const sealedPeer: Json = await ctx.DB.prepare("SELECT sealed_requester,sealed_responder FROM peers WHERE label=? AND revoked_at IS NULL").bind(label).first();
  let sealed: Json = null;
  if (sealedPeer?.sealed_requester || msg.extensions?.includes(SealedKeys.SEALED_URI)) {
-  if (ctx.A2A_SEALED_ENABLED !== "1") throw new RpcError(-32602, "Encrypted messaging is disabled on this inbox. Ask its owner to check the inbox encryption setting. No plaintext fallback.");
-  if (!sealedPeer?.sealed_requester) throw new RpcError(-32602, "This peer has no approved encryption keys on this inbox. Complete the existing human-approved key pairing first. No plaintext fallback.");
+  if (ctx.A2A_SEALED_ENABLED !== "1") throw new RpcError(-32602, "Encrypted messaging is disabled on this inbox. Ask its owner to check the inbox encryption setting. No plaintext fallback.", { reason: "encryption_disabled" });
+  if (!sealedPeer?.sealed_requester) throw new RpcError(-32602, "This peer has no approved encryption keys on this inbox. Complete the existing human-approved key pairing first. No plaintext fallback.", { reason: "peer_keys_missing" });
   try {
    // Reject extra outer fields before normMessage can discard them.
    const raw = params.message;
@@ -1282,7 +1283,7 @@ async function handleRpc(req: Request, ctx: TenantContext, ectx: ExecutionContex
 	try { rq = JSON.parse(raw); } catch { return json({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } }, 400); }
 	if (Array.isArray(rq)) return json({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "Batch not supported" } }, 400);
 	const rid = rq && typeof rq === "object" ? rq.id ?? null : null;
-	const err = (code: number, message: string) => json({ jsonrpc: "2.0", id: rid, error: { code, message } });
+	const err = (code: number, message: string, data?: RpcError["data"]) => json({ jsonrpc: "2.0", id: rid, error: { code, message, ...(data ? { data } : {}) } });
 	if (!rq || typeof rq !== "object" || rq.jsonrpc !== "2.0" || typeof rq.method !== "string") return err(-32600, "Invalid Request");
 	const method: string = rq.method;
 	const proxy = proxyMode(ctx);
@@ -1309,7 +1310,7 @@ async function handleRpc(req: Request, ctx: TenantContext, ectx: ExecutionContex
 		log("rpc_ok", { peer: label, method, ip });
 		return json({ jsonrpc: "2.0", id: rid, result }, 200, activated && ctx.A2A_SEALED_ENABLED === "1" ? { "A2A-Extensions": SealedKeys.SEALED_URI } : {});
 	} catch (e: any) {
-		if (e instanceof RpcError) { log("rpc_error", { peer: label, method, code: e.code, msg: e.message }); return err(e.code, e.message); }
+		if (e instanceof RpcError) { log("rpc_error", { peer: label, method, code: e.code, msg: e.message }); return err(e.code, e.message, e.data); }
 		if (e instanceof A.InvalidParams) { log("rpc_invalid", { peer: label, method, msg: e.message }); return err(-32602, `Invalid params: ${e.message}`); }
 		log("rpc_exception", { peer: label, method, error: String(e?.stack || e).slice(0, 500) });
 		return err(-32603, "Internal error");

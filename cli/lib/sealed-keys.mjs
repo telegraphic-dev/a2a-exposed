@@ -7,7 +7,7 @@ import { CLI, CliError, httpJson, pickEndpoint } from "./a2a.mjs";
 import { baseUrl } from "./commands.mjs";
 export const URI = "https://a2a.exposed/ext/sealed/v1";
 const fail = message => { throw new CliError(message); };
-export const encryptionDisabled = "Local encryption is disabled. Set A2A_SEALED_ENABLED=1 in this local CLI or MCP process only after owner approval; the inbox Worker needs its own setting. Only the exact value 1 enables encryption; true, yes and whitespace do not. No plaintext fallback.";
+export const encryptionDisabled = "Local encryption is disabled. Set A2A_SEALED_ENABLED=1 in this local CLI or MCP process only after owner approval; the inbox Worker needs its own setting (on hosted inboxes, the service operator controls this). Only the exact value 1 enables encryption; true, yes and whitespace do not. No plaintext fallback.";
 export const peerKeysChanged = "The peer's published keys changed. Ask its owner whether they changed them; do not continue until they confirm. Communication is held; key replacement is not supported yet.";
 export function gate() {
  if (process.env.A2A_SEALED_ENABLED !== "1") fail(encryptionDisabled);

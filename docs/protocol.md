@@ -177,6 +177,11 @@ Local encrypted CLI fixtures use the disabled sealed extension and preserve
 signed ciphertext-only carriers. See [local keys and pairing](local-key-pairing.md#local-encrypted-cli-messages)
 for the public routing fields, local verification and task-state limitations.
 
+Encrypted sends refused before storage use JSON-RPC `-32602` with
+`error.data.reason` equal to `encryption_disabled` or `peer_keys_missing`. These
+reasons create no task. Clients should map them to fixed local guidance rather
+than display peer-supplied error text; other errors do not prove non-delivery.
+
 ## Owner wake diagnostics
 
 `GET /owner/wake/status` is owner-only and does not flush due wakes or clear the

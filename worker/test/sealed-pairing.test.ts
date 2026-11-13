@@ -24,11 +24,19 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
  const dispatch=async(name:string,request:Request)=>{const pending:Promise<any>[]=[];const res=await worker.fetch(request,envs[name],{waitUntil:(p:Promise<any>)=>pending.push(p),passThroughOnException(){}} as any);await Promise.allSettled(pending);return res;};
  const owner=(name:string,route:string,method="GET",body?:any)=>dispatch(name,new Request(`https://${name}.example.com${route}`,{method,headers:{authorization:"Bearer dummy-owner","content-type":"application/json"},...(body===undefined?{}:{body:JSON.stringify(body)})}));
  let publishError:{status:number,error:string}|null=null;
+ let refuseSend: "encryption_disabled" | "peer_keys_missing" | "unknown" | "unknown_reason" | null=null;
  const server=http.createServer(async(req,res)=>{try{
   const name=String(req.headers["x-test-agent"]);let body="";for await(const chunk of req)body+=chunk;records.push({name,path:req.url,body});
   if(publishError && req.url==="/owner/sealed-key" && req.method==="PUT"){res.writeHead(publishError.status,{"content-type":"application/json"});res.end(JSON.stringify({error:publishError.error}));return;}
   const headers=new Headers();for(const [k,v]of Object.entries(req.headers))if(typeof v==="string"&&!["host","x-test-agent","connection"].includes(k))headers.set(k,v);
-  const result=await dispatch(name,new Request(`https://${name}.example.com${req.url}`,{method:req.method,headers,...(["GET","HEAD"].includes(req.method!)?{}:{body})}));
+  if((refuseSend==="unknown"||refuseSend==="unknown_reason")&&req.url==="/"&&req.method==="POST"){res.writeHead(200,{"content-type":"application/json"});res.end(JSON.stringify({jsonrpc:"2.0",id:JSON.parse(body).id,error:{code:refuseSend==="unknown"?-32603:-32602,message:"untrusted-private-error",data:{reason:"__proto__"}}}));return;}
+  const originalFlag=envs[name].A2A_SEALED_ENABLED;
+  const keyRow=refuseSend==="peer_keys_missing"&&req.url==="/"&&req.method==="POST"?await envs[name].DB.prepare("SELECT label,sealed_requester FROM peers WHERE sealed_requester IS NOT NULL LIMIT 1").first():null;
+  if(refuseSend==="encryption_disabled"&&req.url==="/"&&req.method==="POST")envs[name].A2A_SEALED_ENABLED="";
+  if(keyRow)await envs[name].DB.prepare("UPDATE peers SET sealed_requester=NULL WHERE label=?").bind(keyRow.label).run();
+  let result:Response;
+  try{result=await dispatch(name,new Request(`https://${name}.example.com${req.url}`,{method:req.method,headers,...(["GET","HEAD"].includes(req.method!)?{}:{body})}));}
+  finally{envs[name].A2A_SEALED_ENABLED=originalFlag;if(keyRow)await envs[name].DB.prepare("UPDATE peers SET sealed_requester=? WHERE label=?").bind(keyRow.sealed_requester,keyRow.label).run();}
   res.writeHead(result.status,Object.fromEntries(result.headers));res.end(await result.text());
  }catch(error){res.writeHead(500);res.end(String(error));}});
  await new Promise<void>(r=>server.listen(0,"127.0.0.1",r));t.after(()=>{server.closeAllConnections();server.close();});
@@ -130,6 +138,21 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
   assert.equal((await owner("bob","/owner/history","POST",{contextId:wrongRowContext,dir:"in",peer:p.peer,taskId:sent.taskId,role:"user",text:"[encrypted message]",data:{sealed:message.parts[0].data}})).status,200);
   const wrongRow=await cli("bob",["history",wrongRowContext,"--json"]);assert.equal(wrongRow.code,1);
   assert.ok(JSON.parse(wrongRow.out).some((r:any)=>r.reason==="binding_mismatch" && /original task\/context IDs.*sender owner/.test(r.next)));
+  const countTasks=async()=>Number((await envs.bob.DB.prepare("SELECT COUNT(*) AS n FROM tasks").first()).n);
+  for(const reason of ["encryption_disabled","peer_keys_missing"] as const){
+   const count=await countTasks();refuseSend=reason;
+   try{
+    const refused=await cli("alice",["send","--to","bob","--text","refusal fixture","--proto",proto]);assert.equal(refused.code,1);
+    assert.match(refused.err,reason==="encryption_disabled"?/encryption is disabled there.*recipient's owner.*service operator/:/no approved encryption keys.*keys status --json.*existing human-approved key pairing/);
+    assert.match(refused.err,/Nothing was delivered.*No plaintext was sent/);assert.equal(refused.err.includes("check history"),false);
+    const refusedMcp=await mcp("alice","send",{to:"bob",text:"refusal fixture",protocol:proto});assert.equal(refusedMcp.isError,true);assert.match(refusedMcp.content[0].text,/recipient inbox refused.*Nothing was delivered/);
+    console.log("Recipient refusal evidence: "+refused.err.trim());
+   }finally{refuseSend=null;}
+   assert.equal(await countTasks(),count,"a pre-storage refusal creates no task");
+  }
+  for(const unknownReason of ["unknown","unknown_reason"] as const){refuseSend=unknownReason;
+  try{const unknown=await cli("alice",["send","--to","bob","--text","unknown-error fixture","--proto",proto]);assert.equal(unknown.code,1);assert.match(unknown.err,/delivery was not confirmed.*Do not resend/);assert.equal(unknown.err.includes("untrusted-private-error"),false);assert.equal(unknown.err.includes("Nothing was delivered"),false);}
+  finally{refuseSend=null;}}
   // Task-only routing must reuse the existing context; responses stay bounded as history grows.
   for(const explicit of [false,true]){
    const large="large-fixture-"+"x".repeat(198980);

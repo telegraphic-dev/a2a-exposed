@@ -64,7 +64,7 @@ export function projectRow(row) {
  else {
   result.text = "[message content withheld]";
   result.reason = row.locallyOpened === false ? row.reason : "server_readable_content_withheld";
-  result.next = row.locallyOpened === false ? row.next : "This message was not encrypted by the sender. To read it, use ordinary inbox/history with a separate --config-dir that has no local keys or pinned peers. Keep this encrypted pairing unchanged.";
+  result.next = row.locallyOpened === false ? row.next : "This message was not encrypted by the sender. To read it, use ordinary inbox/history with a separate --config-dir configured for the same inbox that has no local keys or pinned peers. Keep this encrypted pairing unchanged.";
  }
  return result;
 }

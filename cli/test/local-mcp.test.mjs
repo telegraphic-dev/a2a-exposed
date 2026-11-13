@@ -58,7 +58,7 @@ test("projection strips ciphertext, server structures and refused plaintext", ()
  const hidden = projectRow(raw);
  assert.equal(hidden.taskId, "task"); assert.equal(hidden.contextId, "context");
  assert.equal(hidden.reason, "server_readable_content_withheld");
- assert.match(hidden.next, /ordinary inbox\/history.*separate --config-dir.*no local keys or pinned peers/);
+ assert.match(hidden.next, /ordinary inbox\/history.*separate --config-dir.*same inbox.*no local keys or pinned peers/);
  for (const value of ["plaintext downgrade", "ciphertext", "secret"]) assert.equal(JSON.stringify(hidden).includes(value), false);
  const opened = projectRow({ ...raw, text: "verified", messageId: "verified-message", messageIdAuthenticated: true, locallyOpened: true, encrypted: true, historical: true });
  assert.equal(opened.messageId, "verified-message"); assert.equal(opened.messageIdAuthenticated, true);

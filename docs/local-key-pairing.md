@@ -108,6 +108,12 @@ prints the original context and message IDs. Ask the recipient's owner to check
 their local inbox/history for that message ID before considering any new send. A successful delivery with failed sender-history
 storage is reported as delivered; do not resend it.
 
+A recipient that explicitly refuses because its encryption is off or this peer
+has no approved keys gets a specific local message and next step; no plaintext
+is sent. Ask the recipient owner to check the setting or existing pairing
+before any new attempt. Other errors still leave delivery unconfirmed, so
+preserve the original IDs and check recipient history before any new send.
+
 Encrypted text is limited to 200000 Unicode characters and 307072 UTF-8 bytes for canonical content, including JSON structure and escaping. Both limits are checked before private-key access, for `--text` and piped stdin.
 
 Encrypted send does not accept `--push`, `--wake` or `--intent` in this path.

@@ -81,6 +81,15 @@ export async function send(o, { emit = value => console.log(JSON.stringify(value
    response = await httpJson(url, { redirect: "error", maxResponseBytes: 1024 * 1024, body: { jsonrpc: "2.0", id: b.messageId, method: protocol === "1.0" ? "SendMessage" : "message/send", params: { message, configuration: protocol === "1.0" ? { returnImmediately: true, historyLength: 1 } : { blocking: false, historyLength: 1 } } }, headers: { authorization: `Bearer ${token}`, "A2A-Version": protocol, "A2A-Extensions": URI, ...(protocol === "0.3" ? { "X-A2A-Extensions": URI } : {}) } });
   } catch { fail("Encrypted delivery outcome is unknown. Do not resend. Ask the recipient's owner to check inbox/history for context " + b.contextId + " and message " + b.messageId + ". No plaintext fallback."); }
   const { status, data, headers } = response;
+  if (status === 200 && data?.jsonrpc === "2.0" && data.id === b.messageId && !Object.hasOwn(data, "result") && data.error?.code === -32602 && typeof data.error.message === "string") {
+   // Peer text is untrusted. Map only the two documented pre-storage refusal reasons.
+   const refusals = {
+    encryption_disabled: "The recipient inbox refused the encrypted message because encryption is disabled there. Nothing was delivered. Ask the recipient's owner to check their inbox encryption setting; on hosted inboxes, the service operator controls this setting. No plaintext was sent. Do not retry automatically.",
+    peer_keys_missing: "The recipient inbox refused the encrypted message because this peer has no approved encryption keys there. Nothing was delivered. Inspect keys status --json and keys pairings --json and ask the recipient's owner to check the existing human-approved key pairing. No plaintext was sent. Do not retry automatically.",
+   };
+   const reason = data.error.data?.reason;
+   if (typeof reason === "string" && Object.hasOwn(refusals, reason)) fail(refusals[reason], "recipient_" + reason);
+  }
   if (status !== 200 || data?.jsonrpc !== "2.0" || data.id !== b.messageId || data.error || headers?.get("A2A-Extensions") !== URI) fail("Encrypted delivery was not confirmed. Do not resend automatically. Ask the recipient's owner to check history for context " + b.contextId + " and message " + b.messageId + ". No plaintext fallback.");
   const task = protocol === "1.0" ? data.result?.task : data.result;
   if (!task?.id || task.contextId !== b.contextId || !task.history?.some(m => { try { return api.canonicalJSON(api.readMessageCarrier(api.canonicalJSON(m), protocol)) === api.canonicalJSON(envelope); } catch { return false; } })) fail("Encrypted task routing response is invalid; delivery may have occurred. Preserve context " + b.contextId + " and message " + b.messageId + "; do not resend.");
