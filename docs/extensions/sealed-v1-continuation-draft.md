@@ -1166,8 +1166,12 @@ attached databases refuse. Equivalent but differently written schema SQL also
 refuses; this is a deliberately exact format check.
 
 The caller must hold a transaction with foreign keys enabled and trusted-schema
-execution disabled. Only the unstamped fresh format (`user_version=0`) is
-accepted, so existing authority schemas refuse without reset or migration. The
+execution disabled. Both fresh provenance inspection and schema-3 authority reads
+refuse connections with CHECK constraints disabled or schema writes enabled,
+including after awaits between maintenance transactions. Checks read the effective
+pragma state and never repair connection settings or stored data. Re-enabling
+constraints does not authenticate rows written while enforcement was off.
+Only the unstamped fresh format (`user_version=0`) is accepted, so existing authority schemas refuse without reset or migration. The
 candidate is read only; the reference installation uses a separate in-memory
 database. Tests include a physical read-only connection with unchanged file bytes.
 

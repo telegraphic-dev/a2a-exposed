@@ -184,6 +184,7 @@ let continuationAuthorityInventory;
 const continuationSchema=db=>JSON.stringify(db.prepare('SELECT type,name,tbl_name,sql FROM main.sqlite_schema ORDER BY type,name').all());
 function assertContinuationAuthorityInventory(db){
  if(db.prepare('PRAGMA main.user_version').get().user_version!==3||db.prepare('PRAGMA foreign_keys').get().foreign_keys!==1||db.prepare('PRAGMA trusted_schema').get().trusted_schema!==0)fail('authority_schema');
+ for(const pragma of ['ignore_check_constraints','writable_schema'])if(db.prepare(`PRAGMA ${pragma}`).get()[pragma]!==0)fail('authority_schema');
  if(db.prepare('SELECT COUNT(*) n FROM temp.sqlite_schema').get().n!==0||db.prepare('PRAGMA database_list').all().some(r=>!['main','temp'].includes(r.name)))fail('authority_schema');
  if(continuationAuthorityInventory===undefined){
   const {DatabaseSync}=require('node:sqlite'),reference=new DatabaseSync(':memory:');
