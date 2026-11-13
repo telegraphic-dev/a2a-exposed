@@ -47,6 +47,7 @@ Local encrypted CLI draft (disabled by default):
   peers list --json           list aliases and whether their keys are pinned
   send --to ALIAS --text TEXT [--allow-os-consent]
                                 seal for the pinned peer; no plaintext fallback
+                                max 200000 Unicode characters / 307072 encoded content bytes; checked before key access
                                 encrypted sends refuse --push, --wake and --intent
   inbox --json / history CONTEXT --json
                                 open locally; --allow-os-consent permits keychain access

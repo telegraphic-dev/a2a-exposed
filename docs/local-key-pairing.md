@@ -105,6 +105,8 @@ prints the original context and message IDs: inspect recipient inbox/history
 before considering any new send. A successful delivery with failed sender-history
 storage is reported as delivered; do not resend it.
 
+Encrypted text is limited to 200000 Unicode characters and 307072 UTF-8 bytes for canonical content, including JSON structure and escaping. Both limits are checked before private-key access, for `--text` and piped stdin.
+
 Encrypted send does not accept `--push`, `--wake` or `--intent` in this path.
 Plaintext owner replies on encrypted tasks and syncing pinned peers to remote MCP
 are refused. Local stdio MCP uses this same send/read path; see [MCP](mcp.md#local-stdio-sendread). Encrypted responses remain a separate follow-up.

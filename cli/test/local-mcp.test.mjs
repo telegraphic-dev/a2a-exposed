@@ -34,8 +34,13 @@ test("tool input rejects hidden admin/config/consent choices before execution", 
  const calls = [];
  const handle = await ready(async (...args) => { calls.push(args); return { delivered: true }; });
  for (const [name, args] of [["send", {}], ["send", { to: "bob", text: "x", protocol: "2" }], ["send", { to: "bob", text: "x", token: "secret" }], ["send", { to: "bob", text: "x", "allow-os-consent": true }], ["history", { contextId: "a", limit: 201 }], ["history", { contextId: "a", limit: 1.5 }], ["inbox", { all: "true" }], ["reply", { text: "x" }], ["pair_approve", {}]]) {
-  assert.equal((await handle(request("tools/call", { name, arguments: args }))).error.code, -32602);
+  const response = await handle(request("tools/call", { name, arguments: args }));
+  if (["reply", "pair_approve"].includes(name)) assert.equal(response.error.code, -32602);
+  else { assert.equal(response.result.isError, true); assert.match(response.result.content[0].text, new RegExp(name)); }
  }
+ const missing = await handle(request("tools/call", { name: "send", arguments: { text: "private-input-not-echoed" } }));
+ assert.match(missing.result.content[0].text, /to is required.*list_peers/);
+ assert.equal(JSON.stringify(missing).includes("private-input-not-echoed"), false);
  assert.equal(calls.length, 0);
  assert.equal(await handle({ jsonrpc: "2.0", method: "tools/call", params: { name: "send", arguments: { to: "bob", text: "not sent" } } }), null);
  const result = await handle(request("tools/call", { name: "send", arguments: { to: "bob", text: "valid", protocol: "1.0" } }));
@@ -54,7 +59,8 @@ test("projection strips ciphertext, server structures and refused plaintext", ()
  assert.equal(hidden.taskId, "task"); assert.equal(hidden.contextId, "context");
  assert.equal(hidden.reason, "server_readable_content_withheld");
  for (const value of ["plaintext downgrade", "ciphertext", "secret"]) assert.equal(JSON.stringify(hidden).includes(value), false);
- const opened = projectRow({ ...raw, text: "verified", locallyOpened: true, encrypted: true, historical: true });
+ const opened = projectRow({ ...raw, text: "verified", messageId: "verified-message", messageIdAuthenticated: true, locallyOpened: true, encrypted: true, historical: true });
+ assert.equal(opened.messageId, "verified-message"); assert.equal(opened.messageIdAuthenticated, true);
  assert.equal(opened.text, "verified");assert.equal(opened.encryption, "e2e");assert.equal(opened.historical, true);
  assert.equal(JSON.stringify(opened).includes("ciphertext"), false);
 });
@@ -104,6 +110,8 @@ test("transport flags in a raw owner row cannot authorize opened plaintext", asy
   assert.equal(result.rows[0].locallyOpened, false);
   assert.equal(result.rows[0].reason, "server_readable_content_withheld");
   assert.equal(JSON.stringify(result).includes("forged plaintext"), false);
+  globalThis.fetch = async () => new Response(JSON.stringify({ error: "secret-credential-reflection" }), { status: 401 });
+  await assert.rejects(callTool("history", { contextId: "fixture" }), e => e.message.includes("history read failed (HTTP 401)") && !e.message.includes("secret-credential-reflection"));
  } finally {
   globalThis.fetch = saved.fetch;
   for (const [key, value] of [["A2A_SEALED_ENABLED", saved.enabled], ["A2A_BASE_URL", saved.base], ["A2A_OWNER_TOKEN", saved.token]]) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }

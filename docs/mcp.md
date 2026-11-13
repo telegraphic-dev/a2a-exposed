@@ -44,7 +44,7 @@ Check pairing requests separately with the CLI `pair list --json`.
 
 Read results have `rows`, `untrustedPeerContent: true` and
 `taskStateAuthenticated: false`. Each opened row has `encryption: "e2e"`,
-`locallyOpened: true` and the verified text. Raw ciphertext, envelopes, server
+`locallyOpened: true`, verified `messageId` with `messageIdAuthenticated: true`, and the verified text. Other message IDs, when available, are labelled `messageIdAuthenticated: false`. Raw ciphertext, envelopes, server
 data/status objects and artifacts are omitted. Server-readable content is
 withheld and labelled `encryption: "server-readable"`; use a separate client for
 it. Refused encrypted or pinned-plaintext rows have a safe `reason`/`next` and
@@ -57,6 +57,7 @@ server state remain unauthenticated routing metadata, as in the CLI path.
 `inbox` acknowledges returned wakes/outbound updates, so its MCP annotation is
 not read-only; it does not change task state. It follows at most 100 pages and
 returns at most 1000 rows. Narrow larger reads with `contextId` and `from`.
+Send accepts up to 200000 Unicode characters, provided canonical content fits 307072 UTF-8 bytes including JSON structure and escaping. This check runs before private-key access. Invalid arguments return tool errors naming the field and rule without echoing values.
 Each owner response and input line is bounded to 1 MiB; tool data is bounded to
 4 MiB, with no partial result on overflow. An acknowledged inbox read may have
 happened even when a later page, decryption or output-size check refuses.
@@ -65,9 +66,9 @@ The server supports MCP `2025-11-25`, `2025-06-18` and `2025-03-26`, with the
 initialize/initialized handshake, ping, tools/list and tools/call. It handles
 requests serially, keeps no decrypted history cache, and exits when stdin closes.
 No automatic send retry occurs on transport failure or client cancellation.
-If delivery is uncertain, preserve the returned context/message IDs and inspect
-recipient inbox/history before taking another action. Sender-history failure
-after delivery is reported as delivered; do not resend.
+If delivery is uncertain, preserve the returned context/message IDs and
+ask the recipient owner to check inbox/history before taking another action. Sender-history failure
+after delivery returns `senderHistorySaved: false` and explicit `next` guidance; do not resend.
 
 ## Hosted connector
 

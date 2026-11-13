@@ -127,15 +127,22 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
   }
   // Real stdio subprocesses share the exact CLI sealing/opening path, across restarts.
   const mcpSecret="mcp-private-fixture-"+crypto.randomUUID();
+  const keyFile=path.join(dirs.alice,"encryption",ids.alice+".key");fs.renameSync(keyFile,keyFile+".held");
+  try { const large=await mcp("alice","send",{to:"bob",text:"漢".repeat(120000)});assert.equal(large.isError,true);assert.match(large.content[0].text,/too large after JSON encoding.*307072/); }
+  finally { fs.renameSync(keyFile+".held",keyFile); }
   const listed=await mcp("alice","list_peers",{});assert.ok(listed.structuredContent.peers.some((x:any)=>x.alias==="bob"&&x.pinned));
   const disabled=await mcp("alice","send",{to:"bob",text:mcpSecret},false);assert.equal(disabled.isError,true);assert.match(disabled.content[0].text,/disabled/);
   const mcpSent=await mcp("alice","send",{to:"bob",text:mcpSecret,protocol:proto});assert.ok(!mcpSent.isError,JSON.stringify(mcpSent));
   const mcpContext=mcpSent.structuredContent.contextId;
-  const mcpInbox=await mcp("bob","inbox",{contextId:mcpContext,from:p.peer});assert.ok(!mcpInbox.isError,JSON.stringify(mcpInbox));assert.ok(mcpInbox.structuredContent.rows.some((r:any)=>r.text===mcpSecret&&r.locallyOpened));
+  const mcpInbox=await mcp("bob","inbox",{contextId:mcpContext,from:p.peer});assert.ok(!mcpInbox.isError,JSON.stringify(mcpInbox));assert.ok(mcpInbox.structuredContent.rows.some((r:any)=>r.text===mcpSecret&&r.locallyOpened&&r.messageId===mcpSent.structuredContent.messageId&&r.messageIdAuthenticated));
   for(const name of ["alice","bob"]){
    const mcpHistory=await mcp(name,"history",{contextId:mcpContext,from:name==="alice"?"bob":p.peer,limit:200});assert.ok(!mcpHistory.isError,JSON.stringify(mcpHistory));assert.ok(mcpHistory.structuredContent.rows.some((r:any)=>r.text===mcpSecret&&r.historical));
    for(const table of EXPORT_TABLES){assert.equal(JSON.stringify(await envs[name].DB.prepare(`SELECT * FROM "${table}"`).all()).includes(mcpSecret),false,`${name}.${table}`);}
   }
+  const configPath=path.join(dirs.alice,"config.env"),savedConfig=fs.readFileSync(configPath,"utf8");
+  fs.writeFileSync(configPath,savedConfig.replace(/^A2A_OWNER_TOKEN=.*$/m,"A2A_OWNER_TOKEN="));
+  try { const warning=await mcp("alice","send",{to:"bob",text:mcpSecret,protocol:proto});assert.equal(warning.structuredContent.senderHistorySaved,false);assert.match(warning.structuredContent.next,/delivered.*Do not resend/); }
+  finally { fs.writeFileSync(configPath,savedConfig); }
   assert.equal(JSON.stringify(records).includes(mcpSecret),false);
   assert.equal(JSON.stringify(mcpOutputs).includes('"sealed"'),false);
   // Ciphertext alteration at rest refuses opening; never returns a partial plaintext result.
