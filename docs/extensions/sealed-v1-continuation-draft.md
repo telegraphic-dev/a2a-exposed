@@ -1312,3 +1312,23 @@ This API neither selects a signer nor declares any plan applicable. Fresh reads
 still enforce exact current binding and original expiry. No physical authority
 reader, command, human adapter, enrollment application or traffic path calls this
 comparison. It writes no rows and leaves encryption disabled.
+
+### Disabled exact retained-plan read
+
+The private enrollment-storage `readRetained(db, id)` API retrieves one original
+plan for future uncertainty reconciliation. Its explicit original ID never
+selects a newer plan or substitutes a sibling. The reader authenticates the
+storage MAC, canonical JSON and exact SQL columns, strict UTF-8, original plan
+digest and any original signer row at the plan's creation instant. Missing or
+corrupt selected records refuse without repair. This lookup does not authenticate
+unselected rows; complete inventory diagnosis still authenticates every row.
+
+The detached result and all nested records are frozen. Unlike metadata diagnosis,
+it contains private planning bytes, canonical root and public key DER: it is an
+internal reconciliation input, never a model/tool diagnostic. It makes no current
+binding, freshness, approval or applicability claim. Original expiry, revision,
+epoch and signer identities remain unchanged; normal reads and retention still
+require fresh time and exact current binding. The caller owns the transaction,
+physical namespace authentication and any future human-authorized operation.
+No physical reader, command, enrollment application or traffic path calls this
+API. It neither consumes a plan nor changes authority or enables encryption.

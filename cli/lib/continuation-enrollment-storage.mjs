@@ -57,6 +57,15 @@ export function createContinuationEnrollmentStorage(recoveryKey){
   const plan=stored(db,id,now);
   return assertContinuationSignerChange(plan,currentAuthority,currentSigner,now);
  }
+ // Exact original bytes for future uncertainty reconciliation. Authenticate at
+ // creation, even after expiry or authority rotation; NEVER an applicable plan.
+ // This private result includes the root and key DER, so it must not be returned
+ // through model/tool diagnostics. No physical reader or apply path calls it.
+ function readRetained(db,id){
+  const plan=stored(db,id,undefined,true);
+  Object.freeze(plan.authority);if(plan.current_signer!==null)Object.freeze(plan.current_signer);
+  if(plan.candidate!==null)Object.freeze(plan.candidate);return Object.freeze(plan);
+ }
  function retain(db,value,currentAuthority,currentSigner,now){
   transaction(db);
   const plan=assertContinuationSignerChange(value,currentAuthority,currentSigner,now),stored=row(plan);
@@ -92,7 +101,7 @@ export function createContinuationEnrollmentStorage(recoveryKey){
   transaction(db);
   if(!Number.isSafeInteger(now)||now<0)fail();
   return Object.freeze(db.prepare('SELECT id FROM continuation_enrollment_plans ORDER BY id COLLATE BINARY').all().map(row=>{
-   const plan=stored(db,row.id,undefined,true);
+   const plan=readRetained(db,row.id);
    return Object.freeze({id:plan.id,operation:plan.operation,configIdentity:plan.authority.config_identity,epoch:plan.authority.epoch,baselineRevision:plan.authority.revision,currentSignerId:plan.current_signer?.id??null,candidateFingerprint:plan.candidate?.fingerprint??null,planDigest:plan.plan_digest,createdMs:plan.created_ms,expiresMs:plan.expires_ms,status:now<plan.created_ms?'not-yet-valid':now>=plan.expires_ms?'expired':'fresh',...(binding===undefined?{}:{bindingMatches:JSON.stringify(plan.authority)===JSON.stringify(binding.authority)&&JSON.stringify(plan.current_signer)===JSON.stringify(binding.current_signer)})});
   }));
  }
@@ -107,5 +116,5 @@ export function createContinuationEnrollmentStorage(recoveryKey){
  }
  // No consume/apply operation: a future human-authorized authority CAS must
  // reserve this retained identity once and rotate epoch/revision atomically.
- return Object.freeze({read,retain,diagnose,diagnoseRetained:(db,now)=>diagnoseRetained(db,now),diagnoseBindings});
+ return Object.freeze({read,readRetained,retain,diagnose,diagnoseRetained:(db,now)=>diagnoseRetained(db,now),diagnoseBindings});
 }

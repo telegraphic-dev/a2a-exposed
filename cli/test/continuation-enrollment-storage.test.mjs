@@ -199,3 +199,62 @@ test('expired historical inventory survives process restart without rewriting th
  const script=`import{DatabaseSync}from'node:sqlite';import{createContinuationEnrollmentStorage}from${JSON.stringify(new URL('../lib/continuation-enrollment-storage.mjs',import.meta.url).href)};const d=new DatabaseSync(process.argv[1],{readOnly:true});d.exec('PRAGMA foreign_keys=ON; BEGIN');console.log(JSON.stringify(createContinuationEnrollmentStorage(Buffer.alloc(32,1)).diagnoseRetained(d,3000)));d.exec('ROLLBACK');d.close();`;
  const child=spawnSync(process.execPath,['--input-type=module','-e',script,file],{encoding:'utf8',timeout:10000,env:{DO_NOT_TRACK:'1'}});assert.equal(child.status,0,child.stderr);assert.deepEqual(JSON.parse(child.stdout),expected);assert.deepEqual(fs.readFileSync(file),before);
 });
+
+test('exact retained reads recover all original operations without asserting current applicability',t=>{
+ for(const operation of ['initial','replace','remove']){
+  const f=fixture(t,operation);retain(f);
+  const before=f.db.prepare('SELECT * FROM continuation_enrollment_plans').all();
+  const original=f.store.readRetained(f.db,f.plan.id);assert.deepEqual(original,f.plan);
+  assert.ok(Object.isFrozen(original)&&Object.isFrozen(original.authority));
+  if(original.current_signer!==null)assert.ok(Object.isFrozen(original.current_signer));
+  if(original.candidate!==null)assert.ok(Object.isFrozen(original.candidate));
+  assert.throws(()=>{original.authority.revision=1;},TypeError);
+  assert.throws(()=>{original.operation='initial';},TypeError);
+  if(original.candidate)assert.throws(()=>{original.candidate.fingerprint='changed';},TypeError);
+  if(original.current_signer)assert.throws(()=>{original.current_signer.id=id(99);},TypeError);
+  const changedAuthority={...f.authority,revision:1};
+  assert.throws(()=>f.store.read(f.db,f.plan.id,changedAuthority,f.signer,1000),{code:'continuation_enrollment_plan_stale'});
+  for(const now of [999,2000,Number.MAX_SAFE_INTEGER])refuses(()=>read(f,now));
+  assert.deepEqual(f.store.readRetained(f.db,f.plan.id),f.plan);
+  assert.deepEqual(f.db.prepare('SELECT * FROM continuation_enrollment_plans').all(),before);
+ }
+});
+test('exact retained lookup uses explicit original identity and does not return a sibling',t=>{
+ const f=fixture(t);retain(f);
+ const {version,plan_digest,...input}=f.plan,second=planContinuationSignerChange({...input,id:id(5),candidate:publicKey()});
+ f.store.retain(f.db,second,f.authority,f.signer,1000);
+ assert.deepEqual(f.store.readRetained(f.db,id(5)),second);
+ assert.deepEqual(f.store.readRetained(f.db,id(4)),f.plan);
+ for(const value of [undefined,null,{},'bad',id(4)+'\0'])refuses(()=>f.store.readRetained(f.db,value));
+ assert.throws(()=>f.store.readRetained(f.db,id(99)),{code:'continuation_enrollment_plan_missing'});
+ assert.equal(count(f),2);
+});
+test('exact retained lookup authenticates bytes, columns, key and original signer',t=>{
+ for(const change of ['record','mac','column','signer','key']){
+  const f=fixture(t,'replace');retain(f);unguard(f.db);
+  if(change==='record')f.db.prepare('UPDATE continuation_enrollment_plans SET record=?').run('{}');
+  if(change==='mac')f.db.prepare('UPDATE continuation_enrollment_plans SET storage_mac=?').run(Buffer.alloc(32,9).toString('base64url'));
+  if(change==='column')f.db.prepare('UPDATE continuation_enrollment_plans SET baseline_revision=1').run();
+  if(change==='signer'){
+   for(const {name}of f.db.prepare("SELECT name FROM sqlite_schema WHERE type='trigger' AND tbl_name='continuation_signer_enrollments'").all())f.db.exec(`DROP TRIGGER ${name}`);
+   const other=publicKey();f.db.prepare('UPDATE continuation_signer_enrollments SET public_key_spki=?,fingerprint=?').run(other.public_key_spki,other.fingerprint);
+  }
+  if(change==='key')f.store=createContinuationEnrollmentStorage(Buffer.alloc(32,9));
+  const before=f.db.prepare('SELECT * FROM continuation_enrollment_plans').all();
+  refuses(()=>f.store.readRetained(f.db,f.plan.id));
+  assert.deepEqual(f.db.prepare('SELECT * FROM continuation_enrollment_plans').all(),before);
+ }
+});
+test('exact retained lookup requires caller transaction and foreign keys',t=>{
+ const f=fixture(t);retain(f);f.db.exec('COMMIT');
+ assert.throws(()=>f.store.readRetained(f.db,f.plan.id),{code:'continuation_enrollment_transaction_required'});
+ f.db.exec('PRAGMA foreign_keys=OFF; BEGIN');
+ assert.throws(()=>f.store.readRetained(f.db,f.plan.id),{code:'continuation_enrollment_foreign_keys_required'});
+});
+test('exact retained bytes survive read-only process restart without repair or expiry revival',t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'a2a-exact-retained-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const file=path.join(dir,'state.sqlite'),f=fixture(t,'remove',file);retain(f);f.db.exec('COMMIT');
+ const before=fs.readFileSync(file),script=`import{DatabaseSync}from'node:sqlite';import{createContinuationEnrollmentStorage}from${JSON.stringify(new URL('../lib/continuation-enrollment-storage.mjs',import.meta.url).href)};const d=new DatabaseSync(process.argv[1],{readOnly:true});d.exec('PRAGMA foreign_keys=ON; BEGIN');const store=createContinuationEnrollmentStorage(Buffer.alloc(32,1)),plan=store.readRetained(d,process.argv[2]);let refused=false;try{store.read(d,plan.id,plan.authority,plan.current_signer,plan.expires_ms)}catch{refused=true}console.log(JSON.stringify({plan,refused}));d.exec('ROLLBACK');d.close();`;
+ const child=spawnSync(process.execPath,['--input-type=module','-e',script,file,f.plan.id],{encoding:'utf8',timeout:10000,env:{DO_NOT_TRACK:'1'}});
+ assert.equal(child.status,0,child.stderr);assert.deepEqual(JSON.parse(child.stdout),{plan:f.plan,refused:true});assert.deepEqual(fs.readFileSync(file),before);
+});
