@@ -74,7 +74,8 @@ export type ConfigFields = { [K in ConfigKey]?: string };
 // DISCOVERY_DOCS_ORIGIN: the hosted Worker links every tenant's GET / to its own site (staging to staging).
 // ROBOTS_POLICY and CONTENT_SIGNAL: the hosted Worker sets the platform default (staging: disallow); a tenant overlay may override.
 // SKILLS_BASE_URL: the hosted Worker lists the skills its site serves at the same pin (same bytes, same digests).
-const HOSTED_PLATFORM_DEFAULTS: readonly ConfigKey[] = ["MAX_BODY", "RATE_PER_MIN", "PBKDF2_ITERATIONS", "MCP", "PAIRING_APPROVAL", "DISCOVERY_DOCS_ORIGIN", "ROBOTS_POLICY", "CONTENT_SIGNAL", "SKILLS_BASE_URL"];
+// A2A_SEALED_ENABLED: inherit the explicit Worker flag; unset remains disabled and tenant config can override.
+const HOSTED_PLATFORM_DEFAULTS: readonly ConfigKey[] = ["MAX_BODY", "RATE_PER_MIN", "PBKDF2_ITERATIONS", "MCP", "PAIRING_APPROVAL", "DISCOVERY_DOCS_ORIGIN", "ROBOTS_POLICY", "CONTENT_SIGNAL", "SKILLS_BASE_URL", "A2A_SEALED_ENABLED"];
 
 /** Worker-to-Worker fetch. Present when the deploy sets `A2A_CONTROL_SERVICE`. */
 export interface ControlFetcher {
@@ -574,7 +575,7 @@ export function resolveTenant(env: WorkerBindings, req?: Request): TenantContext
  */
 export function hostedTenantContext(env: WorkerBindings, overlay: HostedOverlay): TenantContext {
 	const parsed = parseGates(env);
-	// Operational caps default from the Worker; everything else, including every secret, comes only from the overlay.
+	// Allowlisted non-secret defaults come from the Worker; all other config comes only from the overlay.
 	const config: ConfigFields = pickConfig(env, HOSTED_PLATFORM_DEFAULTS);
 	for (const k of CONFIG_KEYS) {
 		const v = overlay.config?.[k];
