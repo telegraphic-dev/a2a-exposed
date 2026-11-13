@@ -123,3 +123,10 @@ future uncertainty reconciliation, including expired plans. It authenticates
 only the explicitly selected ID and returns deeply frozen private data, never
 diagnostic output or an applicable plan. Fresh reads keep their original gates;
 no physical authority reader, command or enrollment writer calls this lookup.
+
+The private physical `diagnoseRetainedInitialContinuationSignerPlans` reader
+anchors historical plan comparison to the initial suspended schema-4 authority.
+It retains authenticated nonmatching originals as metadata and keeps time status
+independent of `bindingMatches`. Corruption refuses the whole inventory; signer
+history and advanced physical authority still refuse. No enrollment or traffic
+path uses this diagnostic.

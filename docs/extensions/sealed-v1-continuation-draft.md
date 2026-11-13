@@ -1359,3 +1359,28 @@ No command, MCP tool, enrollment application, human adapter or traffic path
 calls this API. It records no approval, consumes no plan, selects no signer and
 does not enable encryption or admit grants. Nonempty authority authentication
 and human-authorized enrollment remain separate work.
+
+
+### Disabled anchored historical initial-plan comparison
+
+`diagnoseRetainedInitialContinuationSignerPlans` authenticates the complete
+retained-plan inventory in one anchored read-only schema-4 transaction and
+compares every original binding against the physical revision-zero suspended
+initial authority. Callers supply configuration identity and diagnostic time;
+they cannot choose the comparison authority or current signer.
+
+The frozen result preserves original plan identity, configuration identity,
+epoch, baseline revision and signer ID, plus candidate fingerprint, plan digest,
+original creation/deadline and time status. `bindingMatches` compares the complete
+original authority and signer binding independently of freshness. Authenticated
+nonmatching originals remain visible; a corrupt row refuses the complete result.
+Neither equality nor freshness grants enrollment permission or human approval.
+Canonical roots, key DER, recovery keys, source hashes and storage MACs stay out
+of diagnostic output. The original matching-only diagnosis and fresh reads keep
+their existing binding and time checks.
+
+The physical reader still requires initial suspended revision zero with no
+signer, receipt or continuation history. Source drift, namespace substitution,
+schema changes and advanced authority refuse. This API does not implement
+nonempty authority selection, enrollment consumption, a human adapter, authority
+transitions or encrypted traffic. No command or messaging path calls it.
