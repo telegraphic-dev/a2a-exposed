@@ -806,3 +806,30 @@ lock ordering and pre/post S/C COMMIT faults. No command imports the coordinator
 The initial I primitive still lacks trusted human provenance and pre-I SDK readiness
 integration; R/E, quarantine epoch rotation, all-writer invalidation, reconciliation,
 admission, native/platform/archive/privacy and traffic/release acceptance remain.
+
+
+### Isolated suspended SDK-ready checkpoint
+
+The private authority maintenance view adds async readyIntent for the C-to-R
+portion of phase 3. It requires a durable authenticated C, matching pending intent,
+unchanged source/environment and a fresh attestation. It takes the authority
+reserved transaction before acquiring the SDK queue. In a reserved SDK transaction
+it compares every staged binding field, reruns aggregate readiness and commits
+only the exact staged-to-ready transition. It immediately opens a NEW SDK
+reserved transaction, re-reads the exact ready binding and reruns all readiness.
+A cross-process mutation in the R-commit gap must therefore be observed or refuse.
+
+The authority remains unchanged at C: pending intent retained, suspension set,
+no active set, no eligible intent or grant set. The final SDK reserved transaction
+covers all final authority/source checks. This groundwork ends by rolling back
+the read-only authority and SDK transactions, releasing the queue without
+reacquiring authority. No final E transition is implemented. A future phase-3
+coordinator must extend that reserved window through its reviewed E CAS/COMMIT;
+it cannot treat this method's result as readiness that remains valid after release.
+
+A pre/post R COMMIT failure retains public intent/set IDs and an unknown outcome.
+R may already be durable even if the method throws. Existing ready/void rows
+refuse: there is no automatic retry, resumption, rewind or reconciliation. The
+ability to bind a synthetic attestation is still not proof of human comparison.
+No command invokes this method; grant admission, human provenance, pre-I readiness,
+E, quarantine/writer integration and lifecycle acceptance remain unfinished.

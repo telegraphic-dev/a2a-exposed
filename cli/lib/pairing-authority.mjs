@@ -202,7 +202,7 @@ function authenticateContinuationAuthority(db,r,p){
 function own(value,key){const d=value&&Object.getOwnPropertyDescriptor(value,key);if(!d||!Object.hasOwn(d,'value'))fail('authority_continuation_invalid');return d.value;}
 // One physical connection, separate explicit FULL transactions. The private view
 // is for the future coordinator; it does not expose raw SQL or an allowSuspended
-// grant lease. Only nonauthorizing I/S/C checkpoints are implemented here.
+// grant lease. Only nonauthorizing I/S/C/R checkpoints are implemented here.
 export async function withContinuationAuthorityMaintenance(configDir,{configIdentity}={},action){
  let db,live=false,p,registered=false,current=null,attempted=null,preparedCheck=null;
  try{
@@ -273,6 +273,40 @@ export async function withContinuationAuthorityMaintenance(configDir,{configIden
       preparedCheck=checkPlan;witness=exactC();view.commit();committed=true; // C, still suspended.
      });
      if(!committed)fail('authority_stage_incomplete');return{...continuationPublic(guard(false)),checkpoint:'C'};
+    }finally{scope=false;}
+   },
+   // Suspended phase-3 groundwork only: C -> R with readiness rechecked in
+   // a NEW reserved SDK transaction. E/admission is deliberately absent.
+   async readyIntent(input,sdk,{environment=process.env,now=Date.now()}={}){
+    const before=guard();if(preparedCheck!==null||before.pending===null||before.active_set!==null||before.suspended!==1)fail('authority_ready_state');
+    const records=codec(own(own(own(input,'record'),'plan'),'set_id')),intent=records.assertFresh(input,now),plan=intent.record.plan;
+    const stored=readContinuationIntent(db,records,intent.id);
+    if(before.pending!==intent.id||before.revision!==plan.target_revision||stored.state!=='set-committed'||stored.intent.intent_mac!==intent.intent_mac)fail('authority_ready_state');
+    if(typeof sdk?._withMaintenanceQueue!=='function')fail('authority_sdk_required');
+    const checkPlan=sourceCheck(records,intent,before,environment,now);checkPlan();attempted={intentId:intent.id,setId:plan.set_id};
+    const binding={config_id:configIdentity,intent_id:intent.id,set_id:plan.set_id,epoch:plan.epoch,target_revision:plan.target_revision,membership_mac:intent.record.membership_mac};
+    const fields=['alias','endpoint','pairing_identity','trust_record_digest','trust_record_version','local_id','local_bundle_digest','peer_bundle_digest','policy','verification'];
+    const members=plan.members.map(m=>Object.fromEntries(fields.map(k=>[k,m[k]])));
+    const exactC=()=>JSON.stringify([row(db,configIdentity,3),db.prepare('SELECT * FROM continuation_intents WHERE id=?').get(intent.id),db.prepare('SELECT * FROM grant_sets WHERE id=?').get(plan.set_id),db.prepare('SELECT * FROM grant_members WHERE set_id=? ORDER BY grant_id COLLATE BINARY').all(plan.set_id)]);
+    const witness=exactC();let finished=false,scope=true;
+    const exactStage=(q,state)=>{const actual=q.inspectGrant(intent.id);if(!actual||actual.state!==state||Object.keys(actual).length!==Object.keys(binding).length+1||Object.keys(binding).some(k=>actual[k]!==binding[k]))fail('authority_ready_binding');};
+    try{
+     await sdk._withMaintenanceQueue({withAuthorityLease:async run=>{guard();return await run();},assertAuthority:stage=>{
+      if(!scope)return false;
+      if(finished){if(stage!=='exit'||db.isTransaction)return false;guard(false);return witness===exactC();}
+      guard();checkPlan();authenticated(current);return witness===exactC();
+     }},async q=>{
+      q.begin();exactStage(q,'staged');
+      if(await q.assertReadiness(members)!==true)fail('authority_sdk_readiness');checkPlan();
+      q.transitionGrant(binding,'staged','ready');q.commit(); // R is durable, never E.
+      q.begin(); // Fresh snapshot after the cross-process gap at R COMMIT.
+      exactStage(q,'ready');if(await q.assertReadiness(members)!==true)fail('authority_sdk_readiness');
+      checkPlan();authenticated(current);if(witness!==exactC())fail('authority_changed');
+      // Keep the final SDK reserved transaction through the authority checks.
+      // The future E CAS belongs here. For now authority stays unchanged at C.
+      view.rollback();q.rollback();finished=true;
+     });
+     if(!finished)fail('authority_ready_incomplete');return{...continuationPublic(guard(false)),checkpoint:'R'};
     }finally{scope=false;}
    }
   });

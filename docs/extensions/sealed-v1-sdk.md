@@ -193,6 +193,9 @@ The default physical authority remains schema 2. A separate internal
 adds the real epoch/active-set row, anchored maintenance transactions and an atomic
 non-authorizing I checkpoint. It starts and remains suspended. An isolated
 [readiness and suspended phase-2 adapter](sealed-v1-continuation-draft.md#isolated-readiness-and-suspended-phase-2-coordinator)
-adds file-key readiness and durable S/C without eligibility. Final phase
+adds file-key readiness and durable S/C without eligibility. A private
+[suspended ready checkpoint](sealed-v1-continuation-draft.md#isolated-suspended-sdk-ready-checkpoint)
+adds C-to-R with a fresh reserved SDK snapshot after its COMMIT. Authority
+suspension remains set; no E transition or admission is implemented. Final phase
 coordination, privileged human provenance, writer integration,
 reconciliation and grant admission remain unfinished. No command uses these APIs.
