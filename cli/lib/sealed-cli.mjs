@@ -19,16 +19,17 @@ async function paired(peer, o, action) {
   return await action({ api, record, identity, recheck });
  } catch (error) {
   if (error instanceof CliError) throw error;
+  if (error?.code === "key_store_consent") fail("This identity uses the OS keychain. Re-run this send/read with --allow-os-consent only when a human can answer the OS authorization prompt. No store fallback or plaintext retry.");
   // LocalStateError.next is fixed recovery guidance; crypto/provider text never escapes.
   fail(error?.next || sealedFailure);
  } finally { store.close(); }
 }
 export async function send(o) {
  gate();
- if (!o.to || !C.loadPeers()[o.to]?.sealed) fail("This config directory has local keys. Select a pinned alias with peers list; complete human-approved connect first. Use a separate --config-dir for ordinary sends. No plaintext was sent.");
+ if (!o.to || !C.loadPeers()[o.to]?.sealed) fail("This config directory has local keys. Select a pinned alias with peers list --json; complete human-approved connect first. Use a separate --config-dir for ordinary sends. No plaintext was sent.");
  if (o.push || o.wake || o.intent) fail("Encrypted send does not support --push, --wake or --intent yet; nothing was sent.");
  const pe = C.loadPeers()[o.to], token = peerToken(pe.token_env);
- if (!token) fail("The paired peer token is missing; inspect peers list. No plaintext was sent.");
+ if (!token) fail("The paired peer token is missing; inspect peers list --json. No plaintext was sent.");
  return paired(o.to, o, async ({ api, record, identity, recheck }) => {
   const card = await fetchCard(pe.url), [url, protocol] = pickEndpoint(pe.url, card, o.proto);
   const advertised = card?.capabilities?.extensions?.filter(e => e.uri === URI);
@@ -47,7 +48,7 @@ export async function send(o) {
   const { status, data, headers } = response;
   if (status !== 200 || data?.jsonrpc !== "2.0" || data.id !== b.messageId || data.error || headers?.get("A2A-Extensions") !== URI) fail("Encrypted delivery was not confirmed. Do not resend automatically. Inspect recipient history for context " + b.contextId + " and message " + b.messageId + ". No plaintext fallback.");
   const task = protocol === "1.0" ? data.result?.task : data.result;
-  if (!task?.id || task.contextId !== b.contextId) fail("Encrypted task routing response is invalid; delivery may have occurred. Preserve context " + b.contextId + " and message " + b.messageId + "; do not resend.");
+  if (!task?.id || task.contextId !== b.contextId || !task.history?.some(m => { try { return api.canonicalJSON(api.readMessageCarrier(api.canonicalJSON(m), protocol)) === api.canonicalJSON(envelope); } catch { return false; } })) fail("Encrypted task routing response is invalid; delivery may have occurred. Preserve context " + b.contextId + " and message " + b.messageId + "; do not resend.");
   // Persist only the envelope, never the locally opened content or peer-returned text.
   let stored = false;
   if (C.get("A2A_BASE_URL") && C.get("A2A_OWNER_TOKEN")) {

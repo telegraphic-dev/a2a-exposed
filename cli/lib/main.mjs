@@ -44,6 +44,7 @@ Local encrypted CLI draft (disabled by default):
   keys code --id ID --peer ALIAS_OR_LABEL --json
                                 ALIAS on connecting side; LABEL from keys pairings on approving side
                                 compare safety code through another trusted channel
+  peers list --json           list aliases and whether their keys are pinned
   send --to ALIAS --text TEXT  seal for the pinned peer; no plaintext fallback
   inbox --json / history CONTEXT --json
                                 open locally; --allow-os-consent permits keychain access
@@ -549,7 +550,7 @@ const SPEC = {
 	reply: { text: S, stdin: B, state: { type: "string", default: "completed" }, artifact: B, "artifact-name": { type: "string", default: "response" }, force: B },
 	history: { "allow-os-consent": B, from: S, n: { type: "string", short: "n", default: "50" }, json: B },
 	token: { rotate: B },
-	peers: { "token-env": S, "token-stdin": B },
+	peers: { "token-env": S, "token-stdin": B, json: B },
 	peer: { to: S, all: B, reissue: B, hours: S, off: B, json: B },
 	send: { "allow-os-consent": B, to: S, text: S, context: S, task: S, push: B, proto: S, wake: S, intent: S },
 	poll: { to: S, proto: S },

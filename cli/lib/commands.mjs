@@ -267,10 +267,10 @@ async function peersRemote(sub, args) {
 	const all = C.loadPeers();
 	const list = args.length ? args : Object.keys(all);
 	if (!list.length) die(`no peers to sync: add one first (${CLI} connect <url> or peers add)`);
+	if (fs.existsSync(C.CONFIG_DIR + "/encryption/state.sqlite") || list.some(alias => all[alias]?.sealed)) die("Pinned local encryption requires local CLI send; remote MCP cannot hold local keys. No peer was synced.");
 	for (const alias of list) {
 		const pe = all[alias];
 		if (!pe) die(`unknown peer alias ${JSON.stringify(alias)} (see: ${CLI} peers list)`);
-  if (pe.sealed) die("Pinned peers require local encrypted CLI send; remote MCP cannot hold local keys. No peer was synced.");
 		const tok = peerToken(pe.token_env);
 		const r = await ownerTry("PUT", `/owner/outbound-peers/${q(alias)}`, { url: pe.url.replace(/\/$/, ""), ...(tok ? { token: tok } : {}) });
 		if (r.status === 404) die(`this Worker has no MCP support yet: redeploy (${CLI} deploy) and try again`);
@@ -321,6 +321,7 @@ export function peers(sub, args, o) {
 		if (drop.length) C.saveConfig(Object.fromEntries(drop.map((k) => [k, null])));
 		return console.log(`removed ${alias}${drop.length ? ` (and ${drop.join(", ")} from ${C.CONFIG_FILE})` : ""}`);
 	}
+	if (o.json) return out(Object.entries(all).map(([alias, v]) => ({ alias, url: v.url, token_env: v.token_env || null, token_set: !!(v.token_env && C.get(v.token_env)), pinned: v.sealed?.policy === "required" })));
 	for (const [k, v] of Object.entries(all)) {
 		const te = v.token_env || "";
 		warnPeerTokenEnv(te);

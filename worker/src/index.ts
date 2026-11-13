@@ -1064,6 +1064,7 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
 	if (held.claim_token !== claimToken) {
 		const winner = await loadTask(ctx, held.task_id);
 		if (!winner || winner._peer !== label) throw new RpcError(-32603, "Internal error");
+  if (sealed && !winner.history.some((m: Json) => m.messageId === msg.messageId && SealedKeys.canonical(m) === SealedKeys.canonical(msg))) throw new RpcError(-32602, "Encrypted message ID already used with different bytes");
 		const again = await routeInbound(ctx, label, winner.contextId, routed.fields.wake, routed.fields.intent, "", true);
 		await recordRoute(ctx, again.decision, "inbound");
 		const won = A.publicTask(winner, version, conf.historyLength);

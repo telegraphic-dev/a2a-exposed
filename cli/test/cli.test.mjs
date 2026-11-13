@@ -30,6 +30,9 @@ test("peers rm also removes the token stored with --token-stdin (loopback self-t
 	assert.equal(r.status, 0, r.stderr);
 	assert.equal(s.config().PEER_SELF_TOKEN, "a2aow_testtoken");
 	assert.match(s.cli(["peers", "list"]).stdout, /self\thttps:\/\/agent\.example\.com\ttoken_env=PEER_SELF_TOKEN\t\(set\)/);
+	const listing = JSON.parse(s.cli(["peers", "list", "--json"]).stdout);
+	assert.deepEqual(listing, [{ alias: "self", url: "https://agent.example.com", token_env: "PEER_SELF_TOKEN", token_set: true, pinned: false }]);
+	assert.equal(JSON.stringify(listing).includes("a2aow_testtoken"), false);
 	r = s.cli(["peers", "rm", "self"]);
 	assert.equal(r.status, 0, r.stderr);
 	assert.match(r.stdout, /removed self \(and PEER_SELF_TOKEN/);
