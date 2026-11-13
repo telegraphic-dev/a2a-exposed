@@ -28,7 +28,7 @@ test("wake status reads a bounded queue without flushing overdue wakes, leaking 
 		await f.env.DB.prepare("INSERT INTO wakes (context_id, peer, last_sent_ms, pending_json, pending_since_ms, busy_until_ms) VALUES (?, ?, ?, ?, ?, ?)")
 			.bind(`ctx-${i}`, "ada", now - 20000, JSON.stringify({ from: "ada", preview: "PRIVATE-CONTENT", taskIds: ["secret-task"], ...(i === 0 ? { attempts: 2 } : i === 1 ? { busy: 1 } : {}) }), now - 30000, i === 1 ? now + 50000 : null).run();
 	}
-	const before = await f.env.DB.prepare("SELECT * FROM wakes ORDER BY context_id").all();
+	const before = (await f.env.DB.prepare("SELECT * FROM wakes ORDER BY context_id").all()).results;
 	assert.equal((await f.call("GET", "/owner/wake/status", undefined, "Bearer wrong")).status, 401);
 	const result = await f.call("GET", "/owner/wake/status");
 	assert.equal(result.status, 200);
@@ -41,7 +41,7 @@ test("wake status reads a bounded queue without flushing overdue wakes, leaking 
 	assert.doesNotMatch(JSON.stringify(result.data), /PRIVATE-CONTENT|secret-task|secret-key/);
 	assert.equal((await f.call("HEAD", "/owner/wake/status")).status, 200);
 	assert.equal(f.posts, 0);
-	assert.deepEqual(await f.env.DB.prepare("SELECT * FROM wakes ORDER BY context_id").all(), before);
+	assert.deepEqual((await f.env.DB.prepare("SELECT * FROM wakes ORDER BY context_id").all()).results, before);
 });
 
 test("HTTP acceptance and later failure stay distinct and preserve only safe observations", async t => {
