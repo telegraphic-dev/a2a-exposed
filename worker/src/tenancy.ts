@@ -49,6 +49,8 @@ export const CONFIG_KEYS = [
 	/** "1" when this self-host deploy has the minute cron. Hosted flushes from the inbox alarm instead. */
 	"ENABLE_CRON",
 	"MAX_BODY", "RATE_PER_MIN",
+	/** Disabled draft local-key pairing path; never enables encrypted messages by itself. */
+	"A2A_SEALED_ENABLED",
 	"PAIRING_APPROVAL", "PBKDF2_ITERATIONS",
 	"UPSTREAM_URL", "UPSTREAM_CARD_URL", "UPSTREAM_TOKEN", "UPSTREAM_ACCESS_CLIENT_ID", "UPSTREAM_ACCESS_CLIENT_SECRET",
 	"MCP",
@@ -417,6 +419,7 @@ export class TenantContext implements ConfigFields {
 	readonly ENABLE_CRON?: string;
 	readonly MAX_BODY?: string;
 	readonly RATE_PER_MIN?: string;
+ readonly A2A_SEALED_ENABLED?: string;
 	readonly PAIRING_APPROVAL?: string;
 	readonly PBKDF2_ITERATIONS?: string;
 	readonly UPSTREAM_URL?: string;

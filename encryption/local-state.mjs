@@ -117,7 +117,7 @@ export async function stores() {
  return { ok: true, stores: [{ id: "file", available: true, private_keys: "protected local files", unattended: true }, { id: "keychain", available: native, backend: process.platform === "linux" ? "secret-service (no kernel fallback)" : process.platform === "darwin" ? "macOS Keychain" : "Windows Credential Manager", readiness: "not probed; owner authorization may be required", unattended: false }], next: "Select --store file or keychain explicitly; keychain never silently falls back." };
 }
 
-function localSafetyCode(local, other) {
+export function localSafetyCode(local, other) {
   const tuples = [local, other].map(x => ({ cardUrl: x.cardUrl, identityKey: x.identityKey, keyId: x.keyId })).sort((a, b) => Buffer.compare(Buffer.from(a.identityKey, "base64url"), Buffer.from(b.identityKey, "base64url")) || a.cardUrl.localeCompare(b.cardUrl));
   const bytes = createHash("sha256").update("a2a-exposed sealed safety v1\n" + canonicalJSON(tuples)).digest("hex");
   const digits = (BigInt("0x" + bytes) % (10n ** 60n)).toString().padStart(60, "0");

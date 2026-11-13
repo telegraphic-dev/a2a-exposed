@@ -342,6 +342,8 @@ async function logHistory(ctx, entry) {
 }
 
 export async function send(o) {
+ if (o.to && C.loadPeers()[o.to]?.sealed?.policy === "required") die(`Peer ${o.to} has pinned keys; encrypted sending is not available yet. No plaintext was sent.`);
+ if (fs.existsSync(C.CONFIG_DIR + "/encryption/state.sqlite")) die("This config directory has local keys (keys init), so ordinary send is off here. Use a separate --config-dir for ordinary sends. No plaintext was sent.");
 	if (!o.to) die("--to required");
 	// The callback authenticates against the token saved through the owner API.
 	if (o.push && !ownerConfigured()) die("--push needs A2A_BASE_URL and A2A_OWNER_TOKEN (your Worker); configure both or omit --push and poll instead");

@@ -15,6 +15,7 @@ import { fetchCheckedPeer, fetchCheckedWake } from "./wake-target.ts";
 import { withDeadline } from "./deadline.ts";
 import * as Addr from "./address.ts";
 import * as P from "./pairing.ts";
+import * as SealedKeys from "./sealed-keys.ts";
 import * as D from "./discovery.ts";
 import { SKILLS } from "./skills-index.ts";
 import * as M from "./mcp.ts";
@@ -1636,6 +1637,10 @@ async function publicCard(ctx: TenantContext): Promise<Json> {
 		const signature = await Addr.signBytes(ident.privateKey, Addr.identityMessage(cardUrl, ident.publicKey));
 		if (signature) extensions.push(Addr.identityExtension(ident.publicKey, cardUrl, signature));
 	}
+ if (ctx.A2A_SEALED_ENABLED === "1") {
+  const row: Json = await ctx.DB.prepare("SELECT value FROM settings WHERE key = ?").bind(SealedKeys.SEALED_KEY_SETTING).first();
+  if (row) extensions.push({ uri: SealedKeys.SEALED_URI, required: false, description: "Local key pairing draft; encrypted traffic disabled", params: { pairingBundle: JSON.parse(row.value) } });
+ }
 	const forward = await activeForward(ctx);
 	if (forward) extensions.push(Addr.movedExtension(forward.cardUrl, new Date(forward.untilMs).toISOString()));
 	if (!extensions.length) return card;
@@ -2541,6 +2546,27 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			return json({ ok: true });
 		}
 	}
+	if (seg[0] === "sealed-key" && !seg[1] && ctx.A2A_SEALED_ENABLED === "1") {
+  if (m === "GET") {
+   const row: Json = await ctx.DB.prepare("SELECT value FROM settings WHERE key = ?").bind(SealedKeys.SEALED_KEY_SETTING).first();
+   return json({ bundle: row ? JSON.parse(row.value) : null });
+  }
+  if (m === "PUT") {
+   let bundle;
+   try { bundle = await SealedKeys.verifyPublicBundle(await body(), Addr.cardUrlFor(ctx.PUBLIC_URL)); }
+   catch { return json({ error: "invalid sealed public bundle; send public fields only" }, 400); }
+   // Initial publication is immutable here. Rotation is a separately reviewed follow-up.
+   const encoded = SealedKeys.canonical(bundle);
+   await ctx.DB.prepare("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING").bind(SealedKeys.SEALED_KEY_SETTING, encoded).run();
+   const row: Json = await ctx.DB.prepare("SELECT value FROM settings WHERE key = ?").bind(SealedKeys.SEALED_KEY_SETTING).first();
+   if (row.value !== encoded) return json({ error: "sealed key already exists; rotation is not supported" }, 409);
+   return json({ bundle });
+  }
+ }
+ if (seg[0] === "sealed-pairings" && !seg[1] && m === "GET" && ctx.A2A_SEALED_ENABLED === "1") {
+  const rows = await ctx.DB.prepare("SELECT label,user_code,sealed_requester,sealed_responder FROM peers WHERE revoked_at IS NULL AND source='pairing' AND sealed_requester IS NOT NULL").all();
+  return json({ pairings: (rows.results as Json[]).map(r => ({ peer: r.label, userCode: P.formatUserCode(r.user_code), requester: JSON.parse(r.sealed_requester), responder: JSON.parse(r.sealed_responder) })) });
+ }
 	if (seg[0] === "identity" && !seg[1] && m === "GET") {
 		const ident = await readIdentity(ctx);
 		if (!ident || ident === "unreadable") return json({ publicKey: null, fingerprint: null });
@@ -2883,6 +2909,17 @@ async function deviceAuthorization(req: Request, ctx: TenantContext, ectx: Execu
 		log("pairing_rate_limited", { ip, scope: "global" });
 		return oauthError("slow_down", "this A2A endpoint has too many pairing requests waiting; try again later", 429, retry);
 	}
+ let sealedRequester: string | null = null, sealedResponder: string | null = null;
+ if (p.sealed_bundle || p.sealed_responder_key_id) {
+  if (ctx.A2A_SEALED_ENABLED !== "1") return oauthError("invalid_request", "sealed pairing is disabled");
+  try {
+   const requester = await SealedKeys.verifyPublicBundle(JSON.parse(p.sealed_bundle), cardUrl);
+   const row: Json = await ctx.DB.prepare("SELECT value FROM settings WHERE key = ?").bind(SealedKeys.SEALED_KEY_SETTING).first();
+   const responder = await SealedKeys.verifyPublicBundle(row ? JSON.parse(row.value) : null, Addr.cardUrlFor(ctx.PUBLIC_URL));
+   if (!cardUrl || requester.identityKey === responder.identityKey || responder.keyId !== p.sealed_responder_key_id) throw Error();
+   sealedRequester = SealedKeys.canonical(requester); sealedResponder = SealedKeys.canonical(responder);
+  } catch { return oauthError("invalid_request", "sealed pairing needs exact valid requester and responder public bundles"); }
+ }
 	const deviceCode = P.newDeviceCode();
 	const deviceHash = await A.sha256(deviceCode);
 	const country = clientCountry(req);
@@ -2890,10 +2927,10 @@ async function deviceAuthorization(req: Request, ctx: TenantContext, ectx: Execu
 	for (let i = 0; i < 5 && !userCode; i++) {
 		const c = P.newUserCode();
 		const r = await ctx.DB.prepare(
-			`INSERT INTO device_requests (device_hash, user_code, client_id, client_name, agent_card_url, identity_key, ip, country, status, created_ms, expires_ms, interval_s)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?) ON CONFLICT DO NOTHING`,
+			`INSERT INTO device_requests (device_hash, user_code, client_id, client_name, agent_card_url, identity_key, ip, country, status, created_ms, expires_ms, interval_s, sealed_requester, sealed_responder)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
 		).bind(deviceHash, c, clientId || null, clientName || null, cardUrl || null, identity || null, ip || null, country || null,
-			now, now + P.EXPIRES_S * 1000, P.INTERVAL_S).run();
+			now, now + P.EXPIRES_S * 1000, P.INTERVAL_S, sealedRequester, sealedResponder).run();
 		if (r.meta.changes === 1) userCode = c;
 	}
 	if (!userCode) return oauthError("temporarily_unavailable", "could not allocate a user code; try again", 503);
@@ -2903,6 +2940,10 @@ async function deviceAuthorization(req: Request, ctx: TenantContext, ectx: Execu
 	// redemption, the swap is refused and a fresh label is used (a compromised old token can't overwrite a rotated one).
 	// Anything else in the header is ignored: the request is an ordinary new pairing.
 	const replaces = await peerOf(ctx, req.headers.get("authorization"));
+	if (replaces && !sealedRequester && await ctx.DB.prepare("SELECT 1 FROM peers WHERE label=? AND sealed_requester IS NOT NULL").bind(replaces.label).first()) {
+  await ctx.DB.prepare("DELETE FROM device_requests WHERE device_hash=?").bind(deviceHash).run();
+  return oauthError("invalid_request", "this pairing has encryption keys; plaintext replacement is refused");
+ }
 	if (replaces) await ctx.DB.prepare("UPDATE device_requests SET replaces_label = ?, replaces_hash = ? WHERE user_code = ?").bind(replaces.label, replaces.hash, userCode).run();
 	const u = oauthUrls(ctx);
 	const shown = P.formatUserCode(userCode);
@@ -2939,6 +2980,7 @@ async function tokenEndpoint(req: Request, ctx: TenantContext): Promise<Response
 	const r: Json = await ctx.DB.prepare("SELECT * FROM device_requests WHERE device_hash = ?").bind(hash).first();
 	if (!r) return oauthError("invalid_grant", "unknown, already used, or expired device_code");
 	if (now >= r.expires_ms) return oauthError("expired_token", "the device_code expired; start again");
+ if (r.sealed_requester && ctx.A2A_SEALED_ENABLED !== "1") return oauthError("temporarily_unavailable", "sealed pairing is disabled; preserve the original request");
 	if (r.status === "denied") {
 		await ctx.DB.prepare("DELETE FROM device_requests WHERE device_hash = ?").bind(hash).run();
 		return oauthError("access_denied", "the agent owner denied this request");
@@ -2959,12 +3001,12 @@ async function tokenEndpoint(req: Request, ctx: TenantContext): Promise<Response
 	// re-pairing (approved as a replacement): the new token takes over the label only if the presented token is still the
 	// one on that label (hash match). A rotate or revoke in between leaves u.meta.changes = 0.
 	if (r.replaces_label && r.replaces_hash && r.label === r.replaces_label) {
-		const u = await ctx.DB.prepare("UPDATE peers SET token_hash = ?, created_at = ?, source = 'pairing', user_code = ?, client_name = ?, identity_key = COALESCE(?, identity_key) WHERE label = ? AND token_hash = ? AND revoked_at IS NULL")
-			.bind(await A.sha256(token), A.nowIso(), r.user_code, r.client_name || r.client_id || null, r.identity_key || null, r.replaces_label, r.replaces_hash).run();
+		const u = await ctx.DB.prepare("UPDATE peers SET token_hash = ?, created_at = ?, source = 'pairing', user_code = ?, client_name = ?, identity_key = COALESCE(?, identity_key), sealed_requester = ?, sealed_responder = ? WHERE label = ? AND token_hash = ? AND revoked_at IS NULL")
+			.bind(await A.sha256(token), A.nowIso(), r.user_code, r.client_name || r.client_id || null, r.identity_key || null, r.sealed_requester || null, r.sealed_responder || null, r.replaces_label, r.replaces_hash).run();
 		if (u.meta.changes === 1) {
 			await ctx.DB.prepare("DELETE FROM device_requests WHERE device_hash = ?").bind(hash).run();
 			log("pairing_redeemed", { ip, label: r.replaces_label, userCode: P.formatUserCode(r.user_code), replaced: true });
-			return json({ access_token: token, token_type: "Bearer", peer_label: r.replaces_label, replaced: true }, 200, { pragma: "no-cache" });
+			return json({ access_token: token, token_type: "Bearer", peer_label: r.replaces_label, replaced: true, ...(r.sealed_responder ? { sealed_peer_bundle: JSON.parse(r.sealed_responder) } : {}) }, 200, { pragma: "no-cache" });
 		}
 	}
 	// the replaced token was rotated or revoked meanwhile: an ordinary new label
@@ -2972,8 +3014,8 @@ async function tokenEndpoint(req: Request, ctx: TenantContext): Promise<Response
 		: r.label ? await freeLabel(ctx, P.labelBase(r.client_name || "", r.client_id || "")) : P.labelBase(r.client_name || "", r.client_id || "");
 	for (let i = 0; i < 5; i++) {
 		try {
-			await ctx.DB.prepare("INSERT INTO peers (label, token_hash, created_at, source, user_code, client_name, identity_key) VALUES (?, ?, ?, 'pairing', ?, ?, ?)")
-				.bind(label, await A.sha256(token), A.nowIso(), r.user_code, r.client_name || r.client_id || null, r.identity_key || null).run();
+			await ctx.DB.prepare("INSERT INTO peers (label, token_hash, created_at, source, user_code, client_name, identity_key, sealed_requester, sealed_responder) VALUES (?, ?, ?, 'pairing', ?, ?, ?, ?, ?)")
+				.bind(label, await A.sha256(token), A.nowIso(), r.user_code, r.client_name || r.client_id || null, r.identity_key || null, r.sealed_requester || null, r.sealed_responder || null).run();
 			break;
 		} catch (e) {
 			if (i === 4) throw e;
@@ -2982,7 +3024,7 @@ async function tokenEndpoint(req: Request, ctx: TenantContext): Promise<Response
 	}
 	await ctx.DB.prepare("DELETE FROM device_requests WHERE device_hash = ?").bind(hash).run();
 	log("pairing_redeemed", { ip, label, userCode: P.formatUserCode(r.user_code) });
-	return json({ access_token: token, token_type: "Bearer", peer_label: label }, 200, { pragma: "no-cache" });
+	return json({ access_token: token, token_type: "Bearer", peer_label: label, ...(r.sealed_responder ? { sealed_peer_bundle: JSON.parse(r.sealed_responder) } : {}) }, 200, { pragma: "no-cache" });
 }
 
 async function freeLabel(ctx: TenantContext, base: string): Promise<string> {

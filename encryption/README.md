@@ -130,3 +130,7 @@ It retains authenticated nonmatching originals as metadata and keeps time status
 independent of `bindingMatches`. Corruption refuses the whole inventory; signer
 history and advanced physical authority still refuse. No enrollment or traffic
 path uses this diagnostic.
+
+`local-state.localSafetyCode` computes the deterministic public-bundle comparison
+code used by local CLI pairing. Computing or displaying it grants no approval;
+initial human-approved pairing pins remain TOFU until a separate verification.
