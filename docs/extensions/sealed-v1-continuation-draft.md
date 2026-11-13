@@ -1137,7 +1137,7 @@ This module does not select the current signer, apply or consume a plan, enroll
 a key, rotate authority, sign a decision or admit grants. The future anchored
 caller must obtain current state independently and implement single consumption,
 human authorization and authority revision/epoch CAS in the same transaction.
-No physical initializer, command or runtime admission path imports this module;
+No physical initializer, command or runtime admission path calls this module;
 existing schema-1/2/3 stores remain preserved and unadopted. Retained planning
 bytes and private MACs stay outside model/tool output and public diagnostics.
 
@@ -1230,3 +1230,33 @@ rows, file identity, current signer, receipts or a human decision. An anchored
 authority format must define its own complete inventory, data validation and
 adoption boundary. No command, initializer, enrollment writer or admission path
 calls this check; schema adoption and encryption remain disabled.
+
+### Disabled anchored initial signer-plan retention
+
+`retainInitialContinuationSignerPlan` and `readInitialContinuationSignerPlan`
+in `pairing-authority.mjs` bind initial signer plans to the physical schema-4
+configuration. They select the canonical root, recovery key, epoch and revision
+from the anchored authority rather than accepting caller-supplied state. Only
+revision-zero suspended authority with no current signer, intent, receipt,
+attestation or grant history is accepted. Retained initial plans are allowed;
+the original fresh-only diagnostic continues to refuse all retained history.
+
+Retention uses one FULL, immediate authority transaction. It parses the exact
+protected source bytes, checks complete schema inventory and file identities,
+retains the plan using the private enrollment-storage MAC, rechecks before commit
+and authenticates the committed record in a fresh transaction. Readback uses a
+read-only connection and never repairs or rewrites the authority. The candidate
+public key, explicit plan UUID and original validity window pass through the
+strict planning codec. Duplicate IDs refuse without replacement. A different
+plan can be retained without changing authority or superseding an earlier plan.
+Expired plans remain retained; reading one refuses its original deadline and
+never extends it. Unknown commit/publication outcomes preserve the original ID
+for a later explicit read, with no automatic retry or substitute operation.
+
+These private APIs return plan bytes, including the canonical root. Callers must
+keep them outside public/model/tool diagnostics. They authenticate a selected
+retained plan, not arbitrary historical rows or signer authority. No signer is
+enrolled or selected, no plan is consumed, and no human decision is recorded.
+Replacement/removal, nonempty signer/provenance reading, enrollment apply,
+privileged custody/ceremony, adoption and live admission remain unimplemented.
+No command, human adapter or grant/traffic path calls these APIs.

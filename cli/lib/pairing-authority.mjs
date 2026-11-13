@@ -3,6 +3,8 @@
 import {createContinuationSourceSnapshot,ContinuationSourceError} from './continuation-sources.mjs';
 import {installContinuationTables,prepareContinuationIntent,readContinuationIntent,commitContinuationMembers} from './continuation-tables.mjs';
 import {installContinuationProvenanceAuthority,assertContinuationProvenanceAuthorityInventory} from './continuation-provenance-authority.mjs';
+import {planContinuationSignerChange} from './continuation-enrollment-plan.mjs';
+import {createContinuationEnrollmentStorage} from './continuation-enrollment-storage.mjs';
 import {createContinuationRecords} from './continuation-records.mjs';
 import fs from 'node:fs';import path from 'node:path';import{createHash,createHmac,randomBytes,timingSafeEqual,randomUUID,createPublicKey,verify}from'node:crypto';import{createRequire}from'node:module';
 const require=createRequire(import.meta.url),UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
@@ -234,13 +236,13 @@ export function inspectContinuationAuthority(configDir,{configIdentity}={}){
 // Disabled fresh-only physical schema-4 foundation. No CLI, writer, signer
 // selection or grant path calls these APIs. Nonempty history always refuses;
 // this diagnostic never authenticates retained provenance or authorizes a grant.
-function freshProvenanceRow(db,p,configIdentity){
+function freshProvenanceRow(db,p,configIdentity,{plans=false}={}){
  assertContinuationProvenanceAuthorityInventory(db);
  const r=db.prepare('SELECT *,CAST(canonical_root AS BLOB) AS root_bytes FROM main.authority WHERE id=1').get();
  if(!r||db.prepare('SELECT COUNT(*) n FROM main.authority').get().n!==1)fail('authority_state_invalid');
  let root;try{root=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(r.root_bytes);}catch{fail('authority_state_invalid');}
  if(r.config_id!==configIdentity||!UUID.test(r.config_id)||root!==r.canonical_root||root!==p.root||r.revision!==0||!canonicalDigest(r.source_hash)||!canonicalDigest(r.recovery_key)||!UUID.test(r.suspension_epoch)||r.pending!==null||r.active_set!==null||r.current_signer_id!==null||r.suspended!==1)fail('authority_fresh_required');
- for(const table of ['continuation_attestations','continuation_intents','grant_sets','grant_members','continuation_signer_enrollments','continuation_enrollment_plans','continuation_decision_receipts'])if(db.prepare(`SELECT COUNT(*) n FROM main.${table}`).get().n!==0)fail('authority_fresh_required');
+ for(const table of ['continuation_attestations','continuation_intents','grant_sets','grant_members','continuation_signer_enrollments','continuation_enrollment_plans','continuation_decision_receipts'])if(!(plans&&table==='continuation_enrollment_plans')&&db.prepare(`SELECT COUNT(*) n FROM main.${table}`).get().n!==0)fail('authority_fresh_required');
  return r;
 }
 export function initializeFreshContinuationProvenanceAuthority(configDir,options={}){return initializeAuthority(configDir,options,4);}
@@ -254,6 +256,48 @@ export function inspectFreshContinuationProvenanceAuthority(configDir,{configIde
   return Object.freeze({schema:4,configIdentity:before.config_id,revision:0,epoch:before.suspension_epoch,suspended:true,currentSigner:null,intentId:null,activeSet:null,sourceMismatch});
  }catch(error){throw mapped(error);}finally{try{db?.exec('ROLLBACK');}catch{}close(db);}
 }
+
+// Disabled private anchored initial-plan retention. No signer enrollment/apply,
+// human approval, schema adoption or grant admission is provided by these APIs.
+function initialSignerAuthority(r,p){return{config_identity:r.config_id,canonical_root:p.root,epoch:r.suspension_epoch,revision:0,suspended:true,active_set_id:null,pending_intent_id:null};}
+function anchoredInitialSignerPlan(configDir,options,write){
+ let db,registered=false,p;
+ try{
+  const {configIdentity,id,now}=options;
+  p=locations(configDir);const anchor=operationAnchor(p,configIdentity,write);
+  db=open(p,{readonly:!write,schema:4});if(write)db.exec('PRAGMA synchronous=FULL');
+  db.exec(write?'BEGIN IMMEDIATE':'BEGIN');assertAnchor(p,anchor);
+  if(write){activeLeases.set(p.root,{db,configIdentity,anchor});registered=true;}
+  const before=freshProvenanceRow(db,p,configIdentity,{plans:true});
+  function guard(){
+   assertAnchor(p,anchor);
+   if(JSON.stringify(freshProvenanceRow(db,p,configIdentity,{plans:true}))!==JSON.stringify(before))fail('authority_changed');
+   strictSourceSnapshot(p.root,before.source_hash);assertAnchor(p,anchor);
+  }
+  guard();
+  const authority=initialSignerAuthority(before,p),storage=createContinuationEnrollmentStorage(Buffer.from(before.recovery_key,'base64url'));
+  let result;
+  if(write){
+   const plan=planContinuationSignerChange({id,operation:'initial',authority,current_signer:null,candidate:options.candidate,created_ms:now,expires_ms:options.expiresMs});
+   result=storage.retain(db,plan,authority,null,now);
+  }else result=storage.read(db,id,authority,null,now);
+  guard();
+  db.exec(write?'COMMIT':'ROLLBACK');assertAnchor(p,anchor);
+  if(write){
+   // A failed COMMIT/publication can still have persisted the original ID.
+   // Read it again; never replace it or mint a fresh operation on uncertainty.
+   db.exec('BEGIN');guard();
+   const retained=storage.read(db,id,authority,null,now);
+   if(JSON.stringify(retained)!==JSON.stringify(result))fail('authority_changed');
+   guard();db.exec('ROLLBACK');assertAnchor(p,anchor);
+  }
+  // Private plan bytes include the canonical root. Callers must keep them out
+  // of model/tool diagnostics; the digest alone is not human authorization.
+  return result;
+ }catch(error){throw mapped(error);}finally{if(registered)activeLeases.delete(p.root);try{db?.exec('ROLLBACK');}catch{}close(db);}
+}
+export function retainInitialContinuationSignerPlan(configDir,options={}){return anchoredInitialSignerPlan(configDir,options,true);}
+export function readInitialContinuationSignerPlan(configDir,options={}){return anchoredInitialSignerPlan(configDir,options,false);}
 
 function authenticateContinuationAuthority(db,r,p){
  for(const [setId,intentId] of r.pending!==null?[[db.prepare('SELECT set_id FROM continuation_intents WHERE id=?').get(r.pending).set_id,r.pending]]:r.active_set!==null?[[r.active_set,db.prepare('SELECT intent_id FROM grant_sets WHERE id=?').get(r.active_set).intent_id]]:[]){const records=createContinuationRecords(Buffer.from(r.recovery_key,'base64url'),continuationProcessNonce,{root:p.root,config_identity:r.config_id,epoch:r.suspension_epoch,set_id:setId});readContinuationIntent(db,records,intentId);}
