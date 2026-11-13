@@ -2,7 +2,7 @@
 
 Local encryption is disabled by default. `A2A_SEALED_ENABLED=1` is reserved for
 explicitly approved local tests until enablement is approved. It enables key pairing and local encrypted CLI send/inbox/history in approved
-fixtures.
+fixtures, including local stdio MCP send/read.
 Do not configure it on a real inbox yet.
 
 The local CLI loads `@a2a-exposed/encryption` only for key commands and locally encrypted send/read. Install the
@@ -107,7 +107,7 @@ storage is reported as delivered; do not resend it.
 
 Encrypted send does not accept `--push`, `--wake` or `--intent` in this path.
 Plaintext owner replies on encrypted tasks and syncing pinned peers to remote MCP
-are refused. Local stdio MCP and encrypted responses are separate follow-ups.
+are refused. Local stdio MCP uses this same send/read path; see [MCP](mcp.md#local-stdio-sendread). Encrypted responses remain a separate follow-up.
 Use a separate config directory for ordinary server-readable sends.
 
 Follow-ups: signer rotation #379, further approval ceremonies #380,

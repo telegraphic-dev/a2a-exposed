@@ -35,7 +35,7 @@ async function readInput() {
  } catch (error) { if (error instanceof CliError) throw error; fail("Could not read piped input. Nothing was sent."); }
  return Buffer.concat(chunks).toString("utf8");
 }
-export async function send(o) {
+export async function send(o, { emit = value => console.log(JSON.stringify(value, null, 2)) } = {}) {
  if (process.env.A2A_SEALED_ENABLED !== "1") fail("This config directory has local keys or pinned peers, so ordinary send is off here. Local encryption is disabled; A2A_SEALED_ENABLED=1 is reserved for approved local tests. Use a separate --config-dir for ordinary sends. No plaintext was sent.");
  gate();
  if (!o.to || !C.loadPeers()[o.to]?.sealed) fail("This config directory has local keys. Select a pinned alias with peers list --json; complete human-approved connect first. Use a separate --config-dir for ordinary sends. No plaintext was sent.");
@@ -81,11 +81,13 @@ export async function send(o) {
    try { await owner("POST", "/owner/history", { contextId: b.contextId, dir: "out", peer: o.to, taskId: task.id, role: "user", text: "[encrypted message]", data: { sealed: envelope, messageId: b.messageId } }); stored = true; }
    catch { console.error("warning: encrypted message delivered; sender history was not saved. Do not resend."); }
   } else console.error("warning: encrypted message delivered; sender history was not saved because A2A_BASE_URL / A2A_OWNER_TOKEN is missing. Do not resend.");
-  console.log(JSON.stringify({ taskId: task.id, contextId: b.contextId, messageId: b.messageId, encrypted: true, serverReadable: false, senderHistorySaved: stored, taskStateAuthenticated: false }, null, 2));
+  const result = { taskId: task.id, contextId: b.contextId, messageId: b.messageId, encrypted: true, serverReadable: false, senderHistorySaved: stored, taskStateAuthenticated: false };
+  emit(result);
+  return result;
  });
 }
 // Historical reads authenticate archived content without granting live/replay authorization.
-export async function openRows(rows, o, { historical = false } = {}) {
+export async function openRows(rows, o, { historical = false, markFailure = true } = {}) {
  const out = [];
  for (const row of rows) {
   const envelope = row.sealed ?? row.data?.sealed, peer = row.from ?? row.peer;
@@ -115,7 +117,7 @@ export async function openRows(rows, o, { historical = false } = {}) {
    const next = reason === "os_consent_required" ? "Re-run with --allow-os-consent when a human can answer the OS authorization prompt." : reason === "too_old" ? "Read this context with history CONTEXT --json for verified historical content; this does not admit live work." : reason === "encryption_disabled" ? "Local encryption needs the approved test flag; use a separate --config-dir for ordinary sends. No plaintext fallback." : "Preserve the original keys and pairing; inspect keys status --json. No plaintext fallback.";
    // Do not echo unverified text, data or provider errors, even in JSON mode.
    out.push({ taskId: row.taskId ?? row.task_id ?? null, contextId: row.contextId ?? row.context_id ?? null, from: peer, encrypted: reason !== "plaintext_from_pinned_peer", locallyOpened: false, reason, next, text: reason === "plaintext_from_pinned_peer" ? "[unencrypted message refused from pinned peer]" : `[encrypted message unavailable: ${reason}]` });
-   process.exitCode = 1;
+   if (markFailure) process.exitCode = 1;
   }
  }
  return out;

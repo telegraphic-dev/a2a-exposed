@@ -34,10 +34,17 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
  await new Promise<void>(r=>server.listen(0,"127.0.0.1",r));t.after(()=>{server.closeAllConnections();server.close();});
  const hook=path.join(tmp,"fetch.mjs"),port=(server.address()as any).port;
  fs.writeFileSync(hook,`if(process.env.FIXTURE_OLD_INIT){const now=Date.now()-40*86400000;Date.now=()=>now;}const original=globalThis.fetch;globalThis.fetch=(url,init={})=>{const u=new URL(url);if(!/^(alice|bob)\\.example\\.com$/.test(u.hostname))throw Error('nonfixture network refused');const headers=new Headers(init.headers);headers.set('x-test-agent',u.hostname.split('.')[0]);return original('http://127.0.0.1:${port}'+u.pathname+u.search,{...init,headers});};`);
+ const mcpOutputs:any[]=[];
  const clean=Object.fromEntries(Object.entries(process.env).filter(([k])=>!/^(A2A_|PEER_|WAKE_|CF_|CLOUDFLARE_|UPSTREAM_|APPROVAL_|EVENT_|HOSTED_)/.test(k)));
  const cli=(name:string,args:string[],enabled=true,input?:string):Promise<any>=>new Promise(resolve=>{
   const ch=spawn(process.execPath,["--import",hook,path.join(root,"cli/bin/a2a-exposed.mjs"),...args],{env:{...clean,A2A_CONFIG_DIR:dirs[name],A2A_SEALED_ENABLED:enabled?"1":"",DO_NOT_TRACK:"1",A2A_NO_UPDATE_CHECK:"1",...(args[0]==="keys"&&args[1]==="init"?{FIXTURE_OLD_INIT:"1"}:{})},stdio:[input===undefined?"ignore":"pipe","pipe","pipe"]});if(input!==undefined){ch.stdin?.on("error",()=>{});ch.stdin?.end(input);}let out="",err="";ch.stdout.on("data",b=>out+=b);ch.stderr.on("data",b=>err+=b);ch.on("close",code=>resolve({code,out,err}));
  });
+ const mcp=async(name:string,tool:string,args:any,enabled=true)=>{
+  const frames=[{jsonrpc:"2.0",id:1,method:"initialize",params:{protocolVersion:"2025-11-25",capabilities:{},clientInfo:{name:"fixture",version:"1"}}},{jsonrpc:"2.0",method:"notifications/initialized"},{jsonrpc:"2.0",id:2,method:"tools/call",params:{name:tool,arguments:args}}];
+  const result=await cli(name,["mcp"],enabled,frames.map(f=>JSON.stringify(f)).join("\n")+"\n");
+  assert.equal(result.code,0,result.err);const lines=result.out.trim().split("\n").map((s:string)=>JSON.parse(s));assert.equal(lines.length,2,result.out);assert.equal(lines[1].id,2);
+  mcpOutputs.push(result);return lines[1].result;
+ };
  for(const name of ["alice","bob"]){
   const stores=await cli(name,["keys","stores","--json"]);assert.equal(stores.code,0,stores.err);
   const noConsent=await cli(name,["keys","init","--store","keychain","--card-url",`https://${name}.example.com/.well-known/agent-card.json`,"--json"]);assert.equal(noConsent.code,1);assert.match(noConsent.err,/--allow-os-consent/);
@@ -118,12 +125,26 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
    assert.equal(JSON.stringify(records).includes(large),false);
    const latest=JSON.parse(records.findLast((x:any)=>x.name==="bob"&&x.path==="/"&&JSON.parse(x.body||"{}").params?.message).body);assert.equal(latest.params.configuration.historyLength,1);
   }
+  // Real stdio subprocesses share the exact CLI sealing/opening path, across restarts.
+  const mcpSecret="mcp-private-fixture-"+crypto.randomUUID();
+  const listed=await mcp("alice","list_peers",{});assert.ok(listed.structuredContent.peers.some((x:any)=>x.alias==="bob"&&x.pinned));
+  const disabled=await mcp("alice","send",{to:"bob",text:mcpSecret},false);assert.equal(disabled.isError,true);assert.match(disabled.content[0].text,/disabled/);
+  const mcpSent=await mcp("alice","send",{to:"bob",text:mcpSecret,protocol:proto});assert.ok(!mcpSent.isError,JSON.stringify(mcpSent));
+  const mcpContext=mcpSent.structuredContent.contextId;
+  const mcpInbox=await mcp("bob","inbox",{contextId:mcpContext,from:p.peer});assert.ok(!mcpInbox.isError,JSON.stringify(mcpInbox));assert.ok(mcpInbox.structuredContent.rows.some((r:any)=>r.text===mcpSecret&&r.locallyOpened));
+  for(const name of ["alice","bob"]){
+   const mcpHistory=await mcp(name,"history",{contextId:mcpContext,from:name==="alice"?"bob":p.peer,limit:200});assert.ok(!mcpHistory.isError,JSON.stringify(mcpHistory));assert.ok(mcpHistory.structuredContent.rows.some((r:any)=>r.text===mcpSecret&&r.historical));
+   for(const table of EXPORT_TABLES){assert.equal(JSON.stringify(await envs[name].DB.prepare(`SELECT * FROM "${table}"`).all()).includes(mcpSecret),false,`${name}.${table}`);}
+  }
+  assert.equal(JSON.stringify(records).includes(mcpSecret),false);
+  assert.equal(JSON.stringify(mcpOutputs).includes('"sealed"'),false);
   // Ciphertext alteration at rest refuses opening; never returns a partial plaintext result.
   const stored:any=await envs.bob.DB.prepare("SELECT seq,message_json FROM messages WHERE task_id=? ORDER BY seq DESC LIMIT 1").bind(sent.taskId).first();
   const corrupt=JSON.parse(stored.message_json);corrupt.parts[0].data.sender.ct="AAAA";
   await envs.bob.DB.prepare("UPDATE messages SET message_json=? WHERE seq=?").bind(JSON.stringify(corrupt),stored.seq).run();
   const bad=await cli("bob",["inbox","--json"]);assert.equal(bad.code,1);assert.equal(bad.out.includes(secret),false);
   const refused=JSON.parse(bad.out).find((x:any)=>x.taskId===sent.taskId);assert.equal(refused.locallyOpened,false);assert.equal(refused.reason,"verification_failed");assert.equal(refused.contextId,sent.contextId);
+  const mcpBad=await mcp("bob","inbox",{contextId:sent.contextId});assert.equal(mcpBad.isError,true);assert.equal(JSON.stringify(mcpBad).includes(secret),false);assert.ok(mcpBad.structuredContent.rows.some((r:any)=>r.reason==="verification_failed"));
   await envs.bob.DB.prepare("UPDATE messages SET message_json=? WHERE seq=?").bind(stored.message_json,stored.seq).run();
   // Archive reads keep cryptographic verification but do not use the live replay clock.
   const {LocalState}=await import("../../encryption/local-state.mjs"),api=await import("../../encryption/index.mjs");
@@ -143,7 +164,7 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
  }
  const downgrade=await cli("alice",["connect","https://bob.example.com","--alias","bob","--no-wait"]);assert.equal(downgrade.code,1);assert.match(downgrade.err,/pinned encryption keys/);
  assert.equal((await cli("bob",["keys","pin","--id",ids.bob,"--peer",p.peer,"--user-code","WRONG","--json"])).code,1);
- for(const name of ["alice","bob"]){const value=JSON.parse(fs.readFileSync(path.join(dirs[name],"encryption",ids[name]+".key"),"utf8"));for(const secret of [value.signing,value.encryption]){assert.equal(JSON.stringify(records).includes(secret),false);assert.equal(JSON.stringify([pending,connected,pinned,restart]).includes(secret),false);}}
+ for(const name of ["alice","bob"]){const value=JSON.parse(fs.readFileSync(path.join(dirs[name],"encryption",ids[name]+".key"),"utf8"));for(const secret of [value.signing,value.encryption]){assert.equal(JSON.stringify(records).includes(secret),false);assert.equal(JSON.stringify([pending,connected,pinned,restart,mcpOutputs]).includes(secret),false);}}
  await assert.rejects(verifyPublicBundle({...bundles.alice,privateKey:"never accepted"}));await assert.rejects(verifyPublicBundle({...bundles.alice,keyId:bundles.bob.keyId}));
  const {generateIdentity}=await import("../../encryption/index.mjs");
  const replacement=await generateIdentity(bundles.bob.cardUrl);

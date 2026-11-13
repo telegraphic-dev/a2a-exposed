@@ -103,6 +103,15 @@ Hosted setup:
                                 without that reference MCP keeps browser confirmation
   Listings and previews show result fields; --json provides structured output.
 
+Local MCP (stdio; local encryption remains disabled by default)
+  mcp [--allow-os-consent]      newline-delimited JSON-RPC on stdin/stdout; no listening port
+                                tools: list_peers, send, inbox, history; use list_peers before send
+                                uses --config-dir DIR; credentials/keys stay local
+                                sends only to pinned peers through the encrypted CLI path
+                                A2A_SEALED_ENABLED=1 is for approved local fixtures only
+                                keychain access needs this startup flag and a human OS prompt
+                                no pairing, trust changes, plaintext sends or automatic retries
+
 Setup (needs Node 22.18+, e.g. \`mise exec node@22 -- npx -y a2a-exposed@latest ...\`, and a Cloudflare login:
 npx cf auth login --no-browser; on a VPS where it fails with HTTP 403 before showing a code, export
 CLOUDFLARE_API_TOKEN instead: setup skill, Troubleshooting. a2a.exposed hosts the A2A endpoint and is open to everyone
@@ -544,6 +553,7 @@ const deployOpts = {
 	"workers-dev": B, "workers-dev-subdomain": S, "upstream-token-stdin": B, "no-upstream-token": B, "event-secret-stdin": B,
 };
 const SPEC = {
+ mcp: { "allow-os-consent": B },
  keys: { id: S, peer: S, store: S, "card-url": S, "user-code": S, "allow-os-consent": B, json: B },
 	hosted: { url: S, version: S, "upstream-token-file": S, "upstream-token-env": S, "access-client-id-file": S, "access-client-id-env": S, "access-client-secret-file": S, "access-client-secret-env": S, name: S, json: B, agent: S, hostname: S, origin: S, path: S, preset: S, "control-url": S, "secret-file": S, "secret-env": S, "secret-from": S, "hermes-home": S, route: S, "token-file": S, "no-run": B },
 	init: { ...deployOpts, ...tunnelOpts, tunnel: B, "dry-run": B, json: B }, deploy: deployOpts,
@@ -602,7 +612,7 @@ export async function main(argv) {
 		if (extra.length && !ok)
 			throw new CliError("`pair set-password` takes no password argument: it reads the password from the terminal, without echo (never from argv, stdin or the environment). For a one-time web link instead: `pair set-password --web [--ttl MIN] [--json]`");
 	}
-	if (name !== "env" && !(name === "init" && (rest.includes("--dry-run") || rest.includes("--json")))) upd.check(VERSION);
+	if (name !== "mcp" && name !== "env" && !(name === "init" && (rest.includes("--dry-run") || rest.includes("--json")))) upd.check(VERSION);
 	let parsed;
 	try {
 		parsed = parseArgs({ args: rest, options: SPEC[name] || {}, allowPositionals: true, strict: true });
@@ -619,6 +629,10 @@ export async function main(argv) {
 	const { values: o, positionals: p } = parsed;
 	if (o["worker-dir"] !== undefined) o.dir = o["worker-dir"];
 	switch (name) {
+  case "mcp": {
+   if (p.length) throw new CliError("mcp takes no positional arguments; select --config-dir DIR before starting it.");
+   return (await import("./local-mcp.mjs")).serve(o);
+  }
   case "keys": {
    try { return await (await import("./sealed-keys.mjs")).command(p, o); }
    catch (error) {
