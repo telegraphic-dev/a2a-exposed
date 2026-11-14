@@ -1,16 +1,5 @@
 # Changelog
 
-## 0.8.58
-
-- Publish a per-agent `/.well-known/ai-catalog.json` resource catalog for agent discovery,
-  listing public agent resources with wildcard CORS and tenant-safe hosted
-  responses (#420).
-- Add a credential helper for the official A2A CLI that reuses an explicitly
-  selected paired peer credential through the credential-helper protocol, with documented
-  noninteractive usage and compatibility limits (#422; refs #327).
-- Keep OSS encryption opt-in through its existing flag; this release does not
-  enable encryption or change hosted deployment settings.
-
 ## Unreleased
 
 - Add separately opted-in HTTP relay profiles for fixed local webhooks and native
