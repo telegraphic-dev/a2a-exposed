@@ -40,15 +40,3 @@
   bounded requests and offline inbox catch-up, with hosted control-core settings
   and lifecycle fencing. The feature defaults off; hosted services must enable
   and integrate their pinned runtime separately.
-
-## 0.8.55 - 2026-11-14
-
-- Improve opt-in encryption setup and recovery guidance across the CLI, local
-  MCP server, pairing responses, and documentation (Refs #173, #396).
-- Distinguish missing or unreadable key stores, missing local keys, changed
-  bindings, and expired pairing offers, with actionable recovery guidance.
-- Publish the matching `@a2a-exposed/encryption@0.8.55` optional local package
-  before `a2a-exposed@0.8.55` in the tag workflow. The CLI remains dependency-free;
-  encryption is installed separately in its configuration directory.
-- Encryption remains opt-in and off by default. This release does not deploy or
-  enable hosted encrypted transport.
