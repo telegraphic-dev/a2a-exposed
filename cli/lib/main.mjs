@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { CLI, CliError } from "./a2a.mjs";
 import * as C from "./config.mjs";
 import * as cmd from "./commands.mjs";
+import { credential } from "./credential.mjs";
 import * as dep from "./deploy.mjs";
 import * as tun from "./tunnel.mjs";
 import * as st from "./status.mjs";
@@ -447,6 +448,10 @@ Inbound peer tokens (one per peer label; paired agents get one too)
 
 Outbound (agents you call)
   peers add <alias> <url> [--token-env VAR | --token-stdin]
+  credential get             Bazel helper: reads one JSON {"uri":"https://peer.example.com"} on stdin;
+                             returns bearer headers to the invoking client (sensitive stdout).
+                             Exact saved peer endpoint/card only; no pairing or network calls.
+                             First inspect peers list --json; encrypted configs use send instead.
   peers list [--json] | peers rm <alias>
   peers sync [alias...] | peers unsync <alias>
                           upload peers (URL + token, encrypted on the Worker) so the MCP connector can send to
@@ -629,7 +634,7 @@ export async function main(argv) {
 		if (extra.length && !ok)
 			throw new CliError("`pair set-password` takes no password argument: it reads the password from the terminal, without echo (never from argv, stdin or the environment). For a one-time web link instead: `pair set-password --web [--ttl MIN] [--json]`");
 	}
-	if (name !== "mcp" && name !== "env" && !(name === "init" && (rest.includes("--dry-run") || rest.includes("--json")))) upd.check(VERSION);
+	if (name !== "mcp" && name !== "env" && name !== "credential" && !(name === "init" && (rest.includes("--dry-run") || rest.includes("--json")))) upd.check(VERSION);
 	let parsed;
 	try {
 		parsed = parseArgs({ args: rest, options: SPEC[name] || {}, allowPositionals: true, strict: true });
@@ -719,6 +724,7 @@ export async function main(argv) {
 		case "contexts": return cmd.contexts();
 		case "export": return cmd.exportInbox(o);
 		case "token": return cmd.token(need(p[0], "token issue|list|revoke|rotate [label]"), p[1], o);
+		case "credential": return credential(p);
 		case "peers": return cmd.peers(p[0] || "list", p.slice(1), o);
 		case "peer": {
 			const sub = need(p[0], "peer announce (--to <alias> | --all) | peer forward --to <card-url> [--hours N] | peer forward --off");
