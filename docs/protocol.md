@@ -122,7 +122,7 @@ When `EVENT_URL` is an https URL and `EVENT_SECRET` is set, the A2A endpoint POS
 
 `GET /` with `Accept: text/markdown` (named at least as high as `text/html` and `application/json`), and `GET /index.md`, return `text/markdown; charset=utf-8` with `Vary: Accept`: a short page for an agent that was told to connect to this URL. Front matter names the agent card. Step 1 offers the visitor its own A2A address first (pairing is one-way), step 2 pairs (CLI `connect` or the RFC 8628 device flow; with pairing off, ask the operator for a token), step 3 talks over JSON-RPC. It ends with links to the agent card, the legacy card, and OAuth metadata when it is served. `GET /llms.txt` is the same content in llms.txt form (`text/plain; charset=utf-8`), with absolute links and the full project docs as optional. Name and description come from the served card, on one line with Markdown and HTML syntax escaped.
 
-`GET /.well-known/api-catalog` is an API catalog (RFC 9727, `application/linkset+json` with the RFC 9727 profile, CORS `*`). It has one anchor for the A2A API at `/`: the agent card as `service-desc`, `/index.md` and the connect playbook as `service-doc`, and `/.well-known/oauth-protected-resource` as `describedby` when pairing is on. While MCP is on, a second anchor for `/mcp` links the MCP server card and `/.well-known/oauth-protected-resource/mcp`. `GET /auth.md` (alias `/.well-known/auth.md`, `text/markdown`) says in a few lines how a peer gets a token (device flow or CLI `connect`; with pairing off, ask the operator), that `/mcp` is for the owner only, and links the full credential map at `<docs origin>/auth.md`. It names endpoints and commands only, never a token value. The OAuth metadata has no `agent_auth` block, because there is no agent self-registration flow.
+`GET /.well-known/api-catalog` is an API catalog (RFC 9727, `application/linkset+json` with the RFC 9727 profile, CORS `*`). It has one anchor for the A2A API at `/`: the agent card as `service-desc`, `/index.md` and the connect playbook as `service-doc`, and `/.well-known/oauth-protected-resource` as `describedby` when pairing is on. While MCP is on, a second anchor for `/mcp` links the MCP server card and `/.well-known/oauth-protected-resource/mcp`. `GET /auth.md` (alias `/.well-known/auth.md`, `text/markdown`) says in a few lines how a peer gets a token (device flow or CLI `connect`; with pairing off, ask the operator), that `/mcp` is for the owner only, and links the full credential map at `<docs origin>/auth.md`. It names endpoints and commands only, never a token value. The tenant OAuth metadata has no `agent_auth` block: tenant pairing and owner MCP remain separate authorities.
 
 Anything else (`curl`, agents, `Accept: application/json`, `?format=json`) gets JSON: `name`, `description`, `agentCard`, `a2a` (the JSON-RPC endpoint), `pairing` (the human approval page, kept for compatibility), `pairingEndpoint` (`/oauth/device_authorization`, the endpoint an agent POSTs to) and `approvalPage` when pairing is on, `connect` (the playbook), `exposeYourself` (the setup skill), and `markdown` (`/index.md`).
 
@@ -324,3 +324,21 @@ credential, or message content. Expired rows remain explicitly historical until
 lazy cleanup at the next real inbound attempt or cron, seven days after issue.
 History follows the inbox's normal retention/export policy. Receipt storage
 failure does not trigger an extra send or turn a successful wake into failure.
+
+### Hosted registration discovery
+
+On hosted tenants only, exact platform settings `SITE_ENV=staging` and
+`AGENT_REGISTRATION_ENABLED=1` let both auth.md paths advertise the platform's
+`POST /oauth/agent/identity` flow. `FEEDBACK_URL` supplies its HTTPS origin; a
+tenant's documentation override cannot select that authority. The start request
+includes `target_agent` (this tenant's canonical public URL) and `scope=agents:read`.
+The human must claim and approve before any credential is issued. That credential
+reads only the approved address and status at platform `GET /api/v1/tenants`; it
+cannot list sibling agents, send A2A messages, manage the tenant, or use tenant MCP.
+Pairing stays the peer-access path. Self-hosted, flag-off and production auth.md
+keep the pairing-only behavior.
+
+This is discovery support, not credential issuance or enforcement. Keep the flag
+off until the platform implements immutable target/owner binding, exchange/use
+checks and invalidation, and passes separate auth-security review. No enablement
+or deployment is performed by adding this support.

@@ -39,3 +39,9 @@ That publishes your card and registers a return token, so they can message you w
 
 401 `invalid_token` or `rejected our token`: run `connect <url> --alias <alias>` again. Code expired: start again (codes last 60 minutes).
 More: [pairing](pairing.md), [messaging](messaging.md), [troubleshooting](troubleshooting.md), https://a2a.exposed/auth.md
+
+Hosted tenant auth.md may also advertise human-approved registration for reading
+that one hosted address and status. It names the platform authority and
+`target_agent` explicitly. A registration credential has `agents:read` only; it
+is not a peer token and cannot send messages or use tenant MCP. Pair separately
+for peer access. Self-hosted agents keep pairing-only discovery.

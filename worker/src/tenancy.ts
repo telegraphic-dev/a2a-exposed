@@ -93,6 +93,9 @@ export interface WorkerBindings extends ConfigFields {
 	OWNER_TOKEN?: string;
 	// --- gates (spec §6 / plan §4.3). Unset = today's behaviour. Reserved ones are parsed onto ctx.gates only. ---
 	TENANCY?: string;
+	/** Platform-only staging registration discovery. Never inherited from a tenant config. */
+	SITE_ENV?: string;
+	AGENT_REGISTRATION_ENABLED?: string;
 	TENANT_SECRETS_KEY?: string;
 	TENANT_DOMAIN?: string;
 	/** KV name directory: tenant name → {id,status,region,version}. Read by the hosted router. */
@@ -191,6 +194,8 @@ export interface FeatureGates {
 	branding: "" | "hosted";
 	/** https origin that accepts POST /api/feedback, or "". Ignored unless mode is host. */
 	feedbackUrl: string;
+	/** Platform origin for read-only, human-approved one-agent registration, or empty when disabled. */
+	agentRegistrationOrigin: string;
 	dataRegion: DataRegion;
 	tenantDomain: string;
 	approvalOidc: ApprovalOidcGate;
@@ -333,6 +338,8 @@ export function parseGates(env: WorkerBindings): ParsedGates {
 			signupUrl: httpsUrl(env.SIGNUP_URL),
 			branding: env.BRANDING === "hosted" ? "hosted" : "",
 			feedbackUrl: httpsOriginOnly(env.FEEDBACK_URL),
+			agentRegistrationOrigin: tenancy === "host" && !!env.TENANT_DO && env.SITE_ENV === "staging" && env.AGENT_REGISTRATION_ENABLED === "1"
+				? httpsOriginOnly(env.FEEDBACK_URL) : "",
 			dataRegion,
 			tenantDomain: (env.TENANT_DOMAIN || "").trim().toLowerCase().replace(/^\.+|\.+$/g, ""),
 			approvalOidc: {

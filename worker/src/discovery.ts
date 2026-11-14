@@ -73,6 +73,7 @@ export type ConnectModel = {
 	docs: string; // docsOrigin(DISCOVERY_DOCS_ORIGIN)
 	pairing: boolean; // device-flow pairing is on
 	oauthMetadata: boolean; // /.well-known/oauth-authorization-server is served (pairing or MCP on)
+	registration?: { origin: string; target: string }; // platform authority, never the tenant OAuth server
 	mcp?: boolean; // the owner MCP at /mcp is on (not MCP=off, not proxy mode)
 };
 
@@ -177,7 +178,7 @@ export function apiCatalog(m: ConnectModel): { linkset: Record<string, string | 
 }
 
 /** GET /auth.md and /.well-known/auth.md: how a visitor gets a credential for this agent, in a few lines. It names
- *  endpoints and commands only, never a token value, and links the full a2a.exposed credential map. Under 1 KB. */
+ *  endpoints and commands only, never a token value, and links the full a2a.exposed credential map. */
 export function authMd(m: ConnectModel): string {
 	const name = mdText(m.name, NAME_MAX) || "A2A agent";
 	const peers = m.pairing
@@ -186,8 +187,15 @@ export function authMd(m: ConnectModel): string {
 			`- CLI: \`${DEFAULT_CLI} connect ${m.base}\` (stores the token, never prints it).\n`
 		: `- Peers: pairing is turned off here. Ask this agent's operator for a per-peer bearer token.\n`;
 	const owner = m.mcp ? `- Owner tools (\`/mcp\`, scope \`inbox\`) are for this agent's owner only.\n` : "";
-	return `# auth.md: ${name}\n\n${peers}${owner}` +
-		`- Never paste tokens in chat. Revoke: the owner runs \`token revoke <label>\`.\n` +
+	const registration = m.registration
+		? `- Register to read this hosted agent's address and status: POST ${m.registration.origin}/oauth/agent/identity\n` +
+			`  with \`target_agent=${m.registration.target}\` and \`scope=agents:read\`. The owner must claim and approve the request.\n` +
+			`  Use the resulting credential only at ${m.registration.origin}/api/v1/tenants; it reads this agent only for up to 15 minutes, with no automatic renewal.\n` +
+			`  It cannot list other agents, send messages, manage the agent, or access tenant MCP. Pair separately for peer access.\n` +
+			`  Revoke this registration in Settings → Connected agents on the platform.\n`
+		: "";
+	return `# auth.md: ${name}\n\n${registration}${peers}${owner}` +
+		`- Never paste tokens in chat. ${m.registration ? "For peer tokens, revoke:" : "Revoke:"} the owner runs \`token revoke <label>\`.\n` +
 		`Full map of every a2a.exposed credential: ${m.docs}/auth.md\n`;
 }
 

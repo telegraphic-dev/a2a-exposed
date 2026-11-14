@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add disabled-by-default hosted staging auth.md discovery for human-approved, one-agent address/status registration. Peer pairing and tenant MCP remain separate.
+
+## Unreleased
+
 - Add separately opted-in HTTP relay profiles for fixed local webhooks and native
   A2A JSON-RPC services, with original request bytes/application authentication,
   real receiver responses, rewritten discovery and bounded incremental SSE.

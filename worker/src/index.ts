@@ -3627,7 +3627,8 @@ async function ownerPairing(req: Request, ctx: TenantContext, ectx: ExecutionCon
 async function connectModel(ctx: TenantContext): Promise<{ card: any; model: D.ConnectModel }> {
 	const card: any = await publicCard(ctx);
 	return { card, model: { name: String(card.name || ctx.AGENT_NAME || "A2A agent"), description: typeof card.description === "string" ? card.description : undefined,
-		base: ctx.PUBLIC_URL.replace(/\/$/, ""), docs: D.docsOrigin(ctx.DISCOVERY_DOCS_ORIGIN), pairing: pairingOn(ctx), oauthMetadata: pairingOn(ctx) || mcpOn(ctx), mcp: mcpOn(ctx) } };
+		base: ctx.PUBLIC_URL.replace(/\/$/, ""), docs: D.docsOrigin(ctx.DISCOVERY_DOCS_ORIGIN), pairing: pairingOn(ctx), oauthMetadata: pairingOn(ctx) || mcpOn(ctx), mcp: mcpOn(ctx),
+		...(ctx.mode === "host" && ctx.gates.agentRegistrationOrigin ? { registration: { origin: ctx.gates.agentRegistrationOrigin, target: ctx.PUBLIC_URL.replace(/\/$/, "") } } : {}) } };
 }
 
 /** A browser (Accept: text/html) gets a small HTML page; an agent that asks for text/markdown the connect steps in
