@@ -4,6 +4,7 @@ import { randomBytes, createHash } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { owner, baseUrl } from "./commands.mjs";
 import { CliError } from "./a2a.mjs";
+import { relayDispatcher } from "./relay-dispatcher.mjs";
 
 const MAX_FRAME = 128 * 1024;
 export function localDestination(value) {
@@ -37,7 +38,7 @@ export async function runConnector({ url, token, localUrl, signal, onReady = () 
 		let permanent, helloReceived = false, handshakeTimeout = false;
 		await new Promise(resolve => {
 			let ws;
-			try { ws = new WebSocket(url, ['a2a-wake-v1', token]); }
+			try { ws = new WebSocket(url, { protocols: ['a2a-wake-v1', token], dispatcher: relayDispatcher }); }
 			catch { permanent = "relay connection setup failed; check --url and Node 22.18+ support"; resolve(); return; }
 			let generation, hello = false, ping;
 			const active = new Map();

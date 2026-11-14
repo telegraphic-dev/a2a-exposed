@@ -15,6 +15,7 @@ import { CliError } from './a2a.mjs';
 import { owner, ownerTry, baseUrl } from './commands.mjs';
 import { get as configGet } from './config.mjs';
 import { protectedToken, reconnectDelay } from './relay.mjs';
+import { relayDispatcher } from './relay-dispatcher.mjs';
 
 const PROTOCOL = 'a2a-http-relay-v2';
 const CAPS = ['http-response-v1', 'response-stream-v1'];
@@ -62,7 +63,7 @@ export async function runHttpConnector({ url, token, profile, localUrl, cardUrl,
 	while (!signal?.aborted) {
 		let permanent, helloReceived = false;
 		await new Promise(resolve => {
-			let ws; try { ws = new WebSocket(url, [PROTOCOL, token]); } catch { permanent = 'HTTP relay connection setup failed; Node 22.18+ is required'; resolve(); return; }
+			let ws; try { ws = new WebSocket(url, { protocols: [PROTOCOL, token], dispatcher: relayDispatcher }); } catch { permanent = 'HTTP relay connection setup failed; Node 22.18+ is required'; resolve(); return; }
 			let generation, hello = false, finished = false, ping, pongAt = Date.now();
 			const active = new Map(), retired = new Set();
 			const remember = id => { retired.add(id); if (retired.size > 64) retired.delete(retired.values().next().value); };
