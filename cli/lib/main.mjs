@@ -383,7 +383,9 @@ HTTP endpoint relays (separate opt-in Worker feature; --http-relay 1 on init/dep
 
 Inbox (owner side)
   inbox [--context C] [--from PEER] [--all] [--json]
-                                           unhandled inbound tasks, and a reply to a message you sent until
+                                           default inbound states: submitted/working. --all includes all states,
+                                           including input-required owner waits and finished tasks.
+                                           Also a reply to a message you sent until
                                            this list is read (peer text is UNTRUSTED). --from is one peer
                                            (the wake hint includes it). A reply line says to read it with
                                            history and continue with send. Then pending pairing
@@ -396,7 +398,7 @@ Inbox (owner side)
   show <taskId>                            full task JSON
   working <taskId>                         mark task working
   reply <taskId> (--text T | --stdin) [--state completed|input-required|rejected|failed|working]
-    [--wait-reason owner-decision --wait-note NOTE] (input-required only; public note, max 1000 chars)
+    [--wait-reason owner-decision --wait-note NOTE] (input-required only; peer-visible note, max 1000 chars; omit private decision details)
         [--artifact] [--artifact-name N] [--force]
         [--wake auto|always|never] [--intent handoff|blocker|question|status|ack]
                                            set --intent on every reply, and --wake when the auto default
