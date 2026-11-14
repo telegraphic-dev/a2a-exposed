@@ -474,7 +474,7 @@ use the stored task status, including when the displayed rows are limited by
 keeps its array shape; history rows with a known task state include `currentState`
 with `state` and `timestamp`.
 
-When hosted `wake test` or `wake set` returns `cloudflare-target-unsupported`, a service with verified import enabled can return a selected-agent `recovery_url`. Open it to **Import or manage your existing tunnel**, connect Cloudflare, authorize the exact existing route and Access pair, then test and save again. The CLI does not import, retry or change infrastructure automatically. Services without this recovery retain the public HTTPS/polling/self-hosted guidance. Keep Access and webhook authentication enabled.
+When hosted `wake test` or `wake set` returns `cloudflare-target-unsupported`, a service with verified import enabled can return a selected-agent `recovery_url`. Open it to **Import or manage your existing tunnel**, connect Cloudflare, authorize the exact existing route and Access pair, then test and save again. Import needs Cloudflare Zero Trust to be active on the account that owns the tunnel; the Free plan is enough. Turning it on is an account setting that stays on after you remove test resources, so check with the account owner first. The CLI does not import, retry or change infrastructure automatically. Services without this recovery retain the public HTTPS/polling/self-hosted guidance. Keep Access and webhook authentication enabled.
 
 
 ## Hosted relay wake setup with protected files
