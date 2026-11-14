@@ -445,3 +445,11 @@ Inbox reads acknowledge matching pending wakes. Last HTTP acceptance only says
 the receiver accepted the request; verify handler execution and owner notification
 in receiver logs. Local-only receivers can use the outbound relay; inspect
 `relay status --json` and `hosted capabilities --json` before selecting a route.
+
+
+Owner-side receiver adapters can explicitly report observed wake stages with
+`wake receipt ID --stage signature-verified|handler-ran|owner-notified`.
+List IDs and their expiry first with `wake receipts --json`. HTTP acceptance
+and missing receiver reports remain separate; no preset reports automatically.
+See [authenticated wake receipts](protocol.md#authenticated-wake-receipts)
+for authentication, message binding, expiry and privacy limits.
