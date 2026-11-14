@@ -104,20 +104,33 @@ test("busy cool-down, debounce, preset defaults, and an explicit 0", async (t) =
 	assert.equal(done[2].taskId, third);
 	assert.deepEqual(done[2].taskIds, [third]);
 
-	// A burst inside the short debounce flushes then, not at the busy deadline.
-	const burst = envFor({ WAKE_DEBOUNCE_SECONDS: "30", WAKE_BUSY_SECONDS: "300" });
+	// Messages inside the debounce after a sent wake wait for the busy deadline. They never flush on the
+	// debounce, so spacing shorter than the debounce cannot chain wakes past the cool-down. Claude Code timings.
+	const burst = envFor({ WAKE_DEBOUNCE_SECONDS: "20", WAKE_BUSY_SECONDS: "300" });
 	const burstToken = (await call(burst, "POST", "/owner/peers", { label: "ada" })).token as string;
+	const burstRow = () => burst.DB.db.prepare(
+		"SELECT pending_json, busy_until_ms FROM wakes WHERE context_id = 'ctx-burst'",
+	).get() as { pending_json: string | null; busy_until_ms: number };
 	const before = sent.length;
-	await msg(burst, burstToken, "ctx-burst", "one");
-	await msg(burst, burstToken, "ctx-burst", "two");
-	assert.equal(sent.length, before + 1);
-	const burstPending = JSON.parse(burst.DB.db.prepare("SELECT pending_json FROM wakes WHERE context_id = 'ctx-burst'").get().pending_json);
-	assert.equal(burstPending.busy, undefined);
-	const due = await nextCronAt(resolveTenant(burst as never), Date.now());
-	assert.ok(due != null && due <= Date.now() + 31_000 && due > Date.now() + 20_000, `debounce due ${due}`);
-	offset += 31_000;
+	const burstIds = [await msg(burst, burstToken, "ctx-burst", "one")];
+	const burstUntil = burstRow().busy_until_ms;
+	for (let i = 0; i < 3; i++) {
+		offset += 16_000;
+		burstIds.push(await msg(burst, burstToken, "ctx-burst", `follow-up ${i}`));
+		await call(burst, "GET", "/health");
+		assert.equal(sent.length, before + 1, `follow-up ${i} inside the debounce does not send`);
+		assert.equal(JSON.parse(burstRow().pending_json!).busy, 1, `follow-up ${i} is held busy`);
+	}
+	offset += 30_000;
 	await call(burst, "GET", "/health");
-	assert.equal(sent.length, before + 2, "the burst flushes at the debounce");
+	assert.equal(sent.length, before + 1, "a held burst does not flush on the debounce");
+	assert.equal(burstRow().busy_until_ms, burstUntil, "held follow-ups do not move the deadline");
+	const due = await nextCronAt(resolveTenant(burst as never), Date.now());
+	assert.equal(due, burstUntil, "the held burst is due at the busy deadline");
+	offset = burstUntil - realNow() + 1000;
+	await call(burst, "GET", "/health");
+	assert.equal(sent.length, before + 2, "one catch-up at the busy deadline");
+	assert.deepEqual(sent.at(-1).taskIds, burstIds.slice(1), "the catch-up lists every held task");
 
 	// Explicit 0 disables the cool-down. Unset uses the preset default, shown on wake preview.
 	const off = envFor({ WAKE_PRESET: "claude-code", WAKE_BUSY_SECONDS: "0", WAKE_DEBOUNCE_SECONDS: "20" });
