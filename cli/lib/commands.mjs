@@ -49,14 +49,20 @@ export const INBOX_MAX_PAGES = 10000;
 const WAKE_MODES = ["auto", "always", "never"];
 const INTENTS = ["handoff", "blocker", "question", "status", "ack"];
 
-/** Metadata for `message/send`. Omitted fields stay off the message so a legacy peer keeps today's wake. */
+/** Metadata for `message/send`. Both fields stay optional; an omitted field stays off the message. */
 export function routingMetadata(wake, intent) {
+	const route = routeFields(wake, intent);
+	const metadata = {};
+	if (route.wake) metadata["a2a.exposed/wake"] = route.wake;
+	if (route.intent) metadata["a2a.exposed/intent"] = route.intent;
+	return Object.keys(metadata).length ? metadata : undefined;
+}
+
+/** Checked optional --wake and --intent, for the owner reply body. Blank or omitted fields are left out. */
+export function routeFields(wake, intent) {
 	if (wake != null && wake !== "" && !WAKE_MODES.includes(wake)) die(`--wake must be ${WAKE_MODES.join(", ")}`);
 	if (intent != null && intent !== "" && !INTENTS.includes(intent)) die(`--intent must be ${INTENTS.join(", ")}`);
-	const metadata = {};
-	if (wake) metadata["a2a.exposed/wake"] = wake;
-	if (intent) metadata["a2a.exposed/intent"] = intent;
-	return Object.keys(metadata).length ? metadata : undefined;
+	return { ...(wake ? { wake } : {}), ...(intent ? { intent } : {}) };
 }
 
 /** Follow inbox cursors until they end. A repeated cursor stops. Past maxPages the command errors. */
@@ -167,10 +173,11 @@ export async function working(id) {
 }
 
 export async function reply(id, o) {
+	const route = routeFields(o.wake, o.intent);
 	const text = o.text ?? (o.stdin || !process.stdin.isTTY ? readStdin() : undefined);
 	if (!text) die("--text or --stdin required");
 	const res = await owner("POST", `/owner/tasks/${q(id)}/reply`, {
-		text, state: o.state, artifact: !!o.artifact, artifactName: o["artifact-name"], force: !!o.force,
+		text, state: o.state, artifact: !!o.artifact, artifactName: o["artifact-name"], force: !!o.force, ...route,
 	});
 	printPush(res.delivery || res);
 	printDelivery(res);

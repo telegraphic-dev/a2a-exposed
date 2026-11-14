@@ -9,12 +9,12 @@ import { fileURLToPath } from "node:url";
 const bin = fileURLToPath(new URL("../bin/a2a-exposed.mjs", import.meta.url));
 const stub = fileURLToPath(new URL("./fetch-stub.mjs", import.meta.url));
 const ts = "2026-11-07T01:00:00.000Z";
-function fixture(t) {
+function fixture(t, extra = {}) {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "a2a-reply-history-"));
 	t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 	const routes = path.join(dir, "routes.json");
 	const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(A2A_|PEER_|WAKE_|CF_|CLOUDFLARE_)/.test(key)));
-	Object.assign(env, { A2A_CONFIG_DIR: dir, A2A_BASE_URL: "https://agent.example.com", A2A_OWNER_TOKEN: "test-owner", A2A_NO_UPDATE_CHECK: "1", A2A_TEST_FETCH_ROUTES: routes });
+	Object.assign(env, { A2A_CONFIG_DIR: dir, A2A_BASE_URL: "https://agent.example.com", A2A_OWNER_TOKEN: "test-owner", A2A_NO_UPDATE_CHECK: "1", A2A_TEST_FETCH_ROUTES: routes }, extra);
 	return (args, body) => {
 		fs.writeFileSync(routes, JSON.stringify({ "https://agent.example.com/owner/": { status: 200, body } }));
 		return spawnSync(process.execPath, ["--import", stub, bin, ...args], { env, encoding: "utf8" });
@@ -86,4 +86,28 @@ test("inbox prints callback guidance once per peer while preserving every task",
 	assert.equal(result.status, 0, result.stderr);
 	assert.equal((result.stdout.match(/Ask the peer owner/g) || []).length, 2);
 	assert.equal((result.stdout.match(/current state: submitted/g) || []).length, 3);
+});
+
+test("reply passes optional --intent and --wake to the owner reply and checks them first (#401)", (t) => {
+	const log = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "a2a-reply-route-")), "fetch.log");
+	t.after(() => fs.rmSync(path.dirname(log), { recursive: true, force: true }));
+	const cli = fixture(t, { A2A_TEST_FETCH_LOG: log });
+	const saved = { task: { status: { state: "completed" } }, delivery: { status: "stored-only", method: "stored" } };
+	const bodies = () => (fs.existsSync(log) ? fs.readFileSync(log, "utf8") : "").split("\n").filter(Boolean).map((line) => JSON.parse(line)).filter((r) => r.url.endsWith("/owner/tasks/task-1/reply")).map((r) => JSON.parse(r.body));
+	const labelled = cli(["reply", "task-1", "--text", "done", "--intent", "status", "--wake", "auto"], saved);
+	assert.equal(labelled.status, 0, labelled.stderr);
+	assert.equal(bodies().at(-1).intent, "status");
+	assert.equal(bodies().at(-1).wake, "auto");
+	const plain = cli(["reply", "task-1", "--text", "done"], saved);
+	assert.equal(plain.status, 0, plain.stderr);
+	assert.equal("intent" in bodies().at(-1), false);
+	assert.equal("wake" in bodies().at(-1), false);
+	const sent = bodies().length;
+	const badIntent = cli(["reply", "task-1", "--text", "done", "--intent", "ping"], saved);
+	assert.notEqual(badIntent.status, 0);
+	assert.match(badIntent.stderr, /--intent must be handoff, blocker, question, status, ack/);
+	const badWake = cli(["reply", "task-1", "--text", "done", "--wake", "later"], saved);
+	assert.notEqual(badWake.status, 0);
+	assert.match(badWake.stderr, /--wake must be auto, always, never/);
+	assert.equal(bodies().length, sent);
 });
