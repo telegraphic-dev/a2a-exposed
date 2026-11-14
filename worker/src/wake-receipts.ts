@@ -49,10 +49,12 @@ export async function reportReceipt(db: SqlDb, id: string, stage: typeof RECEIPT
  const col = columns[stage];
  const at = new Date(now).toISOString();
  const [r] = await db.batch([
-  db.prepare(`UPDATE wake_receipts SET ${col}=COALESCE(${col}, ?) WHERE delivery_id=? AND expires_ms>?`).bind(at, id, now),
+  db.prepare(`UPDATE wake_receipts SET ${col}=COALESCE(${col}, ?) WHERE delivery_id=? AND expires_ms>?
+   AND EXISTS (SELECT 1 FROM tasks t JOIN messages m ON m.task_id=t.id WHERE t.id=wake_receipts.task_id AND t.peer=wake_receipts.peer AND t.context_id=wake_receipts.context_id AND m.message_id=wake_receipts.message_id AND m.context_id=wake_receipts.context_id AND m.role='user')`).bind(at, id, now),
   db.prepare(`INSERT INTO history (context_id, ts, dir, peer, task_id, event, data_json)
    SELECT context_id, ?, 'local', peer, task_id, 'wake-receipt', json_object('wakeReceipt', json_object('id',delivery_id,'stage',?,'at',${col},'messageId',message_id,'authentication','inbox-owner','semantics','receiver-assertion'))
    FROM wake_receipts r WHERE delivery_id=? AND expires_ms>? AND ${col} IS NOT NULL
+   AND EXISTS (SELECT 1 FROM tasks t JOIN messages m ON m.task_id=t.id WHERE t.id=r.task_id AND t.peer=r.peer AND t.context_id=r.context_id AND m.message_id=r.message_id AND m.context_id=r.context_id AND m.role='user')
    AND NOT EXISTS (SELECT 1 FROM history h WHERE h.task_id=r.task_id AND h.peer=r.peer AND h.event='wake-receipt'
     AND json_extract(h.data_json,'$.wakeReceipt.id')=r.delivery_id AND json_extract(h.data_json,'$.wakeReceipt.stage')=?)`).bind(at, stage, id, now, stage),
  ]);

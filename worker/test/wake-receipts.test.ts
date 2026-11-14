@@ -159,3 +159,24 @@ test("MausBot retries keep identical body bytes and the original idempotency key
  assert.equal(f.sent[1].headers["idempotency-key"], f.sent[0].headers["idempotency-key"]);
  assert.equal(f.sent[0].headers["x-a2a-wake-receipt-id"], undefined);
 });
+
+
+test("late reports for pre-existing orphan receipts and unknown conversations do not recreate history", async t => {
+ const f = await fixture(t), task = await f.send("orphan-message");
+ const id = f.sent[0].headers["x-a2a-wake-receipt-id"];
+ const unknown = crypto.randomUUID();
+ await f.env.DB.prepare("INSERT INTO wake_receipts (delivery_id,task_id,message_id,peer,context_id,issued_ms,expires_ms) SELECT ?,task_id,message_id,peer,'unknown-context',issued_ms,expires_ms FROM wake_receipts WHERE delivery_id=?").bind(unknown, id).run();
+ assert.equal((await f.call("POST", `/owner/wake/receipts/${unknown}`, { stage: "owner-notified" })).status, 409);
+ assert.deepEqual((await f.call("GET", "/owner/history/unknown-context?from=ada")).data, []);
+ // Model an orphan row retained by an older purge implementation.
+ await f.env.DB.batch([
+  f.env.DB.prepare("DELETE FROM tasks WHERE id=?").bind(task),
+  f.env.DB.prepare("DELETE FROM messages WHERE task_id=?").bind(task),
+  f.env.DB.prepare("DELETE FROM history WHERE task_id=?").bind(task),
+  f.env.DB.prepare("DELETE FROM conversation_owners WHERE context_id='same-context'"),
+ ]);
+ assert.equal((await f.call("POST", `/owner/wake/receipts/${id}`, { stage: "handler-ran" })).status, 409);
+ assert.deepEqual((await f.call("GET", "/owner/contexts")).data, []);
+ const rows = (await f.env.DB.prepare("SELECT handler_ran_at,owner_notified_at FROM wake_receipts").all()).results;
+ assert.ok(rows.every((r: any) => r.handler_ran_at === null && r.owner_notified_at === null));
+});

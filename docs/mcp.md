@@ -233,6 +233,8 @@ self-hosted Worker reminders. These are locally generated guidance, not peer
 content or permission to deploy. They are rate-limited and suppressed by the
 update-check opt-outs. See [update reminders](upgrading.md#update-reminders).
 
+## Wake receiver receipts
+
 Remote `show_task`, inbox and polling expose optional server-readable wake
 receipt metadata. Reports are owner-only CLI/HTTP operations, not MCP tools.
 Local encrypted MCP keeps withholding server metadata. See

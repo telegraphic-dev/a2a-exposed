@@ -649,6 +649,8 @@ notices. Explicit status diagnostics still read build/schema facts. Cache files
 store versions and migration names only, never credentials; Worker facts stay
 inside the selected config directory, keeping deployments separate.
 
+## Wake receiver receipts
+
 Owner-side receiver adapters can explicitly report observed wake stages with
 `wake receipt ID --stage signature-verified|handler-ran|owner-notified`.
 List IDs and their expiry first with `wake receipts --json`. HTTP acceptance
