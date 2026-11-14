@@ -159,3 +159,23 @@ are public metadata; a listed ID does not prove its private material is present.
 Sent history uses the sender's outbound alias; received history uses the
 recipient's inbound token label. Different names alone do not prove different
 peers. Confirm the pairing and safety code before associating those labels.
+
+## Official A2A CLI
+
+Use `peers list --json` in the existing pairing's `--config-dir` before choosing
+the exact endpoint. `credential get` reads one JSON object with a `uri` from
+stdin (64 KiB maximum; close stdin within five seconds) and returns Bazel bearer
+headers to the invoking client. Its stdout contains the peer credential; never
+capture it in evidence or chat. It makes no network/config writes and never
+pairs, issues tokens, or falls back to owner or generic peer credentials.
+Unknown, ambiguous or unsafe URIs and missing/privileged tokens fail with exit 1
+and no headers. Environment overrides still apply, with a value-free warning.
+Exact origin, port and tenant path must match a saved peer's endpoint or standard
+card path. Configs containing local keys or pinned peers must use encrypted
+`a2a-exposed send` instead. Do not change their policy to use the helper.
+Configure the official CLI's `credential-helper` command array ending in
+`credential`; the client appends `get`. See
+[Use with the official A2A CLI](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/official-a2a-cli.md)
+for the complete JSON configuration and redacted `a2a auth get` check.
+Human pairing approval remains unchanged. Pairing over A2A and owner skills are
+separate protocol work, not capabilities of the helper.

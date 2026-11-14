@@ -602,3 +602,13 @@ are public metadata; a listed ID does not prove its private material is present.
 Sent history uses the sender's outbound alias; received history uses the
 recipient's inbound token label. Different names alone do not prove different
 peers. Confirm the pairing and safety code before associating those labels.
+
+## Official A2A CLI credential helper
+
+`credential get` reads one Bazel JSON request with a `uri` from stdin and returns
+its exact saved outbound peer bearer header to the invoking client. First select
+the endpoint with `peers list --json`. It makes no network calls or config writes,
+never pairs or falls back to owner credentials, and refuses local encrypted configs.
+Stdout is sensitive; let the client consume it directly. See
+[Use with the official A2A CLI](official-a2a-cli.md) for client configuration,
+URI boundaries, noninteractive errors and encryption restrictions.
