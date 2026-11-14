@@ -507,7 +507,9 @@ async function wake(ctx: TenantContext, ectx: ExecutionContext, contextId: strin
 	const curPeer = cur?.peer ?? peer;
 	const prev = cur?.pending_json ? JSON.parse(cur.pending_json) : null;
 	const sentAt = Number(cur?.last_sent_ms) || 0;
-	const hold = wakeHooked(ctx) && messageWake(kind) && busyActive(ctx, ectx, cur, now) && !prev?.attempts && now - sentAt >= deb;
+	// After a sent wake, every later message waits for the busy deadline, including one inside the debounce.
+	// A debounce flush here would re-arm last_sent_ms, so closely spaced messages would never reach the cool-down.
+	const hold = wakeHooked(ctx) && messageWake(kind) && busyActive(ctx, ectx, cur, now) && !prev?.attempts;
 	const keeping = !!(prev?.busy && busyActive(ctx, ectx, cur, now) && !prev?.attempts);
 	payload.taskIds = [...new Set([...(prev?.taskIds || []), taskId])];
 	if (hold || keeping) payload.busy = 1;
