@@ -2,9 +2,6 @@
 
 ## Unreleased
 
-- Prevent duplicate rejected HTTP 401 WebSocket upgrades on Node 24 in wake and
-  HTTP/A2A relay connectors. Each reconnect attempt sends one upgrade request;
-  native framing, handshake validation and bounded reconnect delays remain.
 - Add separately opted-in HTTP relay profiles for fixed local webhooks and native
   A2A JSON-RPC services, with original request bytes/application authentication,
   real receiver responses, rewritten discovery and bounded incremental SSE.
