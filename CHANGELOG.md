@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Add disabled-by-default hosted auth.md discovery for human-approved, one-agent address/status registration. Peer pairing and tenant MCP remain separate.
+- Add two read-only WebMCP tools to agent landing pages through one nonce-authorized same-origin script. Pairing approval and setup pages remain script-free.
 
 - Add separately opted-in HTTP relay profiles for fixed local webhooks and native
   A2A JSON-RPC services, with original request bytes/application authentication,

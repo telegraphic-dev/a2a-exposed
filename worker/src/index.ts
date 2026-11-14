@@ -1,3 +1,4 @@
+import { LANDING_WEBMCP_SCRIPT } from "./landing-webmcp.ts";
 // a2a-exposed Worker: public A2A endpoint (JSON-RPC; A2A 1.0 primary, 0.3 compatible),
 // D1-backed inbox, wake webhooks (presets), and an owner API for the local CLI.
 // Proxy mode (UPSTREAM_URL set): a public façade for an agent that already speaks A2A on a private network; the
@@ -3654,7 +3655,7 @@ async function landing(req: Request, ctx: TenantContext, url: URL): Promise<Resp
 		.map((k: any) => ({ name: String(k.name || k.id), description: typeof k.description === "string" ? k.description : undefined }));
 	const nonce = P.randomB64();
 	const links = D.docsLinks(model.docs);
-	const page = P.landingPage({ name: model.name, description: model.description,
+	const page = P.landingPage({ name: model.name, description: model.description, card,
 		base: ctx.PUBLIC_URL, versions, skills, pairing: model.pairing, proxy: proxyMode(ctx), connectDoc: links.connect, exposeDoc: links.exposeYourself }, nonce);
 	return new Response(req.method === "HEAD" ? null : page, { status: 200, headers: { ...P.landingHeaders(nonce), ...discovery } });
 }
@@ -4710,6 +4711,9 @@ async function handle(req: Request, ctx: TenantContext, ectx: ExecutionContext, 
 		if (req.method === "GET" && path.startsWith("/.well-known/agent-skills/")) return skillsDoc(ctx, path);
 		if (req.method === "GET" && path === "/.well-known/ai-catalog.json") return await discoveryDoc(ctx, "ard");
 		if (req.method === "GET" && path === "/.well-known/api-catalog") return await discoveryDoc(ctx, "catalog");
+		if (req.method === "GET" && path === "/landing-webmcp.js") return new Response(LANDING_WEBMCP_SCRIPT, { headers: {
+			"content-type": "text/javascript; charset=utf-8", "cache-control": "no-cache", "x-content-type-options": "nosniff",
+		} });
 		if (req.method === "GET" && (path === "/auth.md" || path === "/.well-known/auth.md")) return await discoveryDoc(ctx, "auth");
 		return json({ error: "not found" }, 404);
 	} catch (e: any) {

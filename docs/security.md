@@ -28,7 +28,7 @@ The code-entry form on `/device` submits by POST to keep manually entered codes 
 
 `/device` and `/device/setup` have no scripts, a strict content security policy, no caching, and CSRF protection. Their CSS is the neutral style in `worker/src/theme.ts`, inlined in the nonce'd style block. `WORKER_THEME` (a CSS file) replaces that style at `cf build`. A theme that loads an external asset, including an `image()` or `image-set()` string source and one whose name is written with a CSS escape, is refused.
 
-`GET /` in a browser shows the agent name, description, and skills from the served card, plus links to the card and `/device`. It has the same frame: no scripts, no external assets, a strict content security policy, and `form-action 'none'`.
+`GET /` in a browser shows the agent name, description, and skills from the served card, plus links to the card and `/device`. It keeps a strict content security policy and `form-action 'none'`. One nonce-authorized same-origin script exposes two read-only WebMCP tools: the public card snapshot and connection instructions. It makes no network calls, reads no credentials, and cannot pair, approve, send messages, or invoke owner operations. Device approval and setup pages remain script-free.
 
 Optional OpenID Connect (`APPROVAL_OIDC_*`) adds an "Approve with …" button on `/device` and "Continue with …" on the MCP consent page. Those two pages then allow that issuer's origin in `form-action`. The consent page also allows the client's redirect origin. An authorization endpoint on a different origin is refused. `/device/setup` stays `form-action 'self'`. The password stays available unless `APPROVAL_METHODS=oidc` and the OpenID Connect settings are complete. Unset settings do not change either page.
 
