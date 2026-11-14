@@ -318,7 +318,7 @@ export async function wake(sub, o = {}) {
  const importRecovery = !ok && result.saved === false && code === "cloudflare-target-unsupported"
   && result.recovery?.code === "verified-import" && result.recovery?.path === importPath;
  const recoveryUrl = importRecovery ? new URL(importPath, origin).href : "";
- return { ok, code, saved: result.saved === true, ...(recoveryUrl ? { recovery_url: recoveryUrl } : {}), next: ok ? sub === "set" ? "Check the receiver for the test wake." : "The draft passed. Run wake set with the same inputs to test and save." : `Saved settings were not changed. ${recoveryUrl ? `Import or manage your existing tunnel: ${recoveryUrl} — connect Cloudflare, check and authorize the existing tunnel, then test and save again. Keep Access and webhook authentication enabled; no import or retry was performed.` : recovery[code] || "Check the receiver, credentials and draft, then test again."}` };
+ return { ok, code, saved: result.saved === true, ...(recoveryUrl ? { recovery_url: recoveryUrl } : {}), next: ok ? sub === "set" ? "Check the receiver for the test wake." : "The draft passed. Run wake set with the same inputs to test and save." : `Saved settings were not changed. ${recoveryUrl ? `Import or manage your existing tunnel: ${recoveryUrl} — connect Cloudflare, check the exact route and confirm the Access service-token secret rotation (the old secret stops working). Then send one authenticated test wake and save. Keep Access and webhook authentication enabled; no import or retry was performed.` : recovery[code] || "Check the receiver, credentials and draft, then test again."}` };
 }
 
 /** Hosted upstream configuration uses only scoped setup or this agent's owner credential. */
