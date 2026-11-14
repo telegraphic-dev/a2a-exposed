@@ -51,7 +51,7 @@ just to avoid asking for DNS consent. Present both choices even when one is
 recommended; explain the concrete resources and wait for authorization before
 creating them. A public webhook that is already reachable needs no tunnel.
 
-Check hosting compatibility before account steps. A hosted endpoint does not imply hosted delivery can reach a local tunnel. For Cloudflare Tunnel hostnames, run `hosted capabilities --json`, then use dashboard **Import your existing tunnel** or **Create secure link** to authorize the route before testing. Do not create Access resources by hand as a workaround. Without a supported authorized route, offer polling or an explicitly authorized self-hosted endpoint instead. For other public HTTPS routes, verify a test wake before claiming delivery works.
+Check hosting compatibility before account steps. A hosted endpoint does not imply hosted delivery can reach a local tunnel. For Cloudflare Tunnel hostnames, run `hosted capabilities --json`, then use dashboard **Import your existing tunnel** or **Create secure link** to authorize the route before testing. Both need Cloudflare Zero Trust active on that account (Free plan is enough); turning it on is a lasting account change, so ask the human first. Do not create Access resources by hand as a workaround. Without a supported authorized route, offer polling or an explicitly authorized self-hosted endpoint instead. For other public HTTPS routes, verify a test wake before claiming delivery works.
 
 | Command or tool | Hosted config | Self-hosted config |
 | --- | --- | --- |
