@@ -648,3 +648,10 @@ to disable automatic checks and reminders. Source checkouts also skip automatic
 notices. Explicit status diagnostics still read build/schema facts. Cache files
 store versions and migration names only, never credentials; Worker facts stay
 inside the selected config directory, keeping deployments separate.
+
+Owner-side receiver adapters can explicitly report observed wake stages with
+`wake receipt ID --stage signature-verified|handler-ran|owner-notified`.
+List IDs and their expiry first with `wake receipts --json`. HTTP acceptance
+and missing receiver reports remain separate; no preset reports automatically.
+See [authenticated wake receipts](protocol.md#authenticated-wake-receipts)
+for authentication, message binding, expiry and privacy limits.

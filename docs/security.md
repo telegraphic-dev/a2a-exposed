@@ -113,3 +113,9 @@ credentials readable during rotation. Legacy v1 blobs remain readable. An unread
 closed and emits `wake_secrets_unreadable` without sensitive values. Configure an operator alert
 for that event. See [the control library rotation procedure](../control/README.md#tenant-secret-key-rotation)
 for reader-first rollout, rewrapping, outbound peer-token resync and retirement checks.
+
+
+Wake receipt reports reuse owner authentication; paired peers can read only
+their own task's report. They authenticate the reporter, not independent proof
+of handler execution or human notification. No new receipt token, signature key,
+or trust relationship is introduced. See [receipt limits](protocol.md#authenticated-wake-receipts).

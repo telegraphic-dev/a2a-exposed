@@ -128,3 +128,22 @@ test("owner-wait copy is visible in inbox/history and malformed reply flags fail
  const valid = cli(["reply", "task-1", "--text", "pending", "--state", "input-required", "--wait-reason", "owner-decision", "--wait-note", ownerWait.note], { task: { status: { state: "input-required" } } });
  assert.equal(valid.status, 0, valid.stderr);
 });
+
+
+test("wake receipt workflow lists choices and rejects missing/invalid stages without a request", t => {
+ const cli = fixture(t);
+ const id = "00000000-0000-4000-8000-000000000001";
+ const data = { receipts: [{ id, taskId: "task-1", expiresAt: ts, expired: true, httpStatus: 202, reports: {} }], more: false, next: "Receiver assertions only; absent stages are unknown." };
+ const list = cli(["wake", "receipts"], data);
+ assert.equal(list.status, 0, list.stderr);
+ assert.match(list.stdout, /signature verified unknown; handler ran unknown; owner notified unknown/);
+ assert.deepEqual(JSON.parse(cli(["wake", "receipts", "--json"], data).stdout), data);
+ for (const args of [["receipt"], ["receipt", id], ["receipt", id, "--stage", "all"], ["receipts", "--stage", "handler-ran"], ["receipt", "bad", "--stage", "handler-ran"]]) {
+  const result = cli(["wake", ...args], data);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /wake receipts --json/);
+ }
+ const report = cli(["wake", "receipt", id, "--stage", "handler-ran"], { recorded: true });
+ assert.equal(report.status, 0, report.stderr);
+ assert.match(report.stdout, /receiver assertion.*does not complete the task/);
+});
