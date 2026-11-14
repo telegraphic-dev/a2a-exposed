@@ -1161,7 +1161,14 @@ test("owner log lists history without data_json and does not clear a pending wak
 	s.DB.db.prepare("UPDATE wakes SET last_sent_ms = ?, pending_json = ?, pending_since_ms = ? WHERE context_id = ?").run(now, pending, now, contextId);
 	const secret = JSON.stringify({ token: pasted, messageId: "m-log" });
 	s.DB.db.prepare("UPDATE history SET text = ?, data_json = ? WHERE dir = 'in'").run(`hello ${pasted} and ${owner} there`, secret);
+	assert.equal(s.DB.db.prepare("SELECT state FROM history WHERE task_id = ? AND dir = 'in'").get(taskId)?.state, "submitted", "new plaintext input stores its initial task state");
+	s.DB.db.prepare("UPDATE history SET state = NULL WHERE task_id = ?").run(taskId);
 	const log = await s.owner("GET", "/owner/log");
+	assert.equal(log.data.entries.find((r: any) => r.taskId === taskId).state, "submitted", "plaintext task rows need the same status fallback as encrypted rows");
+	s.DB.db.prepare("UPDATE history SET peer = 'different-peer' WHERE task_id = ?").run(taskId);
+	const unrelated = await s.owner("GET", "/owner/log");
+	assert.equal(unrelated.data.entries.find((r: any) => r.taskId === taskId).state, null, "another peer's task cannot supply the fallback state");
+	s.DB.db.prepare("UPDATE history SET peer = 'ada' WHERE task_id = ?").run(taskId);
 	assert.equal(log.status, 200);
 	const text = JSON.stringify(log.data);
 	assert.match(text, /hello \[redacted\] and \[redacted\] there/);

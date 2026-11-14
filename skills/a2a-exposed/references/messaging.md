@@ -90,7 +90,7 @@ pairing: ask the approving inbox owner to `token revoke LABEL` (list labels with
 `keys pairings --json`) and tell the other owner. `keys init` turns off ordinary
 `send` in this config directory; use a separate `--config-dir` for ordinary sends.
 `connect --json` emits newline-delimited JSON, one object per step: with local
-keys, `key_comparison` then `authorization_pending`, and `keys_pinned` then
+keys, `key_comparison` then `authorization_pending` (new) or `checking_authorization` (resumed), and `keys_pinned` then
 `connected`. Parse each line separately.
 The path is disabled by default; owner-approved environments can seal/send and open locally. See
 [local keys and pairing](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/local-key-pairing.md).
@@ -140,3 +140,22 @@ and `poll_outbound` with explicit `to` and `taskId`; remote MCP cannot open loca
 A missing encrypted outbound record does not mean delivery failed. Use
 `poll --to ALIAS TASK_ID --json` (local MCP: `poll_outbound`) or history with the
 original context; do not resend. Remote connector polling cannot open local ciphertext.
+
+### Continue from a one-way encrypted pairing
+
+A one-way encrypted pairing lets the recipient read locally but does not give it
+an outbound credential. To continue, list `peers list --json` in the original
+config directory and use an existing pinned alias with `send` and the same
+context ID. If none exists, list `keys status --json`, select the existing local
+ID, verify the peer URL with its owner, and ask your human before running
+`connect <peer URL> --sealed-key-id <id> --alias ALIAS --no-wait`.
+The reverse pairing needs owner approval; never pair automatically, create
+replacement keys, or fall back to plaintext `reply`.
+
+`keys pin` includes safety-code mismatch recovery. A resumed `connect --json`
+reports `checking_authorization` before checking its saved request, rather than
+claiming that an already-approved request is still pending. Key catalog entries
+are public metadata; a listed ID does not prove its private material is present.
+Sent history uses the sender's outbound alias; received history uses the
+recipient's inbound token label. Different names alone do not prove different
+peers. Confirm the pairing and safety code before associating those labels.

@@ -148,11 +148,13 @@ backup/restore #383, broader hardening scans #384. No release or deployment is
 part of the local test workflow.
 
 `connect --json` emits newline-delimited JSON, one object per step. With local
-keys, `key_comparison` precedes `authorization_pending` (also on resume), and
+keys, `key_comparison` precedes `authorization_pending` for a new request or
+`checking_authorization` on resume, and
 `keys_pinned` precedes `connected`. Parse each line separately. For `keys code`,
 use the connecting side's ALIAS or the approving side's LABEL from `keys pairings`.
 
-`traffic_requires_test_flag: true` in key/pairing results means traffic still
+The existing `traffic_requires_test_flag: true` field is retained for compatibility.
+It means traffic still
 requires exact `A2A_SEALED_ENABLED=1` in the local process and each Worker. It is
 not a second flag or evidence of enablement.
 
@@ -181,6 +183,25 @@ verification even for a freshly sent message; it does not mean the message is ol
 These fields
 describe local sealing and storage; the server task state is not authenticated.
 
+## Continue from a one-way pairing
+
+A one-way encrypted pairing lets the recipient read locally but does not give it
+an outbound credential. To continue, list `peers list --json` in the original
+config directory and use an existing pinned alias with `send` and the same
+context ID. If none exists, list `keys status --json`, select the existing local
+ID, verify the peer URL with its owner, and ask your human before running
+`connect <peer URL> --sealed-key-id <id> --alias ALIAS --no-wait`.
+The reverse pairing needs owner approval; never pair automatically, create
+replacement keys, or fall back to plaintext `reply`.
+
+`keys pin` includes safety-code mismatch recovery. A resumed `connect --json`
+reports `checking_authorization` before checking its saved request, rather than
+claiming that an already-approved request is still pending. Key catalog entries
+are public metadata; a listed ID does not prove its private material is present.
+Sent history uses the sender's outbound alias; received history uses the
+recipient's inbound token label. Different names alone do not prove different
+peers. Confirm the pairing and safety code before associating those labels.
+
 ## Acceptance before enablement
 
 Use the existing `A2A_SEALED_ENABLED` switch on both local CLI processes and both
@@ -195,3 +216,10 @@ agents, real CLI and stdio processes, and the real Worker with fixture storage.
 It does not deploy resources, approve a real pairing, or use an owner's account.
 The fixture simulates the human approval boundary; it does not verify a browser
 approval or an operating-system keychain prompt.
+
+Local stdio MCP `list_peers.encryptionEnabled` describes only the current MCP
+process's exact `A2A_SEALED_ENABLED=1` setting. It does not report or enable an
+inbox Worker or a peer; each needs its own separately approved setting.
+A refused verification row tells the operator not to resend and to report its
+`taskId` and `contextId` to the inbox owner. Preserve those IDs with the original
+keys and pairing. The approval-page safety-code work remains tracked in [#380](https://github.com/telegraphic-dev/a2a-exposed/issues/380).

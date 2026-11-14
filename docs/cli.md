@@ -583,3 +583,22 @@ leave it unknown. For hosted setup selected by `--agent`, use `wake preview
 --agent NAME --json`; `wake status` instead uses an existing local owner config.
 
 Pinned encrypted configs use sealed-aware `poll` and `outbound`, with optional `--allow-os-consent` for keychain reads. Only verified message content opens locally; server task status remains unauthenticated. Ciphertext tracking is best-effort (`outboundSaved`), independent of sender history. A missing record permits explicit polling with the original task ID; never resend to repair tracking. See [encrypted recovery](local-key-pairing.md#local-encrypted-cli-messages).
+
+### Continue from a one-way encrypted pairing
+
+A one-way encrypted pairing lets the recipient read locally but does not give it
+an outbound credential. To continue, list `peers list --json` in the original
+config directory and use an existing pinned alias with `send` and the same
+context ID. If none exists, list `keys status --json`, select the existing local
+ID, verify the peer URL with its owner, and ask your human before running
+`connect <peer URL> --sealed-key-id <id> --alias ALIAS --no-wait`.
+The reverse pairing needs owner approval; never pair automatically, create
+replacement keys, or fall back to plaintext `reply`.
+
+`keys pin` includes safety-code mismatch recovery. A resumed `connect --json`
+reports `checking_authorization` before checking its saved request, rather than
+claiming that an already-approved request is still pending. Key catalog entries
+are public metadata; a listed ID does not prove its private material is present.
+Sent history uses the sender's outbound alias; received history uses the
+recipient's inbound token label. Different names alone do not prove different
+peers. Confirm the pairing and safety code before associating those labels.

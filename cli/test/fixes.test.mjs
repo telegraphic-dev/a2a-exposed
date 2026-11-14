@@ -329,7 +329,7 @@ test("connect: a working token is kept unless --replace; --replace swaps it unde
 	r = await client.cli(["connect", w.url, "--alias", "srv", "--no-wait", "--json"]);
 	assert.equal(r.status, 0, r.stderr);
 	let lines = jsonLines(r.stdout);
-	assert.deepEqual(lines.map((l) => l.status), ["authorization_pending", "connected"], "a resumed --no-wait checks once");
+	assert.deepEqual(lines.map((l) => l.status), ["checking_authorization", "connected"], "a resumed --no-wait checks once");
 	assert.equal(lines[1].peer_label, "Client-Bot");
 	assert.equal(client.peers().srv.paired.label, "Client-Bot");
 	const tok1 = client.config().PEER_SRV_TOKEN;

@@ -37,6 +37,7 @@ Local encrypted CLI draft (disabled by default):
   keys status --json          list key IDs, bundles and private-key file availability; no private bytes
   keys publish --id ID --json publish only the selected public bundle to this inbox
   connect URL --sealed-key-id ID --alias ALIAS --no-wait --json
+                                one-way recipient without an alias: select existing ID with keys status --json; ask human before pairing back
                                 existing human pairing approval binds the exact public bundles
   keys pairings --json        list approved pairings after requester re-runs connect to collect token
   keys pin --id ID --peer LABEL --user-code CODE --json

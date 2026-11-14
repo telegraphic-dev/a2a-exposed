@@ -169,6 +169,7 @@ test("configured send and poll still persist history and outbound state", async 
 	}
 	const writes = s.requests.filter((r) => ["POST", "PUT"].includes(r.method) && r.path.startsWith("/owner/"));
 	assert.deepEqual(writes.map((r) => [r.method, r.path]), [["POST", "/owner/history"], ["POST", "/owner/outbound"], ["PUT", `/owner/outbound/${task.id}`], ["POST", "/owner/history"]]);
+	assert.equal(writes[0].body.state, "submitted", "plaintext sends record a task status too");
 	assert.deepEqual(writes[1].body.task, task);
 	assert.deepEqual(writes[2].body.task, task);
 	assert.ok(writes.every((r) => r.auth === "Bearer owner-test-token"));

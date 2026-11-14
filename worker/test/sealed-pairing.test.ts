@@ -112,10 +112,11 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
  assert.equal(fs.existsSync(path.join(dirs.alice,"peers.json")),false);
  await envs.bob.DB.prepare("UPDATE settings SET value=? WHERE key='sealed_public_bundle'").bind(originalKey.value).run();
  const connected=await cli("alice",args);assert.equal(connected.code,0,connected.err);
+ assert.equal(connected.out.includes("authorization_pending"),false,"approved resume must not claim approval is pending");
  const pin=connected.out.trim().split("\n").map((s:string)=>JSON.parse(s)).find((s:any)=>s.status==="keys_pinned");assert.equal(pin.verification,"tofu");
  const pairings=await cli("bob",["keys","pairings","--json"]);assert.equal(pairings.code,0,pairings.err);const p=JSON.parse(pairings.out).pairings[0];
  assert.deepEqual(p.requester,bundles.alice);assert.deepEqual(p.responder,bundles.bob);
- const pinned=await cli("bob",["keys","pin","--id",ids.bob,"--peer",p.peer,"--user-code",p.userCode,"--json"]);assert.equal(pinned.code,0,pinned.err);assert.equal(JSON.parse(pinned.out).safety_code,pin.safety_code);
+ const pinned=await cli("bob",["keys","pin","--id",ids.bob,"--peer",p.peer,"--user-code",p.userCode,"--json"]);assert.equal(pinned.code,0,pinned.err);assert.equal(JSON.parse(pinned.out).safety_code,pin.safety_code);assert.match(JSON.parse(pinned.out).next,/If any group differs.*token revoke LABEL.*keys pairings --json/);
  const restart=await cli("bob",["keys","code","--id",ids.bob,"--peer",p.peer,"--json"]);assert.equal(restart.code,0,restart.err);assert.equal(JSON.parse(restart.out).code,pin.safety_code);
  const send=await cli("alice",["send","--to","bob","--text","must not leave this process"],false);assert.equal(send.code,1);assert.match(send.err,/disabled/);assert.match(send.err,/No plaintext was sent/);assert.match(send.err,/separate --config-dir/);
  // Both supported wire versions use the same HPKE envelope and local pins.
@@ -164,7 +165,20 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
   assert.equal(opened.text,secret);
   await envs.bob.DB.prepare("UPDATE history SET state=NULL WHERE task_id=?").bind(sent.taskId).run();
   const log=(await (await owner("bob","/owner/log")).json())as any;assert.equal(log.entries.find((r:any)=>r.taskId===sent.taskId).state,"submitted");
-  assert.equal(opened.continuation.kind,"local-encrypted");assert.equal(opened.locallyOpened,true);assert.equal(opened.taskStateAuthenticated,false);
+  assert.equal(opened.continuation.kind,"local-encrypted");
+  assert.match(opened.continuation.next,/If no pinned outbound alias exists.*keys status --json.*ask your human.*connect <peer URL> --sealed-key-id <id>/);
+  const peersBefore=fs.existsSync(path.join(dirs.bob,"peers.json"));
+  assert.equal(peersBefore,false,"recipient has no reverse outbound alias yet");
+  const blockedReply=await owner("bob",`/owner/tasks/${sent.taskId}/reply`,"POST",{text:"never deliver plaintext"});
+  assert.equal(blockedReply.status,409);const blocked=await blockedReply.json()as any;
+  assert.equal(blocked.code,"encrypted_reply_required");assert.match(blocked.error,/If no pinned outbound alias exists.*connect <peer URL> --sealed-key-id <id>/);
+  const cliReply=await cli("bob",["reply",sent.taskId,"--text","never deliver plaintext"]);
+  assert.equal(cliReply.code,1);assert.match(cliReply.err,/keys status --json.*ask your human.*connect <peer URL> --sealed-key-id <id>/);assert.equal(cliReply.err.includes("/owner/tasks/"),false);
+  const noAliasSend=await cli("bob",["send","--to","alice","--text","never deliver plaintext"]);
+  assert.equal(noAliasSend.code,1);assert.match(noAliasSend.err,/pinned outbound alias.*connect <peer URL> --sealed-key-id <id>/);
+  assert.equal(fs.existsSync(path.join(dirs.bob,"peers.json")),peersBefore,"guidance must not create reverse pairing");
+  assert.equal(JSON.stringify((await envs.bob.DB.prepare("SELECT * FROM messages").all()).results).includes("never deliver plaintext"),false);
+  assert.equal(opened.locallyOpened,true);assert.equal(opened.taskStateAuthenticated,false);
   for(const name of ["alice","bob"]){
    const history=await cli(name,["history",sent.contextId,"--json"]);assert.equal(history.code,0,history.err);
    assert.ok(JSON.parse(history.out).some((x:any)=>x.text===secret&&x.locallyOpened));
@@ -240,6 +254,7 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
    assert.equal(JSON.parse(missingStatus.out).identities.find((r:any)=>r.id===ids.bob).private_key_status,"key_missing");
    console.log("Missing-key CLI evidence: "+missing.out.trim());console.log("Missing-key status evidence: "+missingStatus.out.trim());console.log("Missing-key MCP evidence: "+JSON.stringify(missingMcp));
    assert.ok(missingMcp.structuredContent.rows.some((r:any)=>r.reason==="key_missing"&&r.text==="[encrypted message]"));
+   assert.match(missing.out,/Catalog entries are public metadata.*private key file or keychain entry is unavailable/);
    assert.equal(fs.existsSync(bobKey),false,"a read must not generate replacement private material");
    assert.equal(records.filter((r:any)=>r.path==="/"&&JSON.parse(r.body||"{}").params?.message).length,before);
   } finally { fs.renameSync(bobKey+".held",bobKey); }
@@ -259,7 +274,7 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
   const corrupt=JSON.parse(stored.message_json);corrupt.parts[0].data.sender.ct="AAAA";
   await envs.bob.DB.prepare("UPDATE messages SET message_json=? WHERE seq=?").bind(JSON.stringify(corrupt),stored.seq).run();
   const bad=await cli("bob",["inbox","--json"]);assert.equal(bad.code,1);assert.equal(bad.out.includes(secret),false);
-  const refused=JSON.parse(bad.out).find((x:any)=>x.taskId===sent.taskId);assert.equal(refused.locallyOpened,false);assert.equal(refused.reason,"verification_failed");assert.equal(refused.contextId,sent.contextId);
+  const refused=JSON.parse(bad.out).find((x:any)=>x.taskId===sent.taskId);assert.equal(refused.locallyOpened,false);assert.equal(refused.reason,"verification_failed");assert.equal(refused.contextId,sent.contextId);assert.match(refused.next,/Do not resend.*Report the taskId and contextId/);
   const mcpBad=await mcp("bob","inbox",{contextId:sent.contextId});assert.equal(mcpBad.isError,true);assert.equal(JSON.stringify(mcpBad).includes(secret),false);assert.ok(mcpBad.structuredContent.rows.some((r:any)=>r.reason==="verification_failed"));
   await envs.bob.DB.prepare("UPDATE messages SET message_json=? WHERE seq=?").bind(stored.message_json,stored.seq).run();
   // Archive reads keep cryptographic verification but do not use the live replay clock.
@@ -278,6 +293,15 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
   const mixed=await cli("bob",["history",sent.contextId,"--json"]);assert.equal(mixed.code,1);const mixedRows=JSON.parse(mixed.out);assert.ok(mixedRows.some((x:any)=>x.text===secret&&x.locallyOpened));assert.ok(mixedRows.some((x:any)=>x.reason==="plaintext_from_pinned_peer"&&x.encrypted===false));assert.equal(mixed.out.includes("untrusted plaintext downgrade"),false);
 
  }
+ // Reverse pairing remains an explicit, human-approved action using existing keys.
+ const reverseArgs=["connect","https://alice.example.com","--alias","alice","--sealed-key-id",ids.bob,"--no-wait","--json"];
+ const reversePending=await cli("bob",reverseArgs);assert.equal(reversePending.code,0,reversePending.err);
+ const reverseCode=reversePending.out.trim().split("\n").map((s:string)=>JSON.parse(s)).find((x:any)=>x.status==="authorization_pending").user_code;
+ assert.equal((await owner("alice",`/owner/pairing/${reverseCode}/approve`,"POST",{})).status,200);
+ const reverseConnected=await cli("bob",reverseArgs);assert.equal(reverseConnected.code,0,reverseConnected.err);assert.equal(reverseConnected.out.includes("authorization_pending"),false);
+ const continued=await cli("bob",["send","--to","alice","--context","reverse-pair-fixture","--text","reverse-pair-private-fixture","--json"]);assert.equal(continued.code,0,continued.err);
+ const reverseRead=await cli("alice",["inbox","--context","reverse-pair-fixture","--json"]);assert.equal(reverseRead.code,0,reverseRead.err);assert.ok(JSON.parse(reverseRead.out).some((r:any)=>r.text==="reverse-pair-private-fixture"&&r.locallyOpened));
+ assert.equal(JSON.stringify(records).includes("reverse-pair-private-fixture"),false,"reverse continuation stays encrypted");
  const downgrade=await cli("alice",["connect","https://bob.example.com","--alias","bob","--no-wait"]);assert.equal(downgrade.code,1);assert.match(downgrade.err,/pinned encryption keys/);
  assert.equal((await cli("bob",["keys","pin","--id",ids.bob,"--peer",p.peer,"--user-code","WRONG","--json"])).code,1);
  for(const name of ["alice","bob"]){const value=JSON.parse(fs.readFileSync(path.join(dirs[name],"encryption",ids[name]+".key"),"utf8"));for(const secret of [value.signing,value.encryption]){assert.equal(JSON.stringify(records).includes(secret),false);assert.equal(JSON.stringify([pending,connected,pinned,restart,mcpOutputs]).includes(secret),false);}}

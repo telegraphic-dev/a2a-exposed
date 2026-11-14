@@ -120,7 +120,7 @@ The `/device` code-entry form submits by POST. Looking up a code is separate fro
 - In default `human` mode, the human approves via the page/dashboard or runs `pair approve` themselves. Never open or fill the approval page, sign in, or ask for the password or client secret. In `agent` mode, run `pair approve <code>` only after a clear human yes in chat; deny if they say no or do not answer.
 - If a password is missing, `pair set-password --web` creates a one-time setup link: send it **privately** to your human. Never open/fill that page, ask for the password, or run the interactive password command yourself.
 - Read [pairing procedure](references/pairing.md) **before handling a pairing or password setup**; it covers modes, expiry, re-pairing and revocation. Prefer pairing over manual tokens. Issue or rotate tokens only when the user asks; all access changes need approval. Use one label/token per peer, never share a token across peers. Share a token plus the card URL only over a user-approved channel: [inbound tokens](references/tokens.md).
-
+For a one-way encrypted pairing without a pinned outbound alias, select an existing ID with `keys status --json`, verify the peer URL with its owner, and ask your human before `connect <peer URL> --sealed-key-id <id> --alias ALIAS --no-wait`; never pair automatically, replace keys, or fall back to plaintext `reply`.
 ## Reference routing
 
 | Need | Read before acting |

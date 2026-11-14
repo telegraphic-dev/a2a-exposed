@@ -96,6 +96,7 @@ export async function command(p, o) {
   const pairing = data.pairings?.find(r => r.peer === o.peer && r.userCode === o["user-code"]);
   if (!pairing) fail("No matching active human-approved pairing; run keys pairings --json. No trust was changed.");
   result = await pinPairing({ id: o.id, peer: o.peer, bundle: pairing.requester, localBundle: pairing.responder, endpoint: new URL("/", pairing.requester.cardUrl).href });
+  result.next = "Compare every safety-code group through another trusted channel. If any group differs, do not use this pairing. Ask the approving inbox owner to revoke it with token revoke LABEL (select LABEL with keys pairings --json), and tell the other owner. Do not replace keys automatically.";
  } else {
   if (action === "init" && (!o.store || !o["card-url"])) fail("keys init requires --store from keys stores --json and --card-url https://agent.example.com/.well-known/agent-card.json.");
   if (action === "init") {
