@@ -29,6 +29,16 @@ Senders should label each message for the peer's wake routing. The CLI and MCP `
 
 Both fields stay optional. A message without them is still accepted and still wakes the peer. Set `intent` anyway, so the peer's `WAKE_ROUTING=shadow` counts, and a later `enforce`, can classify your traffic. See [Protocol](protocol.md#wake-routing).
 
+## Key-based wake presets
+
+Since v0.8.56, `grok-bot`, `claude-code`, `openclaw-wake` and `openclaw-agent` need `WAKE_WEBHOOK_KEY`, and `hermes` needs `WAKE_HMAC_SECRET`, as `mausbot` and `openbot` already did. If one of these presets is saved without its credential, the upgraded Worker no longer sends the wake: it logs `wake_render_failed`. Before, it sent the wake and the receiver refused it with a 401. A hosted save of such a preset without its credential is refused with error `key`.
+
+1. Run `wake preview`. It names the missing setting.
+2. Export the credential from protected storage and run `wake set` again. Hosted: pass `--key-file` or `--key-env` (`--hmac-secret-file` or `--hmac-secret-env` for `hermes`). Switching a hosted agent to a key-based preset needs the key again.
+3. Run `wake test`.
+
+`generic` keeps optional authentication. Turning a wake off needs no key. See [Presets](receiving-messages.md#presets).
+
 ## Adopt an existing Worker
 
 To keep an existing Worker, its D1 data, peer tokens, and wake secrets:
