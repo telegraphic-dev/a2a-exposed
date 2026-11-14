@@ -62,7 +62,7 @@ export function projectRow(row) {
  if (typeof row.messageId === "string" && row.messageId.length <= 256) { result.messageId = row.messageId; result.messageIdAuthenticated = opened && row.messageIdAuthenticated === true; }
  if (opened) { result.text = row.text; result.historical = row.historical === true; }
  else {
-  result.text = row.locallyOpened === false ? "[encrypted message]" : "[message content withheld]";
+  result.text = row.locallyOpened === false ? row.reason === "plaintext_from_pinned_peer" ? "[unencrypted message refused from pinned peer]" : "[encrypted message]" : "[message content withheld]";
   result.reason = row.locallyOpened === false ? row.reason : "server_readable_content_withheld";
   result.next = row.locallyOpened === false ? row.next : "This message was not encrypted by the sender. To read it, use ordinary inbox/history with a separate --config-dir configured for the same inbox that has no local keys or pinned peers. Keep this encrypted pairing unchanged.";
  }

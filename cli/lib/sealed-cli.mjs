@@ -6,7 +6,7 @@ import { owner, peerToken } from "./commands.mjs";
 import { gate, sdk, URI, encryptionDisabled, peerKeysChanged } from "./sealed-keys.mjs";
 const fail = (message, code = "verification_failed") => { const error = new CliError(message); error.code = code; throw error; };
 const binding = h => Object.fromEntries(["contextId", "messageId", "taskId", "role", "state", "kind"].map(k => [k, h[k]]));
-const sealedFailure = "Encrypted operation refused. Use the original --config-dir that holds the approved key or restore that original key from a protected backup. Inspect keys status --json and the original pairing; preserve the original task/context IDs. Do not run keys init. No plaintext fallback or automatic retry.";
+const sealedFailure = "Encrypted operation refused. Preserve the original keys and pairing; inspect keys status --json and the original task/context IDs. Do not replace keys or change trust automatically. No plaintext fallback or automatic retry.";
 async function paired(peer, o, action) {
  gate();
  const api = await sdk(), store = new api.LocalState(C.CONFIG_DIR);
@@ -28,7 +28,7 @@ async function paired(peer, o, action) {
   }
   if (error?.code === "key_store_consent") fail("This identity uses the OS keychain. Re-run this send/read with --allow-os-consent only when a human can answer the OS authorization prompt. No store fallback or plaintext retry.", "key_store_consent");
   // LocalStateError.next is fixed recovery guidance; crypto/provider text never escapes.
-  fail(`Expected local key ${expectedLocalId} in config ${store.configId()}. ${error?.next || sealedFailure}`, error?.code || "verification_failed");
+  fail(`Local encryption config ${store.configId()}. ${error?.next || sealedFailure}`, error?.code || "verification_failed");
  } finally { store.close(); }
 }
 async function readInput() {
