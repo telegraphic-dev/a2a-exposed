@@ -363,6 +363,8 @@ export const TOOLS: { name: string; title: string; description: string; inputSch
 	{ name: "reply", title: "Reply to task", annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
 		description: `Answer an inbound task. state: completed (default; the text becomes the result), input-required (ask the peer a question), working, failed or rejected. Set intent on every reply, and wake when the auto default is wrong. They label the reply for the peer's wake routing, the same way they do on send. The answer is always stored on the task. It uses the task's existing push update, or, when no push exists, an exact paired outbound peer with a held token; otherwise the peer fetches it. Don't include secrets or private data your human hasn't approved sharing. ${RULES}`,
 		inputSchema: { type: "object", properties: { taskId: str("Task id"), text: str("Reply text"),
+			waitReason: str("Waiting for the local owner, only with input-required and waitNote. Advisory, not proof the owner was notified.", { enum: ["owner-decision"] }),
+   waitNote: str("Public note for the peer (1-1000 characters); omit private decision details."),
 			state: str("New task state", { enum: ["completed", "input-required", "working", "failed", "rejected"] }),
 			wake: str("When the peer should wake. auto routes, always wakes, never only stores.", { enum: [...WAKE_MODES] }),
 			intent: str("Why this reply exists. Pick one. An ack is not a reply.", { enum: [...INTENTS] }) }, required: ["taskId", "text"], additionalProperties: false },

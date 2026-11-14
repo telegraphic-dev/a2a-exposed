@@ -1094,7 +1094,7 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
 	if (directReply) task.metadata = { ...(task.metadata || {}), [DIRECT_REPLY_META]: params.metadata?.[DIRECT_REPLY_META] || msg.metadata?.[DIRECT_REPLY_META] };
 	const preview = sealed ? "[encrypted message]" : A.textOf(msg);
 	const claimToken = A.newId();
-	const history = { dir: "in", peer: label, taskId: task.id, role: "user", text: preview, state: task.status.state, data: { messageId: msg.messageId, ...(sealed ? { sealed } : {}) } };
+	const history = { dir: "in", peer: label, taskId: task.id, role: "user", text: preview, state: task.status.state, data: { messageId: msg.messageId, ...(A.ownerWaitOf(task) ? { ownerWait: A.ownerWaitOf(task) } : {}), ...(sealed ? { sealed } : {}) } };
 	const stored = creating
 		? await ctx.DB.batch([
 			claimContextStmt(ctx, contextId, label, ts),
@@ -2025,6 +2025,7 @@ async function deliverReplyMessage(ctx: TenantContext, ectx: ExecutionContext, t
 		const v1 = version.startsWith("1");
 		const routeMeta: Json = { [DIRECT_REPLY_META]: { taskId: task.id, messageId: message.messageId, state } };
 		const srcMeta = message.metadata && typeof message.metadata === "object" ? message.metadata as Json : null;
+		if (srcMeta?.[A.OWNER_WAIT_META]) routeMeta[A.OWNER_WAIT_META] = srcMeta[A.OWNER_WAIT_META];
 		if (srcMeta?.["a2a.exposed/wake"]) routeMeta["a2a.exposed/wake"] = srcMeta["a2a.exposed/wake"];
 		if (srcMeta?.["a2a.exposed/intent"]) routeMeta["a2a.exposed/intent"] = srcMeta["a2a.exposed/intent"];
 		const direct: Json = {
@@ -2079,7 +2080,7 @@ async function deliverReplyMessage(ctx: TenantContext, ectx: ExecutionContext, t
 
 /** State and text of one pushed task, in the internal shape history and the inbox store.
  *  A full task or a status update carries both. A message and an artifact update carry text and no task state. */
-function pushUpdateView(body: Json): { state: string | null; text: string } {
+function pushUpdateView(body: Json): { state: string | null; text: string; ownerWait?: A.OwnerWait } {
 	if (!body || typeof body !== "object") return { state: null, text: "" };
 	const inner: Json = body.task || body.statusUpdate || body.artifactUpdate || body.message || body;
 	if (!inner || typeof inner !== "object") return { state: null, text: "" };
@@ -2095,7 +2096,7 @@ function pushUpdateView(body: Json): { state: string | null; text: string } {
 	if (message) add(A.textOf(message));
 	const artifact = inner.artifact && typeof inner.artifact === "object" ? inner.artifact : null;
 	if (artifact) add(A.textOf(artifact));
-	return { state, text: chunks.filter(Boolean).join("\n") };
+	return { state, text: chunks.filter(Boolean).join("\n"), ...(A.ownerWaitOf(t) ? { ownerWait: A.ownerWaitOf(t) } : {}) };
 }
 
 /** Message-level and task-level metadata on a push. Message fields win when both are present and agree; a conflict is rejected by readRouteFields. */
@@ -2154,7 +2155,7 @@ async function handlePush(req: Request, ctx: TenantContext, ectx: ExecutionConte
 	await ctx.DB.batch([
 		ctx.DB.prepare("UPDATE outbound SET updates_json = ?, task_json = COALESCE(?, task_json), updates_seen = 0 WHERE task_id = ?")
 			.bind(JSON.stringify(updates.slice(-20)), t && t.id ? JSON.stringify(inner) : null, taskId),
-		histStmt(ctx, rec.context_id, { dir: "in", peer: rec.peer, taskId, event: "push", state, text }),
+		histStmt(ctx, rec.context_id, { dir: "in", peer: rec.peer, taskId, event: "push", state, text, ...(view.ownerWait ? { data: { ownerWait: view.ownerWait } } : {}) }),
 	]);
 	log("push_received", { peer: rec.peer, taskId, state });
 	// Identical payloads only. File bytes and URIs are part of the body, so a new file under the same name still wakes.
@@ -2421,12 +2422,12 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 		const rows = await ctx.DB.prepare(q).bind(...args).all();
 		const found = rows.results as Json[];
 		const page = found.slice(0, limit);
-		const out = [];
+		const out: Json[] = [];
 		for (const r of page) {
 			const t = await loadTask(ctx, r.id);
 			const lastUser = [...t.history].reverse().find((x: Json) => x.role === "user") || {};
 			const peerAddress: Json = await ctx.DB.prepare("SELECT card_url, claimed_card_url FROM peers WHERE label = ? AND revoked_at IS NULL").bind(t._peer).first();
-			out.push({ continuation: await continuationGuide(ctx, t._peer, peerAddress?.card_url || peerAddress?.claimed_card_url), taskId: t.id, contextId: t.contextId, from: t._peer, state: t.status.state, updated: t.status.timestamp, text: SealedKeys.envelopeOf(lastUser) ? "[encrypted message]" : A.textOf(lastUser), ...(SealedKeys.envelopeOf(lastUser) ? { sealed: SealedKeys.envelopeOf(lastUser) } : {}) });
+			out.push({ ...(A.ownerWaitOf(t) ? { ownerWait: A.ownerWaitOf(t) } : {}), continuation: await continuationGuide(ctx, t._peer, peerAddress?.card_url || peerAddress?.claimed_card_url), taskId: t.id, contextId: t.contextId, from: t._peer, state: t.status.state, updated: t.status.timestamp, text: SealedKeys.envelopeOf(lastUser) ? "[encrypted message]" : A.textOf(lastUser), ...(SealedKeys.envelopeOf(lastUser) ? { sealed: SealedKeys.envelopeOf(lastUser) } : {}) });
 		}
 		// A reply to a message this agent sent. The first page carries it, up to the same limit, so a later
 		// page does not repeat it and the inbound cursor stays the inbound page. It stays in the default
@@ -2451,7 +2452,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 				replySnaps.push({ taskId: String(r.task_id), contextId: String(r.context_id), updatesJson });
 				out.push({
 					taskId: r.task_id, contextId: r.context_id, from: r.peer, state: view.state,
-					updated: typeof last.receivedAt === "string" ? last.receivedAt : null, text: view.text, kind: "outbound",
+					updated: typeof last.receivedAt === "string" ? last.receivedAt : null, text: view.text, kind: "outbound", ...(view.ownerWait ? { ownerWait: view.ownerWait } : {}),
 				});
 			}
 		}
@@ -2498,7 +2499,11 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			if (!["completed", "input-required", "failed", "rejected", "working"].includes(state)) return json({ error: "bad state" }, 400);
 			if (typeof b.text !== "string" || !b.text) return json({ error: "text required" }, 400);
 			const turn = [...t.history].reverse().find((x: Json) => x.role === "user")?.messageId || t.id;
-			const deliveryKey = await A.sha256(JSON.stringify([t.id, turn, state, b.text]));
+			const hasWait = b.waitReason !== undefined || b.waitNote !== undefined;
+   if (hasWait && (state !== "input-required" || b.waitReason !== "owner-decision" || typeof b.waitNote !== "string" || !b.waitNote.trim() || b.waitNote.length > 1000))
+    return json({ error: "waitReason owner-decision requires state input-required and waitNote (1-1000 characters)" }, 400);
+   const ownerWait = hasWait ? { code: b.waitReason, note: b.waitNote } : undefined;
+   const deliveryKey = await A.sha256(JSON.stringify([t.id, turn, state, b.text, ...(ownerWait ? [ownerWait] : [])]));
 			let previous: Json = await ctx.DB.prepare("SELECT message_id, result_json, updated_at FROM reply_deliveries WHERE delivery_key = ?").bind(deliveryKey).first();
 			if (previous?.result_json) return json({ task: ownerTaskView(t), delivery: JSON.parse(previous.result_json), idempotent: true });
 			if (previous && Date.now() - Date.parse(previous.updated_at) > 20000) {
@@ -2527,6 +2532,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			}
 			const msg: Json = { kind: "message", role: "agent", messageId: A.newId(), contextId: t.contextId, taskId: t.id, parts: [{ kind: "text", text: b.text }] };
 			const routeMeta: Json = {};
+   if (ownerWait) routeMeta[A.OWNER_WAIT_META] = ownerWait;
 			if (b.wake !== undefined && b.wake !== null && b.wake !== "") {
 				if (b.wake !== "auto" && b.wake !== "always" && b.wake !== "never") return json({ error: "wake must be auto, always, or never" }, 400);
 				routeMeta["a2a.exposed/wake"] = b.wake;
@@ -2552,7 +2558,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			t.status = { state, timestamp: now, message: msg };
 			await ctx.DB.batch([saveTaskStmt(ctx, t), msgStmt(ctx, t, msg),
 				histStmt(ctx, t.contextId, { dir: "out", peer: t._peer, taskId: t.id, role: "agent", state, text: b.text,
-					...(forced ? { event: "forced", data: { forced: true, previousState, state } } : {}) })]);
+					...(ownerWait || forced ? { data: { ...(ownerWait ? { ownerWait } : {}), ...(forced ? { forced: true, previousState, state } : {}) } } : {}), ...(forced ? { event: "forced" } : {}) })]);
 			await ackPendingWakes(ctx, [{ taskId: t.id, contextId: t.contextId }]);
 			let delivery: ReplyDelivery;
 			try { delivery = await withDeadline(18000, (signal) => deliverReplyMessage(ctx, ectx, t, msg, state, b.text, signal)); }
@@ -2607,7 +2613,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			? [seg[1], fromFilter, seg[1], fromFilter, seg[1], fromFilter, n]
 			: [seg[1], seg[1], seg[1], seg[1], seg[1], n])).all();
 		return json((rows.results as Json[]).map((r) => ({ ...r, data: r.data_json ? JSON.parse(r.data_json) : undefined, data_json: undefined,
-			currentState: r.current_status_json ? (({ state, timestamp }) => ({ state, timestamp }))(JSON.parse(r.current_status_json))
+			currentState: r.current_status_json ? ((status) => { const ownerWait = A.ownerWaitOf({ status }); return { state: status.state, timestamp: status.timestamp, ...(ownerWait ? { ownerWait } : {}) }; })(JSON.parse(r.current_status_json))
 				: r.current_history_json ? JSON.parse(r.current_history_json) : undefined, current_status_json: undefined, current_history_json: undefined })));
 	}
 	if (seg[0] === "history" && !seg[1] && m === "POST") {
@@ -4320,7 +4326,7 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 			const intent = argStr(a, "intent", false);
 			if (wake && wake !== "auto" && wake !== "always" && wake !== "never") throw new ToolError("wake must be auto, always, or never");
 			if (intent && intent !== "handoff" && intent !== "blocker" && intent !== "question" && intent !== "status" && intent !== "ack") throw new ToolError("intent must be handoff, blocker, question, status, or ack");
-			const r = must(await ownerCall(ctx, ectx, "POST", `/owner/tasks/${enc(A.checkId(argStr(a, "taskId"), "taskId"))}/reply`, { text: argStr(a, "text"), state, ...(wake ? { wake } : {}), ...(intent ? { intent } : {}) }));
+			const r = must(await ownerCall(ctx, ectx, "POST", `/owner/tasks/${enc(A.checkId(argStr(a, "taskId"), "taskId"))}/reply`, { text: argStr(a, "text"), state, ...(a.waitReason !== undefined ? { waitReason: a.waitReason } : {}), ...(a.waitNote !== undefined ? { waitNote: a.waitNote } : {}), ...(wake ? { wake } : {}), ...(intent ? { intent } : {}) }));
 			const d: ReplyDelivery = r.delivery;
 			const where = d.target ? `${d.target.alias ? `**${d.target.alias}** at ` : ""}\`${d.target.host}\`` : "the task";
 			const http = d.httpStatus ? ` (HTTP ${d.httpStatus})` : "";
@@ -4412,7 +4418,7 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 			let txt = A.textOf((res?.status || {}).message || {});
 			const arts = (res?.artifacts || []).map((x: Json) => A.textOf(x)).join("\n");
 			if (arts && arts !== txt) txt = (txt ? txt + "\n" : "") + arts;
-			await ownerCall(ctx, ectx, "POST", "/owner/history", { contextId: rec.contextId, dir: "in", peer: peer.alias, taskId: tid, event: cancel ? "cancel" : "poll", state: M.plainState(res), text: txt });
+			await ownerCall(ctx, ectx, "POST", "/owner/history", { contextId: rec.contextId, dir: "in", peer: peer.alias, taskId: tid, event: cancel ? "cancel" : "poll", state: M.plainState(res), text: txt, ...(A.ownerWaitOf(res) ? { data: { ownerWait: A.ownerWaitOf(res) } } : {}) });
 			return M.toolText(`Task ${tid} at ${peer.alias}: ${M.plainState(res)}. ${UNTRUSTED}`, res);
 		}
 		case "list_peers": {

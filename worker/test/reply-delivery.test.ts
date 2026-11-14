@@ -80,7 +80,7 @@ async function fixture(t: Parameters<typeof test>[1] extends (t: infer T) => unk
 		assert.equal(r.status, 200, JSON.stringify(data));
 		return data.result.id as string;
 	};
-	return { a, b, dbA, dbB, owner, sendToBob, bobAtAlice, otherAtAlice: () => issue(a, ownerA, "other"), cards, redirectPush() { redirectPush = true; }, missingCard() { missingCard = true; }, get pushRequests() { return pushRequests; }, get directPosts() { return directPosts; }, get aborted() { return aborted; }, blockDirect() {
+	return { a, b, dbA, dbB, owner, sendToBob, aliceAtBob, bobAtAlice, otherAtAlice: () => issue(a, ownerA, "other"), cards, redirectPush() { redirectPush = true; }, missingCard() { missingCard = true; }, get pushRequests() { return pushRequests; }, get directPosts() { return directPosts; }, get aborted() { return aborted; }, blockDirect() {
 		let release!: () => void;
 		hold = new Promise<void>((resolve) => { release = resolve; });
 		const started = new Promise<void>((resolve) => { posted = resolve; });
@@ -341,4 +341,82 @@ test("closed tasks name continuation and missing pairing without sending or forc
 	assert.equal(missing.status, 409);
 	assert.match(String(missing.body.error), /token list --json.*human before pairing back/);
 	assert.equal(s.directPosts, count);
+});
+
+
+test("owner-wait survives MCP, peer delivery and history; the owner answer resumes the same task", async (t) => {
+ const s = await fixture(t as never);
+ const taskId = await s.sendToBob("owner decision", "ctx-owner-wait");
+ const wait = { code: "owner-decision", note: "Waiting for the owner to choose a date." };
+ const reply = (extra: any) => s.owner(s.b, "acct-bob", "POST", "/owner/mcp/reply", { taskId, text: "Decision pending", state: "input-required", ...extra });
+ for (const extra of [{ waitReason: "unknown", waitNote: wait.note }, { waitReason: wait.code }, { waitReason: wait.code, waitNote: " " }, { waitReason: wait.code, waitNote: "x".repeat(1001) }, { waitReason: wait.code, waitNote: wait.note, state: "working" }]) {
+  const bad = await reply(extra);
+  assert.ok(bad.status === 400 || (bad.body as any).isError, JSON.stringify(bad));
+ }
+ assert.equal(s.directPosts, 0, "invalid metadata never sends");
+ const result = await reply({ waitReason: wait.code, waitNote: wait.note });
+ assert.equal((result.body as any).isError, false, JSON.stringify(result));
+ const inbox = await s.owner(s.b, "acct-bob", "GET", "/owner/inbox?all=1");
+ assert.deepEqual((inbox.body as any[]).find(x => x.taskId === taskId).ownerWait, wait);
+ const remote = await s.owner(s.a, "acct-alice", "GET", "/owner/inbox?all=1");
+ assert.deepEqual((remote.body as any[]).find(x => x.text === "Decision pending").ownerWait, wait);
+ const history = await s.owner(s.b, "acct-bob", "GET", "/owner/history/ctx-owner-wait?from=alice");
+ assert.deepEqual((history.body as any[]).find(x => x.data?.ownerWait).data.ownerWait, wait);
+ assert.deepEqual((history.body as any[]).at(-1).currentState.ownerWait, wait);
+ const changed = await reply({ waitReason: wait.code, waitNote: "Waiting for a different decision." });
+ assert.equal((changed.body as any).isError, false);
+ assert.equal(s.directPosts, 2, "changed note is not an identical delivery");
+ const answer = await s.owner(s.b, "acct-bob", "POST", "/owner/mcp/reply", { taskId, text: "Owner chose Monday", state: "working", intent: "handoff", wake: "always" });
+ assert.equal((answer.body as any).isError, false);
+ const resumed = await s.owner(s.b, "acct-bob", "GET", "/owner/tasks/" + taskId);
+ assert.equal((resumed.body as any).status.state, "working");
+ assert.equal((resumed.body as any).status.message.metadata?.["a2a.exposed/owner-wait"], undefined);
+ const after = await s.owner(s.b, "acct-bob", "GET", "/owner/inbox");
+ assert.equal((after.body as any[]).find(x => x.taskId === taskId).ownerWait, undefined);
+});
+
+test("owner answer pushes the same task, clears the wait and schedules a peer wake", async (t) => {
+ const s = await fixture(t as never);
+ const contextId = "ctx-owner-push";
+ const token = "fixture-push-token";
+ const taskId = await s.sendToBob("owner push", contextId, { id: "wait-push", url: s.a.PUBLIC_URL + "/push", token });
+ await s.dbA.prepare("INSERT INTO outbound (task_id, context_id, peer, endpoint, protocol, push_token_hash, sent_at) VALUES (?, ?, 'bob', ?, '0.3', ?, ?)")
+  .bind(taskId, contextId, s.b.PUBLIC_URL, await sha256(token), new Date().toISOString()).run();
+ const wait = { code: "owner-decision", note: "Waiting for the owner." };
+ const first = await s.owner(s.b, "acct-bob", "POST", "/owner/mcp/reply", { taskId, text: "Pending", state: "input-required", waitReason: wait.code, waitNote: wait.note });
+ assert.equal((first.body as any).structuredContent.method, "push");
+ const inbox = await s.owner(s.a, "acct-alice", "GET", "/owner/inbox");
+ assert.deepEqual((inbox.body as any[]).find(x => x.taskId === taskId).ownerWait, wait);
+ await s.dbA.prepare("DELETE FROM wakes").run();
+ const answer = await s.owner(s.b, "acct-bob", "POST", "/owner/mcp/reply", { taskId, text: "Owner chose Monday", state: "working", intent: "handoff", wake: "always" });
+ assert.equal((answer.body as any).structuredContent.method, "push");
+ const rows = await s.owner(s.a, "acct-alice", "GET", "/owner/inbox");
+ const resumed = (rows.body as any[]).find(x => x.taskId === taskId);
+ assert.equal(resumed.state, "working");
+ assert.equal(resumed.ownerWait, undefined);
+ assert.match(resumed.text, /Owner chose Monday/);
+ const wake = await s.dbA.prepare("SELECT * FROM wakes WHERE context_id = ? AND peer = 'bob'").bind(contextId).first();
+ assert.ok(wake, "the authenticated answer schedules an outbound-update wake");
+});
+
+
+test("peer polling sees owner-wait in both versions and same-task continuation clears it", async t => {
+ const s = await fixture(t as never);
+ const taskId = await s.sendToBob("peer continuation", "ctx-peer-wait");
+ await s.owner(s.b, "acct-bob", "POST", "/owner/mcp/reply", { taskId, state: "input-required", text: "Pending", waitReason: "owner-decision", waitNote: "Awaiting owner" });
+ const rpc = async (method: string, params: any, token = s.aliceAtBob) => {
+  const response = await dispatch(new Request(s.b.PUBLIC_URL, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: "check", method, params }) }), s.b, ectx as never);
+  return await response.json() as any;
+ };
+ for (const method of ["GetTask", "tasks/get"]) {
+  const polled = await rpc(method, { id: taskId });
+  const task = polled.result.task || polled.result;
+  assert.deepEqual(task.status.message.metadata["a2a.exposed/owner-wait"], { code: "owner-decision", note: "Awaiting owner" });
+ }
+ const resumed = await rpc("message/send", { message: { kind: "message", role: "user", messageId: "peer-follow-up", taskId, contextId: "ctx-peer-wait", parts: [{ kind: "text", text: "New information" }] } });
+ assert.equal(resumed.result.id, taskId);
+ assert.equal(resumed.result.status.state, "submitted");
+ assert.equal(resumed.result.status.message, undefined);
+ const rows = await s.owner(s.b, "acct-bob", "GET", "/owner/inbox");
+ assert.equal((rows.body as any[]).find(x => x.taskId === taskId).ownerWait, undefined);
 });

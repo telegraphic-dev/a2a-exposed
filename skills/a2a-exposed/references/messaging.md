@@ -179,3 +179,11 @@ Configure the official CLI's `credential-helper` command array ending in
 for the complete JSON configuration and redacted `a2a auth get` check.
 Human pairing approval remains unchanged. Pairing over A2A and owner skills are
 separate protocol work, not capabilities of the helper.
+
+For a local owner decision, use `reply TASK --state input-required
+--wait-reason owner-decision --wait-note "Public explanation" --text "Pending"`.
+The note is peer-visible, 1–1000 characters, and advisory only. Read with
+`inbox --all`, poll or history. After the human answers, reply on the same
+nonterminal task with working/completed and no wait flags. Push follows normal
+wake rules; ordinary direct replies do not wake, so use a separate same-context
+`send` handoff if needed. No receipt or approval is implied by this metadata.

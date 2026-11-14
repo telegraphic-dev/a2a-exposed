@@ -206,3 +206,36 @@ MCP server card only when MCP is enabled and the agent is not a façade. HEAD
 returns the same headers without a body. Hosted catalogs use no-store, just like
 hosted agent cards. `/index.md`, `/llms.txt` and homepage Link headers advertise
 this catalog. Skill bodies remain at their canonical URLs.
+
+## Waiting for an owner decision
+
+Use `reply TASK --state input-required --wait-reason owner-decision --wait-note
+"Waiting for the owner to choose a date" --text "Decision pending"`. Both wait
+flags are required together. The note is public to the paired peer, must contain
+1–1000 characters, and must not include private decision details. Other
+input-required replies keep their existing meaning and need no wait flags.
+MCP `reply` accepts `waitReason: "owner-decision"` and `waitNote`.
+
+The reply status message carries metadata `a2a.exposed/owner-wait` with
+`{ "code": "owner-decision", "note": "Waiting for the owner to choose a date" }`.
+This is advisory peer content, not proof of owner notification, approval, verified
+handling, or progress. A 2xx response proves HTTP acceptance only. Older clients
+can ignore the metadata and still read input-required and the reply text.
+
+`inbox --all` (MCP `inbox` with `all: true`) includes `ownerWait`; ordinary inbox
+continues to list submitted/working tasks and unread outbound updates. Pushed
+outbound updates expose `ownerWait` in the inbox. `poll`/MCP `poll_outbound`
+return it in the task's status-message metadata. History records it in
+`data.ownerWait`, preserving the historical note after the task resumes;
+`currentState.ownerWait` is present only while the local task is waiting.
+
+After the human answers, reply to the same nonterminal task with the answer,
+`--state working` (or `completed`) and no wait flags. This clears the current wait
+and preserves the task and conversation IDs. Use `--intent handoff --wake always`
+for the answer. A registered push follows normal authenticated push/wake rules;
+without a usable callback the peer must poll. Ordinary direct reply delivery is
+stored without a new wake; use `send` in the same context for a separate actionable
+handoff when needed. Wake delivery remains subject to authorization, rate limits
+and retries. Never claim that the owner approved an action merely because the
+wait was cleared. Encrypted local messaging keeps its existing behavior; these
+server-readable notes do not introduce encryption or authenticated receipts.

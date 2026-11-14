@@ -129,6 +129,20 @@ export function messageToV1(m: Json): Json {
 	return { ...rest, role: role === "agent" ? "ROLE_AGENT" : "ROLE_USER", parts: (parts || []).map(partToV1) };
 }
 
+export const OWNER_WAIT_META = "a2a.exposed/owner-wait";
+export type OwnerWait = { code: "owner-decision"; note: string };
+
+/** Advisory peer data, never proof of human notification or authorization. */
+export function ownerWaitOf(task: Json): OwnerWait | undefined {
+ const state = fromV1State(task?.status?.state);
+ const message = task?.status?.message;
+ const direct = task?.metadata?.["a2a.exposed/reply-delivery"];
+ const value = message?.metadata?.[OWNER_WAIT_META] || (direct?.state === "input-required" ? task?.history?.at(-1)?.metadata?.[OWNER_WAIT_META] : undefined);
+ if (state !== "input-required" && direct?.state !== "input-required") return undefined;
+ return value?.code === "owner-decision" && typeof value.note === "string" && value.note.trim() && value.note.length <= 1000
+  ? { code: "owner-decision", note: value.note } : undefined;
+}
+
 /** Serialise an internal task for the given protocol version. */
 export function publicTask(task: Json, version: string, historyLength?: number | null): Json {
 	const t: Json = { kind: "task", id: task.id, contextId: task.contextId, status: task.status, artifacts: task.artifacts || [] };

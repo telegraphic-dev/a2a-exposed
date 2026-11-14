@@ -210,7 +210,7 @@ const REPLY_STATES = new Set(["completed", "input-required", "working", "failed"
 
 const MCP_ARGS: Record<string, { required: readonly string[]; optional: readonly string[] }> = {
 	"POST /owner/mcp/send": { required: ["to", "text"], optional: ["contextId", "taskId", "wake", "intent"] },
-	"POST /owner/mcp/reply": { required: ["taskId", "text"], optional: ["state", "wake", "intent"] },
+	"POST /owner/mcp/reply": { required: ["taskId", "text"], optional: ["state", "wake", "intent", "waitReason", "waitNote"] },
 	"POST /owner/mcp/poll_outbound": { required: ["taskId"], optional: [] },
 	"POST /owner/mcp/cancel_outbound": { required: ["taskId"], optional: [] },
 	"POST /owner/mcp/mark_working": { required: ["taskId"], optional: [] },
@@ -226,6 +226,8 @@ function mcpArgOk(key: string, value: string): string | null {
 	if (key === "taskId" || key === "contextId") return idOk(value) ? null : `${key} is invalid`;
 	if (key === "wake") return value === "auto" || value === "always" || value === "never" ? null : "wake is invalid";
 	if (key === "intent") return value === "handoff" || value === "blocker" || value === "question" || value === "status" || value === "ack" ? null : "intent is invalid";
+	if (key === "waitReason") return value === "owner-decision" ? null : "waitReason must be owner-decision";
+ if (key === "waitNote") return value.trim() && value.length <= 1000 ? null : "waitNote must be 1-1000 characters";
 	if (key === "state") return REPLY_STATES.has(value) ? null : "state is invalid";
 	return "body is not allowed";
 }

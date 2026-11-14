@@ -389,6 +389,7 @@ Inbox (owner side)
   show <taskId>                            full task JSON
   working <taskId>                         mark task working
   reply <taskId> (--text T | --stdin) [--state completed|input-required|rejected|failed|working]
+    [--wait-reason owner-decision --wait-note NOTE] (input-required only; public note, max 1000 chars)
         [--artifact] [--artifact-name N] [--force]
         [--wake auto|always|never] [--intent handoff|blocker|question|status|ack]
                                            set --intent on every reply, and --wake when the auto default
@@ -580,7 +581,7 @@ const SPEC = {
 	init: { ...deployOpts, ...tunnelOpts, tunnel: B, "dry-run": B, json: B }, deploy: deployOpts,
 	wake: { ...deployOpts, "local-url": S, json: B, url: S, "reference-file": S, "reference-env": S, clear: B, version: S, agent: S, "control-url": S, "key-header": S, "key-file": S, "key-env": S, "key-stdin": B, "hmac-secret-file": S, "hmac-secret-env": S, "access-client-id-file": S, "access-client-id-env": S, "access-client-secret-file": S, "access-client-secret-env": S }, tunnel: { ...tunnelOpts, preset: S, "hermes-route": S, "hmac-secret-stdin": B, json: B },
 	inbox: { context: S, from: S, all: B, json: B, "allow-os-consent": B },
-	reply: { text: S, stdin: B, state: { type: "string", default: "completed" }, artifact: B, "artifact-name": { type: "string", default: "response" }, force: B, wake: S, intent: S },
+	reply: { "wait-reason": S, "wait-note": S, text: S, stdin: B, state: { type: "string", default: "completed" }, artifact: B, "artifact-name": { type: "string", default: "response" }, force: B, wake: S, intent: S },
 	history: { "allow-os-consent": B, from: S, n: { type: "string", short: "n", default: "50" }, json: B },
 	token: { rotate: B, json: B },
 	peers: { "token-env": S, "token-stdin": B, json: B },

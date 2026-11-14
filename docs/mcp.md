@@ -222,3 +222,7 @@ For local stdio MCP, `list_peers.encryptionEnabled` describes the current proces
 only: it is true exactly when that process has `A2A_SEALED_ENABLED=1`. It does
 not report the setting on the inbox Worker or on the remote peer and does not
 change either setting. See [local keys](local-key-pairing.md).
+
+Owner-wait replies accept an explicit reason and public note. See
+[waiting for an owner decision](protocol.md#waiting-for-an-owner-decision)
+for flags, metadata, history and continuation/delivery limits.

@@ -111,3 +111,20 @@ test("reply passes optional --intent and --wake to the owner reply and checks th
 	assert.match(badWake.stderr, /--wake must be auto, always, never/);
 	assert.equal(bodies().length, sent);
 });
+
+
+test("owner-wait copy is visible in inbox/history and malformed reply flags fail before delivery", t => {
+ const cli = fixture(t);
+ const ownerWait = { code: "owner-decision", note: "Owner is choosing a date." };
+ const rows = [{ taskId: "task-1", contextId: "ctx", from: "ada", state: "input-required", text: "pending", ownerWait }];
+ assert.match(cli(["inbox", "--all"], rows).stdout, /Owner wait \(owner-decision\): Owner is choosing a date/);
+ assert.deepEqual(JSON.parse(cli(["inbox", "--all", "--json"], rows).stdout)[0].ownerWait, ownerWait);
+ assert.match(cli(["history", "ctx"], [{ text: "pending", data: { ownerWait } }]).stdout, /Owner wait \(owner-decision\)/);
+ for (const flags of [["--wait-reason", "owner-decision"], ["--wait-note", "note"], ["--wait-reason", "other", "--wait-note", "note"], ["--wait-reason", "owner-decision", "--wait-note", "note", "--state", "working"]]) {
+  const invalid = cli(["reply", "task-1", "--text", "pending", ...flags], {});
+  assert.equal(invalid.status, 1);
+  assert.match(invalid.stderr, /requires --state input-required and --wait-note/);
+ }
+ const valid = cli(["reply", "task-1", "--text", "pending", "--state", "input-required", "--wait-reason", "owner-decision", "--wait-note", ownerWait.note], { task: { status: { state: "input-required" } } });
+ assert.equal(valid.status, 0, valid.stderr);
+});
