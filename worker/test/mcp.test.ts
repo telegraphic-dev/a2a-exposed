@@ -938,3 +938,22 @@ test("inbox tool clears wakes only for the page it returns, and a later call can
 	assert.equal(second.content[0].text.includes("More tasks are waiting"), false);
 	assert.equal(wakeOf("ctx-0020"), null);
 });
+
+
+test("ARD route matches the MCP card gate, supports HEAD, and safely encodes names", async (t) => {
+	for (const over of [{}, { MCP: "off" }, { UPSTREAM_URL: "https://upstream.example.org" }]) {
+		const name = '\"</script>\nAgent';
+		const s = setup({ ...over, AGENT_NAME: name }); t.after(s.restore);
+		const r = await s.call("GET", "/.well-known/ai-catalog.json");
+		assert.equal(r.status, 200);
+		assert.match(r.headers.get("content-type")!, /application\/json/);
+		assert.equal(r.headers.get("access-control-allow-origin"), "*");
+		const card = await s.call("GET", "/.well-known/mcp/server-card.json");
+		assert.equal(r.data.entries.some((e: any) => e.url.endsWith("/mcp/server-card.json")), card.status === 200);
+		assert.equal(typeof r.data.host.displayName, "string");
+		const head = await s.call("HEAD", "/.well-known/ai-catalog.json");
+		assert.equal(head.status, 200);
+		assert.equal(head.headers.get("access-control-allow-origin"), "*");
+		s.restore();
+	}
+});

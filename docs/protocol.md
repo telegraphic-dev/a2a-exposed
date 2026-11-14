@@ -196,3 +196,13 @@ The peer table keeps `claimed_card_url` distinct from the verified `card_url`.
 Owner lists and inbox results may suggest a human-approved pair-back command,
 but claimed addresses never authorize callback delivery. No read pairs a peer,
 issues a token, or revives a revoked return token.
+
+
+### AI resource catalog
+
+`GET /.well-known/ai-catalog.json` returns a public ARD manifest with wildcard CORS.
+It links to the agent card and skills index on this agent's origin, plus the owner
+MCP server card only when MCP is enabled and the agent is not a façade. HEAD
+returns the same headers without a body. Hosted catalogs use no-store, just like
+hosted agent cards. `/index.md`, `/llms.txt` and homepage Link headers advertise
+this catalog. Skill bodies remain at their canonical URLs.

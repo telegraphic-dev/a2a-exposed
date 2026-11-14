@@ -100,6 +100,7 @@ function machineLinks(m: ConnectModel): { label: string; href: string }[] {
 		{ label: "agent card", href: "/.well-known/agent-card.json" },
 		{ label: "legacy card", href: "/.well-known/agent.json" },
 		{ label: "skills index", href: "/.well-known/agent-skills/index.json" },
+		{ label: "AI catalog", href: "/.well-known/ai-catalog.json" },
 		{ label: "API catalog", href: "/.well-known/api-catalog" },
 		{ label: "authentication", href: "/auth.md" },
 	];
@@ -246,6 +247,7 @@ export function sitemapXml(base: string): string {
 export function linkHeader(docs: string): string {
 	return [
 		`</index.md>; rel="alternate"; type="text/markdown"`,
+		`</.well-known/ai-catalog.json>; rel="ai-catalog"; type="application/json"`,
 		`</.well-known/api-catalog>; rel="api-catalog"; type="application/linkset+json"`,
 		`</.well-known/agent-card.json>; rel="describedby"; type="application/json"`,
 		`</llms.txt>; rel="describedby"; type="text/plain"`,
@@ -289,4 +291,19 @@ export function skillsIndex(skills: readonly SkillEntry[], base: string): { $sch
 export function skillRedirect(path: string, skills: readonly SkillEntry[], base: string): string | null {
 	const m = /^\/\.well-known\/agent-skills\/([a-z0-9-]{1,64})\/SKILL\.md$/.exec(path);
 	return m && skills.some((s) => s.name === m[1]) ? `${base}/${m[1]}/SKILL.md` : null;
+}
+
+/** ARD manifest for resources this agent already serves. MCP follows the card's own gate. */
+export function aiCatalog(m: ConnectModel) {
+	const base = new URL(m.base).origin;
+	const host = new URL(base).host;
+	const entries = [
+		{ namespace: "agent:card", displayName: m.name, type: "application/a2a-agent-card+json", path: "/.well-known/agent-card.json", representativeQueries: ["send this agent a message", "what is this agent's A2A card"] },
+		{ namespace: "skills:index", displayName: "a2a-exposed agent skills", type: "application/agent-skills+json", path: "/.well-known/agent-skills/index.json", representativeQueries: ["how do I pair with this agent", "a2a-exposed connect playbook"] },
+		...(m.mcp ? [{ namespace: "mcp:owner", displayName: "Owner MCP", type: "application/mcp-server-card+json", path: "/.well-known/mcp/server-card.json", representativeQueries: ["connect to this agent's owner MCP", "manage my agent inbox"] }] : []),
+	];
+	return {
+		specVersion: "1.0", host: { displayName: m.name, identifier: `did:web:${host}` },
+		entries: entries.map(({ namespace, path, ...entry }) => ({ ...entry, identifier: `urn:air:${host}:${namespace}`, url: `${base}${path}` })),
+	};
 }

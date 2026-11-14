@@ -3637,8 +3637,10 @@ function skillsDoc(ctx: TenantContext, path: string): Response {
 
 /** GET /index.md, /llms.txt, /.well-known/api-catalog (RFC 9727) and /auth.md: the Markdown connect page, its llms.txt
  *  form, the API catalog and the short auth.md. HEAD is answered by handle(). */
-async function discoveryDoc(ctx: TenantContext, kind: "markdown" | "llms" | "catalog" | "auth"): Promise<Response> {
+async function discoveryDoc(ctx: TenantContext, kind: "markdown" | "llms" | "catalog" | "auth" | "ard"): Promise<Response> {
 	const { model } = await connectModel(ctx);
+	if (kind === "ard") return json(D.aiCatalog(model), 200,
+		{ "access-control-allow-origin": "*", "cache-control": cardCacheControl(ctx) });
 	if (kind === "catalog") return json(D.apiCatalog(model), 200,
 		{ "content-type": D.API_CATALOG_TYPE, "access-control-allow-origin": "*", "cache-control": cardCacheControl(ctx) });
 	if (kind === "auth") return new Response(D.authMd(model), { status: 200, headers: D.authMdHeaders() });
@@ -4658,6 +4660,7 @@ async function handle(req: Request, ctx: TenantContext, ectx: ExecutionContext, 
 		if (req.method === "GET" && path === "/robots.txt") return crawlerDoc(ctx, "robots");
 		if (req.method === "GET" && path === "/sitemap.xml") return crawlerDoc(ctx, "sitemap");
 		if (req.method === "GET" && path.startsWith("/.well-known/agent-skills/")) return skillsDoc(ctx, path);
+		if (req.method === "GET" && path === "/.well-known/ai-catalog.json") return await discoveryDoc(ctx, "ard");
 		if (req.method === "GET" && path === "/.well-known/api-catalog") return await discoveryDoc(ctx, "catalog");
 		if (req.method === "GET" && (path === "/auth.md" || path === "/.well-known/auth.md")) return await discoveryDoc(ctx, "auth");
 		return json({ error: "not found" }, 404);
