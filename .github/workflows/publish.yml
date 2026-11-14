@@ -90,6 +90,28 @@ jobs:
           npm run build
           node scripts/check-build.mjs
 
+      # Optional local crypto package: publish before the CLI. This does not enable traffic.
+      - name: Encryption - install, test, pack
+        working-directory: encryption
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm test
+          npm pack --dry-run
+
+      - name: Publish encryption
+        working-directory: encryption
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if npm view "@a2a-exposed/encryption@$VERSION" version >/dev/null 2>&1; then
+            echo "@a2a-exposed/encryption@$VERSION is already on npm; skipping publish"
+            exit 0
+          fi
+          DIST_TAG=latest
+          if [[ "$VERSION" == *-* ]]; then DIST_TAG=next; fi
+          npm publish --provenance --access public --tag "$DIST_TAG"
+
       # CLI package. Auth is the NPM_TOKEN secret. prepack bundles ../worker (scripts/sync-worker.mjs).
       - name: Publish to npm
         working-directory: cli

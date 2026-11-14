@@ -24,11 +24,11 @@ export async function sdk() {
   return { ...primitives, ...state, ...carriers, ...content };
  } catch { fail(`Install the matching optional @a2a-exposed/encryption package in this config directory before keys init; run ${CLI} keys stores --json afterward. No keys or network requests were created.`); }
 }
-async function owner(method, route, body) {
+async function owner(method, route, body, operation = "Local key pairing") {
  const base = baseUrl(), token = C.get("A2A_OWNER_TOKEN");
  if (!base || !token) fail("Select a configured inbox with --config-dir; A2A_BASE_URL and A2A_OWNER_TOKEN are required.");
  const r = await httpJson(base + route, { method, body, headers: { authorization: `Bearer ${token}` } });
- if (r.status !== 200) fail(`Local key pairing request failed (HTTP ${r.status}): ${r.data?.error || "request refused"}.${r.status === 404 ? " Check the inbox flag and matching Worker version." : ""} No private key was sent.`);
+ if (r.status !== 200) fail(`${operation} request failed (HTTP ${r.status}): ${r.data?.error || "request refused"}.${r.status === 404 ? " Check the inbox flag and matching Worker version." : ""} No private key was sent.`);
  return r.data;
 }
 export async function selected(id) {
@@ -81,10 +81,13 @@ export async function command(p, o) {
  const api = await sdk();
  let result;
  if (action === "stores") result = await api.stores();
- else if (action === "pairings") result = await owner("GET", "/owner/sealed-pairings");
+ else if (action === "pairings") {
+  result = await owner("GET", "/owner/sealed-pairings");
+  result.next = "After human approval, the requester must re-run the same connect command to collect the token. Only then is the pairing listed here for keys pin. Do not create another request.";
+ }
  else if (action === "publish") {
   const { bundle } = await selected(o.id);
-  const data = await owner("PUT", "/owner/sealed-key", bundle);
+  const data = await owner("PUT", "/owner/sealed-key", bundle, "Public-key publication");
   if (api.canonicalJSON(data.bundle) !== api.canonicalJSON(bundle)) fail("Public-key publication readback differs; preserve keys and stop.");
   result = { published: true, id: o.id, key_id: bundle.keyId, traffic_requires_test_flag: true };
  } else if (action === "pin") {
@@ -106,6 +109,7 @@ export async function command(p, o) {
    if (action === "code") {
     if (!o.id || !o.peer) fail("keys code requires --id from keys status --json and --peer ALIAS (connecting side) or LABEL from keys pairings --json (approving side).");
     result = store.safetyCode(o.id, o.peer);
+    result.next = "Compare every safety-code group through another trusted channel. This code describes the existing human-approved pin; it does not grant independent verification or approve a key change.";
    }
   } finally { store.close(); }
  }

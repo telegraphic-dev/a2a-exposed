@@ -507,7 +507,18 @@ export class LocalState {
   pageInputs(limit, identityCursor); pageInputs(limit, operationCursor);
   if (!this.db) return { ok: true, configured: false, identities: [], operations: [], next: "Run keys stores --json before keys init." };
   const rows = this.db.prepare("SELECT rowid AS cursor,id,bundle,store,live_state,created_ms FROM identities WHERE rowid>? ORDER BY rowid LIMIT ?").all(identityCursor, limit + 1);
-  const identities = rows.slice(0, limit).map(row => ({ id: row.id, bundle: JSON.parse(row.bundle), key_store: row.store, live_state: row.live_state, created_ms: row.created_ms }));
+  const identities = rows.slice(0, limit).map(row => {
+   // Metadata-only file check: never read private bytes or prompt the OS keychain.
+   let private_key_status = "not_checked", next = "OS keychain availability is not checked by status; use explicit --allow-os-consent on the intended send/read.";
+   if (row.store === "file") {
+    try { permissions(path.join(this.root, row.id + ".key")); private_key_status = "present"; next = "File exists with protected permissions; this listing does not verify its key material."; }
+    catch (error) {
+     private_key_status = error.code === "ENOENT" ? "key_missing" : "unavailable";
+     next = private_key_status === "key_missing" ? "Restore the original private key from its protected backup; do not run keys init or replace the key. No plaintext fallback." : "Check the original key file permissions and store; do not initialize replacement keys.";
+    }
+   }
+   return { id: row.id, bundle: JSON.parse(row.bundle), key_store: row.store, live_state: row.live_state, private_key_status, next, created_ms: row.created_ms };
+  });
   const opRows = this.db.prepare("SELECT rowid AS cursor,id,public_json,digest,state,created_ms,broker_pid,revision FROM key_operations WHERE rowid>? ORDER BY rowid LIMIT ?").all(operationCursor, limit + 1);
   const operations = opRows.slice(0, limit).map(row => ({ id: row.id, operation: JSON.parse(row.public_json), digest: row.digest, state: row.state, created_ms: row.created_ms, broker_pid: row.broker_pid, revision: row.revision, recovery_choices: row.state === "committed" ? [] : ["adopt", "abandon-if-absent"].map(action => ({ action, approval_digest: recoveryApproval(this.configId(), row, action) })) }));
   return { ok: true, configured: Boolean(this.db.prepare("SELECT id FROM identities LIMIT 1").get()), config_identity: this.configId(), archive_only: this.db.prepare("SELECT value FROM meta WHERE key='restore_paused'").get()?.value === "1", identities, operations, next_identity_cursor: rows.length > limit ? rows[limit - 1].cursor : null, next_operation_cursor: opRows.length > limit ? opRows[limit - 1].cursor : null, next: "Continue listings with the returned cursors. For pending key creation, reconcile the exact operation/digest; do not repeat initialization." };

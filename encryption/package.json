@@ -1,7 +1,7 @@
 {
   "name": "@a2a-exposed/encryption",
   "version": "0.8.54",
-  "description": "Local sealed A2A envelope primitives. Protocol review draft; transport integration is not enabled.",
+  "description": "Local sealed A2A envelope primitives and key custody for opt-in CLI and stdio MCP encryption.",
   "type": "module",
   "exports": {
     ".": "./index.mjs",

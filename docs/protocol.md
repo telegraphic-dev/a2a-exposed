@@ -178,7 +178,7 @@ signed ciphertext-only carriers. See [local keys and pairing](local-key-pairing.
 for the public routing fields, local verification and task-state limitations.
 
 Encrypted sends refused before storage use JSON-RPC `-32602` with
-`error.data.reason` equal to `encryption_disabled` or `peer_keys_missing`. These
+`error.data.reason` equal to `encryption_disabled`, `peer_keys_missing` or `sealed_invalid`. These
 reasons create no task. Clients should map them to fixed local guidance rather
 than display peer-supplied error text; other errors do not prove non-delivery.
 

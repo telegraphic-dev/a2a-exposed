@@ -204,3 +204,18 @@ test('reconciliation refuses a recorded broker that is still alive',async t=>{
  await assert.rejects(state.reconcileInitialization({operationId:op.id,expectedDigest:op.digest,action:'adopt',approvalDigest:recoveryDigest(state,op.id,'adopt'),ownerApproved:true}),{code:'operation_in_progress'});
  assert.equal(state.status().identities.length,0);
 });
+
+
+test("status reports missing file keys without reading or replacing private material", async t => {
+ const { state, dir } = fixture(t), result = await init(state);
+ const keyFile = path.join(dir, "encryption", result.id + ".key");
+ assert.equal(state.status().identities[0].private_key_status, "present");
+ fs.renameSync(keyFile, keyFile + ".held");
+ const row = state.status().identities[0];
+ assert.equal(row.private_key_status, "key_missing");
+ assert.match(row.next, /Restore the original private key.*do not run keys init/);
+ assert.equal(row.live_state, "local-only");
+ assert.equal(fs.existsSync(keyFile), false);
+ fs.renameSync(keyFile + ".held", keyFile);
+ assert.equal(state.status().identities[0].private_key_status, "present");
+});

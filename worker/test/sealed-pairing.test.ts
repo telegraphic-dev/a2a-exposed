@@ -24,12 +24,12 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
  const dispatch=async(name:string,request:Request)=>{const pending:Promise<any>[]=[];const res=await worker.fetch(request,envs[name],{waitUntil:(p:Promise<any>)=>pending.push(p),passThroughOnException(){}} as any);await Promise.allSettled(pending);return res;};
  const owner=(name:string,route:string,method="GET",body?:any)=>dispatch(name,new Request(`https://${name}.example.com${route}`,{method,headers:{authorization:"Bearer dummy-owner","content-type":"application/json"},...(body===undefined?{}:{body:JSON.stringify(body)})}));
  let publishError:{status:number,error:string}|null=null;
- let refuseSend: "encryption_disabled" | "peer_keys_missing" | "unknown" | "unknown_reason" | null=null;
+ let refuseSend: "encryption_disabled" | "peer_keys_missing" | "sealed_invalid" | "unknown" | "unknown_reason" | null=null;
  const server=http.createServer(async(req,res)=>{try{
   const name=String(req.headers["x-test-agent"]);let body="";for await(const chunk of req)body+=chunk;records.push({name,path:req.url,body});
   if(publishError && req.url==="/owner/sealed-key" && req.method==="PUT"){res.writeHead(publishError.status,{"content-type":"application/json"});res.end(JSON.stringify({error:publishError.error}));return;}
   const headers=new Headers();for(const [k,v]of Object.entries(req.headers))if(typeof v==="string"&&!["host","x-test-agent","connection"].includes(k))headers.set(k,v);
-  if((refuseSend==="unknown"||refuseSend==="unknown_reason")&&req.url==="/"&&req.method==="POST"){res.writeHead(200,{"content-type":"application/json"});res.end(JSON.stringify({jsonrpc:"2.0",id:JSON.parse(body).id,error:{code:refuseSend==="unknown"?-32603:-32602,message:"untrusted-private-error",data:{reason:"__proto__"}}}));return;}
+  if((refuseSend==="sealed_invalid"||refuseSend==="unknown"||refuseSend==="unknown_reason")&&req.url==="/"&&req.method==="POST"){res.writeHead(200,{"content-type":"application/json"});res.end(JSON.stringify({jsonrpc:"2.0",id:JSON.parse(body).id,error:{code:refuseSend==="unknown"?-32603:-32602,message:"untrusted-private-error",data:{reason:refuseSend==="sealed_invalid"?"sealed_invalid":"__proto__"}}}));return;}
   const originalFlag=envs[name].A2A_SEALED_ENABLED;
   const keyRow=refuseSend==="peer_keys_missing"&&req.url==="/"&&req.method==="POST"?await envs[name].DB.prepare("SELECT label,sealed_requester FROM peers WHERE sealed_requester IS NOT NULL LIMIT 1").first():null;
   if(refuseSend==="encryption_disabled"&&req.url==="/"&&req.method==="POST")envs[name].A2A_SEALED_ENABLED="";
@@ -65,7 +65,7 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
  }
  for(const error of [{status:409,error:"sealed key already exists; rotation is not supported"},{status:400,error:"send public fields only"},{status:404,error:"not found"}]){
   publishError=error;const result=await cli("alice",["keys","publish","--id",ids.alice,"--json"]);
-  assert.equal(result.code,1);assert.ok(result.err.includes(error.error),result.err);
+  assert.equal(result.code,1);assert.ok(result.err.includes(error.error),result.err);assert.match(result.err,/Public-key publication request failed/);
   assert.equal(result.err.includes("matching Worker version"),error.status===404);
  }
  publishError=null;
@@ -89,7 +89,10 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
  const resumedLines=resumed.out.trim().split("\n").map((s:string)=>JSON.parse(s));
  assert.equal(resumedLines[0].status,"key_comparison");assert.equal(resumedLines[0].safety_code,lines[0].safety_code);
  assert.equal(fs.existsSync(path.join(dirs.alice,"peers.json")),false);
- assert.equal((await owner("bob",`/owner/pairing/${code}/approve`,"POST",{})).status,200);
+ const approval=await owner("bob",`/owner/pairing/${code}/approve`,"POST",{});assert.equal(approval.status,200);assert.match(((await approval.json())as any).continuation.next,/Waiting for the requester.*same connect/);
+ const beforeCollection=await cli("bob",["keys","pairings","--json"]);
+ assert.deepEqual(JSON.parse(beforeCollection.out).pairings,[]);
+ assert.match(JSON.parse(beforeCollection.out).next,/requester must re-run the same connect/);console.log("Pairing listing before token collection: "+beforeCollection.out.trim());
  // A changed discovery bundle must not redeem the approved token or change local trust.
  const originalKey:any=await envs.bob.DB.prepare("SELECT value FROM settings WHERE key='sealed_public_bundle'").first();
  await envs.bob.DB.prepare("UPDATE settings SET value=? WHERE key='sealed_public_bundle'").bind(JSON.stringify({...bundles.bob,signature:bundles.alice.signature})).run();
@@ -106,12 +109,15 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
  // Both supported wire versions use the same HPKE envelope and local pins.
  for(const proto of ["0.3","1.0"]){
   const secret="fixture-private-text-"+proto+"-"+crypto.randomUUID();
-  const result=await cli("alice",["send","--to","bob","--text",secret,"--proto",proto]);
+  const result=await cli("alice",["send","--to","bob","--text",secret,"--json","--proto",proto]);
   assert.equal(result.code,0,result.err);const sent=JSON.parse(result.out);
   assert.equal(sent.serverReadable,false);assert.equal(sent.senderHistorySaved,true);
   const inbox=await cli("bob",["inbox","--json"]);assert.equal(inbox.code,0,inbox.err);
   const opened=JSON.parse(inbox.out).find((x:any)=>x.taskId===sent.taskId);
-  assert.equal(opened.text,secret);assert.equal(opened.locallyOpened,true);assert.equal(opened.taskStateAuthenticated,false);
+  assert.equal(opened.text,secret);
+  await envs.bob.DB.prepare("UPDATE history SET state=NULL WHERE task_id=?").bind(sent.taskId).run();
+  const log=(await (await owner("bob","/owner/log")).json())as any;assert.equal(log.entries.find((r:any)=>r.taskId===sent.taskId).state,"submitted");
+  assert.equal(opened.continuation.kind,"local-encrypted");assert.equal(opened.locallyOpened,true);assert.equal(opened.taskStateAuthenticated,false);
   for(const name of ["alice","bob"]){
    const history=await cli(name,["history",sent.contextId,"--json"]);assert.equal(history.code,0,history.err);
    assert.ok(JSON.parse(history.out).some((x:any)=>x.text===secret&&x.locallyOpened));
@@ -128,7 +134,7 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
   const call=async(payload:any,enabled=true)=>{envs.bob.A2A_SEALED_ENABLED=enabled?"1":"";const res=await dispatch("bob",new Request("https://bob.example.com/",{method:"POST",headers:{authorization:`Bearer ${token}`,"content-type":"application/json","A2A-Version":proto,"A2A-Extensions":"https://a2a.exposed/ext/sealed/v1"},body:JSON.stringify(payload)}));return res.json()as any;};
   assert.ok(!(await call(request)).error,"same bytes are idempotent");
   const mutated=structuredClone(request);mutated.params.message.parts.push(proto==="0.3"?{kind:"text",text:"leak"}:{text:"leak"});assert.ok((await call(mutated)).error);
-  const tampered=structuredClone(request);tampered.params.message.parts[0].data.signature="A".repeat(86);assert.ok((await call(tampered)).error);
+  const tampered=structuredClone(request);tampered.params.message.parts[0].data.signature="A".repeat(86);const invalid=await call(tampered);assert.equal(invalid.error.data.reason,"sealed_invalid");assert.match(invalid.error.message,/Nothing was delivered.*keys pairings --json.*current matching CLI.*not resend/);
   const wrongContext=structuredClone(request);wrongContext.params.message.contextId="another-context";assert.ok((await call(wrongContext)).error);
   const downgradeRequest=structuredClone(request);downgradeRequest.params.message={messageId:crypto.randomUUID(),role:"user",parts:[{kind:"text",text:"leak"}]};assert.ok((await call(downgradeRequest)).error);
   assert.match((await call(request,false)).error.message,/disabled on this inbox.*Ask its owner/);envs.bob.A2A_SEALED_ENABLED="1";
@@ -139,13 +145,13 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
   const wrongRow=await cli("bob",["history",wrongRowContext,"--json"]);assert.equal(wrongRow.code,1);
   assert.ok(JSON.parse(wrongRow.out).some((r:any)=>r.reason==="binding_mismatch" && /original task\/context IDs.*sender owner/.test(r.next)));
   const countTasks=async()=>Number((await envs.bob.DB.prepare("SELECT COUNT(*) AS n FROM tasks").first()).n);
-  for(const reason of ["encryption_disabled","peer_keys_missing"] as const){
+  for(const reason of ["encryption_disabled","peer_keys_missing","sealed_invalid"] as const){
    const count=await countTasks();refuseSend=reason;
    try{
     const refused=await cli("alice",["send","--to","bob","--text","refusal fixture","--proto",proto]);assert.equal(refused.code,1);
-    assert.match(refused.err,reason==="encryption_disabled"?/encryption is disabled there.*recipient's owner.*service operator/:/no approved encryption keys.*keys status --json.*existing human-approved key pairing/);
-    assert.match(refused.err,/Nothing was delivered.*No plaintext was sent/);assert.equal(refused.err.includes("check history"),false);
-    const refusedMcp=await mcp("alice","send",{to:"bob",text:"refusal fixture",protocol:proto});assert.equal(refusedMcp.isError,true);assert.match(refusedMcp.content[0].text,/recipient inbox refused.*Nothing was delivered/);
+    assert.match(refused.err,reason==="sealed_invalid"?/could not verify.*Nothing was delivered.*keys pairings --json/:reason==="encryption_disabled"?/encryption is disabled there.*recipient's owner.*service operator/:/no approved encryption keys.*keys status --json.*existing human-approved key pairing/);
+    assert.match(refused.err,reason==="sealed_invalid"?/Nothing was delivered.*not resend automatically or as plaintext/:/Nothing was delivered.*No plaintext was sent/);assert.equal(refused.err.includes("check history"),false);
+    const refusedMcp=await mcp("alice","send",{to:"bob",text:"refusal fixture",protocol:proto});assert.equal(refusedMcp.isError,true);assert.match(refusedMcp.content[0].text,reason==="sealed_invalid"?/recipient inbox could not verify.*Nothing was delivered/:/recipient inbox refused.*Nothing was delivered/);
     console.log("Recipient refusal evidence: "+refused.err.trim());
    }finally{refuseSend=null;}
    assert.equal(await countTasks(),count,"a pre-storage refusal creates no task");
@@ -181,8 +187,12 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
   try {
    const before=records.filter((r:any)=>r.path==="/"&&JSON.parse(r.body||"{}").params?.message).length;
    const missing=await cli("bob",["history",mcpContext,"--json"]);assert.equal(missing.code,1);assert.equal(missing.out.includes(mcpSecret),false);
-   assert.ok(JSON.parse(missing.out).some((r:any)=>r.reason==="key_missing" && /Restore the original private key.*do not run keys init/.test(r.next)));
+   assert.ok(JSON.parse(missing.out).some((r:any)=>r.reason==="key_missing" && /expects local key.*original --config-dir.*do not run keys init/.test(r.next)));
    const missingMcp=await mcp("bob","history",{contextId:mcpContext});assert.equal(missingMcp.isError,true);assert.equal(JSON.stringify(missingMcp).includes(mcpSecret),false);
+   const missingStatus=await cli("bob",["keys","status","--json"]);assert.equal(missingStatus.code,0,missingStatus.err);
+   assert.equal(JSON.parse(missingStatus.out).identities.find((r:any)=>r.id===ids.bob).private_key_status,"key_missing");
+   console.log("Missing-key CLI evidence: "+missing.out.trim());console.log("Missing-key status evidence: "+missingStatus.out.trim());console.log("Missing-key MCP evidence: "+JSON.stringify(missingMcp));
+   assert.ok(missingMcp.structuredContent.rows.some((r:any)=>r.reason==="key_missing"&&r.text==="[encrypted message]"));
    assert.equal(fs.existsSync(bobKey),false,"a read must not generate replacement private material");
    assert.equal(records.filter((r:any)=>r.path==="/"&&JSON.parse(r.body||"{}").params?.message).length,before);
   } finally { fs.renameSync(bobKey+".held",bobKey); }

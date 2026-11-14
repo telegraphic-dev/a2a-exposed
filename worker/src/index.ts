@@ -32,7 +32,7 @@ type Json = any;
 
 class RpcError extends Error {
 	code: number;
-	data?: { reason: "encryption_disabled" | "peer_keys_missing" };
+	data?: { reason: "encryption_disabled" | "peer_keys_missing" | "sealed_invalid" };
 	constructor(code: number, msg: string, data?: RpcError["data"]) { super(msg); this.code = code; this.data = data; }
 }
 class HttpError extends Error {
@@ -1025,7 +1025,7 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
    if (Object.keys(raw).some(k => !allowed.includes(k)) || Object.keys(params).some(k => !["message","configuration"].includes(k)) || Object.keys(params.configuration || {}).some(k => !["blocking","returnImmediately","historyLength"].includes(k) || k === "historyLength" && params.configuration[k] !== 1)) throw Error();
    for (const part of raw.parts) if (Object.keys(part).some(k => !["kind","data","metadata"].includes(k))) throw Error();
    sealed = await SealedKeys.verifyMessage(msg, JSON.parse(sealedPeer.sealed_requester), JSON.parse(sealedPeer.sealed_responder));
-  } catch { throw new RpcError(-32602, "Invalid encrypted message; no plaintext fallback"); }
+  } catch { throw new RpcError(-32602, "The recipient inbox could not verify this encrypted message. Nothing was delivered. Check the existing approved pairing with keys pairings --json on the receiving side and keys status --json on both sides; use a current matching CLI. Do not resend automatically or as plaintext.", { reason: "sealed_invalid" }); }
  }
 	const routed = readRouteFields(msg.metadata, params.metadata);
 	if (!routed.ok) throw new RpcError(-32602, `Invalid params: ${routed.error}`);
@@ -1069,7 +1069,7 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
 	if (directReply) task.metadata = { ...(task.metadata || {}), [DIRECT_REPLY_META]: params.metadata?.[DIRECT_REPLY_META] || msg.metadata?.[DIRECT_REPLY_META] };
 	const preview = sealed ? "[encrypted message]" : A.textOf(msg);
 	const claimToken = A.newId();
-	const history = { dir: "in", peer: label, taskId: task.id, role: "user", text: preview, data: { messageId: msg.messageId, ...(sealed ? { sealed } : {}) } };
+	const history = { dir: "in", peer: label, taskId: task.id, role: "user", text: preview, ...(sealed ? { state: task.status.state } : {}), data: { messageId: msg.messageId, ...(sealed ? { sealed } : {}) } };
 	const stored = creating
 		? await ctx.DB.batch([
 			claimContextStmt(ctx, contextId, label, ts),
@@ -1938,6 +1938,8 @@ async function replyPeer(ctx: TenantContext, label: string): Promise<{ alias: st
 
 /** Reads never pair or revive a revoked return token. A claimed card is only a human-reviewable suggestion. */
 async function continuationGuide(ctx: TenantContext, label: string, rawCard?: string): Promise<Json> {
+	const encrypted: Json = await ctx.DB.prepare("SELECT sealed_requester FROM peers WHERE label=? AND revoked_at IS NULL").bind(label).first();
+ if (encrypted?.sealed_requester) return { kind: "local-encrypted", next: "This peer uses local encryption. Read local history, then select an existing pinned alias with peers list --json in the original config directory and continue with send and the same context id. Server callback availability does not describe local credentials; do not create another pairing automatically." };
 	const callback = await replyPeer(ctx, label);
 	if (callback) return { kind: "send", alias: callback.alias, next: "Read history, then continue with send and the same context id. For the CLI, select a local alias with peers list --json." };
 	const card = Addr.canonicalCardUrl(rawCard || "");
@@ -2865,7 +2867,11 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 		// Recent history, newest first. Unlike GET /owner/inbox this does not clear a pending wake, and it does not return data_json.
 		const clip = (v: unknown, max: number) => typeof v === "string" ? scrubSecretText(v).slice(0, max) : null;
 		const rows = await ctx.DB.prepare(
-			"SELECT seq, context_id, ts, dir, peer, task_id, role, state, event, text FROM history ORDER BY seq DESC LIMIT 100",
+			`SELECT seq, context_id, ts, dir, peer, task_id, role,
+    COALESCE(state, CASE WHEN json_type(data_json, '$.sealed') = 'object' THEN
+      (SELECT json_extract(t.status_json, '$.state') FROM tasks t
+       WHERE t.id = history.task_id AND t.context_id = history.context_id AND t.peer = history.peer)
+    END) AS state, event, text FROM history ORDER BY seq DESC LIMIT 100`,
 		).all();
 		return json({
 			entries: (rows.results as Json[]).map((r) => ({
@@ -3537,7 +3543,11 @@ async function ownerPairing(req: Request, ctx: TenantContext, ectx: ExecutionCon
 		if (!d.ok) return json({ error: d.error }, 409);
 		return json({ ok: true, decision: approve ? "approved" : "denied", userCode: P.formatUserCode(code), label: d.label || null,
 			clientName: d.request.client_name || d.request.client_id || null, replaced: !!d.replaced,
-			...(approve ? { continuation: { ...(await continuationGuide(ctx, d.label!, d.request.agent_card_url)),
+			...(approve ? { continuation: d.request.sealed_requester ? {
+    kind: "await-token-collection",
+    next: "Approved. Waiting for the requester to run the same connect command again to collect its token and finish; then use keys pairings --json and keys pin. Do not create another request.",
+    note: "Only public bundles were approved; no encrypted message was sent."
+   } : { ...(await continuationGuide(ctx, d.label!, d.request.agent_card_url)),
 				note: "Wait for token collection and the signed address announcement, then check token list --json; the existing return-token flow can provide both directions without another approval." } } : {}) });
 	}
 	return json({ error: "not found" }, 404);

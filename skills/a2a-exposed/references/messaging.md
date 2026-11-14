@@ -122,3 +122,11 @@ The one `A2A_SEALED_ENABLED=1` switch must be set explicitly on both fixture CLI
 and Workers. A hosted Worker passes the explicit flag to its tenants; this
 does not configure either local process. Fixture success does not verify
 real desktop MCP clients, browser approvals or live keychain prompts.
+
+For encrypted pairing, resume the original connect after human approval to collect
+the token before the receiving owner lists `keys pairings --json` and pins it.
+An empty list before collection is expected. `keys status --json` reports missing
+private-key files without reading private bytes or prompting a keychain. Restore
+the original key; never initialize a replacement as a read recovery. Inspect
+encrypted delivery with `history CONTEXT --from ALIAS --json`, not ordinary
+`outbound`/`poll`. History uses archive verification even for fresh rows.
