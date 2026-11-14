@@ -1094,7 +1094,7 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
 	if (directReply) task.metadata = { ...(task.metadata || {}), [DIRECT_REPLY_META]: params.metadata?.[DIRECT_REPLY_META] || msg.metadata?.[DIRECT_REPLY_META] };
 	const preview = sealed ? "[encrypted message]" : A.textOf(msg);
 	const claimToken = A.newId();
-	const history = { dir: "in", peer: label, taskId: task.id, role: "user", text: preview, ...(sealed ? { state: task.status.state } : {}), data: { messageId: msg.messageId, ...(sealed ? { sealed } : {}) } };
+	const history = { dir: "in", peer: label, taskId: task.id, role: "user", text: preview, state: task.status.state, data: { messageId: msg.messageId, ...(sealed ? { sealed } : {}) } };
 	const stored = creating
 		? await ctx.DB.batch([
 			claimContextStmt(ctx, contextId, label, ts),
@@ -1964,7 +1964,7 @@ async function replyPeer(ctx: TenantContext, label: string): Promise<{ alias: st
 /** Reads never pair or revive a revoked return token. A claimed card is only a human-reviewable suggestion. */
 async function continuationGuide(ctx: TenantContext, label: string, rawCard?: string): Promise<Json> {
 	const encrypted: Json = await ctx.DB.prepare("SELECT sealed_requester FROM peers WHERE label=? AND revoked_at IS NULL").bind(label).first();
- if (encrypted?.sealed_requester) return { kind: "local-encrypted", next: "This peer uses local encryption. Read local history, then select an existing pinned alias with peers list --json in the original config directory and continue with send and the same context id. Server callback availability does not describe local credentials; do not create another pairing automatically." };
+ if (encrypted?.sealed_requester) return { kind: "local-encrypted", next: "This peer uses local encryption. Read local history, then select an existing pinned alias with peers list --json in the original config directory and continue with send and the same context id. If no pinned outbound alias exists, select the existing local ID with keys status --json, verify the peer URL with its owner, and ask your human before running connect <peer URL> --sealed-key-id <id> --alias ALIAS --no-wait. This reverse pairing needs owner approval; do not pair automatically or create replacement keys. Server callback availability does not describe local credentials." };
 	const callback = await replyPeer(ctx, label);
 	if (callback) return { kind: "send", alias: callback.alias, next: "Read history, then continue with send and the same context id. For the CLI, select a local alias with peers list --json." };
 	const card = Addr.canonicalCardUrl(rawCard || "");
@@ -2489,7 +2489,10 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			return json({ task: ownerTaskView(t), push: await notifyPeer(ctx, ectx, t) });
 		}
 		if (seg[2] === "reply" && m === "POST") {
-   if (t.history.some((msg: Json) => SealedKeys.envelopeOf(msg))) return json({ error: "This task requires a local encrypted response; plaintext reply is disabled" }, 409);
+   if (t.history.some((msg: Json) => SealedKeys.envelopeOf(msg))) {
+    const continuation = await continuationGuide(ctx, t._peer);
+    return json({ code: "encrypted_reply_required", error: "This task requires a local encrypted response; plaintext reply is disabled. " + continuation.next, continuation }, 409);
+   }
 			const b = await body();
 			const state = b.state || "completed";
 			if (!["completed", "input-required", "failed", "rejected", "working"].includes(state)) return json({ error: "bad state" }, 400);
@@ -2895,10 +2898,9 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 		const clip = (v: unknown, max: number) => typeof v === "string" ? scrubSecretText(v).slice(0, max) : null;
 		const rows = await ctx.DB.prepare(
 			`SELECT seq, context_id, ts, dir, peer, task_id, role,
-    COALESCE(state, CASE WHEN json_type(data_json, '$.sealed') = 'object' THEN
+    COALESCE(state,
       (SELECT json_extract(t.status_json, '$.state') FROM tasks t
-       WHERE t.id = history.task_id AND t.context_id = history.context_id AND t.peer = history.peer)
-    END) AS state, event, text FROM history ORDER BY seq DESC LIMIT 100`,
+       WHERE t.id = history.task_id AND t.context_id = history.context_id AND t.peer = history.peer)) AS state, event, text FROM history ORDER BY seq DESC LIMIT 100`,
 		).all();
 		return json({
 			entries: (rows.results as Json[]).map((r) => ({

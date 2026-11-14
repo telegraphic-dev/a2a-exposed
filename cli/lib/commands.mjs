@@ -11,6 +11,7 @@ export async function owner(method, path, body, timeout) {
 	const base = baseUrl(), tok = C.get("A2A_OWNER_TOKEN");
 	if (!base || !tok) die(`A2A_BASE_URL / A2A_OWNER_TOKEN missing (run \`${CLI} init\` or edit ${C.CONFIG_FILE})`);
 	const { status, data } = await httpJson(base + path, { method, body, headers: { authorization: `Bearer ${tok}` }, timeout });
+	if (status === 409 && data?.code === "encrypted_reply_required") die("This task needs a local encrypted response. Read local history and select an existing pinned alias with peers list --json, then continue with send and the same context id. If no pinned outbound alias exists, select the existing local ID with keys status --json, verify the peer URL with its owner, and ask your human before running connect <peer URL> --sealed-key-id <id> --alias ALIAS --no-wait. Do not pair automatically or create replacement keys. No plaintext reply was sent.");
 	if (status < 200 || status >= 300) die(`worker ${method} ${path} -> ${describeHttp(status, data)}`);
 	return data;
 }
@@ -409,7 +410,7 @@ export async function send(o) {
 	const ctx = (obj && obj.contextId) || o.context || newId();
 	const tid = isTask ? obj.id : null;
 	out(obj);
-	await logHistory(ctx, { dir: "out", peer: alias, taskId: tid, role: "user", text, data: { messageId: msg.messageId, endpoint: url, protocol: version } });
+	await logHistory(ctx, { dir: "out", peer: alias, taskId: tid, role: "user", state: isTask ? plainState(obj) : null, text, data: { messageId: msg.messageId, endpoint: url, protocol: version } });
 	if (tid) {
 		const saved = await persistOutbound("POST", "/owner/outbound", { taskId: tid, contextId: ctx, peer: alias, endpoint: url, protocol: version, pushToken, task: obj }, "save outbound task");
 		if (o.push && !saved) console.error(`warning: push updates cannot authenticate because the outbound task token could not be saved; use ${CLI} poll --to ${alias} ${tid} instead; the message was delivered, do not resend`);

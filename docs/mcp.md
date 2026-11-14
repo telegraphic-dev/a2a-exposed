@@ -217,3 +217,8 @@ pair-back address or a missing address announcement. Verify any claimed address
 with the owner and ask the human before pairing. The connector cannot approve
 pairing. A closed-task reply explains how to read history and continue with
 `send`; it does not overwrite the stored answer.
+
+For local stdio MCP, `list_peers.encryptionEnabled` describes the current process
+only: it is true exactly when that process has `A2A_SEALED_ENABLED=1`. It does
+not report the setting on the inbox Worker or on the remote peer and does not
+change either setting. See [local keys](local-key-pairing.md).

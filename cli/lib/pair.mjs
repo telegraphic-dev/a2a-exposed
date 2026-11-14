@@ -381,7 +381,7 @@ A different agent at the same URL? Pass another --alias.`);
 	}
  const mismatchNext = "If any group differs, do not use this pairing. Ask the approving inbox owner to revoke it with token revoke LABEL (select LABEL with keys pairings --json), and tell the other owner.";
  if (preparedSealed) emit({ status: "key_comparison", safety_code: preparedSealed.safetyPreview, verification: "tofu", independently_verified: false, traffic_requires_test_flag: true, next: mismatchNext }, `Local safety code: ${preparedSealed.safetyPreview}\nTrust on first use; not independently verified. Compare through another trusted channel. ${mismatchNext} Encrypted traffic needs A2A_SEALED_ENABLED=1 in each local CLI/MCP process and on each inbox Worker, with owner approval.`);
-	if (st) emit({ status: "authorization_pending", resumed: true, alias, user_code: st.userCode, verification_uri: st.verificationUri, verification_uri_complete: st.verificationUriComplete, expires_in: Math.round((st.expiresAt - Date.now()) / 1000) },
+	if (st) emit({ status: "checking_authorization", resumed: true, alias, user_code: st.userCode, verification_uri: st.verificationUri, verification_uri_complete: st.verificationUriComplete, expires_in: Math.round((st.expiresAt - Date.now()) / 1000) },
 		`Resuming the pairing request to ${peerName} (code ${st.userCode}, link ${st.verificationUriComplete}).`);
 	else {
 		const own = baseUrl();

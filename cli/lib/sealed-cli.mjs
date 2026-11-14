@@ -29,7 +29,7 @@ async function paired(peer, o, action) {
   if (error instanceof CliError) throw error;
   if (["key_lost", "key_unknown"].includes(error?.code)) {
    const status = store.status();
-   const message = `This config (${status.config_identity}) expects local key ${expectedLocalId}; it holds catalogued IDs: ${status.identities.map(row => row.id).join(", ") || "none"}. The expected private key is unavailable. Use the original --config-dir that holds this key, or restore that original key from its protected backup or OS keychain. Inspect keys status --json; do not run keys init or replace the key. No plaintext fallback.`;
+   const message = `This config (${status.config_identity}) expects local key ${expectedLocalId}; its key catalog lists IDs: ${status.identities.map(row => row.id).join(", ") || "none"}. Catalog entries are public metadata, not proof that private material is available. The expected private key file or keychain entry is unavailable. Use the original --config-dir that holds this key, or restore that original key from its protected backup or OS keychain. Inspect keys status --json; do not run keys init or replace the key. No plaintext fallback.`;
    fail(message, error.code);
   }
   if (error?.code === "key_store_consent") fail("This identity uses the OS keychain. Re-run this send/read with --allow-os-consent only when a human can answer the OS authorization prompt. No store fallback or plaintext retry.", "key_store_consent");
@@ -51,7 +51,7 @@ async function readInput() {
 export async function send(o, { emit = value => console.log(JSON.stringify(value, null, 2)) } = {}) {
  if (process.env.A2A_SEALED_ENABLED !== "1") fail(encryptionDisabled + " Use a separate --config-dir for ordinary sends. No plaintext was sent.");
  gate();
- if (!o.to || !C.loadPeers()[o.to]?.sealed) fail("This config directory has local keys. Select a pinned alias with peers list --json; complete human-approved connect first. Use a separate --config-dir for ordinary sends. No plaintext was sent.");
+ if (!o.to || !C.loadPeers()[o.to]?.sealed) fail("This config directory has local keys. Select a pinned outbound alias with peers list --json. If none exists, select the existing local ID with keys status --json, verify the peer URL with its owner, and ask your human before running connect <peer URL> --sealed-key-id <id> --alias ALIAS --no-wait. Do not pair automatically or create replacement keys. Use a separate --config-dir for ordinary sends. No plaintext was sent.");
  if (o.text === undefined && process.stdin.isTTY) fail("Encrypted send requires --text TEXT or piped stdin; no terminal prompt is used. Nothing was sent.");
  if (o.push || o.wake || o.intent) fail("Encrypted send does not support --push, --wake or --intent yet; nothing was sent.");
  const pe = C.loadPeers()[o.to], token = peerToken(pe.token_env);
@@ -159,7 +159,7 @@ export async function openRows(rows, o, { historical = false, markFailure = true
     no_pin: "Run keys status --json and keys pairings --json, then complete the existing human-approved pairing for this peer. Do not change trust automatically. No plaintext fallback.",
     binding_mismatch: "The encrypted message does not match this task or conversation. Preserve the original task/context IDs and ask the sender owner to check them; do not move or retry the message. No plaintext fallback.",
     plaintext_from_pinned_peer: "Ask the peer owner to use their approved encrypted client for this pinned pairing. Do not accept a plaintext retry.",
-   })[reason] || "Preserve the original keys and pairing; inspect keys status --json. No plaintext fallback.";
+   })[reason] || "Preserve the original keys and pairing; inspect keys status --json. Do not resend. Report the taskId and contextId shown on this row to the inbox owner for investigation. No plaintext fallback.";
    // Do not echo unverified text, data or provider errors, even in JSON mode.
    out.push({ taskId: row.taskId ?? row.task_id ?? null, contextId: row.contextId ?? row.context_id ?? null, from: peer, encrypted: reason !== "plaintext_from_pinned_peer", locallyOpened: false, reason, next, text: reason === "plaintext_from_pinned_peer" ? "[unencrypted message refused from pinned peer]" : "[encrypted message]" });
    if (markFailure) process.exitCode = 1;
