@@ -276,6 +276,61 @@ test("enforce batches changed status into one wake", async (t) => {
 	}
 });
 
+test("shadow savings count each avoidable delivery once and test wakes stay out of delivered", async (t) => {
+	const realNow = Date.now;
+	let offset = 0;
+	Date.now = () => realNow() + offset;
+	const env = envFor({ WAKE_DEBOUNCE_SECONDS: "10", WAKE_BUSY_SECONDS: "180", ENABLE_CRON: "1" });
+	const h = harness(env);
+	t.after(() => { Date.now = realNow; h.restore(); });
+	type Report = { delivered: number; testDelivered: number; shadow: number; shadowAvoidable: number; counts: { decision: string }[] };
+	const report = async () => (await h.call("GET", "/owner/wake/routing")).data as Report;
+	try {
+		const token = ((await h.call("POST", "/owner/peers", { label: "ada" })).data as { token: string }).token;
+		const peer = `Bearer ${token}`;
+		const status = (text: string, contextId: string) => h.call("POST", "/", message(text, { contextId, message: { "a2a.exposed/wake": "auto", "a2a.exposed/intent": "status" } }), peer);
+		const ack = (contextId: string) => h.call("POST", "/", message("thanks", { contextId, message: { "a2a.exposed/wake": "auto", "a2a.exposed/intent": "ack" } }), peer);
+
+		assert.equal((await h.call("POST", "/owner/wake/test", {})).data && h.sent.length, 1);
+		let r = await report();
+		assert.deepEqual([r.delivered, r.testDelivered, r.shadowAvoidable], [0, 1, 0], "a test wake is not a delivery");
+
+		// A changed and an unchanged status inside the busy window merge into one catch-up.
+		// Enforce would still send that catch-up for the changed status, so neither decision is a saved delivery.
+		// Follow-ups are spaced past the 10 s debounce, as in the staging run, so the busy hold applies.
+		await h.call("POST", "/", message("start", { contextId: "ctx-merge" }), peer);
+		offset += 16_000;
+		await status("building", "ctx-merge");
+		offset += 16_000;
+		await status("building", "ctx-merge");
+		assert.equal(h.sent.length, 2);
+		offset += 181_000;
+		await h.call("GET", "/health");
+		assert.equal(h.sent.length, 3, "one catch-up for both statuses");
+		r = await report();
+		assert.equal(r.shadow, 2, "both statuses are shadow decisions");
+		assert.deepEqual([r.delivered, r.shadowAvoidable], [2, 0]);
+
+		// Acks enforce would suppress: the first wakes now, the second is held and merged. Each send is one saving.
+		await ack("ctx-acks");
+		offset += 16_000;
+		await ack("ctx-acks");
+		offset += 16_000;
+		await ack("ctx-acks");
+		assert.equal(h.sent.length, 4);
+		offset += 181_000;
+		await h.call("GET", "/health");
+		assert.equal(h.sent.length, 5);
+		r = await report();
+		assert.equal(r.shadow, 5);
+		assert.deepEqual([r.delivered, r.testDelivered, r.shadowAvoidable], [4, 1, 2]);
+		assert.equal(r.counts.some((row) => row.decision === "invocation"), false);
+		assert.equal(h.sent.some((body) => "shadowOnly" in body), false, "the counter flag is never sent");
+	} finally {
+		Date.now = realNow;
+	}
+});
+
 test("always is still subject to the peer rate limit", async (t) => {
 	const env = envFor({ RATE_PER_MIN: "1" });
 	const h = harness(env);

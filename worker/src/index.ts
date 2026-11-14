@@ -307,7 +307,9 @@ async function attemptWake(ctx: TenantContext, ectx: ExecutionContext, payload: 
 	const catchUp = !!payload.busy;
 	const delivered = { ...payload };
 	delete delivered.busy;
-	const ev: WakeEvent = { ...delivered, publicUrl: ctx.PUBLIC_URL };
+	// shadowOnly is a routing counter flag, never part of the request.
+	const { shadowOnly: _counterFlag, ...event } = delivered;
+	const ev: WakeEvent = { ...event, publicUrl: ctx.PUBLIC_URL };
 	let req;
 	try { req = await renderWake(wakeConfig(ctx), ev); } catch (e) {
 		if (ctx.WAKE_TRANSPORT === "relay") { await clearBusy(ctx, payload); return { status: null, error: "invalid", info: "invalid relay receiver configuration" }; }
@@ -326,7 +328,7 @@ async function attemptWake(ctx: TenantContext, ectx: ExecutionContext, payload: 
 			const result = await response.json() as { status?: number; error?: string };
 			const outcome = relayTestOutcome(response, result);
 			const { status } = outcome;
-			if (status && status < 300) { await armBusy(ctx, ectx, delivered, Date.now()); await recordDelivered(ctx); }
+			if (status && status < 300) { await armBusy(ctx, ectx, delivered, Date.now()); await recordDelivered(ctx, delivered); }
 			else await clearBusy(ctx, payload);
 			// A missing acknowledgment is uncertain: never retry the serialized request.
 			return { ...outcome, info: status ? `local HTTP ${status}` : result.error === "connector_offline" ? "connector offline" : "relay delivery unconfirmed" };
@@ -355,7 +357,7 @@ async function attemptWake(ctx: TenantContext, ectx: ExecutionContext, payload: 
    location: r.headers.get("location") || "",
 		});
 		log("wake_sent", { preset: preset(ctx), contextId: ev.contextId, taskId: ev.taskId, status: r.status, ...(catchUp ? { catchUp: true } : {}), ...(hint ? { hint } : {}) });
-		if (r.ok) { await armBusy(ctx, ectx, delivered, Date.now()); await recordDelivered(ctx); }
+		if (r.ok) { await armBusy(ctx, ectx, delivered, Date.now()); await recordDelivered(ctx, delivered); }
 		else if (r.status === 429 || r.status === 503) {
 			// Retry-After owns the next POST. Drop the busy window so the retry is not held behind it.
 			await clearBusy(ctx, payload);
@@ -448,6 +450,7 @@ async function requeueWake(ctx: TenantContext, ectx: ExecutionContext, payload: 
 	const prev = cur?.pending_json ? JSON.parse(cur.pending_json) : null;
 	const merged = { ...payload, attempts, taskIds: [...new Set([...(prev?.taskIds || []), ...(payload.taskIds || [])])] };
 	delete merged.busy;
+	if (prev && prev.shadowOnly !== 1) delete merged.shadowOnly;
 	// flushWake and nextCronAt wait until last_sent_ms + debounce. Store Retry-After minus that debounce so the
 	// deadline is Retry-After itself, including when the debounce is longer than Retry-After. Do not keep the
 	// previous last_sent_ms: that clock is the send we just made, and keeping it would wait out the debounce.
@@ -463,10 +466,11 @@ async function requeueWake(ctx: TenantContext, ectx: ExecutionContext, payload: 
 	await noteWakeWrite(ectx);
 }
 
-async function wake(ctx: TenantContext, ectx: ExecutionContext, contextId: string, taskId: string, from: string, preview: string, kind = "inbound", opts?: { defer?: boolean }) {
+/** `shadowSuppress`: shadow routing proposed suppressing this task. Enforce would not have woken for it. */
+async function wake(ctx: TenantContext, ectx: ExecutionContext, contextId: string, taskId: string, from: string, preview: string, kind = "inbound", opts?: { defer?: boolean; shadowSuppress?: boolean }) {
 	const defer = opts?.defer === true;
 	const payload: Json = { contextId, taskId, taskIds: [taskId], from, preview: preview.slice(0, 300), kind,
-		...(preset(ctx) === "mausbot" ? { deliveryId: crypto.randomUUID() } : {}) };
+		...(preset(ctx) === "mausbot" ? { deliveryId: crypto.randomUUID() } : {}), ...(opts?.shadowSuppress ? { shadowOnly: 1 } : {}) };
 	const now = Date.now(), deb = debounceMs(ctx);
 	let row: Json = await loadWake(ctx, contextId, from);
 	// A pre-peer row (peer '') is this conversation when it names this peer, or names nobody yet.
@@ -510,6 +514,8 @@ async function wake(ctx: TenantContext, ectx: ExecutionContext, contextId: strin
 	const hold = wakeHooked(ctx) && messageWake(kind) && busyActive(ctx, ectx, cur, now) && !prev?.attempts && now - sentAt >= deb;
 	const keeping = !!(prev?.busy && busyActive(ctx, ectx, cur, now) && !prev?.attempts);
 	payload.taskIds = [...new Set([...(prev?.taskIds || []), taskId])];
+	// The merged wake is avoidable only while every task in it is one enforce would have suppressed.
+	if (prev && prev.shadowOnly !== 1) delete payload.shadowOnly;
 	if (hold || keeping) payload.busy = 1;
 	// A changed status starts its own debounce window when nothing is already waiting.
 	// Later status in that window joins it. The window does not move.
@@ -925,6 +931,10 @@ type Rpc = (p: Json, label: string, version: string, ctx: TenantContext, ectx: E
 
 const ROUTING_KEEP_HOURS = 24 * 14;
 
+function wakeOpts(decision: RouteDecision): { defer?: boolean; shadowSuppress?: boolean } {
+	return { ...(decision.batch ? { defer: true } : {}), ...(decision.action === "shadow" && decision.proposed === "suppress" ? { shadowSuppress: true } : {}) };
+}
+
 async function recordRoute(ctx: TenantContext, decision: RouteDecision, kind: "inbound" | "outbound_update"): Promise<void> {
 	log("wake_route", {
 		kind, mode: decision.mode, decision: decision.decision, action: decision.action,
@@ -941,15 +951,21 @@ async function recordRoute(ctx: TenantContext, decision: RouteDecision, kind: "i
 	}
 }
 
-async function recordDelivered(ctx: TenantContext): Promise<void> {
+/**
+ * A successful webhook or relay send. A test wake is counted apart from real deliveries. A message wake whose
+ * every merged task enforce would have suppressed is also counted once as avoidable, however many tasks it lists.
+ */
+async function recordDelivered(ctx: TenantContext, payload: Json): Promise<void> {
+	const kind = String(payload?.kind || "");
+	const actions = kind === "test" ? ["test_delivered"] : ["delivered", ...(messageWake(kind) && payload?.shadowOnly === 1 ? ["shadow_avoidable"] : [])];
 	try {
 		const hour = Math.floor(Date.now() / 3600000);
-		await ctx.DB.prepare(
-			`INSERT INTO wake_routing (hour, decision, action, count) VALUES (?, 'invocation', 'delivered', 1)
+		await ctx.DB.batch(actions.map((action) => ctx.DB.prepare(
+			`INSERT INTO wake_routing (hour, decision, action, count) VALUES (?, 'invocation', ?, 1)
 			 ON CONFLICT(hour, decision, action) DO UPDATE SET count = count + 1`,
-		).bind(hour).run();
+		).bind(hour, action)));
 	} catch {
-		log("wake_route_failed", { decision: "invocation", action: "delivered" });
+		log("wake_route_failed", { decision: "invocation", action: actions.join(",") });
 	}
 }
 async function routingReport(ctx: TenantContext): Promise<Json> {
@@ -960,18 +976,25 @@ async function routingReport(ctx: TenantContext): Promise<Json> {
 	const all = ((rows.results || []) as Json[]).map((row) => ({
 		hour: Number(row.hour), decision: String(row.decision), action: String(row.action), count: Number(row.count),
 	})).filter((row) => Number.isSafeInteger(row.hour) && Number.isSafeInteger(row.count) && row.count >= 0);
-	let decided = 0, suppressed = 0, shadow = 0, delivered = 0;
+	let decided = 0, suppressed = 0, shadow = 0, delivered = 0, testDelivered = 0, shadowAvoidable = 0;
 	const counts = [];
 	for (const row of all) {
-		if (row.decision === "invocation" && row.action === "delivered") { delivered += row.count; continue; }
+		if (row.decision === "invocation") {
+			if (row.action === "delivered") delivered += row.count;
+			else if (row.action === "test_delivered") testDelivered += row.count;
+			else if (row.action === "shadow_avoidable") shadowAvoidable += row.count;
+			continue;
+		}
 		counts.push(row);
 		decided += row.count;
 		if (row.action === "suppress") suppressed += row.count;
 		else if (row.action === "shadow") shadow += row.count;
 	}
 	// `counts` and `decided` are routing decisions. A batch is counted before the webhook is sent.
-	// `delivered` is a successful webhook or relay send. Measure savings from `delivered`.
-	return { mode: routingMode(ctx.WAKE_ROUTING), decided, delivered, suppressed, shadow, counts };
+	// `delivered` is a successful webhook or relay send for a real event; test wakes are `testDelivered`.
+	// `shadow` counts decisions, and the busy cool-down can merge several into one send. `shadowAvoidable`
+	// counts sent wakes that enforce would have skipped. Measure savings from `shadowAvoidable` and `delivered`.
+	return { mode: routingMode(ctx.WAKE_ROUTING), decided, delivered, testDelivered, suppressed, shadow, shadowAvoidable, counts };
 }
 
 async function dedupFingerprint(ctx: TenantContext, kind: string, peer: string, ref: string): Promise<string | null> {
@@ -1110,7 +1133,7 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
 		const routedNow = await routeInbound(ctx, label, contextId, routed.fields.wake, routed.fields.intent, preview, false);
 		if (routedNow.fingerprint) await saveDedup(ctx, "status", label, contextId, routedNow.fingerprint);
 		await recordRoute(ctx, routedNow.decision, "inbound");
-		if (routedNow.decision.deliver) await wake(ctx, ectx, contextId, task.id, label, preview, "inbound", routedNow.decision.batch ? { defer: true } : undefined);
+		if (routedNow.decision.deliver) await wake(ctx, ectx, contextId, task.id, label, preview, "inbound", wakeOpts(routedNow.decision));
 	}
 	const pt = A.publicTask(task, version, conf.historyLength);
 	return version.startsWith("1") ? { task: pt } : pt;
@@ -2148,7 +2171,7 @@ async function handlePush(req: Request, ctx: TenantContext, ectx: ExecutionConte
 		unchanged: false,
 	});
 	await recordRoute(ctx, pushDecision, "outbound_update");
-	if (pushDecision.deliver) await wake(ctx, ectx, rec.context_id, taskId, rec.peer, `[update on outbound task: ${state}] ${text}`, "outbound_update", pushDecision.batch ? { defer: true } : undefined);
+	if (pushDecision.deliver) await wake(ctx, ectx, rec.context_id, taskId, rec.peer, `[update on outbound task: ${state}] ${text}`, "outbound_update", wakeOpts(pushDecision));
 	return json({ ok: true });
 }
 

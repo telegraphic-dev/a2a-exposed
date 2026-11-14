@@ -162,6 +162,14 @@ function hintFor(ev: WakeEvent, cli: string): string {
 		: `${cli} inbox --context ${ev.contextId}${from}`;
 }
 
+const MAX_LISTED_TASKS = 20;
+
+/** Every merged task id, so a text-only wake can attribute each one. Ids are minted by this inbox, never peer text. */
+function taskList(ids: string[]): string {
+	const shown = ids.slice(0, MAX_LISTED_TASKS).join(", ");
+	return `tasks ${shown}${ids.length > MAX_LISTED_TASKS ? ` and ${ids.length - MAX_LISTED_TASKS} more` : ""}`;
+}
+
 /** Human/agent-readable wake text. `withPreview=false` keeps peer-authored text out entirely. */
 export function wakeSummary(ev: WakeEvent, cli: string, withPreview = true): string {
 	if (ev.kind === "pairing_request" && ev.pairing) {
@@ -183,7 +191,7 @@ export function wakeSummary(ev: WakeEvent, cli: string, withPreview = true): str
 			? `A2A: peer "${ev.from}" sent an update on a task you sent (context ${ev.contextId}, task ${ev.taskId}).`
 			: ev.kind === "test"
 				? `A2A: test wake from your A2A endpoint (no real message).`
-				: `A2A endpoint: ${n > 1 ? n + " new messages" : "new message"} from peer "${ev.from}" (context ${ev.contextId}, task ${ev.taskId}).`;
+				: `A2A endpoint: ${n > 1 ? n + " new messages" : "new message"} from peer "${ev.from}" (context ${ev.contextId}, ${n > 1 ? taskList(ev.taskIds) : `task ${ev.taskId}`}).`;
 	const lines = [
 		head,
 		`Use the a2a-exposed skill: run \`${hintFor(ev, cli)}\`, handle the request, then reply with \`${cli} reply <taskId> ...\`.`,

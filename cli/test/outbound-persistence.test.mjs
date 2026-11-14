@@ -182,3 +182,15 @@ test("peer failures remain fatal and do not persist a send", async (t) => {
 	assert.match(r.stderr, /rejected our token/);
 	assert.equal(s.requests.filter((r) => r.path.startsWith("/owner/")).length, 0);
 });
+
+test("send --json and poll --json print only the task JSON, with no # task trailer", async (t) => {
+	const s = await setup(t);
+	const plain = await s.cli(["send", "--to", "paired", "--text", "hello"]);
+	assert.match(plain.stderr, /^# task peer-task: submitted/m, "without --json the trailer stays for people");
+	for (const args of [["send", "--to", "paired", "--text", "hello", "--json"], ["poll", "--to", "paired", task.id, "--json"]]) {
+		const r = await s.cli(args);
+		assert.equal(r.status, 0, r.stderr);
+		assert.deepEqual(JSON.parse(r.stdout), task);
+		assert.equal(r.stderr, "", `${args[0]} --json keeps stderr free of human lines`);
+	}
+});
