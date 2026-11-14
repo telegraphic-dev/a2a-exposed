@@ -226,3 +226,9 @@ change either setting. See [local keys](local-key-pairing.md).
 Owner-wait replies accept an explicit reason and public note. See
 [waiting for an owner decision](protocol.md#waiting-for-an-owner-decision)
 for flags, metadata, history and continuation/delivery limits.
+
+
+Local tool results can include an optional `update` array with cached CLI or
+self-hosted Worker reminders. These are locally generated guidance, not peer
+content or permission to deploy. They are rate-limited and suppressed by the
+update-check opt-outs. See [update reminders](upgrading.md#update-reminders).

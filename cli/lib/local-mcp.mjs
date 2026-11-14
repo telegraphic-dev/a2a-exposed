@@ -1,5 +1,6 @@
 // Local stdio only: no remote listener, shell invocation, key management or plaintext send.
 import fs from "node:fs";
+import { cachedUpdates, check as checkUpdates } from "./update.mjs";
 import { once } from "node:events";
 import * as C from "./config.mjs";
 import { CliError, checkId, httpJson } from "./a2a.mjs";
@@ -138,9 +139,12 @@ export function session(options = {}, execute = callTool) {
   if (invalid) return ok({ isError: true, content: [{ type: "text", text: invalid }] });
   try {
    const data = await execute(p.name, args, options);
+   const update = cachedUpdates(VERSION);
+   checkUpdates(VERSION, { write: () => {} });
+   if (update.length) data.update = update;
    if (Buffer.byteLength(JSON.stringify(data)) > 4 * MAX_FRAME) throw new CliError("Read result exceeds 4 MiB. Narrow it with contextId/from or a smaller history limit. No partial result returned.");
    const isError = data.rows?.some(r => r.locallyOpened === false && r.reason !== "server_readable_content_withheld") || false;
-   return ok({ content: [{ type: "text", text: JSON.stringify(data) }], structuredContent: data, ...(isError ? { isError: true } : {}) });
+   return ok({ content: [{ type: "text", text: JSON.stringify(data) }, ...(update.length ? [{ type: "text", text: update.map(r => r.message).join("\n") }] : [])], structuredContent: data, ...(isError ? { isError: true } : {}) });
   } catch (e) {
    // CLI errors on this path contain fixed local guidance (and validated routing IDs).
    const text = e instanceof CliError && e.code === "key_store_consent" ? "OS keychain consent is required. Restart this local MCP server with --allow-os-consent only when a human can answer the OS prompt. No store fallback or plaintext retry." : e instanceof CliError ? e.message : "Local operation refused. Preserve keys and pairing; inspect keys status --json. No plaintext fallback or automatic retry.";

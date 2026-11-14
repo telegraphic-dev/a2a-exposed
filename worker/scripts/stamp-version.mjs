@@ -11,5 +11,6 @@ if (typeof version !== "string" || !/^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$/
 	console.error(`stamp-version: cli/package.json version ${JSON.stringify(version)} is not a release version`);
 	process.exit(1);
 }
-const body = `/** Inbox build. Keep this equal to \`version\` in cli/package.json. */\nexport const VERSION = ${JSON.stringify(version)};\n`;
+const migrations = fs.readdirSync(path.join(workerRoot, "migrations")).filter(n => /^\d{4}_[a-z0-9_]+\.sql$/.test(n)).sort();
+const body = `/** Inbox build. Keep this equal to \`version\` in cli/package.json. */\nexport const VERSION = ${JSON.stringify(version)};\n/** Packaged migration names; generated without importing SQL at runtime. */\nexport const MIGRATION_NAMES = ${JSON.stringify(migrations)};\n`;
 if (!fs.existsSync(dest) || fs.readFileSync(dest, "utf8") !== body) fs.writeFileSync(dest, body);

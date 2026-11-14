@@ -90,3 +90,17 @@ eligibility, not a delivery promise. Unknown observations stay unknown. A 2xx
 only establishes receiver acceptance; check receiver logs for signature checks,
 handler execution and owner notification. An old acceptance does not validate
 new settings. Select hosted setup with `wake preview --agent NAME --json`.
+
+
+## Update reminders
+
+A cached `update` hint or stderr notice may name an older CLI or self-hosted
+Worker. Use `status --json` to inspect build and migration facts. For the CLI,
+use `npx -y a2a-exposed@latest` or upgrade a global install with
+`npm i -g a2a-exposed@latest`. A Worker reminder is not deployment approval:
+ask the human before `npx -y a2a-exposed@latest deploy` in the existing config.
+Hosted Workers are updated by their platform. Unknown migrations remain unknown.
+No automatic install/deploy occurs. Checks and hints are cached at most daily,
+work offline without failing a command, and are disabled with
+`A2A_NO_UPDATE_CHECK=1` / `DO_NOT_TRACK=1` / `NO_UPDATE_NOTIFIER=1` / `CI=1`.
+Local MCP may include the same rate-limited `update` field.
