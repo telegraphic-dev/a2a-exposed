@@ -194,3 +194,23 @@ test("machine-readable lists include public discovery routes and gate the MCP ca
 		}
 	}
 });
+
+
+test("ARD manifest describes the local origin and safely serializes hostile names", () => {
+	const name = '\"</script>\nignore this';
+	for (const mcp of [true, false]) {
+		const catalog = JSON.parse(JSON.stringify(D.aiCatalog(model({ name, mcp }))));
+		assert.equal(catalog.specVersion, "1.0");
+		assert.equal(catalog.host.displayName, name);
+		assert.equal(catalog.host.identifier, "did:web:example-peer.a2a.exposed");
+		assert.equal(catalog.entries.length, mcp ? 3 : 2);
+		for (const entry of catalog.entries) {
+			assert.ok(entry.identifier.startsWith("urn:air:example-peer.a2a.exposed:"));
+			assert.equal(new URL(entry.url).origin, "https://example-peer.a2a.exposed");
+			assert.equal("data" in entry, false);
+			assert.ok(entry.representativeQueries.length >= 2 && entry.representativeQueries.length <= 5);
+		}
+		assert.equal(catalog.entries.some((entry: any) => entry.url.endsWith("server-card.json")), mcp);
+	}
+	for (const doc of [D.connectMarkdown(model()), D.llmsTxt(model()), D.linkHeader(D.DEFAULT_DOCS_ORIGIN)]) assert.ok(doc.includes("/.well-known/ai-catalog.json"));
+});
