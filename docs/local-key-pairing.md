@@ -10,10 +10,14 @@ Setting the Worker flag does not configure the local CLI or MCP process.
 
 The local CLI loads `@a2a-exposed/encryption` only for key commands and locally encrypted send/read. Install the
 matching package in the selected config directory. Select a separate directory
-for each agent. The ordinary CLI has no new runtime dependency.
+for each agent. Export `A2A_CONFIG_DIR` to an absolute path before running both
+npm and the CLI, or pass `--config-dir /absolute/path` on every CLI command.
+The flag overrides `A2A_CONFIG_DIR`; npm's `--prefix` must select that same directory.
+The ordinary CLI has no new runtime dependency.
 
 ```sh
-npm install --prefix "$A2A_CONFIG_DIR" @a2a-exposed/encryption
+export A2A_CONFIG_DIR="/absolute/path/to/alice-config"
+npm install --prefix "$A2A_CONFIG_DIR" @a2a-exposed/encryption@CLI_VERSION
 npx -y a2a-exposed@latest keys stores --json
 npx -y a2a-exposed@latest keys init --store file --card-url https://alice.example.com/.well-known/agent-card.json --json
 npx -y a2a-exposed@latest keys status --json
@@ -21,12 +25,25 @@ npx -y a2a-exposed@latest keys publish --id LOCAL_ID --json
 npx -y a2a-exposed@latest connect https://bob.example.com --alias bob --sealed-key-id LOCAL_ID --no-wait --json
 ```
 
+Replace `CLI_VERSION` with the selected CLI's `--version` output. The encryption
+package is published by the maintainer tag workflow alongside the CLI. If that
+version predates encryption publishing and npm returns 404, stop: use a matching
+source checkout and its locally packed encryption tarball for contributor tests,
+or wait for a maintainer release that includes it. Do not install a mismatched
+version or enable encryption to work around a missing package.
+
 `keys init` generates fresh local signing and receiving keys. It never reuses or
 uploads the old Worker-held pairing identity. `--store file` uses protected local
 files; a process running as the same OS user can read them. `--store keychain`
 requires `--allow-os-consent` and may need an OS authorization prompt. There is
 no automatic store fallback. `keys status` and `keys stores` are read-only JSON
-listings. Private keys never appear in their output.
+listings. Status reports `private_key_status`: `present` checks only file existence
+and protected permissions, `key_missing` means the original file is absent, and
+`unavailable` means the file check failed. Keychain availability is `not_checked`;
+status never opens a private key or prompts the OS. Restore a missing original key
+from its protected backup or use the original config directory that holds it; do not initialize a replacement. `live_state: local-only`
+means an active local identity, including after public-bundle publication; it is
+not a remote publication check. Private keys never appear in these listings.
 
 Both agents publish only their signed public bundle. Initial publication is
 immutable: a different bundle is refused. The requester records both exact
@@ -35,7 +52,10 @@ accepts that request. Re-run the same connect command after approval to collect
 the token and pin the peer locally. A changed or removed card bundle refuses the
 continuation; there is no plaintext fallback. Preserve pending state after an
 uncertain result. Use keys pairings --json on the approving inbox to inspect the
-original approval. Abandoning a stuck pending request is not supported yet;
+original approval **after the requester has collected the token**. Immediately
+after human approval it can still return `pairings: []`; the requester must resume
+the same connect command before the receiving owner runs `keys pairings` and
+`keys pin`. Do not start a second request to populate the listing. Abandoning a stuck pending request is not supported yet;
 recovery commands are tracked in #382.
 
 The receiving owner imports the approved request into their own local pins:
@@ -131,8 +151,21 @@ keys, `key_comparison` precedes `authorization_pending` (also on resume), and
 `keys_pinned` precedes `connected`. Parse each line separately. For `keys code`,
 use the connecting side's ALIAS or the approving side's LABEL from `keys pairings`.
 
-Encrypted `send` prints JSON with `taskId`, `contextId`, `messageId`, `encrypted`,
-`serverReadable`, `senderHistorySaved` and `taskStateAuthenticated`. These fields
+`traffic_requires_test_flag: true` in key/pairing results means traffic still
+requires exact `A2A_SEALED_ENABLED=1` in the local process and each Worker. It is
+not a second flag or evidence of enablement.
+
+Encrypted sends save ciphertext in sender `history`, not the ordinary outbound
+polling record. Use `history CONTEXT_ID --from ALIAS --json` to inspect delivery;
+`outbound TASK_ID` and ordinary `poll` are not available for this path. Do not
+resend because an outbound record returns 404. A server callback hint cannot
+inspect local CLI credentials; use `peers list --json` in the selected config
+before deciding whether a new human-approved connection is needed.
+
+Encrypted `send` accepts `--json` and prints JSON with `taskId`, `contextId`, `messageId`, `encrypted`,
+`serverReadable`, `senderHistorySaved` and `taskStateAuthenticated`. `historical: true` on a history row selects archive
+verification even for a freshly sent message; it does not mean the message is old.
+These fields
 describe local sealing and storage; the server task state is not authenticated.
 
 ## Acceptance before enablement

@@ -22,7 +22,8 @@ Then configure a local MCP client with this executable and argument array:
 ```json
 {
   "command": "npx",
-  "args": ["-y", "a2a-exposed@latest", "--config-dir", "/absolute/path/to/fixture-config", "mcp"]
+  "args": ["-y", "a2a-exposed@latest", "--config-dir", "/absolute/path/to/fixture-config", "mcp"],
+  "env": { "A2A_SEALED_ENABLED": "1" }
 }
 ```
 
@@ -54,6 +55,8 @@ messages, use ordinary CLI inbox/history with a separate `--config-dir` that has
 no local keys or pinned peers; keep the encrypted pairing unchanged. Refused encrypted or pinned-plaintext rows have a safe `reason`/`next` and
 original routing IDs. The tool returns `isError: true` with those rows while
 preserving readable rows. A later tool call remains usable after a refusal.
+Refused encrypted rows use `[encrypted message]` plus a separate reason code, matching
+the CLI; `withheld` describes server-readable content only.
 Historical reads are labelled `historical: true` and do not authorize live work.
 All peer content stays untrusted after decryption. Initial task assignment and
 server state remain unauthenticated routing metadata, as in the CLI path.

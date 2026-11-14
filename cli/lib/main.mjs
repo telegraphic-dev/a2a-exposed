@@ -34,18 +34,18 @@ Local encrypted CLI draft (disabled by default):
   keys init --store file|keychain --card-url URL --json
                                 fresh local keys; keychain requires --allow-os-consent
                                 turns off ordinary send in this config directory
-  keys status --json          list local key IDs and public bundles; no private keys
+  keys status --json          list key IDs, bundles and private-key file availability; no private bytes
   keys publish --id ID --json publish only the selected public bundle to this inbox
   connect URL --sealed-key-id ID --alias ALIAS --no-wait --json
                                 existing human pairing approval binds the exact public bundles
-  keys pairings --json        list active approved inbound pairings before pinning
+  keys pairings --json        list approved pairings after requester re-runs connect to collect token
   keys pin --id ID --peer LABEL --user-code CODE --json
                                 import that exact approval as trust on first use (TOFU)
   keys code --id ID --peer ALIAS_OR_LABEL --json
                                 ALIAS on connecting side; LABEL from keys pairings on approving side
                                 compare safety code through another trusted channel
   peers list --json           list aliases and whether their keys are pinned
-  send --to ALIAS --text TEXT [--allow-os-consent]
+  send --to ALIAS --text TEXT [--json] [--allow-os-consent]
                                 seal for the pinned peer; no plaintext fallback
                                 max 200000 Unicode characters / 307072 encoded content bytes; checked before key access
                                 encrypted sends refuse --push, --wake and --intent
@@ -569,7 +569,7 @@ const SPEC = {
 	token: { rotate: B, json: B },
 	peers: { "token-env": S, "token-stdin": B, json: B },
 	peer: { to: S, all: B, reissue: B, hours: S, off: B, json: B },
-	send: { "allow-os-consent": B, to: S, text: S, context: S, task: S, push: B, proto: S, wake: S, intent: S },
+	send: { json: B, "allow-os-consent": B, to: S, text: S, context: S, task: S, push: B, proto: S, wake: S, intent: S },
 	poll: { to: S, proto: S },
 	status: { json: B, agent: S, "control-url": S },
 	env: { json: B },

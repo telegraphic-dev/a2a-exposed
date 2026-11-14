@@ -1,9 +1,11 @@
 # @a2a-exposed/encryption
 
-Local-only primitives for the review-draft [sealed A2A extension](../docs/extensions/sealed-v1.md).
-This foundation does not enable encrypted CLI, MCP or Worker traffic. No E2E
-product support or cryptographic audit is claimed. Integration, persistent trust,
-key custody, replay protection and independent review are required before use.
+Local primitives and key custody for the [sealed A2A extension](../docs/extensions/sealed-v1.md).
+The optional CLI and stdio MCP integration uses this package for local encryption
+and decryption. Install the matching version in the selected config directory;
+see [local keys and pairing](../docs/local-key-pairing.md). Installation does not
+enable traffic: exact `A2A_SEALED_ENABLED=1` requires owner approval separately in
+each local process and inbox Worker. No cryptographic audit is claimed.
 
 The package uses pinned hpke-js RFC 9180 primitives and Ed25519 signatures.
 It seals independently to the recipient and sender-history keys and binds both
@@ -29,7 +31,7 @@ Run `npm ci --ignore-scripts` and `npm test` in this directory. Pack with
 The separate `./local-state` API is an incomplete local custody/trust checkpoint.
 See [local custody contracts](LOCAL-CUSTODY-DRAFT.md) for protected local backup
 and archive-only restore APIs. Local receiving-key rotation retains old keys under exact explicit approval.
-No live CLI enrollment or encrypted transport is enabled. Privileged local replay/outbox APIs are described below.
+The opt-in CLI uses local custody and pins; privileged local replay/outbox APIs below are separate from that integration.
 
 
 `./content` validates the exact supported plaintext union and losslessly maps
@@ -37,8 +39,8 @@ supported inline parts between A2A 0.3/1.0 without fetching file URIs.
 `./carriers` checks structural message carriers/bindings only. See packaged
 `schemas/` and the [SDK integration contract](../docs/extensions/sealed-v1-sdk.md).
 Neither API replaces signatures, local
-trust, assignment, replay/chain checks or model-delivery authorization. No CLI
-message path uses them yet.
+trust, assignment, replay/chain checks or model-delivery authorization. The CLI
+message path uses them without implementing the separate ledger/assignment APIs below.
 
 
 `./assignment` verifies request/response correlation and signed task assignment
@@ -81,9 +83,7 @@ ciphertext once; polling uses a locally signed assignment. Activation echo is
 required on every response, redirects are refused, and failures never trigger a
 new ID, version or plaintext retry. Results contain IDs/state and truthful send
 privacy facts, not plaintext or credentials. Tests use synthetic fetch/provider
-fixtures. Actual saved-pairing CLI wiring, Worker routing, native platforms and
-production traffic remain unimplemented/unaccepted; this export enables none of
-those automatically.
+fixtures. This privileged transport export is separate from the opt-in CLI/Worker integration; it enables no traffic automatically.
 
 
 Transport hosts must provide withPairingLease(run) as well as the fresh pairing
