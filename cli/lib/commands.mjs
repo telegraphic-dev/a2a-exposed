@@ -415,7 +415,8 @@ export async function send(o) {
 		if (o.push && !saved) console.error(`warning: push updates cannot authenticate because the outbound task token could not be saved; use ${CLI} poll --to ${alias} ${tid} instead; the message was delivered, do not resend`);
 	}
 	else if (obj && obj.parts) await logHistory(ctx, { dir: "in", peer: alias, role: "agent", event: "direct_message", text: textOf(obj) });
-	if (tid) console.error(`# task ${tid}: ${plainState(obj)}  (check: ${CLI} poll --to ${alias} ${tid})`);
+	// --json keeps stdout and stderr machine-readable: the task JSON is the whole result.
+	if (tid && !o.json) console.error(`# task ${tid}: ${plainState(obj)}  (check: ${CLI} poll --to ${alias} ${tid})`);
 }
 
 export async function poll(taskId, o) {
@@ -441,7 +442,7 @@ export async function poll(taskId, o) {
 		if (arts && arts !== txt) txt = (txt ? txt + "\n" : "") + arts;
 		await logHistory(rec.contextId, { dir: "in", peer: alias, taskId: tid, event: "poll", state: plainState(res), text: txt });
 	}
-	console.error(`# task ${tid}: ${plainState(res)}`);
+	if (!o.json) console.error(`# task ${tid}: ${plainState(res)}`);
 }
 
 export async function outbound(id, o = {}) {

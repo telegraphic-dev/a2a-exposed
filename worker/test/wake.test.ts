@@ -263,3 +263,16 @@ test("mausbot: rejects unsafe URLs, capability credentials and missing Bearer au
 	}
 	assert.equal(await renderWake({ preset: "mausbot" }, ev), null);
 });
+
+test("a merged text wake names every task id, bounded", () => {
+	const merged = { ...ev, kind: "inbound", taskIds: ["t-1", "t-2", "t-3"], taskId: "t-3" };
+	for (const withPreview of [true, false]) {
+		const head = wakeSummary(merged, "a2a", withPreview).split("\n")[0];
+		assert.match(head, /^A2A endpoint: 3 new messages from peer ".*" \(context .*, tasks t-1, t-2, t-3\)\.$/);
+	}
+	assert.match(wakeSummary({ ...ev, kind: "inbound", taskIds: ["t-9"], taskId: "t-9" }, "a2a").split("\n")[0], /, task t-9\)\.$/);
+	const many = Array.from({ length: 25 }, (_, i) => `t-${i}`);
+	const head = wakeSummary({ ...ev, kind: "inbound", taskIds: many, taskId: "t-24" }, "a2a").split("\n")[0];
+	assert.match(head, /tasks t-0, .*, t-19 and 5 more\)\.$/);
+	assert.equal(head.includes("t-20"), false);
+});

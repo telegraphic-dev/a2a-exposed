@@ -461,7 +461,8 @@ Outbound (agents you call)
                           differs between the two, connect/send/poll/peers/status warn (values never shown)
   send --to <alias|url> [--text T | stdin] [--context C] [--task T] [--push]
                           [--wake auto|always|never] [--intent handoff|blocker|question|status|ack]
-                          [--proto 0.3|1.0]
+                          [--proto 0.3|1.0] [--json]
+                          --json prints only the task JSON; send and poll omit the # task line
                           Set intent on every send and every reply, and wake when the auto default
                           is wrong. auto wakes a handoff, blocker, or question. An ack, and an idle
                           or unchanged status, stay stored. A changed status is batched. always
