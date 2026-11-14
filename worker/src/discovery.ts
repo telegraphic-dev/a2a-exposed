@@ -188,14 +188,21 @@ export function authMd(m: ConnectModel): string {
 		: `- Peers: pairing is turned off here. Ask this agent's operator for a per-peer bearer token.\n`;
 	const owner = m.mcp ? `- Owner tools (\`/mcp\`, scope \`inbox\`) are for this agent's owner only.\n` : "";
 	const registration = m.registration
-		? `- Register to read this hosted agent's address and status: POST ${m.registration.origin}/oauth/agent/identity\n` +
-			`  with \`target_agent=${m.registration.target}\` and \`scope=agents:read\`. The owner must claim and approve the request.\n` +
-			`  Use the resulting credential only at ${m.registration.origin}/api/v1/tenants; it reads this agent only for up to 15 minutes, with no automatic renewal.\n` +
-			`  It cannot list other agents, send messages, manage the agent, or access tenant MCP. Pair separately for peer access.\n` +
-			`  Revoke this registration in Settings → Connected agents on the platform.\n`
+		? `## Register for read-only hosted access\n\n` +
+			`POST ${m.registration.origin}/oauth/agent/identity with Content-Type: application/json and this body:\n\n` +
+			"```json\n" + JSON.stringify({ type: "service_auth", login_hint: "<person-supplied email>", client_name: "<your agent name>", target_agent: m.registration.target, scope: "agents:read" }, null, 2) + "\n```\n\n" +
+			`Ask the person for the email routing hint; do not guess it. Show only the returned claim.verification_uri and claim.user_code to the person.\n` +
+			`The owner must sign in, enter the code, claim and approve the request before any credential is issued. Never open or approve it yourself.\n` +
+			`Keep claim_token in a protected file, never a URL, log or chat. Poll POST ${m.registration.origin}/oauth/token with Content-Type: application/x-www-form-urlencoded:\n\n` +
+			"```text\ngrant_type=urn:workos:agent-auth:grant-type:claim&claim_token=<returned claim_token>\n```\n\n" +
+			`Honor claim.interval; authorization_pending means wait, slow_down means add five seconds, and access_denied or expired_token means stop. The claim token is single-use.\n` +
+			`Store the access_token securely. Use it only for GET ${m.registration.origin}/api/v1/tenants; it reads this agent's address and status for up to 15 minutes, with no automatic renewal.\n` +
+			`This connection cannot list other agents, send messages, manage the agent, or access tenant MCP. Pair separately for peer access.\n` +
+			`To revoke this registration with the person's permission, POST ${m.registration.origin}/oauth/revoke with Content-Type: application/x-www-form-urlencoded and body token=<access_token>, or use Settings → Connected agents on the platform.\n\n` +
+			`## Peer and owner access\n\n`
 		: "";
 	return `# auth.md: ${name}\n\n${registration}${peers}${owner}` +
-		`- Never paste tokens in chat. ${m.registration ? "For peer tokens, revoke:" : "Revoke:"} the owner runs \`token revoke <label>\`.\n` +
+		`- Never paste tokens in chat. ${m.registration ? "To revoke a peer token," : "Revoke:"} the owner runs \`token revoke <label>\`.\n` +
 		`Full map of every a2a.exposed credential: ${m.docs}/auth.md\n`;
 }
 
@@ -205,7 +212,7 @@ export const markdownHeaders = (): Record<string, string> => ({
 
 /** auth.md is one representation (no content negotiation), so no Vary. CORS * like the other public discovery files. */
 export const authMdHeaders = (): Record<string, string> => ({
-	"content-type": "text/markdown; charset=utf-8", "cache-control": "no-cache", "access-control-allow-origin": "*", "x-content-type-options": "nosniff",
+	"content-type": "text/markdown; charset=utf-8", "cache-control": "no-store", "access-control-allow-origin": "*", "x-content-type-options": "nosniff",
 });
 
 export const llmsHeaders = (): Record<string, string> => ({

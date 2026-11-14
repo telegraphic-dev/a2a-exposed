@@ -327,16 +327,20 @@ failure does not trigger an extra send or turn a successful wake into failure.
 
 ### Hosted registration discovery
 
-On hosted tenants only, exact platform settings `SITE_ENV=staging` and
-`AGENT_REGISTRATION_ENABLED=1` let both auth.md paths advertise the platform's
+On hosted tenants only, exact platform setting `AGENT_REGISTRATION_ENABLED=1`
+lets both auth.md paths advertise the platform's
 `POST /oauth/agent/identity` flow. `FEEDBACK_URL` supplies its HTTPS origin; a
 tenant's documentation override cannot select that authority. The start request
 includes `target_agent` (this tenant's canonical public URL) and `scope=agents:read`.
 The human must claim and approve before any credential is issued. That credential
 reads only the approved address and status at platform `GET /api/v1/tenants`; it
 cannot list sibling agents, send A2A messages, manage the tenant, or use tenant MCP.
-Pairing stays the peer-access path. Self-hosted, flag-off and production auth.md
-keep the pairing-only behavior.
+Pairing stays the peer-access path. Self-hosted and flag-off auth.md keep the
+pairing-only behavior. The flag is the only environment opt-in; production stays
+off while its flag is unset. Both auth.md aliases use `Cache-Control: no-store`.
+The tenant text includes the full service_auth start body, a person-supplied
+login_hint, the single-use claim-token poll at platform `POST /oauth/token` and
+registration revocation at platform `POST /oauth/revoke`.
 
 This is discovery support, not credential issuance or enforcement. Keep the flag
 off until the platform implements immutable target/owner binding, exchange/use

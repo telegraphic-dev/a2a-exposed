@@ -1054,6 +1054,7 @@ test("GET /.well-known/api-catalog and /auth.md: RFC 9727 catalog and the short 
 		const a = await s.call("GET", path);
 		assert.equal(a.status, 200, path);
 		assert.equal(a.headers.get("content-type"), "text/markdown; charset=utf-8");
+		assert.equal(a.headers.get("cache-control"), "no-store");
 		assert.equal(a.text.split("\n")[0], "# auth.md: Barry");
 		assert.ok(a.text.includes("https://a2a.exposed/auth.md"));
 		assert.ok(new TextEncoder().encode(a.text).length < 1024);
