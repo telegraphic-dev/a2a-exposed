@@ -155,15 +155,27 @@ use the connecting side's ALIAS or the approving side's LABEL from `keys pairing
 requires exact `A2A_SEALED_ENABLED=1` in the local process and each Worker. It is
 not a second flag or evidence of enablement.
 
-Encrypted sends save ciphertext in sender `history`, not the ordinary outbound
-polling record. Use `history CONTEXT_ID --from ALIAS --json` to inspect delivery;
-`outbound TASK_ID` and ordinary `poll` are not available for this path. Do not
-resend because an outbound record returns 404. A server callback hint cannot
-inspect local CLI credentials; use `peers list --json` in the selected config
-before deciding whether a new human-approved connection is needed.
+Encrypted sends save only ciphertext in sender history and outbound tracking.
+Use `peers list --json` to select the original pinned alias, then
+`outbound TASK_ID --to ALIAS --json` for a stored snapshot or
+`poll --to ALIAS TASK_ID --json` to fetch at the pinned peer endpoint.
+These commands open verified message content locally and never return raw peer
+status messages, artifacts or arbitrary task fields. Task state and initial task
+assignment remain unauthenticated routing hints. Poll reads at most 20 messages;
+use `history CONTEXT_ID --from ALIAS --json` for longer conversation history.
+Stored outbound reads use archive verification; poll uses the live freshness
+check. A refused row remains encrypted and includes recovery guidance.
+
+`outboundSaved` reports optional tracking independently of `senderHistorySaved`.
+A successful send stays successful if either save fails. A missing outbound
+record does not mean delivery failed: poll with the original task ID and local
+alias, or ask the recipient owner to check the original context/message IDs.
+No command automatically retries a send or falls back to plaintext. Polling uses
+the selected local pin, never an endpoint supplied by the tracking record.
+`--allow-os-consent` remains an explicit human-present keychain choice on reads.
 
 Encrypted `send` accepts `--json` and prints JSON with `taskId`, `contextId`, `messageId`, `encrypted`,
-`serverReadable`, `senderHistorySaved` and `taskStateAuthenticated`. `historical: true` on a history row selects archive
+`serverReadable`, `senderHistorySaved`, `outboundSaved` and `taskStateAuthenticated`. `historical: true` on a history row selects archive
 verification even for a freshly sent message; it does not mean the message is old.
 These fields
 describe local sealing and storage; the server task state is not authenticated.

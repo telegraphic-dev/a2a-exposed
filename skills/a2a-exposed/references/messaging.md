@@ -130,5 +130,9 @@ the token before the receiving owner lists `keys pairings --json` and pins it.
 An empty list before collection is expected. `keys status --json` reports missing
 private-key files without reading private bytes or prompting a keychain. Restore
 the original key; never initialize a replacement as a read recovery. Inspect
-encrypted delivery with `history CONTEXT --from ALIAS --json`, not ordinary
-`outbound`/`poll`. History uses archive verification even for fresh rows.
+encrypted delivery with `history CONTEXT --from ALIAS --json`,
+`outbound TASK_ID --to ALIAS --json`, or `poll --to ALIAS TASK_ID --json`.
+Select ALIAS with `peers list --json`. Stored reads use archive verification;
+poll uses live freshness. Tracking failures (`outboundSaved: false`) never
+invalidate delivery or authorize a resend. Local stdio MCP provides `outbound`
+and `poll_outbound` with explicit `to` and `taskId`; remote MCP cannot open local ciphertext.

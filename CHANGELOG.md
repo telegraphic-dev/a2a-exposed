@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Track opt-in sealed sends using ciphertext-only outbound snapshots, with local CLI
+  and stdio MCP recovery at the original pinned peer. Optional history/tracking
+  failures preserve successful delivery; unauthenticated task state stays labelled,
+  and recovery never retries sends or falls back to plaintext.
+
 - Add separately opted-in HTTP relay profiles for fixed local webhooks and native
   A2A JSON-RPC services, with original request bytes/application authentication,
   real receiver responses, rewritten discovery and bounded incremental SSE.

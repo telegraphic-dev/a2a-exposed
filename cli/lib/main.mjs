@@ -466,12 +466,15 @@ Outbound (agents you call)
                           asks for an immediate wake, still subject to the peer's authorization
                           and rate limits. never only stores the message. Do not send an
                           acknowledgement-only message, and do not answer an ack with an ack.
-  poll --to <alias|url> <taskId> [--proto 0.3|1.0]
+  poll --to <alias|url> <taskId> [--proto 0.3|1.0] [--json] [--allow-os-consent]
                           send/poll need only peer config; owner history/task storage is optional.
                           Storage failures warn on stderr; the peer response still prints and exits 0
                           Self-hosted MCP: poll_outbound fetches current state; cancel_outbound asks the peer
                           to cancel a sent task. Ask the human before canceling consequential work
-  outbound <taskId>       stored state of a task you sent (incl. pushed updates)
+  outbound <taskId> [--to ALIAS] [--json] [--allow-os-consent]
+                          stored state of a task you sent
+                          Pinned configs require --to ALIAS from peers list --json.
+                          Sealed poll/outbound open locally; task state is unauthenticated.
 
 Owner
   One A2A endpoint. The owner token from init authenticates inbox, reply, export, and the other owner
@@ -573,7 +576,8 @@ const SPEC = {
 	peers: { "token-env": S, "token-stdin": B, json: B },
 	peer: { to: S, all: B, reissue: B, hours: S, off: B, json: B },
 	send: { json: B, "allow-os-consent": B, to: S, text: S, context: S, task: S, push: B, proto: S, wake: S, intent: S },
-	poll: { to: S, proto: S },
+	poll: { to: S, proto: S, json: B, "allow-os-consent": B },
+	outbound: { to: S, json: B, "allow-os-consent": B },
 	status: { json: B, agent: S, "control-url": S },
 	env: { json: B },
 	export: { sql: B },
@@ -741,7 +745,7 @@ export async function main(argv) {
 		}
 		case "send": return cmd.send(o);
 		case "poll": return cmd.poll(need(p[0], "poll --to <peer> <taskId>"), o);
-		case "outbound": return cmd.outbound(need(p[0], "outbound <taskId>"));
+		case "outbound": return cmd.outbound(need(p[0], "outbound <taskId>"), o);
 		case "feedback": {
 			const message = p.join(" ").trim();
 			need(message, `feedback "message" [--json] [--kind bug|idea|other] [--steps S] [--expected S] [--actual S] [--logs S] [--agent A] [--environment E] [--connection webhook|proxy|polling]`);

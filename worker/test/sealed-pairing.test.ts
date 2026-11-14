@@ -23,10 +23,13 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
  }
  const dispatch=async(name:string,request:Request)=>{const pending:Promise<any>[]=[];const res=await worker.fetch(request,envs[name],{waitUntil:(p:Promise<any>)=>pending.push(p),passThroughOnException(){}} as any);await Promise.allSettled(pending);return res;};
  const owner=(name:string,route:string,method="GET",body?:any)=>dispatch(name,new Request(`https://${name}.example.com${route}`,{method,headers:{authorization:"Bearer dummy-owner","content-type":"application/json"},...(body===undefined?{}:{body:JSON.stringify(body)})}));
+ let trackingFailure=false;
+ let pollFault: string|null=null;
  let publishError:{status:number,error:string}|null=null;
  let refuseSend: "encryption_disabled" | "peer_keys_missing" | "sealed_invalid" | "unknown" | "unknown_reason" | null=null;
  const server=http.createServer(async(req,res)=>{try{
   const name=String(req.headers["x-test-agent"]);let body="";for await(const chunk of req)body+=chunk;records.push({name,path:req.url,body});
+  if(trackingFailure && req.url==="/owner/outbound" && req.method==="POST"){res.writeHead(503);res.end("tracking unavailable");return;}
   if(publishError && req.url==="/owner/sealed-key" && req.method==="PUT"){res.writeHead(publishError.status,{"content-type":"application/json"});res.end(JSON.stringify({error:publishError.error}));return;}
   const headers=new Headers();for(const [k,v]of Object.entries(req.headers))if(typeof v==="string"&&!["host","x-test-agent","connection"].includes(k))headers.set(k,v);
   if((refuseSend==="sealed_invalid"||refuseSend==="unknown"||refuseSend==="unknown_reason")&&req.url==="/"&&req.method==="POST"){res.writeHead(200,{"content-type":"application/json"});res.end(JSON.stringify({jsonrpc:"2.0",id:JSON.parse(body).id,error:{code:refuseSend==="unknown"?-32603:-32602,message:"untrusted-private-error",data:{reason:refuseSend==="sealed_invalid"?"sealed_invalid":"__proto__"}}}));return;}
@@ -37,7 +40,16 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
   let result:Response;
   try{result=await dispatch(name,new Request(`https://${name}.example.com${req.url}`,{method:req.method,headers,...(["GET","HEAD"].includes(req.method!)?{}:{body})}));}
   finally{envs[name].A2A_SEALED_ENABLED=originalFlag;if(keyRow)await envs[name].DB.prepare("UPDATE peers SET sealed_requester=? WHERE label=?").bind(keyRow.sealed_requester,keyRow.label).run();}
-  res.writeHead(result.status,Object.fromEntries(result.headers));res.end(await result.text());
+  let responseBody=await result.text();
+  if(pollFault&&req.url==="/"&&req.method==="POST"&&["GetTask","tasks/get"].includes(JSON.parse(body).method)){
+   const payload=JSON.parse(responseBody);const task=payload.result;
+   if(pollFault==="context")task.contextId="forged-context";
+   if(pollFault==="plaintext")task.history=[{messageId:"forged",role:"user",parts:[{kind:"text",text:"untrusted-poll-plaintext"}]}];
+   if(pollFault==="tampered")task.history[0].parts[0].data.signature="A".repeat(86);
+   if(pollFault==="decoration"){task.status.message={parts:[{text:"untrusted-poll-plaintext"}]};task.artifacts=[{parts:[{text:"untrusted-poll-plaintext"}]}];task.locallyOpened=true;}
+   responseBody=JSON.stringify(payload);
+  }
+  res.writeHead(result.status,Object.fromEntries(result.headers));res.end(responseBody);
  }catch(error){res.writeHead(500);res.end(String(error));}});
  await new Promise<void>(r=>server.listen(0,"127.0.0.1",r));t.after(()=>{server.closeAllConnections();server.close();});
  const hook=path.join(tmp,"fetch.mjs"),port=(server.address()as any).port;
@@ -112,6 +124,37 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
   const result=await cli("alice",["send","--to","bob","--text",secret,"--json","--proto",proto]);
   assert.equal(result.code,0,result.err);const sent=JSON.parse(result.out);
   assert.equal(sent.serverReadable,false);assert.equal(sent.senderHistorySaved,true);
+  assert.equal(sent.outboundSaved,true);
+  const savedOutbound=await cli("alice",["outbound",sent.taskId,"--to","bob","--json"]);
+  assert.equal(savedOutbound.code,0,savedOutbound.err);assert.ok(JSON.parse(savedOutbound.out).rows.some((r:any)=>r.text===secret&&r.locallyOpened));
+  assert.equal((await cli("alice",["outbound",sent.taskId,"--json"])).code,1,"pinned reads require explicit alias");
+  // A saved URL is never a credential destination; the local pin wins.
+  await envs.alice.DB.prepare("UPDATE outbound SET endpoint=? WHERE task_id=?").bind("https://attacker.example.com/",sent.taskId).run();
+  const polled=await cli("alice",["poll","--to","bob",sent.taskId,"--proto",proto,"--json"]);
+  assert.equal(polled.code,0,polled.err);assert.equal(JSON.parse(polled.out).outboundSaved,true);assert.equal(JSON.parse(polled.out).taskStateAuthenticated,false);
+  assert.ok(JSON.parse(polled.out).rows.some((r:any)=>r.text===secret&&r.locallyOpened));
+  const storedRow:any=await envs.alice.DB.prepare("SELECT peer FROM outbound WHERE task_id=?").bind(sent.taskId).first();
+  await envs.alice.DB.prepare("UPDATE outbound SET peer=? WHERE task_id=?").bind("wrong-peer",sent.taskId).run();
+  const beforeWrong=records.filter((r:any)=>r.path==="/").length;
+  assert.equal((await cli("alice",["poll","--to","bob",sent.taskId])).code,1);
+  assert.equal(records.filter((r:any)=>r.path==="/").length,beforeWrong);
+  await envs.alice.DB.prepare("UPDATE outbound SET peer=? WHERE task_id=?").bind(storedRow.peer,sent.taskId).run();
+  assert.equal((await mcp("alice","outbound",{to:"bob",taskId:sent.taskId})).structuredContent.rows[0].text,secret);
+  assert.equal((await mcp("alice","poll_outbound",{to:"bob",taskId:sent.taskId})).structuredContent.rows[0].text,secret);
+  for(const fault of ["context","plaintext","tampered","decoration"]){
+   pollFault=fault;
+   try{
+    const read=await cli("alice",["poll","--to","bob",sent.taskId,"--json"]);
+    assert.equal(read.code,fault==="decoration"?0:1,read.err);assert.equal(read.out.includes("untrusted-poll-plaintext"),false);assert.equal(read.err.includes("untrusted-poll-plaintext"),false);
+    const readMcp=await mcp("alice","poll_outbound",{to:"bob",taskId:sent.taskId});assert.equal(!!readMcp.isError,fault!=="decoration");assert.equal(JSON.stringify(readMcp).includes("untrusted-poll-plaintext"),false);
+   }finally{pollFault=null;}
+  }
+  trackingFailure=true;
+  try{
+   const untracked=await cli("alice",["send","--to","bob","--text","tracking-failure-fixture","--proto",proto]);assert.equal(untracked.code,0,untracked.err);const delivered=JSON.parse(untracked.out);assert.equal(delivered.outboundSaved,false);assert.equal(delivered.senderHistorySaved,true);assert.match(untracked.err,/do not resend/i);
+   const recovered=await cli("alice",["poll","--to","bob",delivered.taskId,"--proto",proto]);assert.equal(recovered.code,0,recovered.err);assert.equal(JSON.parse(recovered.out).outboundSaved,false);assert.ok(JSON.parse(recovered.out).rows.some((r:any)=>r.text==="tracking-failure-fixture"));
+  }finally{trackingFailure=false;}
+
   const inbox=await cli("bob",["inbox","--json"]);assert.equal(inbox.code,0,inbox.err);
   const opened=JSON.parse(inbox.out).find((x:any)=>x.taskId===sent.taskId);
   assert.equal(opened.text,secret);
@@ -200,7 +243,10 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
   const restored=await mcp("bob","history",{contextId:mcpContext});assert.ok(!restored.isError);assert.ok(restored.structuredContent.rows.some((r:any)=>r.text===mcpSecret&&r.locallyOpened));
   const configPath=path.join(dirs.alice,"config.env"),savedConfig=fs.readFileSync(configPath,"utf8");
   fs.writeFileSync(configPath,savedConfig.replace(/^A2A_OWNER_TOKEN=.*$/m,"A2A_OWNER_TOKEN="));
-  try { const warning=await mcp("alice","send",{to:"bob",text:mcpSecret,protocol:proto});assert.equal(warning.structuredContent.senderHistorySaved,false);assert.match(warning.structuredContent.next,/delivered.*Do not resend/); }
+  try {
+   const warning=await mcp("alice","send",{to:"bob",text:mcpSecret,protocol:proto});assert.equal(warning.structuredContent.senderHistorySaved,false);assert.equal(warning.structuredContent.outboundSaved,false);assert.match(warning.structuredContent.next,/delivered.*Do not resend/);
+   const recovered=await cli("alice",["poll","--to","bob",warning.structuredContent.taskId,"--proto",proto]);assert.equal(recovered.code,0,recovered.err);assert.equal(JSON.parse(recovered.out).outboundSaved,false);assert.ok(JSON.parse(recovered.out).rows.some((r:any)=>r.text===mcpSecret));
+  }
   finally { fs.writeFileSync(configPath,savedConfig); }
   assert.equal(JSON.stringify(records).includes(mcpSecret),false);
   assert.equal(JSON.stringify(mcpOutputs).includes('"sealed"'),false);
