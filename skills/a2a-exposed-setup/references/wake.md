@@ -525,3 +525,20 @@ optional `clear:true`; never raw credentials or draft overrides. Prepare removal
 separately closes connector authority. A missing capability stays on the service's
 supported dashboard or polling path, never an implicit deploy. Full flags and limits:
 [relay workflow](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/wake-relay.md#hosted-relay-wake-setup-with-protected-files).
+
+
+### Optional receiver receipts
+
+A wake's receipt ID is an observation reference, never a credential or approval.
+`wake receipts --json` lists attempts and expiry; `wake receipts ID --json`
+reads one ID from the webhook. An already trusted owner-side receiver adapter
+can use `wake receipt ID --stage signature-verified|handler-ran|owner-notified`
+to report only what it observed. The existing owner credential stays in protected
+configuration, never argv or a peer message. Do not grant a receiver owner access
+just for receipts. No preset automatically reports stages. Never infer signature
+verification, handler execution, owner notification or approval from a 2xx,
+an inbox read, or a started agent. Missing reports are unknown. These are
+owner-authenticated receiver assertions, not independent proof. They expire
+after 24 hours and bind the original message; read current task metadata with
+poll rather than reuse an expired/history snapshot. No MCP reporting tool is
+provided. See the protocol's authenticated wake receipts contract.

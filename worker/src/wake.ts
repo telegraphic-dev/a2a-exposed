@@ -10,6 +10,7 @@ export type WakeEvent = {
 	preview: string;
 	kind: string; // "inbound" | "outbound_update" | "test" | "pairing_request"
 	publicUrl: string;
+	receipt?: { id: string; expiresAt: string }; // optional owner-authenticated receiver report reference
 	deliveryId?: string; // MausBot wake identity, retained by Retry-After retries
 	pairing?: PairingInfo; // kind "pairing_request"
 };
@@ -126,6 +127,7 @@ const MAX_PREVIEW = 300;
 export function wakePayload(ev: WakeEvent, cli: string): Record<string, unknown> {
 	return {
 		event_type: "a2a_wake",
+		...(ev.receipt ? { receipt: ev.receipt } : {}),
 		contextId: ev.contextId,
 		taskId: ev.taskId,
 		taskIds: ev.taskIds,
@@ -343,6 +345,7 @@ export async function renderWake(cfg: WakeConfig, ev: WakeEvent, opts: { nowMs?:
 			break;
 		}
 	}
+	if (ev.receipt) headers["x-a2a-wake-receipt-id"] = ev.receipt.id;
 	addAccessHeaders(headers, cfg);
 	if (cfg.transport === "relay" && !relayHeadersValid(headers)) throw new Error("invalid relay forwarding headers; check receiver header configuration");
 	return { url: cfg.url || "", method: "POST", headers, body };
@@ -387,7 +390,7 @@ export function cloudflareErrorHint(status: number, body: string, opts?: { tunne
 
 /** Headers a wake preview may show in full. Every other header carries a credential, whatever its name. */
 export const PREVIEW_PLAIN_HEADERS = new Set([
-	"content-type", "user-agent", "x-request-id", "idempotency-key", "anthropic-version", "x-webhook-timestamp", "x-openbot-timestamp", "x-openbot-delivery-id",
+	"content-type", "user-agent", "x-a2a-wake-receipt-id", "x-request-id", "idempotency-key", "anthropic-version", "x-webhook-timestamp", "x-openbot-timestamp", "x-openbot-delivery-id",
 ]);
 
 export function previewHeaderPlain(name: string): boolean {

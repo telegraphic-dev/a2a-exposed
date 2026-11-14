@@ -616,3 +616,11 @@ URI boundaries, noninteractive errors and encryption restrictions.
 Owner-wait replies accept an explicit reason and public note. See
 [waiting for an owner decision](protocol.md#waiting-for-an-owner-decision)
 for flags, metadata, history and continuation/delivery limits.
+
+
+Owner-side receiver adapters can explicitly report observed wake stages with
+`wake receipt ID --stage signature-verified|handler-ran|owner-notified`.
+List IDs and their expiry first with `wake receipts --json`. HTTP acceptance
+and missing receiver reports remain separate; no preset reports automatically.
+See [authenticated wake receipts](protocol.md#authenticated-wake-receipts)
+for authentication, message binding, expiry and privacy limits.

@@ -239,3 +239,85 @@ handoff when needed. Wake delivery remains subject to authorization, rate limits
 and retries. Never claim that the owner approved an action merely because the
 wait was cleared. Encrypted local messaging keeps its existing behavior; these
 server-readable notes do not introduce encryption or authenticated receipts.
+
+## Authenticated wake receipts
+
+A real, server-readable inbound wake can carry `receipt: { id, expiresAt }` in
+its JSON payload and `x-a2a-wake-receipt-id` on the HTTP request. Text-only and
+custom-template presets carry the header; they need no body change. The ID
+identifies one POST attempt, including at most 200 merged inbound tasks. A retry
+has a new receipt ID. Test, pairing, outbound-update and encrypted-message wakes
+have no receipt. Existing receivers can ignore the additional fields/header.
+
+The receiver adapter uses the inbox's existing owner credential to report a
+stage it actually observed. List available IDs first:
+
+```bash
+npx -y a2a-exposed@latest wake receipts --json
+npx -y a2a-exposed@latest wake receipts RECEIPT_ID --json
+npx -y a2a-exposed@latest wake receipt RECEIPT_ID --stage signature-verified --json
+npx -y a2a-exposed@latest wake receipt RECEIPT_ID --stage handler-ran --json
+npx -y a2a-exposed@latest wake receipt RECEIPT_ID --stage owner-notified --json
+```
+
+`RECEIPT_ID` above is a placeholder for the UUID from the list or webhook.
+Configure `A2A_BASE_URL` and `A2A_OWNER_TOKEN` through protected configuration or
+named environment variables, never command arguments. Do not give the owner
+credential to a new receiver just to enable reports; use only an already trusted
+owner-side adapter. No new callback credential, pairing, or trust identity is
+created. Reports are optional and no existing preset automatically reports them.
+
+The owner HTTP API is `GET /owner/wake/receipts[/ID]` and
+`POST /owner/wake/receipts/ID` with exactly `{ "stage": "handler-ran" }` (or
+`signature-verified` / `owner-notified`). The list returns the latest 50 task rows
+and `more`; use an ID from the webhook to inspect that attempt. Missing records
+or reports mean **unknown**, never failure or success. The reporting route is
+not an MCP tool and is not available through the hosted management RPC.
+
+A 2xx records HTTP acceptance only. `signature-verified` means the receiver
+reports checking the wake's existing HMAC/signature over the exact request;
+`handler-ran` means its handler ran; `owner-notified` means it actually notified
+the human. Each stage is independent: reporting handler execution does not
+assert signature verification, owner notification, task completion, or human
+approval. Never report owner notification just because inbox was read or the
+owner's agent started. A receiver that cannot observe a stage must leave it
+unknown. A bearer-only receiver cannot claim signature verification.
+
+Receipts authenticate **who reported**, using the existing owner bearer over
+HTTPS. They are receiver assertions, not independent cryptographic proof of
+execution or of the wake signature. Peers read the report through their existing
+paired bearer on `GetTask` / `tasks/get` (also `ListTasks`); another peer cannot
+read that task or write a report. The issuer is the receiving inbox origin, with
+`authentication: "inbox-owner"` and `semantics: "receiver-assertion"`. No
+self-asserted receipt key is accepted, and no new signing identity is trusted.
+
+Reports bind the server-generated attempt ID, original task and inbound message
+ID, and expire 24 hours after the attempt starts. The server supplies report
+timestamps. Identical reports preserve the first timestamp; repeated stages do
+not add history. Expired or unknown IDs return 409 and cannot be revived. A
+continuation with a new message ID cannot reuse an earlier receipt. HTTP result
+and receiver reports can arrive in either order and remain independent. A
+receiver may run even if the sender never observes a 2xx.
+
+Task metadata `a2a.exposed/wake-receipt` carries the latest receipt for that
+message. It includes `id`, `taskId`, `messageId`, `issuer`, `issuedAt`,
+`expiresAt`, `expired`, `httpAccepted`, `httpStatus`, and `reports` containing
+nullable `signatureVerifiedAt`, `handlerRanAt` and `ownerNotifiedAt`. This
+namespace is reserved on task metadata: caller-supplied values are discarded
+from public task views. Peers must still treat arbitrary message content as
+untrusted and check the task/message binding and expiry before using a snapshot.
+
+Owner inbox rows include `wakeReceipt`; `show` includes it; CLI/MCP polling
+returns task metadata and stores the snapshot in history. Report history records
+`data.wakeReceipt` with the ID, message ID, stage, server timestamp and assertion
+labels. Read it with `history CONTEXT --from PEER --json`. Reporting does not
+change task state, clear a wake, send a push, or wake anyone. Poll for later
+reports; no receipt-only notification is sent. Local encrypted MCP continues to
+withhold server metadata and does not expose or authenticate these receipts.
+
+Only routing IDs, issuer, status and timestamps are stored. Receipts accept no
+free-form note, owner decision details, destination URL, webhook signature,
+credential, or message content. Expired rows remain explicitly historical until
+lazy cleanup at the next real inbound attempt or cron, seven days after issue.
+History follows the inbox's normal retention/export policy. Receipt storage
+failure does not trigger an extra send or turn a successful wake into failure.
