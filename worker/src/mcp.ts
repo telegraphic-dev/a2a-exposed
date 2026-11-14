@@ -347,7 +347,7 @@ export const TOOLS: { name: string; title: string; description: string; inputSch
 		inputSchema: { type: "object", properties: {
 			contextId: str("Only this conversation"),
 			from: str("Only this peer (the wake's from). The same context id can be a different peer's conversation"),
-			all: { type: "boolean", description: "Include finished tasks on this page" },
+			all: { type: "boolean", description: "Include all task states, including input-required owner waits and finished tasks" },
 			cursor: str("Cursor from the previous inbox page, when more tasks are waiting"),
 			limit: { type: "integer", minimum: 1, maximum: INBOX_MAX, description: `Tasks in this page (default ${INBOX_PAGE}, at most ${INBOX_MAX})` },
 		}, additionalProperties: false } },

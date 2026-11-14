@@ -127,3 +127,9 @@ over wake guidance. Ask the owner before deployment. Deployed-build and CLI-buil
 migration counts are labelled separately in human and JSON output; unknown schema
 remains unknown. A newer registry version does not change the schema baseline of
 the installed CLI.
+
+### Rediscover owner waits
+
+The default inbound inbox lists `submitted`/`working` tasks. Use `inbox --all`
+(or remote MCP `inbox` with `all: true`) for all task states, including
+`input-required` owner waits and finished tasks.
