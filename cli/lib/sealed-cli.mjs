@@ -177,10 +177,13 @@ async function trackingRecord(taskId, optional = false) {
  }
  try {
   const r = await httpJson(C.get("A2A_BASE_URL").replace(/\/$/, "") + "/owner/outbound/" + encodeURIComponent(taskId), { headers: { authorization: `Bearer ${C.get("A2A_OWNER_TOKEN")}` }, redirect: "error", maxResponseBytes: 1024 * 1024 });
-  if (r.status === 404 && optional) return null;
+  if (r.status === 404) {
+   if (optional) return null;
+   fail("No encrypted outbound tracking is stored for this task. That does not mean delivery failed. Use poll --to ALIAS TASK_ID (local MCP: poll_outbound with to and taskId) or history with the original context. Do not resend.", "outbound_tracking_missing");
+  }
   if (r.status !== 200 || !r.data || r.data.taskId !== taskId) throw Error();
   return r.data;
- } catch { if (optional) return null; fail("Could not read encrypted outbound tracking. Check the selected inbox and owner credential; use history with the original context. Do not resend."); }
+ } catch (error) { if (error instanceof CliError && error.code === "outbound_tracking_missing") throw error; if (optional) return null; fail("Could not read encrypted outbound tracking. Check the selected inbox and owner credential; use history with the original context. Do not resend."); }
 }
 export async function recovery(taskId, o, { poll = false, emit = value => console.log(JSON.stringify(value, null, 2)) } = {}) {
  gate();
@@ -199,8 +202,8 @@ export async function recovery(taskId, o, { poll = false, emit = value => consol
    if (api.canonicalJSON(C.loadPeers()[o.to]) !== api.canonicalJSON(pe) || C.get(pe.token_env) !== token) fail(sealedFailure);
    const id = newId(); let response;
    try { response = await httpJson(url, { redirect: "error", maxResponseBytes: 1024 * 1024, body: { jsonrpc: "2.0", id, method: protocol === "1.0" ? "GetTask" : "tasks/get", params: { id: tid, historyLength: 20 } }, headers: { authorization: `Bearer ${token}`, "A2A-Version": protocol, "A2A-Extensions": URI } }); }
-   catch { fail("Encrypted poll failed. Preserve the original task/context/message IDs; check recipient history. Do not resend."); }
-   if (response.status !== 200 || response.data?.jsonrpc !== "2.0" || response.data.id !== id || response.data.error || response.headers?.get("A2A-Extensions") !== URI) fail("Encrypted poll was not verified. Preserve the original IDs; check recipient history. No automatic retry or plaintext fallback.");
+   catch { fail("Encrypted poll failed. Preserve the original task/context/message IDs; ask the recipient's owner to check history. Do not resend."); }
+   if (response.status !== 200 || response.data?.jsonrpc !== "2.0" || response.data.id !== id || response.data.error || response.headers?.get("A2A-Extensions") !== URI) fail("Encrypted poll was not verified. Preserve the original IDs; ask the recipient's owner to check history. No automatic retry or plaintext fallback.");
    task = response.data.result;
   }
   if (!task || task.id !== tid || typeof task.contextId !== "string" || (rec && task.contextId !== rec.contextId)) fail("Encrypted task routing does not match the original task/context. No plaintext fallback or automatic retry.");
@@ -220,6 +223,9 @@ export async function recovery(taskId, o, { poll = false, emit = value => consol
   recheck();
   const result = { taskId: tid, contextId: task.contextId, state: taskState(task), encrypted: true, serverReadable: false, taskStateAuthenticated: false,
    rows: opened.map(({ taskId, contextId, peer, dir, text, messageId, messageIdAuthenticated, locallyOpened, historical, reason, next }) => ({ taskId, contextId, peer, dir, text, messageId, messageIdAuthenticated, locallyOpened, historical, reason, next })) };
+  if (poll && opened.some(row => !row.locallyOpened)) {
+   result.outboundSaved = false; result.next = "Encrypted poll returned refused rows. Tracking was not updated. Follow each row's next step and preserve the original IDs; do not resend.";
+  }
   if (poll && opened.every(row => row.locallyOpened)) {
    try {
     await owner("POST", "/owner/outbound", { taskId: tid, contextId: task.contextId, peer: o.to, endpoint: url, protocol, task: { id: tid, contextId: task.contextId, status: { state: taskState(task) }, envelopes } });

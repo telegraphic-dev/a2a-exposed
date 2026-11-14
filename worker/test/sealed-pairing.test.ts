@@ -146,12 +146,16 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
    try{
     const read=await cli("alice",["poll","--to","bob",sent.taskId,"--json"]);
     assert.equal(read.code,fault==="decoration"?0:1,read.err);assert.equal(read.out.includes("untrusted-poll-plaintext"),false);assert.equal(read.err.includes("untrusted-poll-plaintext"),false);
-    const readMcp=await mcp("alice","poll_outbound",{to:"bob",taskId:sent.taskId});assert.equal(!!readMcp.isError,fault!=="decoration");assert.equal(JSON.stringify(readMcp).includes("untrusted-poll-plaintext"),false);
+    if(fault==="tampered"){const refused=JSON.parse(read.out);assert.equal(refused.outboundSaved,false);assert.match(refused.next,/refused rows.*Tracking was not updated.*do not resend/);}
+    const readMcp=await mcp("alice","poll_outbound",{to:"bob",taskId:sent.taskId});assert.equal(!!readMcp.isError,fault!=="decoration");assert.equal(JSON.stringify(readMcp).includes("untrusted-poll-plaintext"),false);if(fault==="tampered"){assert.equal(readMcp.structuredContent.outboundSaved,false);assert.match(readMcp.structuredContent.next,/Tracking was not updated/);}
    }finally{pollFault=null;}
   }
   trackingFailure=true;
   try{
    const untracked=await cli("alice",["send","--to","bob","--text","tracking-failure-fixture","--proto",proto]);assert.equal(untracked.code,0,untracked.err);const delivered=JSON.parse(untracked.out);assert.equal(delivered.outboundSaved,false);assert.equal(delivered.senderHistorySaved,true);assert.match(untracked.err,/do not resend/i);
+   const missingTracking=await cli("alice",["outbound",delivered.taskId,"--to","bob","--json"]);
+   assert.equal(missingTracking.code,1);assert.match(missingTracking.err,/No encrypted outbound tracking.*does not mean delivery failed.*poll --to ALIAS TASK_ID.*Do not resend/);assert.equal(missingTracking.err.includes("owner credential"),false);
+   const missingMcpTracking=await mcp("alice","outbound",{to:"bob",taskId:delivered.taskId});assert.equal(missingMcpTracking.isError,true);assert.match(missingMcpTracking.content[0].text,/No encrypted outbound tracking.*poll_outbound/);
    const recovered=await cli("alice",["poll","--to","bob",delivered.taskId,"--proto",proto]);assert.equal(recovered.code,0,recovered.err);assert.equal(JSON.parse(recovered.out).outboundSaved,false);assert.ok(JSON.parse(recovered.out).rows.some((r:any)=>r.text==="tracking-failure-fixture"));
   }finally{trackingFailure=false;}
 

@@ -45,6 +45,9 @@ Use `list_peers` before selecting an alias for `send`. Send requires an active
 local pin and the existing human-paired credential; it never sends plaintext,
 including to unpinned peers. For continuation, read `history` and pass the same
 `contextId` to `send`. Sealed `outbound`/`poll_outbound` require an explicit alias from `list_peers`.
+The remote self-hosted connector's similarly named `poll_outbound` uses its
+server-held credentials; it is not local stdio encrypted recovery and cannot
+open this local ciphertext.
 They withhold server status messages, artifacts and arbitrary task data; task state
 remains unauthenticated. Poll reads at most 20 encrypted history messages. Use
 `history` for older or longer conversations. A missing tracking record still

@@ -139,6 +139,7 @@ Encrypted text is limited to 200000 Unicode characters and 307072 UTF-8 bytes fo
 Encrypted send does not accept `--push`, `--wake` or `--intent` in this path.
 Plaintext owner replies on encrypted tasks and syncing pinned peers to remote MCP
 are refused. Local stdio MCP uses this same send/read path; see [MCP](mcp.md#local-stdio-sendread). Encrypted responses remain a separate follow-up.
+A missing encrypted outbound record does not mean delivery failed. Use `poll --to ALIAS TASK_ID --json` (local MCP: `poll_outbound`) or history with the original context; do not resend.
 Use a separate config directory for ordinary server-readable sends.
 
 Follow-ups: signer rotation #379, further approval ceremonies #380,

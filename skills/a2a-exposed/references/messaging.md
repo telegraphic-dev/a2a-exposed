@@ -136,3 +136,7 @@ Select ALIAS with `peers list --json`. Stored reads use archive verification;
 poll uses live freshness. Tracking failures (`outboundSaved: false`) never
 invalidate delivery or authorize a resend. Local stdio MCP provides `outbound`
 and `poll_outbound` with explicit `to` and `taskId`; remote MCP cannot open local ciphertext.
+
+A missing encrypted outbound record does not mean delivery failed. Use
+`poll --to ALIAS TASK_ID --json` (local MCP: `poll_outbound`) or history with the
+original context; do not resend. Remote connector polling cannot open local ciphertext.
