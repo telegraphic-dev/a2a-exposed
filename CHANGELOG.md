@@ -2,13 +2,6 @@
 
 ## Unreleased
 
-- Guide one-way encrypted recipients through an explicitly human-approved reverse
-  pairing when no pinned outbound alias exists, including plaintext-reply refusal.
-  Clarify missing private material versus catalog metadata, safety-code mismatch
-  recovery, resumed authorization checks, and directional history labels. Fill
-  missing plaintext owner-log task states with the same peer-isolated fallback
-  used for encrypted rows, and record initial states for ordinary sends and input. Encryption remains opt-in and disabled by default.
-
 - Add separately opted-in HTTP relay profiles for fixed local webhooks and native
   A2A JSON-RPC services, with original request bytes/application authentication,
   real receiver responses, rewritten discovery and bounded incremental SSE.
