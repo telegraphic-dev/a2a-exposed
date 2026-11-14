@@ -419,6 +419,11 @@ export async function send(o) {
 }
 
 export async function poll(taskId, o) {
+ if (fs.existsSync(C.CONFIG_DIR + "/encryption/state.sqlite") || Object.values(C.loadPeers()).some(p => p.sealed?.policy === "required")) {
+  const result = await (await import("./sealed-cli.mjs")).recovery(taskId, o, { poll: true });
+  if (result.rows.some(row => !row.locallyOpened)) process.exitCode = 1;
+  return;
+ }
 	if (!o.to) die("--to required");
 	const [alias, base, tok] = resolvePeer(o.to);
 	const tid = checkId(taskId, "taskId");
@@ -439,7 +444,14 @@ export async function poll(taskId, o) {
 	console.error(`# task ${tid}: ${plainState(res)}`);
 }
 
-export const outbound = async (id) => out(await owner("GET", `/owner/outbound/${q(id)}`));
+export async function outbound(id, o = {}) {
+ if (fs.existsSync(C.CONFIG_DIR + "/encryption/state.sqlite") || Object.values(C.loadPeers()).some(p => p.sealed?.policy === "required")) {
+  const result = await (await import("./sealed-cli.mjs")).recovery(id, o);
+  if (result.rows.some(row => !row.locallyOpened)) process.exitCode = 1;
+  return;
+ }
+ out(await owner("GET", `/owner/outbound/${q(id)}`));
+}
 
 // ---------------------------------------------------------------- export
 /** JSON dump on stdout. `--sql` prints the same tables as SQL text. */

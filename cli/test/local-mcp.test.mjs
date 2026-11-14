@@ -23,7 +23,7 @@ test("stdio MCP negotiates lifecycle, lists only bounded local send/read tools",
  assert.equal((await handle({ ...initialize, params: { ...initialize.params, protocolVersion: "future" } })).result.protocolVersion, "2025-11-25");
  await handle({ jsonrpc: "2.0", method: "notifications/initialized" });
  const names = (await handle(request("tools/list"))).result.tools.map(t => t.name);
- assert.deepEqual(names, ["list_peers", "send", "inbox", "history"]);
+ assert.deepEqual(names, ["list_peers", "send", "inbox", "history", "outbound", "poll_outbound"]);
  assert.equal(TOOLS.find(t => t.name === "inbox").annotations.readOnlyHint, false);
  assert.equal((await handle(initialize)).error.code, -32602);
  assert.equal((await handle(request("tools/list", { cursor: "bad" }))).error.code, -32602);

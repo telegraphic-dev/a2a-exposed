@@ -5,7 +5,7 @@ import * as C from "./config.mjs";
 import { CliError, checkId, httpJson } from "./a2a.mjs";
 import { followInbox } from "./commands.mjs";
 import { gate, encryptionDisabled } from "./sealed-keys.mjs";
-import { send, openRows } from "./sealed-cli.mjs";
+import { send, openRows, recovery } from "./sealed-cli.mjs";
 
 const VERSION = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 const PROTOCOLS = ["2025-11-25", "2025-06-18", "2025-03-26"];
@@ -19,6 +19,7 @@ export const TOOLS = [
  { name: "send", description: "Seal text locally to a human-paired pinned alias using the CLI path. Continue with contextId from history. No plaintext fallback, remote MCP sync, push or reply. Delivery state is a routing hint." + note, inputSchema: schema({ to: str(), text: { ...str(200000), description: "1–200000 Unicode characters; canonical encrypted content must fit 307072 UTF-8 bytes including JSON structure and escaping. Refused before private-key access." }, contextId: str(), taskId: str(), protocol: { type: "string", enum: ["0.3", "1.0"] } }, ["to", "text"]), annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true } },
  { name: "inbox", description: "Read all open inbox pages and open encrypted rows locally. Acknowledges returned wakes/outbound updates. Refused and server-readable content stays hidden; task state is unchanged. Use all:true or history to read acknowledged rows again. kind outbound means read history then continue with send." + note, inputSchema: schema({ contextId: str(), from: str(), all: { type: "boolean" } }), annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true } },
  { name: "history", description: "Read locally verified historical content for a context and optional peer. Repeatable read; does not admit live work or prove task assignment. Server-readable content stays hidden." + note, inputSchema: schema({ contextId: str(), from: str(), limit: { type: "integer", minimum: 1, maximum: 200 } }, ["contextId"]), annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true } },
+ ...["outbound", "poll_outbound"].map(name => ({ name, description: (name === "outbound" ? "Read stored sealed-task tracking from the selected inbox and open content locally with its pin; does not contact the peer. Only verified message content is returned; server status/artifacts are withheld." : "Contact the selected pinned peer to fetch a sealed sent task, open content locally, and save ciphertext tracking best-effort. Only verified message content is returned; server status/artifacts are withheld.") + note, inputSchema: schema({ to: str(), taskId: str() }, ["to", "taskId"]), annotations: { readOnlyHint: name === "outbound", destructiveHint: false, openWorldHint: true } })),
 ];
 
 function validate(args, spec, name) {
@@ -73,7 +74,11 @@ export async function callTool(name, args, options = {}) {
  gate();
  if (name === "send") {
   const result = await send({ to: args.to, text: args.text, context: args.contextId, task: args.taskId, proto: args.protocol, "allow-os-consent": options["allow-os-consent"] === true }, { emit() {} });
-  return { ...result, ...(result.senderHistorySaved ? {} : { next: "Encrypted message delivered, but sender history was not saved. Do not resend. Ask the recipient owner to check inbox/history with these context/message IDs." }) };
+  return { ...result, ...(result.senderHistorySaved && result.outboundSaved ? {} : { next: "Encrypted message delivered, but sender history or outbound tracking was not saved. Do not resend. Ask the recipient owner to check inbox/history with these context/message IDs." }) };
+ }
+ if (name === "outbound" || name === "poll_outbound") {
+  const result = await recovery(args.taskId, { to: args.to, "allow-os-consent": options["allow-os-consent"] === true }, { poll: name === "poll_outbound", emit() {} });
+  return { ...result, untrustedPeerContent: true };
  }
  if (args.contextId) checkId(args.contextId, "contextId");
  const qs = new URLSearchParams();

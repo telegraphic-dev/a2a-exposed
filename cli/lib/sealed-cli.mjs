@@ -6,6 +6,12 @@ import { owner, peerToken } from "./commands.mjs";
 import { gate, sdk, URI, encryptionDisabled, peerKeysChanged } from "./sealed-keys.mjs";
 const fail = (message, code = "verification_failed") => { const error = new CliError(message); error.code = code; throw error; };
 const binding = h => Object.fromEntries(["contextId", "messageId", "taskId", "role", "state", "kind"].map(k => [k, h[k]]));
+const taskState = task => {
+ const raw = task?.status?.state;
+ if (typeof raw !== "string") return "unknown";
+ const normalized = raw.replace(/^TASK_STATE_/, "").toLowerCase().replaceAll("_", "-");
+ return ["submitted", "working", "input-required", "completed", "failed", "canceled", "rejected", "auth-required"].includes(normalized) ? normalized : "unknown";
+};
 const sealedFailure = "Encrypted operation refused. Preserve the original keys and pairing; inspect keys status --json and the original task/context IDs. Do not replace keys or change trust automatically. No plaintext fallback or automatic retry.";
 async function paired(peer, o, action) {
  gate();
@@ -101,12 +107,17 @@ export async function send(o, { emit = value => console.log(JSON.stringify(value
   const task = protocol === "1.0" ? data.result?.task : data.result;
   if (!task?.id || task.contextId !== b.contextId || !task.history?.some(m => { try { return api.canonicalJSON(api.readMessageCarrier(api.canonicalJSON(m), protocol)) === api.canonicalJSON(envelope); } catch { return false; } })) fail("Encrypted task routing response is invalid; delivery may have occurred. Preserve context " + b.contextId + " and message " + b.messageId + "; do not resend.");
   // Persist only the envelope, never the locally opened content or peer-returned text.
-  let stored = false;
+  let stored = false, outboundSaved = false;
   if (C.get("A2A_BASE_URL") && C.get("A2A_OWNER_TOKEN")) {
    try { await owner("POST", "/owner/history", { contextId: b.contextId, dir: "out", peer: o.to, taskId: task.id, role: "user", text: "[encrypted message]", state: "submitted", data: { sealed: envelope, messageId: b.messageId } }); stored = true; }
    catch { console.error("warning: encrypted message delivered; sender history was not saved. Do not resend."); }
   } else console.error("warning: encrypted message delivered; sender history was not saved because A2A_BASE_URL / A2A_OWNER_TOKEN is missing. Do not resend.");
-  const result = { taskId: task.id, contextId: b.contextId, messageId: b.messageId, encrypted: true, serverReadable: false, senderHistorySaved: stored, taskStateAuthenticated: false };
+  try {
+   const safeTask = { id: task.id, contextId: b.contextId, status: { state: taskState(task) }, sealed: envelope };
+   await owner("POST", "/owner/outbound", { taskId: task.id, contextId: b.contextId, peer: o.to, endpoint: url, protocol, task: safeTask });
+   outboundSaved = true;
+  } catch { console.error("warning: encrypted message delivered; outbound tracking was not saved. Use poll --to ALIAS TASK_ID or history with the original context; do not resend."); }
+  const result = { taskId: task.id, contextId: b.contextId, messageId: b.messageId, encrypted: true, serverReadable: false, senderHistorySaved: stored, outboundSaved, taskStateAuthenticated: false };
   emit(result);
   return result;
  });
@@ -155,4 +166,72 @@ export async function openRows(rows, o, { historical = false, markFailure = true
   }
  }
  return out;
+}
+
+// Recovery reads never trust an owner record's endpoint, plaintext, flags or updates.
+// The selected local pin is the only authority for network destination and opening.
+async function trackingRecord(taskId, optional = false) {
+ if (!C.get("A2A_BASE_URL") || !C.get("A2A_OWNER_TOKEN")) {
+  if (optional) return null;
+  fail("outbound requires A2A_BASE_URL and A2A_OWNER_TOKEN. Use poll --to ALIAS TASK_ID with an alias from peers list --json; do not resend.");
+ }
+ try {
+  const r = await httpJson(C.get("A2A_BASE_URL").replace(/\/$/, "") + "/owner/outbound/" + encodeURIComponent(taskId), { headers: { authorization: `Bearer ${C.get("A2A_OWNER_TOKEN")}` }, redirect: "error", maxResponseBytes: 1024 * 1024 });
+  if (r.status === 404) {
+   if (optional) return null;
+   fail("No encrypted outbound tracking is stored for this task. That does not mean delivery failed. Use poll --to ALIAS TASK_ID (local MCP: poll_outbound with to and taskId) or history with the original context. Do not resend.", "outbound_tracking_missing");
+  }
+  if (r.status !== 200 || !r.data || r.data.taskId !== taskId) throw Error();
+  return r.data;
+ } catch (error) { if (error instanceof CliError && error.code === "outbound_tracking_missing") throw error; if (optional) return null; fail("Could not read encrypted outbound tracking. Check the selected inbox and owner credential; use history with the original context. Do not resend."); }
+}
+export async function recovery(taskId, o, { poll = false, emit = value => console.log(JSON.stringify(value, null, 2)) } = {}) {
+ gate();
+ const tid = checkId(taskId, "taskId"), pe = C.loadPeers()[o.to];
+ if (!o.to || pe?.sealed?.policy !== "required") fail("Encrypted outbound/poll requires --to ALIAS from peers list --json and an active approved local pin. No plaintext fallback.");
+ const token = peerToken(pe.token_env);
+ if (poll && !token) fail("The paired peer token is missing; inspect peers list --json. No request was made.");
+ const rec = await trackingRecord(tid, poll);
+ if (rec && (rec.peer !== o.to || typeof rec.contextId !== "string")) fail("Outbound tracking does not match the selected peer. Preserve the original task/context IDs; select the original alias with peers list --json. No request was made.");
+ return paired(o.to, o, async ({ api, identity, record, recheck }) => {
+  let task = rec?.task, protocol = rec?.protocol, url;
+  if (poll) {
+   [url, protocol] = pickEndpoint(pe.url, await fetchCard(pe.url), o.proto);
+   if (!["0.3", "1.0"].includes(protocol) || url !== record.peerEndpoint) fail(peerKeysChanged + " No poll was made.");
+   recheck();
+   if (api.canonicalJSON(C.loadPeers()[o.to]) !== api.canonicalJSON(pe) || C.get(pe.token_env) !== token) fail(sealedFailure);
+   const id = newId(); let response;
+   try { response = await httpJson(url, { redirect: "error", maxResponseBytes: 1024 * 1024, body: { jsonrpc: "2.0", id, method: protocol === "1.0" ? "GetTask" : "tasks/get", params: { id: tid, historyLength: 20 } }, headers: { authorization: `Bearer ${token}`, "A2A-Version": protocol, "A2A-Extensions": URI } }); }
+   catch { fail("Encrypted poll failed. Preserve the original task/context/message IDs; ask the recipient's owner to check history. Do not resend."); }
+   if (response.status !== 200 || response.data?.jsonrpc !== "2.0" || response.data.id !== id || response.data.error || response.headers?.get("A2A-Extensions") !== URI) fail("Encrypted poll was not verified. Preserve the original IDs; ask the recipient's owner to check history. No automatic retry or plaintext fallback.");
+   task = response.data.result;
+  }
+  if (!task || task.id !== tid || typeof task.contextId !== "string" || (rec && task.contextId !== rec.contextId)) fail("Encrypted task routing does not match the original task/context. No plaintext fallback or automatic retry.");
+  checkId(task.contextId, "contextId");
+  // Stored send snapshots contain one canonical envelope. Poll snapshots contain
+  // canonical envelopes only; status messages, artifacts and arbitrary fields never persist.
+  const envelopes = task.sealed ? [task.sealed] : task.envelopes ?? (Array.isArray(task.history) ? task.history.map(message => {
+   try { return api.readMessageCarrier(api.canonicalJSON(message), protocol); }
+   catch { fail("Encrypted task contains an invalid or plaintext message. Content withheld; no plaintext fallback."); }
+  }) : []);
+  if (!Array.isArray(envelopes) || envelopes.length < 1 || envelopes.length > 20) fail("No bounded encrypted task history is available. Use history with the original context; do not resend.");
+  const rows = envelopes.map(envelope => {
+   const h = api.validateEnvelopeStructure(envelope).header;
+   return { taskId: tid, contextId: task.contextId, peer: o.to, dir: h.from.keyId === identity.bundle.keyId ? "out" : "in", sealed: envelope };
+  });
+  const opened = await openRows(rows, o, { historical: !poll, markFailure: false });
+  recheck();
+  const result = { taskId: tid, contextId: task.contextId, state: taskState(task), encrypted: true, serverReadable: false, taskStateAuthenticated: false,
+   rows: opened.map(({ taskId, contextId, peer, dir, text, messageId, messageIdAuthenticated, locallyOpened, historical, reason, next }) => ({ taskId, contextId, peer, dir, text, messageId, messageIdAuthenticated, locallyOpened, historical, reason, next })) };
+  if (poll && opened.some(row => !row.locallyOpened)) {
+   result.outboundSaved = false; result.next = "Encrypted poll returned refused rows. Tracking was not updated. Follow each row's next step and preserve the original IDs; do not resend.";
+  }
+  if (poll && opened.every(row => row.locallyOpened)) {
+   try {
+    await owner("POST", "/owner/outbound", { taskId: tid, contextId: task.contextId, peer: o.to, endpoint: url, protocol, task: { id: tid, contextId: task.contextId, status: { state: taskState(task) }, envelopes } });
+    result.outboundSaved = true;
+   } catch { result.outboundSaved = false; result.next = "Encrypted poll succeeded but tracking was not saved. Preserve the original IDs; do not resend."; }
+  }
+  emit(result); return result;
+ });
 }

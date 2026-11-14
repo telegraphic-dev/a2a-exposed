@@ -37,12 +37,23 @@ Tools cannot grant consent, choose a key store or fall back to file keys.
 | `list_peers` | none | Local aliases, pin mirror and whether a credential is configured; no tokens |
 | `send` | `to`, `text` (up to 200000 characters within the encrypted content byte limit); optional `contextId`, `taskId`, `protocol` (`0.3` or `1.0`) | Locally sealed delivery and sender-history status, plus original IDs |
 | `inbox` | optional `contextId`, `from`, `all` | All matching open pages (or retained rows with `all`), with verified content opened locally |
+| `outbound` | `to`, `taskId` | Locally verified stored sealed snapshot; requires owner configuration |
+| `poll_outbound` | `to`, `taskId` | Fetch at the selected pinned peer, open locally and save ciphertext tracking best-effort |
 | `history` | `contextId`; optional `from`, `limit` (1–200, default 50) | Verified sent/received history after process restart |
 
 Use `list_peers` before selecting an alias for `send`. Send requires an active
 local pin and the existing human-paired credential; it never sends plaintext,
 including to unpinned peers. For continuation, read `history` and pass the same
-`contextId` to `send`. Local MCP provides no `reply`, pairing approval, trust
+`contextId` to `send`. Sealed `outbound`/`poll_outbound` require an explicit alias from `list_peers`.
+The remote self-hosted connector's similarly named `poll_outbound` uses its
+server-held credentials; it is not local stdio encrypted recovery and cannot
+open this local ciphertext.
+They withhold server status messages, artifacts and arbitrary task data; task state
+remains unauthenticated. Poll reads at most 20 encrypted history messages. Use
+`history` for older or longer conversations. A missing tracking record still
+allows polling with the original task ID; no send is retried.
+
+Local MCP provides no `reply`, pairing approval, trust
 change, token administration, push registration or plaintext-send tool.
 Check pairing requests separately with the CLI `pair list --json`.
 
@@ -74,8 +85,8 @@ initialize/initialized handshake, ping, tools/list and tools/call. It handles
 requests serially, keeps no decrypted history cache, and exits when stdin closes.
 No automatic send retry occurs on transport failure or client cancellation.
 If delivery is uncertain, preserve the returned context/message IDs and
-ask the recipient owner to check inbox/history before taking another action. Sender-history failure
-after delivery returns `senderHistorySaved: false` and explicit `next` guidance; do not resend.
+ask the recipient owner to check inbox/history before taking another action. Sender-history or tracking failure
+after delivery returns `senderHistorySaved: false` or `outboundSaved: false` and explicit `next` guidance; do not resend.
 
 Returned inbox wakes are acknowledged even if a later page fails. Use `inbox`
 with `all: true` or `history` with the context ID to read those rows again. If a

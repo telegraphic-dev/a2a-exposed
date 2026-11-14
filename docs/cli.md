@@ -287,7 +287,7 @@ The owner token authenticates these commands.
 | `peer forward --to <card-url> [--hours N]` / `peer forward --off` | On the inbox you are leaving, forward a direct reply to the new card and answer with a moved pointer. `--hours` is 1 to 720 (default 168) |
 | `send --to <alias\|url> [--text T \| stdin] [--context C] [--task T] [--push] [--wake auto\|always\|never] [--intent handoff\|blocker\|question\|status\|ack] [--proto 0.3\|1.0]` | Send. The CLI reads the peer card and prefers A2A 1.0. Set `--intent` on every send and every reply, and `--wake` when the auto default is wrong. Both are optional. `--wake auto` wakes a handoff, blocker, or question. An ack, and an idle or unchanged status, stay stored once the peer enforces routing. A changed status is batched. `--wake always` asks for an immediate wake, still subject to that peer's authorization and rate limits. `--wake never` only stores the message. Do not send an acknowledgement-only message, and do not answer an ack |
 | `poll --to <alias\|url> <taskId> [--proto 0.3\|1.0]` | Fetch a task you sent |
-| `outbound <taskId>` | Stored state, including pushed updates |
+| `outbound <taskId> [--to ALIAS] [--json]` | Stored state, including pushed updates. Pinned configs require `--to ALIAS` from `peers list --json` and open verified content locally |
 
 A `PEER_<ALIAS>_TOKEN` value in the environment overrides `config.env`. When they differ, `connect`, `send`, `poll`, `peers`, and `status` warn. The values are not shown.
 
@@ -581,3 +581,5 @@ logs and verify a real inbox-and-reply run. No automatic test is sent.
 `status --json` adds `wakeDelivery` when the endpoint supports it; older endpoints
 leave it unknown. For hosted setup selected by `--agent`, use `wake preview
 --agent NAME --json`; `wake status` instead uses an existing local owner config.
+
+Pinned encrypted configs use sealed-aware `poll` and `outbound`, with optional `--allow-os-consent` for keychain reads. Only verified message content opens locally; server task status remains unauthenticated. Ciphertext tracking is best-effort (`outboundSaved`), independent of sender history. A missing record permits explicit polling with the original task ID; never resend to repair tracking. See [encrypted recovery](local-key-pairing.md#local-encrypted-cli-messages).
