@@ -180,6 +180,7 @@ const ROUTES: RouteDef[] = [
 	{ method: "GET", name: "GET /owner/facade", take: (s) => s.length === 2 && s[1] === "facade", search: noQuery, path: () => "/owner/facade" },
 	{ method: "POST", name: "POST /owner/facade/verify", take: (s) => s.length === 3 && s[1] === "facade" && s[2] === "verify", search: noQuery, path: () => "/owner/facade/verify" },
 	...(["GET", "POST", "DELETE"] as const).map(method => ({ method, name: `${method} /owner/relay/http/:profile`, take: (s: string[]) => s.length === 4 && s[1] === "relay" && s[2] === "http" && (s[3] === "webhook" || s[3] === "a2a"), search: noQuery, path: (s: string[]) => `/owner/relay/http/${s[3]}` })),
+	{ method: "GET", name: "GET /owner/wake/receipts", take: (s) => (s.length === 3 || s.length === 4 && /^[a-f0-9-]{36}$/.test(s[3]!)) && s[1] === "wake" && s[2] === "receipts", search: noQuery, path: (s) => `/owner/wake/receipts${s[3] ? `/${s[3]}` : ""}` },
 	{ method: "GET", name: "GET /owner/wake/status", take: (s) => s.length === 3 && s[1] === "wake" && s[2] === "status", search: noQuery, path: () => "/owner/wake/status" },
 	{ method: "GET", name: "GET /owner/wake/routing", take: (s) => s.length === 3 && s[1] === "wake" && s[2] === "routing", search: noQuery, path: () => "/owner/wake/routing" },
 	...(["GET", "POST", "DELETE"] as const).map(method => ({ method, name: `${method} /owner/wake/relay`, take: (s: string[]) => s.length === 3 && s[1] === "wake" && s[2] === "relay", search: noQuery, path: () => "/owner/wake/relay" })),

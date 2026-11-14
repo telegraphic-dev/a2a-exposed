@@ -146,7 +146,10 @@ export function ownerWaitOf(task: Json): OwnerWait | undefined {
 /** Serialise an internal task for the given protocol version. */
 export function publicTask(task: Json, version: string, historyLength?: number | null): Json {
 	const t: Json = { kind: "task", id: task.id, contextId: task.contextId, status: task.status, artifacts: task.artifacts || [] };
-	if (task.metadata) t.metadata = task.metadata;
+	// The receipt namespace is reserved: never echo a peer-supplied assertion as an inbox report.
+	const { ["a2a.exposed/wake-receipt"]: _untrustedReceipt, ...metadata } = task.metadata || {};
+	if (task._wakeReceipt) metadata["a2a.exposed/wake-receipt"] = task._wakeReceipt;
+	if (Object.keys(metadata).length) t.metadata = metadata;
 	let hist: Json[] = task.history || [];
 	if (historyLength !== undefined && historyLength !== null) hist = historyLength > 0 ? hist.slice(-historyLength) : [];
 	if (hist.length) t.history = hist;

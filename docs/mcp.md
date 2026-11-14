@@ -226,3 +226,9 @@ change either setting. See [local keys](local-key-pairing.md).
 Owner-wait replies accept an explicit reason and public note. See
 [waiting for an owner decision](protocol.md#waiting-for-an-owner-decision)
 for flags, metadata, history and continuation/delivery limits.
+
+
+Remote `show_task`, inbox and polling expose optional server-readable wake
+receipt metadata. Reports are owner-only CLI/HTTP operations, not MCP tools.
+Local encrypted MCP keeps withholding server metadata. See
+[authenticated wake receipts](protocol.md#authenticated-wake-receipts).

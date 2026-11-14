@@ -224,6 +224,10 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
                                                would skip and still wakes. enforce stores an ack and an idle
                                                or unchanged status without a wake, and batches a changed status.
                                                Set shadow again to roll enforce back
+  wake receipts [ID] [--json]  list receiver report IDs (latest 50 rows), expiry and separate stages
+  wake receipt ID --stage STAGE [--json]
+                                owner-only report: signature-verified | handler-ran | owner-notified
+                                select ID with wake receipts --json; only report an observed stage
   wake status [--json]          read pending/retrying wakes and last HTTP acceptance; does not clear them
   wake preview                  rendered wake request (a credential is Bearer •••• or ••••, none of the secret)
                                 openbot includes a sample delivery ID and canonical signing-input description
@@ -579,7 +583,7 @@ const SPEC = {
  keys: { id: S, peer: S, store: S, "card-url": S, "user-code": S, "allow-os-consent": B, json: B },
 	hosted: { url: S, version: S, "upstream-token-file": S, "upstream-token-env": S, "access-client-id-file": S, "access-client-id-env": S, "access-client-secret-file": S, "access-client-secret-env": S, name: S, json: B, agent: S, hostname: S, origin: S, path: S, preset: S, "control-url": S, "secret-file": S, "secret-env": S, "secret-from": S, "hermes-home": S, route: S, "token-file": S, "no-run": B },
 	init: { ...deployOpts, ...tunnelOpts, tunnel: B, "dry-run": B, json: B }, deploy: deployOpts,
-	wake: { ...deployOpts, "local-url": S, json: B, url: S, "reference-file": S, "reference-env": S, clear: B, version: S, agent: S, "control-url": S, "key-header": S, "key-file": S, "key-env": S, "key-stdin": B, "hmac-secret-file": S, "hmac-secret-env": S, "access-client-id-file": S, "access-client-id-env": S, "access-client-secret-file": S, "access-client-secret-env": S }, tunnel: { ...tunnelOpts, preset: S, "hermes-route": S, "hmac-secret-stdin": B, json: B },
+	wake: { stage: S, ...deployOpts, "local-url": S, json: B, url: S, "reference-file": S, "reference-env": S, clear: B, version: S, agent: S, "control-url": S, "key-header": S, "key-file": S, "key-env": S, "key-stdin": B, "hmac-secret-file": S, "hmac-secret-env": S, "access-client-id-file": S, "access-client-id-env": S, "access-client-secret-file": S, "access-client-secret-env": S }, tunnel: { ...tunnelOpts, preset: S, "hermes-route": S, "hmac-secret-stdin": B, json: B },
 	inbox: { context: S, from: S, all: B, json: B, "allow-os-consent": B },
 	reply: { "wait-reason": S, "wait-note": S, text: S, stdin: B, state: { type: "string", default: "completed" }, artifact: B, "artifact-name": { type: "string", default: "response" }, force: B, wake: S, intent: S },
 	history: { "allow-os-consent": B, from: S, n: { type: "string", short: "n", default: "50" }, json: B },
@@ -697,6 +701,7 @@ export async function main(argv) {
 			if (p.length !== 1) throw new CliError("usage: relay create|status|revoke|run");
 			return relay(p[0], o);
 		case "wake": {
+			if (p[0] === "receipts" || p[0] === "receipt") return cmd.wakeReceipt(p, o);
 			if (p[0] === "status") {
 				if (p.length !== 1 || Object.keys(o).some(key => key !== "json")) throw new CliError("usage: wake status [--json] (select the owner config with --config-dir; hosted setup: wake preview --agent NAME --json)");
 				return cmd.wakeStatus(o);

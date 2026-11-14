@@ -100,6 +100,27 @@ async function inboxRows(o) {
 	});
 }
 
+export async function wakeReceipt(p, o) {
+ const listing = p[0] === "receipts";
+ const usage = "wake receipts [ID] [--json]; wake receipt ID --stage signature-verified|handler-ran|owner-notified [--json]. List IDs with wake receipts --json";
+ if (p.length > 2 || (!listing && !p[1]) || Object.keys(o).some(k => !["json", ...(!listing ? ["stage"] : [])].includes(k))) die(usage);
+ if (p[1] && !/^[a-f0-9-]{36}$/.test(p[1])) die(`invalid receipt ID. ${usage}`);
+ if (!listing && !["signature-verified", "handler-ran", "owner-notified"].includes(o.stage)) die(`invalid or missing --stage. ${usage}`);
+ const r = await ownerTry(listing ? "GET" : "POST", "/owner/wake/receipts" + (p[1] ? "/" + q(p[1]) : ""), listing ? undefined : { stage: o.stage });
+ if (r.status === 404) die("this endpoint has no wake receipts support; check its version before reporting. No receipt was recorded.");
+ if (r.status === 409) die("receipt unknown or expired; list wake receipts --json. Do not replay an old wake.");
+ if (r.status !== 200) die(`wake receipt request failed (HTTP ${r.status}); list wake receipts --json`);
+ if (o.json) return out(r.data);
+ if (!listing) return console.log(`Recorded ${o.stage} for ${p[1]} as a receiver assertion. This does not complete the task.`);
+ for (const row of r.data.receipts || []) {
+  console.log(`${row.id} task ${row.taskId}: HTTP ${row.httpStatus ?? "unknown"}; expires ${row.expiresAt}${row.expired ? " (expired)" : ""}`);
+  console.log(`  receiver reports: signature verified ${row.reports?.signatureVerifiedAt || "unknown"}; handler ran ${row.reports?.handlerRanAt || "unknown"}; owner notified ${row.reports?.ownerNotifiedAt || "unknown"}`);
+ }
+ if (!(r.data.receipts || []).length) console.log("No wake receipt records. Missing reports are unknown.");
+ if (r.data.more) console.log("Showing the latest 50 rows. Use wake receipts ID --json for an ID from the received webhook.");
+ console.log(r.data.next);
+}
+
 export async function wakeStatus(o) {
 	const r = await ownerTry("GET", "/owner/wake/status");
 	if (r.status === 404) die("this endpoint predates wake status; use wake preview and receiver logs, then ask the owner about upgrading");
@@ -447,7 +468,7 @@ export async function poll(taskId, o) {
 		let txt = textOf((res.status || {}).message || {});
 		const arts = (res.artifacts || []).map((x) => textOf(x)).join("\n");
 		if (arts && arts !== txt) txt = (txt ? txt + "\n" : "") + arts;
-		await logHistory(rec.contextId, { dir: "in", peer: alias, taskId: tid, event: "poll", state: plainState(res), text: txt, ...(ownerWaitOf(res) ? { data: { ownerWait: ownerWaitOf(res) } } : {}) });
+		await logHistory(rec.contextId, { dir: "in", peer: alias, taskId: tid, event: "poll", state: plainState(res), text: txt, data: { ...(ownerWaitOf(res) ? { ownerWait: ownerWaitOf(res) } : {}), ...(res?.metadata?.["a2a.exposed/wake-receipt"] ? { wakeReceipt: res.metadata["a2a.exposed/wake-receipt"] } : {}) } });
 	}
 	if (!o.json) console.error(`# task ${tid}: ${plainState(res)}`);
 }

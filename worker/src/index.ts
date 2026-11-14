@@ -4,6 +4,7 @@
 // Worker serves a rewritten agent card and device-flow pairing, and forwards authenticated JSON-RPC to the upstream.
 // Handlers take a TenantContext (tenancy.ts) built from the Worker bindings. With the hosted gates unset, that
 // context is the single self-host tenant and behaviour matches a Worker that read env.* directly.
+import * as Receipts from "./wake-receipts.ts";
 import { attemptView, pendingView } from "./wake-status.ts";
 import { VERSION } from "./version.ts";
 import * as A from "./a2a.ts";
@@ -50,10 +51,14 @@ async function loadTask(ctx: TenantContext, id: string): Promise<Json | null> {
 	const r: Json = await ctx.DB.prepare("SELECT * FROM tasks WHERE id = ?").bind(id).first();
 	if (!r) return null;
 	const msgs = await ctx.DB.prepare("SELECT message_json FROM messages WHERE task_id = ? ORDER BY seq").bind(id).all();
+	const history = (msgs.results || []).map((m: Json) => JSON.parse(m.message_json));
+	const lastUser = [...history].reverse().find((m: Json) => m.role === "user");
+	let receipt;
+	try { receipt = lastUser && !SealedKeys.envelopeOf(lastUser) ? await Receipts.taskReceipt(ctx.DB, id, lastUser.messageId, r.peer, ctx.PUBLIC_URL) : undefined; } catch { log("wake_receipt_unavailable", {}); }
 	return {
-		id: r.id, contextId: r.context_id, status: JSON.parse(r.status_json), artifacts: JSON.parse(r.artifacts_json),
+		_wakeReceipt: receipt, id: r.id, contextId: r.context_id, status: JSON.parse(r.status_json), artifacts: JSON.parse(r.artifacts_json),
 		metadata: r.metadata_json ? JSON.parse(r.metadata_json) : undefined,
-		history: (msgs.results || []).map((m: Json) => JSON.parse(m.message_json)),
+		history,
 		_peer: r.peer, _protocol: r.protocol, _createdAt: r.created_at, _push: JSON.parse(r.push_configs_json),
 	};
 }
@@ -279,7 +284,14 @@ async function noteWakeWrite(ectx: object): Promise<void> {
 }
 
 async function sendWake(ctx: TenantContext, ectx: ExecutionContext, payload: Json): Promise<{ status: number | null; info: string; error?: RelayTestError }> {
-	const result = await attemptWake(ctx, ectx, payload);
+	let receipt: Receipts.ReceiptRef | undefined;
+	if (wakeHooked(ctx)) {
+		try { receipt = await Receipts.beginReceipt(ctx.DB, payload); } catch { log("wake_receipt_unavailable", {}); }
+	}
+	const result = await attemptWake(ctx, ectx, payload, receipt);
+	if (receipt) {
+		try { await ctx.DB.prepare("UPDATE wake_receipts SET http_status=? WHERE delivery_id=?").bind(result.status, receipt.id).run(); } catch { log("wake_receipt_unavailable", {}); }
+	}
 	if (!wakeHooked(ctx)) return result;
 	const value = JSON.stringify({ at: new Date(Date.now()).toISOString(), httpStatus: result.status, transport: ctx.WAKE_TRANSPORT === "relay" ? "relay" : "webhook" });
 	try {
@@ -300,18 +312,18 @@ async function wakeStatus(ctx: TenantContext): Promise<Json> {
 	for (const row of settings.results as Json[]) snapshots[row.key] = attemptView(row.value);
 	return { configured: wakeHooked(ctx), transport: ctx.WAKE_TRANSPORT === "relay" ? "relay" : "webhook", pendingCount: Number(total?.n || 0),
 		pending: (rows.results as Json[]).map(pendingView), lastAttempt: snapshots.wake_last_attempt || null, lastAccepted: snapshots.wake_last_accepted || null,
-		next: "HTTP success records receiver acceptance only. Signature verification, handler execution and owner notification are unverified; check receiver logs. Reading inbox clears matching pending wakes." };
+		next: "HTTP success records receiver acceptance only. Signature verification, handler execution and owner notification are unverified; check receiver logs. Reading inbox clears matching pending wakes. Optional receiver assertions: wake receipts --json." };
 }
 
-async function attemptWake(ctx: TenantContext, ectx: ExecutionContext, payload: Json): Promise<{ status: number | null; info: string; error?: RelayTestError }> {
+async function attemptWake(ctx: TenantContext, ectx: ExecutionContext, payload: Json, receipt?: Receipts.ReceiptRef): Promise<{ status: number | null; info: string; error?: RelayTestError }> {
 	const catchUp = !!payload.busy;
 	const delivered = { ...payload };
 	delete delivered.busy;
 	// shadowOnly is a routing counter flag, never part of the request.
 	const { shadowOnly: _counterFlag, ...event } = delivered;
-	const ev: WakeEvent = { ...event, publicUrl: ctx.PUBLIC_URL };
+	const ev: WakeEvent = { ...event, publicUrl: ctx.PUBLIC_URL, ...(receipt ? { receipt } : {}) };
 	let req;
-	try { req = await renderWake(wakeConfig(ctx), ev); } catch (e) {
+	try { req = await renderWake(wakeConfig(ctx), ev, receipt ? { requestId: receipt.id } : {}); } catch (e) {
 		if (ctx.WAKE_TRANSPORT === "relay") { await clearBusy(ctx, payload); return { status: null, error: "invalid", info: "invalid relay receiver configuration" }; }
 		log("wake_render_failed", { preset: preset(ctx), error: String(e).slice(0, 200) });
 		await clearBusy(ctx, payload);
@@ -580,6 +592,7 @@ export async function cronFlush(ctx: TenantContext, ectx: ExecutionContext): Pro
 	await flushDue(ctx, ectx);
 	const now = Date.now();
 	await ctx.DB.batch([
+		ctx.DB.prepare("DELETE FROM wake_receipts WHERE expires_ms <= ?").bind(now - 6 * Receipts.RECEIPT_TTL),
 		ctx.DB.prepare("DELETE FROM rate WHERE minute < ?").bind(Math.floor(now / 60000) - 5),
 		ctx.DB.prepare("DELETE FROM wake_budget WHERE hour < ?").bind(Math.floor(now / 3600000) - 24),
 		ctx.DB.prepare("DELETE FROM wake_routing WHERE hour < ?").bind(Math.floor(now / 3600000) - 24 * 14),
@@ -1087,6 +1100,7 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
 	if (!task) task = { id: A.newId(), contextId, status: { state: "submitted", timestamp: ts }, artifacts: [], history: [], _peer: label, _protocol: version, _createdAt: ts, _push: [] };
 	msg.contextId = contextId; if (!sealed) msg.taskId = task.id;
 	task.history.push(msg);
+	delete task._wakeReceipt; // A new user message cannot inherit the previous message's receipt.
 	task.status = { state: directReply ? "completed" : "submitted", timestamp: ts };
 	if (pushCfg) task._push = [...task._push.filter((c: Json) => c.id !== pushCfg.id), pushCfg];
 	if (params.metadata && typeof params.metadata === "object") task.metadata = { ...(task.metadata || {}), ...params.metadata };
@@ -2341,9 +2355,9 @@ async function ackPendingWakes(ctx: TenantContext, seen: { taskId: string; conte
 }
 
 function ownerTaskView(t: Json): Json {
-	const { _push, _peer, _protocol, _createdAt, ...rest } = t;
+	const { _push, _peer, _protocol, _createdAt, _wakeReceipt, ...rest } = t;
 	return {
-		...rest, from: _peer, protocol: _protocol, createdAt: _createdAt,
+		...rest, ...(_wakeReceipt ? { wakeReceipt: _wakeReceipt } : {}), from: _peer, protocol: _protocol, createdAt: _createdAt,
 		pushConfigs: (_push || []).map((c: Json) => ({ id: c.id, url: c.url, version: c._version, hasToken: !!c.token, hasAuth: !!c.authentication })),
 	};
 }
@@ -2427,7 +2441,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			const t = await loadTask(ctx, r.id);
 			const lastUser = [...t.history].reverse().find((x: Json) => x.role === "user") || {};
 			const peerAddress: Json = await ctx.DB.prepare("SELECT card_url, claimed_card_url FROM peers WHERE label = ? AND revoked_at IS NULL").bind(t._peer).first();
-			out.push({ ...(A.ownerWaitOf(t) ? { ownerWait: A.ownerWaitOf(t) } : {}), continuation: await continuationGuide(ctx, t._peer, peerAddress?.card_url || peerAddress?.claimed_card_url), taskId: t.id, contextId: t.contextId, from: t._peer, state: t.status.state, updated: t.status.timestamp, text: SealedKeys.envelopeOf(lastUser) ? "[encrypted message]" : A.textOf(lastUser), ...(SealedKeys.envelopeOf(lastUser) ? { sealed: SealedKeys.envelopeOf(lastUser) } : {}) });
+			out.push({ ...(t._wakeReceipt ? { wakeReceipt: t._wakeReceipt } : {}), ...(A.ownerWaitOf(t) ? { ownerWait: A.ownerWaitOf(t) } : {}), continuation: await continuationGuide(ctx, t._peer, peerAddress?.card_url || peerAddress?.claimed_card_url), taskId: t.id, contextId: t.contextId, from: t._peer, state: t.status.state, updated: t.status.timestamp, text: SealedKeys.envelopeOf(lastUser) ? "[encrypted message]" : A.textOf(lastUser), ...(SealedKeys.envelopeOf(lastUser) ? { sealed: SealedKeys.envelopeOf(lastUser) } : {}) });
 		}
 		// A reply to a message this agent sent. The first page carries it, up to the same limit, so a later
 		// page does not repeat it and the inbound cursor stays the inbound page. It stays in the default
@@ -2822,6 +2836,22 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 		if (!proxyMode(ctx)) return json({ mode: "inbox", ok: false, reason: "not_proxy_mode", detail: "this Worker is an A2A endpoint (no UPSTREAM_URL): nothing to verify" }, 409);
 		return json({ mode: "proxy", ...(await verifyUpstream(ctx)) });
 	}
+	if (seg[0] === "wake" && seg[1] === "receipts" && !seg[3] && m === "GET") {
+  if (url.search) throw new HttpError(400, "wake receipts takes no query parameters");
+  const id = seg[2];
+  if (id && !/^[a-f0-9-]{36}$/.test(id)) throw new HttpError(400, "invalid receipt id; list wake receipts --json");
+  const rows = await ctx.DB.prepare(`SELECT * FROM wake_receipts ${id ? "WHERE delivery_id=?" : ""} ORDER BY issued_ms DESC, delivery_id DESC, task_id LIMIT 51`).bind(...(id ? [id] : [])).all();
+  const all = rows.results as Json[];
+  return json({ receipts: all.slice(0, 50).map(r => Receipts.receiptView(r, ctx.PUBLIC_URL)), more: all.length > 50,
+   next: "Receiver reports are owner-authenticated assertions, not independent proof. Report only a stage the receiver actually observed; missing reports are unknown. HTTP success means acceptance only." });
+ }
+ if (seg[0] === "wake" && seg[1] === "receipts" && seg[2] && !seg[3] && m === "POST") {
+  if (url.search || !/^[a-f0-9-]{36}$/.test(seg[2])) throw new HttpError(400, "invalid receipt id; list wake receipts --json");
+  const b = await body();
+  if (!Receipts.receiptInput(b)) throw new HttpError(400, "stage must be signature-verified, handler-ran or owner-notified; list wake receipts --json");
+  if (!await Receipts.reportReceipt(ctx.DB, seg[2], b.stage)) throw new HttpError(409, "receipt unknown or expired; list wake receipts --json; do not replay an old wake");
+  return json({ recorded: true, id: seg[2], stage: b.stage });
+ }
 	if (seg[0] === "wake" && seg[1] === "status" && !seg[2] && m === "GET") return json(await wakeStatus(ctx));
 	if (seg[0] === "wake" && seg[1] === "preview" && m === "GET") {
 		// rendered wake request for a sample event, credentials shown as Bearer •••• or ••••, plus short sha256 fingerprints of the
@@ -4418,7 +4448,7 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 			let txt = A.textOf((res?.status || {}).message || {});
 			const arts = (res?.artifacts || []).map((x: Json) => A.textOf(x)).join("\n");
 			if (arts && arts !== txt) txt = (txt ? txt + "\n" : "") + arts;
-			await ownerCall(ctx, ectx, "POST", "/owner/history", { contextId: rec.contextId, dir: "in", peer: peer.alias, taskId: tid, event: cancel ? "cancel" : "poll", state: M.plainState(res), text: txt, ...(A.ownerWaitOf(res) ? { data: { ownerWait: A.ownerWaitOf(res) } } : {}) });
+			await ownerCall(ctx, ectx, "POST", "/owner/history", { contextId: rec.contextId, dir: "in", peer: peer.alias, taskId: tid, event: cancel ? "cancel" : "poll", state: M.plainState(res), text: txt, data: { ...(A.ownerWaitOf(res) ? { ownerWait: A.ownerWaitOf(res) } : {}), ...(res?.metadata?.[Receipts.RECEIPT_META] ? { wakeReceipt: res.metadata[Receipts.RECEIPT_META] } : {}) } });
 			return M.toolText(`Task ${tid} at ${peer.alias}: ${M.plainState(res)}. ${UNTRUSTED}`, res);
 		}
 		case "list_peers": {
@@ -4701,7 +4731,7 @@ export async function dispatch(req: Request, ctx: TenantContext, ectx: Execution
 	if (moved) return new Response(moved.body || null, { status: moved.status, headers: moved.headers });
 	const res = noindex(ctx, await handle(req, ctx, ectx));
 	// A diagnostic probe must not flush/consume pending inbox wakes as a side effect.
-	if (!((req.method === "POST" && /^\/owner\/wake\/test(?:\/|$)/.test(new URL(req.url).pathname)) || (["GET", "HEAD"].includes(req.method) && new URL(req.url).pathname === "/owner/wake/status")))
+	if (!((req.method === "POST" && /^\/owner\/wake\/test(?:\/|$)/.test(new URL(req.url).pathname)) || (["GET", "HEAD", "POST"].includes(req.method) && /^\/owner\/wake\/(?:status|receipts)(?:\/|$)/.test(new URL(req.url).pathname))))
 		ectx.waitUntil(flushDue(ctx, ectx).catch((e) => log("flush_failed", { error: String(e).slice(0, 200) })));
 	return res;
 }

@@ -90,3 +90,20 @@ eligibility, not a delivery promise. Unknown observations stay unknown. A 2xx
 only establishes receiver acceptance; check receiver logs for signature checks,
 handler execution and owner notification. An old acceptance does not validate
 new settings. Select hosted setup with `wake preview --agent NAME --json`.
+
+
+### Optional receiver receipts
+
+A wake's receipt ID is an observation reference, never a credential or approval.
+`wake receipts --json` lists attempts and expiry; `wake receipts ID --json`
+reads one ID from the webhook. An already trusted owner-side receiver adapter
+can use `wake receipt ID --stage signature-verified|handler-ran|owner-notified`
+to report only what it observed. The existing owner credential stays in protected
+configuration, never argv or a peer message. Do not grant a receiver owner access
+just for receipts. No preset automatically reports stages. Never infer signature
+verification, handler execution, owner notification or approval from a 2xx,
+an inbox read, or a started agent. Missing reports are unknown. These are
+owner-authenticated receiver assertions, not independent proof. They expire
+after 24 hours and bind the original message; read current task metadata with
+poll rather than reuse an expired/history snapshot. No MCP reporting tool is
+provided. See the protocol's authenticated wake receipts contract.
