@@ -495,9 +495,42 @@ test('create preflights advertised names and capacity before any POST',()=>{
     'https://control.example/api/v1/setup/capacity':{status:200,body:{limit:1,used:1,remaining:0,can_create:false}},
    },{A2A_TEST_FETCH_LOG:log});
    assert.equal(r.status,1,r.stdout+r.stderr);assert.equal(JSON.parse(r.stdout).code,scenario);
+   if(scenario==='limit')assertLimitRecovery(JSON.parse(r.stdout).next,/no agent was created/);
    assert.ok(fs.readFileSync(log,'utf8').trim().split('\n').map(JSON.parse).every(c=>c.method==='GET'));
   }finally{f.clean();}
  }
+});
+
+function assertLimitRecovery(next,lead){
+ assert.match(next,lead);
+ assert.match(next,/This CLI cannot delete agents\./);
+ assert.match(next,/open https:\/\/control\.example\/app, select an unused hosted agent and choose Delete this agent/);
+ assert.match(next,/Plan limits are at https:\/\/control\.example\/pricing\./);
+ assert.match(next,/Run hosted capacity --json again before hosted create/);
+ assert.doesNotMatch(next,/hosted (delete|remove)|upgrade/i);
+}
+
+test('agent-limit results name the dashboard Agents page and plans without a CLI delete command',()=>{
+ const f=fixture();f.save();
+ try{
+  const full=f.run(['hosted','capacity','--json'],{
+   'https://control.example/api/v1/setup/capabilities':{status:200,body:{...capabilities,preflight:true}},
+   'https://control.example/api/v1/setup/capacity':{status:200,body:{limit:2,used:2,remaining:0,can_create:false}},
+  });
+  assert.equal(full.status,0,full.stdout+full.stderr);const room=JSON.parse(full.stdout);
+  assert.equal(room.can_create,false);assertLimitRecovery(room.next,/^The account has no room for another hosted agent\./);
+  const log=path.join(f.dir,'requests');
+  const refused=f.run(['hosted','create','--name','windmill','--json'],{
+   'https://control.example/api/v1/tenants':{status:403,body:{error:'limit',message:owner}},
+  },{A2A_TEST_FETCH_LOG:log});
+  assert.equal(refused.status,1,refused.stdout+refused.stderr);const result=JSON.parse(refused.stdout);
+  assert.equal(result.code,'limit');assertLimitRecovery(result.next,/^The account is at its hosted agent limit, so no agent was created\./);
+  assert.ok(!(refused.stdout+refused.stderr).includes(owner));
+  const plain=f.run(['hosted','create','--name','windmill'],{
+   'https://control.example/api/v1/tenants':{status:403,body:{error:'limit'}},
+  });
+  assert.equal(plain.status,1);assert.match(plain.stdout+plain.stderr,/control\.example\/app[\s\S]*control\.example\/pricing/);
+ }finally{f.clean();}
 });
 
 test("hosted upstream requires explicit versions, protects secret inputs, and prints only known results", () => {

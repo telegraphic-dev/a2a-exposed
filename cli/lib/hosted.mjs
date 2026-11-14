@@ -7,6 +7,9 @@ import { CliError, upstreamUrlProblem } from "./a2a.mjs";
 export const SETUP_SCOPES = ["agents:read", "agents:create", "agents:owner-token", "wake:write", "wake:test", "upstream:write", "upstream:test"];
 const SETUP_UNSUPPORTED = "This service does not expose scoped hosted setup capabilities. Check the --control-url service origin. Use the service dashboard to create an agent and configure Wake settings, or hosted MCP create_agent/set_wake with human confirmation and secret entry. Do not run init or deploy to repair a hosted address; no setup approval was requested.";
 const NEXT = "Run hosted capabilities --json to list scopes and presets; login --machine NAME --scopes SCOPES to approve setup. Use the same --config-dir DIR for login and subsequent hosted commands.";
+// The CLI has no delete command: name the dashboard Agents page and the plan page on the same service.
+const limitRecovery = origin => `This CLI cannot delete agents. To free a slot, open ${origin}/app, select an unused hosted agent and choose Delete this agent in its Danger zone. Plan limits are at ${origin}/pricing. Run hosted capacity --json again before hosted create; a deleted agent can take a moment to free its slot.`;
+const LIMIT_CREATE = origin => `The account is at its hosted agent limit, so no agent was created. ${limitRecovery(origin)}`;
 const fail = (code, next) => { const error = new CliError(next); error.result = { ok: false, code, next }; throw error; };
 const printable = value => typeof value === "string" && value.length <= 4096 && !/[\x00-\x1f\x7f]/.test(value);
 
@@ -85,7 +88,7 @@ async function request(origin, path, { token = "", method = "GET", body, fetchIm
 		const next = code === "insufficient_scope" && path === "/api/v1/tenants" ? 'Creating an agent requires agents:create and agents:owner-token. Run hosted capabilities --json, then login --machine NAME --scopes "agents:create agents:owner-token" using the same --config-dir DIR as hosted create.'
 			: code === "not_configured" ? "No agent address is saved. Run hosted upstream preview --agent NAME --json, then hosted upstream set with its version and explicit credentials before verifying."
 			: code === "taken" || code === "reserved_name" ? "Choose another --name using hosted names --name NAME --json before creating."
-			: code === "limit" ? "The account is at its agent limit. Read hosted capacity --json and review account plans."
+			: code === "limit" ? LIMIT_CREATE(origin)
 			: code === "conflict" && path.includes("/upstream") ? "Upstream settings changed. Run hosted upstream preview --agent NAME --json, then repeat with its explicit --version."
 			: code === "conflict" ? "Wake settings changed. Run wake preview --json, then test the draft again."
 			: code === "invalid_reference" ? "The wake reference was already used, expired or does not match this draft. Run wake prepare again with the draft inputs and a new --reference-file."
@@ -142,7 +145,7 @@ export async function capacity(o = {}) {
  const data = await request(origin, "/api/v1/setup/capacity", { token });
  const count = value => Number.isSafeInteger(value) && value >= 0;
  if (!(data.limit === null || count(data.limit)) || !count(data.used) || !(data.remaining === null || count(data.remaining)) || data.remaining !== (data.limit === null ? null : Math.max(0, data.limit - data.used)) || data.can_create !== (data.remaining === null || data.remaining > 0)) fail("invalid_response", "The service did not return valid account capacity. No creation was attempted.");
- return { ok: true, code: "capacity", limit: data.limit, used: data.used, remaining: data.remaining, can_create: data.can_create, next: data.can_create ? "This is a read-only snapshot. Check hosted names --name NAME --json, then explicitly approve creation scopes if needed and run hosted create --name NAME --json." : "The account has no creation room. Review its agents and plan before another creation attempt." };
+ return { ok: true, code: "capacity", limit: data.limit, used: data.used, remaining: data.remaining, can_create: data.can_create, next: data.can_create ? "This is a read-only snapshot. Check hosted names --name NAME --json, then explicitly approve creation scopes if needed and run hosted create --name NAME --json." : `The account has no room for another hosted agent. ${limitRecovery(origin)}` };
 }
 
 export async function create(o = {}) {
@@ -155,7 +158,7 @@ export async function create(o = {}) {
  if (service.preflight) {
   const available = await names(o);
   if (!available.available) fail(available.reason, "Choose a name with hosted names --name NAME --json before creating.");
-  if (!(await capacity(o)).can_create) fail("limit", "The account is at its agent limit. Read hosted capacity --json and review its agents or plan.");
+  if (!(await capacity(o)).can_create) fail("limit", LIMIT_CREATE(origin));
  }
 	const before = await list(o);
 	if (before.agents.some(row => row.name === name && row.status !== "deleted")) fail("taken", "That name already belongs to this account. Select it from hosted list --json or choose another --name.");
