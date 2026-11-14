@@ -22,5 +22,14 @@ test("deployment configuration composes hosted and relay bindings with explicit 
 		assert.equal(config({ ...mode, A2A_SEALED_ENABLED: "1" }).env.A2A_SEALED_ENABLED.value, "1");
 		for (const value of ["true", "yes", " 1", "1 "]) assert.throws(() => config({ ...mode, A2A_SEALED_ENABLED: value }), /must be exactly 1.*0\/unset.*owner approval/);
 	}
+	// Deployment must not trim a malformed registration opt-in into the enabled value.
+	for (const mode of [{}, { TENANCY: "host" }]) {
+		for (const SITE_ENV of ["", "staging", "production"]) {
+			assert.equal(config({ ...mode, SITE_ENV }).env.AGENT_REGISTRATION_ENABLED, undefined);
+			assert.equal(config({ ...mode, SITE_ENV, AGENT_REGISTRATION_ENABLED: "1" }).env.AGENT_REGISTRATION_ENABLED.value, "1");
+			for (const value of ["0", "true", "True", "TRUE", "on", "ON", " 1", "1 ", "\t1", "1\n", "01"])
+				assert.equal(config({ ...mode, SITE_ENV, AGENT_REGISTRATION_ENABLED: value }).env.AGENT_REGISTRATION_ENABLED, undefined, JSON.stringify(value));
+		}
+	}
 	const core = readFileSync("../control/src/core/http-relay-metadata.ts", "utf8"); assert.match(core, /HTTP_RELAY_PROTOCOL_VERSION = 2/); assert.match(core, /response-stream-v1/);
 });

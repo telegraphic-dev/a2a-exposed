@@ -70,7 +70,7 @@ const plain: Record<string, string> = {
 	// APPROVAL_OIDC_* turn on OpenID Connect approval when issuer, client id, secret and allowlist are all set.
 	TENANCY: v("TENANCY"),
 	// Discovery only: remains off until the platform implements agent-scoped registration.
-	AGENT_REGISTRATION_ENABLED: v("AGENT_REGISTRATION_ENABLED"),
+	AGENT_REGISTRATION_ENABLED: e.AGENT_REGISTRATION_ENABLED === "1" ? "1" : "",
 	TENANT_DOMAIN: v("TENANT_DOMAIN"),
 	DATA_REGION: v("DATA_REGION"), // eu | fedramp; unset = Cloudflare's default placement
 	QUOTAS: v("QUOTAS"),
