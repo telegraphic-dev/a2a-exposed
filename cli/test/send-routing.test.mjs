@@ -1,7 +1,7 @@
 // --wake and --intent become message metadata. Invalid values fail before a request.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { routingMetadata } from "../lib/commands.mjs";
+import { routeFields, routingMetadata } from "../lib/commands.mjs";
 
 test("routing metadata is omitted unless wake or intent is set", () => {
 	assert.equal(routingMetadata(undefined, undefined), undefined);
@@ -14,4 +14,12 @@ test("routing metadata is omitted unless wake or intent is set", () => {
 test("routing metadata rejects an unknown wake or intent", () => {
 	assert.throws(() => routingMetadata("later", "question"), /--wake must be auto, always, never/);
 	assert.throws(() => routingMetadata("always", "ping"), /--intent must be handoff, blocker, question, status, ack/);
+});
+
+test("reply route fields stay optional and use the same checks as send (#401)", () => {
+	assert.deepEqual(routeFields(undefined, undefined), {});
+	assert.deepEqual(routeFields("", ""), {});
+	assert.deepEqual(routeFields("auto", "handoff"), { wake: "auto", intent: "handoff" });
+	assert.throws(() => routeFields("later", undefined), /--wake must be auto, always, never/);
+	assert.throws(() => routeFields(undefined, "ping"), /--intent must be handoff, blocker, question, status, ack/);
 });

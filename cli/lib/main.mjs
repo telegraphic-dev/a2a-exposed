@@ -385,6 +385,9 @@ Inbox (owner side)
   working <taskId>                         mark task working
   reply <taskId> (--text T | --stdin) [--state completed|input-required|rejected|failed|working]
         [--artifact] [--artifact-name N] [--force]
+        [--wake auto|always|never] [--intent handoff|blocker|question|status|ack]
+                                           set --intent on every reply, and --wake when the auto default
+                                           is wrong; both label the reply for the peer's wake routing, as on send
                                            delivery waits at most 18 s; identical retries read the first result
                                            --force changes a terminal task again; peers see every change
                                            push results show role/host/URL fingerprint; task state saved confirms storage
@@ -457,12 +460,12 @@ Outbound (agents you call)
   send --to <alias|url> [--text T | stdin] [--context C] [--task T] [--push]
                           [--wake auto|always|never] [--intent handoff|blocker|question|status|ack]
                           [--proto 0.3|1.0]
-                          Set intent on every send. auto wakes a handoff, blocker, or question.
-                          An ack, and an idle or unchanged status, stay stored. A changed status
-                          is batched. always asks for an immediate wake, still subject to the
-                          peer's authorization and rate limits. never only stores the message.
-                          Omit both for a legacy sender: the peer wakes as before. Do not send
-                          an acknowledgement-only message, and do not answer an ack with an ack.
+                          Set intent on every send and every reply, and wake when the auto default
+                          is wrong. auto wakes a handoff, blocker, or question. An ack, and an idle
+                          or unchanged status, stay stored. A changed status is batched. always
+                          asks for an immediate wake, still subject to the peer's authorization
+                          and rate limits. never only stores the message. Do not send an
+                          acknowledgement-only message, and do not answer an ack with an ack.
   poll --to <alias|url> <taskId> [--proto 0.3|1.0]
                           send/poll need only peer config; owner history/task storage is optional.
                           Storage failures warn on stderr; the peer response still prints and exits 0
@@ -564,7 +567,7 @@ const SPEC = {
 	init: { ...deployOpts, ...tunnelOpts, tunnel: B, "dry-run": B, json: B }, deploy: deployOpts,
 	wake: { ...deployOpts, "local-url": S, json: B, url: S, "reference-file": S, "reference-env": S, clear: B, version: S, agent: S, "control-url": S, "key-header": S, "key-file": S, "key-env": S, "key-stdin": B, "hmac-secret-file": S, "hmac-secret-env": S, "access-client-id-file": S, "access-client-id-env": S, "access-client-secret-file": S, "access-client-secret-env": S }, tunnel: { ...tunnelOpts, preset: S, "hermes-route": S, "hmac-secret-stdin": B, json: B },
 	inbox: { context: S, from: S, all: B, json: B, "allow-os-consent": B },
-	reply: { text: S, stdin: B, state: { type: "string", default: "completed" }, artifact: B, "artifact-name": { type: "string", default: "response" }, force: B },
+	reply: { text: S, stdin: B, state: { type: "string", default: "completed" }, artifact: B, "artifact-name": { type: "string", default: "response" }, force: B, wake: S, intent: S },
 	history: { "allow-os-consent": B, from: S, n: { type: "string", short: "n", default: "50" }, json: B },
 	token: { rotate: B, json: B },
 	peers: { "token-env": S, "token-stdin": B, json: B },

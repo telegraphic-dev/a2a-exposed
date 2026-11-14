@@ -18,6 +18,17 @@ The config directory is `~/.config/a2a-exposed`, or `$XDG_CONFIG_HOME/a2a-expose
 
 New peer tokens use the `a2aow_` prefix. Only the hash is stored.
 
+## Sender upgrade
+
+Senders should label each message for the peer's wake routing. The CLI and MCP `send` have taken `--intent` / `intent` (and `--wake` / `wake`) since v0.8.49. CLI `reply` now takes the same flags, and the MCP `reply` tool already does.
+
+1. Use the current CLI: `npx -y a2a-exposed@latest`.
+2. Reconnect the MCP client so it reads the current `send` and `reply` tool descriptions.
+3. Refresh the official skill: `npx skills add telegraphic-dev/a2a-exposed`.
+4. Set `intent` on every send and every reply, and `wake` only when the `auto` default is wrong.
+
+Both fields stay optional. A message without them is still accepted and still wakes the peer. Set `intent` anyway, so the peer's `WAKE_ROUTING=shadow` counts, and a later `enforce`, can classify your traffic. See [Protocol](protocol.md#wake-routing).
+
 ## Adopt an existing Worker
 
 To keep an existing Worker, its D1 data, peer tokens, and wake secrets:
