@@ -141,7 +141,7 @@ test("Worker versions: stale, current, newer, legacy, and unknown health", () =>
 	assert.match(legacy.text, /predates version reporting/);
 	assert.equal(step({ health: { ok: false, version: null } }).ok, true);
 	const latest = step({ workerVersion: "0.8.20", latestVersion: "0.8.22" });
-	assert.deepEqual(latest.also, ["a2a-exposed 0.8.22 is available: run npx -y a2a-exposed@latest deploy"]);
+	assert.deepEqual(latest.also, ["a2a-exposed 0.8.22 is available: ask the owner before running npx -y a2a-exposed@latest deploy"]);
 	assert.ok(!step({ workerVersion: "0.8.22", latestVersion: "0.8.23" }).also.some((hint) => hint.includes("is available")));
 });
 
@@ -195,4 +195,13 @@ test("connector persistence is local, bounded, and never includes process argume
 	assert.match(connectorLine({ connections: 4, persistence: "ephemeral" }), /^connected \(4\), ephemeral/);
 	assert.equal(connectorLine({ connections: null }), "unknown, persistence unknown");
 	assert.equal(connectorLine({ connections: 0 }), "not connected (0), persistence unknown");
+});
+
+
+test("known target migrations fail status before wake guidance; unknown and hosted remain separate", () => {
+ const snapshot = healthy({ cliVersion: "0.8.58", workerVersion: "0.8.58", wake: { configured: false }, targetMigrations: { status: "known", baseline: "cli-build", version: "0.8.58", pending: ["one.sql", "two.sql", "three.sql"] } });
+ const missing = nextStep(snapshot); assert.equal(missing.ok, false); assert.match(missing.text, /3 known pending.*CLI build 0.8.58.*ask the owner before running/);
+ assert.ok(!nextStep({ ...snapshot, targetMigrations: { status: "unknown", pending: null } }).text.includes("known pending"));
+ assert.ok(!nextStep({ ...snapshot, deployment: "hosted" }).text.includes("known pending"));
+ for (const s of [healthy({ cliVersion:"0.8.58", workerVersion:"0.8.20" }), healthy({ health:{ok:true,version:null} })]) assert.match(nextStep(s).text, /ask the owner before running/);
 });
