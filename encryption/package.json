@@ -1,6 +1,6 @@
 {
   "name": "@a2a-exposed/encryption",
-  "version": "0.8.56",
+  "version": "0.8.57",
   "description": "Local sealed A2A envelope primitives and key custody for opt-in CLI and stdio MCP encryption.",
   "type": "module",
   "exports": {
