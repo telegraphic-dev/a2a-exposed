@@ -286,7 +286,8 @@ async function noteWakeWrite(ectx: object): Promise<void> {
 
 async function sendWake(ctx: TenantContext, ectx: ExecutionContext, payload: Json): Promise<{ status: number | null; info: string; error?: RelayTestError }> {
 	let receipt: Receipts.ReceiptRef | undefined;
-	if (wakeHooked(ctx)) {
+	if (wakeHooked(ctx) && preset(ctx) !== "mausbot") {
+		// MausBot retries retain identical payload bytes under one idempotency key.
 		try { receipt = await Receipts.beginReceipt(ctx.DB, payload); } catch { log("wake_receipt_unavailable", {}); }
 	}
 	const result = await attemptWake(ctx, ectx, payload, receipt);
@@ -2916,6 +2917,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			const res = await ctx.DB.batch([
 				ctx.DB.prepare("DELETE FROM message_claims WHERE task_id IN (SELECT id FROM tasks WHERE context_id = ?)").bind(c),
 				ctx.DB.prepare("DELETE FROM wake_dedup WHERE ref = ? OR ref IN (SELECT id FROM tasks WHERE context_id = ?)").bind(c, c),
+				ctx.DB.prepare("DELETE FROM wake_receipts WHERE context_id = ?").bind(c),
 				ctx.DB.prepare("DELETE FROM messages WHERE context_id = ?").bind(c),
 				ctx.DB.prepare("DELETE FROM tasks WHERE context_id = ?").bind(c),
 				ctx.DB.prepare("DELETE FROM history WHERE context_id = ?").bind(c),

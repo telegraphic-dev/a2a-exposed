@@ -247,7 +247,8 @@ its JSON payload and `x-a2a-wake-receipt-id` on the HTTP request. Text-only and
 custom-template presets carry the header; they need no body change. The ID
 identifies one POST attempt, including at most 200 merged inbound tasks. A retry
 has a new receipt ID. Test, pairing, outbound-update and encrypted-message wakes
-have no receipt. Existing receivers can ignore the additional fields/header.
+have no receipt. MausBot also keeps its existing identical-body retry contract
+and carries no per-attempt receipt. Existing receivers can ignore the additional fields/header.
 
 The receiver adapter uses the inbox's existing owner credential to report a
 stage it actually observed. List available IDs first:

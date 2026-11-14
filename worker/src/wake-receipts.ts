@@ -35,11 +35,12 @@ export async function beginReceipt(db: SqlDb, payload: Row, now = Date.now()): P
  const peer = await db.prepare("SELECT sealed_requester FROM peers WHERE label=? AND revoked_at IS NULL").bind(payload.from).first<Row>();
  if (!eligible.length || !peer || peer.sealed_requester) return;
  const id = crypto.randomUUID(), expires = now + RECEIPT_TTL;
- await db.batch([
+ const stored = await db.batch([
   db.prepare("DELETE FROM wake_receipts WHERE expires_ms <= ?").bind(now - 6 * RECEIPT_TTL),
-  ...eligible.map(r => db.prepare("INSERT INTO wake_receipts (delivery_id, task_id, message_id, peer, context_id, issued_ms, expires_ms) VALUES (?, ?, ?, ?, ?, ?, ?)")
-   .bind(id, r.id, r.message_id, r.peer, r.context_id, now, expires)),
+  ...eligible.map(r => db.prepare("INSERT INTO wake_receipts (delivery_id, task_id, message_id, peer, context_id, issued_ms, expires_ms) SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM tasks t JOIN messages m ON m.task_id=t.id WHERE t.id=? AND t.peer=? AND t.context_id=? AND m.message_id=?)")
+   .bind(id, r.id, r.message_id, r.peer, r.context_id, now, expires, r.id, r.peer, r.context_id, r.message_id)),
  ]);
+ if (!stored.slice(1).some(r => Number(r.meta.changes) > 0)) return;
  return { id, expiresAt: new Date(expires).toISOString() };
 }
 

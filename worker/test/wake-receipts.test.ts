@@ -129,3 +129,33 @@ test("an HTTP failure can coexist with a receiver report; no old report binds a 
  const forged = publicTask({ id: "task", metadata: { [RECEIPT_META]: { ownerNotified: true }, keep: "value" }, status: { state: "submitted" } }, "0.3");
  assert.deepEqual(forged.metadata, { keep: "value" });
 });
+
+
+test("purging a conversation removes receipts and fences an in-flight receipt insert", async t => {
+ const f = await fixture(t), task = await f.send("purged-message");
+ const id = f.sent[0].headers["x-a2a-wake-receipt-id"];
+ // Purge after receipt discovery but before its atomic insert, as overlapping requests may do.
+ const racingDb = { prepare: f.env.DB.prepare.bind(f.env.DB), batch: async (stmts: any[]) => {
+  assert.equal((await f.call("POST", "/owner/purge", { contexts: ["same-context"] })).status, 200);
+  return f.env.DB.batch(stmts);
+ } };
+ assert.equal(await beginReceipt(racingDb, { kind: "inbound", from: "ada", contextId: "same-context", taskIds: [task] }), undefined);
+ assert.deepEqual((await f.call("GET", "/owner/wake/receipts")).data.receipts, []);
+ assert.equal((await f.call("POST", `/owner/wake/receipts/${id}`, { stage: "owner-notified" })).status, 409);
+ assert.deepEqual((await f.call("GET", "/owner/contexts")).data, []);
+ assert.deepEqual((await f.call("GET", "/owner/history/same-context?from=ada")).data, []);
+});
+
+
+test("MausBot retries keep identical body bytes and the original idempotency key", async t => {
+ const f = await fixture(t, 503);
+ Object.assign(f.env, { WAKE_PRESET: "mausbot", WAKE_WEBHOOK_KEY: "fixture-key", WAKE_WEBHOOK_URL: "https://hook.example.net/hooks/wh_fixture" });
+ await f.send("maus-message");
+ assert.equal(f.sent.length, 1);
+ await f.env.DB.prepare("UPDATE wakes SET last_sent_ms=0").run();
+ await f.call("GET", "/owner/contexts");
+ assert.equal(f.sent.length, 2);
+ assert.equal(f.sent[1].body, f.sent[0].body);
+ assert.equal(f.sent[1].headers["idempotency-key"], f.sent[0].headers["idempotency-key"]);
+ assert.equal(f.sent[0].headers["x-a2a-wake-receipt-id"], undefined);
+});
