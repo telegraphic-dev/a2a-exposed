@@ -64,7 +64,7 @@ export function updates(current, registry, worker, { selfHosted = C.deploymentKi
  const version = validVersion(worker?.version) ? worker.version : null;
  const pending = worker?.schema?.status === "known" && Array.isArray(worker.schema.applied)
   ? expected.filter(n => !worker.schema.applied.includes(n)) : null;
- if (worker?.versionReported === false || version && validVersion(target) && newer(target, version) || pending?.length) {
+ if (worker?.versionReported === false && !version || version && validVersion(target) && newer(target, version) || pending?.length) {
   const message = `Last check: self-hosted Worker ${version || (worker?.versionReported === false ? "predates version reporting" : "version unknown")}${version && validVersion(target) && newer(target, version) ? ` is older than ${target}` : ""}; ${pending === null ? "migration status unknown; redeploy applies pending D1 migrations" : `${pending.length} pending D1 migration(s)`}. Ask the owner before running ${CLI_COMMAND} deploy. Nothing was updated.`;
   result.push({ component: "worker", current: version, target, pendingMigrations: pending, command: `${CLI_COMMAND} deploy`, message });
  }
@@ -154,7 +154,7 @@ async function refreshWorker(file) {
    const raw = response.data;
    if (!validVersion(raw.version) || !["self-hosted", "platform"].includes(raw.management)) return;
    const applied = Array.isArray(raw.schema?.applied) ? raw.schema.applied.filter(n => typeof n === "string" && /^\d{4}_[a-z0-9_]+\.sql$/.test(n)).slice(0, 1000) : null;
-   data = { version: raw.version, management: raw.management, schema: { status: raw.schema?.status === "known" && applied ? "known" : "unknown", applied } };
+   data = { version: raw.version, versionReported: true, management: raw.management, schema: { status: raw.schema?.status === "known" && applied ? "known" : "unknown", applied } };
   }
   fs.writeFileSync(file, JSON.stringify({ ...readCache(file), ...data, checkedAt: Date.now() }), { mode: 0o600 });
  } catch { /* offline/old endpoints: no error, deployment or retry */ }
