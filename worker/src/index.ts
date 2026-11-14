@@ -2843,9 +2843,9 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
   if (url.search) throw new HttpError(400, "wake receipts takes no query parameters");
   const id = seg[2];
   if (id && !/^[a-f0-9-]{36}$/.test(id)) throw new HttpError(400, "invalid receipt id; list wake receipts --json");
-  const rows = await ctx.DB.prepare(`SELECT * FROM wake_receipts ${id ? "WHERE delivery_id=?" : ""} ORDER BY issued_ms DESC, delivery_id DESC, task_id LIMIT 51`).bind(...(id ? [id] : [])).all();
+  const rows = await ctx.DB.prepare(`SELECT * FROM wake_receipts ${id ? "WHERE delivery_id=?" : ""} ORDER BY issued_ms DESC, delivery_id DESC, task_id LIMIT ${id ? 200 : 51}`).bind(...(id ? [id] : [])).all();
   const all = rows.results as Json[];
-  return json({ receipts: all.slice(0, 50).map(r => Receipts.receiptView(r, ctx.PUBLIC_URL)), more: all.length > 50,
+  return json({ receipts: (id ? all : all.slice(0, 50)).map(r => Receipts.receiptView(r, ctx.PUBLIC_URL)), more: !id && all.length > 50,
    next: "Receiver reports are owner-authenticated assertions, not independent proof. Report only a stage the receiver actually observed; missing reports are unknown. HTTP success means acceptance only." });
  }
  if (seg[0] === "wake" && seg[1] === "receipts" && seg[2] && !seg[3] && m === "POST") {

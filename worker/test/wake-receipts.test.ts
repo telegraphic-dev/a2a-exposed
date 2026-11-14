@@ -180,3 +180,28 @@ test("late reports for pre-existing orphan receipts and unknown conversations do
  const rows = (await f.env.DB.prepare("SELECT handler_ran_at,owner_notified_at FROM wake_receipts").all()).results;
  assert.ok(rows.every((r: any) => r.handler_ran_at === null && r.owner_notified_at === null));
 });
+
+
+test("exact-ID inspection returns all 200 bindings while the general list remains capped", async t => {
+ const f = await fixture(t);
+ await f.send("batch-source");
+ const id = f.sent[0].headers["x-a2a-wake-receipt-id"];
+ // Populate a maximum-size attempt without emitting another 199 webhooks.
+ await f.env.DB.batch(Array.from({ length: 199 }, (_, i) => f.env.DB.prepare(
+  "INSERT INTO wake_receipts (delivery_id,task_id,message_id,peer,context_id,issued_ms,expires_ms) SELECT delivery_id,?,?,peer,context_id,issued_ms,expires_ms FROM wake_receipts WHERE delivery_id=? AND message_id='batch-source'"
+ ).bind(`batch-task-${i}`, `batch-message-${i}`, id)));
+ const listing = await f.call("GET", "/owner/wake/receipts");
+ assert.equal(listing.status, 200);
+ assert.equal(listing.data.receipts.length, 50);
+ assert.equal(listing.data.more, true);
+ const exact = await f.call("GET", `/owner/wake/receipts/${id}`);
+ assert.equal(exact.status, 200);
+ assert.equal(exact.data.receipts.length, 200);
+ assert.equal(exact.data.more, false);
+ assert.equal(new Set(exact.data.receipts.map((r: any) => r.taskId)).size, 200);
+ assert.equal(new Set(exact.data.receipts.map((r: any) => r.messageId)).size, 200);
+ assert.ok(exact.data.receipts.every((r: any) => r.id === id));
+ const unknown = await f.call("GET", `/owner/wake/receipts/${crypto.randomUUID()}`);
+ assert.deepEqual(unknown.data.receipts, []);
+ assert.equal(unknown.data.more, false);
+});

@@ -119,7 +119,9 @@ an inbox read, or a started agent. Missing reports are unknown. These are
 owner-authenticated receiver assertions, not independent proof. They expire
 after 24 hours and bind the original message; read current task metadata with
 poll rather than reuse an expired/history snapshot. No MCP reporting tool is
-provided. See the protocol's authenticated wake receipts contract.
+provided. The general list shows the latest 50 task rows; `wake receipts ID --json`
+returns all task/message bindings for that attempt (up to 200 rows).
+See the protocol's authenticated wake receipts contract.
 
 
 Known missing CLI-build migrations make self-hosted status fail and take priority

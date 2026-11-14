@@ -653,7 +653,9 @@ inside the selected config directory, keeping deployments separate.
 
 Owner-side receiver adapters can explicitly report observed wake stages with
 `wake receipt ID --stage signature-verified|handler-ran|owner-notified`.
-List IDs and their expiry first with `wake receipts --json`. HTTP acceptance
+List IDs and their expiry first with `wake receipts --json` (latest 50 rows).
+Use `wake receipts ID --json` for all task bindings in that attempt (up to 200),
+including message IDs. HTTP acceptance
 and missing receiver reports remain separate; no preset reports automatically.
 See [authenticated wake receipts](protocol.md#authenticated-wake-receipts)
 for authentication, message binding, expiry and privacy limits.
