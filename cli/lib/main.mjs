@@ -227,7 +227,7 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
   Update reminders: cached at most daily; A2A_NO_UPDATE_CHECK=1 opts out; never auto-update/deploy.
   status --json labels deployed/CLI schema counts; known pending CLI migrations fail status.
   Deployment guidance requires owner approval; local MCP includes cached update hints.
-  wake receipts [ID] [--json]  list receiver report IDs (latest 50 rows), expiry and separate stages
+  wake receipts [ID] [--json]  list latest 50 rows; ID shows all task bindings (up to 200)
   wake receipt ID --stage STAGE [--json]
                                 owner-only report: signature-verified | handler-ran | owner-notified
                                 select ID with wake receipts --json; only report an observed stage

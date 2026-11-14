@@ -271,7 +271,9 @@ created. Reports are optional and no existing preset automatically reports them.
 The owner HTTP API is `GET /owner/wake/receipts[/ID]` and
 `POST /owner/wake/receipts/ID` with exactly `{ "stage": "handler-ran" }` (or
 `signature-verified` / `owner-notified`). The list returns the latest 50 task rows
-and `more`; use an ID from the webhook to inspect that attempt. Missing records
+and `more`; an exact-ID read returns every task binding for that bounded attempt
+(up to 200 rows), with `more: false`. Use an ID from the webhook to inspect
+that attempt. Missing records
 or reports mean **unknown**, never failure or success. The reporting route is
 not an MCP tool and is not available through the hosted management RPC.
 
