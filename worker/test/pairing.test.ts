@@ -105,6 +105,10 @@ test("device code entry posts a CSRF-protected lookup without making a pairing d
 });
 
 test("POST code lookups keep the existing IP limit", async (t) => {
+	// All lookups belong to one fixed window, even when CI runs across its wall-clock boundary.
+	const previousNow = Date.now, now = Date.now();
+	Date.now = () => now;
+	t.after(() => { Date.now = previousNow; });
 	const s = setup(); t.after(s.restore);
 	const g = await s.call("GET", "/device");
 	const cookie = g.headers.get("set-cookie")!.split(";")[0];
