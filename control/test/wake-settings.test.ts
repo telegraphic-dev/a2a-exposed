@@ -63,17 +63,42 @@ test("OpenBot fails closed without a signing secret or on destination/authentica
 	assert.deepEqual(await s.save({ hmacSecret: "" }), { ok: false, error: "key" });
 });
 
+test("key-based presets and Hermes refuse to save without the receiver's credential", async () => {
+	const s = await setup();
+	for (const preset of ["grok-bot", "claude-code", "openclaw-wake", "openclaw-agent", "mausbot"]) {
+		const before = await s.row();
+		assert.deepEqual(await s.save({ preset, hmacSecret: "", key: "" }), { ok: false, error: "key" }, preset);
+		assert.deepEqual(await s.save({ preset, hmacSecret: "cannot-replace-key", key: "" }), { ok: false, error: "key" }, preset);
+		assert.deepEqual(await s.row(), before, `${preset} refusal makes no write`);
+	}
+	assert.deepEqual(await s.save({ preset: "hermes", hmacSecret: "", key: "cannot-replace-signing" }), { ok: false, error: "key" });
+	assert.deepEqual(await s.save({ preset: "claude-code", hmacSecret: "", key: "dummy-key" }), { ok: true });
+	assert.deepEqual(await s.secrets(), { WAKE_WEBHOOK_KEY: "dummy-key" });
+	assert.deepEqual(await s.save({ preset: "claude-code", hmacSecret: "", key: "" }), { ok: true }, "an unchanged edit keeps the saved key");
+	assert.deepEqual(await s.save({ preset: "grok-bot", hmacSecret: "", key: "" }), { ok: false, error: "key" }, "a preset change does not carry the key");
+	assert.deepEqual(await s.save({ preset: "hermes", hmacSecret: "dummy-signing", key: "" }), { ok: true });
+	assert.deepEqual(await s.save({ preset: "generic", hmacSecret: "", key: "" }), { ok: true }, "generic keeps optional auth");
+	assert.deepEqual(await s.save({ preset: "claude-code", url: "", hmacSecret: "", key: "" }), { ok: true }, "disabling a wake needs no key");
+	// Without a platform secret key the save fails closed instead of saving an unauthenticated preset.
+	assert.deepEqual(await s.save({ preset: "claude-code", hmacSecret: "", key: "" }, ""), { ok: false, error: "unavailable" });
+});
+
 test("webhook key reuse requires identical URL, preset and key header; disable clears both wake credentials", async () => {
 	const s = await setup();
 	const edit = { preset: "generic", hmacSecret: "", key: "first", keyHeader: "X-Key" };
 	await s.save(edit);
 	await s.save({ ...edit, key: "" });
 	assert.equal((await s.secrets())?.WAKE_WEBHOOK_KEY, "first");
-	for (const changed of [{ url: "https://other.example.com/wake" }, { preset: "grok-bot" }, { keyHeader: "X-Other" }]) {
+	for (const changed of [{ url: "https://other.example.com/wake" }, { keyHeader: "X-Other" }]) {
 		await s.save(edit);
 		await s.save({ ...edit, key: "", ...changed });
 		assert.equal((await s.secrets())?.WAKE_WEBHOOK_KEY, undefined);
 	}
+	// A key-based preset does not inherit the previous preset's key, so the change is refused with no write.
+	await s.save(edit);
+	const keyed = await s.row();
+	assert.deepEqual(await s.save({ ...edit, key: "", keyHeader: "", preset: "grok-bot" }), { ok: false, error: "key" });
+	assert.deepEqual(await s.row(), keyed);
 	await s.save();
 	await s.save({ url: "", hmacSecret: "ignored", key: "ignored", keyHeader: "X-Key" });
 	assert.deepEqual(await s.secrets(), {});

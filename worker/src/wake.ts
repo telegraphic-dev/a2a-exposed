@@ -254,12 +254,26 @@ export function mausbotConfigProblem(cfg: WakeConfig): string {
 	return "";
 }
 
+/** Presets whose receiver authenticates every wake with `Authorization: Bearer <WAKE_WEBHOOK_KEY>`. */
+export const BEARER_KEY_PRESETS = ["grok-bot", "claude-code", "openclaw-wake", "openclaw-agent"] as const;
+
+/** A key-based preset without its key, or Hermes without its signing secret. The receiver would refuse every wake. */
+export function presetAuthProblem(cfg: Pick<WakeConfig, "preset" | "key" | "hmacSecret">): string {
+	if ((BEARER_KEY_PRESETS as readonly string[]).includes(cfg.preset) && !cfg.key?.trim())
+		return `${cfg.preset} requires WAKE_WEBHOOK_KEY from protected environment/secret storage; the receiver refuses a wake without it`;
+	if (cfg.preset === "hermes" && !cfg.hmacSecret?.trim())
+		return "hermes requires WAKE_HMAC_SECRET (the subscription signing secret) from protected environment/secret storage; the receiver refuses an unsigned wake";
+	return "";
+}
+
 /** Build the HTTP request, return null without a URL, or throw when required preset auth/config is missing. */
 export async function renderWake(cfg: WakeConfig, ev: WakeEvent, opts: { nowMs?: number; requestId?: string } = {}): Promise<WakeRequest | null> {
 	if (!cfg.url && cfg.transport !== "relay") return null;
 	const mausbotProblem = mausbotConfigProblem(cfg);
 	if (mausbotProblem) throw new Error(mausbotProblem);
 	if (cfg.preset === "openbot" && !cfg.hmacSecret?.trim()) throw new Error("OpenBot requires WAKE_HMAC_SECRET from the routine settings");
+	const authProblem = presetAuthProblem(cfg);
+	if (authProblem) throw new Error(authProblem);
 	const cli = cfg.cliCommand || DEFAULT_CLI;
 	const nowMs = opts.nowMs ?? Date.now();
 	const requestId = opts.requestId ?? crypto.randomUUID();

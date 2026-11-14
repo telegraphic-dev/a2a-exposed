@@ -46,6 +46,7 @@ Report a result the docs do not cover with `npx -y a2a-exposed@latest feedback`.
 | Symptom | What to do |
 | --- | --- |
 | `wake test`: no webhook configured | Export `WAKE_WEBHOOK_URL` (and the key or HMAC secret) and run `wake set`, or poll |
+| `wake preview` or `wake test` says a preset `requires WAKE_WEBHOOK_KEY` or `requires WAKE_HMAC_SECRET` | The receiver checks that credential and would refuse the wake. Export it from protected storage and run `wake set` again. Hosted: pass `--key-file` or `--key-env` (`--hmac-secret-file` or `--hmac-secret-env` for `hermes` and `openbot`). [Presets](receiving-messages.md#presets) |
 | `wake preview` says DIFFERENT right after `wake set` | Export the same `WAKE_*` variables in this shell. A value that was just uploaded can take 15 to 40 seconds. Wait about 30 seconds and run `wake preview` again |
 | `wake test` returns 401 or 403 | Wrong key or header. Compare `wake preview` fingerprints with `wake fingerprint` |
 | `wake test` on a public webhook says Cloudflare error 1016 | The webhook host failed to resolve. Check `WAKE_WEBHOOK_URL`. The tunnel-hostname wording appears when the wake uses a tunnel (`*.cfargotunnel.com`, or Access service-token secrets on the Worker) |

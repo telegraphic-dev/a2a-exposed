@@ -131,6 +131,8 @@ The hint command is `WAKE_CLI_COMMAND` when set, otherwise `npx -y a2a-exposed@l
 
 ## Presets
 
+Each preset except `generic` needs the credential its receiver checks. `grok-bot`, `claude-code`, `openclaw-wake`, `openclaw-agent` and `mausbot` need `WAKE_WEBHOOK_KEY`. `hermes` and `openbot` need `WAKE_HMAC_SECRET`. Without it, a hosted save is refused, and `wake preview` and `wake test` report the missing setting. No wake is sent. Self-hosted `wake set` warns when the credential is not in its environment.
+
 ### `grok-bot`
 
 For hosted setup, select `grok-bot` from `hosted capabilities --json` when

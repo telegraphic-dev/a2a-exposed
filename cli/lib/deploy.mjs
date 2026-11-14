@@ -193,6 +193,13 @@ export async function withSecretsFile(secrets, fn) {
 	}
 }
 
+/** The credential a preset's receiver checks, or "" when auth is optional (generic). */
+export function wakeCredentialFor(preset) {
+	if (["grok-bot", "claude-code", "openclaw-wake", "openclaw-agent", "mausbot"].includes(preset)) return "WAKE_WEBHOOK_KEY";
+	if (["hermes", "openbot"].includes(preset)) return "WAKE_HMAC_SECRET";
+	return "";
+}
+
 export function wakeSecretsFromEnv() {
 	const s = {};
 	for (const k of WAKE_SECRETS) if (process.env[k]) s[k] = process.env[k];
@@ -888,6 +895,9 @@ export async function wake(sub, o) {
 			die("nothing to set: export WAKE_WEBHOOK_URL / WAKE_WEBHOOK_KEY / WAKE_HMAC_SECRET and/or pass --preset etc.");
 		await deploy(o); // wake set = save settings + upload secrets + redeploy, in one step
 		console.error(`wake settings deployed. Next: ${CLI} wake preview, then ${CLI} wake test`);
+		const needed = wakeCredentialFor(C.get("WAKE_PRESET"));
+		if (needed && !secrets[needed])
+			console.error(`warning: ${C.get("WAKE_PRESET")} needs ${needed}, which was not in this environment. If the Worker does not already have it, wake preview reports it missing and wakes are not sent. Export it from protected storage and run \`${CLI} wake set\` again.`);
 		if (C.get("WAKE_PRESET") === "claude-code") console.error(CLAUDE_CODE_NOTE);
 		if (C.get("WAKE_PRESET") === "mausbot") console.error(MAUSBOT_NOTE);
 		return;

@@ -83,7 +83,7 @@ async function request(origin, path, { token = "", method = "GET", body, fetchIm
 			error.result = { ok: false, code: "too_many_references", next, ...(message ? { message } : {}), ...(seconds === undefined ? {} : { retry_after: seconds }) };
 			throw error;
 		}
-		const known = ["taken", "limit", "invalid_name", "reserved_name", "invalid_grant", "insufficient_scope", "conflict", "unavailable", "not_found", "test", "signing", "unreadable", "preset", "url", "header", "access", "invalid_reference", "body", "confirmation", "offline", "draft", "not_configured"];
+		const known = ["taken", "limit", "invalid_name", "reserved_name", "invalid_grant", "insufficient_scope", "conflict", "unavailable", "not_found", "test", "signing", "unreadable", "preset", "url", "header", "access", "invalid_reference", "body", "confirmation", "offline", "draft", "not_configured", "key"];
 		const code = known.includes(data.error) ? data.error : `http_${response.status}`;
 		const next = code === "insufficient_scope" && path === "/api/v1/tenants" ? 'Creating an agent requires agents:create and agents:owner-token. Run hosted capabilities --json, then login --machine NAME --scopes "agents:create agents:owner-token" using the same --config-dir DIR as hosted create.'
 			: code === "not_configured" ? "No agent address is saved. Run hosted upstream preview --agent NAME --json, then hosted upstream set with its version and explicit credentials before verifying."
@@ -91,6 +91,7 @@ async function request(origin, path, { token = "", method = "GET", body, fetchIm
 			: code === "limit" ? LIMIT_CREATE(origin)
 			: code === "conflict" && path.includes("/upstream") ? "Upstream settings changed. Run hosted upstream preview --agent NAME --json, then repeat with its explicit --version."
 			: code === "conflict" ? "Wake settings changed. Run wake preview --json, then test the draft again."
+			: code === "key" ? "This preset needs the credential its receiver checks. Pass --key-file or --key-env (hermes and openbot: --hmac-secret-file or --hmac-secret-env) from protected storage, then test again. Saved settings were not changed."
 			: code === "invalid_reference" ? "The wake reference was already used, expired or does not match this draft. Run wake prepare again with the draft inputs and a new --reference-file."
 			: code === "invalid_grant" || code === "insufficient_scope" ? NEXT
 			: "Hosted setup refused the request. Run hosted capabilities --json and check the inputs; no automatic retry was made.";

@@ -1278,7 +1278,7 @@ test("pairing readiness reaches text wakes without requester text on the trusted
 	const ev: WakeEvent = { contextId: "pairing", taskId: "none", taskIds: [], from: "Untrusted", preview: "", kind: "pairing_request", publicUrl: BASE,
 		pairing: { userCode: "WDJB-2345", verificationUriComplete: `${BASE}/device?user_code=WDJB-2345`, approval: "human", clientName: "Untrusted", clientId: "untrusted", agentCardUrl: "", expiresIn: 3600, passwordSet: false } };
 	for (const preset of ["claude-code", "openclaw-wake", "openclaw-agent"]) {
-		const request = (await renderWake({ preset, url: "https://hook.example.net/wake", cliCommand: "a2a" }, ev))!;
+		const request = (await renderWake({ preset, url: "https://hook.example.net/wake", key: "dummy-key", cliCommand: "a2a" }, ev))!;
 		const body = JSON.parse(request.body);
 		assert.match(body.text || body.message, /Approval password: not set[\s\S]*a2a pair set-password --web/);
 		if (preset === "openclaw-wake") assert.doesNotMatch(body.text, /Untrusted/);
