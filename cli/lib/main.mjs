@@ -85,7 +85,8 @@ Hosted setup:
                                 hosted settings: read, test a draft, or test then save it
                                 cloudflare-target-unsupported: when verified_import is advertised and recovery_url
                                 is returned, ask the human to open Import or manage your existing tunnel,
-                                authorize the exact existing route and Access pair, then test and save again
+                                check the exact route and confirm the Access service-token secret rotation
+                                (the old secret stops working), then send one authenticated test wake and save
                                 no automatic import or retry; without recovery use supported HTTPS, polling,
                                 or an explicitly authorized self-hosted Worker; keep Access and hook auth enabled
                                 secrets: --key-file|--key-env|--key-stdin; --hmac-secret-file|--hmac-secret-env

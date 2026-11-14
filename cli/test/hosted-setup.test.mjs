@@ -658,7 +658,13 @@ test("verified-import recovery only accepts the exact selected-agent path and pe
    },{WAKE_HMAC_SECRET:'private-hmac',A2A_TEST_FETCH_LOG:log});
    assert.equal(r.status,1,r.stdout+r.stderr);
    const result=JSON.parse(r.stdout);assert.equal(result.saved,false);
-   if(accepted){assert.equal(result.recovery_url,'https://control.example'+expectedPath);assert.match(result.next,/Import or manage your existing tunnel/);}
+   if(accepted){
+    assert.equal(result.recovery_url,'https://control.example'+expectedPath);
+    assert.match(result.next,/Import or manage your existing tunnel/);
+    assert.match(result.next,/connect Cloudflare, check the exact route and confirm the Access service-token secret rotation \(the old secret stops working\)\. Then send one authenticated test wake and save\./);
+    assert.match(result.next,/Saved settings were not changed/);
+    assert.match(result.next,/Keep Access and webhook authentication enabled; no import or retry was performed/);
+   }
    else {assert.equal(result.recovery_url,undefined);assert.match(result.next,/supported public HTTPS route, polling/);}
    for(const hidden of ['evil.example','another-agent','private-response','private-hmac',grant,'private-hook']) assert.equal((r.stdout+r.stderr).includes(hidden),false);
    assert.equal(fs.readFileSync(f.config,'utf8'),before);
