@@ -225,7 +225,8 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
                                                or unchanged status without a wake, and batches a changed status.
                                                Set shadow again to roll enforce back
   Update reminders: cached at most daily; A2A_NO_UPDATE_CHECK=1 opts out; never auto-update/deploy.
-  status --json includes update/version/schema facts; local MCP includes cached update hints.
+  status --json labels deployed/CLI schema counts; known pending CLI migrations fail status.
+  Deployment guidance requires owner approval; local MCP includes cached update hints.
   wake receipts [ID] [--json]  list receiver report IDs (latest 50 rows), expiry and separate stages
   wake receipt ID --stage STAGE [--json]
                                 owner-only report: signature-verified | handler-ran | owner-notified

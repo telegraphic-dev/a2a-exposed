@@ -185,7 +185,7 @@ test("status reports Worker version, stale exit code, and cached latest with not
 	assert.equal(j.workerVersion, "0.0.1");
 	assert.equal(j.ok, false);
 	assert.match(j.nextStep, /older than this CLI.*deploy/);
-	assert.ok(j.also.includes(`a2a-exposed 99.0.0 is available: run npx -y a2a-exposed@latest --config-dir ${s.dir} deploy`));
+	assert.ok(j.also.includes(`a2a-exposed 99.0.0 is available: ask the owner before running npx -y a2a-exposed@latest --config-dir ${s.dir} deploy`));
 	assert.deepEqual(JSON.parse(fs.readFileSync(cache, "utf8")), { latest: "99.0.0", checkedAt: 1 }, "status only reads the cache");
 	assert.match(s.cli(["status"]).stdout, /worker version: +0\.0\.1 \(CLI /);
 	routes[`${base}/health`] = { status: 503, body: {} };

@@ -54,6 +54,12 @@ export function expectedMigrations() {
  }
  return [];
 }
+/** Pending names are relative to the installed CLI build, never an unknown future registry build. */
+export function migrationStatus(current, worker, expected = expectedMigrations()) {
+ const known = worker?.schema?.status === "known" && Array.isArray(worker.schema.applied);
+ return { status: known ? "known" : "unknown", baseline: "cli-build", version: current,
+  pending: known ? expected.filter(n => !worker.schema.applied.includes(n)) : null };
+}
 /** Fixed local messages only; never echo strings or commands supplied by a remote server/cache. */
 export function updates(current, registry, worker, { selfHosted = C.deploymentKind() === "self-hosted", expected = expectedMigrations() } = {}) {
  const result = [];
@@ -62,11 +68,10 @@ export function updates(current, registry, worker, { selfHosted = C.deploymentKi
  if (!selfHosted || worker?.management === "platform") return result;
  const target = validVersion(registry?.latest) && newer(registry.latest, current) ? registry.latest : current;
  const version = validVersion(worker?.version) ? worker.version : null;
- const pending = worker?.schema?.status === "known" && Array.isArray(worker.schema.applied)
-  ? expected.filter(n => !worker.schema.applied.includes(n)) : null;
+ const migrations = migrationStatus(current, worker, expected), pending = migrations.pending;
  if (worker?.versionReported === false && !version || version && validVersion(target) && newer(target, version) || pending?.length) {
-  const message = `Last check: self-hosted Worker ${version || (worker?.versionReported === false ? "predates version reporting" : "version unknown")}${version && validVersion(target) && newer(target, version) ? ` is older than ${target}` : ""}; ${pending === null ? "migration status unknown; redeploy applies pending D1 migrations" : `${pending.length} pending D1 migration(s)`}. Ask the owner before running ${CLI_COMMAND} deploy. Nothing was updated.`;
-  result.push({ component: "worker", current: version, target, pendingMigrations: pending, command: `${CLI_COMMAND} deploy`, message });
+  const message = `Last check: self-hosted Worker ${version || (worker?.versionReported === false ? "predates version reporting" : "version unknown")}${version && validVersion(target) && newer(target, version) ? ` is older than ${target}` : ""}; ${pending === null ? "migration status unknown; redeploy applies pending D1 migrations" : `${pending.length} pending D1 migration(s) for CLI build ${current}`}. Ask the owner before running ${CLI_COMMAND} deploy. Nothing was updated.`;
+  result.push({ component: "worker", current: version, target, pendingMigrations: pending, pendingMigrationBaseline: migrations.baseline, pendingMigrationVersion: migrations.version, command: `${CLI_COMMAND} deploy`, message });
  }
  return result;
 }

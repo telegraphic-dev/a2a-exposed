@@ -86,3 +86,15 @@ to disable automatic checks and reminders. Source checkouts also skip automatic
 notices. Explicit status diagnostics still read build/schema facts. Cache files
 store versions and migration names only, never credentials; Worker facts stay
 inside the selected config directory, keeping deployments separate.
+
+
+Known pending migrations for the installed CLI build make self-hosted `status`
+unsuccessful (`ok:false`, exit 1) and take priority over wake setup guidance.
+Unknown schema remains unknown. Deployment guidance asks for owner approval.
+Human rows label the deployed build's applied/pending count separately from the
+CLI build's pending count. JSON `upgrade.schema.baseline` is `deployed-build`
+and its `version` names that Worker build. `targetMigrations` has baseline
+`cli-build`, version and pending names; `update.pendingMigrations` keeps its
+existing meaning and adds `pendingMigrationBaseline` / `pendingMigrationVersion`.
+The migration target is the installed CLI, even when a newer npm version is known;
+the CLI cannot know the schema of a future package it has not installed.

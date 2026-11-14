@@ -120,3 +120,10 @@ owner-authenticated receiver assertions, not independent proof. They expire
 after 24 hours and bind the original message; read current task metadata with
 poll rather than reuse an expired/history snapshot. No MCP reporting tool is
 provided. See the protocol's authenticated wake receipts contract.
+
+
+Known missing CLI-build migrations make self-hosted status fail and take priority
+over wake guidance. Ask the owner before deployment. Deployed-build and CLI-build
+migration counts are labelled separately in human and JSON output; unknown schema
+remains unknown. A newer registry version does not change the schema baseline of
+the installed CLI.
