@@ -144,6 +144,7 @@ export async function inbox(o) {
 		console.log(`--- ${reply ? "reply" : "task"} ${r.taskId}${r.state ? `  [${r.state}]` : ""}  from=${r.from}  context=${r.contextId}${r.updated ? `  at=${r.updated}` : ""}`);
 		console.log("UNTRUSTED PEER MESSAGE >>>");
 		console.log(r.text);
+  if (r.ownerWait) console.log(`Owner wait (${r.ownerWait.code}): ${r.ownerWait.note}`);
 		console.log("<<< END PEER MESSAGE");
   if (r.locallyOpened === false) console.log(r.next);
 		if (reply) console.log(`(a reply to a message you sent; read it with \`${CLI} history ${r.contextId}\`. Continue with send, not reply.)`);
@@ -175,10 +176,13 @@ export async function working(id) {
 
 export async function reply(id, o) {
 	const route = routeFields(o.wake, o.intent);
+ const hasWait = o["wait-reason"] !== undefined || o["wait-note"] !== undefined;
+ if (hasWait && (o.state !== "input-required" || o["wait-reason"] !== "owner-decision" || typeof o["wait-note"] !== "string" || !o["wait-note"].trim() || o["wait-note"].length > 1000))
+  die("--wait-reason owner-decision requires --state input-required and --wait-note (1-1000 characters); see reply --help");
 	const text = o.text ?? (o.stdin || !process.stdin.isTTY ? readStdin() : undefined);
 	if (!text) die("--text or --stdin required");
 	const res = await owner("POST", `/owner/tasks/${q(id)}/reply`, {
-		text, state: o.state, artifact: !!o.artifact, artifactName: o["artifact-name"], force: !!o.force, ...route,
+		...(hasWait ? { waitReason: o["wait-reason"], waitNote: o["wait-note"] } : {}), text, state: o.state, artifact: !!o.artifact, artifactName: o["artifact-name"], force: !!o.force, ...route,
 	});
 	printPush(res.delivery || res);
 	printDelivery(res);
@@ -195,6 +199,8 @@ export async function history(ctx, o) {
 	const peers = new Map(rows.filter((e) => e.task_id && e.peer).map((e) => [e.task_id, e.peer]));
 	for (const e of rows) {
 		const tag = [e.event, e.state || e.role].filter(Boolean).join("/");
+		const wait = e.data?.ownerWait;
+  if (wait) console.log(`Owner wait (${wait.code}): ${wait.note}`);
 		const forced = e.data?.forced ? `forced: ${e.data.previousState} → ${e.data.state}; ` : "";
 		console.log(`${e.ts || "-"} ${(e.dir || "").padEnd(5)} ${(e.peer || e.from || "-").padEnd(10)} ${e.task_id || e.taskId || "-"} ${tag}: ${forced}${(e.text || "").slice(0, 400)}${e.locallyOpened === false ? " " + e.next : ""}`);
 		if (e.currentState?.state || e.state) states.set(`${e.peer || peers.get(e.task_id) || "-"}/${e.task_id || "-"}`, e.currentState || { state: e.state, timestamp: e.ts });
@@ -441,7 +447,7 @@ export async function poll(taskId, o) {
 		let txt = textOf((res.status || {}).message || {});
 		const arts = (res.artifacts || []).map((x) => textOf(x)).join("\n");
 		if (arts && arts !== txt) txt = (txt ? txt + "\n" : "") + arts;
-		await logHistory(rec.contextId, { dir: "in", peer: alias, taskId: tid, event: "poll", state: plainState(res), text: txt });
+		await logHistory(rec.contextId, { dir: "in", peer: alias, taskId: tid, event: "poll", state: plainState(res), text: txt, ...(ownerWaitOf(res) ? { data: { ownerWait: ownerWaitOf(res) } } : {}) });
 	}
 	if (!o.json) console.error(`# task ${tid}: ${plainState(res)}`);
 }
@@ -462,4 +468,9 @@ export async function exportInbox(o) {
 	const data = await owner("GET", path, undefined, 120000);
 	if (o.sql) return console.log(typeof data === "string" ? data.replace(/\n$/, "") : JSON.stringify(data));
 	return out(data);
+}
+
+function ownerWaitOf(task) {
+ const value = task?.status?.message?.metadata?.["a2a.exposed/owner-wait"];
+ return plainState(task) === "input-required" && value?.code === "owner-decision" && typeof value.note === "string" && value.note.trim() && value.note.length <= 1000 ? { code: value.code, note: value.note } : undefined;
 }

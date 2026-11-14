@@ -612,3 +612,7 @@ never pairs or falls back to owner credentials, and refuses local encrypted conf
 Stdout is sensitive; let the client consume it directly. See
 [Use with the official A2A CLI](official-a2a-cli.md) for client configuration,
 URI boundaries, noninteractive errors and encryption restrictions.
+
+Owner-wait replies accept an explicit reason and public note. See
+[waiting for an owner decision](protocol.md#waiting-for-an-owner-decision)
+for flags, metadata, history and continuation/delivery limits.
