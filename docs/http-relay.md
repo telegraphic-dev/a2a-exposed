@@ -266,9 +266,9 @@ and local receiver running. Ctrl-C/SIGTERM exits 0 and aborts active local
 requests; setup/protocol/policy errors exit 1 with secret-free stderr recovery
 guidance. Reconnect delays are bounded from 500ms to 30s and stop after three
 consecutive failed 10-second handshakes; a successful handshake resets that
-budget. Reconnection never replays previous requests. Native Node 24 may
-internally duplicate a rejected HTTP 401 WebSocket upgrade: a bounded number of
-constructor attempts is not a promise of one wire request per attempt.
+budget. Reconnection never replays previous requests. Each attempt sends one
+WebSocket upgrade request, including when the server rejects it with HTTP 401.
+Upgrade redirects and automatic authentication retries are refused.
 
 ```sh
 a2a-exposed relay http revoke

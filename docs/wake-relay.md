@@ -98,7 +98,9 @@ Other disconnections reconnect with exponential backoff and jitter, waiting at
 least **500 ms** and at most **30 seconds** per attempt. A healthy `hello` resets
 both backoff and consecutive handshake failures. Each handshake has a **10-second**
 hello deadline. A failed upgrade or hello timeout produces a safe diagnostic;
-**three consecutive failed handshakes** stop with exit 1. Native WebSocket does
+**three consecutive failed handshakes** stop with exit 1. Each attempt sends one
+upgrade request; redirects and automatic HTTP authentication retries are refused.
+Native WebSocket does
 not expose the upgrade's HTTP status: wrong/revoked credentials, disabled runtime
 capability and transient network errors therefore share this bounded retry budget,
 not a guessed authentication classification. Check endpoint, capability and
