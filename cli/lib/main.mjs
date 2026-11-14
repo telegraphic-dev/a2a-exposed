@@ -210,6 +210,8 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
                                 mausbot: HTTPS /hooks/<endpointId> + WAKE_WEBHOOK_KEY Bearer auth from protected env
                                 openbot: human supplies WAKE_HMAC_SECRET via protected env/secret storage, never chat or argv
                                 the Worker refuses unsigned openbot wakes (a webhook key is not a signing secret)
+                                grok-bot, claude-code, openclaw-wake, openclaw-agent: the Worker refuses to preview,
+                                test or send without WAKE_WEBHOOK_KEY; hermes: without WAKE_HMAC_SECRET
                                 --busy S        seconds a conversation stays busy after a sent wake.
                                                0 disables it. Unset uses the preset default:
                                                300 for claude-code, 180 for the others

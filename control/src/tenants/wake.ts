@@ -6,6 +6,11 @@ import { WAKE_SECRET_KEYS, openWakeSecrets, sealWakeSecrets, type WakeSecrets } 
 /** The same list the Worker renders. Claude Code is one of them. */
 export const WAKE_PRESETS = ["grok-bot", "claude-code", "openclaw-wake", "openclaw-agent", "hermes", "openbot", "mausbot", "generic"] as const;
 
+/** Presets whose receiver refuses a wake without WAKE_WEBHOOK_KEY. */
+const KEY_PRESETS = new Set(["grok-bot", "claude-code", "openclaw-wake", "openclaw-agent", "mausbot"]);
+/** Presets whose receiver refuses a wake without WAKE_HMAC_SECRET. */
+const HMAC_PRESETS = new Set(["hermes", "openbot"]);
+
 /** Headers a wake preview shows in full. A key header must not be one of these. */
 const PLAIN_HEADERS = new Set([
 	"content-type", "user-agent", "x-request-id", "idempotency-key", "anthropic-version", "x-webhook-timestamp", "x-openbot-timestamp", "x-openbot-delivery-id",
@@ -151,7 +156,9 @@ export async function saveWakeSettings(
 	const sameKey = same && (config.WAKE_KEY_HEADER ?? "") === keyHeader;
 	let secretsEnc = row.secrets_enc;
 	const hasSecrets = !!secretsEnc || Object.keys(plaintext).length > 0;
-	if (hasSecrets || key || hmacSecret || accessClientId || accessClientSecret || (enabled && preset === "openbot")) {
+	const needsKey = enabled && KEY_PRESETS.has(preset);
+	const needsHmac = enabled && HMAC_PRESETS.has(preset);
+	if (hasSecrets || key || hmacSecret || accessClientId || accessClientSecret || needsKey || needsHmac) {
 		const ikm = secretsKey.trim();
 		if (!ikm) return { ok: false, error: "unavailable" };
 		const current = secretsEnc ? await openWakeSecrets(ikm, row.id, secretsEnc) : { ...plaintext };
@@ -170,7 +177,8 @@ export async function saveWakeSettings(
 		}
 		if (enabled && key && preset !== "openbot") current.WAKE_WEBHOOK_KEY = key;
 		if (enabled && hmacSecret) current.WAKE_HMAC_SECRET = hmacSecret;
-		if (enabled && preset === "openbot" && !current.WAKE_HMAC_SECRET) return { ok: false, error: "key" };
+		// A key-based preset never saves without the credential its receiver checks.
+		if ((needsHmac && !current.WAKE_HMAC_SECRET) || (needsKey && !current.WAKE_WEBHOOK_KEY)) return { ok: false, error: "key" };
 		// Preserve ciphertext on an unchanged edit and fail closed on every decrypt/seal error.
 		if (!secretsEnc || JSON.stringify(current) !== before) {
 			const sealed = await sealWakeSecrets(ikm, row.id, current);

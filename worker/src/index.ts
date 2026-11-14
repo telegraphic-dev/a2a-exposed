@@ -10,7 +10,7 @@ import * as A from "./a2a.ts";
 import * as F from "./facade.ts";
 import { routeHttpRelay, httpRelayFetch, httpRelayEnrollment, isHttpRelayProfile } from "./http-relay-routing.ts";
 import { relayFetch, relayTestOutcome, type RelayTestError } from "./relay-routing.ts";
-import { renderWake, relayWakeTestInput, mausbotConfigProblem, redact, cloudflareErrorHint, wakeUrlIsTunnelHost, defaultBusySeconds, defaultDebounceSeconds, defaultMaxPerHour, type WakeConfig, type WakeEvent } from "./wake.ts";
+import { renderWake, relayWakeTestInput, mausbotConfigProblem, presetAuthProblem, redact, cloudflareErrorHint, wakeUrlIsTunnelHost, defaultBusySeconds, defaultDebounceSeconds, defaultMaxPerHour, type WakeConfig, type WakeEvent } from "./wake.ts";
 import { decideRoute, isIdleWorkingPush, readRouteFields, routingMode, statusText, type RouteDecision } from "./wake-route.ts";
 import { fetchCheckedPeer, fetchCheckedWake } from "./wake-target.ts";
 import { withDeadline } from "./deadline.ts";
@@ -2798,6 +2798,8 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			return json({ error: "OpenBot requires WAKE_HMAC_SECRET from the routine settings" }, 400);
 		const mausbotProblem = mausbotConfigProblem(wakeConfig(ctx));
 		if (mausbotProblem) return json({ error: mausbotProblem }, 400);
+		const authProblem = wakeHooked(ctx) ? presetAuthProblem(wakeConfig(ctx)) : "";
+		if (authProblem) return json({ error: authProblem }, 400);
 		const req = await renderWake(wakeConfig(ctx), ev, { requestId: "preview" });
 		return json({ preset: preset(ctx), configured: !!req, debounceSeconds: debounceMs(ctx) / 1000, busySeconds: busySecondsReported(ctx, ectx), maxPerHour: maxPerHour(ctx),
 			hasKey: !!ctx.WAKE_WEBHOOK_KEY, hasHmacSecret: !!ctx.WAKE_HMAC_SECRET,

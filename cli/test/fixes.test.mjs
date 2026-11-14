@@ -12,7 +12,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseEnv } from "../lib/config.mjs";
 import { cfErrorCode, describeHttp } from "../lib/a2a.mjs";
-import { checkNode, NODE_HELP, verifyCard } from "../lib/deploy.mjs";
+import { checkNode, NODE_HELP, verifyCard, wakeCredentialFor } from "../lib/deploy.mjs";
 import { nextStep } from "../lib/status.mjs";
 import * as U from "../lib/update.mjs";
 
@@ -447,4 +447,10 @@ test("every command the CLI tells people to run uses the one npx form (no bare `
 		});
 	}
 	assert.deepEqual(found, []);
+});
+
+test("wake set names the credential each key-based preset needs", () => {
+	for (const preset of ["grok-bot", "claude-code", "openclaw-wake", "openclaw-agent", "mausbot"]) assert.equal(wakeCredentialFor(preset), "WAKE_WEBHOOK_KEY");
+	for (const preset of ["hermes", "openbot"]) assert.equal(wakeCredentialFor(preset), "WAKE_HMAC_SECRET");
+	for (const preset of ["generic", undefined, ""]) assert.equal(wakeCredentialFor(preset), "");
 });

@@ -180,6 +180,21 @@ test("hosted draft failures preserve codes and redact arbitrary service fields",
 	} finally { f.clean(); }
 });
 
+test("hosted refusal of a key-based preset without its credential names the missing input", () => {
+	const f = fixture(); f.save("HOSTED_AGENT_NAME=sample-agent\n");
+	try {
+		const r = f.run(["wake", "test", "--agent", "sample-agent", "--url", "https://receiver.example/wake", "--preset", "hermes", "--json"], {
+			"https://control.example/api/v1/agents/sample-agent/wake/test": { status: 400, body: { error: "key", message: owner } },
+			"https://control.example/api/v1/agents/sample-agent/wake": { status: 200, body: { version: 7, preset: "generic", url: "" } },
+		});
+		assert.equal(r.status, 1);
+		const out = JSON.parse(r.stdout);
+		assert.equal(out.code, "key");
+		assert.match(out.next, /--key-file or --key-env.*--hmac-secret-file or --hmac-secret-env.*Saved settings were not changed/);
+		assert.ok(!(r.stdout + r.stderr).includes(owner));
+	} finally { f.clean(); }
+});
+
 test("protected secret file validation fails before a test or save", () => {
 	const f = fixture(); f.save(); const secretFile = path.join(f.dir, "key"); fs.writeFileSync(secretFile, "secret", { mode: 0o644 });
 	try {
