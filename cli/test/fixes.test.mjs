@@ -76,7 +76,7 @@ test("update notice: version compare, 24 h cache, opt-outs, no notice from a che
 	assert.ok(!U.newer("0.2.0", "0.2.0") && !U.newer("0.1.9", "0.2.0"));
 	assert.equal(U.notice("0.2.0", { latest: "0.2.0" }), "");
 	assert.equal(U.notice("0.2.0", null), "");
-	assert.match(U.notice("0.2.0", { latest: "0.3.1" }), /^a2a-exposed 0\.3\.1 is available \(you have 0\.2\.0\): run npx -y a2a-exposed@latest deploy \(updates the Worker; applies new D1 migrations\)\. With a global install, npm i -g a2a-exposed@latest first/);
+	assert.match(U.notice("0.2.0", { latest: "0.3.1" }), /npx -y a2a-exposed@latest. With a global install, npm i -g a2a-exposed@latest first.*does not update an existing Worker/);
 	const now = Date.now();
 	assert.ok(U.due(null, now) && U.due({ checkedAt: now - U.CHECK_INTERVAL_MS - 1 }, now) && !U.due({ checkedAt: now - 1000 }, now));
 	const installed = path.join("/usr/lib/node_modules/a2a-exposed/lib/update.mjs");

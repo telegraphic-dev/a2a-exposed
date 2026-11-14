@@ -224,6 +224,8 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
                                                would skip and still wakes. enforce stores an ack and an idle
                                                or unchanged status without a wake, and batches a changed status.
                                                Set shadow again to roll enforce back
+  Update reminders: cached at most daily; A2A_NO_UPDATE_CHECK=1 opts out; never auto-update/deploy.
+  status --json includes update/version/schema facts; local MCP includes cached update hints.
   wake status [--json]          read pending/retrying wakes and last HTTP acceptance; does not clear them
   wake preview                  rendered wake request (a credential is Bearer •••• or ••••, none of the secret)
                                 openbot includes a sample delivery ID and canonical signing-input description

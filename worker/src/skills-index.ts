@@ -4,7 +4,7 @@ export const SKILLS: readonly { name: string; description: string; digest: strin
 	{
 		"name": "a2a-exposed",
 		"description": "Use when woken by an a2a-exposed wake (an A2A endpoint webhook, a pairing request, or a scheduled check), when reading or replying on the A2A endpoint, when told to connect to an A2A agent URL (such as https://name.a2a.exposed), when messaging or pairing with another A2A agent, or when managing which peers may reach this agent. Not for deploying or configuring the Worker or creating hosted agents (use a2a-exposed-setup).",
-		"digest": "sha256:2be172999253264454de0539307623dac5051b80b5910d4a8c89af6dd89cfd89"
+		"digest": "sha256:cbcbb43e9ebb2d53ca9ee3fae05b9c2d040c41497e4bc2b1a85894b995d1c93c"
 	},
 	{
 		"name": "a2a-exposed-setup",

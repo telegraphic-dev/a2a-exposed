@@ -5,6 +5,7 @@
 // Handlers take a TenantContext (tenancy.ts) built from the Worker bindings. With the hosted gates unset, that
 // context is the single self-host tenant and behaviour matches a Worker that read env.* directly.
 import { attemptView, pendingView } from "./wake-status.ts";
+import { upgradeStatus } from "./upgrade-status.ts";
 import { VERSION } from "./version.ts";
 import * as A from "./a2a.ts";
 import * as F from "./facade.ts";
@@ -2822,6 +2823,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 		if (!proxyMode(ctx)) return json({ mode: "inbox", ok: false, reason: "not_proxy_mode", detail: "this Worker is an A2A endpoint (no UPSTREAM_URL): nothing to verify" }, 409);
 		return json({ mode: "proxy", ...(await verifyUpstream(ctx)) });
 	}
+	if (seg[0] === "upgrade-status" && !seg[1] && m === "GET") return json(await upgradeStatus(ctx.DB, VERSION, ctx.mode === "host"));
 	if (seg[0] === "wake" && seg[1] === "status" && !seg[2] && m === "GET") return json(await wakeStatus(ctx));
 	if (seg[0] === "wake" && seg[1] === "preview" && m === "GET") {
 		// rendered wake request for a sample event, credentials shown as Bearer •••• or ••••, plus short sha256 fingerprints of the
@@ -4701,7 +4703,7 @@ export async function dispatch(req: Request, ctx: TenantContext, ectx: Execution
 	if (moved) return new Response(moved.body || null, { status: moved.status, headers: moved.headers });
 	const res = noindex(ctx, await handle(req, ctx, ectx));
 	// A diagnostic probe must not flush/consume pending inbox wakes as a side effect.
-	if (!((req.method === "POST" && /^\/owner\/wake\/test(?:\/|$)/.test(new URL(req.url).pathname)) || (["GET", "HEAD"].includes(req.method) && new URL(req.url).pathname === "/owner/wake/status")))
+	if (!((req.method === "POST" && /^\/owner\/wake\/test(?:\/|$)/.test(new URL(req.url).pathname)) || (["GET", "HEAD"].includes(req.method) && ["/owner/wake/status", "/owner/upgrade-status"].includes(new URL(req.url).pathname))))
 		ectx.waitUntil(flushDue(ctx, ectx).catch((e) => log("flush_failed", { error: String(e).slice(0, 200) })));
 	return res;
 }

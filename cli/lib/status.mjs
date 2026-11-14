@@ -15,7 +15,7 @@ import { baseUrl, owner, ownerTry } from "./commands.mjs";
 import * as D from "./deploy.mjs";
 import { buildLayers, layerValue, usablePin } from "./layers.mjs";
 import * as T from "./tunnel.mjs";
-import { cacheFile, readCache, newer } from "./update.mjs";
+import { updates, cacheFile, readCache, newer } from "./update.mjs";
 
 /** Best-effort local check only. A terminal-attached process using this exact token file is ephemeral.
  * Never return process arguments (they may contain credentials), or infer persistence from remote connections. */
@@ -368,9 +368,9 @@ function nextStepCore(s) {
 			? `the owner token in ${s.configFile} does not match the Worker: run \`${CLI} init --rotate-owner-token\` from the machine that owns this deployment`
 			: `the owner API failed (${s.ownerApi.error}): run \`${CLI} deploy\``);
 	const version = s.cliVersion || D.VERSION;
-	if (s.workerVersion && newer(version, s.workerVersion))
+	if (s.deployment !== "hosted" && s.workerVersion && newer(version, s.workerVersion))
 		return fail(`the deployed Worker is ${s.workerVersion}, older than this CLI (${version}): run \`${CLI} deploy\``);
-	if (s.health?.ok && s.health.version === null)
+	if (s.deployment !== "hosted" && s.health?.ok && s.health.version === null)
 		return fail(`the deployed Worker predates version reporting (older than ${version}): run \`${CLI} deploy\``);
 	// proxy / expose mode: the upstream answers peers, so wakes are optional (pairing notifications only)
 	const fc = s.facade;
@@ -516,12 +516,13 @@ export async function collect(net = {}) {
 		card: { ok: false, error: "not checked" }, ownerApi: { ok: false, error: "not checked" }, wake: null, tunnel: null, zones: null, pairing: null,
 		upstream: C.get("A2A_UPSTREAM_URL") || null, facade: null, upstreamVerify: null, upstreamVerifyError: "", facadePeerAuth: null,
 		upstreamNoToken: C.get("A2A_UPSTREAM_NO_TOKEN") === "1", localUpstreamToken: fingerprint(process.env.UPSTREAM_TOKEN),
-		peerTokenShadowed: shadowedPeerTokens(), addresses: null, wakeDelivery: null,
+		peerTokenShadowed: shadowedPeerTokens(), addresses: null, wakeDelivery: null, upgrade: null, update: [],
 		mcp: "unknown", health: null, workerVersion: null, cliVersion: D.VERSION, latestVersion: readCache(cacheFile())?.latest || null,
 	};
 	if (s.deployment === "hosted") { s.deployed = true; s.urlKind = "hosted"; }
 	const envBase = (process.env.A2A_BASE_URL || "").replace(/\/$/, "");
 	if (envBase && envBase !== s.baseUrlSaved) s.baseUrlEnv = envBase;
+	s.update = updates(s.cliVersion, { latest: s.latestVersion }, null, { selfHosted: false });
 	if (!s.deployed || !s.baseUrl) return finishLayers(s, { host: "", workerDns: { kind: "skip" }, wakeHost: "", wakeDns: { kind: "skip" }, bare: null, authed: null });
 	const host = hostOf(s.baseUrl);
 	const workerDns = await resolveWorkerDns(host, net);
@@ -545,6 +546,7 @@ export async function collect(net = {}) {
 				}
 			}
 			if (s.ownerApi.ok) {
+				try { const u = await ownerTry("GET", "/owner/upgrade-status"); if (u.status === 200) { s.upgrade = u.data; if (u.data?.management === "platform") s.deployment = "hosted"; } } catch { /* unavailable on older Workers */ }
 				try { const w = await ownerTry("GET", "/owner/wake/status"); if (w.status === 200) s.wakeDelivery = w.data; } catch { /* old or unreachable endpoint: unknown */ }
 				try {
 					const pr = await owner("GET", "/owner/pairing");
@@ -594,6 +596,7 @@ export async function collect(net = {}) {
 	if (workerDns.kind === "public-only" && usablePin(workerDns.ip)) await withHostPin(host, workerDns.ip, remote);
 	else await remote();
 	const wake = await wakeProbes(s, net);
+	s.update = updates(s.cliVersion, { latest: s.latestVersion }, s.upgrade || { version: s.workerVersion }, { selfHosted: s.deployment !== "hosted" });
 	return finishLayers(s, { host, workerDns, ...wake });
 }
 
@@ -657,9 +660,11 @@ export async function status(o) {
 			["deployment", s.deployment === "hosted" ? "hosted" : s.deployed ? `Worker ${s.worker}, D1 ${s.d1 || s.worker}${s.account ? `, account ${s.account}` : ""}${s.cfProfile ? `, cf profile ${s.cfProfile}` : ""}${s.cron ? ", cron flush on" : ""}` : "none"],
 			["base URL", s.baseUrl ? `${s.baseUrl} (${s.baseUrlEnv ? `from the exported A2A_BASE_URL; ${s.configFile} has ${s.baseUrlSaved || "none"}` : s.urlKind})` : "(not saved)"],
 		];
+		for (const row of s.update || []) rows.push([`${row.component} update`, row.message]);
 		if (s.deployed && s.baseUrl) {
 			rows.push(["agent card", !s.card.ok ? `FAILED: ${s.card.error}` : s.card.urlProblem ? `WRONG URL: "${s.card.name}", but ${s.card.urlProblem}`
 				: `OK: "${s.card.name}" (A2A ${s.card.versions.join(", ") || "?"})`]);
+			if (s.upgrade) rows.push(["Worker migrations", s.upgrade.schema?.status === "known" && Array.isArray(s.upgrade.schema.applied) && Array.isArray(s.upgrade.schema.pending) ? `${s.upgrade.schema.applied.length} applied; ${s.upgrade.schema.pending.length} pending` : "unknown (no migration ledger reported)"]);
 			rows.push(["worker version", `${s.workerVersion || "unknown"} (CLI ${s.cliVersion})`]);
 			rows.push(["owner API", s.ownerApi.ok ? "OK" : `FAILED: ${s.ownerApi.error}`]);
 			if (s.upstream) {

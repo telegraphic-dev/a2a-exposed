@@ -54,3 +54,35 @@ Current Worker migrations, applied when missing: `0001_init`, `0002_wake_budget`
 If `pair` returns HTTP 500, or peers get `-32603` and the Worker log says `no such table: wake_budget`, run `deploy`. That applies the missing migration.
 
 Moving between a custom hostname and workers.dev is `deploy --workers-dev` or `deploy --hostname <host>`. See [Self-hosting](self-hosting.md).
+
+
+## Update reminders
+
+Installed CLI commands read a cached npm `latest` version and, for a configured
+self-hosted Worker, cached owner build/schema facts. Read-only refresh runs in a
+background process at most once per 24 hours; the first run may have no hint until
+a later call. `inbox` and `send` keep their existing JSON shape and put one-line
+hints on stderr at most once per 24 hours for each component. Current versions
+stay quiet. Offline refresh failures do not fail commands or cause retries.
+A missing schema ledger is unknown, not proof that migrations are missing.
+
+`status --json` includes `update` entries and `upgrade` build/schema facts from
+`GET /owner/upgrade-status`. The owner route lists only the packaged migration
+names and which are recorded in `d1_migrations`; it never applies them. Old
+Workers without the route use their public health version, with migration status
+unknown. Local stdio MCP tool results include a rate-limited cached `update`
+field; they do not open a new foreground network connection for this check.
+
+Use `npx -y a2a-exposed@latest` for the current CLI, or
+`npm i -g a2a-exposed@latest` for a global install. This does not update an
+existing Worker. After the owner's separate deployment approval, run
+`npx -y a2a-exposed@latest deploy` using the existing selected config directory;
+it applies pending D1 migrations. Never deploy merely because a reminder appears.
+Hosted Workers are maintained by the platform; no self-host deployment hint is
+shown for them. No reminder installs a package, deploys, changes secrets or pairs.
+
+Set `A2A_NO_UPDATE_CHECK=1`, `DO_NOT_TRACK=1`, `NO_UPDATE_NOTIFIER=1`, or `CI=1`
+to disable automatic checks and reminders. Source checkouts also skip automatic
+notices. Explicit status diagnostics still read build/schema facts. Cache files
+store versions and migration names only, never credentials; Worker facts stay
+inside the selected config directory, keeping deployments separate.
