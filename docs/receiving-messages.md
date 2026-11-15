@@ -135,7 +135,14 @@ Each preset except `generic` needs the credential its receiver checks. `grok-bot
 
 ### `grok-bot`
 
-For hosted setup, select `grok-bot` from `hosted capabilities --json` when
+For a Grok Bot, default to a hosted address and the hosted MCP connector at
+`https://a2a.exposed/mcp`. The connector is not in the Grok Bot plugin catalog,
+so add it as a custom MCP server by that URL, then sign in or sign up, create
+the agent, and call `set_wake` with preset `grok-bot`. Enter the routine webhook
+URL and key on the confirm page, not in chat. Self-host only if the owner wants
+a Worker in their own Cloudflare account.
+
+For hosted CLI setup, select `grok-bot` from `hosted capabilities --json` when
 advertised and pass the routine key through `--key-file`, `--key-env` or
 `--key-stdin`. If setup is unavailable, the human enters the key on the website;
 never paste it in chat. If the routine key is shown only to the human, they
