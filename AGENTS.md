@@ -5,6 +5,8 @@ A2A endpoint Worker, the `a2a-exposed` CLI, MCP, two agent
 skills, and `@a2a-exposed/control-core`. The hosted service pins its releases;
 a package release does not update that service. User documentation lives in
 [docs/](docs/README.md); this file guides contributors with no prior context.
+[CLI, skills, MCP and dashboard parity](docs/cli-mcp-parity.md) tracks what
+each owner or agent surface can do.
 
 ## Ten rules that matter most
 
@@ -234,6 +236,9 @@ client and preset you exercised, and clean up approved test resources.
 
 Read [Security](docs/security.md), [MCP](docs/mcp.md), and
 [Protocol](docs/protocol.md) before changing auth, network, storage, or routing.
+Read [CLI, skills, MCP and dashboard parity](docs/cli-mcp-parity.md) when adding
+or changing a CLI command, MCP tool (Worker or hosted), skill guidance, or
+owner dashboard capability.
 These user contracts hold feature-level behavior; keep hard invariants here too.
 
 ## Docs and copy style
@@ -257,7 +262,10 @@ maturity labels, and do not infer support from a mock or a documented API.
 
 For a user-visible command, flag, preset, or output change, update the relevant
 `docs/` page, relevant `SKILL.md` and references, and `cli/lib/main.mjs` help
-in the same PR. Write a clear PR title and add the right release label; never
+in the same PR. A PR that adds or changes a CLI command, MCP tool (Worker or
+hosted), skill guidance, or owner dashboard capability must update the matching
+row in [docs/cli-mcp-parity.md](docs/cli-mcp-parity.md) in the same PR.
+Write a clear PR title and add the right release label; never
 edit a changelog. Update README when its short intro changes.
 For new wake presets, follow [CONTRIBUTING.md](CONTRIBUTING.md): implementation,
 CLI preset list, tests, request shape, target docs, and honest end-to-end status.
