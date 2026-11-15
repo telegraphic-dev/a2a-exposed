@@ -100,6 +100,16 @@ async function inboxRows(o) {
 	});
 }
 
+export async function wakePolicy(p, o) {
+ const usage = "wake policy [--json]; wake policy --policy smart|legacy [--json]. List choices with wake policy --json";
+ if (p.length !== 1 || Object.keys(o).some(k => !["policy", "json"].includes(k)) || (o.policy !== undefined && !["smart", "legacy"].includes(o.policy))) die(usage);
+ const r = await ownerTry(o.policy === undefined ? "GET" : "PUT", "/owner/wake/policy", o.policy === undefined ? undefined : { policy: o.policy });
+ if (r.status !== 200) die(`wake policy failed (HTTP ${r.status}); list wake policy --json; check the endpoint version if unsupported`);
+ if (o.json) return out(r.data);
+ console.log(`Wake policy: ${r.data.policy}; effective routing: ${r.data.mode}`);
+ console.log("Choices: smart (deployment-controlled routing), legacy (opt out; auto decisions stay shadow). Messages stay in the inbox. Explicit never and duplicate suppression still apply.");
+}
+
 export async function wakeReceipt(p, o) {
  const listing = p[0] === "receipts";
  const usage = "wake receipts [ID] [--json]; wake receipt ID --stage signature-verified|handler-ran|owner-notified [--json]. List IDs with wake receipts --json";

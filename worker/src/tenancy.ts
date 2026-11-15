@@ -84,6 +84,8 @@ export interface ControlFetcher {
 
 /** Bindings the Worker entry sees. Gate bindings are optional and empty by default. */
 export interface WorkerBindings extends ConfigFields {
+	/** Deployment-only guard; tenant overlays cannot grant staging enforcement. */
+	WAKE_ROUTING_ENV?: string;
 	DB: SqlDb;
 	HTTP_RELAY_ENABLED?: string;
 	HTTP_RELAY?: DoNamespace;
@@ -379,6 +381,7 @@ function pickConfig(src: ConfigFields | Record<string, string | undefined> | und
  * `mode: "single"` is every self-host deploy and any process that has not been handed a hosted overlay.
  */
 export class TenantContext implements ConfigFields {
+	readonly stagingWakeRouting: boolean;
 	readonly id: string;
 	readonly configVersion: number;
 	readonly mode: TenancyMode;
@@ -455,12 +458,13 @@ export class TenantContext implements ConfigFields {
 	#peerKey: Promise<CryptoKey | null> | null = null;
 
 	constructor(init: {
-		configVersion?: number; id: string; mode: TenancyMode; status: string; db: SqlDb; publicUrl: string;
+		stagingWakeRouting?: boolean; configVersion?: number; id: string; mode: TenancyMode; status: string; db: SqlDb; publicUrl: string;
 		gates: FeatureGates; limits: Record<string, unknown>; approval: Record<string, unknown>;
 		config: ConfigFields; ownerToken?: string; ownerTokenHash?: string; secretsKey?: string;
 		approvalClientSecret?: string; controlService?: ControlFetcher;
 		tenantDirectory?: KvNamespace; tenantNamespace?: DoNamespace; relayNamespace?: DoNamespace; relayRegion?: DataRegion; httpRelayNamespace?: DoNamespace; httpRelayRegion?: DataRegion;
 	}) {
+		this.stagingWakeRouting = init.stagingWakeRouting === true;
 		this.id = init.id;
 		this.configVersion = init.configVersion ?? 0;
 		this.mode = init.mode;
@@ -565,7 +569,7 @@ export function resolveTenant(env: WorkerBindings, req?: Request): TenantContext
 	const { gates } = parseGates(env);
 	const publicUrl = req ? A.publicOrigin(env.PUBLIC_URL, req.url) : (env.PUBLIC_URL || "");
 	return new TenantContext({
-		id: "", mode: "single", status: "active", db: env.DB, publicUrl, gates,
+		stagingWakeRouting: env.WAKE_ROUTING_ENV === "staging", id: "", mode: "single", status: "active", db: env.DB, publicUrl, gates,
 		limits: {}, approval: {}, config: pickConfig(env, CONFIG_KEYS),
 		ownerToken: env.OWNER_TOKEN, secretsKey: undefined,
 		httpRelayNamespace: env.HTTP_RELAY_ENABLED === "1" ? env.HTTP_RELAY : undefined,
@@ -591,7 +595,7 @@ export function hostedTenantContext(env: WorkerBindings, overlay: HostedOverlay)
 	// Hosted approval is the pushed tenant object only. Worker APPROVAL_OIDC_* does not approve a tenant.
 	const approval = approvalFromRecord(overlay.approval);
 	return new TenantContext({
-		httpRelayRegion: overlay.httpRelayRegion, relayRegion: overlay.relayRegion, configVersion: overlay.configVersion, id: overlay.id, mode: "host", status: overlay.status || "active", db: overlay.db,
+		stagingWakeRouting: env.WAKE_ROUTING_ENV === "staging", httpRelayRegion: overlay.httpRelayRegion, relayRegion: overlay.relayRegion, configVersion: overlay.configVersion, id: overlay.id, mode: "host", status: overlay.status || "active", db: overlay.db,
 		publicUrl: overlay.publicUrl, gates: { ...parsed.gates, approvalOidc: approval.gate },
 		limits: overlay.limits || {}, approval: approval.publicRecord,
 		config, ownerTokenHash: hash || undefined, secretsKey: parsed.secretsKey,

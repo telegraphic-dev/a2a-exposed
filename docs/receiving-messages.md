@@ -465,3 +465,8 @@ List IDs and their expiry first with `wake receipts --json`. HTTP acceptance
 and missing receiver reports remain separate; no preset reports automatically.
 See [authenticated wake receipts](protocol.md#authenticated-wake-receipts)
 for authentication, message binding, expiry and privacy limits.
+
+Owners can inspect and opt out of automatic wake suppression with `wake policy --json`
+and `wake policy --policy legacy --json`. `smart` follows the deployment gate.
+See [per-agent wake policy](protocol.md#per-agent-wake-policy-and-staging-rollout)
+for the rollout on staging and rollback. All messages remain in the inbox.

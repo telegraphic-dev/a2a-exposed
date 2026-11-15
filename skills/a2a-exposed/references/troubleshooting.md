@@ -135,3 +135,5 @@ the installed CLI.
 The default inbound inbox lists `submitted`/`working` tasks. Use `inbox --all`
 (or remote MCP `inbox` with `all: true`) for all task states, including
 `input-required` owner waits and finished tasks.
+
+Use `wake policy --json` before `wake policy --policy smart|legacy --json`. Legacy opts out and smart follows deployment routing. Compare routing counters with actual deliveries; every stored update remains available to inbox/history even when no wake is sent.

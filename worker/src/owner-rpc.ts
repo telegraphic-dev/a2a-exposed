@@ -183,6 +183,7 @@ const ROUTES: RouteDef[] = [
 	{ method: "GET", name: "GET /owner/upgrade-status", take: (s) => s.length === 2 && s[1] === "upgrade-status", search: noQuery, path: () => "/owner/upgrade-status" },
 	{ method: "GET", name: "GET /owner/wake/receipts", take: (s) => (s.length === 3 || s.length === 4 && /^[a-f0-9-]{36}$/.test(s[3]!)) && s[1] === "wake" && s[2] === "receipts", search: noQuery, path: (s) => `/owner/wake/receipts${s[3] ? `/${s[3]}` : ""}` },
 	{ method: "GET", name: "GET /owner/wake/status", take: (s) => s.length === 3 && s[1] === "wake" && s[2] === "status", search: noQuery, path: () => "/owner/wake/status" },
+	...(["GET", "PUT"] as const).map(method => ({ method, name: `${method} /owner/wake/policy`, take: (s: string[]) => s.length === 3 && s[1] === "wake" && s[2] === "policy", search: noQuery, path: () => "/owner/wake/policy" })),
 	{ method: "GET", name: "GET /owner/wake/routing", take: (s) => s.length === 3 && s[1] === "wake" && s[2] === "routing", search: noQuery, path: () => "/owner/wake/routing" },
 	...(["GET", "POST", "DELETE"] as const).map(method => ({ method, name: `${method} /owner/wake/relay`, take: (s: string[]) => s.length === 3 && s[1] === "wake" && s[2] === "relay", search: noQuery, path: () => "/owner/wake/relay" })),
 	{ method: "GET", name: "GET /owner/wake/preview", take: (s) => s.length === 3 && s[1] === "wake" && s[2] === "preview", search: noQuery, path: () => "/owner/wake/preview" },
@@ -313,6 +314,11 @@ export function ownerRpcBody(routeName: string, body: unknown): { ok: true; valu
 		return Object.keys(b).join(",") === "generation" && Number.isSafeInteger(b.generation) && Number(b.generation) >= 0 ? { ok: true, value: { generation: b.generation } } : { ok: false, error: "generation is invalid" };
 	}
 	if (routeName === "POST /owner/relay/http/:profile") return httpRelayEnrollment(body) ? { ok: true, value: { ...body } } : { ok: false, error: "invalid_http_relay_enrollment" };
+ if (routeName === "PUT /owner/wake/policy") {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return { ok: false, error: "policy must be smart or legacy" };
+  const b = body as Record<string, unknown>;
+  return Object.keys(b).join(",") === "policy" && (b.policy === "smart" || b.policy === "legacy") ? { ok: true, value: { policy: b.policy } } : { ok: false, error: "policy must be smart or legacy; list wake policy --json" };
+ }
 	if (routeName === "POST /owner/wake/test" && body != null) {
 		const value = relayWakeTestInput(body);
 		return value ? { ok: true, value } : { ok: false, error: "invalid" };

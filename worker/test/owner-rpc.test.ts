@@ -216,3 +216,11 @@ test("a token-shaped claim is blanked and the rest of the list is returned", () 
 	assert.equal(JSON.stringify(listed).includes("t=" + "c".repeat(16)), false);
 	assert.equal(JSON.stringify(listed).includes("user:secret"), false);
 });
+
+
+test("wake policy owner RPC allows only enumerated policy and exact route", () => {
+ for (const method of ["GET","PUT"]) assert.equal(matchOwnerRpc(method,"/owner/wake/policy",undefined).ok,true);
+ assert.equal(matchOwnerRpc("POST","/owner/wake/policy",undefined).ok,false);
+ for (const policy of ["smart","legacy"]) assert.equal(ownerRpcBody("PUT /owner/wake/policy",{policy}).ok,true);
+ for (const body of [null,{}, {policy:"enforce"},{policy:"smart",extra:true},["smart"]]) assert.equal(ownerRpcBody("PUT /owner/wake/policy",body).ok,false);
+});

@@ -14,7 +14,7 @@ import * as F from "./facade.ts";
 import { routeHttpRelay, httpRelayFetch, httpRelayEnrollment, isHttpRelayProfile } from "./http-relay-routing.ts";
 import { relayFetch, relayTestOutcome, type RelayTestError } from "./relay-routing.ts";
 import { renderWake, relayWakeTestInput, mausbotConfigProblem, presetAuthProblem, redact, cloudflareErrorHint, wakeUrlIsTunnelHost, defaultBusySeconds, defaultDebounceSeconds, defaultMaxPerHour, type WakeConfig, type WakeEvent } from "./wake.ts";
-import { decideRoute, isIdleWorkingPush, readRouteFields, routingMode, statusText, type RouteDecision } from "./wake-route.ts";
+import { decideRoute, decidePush, outboundClass, isIdleWorkingPush, readRouteFields, routingMode, statusText, type RouteDecision } from "./wake-route.ts";
 import { fetchCheckedPeer, fetchCheckedWake } from "./wake-target.ts";
 import { withDeadline } from "./deadline.ts";
 import * as Addr from "./address.ts";
@@ -986,6 +986,14 @@ async function recordDelivered(ctx: TenantContext, payload: Json): Promise<void>
 		log("wake_route_failed", { decision: "invocation", action: actions.join(",") });
 	}
 }
+async function wakePolicy(ctx: TenantContext): Promise<Json> {
+ const row: Json = await ctx.DB.prepare("SELECT value FROM settings WHERE key = 'wake_policy'").first();
+ const policy = row?.value === "legacy" ? "legacy" : "smart";
+ const configured = ctx.WAKE_ROUTING === "staging-enforce" ? "staging-enforce" : routingMode(ctx.WAKE_ROUTING);
+ const mode = policy === "legacy" || (configured === "staging-enforce" && !ctx.stagingWakeRouting) ? "shadow" : configured;
+ return { policy, mode, configured, stagingAllowed: ctx.stagingWakeRouting, choices: ["smart", "legacy"] };
+}
+
 async function routingReport(ctx: TenantContext): Promise<Json> {
 	const since = Math.floor(Date.now() / 3600000) - ROUTING_KEEP_HOURS;
 	const rows = await ctx.DB.prepare(
@@ -1012,7 +1020,7 @@ async function routingReport(ctx: TenantContext): Promise<Json> {
 	// `delivered` is a successful webhook or relay send for a real event; test wakes are `testDelivered`.
 	// `shadow` counts decisions, and the busy cool-down can merge several into one send. `shadowAvoidable`
 	// counts sent wakes that enforce would have skipped. Measure savings from `shadowAvoidable` and `delivered`.
-	return { mode: routingMode(ctx.WAKE_ROUTING), decided, delivered, testDelivered, suppressed, shadow, shadowAvoidable, counts };
+	return { ...(await wakePolicy(ctx)), decided, delivered, testDelivered, suppressed, shadow, shadowAvoidable, counts };
 }
 
 async function dedupFingerprint(ctx: TenantContext, kind: string, peer: string, ref: string): Promise<string | null> {
@@ -1046,9 +1054,13 @@ async function routeInbound(ctx: TenantContext, peer: string, contextId: string,
 		else {
 			fingerprint = await A.sha256(normalized);
 			unchanged = await dedupFingerprint(ctx, "status", peer, contextId) === fingerprint;
+   if (ctx.WAKE_ROUTING === "staging-enforce") {
+    const at = Number(await dedupFingerprint(ctx, "status_at", peer, contextId));
+    unchanged = unchanged && at > 0 && Date.now() >= at && Date.now() - at < debounceMs(ctx);
+   }
 		}
 	}
-	return { decision: decideRoute({ mode: routingMode(ctx.WAKE_ROUTING), wake, intent, duplicate, idle, unchanged }), fingerprint };
+	return { decision: decideRoute({ mode: (await wakePolicy(ctx)).mode, wake, intent, duplicate, idle, unchanged }), fingerprint };
 }
 
 const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
@@ -1150,7 +1162,10 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
 	// Direct replies are stored for history, not scheduled as new work.
 	if (!directReply) {
 		const routedNow = await routeInbound(ctx, label, contextId, routed.fields.wake, routed.fields.intent, preview, false);
-		if (routedNow.fingerprint) await saveDedup(ctx, "status", label, contextId, routedNow.fingerprint);
+		if (routedNow.fingerprint) {
+   await saveDedup(ctx, "status", label, contextId, routedNow.fingerprint);
+   await saveDedup(ctx, "status_at", label, contextId, String(Date.now()));
+  }
 		await recordRoute(ctx, routedNow.decision, "inbound");
 		if (routedNow.decision.deliver) await wake(ctx, ectx, contextId, task.id, label, preview, "inbound", wakeOpts(routedNow.decision));
 	}
@@ -2137,6 +2152,7 @@ function pushCarriesFile(value: unknown, depth = 0): boolean {
 	if (!value || typeof value !== "object" || depth > 6) return false;
 	if (Array.isArray(value)) return value.some((item) => pushCarriesFile(item, depth + 1));
 	const rec = value as Record<string, unknown>;
+	if (rec.kind === "data" || rec.data !== undefined || rec.artifact !== undefined || Array.isArray(rec.artifacts) && rec.artifacts.length > 0) return true;
 	if (rec.kind === "file" || (rec.file && typeof rec.file === "object")) return true;
 	for (const key of ["parts", "message", "status", "artifact", "artifacts", "task", "statusUpdate", "artifactUpdate"]) {
 		if (key in rec && pushCarriesFile(rec[key], depth + 1)) return true;
@@ -2182,14 +2198,15 @@ async function handlePush(req: Request, ctx: TenantContext, ectx: ExecutionConte
 	const labelled = readRouteFields(sources.messageMeta, sources.taskMeta);
 	const fields = labelled.ok ? labelled.fields : { wake: null, intent: null };
 	const idleWorking = isIdleWorkingPush(view.state, view.text, pushCarriesFile(body));
-	const pushDecision = decideRoute({
-		mode: routingMode(ctx.WAKE_ROUTING),
-		wake: fields.wake ?? (idleWorking ? "auto" : null),
-		intent: fields.intent ?? (idleWorking ? "status" : null),
+	const category = outboundClass(view.state, view.text, pushCarriesFile(body), fields.intent);
+ const pushDecision = decidePush({
+  mode: (await wakePolicy(ctx)).mode,
+		wake: fields.wake,
+		intent: fields.intent,
 		duplicate: samePayload,
 		idle: fields.intent === "status" ? !statusText(view.text) : idleWorking,
 		unchanged: false,
-	});
+	}, category);
 	await recordRoute(ctx, pushDecision, "outbound_update");
 	if (pushDecision.deliver) await wake(ctx, ectx, rec.context_id, taskId, rec.peer, `[update on outbound task: ${state}] ${text}`, "outbound_update", wakeOpts(pushDecision));
 	return json({ ok: true });
@@ -2388,7 +2405,16 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			return httpRelayFetch(ctx, profile, "/disable", { method: "POST", body: JSON.stringify({ generation: input.generation }) });
 		}
 	}
-	if (seg[0] === "wake" && seg[1] === "routing" && seg.length === 2 && !url.search && m === "GET") return json(await routingReport(ctx));
+	if (seg[0] === "wake" && seg[1] === "policy" && seg.length === 2 && !url.search) {
+  if (m === "GET") return json(await wakePolicy(ctx));
+  if (m === "PUT") {
+   const b = await body();
+   if (!b || Object.keys(b).length !== 1 || !["smart", "legacy"].includes(b.policy)) throw new HttpError(400, "policy must be smart or legacy; list wake policy --json");
+   await ctx.DB.prepare("INSERT INTO settings(key,value) VALUES('wake_policy',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(b.policy).run();
+   return json(await wakePolicy(ctx));
+  }
+ }
+ if (seg[0] === "wake" && seg[1] === "routing" && seg.length === 2 && !url.search && m === "GET") return json(await routingReport(ctx));
 	if (seg[0] === "wake" && seg[1] === "relay" && seg.length === 2 && !url.search) {
 		if (m === "GET") {
 			const response = await relayFetch(ctx, "/status");

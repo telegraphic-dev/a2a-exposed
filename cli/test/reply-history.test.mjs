@@ -147,3 +147,19 @@ test("wake receipt workflow lists choices and rejects missing/invalid stages wit
  assert.equal(report.status, 0, report.stderr);
  assert.match(report.stdout, /receiver assertion.*does not complete the task/);
 });
+
+
+test("wake policy lists choices, sets explicit policy, and rejects invalid inputs without a request", t => {
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),"a2a-policy-"));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const log=path.join(dir,"fetch.log");const cli=fixture(t,{A2A_TEST_FETCH_LOG:log});
+ const report={policy:"smart",mode:"shadow",choices:["smart","legacy"]};
+ let r=cli(["wake","policy","--json"],report);assert.equal(r.status,0,r.stderr);assert.deepEqual(JSON.parse(r.stdout),report);
+ r=cli(["wake","policy","--policy","legacy","--json"],{...report,policy:"legacy"});assert.equal(r.status,0,r.stderr);
+ const calls=()=>fs.readFileSync(log,"utf8").trim().split("\n").map(x=>JSON.parse(x));
+ assert.equal(calls().at(-1).method,"PUT");assert.deepEqual(JSON.parse(calls().at(-1).body),{policy:"legacy"});
+ const count=calls().length;
+ for(const args of [["--policy","bad"],["--policy",""],["extra"],["--stage","owner-notified"]]) {
+  r=cli(["wake","policy",...args],report);assert.equal(r.status,1);assert.match(r.stderr,/wake policy --json/);
+ }
+ assert.equal(calls().length,count);
+});

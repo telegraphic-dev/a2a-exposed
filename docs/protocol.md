@@ -50,7 +50,38 @@ Direct A2A reply messages marked with `a2a.exposed/reply-delivery` in request or
 
 Both fields are optional. A message without either is stored and wakes the recipient, so older clients keep working. Current senders should set `intent` on every send and every reply, so shadow mode, and later enforce, can classify the traffic. A repeated `messageId` from the same peer returns the stored task and does not wake again, including when the retries overlap. A push is a duplicate only when its payload matches the previous push for that task, including file bytes and URIs. The update stays on the outbound task. An empty working status push, with no text and no file, is an idle status. A working push that includes text or a file still wakes. Wake and intent metadata on the push, when present, are used; invalid metadata is ignored and does not reject the update.
 
-`WAKE_ROUTING` selects the rollout. `shadow` is the default, and so is any value other than `enforce`. Shadow counts the auto decision and still wakes, including an ack or an unchanged status. `enforce` applies those decisions: an auto ack and an idle or unchanged status do not wake, and a changed status waits for one batched wake. `never`, `always`, legacy sends, and duplicate suppression apply in both modes. Set `WAKE_ROUTING=shadow`, or leave it unset, to roll `enforce` back. `GET /owner/wake/routing` returns the mode, `decided`, `delivered`, `testDelivered`, `shadow`, `shadowAvoidable`, and hourly decision rows (`decision`, `action`, `count`). It has no message text. `decided` and `counts` are routing decisions. `action` is `wake`, `batch`, `suppress`, or `shadow`. A `batch` row is recorded when the status is stored, before the debounce sends anything. `delivered` is the number of wake webhooks and relay deliveries for real events that returned success. Test wakes are counted in `testDelivered` instead. `shadow` counts decisions enforce would have skipped or batched; that wake is still delivered while the mode is shadow. The busy cool-down can merge several of those decisions into one webhook, so `shadow` is not a count of webhooks. `shadowAvoidable` counts successful message wakes in which enforce would have suppressed every merged task: each is one webhook enforce would not send. Measure savings from `shadowAvoidable` against `delivered`, not from `shadow` or `decided`. Rows older than 14 days are deleted.
+`WAKE_ROUTING` selects the rollout. `shadow` is the default, and so is any unrecognized value. Shadow counts the auto decision and still wakes, including an ack or an unchanged status. `enforce` applies those decisions: an auto ack and an idle or unchanged status do not wake, and a changed status waits for one batched wake. `never`, `always`, legacy sends, and duplicate suppression apply in both modes. Set `WAKE_ROUTING=shadow`, or leave it unset, to roll `enforce` back. `GET /owner/wake/routing` returns the mode, `decided`, `delivered`, `testDelivered`, `shadow`, `shadowAvoidable`, and hourly decision rows (`decision`, `action`, `count`). It has no message text. `decided` and `counts` are routing decisions. `action` is `wake`, `batch`, `suppress`, or `shadow`. A `batch` row is recorded when the status is stored, before the debounce sends anything. `delivered` is the number of wake webhooks and relay deliveries for real events that returned success. Test wakes are counted in `testDelivered` instead. `shadow` counts decisions enforce would have skipped or batched; that wake is still delivered while the mode is shadow. The busy cool-down can merge several of those decisions into one webhook, so `shadow` is not a count of webhooks. `shadowAvoidable` counts successful message wakes in which enforce would have suppressed every merged task: each is one webhook enforce would not send. Measure savings from `shadowAvoidable` against `delivered`, not from `shadow` or `decided`. Rows older than 14 days are deleted.
+
+### Per-agent wake policy and staging rollout
+
+`wake policy --json` lists `smart` and `legacy`, the saved policy, the configured
+routing mode and the effective mode. Select explicitly with
+`wake policy --policy legacy --json` to opt out of automatic suppression, or
+`wake policy --policy smart --json` to follow the deployment's routing mode.
+These owner-authenticated commands use the selected owner configuration; secrets
+stay in its protected file or named environment variables. The matching owner
+API is `GET /owner/wake/policy` and `PUT /owner/wake/policy` with
+`{"policy":"smart"}` or `{"policy":"legacy"}`. Hosted owner RPC permits both.
+The saved choice belongs only to that inbox. `legacy` keeps automatic decisions
+in shadow; explicit `never` and duplicate suppression still apply.
+
+The narrower rollout uses exact `WAKE_ROUTING=staging-enforce` plus the
+**deployment-only** binding `WAKE_ROUTING_ENV=staging`. A tenant overlay cannot
+supply the environment guard. Without that exact guard the new mode stays shadow.
+It skips automatic acks, empty statuses, identical statuses received within the
+debounce window, and textless submitted/working outbound status flips without
+files, artifacts or data. Changed status messages still follow the existing wake
+coalescing. Input-required replies, completed `intent:status` results, actionable
+requests, `always`, and legacy messages still wake. Completed status results are
+labelled `outbound_completed_status` but are not suppressed; the other receiver
+labels are `outbound_status_only` and `outbound_input_required`.
+
+All updates are stored before routing; skipping a wake never acknowledges an
+inbox item. Compare the shadow counters with a replay before enabling staging,
+then verify bounded wakes, preserved messages and must-wake controls. Keep
+production in shadow. Roll back with `WAKE_ROUTING=shadow` or an owner policy of
+`legacy`; deployment changes use the infrastructure workflow. This setting does
+not release, deploy or enable the hosted service by itself.
 
 ## Streaming
 
