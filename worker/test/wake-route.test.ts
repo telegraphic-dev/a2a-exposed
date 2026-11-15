@@ -641,12 +641,13 @@ test("the classifier labels each class and keeps must-wake classes awake in enfo
 	assert.equal(push({ state: "input-required", wake: "never" }).decision, "never");
 	assert.equal(push({ state: "input-required", duplicate: true }).decision, "duplicate");
 
-	// Completed status replies are labelled and stay shadow-only, even in enforce.
+	// Completed status replies get their own label and wake in both modes. They are not a proposed
+	// suppression, so they never count as shadow or shadow-avoidable.
 	for (const mode of ["shadow", "enforce"] as const) {
 		const done = push({ mode, state: "completed", intent: "status", text: "done for today" });
 		assert.equal(done.decision, "status_completed", mode);
-		assert.equal(done.action, "shadow", mode);
-		assert.equal(done.proposed, "suppress", mode);
+		assert.equal(done.action, "wake", mode);
+		assert.equal(done.proposed, "wake", mode);
 		assert.equal(done.deliver, true, mode);
 	}
 	assert.equal(push({ state: "TASK_STATE_COMPLETED", intent: "status", text: "" }).decision, "status_completed");
@@ -778,5 +779,31 @@ test("a burst of status flips and acks replays without waking, and every message
 		assert.ok(body.suppressed >= pushes + acks, "each suppressed event is counted for the shadow stats");
 	} finally {
 		Date.now = realNow;
+	}
+});
+
+test("a completed status reply wakes and is not counted as an avoidable wake", async (t) => {
+	for (const mode of ["shadow", "enforce"]) {
+		const env = envFor({ WAKE_ROUTING: mode });
+		const h = harness(env);
+		t.after(h.restore);
+		const token = `push-token-done-${mode}`;
+		await env.DB.prepare(
+			`INSERT INTO outbound (task_id, context_id, peer, endpoint, protocol, push_token_hash, sent_at, updates_json, updates_seen)
+			 VALUES ('task-done', 'ctx-done', 'ada', 'https://ada.example.net/', '0.3', ?, '2026-01-01T00:00:00.000Z', '[]', 0)`,
+		).bind(await sha256(token)).run();
+		const done = {
+			task: {
+				id: "task-done", contextId: "ctx-done",
+				status: { state: "completed", message: { parts: [{ kind: "text", text: "done for today" }], metadata: { "a2a.exposed/intent": "status" } } },
+			},
+		};
+		assert.equal((await h.call("POST", "/push", done, `Bearer ${token}`)).status, 200);
+		assert.equal(h.sent.length, 1, mode);
+		assert.equal(routes(h.logs).at(-1).decision, "status_completed", mode);
+		const report = (await h.call("GET", "/owner/wake/routing")).data as { delivered: number; shadow: number; shadowAvoidable: number };
+		assert.equal(report.delivered, 1, mode);
+		assert.equal(report.shadow, 0, mode);
+		assert.equal(report.shadowAvoidable, 0, mode);
 	}
 });

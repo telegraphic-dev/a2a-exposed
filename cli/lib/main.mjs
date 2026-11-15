@@ -226,8 +226,10 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
                                 --max-per-hour  hourly cap; 0 or unset is unlimited, except Claude Code,
                                                which defaults to 25 when this is unset
                                 --wake-routing shadow (default) or enforce. shadow counts the wakes auto
-                                               would skip and still wakes. enforce stores an ack and an idle
-                                               or unchanged status without a wake, and batches a changed status.
+                                               would skip and still wakes. enforce stores an ack, an idle
+                                               status, and a status repeated inside the debounce window
+                                               without a wake, and batches a changed status. Input-required
+                                               always wakes.
                                                Set shadow again to roll enforce back
   Update reminders: cached at most daily; A2A_NO_UPDATE_CHECK=1 opts out; never auto-update/deploy.
   status --json labels deployed/CLI schema counts; known pending CLI migrations fail status.
@@ -486,8 +488,9 @@ Outbound (agents you call)
                           [--proto 0.3|1.0] [--json]
                           --json prints only the task JSON; send and poll omit the # task line
                           Set intent on every send and every reply, and wake when the auto default
-                          is wrong. auto wakes a handoff, blocker, or question. An ack, and an idle
-                          or unchanged status, stay stored. A changed status is batched. always
+                          is wrong. auto wakes a handoff, blocker, or question. An ack, an idle
+                          status, and a status repeated inside the debounce window stay stored.
+                          Input-required always wakes. A changed status is batched. always
                           asks for an immediate wake, still subject to the peer's authorization
                           and rate limits. never only stores the message. Do not send an
                           acknowledgement-only message, and do not answer an ack with an ack.

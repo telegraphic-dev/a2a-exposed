@@ -108,7 +108,7 @@ function shadowOr(mode: RoutingMode, proposed: "suppress" | "batch"): { deliver:
  * input-required wakes, whatever the intent, because the agent has to act;
  * legacy (neither field) wakes, which is today's behavior;
  * `auto` wakes for handoff, blocker, and question;
- * an `auto` status on a completed task is labelled and stays shadow-only in both modes;
+ * an `auto` status on a completed task is labelled `status_completed` and wakes in both modes;
  * `auto` ack, idle status, and unchanged status are proposed suppressions;
  * a changed `auto` status is proposed as one batched wake.
  * Shadow records a proposed suppression or batch and still wakes. Enforce applies them.
@@ -142,8 +142,9 @@ export function decideRoute(input: RouteInput): RouteDecision {
 	}
 	if (input.intent === "status") {
 		if (input.completedStatus) {
-			// Labelled for the shadow stats only: enforce does not suppress a completed reply yet.
-			return { ...base, deliver: true, batch: false, decision: "status_completed", proposed: "suppress", action: "shadow" };
+			// Its own label in the routing counts. Enforce does not skip a completed reply yet, so it is not a
+			// proposed suppression: counting it as one would inflate `shadow` and `shadowAvoidable`.
+			return { ...base, deliver: true, batch: false, decision: "status_completed", proposed: "wake", action: "wake" };
 		}
 		if (input.idle) {
 			const applied = shadowOr(input.mode, "suppress");
@@ -200,7 +201,7 @@ export interface WakeEvent {
  * Classify an event into the route input and decide. Suppressible classes: ack, idle status, an identical
  * status inside the debounce window, and a textless outbound status flip. Must-wake classes: input-required,
  * actionable requests, `always`, and legacy events with no labels. A completed `intent: status` reply is
- * labelled and stays shadow-only.
+ * labelled `status_completed` and still wakes.
  */
 export function classifyWake(event: WakeEvent): RouteDecision {
 	const state = plainTaskState(event.state);
