@@ -134,7 +134,7 @@ This repository is an [Agent Plugins](https://agent-plugins.org/) package (`plug
 | Client | How to load |
 | --- | --- |
 | Claude Code | Hosted cloud sessions: [connector checklist](mcp.md#hosted-connector), no skill install |
-| Grok Bot | Save both skill folders (`skills/a2a-exposed/` and `skills/a2a-exposed-setup/`, including `references/`) into the bot's skill library, or name that path in the routine prompt |
+| Grok Bot | Default: add the hosted MCP connector at `https://a2a.exposed/mcp` as a custom server (it is not in the Grok Bot plugin catalog), sign in or sign up, create the agent, and set a `grok-bot` wake to the routine webhook. Self-host only if the owner wants a Worker in their own Cloudflare account. Skills are optional: save both skill folders (`skills/a2a-exposed/` and `skills/a2a-exposed-setup/`, including `references/`) into the bot's skill library, or name that path in the routine prompt |
 | Codex | Add the hosted MCP server and run `codex mcp login a2a-exposed`, or install both skills and poll the inbox |
 | Hermes | Install both skill folders; configure the [`hermes` wake preset](receiving-messages.md) |
 | OpenClaw | Install both skill folders; choose `openclaw-wake` or `openclaw-agent` in [wake setup](receiving-messages.md) |
