@@ -39,7 +39,7 @@ function sandbox(t, cfg = {}) {
 }
 
 /** A scripted authorization server: token responses come from `script` in order (the last one repeats). */
-async function mockServer(t, { script = [], card = true, metadata = false } = {}) {
+async function mockServer(t, { script = [], card = true, metadata = false, extensions = null } = {}) {
 	const seen = { device: [], token: [] };
 	let i = 0;
 	const srv = http.createServer(async (req, res) => {
@@ -48,7 +48,7 @@ async function mockServer(t, { script = [], card = true, metadata = false } = {}
 		const base = `http://${req.headers.host}`;
 		const send = (status, obj) => { res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(obj)); };
 		if (req.url === "/.well-known/agent-card.json")
-			return card ? send(200, { name: "Peer Inbox", supportedInterfaces: [{ url: base + "/", protocolBinding: "JSONRPC", protocolVersion: "1.0" }],
+			return card ? send(200, { name: "Peer Inbox", ...(extensions ? { capabilities: { extensions } } : {}), supportedInterfaces: [{ url: base + "/", protocolBinding: "JSONRPC", protocolVersion: "1.0" }],
 				securitySchemes: { bearer: { httpAuthSecurityScheme: { scheme: "Bearer" } },
 					pairing: { oauth2SecurityScheme: { flows: { deviceCode: { deviceAuthorizationUrl: base + "/oauth/device_authorization", tokenUrl: base + "/oauth/token", scopes: {} } } } } } })
 				: send(200, { name: "Peer Inbox", securitySchemes: { bearer: { httpAuthSecurityScheme: { scheme: "Bearer" } } } });
@@ -215,6 +215,42 @@ test("connect --json: one JSON line per step, for agents", async (t) => {
 	assert.ok(!r.stdout.includes("a2aow_x"));
 	assert.equal(m.seen.device[0].params.client_name, "a2a-exposed agent", "no agent name configured");
 	assert.ok(!("agent_card_url" in m.seen.device[0].params), "no own https base URL: no card URL sent");
+});
+
+test("connect suggests encryption for a plain pairing only when the peer offers it or local keys exist; it never switches it on", async (t) => {
+	const sealedExt = [{ uri: "https://a2a.exposed/ext/sealed/v1", required: false, params: { pairingBundle: { keyId: "k1" } } }];
+	const cases = [
+		{ name: "plain peer, no local keys", extensions: [{ uri: "https://example.com/ext/other", required: false }], localKeys: false, expect: null },
+		{ name: "sealed peer, no local keys", extensions: sealedExt, localKeys: false, expect: { peer_offers_encryption: true, local_keys: false, command: /--config-dir DIR connect \S+ --alias ALIAS --sealed-key-id KEY_ID$/ } },
+		{ name: "sealed peer, local keys", extensions: sealedExt, localKeys: true, expect: { peer_offers_encryption: true, local_keys: true, command: /connect \S+ --alias NEW_ALIAS --sealed-key-id KEY_ID$/ } },
+		{ name: "plain peer, local keys", extensions: null, localKeys: true, expect: { peer_offers_encryption: false, local_keys: true, command: null } },
+	];
+	for (const c of cases) {
+		const m = await mockServer(t, { script: [{ access_token: "a2aow_x", token_type: "Bearer" }], extensions: c.extensions });
+		const s = sandbox(t);
+		if (c.localKeys) { fs.mkdirSync(path.join(s.dir, "encryption"), { recursive: true }); fs.writeFileSync(path.join(s.dir, "encryption", "state.sqlite"), ""); }
+		const r = await s.cli(["connect", m.url, "--alias", "p", "--json"]);
+		assert.equal(r.status, 0, `${c.name}: ${r.stderr}`);
+		const lines = r.stdout.trim().split("\n").map((l) => JSON.parse(l));
+		assert.deepEqual(lines.map((l) => l.status), ["authorization_pending", "connected"], `${c.name}: no extra JSON line`);
+		const params = m.seen.device[0].params;
+		assert.ok(!("sealed_bundle" in params) && !("sealed_responder_key_id" in params), `${c.name}: plain request, encryption not switched on`);
+		assert.equal(s.peers().p.sealed, undefined, `${c.name}: no pin`);
+		const enc = lines[0].encryption;
+		if (!c.expect) { assert.equal(enc, undefined, c.name); continue; }
+		assert.equal(enc.server_readable, true, c.name);
+		assert.equal(enc.peer_offers_encryption, c.expect.peer_offers_encryption, c.name);
+		assert.equal(enc.local_keys, c.expect.local_keys, c.name);
+		if (c.expect.command) assert.match(enc.command, c.expect.command, c.name); else assert.equal(enc.command, undefined, c.name);
+		if (c.localKeys) assert.match(enc.next, /refuses ordinary sends/, c.name);
+		assert.ok(!JSON.stringify(enc).includes("k1"), `${c.name}: no peer key material echoed`);
+	}
+	// human output: the note follows the code and names the exact flag
+	const m = await mockServer(t, { script: [{ access_token: "a2aow_x", token_type: "Bearer" }], extensions: sealedExt });
+	const s = sandbox(t);
+	const r = await s.cli(["connect", m.url, "--alias", "p"]);
+	assert.equal(r.status, 0, r.stderr);
+	assert.match(r.stderr, /code: WDJB-4827[\s\S]*Encryption: this pairing is not end-to-end encrypted; the inbox servers can read its messages\.\nPeer Inbox also offers encrypted pairing\.[\s\S]*--sealed-key-id KEY_ID/);
 });
 
 test("connect: denied, expired and used codes end cleanly (exit 1, no token, state removed)", async (t) => {

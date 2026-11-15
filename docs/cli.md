@@ -263,11 +263,11 @@ The owner token authenticates these commands.
 
 | Command | Effect |
 | --- | --- |
-| `connect <url> [--alias A] [--name N] [--card-url URL] [--replace] [--no-wait] [--json]` | Ask another A2A endpoint for a token. Prints a code and a link. The code lasts 60 minutes. Stores the token and does not print it. `--no-wait` prints the code and exits; run the same command again to check. An expired code exits 1 and does not request a new one silently. An alias whose token still works is refused unless `--replace`. A `*.ts.net` or LAN card is informational. A non-https card is left out |
+| `connect <url> [--alias A] [--name N] [--card-url URL] [--replace] [--no-wait] [--json] [--sealed-key-id ID]` | Ask another A2A endpoint for a token. Prints a code and a link. The code lasts 60 minutes. Stores the token and does not print it. `--no-wait` prints the code and exits; run the same command again to check. An expired code exits 1 and does not request a new one silently. An alias whose token still works is refused unless `--replace`. A `*.ts.net` or LAN card is informational. A non-https card is left out. An ordinary pairing is server-readable. When the peer card offers encrypted pairing or this config directory has local keys, `connect` says so after the code and prints the `--sealed-key-id` command (`--json`: an `encryption` object on `authorization_pending`); it never switches encryption on. `--sealed-key-id ID` pairs with a local key: see [local keys and pairing](local-key-pairing.md) |
 | `pair set-password --web [--ttl MIN] [--json]` | One-time link where a human sets the approval password. `--ttl` is 1 to 60 minutes (default 15). A new link invalidates the previous one |
 | `pair set-password` | The same, in a terminal, no echo. The human types the password there |
 | `pair set-oidc --issuer URL --client-id ID --subjects SUB[,SUB...] [--methods password,oidc] [--secret-stdin]` | Optional OpenID Connect on `/device` and the MCP consent page. Deploy uploads `APPROVAL_OIDC_CLIENT_SECRET` only when that variable is set in the environment you use for deploy. `--secret-stdin` checks one line and discards it. `config.env` keeps the issuer and client id |
-| `pair list [--json]` | Inbound-only callback guidance (`inboundOnly` in JSON), pending requests, the approval mode, when the password was set, and the dashboard URL when `MANAGE_URL` is set. JSON includes `expiresIn` on each pending request |
+| `pair list [--json]` | Inbound-only callback guidance (`inboundOnly` in JSON), pending requests, the approval mode, when the password was set, and the dashboard URL when `MANAGE_URL` is set. JSON includes `expiresIn` on each pending request. An encrypted key pairing is labelled with its safety code (JSON: `sealed: true`, `safetyCode`; no key material) |
 | `pair approve <code> [--json]` | Approves with the owner token. In human mode the decision is the owner's. In agent mode, run it only after the human says yes |
 | `pair deny <code> [--json]` | Any mode. On `/device`, deny needs no password |
 
@@ -558,7 +558,7 @@ process and separately on each inbox Worker, after owner approval. Local `send` 
 `list_peers` before selecting the send alias. Encryption is off by default. Only exact
 `A2A_SEALED_ENABLED=1` enables it in this local process; each inbox Worker needs
 its own setting and owner approval. `true`, `yes` and whitespace do not enable
-it. Production stays off until separately approved. No plaintext fallback is available. OS consent is a startup choice, never a tool parameter. See the
+it. Hosted production Workers have had this setting on since 2026-11-14; a self-hosted Worker stays off until its owner sets it. No plaintext fallback is available. OS consent is a startup choice, never a tool parameter. See the
 [MCP local setup and limits](mcp.md#local-stdio-sendread).
 
 ## Pairing and delivery diagnostics

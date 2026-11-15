@@ -420,7 +420,7 @@ Inbox (owner side)
                                        a Worker secret). --sql prints the same tables as SQL
 
 Pairing (OAuth 2.0 device flow, RFC 8628: agents connect without pasting tokens into chat)
-  connect <base-or-card-url> [--alias A] [--name N] [--card-url URL] [--replace] [--no-wait] [--json]
+  connect <base-or-card-url> [--alias A] [--name N] [--card-url URL] [--replace] [--no-wait] [--json] [--sealed-key-id ID]
                           ask another A2A endpoint for a token: prints a code + link for your human (the code lasts
                           60 minutes; they confirm the code with that A2A endpoint's owner), waits for approval, stores
                           the token as outbound peer A
@@ -434,7 +434,11 @@ Pairing (OAuth 2.0 device flow, RFC 8628: agents connect without pasting tokens 
                           The name sent is the card named in the request (--card-url, otherwise this
                           deployment's). --name overrides it. If that card can't be read, the name is the
                           configured agent name, the worker name, or the public host's first label. The
-                          other A2A endpoint labels the token from that name and adds -2, -3, … when it is taken
+                          other A2A endpoint labels the token from that name and adds -2, -3, … when it is taken.
+                          A plain pairing is server-readable. When the peer card offers encrypted pairing or this
+                          config directory has local keys, connect says so and prints the --sealed-key-id command;
+                          it never switches encryption on. --sealed-key-id ID: pair with local key ID from
+                          keys status --json (see "Local encrypted CLI draft" above)
   pair set-password --web [--ttl MIN] [--json]
                           one-time link (default 15 min, --ttl 1 to 60, single use) where your human sets or
                           changes the approval password on a web page. Send it to them privately; never open

@@ -101,6 +101,18 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
  const resumedLines=resumed.out.trim().split("\n").map((s:string)=>JSON.parse(s));
  assert.equal(resumedLines[0].status,"key_comparison");assert.equal(resumedLines[0].safety_code,lines[0].safety_code);
  assert.equal(fs.existsSync(path.join(dirs.alice,"peers.json")),false);
+ // The approving owner sees a public-only key-pairing flag and the same safety code the requester printed.
+ const comparison=lines.find((x:any)=>x.status==="key_comparison").safety_code;
+ const listing:any=await (await owner("bob","/owner/pairing")).json();
+ const listed=listing.pending.find((x:any)=>x.userCode===code);
+ assert.equal(listed.sealed,true);assert.equal(listed.safetyCode,comparison);
+ for(const secretish of [bundles.alice.identityKey,bundles.alice.encryptionKey,bundles.alice.keyId,bundles.alice.signature,bundles.bob.encryptionKey,"sealed_requester","sealed_responder","encryptionKey"])assert.equal(JSON.stringify(listing).includes(secretish),false,"no key material in the owner listing");
+ const page=await (await dispatch("bob",new Request(`https://bob.example.com/device?user_code=${code}`))).text();
+ assert.match(page,/Encrypted key pairing/);assert.ok(page.includes(comparison),"device page shows the safety code");
+ assert.match(page,/Trust on first use: this page can't verify the keys\..*compare the safety code.*If it differs, deny\./s);
+ assert.equal(page.includes(bundles.alice.encryptionKey),false);
+ const listed2=await cli("bob",["pair","list"]);assert.equal(listed2.code,0,listed2.err);
+ assert.ok(listed2.out.includes(`encrypted key pairing, safety code: ${comparison} (trust on first use`),listed2.out);
  const approval=await owner("bob",`/owner/pairing/${code}/approve`,"POST",{});assert.equal(approval.status,200);assert.match(((await approval.json())as any).continuation.next,/Waiting for the requester.*same connect/);
  const beforeCollection=await cli("bob",["keys","pairings","--json"]);
  assert.deepEqual(JSON.parse(beforeCollection.out).pairings,[]);

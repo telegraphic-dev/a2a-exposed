@@ -14,7 +14,7 @@ Local encryption remains **disabled by default**. After owner approval, set
 `A2A_SEALED_ENABLED=1` in the local MCP process and separately on each inbox
 Worker. Enabling a hosted Worker does not configure this local process. Only
 the exact value `1` enables encryption; `true`, `yes` and whitespace do not.
-Production stays off until its owner approves production enablement.
+Hosted production Workers have had this setting on since 2026-11-14; a self-hosted Worker stays off until its owner sets it.
 First install the matching optional encryption package and complete
 [local key pairing](local-key-pairing.md) in a separate fixture config directory.
 Then configure a local MCP client with this executable and argument array:

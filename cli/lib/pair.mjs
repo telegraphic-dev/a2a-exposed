@@ -181,6 +181,7 @@ export async function list(o) {
 		console.log(`--- ${p.userCode}  ${JSON.stringify(p.clientName || p.clientId || "(no name)")} (claimed, untrusted)  expires ${p.expiresAt}${p.replacesLabel ? `  replaces the active token "${p.replacesLabel}"` : ""}`);
 		console.log(`    card: ${p.agentCardUrl || "-"}  from: ${[p.ip || "?", p.country].filter(Boolean).join(", ")}`);
 		if (p.identityFingerprint) console.log(`    identity: ${p.identityFingerprint}`);
+		if (p.sealed) console.log(`    encrypted key pairing, safety code: ${p.safetyCode || "(unavailable)"} (trust on first use: compare it with the requester's owner through another trusted channel; deny if it differs)`);
 		if (!p.agentCardUrl) console.log("    no callback address yet: replies stay on the task until this agent announces one");
 		console.log(`    link: ${p.verificationUriComplete}`);
 	}
@@ -318,6 +319,33 @@ Ask its owner for a token instead: they run \`${C.DEFAULT_CLI_COMMAND} token iss
 /** Shell-quote one argument for a copy-paste hint. */
 const shq = (v) => (/^[A-Za-z0-9_./:@%+=,-]+$/.test(v) ? v : `'${String(v).replace(/'/g, `'\\''`)}'`);
 
+const SEALED_URI = "https://a2a.exposed/ext/sealed/v1";
+const LOCAL_KEYS_DOC = "https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/local-key-pairing.md";
+/** Suggest-only note for a plain (server-readable) pairing request. Never switches encryption on, never loads
+ *  the optional encryption package and never reads key material: it checks the peer card and whether this
+ *  config directory has a local key store. Returns null when neither side has anything to offer. */
+export function encryptionSuggestion({ card, localKeys, target, peerName }) {
+	const ext = card?.capabilities?.extensions;
+	const peerOffers = Array.isArray(ext) && ext.some((e) => e && e.uri === SEALED_URI);
+	if (!peerOffers && !localKeys) return null;
+	const lines = ["Encryption: this pairing is not end-to-end encrypted; the inbox servers can read its messages."];
+	let command = null;
+	if (peerOffers) {
+		if (localKeys) {
+			command = `${CLI} connect ${shq(target)} --alias NEW_ALIAS --sealed-key-id KEY_ID`;
+			lines.push(`${peerName} also offers encrypted pairing. To use it instead, ask its owner not to approve this code, then run this with a new alias and KEY_ID from keys status --json:`, `  ${command}`);
+		} else {
+			command = `${C.DEFAULT_CLI_COMMAND} --config-dir DIR connect ${shq(target)} --alias ALIAS --sealed-key-id KEY_ID`;
+			lines.push(`${peerName} also offers encrypted pairing. To use it, set up local keys in a separate config directory DIR (${LOCAL_KEYS_DOC}), then run this with KEY_ID from keys status --json:`, `  ${command}`);
+		}
+	} else lines.push(`${peerName} does not offer encrypted pairing.`);
+	if (localKeys) lines.push("This config directory has local keys, so it refuses ordinary sends: a plain pairing can't send from here. Use a separate config directory for unencrypted peers.");
+	return {
+		json: { server_readable: true, peer_offers_encryption: peerOffers, local_keys: !!localKeys, ...(command ? { command } : {}), next: lines.slice(1).join(" ").replace(/\s+/g, " ") },
+		text: lines.join("\n"),
+	};
+}
+
 /** Does `token` still work at the peer? A GetTask for a random id answers 401 for a bad token and a JSON-RPC
  *  "task not found" (or a task) for a good one. Unknown (network or odd answer): null. */
 async function tokenWorks(base, card, token) {
@@ -413,13 +441,15 @@ A different agent at the same URL? Pass another --alias.`);
 		const swap = !st.replacing ? "" : st.replacesLabel
 			? ` On approval the peer replaces our token "${st.replacesLabel}" (the old one stops working).`
 			: ` This peer does not swap tokens: our old token${oldLabel ? ` (label "${oldLabel}" on its side)` : ""} stays active until its owner revokes it${oldLabel ? ` (\`${C.DEFAULT_CLI_COMMAND} token revoke ${oldLabel}\`)` : ""}; tell them.`;
+		const suggestion = preparedSealed ? null : encryptionSuggestion({ card, localKeys: fs.existsSync(path.join(C.CONFIG_DIR, "encryption", "state.sqlite")), target, peerName });
 		emit({ status: "authorization_pending", alias, user_code: st.userCode, verification_uri: st.verificationUri, verification_uri_complete: st.verificationUriComplete, expires_in: Math.round((st.expiresAt - Date.now()) / 1000), interval: st.interval,
 			...(st.replacing ? { replaces_label: st.replacesLabel } : {}),
+			...(suggestion ? { encryption: suggestion.json } : {}),
 			instructions: `Show the code and the link to your human. They confirm the code with the owner of ${peerName}, who approves it on that page.${swap}` },
 			`Pairing with ${peerName} (${base}):
   code: ${st.userCode}
   link: ${st.verificationUriComplete}
-Show this code and link to your human. They confirm the code with the owner of ${peerName}, who approves it on that page (expires in ${mins} minutes).${swap}`);
+Show this code and link to your human. They confirm the code with the owner of ${peerName}, who approves it on that page (expires in ${mins} minutes).${swap}${suggestion ? `\n${suggestion.text}` : ""}`);
 	}
 
 	const finish = async (r) => {

@@ -1225,6 +1225,12 @@ test("device page copy: code hint, expiry, token scope, settled result, A2A endp
 	assert.match(localPage, new RegExp(`${localClock} \\((?:less than a minute|\\d+ min)\\)`));
 	assert.equal(localPage.includes("UTC"), false);
 	assert.match(page, /Revoke the token &lt;label&gt; any time with <code>a2a token revoke &lt;label&gt;<\/code>/);
+	assert.doesNotMatch(page, /Encrypted key pairing|Safety code|Trust on first use/, "a plain request gets no encryption label");
+	const keyed = P.devicePage({ ...base, request: { ...req, sealed: { safetyCode: "12345 67890 12345 67890 12345 67890 12345 67890 12345 67890 12345 67890" } } }, "n");
+	assert.match(keyed, /<th>Encryption<\/th><td>Encrypted key pairing \(the requester sent public encryption keys\)<\/td>/);
+	assert.match(keyed, /<th>Safety code<\/th><td>12345 67890 12345 67890 12345 67890 12345 67890 12345 67890 12345 67890<\/td>/);
+	assert.match(keyed, /Trust on first use: this page can't verify the keys\..*compare the safety code.*If it differs, deny\..*doesn't turn on encryption for any other peer/s);
+	assert.match(P.devicePage({ ...base, request: { ...req, sealed: { safetyCode: null } } }, "n"), /<th>Safety code<\/th><td>\(unavailable\)<\/td>/);
 	const namedToken = P.devicePage({ ...base, request: { ...req, tokenLabel: "barry" } }, "n");
 	assert.match(namedToken, /Revoke the token barry any time with <code>a2a token revoke barry<\/code>/);
 	for (const settled of ["approved", "denied"] as const) {

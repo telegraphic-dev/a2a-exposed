@@ -3244,6 +3244,7 @@ async function withTokenLabel(ctx: TenantContext, r: Json): Promise<P.PageReques
 	const base = pageRequest(r);
 	const identityFingerprint = r.identity_key ? await A.fingerprint(String(r.identity_key)) : null;
 	if (identityFingerprint) base.identityFingerprint = identityFingerprint;
+	if (r.sealed_requester) base.sealed = { safetyCode: await SealedKeys.requestSafetyCode(r) };
 	if (r.replaces_label && r.replaces_hash) {
 		const live = await ctx.DB.prepare("SELECT 1 FROM peers WHERE label = ? AND token_hash = ? AND revoked_at IS NULL").bind(r.replaces_label, r.replaces_hash).first();
 		if (live) return { ...base, tokenLabel: String(r.replaces_label) };
@@ -3567,7 +3568,9 @@ async function ownerPairing(req: Request, ctx: TenantContext, ectx: ExecutionCon
 				agentCardUrl: r.agent_card_url, ip: r.ip, country: r.country, createdAt: new Date(r.created_ms).toISOString(),
 				expiresAt: new Date(r.expires_ms).toISOString(), verificationUriComplete: `${oauthUrls(ctx).page}?user_code=${P.formatUserCode(r.user_code)}`,
 				replacesLabel: r.replaces_label || null,
-				...(r.identity_key ? { identityFingerprint: await A.fingerprint(String(r.identity_key)) } : {}) }))) });
+				...(r.identity_key ? { identityFingerprint: await A.fingerprint(String(r.identity_key)) } : {}),
+				// public-only: a key pairing is flagged with its safety code; bundles and keys are never listed here
+				...(r.sealed_requester ? { sealed: true, safetyCode: await SealedKeys.requestSafetyCode(r) } : {}) }))) });
 	}
 	if (seg[0] === "password-link" && m === "POST" && !seg[1]) {
 		if (mode === "off" && !mcpOn(ctx)) return json({ error: "device-flow pairing is disabled (PAIRING_APPROVAL=off) and so is MCP: there is nothing to approve, so no approval password is needed" }, 409);
