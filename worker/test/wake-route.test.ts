@@ -385,12 +385,12 @@ test("an empty working push is an idle status: shadow still wakes, enforce does 
 	const auth = `Bearer ${token}`;
 	assert.equal((await hs.call("POST", "/push", empty, auth)).status, 200);
 	assert.equal(hs.sent.length, 1, "shadow still wakes an empty working push");
-	assert.equal(routes(hs.logs).at(-1).decision, "status_idle");
+	assert.equal(routes(hs.logs).at(-1).decision, "outbound_status_only");
 	assert.equal(routes(hs.logs).at(-1).action, "shadow");
 	const shadowReport = await hs.call("GET", "/owner/wake/routing");
 	assert.equal((shadowReport.data as { mode?: string }).mode, "shadow");
 	assert.ok(((shadowReport.data as { counts?: { decision: string; action: string; count: number }[] }).counts || [])
-		.some((row) => row.decision === "status_idle" && row.action === "shadow" && row.count >= 1));
+		.some((row) => row.decision === "outbound_status_only" && row.action === "shadow" && row.count >= 1));
 
 	const env = envFor({ WAKE_ROUTING: "enforce" });
 	const h = harness(env);
@@ -401,7 +401,7 @@ test("an empty working push is an idle status: shadow still wakes, enforce does 
 	).bind(await sha256(token)).run();
 	assert.equal((await h.call("POST", "/push", empty, auth)).status, 200);
 	assert.equal(h.sent.length, 0, "enforce does not wake an empty working push");
-	assert.equal(routes(h.logs).at(-1).decision, "status_idle");
+	assert.equal(routes(h.logs).at(-1).decision, "outbound_status_only");
 	assert.equal(routes(h.logs).at(-1).action, "suppress");
 	assert.equal((await h.call("POST", "/push", emptyV1, auth)).status, 200);
 	assert.equal(h.sent.length, 0, "the v1 working spelling is also idle");
@@ -418,7 +418,7 @@ test("an empty working push is an idle status: shadow still wakes, enforce does 
 	const report = await h.call("GET", "/owner/wake/routing");
 	assert.equal((report.data as { mode?: string }).mode, "enforce");
 	assert.ok(((report.data as { counts?: { decision: string; action: string; count: number }[] }).counts || [])
-		.some((row) => row.decision === "status_idle" && row.action === "suppress" && row.count >= 1));
+		.some((row) => row.decision === "outbound_status_only" && row.action === "suppress" && row.count >= 1));
 });
 
 test("a labelled push follows the sender's wake and intent fields", async (t) => {
@@ -458,7 +458,7 @@ test("a labelled push follows the sender's wake and intent fields", async (t) =>
 	};
 	assert.equal((await h.call("POST", "/push", invalid, auth)).status, 200, "invalid metadata does not reject the push");
 	assert.equal(h.sent.length, 1, "invalid labels fall back to the empty-working rule");
-	assert.equal(routes(h.logs).at(-1).decision, "status_idle");
+	assert.equal(routes(h.logs).at(-1).decision, "outbound_status_only");
 	const taskNever = {
 		task: {
 			id: "task-label", contextId: "ctx-label",
@@ -592,4 +592,117 @@ test("purge drops message claims and status fingerprints", async (t) => {
 	assert.notEqual(taskIdOf(retried.data), taskIdOf(first.data));
 	assert.notEqual(routes(h.logs).at(-1).decision, "status_unchanged");
 	assert.ok(h.sent.length > before, "the same status text wakes again after purge");
+});
+
+// Sanitized #408 replay; no live traffic or credentials.
+test("staging replay suppresses flips and acks, preserves inbox, and wakes owner decisions", async (t) => {
+ const env = envFor({ WAKE_ROUTING: "staging-enforce", WAKE_ROUTING_ENV: "staging" });
+ const h = harness(env); t.after(h.restore);
+ const token = "replay-push-token";
+ await env.DB.prepare(`INSERT INTO outbound (task_id,context_id,peer,endpoint,protocol,push_token_hash,sent_at,updates_json,updates_seen) VALUES ('replay-task','replay-ctx','ada','https://ada.example.net/','0.3',?,'2026-01-01T00:00:00.000Z','[]',0)`).bind(await sha256(token)).run();
+ const peerToken = ((await h.call("POST", "/owner/peers", { label: "ada" })).data as { token: string }).token;
+ const push = (state: string, n: number, intent?: string) => h.call("POST", "/push", { task: { id: "replay-task", status: { state, timestamp: String(n), ...(intent ? {message:{metadata:{"a2a.exposed/intent":intent}}} : {}) } } }, `Bearer ${token}`);
+ for (let n = 0; n < 6; n++) {
+  assert.equal((await push(n % 2 ? "TASK_STATE_WORKING" : "submitted", n)).status, 200);
+  assert.equal((await h.call("POST", "/", message("ack", { contextId: "replay-inbound", message: { "a2a.exposed/intent": "ack" } }), `Bearer ${peerToken}`)).status, 200);
+ }
+ assert.equal(h.sent.length, 0);
+ const updates = await env.DB.prepare("SELECT updates_json, updates_seen FROM outbound WHERE task_id='replay-task'").first() as { updates_json: string; updates_seen: number };
+ assert.equal(JSON.parse(updates.updates_json).length, 6); assert.equal(updates.updates_seen, 0);
+ const messages = await env.DB.prepare("SELECT COUNT(*) AS n FROM messages").first() as { n: number }; assert.equal(messages.n, 6);
+ for (const state of ["input-required", "TASK_STATE_INPUT_REQUIRED", "completed"]) await push(state, 10, "status");
+ assert.equal(h.sent.length, 3);
+ assert.ok(routes(h.logs).some(r => r.decision === "outbound_input_required" && r.action === "wake"));
+ assert.ok(routes(h.logs).some(r => r.decision === "outbound_completed_status" && r.action === "wake"));
+ const opted = await h.call("PUT", "/owner/wake/policy", { policy: "legacy" }); assert.equal((opted.data as {mode:string}).mode,"shadow");
+ await push("working", 20); assert.equal(h.sent.length,4);
+ const seen = (await h.call("GET", "/owner/wake/policy")).data as { policy:string;choices:string[] };
+ assert.equal(seen.policy,"legacy"); assert.deepEqual(seen.choices,["smart","legacy"]);
+ assert.equal((await h.call("PUT", "/owner/wake/policy", {policy:"bad"})).status,400);
+ assert.equal((await h.call("PUT", "/owner/wake/policy", {policy:"smart"}, `Bearer ${peerToken}`)).status,401);
+});
+
+test("staging mode requires exact deployment gate", async () => {
+ for (const stage of ["", "production", "STAGING", " staging"]) {
+  const h=harness(envFor({WAKE_ROUTING:"staging-enforce",WAKE_ROUTING_ENV:stage}));
+  try { assert.equal(((await h.call("GET","/owner/wake/policy")).data as {mode:string}).mode,"shadow"); } finally {h.restore();}
+ }
+});
+
+test("staging bounds identical-status suppression to debounce and preserves actionable controls", async (t) => {
+ const real=Date.now; let offset=0; Date.now=()=>real()+offset;
+ const env=envFor({WAKE_ROUTING:"staging-enforce",WAKE_ROUTING_ENV:"staging",WAKE_DEBOUNCE_SECONDS:"30",WAKE_BUSY_SECONDS:"0",ENABLE_CRON:"1"});
+ const h=harness(env);t.after(()=>{Date.now=real;h.restore();});
+ const token=((await h.call("POST","/owner/peers",{label:"ada"})).data as {token:string}).token;
+ const send=(text:string,intent?:string,wake?:string)=>h.call("POST","/",message(text,{contextId:"repeat-ctx",message:{...(intent?{"a2a.exposed/intent":intent}:{}),...(wake?{"a2a.exposed/wake":wake}:{})}}),`Bearer ${token}`);
+ await send("building","status"); await send("building","status"); assert.equal(routes(h.logs).at(-1).action,"suppress");
+ offset+=31000; await send("building","status"); assert.notEqual(routes(h.logs).at(-1).action,"suppress");
+ for (const [intent,wake] of [["question",undefined],["ack","always"],[undefined,undefined]]) {
+  offset+=31000; await send("action",intent,wake);assert.equal(routes(h.logs).at(-1).action,"wake");
+ }
+});
+
+
+test("shadow replay measures all twelve avoidable wakes without suppressing or clearing messages", async (t) => {
+ const env=envFor(); const h=harness(env);t.after(h.restore);
+ const token="shadow-replay";
+ await env.DB.prepare(`INSERT INTO outbound (task_id,context_id,peer,endpoint,protocol,push_token_hash,sent_at,updates_json,updates_seen) VALUES ('shadow-task','shadow-ctx','ada','https://ada.example.net/','0.3',?,'2026-01-01T00:00:00.000Z','[]',0)`).bind(await sha256(token)).run();
+ const peer=((await h.call("POST","/owner/peers",{label:"ada"})).data as {token:string}).token;
+ for(let n=0;n<6;n++) {
+  await h.call("POST","/push",{task:{id:"shadow-task",status:{state:"working",timestamp:String(n)}}},`Bearer ${token}`);
+  await h.call("POST","/",message("ack",{contextId:"shadow-in",message:{"a2a.exposed/intent":"ack"}}),`Bearer ${peer}`);
+ }
+ const r=(await h.call("GET","/owner/wake/routing")).data as {delivered:number;shadowAvoidable:number;shadow:number;suppressed:number};
+ assert.deepEqual([h.sent.length,r.delivered,r.shadowAvoidable,r.shadow,r.suppressed],[12,12,12,12,0]);
+});
+
+
+test("staging does not skip status or ack updates carrying files or structured data", async (t) => {
+ const env=envFor({WAKE_ROUTING:"staging-enforce",WAKE_ROUTING_ENV:"staging"});const h=harness(env);t.after(h.restore);
+ const token=((await h.call("POST","/owner/peers",{label:"ada"})).data as {token:string}).token;
+ for (const intent of ["ack","status"]) {
+  const body=message("",{contextId:"attachments",message:{"a2a.exposed/intent":intent}});
+  body.params.message.parts.push({kind:"data",data:{result:"synthetic"}} as never);
+  await h.call("POST","/",body,`Bearer ${token}`);
+  assert.equal(routes(h.logs).at(-1).action,"wake");
+ }
+ assert.equal(h.sent.length,2);
+});
+
+
+test("an answer on an input-required inbound task wakes even when labelled ack or status", async (t) => {
+ const env=envFor({WAKE_ROUTING:"staging-enforce",WAKE_ROUTING_ENV:"staging"});const h=harness(env);t.after(h.restore);
+ const token=((await h.call("POST","/owner/peers",{label:"ada"})).data as {token:string}).token;
+ const peer=`Bearer ${token}`;
+ for (const intent of ["ack","status"]) {
+  const first=await h.call("POST","/",message("request",{contextId:`await-${intent}`}),peer);
+  const id=taskIdOf(first.data);
+  const waiting=await h.call("POST",`/owner/tasks/${id}/reply`,{text:"Please answer",state:"input-required"});
+  assert.equal(waiting.status,200);
+  const before=h.sent.length;
+  const answer=message(intent==="status"?"":"yes",{taskId:id,message:{"a2a.exposed/intent":intent}},`answer-${intent}`);
+  assert.equal((await h.call("POST","/",answer,peer)).status,200);
+  assert.equal(h.sent.length,before+1,`the ${intent}-labelled answer must wake`);
+  assert.equal(routes(h.logs).at(-1).decision,"input_required");
+  await h.call("POST","/",answer,peer);
+  assert.equal(h.sent.length,before+1,"a retry must not wake twice");
+  await h.call("POST",`/owner/tasks/${id}/reply`,{text:"Please answer again",state:"input-required"});
+  const silent=message("silent",{taskId:id,message:{"a2a.exposed/wake":"never","a2a.exposed/intent":intent}});
+  await h.call("POST","/",silent,peer);
+  assert.equal(h.sent.length,before+1,"explicit never remains authoritative");
+ }
+});
+
+test("steady identical statuses cannot slide the staging suppression window forever", async (t) => {
+ const real=Date.now;let offset=0;Date.now=()=>real()+offset;
+ const env=envFor({WAKE_ROUTING:"staging-enforce",WAKE_ROUTING_ENV:"staging",WAKE_DEBOUNCE_SECONDS:"30",WAKE_BUSY_SECONDS:"0",ENABLE_CRON:"1"});
+ const h=harness(env);t.after(()=>{Date.now=real;h.restore();});
+ const token=((await h.call("POST","/owner/peers",{label:"ada"})).data as {token:string}).token;
+ for(let n=0;n<6;n++) {
+  offset=n*20000;
+  await h.call("POST","/",message("building",{contextId:"fixed-window",message:{"a2a.exposed/intent":"status"}}),`Bearer ${token}`);
+ }
+ assert.equal(h.sent.length,3,"wake at 0, 40 and 80 seconds with a 30-second window");
+ const inbox=await h.call("GET","/owner/inbox?context=fixed-window&from=ada&all=1");
+ assert.equal((inbox.data as unknown[]).length,6,"every repeated message remains available");
 });

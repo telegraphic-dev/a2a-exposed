@@ -681,3 +681,8 @@ and its `version` names that Worker build. `targetMigrations` has baseline
 existing meaning and adds `pendingMigrationBaseline` / `pendingMigrationVersion`.
 The migration target is the installed CLI, even when a newer npm version is known;
 the CLI cannot know the schema of a future package it has not installed.
+
+Owners can inspect and opt out of automatic wake suppression with `wake policy --json`
+and `wake policy --policy legacy --json`. `smart` follows the deployment gate.
+See [per-agent wake policy](protocol.md#per-agent-wake-policy-and-staging-rollout)
+for the rollout on staging and rollback. All messages remain in the inbox.

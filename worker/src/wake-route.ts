@@ -6,7 +6,7 @@ export const INTENT_META = "a2a.exposed/intent";
 
 export const WAKE_MODES = ["auto", "always", "never"] as const;
 export const INTENTS = ["handoff", "blocker", "question", "status", "ack"] as const;
-export const ROUTING_MODES = ["shadow", "enforce"] as const;
+export const ROUTING_MODES = ["shadow", "enforce", "staging-enforce"] as const;
 
 export type WakeMode = (typeof WAKE_MODES)[number];
 export type Intent = (typeof INTENTS)[number];
@@ -68,6 +68,9 @@ export function readRouteFields(messageMeta: unknown, paramsMeta: unknown): Rout
 
 export interface RouteInput {
 	mode: RoutingMode;
+	hasContent?: boolean;
+	/** An inbound peer answer continues a task that was waiting for input. */
+	inputRequired?: boolean;
 	wake: WakeMode | null;
 	intent: Intent | null;
 	duplicate: boolean;
@@ -91,7 +94,7 @@ export interface RouteDecision {
 }
 
 function shadowOr(mode: RoutingMode, proposed: "suppress" | "batch"): { deliver: boolean; batch: boolean; action: RouteAction } {
-	if (mode === "enforce" && proposed === "suppress") return { deliver: false, batch: false, action: "suppress" };
+	if (mode !== "shadow" && proposed === "suppress") return { deliver: false, batch: false, action: "suppress" };
 	if (mode === "enforce") return { deliver: true, batch: true, action: "batch" };
 	return { deliver: true, batch: false, action: "shadow" };
 }
@@ -120,6 +123,7 @@ export function decideRoute(input: RouteInput): RouteDecision {
 	if (input.wake === "always") {
 		return { ...base, deliver: true, batch: false, decision: "always", proposed: "wake", action: "wake" };
 	}
+	if (input.inputRequired) return { ...base, deliver: true, batch: false, decision: "input_required", proposed: "wake", action: "wake" };
 	const auto = input.wake === "auto" || (input.wake === null && input.intent !== null);
 	if (!auto) {
 		return { ...base, deliver: true, batch: false, decision: "legacy", proposed: "wake", action: "wake" };
@@ -127,6 +131,7 @@ export function decideRoute(input: RouteInput): RouteDecision {
 	if (input.intent && ACTIONABLE.has(input.intent)) {
 		return { ...base, deliver: true, batch: false, decision: input.intent, proposed: "wake", action: "wake" };
 	}
+	if (input.hasContent) return { ...base, deliver: true, batch: false, decision: "content", proposed: "wake", action: "wake" };
 	if (input.intent === "ack") {
 		const applied = shadowOr(input.mode, "suppress");
 		return { ...base, ...applied, decision: "ack", proposed: "suppress" };
@@ -140,7 +145,7 @@ export function decideRoute(input: RouteInput): RouteDecision {
 			const applied = shadowOr(input.mode, "suppress");
 			return { ...base, ...applied, decision: "status_unchanged", proposed: "suppress" };
 		}
-		const applied = shadowOr(input.mode, "batch");
+		const applied = shadowOr(input.mode === "staging-enforce" ? "shadow" : input.mode, "batch");
 		return { ...base, ...applied, decision: "status", proposed: "batch" };
 	}
 	return { ...base, deliver: true, batch: false, decision: "auto_unspecified", proposed: "wake", action: "wake" };
@@ -150,4 +155,26 @@ export function decideRoute(input: RouteInput): RouteDecision {
 export function isIdleWorkingPush(state: string | null | undefined, text: string, hasFile: boolean): boolean {
 	const plain = state === "TASK_STATE_WORKING" ? "working" : state;
 	return plain === "working" && !statusText(text) && !hasFile;
+}
+
+/** Receiver-side classes are independent of peer-provided metadata. */
+export function outboundClass(state: string | null | undefined, text: string, hasContent: boolean, intent: Intent | null): string {
+ const plain = (state || "").replace(/^TASK_STATE_/, "").toLowerCase().replace(/_/g, "-");
+ if (plain === "input-required") return "outbound_input_required";
+ if (plain === "completed" && intent === "status") return "outbound_completed_status";
+ if (["submitted", "working"].includes(plain) && !statusText(text) && !hasContent) return "outbound_status_only";
+ return "outbound_content";
+}
+
+/** Apply only the reviewed safe classes. Completed status results and owner decisions always wake. */
+export function decidePush(input: RouteInput, category: string): RouteDecision {
+ const decision = decideRoute(input);
+ if (input.duplicate || input.wake === "never" || input.wake === "always") return decision;
+ if (category === "outbound_input_required" || category === "outbound_completed_status") {
+  return { ...decision, decision: category, proposed: "wake", action: "wake", deliver: true, batch: false };
+ }
+ if (category === "outbound_status_only" && !input.intent) {
+  return { ...decision, ...shadowOr(input.mode, "suppress"), decision: category, proposed: "suppress" };
+ }
+ return decision;
 }

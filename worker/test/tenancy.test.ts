@@ -323,3 +323,15 @@ test("hosted peer token keys follow the active ring key and keep the previous ke
 	assert.deepEqual(await make('{"v":2}').peerReadKeys(), []);
 	assert.equal((await resolveTenant(selfEnv()).peerReadKeys()).length, 1);
 });
+
+
+test("tenant overlays cannot grant the deployment-only staging wake-routing guard", () => {
+ const config = { WAKE_ROUTING: "staging-enforce", WAKE_ROUTING_ENV: "staging", stagingWakeRouting: "true" };
+ for (const stage of [undefined,"production","STAGING"," staging"]) {
+  const ctx=hostedTenantContext(selfEnv({WAKE_ROUTING_ENV:stage}),{id:"ten_guard",db:dummy,publicUrl:BASE,config});
+  assert.equal(ctx.stagingWakeRouting,false);
+ }
+ const ctx=hostedTenantContext(selfEnv({WAKE_ROUTING_ENV:"staging"}),{id:"ten_guard",db:dummy,publicUrl:BASE,config});
+ assert.equal(ctx.stagingWakeRouting,true);
+ assert.equal(ctx.WAKE_ROUTING,"staging-enforce");
+});

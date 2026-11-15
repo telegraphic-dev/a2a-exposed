@@ -100,6 +100,35 @@ async function inboxRows(o) {
 	});
 }
 
+export async function wakePolicy(p, o) {
+ const usage = "wake policy [--json]; wake policy --policy smart|legacy [--json]. List choices with wake policy --json";
+ if (p.length !== 1) die(`Unexpected wake policy argument ${JSON.stringify(p[1])}. ${usage}`);
+ const unknown = Object.keys(o).find(k => !["policy", "json"].includes(k));
+ if (unknown) die(`Unknown wake policy option --${unknown}. ${usage}`);
+ if (o.policy !== undefined && !["smart", "legacy"].includes(o.policy)) die(`Unknown wake policy ${JSON.stringify(String(o.policy).slice(0, 80))}. Choose smart or legacy. ${usage}`);
+ const checked = r => {
+  if (r.status === 404) die("This inbox's Worker does not support wake policy yet. Check status --json, then ask its owner about upgrading. No policy was changed.");
+  if (r.status !== 200) die(`Wake policy request failed (HTTP ${r.status}). Check status --json and read the policy again before retrying a change.`);
+  return r;
+ };
+ // Read the saved choice for Undo, and avoid writing when the choice already matches.
+ const before = checked(await ownerTry("GET", "/owner/wake/policy"));
+ if (!["smart", "legacy"].includes(before.data?.policy)) die("The inbox returned an unrecognized wake policy. Check status --json and ask its owner about the Worker version. No policy was changed.");
+ const unchanged = o.policy !== undefined && before.data.policy === o.policy;
+ const r = o.policy === undefined || unchanged ? before : checked(await ownerTry("PUT", "/owner/wake/policy", { policy: o.policy }));
+ if (o.json) return out(r.data);
+ const descriptions = {
+  shadow: "Automatic filtering is off; messages still wake your agent",
+  "staging-enforce": "Without files, artifacts or data, acks, empty status updates, identical status updates within the batching window, and progress updates without content are stored without waking your agent",
+  enforce: "Without files, artifacts or data, acks and empty or unchanged status updates are stored without waking your agent; changed status updates are batched",
+ };
+ const description = r.data.policy === "legacy" ? "Automatic filtering is off; messages still wake your agent" : descriptions[r.data.mode] || "This Worker uses an unrecognized wake mode; check its version with the owner";
+ console.log(`${o.policy === undefined ? "" : unchanged ? `No change: policy was already ${o.policy}. ` : "Saved. "}Wake policy: ${r.data.policy}. ${description} (routing: ${r.data.mode}).`);
+ console.log("All messages stay in your inbox. Choices: smart (use this deployment's wake rules) or legacy (turn off automatic filtering).");
+ console.log("Explicit wake always still requests a wake. Messages sent with wake never and duplicates do not wake your agent; existing batching and limits still apply.");
+ if (o.policy !== undefined && !unchanged) console.log(`Undo: wake policy --policy ${before.data.policy}`);
+}
+
 export async function wakeReceipt(p, o) {
  const listing = p[0] === "receipts";
  const usage = "wake receipts [ID] [--json]; wake receipt ID --stage signature-verified|handler-ran|owner-notified [--json]. List IDs with wake receipts --json";
