@@ -102,12 +102,30 @@ async function inboxRows(o) {
 
 export async function wakePolicy(p, o) {
  const usage = "wake policy [--json]; wake policy --policy smart|legacy [--json]. List choices with wake policy --json";
- if (p.length !== 1 || Object.keys(o).some(k => !["policy", "json"].includes(k)) || (o.policy !== undefined && !["smart", "legacy"].includes(o.policy))) die(usage);
- const r = await ownerTry(o.policy === undefined ? "GET" : "PUT", "/owner/wake/policy", o.policy === undefined ? undefined : { policy: o.policy });
- if (r.status !== 200) die(`wake policy failed (HTTP ${r.status}); list wake policy --json; check the endpoint version if unsupported`);
+ if (p.length !== 1) die(`Unexpected wake policy argument ${JSON.stringify(p[1])}. ${usage}`);
+ const unknown = Object.keys(o).find(k => !["policy", "json"].includes(k));
+ if (unknown) die(`Unknown wake policy option --${unknown}. ${usage}`);
+ if (o.policy !== undefined && !["smart", "legacy"].includes(o.policy)) die(`Unknown wake policy ${JSON.stringify(String(o.policy).slice(0, 80))}. Choose smart or legacy. ${usage}`);
+ const checked = r => {
+  if (r.status === 404) die("This inbox's Worker does not support wake policy yet. Check status --json, then ask its owner about upgrading. No policy was changed.");
+  if (r.status !== 200) die(`Wake policy request failed (HTTP ${r.status}). Check status --json and read the policy again before retrying a change.`);
+  return r;
+ };
+ // Read the saved choice before changing it so Undo restores it, including a repeated save.
+ const before = checked(await ownerTry("GET", "/owner/wake/policy"));
+ if (!["smart", "legacy"].includes(before.data?.policy)) die("The inbox returned an unrecognized wake policy. Check status --json and ask its owner about the Worker version. No policy was changed.");
+ const r = o.policy === undefined ? before : checked(await ownerTry("PUT", "/owner/wake/policy", { policy: o.policy }));
  if (o.json) return out(r.data);
- console.log(`Wake policy: ${r.data.policy}; effective routing: ${r.data.mode}`);
- console.log("Choices: smart (deployment-controlled routing), legacy (opt out; auto decisions stay shadow). Messages stay in the inbox. Explicit never and duplicate suppression still apply.");
+ const descriptions = {
+  shadow: "Automatic filtering is off; messages still wake your agent",
+  "staging-enforce": "Acks, empty status updates, identical status updates within the batching window, and progress updates without content are stored without waking your agent",
+  enforce: "Acks and empty or unchanged status updates are stored without waking your agent; changed status updates are batched",
+ };
+ const description = r.data.policy === "legacy" ? "Automatic filtering is off; messages still wake your agent" : descriptions[r.data.mode] || "This Worker uses an unrecognized wake mode; check its version with the owner";
+ console.log(`${o.policy === undefined ? "" : "Saved. "}Wake policy: ${r.data.policy}. ${description} (routing: ${r.data.mode}).`);
+ console.log("All messages stay in your inbox. Choices: smart (use this deployment's wake rules) or legacy (turn off automatic filtering).");
+ console.log("Messages sent with wake never and duplicates do not wake your agent; existing batching and limits still apply.");
+ if (o.policy !== undefined) console.log(`Undo: wake policy --policy ${before.data.policy}`);
 }
 
 export async function wakeReceipt(p, o) {

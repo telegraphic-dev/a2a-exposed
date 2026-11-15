@@ -62,7 +62,16 @@ These owner-authenticated commands use the selected owner configuration; secrets
 stay in its protected file or named environment variables. The matching owner
 API is `GET /owner/wake/policy` and `PUT /owner/wake/policy` with
 `{"policy":"smart"}` or `{"policy":"legacy"}`. Hosted owner RPC permits both.
-The saved choice belongs only to that inbox. `legacy` keeps automatic decisions
+Both the policy response and `GET /owner/wake/routing` include `policy` (the saved
+owner choice), `mode` (the effective routing mode after the policy and staging
+guard are applied), `configured` (the deployment's requested mode),
+`stagingAllowed` (whether its exact staging guard is present), and `choices`.
+In the routing report, `mode` is the effective mode, rather than the configured
+mode; use `configured` to inspect the deployment setting.
+
+The CLI reads the saved choice before applying `--policy`. Plain output confirms
+`Saved.` and prints an `Undo:` command that restores that choice. JSON output
+remains a single policy response. The saved choice belongs only to that inbox. `legacy` keeps automatic decisions
 in shadow; explicit `never` and duplicate suppression still apply.
 
 The narrower rollout uses exact `WAKE_ROUTING=staging-enforce` plus the
