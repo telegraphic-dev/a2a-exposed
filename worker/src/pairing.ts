@@ -277,6 +277,7 @@ ${pageStyle()}
 export type LandingModel = {
 	name: string;
 	description?: string;
+	card?: unknown; // already scrubbed public card snapshot, exposed only as inert attribute data
 	base: string; // PUBLIC_URL (no trailing slash)
 	versions: string[]; // A2A protocol versions served over JSON-RPC at base + "/"
 	skills: { name: string; description?: string }[];
@@ -286,7 +287,7 @@ export type LandingModel = {
 	exposeDoc?: string; // the setup skill: get your own A2A address (https)
 };
 
-/** GET / in a browser: what this URL is and how to connect. Same frame and CSP as /device (no scripts, no external assets). Everything comes from the public card, so nothing private leaks here either. */
+/** GET / in a browser: what this URL is and how to connect. The only script is the nonce-authorized same-origin read-only WebMCP adapter. Approval pages stay script-free. Everything comes from the public card, so nothing private leaks here either. */
 export function landingPage(m: LandingModel, nonce: string): string {
 	const card = `${m.base}/.well-known/agent-card.json`;
 	const desc = m.description ? `<p>${esc(m.description)}</p>` : "";
@@ -310,12 +311,12 @@ export function landingPage(m: LandingModel, nonce: string): string {
 </table>
 ${skills}${connect}
 <footer class="w">Served by <a href="https://github.com/telegraphic-dev/a2a-exposed">a2a-exposed</a>.</footer>`,
-		`<link rel="alternate" type="text/markdown" href="/index.md">`);
+		`<link rel="alternate" type="text/markdown" href="/index.md"><script defer nonce="${nonce}" src="/landing-webmcp.js" data-agent-card="${esc(JSON.stringify(m.card || {}))}" data-agent-base="${esc(m.base)}" data-pairing="${m.pairing ? "1" : "0"}"></script>`);
 }
 
-/** Security headers for the landing page: the /device CSP minus forms, cacheable for a few minutes (no per-visitor state). */
+/** Security headers for the landing page: the /device CSP minus forms, plus one nonce-authorized script; no network requests. */
 export function landingHeaders(nonce: string): Record<string, string> {
-	return { ...pageHeaders(nonce), "content-security-policy": `default-src 'none'; style-src 'nonce-${nonce}'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'`,
+	return { ...pageHeaders(nonce), "content-security-policy": `default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'`,
 		"cache-control": "no-cache", vary: "accept" };
 }
 

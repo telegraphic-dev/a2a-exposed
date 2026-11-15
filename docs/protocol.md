@@ -351,3 +351,14 @@ enforces the immutable target/owner binding, the scoped `v1` credential formats,
 exchange/use checks and invalidation, and accepts one-agent registration only where
 its own registration gate allows it. Enable the tenant flag only where the platform
 accepts `target_agent`. No enablement or deployment is performed by adding this support.
+
+### Landing-page WebMCP
+
+The HTML root loads `/landing-webmcp.js` with a fresh per-response nonce. Its CSP
+adds only `script-src 'nonce-…'`; `default-src 'none'`, `form-action 'none'` and
+the other restrictions remain. In browsers with WebMCP, `get_agent_card` returns
+the already scrubbed public card snapshot and `get_connection_instructions`
+returns pairing availability and public instructions. Both take an empty object
+and declare `readOnlyHint: true`. They make no network calls or state changes.
+There is no send-message or approval tool. Without WebMCP, the page works as
+usual. Hosted and self-hosted landing pages share this behavior.

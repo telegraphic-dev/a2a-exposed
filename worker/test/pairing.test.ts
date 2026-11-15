@@ -858,7 +858,7 @@ test("PBKDF2 iterations: stored per hash, tunable from 50,000 to 100,000; the we
 	assert.equal((await s.decidePage(a.user_code, PASSWORD, "approve")).status, 200, "verification uses the stored count");
 });
 
-test("GET /: a browser gets an HTML landing page (strict CSP, no scripts); curl/agents still get JSON", async (t) => {
+test("GET /: a browser gets an HTML landing page (strict nonce CSP, read-only script); curl/agents still get JSON", async (t) => {
 	const s = setup({ AGENT_NAME: "Barry <b>& Co</b>", AGENT_DESCRIPTION: "Answers questions about <bricks>." }); t.after(s.restore);
 	const h = await s.call("GET", "/", { headers: { accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" } });
 	assert.equal(h.status, 200);
@@ -869,7 +869,12 @@ test("GET /: a browser gets an HTML landing page (strict CSP, no scripts); curl/
 	assert.match(csp, /frame-ancestors 'none'/);
 	assert.equal(h.headers.get("vary"), "accept");
 	assert.equal(h.headers.get("x-frame-options"), "DENY");
-	assert.ok(!/<script|<img|<iframe|src=/i.test(h.text), "no scripts or external assets");
+	assert.ok(!/<img|<iframe/i.test(h.text), "no external media");
+	assert.equal((h.text.match(/<script /g) || []).length, 1);
+	assert.match(h.text, /src="\/landing-webmcp\.js"/);
+	const scriptNonce = /<script defer nonce="([^"]+)"/.exec(h.text)![1];
+	assert.ok(h.headers.get("content-security-policy")!.includes(`script-src 'nonce-${scriptNonce}'`));
+	assert.ok(!h.headers.get("content-security-policy")!.includes("'unsafe-inline'"));
 	assert.deepEqual(h.text.match(/<link[^>]*>/g), [`<link rel="alternate" type="text/markdown" href="/index.md">`], "only the Markdown alternate, which loads nothing");
 	assert.equal(h.text.match(/one-way/g)?.length, 1);
 	assert.ok(h.text.includes(`<a href="https://a2a.exposed/.well-known/agent-skills/a2a-exposed-setup/SKILL.md">hosted or self-hosted</a>`));

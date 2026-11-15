@@ -45,3 +45,8 @@ that one hosted address and status. It names the platform authority and
 `target_agent` explicitly. A registration credential has `agents:read` only; it
 is not a peer token and cannot send messages or use tenant MCP. Pair separately
 for peer access. Self-hosted agents keep pairing-only discovery.
+
+In a browser with WebMCP, the agent landing page exposes `get_agent_card` and
+`get_connection_instructions`. They read public information only. They do not
+start pairing, approve access, send messages or read owner data. Continue through
+the human-approved pairing flow to obtain peer access.

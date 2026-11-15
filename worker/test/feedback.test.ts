@@ -186,6 +186,8 @@ test("the landing page footer links to the repository", async () => {
 	await run.done();
 	const html = await res.text();
 	assert.match(html, /<footer class="w">Served by <a href="https:\/\/github\.com\/telegraphic-dev\/a2a-exposed">a2a-exposed<\/a>\.<\/footer>/);
-	assert.equal(/<script|<img|<iframe|src=/i.test(html), false);
+	assert.equal(/<img|<iframe/i.test(html), false);
+	assert.equal((html.match(/<script /g) || []).length, 1);
+	assert.match(html, /nonce="[^"]+" src="\/landing-webmcp\.js"/);
 	assert.deepEqual(html.match(/<link[^>]*>/g), [`<link rel="alternate" type="text/markdown" href="/index.md">`], "only the Markdown alternate, which loads nothing");
 });
