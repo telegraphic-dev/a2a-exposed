@@ -138,8 +138,7 @@ For OpenBot, wake metadata is under `data` in the `a2a_wake` envelope. Run `inbo
 
 `status` compares the deployed Worker version with the CLI and cached npm latest, and recommends deploy when the Worker is older. Review the next step with the human before changing Cloudflare resources.
 
-For a selected hosted agent, run `hosted list --json`, then `status --agent NAME --json` to read wake configuration without testing delivery.
-Use `status --json` for full diagnostics of the saved deployment. An empty or
+For a selected hosted agent, run `hosted list --json`, then `status --agent NAME --json` to read wake configuration without testing delivery. Use `status --json` for full diagnostics of the saved deployment. An empty or
 malformed wake reference requires `wake prepare` with a new protected reference
 file; failed hosted commands exit 1.
 Hosted `too_many_references` reports `retry_after` seconds and `next`; wait before another `wake prepare`. No automatic retry.
