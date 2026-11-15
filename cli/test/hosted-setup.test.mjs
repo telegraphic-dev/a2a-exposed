@@ -818,3 +818,55 @@ test("hosted wake rejects obsolete Access inputs before network with actionable 
   }
  } finally { f.clean(); }
 });
+
+test('wake request sends no secret and prints the confirm link with owner next steps', () => {
+ const f = fixture(); f.save();
+ try {
+  const log = path.join(f.dir, 'requests'), link = 'https://control.example/app/mcp/confirm/' + 'c'.repeat(32);
+  const replies = {
+   'https://control.example/api/v1/setup/capabilities': { status: 200, body: { ...capabilities, wake: { ...capabilities.wake, presets: ['grok-bot', 'generic', 'hermes'], browser_confirm: true } } },
+   'https://control.example/api/v1/agents/sample-agent/wake': { status: 200, body: { version: 4, url: '' } },
+   'https://control.example/api/v1/agents/sample-agent/wake/confirm': { status: 200, body: { ok: true, code: 'confirm', saved: false, confirm_url: link, expires_in: 600, version: 4, token: grant } },
+  };
+  const r = f.run(['wake', 'request', '--agent', 'sample-agent', '--url', 'https://receiver.example/grok/hook', '--preset', 'grok-bot', '--json'], replies, { A2A_TEST_FETCH_LOG: log, WAKE_WEBHOOK_KEY: 'ambient-key-must-not-leave' });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const result = JSON.parse(r.stdout);
+  assert.equal(result.ok, true); assert.equal(result.code, 'confirm'); assert.equal(result.saved, false); assert.equal(result.confirm_url, link); assert.equal(result.version, 4);
+  assert.match(result.next, /copy only the webhook key/); assert.match(result.next, /not the URL/); assert.match(result.next, /Never ask for the webhook key in chat/); assert.ok(result.next.includes(link));
+  assert.ok(!r.stdout.includes(grant));
+  const calls = fs.readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse);
+  const posted = calls.find(call => call.url.endsWith('/wake/confirm'));
+  assert.deepEqual(JSON.parse(posted.body), { version: 4, url: 'https://receiver.example/grok/hook', preset: 'grok-bot' });
+  assert.ok(!fs.readFileSync(log, 'utf8').includes('ambient-key-must-not-leave'));
+  const text = f.run(['wake', 'request', '--agent', 'sample-agent', '--url', 'https://receiver.example/grok/hook', '--preset', 'hermes'], replies);
+  assert.equal(text.status, 0, text.stdout + text.stderr); assert.match(text.stdout, /^confirm: Send the owner this link/); assert.match(text.stdout, /copy only the signing secret/);
+ } finally { f.clean(); }
+});
+
+test('wake request refuses secrets, owner tokens, unsupported services and foreign links before saving anything', () => {
+ const f = fixture();
+ try {
+  const log = path.join(f.dir, 'requests');
+  const caps = { status: 200, body: { ...capabilities, wake: { ...capabilities.wake, presets: ['grok-bot'], browser_confirm: true } } };
+  const base = ['wake', 'request', '--agent', 'sample-agent', '--url', 'https://receiver.example/hook', '--preset', 'grok-bot', '--json'];
+  f.save();
+  for (const extra of [['--key-env', 'WAKE_WEBHOOK_KEY'], ['--key-stdin'], ['--hmac-secret-env', 'X'], ['--reference-file', path.join(f.dir, 'r')]]) {
+   const r = f.run([...base, ...extra], { 'https://control.example/api/v1/setup/capabilities': caps }, { A2A_TEST_FETCH_LOG: log });
+   assert.equal(r.status, 1); assert.equal(JSON.parse(r.stdout).code, 'secret_inputs');
+  }
+  assert.equal(fs.existsSync(log), false, 'no request is sent when a secret option is passed');
+  for (const [args, code] of [[['wake', 'request', '--agent', 'sample-agent', '--preset', 'grok-bot', '--json'], 'url'], [['wake', 'request', '--agent', 'sample-agent', '--url', 'http://receiver.example/hook', '--preset', 'grok-bot', '--json'], 'url'], [['wake', 'request', '--agent', 'sample-agent', '--url', 'https://receiver.example/hook', '--json'], 'preset']]) {
+   const r = f.run(args, { 'https://control.example/api/v1/setup/capabilities': caps }); assert.equal(r.status, 1); assert.equal(JSON.parse(r.stdout).code, code);
+  }
+  const unsupported = f.run(base, {}); assert.equal(unsupported.status, 1); assert.equal(JSON.parse(unsupported.stdout).code, 'unsupported');
+  const foreign = f.run(base, {
+   'https://control.example/api/v1/setup/capabilities': caps,
+   'https://control.example/api/v1/agents/sample-agent/wake': { status: 200, body: { version: 1 } },
+   'https://control.example/api/v1/agents/sample-agent/wake/confirm': { status: 200, body: { ok: true, confirm_url: 'https://evil.example/app/mcp/confirm/' + 'c'.repeat(32) } },
+  });
+  assert.equal(foreign.status, 1); assert.equal(JSON.parse(foreign.stdout).code, 'invalid_response'); assert.ok(!foreign.stdout.includes('evil.example'));
+  fs.writeFileSync(f.config, `A2A_BASE_URL=https://sample-agent.control.example\nA2A_OWNER_TOKEN=${owner}\n`, { mode: 0o600 });
+  const byOwner = f.run([...base, '--control-url', 'https://control.example'], { 'https://control.example/api/v1/setup/capabilities': caps });
+  assert.equal(byOwner.status, 1); assert.equal(JSON.parse(byOwner.stdout).code, 'login_required'); assert.ok(!byOwner.stdout.includes(owner));
+ } finally { f.clean(); }
+});

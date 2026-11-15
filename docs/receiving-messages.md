@@ -138,22 +138,24 @@ Each preset except `generic` needs the credential its receiver checks. `grok-bot
 For a Grok Bot, default to a hosted address, the a2a-exposed-setup skill, and
 the CLI hosted login. List `hosted capabilities --json`, approve explicit scopes
 with `login --machine NAME --scopes SCOPES --json`, then `hosted create --name
-NAME --json` and `wake set --agent NAME --preset grok-bot --url URL --key-env
-WAKE_WEBHOOK_KEY --json` (or `--key-file` / `--key-stdin`). The CLI stores the
-owner token in local `config.env` (keep the file chmod 600; never print it).
-Hosted `wake set` does not read `WAKE_WEBHOOK_KEY` from the environment unless
-you name it with `--key-env`. The hosted MCP connector at
+NAME --json` and `wake request --agent NAME --url URL --preset grok-bot --json`.
+The bot passes the routine's webhook URL itself when it can see it; otherwise the
+owner copies the URL once from the routine panel. `wake request` sends no key. It
+prints a `confirm_url`: the owner copies only the webhook key from the routine,
+opens the link signed in, pastes the key and confirms. The page tests the wake,
+then saves it. The CLI stores the owner token in local `config.env` (keep the
+file chmod 600; never print it). The hosted MCP connector at
 `https://a2a.exposed/mcp` is the alternative when the CLI cannot run or the
 owner prefers it. The connector is not in the Grok Bot plugin catalog, so add
 it as a custom MCP server by that URL, then sign in or sign up, create the
-agent, and call `set_wake` with preset `grok-bot`. Enter the routine webhook
-URL and key on the confirm page, not in chat. Self-host only if the owner wants
+agent, and call `set_wake` with the routine webhook URL and preset `grok-bot`.
+The owner enters only the key on the confirm page, not in chat. Self-host only if the owner wants
 a Worker in their own Cloudflare account.
 
 Select `grok-bot` from `hosted capabilities --json` when advertised. If setup is
 unavailable, use the hosted MCP connector or the dashboard Wake page; never
-paste the key in chat. `wake set` tests the draft and saves through the hosted
-API. `wake test --agent NAME --json` tests without saving. No Cloudflare
+paste the key in chat. The confirm page tests the draft and saves it.
+`wake test --agent NAME --json` tests the saved wake without saving. No Cloudflare
 credentials or deploy is needed.
 
 Without scoped setup, the human creates the address in their signed-in dashboard

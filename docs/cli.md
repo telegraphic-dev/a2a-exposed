@@ -168,6 +168,7 @@ Wake secrets are read from `WAKE_WEBHOOK_URL`, `WAKE_WEBHOOK_KEY`, and `WAKE_HMA
 | Command | Effect |
 | --- | --- |
 | `wake set` | Self-hosted: save wake settings, upload secrets from the environment, redeploy. Flags: `--preset`, `--agent-id`, `--key-header`, `--key-prefix`, `--body-template`, `--cli-command`, `--debounce`, `--busy`, `--max-per-hour`. Hosted: use the configured address and owner token to test then save through the hosted service; no Cloudflare deploy. Read presets with `hosted capabilities --json`; supply `WAKE_WEBHOOK_URL` or `--url` and protected secrets |
+| `wake request --agent NAME --url URL --preset P [--key-header H] [--json]` | Hosted, when `hosted capabilities --json` lists `browser_confirm`: request a browser confirmation without reading or sending any secret. Prints `confirm_url`; the owner copies only the webhook key (or signing secret), opens the link signed in, pastes it and confirms. The page tests, then saves. Needs a setup grant with `wake:write`; the link works once for ten minutes |
 | `wake preview` | Rendered request with credentials masked, plus SHA-256 fingerprints. Export `WAKE_WEBHOOK_URL`, `WAKE_WEBHOOK_KEY`, and `WAKE_HMAC_SECRET` in this shell. `match` means the exported value is the one on the Worker. `DIFFERENT` means they differ: the variable is absent from this shell, or the upload is still propagating (about 15 to 40 seconds after `wake set`, `wake unset`, or `tunnel create`). Wait about 30 seconds and run it again |
 | `wake fingerprint` | Fingerprints of `WAKE_*` exported in this shell |
 | `wake check [--local-url URL] [--json]` | Hermes delivery diagnostic: unsigned loopback POST must return 401/403 before the signed Worker test requires 2xx. Exits 1 on failure; no inbox task or receiver execution proof. See the [recipe](hermes.md) |
@@ -383,6 +384,15 @@ their documented environment inputs.
 
 Protected files must be regular
 files with no group or other permissions. No secret belongs in an argument value.
+
+When capabilities lists `browser_confirm: true`, `wake request --agent NAME --url URL
+--preset P --json` lets the owner keep the secret out of the agent entirely. It sends only
+the URL, preset and optional key header with a setup grant holding `wake:write`, and
+prints a single-use `confirm_url` that expires in ten minutes. The owner copies only the
+webhook key (or signing secret) from the webhook service, opens the link signed in to the
+same account, pastes it and confirms; the page tests the wake, then saves it. A newer
+request or any wake change cancels the link. Read `wake preview --agent NAME --json`
+afterwards to see the new version. Key, signing-secret and reference options are refused.
 
 When capabilities lists `secret_reference: true`, `wake set` uploads the draft for a
 short-lived reference before testing and saving. `wake prepare --agent NAME --url URL

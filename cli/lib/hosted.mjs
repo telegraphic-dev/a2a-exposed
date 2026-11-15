@@ -39,7 +39,7 @@ function originFor(o = {}) {
 async function request(origin, path, { token = "", method = "GET", body, fetchImpl = fetch } = {}) {
 	let response, data;
 	const discovery = method === "GET" && path === "/api/v1/setup/capabilities";
-	const wakeRequest = /^\/api\/v1\/agents\/[^/]+\/wake(?:\/(?:test|relay(?:\/(?:test|reference))?))?$/.test(path);
+	const wakeRequest = /^\/api\/v1\/agents\/[^/]+\/wake(?:\/(?:test|confirm|relay(?:\/(?:test|reference))?))?$/.test(path);
 	try {
 		response = await fetchImpl(`${origin}${path}`, {
 			method, redirect: "error", signal: AbortSignal.timeout(30_000),
@@ -103,7 +103,7 @@ async function request(origin, path, { token = "", method = "GET", body, fetchIm
 export async function capabilities(o = {}) {
 	const data = await request(originFor(o), "/api/v1/setup/capabilities");
 	if (!Array.isArray(data.scopes) || !Array.isArray(data.wake?.presets)) fail("unsupported", SETUP_UNSUPPORTED);
-	return { ok: true, code: "capabilities", next: "Select explicit scopes and a wake preset from this listing.", scopes: data.scopes.filter(s => SETUP_SCOPES.includes(s)), presets: data.wake.presets.filter(s => /^[a-z-]+$/.test(s)), upstream: data.upstream?.configuration === true && data.upstream?.verify === true, preflight: data.preflight === true, secret_reference: data.wake.secret_reference === true, relay: data.wake.relay === true, wake_removal: data.wake.removal === true, verified_import: data.wake.verified_import === true, secure_link_create: data.wake.secure_link_create === true };
+	return { ok: true, code: "capabilities", next: "Select explicit scopes and a wake preset from this listing.", scopes: data.scopes.filter(s => SETUP_SCOPES.includes(s)), presets: data.wake.presets.filter(s => /^[a-z-]+$/.test(s)), upstream: data.upstream?.configuration === true && data.upstream?.verify === true, preflight: data.preflight === true, secret_reference: data.wake.secret_reference === true, browser_confirm: data.wake.browser_confirm === true, relay: data.wake.relay === true, wake_removal: data.wake.removal === true, verified_import: data.wake.verified_import === true, secure_link_create: data.wake.secure_link_create === true };
 }
 
 export async function login(o = {}) {
@@ -229,7 +229,8 @@ export async function status(o = {}) {
 
 export async function wake(sub, o = {}) {
 	if (Object.keys(o).some(key => /^access-client-(?:id|secret)(?:-|$)/.test(key))) fail("access_options_removed", "Hosted wake Access credential options were removed. Run hosted capabilities --json, then use Import your existing tunnel or Create secure link in dashboard Wake settings. Facade hosted upstream options are unchanged.");
-	if (!["preview", "test", "set", "prepare", "remove", "unset"].includes(sub)) fail("usage", "Use wake preview|test|set|prepare|remove. List presets with hosted capabilities --json.");
+	if (!["preview", "test", "set", "prepare", "remove", "unset", "request"].includes(sub)) fail("usage", "Use wake preview|test|set|prepare|remove|request. List presets with hosted capabilities --json.");
+	if (sub === "request") return wakeRequest(o);
 	const removing = sub === "remove" || sub === "unset";
  const preparingRemoval = sub === "prepare" && o.clear === true;
  if (o.clear && !preparingRemoval) fail("usage", "Use wake prepare --clear for an MCP removal reference, or wake remove --version N. Run wake preview --json to list the current version.");
@@ -319,6 +320,39 @@ export async function wake(sub, o = {}) {
   && result.recovery?.code === "verified-import" && result.recovery?.path === importPath;
  const recoveryUrl = importRecovery ? new URL(importPath, origin).href : "";
  return { ok, code, saved: result.saved === true, ...(recoveryUrl ? { recovery_url: recoveryUrl } : {}), next: ok ? sub === "set" ? "Check the receiver for the test wake." : "The draft passed. Run wake set with the same inputs to test and save." : `Saved settings were not changed. ${recoveryUrl ? `Import or manage your existing tunnel: ${recoveryUrl} — connect Cloudflare, check the exact route and confirm the Access service-token secret rotation (the old secret stops working). Then send one authenticated test wake and save. Keep Access and webhook authentication enabled; no import or retry was performed.` : recovery[code] || "Check the receiver, credentials and draft, then test again."}` };
+}
+
+/** What the owner does with a confirm link: copy only the secret, open the page, paste it there. */
+export function wakeRequestNext(preset, link) {
+	const signed = ["hermes", "openbot"].includes(preset);
+	const secretName = signed ? "signing secret" : preset === "claude-code" ? "routine token" : "webhook key";
+	return `Send the owner this link: ${link} . Ask them to copy only the ${secretName} from the webhook service (not the URL), open the link signed in to the same a2a.exposed account, paste it and confirm. The page tests the wake, then saves it. Never ask for the ${secretName} in chat or put it on a command line. The link works once and expires in 10 minutes. Then run wake preview --agent NAME --json: a higher version means it was saved.`;
+}
+
+/** Ask the owner to enter the wake secret on a browser page. No secret is read, sent or printed. */
+async function wakeRequest(o) {
+	const allowed = new Set(["agent", "url", "preset", "key-header", "json", "control-url"]);
+	if (Object.keys(o).some(key => /^(?:key-(?:file|env|stdin)|hmac-secret|reference|secret)/.test(key))) fail("secret_inputs", "wake request sends no secret. Omit --key-*, --hmac-secret-* and --reference-* options; the owner pastes the secret on the confirm page.");
+	if (Object.keys(o).some(key => !allowed.has(key))) fail("usage", "Use wake request --agent NAME --url URL --preset P [--key-header H] [--json]. List agents with hosted list --json and presets with hosted capabilities --json.");
+	const url = String(o.url || process.env.WAKE_WEBHOOK_URL || "");
+	if (!url || upstreamUrlProblem(url)) fail("url", "Pass --url with the public HTTPS webhook URL (or set WAKE_WEBHOOK_URL). Use polling if no public webhook is available.");
+	const preset = String(o.preset || "");
+	if (!preset) fail("preset", "Pass --preset P selected from hosted capabilities --json.");
+	const keyHeader = String(o["key-header"] ?? "");
+	if (keyHeader && !printable(keyHeader)) fail("header", "--key-header must be printable.");
+	const { origin, token, name } = wakeCredential(o, false);
+	if (!token.startsWith("a2asg_")) fail("login_required", 'wake request needs a setup grant with wake:write. Run login --machine NAME --scopes "wake:write" with the same --config-dir. An owner token cannot request a confirmation.');
+	const available = await capabilities({ "control-url": origin });
+	if (!available.browser_confirm) fail("unsupported", "This service cannot create a wake confirmation page. Use hosted MCP set_wake or the agent's Wake settings on the website.");
+	if (!available.presets.includes(preset)) fail("preset", "Select --preset from hosted capabilities --json.");
+	const path = `/api/v1/agents/${encodeURIComponent(name)}/wake`;
+	const current = await request(origin, path, { token });
+	if (!Number.isSafeInteger(current.version)) fail("invalid_response", "The service did not return a valid wake version. No confirmation was requested.");
+	const result = await request(origin, `${path}/confirm`, { token, method: "POST", body: { version: current.version, url, preset, ...(keyHeader ? { keyHeader } : {}) } });
+	let link = "";
+	try { const parsed = new URL(String(result.confirm_url || "")); if (parsed.origin === origin && /^\/app\/mcp\/confirm\/[0-9a-f]{32}$/.test(parsed.pathname) && !parsed.search && !parsed.hash) link = parsed.href; } catch {}
+	if (result.ok !== true || !link) fail("invalid_response", "The service did not return a valid confirmation link. Nothing was saved.");
+	return { ok: true, code: "confirm", saved: false, confirm_url: link, expires_in: Number.isSafeInteger(result.expires_in) ? result.expires_in : 600, version: current.version, preset, next: wakeRequestNext(preset, link) };
 }
 
 /** Hosted upstream configuration uses only scoped setup or this agent's owner credential. */

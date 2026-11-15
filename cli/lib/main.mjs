@@ -93,6 +93,11 @@ Hosted setup:
                                 secrets: --key-file|--key-env|--key-stdin; --hmac-secret-file|--hmac-secret-env
                                 hosted capabilities --json lists route support; the human uses dashboard
                                 Import your existing tunnel or Create secure link to authorize Access
+  wake request --agent NAME --url URL --preset P [--key-header H] --json
+                                when the service lists browser_confirm: no secret is read or sent; prints a
+                                confirm_url for the owner, who copies only the webhook key (or signing secret),
+                                opens the link signed in, pastes it and confirms; the page tests, then saves
+                                needs a setup grant with wake:write; the link works once for ten minutes
   wake prepare --agent NAME --url URL --preset P --reference-file FILE --json
                                 when the service lists secret_reference, upload the draft and save a
                                 ten-minute single-use reference in a new protected file; never print it
