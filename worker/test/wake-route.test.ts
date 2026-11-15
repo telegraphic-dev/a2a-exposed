@@ -655,3 +655,16 @@ test("shadow replay measures all twelve avoidable wakes without suppressing or c
  const r=(await h.call("GET","/owner/wake/routing")).data as {delivered:number;shadowAvoidable:number;shadow:number;suppressed:number};
  assert.deepEqual([h.sent.length,r.delivered,r.shadowAvoidable,r.shadow,r.suppressed],[12,12,12,12,0]);
 });
+
+
+test("staging does not skip status or ack updates carrying files or structured data", async (t) => {
+ const env=envFor({WAKE_ROUTING:"staging-enforce",WAKE_ROUTING_ENV:"staging"});const h=harness(env);t.after(h.restore);
+ const token=((await h.call("POST","/owner/peers",{label:"ada"})).data as {token:string}).token;
+ for (const intent of ["ack","status"]) {
+  const body=message("",{contextId:"attachments",message:{"a2a.exposed/intent":intent}});
+  body.params.message.parts.push({kind:"data",data:{result:"synthetic"}} as never);
+  await h.call("POST","/",body,`Bearer ${token}`);
+  assert.equal(routes(h.logs).at(-1).action,"wake");
+ }
+ assert.equal(h.sent.length,2);
+});

@@ -68,6 +68,7 @@ export function readRouteFields(messageMeta: unknown, paramsMeta: unknown): Rout
 
 export interface RouteInput {
 	mode: RoutingMode;
+	hasContent?: boolean;
 	wake: WakeMode | null;
 	intent: Intent | null;
 	duplicate: boolean;
@@ -127,6 +128,7 @@ export function decideRoute(input: RouteInput): RouteDecision {
 	if (input.intent && ACTIONABLE.has(input.intent)) {
 		return { ...base, deliver: true, batch: false, decision: input.intent, proposed: "wake", action: "wake" };
 	}
+	if (input.hasContent) return { ...base, deliver: true, batch: false, decision: "content", proposed: "wake", action: "wake" };
 	if (input.intent === "ack") {
 		const applied = shadowOr(input.mode, "suppress");
 		return { ...base, ...applied, decision: "ack", proposed: "suppress" };

@@ -1044,11 +1044,11 @@ async function messageTaskId(ctx: TenantContext, peer: string, messageId: string
 	return typeof row?.task_id === "string" ? row.task_id : null;
 }
 
-async function routeInbound(ctx: TenantContext, peer: string, contextId: string, wake: "auto" | "always" | "never" | null, intent: "handoff" | "blocker" | "question" | "status" | "ack" | null, text: string, duplicate: boolean): Promise<{ decision: RouteDecision; fingerprint: string }> {
+async function routeInbound(ctx: TenantContext, peer: string, contextId: string, wake: "auto" | "always" | "never" | null, intent: "handoff" | "blocker" | "question" | "status" | "ack" | null, text: string, duplicate: boolean, hasContent = false): Promise<{ decision: RouteDecision; fingerprint: string }> {
 	let idle = false;
 	let unchanged = false;
 	let fingerprint = "";
-	if (!duplicate && intent === "status") {
+	if (!duplicate && !hasContent && intent === "status") {
 		const normalized = statusText(text);
 		if (!normalized) idle = true;
 		else {
@@ -1060,7 +1060,7 @@ async function routeInbound(ctx: TenantContext, peer: string, contextId: string,
    }
 		}
 	}
-	return { decision: decideRoute({ mode: (await wakePolicy(ctx)).mode, wake, intent, duplicate, idle, unchanged }), fingerprint };
+	return { decision: decideRoute({ mode: (await wakePolicy(ctx)).mode, wake, intent, duplicate, idle, unchanged, hasContent }), fingerprint };
 }
 
 const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
@@ -1161,7 +1161,7 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
 	log("message_received", { peer: label, contextId, taskId: task.id, chars: preview.length, version });
 	// Direct replies are stored for history, not scheduled as new work.
 	if (!directReply) {
-		const routedNow = await routeInbound(ctx, label, contextId, routed.fields.wake, routed.fields.intent, preview, false);
+		const routedNow = await routeInbound(ctx, label, contextId, routed.fields.wake, routed.fields.intent, preview, false, pushCarriesFile(msg));
 		if (routedNow.fingerprint) {
    await saveDedup(ctx, "status", label, contextId, routedNow.fingerprint);
    await saveDedup(ctx, "status_at", label, contextId, String(Date.now()));
@@ -2201,6 +2201,7 @@ async function handlePush(req: Request, ctx: TenantContext, ectx: ExecutionConte
 	const category = outboundClass(view.state, view.text, pushCarriesFile(body), fields.intent);
  const pushDecision = decidePush({
   mode: (await wakePolicy(ctx)).mode,
+  hasContent: pushCarriesFile(body),
 		wake: fields.wake,
 		intent: fields.intent,
 		duplicate: samePayload,
