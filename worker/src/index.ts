@@ -3627,7 +3627,15 @@ async function ownerPairing(req: Request, ctx: TenantContext, ectx: ExecutionCon
 async function connectModel(ctx: TenantContext): Promise<{ card: any; model: D.ConnectModel }> {
 	const card: any = await publicCard(ctx);
 	return { card, model: { name: String(card.name || ctx.AGENT_NAME || "A2A agent"), description: typeof card.description === "string" ? card.description : undefined,
-		base: ctx.PUBLIC_URL.replace(/\/$/, ""), docs: D.docsOrigin(ctx.DISCOVERY_DOCS_ORIGIN), pairing: pairingOn(ctx), oauthMetadata: pairingOn(ctx) || mcpOn(ctx), mcp: mcpOn(ctx) } };
+		base: ctx.PUBLIC_URL.replace(/\/$/, ""), docs: D.docsOrigin(ctx.DISCOVERY_DOCS_ORIGIN), pairing: pairingOn(ctx), oauthMetadata: pairingOn(ctx) || mcpOn(ctx), mcp: mcpOn(ctx),
+		...registrationModel(ctx) } };
+}
+
+/** Hosted, flag-on, and only with the canonical target the platform accepts. */
+function registrationModel(ctx: TenantContext): { registration?: { origin: string; target: string } } {
+	if (ctx.mode !== "host" || !ctx.gates.agentRegistrationOrigin) return {};
+	const target = D.registrationTarget(ctx.PUBLIC_URL, ctx.gates.tenantDomain);
+	return target ? { registration: { origin: ctx.gates.agentRegistrationOrigin, target } } : {};
 }
 
 /** A browser (Accept: text/html) gets a small HTML page; an agent that asks for text/markdown the connect steps in

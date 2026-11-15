@@ -73,6 +73,7 @@ export type ConnectModel = {
 	docs: string; // docsOrigin(DISCOVERY_DOCS_ORIGIN)
 	pairing: boolean; // device-flow pairing is on
 	oauthMetadata: boolean; // /.well-known/oauth-authorization-server is served (pairing or MCP on)
+	registration?: { origin: string; target: string }; // platform authority, never the tenant OAuth server
 	mcp?: boolean; // the owner MCP at /mcp is on (not MCP=off, not proxy mode)
 };
 
@@ -176,8 +177,19 @@ export function apiCatalog(m: ConnectModel): { linkset: Record<string, string | 
 	return { linkset };
 }
 
+/** The platform accepts only the canonical hosted address as target_agent: `https://<name>.<TENANT_DOMAIN>`,
+ *  lowercase, with no port, path, query or trailing slash. Anything else (no tenant domain, a fallback origin)
+ *  returns "", so auth.md advertises no registration rather than a target the platform would reject. */
+export function registrationTarget(publicUrl: string, tenantDomain: string): string {
+	const domain = (tenantDomain || "").trim().replace(/^\.+|\.+$/g, "").toLowerCase();
+	if (!domain || domain.length > 253 || !/^[a-z0-9.-]+$/.test(domain)) return "";
+	const value = (publicUrl || "").replace(/\/$/, "");
+	const m = /^https:\/\/([a-z0-9][a-z0-9-]{0,61}[a-z0-9])\.(.+)$/.exec(value);
+	return m && m[2] === domain && value === `https://${m[1]}.${domain}` ? value : "";
+}
+
 /** GET /auth.md and /.well-known/auth.md: how a visitor gets a credential for this agent, in a few lines. It names
- *  endpoints and commands only, never a token value, and links the full a2a.exposed credential map. Under 1 KB. */
+ *  endpoints and commands only, never a token value, and links the full a2a.exposed credential map. */
 export function authMd(m: ConnectModel): string {
 	const name = mdText(m.name, NAME_MAX) || "A2A agent";
 	const peers = m.pairing
@@ -186,8 +198,22 @@ export function authMd(m: ConnectModel): string {
 			`- CLI: \`${DEFAULT_CLI} connect ${m.base}\` (stores the token, never prints it).\n`
 		: `- Peers: pairing is turned off here. Ask this agent's operator for a per-peer bearer token.\n`;
 	const owner = m.mcp ? `- Owner tools (\`/mcp\`, scope \`inbox\`) are for this agent's owner only.\n` : "";
-	return `# auth.md: ${name}\n\n${peers}${owner}` +
-		`- Never paste tokens in chat. Revoke: the owner runs \`token revoke <label>\`.\n` +
+	const registration = m.registration
+		? `## Register for read-only hosted access\n\n` +
+			`POST ${m.registration.origin}/oauth/agent/identity with Content-Type: application/json and this body:\n\n` +
+			"```json\n" + JSON.stringify({ type: "service_auth", login_hint: "<person-supplied email>", client_name: "<your agent name>", target_agent: m.registration.target, scope: "agents:read" }, null, 2) + "\n```\n\n" +
+			`Ask the person for the email routing hint; do not guess it. Show only the returned claim.verification_uri and claim.user_code to the person.\n` +
+			`The owner must sign in, enter the code, claim and approve the request before any credential is issued. Never open or approve it yourself.\n` +
+			`Keep claim_token in a protected file, never a URL, log or chat. Poll POST ${m.registration.origin}/oauth/token with Content-Type: application/x-www-form-urlencoded:\n\n` +
+			"```text\ngrant_type=urn:workos:agent-auth:grant-type:claim&claim_token=<returned claim_token>\n```\n\n" +
+			`Honor claim.interval; authorization_pending means wait, slow_down means add five seconds, and access_denied or expired_token means stop. The claim token is single-use.\n` +
+			`Store the access_token securely. Send it only as Authorization: Bearer <access_token> on GET ${m.registration.origin}/api/v1/tenants; it reads this agent's address and status for up to 15 minutes, with no automatic renewal.\n` +
+			`This connection cannot list other agents, send messages, manage the agent, or access tenant MCP. Pair separately for peer access.\n` +
+			`To revoke this registration with the person's permission, POST ${m.registration.origin}/oauth/revoke with Content-Type: application/x-www-form-urlencoded and body token=<access_token>, or use Settings → Connected agents on the platform.\n\n` +
+			`## Peer and owner access\n\n`
+		: "";
+	return `# auth.md: ${name}\n\n${registration}${peers}${owner}` +
+		`- Never paste tokens in chat. ${m.registration ? "To revoke a peer token," : "Revoke:"} the owner runs \`token revoke <label>\`.\n` +
 		`Full map of every a2a.exposed credential: ${m.docs}/auth.md\n`;
 }
 
@@ -197,7 +223,7 @@ export const markdownHeaders = (): Record<string, string> => ({
 
 /** auth.md is one representation (no content negotiation), so no Vary. CORS * like the other public discovery files. */
 export const authMdHeaders = (): Record<string, string> => ({
-	"content-type": "text/markdown; charset=utf-8", "cache-control": "no-cache", "access-control-allow-origin": "*", "x-content-type-options": "nosniff",
+	"content-type": "text/markdown; charset=utf-8", "cache-control": "no-store", "access-control-allow-origin": "*", "x-content-type-options": "nosniff",
 });
 
 export const llmsHeaders = (): Record<string, string> => ({

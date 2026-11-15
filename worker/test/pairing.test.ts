@@ -105,6 +105,10 @@ test("device code entry posts a CSRF-protected lookup without making a pairing d
 });
 
 test("POST code lookups keep the existing IP limit", async (t) => {
+	// All lookups belong to one fixed window, even when CI runs across its wall-clock boundary.
+	const previousNow = Date.now, now = Date.now();
+	Date.now = () => now;
+	t.after(() => { Date.now = previousNow; });
 	const s = setup(); t.after(s.restore);
 	const g = await s.call("GET", "/device");
 	const cookie = g.headers.get("set-cookie")!.split(";")[0];
@@ -1050,6 +1054,7 @@ test("GET /.well-known/api-catalog and /auth.md: RFC 9727 catalog and the short 
 		const a = await s.call("GET", path);
 		assert.equal(a.status, 200, path);
 		assert.equal(a.headers.get("content-type"), "text/markdown; charset=utf-8");
+		assert.equal(a.headers.get("cache-control"), "no-store");
 		assert.equal(a.text.split("\n")[0], "# auth.md: Barry");
 		assert.ok(a.text.includes("https://a2a.exposed/auth.md"));
 		assert.ok(new TextEncoder().encode(a.text).length < 1024);
