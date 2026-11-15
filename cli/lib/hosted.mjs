@@ -168,7 +168,7 @@ export async function create(o = {}) {
 	if (data.name !== name || !/^a2aot_[A-Za-z0-9_-]{43}$/.test(data.owner_token || "") || !controlOrigin(base)) fail("invalid_response", "Creation returned an invalid credential response. Check hosted list --json before retrying; the agent may already exist.");
 	try { C.saveConfig({ A2A_BASE_URL: base, A2A_OWNER_TOKEN: data.owner_token, HOSTED_AGENT_NAME: name, HOSTED_SETUP_URL: origin }); }
 	catch { fail("credential_save", "The agent was created, but its one-time credential could not be saved. Do not create it again. Use the agent's account page to recover access."); }
-	return { ok: true, code: "created", next: "Run wake set with an explicit URL and preset, reading credentials from protected files or named environment variables.", name, base_url: base };
+	return { ok: true, code: "created", next: `Run wake request --agent ${name} --url URL --preset P --json, then give the owner the printed link: they paste only the webhook key there. Never ask for the key in chat.`, name, base_url: base };
 }
 
 function secret(o, name, envName = "") {

@@ -161,6 +161,9 @@ test("create lists first, atomically saves the owner token, and preserves other 
 		assert.equal(saved.A2A_OWNER_TOKEN, owner); assert.equal(saved.UNRELATED, "retained");
 		assert.equal(fs.statSync(f.config).mode & 0o777, 0o600);
 		assert.ok(!r.stdout.includes(owner) && !r.stderr.includes(owner));
+		const created = JSON.parse(r.stdout);
+		assert.match(created.next, /^Run wake request --agent sample-agent --url URL --preset P --json/);
+		assert.match(created.next, /paste only the webhook key/); assert.doesNotMatch(created.next, /wake set/);
 		const again = f.run(["hosted", "create", "--name", "another-agent", "--json"]);
 		assert.equal(JSON.parse(again.stdout).code, "config_in_use");
 		assert.equal(again.status, 1);
