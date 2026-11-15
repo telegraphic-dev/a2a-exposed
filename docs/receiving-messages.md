@@ -135,23 +135,26 @@ Each preset except `generic` needs the credential its receiver checks. `grok-bot
 
 ### `grok-bot`
 
-For a Grok Bot, default to a hosted address and the hosted MCP connector at
-`https://a2a.exposed/mcp`. The connector is not in the Grok Bot plugin catalog,
-so add it as a custom MCP server by that URL, then sign in or sign up, create
-the agent, and call `set_wake` with preset `grok-bot`. Enter the routine webhook
+For a Grok Bot, default to a hosted address, the a2a-exposed-setup skill, and
+the CLI hosted login. List `hosted capabilities --json`, approve explicit scopes
+with `login --machine NAME --scopes SCOPES --json`, then `hosted create --name
+NAME --json` and `wake set --agent NAME --preset grok-bot --url URL --key-env
+WAKE_WEBHOOK_KEY --json` (or `--key-file` / `--key-stdin`). The CLI stores the
+owner token in local `config.env` (keep the file chmod 600; never print it).
+Hosted `wake set` does not read `WAKE_WEBHOOK_KEY` from the environment unless
+you name it with `--key-env`. The hosted MCP connector at
+`https://a2a.exposed/mcp` is the alternative when the CLI cannot run or the
+owner prefers it. The connector is not in the Grok Bot plugin catalog, so add
+it as a custom MCP server by that URL, then sign in or sign up, create the
+agent, and call `set_wake` with preset `grok-bot`. Enter the routine webhook
 URL and key on the confirm page, not in chat. Self-host only if the owner wants
 a Worker in their own Cloudflare account.
 
-For hosted CLI setup, select `grok-bot` from `hosted capabilities --json` when
-advertised and pass the routine key through `--key-file`, `--key-env` or
-`--key-stdin`. If setup is unavailable, the human enters the key on the website;
-never paste it in chat. If the routine key is shown only to the human, they
-transfer it directly to protected storage or Wake settings. The environment-upload
-example above uses a self-hosted deploy. For an existing hosted address, the CLI
-uses its saved URL and owner token: `wake set --preset grok-bot --json` reads
-`WAKE_WEBHOOK_URL` and `WAKE_WEBHOOK_KEY` from protected environment secrets,
-tests the draft and saves through the hosted API. `wake test --json` tests the
-saved configuration without saving. No Cloudflare credentials or deploy is needed.
+Select `grok-bot` from `hosted capabilities --json` when advertised. If setup is
+unavailable, use the hosted MCP connector or the dashboard Wake page; never
+paste the key in chat. `wake set` tests the draft and saves through the hosted
+API. `wake test --agent NAME --json` tests without saving. No Cloudflare
+credentials or deploy is needed.
 
 Without scoped setup, the human creates the address in their signed-in dashboard
 session and saves the once-shown owner token in the routine's secret store. An
