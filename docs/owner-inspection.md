@@ -161,12 +161,21 @@ inspection. `GET /owner/inbox` keeps its acknowledging behaviour for agents.
 | `limit` | 1–200, default 50 |
 | `cursor` | Opaque value from the previous page |
 
-- The response is `{ items, nextCursor }`. `nextCursor` is `null` on the last
+- The response is `{ items, nextCursor, asOf, updatedSince }`. `nextCursor` is `null` on the last
   page. The hosted RPC returns the same body.
 - The cursor encodes the position **and** the filters and order. A cursor used
   with different filters is refused with HTTP 400 `cursor does not match`.
-- A task updated while the caller pages can appear twice; none is skipped.
-  The dashboard deduplicates by `taskId`.
+- The first page fixes `asOf`, the time of that read. The cursor carries it,
+  and every page returns it.
+- A task updated after `asOf` changes position while the caller pages. With
+  `order=oldest` it can appear again on a later page; the dashboard
+  deduplicates by `taskId`. With `order=newest` it moves above the cursor and
+  is **not** on later pages. A list is complete only for tasks not updated
+  since `asOf`.
+- Every page returns `updatedSince`: the number of tasks matching the same
+  filters with `updated_at` after `asOf`. When it is above `0`, the dashboard
+  offers a refresh from the first page instead of claiming the list is
+  complete.
 - Each item: `taskId`, `contextId`, `from`, `peerRevoked`, `state`,
   `createdAt`, `updated`, `messageCount`, `preview`, `sealed`, and
   `ownerWait` when present.
@@ -225,8 +234,8 @@ issue.
 2. **No state filter.** The inbox has open-only or `all=1`. Add `state` with
    single states and groups.
 3. **Oldest-first only.** Add `order=newest`.
-4. **Cursor not bound to filters.** Encode filters and order in the cursor
-   and refuse a mismatch.
+4. **Cursor not bound to filters, no change signal.** Encode filters, order
+   and `asOf` in the cursor, refuse a mismatch, and return `updatedSince`.
 5. **No per-peer or outbound counts.** Extend `GET /owner/summary` with
    `groups`, `peers[]` and `outbound`.
 6. **No message count on list items.** Add `messageCount` without loading
