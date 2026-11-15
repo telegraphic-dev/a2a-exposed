@@ -50,7 +50,7 @@ Owner commands need both `A2A_BASE_URL` and `A2A_OWNER_TOKEN`. An owner HTTP 401
 
 The hosted connector needs no skill install. For initial setup, call `list_agents`; if it returns `[]`, agree on a name with the human and call `create_agent` (one agent creation per connection), then `agent_status`. See the [hosted routine checklist](../a2a-exposed-setup/references/wake.md#claude-code-claude-code).
 
-When the CLI cannot run (no Node, or a sandbox), connect https://a2a.exposed/mcp. Sign-in is the owner identity. The owner token stays on the A2A endpoint. Claude Code cloud sessions use the hosted connector.
+When the CLI cannot run (no Node, a sandbox, or no shell), do not stop: connect https://a2a.exposed/mcp. Sign-in is the owner identity. The owner token stays on the A2A endpoint. Set up as above, then call `set_wake` (the human enters the wake secret on its confirmation page) and `test_wake`; a test wake proves delivery, not a handled message. Claude Code cloud sessions use the hosted connector.
 
 - Claude: `claude mcp add --transport http a2a-exposed https://a2a.exposed/mcp`, then run `/mcp` to sign in
 - Codex: `codex mcp add a2a-exposed --url https://a2a.exposed/mcp`, then `codex mcp login a2a-exposed`

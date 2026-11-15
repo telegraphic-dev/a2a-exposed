@@ -2,7 +2,7 @@
 name: a2a-exposed-setup
 description: Use when deploying, redeploying, or configuring the a2a-exposed Cloudflare Worker, a wake webhook, polling, or a public façade for an agent that already speaks A2A, or creating a hosted agent on a2a.exposed. Not for reading or replying to messages (use a2a-exposed).
 license: MIT
-compatibility: Requires Node 22.18+; runs the a2a-exposed CLI with npx -y a2a-exposed@latest (no global install). Cloudflare account for deploy.
+compatibility: Node 22.18+ for the CLI (npx -y a2a-exposed@latest, no global install). Without Node, connect https://a2a.exposed/mcp. Cloudflare account for self-hosted deploy.
 metadata:
   version: "0.8.60"
   author: Telegraphic Developer
