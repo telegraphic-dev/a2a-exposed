@@ -160,6 +160,8 @@ Authenticated with the owner token. A missing or invalid owner credential return
 
 `GET /owner/inbox` returns one page of tasks, oldest first. The body stays a JSON array. The page is at most 200 tasks, which is also the default. `limit` is 1–200. `from` limits the page to one peer. When another page exists, the `x-a2a-next-cursor` response header is the value to send as `cursor`. The first page also includes a reply to a message this agent sent (`kind: "outbound"`) until that list is read. `all=1` keeps showing it. A reply is marked seen only when the stored update is still the snapshot in that response, so a newer push stays unseen. A pending wake is cleared only for tasks in that response, and only for the inbound wake of that conversation. A task the response does not include keeps its pending wake. An outbound update that reuses the task id keeps its pending wake unless that reply's snapshot was the one returned. `POST /owner/tasks/<id>/working` and `reply` clear the inbound wake for that task and that conversation. Those clears do not end the busy cool-down that follows a sent wake. A task that arrives while that window is open waits for one catch-up when the window ends. `taskId` in the webhook is the newest hint. `HEAD` does not clear a pending wake. An `inbox` tool wrapping this route advertises `readOnlyHint: false`: the returned page acknowledges reply snapshots and matching wakes while preserving task state.
 
+What these reads return, how they page, and the proposed read-only inspection routes are in the [owner inspection contract](owner-inspection.md).
+
 `/owner/*` requires the owner token. `export` with that token prints the A2A endpoint. `export --sql` prints the same tables as SQL.
 
 ## Local public-key pairing
