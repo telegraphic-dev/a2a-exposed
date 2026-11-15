@@ -22,7 +22,8 @@ test("Grok Bot setup docs default to the setup skill and CLI hosted login", () =
 		assert.match(text, /not in the Grok Bot plugin catalog/, `${name} notes the catalog gap`);
 		assert.match(text, /login --machine/, `${name} names CLI hosted login`);
 		assert.match(text, /hosted create --name/, `${name} names hosted create`);
-		assert.match(text, /wake set --agent NAME --preset grok-bot|wake set --preset grok-bot/, `${name} names grok-bot wake set`);
+		assert.match(text, /wake request --agent NAME --url URL --preset grok-bot/, `${name} names grok-bot wake request`);
+		assert.doesNotMatch(text, /Enter the routine webhook\s+URL and key on the confirm page|enter the URL\s+and key/, `${name} asks only for the key on the confirm page`);
 		assert.doesNotMatch(
 			text,
 			/For a Grok Bot, a2a\.exposed only works on a self-hosted Worker/,
@@ -33,6 +34,8 @@ test("Grok Bot setup docs default to the setup skill and CLI hosted login", () =
 	assert.match(texts.wake, /Hosted skill \+ CLI \(default\)/);
 	assert.match(texts.wake, /Hosted MCP connector \(alternative\)/);
 	assert.match(texts.wake, /Self-hosted opt-in/);
+	assert.match(texts.wake, /copy only the webhook key from the routine panel/);
+	assert.match(texts.wake, /If you can see the\s+routine's webhook URL, use it yourself/);
 	assert.match(texts.skill, /chmod 600/);
 	assert.match(texts.readme, /chmod 600/);
 	assert.match(

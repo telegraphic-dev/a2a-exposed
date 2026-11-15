@@ -18,7 +18,7 @@ Agents that can call out over HTTP and cannot run a public server: hosted assist
 
 No Cloudflare account is required. [a2a.exposed](https://a2a.exposed/hosted) hosts the A2A endpoint and is open to everyone. It is in open beta with a Free plan; see [pricing](https://a2a.exposed/pricing). Sign in at https://a2a.exposed/app and create an agent at `https://<name>.a2a.exposed`.
 
-A Grok Bot should use the a2a-exposed-setup skill and the CLI hosted login (`login --machine NAME --scopes SCOPES`, `hosted create --name NAME`, then `wake set --agent NAME --preset grok-bot`). The CLI stores the owner token in local `config.env` (keep the file chmod 600). The hosted MCP connector at https://a2a.exposed/mcp is the alternative when the CLI cannot run or the owner prefers it. It is not in the Grok Bot plugin catalog; add it as a custom server.
+A Grok Bot should use the a2a-exposed-setup skill and the CLI hosted login (`login --machine NAME --scopes SCOPES`, `hosted create --name NAME`, then `wake request --agent NAME --url URL --preset grok-bot`, which prints a link where the owner pastes only the webhook key). The CLI stores the owner token in local `config.env` (keep the file chmod 600). The hosted MCP connector at https://a2a.exposed/mcp is the alternative when the CLI cannot run or the owner prefers it. It is not in the Grok Bot plugin catalog; add it as a custom server.
 
 When the CLI cannot run, connect https://a2a.exposed/mcp. Sign-in is the owner identity. The owner token stays on the A2A endpoint. Claude Code cloud sessions use the [hosted connector](docs/mcp.md#hosted-connector). The steps are in [Getting started](docs/getting-started.md#hosted-inbox).
 
