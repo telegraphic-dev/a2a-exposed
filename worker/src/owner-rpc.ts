@@ -92,7 +92,8 @@ function queryRecord(query: unknown): Record<string, string> | null {
 	const out: Record<string, string> = {};
 	for (const [k, v] of Object.entries(query)) {
 		// Inbox cursors are base64url(updated_at, id). An id can be 128 characters, so this is wider than a context id.
-		if (typeof v !== "string" || v.length > 256) return null;
+		// Inspection cursors also carry a filter binding and asOf, so a cursor may be up to 512 characters.
+		if (typeof v !== "string" || v.length > (k === "cursor" ? 512 : 256)) return null;
 		out[k] = v;
 	}
 	return out;
@@ -123,15 +124,57 @@ function inboxQuery(q: Record<string, string>): string | null {
 	return s ? `?${s}` : "";
 }
 
-function historyQuery(q: Record<string, string>): string | null {
-	for (const k of Object.keys(q)) if (k !== "n" && k !== "from") return null;
-	if (q.n !== undefined && (!/^[1-9][0-9]{0,3}$/.test(q.n) || Number(q.n) > 1000)) return null;
-	if (q.from !== undefined && !/^[A-Za-z0-9_.-]{1,64}$/.test(q.from)) return null;
+const INSPECT_STATE = /^(?:submitted|working|input-required|completed|failed|rejected|canceled|open|waiting|terminal|all)$/;
+const INSPECT_CURSOR = /^[A-Za-z0-9_-]{1,512}$/;
+const PEER_Q = /^[A-Za-z0-9_.-]{1,64}$/;
+
+function limitOk(v: string | undefined): boolean {
+	return v === undefined || (/^[1-9]\d{0,2}$/.test(v) && Number(v) <= 200);
+}
+
+/** Build the search string in a fixed key order from already checked values. */
+function searchOf(q: Record<string, string>, keys: readonly string[]): string {
 	const sp = new URLSearchParams();
-	if (q.n) sp.set("n", q.n);
-	if (q.from) sp.set("from", q.from);
+	for (const k of keys) if (q[k] !== undefined) sp.set(k, q[k]!);
 	const s = sp.toString();
 	return s ? `?${s}` : "";
+}
+
+function historyQuery(q: Record<string, string>): string | null {
+	const keys = ["n", "from", "limit", "cursor", "order"] as const;
+	for (const k of Object.keys(q)) if (!(keys as readonly string[]).includes(k)) return null;
+	if (q.n !== undefined && (!/^[1-9][0-9]{0,3}$/.test(q.n) || Number(q.n) > 1000)) return null;
+	if (q.from !== undefined && !PEER_Q.test(q.from)) return null;
+	if (!limitOk(q.limit)) return null;
+	if (q.cursor !== undefined && !INSPECT_CURSOR.test(q.cursor)) return null;
+	if (q.order !== undefined && q.order !== "oldest" && q.order !== "newest") return null;
+	if (q.n !== undefined && (q.limit !== undefined || q.cursor !== undefined || q.order !== undefined)) return null;
+	return searchOf(q, keys);
+}
+
+/** GET /owner/tasks (no id): the read-only inspection list. */
+function tasksQuery(q: Record<string, string>): string | null {
+	const keys = ["state", "from", "context", "order", "limit", "cursor"] as const;
+	for (const k of Object.keys(q)) if (!(keys as readonly string[]).includes(k)) return null;
+	if (q.state !== undefined && !INSPECT_STATE.test(q.state)) return null;
+	if (q.from !== undefined && !PEER_Q.test(q.from)) return null;
+	if (q.context !== undefined && !idOk(q.context)) return null;
+	if (q.order !== undefined && q.order !== "oldest" && q.order !== "newest") return null;
+	if (!limitOk(q.limit)) return null;
+	if (q.cursor !== undefined && !INSPECT_CURSOR.test(q.cursor)) return null;
+	return searchOf(q, keys);
+}
+
+/** GET /owner/outbound (no id): the read-only outbound list. */
+function outboundQuery(q: Record<string, string>): string | null {
+	const keys = ["to", "context", "order", "limit", "cursor"] as const;
+	for (const k of Object.keys(q)) if (!(keys as readonly string[]).includes(k)) return null;
+	if (q.to !== undefined && !PEER_Q.test(q.to)) return null;
+	if (q.context !== undefined && !idOk(q.context)) return null;
+	if (q.order !== undefined && q.order !== "oldest" && q.order !== "newest") return null;
+	if (!limitOk(q.limit)) return null;
+	if (q.cursor !== undefined && !INSPECT_CURSOR.test(q.cursor)) return null;
+	return searchOf(q, keys);
 }
 
 /** `format=sql` is the only export query. The RPC still calls the JSON handler and redacts before building SQL. */
@@ -153,6 +196,8 @@ interface RouteDef {
 const ROUTES: RouteDef[] = [
 	{ method: "GET", name: "GET /owner/inbox", take: (s) => s.length === 2 && s[1] === "inbox", search: inboxQuery, path: () => "/owner/inbox" },
 	{ method: "GET", name: "GET /owner/summary", take: (s) => s.length === 2 && s[1] === "summary", search: noQuery, path: () => "/owner/summary" },
+	{ method: "GET", name: "GET /owner/tasks", take: (s) => s.length === 2 && s[1] === "tasks", search: tasksQuery, path: () => "/owner/tasks" },
+	{ method: "GET", name: "GET /owner/outbound", take: (s) => s.length === 2 && s[1] === "outbound", search: outboundQuery, path: () => "/owner/outbound" },
 	{ method: "GET", name: "GET /owner/tasks/:id", take: (s) => s.length === 3 && s[1] === "tasks" && idOk(s[2]!), search: noQuery, path: (s) => `/owner/tasks/${s[2]}` },
 	{ method: "GET", name: "GET /owner/history/:id", take: (s) => s.length === 3 && s[1] === "history" && idOk(s[2]!), search: historyQuery, path: (s) => `/owner/history/${s[2]}` },
 	{ method: "GET", name: "GET /owner/outbound/:id", take: (s) => s.length === 3 && s[1] === "outbound" && idOk(s[2]!), search: noQuery, path: (s) => `/owner/outbound/${s[2]}` },
