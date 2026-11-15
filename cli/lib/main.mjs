@@ -639,6 +639,10 @@ export async function main(argv) {
 		if (name === "tunnel") return console.log(HELP_TUNNEL);
 		return console.log(HELP);
 	}
+ if (name === "wake" && rest[0] === "policy") {
+  const at = rest.indexOf("--policy");
+  if (at >= 0 && (!rest[at + 1] || rest[at + 1].startsWith("--"))) throw new CliError("--policy needs smart or legacy; list choices with wake policy --json");
+ }
 	if ((name === "init" || name === "deploy" || name === "wake") && rest.some((a) => /^--event-secret(=|$)/.test(a)))
 		throw new CliError("export EVENT_SECRET or pass --event-secret-stdin. The secret is not an argument. It is not printed and it is not saved in config.env");
 	if (name === "pair" && rest[0] === "set-oidc" && rest.some((a) => /^--(secret|client-secret)(=|$)/.test(a)))

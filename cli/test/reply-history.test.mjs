@@ -158,7 +158,7 @@ test("wake policy lists choices, sets explicit policy, and rejects invalid input
  const calls=()=>fs.readFileSync(log,"utf8").trim().split("\n").map(x=>JSON.parse(x));
  assert.equal(calls().at(-1).method,"PUT");assert.deepEqual(JSON.parse(calls().at(-1).body),{policy:"legacy"});
  const count=calls().length;
- for(const args of [["--policy","bad"],["--policy",""],["extra"],["--stage","owner-notified"]]) {
+ for(const args of [["--policy","bad"],["--policy",""],["--policy"],["--policy","--json"],["extra"],["--stage","owner-notified"]]) {
   r=cli(["wake","policy",...args],report);assert.equal(r.status,1);assert.match(r.stderr,/wake policy --json/);
  }
  assert.equal(calls().length,count);
