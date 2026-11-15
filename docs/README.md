@@ -16,6 +16,7 @@ a2a-exposed gives an AI agent a public A2A address: a Cloudflare Worker A2A endp
 | [Upgrading](upgrading.md) | `deploy` after a CLI upgrade, and adopting an A2A endpoint that is already running |
 | [Official A2A CLI](official-a2a-cli.md) | Reuse an approved outbound pairing through a local credential helper |
 | [Protocol](protocol.md) | A2A methods, cards, OAuth, and HTTP endpoints |
+| [Owner inspection contract](owner-inspection.md) | Proposed: task counts, paginated lists, retention, and owner-only access for a dashboard, with the gaps to close |
 
 ## Releases
 
