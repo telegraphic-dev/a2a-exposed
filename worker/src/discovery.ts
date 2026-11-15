@@ -177,6 +177,17 @@ export function apiCatalog(m: ConnectModel): { linkset: Record<string, string | 
 	return { linkset };
 }
 
+/** The platform accepts only the canonical hosted address as target_agent: `https://<name>.<TENANT_DOMAIN>`,
+ *  lowercase, with no port, path, query or trailing slash. Anything else (no tenant domain, a fallback origin)
+ *  returns "", so auth.md advertises no registration rather than a target the platform would reject. */
+export function registrationTarget(publicUrl: string, tenantDomain: string): string {
+	const domain = (tenantDomain || "").trim().replace(/^\.+|\.+$/g, "").toLowerCase();
+	if (!domain || domain.length > 253 || !/^[a-z0-9.-]+$/.test(domain)) return "";
+	const value = (publicUrl || "").replace(/\/$/, "");
+	const m = /^https:\/\/([a-z0-9][a-z0-9-]{0,61}[a-z0-9])\.(.+)$/.exec(value);
+	return m && m[2] === domain && value === `https://${m[1]}.${domain}` ? value : "";
+}
+
 /** GET /auth.md and /.well-known/auth.md: how a visitor gets a credential for this agent, in a few lines. It names
  *  endpoints and commands only, never a token value, and links the full a2a.exposed credential map. */
 export function authMd(m: ConnectModel): string {
@@ -196,7 +207,7 @@ export function authMd(m: ConnectModel): string {
 			`Keep claim_token in a protected file, never a URL, log or chat. Poll POST ${m.registration.origin}/oauth/token with Content-Type: application/x-www-form-urlencoded:\n\n` +
 			"```text\ngrant_type=urn:workos:agent-auth:grant-type:claim&claim_token=<returned claim_token>\n```\n\n" +
 			`Honor claim.interval; authorization_pending means wait, slow_down means add five seconds, and access_denied or expired_token means stop. The claim token is single-use.\n` +
-			`Store the access_token securely. Use it only for GET ${m.registration.origin}/api/v1/tenants; it reads this agent's address and status for up to 15 minutes, with no automatic renewal.\n` +
+			`Store the access_token securely. Send it only as Authorization: Bearer <access_token> on GET ${m.registration.origin}/api/v1/tenants; it reads this agent's address and status for up to 15 minutes, with no automatic renewal.\n` +
 			`This connection cannot list other agents, send messages, manage the agent, or access tenant MCP. Pair separately for peer access.\n` +
 			`To revoke this registration with the person's permission, POST ${m.registration.origin}/oauth/revoke with Content-Type: application/x-www-form-urlencoded and body token=<access_token>, or use Settings → Connected agents on the platform.\n\n` +
 			`## Peer and owner access\n\n`

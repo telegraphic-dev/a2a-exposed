@@ -3,6 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { dispatch } from "../src/index.ts";
 import { hostedTenantContext, resolveTenant } from "../src/tenancy.ts";
+import { registrationTarget } from "../src/discovery.ts";
 import { d1 } from "./d1.ts";
 
 const origin = "https://platform.example";
@@ -13,7 +14,7 @@ const namespace = { idFromName: () => "unused", get() { throw new Error("no netw
 test("hosted auth.md advertises the full platform read-one-agent contract on both aliases with exact opt-in in any environment", async () => {
  const DB = d1(new URL("../migrations/", import.meta.url));
  for (const SITE_ENV of [undefined, "staging", "production", "Production", " production "]) {
-  const env = { DB, TENANCY: "host", TENANT_DO: namespace, SITE_ENV, AGENT_REGISTRATION_ENABLED: "1", FEEDBACK_URL: origin };
+  const env = { DB, TENANCY: "host", TENANT_DO: namespace, SITE_ENV, AGENT_REGISTRATION_ENABLED: "1", FEEDBACK_URL: origin, TENANT_DOMAIN: "platform.example" };
   const ctx = hostedTenantContext(env, { id: "tenant-alpha", db: DB, publicUrl: target + "/", config: { AGENT_NAME: "Alpha", DISCOVERY_DOCS_ORIGIN: "https://docs.example", AGENT_REGISTRATION_ENABLED: "0", FEEDBACK_URL: "https://tenant-override.example" } });
   for (const path of ["/auth.md", "/.well-known/auth.md"]) {
    const res = await dispatch(new Request(target + path), ctx, execution);
@@ -34,6 +35,7 @@ test("hosted auth.md advertises the full platform read-one-agent contract on bot
    assert.ok(text.includes("body token=<access_token>"));
    assert.match(text, /cannot list other agents, send messages, manage the agent, or access tenant MCP/);
    assert.ok(text.includes(`${origin}/api/v1/tenants`));
+   assert.ok(text.includes(`Send it only as Authorization: Bearer <access_token> on GET ${origin}/api/v1/tenants`));
    assert.ok(text.includes(`${target}/oauth/device_authorization`));
    assert.ok(!text.includes(`${target}/oauth/agent/identity`) && !text.includes("tenant-override.example"));
    const head = await dispatch(new Request(target + path, { method: "HEAD" }), ctx, execution);
@@ -47,7 +49,7 @@ test("hosted auth.md advertises the full platform read-one-agent contract on bot
 
 test("flag-off, whitespace/case variants, malformed origin, tenant override and self-host cannot enable registration discovery", async () => {
  const DB = d1(new URL("../migrations/", import.meta.url));
- const enabled = { DB, TENANCY: "host", TENANT_DO: namespace, AGENT_REGISTRATION_ENABLED: "1", FEEDBACK_URL: origin };
+ const enabled = { DB, TENANCY: "host", TENANT_DO: namespace, AGENT_REGISTRATION_ENABLED: "1", FEEDBACK_URL: origin, TENANT_DOMAIN: "platform.example" };
  const overlays = [
   { AGENT_REGISTRATION_ENABLED: undefined }, { SITE_ENV: "production", AGENT_REGISTRATION_ENABLED: undefined },
   ...["", "0", "true", "True", "TRUE", "on", "ON", " 1", "1 ", "\t1", "1\n", "01"].map(AGENT_REGISTRATION_ENABLED => ({ AGENT_REGISTRATION_ENABLED })),
@@ -71,5 +73,25 @@ test("flag-off, whitespace/case variants, malformed origin, tenant override and 
   const res = await dispatch(new Request(target + "/auth.md"), ctx, execution);
   assert.equal(res.headers.get("cache-control"), "no-store");
   assert.ok(!(await res.text()).includes("/oauth/agent/identity"));
+ }
+});
+
+test("registration discovery advertises only the canonical https://NAME.TENANT_DOMAIN target the platform accepts", async () => {
+ assert.equal(registrationTarget(target, "platform.example"), target);
+ assert.equal(registrationTarget(target + "/", " .Platform.Example. "), target);
+ for (const [publicUrl, domain] of [
+  [target, ""], [target, "other.example"], ["https://platform.example", "platform.example"],
+  ["https://Alpha.platform.example", "platform.example"], ["http://alpha.platform.example", "platform.example"],
+  ["https://alpha.platform.example:8443", "platform.example"], ["https://alpha.platform.example/x", "platform.example"],
+  ["https://alpha.platform.example?x=1", "platform.example"], ["https://a.platform.example", "platform.example"],
+  ["https://-alpha.platform.example", "platform.example"], ["https://u@alpha.platform.example", "platform.example"],
+  ["https://alpha.beta.platform.example", "platform.example"], ["https://alpha.platform.example//", "platform.example"],
+ ]) assert.equal(registrationTarget(publicUrl, domain), "", `${publicUrl} on ${domain}`);
+ const DB = d1(new URL("../migrations/", import.meta.url));
+ for (const [publicUrl, TENANT_DOMAIN] of [[target, undefined], ["https://fallback.workers.dev", "platform.example"], [target, "other.example"]]) {
+  const ctx = hostedTenantContext({ DB, TENANCY: "host", TENANT_DO: namespace, AGENT_REGISTRATION_ENABLED: "1", FEEDBACK_URL: origin, TENANT_DOMAIN }, { id: "tenant-alpha", db: DB, publicUrl, config: {} });
+  const text = await (await dispatch(new Request(publicUrl + "/auth.md"), ctx, execution)).text();
+  assert.ok(!text.includes("/oauth/agent/identity") && !text.includes("target_agent"), `${publicUrl} on ${TENANT_DOMAIN}`);
+  assert.ok(text.includes("/oauth/device_authorization"));
  }
 });

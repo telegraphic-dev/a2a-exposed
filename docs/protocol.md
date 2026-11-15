@@ -331,9 +331,13 @@ On hosted tenants only, exact platform setting `AGENT_REGISTRATION_ENABLED=1`
 lets both auth.md paths advertise the platform's
 `POST /oauth/agent/identity` flow. `FEEDBACK_URL` supplies its HTTPS origin; a
 tenant's documentation override cannot select that authority. The start request
-includes `target_agent` (this tenant's canonical public URL) and `scope=agents:read`.
+includes `target_agent` and `scope=agents:read`. `target_agent` is exactly
+`https://<name>.<TENANT_DOMAIN>`, lowercase, with no port, path, query or trailing
+slash. Without `TENANT_DOMAIN`, or when the tenant URL is not that canonical form,
+auth.md advertises no registration.
 The human must claim and approve before any credential is issued. That credential
-reads only the approved address and status at platform `GET /api/v1/tenants`; it
+is sent as `Authorization: Bearer <access_token>` and reads only the approved
+address and status at platform `GET /api/v1/tenants`; it
 cannot list sibling agents, send A2A messages, manage the tenant, or use tenant MCP.
 Pairing stays the peer-access path. Self-hosted and flag-off auth.md keep the
 pairing-only behavior. The flag is the only environment opt-in; production stays
@@ -342,7 +346,8 @@ The tenant text includes the full service_auth start body, a person-supplied
 login_hint, the single-use claim-token poll at platform `POST /oauth/token` and
 registration revocation at platform `POST /oauth/revoke`.
 
-This is discovery support, not credential issuance or enforcement. Keep the flag
-off until the platform implements immutable target/owner binding, exchange/use
-checks and invalidation, and passes separate auth-security review. No enablement
-or deployment is performed by adding this support.
+This is discovery support, not credential issuance or enforcement. The platform
+enforces the immutable target/owner binding, the scoped `v1` credential formats,
+exchange/use checks and invalidation, and accepts one-agent registration only where
+its own registration gate allows it. Enable the tenant flag only where the platform
+accepts `target_agent`. No enablement or deployment is performed by adding this support.
