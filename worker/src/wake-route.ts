@@ -73,8 +73,12 @@ export interface RouteInput {
 	duplicate: boolean;
 	/** Status text is empty after normalization. */
 	idle: boolean;
-	/** Status text matches the last status stored for this peer and conversation. */
+	/** Status text matches the last status stored for this peer and conversation, inside the debounce window. */
 	unchanged: boolean;
+	/** The event asks this agent for input, or answers a task that asked the peer for input. Must wake. */
+	inputRequired?: boolean;
+	/** A completed task carrying an `intent: status` reply. Labelled, never suppressed, even in enforce. */
+	completedStatus?: boolean;
 }
 
 export interface RouteDecision {
@@ -101,8 +105,10 @@ function shadowOr(mode: RoutingMode, proposed: "suppress" | "batch"): { deliver:
  * a repeated message id does not wake;
  * `never` stores without a wake;
  * `always` wakes, subject to the caller's existing safeguards;
+ * input-required wakes, whatever the intent, because the agent has to act;
  * legacy (neither field) wakes, which is today's behavior;
  * `auto` wakes for handoff, blocker, and question;
+ * an `auto` status on a completed task is labelled and stays shadow-only in both modes;
  * `auto` ack, idle status, and unchanged status are proposed suppressions;
  * a changed `auto` status is proposed as one batched wake.
  * Shadow records a proposed suppression or batch and still wakes. Enforce applies them.
@@ -120,6 +126,9 @@ export function decideRoute(input: RouteInput): RouteDecision {
 	if (input.wake === "always") {
 		return { ...base, deliver: true, batch: false, decision: "always", proposed: "wake", action: "wake" };
 	}
+	if (input.inputRequired) {
+		return { ...base, deliver: true, batch: false, decision: "input_required", proposed: "wake", action: "wake" };
+	}
 	const auto = input.wake === "auto" || (input.wake === null && input.intent !== null);
 	if (!auto) {
 		return { ...base, deliver: true, batch: false, decision: "legacy", proposed: "wake", action: "wake" };
@@ -132,6 +141,10 @@ export function decideRoute(input: RouteInput): RouteDecision {
 		return { ...base, ...applied, decision: "ack", proposed: "suppress" };
 	}
 	if (input.intent === "status") {
+		if (input.completedStatus) {
+			// Labelled for the shadow stats only: enforce does not suppress a completed reply yet.
+			return { ...base, deliver: true, batch: false, decision: "status_completed", proposed: "suppress", action: "shadow" };
+		}
 		if (input.idle) {
 			const applied = shadowOr(input.mode, "suppress");
 			return { ...base, ...applied, decision: "status_idle", proposed: "suppress" };
@@ -146,8 +159,74 @@ export function decideRoute(input: RouteInput): RouteDecision {
 	return { ...base, deliver: true, batch: false, decision: "auto_unspecified", proposed: "wake", action: "wake" };
 }
 
-/** Empty working status, including the v1 spelling, with no file or artifact parts. */
+/** A task state in the 0.3 spelling. The v1 `TASK_STATE_*` spelling maps to it; anything else is kept. */
+export function plainTaskState(state: string | null | undefined): string | null {
+	if (typeof state !== "string" || !state) return null;
+	const m = /^TASK_STATE_([A-Z_]+)$/.exec(state);
+	return m ? m[1]!.toLowerCase().replace(/_/g, "-") : state;
+}
+
+/**
+ * A textless status flip: `submitted` or `working`, including the v1 spellings, with no text and no file
+ * or artifact parts. Terminal and input-required states are not flips; they still wake.
+ */
 export function isIdleWorkingPush(state: string | null | undefined, text: string, hasFile: boolean): boolean {
-	const plain = state === "TASK_STATE_WORKING" ? "working" : state;
-	return plain === "working" && !statusText(text) && !hasFile;
+	const plain = plainTaskState(state);
+	return (plain === "working" || plain === "submitted") && !statusText(text) && !hasFile;
+}
+
+/** One event the wake path is about to route. Text is read here and never returned. */
+export interface WakeEvent {
+	kind: "inbound" | "outbound_update";
+	mode: RoutingMode;
+	/** Labels the sender set. Invalid or conflicting labels are passed as null. */
+	wake: WakeMode | null;
+	intent: Intent | null;
+	duplicate: boolean;
+	text: string;
+	/** Outbound update: the pushed state. Inbound: the task's state before this message. */
+	state: string | null;
+	/** Outbound update: the push carries a file or artifact part. */
+	hasFile?: boolean;
+	/** Inbound status: the last stored status for this peer and conversation equals this one. */
+	sameStatus?: boolean;
+	/** Inbound status: milliseconds since that stored status, or null when unknown. */
+	sameStatusAgeMs?: number | null;
+	/** The debounce window in milliseconds. A repeated status outside it is a new signal. */
+	debounceMs?: number;
+}
+
+/**
+ * Classify an event into the route input and decide. Suppressible classes: ack, idle status, an identical
+ * status inside the debounce window, and a textless outbound status flip. Must-wake classes: input-required,
+ * actionable requests, `always`, and legacy events with no labels. A completed `intent: status` reply is
+ * labelled and stays shadow-only.
+ */
+export function classifyWake(event: WakeEvent): RouteDecision {
+	const state = plainTaskState(event.state);
+	if (event.kind === "outbound_update") {
+		const flip = isIdleWorkingPush(event.state, event.text, !!event.hasFile);
+		return decideRoute({
+			mode: event.mode,
+			wake: event.wake ?? (flip ? "auto" : null),
+			intent: event.intent ?? (flip ? "status" : null),
+			duplicate: event.duplicate,
+			idle: event.intent === "status" ? !statusText(event.text) : flip,
+			unchanged: false,
+			inputRequired: state === "input-required",
+			completedStatus: state === "completed" && event.intent === "status",
+		});
+	}
+	const status = event.intent === "status";
+	const age = event.sameStatusAgeMs;
+	const window = event.debounceMs ?? 0;
+	return decideRoute({
+		mode: event.mode,
+		wake: event.wake,
+		intent: event.intent,
+		duplicate: event.duplicate,
+		idle: status && !event.duplicate && !statusText(event.text),
+		unchanged: status && !event.duplicate && !!event.sameStatus && typeof age === "number" && age >= 0 && age <= window,
+		inputRequired: state === "input-required",
+	});
 }

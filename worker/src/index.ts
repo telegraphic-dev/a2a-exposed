@@ -14,7 +14,7 @@ import * as F from "./facade.ts";
 import { routeHttpRelay, httpRelayFetch, httpRelayEnrollment, isHttpRelayProfile } from "./http-relay-routing.ts";
 import { relayFetch, relayTestOutcome, type RelayTestError } from "./relay-routing.ts";
 import { renderWake, relayWakeTestInput, mausbotConfigProblem, presetAuthProblem, redact, cloudflareErrorHint, wakeUrlIsTunnelHost, defaultBusySeconds, defaultDebounceSeconds, defaultMaxPerHour, type WakeConfig, type WakeEvent } from "./wake.ts";
-import { decideRoute, isIdleWorkingPush, readRouteFields, routingMode, statusText, type RouteDecision } from "./wake-route.ts";
+import { classifyWake, readRouteFields, routingMode, statusText, type RouteDecision } from "./wake-route.ts";
 import { fetchCheckedPeer, fetchCheckedWake } from "./wake-target.ts";
 import { withDeadline } from "./deadline.ts";
 import * as Addr from "./address.ts";
@@ -1015,16 +1015,19 @@ async function routingReport(ctx: TenantContext): Promise<Json> {
 	return { mode: routingMode(ctx.WAKE_ROUTING), decided, delivered, testDelivered, suppressed, shadow, shadowAvoidable, counts };
 }
 
-async function dedupFingerprint(ctx: TenantContext, kind: string, peer: string, ref: string): Promise<string | null> {
-	const row: Json = await ctx.DB.prepare("SELECT fingerprint FROM wake_dedup WHERE kind = ? AND peer = ? AND ref = ?").bind(kind, peer, ref).first();
-	return typeof row?.fingerprint === "string" ? row.fingerprint : null;
+/** Last stored fingerprint and when it was saved. `seenMs` is null for a row written before 0021. */
+async function dedupFingerprint(ctx: TenantContext, kind: string, peer: string, ref: string): Promise<{ fingerprint: string; seenMs: number | null } | null> {
+	const row: Json = await ctx.DB.prepare("SELECT fingerprint, seen_ms FROM wake_dedup WHERE kind = ? AND peer = ? AND ref = ?").bind(kind, peer, ref).first();
+	if (typeof row?.fingerprint !== "string") return null;
+	const seen = Number(row.seen_ms);
+	return { fingerprint: row.fingerprint, seenMs: row.seen_ms !== null && row.seen_ms !== undefined && Number.isSafeInteger(seen) ? seen : null };
 }
 
 async function saveDedup(ctx: TenantContext, kind: string, peer: string, ref: string, fingerprint: string): Promise<void> {
 	await ctx.DB.prepare(
-		`INSERT INTO wake_dedup (kind, peer, ref, fingerprint) VALUES (?, ?, ?, ?)
-		 ON CONFLICT(kind, peer, ref) DO UPDATE SET fingerprint = excluded.fingerprint`,
-	).bind(kind, peer, ref, fingerprint).run();
+		`INSERT INTO wake_dedup (kind, peer, ref, fingerprint, seen_ms) VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(kind, peer, ref) DO UPDATE SET fingerprint = excluded.fingerprint, seen_ms = excluded.seen_ms`,
+	).bind(kind, peer, ref, fingerprint, Date.now()).run();
 }
 
 /** Task id already stored for this peer's message id, when a retry repeats it. */
@@ -1036,19 +1039,25 @@ async function messageTaskId(ctx: TenantContext, peer: string, messageId: string
 	return typeof row?.task_id === "string" ? row.task_id : null;
 }
 
-async function routeInbound(ctx: TenantContext, peer: string, contextId: string, wake: "auto" | "always" | "never" | null, intent: "handoff" | "blocker" | "question" | "status" | "ack" | null, text: string, duplicate: boolean): Promise<{ decision: RouteDecision; fingerprint: string }> {
-	let idle = false;
-	let unchanged = false;
+async function routeInbound(ctx: TenantContext, peer: string, contextId: string, wake: "auto" | "always" | "never" | null, intent: "handoff" | "blocker" | "question" | "status" | "ack" | null, text: string, duplicate: boolean, priorState: string | null = null): Promise<{ decision: RouteDecision; fingerprint: string }> {
 	let fingerprint = "";
+	let sameStatus = false;
+	let sameStatusAgeMs: number | null = null;
 	if (!duplicate && intent === "status") {
 		const normalized = statusText(text);
-		if (!normalized) idle = true;
-		else {
+		if (normalized) {
 			fingerprint = await A.sha256(normalized);
-			unchanged = await dedupFingerprint(ctx, "status", peer, contextId) === fingerprint;
+			const last = await dedupFingerprint(ctx, "status", peer, contextId);
+			sameStatus = last?.fingerprint === fingerprint;
+			sameStatusAgeMs = sameStatus && last?.seenMs !== null && last?.seenMs !== undefined ? Date.now() - last.seenMs : null;
 		}
 	}
-	return { decision: decideRoute({ mode: routingMode(ctx.WAKE_ROUTING), wake, intent, duplicate, idle, unchanged }), fingerprint };
+	const decision = classifyWake({
+		kind: "inbound", mode: routingMode(ctx.WAKE_ROUTING), wake, intent, duplicate, text, state: priorState,
+		sameStatus, sameStatusAgeMs, debounceMs: debounceMs(ctx),
+	});
+	// A repeat inside the window keeps the earlier time, so a steady stream of one status still wakes once per window.
+	return { decision, fingerprint: decision.decision === "status_unchanged" ? "" : fingerprint };
 }
 
 const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
@@ -1093,6 +1102,8 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
 		if (msg.contextId && msg.contextId !== task.contextId) throw new RpcError(-32602, "contextId does not match task");
 	}
 	const contextId = task ? task.contextId : msg.contextId ? A.checkId(msg.contextId, "contextId") : A.newId();
+	// The state before this message: a follow-up on an input-required task answers this agent's question.
+	const priorState: string | null = task ? String(task.status?.state || "") || null : null;
 	const ts = A.nowIso();
 	// A2A lets an agent accept a client-supplied contextId and forbids minting a replacement when it will not.
 	// This inbox accepts the id for the caller. A peer that already has it continues that conversation. An id
@@ -1149,7 +1160,7 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
 	log("message_received", { peer: label, contextId, taskId: task.id, chars: preview.length, version });
 	// Direct replies are stored for history, not scheduled as new work.
 	if (!directReply) {
-		const routedNow = await routeInbound(ctx, label, contextId, routed.fields.wake, routed.fields.intent, preview, false);
+		const routedNow = await routeInbound(ctx, label, contextId, routed.fields.wake, routed.fields.intent, preview, false, priorState);
 		if (routedNow.fingerprint) await saveDedup(ctx, "status", label, contextId, routedNow.fingerprint);
 		await recordRoute(ctx, routedNow.decision, "inbound");
 		if (routedNow.decision.deliver) await wake(ctx, ectx, contextId, task.id, label, preview, "inbound", wakeOpts(routedNow.decision));
@@ -2181,14 +2192,9 @@ async function handlePush(req: Request, ctx: TenantContext, ectx: ExecutionConte
 	const sources = pushRouteSources(body);
 	const labelled = readRouteFields(sources.messageMeta, sources.taskMeta);
 	const fields = labelled.ok ? labelled.fields : { wake: null, intent: null };
-	const idleWorking = isIdleWorkingPush(view.state, view.text, pushCarriesFile(body));
-	const pushDecision = decideRoute({
-		mode: routingMode(ctx.WAKE_ROUTING),
-		wake: fields.wake ?? (idleWorking ? "auto" : null),
-		intent: fields.intent ?? (idleWorking ? "status" : null),
-		duplicate: samePayload,
-		idle: fields.intent === "status" ? !statusText(view.text) : idleWorking,
-		unchanged: false,
+	const pushDecision = classifyWake({
+		kind: "outbound_update", mode: routingMode(ctx.WAKE_ROUTING), wake: fields.wake, intent: fields.intent,
+		duplicate: samePayload, text: view.text, state: view.state, hasFile: pushCarriesFile(body),
 	});
 	await recordRoute(ctx, pushDecision, "outbound_update");
 	if (pushDecision.deliver) await wake(ctx, ectx, rec.context_id, taskId, rec.peer, `[update on outbound task: ${state}] ${text}`, "outbound_update", wakeOpts(pushDecision));

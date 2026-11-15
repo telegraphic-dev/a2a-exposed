@@ -22,6 +22,7 @@ import m0017 from "../../../worker/migrations/0017_wake_routing.sql?raw";
 import m0018 from "../../../worker/migrations/0018_sealed_pairing.sql?raw";
 import m0019 from "../../../worker/migrations/0019_claimed_callback.sql?raw";
 import m0020 from "../../../worker/migrations/0020_wake_receipts.sql?raw";
+import m0021 from "../../../worker/migrations/0021_wake_dedup_seen.sql?raw";
 
 export type { InboxMigration };
 
@@ -46,4 +47,5 @@ export const INBOX_MIGRATIONS: InboxMigration[] = [
  { name: "0018_sealed_pairing.sql", sql: m0018 },
 	{ name: "0019_claimed_callback.sql", sql: m0019 },
 	{ name: "0020_wake_receipts.sql", sql: m0020 },
+	{ name: "0021_wake_dedup_seen.sql", sql: m0021 },
 ];

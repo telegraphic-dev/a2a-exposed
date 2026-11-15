@@ -327,7 +327,7 @@ One A2A endpoint has one owner token, saved by `init` in `config.env`. That toke
 | `WAKE_CLI_COMMAND` | Command in wake hints |
 | `WAKE_PRESET`, `WAKE_AGENT_ID`, `WAKE_KEY_HEADER`, `WAKE_KEY_PREFIX`, `WAKE_BODY_TEMPLATE` | Wake shape. Usually set by flags |
 | `WAKE_DEBOUNCE_SECONDS`, `WAKE_BUSY_SECONDS`, `WAKE_MAX_PER_HOUR` | Debounce, busy cool-down, and hourly cap. `WAKE_BUSY_SECONDS=0` disables the cool-down |
-| `WAKE_ROUTING` | `shadow` (default) or `enforce`. Shadow counts auto wakes that would be skipped and still wakes. Enforce stores an ack and an idle or unchanged status without a wake, and batches a changed status. `shadow` rolls `enforce` back |
+| `WAKE_ROUTING` | `shadow` (default) or `enforce`. Shadow counts auto wakes that would be skipped and still wakes. Enforce stores an ack, an idle status, and a status repeated inside the debounce window without a wake, and batches a changed status. Input-required updates always wake. `shadow` rolls `enforce` back |
 | `UPSTREAM_TOKEN` | Façade only. Bearer presented to the private agent |
 | `UPSTREAM_ACCESS_CLIENT_ID` / `UPSTREAM_ACCESS_CLIENT_SECRET` | Façade only. Access service token for the upstream tunnel |
 | `PEER_<ALIAS>_TOKEN` | Outbound peer token. Overrides the saved value |

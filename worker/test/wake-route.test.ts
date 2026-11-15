@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import worker from "../src/index.ts";
 import { sha256 } from "../src/a2a.ts";
 import { d1 } from "./d1.ts";
-import { decideRoute, isIdleWorkingPush, readRouteFields, routingMode, statusText } from "../src/wake-route.ts";
+import { classifyWake, decideRoute, isIdleWorkingPush, plainTaskState, readRouteFields, routingMode, statusText } from "../src/wake-route.ts";
 import { TOOLS } from "../src/mcp.ts";
 
 const BASE = "https://agent.example.com";
@@ -19,6 +19,13 @@ test("routing rules are deterministic", () => {
 	assert.equal(isIdleWorkingPush("working", "still going", false), false);
 	assert.equal(isIdleWorkingPush("working", "", true), false);
 	assert.equal(isIdleWorkingPush("completed", "", false), false);
+	assert.equal(isIdleWorkingPush("submitted", "", false), true);
+	assert.equal(isIdleWorkingPush("TASK_STATE_SUBMITTED", "", false), true);
+	assert.equal(isIdleWorkingPush("input-required", "", false), false);
+	assert.equal(isIdleWorkingPush("TASK_STATE_INPUT_REQUIRED", "", false), false);
+	assert.equal(plainTaskState("TASK_STATE_INPUT_REQUIRED"), "input-required");
+	assert.equal(plainTaskState("completed"), "completed");
+	assert.equal(plainTaskState(null), null);
 	assert.deepEqual(readRouteFields(undefined, undefined), { ok: true, fields: { wake: null, intent: null } });
 	assert.equal(readRouteFields({ "a2a.exposed/wake": "later" }, undefined).ok, false);
 	assert.equal(readRouteFields({ "a2a.exposed/wake": "auto" }, { "a2a.exposed/wake": "never" }).ok, false);
@@ -209,7 +216,8 @@ test("legacy, never, always, auto, dedup, and shadow metrics", async (t) => {
 });
 
 test("enforce suppresses acks and idle or unchanged status, and still wakes actionable and legacy sends", async (t) => {
-	const env = envFor({ WAKE_ROUTING: "enforce" });
+	// An unchanged status is suppressed only inside the debounce window. Each case below uses its own conversation.
+	const env = envFor({ WAKE_ROUTING: "enforce", WAKE_DEBOUNCE_SECONDS: "30" });
 	const h = harness(env);
 	t.after(h.restore);
 	const token = ((await h.call("POST", "/owner/peers", { label: "ada" })).data as { token: string }).token;
@@ -592,4 +600,183 @@ test("purge drops message claims and status fingerprints", async (t) => {
 	assert.notEqual(taskIdOf(retried.data), taskIdOf(first.data));
 	assert.notEqual(routes(h.logs).at(-1).decision, "status_unchanged");
 	assert.ok(h.sent.length > before, "the same status text wakes again after purge");
+});
+
+test("the classifier labels each class and keeps must-wake classes awake in enforce", () => {
+	const base = { mode: "enforce" as const, wake: null, intent: null, duplicate: false, text: "", state: null };
+	const label = (over: Partial<Parameters<typeof classifyWake>[0]>) => classifyWake({ kind: "inbound", ...base, ...over });
+	const push = (over: Partial<Parameters<typeof classifyWake>[0]>) => classifyWake({ kind: "outbound_update", ...base, ...over });
+
+	// Suppressible.
+	assert.equal(label({ intent: "ack", text: "ok" }).decision, "ack");
+	assert.equal(label({ intent: "ack", text: "ok" }).deliver, false);
+	assert.equal(label({ intent: "status", text: "  " }).decision, "status_idle");
+	const repeat = label({ intent: "status", text: "building", sameStatus: true, sameStatusAgeMs: 5_000, debounceMs: 30_000 });
+	assert.equal(repeat.decision, "status_unchanged");
+	assert.equal(repeat.deliver, false);
+	const late = label({ intent: "status", text: "building", sameStatus: true, sameStatusAgeMs: 31_000, debounceMs: 30_000 });
+	assert.equal(late.decision, "status", "an identical status outside the window is a new signal");
+	assert.equal(late.batch, true);
+	assert.equal(label({ intent: "status", text: "building", sameStatus: true, sameStatusAgeMs: null, debounceMs: 30_000 }).decision, "status",
+		"a fingerprint with no saved time is outside the window");
+	for (const state of ["working", "submitted", "TASK_STATE_WORKING", "TASK_STATE_SUBMITTED"]) {
+		const flip = push({ state });
+		assert.equal(flip.decision, "status_idle", state);
+		assert.equal(flip.deliver, false, state);
+	}
+
+	// Must wake.
+	assert.equal(push({ state: "input-required" }).decision, "input_required");
+	assert.equal(push({ state: "TASK_STATE_INPUT_REQUIRED", intent: "ack", text: "ok" }).deliver, true);
+	assert.equal(push({ state: "input-required", intent: "status", text: "" }).decision, "input_required");
+	assert.equal(label({ state: "input-required", intent: "ack", text: "here you go" }).decision, "input_required",
+		"a follow-up on an input-required task answers this agent's question");
+	assert.equal(label({ intent: "handoff", text: "please review" }).deliver, true);
+	assert.equal(label({ wake: "always", intent: "ack", text: "ok" }).decision, "always");
+	assert.equal(label({ text: "hello" }).decision, "legacy");
+	assert.equal(push({ state: "completed" }).decision, "legacy", "a textless completed push is not a flip");
+	assert.equal(push({ state: "failed" }).deliver, true);
+
+	// Sender choices still win over must-wake labels.
+	assert.equal(push({ state: "input-required", wake: "never" }).decision, "never");
+	assert.equal(push({ state: "input-required", duplicate: true }).decision, "duplicate");
+
+	// Completed status replies are labelled and stay shadow-only, even in enforce.
+	for (const mode of ["shadow", "enforce"] as const) {
+		const done = push({ mode, state: "completed", intent: "status", text: "done for today" });
+		assert.equal(done.decision, "status_completed", mode);
+		assert.equal(done.action, "shadow", mode);
+		assert.equal(done.proposed, "suppress", mode);
+		assert.equal(done.deliver, true, mode);
+	}
+	assert.equal(push({ state: "TASK_STATE_COMPLETED", intent: "status", text: "" }).decision, "status_completed");
+
+	// Shadow mode never suppresses: the same classes are only proposed.
+	for (const over of [{ intent: "ack" as const, text: "ok" }, { intent: "status" as const, text: "" }]) {
+		const shadow = label({ ...over, mode: "shadow" });
+		assert.equal(shadow.deliver, true);
+		assert.equal(shadow.action, "shadow");
+	}
+	assert.equal(push({ mode: "shadow", state: "working" }).action, "shadow");
+});
+
+test("an identical status outside the debounce window wakes again", async (t) => {
+	const realNow = Date.now;
+	let offset = 0;
+	Date.now = () => realNow() + offset;
+	const env = envFor({ WAKE_ROUTING: "enforce", WAKE_DEBOUNCE_SECONDS: "30" });
+	const h = harness(env);
+	t.after(() => { Date.now = realNow; h.restore(); });
+	try {
+		const token = ((await h.call("POST", "/owner/peers", { label: "ada" })).data as { token: string }).token;
+		const peer = `Bearer ${token}`;
+		const status = (text: string) => message(text, { contextId: "ctx-window", message: { "a2a.exposed/wake": "auto", "a2a.exposed/intent": "status" } });
+		await h.call("POST", "/", status("blocked on review"), peer);
+		assert.equal(routes(h.logs).at(-1).decision, "status");
+		const saved = env.DB.db.prepare("SELECT seen_ms FROM wake_dedup WHERE kind = 'status' AND peer = 'ada' AND ref = 'ctx-window'").get() as { seen_ms: number };
+		assert.equal(typeof saved.seen_ms, "number");
+		offset += 20_000;
+		await h.call("POST", "/", status("blocked on review"), peer);
+		assert.equal(routes(h.logs).at(-1).decision, "status_unchanged");
+		const kept = env.DB.db.prepare("SELECT seen_ms FROM wake_dedup WHERE kind = 'status' AND peer = 'ada' AND ref = 'ctx-window'").get() as { seen_ms: number };
+		assert.equal(kept.seen_ms, saved.seen_ms, "a suppressed repeat keeps the earlier time");
+		offset += 11_000;
+		await h.call("POST", "/", status("blocked on review"), peer);
+		assert.equal(routes(h.logs).at(-1).decision, "status", "31 s after the saved status, the same text is a new signal");
+		env.DB.db.prepare("UPDATE wake_dedup SET seen_ms = NULL WHERE kind = 'status' AND peer = 'ada' AND ref = 'ctx-window'").run();
+		await h.call("POST", "/", status("blocked on review"), peer);
+		assert.equal(routes(h.logs).at(-1).decision, "status", "a row saved before migration 0021 is outside the window");
+	} finally {
+		Date.now = realNow;
+	}
+});
+
+test("a follow-up on an input-required task wakes in enforce, whatever its intent", async (t) => {
+	const env = envFor({ WAKE_ROUTING: "enforce" });
+	const h = harness(env);
+	t.after(h.restore);
+	const token = ((await h.call("POST", "/owner/peers", { label: "ada" })).data as { token: string }).token;
+	const peer = `Bearer ${token}`;
+	const first = await h.call("POST", "/", message("can you review this?", { contextId: "ctx-ask" }), peer);
+	const taskId = taskIdOf(first.data);
+	assert.equal(h.sent.length, 1);
+	const asked = await h.call("POST", `/owner/tasks/${taskId}/reply`, { text: "Which screen?", state: "input-required" });
+	assert.equal(asked.status, 200, JSON.stringify(asked.data));
+	const before = h.sent.length;
+	await h.call("POST", "/", message("the settings page", { contextId: "ctx-ask", taskId, message: { "a2a.exposed/intent": "ack" } }), peer);
+	assert.equal(routes(h.logs).at(-1).decision, "input_required");
+	assert.equal(h.sent.length, before + 1, "the answer to this agent's question wakes");
+});
+
+test("a burst of status flips and acks replays without waking, and every message still lands", async (t) => {
+	const realNow = Date.now;
+	let offset = 0;
+	Date.now = () => realNow() + offset;
+	const env = envFor({ WAKE_ROUTING: "enforce", WAKE_DEBOUNCE_SECONDS: "30", WAKE_BUSY_SECONDS: "0", ENABLE_CRON: "1" });
+	const h = harness(env);
+	t.after(() => { Date.now = realNow; h.restore(); });
+	try {
+		const peerToken = ((await h.call("POST", "/owner/peers", { label: "ada" })).data as { token: string }).token;
+		const peer = `Bearer ${peerToken}`;
+		const pushToken = "push-token-burst";
+		const outbound = ["task-burst-1", "task-burst-2", "task-burst-3"];
+		for (const id of outbound) {
+			await env.DB.prepare(
+				`INSERT INTO outbound (task_id, context_id, peer, endpoint, protocol, push_token_hash, sent_at, updates_json, updates_seen)
+				 VALUES (?, 'ctx-burst', 'ada', 'https://ada.example.net/', '0.3', ?, '2026-01-01T00:00:00.000Z', '[]', 0)`,
+			).bind(id, await sha256(pushToken)).run();
+		}
+		const auth = `Bearer ${pushToken}`;
+		const flip = (id: string, state: string) => ({ task: { id, contextId: "ctx-burst", status: { state } } });
+
+		// Pure status flips and acks, interleaved, as in the reported burst.
+		let acks = 0;
+		let pushes = 0;
+		for (let round = 0; round < 10; round++) {
+			for (const id of outbound) {
+				assert.equal((await h.call("POST", "/push", flip(id, round % 2 ? "working" : "submitted"), auth)).status, 200);
+				pushes++;
+			}
+			await h.call("POST", "/", message(`ack ${round}`, { contextId: "ctx-burst-acks", message: { "a2a.exposed/wake": "auto", "a2a.exposed/intent": "ack" } }), peer);
+			acks++;
+			await h.call("POST", "/", message("   ", { contextId: "ctx-burst-acks", message: { "a2a.exposed/wake": "auto", "a2a.exposed/intent": "status" } }), peer);
+			acks++;
+			offset += 1_000;
+		}
+		assert.equal(h.sent.length, 0, "pure status flips and acks do not wake at all");
+		offset += 60_000;
+		await h.call("GET", "/health");
+		assert.equal(h.sent.length, 0, "nothing was batched for later either");
+
+		// One changed status in the same burst: the repeats collapse into at most one wake.
+		for (let i = 0; i < 10; i++) {
+			await h.call("POST", "/", message("rebuilding the index", { contextId: "ctx-burst-status", message: { "a2a.exposed/wake": "auto", "a2a.exposed/intent": "status" } }), peer);
+			offset += 1_000;
+		}
+		assert.equal(h.sent.length, 0, "a changed status waits for the debounce");
+		offset += 31_000;
+		await h.call("GET", "/health");
+		assert.equal(h.sent.length, 1, "the status burst wakes once");
+
+		// Every message is still in the inbox and every push is stored.
+		const inbound = await h.call("GET", "/owner/inbox?all=1&from=ada");
+		const rows = inbound.data as { contextId: string; kind?: string }[];
+		assert.equal(rows.filter((r) => r.kind !== "outbound" && r.contextId === "ctx-burst-acks").length, acks);
+		assert.equal(rows.filter((r) => r.kind !== "outbound" && r.contextId === "ctx-burst-status").length, 10);
+		let stored = 0;
+		for (const id of outbound) {
+			const row = env.DB.db.prepare("SELECT updates_json FROM outbound WHERE task_id = ?").get(id) as { updates_json: string };
+			stored += JSON.parse(row.updates_json).length;
+		}
+		assert.equal(stored, pushes);
+		const pushHistory = env.DB.db.prepare("SELECT COUNT(*) AS n FROM history WHERE context_id = 'ctx-burst' AND event = 'push'").get() as { n: number };
+		assert.equal(pushHistory.n, pushes);
+
+		const report = await h.call("GET", "/owner/wake/routing");
+		const body = report.data as { delivered: number; suppressed: number };
+		assert.equal(body.delivered, 1);
+		assert.ok(body.suppressed >= pushes + acks, "each suppressed event is counted for the shadow stats");
+	} finally {
+		Date.now = realNow;
+	}
 });
