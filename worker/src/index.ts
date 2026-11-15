@@ -1044,7 +1044,7 @@ async function messageTaskId(ctx: TenantContext, peer: string, messageId: string
 	return typeof row?.task_id === "string" ? row.task_id : null;
 }
 
-async function routeInbound(ctx: TenantContext, peer: string, contextId: string, wake: "auto" | "always" | "never" | null, intent: "handoff" | "blocker" | "question" | "status" | "ack" | null, text: string, duplicate: boolean, hasContent = false): Promise<{ decision: RouteDecision; fingerprint: string }> {
+async function routeInbound(ctx: TenantContext, peer: string, contextId: string, wake: "auto" | "always" | "never" | null, intent: "handoff" | "blocker" | "question" | "status" | "ack" | null, text: string, duplicate: boolean, hasContent = false, inputRequired = false): Promise<{ decision: RouteDecision; fingerprint: string }> {
 	let idle = false;
 	let unchanged = false;
 	let fingerprint = "";
@@ -1060,7 +1060,7 @@ async function routeInbound(ctx: TenantContext, peer: string, contextId: string,
    }
 		}
 	}
-	return { decision: decideRoute({ mode: (await wakePolicy(ctx)).mode, wake, intent, duplicate, idle, unchanged, hasContent }), fingerprint };
+	return { decision: decideRoute({ mode: (await wakePolicy(ctx)).mode, wake, intent, duplicate, idle, unchanged, hasContent, inputRequired }), fingerprint };
 }
 
 const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
@@ -1111,6 +1111,7 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
 	// this agent has never seen, and an id another peer already has, are the same for the caller: a new
 	// conversation of their own. The other peer's tasks, history, and wake are not read or written. The claim
 	// and the first task are one batch, so the task is stored only when this peer's owner row is present.
+	const inputRequired = task?.status.state === "input-required";
 	const creating = !task;
 	if (!task) task = { id: A.newId(), contextId, status: { state: "submitted", timestamp: ts }, artifacts: [], history: [], _peer: label, _protocol: version, _createdAt: ts, _push: [] };
 	msg.contextId = contextId; if (!sealed) msg.taskId = task.id;
@@ -1161,8 +1162,9 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
 	log("message_received", { peer: label, contextId, taskId: task.id, chars: preview.length, version });
 	// Direct replies are stored for history, not scheduled as new work.
 	if (!directReply) {
-		const routedNow = await routeInbound(ctx, label, contextId, routed.fields.wake, routed.fields.intent, preview, false, pushCarriesFile(msg));
-		if (routedNow.fingerprint) {
+		const routedNow = await routeInbound(ctx, label, contextId, routed.fields.wake, routed.fields.intent, preview, false, pushCarriesFile(msg), inputRequired);
+		// Suppressed repeats do not move the window anchored to the last non-suppressed status.
+		if (routedNow.fingerprint && routedNow.decision.decision !== "status_unchanged") {
    await saveDedup(ctx, "status", label, contextId, routedNow.fingerprint);
    await saveDedup(ctx, "status_at", label, contextId, String(Date.now()));
   }

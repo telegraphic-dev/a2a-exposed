@@ -70,20 +70,27 @@ In the routing report, `mode` is the effective mode, rather than the configured
 mode; use `configured` to inspect the deployment setting.
 
 The CLI reads the saved choice before applying `--policy`. Plain output confirms
-`Saved.` and prints an `Undo:` command that restores that choice. JSON output
-remains a single policy response. The saved choice belongs only to that inbox. `legacy` keeps automatic decisions
-in shadow; explicit `never` and duplicate suppression still apply.
+`Saved.` and prints an `Undo:` command that restores that choice. Saving the
+current policy is a read-only no-op; plain output says `No change` and omits
+`Undo:`. JSON output remains a single policy response. The saved choice belongs
+only to that inbox. `legacy` keeps automatic decisions in shadow; explicit
+`never` and duplicate suppression still apply.
 
 The narrower rollout uses exact `WAKE_ROUTING=staging-enforce` plus the
 **deployment-only** binding `WAKE_ROUTING_ENV=staging`. A tenant overlay cannot
 supply the environment guard. Without that exact guard the new mode stays shadow.
 It skips automatic acks, empty statuses, identical statuses received within the
-debounce window, and textless submitted/working outbound status flips without
-files, artifacts or data. Changed status messages still follow the existing wake
-coalescing. Input-required replies, completed `intent:status` results, actionable
-requests, `always`, and legacy messages still wake. Completed status results are
+debounce window measured from the last status that was not suppressed, and
+textless submitted/working outbound status flips without files, artifacts or data. Changed status messages still follow the existing wake
+coalescing. Repeats do not extend that window. Input-required replies and peer
+answers on an inbound task awaiting input, completed `intent:status` results,
+actionable requests, `always`, and legacy messages still wake. Completed status results are
 labelled `outbound_completed_status` but are not suppressed; the other receiver
 labels are `outbound_status_only` and `outbound_input_required`.
+Auto-classified updates carrying files, artifacts or structured data retain their
+wake (`content` when no higher-priority rule applies). Full task snapshots with
+older artifacts can therefore keep waking on otherwise empty progress flips;
+account for those conservative wakes in shadow analysis.
 
 All updates are stored before routing; skipping a wake never acknowledges an
 inbox item. Compare the shadow counters with a replay before enabling staging,

@@ -69,6 +69,8 @@ export function readRouteFields(messageMeta: unknown, paramsMeta: unknown): Rout
 export interface RouteInput {
 	mode: RoutingMode;
 	hasContent?: boolean;
+	/** An inbound peer answer continues a task that was waiting for input. */
+	inputRequired?: boolean;
 	wake: WakeMode | null;
 	intent: Intent | null;
 	duplicate: boolean;
@@ -121,6 +123,7 @@ export function decideRoute(input: RouteInput): RouteDecision {
 	if (input.wake === "always") {
 		return { ...base, deliver: true, batch: false, decision: "always", proposed: "wake", action: "wake" };
 	}
+	if (input.inputRequired) return { ...base, deliver: true, batch: false, decision: "input_required", proposed: "wake", action: "wake" };
 	const auto = input.wake === "auto" || (input.wake === null && input.intent !== null);
 	if (!auto) {
 		return { ...base, deliver: true, batch: false, decision: "legacy", proposed: "wake", action: "wake" };

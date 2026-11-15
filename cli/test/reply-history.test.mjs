@@ -154,7 +154,7 @@ test("wake policy lists choices, sets explicit policy, and rejects invalid input
  const log=path.join(dir,"fetch.log");const cli=fixture(t,{A2A_TEST_FETCH_LOG:log});
  const report={policy:"smart",mode:"shadow",choices:["smart","legacy"]};
  let r=cli(["wake","policy","--json"],report);assert.equal(r.status,0,r.stderr);assert.deepEqual(JSON.parse(r.stdout),report);
- r=cli(["wake","policy","--policy","legacy","--json"],{...report,policy:"legacy"});assert.equal(r.status,0,r.stderr);
+ r=cli(["wake","policy","--policy","legacy","--json"],{...report,policy:"legacy"},{byHeader:{"content-type":{status:200,body:{...report,policy:"legacy"}}},default:{status:200,body:report}});assert.equal(r.status,0,r.stderr);
  const calls=()=>fs.readFileSync(log,"utf8").trim().split("\n").map(x=>JSON.parse(x));
  assert.equal(calls().at(-1).method,"PUT");assert.deepEqual(JSON.parse(calls().at(-1).body),{policy:"legacy"});
  const count=calls().length;
@@ -175,10 +175,23 @@ test("wake policy explains each effective mode and restores the actual prior cho
  for (const previous of ["smart","legacy"]) {
   const after={...base,policy:"legacy"};
   const r=cli(["wake","policy","--policy","legacy"],after,{byHeader:{"content-type":{status:200,body:after}},default:{status:200,body:{...base,policy:previous}}});
-  assert.equal(r.status,0,r.stderr);assert.match(r.stdout,/^Saved\./);assert.ok(r.stdout.includes(`Undo: wake policy --policy ${previous}`));
+  assert.equal(r.status,0,r.stderr);
+  if (previous === "legacy") {assert.match(r.stdout,/^No change: policy was already legacy\./);assert.doesNotMatch(r.stdout,/Undo:/);}
+  else {assert.match(r.stdout,/^Saved\./);assert.ok(r.stdout.includes(`Undo: wake policy --policy ${previous}`));}
  }
  const unsupported=cli(["wake","policy","--policy","legacy"],{}, {status:404});
  assert.equal(unsupported.status,1);assert.match(unsupported.stderr,/does not support wake policy yet/);assert.match(unsupported.stderr,/Check status --json/);assert.doesNotMatch(unsupported.stderr,/list wake policy/);
  const invalid=cli(["wake","policy","--policy","invalid"],base);assert.match(invalid.stderr,/Unknown wake policy "invalid"/);
  const extra=cli(["wake","policy","--stage","owner-notified"],base);assert.match(extra.stderr,/Unknown wake policy option --stage/);
+});
+
+
+test("saving the current wake policy is a read-only no-op", t => {
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),"a2a-policy-noop-"));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const log=path.join(dir,"fetch.log");const cli=fixture(t,{A2A_TEST_FETCH_LOG:log});
+ const data={policy:"legacy",mode:"shadow",choices:["smart","legacy"]};
+ const r=cli(["wake","policy","--policy","legacy","--json"],data);
+ assert.equal(r.status,0,r.stderr);assert.deepEqual(JSON.parse(r.stdout),data);
+ const calls=fs.readFileSync(log,"utf8").trim().split("\n").map(x=>JSON.parse(x));
+ assert.deepEqual(calls.map(r=>r.method),["GET"]);
 });

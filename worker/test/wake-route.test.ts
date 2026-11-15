@@ -668,3 +668,41 @@ test("staging does not skip status or ack updates carrying files or structured d
  }
  assert.equal(h.sent.length,2);
 });
+
+
+test("an answer on an input-required inbound task wakes even when labelled ack or status", async (t) => {
+ const env=envFor({WAKE_ROUTING:"staging-enforce",WAKE_ROUTING_ENV:"staging"});const h=harness(env);t.after(h.restore);
+ const token=((await h.call("POST","/owner/peers",{label:"ada"})).data as {token:string}).token;
+ const peer=`Bearer ${token}`;
+ for (const intent of ["ack","status"]) {
+  const first=await h.call("POST","/",message("request",{contextId:`await-${intent}`}),peer);
+  const id=taskIdOf(first.data);
+  const waiting=await h.call("POST",`/owner/tasks/${id}/reply`,{text:"Please answer",state:"input-required"});
+  assert.equal(waiting.status,200);
+  const before=h.sent.length;
+  const answer=message(intent==="status"?"":"yes",{taskId:id,message:{"a2a.exposed/intent":intent}},`answer-${intent}`);
+  assert.equal((await h.call("POST","/",answer,peer)).status,200);
+  assert.equal(h.sent.length,before+1,`the ${intent}-labelled answer must wake`);
+  assert.equal(routes(h.logs).at(-1).decision,"input_required");
+  await h.call("POST","/",answer,peer);
+  assert.equal(h.sent.length,before+1,"a retry must not wake twice");
+  await h.call("POST",`/owner/tasks/${id}/reply`,{text:"Please answer again",state:"input-required"});
+  const silent=message("silent",{taskId:id,message:{"a2a.exposed/wake":"never","a2a.exposed/intent":intent}});
+  await h.call("POST","/",silent,peer);
+  assert.equal(h.sent.length,before+1,"explicit never remains authoritative");
+ }
+});
+
+test("steady identical statuses cannot slide the staging suppression window forever", async (t) => {
+ const real=Date.now;let offset=0;Date.now=()=>real()+offset;
+ const env=envFor({WAKE_ROUTING:"staging-enforce",WAKE_ROUTING_ENV:"staging",WAKE_DEBOUNCE_SECONDS:"30",WAKE_BUSY_SECONDS:"0",ENABLE_CRON:"1"});
+ const h=harness(env);t.after(()=>{Date.now=real;h.restore();});
+ const token=((await h.call("POST","/owner/peers",{label:"ada"})).data as {token:string}).token;
+ for(let n=0;n<6;n++) {
+  offset=n*20000;
+  await h.call("POST","/",message("building",{contextId:"fixed-window",message:{"a2a.exposed/intent":"status"}}),`Bearer ${token}`);
+ }
+ assert.equal(h.sent.length,3,"wake at 0, 40 and 80 seconds with a 30-second window");
+ const inbox=await h.call("GET","/owner/inbox?context=fixed-window&from=ada&all=1");
+ assert.equal((inbox.data as unknown[]).length,6,"every repeated message remains available");
+});
