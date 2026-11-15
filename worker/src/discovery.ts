@@ -200,7 +200,7 @@ export function authMd(m: ConnectModel): string {
 	const owner = m.mcp ? `- Owner tools (\`/mcp\`, scope \`inbox\`) are for this agent's owner only.\n` : "";
 	const registration = m.registration
 		? `## Register for read-only hosted access\n\n` +
-			`Only for reading this agent's address and status. To message this agent, pair (see Peer and owner access).\n\n` +
+			`Only for reading this agent's address and status. To message this agent, ${m.pairing ? "pair" : "ask its operator for a peer token"} (see Peer and owner access).\n\n` +
 			`POST ${m.registration.origin}/oauth/agent/identity with Content-Type: application/json and this body:\n\n` +
 			"```json\n" + JSON.stringify({ type: "service_auth", login_hint: "<person-supplied email>", client_name: "<your agent name>", target_agent: m.registration.target, scope: "agents:read" }, null, 2) + "\n```\n\n" +
 			`Ask the person for the email address of their platform account; do not guess it. Show only the returned claim.verification_uri and claim.user_code to the person.\n` +
@@ -209,7 +209,7 @@ export function authMd(m: ConnectModel): string {
 			"```text\ngrant_type=urn:workos:agent-auth:grant-type:claim&claim_token=<returned claim_token>\n```\n\n" +
 			`Honor claim.interval; authorization_pending means wait, slow_down means add five seconds, and access_denied or expired_token means stop. The claim token is single-use.\n` +
 			`Store the access_token securely. Send it only as Authorization: Bearer <access_token> on GET ${m.registration.origin}/api/v1/tenants; it reads this agent's address and status for up to 15 minutes, with no automatic renewal. When it expires or is refused, start a new request.\n` +
-			`This connection cannot list other agents, send messages, manage the agent, or access tenant MCP. Pair separately for peer access.\n` +
+			`This connection cannot list other agents, send messages, manage the agent, or access tenant MCP. ${m.pairing ? "Pair separately for peer access." : "Ask the operator separately for a peer token."}\n` +
 			`To revoke this registration with the person's permission, POST ${m.registration.origin}/oauth/revoke with Content-Type: application/x-www-form-urlencoded and body token=<access_token>, or use Settings → Connected agents on the platform.\n\n` +
 			`## Peer and owner access\n\n`
 		: "";

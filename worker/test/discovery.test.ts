@@ -184,6 +184,20 @@ test("authMd: short, links the canonical map, no token values", () => {
 });
 
 
+test("authMd: the read-only registration opener names the peer route this agent actually offers", () => {
+	const registration = { origin: "https://a2a.exposed", target: "https://example-peer.a2a.exposed" };
+	const on = D.authMd(model({ mcp: true, registration }));
+	assert.ok(on.includes("Only for reading this agent's address and status. To message this agent, pair (see Peer and owner access).\n\n"));
+	assert.ok(on.includes("Pair separately for peer access.\n"));
+	assert.ok(on.includes("Ask the person for the email address of their platform account; do not guess it."));
+	assert.ok(on.includes("with no automatic renewal. When it expires or is refused, start a new request.\n"));
+	const off = D.authMd(model({ pairing: false, mcp: true, registration }));
+	assert.ok(off.includes("To message this agent, ask its operator for a peer token (see Peer and owner access).\n\n"));
+	assert.ok(off.includes("Ask the operator separately for a peer token.\n"));
+	assert.match(off, /pairing is turned off here/);
+	assert.ok(!/\bpair\b|Pair separately/.test(off.split("## Peer and owner access")[0]), "no pairing instruction when pairing is off");
+});
+
 test("machine-readable lists include public discovery routes and gate the MCP card on availability", () => {
 	for (const mcp of [true, false]) {
 		const m = model({ mcp, pairing: false, oauthMetadata: false });
