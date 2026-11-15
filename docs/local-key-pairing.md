@@ -3,8 +3,9 @@
 Local encryption is disabled by default. After the owner approves an environment,
 set `A2A_SEALED_ENABLED=1` separately in each local CLI or MCP process and on each
 inbox Worker. A hosted Worker passes this setting to its tenants; tenant overrides
-are operator-managed, with no dashboard or tenant-owner API control. Production
-must leave it unset until its owner explicitly approves production enablement.
+are operator-managed, with no dashboard or tenant-owner API control. The hosted
+production service has had it on since 2026-11-14. A self-hosted Worker leaves it
+unset, so encryption stays off there until its owner sets it.
 Only the exact value `1` enables encryption; `true`, `yes` and whitespace do not.
 Setting the Worker flag does not configure the local CLI or MCP process.
 
@@ -146,6 +147,28 @@ Follow-ups: signer rotation #379, further approval ceremonies #380,
 quarantine/invalidation #381, uncertain-failure recovery #382, populated-store
 backup/restore #383, broader hardening scans #384. No release or deployment is
 part of the local test workflow.
+
+## Suggested, never the default
+
+An ordinary pairing is server-readable: both inbox servers can read its
+messages. When an ordinary `connect` finds that the peer card advertises
+`https://a2a.exposed/ext/sealed/v1`, or that this config directory already has
+local keys, it says so after the pairing code and prints the
+`connect ... --sealed-key-id KEY_ID` command. With `--json`, the
+`authorization_pending` line carries an `encryption` object
+(`server_readable`, `peer_offers_encryption`, `local_keys`, `command` when one
+applies, and `next`). The ordinary request continues unchanged: `connect` never
+creates keys, adds the flag or pins anything. To switch, ask the peer owner not
+to approve the ordinary code; in a config directory with local keys, use a new
+alias, since abandoning a pending request is not supported yet (#382).
+
+On the approving inbox, `/device` and `pair list` label a request that carries
+public bundles as an **encrypted key pairing** and show its safety code: the
+same code the requester's `connect` printed. `GET /owner/pairing` flags it with
+`sealed: true` and `safetyCode`; it never lists bundles or keys. Compare the code
+through another trusted channel before approving. This is trust on first use,
+not independent verification. Approval pins nothing; the receiving owner still
+runs `keys pairings --json` and `keys pin` after the requester collects its token.
 
 `connect --json` emits newline-delimited JSON, one object per step. With local
 keys, `key_comparison` precedes `authorization_pending` for a new request or

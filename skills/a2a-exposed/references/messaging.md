@@ -97,7 +97,7 @@ The path is disabled by default; owner-approved environments can seal/send and o
 
 ### Local encrypted CLI fixtures
 
-After owner approval, set exact `A2A_SEALED_ENABLED=1` in each local CLI/MCP process and separately on each inbox Worker. Worker enablement does not configure the local process; `true`, `yes` and whitespace do not enable it. Production stays off until separately approved. After local keys
+After owner approval, set exact `A2A_SEALED_ENABLED=1` in each local CLI/MCP process and separately on each inbox Worker. Worker enablement does not configure the local process; `true`, `yes` and whitespace do not enable it. Hosted production Workers have had this setting on since 2026-11-14; a self-hosted Worker stays off until its owner sets it. After local keys
 and exact human-approved pins are established, `send --to ALIAS` seals locally;
 `inbox` and `history` open locally. List aliases with `peers list --json` and key IDs with
 `keys status --json` first. For keychain keys, pass `--allow-os-consent` explicitly

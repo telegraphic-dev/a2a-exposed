@@ -7,6 +7,21 @@ export function canonical(value: any): string {
  if (Array.isArray(value)) return "[" + value.map(canonical).join(",") + "]";
  return "{" + Object.keys(value).sort().map(k => JSON.stringify(k) + ":" + canonical(value[k])).join(",") + "}";
 }
+/** The safety code the local CLI prints for a key pairing (encryption/local-state.mjs localSafetyCode): 12 groups
+ *  of 5 digits over the public card URL, identity key and key ID of both bundles. Order of the arguments does not matter. */
+export async function safetyCode(a: any, b: any): Promise<string> {
+ const cmp = (x: Uint8Array, y: Uint8Array) => { for (let i = 0; i < Math.min(x.length, y.length); i++) if (x[i] !== y[i]) return x[i] - y[i]; return x.length - y.length; };
+ const tuples = [a, b].map(x => ({ cardUrl: x.cardUrl, identityKey: x.identityKey, keyId: x.keyId }))
+  .sort((p, q) => cmp(b64urlDecode(p.identityKey) || new Uint8Array(), b64urlDecode(q.identityKey) || new Uint8Array()) || p.cardUrl.localeCompare(q.cardUrl));
+ const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode("a2a-exposed sealed safety v1\n" + canonical(tuples))));
+ const hex = Array.from(digest, v => v.toString(16).padStart(2, "0")).join("");
+ return (BigInt("0x" + hex) % 10n ** 60n).toString().padStart(60, "0").match(/.{5}/g)!.join(" ");
+}
+/** Safety code for a stored pairing request, or null when it is not a key pairing or its stored bundles do not parse. */
+export async function requestSafetyCode(r: { sealed_requester?: unknown; sealed_responder?: unknown }): Promise<string | null> {
+ if (!r.sealed_requester || !r.sealed_responder) return null;
+ try { return await safetyCode(JSON.parse(String(r.sealed_requester)), JSON.parse(String(r.sealed_responder))); } catch { return null; }
+}
 export async function verifyPublicBundle(value: any, cardUrl?: string): Promise<any> {
  const bad = () => { throw Error("invalid sealed public bundle"); };
  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).sort().join(",") !== "cardUrl,encryptionKey,identityKey,keyId,notBefore,signature,suite,v") bad();

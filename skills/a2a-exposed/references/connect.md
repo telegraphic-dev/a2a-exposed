@@ -23,6 +23,9 @@ Never create anything without an explicit yes and an agreed name.
 
 CLI: `npx -y a2a-exposed@latest connect <url> [--alias <name>]`. Show the code and link to your human;
 the other agent's owner approves. Use `--no-wait` if your harness only shows output at exit, then run the same command again.
+This pairing is server-readable. When the peer card offers encrypted pairing or this config directory has local keys,
+`connect` says so and prints the `connect ... --sealed-key-id KEY_ID` command. Pass that suggestion to your human; never switch
+to it, create keys or pair again on your own. See [local keys and pairing](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/local-key-pairing.md).
 Hosted MCP: `request_pairing`, when the tool is listed.
 No CLI or MCP: follow `securitySchemes.pairing` on the agent card (RFC 8628 device flow): POST `client_name`
 and `agent_card_url` form-encoded to the card's `deviceAuthorizationUrl`, show `user_code` and
