@@ -13,7 +13,8 @@ const tokens = { alice: 'a'.repeat(43), bob: 'b'.repeat(43) };
 const delay = ms => new Promise(r => setTimeout(r, ms));
 async function setup(t, options = {}) {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'acp-target-')), log = path.join(dir, 'wire');
-	const target = createAcpTarget({ command: [process.execPath, fixture, log, options.mode || 'ok'], cwd: dir, peers: new Map(Object.entries(tokens).map(([p, token]) => [p, hash(token)])), ...options });
+	const reports = [];
+	const target = createAcpTarget({ acpMode: 'ask', report: message => reports.push(message), command: [process.execPath, fixture, log, options.mode || 'ok'], cwd: dir, peers: new Map(Object.entries(tokens).map(([p, token]) => [p, hash(token)])), ...options });
 	const calls = () => fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse) : [];
 	t.after(async () => { await target.close(); for (const { pid } of calls().filter(m => m.pid)) { assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' }); } fs.rmSync(dir, { recursive: true, force: true }); });
 	async function rpc(method, params, peer = 'alice', extra = {}) {
@@ -24,7 +25,7 @@ async function setup(t, options = {}) {
 	async function done(id, peer = 'alice') {
 		for (let i = 0; i < 500; i++) { const r = await rpc('tasks/get', { id }, peer); if (r.error || !['working', 'submitted'].includes(r.result.status.state)) return r; await delay(10); } throw new Error('task timed out');
 	}
-	return { dir, log, target, calls, rpc, send, done };
+	return { dir, log, target, calls, rpc, send, done, reports };
 }
 test('stdio sessions reuse the exact peer/context binding, isolate peers, never expose ACP IDs or thoughts', async t => {
 	const s = await setup(t);
@@ -70,7 +71,8 @@ test('task cancel interrupts stdio, busy concurrent prompts are refused, no recr
 	for (let i = 0; i < 500 && !s.calls().some(m => m.method === 'session/prompt'); i++) await delay(10);
 	assert.equal((await s.send('busy', 'ctx')).error.code, -32005);
 	assert.equal((await s.rpc('tasks/cancel', { id: task.id })).result.status.state, 'canceled');
-	await delay(20); const next = (await s.send('after', 'ctx')).result; assert.equal((await s.done(next.id)).result.status.state, 'failed');
+	await delay(20); const next = (await s.send('after', 'ctx')).result; const stopped = (await s.done(next.id)).result;
+	assert.equal(stopped.status.state, 'failed'); assert.match(stopped.status.message.parts[0].text, /binding stopped; restart connector/);
 	assert.equal(s.calls().filter(m => m.method === 'session/new').length, 1);
 });
 for (const method of ['message/stream', 'SendStreamingMessage']) test(`streaming emits real chunks and completed status: ${method}`, async t => {
@@ -128,7 +130,7 @@ test('owner-only peer hash file and argv validation reject ambiguous targeting a
 	const s = await setup(t); const file = path.join(s.dir, 'peers.json');
 	fs.writeFileSync(file, JSON.stringify({ peers: { alice: hash(tokens.alice).toString('hex') } }), { mode: 0o600 });
 	assert.equal(acpPeerFile(file).size, 1);
-	const flags = { acp: JSON.stringify([process.execPath, fixture]), 'acp-cwd': s.dir, 'acp-peers-file': file };
+	const flags = { 'acp-mode': 'ask', acp: JSON.stringify([process.execPath, fixture]), 'acp-cwd': s.dir, 'acp-peers-file': file };
 	assert.equal(acpOptions(flags).cwd, s.dir);
 	assert.throws(() => acpOptions({ ...flags, acp: 'sh -c evil' }), /JSON argv/);
 	assert.throws(() => acpOptions({ ...flags, 'acp-session': 'exact' }), /session-peer/);

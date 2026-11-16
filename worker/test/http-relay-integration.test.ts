@@ -116,7 +116,7 @@ test("ACP actual CLI through native Worker and official SDK addresses exactly on
 	try {
 		writeFileSync(peerFile, JSON.stringify({ peers: { alice: hash(appToken), bob: hash("b".repeat(43)) } }), { mode: 0o600 });
 		await run(["relay", "a2a", "create", "--token-file", connector, "--ingress-token-file", ingressFile, "--forward-headers", "content-type,accept,authorization,a2a-version"]);
-		child = spawn(process.execPath, [cli, "relay", "a2a", "run", "--token-file", connector, "--acp", JSON.stringify([process.execPath, resolve("../cli/test/fixtures/acp-agent.mjs"), log]), "--acp-cwd", dir, "--acp-peers-file", peerFile, "--acp-session", "owner-selected-session", "--acp-session-peer", "alice"], { env, cwd: dir, stdio: ["ignore", "pipe", "pipe"] });
+		child = spawn(process.execPath, [cli, "relay", "a2a", "run", "--token-file", connector, "--acp", JSON.stringify([process.execPath, resolve("../cli/test/fixtures/acp-agent.mjs"), log]), "--acp-mode", "ask", "--acp-cwd", dir, "--acp-peers-file", peerFile, "--acp-session", "owner-selected-session", "--acp-session-peer", "alice"], { env, cwd: dir, stdio: ["ignore", "pipe", "pipe"] });
 		let diagnostics = ""; child.stderr!.on("data", (c: any) => { diagnostics += c; });
 		await until(async () => { if (child!.exitCode !== null) throw new Error(`ACP connector failed ${child!.exitCode}`); return (await (await r.call("/owner/relay/http/a2a")).json() as any).connected; });
 		const ingress = readFileSync(ingressFile, "utf8").trim();
@@ -127,10 +127,12 @@ test("ACP actual CLI through native Worker and official SDK addresses exactly on
 		for (const protocolVersion of ["0.3", "1.0"]) {
 			const client = await new ClientFactory({ transports: [new JsonRpcTransportFactory({ fetchImpl: publicFetch, legacyCompat: { enabled: true } })] }).createFromAgentCard(AgentCard.fromJSON({ ...discovered, supportedInterfaces: [{ url: new URL("/relay/a2a/", r.url).href, protocolBinding: "JSONRPC", protocolVersion }] }));
 			const events: any[] = [];
-			for await (const event of client.sendMessageStream(SendMessageRequest.fromJSON({ message: { messageId: `test-${protocolVersion}`, role: "ROLE_USER", parts: [{ text: "native" }] } }))) events.push(event);
-			const text = JSON.stringify(events); assert.ok(text.includes("hello ")); assert.ok(text.includes("native")); assert.ok(!text.includes("PRIVATE"));
+			for await (const event of client.sendMessageStream(SendMessageRequest.fromJSON({ message: { messageId: `test-${protocolVersion}`, role: "ROLE_USER", parts: [{ text: "messages" }] } }))) events.push(event);
+			const text = JSON.stringify(events); assert.ok(text.includes("final artifact")); assert.ok(!text.includes("PRIVATE"));
 			assert.ok(text.includes("COMPLETED") || text.includes('"state":3'), text);
 			const artifactEvents = events.filter(e => e.payload?.$case === "artifactUpdate");
+			assert.equal(artifactEvents.map(e => e.payload.value.artifact.parts.map((p: any) => p.content?.$case === "text" ? p.content.value : "").join("")).join(""), "hello\nworld\nfinal artifact");
+			assert.equal(artifactEvents.filter(e => e.payload.value.lastChunk).length, 1);
 			assert.equal(artifactEvents.at(-1)?.payload.value.lastChunk, true);
 			assert.equal(artifactEvents.at(-1)?.payload.value.append, true);
 			assert.equal(events.at(-2)?.payload?.$case, "artifactUpdate", "SDK receives artifact finalization before terminal task status");
@@ -142,6 +144,8 @@ test("ACP actual CLI through native Worker and official SDK addresses exactly on
 		const calls: any[] = readFileSync(log, "utf8").trim().split("\n").map((line: string) => JSON.parse(line));
 		assert.equal(calls.filter(m => m.method === "session/load").length, 1); assert.equal(calls.filter(m => m.method === "session/new").length, 0);
 		assert.ok(calls.filter(m => m.method === "session/prompt").every(m => m.params.sessionId === "owner-selected-session"));
+		for (let i = 0; i < calls.length; i++) if (calls[i].method === "session/prompt") { assert.equal(calls[i - 1].method, "session/set_mode"); assert.deepEqual(calls[i - 1].params, { sessionId: "owner-selected-session", modeId: "ask" }); }
+		assert.ok(diagnostics.includes("ACP active mode confirmed: ask"));
 		assert.ok(!diagnostics.includes(appToken));
 	} finally {
 		if (child && child.exitCode === null && child.signalCode === null) { child.kill("SIGTERM"); await once(child, "exit"); }

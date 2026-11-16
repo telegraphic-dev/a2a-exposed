@@ -184,7 +184,7 @@ a2a-exposed relay a2a create \
   --forward-headers content-type,accept,authorization,a2a-version
 a2a-exposed relay a2a run --token-file ./acp-connector.token \
   --acp '["/absolute/path/to/agent","--acp"]' \
-  --acp-cwd /absolute/project --acp-peers-file ./acp-peers.json \
+  --acp-cwd /absolute/project --acp-peers-file ./acp-peers.json --acp-mode OWNER_CHOSEN_MODE \
   --acp-session existing-session-id --acp-session-peer reviewer
 ```
 
@@ -200,6 +200,43 @@ before attaching: ACP loading is not guaranteed to join or coordinate an already
 running editor session. Session discovery/selection happens locally using the
 agent's own session tools, not through an arbitrary peer-supplied session ID.
 
+**`--acp-mode MODE` is mandatory**, including for existing sessions. Inspect the
+adapter's advertised `availableModes` locally and choose its exact ID with the
+owner; there is no universal safe mode name and no provider-name/default-mode
+guessing. After either `session/new` or exact `session/load`, the relay validates
+the advertised mode state and must successfully call ACP v1 `session/set_mode`
+before any prompt. A successful setter response (`{}` in ACP v1) acknowledges the
+selection; a contradictory notification is a failure, not a fallback. The relay
+reapplies the owner-selected mode before every subsequent prompt and prints a
+sanitized active-mode confirmation locally. Missing mode information, unavailable
+modes, setter rejection or uncertain responses stop the binding without a prompt.
+Conflicting `current_mode_update` or mode `config_option_update` notifications,
+including idle/delayed updates, stop that binding; they never authorize a weaker
+mode. Native slash-command prompts are refused. Peer content cannot select modes.
+This does not change native approval/sandbox defaults globally, nor prove that an
+adapter implements its mode safely: validate real-agent behavior before exposure.
+An adapter may act before announcing a mode change; the relay is not a sandbox.
+This target requires the ACP v1 [session modes](https://agentclientprotocol.com/protocol/v1/session-modes)
+contract; config-options-only adapters are refused rather than guessed. It also
+monitors advertised mode selectors in full-state
+[config option updates](https://agentclientprotocol.com/protocol/v1/session-config-options).
+
+Startup/initialize, session creation, exact loading, mode discovery, mode setting,
+mode drift, prompt failure and stopped-binding reuse have distinct fixed local
+console/task diagnostics. Raw adapter errors never appear in those diagnostics.
+For private troubleshooting only, add `--acp-diagnostics-file NEWFILE` to `run`.
+It exclusively creates a new owner-only mode-600 regular file (no symlinks or
+overwrite) before starting agents and captures at most **1 MiB total raw stderr**
+across all bindings. After the cap, remaining stderr is drained and discarded.
+The file closes after process teardown, including connector failure; creation
+failure aborts startup, while write/close failure reports a fixed diagnostic and
+stops the target. Partial files are retained for local inspection. Use a private
+directory; raw stderr can contain credentials, prompts and other sensitive data.
+Never paste it into chat, peers, GitHub or public logs. No raw verbose-console
+option is provided. The adapter inherits your environment, including `CLAUDECODE`;
+launch from an appropriate shell if nested Claude execution is refused. The relay
+does not silently strip or change the user's environment.
+
 Omit both session options to create one ACP process/session for each authenticated
 peer and A2A context. Reuse the returned `contextId` to continue it. The same
 context string from a different peer is a separate session. Neither peer metadata
@@ -208,6 +245,15 @@ Send/Get/Cancel and streaming Send in A2A 0.3 and 1.0. It does not implement tas
 subscriptions, listing or push callbacks. Nonstreaming Send returns a task
 immediately; poll Get for completion. Streaming sends public assistant text only,
 not reasoning, tool arguments or historical messages.
+
+Assistant `agent_message_chunk` text is concatenated exactly within a message.
+When consecutive chunks carry different actual ACP `messageId` values, a newline
+separates messages in both polled and streamed artifacts. ID-less chunks remain
+an unmodified text stream: the relay cannot infer where one message ends. Claude
+ACP 0.107.3 stamps message IDs on ordinary assistant chunks (some notices omit
+them); older Codex ACP emits ID-less text chunks. Such output can remain ambiguous
+across distinct native messages; inserting a newline for every chunk would corrupt
+split words. Artifact finalization is independent of the final text chunk.
 
 A permission request is answered `cancelled`, and the task becomes `input-required`
 with `a2a.exposed/owner-wait` metadata. No remote approval channel is provided.

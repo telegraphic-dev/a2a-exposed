@@ -5,7 +5,7 @@ import { StringDecoder } from 'node:string_decoder';
 export const acpLimits = Object.freeze({ lineBytes: 262144, outputBytes: 524288, requestMs: 45000, sessions: 8, tasks: 128 });
 const failure = () => new Error('ACP operation failed; check local adapter authentication and protocol compatibility');
 export class AcpClient {
-	constructor({ command, cwd, onUpdate = () => {}, onPermission = () => {} }) {
+	constructor({ command, cwd, onUpdate = () => {}, onPermission = () => {}, onStderr = () => {} }) {
 		this.pending = new Map(); this.next = 0; this.closed = false; this.cleanup = null;
 		this.onUpdate = onUpdate; this.onPermission = onPermission;
 		this.child = spawn(command[0], command.slice(1), { cwd, shell: false, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
@@ -14,7 +14,7 @@ export class AcpClient {
 		this.child.on('exit', () => { void this.close(); });
 		this.child.stdin.on('error', () => { void this.close(); });
 		// Drain but never log arbitrary diagnostics: providers may include credentials.
-		this.child.stderr.on('data', () => {});
+		this.child.stderr.on('data', onStderr);
 		let buffer = '', bytes = 0; const decoder = new StringDecoder('utf8');
 		this.child.stdout.on('data', chunk => {
 			if (this.closed) return;

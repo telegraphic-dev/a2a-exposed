@@ -4,6 +4,20 @@ import path from 'node:path';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { AcpClient, acpLimits } from './acp-client.mjs';
 import { CliError } from './a2a.mjs';
+import { acpDiagnostics } from './acp-diagnostics.mjs';
+
+const modeValid = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,100}$/.test(value);
+const phases = Object.freeze({
+	initialize: 'ACP initialize failed; check adapter startup, authentication and ACP v1 compatibility. No automatic replay.',
+	new: 'ACP session/new failed; check local adapter configuration. No replacement or automatic replay.',
+	load: 'ACP session/load failed; check load support and the exact existing session locally. No replacement or automatic replay.',
+	modes: 'ACP mode discovery failed; requested mode must be advertised in availableModes. No prompt sent.',
+	setMode: 'ACP session/set_mode failed or uncertain; no prompt sent. Restart connector after local inspection.',
+	changed: 'ACP mode changed unexpectedly; binding stopped. Restart connector after local inspection. No automatic replay.',
+	prompt: 'ACP session/prompt failed; inspect local adapter authentication, model and tool compatibility. No automatic replay.',
+	stopped: 'ACP binding stopped; restart connector to use this context. No session recreation or automatic replay.',
+	diagnostics: 'ACP private diagnostics write or close failed; connector stopped. Inspect protected file locally.',
+});
 
 const digest = value => createHash('sha256').update(value).digest();
 const idValid = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,200}$/.test(value);
@@ -41,30 +55,56 @@ export function acpOptions(flags) {
 	try { command = JSON.parse(flags.acp); } catch { throw new CliError('--acp requires a JSON argv array, not a shell command'); }
 	if (!Array.isArray(command) || !command.length || command.length > 64 || command.some(v => typeof v !== 'string' || !v || v.includes('\0') || v.length > 4096)) throw new CliError('--acp requires a nonempty JSON argv array');
 	if (!flags['acp-cwd'] || !path.isAbsolute(flags['acp-cwd']) || !fs.statSync(flags['acp-cwd'], { throwIfNoEntry: false })?.isDirectory()) throw new CliError('--acp-cwd requires an existing absolute working directory');
+	if (!modeValid(flags['acp-mode'])) throw new CliError('--acp-mode requires an explicit advertised mode ID; inspect your adapter modes locally (no provider defaults)');
 	const peers = acpPeerFile(flags['acp-peers-file']);
 	const sessionId = flags['acp-session'], sessionPeer = flags['acp-session-peer'];
 	if (sessionId !== undefined && !sessionValid(sessionId)) throw new CliError('invalid --acp-session');
 	if (!!sessionId !== !!sessionPeer || (sessionPeer && !peers.has(sessionPeer))) throw new CliError('--acp-session requires --acp-session-peer naming one configured peer (and vice versa)');
-	return { command, cwd: flags['acp-cwd'], peers, sessionId, sessionPeer };
+	return { command, cwd: flags['acp-cwd'], peers, sessionId, sessionPeer, acpMode: flags['acp-mode'], diagnosticsFile: flags['acp-diagnostics-file'] };
 }
-export function createAcpTarget({ command, cwd, peers, sessionId, sessionPeer }) {
+export function createAcpTarget({ command, cwd, peers, sessionId, sessionPeer, acpMode, diagnosticsFile, report = message => console.error(message) }) {
+	if (!modeValid(acpMode)) throw new CliError('--acp-mode requires an explicit advertised mode ID');
 	const sessions = new Map(), tasks = new Map(); let closed = false, fixedContext;
+	const diagnostics = acpDiagnostics(diagnosticsFile, () => { closed = true; report(phases.diagnostics); for (const entry of sessions.values()) stop(entry, 'diagnostics'); });
 	const notify = task => { task.timestamp = new Date().toISOString(); for (const cb of task.listeners) cb(); };
 	const set = (task, state, note) => { if (terminal(task.state)) return; task.state = state; task.note = note; notify(task); };
+	function stop(entry, phase) {
+		if (!entry.stopped) { entry.stopped = phase; report(phases[phase]); }
+		if (entry.current) set(entry.current, 'failed', phases[phase]);
+		void entry.client.close();
+	}
+	async function applyMode(entry) {
+		entry.phase = 'setMode'; entry.guarded = true;
+		const result = await entry.client.call('session/set_mode', { sessionId: entry.id, modeId: acpMode });
+		// ACP v1 setters return {}, not a currentModeId. Successful RPC is the
+		// acknowledgement; contradictory notifications always win and fence it.
+		if (entry.stopped || entry.client.closed || Object.keys(result).some(key => key !== '_meta') || (result._meta !== undefined && !obj(result._meta))) throw new Error();
+		report(`ACP active mode confirmed: ${acpMode}`);
+	}
 	function binding(peer, contextId) {
 		const key = JSON.stringify([peer, contextId]); let entry = sessions.get(key);
 		if (entry) return entry;
 		if (sessions.size >= acpLimits.sessions || closed) throw new Error('capacity');
-		entry = { id: null, busy: false, current: null, client: null };
-		entry.client = new AcpClient({ command, cwd,
+		entry = { id: null, busy: false, current: null, client: null, phase: 'initialize', stopped: null, guarded: false, modeConfigIds: new Set() };
+		entry.client = new AcpClient({ command, cwd, onStderr: chunk => diagnostics.write(chunk),
 			onUpdate(params) {
+				if (params?.sessionId !== entry.id) return;
+				const u = params.update;
+				if (entry.guarded && u?.sessionUpdate === 'current_mode_update' && u.currentModeId !== acpMode) { stop(entry, 'changed'); return; }
+				if (entry.guarded && u?.sessionUpdate === 'config_option_update') {
+					if (!Array.isArray(u.configOptions) || [...entry.modeConfigIds].some(id => !u.configOptions.some(o => o.id === id)) || u.configOptions.some(o => (o.category === 'mode' || entry.modeConfigIds.has(o.id)) && o.currentValue !== acpMode)) { stop(entry, 'changed'); return; }
+					for (const o of u.configOptions) if (o.category === 'mode') entry.modeConfigIds.add(o.id);
+				}
 				const task = entry.current;
 				// Ignore load replay and all thoughts, tools and other session IDs.
 				if (!task || terminal(task.state) || params?.sessionId !== entry.id) return;
-				const u = params.update;
 				if (u?.sessionUpdate === 'agent_message_chunk' && u.content?.type === 'text' && typeof u.content.text === 'string') {
-					if (Buffer.byteLength(task.text) + Buffer.byteLength(u.content.text) > acpLimits.outputBytes) { set(task, 'failed', 'ACP output limit exceeded'); void entry.client.close(); return; }
-					task.text += u.content.text; notify(task);
+					const messageId = typeof u.messageId === 'string' && u.messageId.length ? u.messageId : undefined;
+					const chunk = (messageId !== undefined && task.messageId !== undefined && messageId !== task.messageId ? '\n' : '') + u.content.text;
+					// An ID-less chunk does not establish a message boundary.
+					task.messageId = messageId;
+					if (Buffer.byteLength(task.text) + Buffer.byteLength(chunk) > acpLimits.outputBytes) { set(task, 'failed', 'ACP output limit exceeded'); void entry.client.close(); return; }
+					task.text += chunk; notify(task);
 				}
 			},
 			onPermission(params) {
@@ -77,30 +117,44 @@ export function createAcpTarget({ command, cwd, peers, sessionId, sessionPeer })
 		entry.ready = (async () => {
 			const init = await entry.client.call('initialize', { protocolVersion: 1, clientCapabilities: {}, clientInfo: { name: 'a2a-exposed', version: '1' } });
 			if (init.protocolVersion !== 1) throw new Error('protocol');
+			let result;
 			if (sessionId) {
+				entry.phase = 'load';
 				if (init.agentCapabilities?.loadSession !== true) throw new Error('load');
 				entry.id = sessionId;
-				await entry.client.call('session/load', { sessionId, cwd, mcpServers: [] });
+				result = await entry.client.call('session/load', { sessionId, cwd, mcpServers: [] });
 			} else {
-				const result = await entry.client.call('session/new', { cwd, mcpServers: [] });
+				entry.phase = 'new';
+				result = await entry.client.call('session/new', { cwd, mcpServers: [] });
 				if (!sessionValid(result.sessionId)) throw new Error('session'); entry.id = result.sessionId;
 			}
-		})().catch(async () => { await entry.client.close(); throw new Error('ACP session unavailable; no replacement session was created'); });
+			entry.phase = 'modes';
+			const modes = result.modes;
+			if (!obj(modes) || !modeValid(modes.currentModeId) || !Array.isArray(modes.availableModes) || !modes.availableModes.length || modes.availableModes.some(m => !obj(m) || !modeValid(m.id) || typeof m.name !== 'string') || new Set(modes.availableModes.map(m => m.id)).size !== modes.availableModes.length || !modes.availableModes.some(m => m.id === acpMode) || !modes.availableModes.some(m => m.id === modes.currentModeId)) throw new Error();
+			for (const o of result.configOptions || []) if (o.category === 'mode') entry.modeConfigIds.add(o.id);
+			await applyMode(entry); entry.prepared = true;
+		})().catch(async () => { stop(entry, entry.phase); await entry.client.close(); throw new Error(); });
 		entry.ready.catch(() => {}); sessions.set(key, entry); return entry;
 	}
 	async function execute(entry, task, prompt) {
 		try {
+			if (entry.stopped) { set(task, 'failed', phases.stopped); report(phases.stopped); return; }
 			await entry.ready;
 			if (terminal(task.state)) return;
 			entry.current = task;
+			if (entry.stopped || entry.client.closed) { set(task, 'failed', phases.stopped); report(phases.stopped); return; }
+			if (!entry.prepared) await applyMode(entry);
+			entry.prepared = false;
+			if (entry.stopped || terminal(task.state)) return;
+			entry.phase = 'prompt';
 			const result = await entry.client.call('session/prompt', { sessionId: entry.id, prompt });
 			if (!terminal(task.state)) set(task, result.stopReason === 'end_turn' ? 'completed' : result.stopReason === 'cancelled' ? 'canceled' : 'failed', result.stopReason === 'end_turn' ? undefined : 'ACP turn stopped without completion');
-		} catch { set(task, 'failed', 'ACP operation failed; check the local adapter, session availability and authentication. No automatic replay.'); }
+		} catch { const phase = entry.stopped || entry.phase; set(task, 'failed', phases[phase]); stop(entry, phase); }
 		finally { entry.current = null; entry.busy = false; }
 	}
 	function stream(task, v1, rpcId, signal) {
 		let callback, detach, finished = false, sent = 0, count = 0, streamBytes = 0;
-		const cancel = () => { if (finished) return; finished = true; task.listeners.delete(callback); detach?.(); if (!terminal(task.state)) { set(task, 'canceled', 'Caller disconnected; ACP turn canceled'); task.entry.client.cancel(task.entry.id); void task.entry.client.close(); } };
+		const cancel = () => { if (finished) return; finished = true; task.listeners.delete(callback); detach?.(); if (!terminal(task.state)) { set(task, 'canceled', 'Caller disconnected; ACP turn canceled'); task.entry.stopped = 'stopped'; report(phases.stopped); task.entry.client.cancel(task.entry.id); void task.entry.client.close(); } };
 		const body = new ReadableStream({
 			start(controller) {
 				callback = () => {
@@ -153,7 +207,7 @@ export function createAcpTarget({ command, cwd, peers, sessionId, sessionPeer })
 			if (!task || task.peer !== peer) return rpcError(m.id, -32001, 'Task not found');
 			if (m.method === 'CancelTask' || m.method === 'tasks/cancel') {
 				if (terminal(task.state)) return rpcError(m.id, -32002, 'Task is not cancelable');
-				set(task, 'canceled', 'Canceled by caller'); task.entry.client.cancel(task.entry.id); await task.entry.client.close();
+				set(task, 'canceled', 'Canceled by caller'); task.entry.stopped = 'stopped'; report(phases.stopped); task.entry.client.cancel(task.entry.id); await task.entry.client.close();
 			}
 			return ok(wireTask(task, v1));
 		}
@@ -161,6 +215,7 @@ export function createAcpTarget({ command, cwd, peers, sessionId, sessionPeer })
 		const message = p.message;
 		if (!obj(message) || !['user', 'ROLE_USER'].includes(message.role) || !Array.isArray(message.parts) || !message.parts.length || message.parts.length > 100 || message.parts.some(part => !obj(part) || typeof part.text !== 'string' || Object.keys(part).some(k => !['kind', 'text'].includes(k)) || (part.kind !== undefined && part.kind !== 'text')) || Object.keys(message).some(k => !['messageId', 'role', 'parts', 'contextId', 'taskId', 'kind'].includes(k)) || (message.contextId !== undefined && !idValid(message.contextId))) return rpcError(m.id, -32602, 'Only text user messages and opaque A2A context IDs are supported');
 		if (p.configuration?.pushNotificationConfig || p.configuration?.pushNotification || p.pushNotificationConfig) return rpcError(m.id, -32003, 'Push notifications not supported');
+		if (message.parts.some(p => p.text.trimStart().startsWith('/'))) return rpcError(m.id, -32602, 'Native slash commands are not accepted; peers cannot select permission modes');
 		if (message.taskId !== undefined) return rpcError(m.id, -32602, 'Start a new task in the returned context; peer replies cannot approve tools');
 		const contextId = message.contextId || (sessionId ? fixedContext : null) || randomUUID();
 		if (sessionId && fixedContext && fixedContext !== contextId) return rpcError(m.id, -32602, 'This target is bound to one A2A context');
@@ -175,5 +230,5 @@ export function createAcpTarget({ command, cwd, peers, sessionId, sessionPeer })
 		if (m.method === 'SendStreamingMessage' || m.method === 'message/stream') return stream(task, v1, m.id, signal);
 		return ok(v1 ? { task: wireTask(task, true) } : wireTask(task, false));
 	}
-	return { handle, async close() { closed = true; for (const task of tasks.values()) set(task, 'failed', 'ACP connector stopped; no automatic replay'); await Promise.all([...sessions.values()].map(entry => entry.client.close())); } };
+	return { handle, async close() { closed = true; for (const task of tasks.values()) set(task, 'failed', 'ACP connector stopped; no automatic replay'); try { await Promise.all([...sessions.values()].map(entry => entry.client.close())); } finally { diagnostics.close(); } } };
 }

@@ -184,7 +184,7 @@ export async function runHttpConnector({ url, token, profile, localUrl, cardUrl,
 export async function relayHttp(args, flags = {}) {
 	const [kind, action] = args || [], profile = kind === 'http' ? 'webhook' : kind;
 	if (args?.length !== 2 || !['webhook', 'a2a'].includes(profile) || !['create', 'status', 'revoke', 'run'].includes(action)) throw new CliError('usage: relay http|a2a create|status|revoke|run');
-	const allowed = { create: ['token-file', 'ingress-token-file', 'forward-headers', 'json'], status: ['json'], revoke: ['json'], run: ['url', 'token-file', 'local-url', 'card-url', 'local-headers-file', 'json', 'acp', 'acp-cwd', 'acp-peers-file', 'acp-session', 'acp-session-peer'] }[action];
+	const allowed = { create: ['token-file', 'ingress-token-file', 'forward-headers', 'json'], status: ['json'], revoke: ['json'], run: ['url', 'token-file', 'local-url', 'card-url', 'local-headers-file', 'json', 'acp', 'acp-cwd', 'acp-peers-file', 'acp-session', 'acp-session-peer', 'acp-mode', 'acp-diagnostics-file'] }[action];
 	for (const key of Object.keys(flags)) if (!allowed.includes(key)) throw new CliError(`unsupported HTTP relay option --${key}`);
 	const path = `/owner/relay/http/${profile}`;
 	if (action === 'create') {
@@ -235,7 +235,7 @@ export async function relayHttp(args, flags = {}) {
 	}
 	if (action === 'run') {
 		if (!flags['token-file'] || (!flags['local-url'] && !flags.acp)) throw new CliError('run requires --token-file and --local-url (or --acp for relay a2a)');
-		const acpKeys = ['acp', 'acp-cwd', 'acp-peers-file', 'acp-session', 'acp-session-peer'];
+		const acpKeys = ['acp', 'acp-cwd', 'acp-peers-file', 'acp-session', 'acp-session-peer', 'acp-mode', 'acp-diagnostics-file'];
 		if (acpKeys.some(k => flags[k] !== undefined) && (!flags.acp || profile !== 'a2a')) throw new CliError('ACP options require relay a2a run --acp');
 		if (flags.acp && ['local-url', 'card-url', 'local-headers-file'].some(k => flags[k] !== undefined)) throw new CliError('--acp cannot be combined with local HTTP destinations or fixed headers');
 		if (profile !== 'a2a' && flags['card-url']) throw new CliError('--card-url is only supported by relay a2a');

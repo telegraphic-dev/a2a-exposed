@@ -21,6 +21,8 @@ test('HTTP relay help makes audience, optional URL and machine/process contracts
 	const section = result.stdout.split('HTTP endpoint relays')[1]?.split('\nInbox (owner side)')[0];
 	assert.ok(section, 'help contains the HTTP/native relay section');
 	assert.match(section, /relay http\|a2a run --token-file FILE --local-url/);
+	assert.match(section, /--acp-mode MODE/); assert.match(section, /--acp-diagnostics-file NEWFILE/);
+	assert.match(section, /set before every prompt/); assert.match(section, /private raw stderr/);
 	assert.match(section, /\[--url wss:\/\/agent\.example\.com\/relay\/http\/PROFILE\/connect\]/);
 	for (const text of ['--url defaults from A2A_BASE_URL', 'CLI http maps to wire PROFILE webhook', 'create/status/revoke always print JSON', 'run is silent on stdout', 'foreground only: keep running', '3 failed 10s handshakes', 'required for discovery too: invited callers, not URL-only public access']) assert.ok(section.includes(text), text);
 });
