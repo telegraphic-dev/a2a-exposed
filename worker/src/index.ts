@@ -20,6 +20,7 @@ import { withDeadline } from "./deadline.ts";
 import * as Addr from "./address.ts";
 import * as P from "./pairing.ts";
 import * as SealedKeys from "./sealed-keys.ts";
+import * as Inspect from "./owner-inspect.ts";
 import * as D from "./discovery.ts";
 import { SKILLS } from "./skills-index.ts";
 import * as M from "./mcp.ts";
@@ -2432,19 +2433,14 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 	}
 	if (seg[0] === "summary" && !seg[1] && m === "GET") {
 		// Counts only. Unlike GET /owner/inbox this does not return message text or clear a pending wake.
-		const known = ["submitted", "working", "input-required", "completed", "failed", "rejected", "canceled"];
-		const tasks: Record<string, number> = {};
-		for (const state of known) tasks[state] = 0;
-		const rows = await ctx.DB.prepare("SELECT state, COUNT(*) AS n FROM tasks GROUP BY state").all();
-		for (const r of rows.results as Json[]) {
-			if (typeof r.state !== "string" || !known.includes(r.state)) continue;
-			const n = Number(r.n);
-			if (Number.isSafeInteger(n) && n >= 0) tasks[r.state] = n;
-		}
+		const counts = await Inspect.summary(ctx.DB);
 		const pending: Json = await ctx.DB.prepare("SELECT COUNT(*) AS n FROM device_requests WHERE status = 'pending' AND expires_ms > ?").bind(Date.now()).first();
 		const pairing = Number(pending?.n ?? 0);
-		return json({ tasks, pairingPending: Number.isSafeInteger(pairing) && pairing >= 0 ? pairing : 0 });
+		return json({ tasks: counts.tasks, pairingPending: Number.isSafeInteger(pairing) && pairing >= 0 ? pairing : 0, groups: counts.groups, peers: counts.peers, outbound: counts.outbound });
 	}
+	// Read-only inspection lists. Unlike GET /owner/inbox they clear no wake and mark no reply seen.
+	if (seg[0] === "tasks" && !seg[1] && m === "GET") return json(await Inspect.listTasks(ctx.DB, url.searchParams, A.nowIso()));
+	if (seg[0] === "outbound" && !seg[1] && m === "GET") return json(await Inspect.listOutbound(ctx.DB, url.searchParams, A.nowIso(), pushUpdateView));
 	if (seg[0] === "feedback" && !seg[1] && m === "GET") {
 		const endpoint = Fb.feedbackEndpoint(ctx);
 		const facts = { version: Fb.WORKER_VERSION, connection: Fb.connectionOf(ctx) };
@@ -2623,9 +2619,17 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 		}
 	}
 	if (seg[0] === "history" && seg[1] && m === "GET") {
-		const n = Math.min(Number(url.searchParams.get("n") || "50"), 1000);
+		const contextId = seg[1];
 		const fromFilter = url.searchParams.get("from");
 		if (fromFilter !== null && !PEER_FILTER.test(fromFilter)) return json({ error: "from is invalid" }, 400);
+		// n: the newest n rows as an array (existing callers). limit, cursor or order: a keyset page { items, nextCursor }.
+		const paged = Inspect.historyPaged(url.searchParams);
+		const page = paged ? await Inspect.historyPage(url.searchParams, contextId, fromFilter) : null;
+		const n = Math.min(Number(url.searchParams.get("n") || "50"), 1000);
+		const take = page ? page.limit + 1 : n;
+		const seqCond = page?.after != null ? (page.newest ? " AND seq < ?" : " AND seq > ?") : "";
+		const innerOrder = page && !page.newest ? "ASC" : "DESC";
+		const outerOrder = page?.newest ? "DESC" : "";
 		// Without `from`, rows for every peer that owns this context id (a task or an outbound task), plus local notes.
 		// With `from`, one peer's rows only, so another peer's conversation is not in this read.
 		const rows = await ctx.DB.prepare(`SELECT h.*,
@@ -2644,7 +2648,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 						OR task_id IN (SELECT task_id FROM outbound WHERE context_id = ? AND peer = ?)
 					)
 				)
-			) ORDER BY seq DESC LIMIT ?
+			)${seqCond} ORDER BY seq ${innerOrder} LIMIT ?
 		) ORDER BY seq` : `SELECT * FROM (
 			SELECT * FROM history WHERE context_id = ? AND (
 				peer IS NULL OR peer = ''
@@ -2654,13 +2658,17 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 					NOT EXISTS (SELECT 1 FROM tasks WHERE context_id = ?)
 					AND NOT EXISTS (SELECT 1 FROM outbound WHERE context_id = ?)
 				)
-			) ORDER BY seq DESC LIMIT ?
-		) ORDER BY seq`} ) h ORDER BY h.seq`).bind(...(fromFilter
-			? [seg[1], fromFilter, seg[1], fromFilter, seg[1], fromFilter, n]
-			: [seg[1], seg[1], seg[1], seg[1], seg[1], n])).all();
-		return json((rows.results as Json[]).map((r) => ({ ...r, data: r.data_json ? JSON.parse(r.data_json) : undefined, data_json: undefined,
+			)${seqCond} ORDER BY seq ${innerOrder} LIMIT ?
+		) ORDER BY seq`} ) h ORDER BY h.seq ${outerOrder}`).bind(...(fromFilter
+			? [contextId, fromFilter, contextId, fromFilter, contextId, fromFilter, ...(seqCond ? [page!.after] : []), take]
+			: [contextId, contextId, contextId, contextId, contextId, ...(seqCond ? [page!.after] : []), take])).all();
+		const view = (rows.results as Json[]).map((r) => ({ ...r, data: r.data_json ? JSON.parse(r.data_json) : undefined, data_json: undefined,
 			currentState: r.current_status_json ? ((status) => { const ownerWait = A.ownerWaitOf({ status }); return { state: status.state, timestamp: status.timestamp, ...(ownerWait ? { ownerWait } : {}) }; })(JSON.parse(r.current_status_json))
-				: r.current_history_json ? JSON.parse(r.current_history_json) : undefined, current_status_json: undefined, current_history_json: undefined })));
+				: r.current_history_json ? JSON.parse(r.current_history_json) : undefined, current_status_json: undefined, current_history_json: undefined }));
+		if (!page) return json(view);
+		const items = view.slice(0, page.limit).map(Inspect.pagedHistoryRow);
+		const nextCursor = view.length > page.limit ? Inspect.historyCursor(page.binding, items[items.length - 1]?.seq) : null;
+		return json({ items, nextCursor });
 	}
 	if (seg[0] === "history" && !seg[1] && m === "POST") {
 		const b = await body();
