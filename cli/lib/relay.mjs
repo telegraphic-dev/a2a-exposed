@@ -104,7 +104,7 @@ export async function runConnector({ url, token, localUrl, signal, onReady = () 
 		if (!helloReceived) {
 			handshakesFailed++;
 			const category = handshakeTimeout ? "relay handshake timed out" : "relay handshake failed";
-			if (handshakesFailed >= 3) throw new CliError(`${category} three consecutive times; check endpoint, relay capability and credential enrollment, then restart`);
+			if (handshakesFailed >= 3) throw new CliError(`${category} three consecutive times on Node ${process.version}; check endpoint, network reachability and credential enrollment; run relay status before restarting`);
 			onDiagnostic(`${category}; retrying with backoff (${handshakesFailed}/3). Check endpoint and relay enrollment.`);
 		}
 		const delay = reconnectDelay(attempt++);

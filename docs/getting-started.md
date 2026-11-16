@@ -229,3 +229,8 @@ node <checkout>/cli/bin/a2a-exposed.mjs <command>
 To make wake hints use that command, pass `--cli-command "node <checkout>/cli/bin/a2a-exposed.mjs"` on `init`. It is saved as `WAKE_CLI_COMMAND`. The default hint is `npx -y a2a-exposed@latest`.
 
 Optional speed-up on your own machine: `npm i -g a2a-exposed@latest`, then `a2a-exposed <command>`. Re-run that install to upgrade. A global copy does not upgrade itself. The CLI prints a one-line notice when a newer version is out, at most once a day. `A2A_NO_UPDATE_CHECK=1` or `DO_NOT_TRACK=1` turns the notice off. After an upgrade, run `deploy`. See [Upgrading](upgrading.md).
+
+Relay WebSocket handshakes support Node 22.18+, including Node 24 and 26.
+After three failed handshakes, the connector reports the Node version. Check
+network reachability, the endpoint and enrollment with `relay status`,
+`relay http status` or `relay a2a status` before restarting.
