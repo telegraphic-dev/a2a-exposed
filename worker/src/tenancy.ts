@@ -75,7 +75,8 @@ export type ConfigFields = { [K in ConfigKey]?: string };
 // ROBOTS_POLICY and CONTENT_SIGNAL: the hosted Worker sets the platform default (staging: disallow); a tenant overlay may override.
 // SKILLS_BASE_URL: the hosted Worker lists the skills its site serves at the same pin (same bytes, same digests).
 // A2A_SEALED_ENABLED: inherit the explicit Worker flag; unset remains disabled and tenant config can override.
-const HOSTED_PLATFORM_DEFAULTS: readonly ConfigKey[] = ["MAX_BODY", "RATE_PER_MIN", "PBKDF2_ITERATIONS", "MCP", "PAIRING_APPROVAL", "DISCOVERY_DOCS_ORIGIN", "ROBOTS_POLICY", "CONTENT_SIGNAL", "SKILLS_BASE_URL", "A2A_SEALED_ENABLED"];
+// WAKE_ROUTING: inherit the deployment default; tenant overrides remain subject to the deployment-only staging guard.
+const HOSTED_PLATFORM_DEFAULTS: readonly ConfigKey[] = ["MAX_BODY", "RATE_PER_MIN", "PBKDF2_ITERATIONS", "MCP", "PAIRING_APPROVAL", "DISCOVERY_DOCS_ORIGIN", "ROBOTS_POLICY", "CONTENT_SIGNAL", "SKILLS_BASE_URL", "A2A_SEALED_ENABLED", "WAKE_ROUTING"];
 
 /** Worker-to-Worker fetch. Present when the deploy sets `A2A_CONTROL_SERVICE`. */
 export interface ControlFetcher {
@@ -591,6 +592,8 @@ export function hostedTenantContext(env: WorkerBindings, overlay: HostedOverlay)
 		const v = overlay.config?.[k];
 		if (typeof v === "string") config[k] = v;
 	}
+	// Hosted enforcement is deployment-gated, including tenant overrides.
+	if (env.WAKE_ROUTING_ENV !== "staging" && config.WAKE_ROUTING?.trim().toLowerCase() === "enforce") config.WAKE_ROUTING = "shadow";
 	const hash = (overlay.ownerTokenHash || "").trim().toLowerCase();
 	// Hosted approval is the pushed tenant object only. Worker APPROVAL_OIDC_* does not approve a tenant.
 	const approval = approvalFromRecord(overlay.approval);

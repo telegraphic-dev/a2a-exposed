@@ -335,3 +335,45 @@ test("tenant overlays cannot grant the deployment-only staging wake-routing guar
  assert.equal(ctx.stagingWakeRouting,true);
  assert.equal(ctx.WAKE_ROUTING,"staging-enforce");
 });
+
+
+test("hosted wake routing inherits deployment defaults with tenant overrides", () => {
+ for (const stage of [undefined, "production", "staging"]) {
+  for (const platform of [undefined, "shadow", "enforce"]) {
+   for (const tenant of [undefined, "shadow", "enforce"]) {
+    const ctx = hostedTenantContext(selfEnv({ WAKE_ROUTING_ENV: stage, WAKE_ROUTING: platform }), {
+     id: "ten_routing", db: dummy, publicUrl: BASE, config: tenant === undefined ? {} : { WAKE_ROUTING: tenant },
+    });
+    const selected = tenant ?? platform;
+    assert.equal(ctx.WAKE_ROUTING, stage !== "staging" && selected === "enforce" ? "shadow" : selected);
+    assert.equal(ctx.stagingWakeRouting, stage === "staging");
+   }
+   const single = resolveTenant(selfEnv({ WAKE_ROUTING_ENV: stage, WAKE_ROUTING: platform }));
+   assert.equal(single.WAKE_ROUTING, platform);
+   assert.equal(single.stagingWakeRouting, stage === "staging");
+  }
+ }
+});
+
+
+test("hosted wake policy reports enforced staging and shadow production", async () => {
+ const db = d1(new URL("../migrations/", import.meta.url));
+ const ownerTokenHash = await sha256("tenant-owner");
+ for (const stage of [undefined, "production", "staging"]) {
+  for (const platform of [undefined, "shadow", "enforce"]) {
+   for (const tenant of [undefined, "shadow", "enforce", "staging-enforce"]) {
+    const ctx = hostedTenantContext(selfEnv({ WAKE_ROUTING_ENV: stage, WAKE_ROUTING: platform }), {
+     id: "ten_routing", db, publicUrl: BASE, ownerTokenHash,
+     config: tenant === undefined ? {} : { WAKE_ROUTING: tenant },
+    });
+    const res = await dispatch(new Request(BASE + "/owner/wake/policy", {
+     headers: { authorization: "Bearer tenant-owner" },
+    }), ctx, { waitUntil() {}, passThroughOnException() {} } as any);
+    assert.equal(res.status, 200);
+    const policy = await res.json() as any;
+    const selected = tenant ?? platform ?? "shadow";
+    assert.equal(policy.mode, stage === "staging" ? selected : "shadow");
+   }
+  }
+ }
+});
