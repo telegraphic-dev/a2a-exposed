@@ -35,6 +35,10 @@ owner reads and history. Temporary stores and the bridge are removed on exit.
 | CLI, A2A 0.3 and 1.0 | Seal sends; recipient inbox and both histories open locally. Task continuations keep the original context. |
 | Local stdio MCP | `list_peers`, `send`, `inbox` and `history` use the same pins and crypto path across process restarts. Verified message IDs survive projection. |
 | Server privacy | Every exported application table and captured request body excludes synthetic private text. Private key material never appears in captured requests or command output. |
+| Side channels | Every encrypted fixture text is absent from wake webhook bodies (encrypted wakes carry only `[encrypted message]`), other Worker outbound requests, Worker logs, `export` JSON and SQL output, stderr of every command, stdout of commands that do not open content, and every local config file including SQLite. Private key material appears only in its own key file. |
+| Size boundaries | Exactly 200000 characters and exactly 307072 encoded content bytes send and open intact; one more character or byte refuses with no request. |
+| Local-store faults | Garbage or truncated local SQLite, an unparsable key file and a private key that does not match its public identity each refuse sends and reads with fixed guidance, no stack trace and no request. The damaged bytes stay in place and no replacement key is created. |
+| Concurrency | Parallel sends from one config get distinct message and task IDs, and parallel reads open each one. |
 | Off switch | CLI-off, Worker-off and nonliteral switch values refuse; failure never produces a plaintext send. |
 | Missing local key | CLI and MCP refuse without a plaintext retry or replacement key; restoring the original key restores reads. |
 | Corruption and downgrade | Tampered signatures/context/ciphertext, plaintext for pinned peers and stale live rows refuse. Historical rows retain signature checks. |
@@ -57,4 +61,8 @@ enabled; this checklist grants no access and changes no deployed configuration.
 
 Deferred work remains linked from #173: signer rotation #379, further approval
 ceremonies #380, quarantine/invalidation #381, uncertain-failure recovery #382,
-populated-store backup/restore #383 and broader hardening scans #384.
+populated-store backup/restore #383 and the rest of the hardening in #384.
+The side-channel, size, local-fault and concurrency rows cover one platform and
+the fixture's surfaces. Cross-platform custody (native keychains, Windows ACLs),
+real push delivery and SQLite fault injection inside a running transaction remain
+open in #384.

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import * as C from "./config.mjs";
 import { CliError, checkId, fetchCard, httpJson, newId, pickEndpoint } from "./a2a.mjs";
 import { owner, peerToken } from "./commands.mjs";
-import { gate, sdk, URI, encryptionDisabled, peerKeysChanged } from "./sealed-keys.mjs";
+import { gate, sdk, openState, URI, encryptionDisabled, peerKeysChanged } from "./sealed-keys.mjs";
 const fail = (message, code = "verification_failed") => { const error = new CliError(message); error.code = code; throw error; };
 const binding = h => Object.fromEntries(["contextId", "messageId", "taskId", "role", "state", "kind"].map(k => [k, h[k]]));
 const taskState = task => {
@@ -15,7 +15,7 @@ const taskState = task => {
 const sealedFailure = "Encrypted operation refused. Preserve the original keys and pairing; inspect keys status --json and the original task/context IDs. Do not replace keys or change trust automatically. No plaintext fallback or automatic retry.";
 async function paired(peer, o, action) {
  gate();
- const api = await sdk(), store = new api.LocalState(C.CONFIG_DIR);
+ const api = await sdk(), store = openState(api);
  let expectedLocalId = "unknown";
  try {
   const pin = store.inspect(peer), record = pin.current;
@@ -130,7 +130,7 @@ export async function openRows(rows, o, { historical = false, markFailure = true
   try {
    if (!envelope) {
     if (peer && (row.text || row.taskId) && fs.existsSync(C.CONFIG_DIR + "/encryption/state.sqlite")) {
-     const api = await sdk(), store = new api.LocalState(C.CONFIG_DIR);
+     const api = await sdk(), store = openState(api);
      try { if (store.inspect(peer).current?.policy === "required") fail("Refusing plaintext from a pinned peer.", "plaintext_from_pinned_peer"); }
      finally { store.close(); }
     }

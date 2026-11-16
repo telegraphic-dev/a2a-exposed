@@ -375,7 +375,7 @@ export async function connect(target, o) {
 	if (peers[alias] && peers[alias].url !== base) die(`peer alias "${alias}" is already used for ${peers[alias].url}; pass --alias <another>`);
 	const peerName = (card && card.name) || base;
  if (preparedSealed) {
-  const { api } = await sealed.selected(preparedSealed.id), store = new api.LocalState(C.CONFIG_DIR);
+  const { api } = await sealed.selected(preparedSealed.id), store = sealed.openState(api);
   try {
    const current = store.inspect(alias).current;
    if (current && (current.localId !== preparedSealed.id || current.peerEndpoint !== preparedSealed.endpoint || api.canonicalJSON(current.bundle) !== api.canonicalJSON(preparedSealed.peerBundle))) die("The peer's published keys changed. Ask its owner whether they changed them; do not continue until they confirm. Communication is held; replacement keys are not supported yet.");
