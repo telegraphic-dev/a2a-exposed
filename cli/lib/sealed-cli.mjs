@@ -15,7 +15,8 @@ const taskState = task => {
 };
 const sealedFailure = "Encrypted operation refused. Preserve the original keys and pairing; inspect keys status --json and the original task/context IDs. Do not replace keys or change trust automatically. No plaintext fallback or automatic retry.";
 const revoked = "This peer's local pin was revoked with keys revoke. Encrypted sends, reads and send recovery for it stay held; its history and send records are kept unchanged. Using this peer again needs a new human-approved pairing under a new alias. No plaintext fallback.";
-// archive:true only for historical reads in a restored copy; it never authorizes live work.
+const keysRotated = (id, peer) => `Keys rotated: this pairing with ${peer} uses local key ${id}, which keys rotate retired. The old key still opens old history and never signs again. To talk to this peer again, re-pair with the new key: select the current ID with keys status --json, run connect URL --sealed-key-id NEW_ID --alias NEW_ALIAS (its owner approves), then keys verify with the other owner. Nothing was sent or read from the live inbox.`;
+// archive:true only for historical reads (a restored copy, or a key retired by keys rotate); it never authorizes live work.
 async function paired(peer, o, action, { archive = false } = {}) {
  gate();
  const api = await sdk(), store = openState(api);
@@ -25,9 +26,13 @@ async function paired(peer, o, action, { archive = false } = {}) {
   if (record?.state === "revoked" || pin.live_state === "revoked") fail(revoked, "pin_revoked");
   const archived = archive === true && pin.live_state === "archive-only" && record?.policy === "required";
   if (pin.live_state === "archive-only" && !archived) fail(archiveOnly, "archive_only");
-  if (!record || record.policy !== "required" || (!archived && !["tofu-pinned", "independently-verified"].includes(pin.live_state))) fail("No active local pin for this peer. Run keys status --json and keys pairings --json; complete the existing human-approved pairing first. No plaintext was sent.", "no_pin");
+  // A pin on a key retired by keys rotate opens old history only; it never signs again.
+  // Checked before the active-pin test, which reports such a pin as change-pending.
+  const rotated = !archived && record?.policy === "required" && ["tofu-pinned", "independently-verified"].includes(record.state) && store.row(record.localId).live_state === "retired";
+  if (rotated && archive !== true) fail(keysRotated(record.localId, peer), "keys_rotated");
+  if (!record || record.policy !== "required" || (!archived && !rotated && !["tofu-pinned", "independently-verified"].includes(pin.live_state))) fail("No active local pin for this peer. Run keys status --json and keys pairings --json; complete the existing human-approved pairing first. No plaintext was sent.", "no_pin");
   expectedLocalId = record.localId;
-  const identity = await store.loadIdentity(record.localId, { purpose: archived ? "archive" : "traffic", allowOsConsent: o["allow-os-consent"] === true });
+  const identity = await store.loadIdentity(record.localId, { purpose: archived || rotated ? "archive" : "traffic", allowOsConsent: o["allow-os-consent"] === true });
   const recheck = () => { if (store.inspect(peer).current_digest !== pin.current_digest || store.inspect(peer).live_state !== pin.live_state) fail(sealedFailure); };
   recheck();
   return await action({ api, record, pin, identity, recheck });
@@ -217,7 +222,7 @@ export async function openRows(rows, o, { historical = false, markFailure = true
     return { ...row, text, messageId: h.messageId, messageIdAuthenticated: true, encrypted: true, locallyOpened: true, historical, taskStateAuthenticated: false };
    }, { archive: historical }));
   } catch (error) {
-   const codes = { replay: "too_old", key_lost: "key_missing", key_unknown: "key_missing", key_changed: "key_changed", no_pin: "no_pin", key_store_consent: "os_consent_required", binding_mismatch: "binding_mismatch", plaintext_from_pinned_peer: "plaintext_from_pinned_peer", pin_revoked: "pin_revoked", archive_only: "archive_only" };
+   const codes = { replay: "too_old", key_lost: "key_missing", key_unknown: "key_missing", key_changed: "key_changed", no_pin: "no_pin", key_store_consent: "os_consent_required", binding_mismatch: "binding_mismatch", plaintext_from_pinned_peer: "plaintext_from_pinned_peer", pin_revoked: "pin_revoked", archive_only: "archive_only", keys_rotated: "keys_rotated" };
    const reason = process.env.A2A_SEALED_ENABLED !== "1" ? "encryption_disabled" : codes[error?.code] || "verification_failed";
    const next = ({
     os_consent_required: "Re-run with --allow-os-consent when a human can answer the OS authorization prompt.",
@@ -230,6 +235,7 @@ export async function openRows(rows, o, { historical = false, markFailure = true
     plaintext_from_pinned_peer: "Ask the peer owner to use their approved encrypted client for this pinned pairing. Do not accept a plaintext retry.",
     pin_revoked: revoked,
     archive_only: archiveOnly,
+    keys_rotated: error.message,
    })[reason] || "Preserve the original keys and pairing; inspect keys status --json. Do not resend. Report the taskId and contextId shown on this row to the inbox owner for investigation. No plaintext fallback.";
    // Do not echo unverified text, data or provider errors, even in JSON mode.
    out.push({ taskId: row.taskId ?? row.task_id ?? null, contextId: row.contextId ?? row.context_id ?? null, from: peer, encrypted: reason !== "plaintext_from_pinned_peer", locallyOpened: false, reason, next, text: reason === "plaintext_from_pinned_peer" ? "[unencrypted message refused from pinned peer]" : "[encrypted message]" });

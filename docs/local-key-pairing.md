@@ -83,8 +83,17 @@ with `independently_verified: false`. Hosted pairing approval alone does not pro
 that the service relayed authentic keys. Compare the complete code through a
 separate trusted channel. If any group differs, do not use this pairing: ask the
 approving inbox owner to revoke it with `token revoke LABEL` (select the label
-with `keys pairings --json`) and tell the other owner. This change does not provide an independent-verification
-approval ceremony or rotation command.
+with `keys pairings --json`) and tell the other owner.
+
+**Independent verification.** The owners read the complete code to each other
+over a separate trusted channel, such as a call. Each side then records the code
+it heard: `keys verify --id LOCAL_ID --peer ALIAS_OR_LABEL --code "CODE" --json`.
+The CLI recomputes the code from the exact pinned keys and needs every one of the
+60 digits to match; spacing is ignored. Only then does the pin change from TOFU
+to `independently-verified`, bound to those exact keys. A mismatch changes nothing
+and gives the recovery steps above. The proposal, the code check and the approval
+run in one transaction, so a failure leaves the pin unchanged. `keys code` reports
+`independently_verified` for each pin.
 
 ## Local encrypted CLI messages
 
@@ -183,6 +192,21 @@ It does not change the inbox server: to stop the peer's access there, the inbox
 owner runs `token revoke LABEL`. A revoked pin is never re-enabled in place; using
 the peer again needs a new human-approved pairing under a new alias.
 
+**Signer rotation.** `keys rotate --id LOCAL_ID --json` prints an exact plan, the
+pins it will hold and an `approval_digest`; it changes nothing. After the human
+approves that plan, `keys rotate --id LOCAL_ID --approve DIGEST --json` creates a
+fresh signing and receiving identity for the same card URL. The old identity is
+retired: it still opens old history (`history CONTEXT --json`) and never signs
+again. Sends, inbox reads and send recovery on its pins refuse with "Keys rotated"
+and send nothing. To talk to a peer again, make a new human-approved pairing with
+the new key (`connect URL --sealed-key-id NEW_ID --alias NEW_ALIAS`), then run
+`keys verify` with the other owner. A changed plan, such as a new pin, needs a new
+approval. Rotation is local only: the store schema and backups are unchanged, and
+nothing changes on the inbox. The inbox keeps the public key it published first,
+so `keys publish` cannot replace it and pairings other agents request from this
+inbox still use the old key and are held. Worker-side continuity (a chained
+publish that refuses a mismatch, plus bundle history) is a possible follow-up.
+
 **Backup.** `keys backup --to FILE --json` writes a new encrypted file (scrypt and
 AES-256-GCM) with the keys, pins, trust history and delivery records. It never
 overwrites a file. The passphrase comes only from piped stdin, never a terminal
@@ -208,8 +232,8 @@ implemented.
 repaired, moved or replaced. It refuses with fixed guidance and stays in place.
 Restore a backup into a new directory to read history.
 
-Follow-ups: signer rotation #379, further approval ceremonies #380, and the rest
-of #384. Not covered yet: abandoning a stuck pending connect request, native
+Follow-ups: Worker-side key continuity after rotation, cross-platform key custody
+and encrypted push delivery from #384. Not covered yet: abandoning a stuck pending connect request, native
 keychain restore, and MCP recovery tools. No release or deployment is part of
 the local test workflow.
 

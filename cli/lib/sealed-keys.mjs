@@ -9,6 +9,9 @@ import { baseUrl } from "./commands.mjs";
 export const URI = "https://a2a.exposed/ext/sealed/v1";
 const fail = message => { throw new CliError(message); };
 export const encryptionDisabled = "Local encryption is disabled. Set A2A_SEALED_ENABLED=1 in this local CLI or MCP process only after owner approval; the inbox Worker needs its own setting (on hosted inboxes, the service operator controls this). Only the exact value 1 enables encryption; true, yes and whitespace do not. No plaintext fallback.";
+// The independent ceremony: a human compares the complete code with the other owner, then records it.
+export const verifyNext = "Trust on first use; not independently verified. Read the complete code with the other owner through another trusted channel, such as a call. If every group matches, have your human run keys verify --id ID --peer PEER --code \"CODE\" with the code the other owner read out; do not copy it from this output. If any group differs, do not use this pairing. Run keys revoke --peer PEER, ask the approving inbox owner to revoke it with token revoke LABEL (select LABEL with keys pairings --json), and tell the other owner.";
+export const mismatchGuidance = "Safety code mismatch: the code you entered differs from the code computed from the pinned keys. Nothing was changed. Do not use this pairing. Check that you read the complete code for this peer; if it still differs, run keys revoke --peer PEER, ask the approving inbox owner to revoke it with token revoke LABEL (select LABEL with keys pairings --json), and tell the other owner. No plaintext fallback.";
 export const peerKeysChanged = "The peer's published keys changed. Ask its owner whether they changed them; do not continue until they confirm. Communication is held; key replacement is not supported yet.";
 export function gate() {
  if (process.env.A2A_SEALED_ENABLED !== "1") fail(encryptionDisabled);
@@ -53,7 +56,7 @@ async function owner(method, route, body, operation = "Local key pairing") {
  const base = baseUrl(), token = C.get("A2A_OWNER_TOKEN");
  if (!base || !token) fail("Select a configured inbox with --config-dir; A2A_BASE_URL and A2A_OWNER_TOKEN are required.");
  const r = await httpJson(base + route, { method, body, headers: { authorization: `Bearer ${token}` } });
- if (r.status !== 200) fail(`${operation} request failed (HTTP ${r.status}): ${r.data?.error || "request refused"}.${r.status === 404 ? " Check the inbox flag and matching Worker version." : ""} No private key was sent.`);
+ if (r.status !== 200) fail(`${operation} request failed (HTTP ${r.status}): ${r.data?.error || "request refused"}.${r.status === 404 ? " Check the inbox flag and matching Worker version." : ""}${r.status === 409 && operation === "Public-key publication" ? " This inbox keeps the public key it published first; it cannot be replaced, including after keys rotate. Pairings other agents request from this inbox still use that first key." : ""} No private key was sent.`);
  return r.data;
 }
 // Damaged or unsupported local state shows fixed recovery guidance, never a stack trace or path.
@@ -121,10 +124,10 @@ async function readPassphrase() {
 const absolute = (value, flag) => { if (typeof value !== "string" || !value) fail(`Select ${flag} PATH.`); return path.resolve(value); };
 export async function command(p, o) {
  gate();
- const actions = ["stores", "init", "status", "publish", "pairings", "pin", "code", "revoke", "outbox", "backup", "restore"];
- if (p.length !== 1 || !actions.includes(p[0])) fail("usage: keys stores|init|status|publish|pairings|pin|code|revoke|outbox|backup|restore; use keys stores --json and keys status --json before actions");
+ const actions = ["stores", "init", "status", "publish", "pairings", "pin", "code", "verify", "revoke", "rotate", "outbox", "backup", "restore"];
+ if (p.length !== 1 || !actions.includes(p[0])) fail("usage: keys stores|init|status|publish|pairings|pin|code|verify|revoke|rotate|outbox|backup|restore; use keys stores --json and keys status --json before actions");
  const action = p[0];
- const allowed = { stores: ["json"], init: ["store","card-url","allow-os-consent","json"], status: ["json"], publish: ["id","json"], pairings: ["json"], pin: ["id","peer","user-code","json"], code: ["id","peer","json"], revoke: ["peer","json"], outbox: ["json"], backup: ["to","allow-os-consent","json"], restore: ["from","to","acknowledge-replay-rollback","json"] };
+ const allowed = { stores: ["json"], init: ["store","card-url","allow-os-consent","json"], status: ["json"], publish: ["id","json"], pairings: ["json"], pin: ["id","peer","user-code","json"], code: ["id","peer","json"], verify: ["id","peer","code","json"], rotate: ["id","approve","allow-os-consent","json"], revoke: ["peer","json"], outbox: ["json"], backup: ["to","allow-os-consent","json"], restore: ["from","to","acknowledge-replay-rollback","json"] };
  for (const key of Object.keys(o)) if (!allowed[action].includes(key)) fail(`keys ${action} does not accept --${key}; run keys stores --json and keys status --json before selecting inputs.`);
  const api = await sdk();
  let result;
@@ -168,6 +171,37 @@ export async function command(p, o) {
   catch { result.archive_marker = false; console.error("warning: the archive-only marker file was not written. The restored store is still archive-only, and inbox and poll still check it before any request."); }
   result.next = `Restored as an archive-only copy with a new config identity. Use it with --config-dir for history CONTEXT --json only, after installing the matching @a2a-exposed/encryption package and inbox settings there. Live sends, inbox reads, polls and recovery stay held; inbox and poll refuse before contacting the inbox. The original backup file is unchanged.`;
  }
+ else if (action === "rotate") {
+  // Signer-authority rotation (#379): plan first, then the exact human-approved digest. Local only.
+  if (!o.id) fail("keys rotate requires --id from keys status --json. Run it without --approve first to see the exact plan and its approval digest. Nothing was changed.");
+  if (o.approve !== undefined && (typeof o.approve !== "string" || !/^[A-Za-z0-9_-]{16,128}$/.test(o.approve))) fail("--approve takes the approval_digest printed by keys rotate --id ID --json. Nothing was changed.");
+  const store = openState(api, { write: o.approve !== undefined });
+  try {
+   if (typeof store.signerRotationPlan !== "function") fail("Install the matching optional @a2a-exposed/encryption package in this config directory; this version cannot rotate signer keys. Nothing was changed.");
+   if (o.approve === undefined) {
+    const plan = store.signerRotationPlan(o.id);
+    result = { ...plan, changed: false, approve: `keys rotate --id ${o.id} --approve ${plan.approval_digest} --json`, next: `Nothing was changed. Show this plan to the human. After approval, run the approve command. The old key will open old history only and never sign again. Held pins: ${plan.plan.heldPins.map(pin => pin.peer).join(", ") || "none"}; each needs a new human-approved pairing with the new key, then keys verify.` };
+   } else {
+    const rotated = await store.rotateSigner({ id: o.id, approvalDigest: o.approve, ownerApproved: true, allowOsConsent: o["allow-os-consent"] === true });
+    result = { rotated: true, changed: true, id: rotated.id, previous_id: rotated.previous_id, key_id: rotated.bundle.keyId, key_store: rotated.key_store, old_key_retained: true, held_pins: rotated.held_pins,
+     next: `The new identity ${rotated.id} is local only. The old key ${rotated.previous_id} is retired: it opens old history and never signs again. Encrypted sends to held pins refuse with "Keys rotated". To resume with a peer, run connect URL --sealed-key-id ${rotated.id} --alias NEW_ALIAS (its owner approves), then keys verify. This inbox keeps its first published key: keys publish cannot replace it, and pairings other agents request from this inbox stay held. That needs a Worker-side follow-up.` };
+   }
+  } finally { store.close(); }
+ }
+ else if (action === "verify") {
+  if (!o.id || !o.peer || typeof o.code !== "string") fail("keys verify requires --id from keys status --json, --peer ALIAS (connecting side) or LABEL from keys pairings --json (approving side), and --code with the complete safety code the other owner read to you through another trusted channel. Nothing was changed.");
+  const store = openState(api, { write: true });
+  try {
+   if (typeof store.verifyIndependent !== "function") fail("Install the matching optional @a2a-exposed/encryption package in this config directory; this version cannot record independent verification. Nothing was changed.");
+   try { result = await store.verifyIndependent({ peer: o.peer, localId: o.id, code: o.code, ownerApproved: true }); }
+   catch (error) {
+    if (error?.code === "safety_code_mismatch") { const e = new CliError(mismatchGuidance); e.code = error.code; throw e; }
+    throw error;
+   }
+  } finally { store.close(); }
+  result = { peer: result.peer, local_id: result.local_id, verified: true, changed: result.changed, verification: "independent", independently_verified: true, safety_code: result.code, local_key_id: result.local_key_id, peer_key_id: result.peer_key_id, version: result.record.version,
+   next: "This pin is now independently verified for these exact keys. If either side's keys change, encrypted traffic is held and a new human-approved pairing and a new comparison are needed. Encrypted traffic still needs A2A_SEALED_ENABLED=1 in each local process and on each inbox Worker." };
+ }
  else if (action === "pairings") {
   result = await owner("GET", "/owner/sealed-pairings");
   result.next = "After human approval, the requester must re-run the same connect command to collect the token. Only then is the pairing listed here for keys pin. Do not create another request.";
@@ -183,7 +217,7 @@ export async function command(p, o) {
   const pairing = data.pairings?.find(r => r.peer === o.peer && r.userCode === o["user-code"]);
   if (!pairing) fail("No matching active human-approved pairing; run keys pairings --json. No trust was changed.");
   result = await pinPairing({ id: o.id, peer: o.peer, bundle: pairing.requester, localBundle: pairing.responder, endpoint: new URL("/", pairing.requester.cardUrl).href });
-  result.next = "Compare every safety-code group through another trusted channel. If any group differs, do not use this pairing. Ask the approving inbox owner to revoke it with token revoke LABEL (select LABEL with keys pairings --json), and tell the other owner. Do not replace keys automatically.";
+  result.next = verifyNext + " Do not replace keys automatically.";
  } else {
   if (action === "init" && (!o.store || !o["card-url"])) fail("keys init requires --store from keys stores --json and --card-url https://agent.example.com/.well-known/agent-card.json.");
   if (action === "init") {
@@ -197,7 +231,8 @@ export async function command(p, o) {
    if (action === "code") {
     if (!o.id || !o.peer) fail("keys code requires --id from keys status --json and --peer ALIAS (connecting side) or LABEL from keys pairings --json (approving side).");
     result = store.safetyCode(o.id, o.peer);
-    result.next = "Compare every safety-code group through another trusted channel. This code describes the existing human-approved pin; it does not grant independent verification or approve a key change.";
+    result.independently_verified = result.verification === "independent";
+    result.next = result.independently_verified ? "This pin was independently verified with keys verify. Compare again through another trusted channel whenever you are unsure." : verifyNext;
    }
   } finally { store.close(); }
  }

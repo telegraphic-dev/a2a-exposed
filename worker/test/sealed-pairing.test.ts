@@ -143,6 +143,21 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
  assert.deepEqual(p.requester,bundles.alice);assert.deepEqual(p.responder,bundles.bob);
  const pinned=await cli("bob",["keys","pin","--id",ids.bob,"--peer",p.peer,"--user-code",p.userCode,"--json"]);assert.equal(pinned.code,0,pinned.err);assert.equal(JSON.parse(pinned.out).safety_code,pin.safety_code);assert.match(JSON.parse(pinned.out).next,/If any group differs.*token revoke LABEL.*keys pairings --json/);
  const restart=await cli("bob",["keys","code","--id",ids.bob,"--peer",p.peer,"--json"]);assert.equal(restart.code,0,restart.err);assert.equal(JSON.parse(restart.out).code,pin.safety_code);
+ assert.equal(JSON.parse(restart.out).independently_verified,false);assert.match(JSON.parse(restart.out).next,/keys verify .*do not copy it from this output/);
+ // #380 independent ceremony: each side records the code the other owner read out. A mismatch changes nothing.
+ const wrongCode=pin.safety_code.replace(/^(\d)/,(d:string)=>String((Number(d)+1)%10));
+ const pinsBefore=fs.readFileSync(path.join(dirs.bob,"encryption/state.sqlite"));
+ const mismatch=await cli("bob",["keys","verify","--id",ids.bob,"--peer",p.peer,"--code",wrongCode,"--json"]);
+ assert.equal(mismatch.code,1);assert.match(mismatch.err,/Safety code mismatch.*Nothing was changed.*keys revoke --peer.*token revoke LABEL/);
+ assert.deepEqual(fs.readFileSync(path.join(dirs.bob,"encryption/state.sqlite")),pinsBefore);
+ assert.equal(JSON.parse((await cli("bob",["keys","code","--id",ids.bob,"--peer",p.peer,"--json"])).out).verification,"tofu");
+ assert.equal((await cli("bob",["keys","verify","--id",ids.bob,"--peer",p.peer,"--json"])).code,1);
+ const bobVerified=await cli("bob",["keys","verify","--id",ids.bob,"--peer",p.peer,"--code",pin.safety_code,"--json"]);assert.equal(bobVerified.code,0,bobVerified.err);
+ const bv=JSON.parse(bobVerified.out);assert.equal(bv.independently_verified,true);assert.equal(bv.changed,true);assert.equal(bv.peer_key_id,bundles.alice.keyId);assert.equal(bv.local_key_id,bundles.bob.keyId);
+ const aliceVerified=await cli("alice",["keys","verify","--id",ids.alice,"--peer","bob","--code",JSON.parse(restart.out).code,"--json"]);assert.equal(aliceVerified.code,0,aliceVerified.err);
+ assert.equal(JSON.parse(aliceVerified.out).verification,"independent");
+ const verifiedCode=JSON.parse((await cli("alice",["keys","code","--id",ids.alice,"--peer","bob","--json"])).out);assert.equal(verifiedCode.independently_verified,true);assert.equal(verifiedCode.code,pin.safety_code);
+ assert.equal(JSON.parse((await cli("alice",["keys","verify","--id",ids.alice,"--peer","bob","--code",pin.safety_code,"--json"])).out).changed,false);
  const send=await cli("alice",["send","--to","bob","--text","must not leave this process"],false);assert.equal(send.code,1);assert.match(send.err,/disabled/);assert.match(send.err,/No plaintext was sent/);assert.match(send.err,/separate --config-dir/);
  // Both supported wire versions use the same HPKE envelope and local pins.
  for(const proto of ["0.3","1.0"]){
@@ -389,6 +404,21 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
  assert.equal((await owner("bob",`/owner/peers/${p.peer}`,"DELETE")).status,200);
  assert.equal((await cli("bob",["keys","pin","--id",ids.bob,"--peer",p.peer,"--user-code",p.userCode,"--json"])).code,1);
  envs.bob.A2A_SEALED_ENABLED="";assert.equal((await owner("bob","/owner/sealed-key")).status,404);envs.bob.A2A_SEALED_ENABLED="1";
+ // #379 signer rotation, local only: an exact plan, an approved digest, then held pins and readable old history.
+ const rotatePlan=await cli("alice",["keys","rotate","--id",ids.alice,"--json"]);assert.equal(rotatePlan.code,0,rotatePlan.err);
+ const rp=JSON.parse(rotatePlan.out);assert.equal(rp.changed,false);assert.ok(rp.plan.heldPins.some((pin:any)=>pin.peer==="bob"));assert.match(rp.approve,/keys rotate --id .* --approve /);
+ const staleRotation=await cli("alice",["keys","rotate","--id",ids.alice,"--approve","x".repeat(43),"--json"]);assert.equal(staleRotation.code,1);assert.match(staleRotation.err,/approval_stale/);
+ assert.equal((await cli("alice",["keys","rotate","--id",ids.alice,"--approve","bad digest!","--json"])).code,1);
+ const rotation=await cli("alice",["keys","rotate","--id",ids.alice,"--approve",rp.approval_digest,"--json"]);assert.equal(rotation.code,0,rotation.err);
+ const rot=JSON.parse(rotation.out);assert.equal(rot.previous_id,ids.alice);assert.equal(rot.rotated,true);assert.ok(rot.held_pins.includes("bob"));assert.match(rot.next,/never signs again.*connect URL --sealed-key-id/);
+ privateTexts.push("must-not-be-signed-by-a-retired-key");
+ const beforeHeld=records.filter((r:any)=>r.path==="/").length;
+ const held=await cli("alice",["send","--to","bob","--text","must-not-be-signed-by-a-retired-key"]);assert.equal(held.code,1);assert.match(held.err,/Keys rotated.*never signs again.*keys verify/);
+ assert.equal(records.filter((r:any)=>r.path==="/").length,beforeHeld,"a held pin sends nothing");
+ const oldHistory=await cli("alice",["history","reverse-pair-fixture","--json"]);assert.equal(oldHistory.code,0,oldHistory.err);
+ assert.ok(JSON.parse(oldHistory.out).some((r:any)=>r.text==="reverse-pair-private-fixture"&&r.locallyOpened),"the retired key still opens old history");
+ const republish=await cli("alice",["keys","publish","--id",rot.id,"--json"]);assert.equal(republish.code,1);assert.match(republish.err,/HTTP 409.*keeps the public key it published first.*including after keys rotate/);
+ assert.equal((await cli("alice",["keys","rotate","--id",ids.alice,"--json"])).code,1,"a retired key cannot be rotated again");
  // Exhaustive plaintext-exclusion scans over every surface this fixture can observe.
  privateTexts.push("reverse-pair-private-fixture","old fixture content");
  const keySecrets=["alice","bob"].flatMap(name=>{const value=JSON.parse(fs.readFileSync(path.join(dirs[name],"encryption",ids[name]+".key"),"utf8"));return [value.signing,value.encryption];});

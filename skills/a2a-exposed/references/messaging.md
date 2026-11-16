@@ -87,7 +87,12 @@ requests before `keys pin --id ID --peer LABEL --user-code CODE --json`.
 Use the connecting side's ALIAS or the approving side's LABEL from `keys pairings`.
 Compare through a separate trusted channel. If codes differ, do not use the
 pairing: ask the approving inbox owner to `token revoke LABEL` (list labels with
-`keys pairings --json`) and tell the other owner. `keys init` turns off ordinary
+`keys pairings --json`) and tell the other owner. After the owners compare the
+code by phone or another trusted channel, `keys verify --id ID --peer ALIAS --code "CODE" --json`
+records independent verification; ask your human for the code they heard, never
+copy it from `keys code` output. `keys rotate --id ID --json` shows a plan and digest;
+run `--approve DIGEST` only after your human approves it. Its pins then refuse with
+"Keys rotated" until a new human-approved pairing with the new key and `keys verify`. `keys init` turns off ordinary
 `send` in this config directory; use a separate `--config-dir` for ordinary sends.
 `connect --json` emits newline-delimited JSON, one object per step: with local
 keys, `key_comparison` then `authorization_pending` (new) or `checking_authorization` (resumed), and `keys_pinned` then
