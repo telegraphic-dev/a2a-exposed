@@ -51,6 +51,23 @@ mock Cloudflare API. If Node tests fail, the shell skips Vitest: fix the failure
 and rerun the full command; use `npx vitest run` separately to diagnose it.
 The library contract test performs a temporary `file:` install and import.
 
+The Worker storage bridge is shared for a whole test file. Its top-level Node
+test `after` hook awaits Miniflare disposal; standalone consumers also have a
+`beforeExit` fallback. SIGINT/SIGTERM request the same bounded teardown. Forced
+termination (SIGKILL or a native process crash) cannot run JavaScript cleanup.
+`storage-bridge-lifecycle.test.ts` launches actual `node --test` subprocesses and
+checks their real workerd descendants for both storage backends, including
+startup/RPC failure, RPC timeout and a stalled disposal. Fault injection wraps
+real Miniflare; it does not substitute a fake workerd. Descendant checks use
+`ps` on Linux/macOS and are skipped on Windows. Run locally with:
+
+```bash
+(cd worker && node --import ./test/register-hooks.mjs --test --test-concurrency=1 test/storage-bridge-lifecycle.test.ts)
+```
+
+On resource-constrained machines, add `--test-concurrency=1` before the file
+arguments in the Node test commands for the full matrix.
+
 Inspect CLI pack output: it must contain `worker/cloudflare.config.ts` and must
 not contain `control/`. Root packing builds the separate control-core library.
 The route check uses example settings and bundles locally, without deploying.
