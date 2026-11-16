@@ -11,6 +11,8 @@ import { once } from "node:events";
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
+import { ClientFactory, JsonRpcTransportFactory } from "@a2a-js/sdk/client";
+import { AgentCard, SendMessageRequest } from "@a2a-js/sdk";
 import { fetch } from "./fresh-connection-fetch.ts";
 const execute = promisify(execFile);
 const hash = (s: string) => createHash("sha256").update(s).digest("hex");
@@ -103,6 +105,44 @@ test("production Worker routes with native CLI create/run/revoke preserve binary
 		for (const child of children) if (child.exitCode === null) child.kill("SIGTERM");
 		await Promise.all(children.map(async child => { if (child.exitCode === null) await once(child, "exit"); }));
 		local.closeAllConnections(); await new Promise<void>(done => local.close(() => done())); await r.mf.dispose(); rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("ACP actual CLI through native Worker and official SDK addresses exactly one loaded session", { timeout: 60000 }, async () => {
+	const r = await runtime(); const dir = mkdtempSync(join(tmpdir(), "acp-native-")), env = cleanEnv(dir, r.url);
+	const connector = join(dir, "connector"), ingressFile = join(dir, "ingress"), peerFile = join(dir, "peers.json"), log = join(dir, "wire");
+	const appToken = "a".repeat(43); let child: ReturnType<typeof spawn> | undefined;
+	const run = (args: string[]) => execute(process.execPath, [cli, ...args], { env, cwd: dir, timeout: 15000 });
+	try {
+		writeFileSync(peerFile, JSON.stringify({ peers: { alice: hash(appToken), bob: hash("b".repeat(43)) } }), { mode: 0o600 });
+		await run(["relay", "a2a", "create", "--token-file", connector, "--ingress-token-file", ingressFile, "--forward-headers", "content-type,accept,authorization,a2a-version"]);
+		child = spawn(process.execPath, [cli, "relay", "a2a", "run", "--token-file", connector, "--acp", JSON.stringify([process.execPath, resolve("../cli/test/fixtures/acp-agent.mjs"), log]), "--acp-cwd", dir, "--acp-peers-file", peerFile, "--acp-session", "owner-selected-session", "--acp-session-peer", "alice"], { env, cwd: dir, stdio: ["ignore", "pipe", "pipe"] });
+		let diagnostics = ""; child.stderr!.on("data", (c: any) => { diagnostics += c; });
+		await until(async () => { if (child!.exitCode !== null) throw new Error(`ACP connector failed ${child!.exitCode}`); return (await (await r.call("/owner/relay/http/a2a")).json() as any).connected; });
+		const ingress = readFileSync(ingressFile, "utf8").trim();
+		const publicFetch = (input: any, init: any = {}) => { const headers = new Headers(init.headers); headers.set("authorization", `Bearer ${appToken}`); headers.set("x-a2a-relay-authorization", `Bearer ${ingress}`); return fetch(input, { ...init, headers }); };
+		const discovered = await (await publicFetch(new URL("/relay/a2a/.well-known/agent-card.json", r.url))).json() as any;
+		assert.ok(!JSON.stringify(discovered).includes("owner-selected-session")); assert.equal(discovered.capabilities.streaming, true);
+		assert.equal((await fetch(new URL("/relay/a2a/.well-known/agent-card.json", r.url), { headers: { "x-a2a-relay-authorization": `Bearer ${ingress}`, authorization: `Bearer ${"b".repeat(43)}` } })).status, 401);
+		for (const protocolVersion of ["0.3", "1.0"]) {
+			const client = await new ClientFactory({ transports: [new JsonRpcTransportFactory({ fetchImpl: publicFetch, legacyCompat: { enabled: true } })] }).createFromAgentCard(AgentCard.fromJSON({ ...discovered, supportedInterfaces: [{ url: new URL("/relay/a2a/", r.url).href, protocolBinding: "JSONRPC", protocolVersion }] }));
+			const events: any[] = [];
+			for await (const event of client.sendMessageStream(SendMessageRequest.fromJSON({ message: { messageId: `test-${protocolVersion}`, role: "ROLE_USER", parts: [{ text: "native" }] } }))) events.push(event);
+			const text = JSON.stringify(events); assert.ok(text.includes("hello ")); assert.ok(text.includes("native")); assert.ok(!text.includes("PRIVATE"));
+			assert.ok(text.includes("COMPLETED") || text.includes('"state":3'), text);
+		}
+		const rpc = async (method: string, params: any) => (await publicFetch(new URL("/relay/a2a/", r.url), { method: "POST", body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) })).json() as Promise<any>;
+		const pending = await rpc("message/send", { message: { role: "user", parts: [{ text: "hang" }] } });
+		await until(() => readFileSync(log, "utf8").includes('"text":"hang"'));
+		assert.equal((await rpc("tasks/cancel", { id: pending.result.id })).result.status.state, "canceled");
+		const calls: any[] = readFileSync(log, "utf8").trim().split("\n").map((line: string) => JSON.parse(line));
+		assert.equal(calls.filter(m => m.method === "session/load").length, 1); assert.equal(calls.filter(m => m.method === "session/new").length, 0);
+		assert.ok(calls.filter(m => m.method === "session/prompt").every(m => m.params.sessionId === "owner-selected-session"));
+		assert.ok(!diagnostics.includes(appToken));
+	} finally {
+		if (child && child.exitCode === null && child.signalCode === null) { child.kill("SIGTERM"); await once(child, "exit"); }
+		try { for (const m of readFileSync(log, "utf8").trim().split("\n").map((line: string) => JSON.parse(line))) if (m.pid) assert.throws(() => process.kill(m.pid, 0), { code: "ESRCH" }); }
+		finally { await r.mf.dispose(); rmSync(dir, { recursive: true, force: true }); }
 	}
 });
 

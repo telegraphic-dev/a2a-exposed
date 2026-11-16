@@ -1,4 +1,20 @@
-# Wake relay operations
+# Relay operations
+
+## ACP stdio targets
+
+For an owner-approved local ACP agent, use `relay a2a run --acp` with JSON argv,
+`--acp-cwd` and a protected `--acp-peers-file`. To address one existing session,
+require both `--acp-session ID` and `--acp-session-peer NAME`; unsupported or failed
+`session/load` must not create a replacement. Never let peer content select a
+local session, executable or working directory. Independent application bearer
+credentials are required; the shared relay ingress token and Worker pairing are
+not peer authentication for this target. Permission requests are canceled and
+reported `input-required`; peers cannot approve tools. File/terminal client
+capabilities are disabled, but cwd is not a sandbox. See the
+[ACP/session contract](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/http-relay.md#local-acp-agent-and-session-targeting)
+for caps, cleanup and hosted HTTP-relay prerequisites.
+
+## Wake relay operations
 
 Offer the relay first when the host is local-only or has no public address the inbox can call. `hosted capabilities --json` reports `relay: true`, or `relay status --json` reports `enabled: true` and `protocolVersion` 1. `enrolled: false` means no connector yet. A 404 means unsupported or disabled. A tunnel is for a self-hosted inbox with a zone. Polling is for a missing relay, no local receiver, or a declined foreground `relay run`. Do not assume a hosted service runs the latest OSS version.
 
