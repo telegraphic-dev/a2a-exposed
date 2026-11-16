@@ -31,9 +31,18 @@ async function owner(method, route, body, operation = "Local key pairing") {
  if (r.status !== 200) fail(`${operation} request failed (HTTP ${r.status}): ${r.data?.error || "request refused"}.${r.status === 404 ? " Check the inbox flag and matching Worker version." : ""} No private key was sent.`);
  return r.data;
 }
+// Damaged or unsupported local state shows fixed recovery guidance, never a stack trace or path.
+export function openState(api, options) {
+ try { return new api.LocalState(C.CONFIG_DIR, options); }
+ catch (error) {
+  const wrapped = new CliError(error instanceof api.LocalStateError ? error.next : "Local encryption state could not be opened. Preserve the encryption folder unchanged and inspect keys status --json. Do not run keys init over it. No plaintext fallback.");
+  wrapped.code = error instanceof api.LocalStateError ? error.code : "local_state_unavailable";
+  throw wrapped;
+ }
+}
 export async function selected(id) {
  if (!id) fail("Select --id from keys status --json before this action.");
- const api = await sdk(), store = new api.LocalState(C.CONFIG_DIR);
+ const api = await sdk(), store = openState(api);
  try {
   const row = store.row(id);
   if (row.live_state !== "local-only") fail("Selected key is retired; run keys status --json.");
@@ -45,7 +54,7 @@ export async function pinPairing({ id, peer, bundle, localBundle, endpoint }) {
  const { api, bundle: own } = await selected(id);
  if (api.canonicalJSON(own) !== api.canonicalJSON(localBundle)) fail("Local key changed since pairing; preserve the original pairing and inspect keys status --json.");
  await api.verifyBundle(bundle, { cardUrl: bundle.cardUrl, identityKey: bundle.identityKey });
- const store = new api.LocalState(C.CONFIG_DIR, { write: true });
+ const store = openState(api, { write: true });
  try {
   const old = store.inspect(peer);
   if (old.current) {
@@ -103,7 +112,7 @@ export async function command(p, o) {
    let url; try { url = new URL(o["card-url"]); } catch { fail("--card-url must be a canonical HTTPS /.well-known/agent-card.json URL; no keys were created."); }
    if (url.protocol !== "https:" || url.username || url.password || url.hash || url.search || url.pathname !== "/.well-known/agent-card.json" || url.href !== o["card-url"]) fail("--card-url must be a canonical HTTPS /.well-known/agent-card.json URL; no keys were created.");
   }
-  const store = new api.LocalState(C.CONFIG_DIR, { create: action === "init" });
+  const store = openState(api, { create: action === "init" });
   try {
    if (action === "init") result = await store.initialize({ store: o.store, cardUrl: o["card-url"], allowOsConsent: o["allow-os-consent"] === true });
    if (action === "status") result = store.status();

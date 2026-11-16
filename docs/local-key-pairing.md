@@ -42,7 +42,12 @@ listings. Status reports `private_key_status`: `present` checks only file existe
 and protected permissions, `key_missing` means the original file is absent, and
 `unavailable` means the file check failed. Keychain availability is `not_checked`;
 status never opens a private key or prompts the OS. Restore a missing original key
-from its protected backup or use the original config directory that holds it; do not initialize a replacement. `live_state: local-only`
+from its protected backup or use the original config directory that holds it; do not initialize a replacement.
+A damaged key file, a private key that does not match its public identity, or an
+unreadable `encryption/state.sqlite` refuses sends and reads with fixed recovery
+guidance before any network request. The damaged files stay unchanged for
+inspection; restore the originals from a trusted backup rather than running
+`keys init` over them. `live_state: local-only`
 means an active local identity, including after public-bundle publication; it is
 not a remote publication check. Private keys never appear in these listings.
 

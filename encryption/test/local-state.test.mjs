@@ -40,6 +40,17 @@ test("fresh local file keys survive restart and never appear in status or SQLite
  await assert.rejects(reopened.loadIdentity(result.id,{purpose:"send"}),{code:"traffic_disabled"});
 });
 
+test("a private key that does not match its public identity refuses without replacement", async t => {
+ const {state,dir}=fixture(t),other=fixture(t);const result=await init(state),foreign=await init(other.state);
+ const keyFile=path.join(dir,"encryption",result.id+".key"),value=JSON.parse(fs.readFileSync(keyFile));
+ const foreignSigning=JSON.parse(fs.readFileSync(path.join(other.dir,"encryption",foreign.id+".key"))).signing;
+ const damaged=JSON.stringify({...value,signing:foreignSigning});fs.writeFileSync(keyFile,damaged);
+ const files=fs.readdirSync(path.join(dir,"encryption")).filter(f=>f.endsWith(".key"));
+ await assert.rejects(state.loadIdentity(result.id),error=>error.code==="key_mismatch"&&/does not match this identity's public key.*no key replacement/.test(error.next)&&!error.next.includes(foreignSigning));
+ assert.equal(fs.readFileSync(keyFile,"utf8"),damaged);
+ assert.deepEqual(fs.readdirSync(path.join(dir,"encryption")).filter(f=>f.endsWith(".key")),files);
+});
+
 test("explicit stores and OS consent fail closed; file keys are never overwritten", async t => {
  const {state}=fixture(t);
  await assert.rejects(state.initialize({cardUrl:"https://local.example.com/card"}),{code:"key_store"});
