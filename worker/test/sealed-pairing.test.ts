@@ -415,10 +415,23 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
  const beforeHeld=records.filter((r:any)=>r.path==="/").length;
  const held=await cli("alice",["send","--to","bob","--text","must-not-be-signed-by-a-retired-key"]);assert.equal(held.code,1);assert.match(held.err,/Keys rotated.*never signs again.*keys verify/);
  assert.equal(records.filter((r:any)=>r.path==="/").length,beforeHeld,"a held pin sends nothing");
+ // The live inbox is refused before any request while a pin still uses the retired key, so no wake is acknowledged.
+ const inboxBefore=records.filter((r:any)=>r.name==="alice"&&String(r.path).startsWith("/owner/inbox")).length;
+ const heldInbox=await cli("alice",["inbox","--json"]);assert.equal(heldInbox.code,1);
+ assert.match(heldInbox.err,/Keys rotated: .*bob.*Nothing was requested from the inbox.*keys revoke --peer/);
+ assert.equal(records.filter((r:any)=>r.name==="alice"&&String(r.path).startsWith("/owner/inbox")).length,inboxBefore,"no inbox request while pins are held");
  const oldHistory=await cli("alice",["history","reverse-pair-fixture","--json"]);assert.equal(oldHistory.code,0,oldHistory.err);
  assert.ok(JSON.parse(oldHistory.out).some((r:any)=>r.text==="reverse-pair-private-fixture"&&r.locallyOpened),"the retired key still opens old history");
  const republish=await cli("alice",["keys","publish","--id",rot.id,"--json"]);assert.equal(republish.code,1);assert.match(republish.err,/HTTP 409.*keeps the public key it published first.*including after keys rotate/);
  assert.equal((await cli("alice",["keys","rotate","--id",ids.alice,"--json"])).code,1,"a retired key cannot be rotated again");
+ // Revoking each held pin releases the live inbox; the retired key can revoke but never sign.
+ const held2=JSON.parse((await cli("alice",["keys","rotate","--id",rot.id,"--json"])).out);assert.deepEqual(held2.plan.heldPins,[]);
+ for(const peer of (heldInbox.err.match(/Keys rotated: (.*?) still/)?.[1]||"").split(", ").filter(Boolean)){const r=await cli("alice",["keys","revoke","--peer",peer,"--json"]);assert.equal(r.code,0,r.err);assert.equal(JSON.parse(r.out).revoked,true);}
+ const released=await cli("alice",["inbox","--json"]);
+ assert.ok(records.filter((r:any)=>r.name==="alice"&&String(r.path).startsWith("/owner/inbox")).length>inboxBefore,"the inbox is read again once no pin is held");
+ const releasedRows=JSON.parse(released.out);assert.ok(Array.isArray(releasedRows));
+ assert.equal(releasedRows.some((r:any)=>r.reason==="keys_rotated"),false);
+ for(const r of releasedRows.filter((r:any)=>r.encrypted&&!r.locallyOpened))assert.equal(r.reason,"pin_revoked");
  // Exhaustive plaintext-exclusion scans over every surface this fixture can observe.
  privateTexts.push("reverse-pair-private-fixture","old fixture content");
  const keySecrets=["alice","bob"].flatMap(name=>{const value=JSON.parse(fs.readFileSync(path.join(dirs[name],"encryption",ids[name]+".key"),"utf8"));return [value.signing,value.encryption];});

@@ -341,5 +341,25 @@ test("a fault while committing a signer rotation leaves the old identity active 
  state.db.exec("DROP TRIGGER temp.fault_identity");
  assert.equal(state.row(own.id).live_state,'local-only');assert.equal(state.status().identities.length,1);
  const pending=state.status().operations.find(op=>op.state==='uncertain');assert.ok(pending,'the interrupted intent stays listed for exact recovery');
+ assert.equal(pending.operation.kind,'rotate-signer');assert.equal(pending.operation.previousId,own.id);
  assert.throws(()=>state.signerRotationPlan(own.id),{code:'initialization_pending'});
+ // Exact recovery completes the approved rotation: the old key is retired and the new one adopted.
+ const recovered=await state.reconcileInitialization({operationId:pending.id,expectedDigest:pending.digest,action:'adopt',approvalDigest:recoveryDigest(state,pending.id,'adopt'),ownerApproved:true});
+ assert.equal(recovered.recovered,true);assert.equal(recovered.id,pending.operation.identityId);
+ assert.equal(state.row(own.id).live_state,'retired');assert.equal(state.row(recovered.id).live_state,'local-only');
+ assert.notEqual(JSON.parse(state.row(recovered.id).bundle).identityKey,JSON.parse(state.row(own.id).bundle).identityKey);
+});
+
+test("rotatedPins lists only non-revoked pins on a retired key", async t => {
+ const {state}=fixture(t);const own=await init(state),first=await proposal(state,own.id);
+ const pinned=await state.approve({peer:'remote',digest:first.digest,expectedCurrent:'none',ownerApproved:true});
+ assert.deepEqual(state.rotatedPins(),[]);
+ const plan=state.signerRotationPlan(own.id);await state.rotateSigner({id:own.id,approvalDigest:plan.approval_digest,ownerApproved:true});
+ assert.deepEqual(state.rotatedPins(),[{peer:'remote',local_id:own.id}]);
+ // Revoking the held pin releases it; history stays.
+ // Any other proposal on the retired key is refused.
+ await assert.rejects(state.propose({peer:'remote',localId:own.id,bundle:remote.bundle,pairingIdentity,expectedCurrent:pinned.digest,policy:'required',verification:'independent',operation:'verify'}),{code:'key_retired'});
+ const revoke=await state.propose({peer:'remote',localId:own.id,bundle:remote.bundle,pairingIdentity,expectedCurrent:pinned.digest,policy:'required',verification:'tofu',operation:'revoke'});
+ const revoked=await state.approve({peer:'remote',digest:revoke.digest,expectedCurrent:pinned.digest,ownerApproved:true});
+ assert.equal(revoked.record.state,'revoked');assert.deepEqual(state.rotatedPins(),[]);
 });

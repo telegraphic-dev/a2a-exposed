@@ -197,8 +197,13 @@ pins it will hold and an `approval_digest`; it changes nothing. After the human
 approves that plan, `keys rotate --id LOCAL_ID --approve DIGEST --json` creates a
 fresh signing and receiving identity for the same card URL. The old identity is
 retired: it still opens old history (`history CONTEXT --json`) and never signs
-again. Sends, inbox reads and send recovery on its pins refuse with "Keys rotated"
-and send nothing. To talk to a peer again, make a new human-approved pairing with
+again. Sends and send recovery on its pins refuse with "Keys rotated" and send
+nothing. While any pin still uses the retired key, `inbox` and `poll` refuse before
+contacting the inbox, so no wake or reply is acknowledged for a pin the new key
+cannot serve. `keys revoke --peer` still works on such a pin (revoking only removes
+trust) and releases the inbox. An interrupted rotation is recorded with its
+lineage, so exact recovery from `keys status --json` completes the approved
+rotation instead of abandoning the new key. To talk to a peer again, make a new human-approved pairing with
 the new key (`connect URL --sealed-key-id NEW_ID --alias NEW_ALIAS`), then run
 `keys verify` with the other owner. A changed plan, such as a new pin, needs a new
 approval. Rotation is local only: the store schema and backups are unchanged, and

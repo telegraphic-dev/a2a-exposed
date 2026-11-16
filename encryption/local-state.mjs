@@ -207,8 +207,8 @@ async function validateSnapshot(snapshot, { checkCredentials = true } = {}) {
   const bundles = new Map(), operations = new Map();
   for (const row of rows.key_operations) {
    const op = parseJSON(row.public_json);
-   const opFields = ["v", "kind", "id", "identityId", "bundle", "store", "namespace", "account", "fileRef", "created_ms", ...(op.kind === "rotate" ? ["previousId", "previousBundleDigest"] : [])];
-   if (!exact(op, opFields) || op.v !== 1 || !["initialize", "rotate"].includes(op.kind) || op.id !== row.id || row.kind !== op.kind || !UUID.test(op.id) || !UUID.test(op.identityId) || !UUID.test(op.namespace) || !["file", "keychain"].includes(op.store) || op.account !== op.identityId + "/" + op.bundle?.keyId || op.fileRef !== op.identityId + ".key" || !Number.isSafeInteger(op.created_ms) || op.created_ms < 0 || !Number.isSafeInteger(row.revision) || row.revision < 0 || !["committed", "orphan-retained", "observed-absent"].includes(row.state) || hash("a2a-exposed local key operation v1", op) !== row.digest || operations.has(op.identityId)) invalid();
+   const opFields = ["v", "kind", "id", "identityId", "bundle", "store", "namespace", "account", "fileRef", "created_ms", ...(["rotate", "rotate-signer"].includes(op.kind) ? ["previousId", "previousBundleDigest"] : [])];
+   if (!exact(op, opFields) || op.v !== 1 || !["initialize", "rotate", "rotate-signer"].includes(op.kind) || op.id !== row.id || row.kind !== op.kind || !UUID.test(op.id) || !UUID.test(op.identityId) || !UUID.test(op.namespace) || !["file", "keychain"].includes(op.store) || op.account !== op.identityId + "/" + op.bundle?.keyId || op.fileRef !== op.identityId + ".key" || !Number.isSafeInteger(op.created_ms) || op.created_ms < 0 || !Number.isSafeInteger(row.revision) || row.revision < 0 || !["committed", "orphan-retained", "observed-absent"].includes(row.state) || hash("a2a-exposed local key operation v1", op) !== row.digest || operations.has(op.identityId)) invalid();
    await verifyBundle(op.bundle, { cardUrl: op.bundle.cardUrl, identityKey: op.bundle.identityKey });
    bundles.set(op.identityId, op.bundle); operations.set(op.identityId, row);
   }
@@ -217,6 +217,11 @@ async function validateSnapshot(snapshot, { checkCredentials = true } = {}) {
    if (op.kind === "rotate") {
     const prior = bundles.get(op.previousId);
     if (!prior || prior.identityKey !== op.bundle.identityKey || prior.cardUrl !== op.bundle.cardUrl || prior.keyId === op.bundle.keyId || hash("a2a-exposed sealed bundle v1", prior) !== op.previousBundleDigest) invalid();
+   }
+   // A signer rotation replaces the signing identity for the same card URL.
+   if (op.kind === "rotate-signer") {
+    const prior = bundles.get(op.previousId);
+    if (!prior || prior.identityKey === op.bundle.identityKey || prior.cardUrl !== op.bundle.cardUrl || prior.keyId === op.bundle.keyId || hash("a2a-exposed sealed bundle v1", prior) !== op.previousBundleDigest) invalid();
    }
   }
   for (const [id, row] of operations) if (row.state === "committed" && !rows.identities.some(identity => identity.id === id)) invalid();
@@ -586,7 +591,7 @@ export class LocalState {
  // Signer-authority rotation (#379), local only. A fresh signing and receiving identity is
  // created for the same card URL; the old identity is retired: it still opens old history
  // and never signs again. Pins bound to it are held until a new human-approved pairing.
- // Recorded as an "initialize" operation so store schema v6 and its backups stay valid.
+ // Recorded as a "rotate-signer" key operation with its lineage; the store schema stays v6.
  signerRotationPlan(id) {
   const row = this.row(id);
   if (this.db.prepare("SELECT value FROM meta WHERE key='restore_paused'").get()?.value === "1") fail("restore_archive_only");
@@ -601,6 +606,15 @@ export class LocalState {
   const plan = { configIdentity: this.configId(), action: "rotate-signing-identity", previousId: id, previousBundleDigest: hash("a2a-exposed sealed bundle v1", bundle), previousIdentityKey: bundle.identityKey, cardUrl: bundle.cardUrl, keyStore: row.store, heldPins: pins, latestOperation: latest ? { ...latest } : null };
   return { ok: true, plan, approval_digest: hash("a2a-exposed local signer rotation approval v1", plan), next: "Ask the human to approve this exact plan. A new signing and receiving identity is created; the old one is retired, still opens old history and never signs again. Listed pins are held until a new human-approved pairing and keys verify. The inbox's published key and its peer records do not change." };
  }
+ // Read-only: peers whose current, non-revoked pin still uses a key retired by keys rotate.
+ rotatedPins() {
+  const retired = new Set(this.db.prepare("SELECT id FROM identities WHERE live_state='retired'").all().map(row => row.id));
+  if (!retired.size) return [];
+  return this.db.prepare("SELECT peer,record FROM trust ORDER BY peer").all()
+   .map(row => ({ peer: row.peer, record: parseJSON(row.record) }))
+   .filter(pin => pin.record.state !== "revoked" && retired.has(pin.record.localId))
+   .map(pin => ({ peer: pin.peer, local_id: pin.record.localId }));
+ }
  async rotateSigner({ id: previousId, approvalDigest, ownerApproved = false, allowOsConsent = false, now = Date.now() }) {
   if (ownerApproved !== true) fail("owner_approval_required", "List the exact signer rotation plan and obtain human approval; no key change was made.");
   if (!Number.isSafeInteger(now) || now < 0) fail("clock_invalid");
@@ -610,11 +624,12 @@ export class LocalState {
   if (previous.store === "keychain" && allowOsConsent !== true) fail("key_store_consent");
   const identity = await generateIdentity(plan.plan.cardUrl, now);
   const value = await serialize(identity), id = randomUUID(), namespace = randomUUID(), opId = randomUUID();
-  const operation = { v: 1, kind: "initialize", id: opId, identityId: id, bundle: identity.bundle, store: previous.store, namespace, account: id + "/" + identity.bundle.keyId, fileRef: id + ".key", created_ms: now };
+  // The intent carries its lineage so an interrupted rotation can be completed by exact recovery.
+  const operation = { v: 1, kind: "rotate-signer", id: opId, identityId: id, bundle: identity.bundle, store: previous.store, namespace, account: id + "/" + identity.bundle.keyId, fileRef: id + ".key", created_ms: now, previousId, previousBundleDigest: plan.plan.previousBundleDigest };
   const digest = hash("a2a-exposed local key operation v1", operation);
   await this.locked(async () => {
    if (this.signerRotationPlan(previousId).approval_digest !== approvalDigest) fail("approval_stale");
-   this.db.prepare("INSERT INTO key_operations(id,kind,public_json,digest,state,created_ms,owner_pid) VALUES(?,?,?,?,?,?,?)").run(opId, "initialize", JSON.stringify(operation), digest, "prepared", now, process.pid);
+   this.db.prepare("INSERT INTO key_operations(id,kind,public_json,digest,state,created_ms,owner_pid) VALUES(?,?,?,?,?,?,?)").run(opId, "rotate-signer", JSON.stringify(operation), digest, "prepared", now, process.pid);
   });
   inflight.add(opId);
   try {
@@ -719,7 +734,7 @@ export class LocalState {
  async reconcileInitialization({ operationId, expectedDigest, action, approvalDigest, ownerApproved = false, allowOsConsent = false }) {
   if (ownerApproved !== true || !["adopt", "abandon-if-absent"].includes(action)) fail("owner_approval_required", "List recovery intents with keys status --json, then select an exact operation/digest and explicit recovery action approved by the human.");
   this.ready();
-  const row = this.db.prepare("SELECT * FROM key_operations WHERE id=? AND kind IN ('initialize','rotate')").get(operationId);
+  const row = this.db.prepare("SELECT * FROM key_operations WHERE id=? AND kind IN ('initialize','rotate','rotate-signer')").get(operationId);
   if (!row || row.digest !== expectedDigest || row.state === "committed" || !Number.isSafeInteger(row.revision) || recoveryApproval(this.configId(), row, action) !== approvalDigest) fail("approval_stale", "Run keys status --json; the recovery intent or its state changed.");
   if (inflight.has(operationId)) fail("operation_in_progress", "The original initialization is still running; inspect keys status --json after it exits.");
   if (["prepared", "writing", "secret-written"].includes(row.state) && row.owner_pid !== process.pid) {
@@ -734,6 +749,10 @@ export class LocalState {
   if (op.kind === "rotate") {
    const prior = parseJSON(this.row(op.previousId).bundle);
    if (hash("a2a-exposed sealed bundle v1", prior) !== op.previousBundleDigest || prior.identityKey !== op.bundle.identityKey || prior.cardUrl !== op.bundle.cardUrl || prior.keyId === op.bundle.keyId) fail("state_corrupt");
+  }
+  if (op.kind === "rotate-signer") {
+   const prior = parseJSON(this.row(op.previousId).bundle);
+   if (hash("a2a-exposed sealed bundle v1", prior) !== op.previousBundleDigest || prior.identityKey === op.bundle.identityKey || prior.cardUrl !== op.bundle.cardUrl || prior.keyId === op.bundle.keyId) fail("state_corrupt");
   }
   // All provider reads and key checks occur outside the write transaction. The final
   // mutation must compare the approved state/revision again, including no-op-looking results.
@@ -760,9 +779,10 @@ export class LocalState {
   const identity = await deserialize(value, op.bundle);
   await seal({ identity, recipient: op.bundle, binding: { contextId: randomUUID(), messageId: randomUUID(), taskId: null, role: "user", state: null, kind: "message" }, content: { purpose: "recover-local-key-check" } });
   return this.locked(async () => {
-   const prior = op.kind === "rotate" ? this.row(op.previousId) : null;
+   const rotating = op.kind === "rotate" || op.kind === "rotate-signer";
+   const prior = rotating ? this.row(op.previousId) : null;
    const canRotate = prior && prior.live_state === "local-only" && hash("a2a-exposed sealed bundle v1", parseJSON(prior.bundle)) === op.previousBundleDigest;
-   if ((op.kind === "rotate" && !canRotate) || (op.kind !== "rotate" && this.db.prepare("SELECT id FROM identities LIMIT 1").get())) {
+   if ((rotating && !canRotate) || (!rotating && this.db.prepare("SELECT id FROM identities LIMIT 1").get())) {
     transition("orphan-retained");
     return { ok: true, operation_id: operationId, retained_orphan: true, next: "Another identity is active. This older credential remains tracked for archive/recovery; no active identity or trust was replaced." };
    }
@@ -790,7 +810,7 @@ export class LocalState {
   const proposals = proposalRows.slice(0, limit).map(x => ({ digest: x.digest, proposal: JSON.parse(x.proposal), state: x.state }));
   const pending = this.db.prepare("SELECT digest FROM proposals WHERE peer=? AND state='pending' LIMIT 1").get(peer);
   const currentKey = current && this.row(current.localId);
-  const keyPending = currentKey && (currentKey.live_state !== "local-only" || this.db.prepare("SELECT id FROM key_operations WHERE kind='rotate' AND state IN ('prepared','writing','secret-written','uncertain') AND json_extract(public_json,'$.previousId')=? LIMIT 1").get(current.localId));
+  const keyPending = currentKey && (currentKey.live_state !== "local-only" || this.db.prepare("SELECT id FROM key_operations WHERE kind IN ('rotate','rotate-signer') AND state IN ('prepared','writing','secret-written','uncertain') AND json_extract(public_json,'$.previousId')=? LIMIT 1").get(current.localId));
   const historyRows = this.db.prepare("SELECT version,record,digest,approved_ms FROM trust_history WHERE peer=? AND version>? ORDER BY version LIMIT ?").all(peer, historyVersion, limit + 1);
   const history = historyRows.slice(0, limit).map(x => ({ version: x.version, record: JSON.parse(x.record), digest: x.digest, approved_ms: x.approved_ms }));
   return { ok: true, config_identity: this.configId(), peer, current, history, next_proposal_cursor: proposalRows.length > limit ? proposalRows[limit - 1].cursor : null, next_history_version: historyRows.length > limit ? historyRows[limit - 1].version : null, live_state: this.db.prepare("SELECT value FROM meta WHERE key='restore_paused'").get()?.value === "1" ? "archive-only" : (pending || keyPending) ? "change-pending" : current?.state || "unpinned", pairing: "not-checked", policies: [...POLICIES], verification_choices: ["tofu", "independent"], current_digest: row ? hash("a2a-exposed sealed trust record v1", current) : "none", current_version: row?.version || 0, proposals };
@@ -807,7 +827,8 @@ export class LocalState {
   {
    const local = this.row(localId), current = this.inspect(peer);
    if (expectedCurrent !== current.current_digest) fail("approval_stale", "Run peer keys inspect --to ALIAS --json; the full trust record changed.");
-   if (local.live_state !== "local-only") fail("key_retired");
+   // Revoking only removes trust, so a pin held by keys rotate can still be revoked; nothing else may use a retired key.
+   if (local.live_state !== "local-only" && !(operation === "revoke" && local.live_state === "retired")) fail("key_retired");
    const localBundle = JSON.parse(local.bundle);
    const proposal = { v: 1, configIdentity: this.configId(), localIdentity: localBundle.identityKey, localKeyId: localBundle.keyId, localBundleDigest: hash("a2a-exposed sealed bundle v1", localBundle), localId, peer, peerEndpoint, pairingIdentity, currentRecordDigest: current.current_digest, currentRecordVersion: current.current_version, newBundleDigest: hash("a2a-exposed sealed bundle v1", bundle), newBundle: bundle, newPolicy: policy, operation, verificationDecision: verification, proposalNonce: b64(randomBytes(32)) };
    const digest = hash("a2a-exposed sealed trust proposal v1", proposal);
@@ -825,7 +846,8 @@ export class LocalState {
    const row = this.db.prepare("SELECT * FROM proposals WHERE digest=? AND peer=? AND state='pending'").get(digest, peer), current = this.inspect(peer);
    if (!row || expectedCurrent !== current.current_digest || row.expected_digest !== current.current_digest || row.expected_version !== current.current_version) fail("approval_stale", "Run peer keys inspect --to ALIAS --json and approve the current exact proposal.");
    const proposal = JSON.parse(row.proposal);
-   if (this.row(proposal.localId).live_state !== "local-only") fail("key_retired");
+   const proposalLocal = this.row(proposal.localId).live_state;
+   if (proposalLocal !== "local-only" && !(proposal.operation === "revoke" && proposalLocal === "retired")) fail("key_retired");
    if (hash("a2a-exposed sealed trust proposal v1", proposal) !== digest || hash("a2a-exposed sealed bundle v1", JSON.parse(this.row(proposal.localId).bundle)) !== proposal.localBundleDigest) fail("approval_stale");
    if (proposal.verificationDecision === "independent" && (independentVerified !== true || verifiedProposalDigest !== digest)) fail("independent_verification_required", "Compare the locally computed safety code through another trusted channel; a hosted comparison is not independent verification.");
    const identityChanged = current.current && (current.current.bundle.identityKey !== proposal.newBundle.identityKey || current.current.pairingIdentity !== proposal.pairingIdentity || parseJSON(this.row(current.current.localId).bundle).identityKey !== proposal.localIdentity);
@@ -897,7 +919,7 @@ export class LocalState {
 }
 
 // Public surface returns fixed recovery errors. Private provider/SQLite/JSON strings never escape.
-for (const name of ["status", "rotationPlan", "rotateLocal", "signerRotationPlan", "rotateSigner", "createBackup", "initialize", "reconcileInitialization", "loadIdentity", "inspect", "propose", "approve", "verifyIndependent", "reject", "safetyCode"]) {
+for (const name of ["status", "rotationPlan", "rotateLocal", "signerRotationPlan", "rotateSigner", "rotatedPins", "createBackup", "initialize", "reconcileInitialization", "loadIdentity", "inspect", "propose", "approve", "verifyIndependent", "reject", "safetyCode"]) {
  const action = LocalState.prototype[name];
  LocalState.prototype[name] = action.constructor.name === "AsyncFunction"
   ? async function (...args) { try { return await action.apply(this, args); } catch (error) { throw stateError(error); } }

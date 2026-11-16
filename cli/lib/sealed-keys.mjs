@@ -35,6 +35,15 @@ export async function refuseArchiveOnly() {
  let archived;
  try { archived = store.status().archive_only; } catch { archived = undefined; } finally { store.close(); }
  if (archived !== false) held(archived === true ? archiveOnly : unconfirmed);
+ // Keys rotated: a live read would acknowledge wakes and replies for pins the retired key
+ // can no longer serve, so refuse before any request until each pin is re-paired or revoked.
+ let rotated = [];
+ try { store = new api.LocalState(C.CONFIG_DIR); rotated = typeof store.rotatedPins === "function" ? store.rotatedPins() : []; }
+ catch { held(unconfirmed); } finally { store?.close(); }
+ if (rotated.length) {
+  const error = new CliError(`Keys rotated: ${rotated.map(pin => pin.peer).join(", ")} still ${rotated.length === 1 ? "uses" : "use"} a retired local key. Nothing was requested from the inbox, so no wakes or replies were acknowledged. For each peer, re-pair with the new key (connect URL --sealed-key-id NEW_ID --alias NEW_ALIAS, then keys verify), or hold its old pin with keys revoke --peer PEER. Old history stays readable with history CONTEXT --json.`);
+  error.code = "keys_rotated"; throw error;
+ }
 }
 export async function sdk() {
  gate();
