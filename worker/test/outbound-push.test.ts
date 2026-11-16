@@ -8,10 +8,10 @@ import assert from "node:assert/strict";
 import { sha256 } from "../src/a2a.ts";
 import { dispatch, runOwnerRpc } from "../src/index.ts";
 import { hostedTenantContext, resolveTenant, type WorkerBindings } from "../src/tenancy.ts";
-import { d1 } from "./d1.ts";
+import { d1, testExecutionContext } from "./d1.ts";
 
 const MIGRATIONS = new URL("../migrations/", import.meta.url);
-const ectx = { waitUntil(_p: Promise<unknown>) {}, passThroughOnException() {} };
+const ectx = testExecutionContext();
 const OWNER = "owner-secret";
 
 type Row = { taskId?: string; contextId?: string; text?: string; kind?: string; state?: string | null };

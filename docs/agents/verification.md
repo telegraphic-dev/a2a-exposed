@@ -55,6 +55,9 @@ The Worker storage bridge is shared for a whole test file. Its top-level Node
 test `after` hook awaits Miniflare disposal; standalone consumers also have a
 `beforeExit` fallback. SIGINT/SIGTERM request the same bounded teardown. Forced
 termination (SIGKILL or a native process crash) cannot run JavaScript cleanup.
+Fixtures with deferred storage work use `testExecutionContext()` from `d1.ts`
+instead of discarding `waitUntil` promises. The file hook drains this work with
+a deadline before disposing storage, including work added by another deferred task.
 `storage-bridge-lifecycle.test.ts` launches actual `node --test` subprocesses and
 checks their real workerd descendants for both storage backends, including
 startup/RPC failure, RPC timeout and a stalled disposal. Fault injection wraps

@@ -22,7 +22,7 @@ async function until(check: () => boolean, ms = 15_000) {
 	assert.ok(check(), "lifecycle condition did not settle before deadline");
 }
 
-for (const backend of ["d1", "do"]) for (const mode of ["normal", "SIGINT", "SIGTERM", "sql-error", "startup-failure", "rpc-failure", "rpc-timeout", "dispose-timeout"]) {
+for (const backend of ["d1", "do"]) for (const mode of ["normal", "SIGINT", "SIGTERM", "sql-error", "startup-failure", "rpc-failure", "rpc-timeout", "dispose-timeout", "background-work"]) {
 	test(`native storage bridge reaps workerd: ${backend} ${mode}`, { skip: process.platform === "win32", timeout: 65_000 }, async () => {
 		const dir = mkdtempSync(join(tmpdir(), "storage-lifecycle-"));
 		const readyFile = join(dir, "ready"); const finishFile = join(dir, "finish");
@@ -31,7 +31,7 @@ for (const backend of ["d1", "do"]) for (const mode of ["normal", "SIGINT", "SIG
 			import assert from 'node:assert/strict';
 			import { writeFileSync, existsSync } from 'node:fs';
 			import { setTimeout as delay } from 'node:timers/promises';
-			import { d1 } from ${JSON.stringify(new URL('./d1.ts', import.meta.url).href)};
+			import { d1, testExecutionContext } from ${JSON.stringify(new URL('./d1.ts', import.meta.url).href)};
 			let retained;
 			test('storage fixture', async () => {
 				let db;
@@ -54,6 +54,7 @@ for (const backend of ["d1", "do"]) for (const mode of ["normal", "SIGINT", "SIG
 			});
 			test('shared storage remains available to later tests', async () => {
 				if (['normal', 'sql-error'].includes(${JSON.stringify(mode)})) await retained.prepare('SELECT 3 AS n').all();
+				if (${JSON.stringify(mode)} === 'background-work') testExecutionContext().waitUntil(delay(100).then(() => retained.prepare('SELECT 4 AS n').all()));
 			});`;
 		const env = { ...process.env, STORAGE_BACKEND: backend };
 		delete env.NODE_TEST_CONTEXT;

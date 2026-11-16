@@ -80,6 +80,30 @@ let bridge: { port: import("node:worker_threads").MessagePort; flag: Int32Array;
 let next = 0;
 export const remoteStats = { calls: 0, ms: 0 };
 
+const pendingTasks = new Set<Promise<unknown>>();
+const taskErrors: unknown[] = [];
+/** Own waitUntil work until the file ends, before closing its shared storage. */
+export function testExecutionContext() {
+	return {
+		waitUntil(task: Promise<unknown>) {
+			pendingTasks.add(task);
+			void task.then(() => pendingTasks.delete(task), error => { pendingTasks.delete(task); taskErrors.push(error); });
+		},
+		passThroughOnException() {},
+	};
+}
+async function drainTasks() {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		await Promise.race([(async () => {
+			while (pendingTasks.size) await Promise.allSettled([...pendingTasks]);
+			if (taskErrors.length) throw new AggregateError(taskErrors, "test waitUntil work failed");
+		})(), new Promise<never>((_, reject) => {
+			timer = setTimeout(() => reject(new Error("test waitUntil work did not settle")), 60_000);
+		})]);
+	} finally { clearTimeout(timer); }
+}
+
 // One owner per file, not per test: later tests may retain storage handles.
 let stopping: Promise<void> | null = null;
 let closed = false;
@@ -106,10 +130,14 @@ export function disposeStorageBridge(): Promise<void> {
 	})();
 	return stopping;
 }
+async function finishStorage() {
+	try { await drainTasks(); }
+	finally { await disposeStorageBridge(); }
+}
+if (process.env.NODE_TEST_CONTEXT) after(finishStorage);
+// Outside node --test there is no file hook. exit cannot await disposal.
+else process.once("beforeExit", () => { void finishStorage().catch(error => { console.error(error); process.exitCode = 1; }); });
 if (BACKEND !== "node") {
-	after(disposeStorageBridge);
-	// exit handlers cannot await disposal; beforeExit can keep the loop alive.
-	process.once("beforeExit", () => { void disposeStorageBridge().catch(error => { console.error(error); process.exitCode = 1; }); });
 	for (const [signal, code] of [["SIGINT", 130], ["SIGTERM", 143]] as const) {
 		process.once(signal, () => {
 			void disposeStorageBridge().catch(error => console.error(error)).finally(() => process.exit(code));
