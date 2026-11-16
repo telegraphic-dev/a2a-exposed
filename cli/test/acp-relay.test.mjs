@@ -105,6 +105,13 @@ test('session admission cap never evicts or silently recreates an existing conte
 	const again = (await s.send('still here', 'c0')).result; await s.done(again.id);
 	assert.equal(s.calls().filter(m => m.method === 'session/new').length, 8);
 });
+test('shutdown awaits active process reaping for every caller, without replay', async t => {
+	const s = await setup(t); const task = (await s.send('hang', 'shutdown')).result;
+	for (let i = 0; i < 500 && !s.calls().some(m => m.method === 'session/prompt'); i++) await delay(10);
+	await Promise.all([s.target.close(), s.target.close()]);
+	assert.equal((await s.rpc('tasks/get', { id: task.id })).error, 'unavailable');
+	for (const { pid } of s.calls().filter(m => m.pid)) assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+});
 test('missing or unrecognized application auth never starts a process, even for card discovery', async t => {
 	const s = await setup(t);
 	for (const headers of [{}, { authorization: 'Bearer unknown' }, { 'x-peer': 'alice' }]) assert.equal((await s.target.handle({ target: 'card', headers, body: Buffer.alloc(0) })).status, 401);
