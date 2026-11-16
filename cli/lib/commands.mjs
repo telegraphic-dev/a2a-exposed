@@ -168,6 +168,8 @@ export async function wakeStatus(o) {
 }
 
 export async function inbox(o) {
+	// A restored archive-only copy must not acknowledge the live inbox; refuse before any request.
+	await (await import("./sealed-keys.mjs")).refuseArchiveOnly();
 	const rows = await (await import("./sealed-cli.mjs")).openRows(await inboxRows(o), o);
 	// pending pairing requests: polling agents get no pairing wake, so the inbox shows them too (not with --context:
 	// that is one conversation). An older Worker without pairing: nothing to show.
@@ -438,7 +440,8 @@ async function logHistory(ctx, entry) {
 }
 
 export async function send(o) {
- if (fs.existsSync(C.CONFIG_DIR + "/encryption/state.sqlite") || Object.values(C.loadPeers()).some(p => p.sealed?.policy === "required")) return (await import("./sealed-cli.mjs")).send(o);
+ // --recover never falls through to an ordinary send: the encrypted path refuses it there.
+ if (o.recover !== undefined || fs.existsSync(C.CONFIG_DIR + "/encryption/state.sqlite") || Object.values(C.loadPeers()).some(p => p.sealed?.policy === "required")) return (await import("./sealed-cli.mjs")).send(o);
 	if (!o.to) die("--to required");
 	// The callback authenticates against the token saved through the owner API.
 	if (o.push && !ownerConfigured()) die("--push needs A2A_BASE_URL and A2A_OWNER_TOKEN (your Worker); configure both or omit --push and poll instead");

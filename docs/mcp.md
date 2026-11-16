@@ -84,8 +84,10 @@ The server supports MCP `2025-11-25`, `2025-06-18` and `2025-03-26`, with the
 initialize/initialized handshake, ping, tools/list and tools/call. It handles
 requests serially, keeps no decrypted history cache, and exits when stdin closes.
 No automatic send retry occurs on transport failure or client cancellation.
-If delivery is uncertain, preserve the returned context/message IDs and
-ask the recipient owner to check inbox/history before taking another action. Sender-history or tracking failure
+If delivery is uncertain, preserve the returned context/message IDs and do not
+send a new message. Reconcile with the CLI in the same config directory:
+`send --to ALIAS --recover MESSAGE_ID` re-submits the same encrypted message and ID,
+which the recipient stores at most once. MCP has no recovery tool. Sender-history or tracking failure
 after delivery returns `senderHistorySaved: false` or `outboundSaved: false` and explicit `next` guidance; do not resend.
 
 Returned inbox wakes are acknowledged even if a later page fails. Use `inbox`

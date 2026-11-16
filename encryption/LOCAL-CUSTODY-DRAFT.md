@@ -110,7 +110,7 @@ blocks key initialization, recovery actions and trust writes; identity rows and
 inspection show archive-only, and live-use loads remain refused. No automatic
 resend or delivery happens. A future separate fresh receiving identity and peer
 re-verification flow is required before live enrollment; it is not implemented.
-This is a local API checkpoint, with no working backup/restore CLI command yet.
+The CLI exposes this as `keys backup` and `keys restore`, with the passphrase from piped stdin only.
 
 ## Local receiving-key rotation
 
