@@ -119,7 +119,11 @@ async function transmit({ api, url, protocol, token, envelope, b, o, record, emi
    peer_keys_missing: "The recipient inbox refused the encrypted message because this peer has no approved encryption keys there. Nothing was delivered. Inspect keys status --json and keys pairings --json and ask the recipient's owner to check the existing human-approved key pairing. No plaintext was sent. Do not retry automatically.",
   };
   const reason = data.error.data?.reason;
-  if (typeof reason === "string" && Object.hasOwn(refusals, reason)) { mark({ state: "refused" }); fail(refusals[reason], "recipient_" + reason); }
+  if (typeof reason === "string" && Object.hasOwn(refusals, reason)) {
+   // A refused re-submission says nothing about an earlier attempt, which may have been stored.
+   if (recovering) fail(`The recipient refused this re-submission (${reason}). That does not show whether the original was stored by an earlier attempt, so delivery stays unresolved and the send record stays unknown. Do not send a new message. Ask the recipient's owner to check history for context ${b.contextId} and message ${b.messageId}; send a new message only after they confirm it never arrived. No plaintext fallback.`, "recover_refused");
+   mark({ state: "refused" }); fail(refusals[reason], "recipient_" + reason);
+  }
  }
  if (status !== 200 || data?.jsonrpc !== "2.0" || data.id !== b.messageId || data.error || headers?.get("A2A-Extensions") !== URI) { mark({ state: "unknown" }); fail("Encrypted delivery was not confirmed. " + recover, "delivery_unknown"); }
  const task = protocol === "1.0" ? data.result?.task : data.result;

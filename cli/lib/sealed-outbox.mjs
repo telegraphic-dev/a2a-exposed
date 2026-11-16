@@ -39,7 +39,7 @@ function valid(record, id) {
   && typeof record.localId === "string" && typeof record.pinDigest === "string" && typeof record.contextId === "string" && ID.test(record.contextId)
   && (record.requestedTaskId === null || (typeof record.requestedTaskId === "string" && ID.test(record.requestedTaskId)))
   && (record.taskId === null || (typeof record.taskId === "string" && ID.test(record.taskId))) && (record.state !== "delivered" || record.taskId !== null)
-  && Number.isSafeInteger(record.createdMs) && Number.isSafeInteger(record.updatedMs) && Number.isSafeInteger(record.recoveries) && record.recoveries >= 0
+  && [record.createdMs, record.updatedMs].every(ms => Number.isSafeInteger(ms) && ms >= 0 && Number.isFinite(new Date(ms).getTime())) && Number.isSafeInteger(record.recoveries) && record.recoveries >= 0
   && record.envelope && typeof record.envelope === "object" && !Array.isArray(record.envelope)
   // Public binding only; send --recover also authenticates the envelope before release.
   && record.envelope.header?.messageId === id && record.envelope.header.contextId === record.contextId && record.envelope.header.taskId === record.requestedTaskId;

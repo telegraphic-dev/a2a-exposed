@@ -27,11 +27,13 @@ test("unconfirmed encrypted sends recover by original ID; revoke holds a pin; ba
  const owner=(name:string,route:string,method="GET",body?:any)=>dispatch(name,new Request(`https://${name}.example.com${route}`,{method,headers:{authorization:"Bearer dummy-owner","content-type":"application/json"},...(body===undefined?{}:{body:JSON.stringify(body)})}));
  // drop-after: the recipient stores the message, then the connection dies before any response.
  // drop-before: the connection dies before the recipient sees the message.
- let fault:"drop-after"|"drop-before"|null=null;
+ // refuse: the recipient answers with a documented pre-storage refusal.
+ let fault:"drop-after"|"drop-before"|"refuse"|null=null;
  const server=http.createServer(async(req,res)=>{try{
   const name=String(req.headers["x-test-agent"]);let body="";for await(const chunk of req)body+=chunk;records.push({name,path:req.url,body});
   const sending=req.url==="/"&&req.method==="POST"&&["SendMessage","message/send"].includes(JSON.parse(body||"{}").method);
   if(sending&&fault==="drop-before"){req.socket.destroy();return;}
+  if(sending&&fault==="refuse"){res.writeHead(200,{"content-type":"application/json"});res.end(JSON.stringify({jsonrpc:"2.0",id:JSON.parse(body).id,error:{code:-32602,message:"refused",data:{reason:"sealed_invalid"}}}));return;}
   const headers=new Headers();for(const [k,v]of Object.entries(req.headers))if(typeof v==="string"&&!["host","x-test-agent","connection"].includes(k))headers.set(k,v);
   const result=await dispatch(name,new Request(`https://${name}.example.com${req.url}`,{method:req.method,headers,...(["GET","HEAD"].includes(req.method!)?{}:{body})}));
   const text=await result.text();
@@ -95,6 +97,13 @@ test("unconfirmed encrypted sends recover by original ID; revoke holds a pin; ba
  const delivered=await cli("alice",["send","--to","bob","--recover",lostRequest,"--json"]);assert.equal(delivered.code,0,delivered.err);
  assert.equal(JSON.parse(delivered.out).messageId,lostRequest);assert.equal(await tasks(),before+2);
  const read=await cli("bob",["history","recover-before","--json"]);assert.ok(JSON.parse(read.out).some((x:any)=>x.text==="recovery-fixture-undelivered"&&x.messageId===lostRequest&&x.messageIdAuthenticated));
+ // A refused re-submission leaves delivery unresolved: the record stays unknown and recoverable.
+ const refusedRecovery=await unconfirmed("recovery-fixture-refused","drop-before","recover-refused");
+ fault="refuse";
+ try{const r=await cli("alice",["send","--to","bob","--recover",refusedRecovery,"--json"]);assert.equal(r.code,1);assert.match(r.err,/refused this re-submission.*does not show whether the original was stored.*stays unknown.*Do not send a new message/);}
+ finally{fault=null;}
+ assert.equal(JSON.parse((await cli("alice",["keys","outbox","--json"])).out).records.find((x:any)=>x.messageId===refusedRecovery).state,"unknown");
+ const afterRefusal=await cli("alice",["send","--to","bob","--recover",refusedRecovery,"--json"]);assert.equal(afterRefusal.code,0,afterRefusal.err);assert.equal(await tasks(),before+3);
  // 3. Recovery takes no new content, routing or alias; nothing is sent.
  const third=await unconfirmed("recovery-fixture-held","drop-before","recover-held");
  for(const extra of [["--text","replacement"],["--context","other"],["--task","other"],["--proto","1.0"]]){
@@ -105,7 +114,7 @@ test("unconfirmed encrypted sends recover by original ID; revoke holds a pin; ba
  assert.match((await cli("alice",["send","--to","bob","--recover","no-such-message"])).err,/No local send record.*keys outbox --json/);
  // 4. A damaged record is quarantined in place: refused, untouched, never resent.
  const file=outboxFile(third),original=fs.readFileSync(file);
- for(const damage of [Buffer.from("{not json"),Buffer.from(JSON.stringify({...JSON.parse(String(original)),messageId:"retargeted"})),Buffer.from(JSON.stringify({...JSON.parse(String(original)),contextId:"moved-context"}))]){
+ for(const damage of [Buffer.from("{not json"),Buffer.from(JSON.stringify({...JSON.parse(String(original)),messageId:"retargeted"})),Buffer.from(JSON.stringify({...JSON.parse(String(original)),contextId:"moved-context"})),Buffer.from(JSON.stringify({...JSON.parse(String(original)),createdMs:Number.MAX_SAFE_INTEGER}))]){
   fs.writeFileSync(file,damage);
   const p0=posts(),refused=await cli("alice",["send","--to","bob","--recover",third]);
   assert.equal(refused.code,1);assert.match(refused.err,/damaged or unreadable.*left unchanged.*cannot be recovered/);assert.equal(posts(),p0);
@@ -194,7 +203,7 @@ test("unconfirmed encrypted sends recover by original ID; revoke holds a pin; ba
  assert.equal(posts(),p2,"a revoked pin sends nothing");
  const history=await cli("alice",["history","recover-before","--json"]);assert.equal(history.code,1);assert.ok(JSON.parse(history.out).every((x:any)=>x.reason==="pin_revoked"));
  assert.deepEqual(fs.readFileSync(outboxFile(held)),heldBytes,"revocation leaves send records unchanged");
- assert.equal(await tasks(),before+2,"held messages were never stored");
+ assert.equal(await tasks(),before+3,"held messages were never stored");
  // No plaintext or private key in any command output.
  for(const r of runs){for(const s of [aliceKey.signing,aliceKey.encryption,passphrase])assert.equal((r.out+r.err).includes(s),false,`${r.args.join(" ")} printed a secret`);
   if(!["history","inbox"].includes(r.args[0]))for(const text of secrets)assert.equal((r.out+r.err).includes(text),false,`${r.args.slice(0,2).join(" ")} printed plaintext`);}

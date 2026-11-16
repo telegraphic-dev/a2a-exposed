@@ -173,7 +173,7 @@ request. Recovery first checks that the pin, local key, endpoint and published
 capability are unchanged and authenticates the stored envelope as this sender's
 own copy. A changed or revoked pairing, or a damaged record, refuses. The record
 is left unchanged for inspection, and the recipient's owner can check history for
-the original IDs. The recipient applies its normal 30-day freshness window. MCP
+the original IDs. The recipient applies its normal 30-day freshness window. A refusal during recovery leaves the record `unknown`: it does not show whether an earlier attempt was stored, so ask the recipient's owner to check history before sending a new message. Only a refusal of the first attempt marks a record `refused`. MCP
 has no recovery tool yet; run the CLI with the same `--config-dir`.
 
 **Local revocation.** `keys revoke --peer ALIAS_OR_LABEL --json` marks one local
