@@ -162,7 +162,9 @@ npx -y a2a-exposed@latest send --to bob --recover MESSAGE_ID --json
 ```
 
 `keys outbox` lists public fields and a next step per record, newest first.
-`send --recover` is explicit and never automatic. It re-submits the same
+`send --recover` is explicit and never automatic. It only ever reconciles an
+encrypted record: in a config directory without one, or with encryption off, it
+refuses and never sends a new message in its place. It re-submits the same
 encrypted bytes with the same message ID; it never reseals, picks a new ID or
 takes new text, context, task or protocol. The recipient inbox stores a message
 once per peer and message ID: if the original arrived, it returns that task and
@@ -192,7 +194,9 @@ records are not included. Unresolved key creation or a known missing key refuses
 restores into a new directory only and never merges. It uses file storage and
 gives the copy a new config identity. The copy is archive-only: `history CONTEXT --json`
 opens verified history (`historical: true`), while send, inbox, poll and recovery
-stay held. To read history there, install the matching optional
+stay held. Inbox and poll refuse before contacting the inbox, so a restored copy
+never acknowledges wakes or replies meant for the live identity: `keys restore`
+writes an `archive-only.json` marker that is checked even with encryption off. To read history there, install the matching optional
 `@a2a-exposed/encryption` package in `NEW_DIR` and give it the inbox settings
 (`config.env`). A wrong passphrase creates nothing. A restored copy cannot become a
 live identity; that needs a fresh key and new peer verification, which is not

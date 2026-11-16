@@ -1,4 +1,5 @@
 // Local CLI adapter. The optional crypto package is never loaded for ordinary commands.
+import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
@@ -11,6 +12,21 @@ export const encryptionDisabled = "Local encryption is disabled. Set A2A_SEALED_
 export const peerKeysChanged = "The peer's published keys changed. Ask its owner whether they changed them; do not continue until they confirm. Communication is held; key replacement is not supported yet.";
 export function gate() {
  if (process.env.A2A_SEALED_ENABLED !== "1") fail(encryptionDisabled);
+}
+export const archiveOnly = "This config directory is a restored archive-only copy. Live sends, inbox reads, polls and send recovery stay held; use history CONTEXT --json for verified historical reads. No plaintext fallback.";
+// keys restore writes this marker into the new directory next to the archive-only store.
+export const ARCHIVE_MARKER = "archive-only.json";
+// Admission guard for live reads (inbox, poll). It runs before the first network request,
+// because reading the live inbox acknowledges wakes and replies meant for the live identity.
+// The marker is checked even with encryption disabled; the store flag needs the package.
+export async function refuseArchiveOnly() {
+ const held = () => { const error = new CliError(archiveOnly); error.code = "archive_only"; throw error; };
+ if (fs.existsSync(path.join(C.CONFIG_DIR, ARCHIVE_MARKER))) held();
+ if (process.env.A2A_SEALED_ENABLED !== "1" || !fs.existsSync(path.join(C.CONFIG_DIR, "encryption", "state.sqlite"))) return;
+ const api = await sdk(), store = openState(api);
+ let archived;
+ try { archived = store.status().archive_only === true; } finally { store.close(); }
+ if (archived) held();
 }
 export async function sdk() {
  gate();
@@ -138,7 +154,10 @@ export async function command(p, o) {
   const passphrase = await readPassphrase();
   try { result = await api.restoreBackup({ source, destination, passphrase, store: "file", acknowledgeReplayRollback: true }); }
   finally { passphrase.fill(0); }
-  result.next = `Restored as an archive-only copy with a new config identity. Use it with --config-dir for history CONTEXT --json only, after installing the matching @a2a-exposed/encryption package and inbox settings there. Live sends, inbox reads and recovery stay held. The original backup file is unchanged.`;
+  // The marker lets inbox and poll refuse before any request, even with encryption off.
+  try { fs.writeFileSync(path.join(destination, ARCHIVE_MARKER), JSON.stringify({ v: 1, archive_only: true, config_identity: result.config_identity }) + "\n", { mode: 0o600, flag: "wx" }); result.archive_marker = true; }
+  catch { result.archive_marker = false; console.error("warning: the archive-only marker file was not written. The restored store is still archive-only, but run inbox and poll there only with A2A_SEALED_ENABLED=1 so the store check applies."); }
+  result.next = `Restored as an archive-only copy with a new config identity. Use it with --config-dir for history CONTEXT --json only, after installing the matching @a2a-exposed/encryption package and inbox settings there. Live sends, inbox reads, polls and recovery stay held; inbox and poll refuse before contacting the inbox. The original backup file is unchanged.`;
  }
  else if (action === "pairings") {
   result = await owner("GET", "/owner/sealed-pairings");

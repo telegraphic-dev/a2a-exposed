@@ -5,7 +5,7 @@ import { once } from "node:events";
 import * as C from "./config.mjs";
 import { CliError, checkId, httpJson } from "./a2a.mjs";
 import { followInbox } from "./commands.mjs";
-import { gate, encryptionDisabled } from "./sealed-keys.mjs";
+import { gate, encryptionDisabled, refuseArchiveOnly } from "./sealed-keys.mjs";
 import { send, openRows, recovery } from "./sealed-cli.mjs";
 
 const VERSION = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
@@ -86,6 +86,8 @@ export async function callTool(name, args, options = {}) {
  if (args.from) qs.set("from", args.from);
  let rows;
  if (name === "inbox") {
+  // Refuse a restored archive-only copy before the request that acknowledges live wakes.
+  await refuseArchiveOnly();
   if (args.contextId) qs.set("context", args.contextId);
   if (args.all) qs.set("all", "1");
   let count = 0;

@@ -42,8 +42,8 @@ test("unconfirmed encrypted sends recover by original ID; revoke holds a pin; ba
  const hook=path.join(tmp,"fetch.mjs"),port=(server.address()as any).port;
  fs.writeFileSync(hook,`if(process.env.FIXTURE_OLD_INIT){const now=Date.now()-40*86400000;Date.now=()=>now;}const original=globalThis.fetch;globalThis.fetch=(url,init={})=>{const u=new URL(url);if(!/^(alice|bob)\\.example\\.com$/.test(u.hostname))throw Error('nonfixture network refused');const headers=new Headers(init.headers);headers.set('x-test-agent',u.hostname.split('.')[0]);return original('http://127.0.0.1:${port}'+u.pathname+u.search,{...init,headers});};`);
  const clean=Object.fromEntries(Object.entries(process.env).filter(([k])=>!/^(A2A_|PEER_|WAKE_|CF_|CLOUDFLARE_|UPSTREAM_|APPROVAL_|EVENT_|HOSTED_)/.test(k)));
- const run=(dir:string,args:string[],input?:string):Promise<any>=>new Promise(resolve=>{
-  const ch=spawn(process.execPath,["--import",hook,path.join(root,"cli/bin/a2a-exposed.mjs"),...args],{env:{...clean,A2A_CONFIG_DIR:dir,A2A_SEALED_ENABLED:"1",DO_NOT_TRACK:"1",A2A_NO_UPDATE_CHECK:"1",...(args[0]==="keys"&&args[1]==="init"?{FIXTURE_OLD_INIT:"1"}:{})},stdio:[input===undefined?"ignore":"pipe","pipe","pipe"]});
+ const run=(dir:string,args:string[],input?:string,extra:Record<string,string>={}):Promise<any>=>new Promise(resolve=>{
+  const ch=spawn(process.execPath,["--import",hook,path.join(root,"cli/bin/a2a-exposed.mjs"),...args],{env:{...clean,A2A_CONFIG_DIR:dir,A2A_SEALED_ENABLED:"1",DO_NOT_TRACK:"1",A2A_NO_UPDATE_CHECK:"1",...(args[0]==="keys"&&args[1]==="init"?{FIXTURE_OLD_INIT:"1"}:{}),...extra},stdio:[input===undefined?"ignore":"pipe","pipe","pipe"]});
   if(input!==undefined){ch.stdin?.on("error",()=>{});ch.stdin?.end(input);}
   let out="",err="";ch.stdout.setEncoding("utf8");ch.stderr.setEncoding("utf8");ch.stdout.on("data",b=>out+=b);ch.stderr.on("data",b=>err+=b);ch.on("close",code=>{runs.push({args,code,out,err});resolve({code,out,err});});
  });
@@ -147,6 +147,34 @@ test("unconfirmed encrypted sends recover by original ID; revoke holds a pin; ba
  const restoredSend=await run(restored,["send","--to","bob","--text","restored-copy-must-not-send"]);assert.equal(restoredSend.code,1);assert.match(restoredSend.err,/restored archive-only copy/);
  assert.equal(posts(),p1);
  const status=JSON.parse((await run(restored,["keys","status","--json"])).out);assert.equal(status.archive_only,true);
+ // Inbox and poll refuse before any request: reading the live inbox would acknowledge its wakes.
+ assert.equal(restoredOut.archive_marker,true);assert.equal(fs.statSync(path.join(restored,"archive-only.json")).mode&0o777,0o600);
+ const liveReads=()=>records.filter(r=>r.name==="alice"&&(String(r.path).startsWith("/owner/inbox")||String(r.path).startsWith("/owner/outbound"))).length+posts();
+ const guarded=async(label:string,extra:Record<string,string>)=>{
+  for(const args of [["inbox","--json"],["poll","--to","bob",r1.taskId,"--json"]]){
+   const n=liveReads(),refused=await run(restored,args,undefined,extra);
+   assert.equal(refused.code,1,`${label} ${args[0]}`);assert.match(refused.err,/restored archive-only copy/,`${label} ${args[0]}`);assert.equal(liveReads(),n,`${label} ${args[0]} made no request`);
+  }
+ };
+ await guarded("marker, encryption off",{A2A_SEALED_ENABLED:""});
+ await guarded("marker, encryption on",{});
+ const marker=path.join(restored,"archive-only.json"),markerBytes=fs.readFileSync(marker);fs.rmSync(marker);
+ await guarded("store flag only",{});
+ fs.writeFileSync(marker,markerBytes,{mode:0o600});
+ // --recover never falls through to an ordinary send, even in a config without local keys.
+ const plain=path.join(tmp,"plain");fs.mkdirSync(plain,{mode:0o700});fs.copyFileSync(path.join(dirs.alice,"config.env"),path.join(plain,"config.env"));
+ const plainPeers=JSON.parse(fs.readFileSync(path.join(dirs.alice,"peers.json"),"utf8"));for(const peer of Object.values(plainPeers) as any[])delete peer.sealed;
+ fs.writeFileSync(path.join(plain,"peers.json"),JSON.stringify(plainPeers),{mode:0o600});
+ for(const [extra,args,expected] of [
+  [{A2A_SEALED_ENABLED:""},["--text","plain-recover-must-not-send"],/send --recover reconciles only encrypted sends.*Nothing was sent/],
+  [{A2A_SEALED_ENABLED:""},[],/send --recover reconciles only encrypted sends.*Nothing was sent/],
+  [{},["--text","plain-recover-must-not-send"],/send --recover does not accept --text.*Nothing was sent/],
+  [{},[],/send --recover requires --to with the original pinned alias.*Nothing was sent/],
+ ] as [Record<string,string>,string[],RegExp][]){
+  const p0=posts(),t0=await tasks(),refused=await run(plain,["send","--to","bob","--recover",third,...args],"plain-recover-stdin-must-not-send",extra);
+  assert.equal(refused.code,1);assert.match(refused.err,expected);
+  assert.equal(posts(),p0);assert.equal(await tasks(),t0);
+ }
  // 6. Local revoke: fail closed for this pin; history and records stay unchanged.
  const held=await unconfirmed("recovery-fixture-revoked","drop-before","recover-revoked");
  const heldBytes=fs.readFileSync(outboxFile(held));

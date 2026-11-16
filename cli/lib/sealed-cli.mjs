@@ -3,7 +3,7 @@ import fs from "node:fs";
 import * as C from "./config.mjs";
 import { CliError, checkId, fetchCard, httpJson, newId, pickEndpoint } from "./a2a.mjs";
 import { owner, peerToken } from "./commands.mjs";
-import { gate, sdk, openState, URI, encryptionDisabled, peerKeysChanged } from "./sealed-keys.mjs";
+import { gate, sdk, openState, URI, encryptionDisabled, peerKeysChanged, archiveOnly, refuseArchiveOnly } from "./sealed-keys.mjs";
 import * as outbox from "./sealed-outbox.mjs";
 const fail = (message, code = "verification_failed") => { const error = new CliError(message); error.code = code; throw error; };
 const binding = h => Object.fromEntries(["contextId", "messageId", "taskId", "role", "state", "kind"].map(k => [k, h[k]]));
@@ -15,7 +15,6 @@ const taskState = task => {
 };
 const sealedFailure = "Encrypted operation refused. Preserve the original keys and pairing; inspect keys status --json and the original task/context IDs. Do not replace keys or change trust automatically. No plaintext fallback or automatic retry.";
 const revoked = "This peer's local pin was revoked with keys revoke. Encrypted sends, reads and send recovery for it stay held; its history and send records are kept unchanged. Using this peer again needs a new human-approved pairing under a new alias. No plaintext fallback.";
-const archiveOnly = "This config directory is a restored archive-only copy. Live sends, inbox reads, polls and send recovery stay held; use history CONTEXT --json for verified historical reads. No plaintext fallback.";
 // archive:true only for historical reads in a restored copy; it never authorizes live work.
 async function paired(peer, o, action, { archive = false } = {}) {
  gate();
@@ -56,6 +55,8 @@ async function readInput() {
  return Buffer.concat(chunks).toString("utf8");
 }
 export async function send(o, { emit = value => console.log(JSON.stringify(value, null, 2)) } = {}) {
+ // Every --recover lands here, also from an ordinary config, so it can never become a new send.
+ if (o.recover !== undefined && process.env.A2A_SEALED_ENABLED !== "1") fail("send --recover reconciles only encrypted sends, in the config directory that sealed the original, with A2A_SEALED_ENABLED=1. Nothing was sent, and no new message is sent in its place.", "recover_unavailable");
  if (process.env.A2A_SEALED_ENABLED !== "1") fail(encryptionDisabled + " Use a separate --config-dir for ordinary sends. No plaintext was sent.");
  gate();
  if (o.recover !== undefined) return recoverSend(o, emit);
@@ -252,6 +253,7 @@ async function trackingRecord(taskId, optional = false) {
  } catch (error) { if (error instanceof CliError && error.code === "outbound_tracking_missing") throw error; if (optional) return null; fail("Could not read encrypted outbound tracking. Check the selected inbox and owner credential; use history with the original context. Do not resend."); }
 }
 export async function recovery(taskId, o, { poll = false, emit = value => console.log(JSON.stringify(value, null, 2)) } = {}) {
+ if (poll) await refuseArchiveOnly();
  gate();
  const tid = checkId(taskId, "taskId"), pe = C.loadPeers()[o.to];
  if (!o.to || pe?.sealed?.policy !== "required") fail("Encrypted outbound/poll requires --to ALIAS from peers list --json and an active approved local pin. No plaintext fallback.");
