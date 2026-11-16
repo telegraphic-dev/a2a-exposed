@@ -159,7 +159,12 @@ test("unconfirmed encrypted sends recover by original ID; revoke holds a pin; ba
  await guarded("marker, encryption off",{A2A_SEALED_ENABLED:""});
  await guarded("marker, encryption on",{});
  const marker=path.join(restored,"archive-only.json"),markerBytes=fs.readFileSync(marker);fs.rmSync(marker);
- await guarded("store flag only",{});
+ await guarded("store flag only, encryption on",{});
+ await guarded("store flag only, encryption off",{A2A_SEALED_ENABLED:""});
+ // Without the marker and the package, the archive state cannot be confirmed: refuse, no request.
+ const pkg=path.join(restored,"node_modules");fs.renameSync(pkg,pkg+".off");
+ for(const args of [["inbox","--json"],["poll","--to","bob",r1.taskId,"--json"]]){const n=liveReads(),refused=await run(restored,args,undefined,{A2A_SEALED_ENABLED:""});assert.equal(refused.code,1);assert.match(refused.err,/could not be confirmed.*Nothing was requested/);assert.equal(liveReads(),n);}
+ fs.renameSync(pkg+".off",pkg);
  fs.writeFileSync(marker,markerBytes,{mode:0o600});
  // --recover never falls through to an ordinary send, even in a config without local keys.
  const plain=path.join(tmp,"plain");fs.mkdirSync(plain,{mode:0o700});fs.copyFileSync(path.join(dirs.alice,"config.env"),path.join(plain,"config.env"));

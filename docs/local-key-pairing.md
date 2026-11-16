@@ -195,8 +195,10 @@ restores into a new directory only and never merges. It uses file storage and
 gives the copy a new config identity. The copy is archive-only: `history CONTEXT --json`
 opens verified history (`historical: true`), while send, inbox, poll and recovery
 stay held. Inbox and poll refuse before contacting the inbox, so a restored copy
-never acknowledges wakes or replies meant for the live identity: `keys restore`
-writes an `archive-only.json` marker that is checked even with encryption off. To read history there, install the matching optional
+never acknowledges wakes or replies meant for the live identity. With local
+encryption state present, they check the store's archive flag whatever the
+encryption setting, and refuse if it cannot be read; `keys restore` also writes an
+`archive-only.json` marker that needs no package. To read history there, install the matching optional
 `@a2a-exposed/encryption` package in `NEW_DIR` and give it the inbox settings
 (`config.env`). A wrong passphrase creates nothing. A restored copy cannot become a
 live identity; that needs a fresh key and new peer verification, which is not
