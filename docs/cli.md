@@ -543,7 +543,10 @@ No raw application or connector credential belongs in MCP or chat.
 ## Local key pairing
 
 The local-key path is disabled by default and provides `keys stores`, `keys init`, `keys status`,
-`keys publish`, `keys pairings`, `keys pin` and `keys code`, all with JSON output.
+`keys publish`, `keys pairings`, `keys pin`, `keys code`, `keys revoke`, `keys outbox`,
+`keys backup` and `keys restore`, all with JSON output. `send --to ALIAS --recover MESSAGE_ID`
+re-submits an unconfirmed encrypted send unchanged; the backup passphrase comes only
+from piped stdin. See [recovery, revocation and backup](local-key-pairing.md#recovery-revocation-and-backup).
 `connect --sealed-key-id ID` binds local public keys to existing human pairing
 approval. See [local keys and pairing](local-key-pairing.md) for exact inputs,
 optional package installation, custody choices and refusal behavior. Encrypted

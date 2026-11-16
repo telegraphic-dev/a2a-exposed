@@ -43,6 +43,9 @@ owner reads and history. Temporary stores and the bridge are removed on exit.
 | Missing local key | CLI and MCP refuse without a plaintext retry or replacement key; restoring the original key restores reads. |
 | Corruption and downgrade | Tampered signatures/context/ciphertext, plaintext for pinned peers and stale live rows refuse. Historical rows retain signature checks. |
 | Uncertain delivery | A sender-history save failure remains delivered and says not to resend. Server task state remains explicitly unauthenticated. |
+| Original-ID recovery | A send whose response is lost after storage, or whose connection dies before storage, recovers with `send --recover`: one stored task, no second wake, same message ID. A delivered record makes no request. New text, context, task or protocol, a wrong alias, and a damaged or edited record refuse with no request and leave the record unchanged. Records hold no plaintext. |
+| Local revocation | `keys revoke` holds sends, reads and recovery for that pin with no request, keeps history and records, and is idempotent. |
+| Backup and restore | The passphrase comes from piped stdin only; terminal, empty and short input refuse. Backups never overwrite and hold no plaintext or readable key. Restore needs the rollback acknowledgment and a new directory; a wrong passphrase creates nothing. The restored copy reads verified history and refuses sends. |
 | Bounds and consent | Oversized encoded content refuses before key access. Keychain access without explicit OS-consent permission refuses. |
 
 Passing these fixtures shows local software behavior with the selected storage
@@ -60,8 +63,8 @@ The final owner decision must separately name which inboxes and clients may be
 enabled; this checklist grants no access and changes no deployed configuration.
 
 Deferred work remains linked from #173: signer rotation #379, further approval
-ceremonies #380, quarantine/invalidation #381, uncertain-failure recovery #382,
-populated-store backup/restore #383 and the rest of the hardening in #384.
+ceremonies #380 and the rest of the hardening in #384. Abandoning a stuck pending
+connect request, native keychain restore and MCP recovery tools are not covered yet.
 The side-channel, size, local-fault and concurrency rows cover one platform and
 the fixture's surfaces. Cross-platform custody (native keychains, Windows ACLs),
 real push delivery and SQLite fault injection inside a running transaction remain

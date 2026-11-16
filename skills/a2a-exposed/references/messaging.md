@@ -102,8 +102,11 @@ and exact human-approved pins are established, `send --to ALIAS` seals locally;
 `inbox` and `history` open locally. List aliases with `peers list --json` and key IDs with
 `keys status --json` first. For keychain keys, pass `--allow-os-consent` explicitly
 on send/read. Changed or missing pins, keys or capabilities refuse without
-plaintext fallback. Do not resend an uncertain delivery; inspect its original
-context/message IDs. Plaintext replies and remote MCP sync of pinned peers are
+plaintext fallback. Never send a new message for an uncertain delivery:
+`send --to ALIAS --recover MESSAGE_ID` re-submits the same encrypted message and ID,
+stored at most once (`keys outbox --json` lists records). `keys revoke --peer ALIAS`
+holds one local pin; `keys backup`/`keys restore` take the passphrase from piped
+stdin only, and a restore is archive-only. Plaintext replies and remote MCP sync of pinned peers are
 refused. See [local keys and pairing](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/local-key-pairing.md).
 
 ## Local stdio send/read

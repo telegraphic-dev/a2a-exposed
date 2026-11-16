@@ -243,7 +243,7 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
    assert.equal(await countTasks(),count,"a pre-storage refusal creates no task");
   }
   for(const unknownReason of ["unknown","unknown_reason"] as const){refuseSend=unknownReason;
-  try{const unknown=await cli("alice",["send","--to","bob","--text","unknown-error fixture","--proto",proto]);assert.equal(unknown.code,1);assert.match(unknown.err,/delivery was not confirmed.*Do not resend/);assert.equal(unknown.err.includes("untrusted-private-error"),false);assert.equal(unknown.err.includes("Nothing was delivered"),false);}
+  try{const unknown=await cli("alice",["send","--to","bob","--text","unknown-error fixture","--proto",proto]);assert.equal(unknown.code,1);assert.match(unknown.err,/delivery was not confirmed.*Do not send a new message.*send --to bob --recover [\w-]+.*at most once/);assert.equal(unknown.err.includes("untrusted-private-error"),false);assert.equal(unknown.err.includes("Nothing was delivered"),false);}
   finally{refuseSend=null;}}
   // Task-only routing must reuse the existing context; responses stay bounded as history grows.
   for(const explicit of [false,true]){

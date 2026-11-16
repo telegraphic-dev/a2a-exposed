@@ -51,6 +51,14 @@ Local encrypted CLI draft (disabled by default):
                                 seal for the pinned peer; no plaintext fallback
                                 max 200000 Unicode characters / 307072 encoded content bytes; checked before key access
                                 encrypted sends refuse --push, --wake and --intent
+  send --to ALIAS --recover MESSAGE_ID [--json]
+                                unconfirmed send: re-submit the same encrypted message and ID; stored at most once
+  keys outbox --json          list local send records (encrypted messages and public IDs only)
+  keys revoke --peer ALIAS_OR_LABEL --json
+                                hold encrypted use of one local pin; keeps history; server access unchanged
+  keys backup --to FILE --json  encrypted backup; passphrase from piped stdin only
+  keys restore --from FILE --to NEW_DIR --acknowledge-replay-rollback --json
+                                archive-only copy in a new directory: history reads only
   inbox --json / history CONTEXT --json
                                 open locally; --allow-os-consent permits keychain access
   If codes differ: do not use the pairing; ask approving owner to token revoke LABEL
@@ -597,7 +605,7 @@ const deployOpts = {
 };
 const SPEC = {
  mcp: { "allow-os-consent": B },
- keys: { id: S, peer: S, store: S, "card-url": S, "user-code": S, "allow-os-consent": B, json: B },
+ keys: { id: S, peer: S, store: S, "card-url": S, "user-code": S, "allow-os-consent": B, json: B, to: S, from: S, "acknowledge-replay-rollback": B },
 	hosted: { url: S, version: S, "upstream-token-file": S, "upstream-token-env": S, "access-client-id-file": S, "access-client-id-env": S, "access-client-secret-file": S, "access-client-secret-env": S, name: S, json: B, agent: S, hostname: S, origin: S, path: S, preset: S, "control-url": S, "secret-file": S, "secret-env": S, "secret-from": S, "hermes-home": S, route: S, "token-file": S, "no-run": B },
 	init: { ...deployOpts, ...tunnelOpts, tunnel: B, "dry-run": B, json: B }, deploy: deployOpts,
 	wake: { policy: S, stage: S, ...deployOpts, "local-url": S, json: B, url: S, "reference-file": S, "reference-env": S, clear: B, version: S, agent: S, "control-url": S, "key-header": S, "key-file": S, "key-env": S, "key-stdin": B, "hmac-secret-file": S, "hmac-secret-env": S, "access-client-id-file": S, "access-client-id-env": S, "access-client-secret-file": S, "access-client-secret-env": S }, tunnel: { ...tunnelOpts, preset: S, "hermes-route": S, "hmac-secret-stdin": B, json: B },
@@ -607,7 +615,7 @@ const SPEC = {
 	token: { rotate: B, json: B },
 	peers: { "token-env": S, "token-stdin": B, json: B },
 	peer: { to: S, all: B, reissue: B, hours: S, off: B, json: B },
-	send: { json: B, "allow-os-consent": B, to: S, text: S, context: S, task: S, push: B, proto: S, wake: S, intent: S },
+	send: { json: B, "allow-os-consent": B, to: S, text: S, context: S, task: S, push: B, proto: S, wake: S, intent: S, recover: S },
 	poll: { to: S, proto: S, json: B, "allow-os-consent": B },
 	outbound: { to: S, json: B, "allow-os-consent": B },
 	status: { json: B, agent: S, "control-url": S },

@@ -58,6 +58,7 @@ export async function pinPairing({ id, peer, bundle, localBundle, endpoint }) {
  try {
   const old = store.inspect(peer);
   if (old.current) {
+   if (old.current.state === "revoked") fail("This peer's local pin was revoked with keys revoke and is never re-enabled in place. Use a new human-approved pairing under a new alias or label; no trust was changed.");
    if (old.current.localId !== id || old.current.peerEndpoint !== endpoint || api.canonicalJSON(old.current.bundle) !== api.canonicalJSON(bundle)) fail(peerKeysChanged);
   } else {
    const proposal = await store.propose({ peer, localId: id, bundle, peerEndpoint: endpoint, pairingIdentity: bundle.identityKey, expectedCurrent: old.current_digest, policy: "required", verification: "tofu" });
@@ -81,15 +82,64 @@ export async function prepareConnect(id, base, card) {
  const code = api.localSafetyCode(bundle, other);
  return { id, localBundle: bundle, peerBundle: other, endpoint, safetyPreview: code, params: { sealed_bundle: api.canonicalJSON(bundle), sealed_responder_key_id: other.keyId } };
 }
+// The backup passphrase comes only from piped stdin: never a prompt, argument or environment variable.
+export const passphraseGuidance = "Pipe the backup passphrase on stdin, for example from your password manager's command-line tool. It is never read from a terminal prompt, a command argument or an environment variable. Use at least 12 characters. Nothing was written.";
+async function readPassphrase() {
+ if (process.stdin.isTTY) fail(passphraseGuidance);
+ const chunks = []; let size = 0;
+ try { for await (const chunk of process.stdin) { size += chunk.length; if (size > 4098) { for (const c of chunks) c.fill(0); fail(passphraseGuidance); } chunks.push(Buffer.from(chunk)); } }
+ catch (error) { if (error instanceof CliError) throw error; fail(passphraseGuidance); }
+ const value = Buffer.concat(chunks); for (const c of chunks) c.fill(0);
+ if (!value.length || !value.toString("utf8").trim()) { value.fill(0); fail(passphraseGuidance); }
+ return value;
+}
+const absolute = (value, flag) => { if (typeof value !== "string" || !value) fail(`Select ${flag} PATH.`); return path.resolve(value); };
 export async function command(p, o) {
  gate();
- if (p.length !== 1 || !["stores", "init", "status", "publish", "pairings", "pin", "code"].includes(p[0])) fail("usage: keys stores|init|status|publish|pairings|pin|code; use keys stores --json and keys status --json before actions");
+ const actions = ["stores", "init", "status", "publish", "pairings", "pin", "code", "revoke", "outbox", "backup", "restore"];
+ if (p.length !== 1 || !actions.includes(p[0])) fail("usage: keys stores|init|status|publish|pairings|pin|code|revoke|outbox|backup|restore; use keys stores --json and keys status --json before actions");
  const action = p[0];
- const allowed = { stores: ["json"], init: ["store","card-url","allow-os-consent","json"], status: ["json"], publish: ["id","json"], pairings: ["json"], pin: ["id","peer","user-code","json"], code: ["id","peer","json"] };
+ const allowed = { stores: ["json"], init: ["store","card-url","allow-os-consent","json"], status: ["json"], publish: ["id","json"], pairings: ["json"], pin: ["id","peer","user-code","json"], code: ["id","peer","json"], revoke: ["peer","json"], outbox: ["json"], backup: ["to","allow-os-consent","json"], restore: ["from","to","acknowledge-replay-rollback","json"] };
  for (const key of Object.keys(o)) if (!allowed[action].includes(key)) fail(`keys ${action} does not accept --${key}; run keys stores --json and keys status --json before selecting inputs.`);
  const api = await sdk();
  let result;
  if (action === "stores") result = await api.stores();
+ else if (action === "outbox") {
+  result = (await import("./sealed-outbox.mjs")).list();
+  result.next = "Records hold only encrypted messages and public IDs. Never send a new message to replace an unconfirmed one; use send --to ALIAS --recover MESSAGE_ID.";
+ }
+ else if (action === "revoke") {
+  // Local invalidation only fails closed: it holds encrypted use of this pin and keeps history.
+  if (!o.peer) fail("keys revoke requires --peer ALIAS (connecting side) or LABEL from keys pairings --json (approving side).");
+  const store = openState(api, { write: true });
+  try {
+   const current = store.inspect(o.peer), record = current.current;
+   if (!record) fail("No local pin exists for this peer; nothing was changed. Run peers list --json or keys pairings --json.");
+   if (record.state === "revoked") result = { peer: o.peer, revoked: true, changed: false };
+   else {
+    const proposal = await store.propose({ peer: o.peer, localId: record.localId, bundle: record.bundle, peerEndpoint: record.peerEndpoint, pairingIdentity: record.pairingIdentity, expectedCurrent: current.current_digest, policy: record.policy, verification: "tofu", operation: "revoke" });
+    const approved = await store.approve({ peer: o.peer, digest: proposal.digest, expectedCurrent: current.current_digest, ownerApproved: true });
+    result = { peer: o.peer, revoked: approved.record.state === "revoked", changed: true, version: approved.record.version };
+   }
+   result.next = "Encrypted sends, reads and send recovery for this peer are now held in this config directory. History and send records stay unchanged. This does not change the inbox server: to stop the peer's access there, the inbox owner runs token revoke LABEL. Using this peer again needs a new human-approved pairing under a new alias.";
+  } finally { store.close(); }
+ }
+ else if (action === "backup") {
+  const destination = absolute(o.to, "--to");
+  const passphrase = await readPassphrase(), store = openState(api);
+  try { result = await store.createBackup({ destination, passphrase, allowOsConsent: o["allow-os-consent"] === true }); }
+  finally { passphrase.fill(0); store.close(); }
+  result.next = "Keep the backup file and its passphrase apart. Local send records are not included. A restore goes into a new config directory and is archive-only: history reads only, no live sends.";
+ }
+ else if (action === "restore") {
+  if (o["acknowledge-replay-rollback"] !== true) fail("keys restore requires --acknowledge-replay-rollback: a restore can roll back replay history, so the restored copy is archive-only. Nothing was written.");
+  const source = absolute(o.from, "--from"), destination = absolute(o.to, "--to");
+  if (path.resolve(destination) === path.resolve(C.CONFIG_DIR)) fail("Restore into a new directory, not the current config directory. Nothing was written.");
+  const passphrase = await readPassphrase();
+  try { result = await api.restoreBackup({ source, destination, passphrase, store: "file", acknowledgeReplayRollback: true }); }
+  finally { passphrase.fill(0); }
+  result.next = `Restored as an archive-only copy with a new config identity. Use it with --config-dir for history CONTEXT --json only, after installing the matching @a2a-exposed/encryption package and inbox settings there. Live sends, inbox reads and recovery stay held. The original backup file is unchanged.`;
+ }
  else if (action === "pairings") {
   result = await owner("GET", "/owner/sealed-pairings");
   result.next = "After human approval, the requester must re-run the same connect command to collect the token. Only then is the pairing listed here for keys pin. Do not create another request.";
