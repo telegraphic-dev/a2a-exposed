@@ -130,6 +130,10 @@ test("ACP actual CLI through native Worker and official SDK addresses exactly on
 			for await (const event of client.sendMessageStream(SendMessageRequest.fromJSON({ message: { messageId: `test-${protocolVersion}`, role: "ROLE_USER", parts: [{ text: "native" }] } }))) events.push(event);
 			const text = JSON.stringify(events); assert.ok(text.includes("hello ")); assert.ok(text.includes("native")); assert.ok(!text.includes("PRIVATE"));
 			assert.ok(text.includes("COMPLETED") || text.includes('"state":3'), text);
+			const artifactEvents = events.filter(e => e.payload?.$case === "artifactUpdate");
+			assert.equal(artifactEvents.at(-1)?.payload.value.lastChunk, true);
+			assert.equal(artifactEvents.at(-1)?.payload.value.append, true);
+			assert.equal(events.at(-2)?.payload?.$case, "artifactUpdate", "SDK receives artifact finalization before terminal task status");
 		}
 		const rpc = async (method: string, params: any) => (await publicFetch(new URL("/relay/a2a/", r.url), { method: "POST", body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) })).json() as Promise<any>;
 		const pending = await rpc("message/send", { message: { role: "user", parts: [{ text: "hang" }] } });

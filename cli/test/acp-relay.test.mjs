@@ -79,6 +79,12 @@ for (const method of ['message/stream', 'SendStreamingMessage']) test(`streaming
 	assert.ok(text.includes('hello ')); assert.ok(text.includes('stream')); assert.ok(!text.includes('PRIVATE'));
 	assert.ok(text.includes(method === 'message/stream' ? '"state":"completed"' : 'TASK_STATE_COMPLETED'));
 	assert.ok(events.length >= 3);
+	const artifacts = events.map(e => e.artifactUpdate || (e.kind === 'artifact-update' ? e : null)).filter(Boolean);
+	assert.equal(artifacts.at(-1).lastChunk, true);
+	assert.equal(artifacts.at(-1).append, true);
+	assert.equal(artifacts.filter(e => e.lastChunk).length, 1);
+	assert.equal(artifacts.map(e => e.artifact.parts.map(p => p.text).join('')).join(''), 'hello stream');
+	assert.equal((events.at(-2).artifactUpdate || events.at(-2)).lastChunk, true, 'artifact finalized before terminal task status');
 });
 test('stream disconnect kills the active child and freezes canceled task', async t => {
 	const s = await setup(t); const res = await s.send('hang', 'ctx', 'alice', 'message/stream'); const reader = res.body.getReader();

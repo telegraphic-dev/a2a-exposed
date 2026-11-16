@@ -107,7 +107,9 @@ export function createAcpTarget({ command, cwd, peers, sessionId, sessionPeer })
 					if (finished) return;
 					const result = count++ === 0 ? (v1 ? { task: wireTask(task, true) } : wireTask(task, false)) : (v1 ? { statusUpdate: { taskId: task.id, contextId: task.contextId, status: wireTask(task, true).status, final: terminal(task.state) } } : { kind: 'status-update', taskId: task.id, contextId: task.contextId, status: wireTask(task, false).status, final: terminal(task.state) });
 					const events = [result];
-					if (task.text.length > sent) {
+					// A terminal status must finalize the artifact even when the last
+					// ACP text notification arrived before the prompt result.
+					if (task.text.length > sent || (terminal(task.state) && sent > 0)) {
 						const artifact = { artifactId: task.id + '-output', parts: [v1 ? { text: task.text.slice(sent) } : { kind: 'text', text: task.text.slice(sent) }] };
 						const update = { taskId: task.id, contextId: task.contextId, artifact, append: sent > 0, lastChunk: terminal(task.state) }; sent = task.text.length;
 						events.unshift(v1 ? { artifactUpdate: update } : { kind: 'artifact-update', ...update });
