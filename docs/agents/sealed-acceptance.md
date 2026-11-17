@@ -62,8 +62,10 @@ code and UX approval before merge. Keep production configuration unchanged.
 The final owner decision must separately name which inboxes and clients may be
 enabled; this checklist grants no access and changes no deployed configuration.
 
-Deferred work remains linked from #173: signer rotation #379, further approval
-ceremonies #380 and the rest of the hardening in #384. Abandoning a stuck pending
+Signer rotation (#379) and the independent `keys verify` ceremony (#380) are
+covered by the two-CLI fixture. Deferred work remains linked from #173:
+Worker-side key continuity after rotation, and cross-platform custody and encrypted
+push delivery from #384. Abandoning a stuck pending
 connect request, native keychain restore and MCP recovery tools are not covered yet.
 The side-channel, size, local-fault and concurrency rows cover one platform and
 the fixture's surfaces. Cross-platform custody (native keychains, Windows ACLs),

@@ -407,7 +407,7 @@ To replace it anyway (for example after a leak), run: ${rerun({})} --replace
 A different agent at the same URL? Pass another --alias.`);
 		if (works === false && !o.json) console.error(`note: peer "${alias}" rejects the stored token (HTTP 401: revoked or rotated); requesting a new one.`);
 	}
- const mismatchNext = "If any group differs, do not use this pairing. Ask the approving inbox owner to revoke it with token revoke LABEL (select LABEL with keys pairings --json), and tell the other owner.";
+ const mismatchNext = "After the keys are pinned, if every group matches, record it with keys verify --id ID --peer ALIAS --code \"CODE\", using the code the other owner read out. If any group differs, do not use this pairing. Ask the approving inbox owner to revoke it with token revoke LABEL (select LABEL with keys pairings --json), and tell the other owner.";
  if (preparedSealed) emit({ status: "key_comparison", safety_code: preparedSealed.safetyPreview, verification: "tofu", independently_verified: false, traffic_requires_test_flag: true, next: mismatchNext }, `Local safety code: ${preparedSealed.safetyPreview}\nTrust on first use; not independently verified. Compare through another trusted channel. ${mismatchNext} Encrypted traffic needs A2A_SEALED_ENABLED=1 in each local CLI/MCP process and on each inbox Worker, with owner approval.`);
 	if (st) emit({ status: "checking_authorization", resumed: true, alias, user_code: st.userCode, verification_uri: st.verificationUri, verification_uri_complete: st.verificationUriComplete, expires_in: Math.round((st.expiresAt - Date.now()) / 1000) },
 		`Resuming the pairing request to ${peerName} (code ${st.userCode}, link ${st.verificationUriComplete}).`);
