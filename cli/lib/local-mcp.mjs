@@ -63,6 +63,8 @@ export function projectRow(row) {
  }
  if (typeof row.messageId === "string" && row.messageId.length <= 256) { result.messageId = row.messageId; result.messageIdAuthenticated = opened && row.messageIdAuthenticated === true; }
  if (opened) { result.text = row.text; result.historical = row.historical === true; }
+ // A text-free event row (a state change or a push status with its text withheld) is not a message.
+ else if (row.locallyOpened === undefined && typeof row.event === "string" && row.event !== "" && (row.text === null || row.text === undefined || row.text === "")) { result.text = null; result.eventOnly = true; if (row.textWithheld === true) result.textWithheld = true; }
  else {
   result.text = row.locallyOpened === false ? row.reason === "plaintext_from_pinned_peer" ? "[unencrypted message refused from pinned peer]" : "[encrypted message]" : "[message content withheld]";
   result.reason = row.locallyOpened === false ? row.reason : "server_readable_content_withheld";
@@ -145,7 +147,7 @@ export function session(options = {}, execute = callTool) {
    checkUpdates(VERSION, { write: () => {} });
    if (update.length) data.update = update;
    if (Buffer.byteLength(JSON.stringify(data)) > 4 * MAX_FRAME) throw new CliError("Read result exceeds 4 MiB. Narrow it with contextId/from or a smaller history limit. No partial result returned.");
-   const isError = data.rows?.some(r => r.locallyOpened === false && r.reason !== "server_readable_content_withheld") || false;
+   const isError = data.rows?.some(r => r.locallyOpened === false && r.eventOnly !== true && r.reason !== "server_readable_content_withheld") || false;
    return ok({ content: [{ type: "text", text: JSON.stringify(data) }, ...(update.length ? [{ type: "text", text: update.map(r => r.message).join("\n") }] : [])], structuredContent: data, ...(isError ? { isError: true } : {}) });
   } catch (e) {
    // CLI errors on this path contain fixed local guidance (and validated routing IDs).

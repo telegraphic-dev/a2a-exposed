@@ -194,7 +194,7 @@ the peer again needs a new human-approved pairing under a new alias.
 
 **Signer rotation.** `keys rotate --id LOCAL_ID --json` prints an exact plan, the
 pins it will hold and an `approval_digest`; it changes nothing. After the human
-approves that plan, `keys rotate --id LOCAL_ID --approve DIGEST --json` creates a
+approves that plan, `keys rotate --id LOCAL_ID --approve=DIGEST --json` creates a
 fresh signing and receiving identity for the same card URL. The old identity is
 retired: it still opens old history (`history CONTEXT --json`) and never signs
 again. Sends and send recovery on its pins refuse with "Keys rotated" and send
@@ -343,3 +343,7 @@ inbox Worker or a peer; each needs its own separately approved setting.
 A refused verification row tells the operator not to resend and to report its
 `taskId` and `contextId` to the inbox owner. Preserve those IDs with the original
 keys and pairing. The approval-page safety-code work remains tracked in [#380](https://github.com/telegraphic-dev/a2a-exposed/issues/380).
+
+History state events have no message text. For pinned peers, owner-side push
+status text is withheld. Local MCP marks these rows `eventOnly: true`; they
+remain unauthenticated task metadata, while inbound plaintext with text is refused.

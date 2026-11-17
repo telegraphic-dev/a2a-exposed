@@ -10,24 +10,30 @@ import { fileURLToPath } from "node:url";
 import worker from "../src/index.ts";
 import { d1 } from "./d1.ts";
 import { EXPORT_TABLES } from "../src/export.ts";
-import { verifyPublicBundle } from "../src/sealed-keys.ts";
+import { verifyPublicBundle, SEALED_URI } from "../src/sealed-keys.ts";
+import { wakeNet, DOH_URL } from "../src/wake-target.ts";
 const root=fileURLToPath(new URL("../../",import.meta.url));
 test("two local CLIs pair, seal and locally open messages while both servers store only ciphertext",async t=>{
  const tmp=fs.mkdtempSync(path.join(os.tmpdir(),"sealed-pairing-"));t.after(()=>fs.rmSync(tmp,{recursive:true,force:true}));
  const envs:Record<string,any>={},dirs:Record<string,string>={},ids:Record<string,string>={},bundles:Record<string,any>={},records:any[]=[];
  // Every in-process Worker side channel is captured for the plaintext-exclusion scans:
- // wake webhooks, any other outbound fetch (push or card reads) and structured logs.
- const wakes:any[]=[],workerFetches:any[]=[],logs:string[]=[],cliRuns:any[]=[],privateTexts:string[]=[];
- const originalFetch=globalThis.fetch;
+ // wake webhooks, A2A push deliveries, any other outbound fetch (card reads) and structured logs.
+ const wakes:any[]=[],pushes:any[]=[],workerFetches:any[]=[],logs:string[]=[],cliRuns:any[]=[],privateTexts:string[]=[];
+ const originalFetch=globalThis.fetch,originalDeliver=wakeNet.deliver;
  globalThis.fetch=(async(input:any,init:any={})=>{
-  const request=new Request(input,init),body=["GET","HEAD"].includes(request.method)?"":await request.text();
+  const request=new Request(input,init);
+  // Push targets pass the public-DNS gate with a fixed public answer; nothing leaves the process.
+  if(new URL(request.url).origin===new URL(DOH_URL).origin)return Response.json({Status:0,Answer:[{type:1,data:"1.2.3.4"}]});
+  const body=["GET","HEAD"].includes(request.method)?"":await request.text();
   workerFetches.push({url:request.url,headers:Object.fromEntries(request.headers),body});
   if(new URL(request.url).hostname==="hook.example.net"){wakes.push({url:request.url,body});return new Response("accepted",{status:202});}
   return originalFetch(new Request(request,{body:body||undefined}));
  }) as typeof fetch;
  const consoleMethods=["log","info","warn","error"] as const,originalConsole=Object.fromEntries(consoleMethods.map(m=>[m,console[m]]));
  for(const m of consoleMethods)console[m]=(...values:any[])=>{logs.push(values.map(v=>typeof v==="string"?v:JSON.stringify(v)).join(" "));(originalConsole[m] as any)(...values);};
- t.after(()=>{globalThis.fetch=originalFetch;for(const m of consoleMethods)console[m]=originalConsole[m] as any;});
+ // Pinned peer deliveries (A2A push) are captured instead of opening a socket.
+ wakeNet.deliver=async(url:string,init:RequestInit)=>{const body=typeof init.body==="string"?init.body:"";const entry={url,headers:Object.fromEntries(new Headers(init.headers)),body};pushes.push(entry);workerFetches.push(entry);return new Response("",{status:200});};
+ t.after(()=>{globalThis.fetch=originalFetch;wakeNet.deliver=originalDeliver;for(const m of consoleMethods)console[m]=originalConsole[m] as any;});
  for(const name of ["alice","bob"]){
   envs[name]={DB:d1(new URL("../migrations/",import.meta.url)),PUBLIC_URL:`https://${name}.example.com`,OWNER_TOKEN:"dummy-owner",AGENT_NAME:name,A2A_SEALED_ENABLED:"1",WAKE_BUSY_SECONDS:"0",WAKE_DEBOUNCE_SECONDS:"0",WAKE_PRESET:"generic",WAKE_WEBHOOK_URL:"https://hook.example.net/wake",WAKE_WEBHOOK_KEY:"dummy-hook-key",RATE_PER_MIN:"1000"};
   dirs[name]=path.join(tmp,name);fs.mkdirSync(dirs[name],{mode:0o700});fs.mkdirSync(path.join(dirs[name],"node_modules/@a2a-exposed"),{recursive:true});
@@ -328,6 +334,50 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
   await envs.bob.DB.prepare("UPDATE messages SET message_json=? WHERE seq=?").bind(JSON.stringify(oldCarrier),stored.seq).run();
   const tooOld=await cli("bob",["inbox","--json"]);assert.equal(tooOld.code,1);assert.ok(JSON.parse(tooOld.out).some((x:any)=>x.taskId===sent.taskId&&x.reason==="too_old"));
   await envs.bob.DB.prepare("UPDATE messages SET message_json=? WHERE seq=?").bind(stored.message_json,stored.seq).run();
+  // Encrypted push delivery (#384): the CLI refuses --push and the Worker refuses a push config inside a
+  // sealed send, but an A2A client may register one on its stored sealed task. That push carries ciphertext only.
+  {
+   const pushSecret="push-private-fixture-"+proto+"-"+crypto.randomUUID();privateTexts.push(pushSecret);
+   const pushContext="push-fixture-"+proto,pushMessageId=crypto.randomUUID();
+   const pb={contextId:pushContext,messageId:pushMessageId,taskId:null,role:"user",state:null,kind:"message"};
+   // Same sealing path as the CLI: validated content, then the protocol's message carrier.
+   const {validateContent}=await import("../../encryption/content.mjs"),{makeMessageCarrier}=await import("../../encryption/carriers.mjs");
+   const content=validateContent({kind:"message",authorRole:"user",parts:[{kind:"text",text:pushSecret,mediaType:null,metadata:{}}],metadata:{},extensions:[],referenceTaskIds:[]},pb);
+   const envelope=await api.seal({identity,recipient:bundles.bob,binding:pb,content});
+   const carrier=makeMessageCarrier(envelope,proto);assert.deepEqual(carrier.extensions,[SEALED_URI]);
+   const pushUrl="https://push.example.net/a2a/"+proto,pushToken="dummy-push-token-"+proto;
+   // A push config inside the sealed send is refused before storage; nothing is delivered.
+   const inline=await call({jsonrpc:"2.0",id:"push-inline-"+proto,method:request.method,params:{message:carrier,configuration:{pushNotificationConfig:{url:pushUrl,token:pushToken}}}});
+   assert.equal(inline.error?.data?.reason,"sealed_invalid");
+   const accepted=await call({jsonrpc:"2.0",id:"push-"+proto,method:request.method,params:{message:carrier}});
+   assert.ok(!accepted.error,JSON.stringify(accepted.error));
+   const pushTask=accepted.result.task?.id??accepted.result.id;assert.ok(pushTask,"sealed send returned a task");
+   // Registering push on the stored sealed task is a separate, allowed A2A call.
+   const registered=await call({jsonrpc:"2.0",id:"pushset-"+proto,method:proto==="1.0"?"CreateTaskPushNotificationConfig":"tasks/pushNotificationConfig/set",params:{taskId:pushTask,pushNotificationConfig:{url:pushUrl,token:pushToken}}});
+   assert.ok(!registered.error,JSON.stringify(registered.error));
+   const beforePush=pushes.length;
+   const working=await owner("bob",`/owner/tasks/${pushTask}/working`,"POST",{});assert.equal(working.status,200);
+   const pushed=pushes.slice(beforePush);assert.equal(pushed.length,1,"one push per state change");
+   assert.equal(new URL(pushed[0].url).href,pushUrl);assert.equal(pushed[0].headers["x-a2a-notification-token"],pushToken);
+   assert.ok(pushed[0].body.includes(envelope.recipient.ct),"the push carries the sealed envelope");
+   assert.equal(pushed[0].body.includes(pushSecret),false,"push body excludes plaintext");
+   assert.equal(JSON.stringify((await envs.bob.DB.prepare("SELECT * FROM history WHERE task_id=?").bind(pushTask).all()).results).includes(pushSecret),false,"push history row excludes plaintext");
+   // Marking the task working and the push status are event rows, not messages: history still reads
+   // cleanly. The push row's server-written text is withheld; an inbound row with text still refuses.
+   const pushedRead=await cli("bob",["history",pushContext,"--json"]);assert.equal(pushedRead.code,0,pushedRead.err);
+   const pushedRows=JSON.parse(pushedRead.out);
+   assert.ok(pushedRows.some((r:any)=>r.text===pushSecret&&r.locallyOpened),"the recipient still opens the pushed task locally");
+   assert.ok(pushedRows.some((r:any)=>r.event==="state"&&r.state==="working"&&r.text===null),"the working state row is kept");
+   assert.ok(pushedRows.some((r:any)=>r.event==="push"&&r.text===null&&r.textWithheld===true),"the push status row is kept without server text");
+   assert.equal(pushedRows.some((r:any)=>r.reason==="plaintext_from_pinned_peer"),false);
+   const pushedMcp=await mcp("bob","history",{contextId:pushContext,from:p.peer});assert.ok(!pushedMcp.isError,JSON.stringify(pushedMcp));
+   assert.equal(JSON.stringify(pushedMcp).includes("pinned peer"),false);assert.equal(JSON.stringify(pushedMcp).includes("not encrypted by the sender"),false);
+   const mcpRows=pushedMcp.structuredContent.rows;assert.ok(mcpRows.some((r:any)=>r.text===pushSecret&&r.locallyOpened));
+   assert.ok(mcpRows.some((r:any)=>r.event==="state"&&r.text===null&&r.eventOnly===true&&r.reason===undefined));assert.ok(mcpRows.some((r:any)=>r.event==="push"&&r.text===null&&r.textWithheld===true));
+   assert.equal((await owner("bob","/owner/history","POST",{contextId:pushContext,dir:"in",peer:p.peer,taskId:pushTask,event:"state",text:"forged inbound event text"})).status,200);
+   const forged=await cli("bob",["history",pushContext,"--json"]);assert.equal(forged.code,1);assert.equal(forged.out.includes("forged inbound event text"),false);
+   assert.ok(JSON.parse(forged.out).some((r:any)=>r.reason==="plaintext_from_pinned_peer"));
+  }
   // Mixed rows: a refused plaintext downgrade cannot hide the valid encrypted history.
   assert.equal((await owner("bob","/owner/history","POST",{contextId:sent.contextId,dir:"in",peer:p.peer,taskId:sent.taskId,text:"untrusted plaintext downgrade"})).status,200);
   const mixed=await cli("bob",["history",sent.contextId,"--json"]);assert.equal(mixed.code,1);const mixedRows=JSON.parse(mixed.out);assert.ok(mixedRows.some((x:any)=>x.text===secret&&x.locallyOpened));assert.ok(mixedRows.some((x:any)=>x.reason==="plaintext_from_pinned_peer"&&x.encrypted===false));assert.equal(mixed.out.includes("untrusted plaintext downgrade"),false);
@@ -406,10 +456,10 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
  envs.bob.A2A_SEALED_ENABLED="";assert.equal((await owner("bob","/owner/sealed-key")).status,404);envs.bob.A2A_SEALED_ENABLED="1";
  // #379 signer rotation, local only: an exact plan, an approved digest, then held pins and readable old history.
  const rotatePlan=await cli("alice",["keys","rotate","--id",ids.alice,"--json"]);assert.equal(rotatePlan.code,0,rotatePlan.err);
- const rp=JSON.parse(rotatePlan.out);assert.equal(rp.changed,false);assert.ok(rp.plan.heldPins.some((pin:any)=>pin.peer==="bob"));assert.match(rp.approve,/keys rotate --id .* --approve /);
+ const rp=JSON.parse(rotatePlan.out);assert.equal(rp.changed,false);assert.ok(rp.plan.heldPins.some((pin:any)=>pin.peer==="bob"));assert.match(rp.approve,/keys rotate --id .* --approve=/);
  const staleRotation=await cli("alice",["keys","rotate","--id",ids.alice,"--approve","x".repeat(43),"--json"]);assert.equal(staleRotation.code,1);assert.match(staleRotation.err,/approval_stale/);
  assert.equal((await cli("alice",["keys","rotate","--id",ids.alice,"--approve","bad digest!","--json"])).code,1);
- const rotation=await cli("alice",["keys","rotate","--id",ids.alice,"--approve",rp.approval_digest,"--json"]);assert.equal(rotation.code,0,rotation.err);
+ const rotation=await cli("alice",["keys","rotate","--id",ids.alice,`--approve=${rp.approval_digest}`,"--json"]);assert.equal(rotation.code,0,rotation.err);
  const rot=JSON.parse(rotation.out);assert.equal(rot.previous_id,ids.alice);assert.equal(rot.rotated,true);assert.ok(rot.held_pins.includes("bob"));assert.match(rot.next,/never signs again.*connect URL --sealed-key-id/);
  privateTexts.push("must-not-be-signed-by-a-retired-key");
  const beforeHeld=records.filter((r:any)=>r.path==="/").length;
@@ -434,16 +484,23 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
  for(const r of releasedRows.filter((r:any)=>r.encrypted&&!r.locallyOpened))assert.equal(r.reason,"pin_revoked");
  // Exhaustive plaintext-exclusion scans over every surface this fixture can observe.
  privateTexts.push("reverse-pair-private-fixture","old fixture content");
- const keySecrets=["alice","bob"].flatMap(name=>{const value=JSON.parse(fs.readFileSync(path.join(dirs[name],"encryption",ids[name]+".key"),"utf8"));return [value.signing,value.encryption];});
+ // Every private key file, including the signer created by keys rotate, is scanned for.
+ const keyFilesOf=(name:string)=>fs.readdirSync(path.join(dirs[name],"encryption")).filter(f=>f.endsWith(".key")).map(f=>path.join(dirs[name],"encryption",f));
+ assert.ok(keyFilesOf("alice").length>=2,"the rotated signer's key file is scanned too");
+ const keySecrets=["alice","bob"].flatMap(name=>keyFilesOf(name).flatMap(file=>{const value=JSON.parse(fs.readFileSync(file,"utf8"));return [value.signing,value.encryption];}));
  const scan=(surface:string,value:string|Buffer,{texts=true,keys=true}={})=>{
   const bytes=Buffer.isBuffer(value)?value:Buffer.from(value);
   if(texts)for(const text of privateTexts)assert.equal(bytes.includes(Buffer.from(text)),false,`${surface} contains encrypted fixture text ${text.slice(0,24)}`);
   if(keys)for(const secret of keySecrets)assert.equal(bytes.includes(Buffer.from(secret)),false,`${surface} contains private key material`);
+  if(keys===true)return;
+  // A key file may hold only its own material: no other identity's private key.
+  const own=JSON.parse(bytes.toString("utf8"));for(const secret of keySecrets)if(secret!==own.signing&&secret!==own.encryption)assert.equal(bytes.includes(Buffer.from(secret)),false,`${surface} contains another key's material`);
  };
  assert.ok(wakes.length>0,"wake webhooks were exercised");
  assert.ok(wakes.some(w=>w.body.includes("[encrypted message]")),"encrypted wakes carry only the fixed preview");
- console.log(`Side-channel evidence: ${wakes.length} wake webhooks, ${workerFetches.length-wakes.length} other Worker outbound requests, ${logs.length} log lines, ${cliRuns.length} command runs, ${privateTexts.length} encrypted fixture texts.`);
- scan("wake webhook bodies",JSON.stringify(wakes));scan("Worker outbound fetches",JSON.stringify(workerFetches));
+ assert.equal(pushes.length,2,"one encrypted push per protocol");
+ console.log(`Side-channel evidence: ${wakes.length} wake webhooks, ${pushes.length} push deliveries, ${workerFetches.length-wakes.length-pushes.length} other Worker outbound requests, ${logs.length} log lines, ${cliRuns.length} command runs, ${privateTexts.length} encrypted fixture texts.`);
+ scan("wake webhook bodies",JSON.stringify(wakes));scan("push delivery bodies and headers",JSON.stringify(pushes));scan("Worker outbound fetches",JSON.stringify(workerFetches));
  scan("Worker and test logs",logs.join("\n"));scan("fixture request bodies",JSON.stringify(records));
  for(const run of cliRuns){
   scan(`stderr of ${run.args[0]}`,run.err);

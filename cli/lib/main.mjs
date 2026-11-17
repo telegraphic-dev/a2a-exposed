@@ -54,13 +54,14 @@ Local encrypted CLI draft (disabled by default):
                                 seal for the pinned peer; no plaintext fallback
                                 max 200000 Unicode characters / 307072 encoded content bytes; checked before key access
                                 encrypted sends refuse --push, --wake and --intent
+                                encrypted history keeps state/push events as metadata; push status text is withheld
   send --to ALIAS --recover MESSAGE_ID [--json]
                                 unconfirmed send: re-submit the same encrypted message and ID; stored at most once
   keys outbox --json          list local send records (encrypted messages and public IDs only)
   keys revoke --peer ALIAS_OR_LABEL --json
                                 hold encrypted use of one local pin; keeps history; server access unchanged
   keys rotate --id ID --json   show the exact signer-rotation plan and its approval digest; changes nothing
-  keys rotate --id ID --approve DIGEST --json
+  keys rotate --id ID --approve=DIGEST --json
                                 new signing and receiving keys; the old key opens old history only
                                 its pins are held: re-pair with connect --sealed-key-id NEW_ID and keys verify, then keys revoke --peer OLD
   keys backup --to FILE --json  encrypted backup; passphrase from piped stdin only

@@ -91,7 +91,7 @@ pairing: ask the approving inbox owner to `token revoke LABEL` (list labels with
 code by phone or another trusted channel, `keys verify --id ID --peer ALIAS --code "CODE" --json`
 records independent verification; ask your human for the code they heard, never
 copy it from `keys code` output. `keys rotate --id ID --json` shows a plan and digest;
-run `--approve DIGEST` only after your human approves it. Its pins then refuse with
+run `--approve=DIGEST` only after your human approves it. Its pins then refuse with
 "Keys rotated", and live inbox reads stay held until each old pin is revoked with
 `keys revoke --peer`. To keep a peer, first re-pair with the new key under a new
 alias and run `keys verify`, then revoke the old pin. `keys init` turns off ordinary
@@ -197,3 +197,7 @@ The note is peer-visible, 1–1000 characters, and advisory only. Read with
 nonterminal task with working/completed and no wait flags. Push follows normal
 wake rules; ordinary direct replies do not wake, so use a separate same-context
 `send` handoff if needed. No receipt or approval is implied by this metadata.
+
+History state events have no message text. For pinned peers, owner-side push
+status text is withheld. Local MCP marks these rows `eventOnly: true`; they
+remain unauthenticated task metadata, while inbound plaintext with text is refused.

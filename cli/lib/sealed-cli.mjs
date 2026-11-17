@@ -203,10 +203,19 @@ export async function openRows(rows, o, { historical = false, markFailure = true
   const envelope = row.sealed ?? row.data?.sealed, peer = row.from ?? row.peer;
   try {
    if (!envelope) {
-    if (peer && (row.text || row.taskId) && fs.existsSync(C.CONFIG_DIR + "/encryption/state.sqlite")) {
+    // An event row without a message body is task metadata, not a message. With no text (the owner
+    // marking a task working, a peer cancel) it carries nothing to refuse. An owner-side event with text
+    // (a push status) is kept with its server-written text withheld for a pinned peer. Message rows and
+    // inbound rows with text are still checked as a plaintext downgrade.
+    const event = typeof row.event === "string" && row.event !== "" && row.parts === undefined && row.message === undefined && row.artifacts === undefined;
+    const contentFree = event && (row.text === null || row.text === undefined || row.text === "");
+    if (peer && !contentFree && (row.text || row.taskId) && fs.existsSync(C.CONFIG_DIR + "/encryption/state.sqlite")) {
      const api = await sdk(), store = openState(api);
-     try { if (store.inspect(peer).current?.policy === "required") fail("Refusing plaintext from a pinned peer.", "plaintext_from_pinned_peer"); }
+     let required;
+     try { required = store.inspect(peer).current?.policy === "required"; }
      finally { store.close(); }
+     if (required && event && row.dir !== "in") { out.push({ ...row, text: null, textWithheld: true }); continue; }
+     if (required) fail("Refusing plaintext from a pinned peer.", "plaintext_from_pinned_peer");
     }
     out.push(row); continue;
    }

@@ -66,7 +66,7 @@ This page tracks what an owner or agent can do on each a2a.exposed surface, so t
 | **Status and owner inspection** | | | | | |
 | Health / diagnostics | yes: `status [--json]` eight layers, `status --agent`, `tunnel status`, `upstream verify` (`main.mjs:713`) | yes: setup `SKILL.md:99`, both `troubleshooting.md` | partial: `agent_status` (address, wake, open counts), `verify_upstream` | **no**: no status tool | partial: Overview status/connection (shows Polling when no wake is set); linked Worker version/upgrade *(unverified-live)*; Worker `/health` (`index.ts:4711`) |
 | **Encryption (sealed/v1)** | | | | | |
-| Keys init / publish / pin / code, sealed send/read | yes: `keys stores/init/status/publish/pairings/pin/code/verify/revoke/rotate/outbox/backup/restore`, `send --recover`, `connect --sealed-key-id`, local stdio `mcp` (`main.mjs:684`, `sealed-keys.mjs:77`, `local-mcp.mjs:18`) | yes: `SKILL.md:123`, `:147`, `references/messaging.md:85` | no (intentional, #458) | no (intentional, #458) | no (intentional: no private keys on the server) |
+| Keys init / publish / pin / code, sealed send/read | yes: `keys stores/init/status/publish/pairings/pin/code/verify/revoke/rotate/outbox/backup/restore`, `send --recover`, `connect --sealed-key-id`, local stdio `mcp` (history preserves text-free state/push events; stdio MCP marks `eventOnly`; `main.mjs:684`, `sealed-keys.mjs:77`, `local-mcp.mjs:18`) | yes: `SKILL.md:123`, `:147`, `references/messaging.md:85` | no (intentional, #458) | no (intentional, #458) | no (intentional: no private keys on the server) |
 | Safety code shown on an encrypted pairing request | yes: `pair list` shows `sealed`, `safetyCode` (`docs/cli.md:270`) | yes: `references/messaging.md:155` | yes: `pairing_requests` and `approve_pairing` show it  | yes: `pairing_requests` passes through `sealed` and `safetyCode`, no key material ([#461](https://github.com/telegraphic-dev/a2a-exposed/issues/461)) | yes: hosted sealed block *(unverified-live: the safety code is only shown when a pairing request is pending; pairings were out of scope for the tour)*; Worker `/device` (`worker/src/pairing.ts:245`) |
 | **Tokens** | | | | | |
 | Owner token rotation | partial: self-host `init --rotate-owner-token`; a hosted config refuses it and points to the dashboard or MCP `rotate_owner_token` ([#461](https://github.com/telegraphic-dev/a2a-exposed/issues/461)) | yes: setup `SKILL.md:107` | yes: `rotate_owner_token`, shown only on the confirm page  | no (by design) | yes: Advanced > Rotate owner token; linked Worker |
@@ -125,3 +125,7 @@ This page tracks what an owner or agent can do on each a2a.exposed surface, so t
 
   and fail when a name is missing from this page. For hosted tools, a scheduled job can compare `tools/list` from a staging test connection with the hosted column, and open an issue on drift. It shouldn't block PRs.
 - **Skills point, they don't copy.** Skills link to this page and to `https://a2a.exposed/docs/hosted-mcp` for the hosted tool list. They don't duplicate either.
+
+Local encrypted history preserves text-free state and push events as unauthenticated
+metadata; stdio MCP returns `eventOnly: true` for these rows and withholds push
+status text. Inbound plaintext with text still fails for a pinned peer.
