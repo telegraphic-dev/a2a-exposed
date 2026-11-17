@@ -16,7 +16,9 @@ function setup(t: TestContext) {
 	const bob = make(BOB, "owner-bob", "Bob");
 	const alice = make(ALICE, "owner-alice", "Alice");
 	const byOrigin: Record<string, typeof bob> = { [BOB]: bob, [ALICE]: alice };
-	const ectx = { waitUntil(p: Promise<unknown>) { p.catch(() => {}); }, passThroughOnException() {} } as any;
+	// Background work (dispatch's opportunistic wake flush) is collected so a call can wait for it.
+	const background: Promise<unknown>[] = [];
+	const ectx = { waitUntil(p: Promise<unknown>) { background.push(p.catch(() => {})); }, passThroughOnException() {} } as any;
 	const peerRequests: { url: string; method: string; body: string }[] = [];
 	const origFetch = globalThis.fetch;
 	const origDeliver = wakeNet.deliver;
@@ -24,6 +26,7 @@ function setup(t: TestContext) {
 		const u = new URL(String(input instanceof Request ? input.url : input));
 		if (u.origin === new URL(DOH_URL).origin) return Response.json({ Status: 0, Answer: [{ type: 1, data: "93.184.216.34" }] });
 		// MCP send and poll use the runtime fetch for the card and JSON-RPC; route them to the peer Worker too.
+		if (u.host === "hook.example.org") { peerRequests.push({ url: u.href, method: "POST", body: "" }); return new Response("ok"); }
 		const target = byOrigin[u.origin];
 		if (target) return worker.fetch((input instanceof Request ? input : new Request(u.href, init)) as any, target.env, ectx);
 		throw new Error(`unexpected fetch ${u.href}`);
@@ -38,6 +41,7 @@ function setup(t: TestContext) {
 	t.after(() => { globalThis.fetch = origFetch; wakeNet.deliver = origDeliver; });
 	const call = async (who: typeof bob, method: string, path: string, json?: unknown, headers: Record<string, string> = {}) => {
 		const res = await worker.fetch(new Request(who.base + path, { method, headers: { "content-type": "application/json", ...headers }, ...(json === undefined ? {} : { body: JSON.stringify(json) }) }) as any, who.env, ectx);
+		await Promise.all(background.splice(0));
 		const text = await res.text();
 		let data: any = text;
 		try { data = JSON.parse(text); } catch { /* text */ }
@@ -148,13 +152,18 @@ test("pairing_requests passes through sealed and safetyCode and no key material"
 	assert.match(tools.find((x: any) => x.name === "pairing_requests").description, /compare that safety code/);
 });
 
-test("wake_status is read-only and never shows the wake address or key", async (t) => {
+test("wake_status is read-only through dispatch: a due wake is not sent or consumed, and no secret is shown", async (t) => {
 	const s = setup(t);
 	s.bob.env.WAKE_PRESET = "generic";
 	s.bob.env.WAKE_WEBHOOK_URL = "https://hook.example.org/secret-path";
 	s.bob.env.WAKE_WEBHOOK_KEY = "wake-key-value";
 	const access = await s.grant();
-	await s.bob.env.DB.prepare("INSERT INTO wakes (context_id, peer, pending_since_ms, last_sent_ms, pending_json) VALUES ('ctx-1', 'carol', ?, ?, ?)").bind(Date.now(), Date.now(), JSON.stringify({ attempts: 2, text: "private preview" })).run();
+	// Due now: debounce passed long ago, so any other request's opportunistic flush would send it.
+	const due = () => s.bob.env.DB.prepare("INSERT OR REPLACE INTO wakes (context_id, peer, pending_since_ms, last_sent_ms, pending_json) VALUES ('ctx-1', 'carol', 1, 0, ?)").bind(JSON.stringify({ contextId: "ctx-1", taskId: "task-1", taskIds: ["task-1"], from: "carol", preview: "private preview", kind: "inbound", attempts: 2 })).run();
+	const pending = async () => (await s.bob.env.DB.prepare("SELECT pending_json FROM wakes WHERE context_id = 'ctx-1'").first() as any)?.pending_json ?? null;
+	const hookCalls = () => s.peerRequests.filter((x) => new URL(x.url).host === "hook.example.org").length;
+	await due();
+	const before = await pending();
 	const r = await s.tool(access, "wake_status");
 	assert.equal(r.isError, false, r.content[0].text);
 	assert.equal(r.structuredContent.configured, true);
@@ -164,6 +173,10 @@ test("wake_status is read-only and never shows the wake address or key", async (
 	assert.match(r.content[0].text, /Read-only: nothing was sent or flushed/);
 	const all = JSON.stringify(r);
 	for (const secret of ["hook.example.org", "secret-path", "wake-key-value", "private preview"]) assert.equal(all.includes(secret), false, secret);
-	assert.equal((await s.bob.env.DB.prepare("SELECT COUNT(*) AS n FROM wakes WHERE pending_json IS NOT NULL").first() as any).n, 1, "nothing was flushed");
-	assert.equal(s.peerRequests.length, 0);
+	assert.equal(await pending(), before, "the due wake is still pending, unchanged");
+	assert.equal(hookCalls(), 0, "no wake notification was sent");
+	// Control: any other MCP call through dispatch does flush the same due wake, so the check above can see a flush.
+	await s.tool(access, "list_peers");
+	assert.equal(await pending(), null, "a non-diagnostic request flushed the due wake");
+	assert.equal(hookCalls(), 1);
 });

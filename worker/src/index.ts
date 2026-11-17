@@ -4803,6 +4803,8 @@ async function handleMcp(req: Request, ctx: TenantContext, ectx: ExecutionContex
 	if (Array.isArray(msg)) return rpcError(null, M.ERR.INVALID_REQUEST, "JSON-RPC batches are not supported", 400);
 	if (!msg || typeof msg !== "object" || msg.jsonrpc !== "2.0") return rpcError(null, M.ERR.INVALID_REQUEST, "invalid JSON-RPC request", 400);
 	const params = msg.params && typeof msg.params === "object" && !Array.isArray(msg.params) ? msg.params : {};
+	// A read-only diagnostic call must not trigger dispatch's opportunistic wake flush (#461).
+	if (msg.method === "tools/call" && params.name === "wake_status") NO_FLUSH.add(req);
 	const meta = params._meta && typeof params._meta === "object" ? params._meta : {};
 	const bodyVersion = typeof meta[M.META.version] === "string" ? meta[M.META.version] : null;
 	const pv = req.headers.get("mcp-protocol-version");
@@ -4968,13 +4970,16 @@ function noindex(ctx: TenantContext, res: Response): Response {
 	return out;
 }
 
+/** Requests whose handler is a read-only diagnostic (MCP wake_status). dispatch skips its opportunistic flush for them. */
+const NO_FLUSH = new WeakSet<Request>();
+
 /** Inbox for one already-resolved tenant: retired-host redirect, the handler, then an opportunistic wake flush. */
 export async function dispatch(req: Request, ctx: TenantContext, ectx: ExecutionContext): Promise<Response> {
 	const moved = A.movedResponse(req.url, ctx.PUBLIC_URL, ctx.RETIRED_HOSTNAMES);
 	if (moved) return new Response(moved.body || null, { status: moved.status, headers: moved.headers });
 	const res = noindex(ctx, await handle(req, ctx, ectx));
 	// A diagnostic probe must not flush/consume pending inbox wakes as a side effect.
-	if (!((req.method === "POST" && /^\/owner\/wake\/test(?:\/|$)/.test(new URL(req.url).pathname)) || (["GET", "HEAD"].includes(req.method) && new URL(req.url).pathname === "/owner/upgrade-status") || (["GET", "HEAD", "POST"].includes(req.method) && /^\/owner\/wake\/(?:status|receipts)(?:\/|$)/.test(new URL(req.url).pathname))))
+	if (!NO_FLUSH.has(req) && !((req.method === "POST" && /^\/owner\/wake\/test(?:\/|$)/.test(new URL(req.url).pathname)) || (["GET", "HEAD"].includes(req.method) && new URL(req.url).pathname === "/owner/upgrade-status") || (["GET", "HEAD", "POST"].includes(req.method) && /^\/owner\/wake\/(?:status|receipts)(?:\/|$)/.test(new URL(req.url).pathname))))
 		ectx.waitUntil(flushDue(ctx, ectx).catch((e) => log("flush_failed", { error: String(e).slice(0, 200) })));
 	return res;
 }
