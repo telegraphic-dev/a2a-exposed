@@ -62,7 +62,7 @@ Local encrypted CLI draft (disabled by default):
   keys rotate --id ID --json   show the exact signer-rotation plan and its approval digest; changes nothing
   keys rotate --id ID --approve DIGEST --json
                                 new signing and receiving keys; the old key opens old history only
-                                its pins are held: re-pair with connect --sealed-key-id NEW_ID, then keys verify
+                                its pins are held: re-pair with connect --sealed-key-id NEW_ID and keys verify, then keys revoke --peer OLD
   keys backup --to FILE --json  encrypted backup; passphrase from piped stdin only
   keys restore --from FILE --to NEW_DIR --acknowledge-replay-rollback --json
                                 archive-only copy in a new directory: history reads only

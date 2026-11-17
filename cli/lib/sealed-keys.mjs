@@ -41,7 +41,7 @@ export async function refuseArchiveOnly() {
  try { store = new api.LocalState(C.CONFIG_DIR); rotated = typeof store.rotatedPins === "function" ? store.rotatedPins() : []; }
  catch { held(unconfirmed); } finally { store?.close(); }
  if (rotated.length) {
-  const error = new CliError(`Keys rotated: ${rotated.map(pin => pin.peer).join(", ")} still ${rotated.length === 1 ? "uses" : "use"} a retired local key. Nothing was requested from the inbox, so no wakes or replies were acknowledged. For each peer, re-pair with the new key (connect URL --sealed-key-id NEW_ID --alias NEW_ALIAS, then keys verify), or hold its old pin with keys revoke --peer PEER. Old history stays readable with history CONTEXT --json.`);
+  const error = new CliError(`Keys rotated: ${rotated.map(pin => pin.peer).join(", ")} still ${rotated.length === 1 ? "uses" : "use"} a retired local key. Nothing was requested from the inbox, so no wakes or replies were acknowledged. Release each old pin with keys revoke --peer PEER; re-pairing under a new alias alone does not release it. To keep talking to a peer, re-pair with the new key first (connect URL --sealed-key-id NEW_ID --alias NEW_ALIAS, then keys verify), then revoke its old pin. Old history stays readable with history CONTEXT --json.`);
   error.code = "keys_rotated"; throw error;
  }
 }
@@ -193,7 +193,7 @@ export async function command(p, o) {
    } else {
     const rotated = await store.rotateSigner({ id: o.id, approvalDigest: o.approve, ownerApproved: true, allowOsConsent: o["allow-os-consent"] === true });
     result = { rotated: true, changed: true, id: rotated.id, previous_id: rotated.previous_id, key_id: rotated.bundle.keyId, key_store: rotated.key_store, old_key_retained: true, held_pins: rotated.held_pins,
-     next: `The new identity ${rotated.id} is local only. The old key ${rotated.previous_id} is retired: it opens old history and never signs again. Encrypted sends to held pins refuse with "Keys rotated". To resume with a peer, run connect URL --sealed-key-id ${rotated.id} --alias NEW_ALIAS (its owner approves), then keys verify. This inbox keeps its first published key: keys publish cannot replace it, and pairings other agents request from this inbox stay held. That needs a Worker-side follow-up.` };
+     next: `The new identity ${rotated.id} is local only. The old key ${rotated.previous_id} is retired: it opens old history and never signs again. Encrypted sends to held pins refuse with "Keys rotated". Live inbox reads and polls stay held until each held pin is revoked with keys revoke --peer PEER. To resume with a peer, run connect URL --sealed-key-id ${rotated.id} --alias NEW_ALIAS (its owner approves) and keys verify, then revoke its old pin. This inbox keeps its first published key: keys publish cannot replace it, and pairings other agents request from this inbox stay held. That needs a Worker-side follow-up.` };
    }
   } finally { store.close(); }
  }

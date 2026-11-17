@@ -203,9 +203,12 @@ contacting the inbox, so no wake or reply is acknowledged for a pin the new key
 cannot serve. `keys revoke --peer` still works on such a pin (revoking only removes
 trust) and releases the inbox. An interrupted rotation is recorded with its
 lineage, so exact recovery from `keys status --json` completes the approved
-rotation instead of abandoning the new key. To talk to a peer again, make a new human-approved pairing with
-the new key (`connect URL --sealed-key-id NEW_ID --alias NEW_ALIAS`), then run
-`keys verify` with the other owner. A changed plan, such as a new pin, needs a new
+rotation instead of abandoning the new key. To talk to a peer again, make a new
+human-approved pairing with the new key under a new alias
+(`connect URL --sealed-key-id NEW_ID --alias NEW_ALIAS`), run `keys verify` with
+the other owner, then revoke the old pin with `keys revoke --peer OLD`. The new
+pairing alone does not release the old pin: live reads stay held until every pin
+on the retired key is revoked. A changed plan, such as a new pin, needs a new
 approval. Rotation is local only: the store schema and backups are unchanged, and
 nothing changes on the inbox. The inbox keeps the public key it published first,
 so `keys publish` cannot replace it and pairings other agents request from this

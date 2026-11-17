@@ -418,7 +418,7 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
  // The live inbox is refused before any request while a pin still uses the retired key, so no wake is acknowledged.
  const inboxBefore=records.filter((r:any)=>r.name==="alice"&&String(r.path).startsWith("/owner/inbox")).length;
  const heldInbox=await cli("alice",["inbox","--json"]);assert.equal(heldInbox.code,1);
- assert.match(heldInbox.err,/Keys rotated: .*bob.*Nothing was requested from the inbox.*keys revoke --peer/);
+ assert.match(heldInbox.err,/Keys rotated: .*bob.*Nothing was requested from the inbox.*keys revoke --peer.*re-pairing under a new alias alone does not release it/);
  assert.equal(records.filter((r:any)=>r.name==="alice"&&String(r.path).startsWith("/owner/inbox")).length,inboxBefore,"no inbox request while pins are held");
  const oldHistory=await cli("alice",["history","reverse-pair-fixture","--json"]);assert.equal(oldHistory.code,0,oldHistory.err);
  assert.ok(JSON.parse(oldHistory.out).some((r:any)=>r.text==="reverse-pair-private-fixture"&&r.locallyOpened),"the retired key still opens old history");
