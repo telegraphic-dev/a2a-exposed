@@ -17,7 +17,17 @@ test("platform file custody survives restart and refuses broadened permissions w
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),"a2a-platform-custody-"));
  let state;
  t.after(()=>{state?.close();fs.rmSync(dir,{recursive:true,force:true});});
- state=new LocalState(dir,{create:true});
+ try { state=new LocalState(dir,{create:true}); }
+ catch(error) {
+  if(process.platform === "win32") {
+   // Diagnose only the error identifier on a disposable fixture; never paths or key data.
+   const source=fs.readFileSync(new URL("../local-state.mjs",import.meta.url),"utf8");
+   const script=source.split('function protect(file) {')[1].split('const script = "')[1].split('";')[0].replace('catch{exit 1}', 'catch{[Console]::Out.Write($_.FullyQualifiedErrorId);exit 1}');
+   try { execFileSync("powershell.exe",["-NoProfile","-NonInteractive","-Command",script],{input:path.join(dir,"encryption"),stdio:["pipe","pipe","pipe"],timeout:5000}); }
+   catch(probe) { t.diagnostic("Windows ACL fixture error identifier: "+String(probe.stdout)); }
+  }
+  throw error;
+ }
  const created=await state.initialize({store:"file",cardUrl:"https://local.example.com/card"});
  const file=path.join(dir,"encryption",created.id+".key"),bytes=fs.readFileSync(file);
  state.close();state=new LocalState(dir);
