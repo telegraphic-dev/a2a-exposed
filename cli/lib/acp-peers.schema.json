@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ACP relay application peers",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["peers"],
+  "properties": {
+    "peers": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 32,
+      "propertyNames": { "pattern": "^[A-Za-z0-9_.:-]{1,200}$" },
+      "additionalProperties": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+    }
+  }
+}

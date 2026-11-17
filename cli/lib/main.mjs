@@ -403,6 +403,21 @@ HTTP endpoint relays (separate opt-in Worker feature; --http-relay 1 on init/dep
                                 --forward-headers explicitly allows original app bearer/signature headers
                                 local app owns per-peer/task authorization; shared ingress is NOT peer auth
                                 native A2A is separate from Worker inbox/pairing/facade. No push callbacks.
+  relay a2a run --token-file FILE --acp '["/path/to/agent","--acp"]'
+             --acp-cwd /absolute/project --acp-peers-file FILE
+             --acp-mode MODE [--acp-diagnostics-file NEWFILE]
+             [--acp-session ID --acp-session-peer PEER] [--url URL]
+                                ACP v1 stdio target; JSON argv, no shell or local HTTP listener
+                                peers file: mode-600 JSON {"peers":{"name":"<SHA-256 token hash>"}}
+                                forward authorization at enrollment; independent per-peer app tokens
+                                --acp-session loads exactly that existing session for one configured peer
+                                requires agent loadSession; never falls back to session/new
+                                --acp-mode is mandatory: advertised ID, set before every prompt
+                                conflicting mode updates stop binding; peers cannot run slash commands
+                                diagnostics: NEW mode-600 private raw stderr, max 1 MiB total; sensitive
+                                otherwise one process/session per peer/context; 8 bindings, 128 tasks
+                                no client file/terminal tools; permissions canceled, input-required
+                                cwd is not a sandbox; retains native agent permissions; text only
 
 Inbox (owner side)
   inbox [--context C] [--from PEER] [--all] [--json]
@@ -628,7 +643,7 @@ const SPEC = {
 	status: { json: B, agent: S, "control-url": S },
 	env: { json: B },
 	export: { sql: B },
-	relay: { agent: S, "control-url": S, preset: S, "key-header": S, "key-file": S, "key-env": S, "key-stdin": B, "hmac-secret-file": S, "hmac-secret-env": S, "receipt-file": S, generation: S, "connector-id": S, confirm: B, clear: B, "forward-headers": S, "ingress-token-file": S, "local-headers-file": S, "card-url": S, "token-file": S, "token-env": S, "local-url": S, url: S, json: B, "config-version": S },
+	relay: { acp: S, "acp-cwd": S, "acp-peers-file": S, "acp-session": S, "acp-session-peer": S, "acp-mode": S, "acp-diagnostics-file": S, agent: S, "control-url": S, preset: S, "key-header": S, "key-file": S, "key-env": S, "key-stdin": B, "hmac-secret-file": S, "hmac-secret-env": S, "receipt-file": S, generation: S, "connector-id": S, confirm: B, clear: B, "forward-headers": S, "ingress-token-file": S, "local-headers-file": S, "card-url": S, "token-file": S, "token-env": S, "local-url": S, url: S, json: B, "config-version": S },
 	upstream: { json: B },
 	connect: { "sealed-key-id": S, alias: S, name: S, json: B, "no-wait": B, replace: B, force: B, "card-url": S },
 	// Internal hosted-service integration commands. Keep out of public help until the production flow is available.

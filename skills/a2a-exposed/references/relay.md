@@ -1,4 +1,35 @@
-# Wake relay operations
+# Relay operations
+
+## ACP stdio targets
+
+For an owner-approved local ACP agent, use `relay a2a run --acp` with JSON argv,
+`--acp-cwd` and a protected `--acp-peers-file`. To address one existing session,
+require both `--acp-session ID` and `--acp-session-peer NAME`; unsupported or failed
+`session/load` must not create a replacement. Never let peer content select a
+local session, executable or working directory. Independent application bearer
+credentials are required; the shared relay ingress token and Worker pairing are
+not peer authentication for this target. Permission requests are canceled and
+reported `input-required`; peers cannot approve tools. File/terminal client
+capabilities are disabled, but cwd is not a sandbox. See the
+[ACP/session contract](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/http-relay.md#local-acp-agent-and-session-targeting)
+for caps, cleanup and hosted HTTP-relay prerequisites.
+
+Require explicit owner `--acp-mode MODE`, selected from advertised adapter modes,
+not provider names/defaults. New and exact loaded sessions must acknowledge
+`session/set_mode` before a prompt; later prompts reapply it. Missing/unavailable
+mode or uncertain setting fails closed. Conflicting current-mode or mode config
+updates stop the binding. Peers cannot select modes or run native slash commands.
+This does not change native sandbox/approval defaults globally; real-agent
+retesting is required before exposure. Canceled/stopped bindings need connector
+restart, not recreation. Phase diagnostics are fixed and sanitized. Optional
+`--acp-diagnostics-file NEWFILE` exclusively creates a mode-600 private raw stderr
+file, no overwrite/symlink, 1 MiB total cap. Raw data may contain credentials:
+inspect locally, never paste into chat/GitHub or send to peers. Environment is
+inherited, including `CLAUDECODE`; do not silently strip it. Distinct actual ACP
+message IDs get newline boundaries; ID-less chunks remain exact because their
+message boundaries cannot be inferred safely.
+
+## Wake relay operations
 
 Offer the relay first when the host is local-only or has no public address the inbox can call. `hosted capabilities --json` reports `relay: true`, or `relay status --json` reports `enabled: true` and `protocolVersion` 1. `enrolled: false` means no connector yet. A 404 means unsupported or disabled. A tunnel is for a self-hosted inbox with a zone. Polling is for a missing relay, no local receiver, or a declined foreground `relay run`. Do not assume a hosted service runs the latest OSS version.
 
