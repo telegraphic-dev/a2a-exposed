@@ -115,13 +115,15 @@ test("#469: a claimed card names the same-address alias as a suggestion and send
 	const taskId = await w.sendToBob(y.access, "question", "ctx-469-claimed");
 	const r = await w.reply(taskId, "done");
 	assert.equal(r.structuredContent.status, "stored-only", "a claimed card is never a delivery target");
-	assert.match(r.structuredContent.next, /stored on the task only and does not notify it/);
-	assert.match(r.structuredContent.next, /Outbound alias alice already points at the address this peer gave/);
-	assert.match(r.structuredContent.next, /if your human confirms it is the same agent/);
+	assert.match(r.structuredContent.next, /stored on the task only and does not notify the peer/);
+	assert.match(r.structuredContent.next, /Outbound alias alice already points at the address this peer gave, so do not pair again/);
+	assert.match(r.structuredContent.next, /if your human confirms it is the same agent, continue with send to alice/i);
+	assert.doesNotMatch(r.structuredContent.next, /No usable outbound callback|pairing back/);
 	assert.equal(w.directPosts, 0);
 	const inbox = await w.owner(w.bob.ctx, "GET", "/owner/inbox?all=1");
 	const row = (inbox.body as any[]).find((x) => x.taskId === taskId);
-	assert.equal(row.continuation.kind, "pair-back");
+	assert.equal(row.continuation.kind, "same-address", "#472: an existing outbound alias is not a missing pairing");
+	assert.match(row.continuation.next, new RegExp(`This label ${y.label} is a separate pairing`));
 	assert.deepEqual(row.continuation.sameAddressAliases, ["alice"]);
 	assert.equal(row.continuation.command, undefined, "no pair-back command when an alias already points there");
 });
@@ -185,4 +187,31 @@ test("#469: a revoked or tokenless alias at the address is never a fallback", as
 	const r = await w.reply(taskId, "kept");
 	assert.equal(r.structuredContent.status, "stored-only");
 	assert.equal(w.directPosts, 0);
+});
+
+test("#472: a device-flow pairing named like an existing outbound alias gets NAME-2 and points at that alias, not a new pairing", async (t) => {
+	const w = await world(t as never);
+	const y = await w.devicePair({ client_name: "alice", client_id: "alice", agent_card_url: ALICE_CARD });
+	assert.equal(y.label, "alice-2", "the claimed name never takes over the outbound alias");
+	const taskId = await w.sendToBob(y.access, "question", "ctx-472");
+	const inbox = await w.owner(w.bob.ctx, "GET", "/owner/inbox");
+	const guide = (inbox.body as any[]).find((x) => x.taskId === taskId).continuation;
+	assert.equal(guide.kind, "same-address");
+	assert.deepEqual(guide.sameAddressAliases, ["alice"]);
+	assert.equal(guide.command, undefined, "no pairing command");
+	assert.match(guide.next, /^Outbound alias alice already points at the address this peer gave, so do not pair again\. This label alice-2 is a separate pairing/);
+	assert.match(guide.next, /continue with send to alice and the same context id/);
+	assert.match(guide.next, /Replies to alice-2 can notify the peer after its owner runs peer announce --to ALIAS/);
+	const peers = await w.call(w.bob.ctx, "/owner/peers", { headers: { authorization: `Bearer ${w.bob.ownerToken}` } });
+	const listed = (peers.data as any[]).find((p) => p.label === "alice-2");
+	assert.equal(listed.continuation.kind, "same-address");
+	assert.equal(listed.card_url, null, "the claimed card is not a verified callback");
+	const r = await w.reply(taskId, "done");
+	assert.equal(r.structuredContent.status, "stored-only");
+	assert.match(r.structuredContent.next, /do not pair again/);
+	assert.equal(w.directPosts, 0, "nothing is sent through the same-address alias without the human");
+	// After the peer's verified announcement, the label routes through alice automatically.
+	await w.bob.db.prepare("UPDATE peers SET card_url = ? WHERE label = ?").bind(ALICE_CARD, y.label).run();
+	const after = await w.owner(w.bob.ctx, "GET", "/owner/inbox?all=1");
+	assert.equal((after.body as any[]).find((x) => x.taskId === taskId).continuation.kind, "send");
 });

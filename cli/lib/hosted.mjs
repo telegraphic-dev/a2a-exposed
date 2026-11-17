@@ -3,6 +3,7 @@ import fs from "node:fs";
 import * as C from "./config.mjs";
 import { controlOrigin, deviceLogin } from "./account.mjs";
 import { CliError, upstreamUrlProblem } from "./a2a.mjs";
+import { networkProblem } from "./net.mjs";
 
 export const SETUP_SCOPES = ["agents:read", "agents:create", "agents:owner-token", "wake:write", "wake:test", "upstream:write", "upstream:test"];
 const SETUP_UNSUPPORTED = "This service does not expose scoped hosted setup capabilities. Check the --control-url service origin. Use the service dashboard to create an agent and configure Wake settings, or hosted MCP create_agent/set_wake with human confirmation and secret entry. Do not run init or deploy to repair a hosted address; no setup approval was requested.";
@@ -40,20 +41,27 @@ async function request(origin, path, { token = "", method = "GET", body, fetchIm
 	let response, data;
 	const discovery = method === "GET" && path === "/api/v1/setup/capabilities";
 	const wakeRequest = /^\/api\/v1\/agents\/[^/]+\/wake(?:\/(?:test|confirm|relay(?:\/(?:test|reference))?))?$/.test(path);
+	const noRepeat = "Do not repeat a create request until hosted list confirms its result.";
 	try {
 		response = await fetchImpl(`${origin}${path}`, {
 			method, redirect: "error", signal: AbortSignal.timeout(30_000),
 			headers: { accept: "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}), ...(body === undefined ? {} : { "content-type": "application/json" }) },
 			...(body === undefined ? {} : { body: JSON.stringify(body) }),
 		});
-		if (!(discovery && response.status === 404)) {
-			try { data = await response.json(); }
-			catch (error) {
-				if (wakeRequest && [401, 403, 404].includes(response.status)) data = {};
-				else throw error;
-			}
+	} catch (error) {
+		const problem = networkProblem(error, origin);
+		const next = `${problem.message} No answer was received, so hosted setup did not run. Check the network and try again. ${noRepeat}`;
+		const failure = new CliError(next);
+		failure.result = { ok: false, code: "unavailable", next, network: problem.code };
+		throw failure;
+	}
+	if (!(discovery && response.status === 404)) {
+		try { data = await response.json(); }
+		catch {
+			if (wakeRequest && [401, 403, 404].includes(response.status)) data = {};
+			else fail("unavailable", `Hosted setup answered HTTP ${response.status} without JSON. Check the service and try again. ${noRepeat}`);
 		}
-	} catch { fail("unavailable", "Hosted setup did not answer with JSON. Check the service and try again. Do not repeat a create request until hosted list confirms its result."); }
+	}
 	if (discovery && response.status === 404) fail("unsupported", SETUP_UNSUPPORTED);
 	if (!data || typeof data !== "object" || Array.isArray(data)) fail("invalid_response", "The hosted service returned an invalid setup response.");
 	if (!response.ok && path.includes("/wake/relay")) {

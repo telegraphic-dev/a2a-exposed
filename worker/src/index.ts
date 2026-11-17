@@ -2066,8 +2066,13 @@ async function continuationGuide(ctx: TenantContext, label: string, rawCard?: st
 	const card = Addr.canonicalCardUrl(rawCard || "");
 	if (card && !peerUrlProblem(card)) {
 		const same = await outboundAliasesAt(ctx, Addr.originOf(card), label);
-		if (same.length) return { kind: "pair-back", claimedCardUrl: card, sameAddressAliases: same.map((r) => r.alias).slice(0, 5),
-			next: `No usable outbound callback is stored under this label. ${notNotified} Outbound alias ${same.slice(0, 5).map((r) => r.alias).join(", ")} already points at the address this peer gave; if your human confirms it is the same agent, send there with the same context id instead of pairing again.` };
+		// #472: a separate pairing (often NAME-2 next to outbound alias NAME) is not a missing pairing. The claimed card is
+		// not proof, so nothing is linked or sent; the peer's own signed announcement links it.
+		if (same.length) {
+			const aliases = same.slice(0, 5).map((r) => r.alias), named = aliases.join(", ");
+			return { kind: "same-address", claimedCardUrl: card, sameAddressAliases: aliases,
+				next: `${aliases.length > 1 ? `Outbound aliases ${named} already point` : `Outbound alias ${named} already points`} at the address this peer gave, so do not pair again. This label ${label} is a separate pairing whose address is only claimed, so a reply here is stored on the task only and does not notify the peer. If your human confirms it is the same agent, continue with send to ${aliases.length > 1 ? "the alias your human confirms" : aliases[0]} and the same context id. Replies to ${label} can notify the peer after its owner runs peer announce --to ALIAS on their side, using their outbound alias for this inbox.` };
+		}
 		return { kind: "pair-back", claimedCardUrl: card,
 			command: `${cliCommand(ctx)} connect ${("'" + card.replaceAll("'", "'\"'\"'") + "'")} --alias ${label.slice(0, 32)} --no-wait`,
 			next: `No usable outbound callback is stored. ${notNotified} Verify this claimed address with the peer owner and ask your human before pairing back.` };

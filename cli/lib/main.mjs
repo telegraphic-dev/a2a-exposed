@@ -514,7 +514,7 @@ Outbound (agents you call)
                           tell paired peers this inbox's current card URL. They switch only after the card
                           proves the same pairing identity. A peer that does not support this keeps the
                           current pairing. A revoked return token stays revoked unless --to and --reissue.
-                          The return token is not printed
+                          The return token is not printed. --to first syncs a connected peer this inbox lacks
   peer forward --to <card-url> [--hours N] | peer forward --off
                           on the old inbox, forward direct replies and answer with a moved pointer for N hours
                           (default 168, max 720)
@@ -577,6 +577,7 @@ Presets: grok-bot | claude-code | openclaw-wake | openclaw-agent | hermes | open
          Clients and how to load them:
          https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#clients
 Config: ${C.CONFIG_FILE}  (override dir with --config-dir DIR or A2A_CONFIG_DIR; env vars override file values)
+Proxy:  HTTPS_PROXY / HTTP_PROXY / NO_PROXY on Node 22.21+ and 24+ (loopback bypasses it); NODE_EXTRA_CA_CERTS for TLS inspection
 Update notice: at most a daily background check of the npm registry; off with A2A_NO_UPDATE_CHECK=1 (or DO_NOT_TRACK=1)`;
 
 const HELP_TUNNEL = `tunnel create|zones|status|rm

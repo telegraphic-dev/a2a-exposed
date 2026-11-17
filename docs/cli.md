@@ -286,7 +286,7 @@ The owner token authenticates these commands.
 | `peers add <alias> <url> [--token-env VAR \| --token-stdin]` | Store an outbound peer. The token is `PEER_<ALIAS>_TOKEN` in the config file |
 | `peers list` / `peers rm <alias>` | List or remove |
 | `peers sync [alias...]` / `peers unsync <alias>` | Upload peers so the MCP connector can send to them. URL and token are encrypted on the Worker with a key derived from the owner token. Re-run after `connect`, a token change, or an owner-token rotation |
-| `peer announce (--to <alias> \| --all) [--reissue] [--json]` | Tell synced peers this inbox's current https card URL. They switch only after the card proves the same pairing identity. A peer that does not support this keeps the current pairing. A revoked return token stays revoked unless `--to` and `--reissue`. The return token is not printed. Run `peers sync` first |
+| `peer announce (--to <alias> \| --all) [--reissue] [--json]` | Tell synced peers this inbox's current https card URL. They switch only after the card proves the same pairing identity. A peer that does not support this keeps the current pairing. A revoked return token stays revoked unless `--to` and `--reissue`. The return token is not printed. `--to` first uploads a connected peer this endpoint lacks, as `peers sync ALIAS` does; `--all` announces synced peers only and names the local ones it skipped |
 | `peer forward --to <card-url> [--hours N]` / `peer forward --off` | On the inbox you are leaving, forward a direct reply to the new card and answer with a moved pointer. `--hours` is 1 to 720 (default 168) |
 | `send --to <alias\|url> [--text T \| stdin] [--context C] [--task T] [--push] [--wake auto\|always\|never] [--intent handoff\|blocker\|question\|status\|ack] [--proto 0.3\|1.0] [--json]` | Send. The CLI reads the peer card and prefers A2A 1.0. Stdout is the task JSON. Without `--json`, a `# task` line on stderr names the task and the `poll` command; `--json` omits it, as does `poll --json`. Set `--intent` on every send and every reply, and `--wake` when the auto default is wrong. Both are optional. `--wake auto` wakes a handoff, blocker, or question. An ack, and an idle or unchanged status, stay stored once the peer enforces routing. A changed status is batched. `--wake always` asks for an immediate wake, still subject to that peer's authorization and rate limits. `--wake never` only stores the message. Do not send an acknowledgement-only message, and do not answer an ack |
 | `poll --to <alias\|url> <taskId> [--proto 0.3\|1.0]` | Fetch a task you sent. Like `cancel`, it uses the recorded endpoint and records the result in history only when owner configuration has a record that names this peer and its endpoint is on this peer's address. A record for another peer, or an endpoint elsewhere, is refused before any request, so one peer's token is never sent to another |
@@ -576,7 +576,9 @@ it. Hosted production Workers have had this setting on since 2026-11-14; a self-
 `token list --json` lists inbound labels and MCP connectors without credentials.
 Active inbound labels include `continuation`: `send` means a usable outbound
 callback is stored, `pair-back` includes a claimed card and an exact `connect
-... --no-wait` command for human review, and `announce-address` means the peer
+... --no-wait` command for human review, `same-address` means an outbound alias
+already points at the address the peer claimed (`sameAddressAliases`; do not pair
+again, confirm with your human and `send` there), and `announce-address` means the peer
 owner must announce an address. Claimed cards never become delivery targets
 without the existing verified announcement or an explicit pairing. Revoked
 labels have no continuation suggestion. CLI `peers list --json` lists local

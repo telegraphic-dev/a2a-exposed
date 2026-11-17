@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import * as C from "./config.mjs";
 import { CLI, die, httpJson } from "./a2a.mjs";
-import { baseUrl } from "./commands.mjs";
+import { baseUrl, peerToken } from "./commands.mjs";
 
 const IDENTITY_FILE = () => path.join(C.CONFIG_DIR, "peer-identity.json");
 
@@ -88,15 +88,52 @@ async function requireIdentityOnWorker() {
 	return put.data.publicKey;
 }
 
+/** The local peer that `peers sync ALIAS` would upload, or null: unknown alias, no token, or pinned local encryption. */
+function localSyncable(alias) {
+	const pe = C.loadPeers()[alias];
+	if (!pe || pe.sealed || fs.existsSync(path.join(C.CONFIG_DIR, "encryption", "state.sqlite"))) return null;
+	const token = peerToken(pe.token_env);
+	return token && typeof pe.url === "string" ? { url: pe.url.replace(/\/$/, ""), token } : null;
+}
+
+/** #473: announcing needs the peer's URL and token on the Worker. Upload the local peer first, exactly as
+ *  `peers sync ALIAS` does, when the Worker lacks it (`force`: its stored token cannot be read). */
+async function syncBeforeAnnounce(alias, force = false) {
+	const local = localSyncable(alias);
+	if (!local) return false;
+	if (!force) {
+		const listed = await ownerCall("GET", "/owner/outbound-peers");
+		if (!listed || listed.status !== 200 || !Array.isArray(listed.data)) return false;
+		if (listed.data.some((row) => row && row.alias === alias && row.has_token)) return false;
+	}
+	const put = await ownerCall("PUT", `/owner/outbound-peers/${encodeURIComponent(alias)}`, local);
+	if (!put || put.status !== 200) die(`could not sync ${alias} before announcing: ${put ? ownerError(put) : "no answer"}. Run ${CLI} peers sync ${alias}, then announce again.`);
+	console.error(`synced ${alias} to this A2A endpoint first (as peers sync ${alias} does): its token is stored encrypted on the Worker`);
+	return true;
+}
+
 export async function announce(o = {}) {
 	if (!!o.to === !!o.all) die(`usage: ${CLI} peer announce (--to <alias> | --all) [--reissue] [--json]`);
 	if (o.reissue && (o.all || !o.to)) die("--reissue needs --to <alias>");
 	if (o.to !== undefined && !/^[A-Za-z0-9_-]{1,64}$/.test(o.to)) die("--to must be a peer alias");
 	await requireIdentityOnWorker();
-	const r = await ownerCall("POST", "/owner/peers/announce", o.all ? { all: true } : { to: o.to, ...(o.reissue ? { reissue: true } : {}) });
+	const body = o.all ? { all: true } : { to: o.to, ...(o.reissue ? { reissue: true } : {}) };
+	const synced = o.to ? await syncBeforeAnnounce(o.to) : false;
+	let r = await ownerCall("POST", "/owner/peers/announce", body);
 	if (!r || r.status !== 200) die(`could not announce this address: ${r ? ownerError(r) : "no answer"}`);
-	const results = Array.isArray(r.data.results) ? r.data.results : [];
+	let results = Array.isArray(r.data.results) ? r.data.results : [];
+	// A token saved before an owner-token rotation cannot be read on the Worker: re-upload it once and retry.
+	if (o.to && !synced && results.length === 1 && results[0].status === "failed" && /can't be read/.test(String(results[0].detail || "")) && await syncBeforeAnnounce(o.to, true)) {
+		r = await ownerCall("POST", "/owner/peers/announce", body);
+		if (!r || r.status !== 200) die(`could not announce this address: ${r ? ownerError(r) : "no answer"}`);
+		results = Array.isArray(r.data.results) ? r.data.results : [];
+	}
 	if (results.length === 1 && results[0].alias === "*") die(results[0].detail || "could not announce this address");
+	if (o.all) {
+		const announced = new Set(results.map((row) => row.alias));
+		const skipped = Object.keys(C.loadPeers()).filter((alias) => !announced.has(alias));
+		if (skipped.length) console.error(`not announced (not synced to this A2A endpoint): ${skipped.join(", ")}. Run ${CLI} peer announce --to ALIAS for each; it syncs the peer first.`);
+	}
 	if (o.json) return console.log(JSON.stringify({ results }));
 	if (!results.length) return console.log("No synced peer to announce to. Run peers sync after connect.");
 	for (const row of results) {
