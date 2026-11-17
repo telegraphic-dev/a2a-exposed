@@ -31,7 +31,7 @@ This page tracks what an owner or agent can do on each a2a.exposed surface, so t
 | **Hosted agents** | | | | | |
 | Create hosted agent (+ name/capacity preflight) | yes: `hosted create / names / capacity` (`main.mjs:763`, help `:68`-`:80`) | yes: setup `SKILL.md:91`, `:149` | yes: `create_agent`, `name_availability`, `creation_capacity` (live) | n/a | yes: `+ New agent` on `/app` |
 | List / select hosted agents | yes: `hosted list` (`main.mjs:764`) | yes: setup `SKILL.md:146` | yes: `list_agents` (live) | n/a | yes: `/app` Agents list |
-| Delete hosted agent | no: "the CLI has no delete command" (`skills/a2a-exposed/SKILL.md:146`) | partial: says use dashboard; never names MCP `delete_agent` | yes: `delete_agent`, browser confirm (live) | n/a | yes: Danger zone on `/app/agents/:name` |
+| Delete hosted agent | no: "the CLI has no delete command" (`skills/a2a-exposed/SKILL.md`) | yes: dashboard or hosted MCP `delete_agent` with browser confirm ([#460](https://github.com/telegraphic-dev/a2a-exposed/issues/460)) | yes: `delete_agent`, browser confirm (live) | n/a | yes: Danger zone on `/app/agents/:name` |
 | **Agent card and address** | | | | | |
 | Set card name, description, skills | yes (self-host): `init --agent-name/--agent-description/--agent-skills` (`docs/cli.md:121`) | partial: setup `references/deploy.md` | no | no | no: no card editor on the hosted agent pages |
 | Share own address / connect text | partial: `url` (`main.mjs:733`) prints base URL only | yes: `references/connect.md` | yes: `connect_message` (live) | no | partial: Get started connect command and pasteable "Message for your agent"; Worker `GET /`, `/index.md`, `/llms.txt` (`index.ts:4739`) |
@@ -86,10 +86,9 @@ This page tracks what an owner or agent can do on each a2a.exposed surface, so t
 
 | Gap | Surfaces | Severity | Issue |
 | --- | --- | --- | --- |
-| The skills describe only the self-hosted MCP tools (`list_peers`, `show_task`, `announce_address`). They say pairing, approval and revoke are CLI-only. The hosted MCP has `peers`, `request_pairing`, `approve_pairing`, `deny_pairing`, `revoke_peer`, `remove_outbound_peer`, `rotate_owner_token` and `delete_agent`. | Skills, `docs/mcp.md` | P1 | [#460](https://github.com/telegraphic-dev/a2a-exposed/issues/460) |
 | Hosted MCP `reply` has no owner-wait fields, and there's no `show_task` | Hosted MCP | P2 | [site #742](https://github.com/telegraphic-dev/a2a-exposed-site/issues/742) (refs #421) |
 | No wake diagnostics on the hosted MCP (`wake status`, preview, policy, receipts); the Worker MCP has read-only `wake_status` only | Hosted MCP (Worker MCP partial) | P2 | [site #742](https://github.com/telegraphic-dev/a2a-exposed-site/issues/742) |
-| Tool names differ between servers (`peers` vs `list_peers`), and none are namespaced | Both MCPs | P2 | [#460](https://github.com/telegraphic-dev/a2a-exposed/issues/460) |
+| Tool names differ between servers (`peers` vs `list_peers`), and none are namespaced. The skills and `docs/mcp.md` now name the differences ([#460](https://github.com/telegraphic-dev/a2a-exposed/issues/460)); the names themselves are unchanged | Both MCPs | P3 | none yet: renaming a tool needs a product decision |
 | Dashboard shows only the latest five exchanges, with no paging or task view | Dashboard | P2 | [#430](https://github.com/telegraphic-dev/a2a-exposed/issues/430) |
 | No hosted `announce_address` or forward | Hosted MCP | P3 | [site #742](https://github.com/telegraphic-dev/a2a-exposed-site/issues/742) |
 | No `contexts` list outside the CLI | MCPs, dashboard | P3 | [#430](https://github.com/telegraphic-dev/a2a-exposed/issues/430) (gap 11) and [site #742](https://github.com/telegraphic-dev/a2a-exposed-site/issues/742) |
