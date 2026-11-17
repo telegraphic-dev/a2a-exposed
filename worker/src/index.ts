@@ -1161,8 +1161,26 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
 		throw new RpcError(-32602, UNKNOWN_CONTEXT);
 	}
 	log("message_received", { peer: label, contextId, taskId: task.id, chars: preview.length, version });
-	// Direct replies are stored for history, not scheduled as new work.
-	if (!directReply) {
+	// A direct reply is the answer to a task this agent sent. It is stored as a finished task, not new work,
+	// and it wakes the receiver the way a pushed reply does: same routing, the sender's wake and intent hints,
+	// kind outbound_update, and the sent task's id (#485). A retried message id returned above without a wake.
+	if (directReply) {
+		const meta = params.metadata?.[DIRECT_REPLY_META] || msg.metadata?.[DIRECT_REPLY_META] || {};
+		const state = typeof meta.state === "string" && /^[a-z-]{1,32}$/.test(meta.state) ? meta.state : "completed";
+		const sentTask = typeof meta.taskId === "string" && A.ID_RE.test(meta.taskId) ? meta.taskId : task.id;
+		const hasContent = pushCarriesFile(msg);
+		const replyDecision = decidePush({
+			mode: (await wakePolicy(ctx)).mode,
+			hasContent,
+			wake: routed.fields.wake,
+			intent: routed.fields.intent,
+			duplicate: false,
+			idle: routed.fields.intent === "status" ? !statusText(preview) : isIdleWorkingPush(state, preview, hasContent),
+			unchanged: false,
+		}, outboundClass(state, preview, hasContent, routed.fields.intent));
+		await recordRoute(ctx, replyDecision, "outbound_update");
+		if (replyDecision.deliver) await wake(ctx, ectx, contextId, sentTask, label, `[update on outbound task: ${state}] ${preview}`, "outbound_update", wakeOpts(replyDecision));
+	} else {
 		const routedNow = await routeInbound(ctx, label, contextId, routed.fields.wake, routed.fields.intent, preview, false, pushCarriesFile(msg), inputRequired);
 		// Suppressed repeats do not move the window anchored to the last non-suppressed status.
 		if (routedNow.fingerprint && routedNow.decision.decision !== "status_unchanged") {

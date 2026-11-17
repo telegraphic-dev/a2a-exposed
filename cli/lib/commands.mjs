@@ -481,6 +481,24 @@ export async function send(o) {
 	if (tid && !o.json) console.error(`# task ${tid}: ${plainState(obj)}  (check: ${CLI} poll --to ${alias} ${tid})`);
 }
 
+/**
+ * The sent-task record poll and cancel may use with the --to peer's token (#461, #485). A record for another
+ * peer, or an endpoint off this peer's origin, is refused before any request. A record that names no peer
+ * (or "?") is not used: the peer's own card endpoint is used, and nothing is written back to that record.
+ */
+function recordedFor(rec, alias, base, tid) {
+	// The Worker stores "?" when a sender named no peer; that record names nobody.
+	const peer = rec.peer && rec.peer !== "?" ? rec.peer : "";
+	if (rec.endpoint && peer && peer !== alias) die(`task ${tid} was sent to peer ${JSON.stringify(String(rec.peer))}, not ${JSON.stringify(alias)}; pass --to with that peer. Nothing was sent.`);
+	const recorded = rec.endpoint && peer === alias ? rec : null;
+	if (recorded) {
+		let same = false;
+		try { same = new URL(recorded.endpoint).origin === new URL(base).origin; } catch { same = false; }
+		if (!same) die(`the recorded endpoint for task ${tid} is not on ${alias}'s address, so its token is not sent there. Nothing was sent.`);
+	}
+	return recorded;
+}
+
 export async function poll(taskId, o) {
  if (fs.existsSync(C.CONFIG_DIR + "/encryption/state.sqlite") || Object.values(C.loadPeers()).some(p => p.sealed?.policy === "required")) {
   const result = await (await import("./sealed-cli.mjs")).recovery(taskId, o, { poll: true });
@@ -494,15 +512,16 @@ export async function poll(taskId, o) {
 	if (ownerConfigured()) {
 		try { rec = await owner("GET", `/owner/outbound/${q(tid)}`); } catch { rec = {}; }
 	}
-	const [url, version] = rec.endpoint ? [rec.endpoint, rec.protocol || "0.3"] : pickEndpoint(base, await fetchCard(base), o.proto);
+	const recorded = recordedFor(rec, alias, base, tid);
+	const [url, version] = recorded ? [recorded.endpoint, recorded.protocol || "0.3"] : pickEndpoint(base, await fetchCard(base), o.proto);
 	const res = await rpc(url, version, tok, "tasks/get", "GetTask", { id: tid }, { alias: C.loadPeers()[alias] ? alias : null, base });
 	out(res);
-	if (rec.endpoint) {
+	if (recorded) {
 		await persistOutbound("PUT", `/owner/outbound/${q(tid)}`, { task: res }, "update outbound task");
 		let txt = textOf((res.status || {}).message || {});
 		const arts = (res.artifacts || []).map((x) => textOf(x)).join("\n");
 		if (arts && arts !== txt) txt = (txt ? txt + "\n" : "") + arts;
-		await logHistory(rec.contextId, { dir: "in", peer: alias, taskId: tid, event: "poll", state: plainState(res), text: txt, data: { ...(ownerWaitOf(res) ? { ownerWait: ownerWaitOf(res) } : {}), ...(res?.metadata?.["a2a.exposed/wake-receipt"] ? { wakeReceipt: res.metadata["a2a.exposed/wake-receipt"] } : {}) } });
+		await logHistory(recorded.contextId, { dir: "in", peer: alias, taskId: tid, event: "poll", state: plainState(res), text: txt, data: { ...(ownerWaitOf(res) ? { ownerWait: ownerWaitOf(res) } : {}), ...(res?.metadata?.["a2a.exposed/wake-receipt"] ? { wakeReceipt: res.metadata["a2a.exposed/wake-receipt"] } : {}) } });
 	}
 	if (!o.json) console.error(`# task ${tid}: ${plainState(res)}`);
 }
@@ -517,15 +536,7 @@ export async function cancel(taskId, o) {
 	if (ownerConfigured()) {
 		try { rec = await owner("GET", `/owner/outbound/${q(tid)}`); } catch { rec = {}; }
 	}
-	// The --to peer's token goes only to that peer: a stored record for another peer, or an endpoint off this
-	// peer's origin, is refused before any request. A record that names no peer is not used.
-	if (rec.endpoint && rec.peer && rec.peer !== alias) die(`task ${tid} was sent to peer ${JSON.stringify(String(rec.peer))}, not ${JSON.stringify(alias)}; pass --to with that peer. Nothing was sent.`);
-	const recorded = rec.endpoint && rec.peer === alias ? rec : null;
-	if (recorded) {
-		let same = false;
-		try { same = new URL(recorded.endpoint).origin === new URL(base).origin; } catch { same = false; }
-		if (!same) die(`the recorded endpoint for task ${tid} is not on ${alias}'s address, so its token is not sent there. Nothing was sent.`);
-	}
+	const recorded = recordedFor(rec, alias, base, tid);
 	const [url, version] = recorded ? [recorded.endpoint, recorded.protocol || "0.3"] : pickEndpoint(base, await fetchCard(base), o.proto);
 	const res = await rpc(url, version, tok, "tasks/cancel", "CancelTask", { id: tid }, { alias: C.loadPeers()[alias] ? alias : null, base });
 	out(res);

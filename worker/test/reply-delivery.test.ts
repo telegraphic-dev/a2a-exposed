@@ -104,7 +104,8 @@ test("reply delivers once to an exact paired peer in the same context and a dire
 	const delivered = (inbox.body as any[]).find((row) => row.text === "answer");
 	assert.equal(delivered.contextId, "ctx-direct");
 	assert.equal(delivered.state, "completed");
-	assert.deepEqual((await s.dbA.prepare("SELECT * FROM wakes").all()).results, []);
+	// #485: the delivered reply wakes Alice once for this conversation.
+	assert.deepEqual((await s.dbA.prepare("SELECT context_id, peer FROM wakes").all()).results, [{ context_id: "ctx-direct", peer: "bob" }]);
 	const openInbox = await s.owner(s.a, "acct-alice", "GET", "/owner/inbox");
 	assert.deepEqual(openInbox.body, []);
 	const stored = await s.dbA.prepare("SELECT metadata_json FROM tasks WHERE id = ?").bind(delivered.taskId).first() as { metadata_json?: string };
@@ -237,7 +238,7 @@ test("reply discovers one canonical card and uses the paired base when it is mis
 
 for (const version of ["0.3", "1.0"]) {
 	for (const placement of ["request", "message"]) {
-		test(`direct reply metadata on ${placement} auto-completes without waking (${version})`, async (t) => {
+		test(`direct reply metadata on ${placement} auto-completes, stays out of inbox and wakes the receiver (${version})`, async (t) => {
 			const s = await fixture(t as never);
 			const contextId = "ctx-marker";
 			const marker = { "a2a.exposed/reply-delivery": { taskId: "remote-task", messageId: "remote-message", state: "working" } };
@@ -253,7 +254,8 @@ for (const version of ["0.3", "1.0"]) {
 			assert.equal(task.status.state, version === "1.0" ? "TASK_STATE_COMPLETED" : "completed");
 			assert.deepEqual(task.metadata, marker);
 			assert.deepEqual((await s.owner(s.a, "acct-alice", "GET", "/owner/inbox")).body, []);
-			assert.deepEqual((await s.dbA.prepare("SELECT * FROM wakes").all()).results, []);
+			// #485: the reply wakes Alice through her wake, like a pushed reply.
+			assert.deepEqual((await s.dbA.prepare("SELECT context_id, peer FROM wakes").all()).results, [{ context_id: contextId, peer: "bob" }]);
 			const history = await s.owner(s.a, "acct-alice", "GET", `/owner/history/${contextId}?from=bob`);
 			assert.match(JSON.stringify(history.body), /reply text/);
 			const unauthorized = await send(marker, task.id, await s.otherAtAlice());
@@ -268,6 +270,24 @@ for (const version of ["0.3", "1.0"]) {
 	}
 }
 
+
+test("a delivered direct reply wakes the receiver as an outbound update for the sent task (#485)", async (t) => {
+	const s = await fixture(t as never);
+	const taskId = await s.sendToBob("question for bob", "ctx-wake-reply");
+	// A wake sent a moment ago holds the next one in its debounce window, so the payload is readable here.
+	await s.dbA.prepare("INSERT OR REPLACE INTO wakes (context_id, peer, last_sent_ms) VALUES (?, 'bob', ?)").bind("ctx-wake-reply", Date.now()).run();
+	const result = await s.owner(s.b, "acct-bob", "POST", "/owner/mcp/reply", { taskId, text: "the answer", intent: "handoff" });
+	assert.equal((result.body as any).structuredContent.status, "delivered");
+	const row = await s.dbA.prepare("SELECT pending_json FROM wakes WHERE context_id = ? AND peer = 'bob'").bind("ctx-wake-reply").first() as { pending_json: string | null };
+	assert.ok(row?.pending_json, "the reply queued a wake");
+	const pending = JSON.parse(row.pending_json);
+	assert.equal(pending.kind, "outbound_update");
+	assert.equal(pending.taskId, taskId);
+	assert.equal(pending.from, "bob");
+	assert.match(pending.preview, /^\[update on outbound task: completed\] the answer/);
+	// The reply is not new work: Alice's inbox stays empty.
+	assert.deepEqual((await s.owner(s.a, "acct-alice", "GET", "/owner/inbox")).body, []);
+});
 
 test("push status only accepts an exact HTTP result in the output schema range", async (t) => {
 	const s = await fixture(t as never);
