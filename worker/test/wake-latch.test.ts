@@ -193,3 +193,81 @@ test("a busy pending wake is due at busy_until_ms, not the debounce", async () =
 	await DB.prepare("DELETE FROM wakes WHERE context_id = 'ctx-soon'").run();
 	assert.equal(await nextCronAt(tenant, now), until);
 });
+
+// #471: a peer's second task lands in the claude-code busy window, then the owner checks the inbox by hand.
+// That read must not clear the held catch-up; marking the task working or replying to it still does.
+test("an inbox read during the busy window keeps the held catch-up", async (t) => {
+	let offset = 0;
+	Date.now = () => realNow() + offset;
+	const sent: any[] = [];
+	const origFetch = globalThis.fetch;
+	globalThis.fetch = (async (_url: unknown, init: any) => {
+		if (init?.body) sent.push(JSON.parse(String(init.body)));
+		return new Response("ok", { status: 200 });
+	}) as typeof fetch;
+	t.after(() => { globalThis.fetch = origFetch; Date.now = realNow; });
+	const env = envFor({ WAKE_DEBOUNCE_SECONDS: "20", WAKE_BUSY_SECONDS: "300" }); // claude-code timings; generic keeps contextId in the body
+	const call = async (method: string, path: string, json?: unknown, auth = "Bearer owner-secret") => {
+		const pending: Promise<unknown>[] = [];
+		const res = await worker.fetch(new Request(BASE + path, {
+			method,
+			headers: { "content-type": "application/json", authorization: auth },
+			body: json === undefined ? undefined : JSON.stringify(json),
+		}) as any, env, { waitUntil: (p: Promise<unknown>) => pending.push(p), passThroughOnException() {} } as any);
+		await Promise.allSettled(pending);
+		const text = await res.text();
+		try { return text ? JSON.parse(text) : null; } catch { return text; }
+	};
+	const token = (await call("POST", "/owner/peers", { label: "ada" })).token as string;
+	const msg = async (contextId: string, text: string) => {
+		const data = await call("POST", "/", {
+			jsonrpc: "2.0", id: 1, method: "message/send",
+			params: { message: { kind: "message", role: "user", messageId: crypto.randomUUID(), contextId, parts: [{ kind: "text", text }] } },
+		}, `Bearer ${token}`);
+		const id = data?.result?.id || data?.result?.task?.id;
+		assert.equal(typeof id, "string", JSON.stringify(data));
+		return id as string;
+	};
+	const row = (contextId: string) => env.DB.db.prepare(
+		"SELECT pending_json, busy_until_ms FROM wakes WHERE context_id = ? AND peer = 'ada'",
+	).get(contextId) as { pending_json: string | null; busy_until_ms: number };
+	const bodies = (contextId: string) => sent.filter((b) => b.contextId === contextId);
+
+	const a = await msg("ctx-read", "task A");
+	assert.deepEqual(bodies("ctx-read").map((b) => b.taskIds), [[a]]);
+	const until = row("ctx-read").busy_until_ms;
+	await call("POST", `/owner/tasks/${a}/reply`, { text: "done A" });
+	offset += 90_000;
+	const b = await msg("ctx-read", "task B");
+	const held = row("ctx-read").pending_json;
+	assert.deepEqual(JSON.parse(held!).taskIds, [b]);
+	assert.equal(JSON.parse(held!).busy, 1);
+
+	const all = await call("GET", "/owner/inbox?all=1");
+	assert.ok(all.some((r: { taskId: string }) => r.taskId === b), "the owner sees task B");
+	const open = await call("GET", "/owner/inbox?context=ctx-read&from=ada");
+	assert.deepEqual(open.map((r: { taskId: string }) => r.taskId), [b]);
+	assert.equal(row("ctx-read").pending_json, held, "reading the inbox keeps the held catch-up");
+
+	offset = until - realNow() + 1000;
+	await call("GET", "/health");
+	const out = bodies("ctx-read");
+	assert.equal(out.length, 2, "the catch-up still wakes for task B");
+	assert.deepEqual(out[1].taskIds, [b]);
+
+	// Handling the task during the window still drops it, so a handled task does not wake again.
+	for (const [contextId, handle] of [["ctx-work", "working"], ["ctx-reply", "reply"]] as const) {
+		await msg(contextId, "first");
+		const startUntil = row(contextId).busy_until_ms;
+		offset += 30_000;
+		const next = await msg(contextId, "second");
+		assert.equal(JSON.parse(row(contextId).pending_json!).busy, 1);
+		await call("GET", `/owner/inbox?context=${contextId}`);
+		assert.ok(row(contextId).pending_json, `${contextId}: the read keeps it`);
+		await call("POST", `/owner/tasks/${next}/${handle}`, handle === "reply" ? { text: "done" } : {});
+		assert.equal(row(contextId).pending_json, null, `${contextId}: ${handle} clears it`);
+		offset = startUntil - realNow() + 1000;
+		await call("GET", "/health");
+		assert.equal(bodies(contextId).length, 1, `${contextId}: no catch-up after ${handle}`);
+	}
+});
