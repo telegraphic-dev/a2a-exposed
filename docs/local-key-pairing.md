@@ -194,7 +194,7 @@ the peer again needs a new human-approved pairing under a new alias.
 
 **Signer rotation.** `keys rotate --id LOCAL_ID --json` prints an exact plan, the
 pins it will hold and an `approval_digest`; it changes nothing. After the human
-approves that plan, `keys rotate --id LOCAL_ID --approve DIGEST --json` creates a
+approves that plan, `keys rotate --id LOCAL_ID --approve=DIGEST --json` creates a
 fresh signing and receiving identity for the same card URL. The old identity is
 retired: it still opens old history (`history CONTEXT --json`) and never signs
 again. Sends and send recovery on its pins refuse with "Keys rotated" and send

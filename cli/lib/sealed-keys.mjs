@@ -189,7 +189,7 @@ export async function command(p, o) {
    if (typeof store.signerRotationPlan !== "function") fail("Install the matching optional @a2a-exposed/encryption package in this config directory; this version cannot rotate signer keys. Nothing was changed.");
    if (o.approve === undefined) {
     const plan = store.signerRotationPlan(o.id);
-    result = { ...plan, changed: false, approve: `keys rotate --id ${o.id} --approve ${plan.approval_digest} --json`, next: `Nothing was changed. Show this plan to the human. After approval, run the approve command. The old key will open old history only and never sign again. Held pins: ${plan.plan.heldPins.map(pin => pin.peer).join(", ") || "none"}; each needs a new human-approved pairing with the new key, then keys verify.` };
+    result = { ...plan, changed: false, approve: `keys rotate --id ${o.id} --approve=${plan.approval_digest} --json`, next: `Nothing was changed. Show this plan to the human. After approval, run the approve command. The old key will open old history only and never sign again. Held pins: ${plan.plan.heldPins.map(pin => pin.peer).join(", ") || "none"}; each needs a new human-approved pairing with the new key, then keys verify.` };
    } else {
     const rotated = await store.rotateSigner({ id: o.id, approvalDigest: o.approve, ownerApproved: true, allowOsConsent: o["allow-os-consent"] === true });
     result = { rotated: true, changed: true, id: rotated.id, previous_id: rotated.previous_id, key_id: rotated.bundle.keyId, key_store: rotated.key_store, old_key_retained: true, held_pins: rotated.held_pins,

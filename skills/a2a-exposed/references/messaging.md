@@ -91,7 +91,7 @@ pairing: ask the approving inbox owner to `token revoke LABEL` (list labels with
 code by phone or another trusted channel, `keys verify --id ID --peer ALIAS --code "CODE" --json`
 records independent verification; ask your human for the code they heard, never
 copy it from `keys code` output. `keys rotate --id ID --json` shows a plan and digest;
-run `--approve DIGEST` only after your human approves it. Its pins then refuse with
+run `--approve=DIGEST` only after your human approves it. Its pins then refuse with
 "Keys rotated", and live inbox reads stay held until each old pin is revoked with
 `keys revoke --peer`. To keep a peer, first re-pair with the new key under a new
 alias and run `keys verify`, then revoke the old pin. `keys init` turns off ordinary

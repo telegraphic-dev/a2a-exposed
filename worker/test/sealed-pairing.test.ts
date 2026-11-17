@@ -456,10 +456,10 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
  envs.bob.A2A_SEALED_ENABLED="";assert.equal((await owner("bob","/owner/sealed-key")).status,404);envs.bob.A2A_SEALED_ENABLED="1";
  // #379 signer rotation, local only: an exact plan, an approved digest, then held pins and readable old history.
  const rotatePlan=await cli("alice",["keys","rotate","--id",ids.alice,"--json"]);assert.equal(rotatePlan.code,0,rotatePlan.err);
- const rp=JSON.parse(rotatePlan.out);assert.equal(rp.changed,false);assert.ok(rp.plan.heldPins.some((pin:any)=>pin.peer==="bob"));assert.match(rp.approve,/keys rotate --id .* --approve /);
+ const rp=JSON.parse(rotatePlan.out);assert.equal(rp.changed,false);assert.ok(rp.plan.heldPins.some((pin:any)=>pin.peer==="bob"));assert.match(rp.approve,/keys rotate --id .* --approve=/);
  const staleRotation=await cli("alice",["keys","rotate","--id",ids.alice,"--approve","x".repeat(43),"--json"]);assert.equal(staleRotation.code,1);assert.match(staleRotation.err,/approval_stale/);
  assert.equal((await cli("alice",["keys","rotate","--id",ids.alice,"--approve","bad digest!","--json"])).code,1);
- const rotation=await cli("alice",["keys","rotate","--id",ids.alice,"--approve",rp.approval_digest,"--json"]);assert.equal(rotation.code,0,rotation.err);
+ const rotation=await cli("alice",["keys","rotate","--id",ids.alice,`--approve=${rp.approval_digest}`,"--json"]);assert.equal(rotation.code,0,rotation.err);
  const rot=JSON.parse(rotation.out);assert.equal(rot.previous_id,ids.alice);assert.equal(rot.rotated,true);assert.ok(rot.held_pins.includes("bob"));assert.match(rot.next,/never signs again.*connect URL --sealed-key-id/);
  privateTexts.push("must-not-be-signed-by-a-retired-key");
  const beforeHeld=records.filter((r:any)=>r.path==="/").length;
