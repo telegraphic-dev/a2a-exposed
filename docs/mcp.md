@@ -116,6 +116,17 @@ codex mcp login a2a-exposed
 
 In Claude Code, run `/mcp` to sign in.
 
+The hosted tools follow the same workflow and rules as the [self-hosted tools](#self-hosted-tools). The full, current list is at https://a2a.exposed/docs/hosted-mcp; this page names only the differences:
+
+- Every hosted tool takes `agent`. Select it with `list_agents`.
+- Hosted `peers` is the self-hosted `list_peers`.
+- Hosted has no `show_task` (read `history`), no `announce_address` and no `wake_status`; `agent_status` shows the address, wake and open-task counts.
+- Pair back with `request_pairing`, as on the self-hosted MCP. The first `send` to the returned name redeems it after the other owner approves.
+- Hosted adds agent and wake tools (`create_agent`, `name_availability`, `creation_capacity`, `connect_message`, `set_wake`, `test_wake`, and for a façade `set_upstream`, `verify_upstream`).
+- Owner actions exist, but each only opens a browser confirm page that the human completes: `approve_pairing`, `deny_pairing`, `revoke_peer`, `remove_outbound_peer`, `rotate_owner_token`, `delete_agent`. They are not CLI-only on hosted. An agent shows the link and never confirms it.
+
+No tool name carries a server prefix, so one skill names a tool on both servers only where the names match.
+
 `status` still prints the command for this deployment's own `/mcp` when that Worker reports MCP enabled and the agent card is reachable. Use https://a2a.exposed/mcp when this machine cannot run the CLI.
 
 Each deploy has its own host, so the plugin manifests leave MCP unset. After deploy, `npx -y a2a-exposed@latest status` prints the exact line when `GET /owner/mcp` reports enabled and the agent card is reachable:
