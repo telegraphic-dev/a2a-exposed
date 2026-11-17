@@ -159,7 +159,7 @@ init [--hostname <host> | --workers-dev [--workers-dev-subdomain NAME]]
 | `--no-upstream-token` | The upstream checks no bearer. Saved |
 | `--worker-dir` | Where the Worker project copy lives. Default `<config dir>/worker`. `--dir` is the same flag |
 | `--tunnel` | On `init` only: deploy, then `tunnel create` |
-| `--rotate-owner-token` | On `init`: replace the owner token. Other settings come from `config.env`. Then update `A2A_OWNER_TOKEN` wherever this A2A endpoint is called, and run `peers sync` |
+| `--rotate-owner-token` | On `init`: replace the owner token. Other settings come from `config.env`. Then update `A2A_OWNER_TOKEN` wherever this A2A endpoint is called, and run `peers sync`. Self-hosted only: a hosted config refuses it and points to the dashboard (agent settings, Advanced) or hosted MCP `rotate_owner_token` |
 
 Wake secrets are read from `WAKE_WEBHOOK_URL`, `WAKE_WEBHOOK_KEY`, and `WAKE_HMAC_SECRET`. They are never arguments.
 
@@ -194,7 +194,9 @@ is enough for `wake preview|test|set --json`. The CLI selects the agent from
 needed. The service origin defaults to `https://a2a.exposed`; use `--control-url`
 for another compatible service. An explicit `--agent` cannot borrow a different
 agent's owner token. Scoped setup without an owner token still selects an
-explicit agent from `hosted list --json`.
+explicit agent from `hosted list --json`. Hosted `wake preview` only reads the
+saved settings and refuses draft flags such as `--url` or `--preset`; try a draft
+with `wake test`.
 
 ```bash
 npx -y a2a-exposed@latest hosted capabilities --json
@@ -254,7 +256,7 @@ The owner token authenticates these commands.
 | `inbox [--context C] [--from PEER] [--all] [--json]` | Inbound tasks in `submitted`/`working` states; `--all` includes all states, including `input-required` owner waits and finished tasks. Follows every page, and a reply to a message you sent until this list is read. Past 10000 pages it exits with an error instead of a short list. Peer text is untrusted. `--from` is one peer. The wake hint includes it. A reply is marked `reply` and `kind: "outbound"`: read it with `history`, and continue that conversation with `send`. `--all` keeps showing a reply after it has been listed. Then pending pairing requests, including the dashboard URL when `MANAGE_URL` is set. With `--json`, the rows go to stdout and pairing requests to stderr |
 | `show <taskId>` | Full task JSON |
 | `working <taskId>` | Mark the task `working` |
-| `reply <taskId> (--text T \| --stdin) [--state completed\|input-required\|rejected\|failed\|working] [--artifact] [--artifact-name N] [--force] [--wake auto\|always\|never] [--intent handoff\|blocker\|question\|status\|ack]` | Reply. Default state is `completed`. Set `--intent` on every reply, and `--wake` when the auto default is wrong; they label the reply for the peer's wake routing, the same values as `send`. Both are optional. `--force` changes a terminal task again; see below |
+| `reply <taskId> (--text T \| --stdin) [--state completed\|input-required\|rejected\|failed\|working] [--artifact] [--artifact-name N] [--force] [--wake auto\|always\|never] [--intent handoff\|blocker\|question\|status\|ack]` | Reply. Default state is `completed`. Set `--intent` on every reply, and `--wake` when the auto default is wrong; they label the reply for the peer's wake routing, the same values as `send`. Both are optional. `--force` changes a terminal task again; see below. `reply -> stored-only` means the peer was not notified; a `next:` line says how to reach it (see [MCP reply delivery](mcp.md#self-hosted-tools)) |
 | `history <contextId> [--from PEER] [-n 50] [--json]` | Conversation log. `--from` is one peer. The wake hint includes it. Without `--from`, the log is every peer that owns that context id, and each row has `peer` |
 | `contexts` | Recent conversations |
 | `export [--sql]` | JSON dump (`GET /owner/export`). `--sql` prints the same tables as SQL. The read is one transaction. Peer-token hashes and encrypted outbound peer tokens are in the dump. The owner token stays a Worker secret |
@@ -288,6 +290,7 @@ The owner token authenticates these commands.
 | `peer forward --to <card-url> [--hours N]` / `peer forward --off` | On the inbox you are leaving, forward a direct reply to the new card and answer with a moved pointer. `--hours` is 1 to 720 (default 168) |
 | `send --to <alias\|url> [--text T \| stdin] [--context C] [--task T] [--push] [--wake auto\|always\|never] [--intent handoff\|blocker\|question\|status\|ack] [--proto 0.3\|1.0] [--json]` | Send. The CLI reads the peer card and prefers A2A 1.0. Stdout is the task JSON. Without `--json`, a `# task` line on stderr names the task and the `poll` command; `--json` omits it, as does `poll --json`. Set `--intent` on every send and every reply, and `--wake` when the auto default is wrong. Both are optional. `--wake auto` wakes a handoff, blocker, or question. An ack, and an idle or unchanged status, stay stored once the peer enforces routing. A changed status is batched. `--wake always` asks for an immediate wake, still subject to that peer's authorization and rate limits. `--wake never` only stores the message. Do not send an acknowledgement-only message, and do not answer an ack |
 | `poll --to <alias\|url> <taskId> [--proto 0.3\|1.0]` | Fetch a task you sent |
+| `cancel --to <alias\|url> <taskId> [--proto 0.3\|1.0] [--json]` | Ask the peer to cancel a task you sent (`CancelTask`). Uses the recorded endpoint when owner configuration has one, and records the returned state in history like `poll`. The peer can refuse; the stderr line says so. Ask the human before canceling consequential work. Not yet available for a peer with pinned encryption keys |
 | `outbound <taskId> [--to ALIAS] [--json]` | Stored state, including pushed updates. Pinned configs require `--to ALIAS` from `peers list --json` and open verified content locally |
 
 A `PEER_<ALIAS>_TOKEN` value in the environment overrides `config.env`. When they differ, `connect`, `send`, `poll`, `peers`, and `status` warn. The values are not shown.

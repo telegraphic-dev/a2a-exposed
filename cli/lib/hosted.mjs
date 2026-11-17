@@ -231,6 +231,8 @@ export async function wake(sub, o = {}) {
 	if (Object.keys(o).some(key => /^access-client-(?:id|secret)(?:-|$)/.test(key))) fail("access_options_removed", "Hosted wake Access credential options were removed. Run hosted capabilities --json, then use Import your existing tunnel or Create secure link in dashboard Wake settings. Facade hosted upstream options are unchanged.");
 	if (!["preview", "test", "set", "prepare", "remove", "unset", "request"].includes(sub)) fail("usage", "Use wake preview|test|set|prepare|remove|request. List presets with hosted capabilities --json.");
 	if (sub === "request") return wakeRequest(o);
+	// preview only reads the saved settings. A draft flag would be silently ignored, so refuse it before any request.
+	if (sub === "preview" && Object.keys(o).some(key => !["agent", "json", "control-url"].includes(key))) fail("usage", "wake preview reads the saved settings only and takes just --agent, --control-url and --json. To try a draft, use wake test --agent NAME --url URL --preset P; wake set tests it, then saves it. Nothing was changed.");
 	const removing = sub === "remove" || sub === "unset";
  const preparingRemoval = sub === "prepare" && o.clear === true;
  if (o.clear && !preparingRemoval) fail("usage", "Use wake prepare --clear for an MCP removal reference, or wake remove --version N. Run wake preview --json to list the current version.");

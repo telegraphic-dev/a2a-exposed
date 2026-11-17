@@ -195,3 +195,32 @@ test("send --json and poll --json print only the task JSON, with no # task trail
 		assert.equal(r.stderr, "", `${args[0]} --json keeps stderr free of human lines`);
 	}
 });
+
+test("cancel asks the peer to cancel a sent task and records it in history like poll (#461)", async (t) => {
+	const s = await setup(t, { owner: "full", result: { ...task, status: { state: "canceled" } } });
+	const r = await s.cli(["cancel", "--to", "paired", task.id]);
+	assert.equal(r.status, 0, r.stderr);
+	assert.equal(JSON.parse(r.stdout).status.state, "canceled");
+	const rpc = s.requests.find((x) => x.path === "/rpc");
+	assert.equal(rpc.body.method, "tasks/cancel");
+	assert.deepEqual(rpc.body.params, { id: task.id });
+	assert.equal(rpc.auth, "Bearer paired-test-token");
+	assert.ok(s.requests.some((x) => x.method === "PUT" && x.path === `/owner/outbound/${task.id}`));
+	const hist = s.requests.find((x) => x.method === "POST" && x.path === "/owner/history");
+	assert.equal(hist.body.event, "cancel");
+	assert.equal(hist.body.state, "canceled");
+	assert.match(r.stderr, /# task peer-task: canceled/);
+});
+
+test("cancel reports a refusal and --json prints only the task (#461)", async (t) => {
+	const s = await setup(t, { result: { ...task, status: { state: "working" } } });
+	const r = await s.cli(["cancel", "--to", "paired", task.id]);
+	assert.equal(r.status, 0, r.stderr);
+	assert.match(r.stderr, /the peer did not cancel it/);
+	const j = await s.cli(["cancel", "--to", "paired", "--json", task.id]);
+	assert.equal(j.stderr.includes("# task"), false);
+	assert.equal(JSON.parse(j.stdout).id, task.id);
+	const none = await s.cli(["cancel", task.id]);
+	assert.notEqual(none.status, 0);
+	assert.match(none.stderr, /--to required/);
+});

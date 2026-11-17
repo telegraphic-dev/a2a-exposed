@@ -533,6 +533,9 @@ Outbound (agents you call)
                           Storage failures warn on stderr; the peer response still prints and exits 0
                           Self-hosted MCP: poll_outbound fetches current state; cancel_outbound asks the peer
                           to cancel a sent task. Ask the human before canceling consequential work
+  cancel --to <alias|url> <taskId> [--proto 0.3|1.0] [--json]
+                          ask the peer to cancel a task you sent (CancelTask); recorded in history like poll.
+                          The peer can refuse. Ask the human before canceling consequential work
   outbound <taskId> [--to ALIAS] [--json] [--allow-os-consent]
                           stored state of a task you sent
                           Pinned configs require --to ALIAS from peers list --json.
@@ -639,6 +642,7 @@ const SPEC = {
 	peer: { to: S, all: B, reissue: B, hours: S, off: B, json: B },
 	send: { json: B, "allow-os-consent": B, to: S, text: S, context: S, task: S, push: B, proto: S, wake: S, intent: S, recover: S },
 	poll: { to: S, proto: S, json: B, "allow-os-consent": B },
+	cancel: { to: S, proto: S, json: B },
 	outbound: { to: S, json: B, "allow-os-consent": B },
 	status: { json: B, agent: S, "control-url": S },
 	env: { json: B },
@@ -724,6 +728,7 @@ export async function main(argv) {
 		case "init":
 			if (p.length) throw new CliError("init takes no positional arguments; use --worker-name NAME");
 			if (o.json && !o["dry-run"]) throw new CliError("init --json requires --dry-run");
+			if (o["rotate-owner-token"] && C.deploymentKind() === "hosted") throw new CliError("this is a hosted config. init --rotate-owner-token rotates a self-hosted Worker's owner token only. Rotate a hosted agent's owner token in the dashboard (agent settings, Advanced) or with the hosted MCP tool rotate_owner_token, which opens a confirm page. Nothing was changed.");
 			if (o.tunnel) tun.preflight(o); // refuse early (hosted preset, missing --tunnel-path) before anything is deployed
 			await dep.init(o);
 			if (!o.tunnel || o["dry-run"]) return;
@@ -814,6 +819,7 @@ export async function main(argv) {
 		}
 		case "send": return cmd.send(o);
 		case "poll": return cmd.poll(need(p[0], "poll --to <peer> <taskId>"), o);
+		case "cancel": return cmd.cancel(need(p[0], "cancel --to <peer> <taskId>"), o);
 		case "outbound": return cmd.outbound(need(p[0], "outbound <taskId>"), o);
 		case "feedback": {
 			const message = p.join(" ").trim();

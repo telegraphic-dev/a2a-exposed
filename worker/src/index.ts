@@ -1564,6 +1564,8 @@ type ReplyDelivery = {
 	target?: { alias?: string; host: string };
 	httpStatus?: number;
 	detail: string;
+	/** Stored-only: the peer was not notified, and this says how it can be reached. */
+	next?: string;
 	push?: Json[];
 };
 
@@ -1996,17 +1998,61 @@ async function replyPeer(ctx: TenantContext, label: string): Promise<{ alias: st
 	return token ? { alias: row.alias, url: row.url, token, identityKey: Addr.cleanPublicKey(row.identity_key), announced: row.source === "announce" } : null;
 }
 
+/** Live outbound aliases with a held token whose address is on `origin`, other than `label`, sorted. */
+async function outboundAliasesAt(ctx: TenantContext, origin: string, label: string): Promise<{ alias: string; url: string; token_enc: string }[]> {
+	if (!origin) return [];
+	const rows = await ctx.DB.prepare(
+		`SELECT o.alias, o.url, o.token_enc FROM outbound_peers o
+		 LEFT JOIN peers p ON p.label = o.alias
+		 WHERE o.token_enc IS NOT NULL AND o.alias <> ? AND p.revoked_at IS NULL ORDER BY o.alias`,
+	).bind(label).all();
+	return (rows.results as Json[]).filter((r) => Addr.originOf(String(r.url || "")) === origin) as { alias: string; url: string; token_enc: string }[];
+}
+
+/** Reply fallback when the inbound label has no outbound row of its own (#469). Only a verified address counts:
+ *  `card_url` is written after a signed address announcement whose card proved `identity_key`. A device-flow
+ *  claimed card or a bare same-host match is never enough. Exactly one live outbound alias with a held token must
+ *  point at that card's origin; delivery then checks again that the fetched card proves the same key. */
+async function replyFallbackPeer(ctx: TenantContext, label: string): Promise<{ alias: string; url: string; token: string; identityKey: string; cardUrl: string } | null> {
+	const inbound: Json = await ctx.DB.prepare("SELECT card_url, identity_key, sealed_requester FROM peers WHERE label = ? AND revoked_at IS NULL").bind(label).first();
+	if (!inbound || inbound.sealed_requester) return null;
+	const cardUrl = Addr.canonicalCardUrl(inbound.card_url || "");
+	const identityKey = Addr.cleanPublicKey(inbound.identity_key);
+	if (!cardUrl || !identityKey) return null;
+	const matches = await outboundAliasesAt(ctx, Addr.originOf(cardUrl), label);
+	if (matches.length !== 1) return null;
+	const token = await openPeerSecret(ctx, matches[0].alias, matches[0].token_enc);
+	return token ? { alias: matches[0].alias, url: matches[0].url, token, identityKey, cardUrl } : null;
+}
+
+/** What the replying agent does next when a reply is stored only: the same continuation the inbox shows, from the
+ *  verified or claimed card. A same-address alias is a suggestion for the human; nothing is sent through it. */
+async function storedOnlyNext(ctx: TenantContext, label: string): Promise<string> {
+	const inbound: Json = await ctx.DB.prepare("SELECT card_url, claimed_card_url FROM peers WHERE label = ? AND revoked_at IS NULL").bind(label).first();
+	const guide = await continuationGuide(ctx, label, inbound?.card_url || inbound?.claimed_card_url || undefined);
+	if (guide.kind === "send") return `Continue with send to ${guide.alias} and the same context id if the peer must see this reply now.`;
+	return String(guide.next || "");
+}
+
 /** Reads never pair or revive a revoked return token. A claimed card is only a human-reviewable suggestion. */
 async function continuationGuide(ctx: TenantContext, label: string, rawCard?: string): Promise<Json> {
 	const encrypted: Json = await ctx.DB.prepare("SELECT sealed_requester FROM peers WHERE label=? AND revoked_at IS NULL").bind(label).first();
  if (encrypted?.sealed_requester) return { kind: "local-encrypted", next: "This peer uses local encryption. Read local history, then select an existing pinned alias with peers list --json in the original config directory and continue with send and the same context id. If no pinned outbound alias exists, select the existing local ID with keys status --json, verify the peer URL with its owner, and ask your human before running connect <peer URL> --sealed-key-id <id> --alias ALIAS --no-wait. This reverse pairing needs owner approval; do not pair automatically or create replacement keys. Server callback availability does not describe local credentials." };
 	const callback = await replyPeer(ctx, label);
 	if (callback) return { kind: "send", alias: callback.alias, next: "Read history, then continue with send and the same context id. For the CLI, select a local alias with peers list --json." };
+	const fallback = await replyFallbackPeer(ctx, label);
+	if (fallback) return { kind: "send", alias: fallback.alias, next: `Replies to this label go through outbound alias ${fallback.alias}, whose verified card is this peer's. Read history, then continue with send to ${fallback.alias} and the same context id.` };
+	const notNotified = "Until then, a reply to this peer is stored on the task only and does not notify it.";
 	const card = Addr.canonicalCardUrl(rawCard || "");
-	if (card && !peerUrlProblem(card)) return { kind: "pair-back", claimedCardUrl: card,
-		command: `${cliCommand(ctx)} connect ${("'" + card.replaceAll("'", "'\"'\"'") + "'")} --alias ${label.slice(0, 32)} --no-wait`,
-		next: "No usable outbound callback is stored. Verify this claimed address with the peer owner and ask your human before pairing back." };
-	return { kind: "announce-address", next: "No callback address is stored for this peer. Ask the peer owner to run peer announce --to ALIAS on their side, using their outbound alias for this inbox (they can select it with peers list --json). Until then, your replies stay stored on the task and the peer can fetch them." };
+	if (card && !peerUrlProblem(card)) {
+		const same = await outboundAliasesAt(ctx, Addr.originOf(card), label);
+		if (same.length) return { kind: "pair-back", claimedCardUrl: card, sameAddressAliases: same.map((r) => r.alias).slice(0, 5),
+			next: `No usable outbound callback is stored under this label. ${notNotified} Outbound alias ${same.slice(0, 5).map((r) => r.alias).join(", ")} already points at the address this peer gave; if your human confirms it is the same agent, send there with the same context id instead of pairing again.` };
+		return { kind: "pair-back", claimedCardUrl: card,
+			command: `${cliCommand(ctx)} connect ${("'" + card.replaceAll("'", "'\"'\"'") + "'")} --alias ${label.slice(0, 32)} --no-wait`,
+			next: `No usable outbound callback is stored. ${notNotified} Verify this claimed address with the peer owner and ask your human before pairing back.` };
+	}
+	return { kind: "announce-address", next: "No callback address is stored for this peer. Ask the peer owner to run peer announce --to ALIAS on their side, using their outbound alias for this inbox (they can select it with peers list --json). Until then, your replies stay stored on the task and do not notify the peer; it sees them only when it fetches the task." };
 }
 
 async function deliverReplyMessage(ctx: TenantContext, ectx: ExecutionContext, task: Json, message: Json, state: string, text: string, signal: AbortSignal): Promise<ReplyDelivery> {
@@ -2028,14 +2074,19 @@ async function deliverReplyMessage(ctx: TenantContext, ectx: ExecutionContext, t
 		status: "stored-only", method: "stored", taskId: task.id, state,
 		detail: "Stored on the task; a directly delivered reply is not delivered again.",
 	};
-	const peer = await replyPeer(ctx, task._peer);
-	if (!peer) return {
-		status: "stored-only", method: "stored", taskId: task.id, state,
-		detail: "Stored on the task for the peer to fetch; no live paired outbound address with a held token was found.",
-	};
+	const exact = await replyPeer(ctx, task._peer);
+	const fallback = exact ? null : await replyFallbackPeer(ctx, task._peer);
+	const storedOnly = async (detail: string): Promise<ReplyDelivery> => ({
+		status: "stored-only", method: "stored", taskId: task.id, state, detail, next: await storedOnlyNext(ctx, task._peer),
+	});
+	if (!exact && !fallback) return storedOnly("Stored on the task. The peer was not notified: no live paired outbound address with a held token was found for this label.");
+	const peer = exact || { ...fallback!, announced: false };
 	let target = safeTarget(peer.alias, peer.url);
 	try {
 		const card = await checkedPeerCard(ctx, ectx, peer.url, signal);
+		// The fallback alias is another name for this peer only while its card still proves the label's verified key.
+		if (fallback && !(card && await Addr.cardProves(card, fallback.identityKey, fallback.cardUrl)))
+			return storedOnly(`Stored on the task. The peer was not notified: outbound alias ${fallback.alias} points at this peer's verified address, but its card no longer proves this peer's identity, so nothing was sent there.`);
 		let base = peer.url;
 		let cardUsed = card;
 		// One extra card fetch, and only when the card we already fetched names a move. The ordinary path stays one card.
@@ -2103,7 +2154,9 @@ async function deliverReplyMessage(ctx: TenantContext, ectx: ExecutionContext, t
 		};
 		return {
 			status: "delivered", method: "a2a-message", taskId: task.id, state, ...(target ? { target } : {}), httpStatus,
-			detail: "Delivered as an A2A message in the same context, referencing the original task.",
+			detail: fallback
+				? `Delivered as an A2A message in the same context, referencing the original task, through outbound alias ${peer.alias}: this label has no callback of its own and that alias's verified card is this peer's.`
+				: "Delivered as an A2A message in the same context, referencing the original task.",
 		};
 	} catch (e: any) {
 		return {
@@ -4291,10 +4344,130 @@ const argStr = (a: Json, k: string, required = true): string => {
 	return v;
 };
 
+// ------------------------------------------------------------------ MCP request_pairing (#461): this inbox as a device-flow client
+const OUTBOUND_PAIRING_AAD = (alias: string) => `outbound-pairing:${alias}`;
+const SEALED_EXT = "https://a2a.exposed/ext/sealed/v1";
+
+/** An https URL on `origin`, or "". A device or token address on another origin is ignored. */
+function sameOriginHref(origin: string, value: unknown): string {
+	if (typeof value !== "string" || !value || value.length > 2000) return "";
+	try {
+		const u = new URL(value);
+		return u.protocol === "https:" && !u.username && !u.password && !u.hash && u.origin === origin ? u.href : "";
+	} catch { return ""; }
+}
+
+/** Device and token endpoints from the peer card when they stay on that origin; otherwise the usual paths. */
+function pairingEndpoints(origin: string, card: Json): { device: string; token: string } {
+	const scheme = card?.securitySchemes?.pairing;
+	const flow = (scheme?.oauth2SecurityScheme ?? scheme)?.flows?.deviceCode;
+	return {
+		device: sameOriginHref(origin, flow?.deviceAuthorizationUrl) || `${origin}/oauth/device_authorization`,
+		token: sameOriginHref(origin, flow?.tokenUrl) || `${origin}/oauth/token`,
+	};
+}
+
+async function peerJson(r: Response, max = 16000): Promise<Json> {
+	const text = (await r.text()).slice(0, max + 1);
+	if (text.length > max) return null;
+	try { const v = JSON.parse(text); return v && typeof v === "object" && !Array.isArray(v) ? v : null; } catch { return null; }
+}
+
+function postPeerForm(ctx: TenantContext, ectx: ExecutionContext, origin: string, url: string, params: Record<string, string>): Promise<Response> {
+	return checkedPeerFetch(ctx, ectx, origin, url, {
+		method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
+		body: new URLSearchParams(params).toString(), signal: AbortSignal.timeout(8000),
+	});
+}
+
+async function requestPairing(ctx: TenantContext, ectx: ExecutionContext, rawUrl: string): Promise<ToolRun> {
+	const why = peerUrlProblem(rawUrl);
+	if (why) throw new ToolError(`url: ${why}. Pass the other agent's public https address.`);
+	const origin = new URL(rawUrl).origin;
+	if (origin === Addr.originOf(ctx.PUBLIC_URL)) throw new ToolError("An agent cannot pair with itself.");
+	const alias = new URL(origin).hostname.toLowerCase();
+	if (!/^[A-Za-z0-9_.-]{1,64}$/.test(alias)) throw new ToolError("That address is too long to use as a peer name.");
+	const key = await ctx.peerKey();
+	if (!key) throw new ToolError(ctx.mode === "host" ? "this agent has no secret key to keep a pairing code with" : "the Worker has no OWNER_TOKEN to keep a pairing code with");
+	const card = await checkedPeerCard(ctx, ectx, origin, AbortSignal.timeout(8000));
+	const ep = pairingEndpoints(origin, card);
+	const ident = await ensureIdentity(ctx);
+	const ownCard = Addr.cardUrlFor(ctx.PUBLIC_URL);
+	const params: Record<string, string> = { client_name: String(ctx.AGENT_NAME || new URL(ctx.PUBLIC_URL).hostname).slice(0, 64), client_id: new URL(ctx.PUBLIC_URL).hostname };
+	if (ownCard && !peerUrlProblem(ownCard)) params.agent_card_url = ownCard;
+	if (ident) params.agent_identity = ident.publicKey;
+	let r: Response;
+	try { r = await postPeerForm(ctx, ectx, origin, ep.device, params); }
+	catch (e: any) { if (e instanceof ToolError) throw e; throw new ToolError("The other agent couldn't be reached. Nothing was stored."); }
+	if (r.status >= 300 && r.status < 400) throw new ToolError("The other agent did not accept the request (redirect refused). Nothing was stored.");
+	const d = await peerJson(r);
+	const userCode = typeof d?.user_code === "string" && /^[A-Za-z0-9-]{1,32}$/.test(d.user_code) ? d.user_code : "";
+	const deviceCode = typeof d?.device_code === "string" && d.device_code.length <= 512 && !/\s/.test(d.device_code) ? d.device_code : "";
+	if (r.status !== 200 || !userCode || !deviceCode) {
+		const code = typeof d?.error === "string" && /^[a-z0-9_]{1,40}$/.test(d.error) ? d.error : `HTTP ${r.status}`;
+		throw new ToolError(r.status === 404 ? "That agent has device-flow pairing turned off. Nothing was stored." : `The other agent did not accept the request (${code}). Nothing was stored.`);
+	}
+	const interval = Math.min(60, Math.max(1, Math.floor(Number(d.interval) || 5)));
+	const ttl = Math.min(3600, Math.max(60, Math.floor(Number(d.expires_in) || 3600)));
+	const now = Date.now();
+	await ctx.DB.prepare(
+		`INSERT INTO outbound_pairings (alias, url, token_url, device_enc, user_code, interval_s, poll_after_ms, expires_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(alias) DO UPDATE SET url = excluded.url, token_url = excluded.token_url, device_enc = excluded.device_enc, user_code = excluded.user_code,
+		 interval_s = excluded.interval_s, poll_after_ms = excluded.poll_after_ms, expires_ms = excluded.expires_ms, created_at = excluded.created_at`,
+	).bind(alias, origin, ep.token, await M.sealPeerTokenWithKey(key, OUTBOUND_PAIRING_AAD(alias), deviceCode), userCode, interval, now, now + ttl * 1000, A.nowIso()).run();
+	log("outbound_pairing_requested", { alias, userCode });
+	const page = sameOriginHref(origin, d.verification_uri) || `${origin}/device`;
+	const complete = sameOriginHref(origin, d.verification_uri_complete) || `${page}?user_code=${encodeURIComponent(userCode)}`;
+	const offersSealed = Array.isArray(card?.capabilities?.extensions) && card.capabilities.extensions.some((x: Json) => x?.uri === SEALED_EXT);
+	const data = { userCode, verificationUri: page, verificationUriComplete: complete, sendTo: alias, expiresAt: new Date(now + ttl * 1000).toISOString(), serverReadable: true, peerOffersEncryption: offersSealed };
+	const enc = offersSealed
+		? " This pairing is not end-to-end encrypted. The other agent also offers encrypted pairing, which needs the local CLI (connect --sealed-key-id); to use it, ask its owner not to approve this code."
+		: " This pairing is not end-to-end encrypted: the inbox servers can read its messages.";
+	return { text: M.toolText(`Pairing requested. Ask the other agent's owner to approve code ${userCode} at the link below; you never approve it yourself. After they approve, send to ${alias}: that first send redeems the code and stores the outbound peer. The code expires at ${data.expiresAt}.${enc} The pairing secret stays on this A2A endpoint. ${UNTRUSTED}`, data), structuredContent: data };
+}
+
+/** Redeems a pending request_pairing code before the first send to that alias. Throws a ToolError until approved. */
+async function redeemOutboundPairing(ctx: TenantContext, ectx: ExecutionContext, alias: string): Promise<void> {
+	const p: Json = await ctx.DB.prepare("SELECT * FROM outbound_pairings WHERE alias = ?").bind(alias).first();
+	if (!p) return;
+	const drop = () => ctx.DB.prepare("DELETE FROM outbound_pairings WHERE alias = ?").bind(alias).run();
+	const now = Date.now();
+	if (Number(p.expires_ms) <= now) { await drop(); throw new ToolError(`The pairing code ${p.user_code} expired before it was approved. Call request_pairing again. Nothing was sent.`); }
+	const waiting = `The other agent's owner has not approved ${p.user_code} yet. Nothing was sent; try again later.`;
+	if (Number(p.poll_after_ms) > now) throw new ToolError(waiting);
+	const deviceCode = await openPeerSecret(ctx, OUTBOUND_PAIRING_AAD(alias), p.device_enc);
+	if (!deviceCode) { await drop(); throw new ToolError("That pairing code can't be read any more. Call request_pairing again. Nothing was sent."); }
+	let r: Response;
+	try { r = await postPeerForm(ctx, ectx, p.url, p.token_url, { grant_type: P.DEVICE_GRANT, device_code: deviceCode }); }
+	catch (e: any) { if (e instanceof ToolError) throw e; throw new ToolError("The other agent couldn't be reached. Nothing was sent."); }
+	const d = await peerJson(r);
+	const error = typeof d?.error === "string" ? d.error : "";
+	if (error === "authorization_pending" || error === "slow_down") {
+		const interval = error === "slow_down" ? Math.min(60, Number(p.interval_s) + 5) : Number(p.interval_s);
+		await ctx.DB.prepare("UPDATE outbound_pairings SET interval_s = ?, poll_after_ms = ? WHERE alias = ?").bind(interval, now + interval * 1000, alias).run();
+		throw new ToolError(waiting);
+	}
+	if (error === "access_denied") { await drop(); throw new ToolError("The other agent's owner denied the pairing. Nothing was sent."); }
+	if (error === "expired_token" || error === "invalid_grant") { await drop(); throw new ToolError(`The pairing code ${p.user_code} expired. Call request_pairing again. Nothing was sent.`); }
+	const token = typeof d?.access_token === "string" ? d.access_token : "";
+	const type = typeof d?.token_type === "string" ? d.token_type : "Bearer";
+	if (r.status !== 200 || !token || token.length > 4096 || /\s/.test(token) || !/^bearer$/i.test(type))
+		throw new ToolError("The other agent did not accept the pairing redemption. Nothing was sent.");
+	const key = await ctx.peerKey();
+	if (!key) throw new ToolError("this A2A endpoint cannot store the peer token. Nothing was sent.");
+	const stamp = A.nowIso();
+	await ctx.DB.batch([
+		ctx.DB.prepare("INSERT INTO outbound_peers (alias, url, token_enc, created_at, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(alias) DO UPDATE SET url = excluded.url, token_enc = excluded.token_enc, source = NULL, updated_at = excluded.updated_at")
+			.bind(alias, p.url, await M.sealPeerTokenWithKey(key, alias, token), stamp, stamp),
+		ctx.DB.prepare("DELETE FROM outbound_pairings WHERE alias = ?").bind(alias),
+	]);
+	log("outbound_pairing_redeemed", { alias });
+}
+
 /** A synced outbound peer with its decrypted token (null token: the peer takes none, or it can't be decrypted). */
 async function outboundPeer(ctx: TenantContext, alias: string): Promise<{ alias: string; url: string; token: string | null }> {
 	const r: Json = await ctx.DB.prepare("SELECT * FROM outbound_peers WHERE alias = ?").bind(alias).first();
-	if (!r) throw new ToolError(`no peer "${alias}" synced to this A2A endpoint. On the machine with the CLI: ${cliCommand(ctx)} peers sync ${alias}`);
+	if (!r) throw new ToolError(`no peer "${alias}" synced to this A2A endpoint. Call request_pairing with the other agent's https address, or on the machine with the CLI: ${cliCommand(ctx)} peers sync ${alias}`);
 	let token: string | null = null;
 	if (r.token_enc) {
 		token = await openPeerSecret(ctx, alias, r.token_enc);
@@ -4418,10 +4591,15 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 				: d.status === "delivery-failed"
 					? `Task \`${d.taskId}\` is now ${d.state}. Reply stored; delivery to ${where} failed${http}, so the stored reply was not lost.`
 					: `Task \`${d.taskId}\` is now ${d.state}. Reply stored for the peer to fetch.`;
-			return { text: `${line}\n\n${d.detail}`, structuredContent: d };
+			return { text: `${line}\n\n${d.detail}${d.next ? `\n\nNext: ${d.next}` : ""}`, structuredContent: d };
 		}
+		case "request_pairing":
+			return await requestPairing(ctx, ectx, argStr(a, "url"));
 		case "send": {
-			const peer = await outboundPeer(ctx, argStr(a, "to"));
+			const to = argStr(a, "to");
+			if (!/^[A-Za-z0-9_.-]{1,64}$/.test(to)) throw new ToolError("to is invalid");
+			await redeemOutboundPairing(ctx, ectx, to);
+			const peer = await outboundPeer(ctx, to);
 			const text = argStr(a, "text");
 			const card = await fetchPeerCard(ctx, ectx, peer.url);
 			const [endpoint, version] = M.pickEndpoint(peer.url, card);
@@ -4507,8 +4685,10 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 		case "list_peers": {
 			const outRows = must(await ownerCall(ctx, ectx, "GET", "/owner/outbound-peers"));
 			const inRows = must(await ownerCall(ctx, ectx, "GET", "/owner/peers")).filter((r: Json) => !r.revoked_at);
-			return M.toolText(`Outbound peers (send works with these) and inbound labels (agents holding a token for this A2A endpoint). Names are claimed by the peers. A paired peer with no card URL has no callback yet: replies stay on the task until that peer announces an address.`,
+			const pendingRows = (await ctx.DB.prepare("SELECT alias, url, user_code, expires_ms FROM outbound_pairings WHERE expires_ms > ? ORDER BY alias").bind(Date.now()).all()).results as Json[];
+			return M.toolText(`Outbound peers (send works with these), pairings you requested that wait for the other owner's approval (the first send to that alias redeems it), and inbound labels (agents holding a token for this A2A endpoint). Names are claimed by the peers. A paired peer with no card URL has no callback yet: replies stay on the task until that peer announces an address.`,
 				{ outbound: outRows.map((r: Json) => ({ alias: r.alias, url: r.url, hasToken: r.has_token })),
+					pendingOutbound: pendingRows.map((r) => ({ alias: r.alias, url: r.url, userCode: r.user_code, expiresAt: new Date(Number(r.expires_ms)).toISOString() })),
 					inbound: inRows.map((r: Json) => ({ label: r.label, source: r.source, clientName: r.client_name, since: r.created_at, cardUrl: r.card_url || null, continuation: r.continuation })) });
 		}
 		case "pairing_requests": {
@@ -4517,7 +4697,14 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 			const manage = dashboardUrl(ctx);
 			return M.toolText(`${d.pending.length} pending pairing request(s). Show your human who asks, the code and the link.${manage ? ` Approve or deny at ${manage}.` : ""} NEVER approve or deny yourself: your human decides on the link with the approval password. Names and card URLs are claimed by the requester (untrusted).`,
 				d.pending.map((r: Json) => ({ code: r.userCode, clientName: r.clientName, clientId: r.clientId, agentCardUrl: r.agentCardUrl, country: r.country,
-					expiresAt: r.expiresAt, link: r.verificationUriComplete, ...(manage ? { manageUrl: manage } : {}), replacesLabel: r.replacesLabel })));
+					expiresAt: r.expiresAt, link: r.verificationUriComplete, ...(manage ? { manageUrl: manage } : {}), replacesLabel: r.replacesLabel,
+					// Public fields only: the flag and the safety code to compare. Bundles and keys are never listed.
+					...(r.sealed === true ? { sealed: true, safetyCode: typeof r.safetyCode === "string" ? r.safetyCode : null } : {}) })));
+		}
+		case "wake_status": {
+			const s = await wakeStatus(ctx);
+			const head = `Wake ${s.configured ? `configured (${s.transport})` : "not configured: messages wait in inbox for polling"}; ${s.pendingCount} pending or retrying. Read-only: nothing was sent or flushed. Peer labels below are claimed names (untrusted).`;
+			return { text: M.toolText(head, s), structuredContent: s };
 		}
 		case "send_feedback": {
 			// The owner authorized this client on the consent page. A peer token and the owner token never arrive here.

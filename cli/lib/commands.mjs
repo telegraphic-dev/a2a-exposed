@@ -40,6 +40,8 @@ function printDelivery(res) {
 	const target = d.target ? `${d.target.alias ? `${d.target.alias} at ` : ""}${d.target.host}` : "task storage";
 	const http = d.httpStatus ? ` (HTTP ${d.httpStatus})` : "";
 	console.error(`reply -> ${d.status} via ${d.method}: ${target}${http}`);
+	// A stored-only reply does not notify the peer. Say so, with the Worker's next step, so it is not read as sent.
+	if (d.status === "stored-only" && typeof d.next === "string" && d.next) console.error(`next: ${d.next}`);
 }
 
 const readStdin = () => fs.readFileSync(0, "utf8");
@@ -503,6 +505,26 @@ export async function poll(taskId, o) {
 		await logHistory(rec.contextId, { dir: "in", peer: alias, taskId: tid, event: "poll", state: plainState(res), text: txt, data: { ...(ownerWaitOf(res) ? { ownerWait: ownerWaitOf(res) } : {}), ...(res?.metadata?.["a2a.exposed/wake-receipt"] ? { wakeReceipt: res.metadata["a2a.exposed/wake-receipt"] } : {}) } });
 	}
 	if (!o.json) console.error(`# task ${tid}: ${plainState(res)}`);
+}
+
+/** Ask the peer to cancel a task you sent. Same endpoint and history record as poll; the peer can refuse. */
+export async function cancel(taskId, o) {
+	if (!o.to) die("--to required");
+	const [alias, base, tok] = resolvePeer(o.to);
+	if (C.loadPeers()[alias]?.sealed) die("cancel is not available for a peer with pinned encryption keys yet; use poll --to ALIAS to read the task state. Nothing was sent.");
+	const tid = checkId(taskId, "taskId");
+	let rec = {};
+	if (ownerConfigured()) {
+		try { rec = await owner("GET", `/owner/outbound/${q(tid)}`); } catch { rec = {}; }
+	}
+	const [url, version] = rec.endpoint ? [rec.endpoint, rec.protocol || "0.3"] : pickEndpoint(base, await fetchCard(base), o.proto);
+	const res = await rpc(url, version, tok, "tasks/cancel", "CancelTask", { id: tid }, { alias: C.loadPeers()[alias] ? alias : null, base });
+	out(res);
+	if (rec.endpoint) {
+		await persistOutbound("PUT", `/owner/outbound/${q(tid)}`, { task: res }, "update outbound task");
+		await logHistory(rec.contextId, { dir: "in", peer: alias, taskId: tid, event: "cancel", state: plainState(res), text: textOf((res.status || {}).message || {}) });
+	}
+	if (!o.json) console.error(`# task ${tid}: ${plainState(res)}${plainState(res) === "canceled" ? "" : " (the peer did not cancel it)"}`);
 }
 
 export async function outbound(id, o = {}) {

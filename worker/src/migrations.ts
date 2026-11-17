@@ -20,6 +20,7 @@ import m0017 from "../migrations/0017_wake_routing.sql?raw";
 import m0018 from "../migrations/0018_sealed_pairing.sql?raw";
 import m0019 from "../migrations/0019_claimed_callback.sql?raw";
 import m0020 from "../migrations/0020_wake_receipts.sql?raw";
+import m0021 from "../migrations/0021_outbound_pairing.sql?raw";
 import type { Migration } from "./storage.ts";
 
 export const MIGRATIONS: Migration[] = [
@@ -43,4 +44,5 @@ export const MIGRATIONS: Migration[] = [
  { name: "0018_sealed_pairing.sql", sql: m0018 },
 	{ name: "0019_claimed_callback.sql", sql: m0019 },
 	{ name: "0020_wake_receipts.sql", sql: m0020 },
+	{ name: "0021_outbound_pairing.sql", sql: m0021 },
 ];

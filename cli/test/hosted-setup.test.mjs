@@ -873,3 +873,30 @@ test('wake request refuses secrets, owner tokens, unsupported services and forei
   assert.equal(byOwner.status, 1); assert.equal(JSON.parse(byOwner.stdout).code, 'login_required'); assert.ok(!byOwner.stdout.includes(owner));
  } finally { f.clean(); }
 });
+
+test("wake preview refuses draft flags instead of ignoring them, before any request (#461)", () => {
+	const f = fixture(); f.save("HOSTED_AGENT_NAME=sample-agent\n");
+	try {
+		for (const extra of [["--url", "https://example.com/hooks/wake"], ["--preset", "generic"], ["--version", "3"]]) {
+			const log = path.join(f.dir, `preview-${extra[0].slice(2)}`);
+			const r = f.run(["wake", "preview", "--agent", "sample-agent", ...extra, "--json"], {}, { A2A_TEST_FETCH_LOG: log });
+			assert.equal(r.status, 1, r.stdout + r.stderr);
+			const out = JSON.parse(r.stdout);
+			assert.equal(out.code, "usage");
+			assert.match(out.next || out.message, /reads the saved settings only[\s\S]*wake test --agent NAME --url URL --preset P/);
+			assert.equal(fs.existsSync(log) && fs.readFileSync(log, "utf8").trim() !== "", false, "nothing was requested");
+		}
+	} finally { f.clean(); }
+});
+
+test("a hosted config refuses init --rotate-owner-token and points to the dashboard or MCP (#461)", () => {
+	const f = fixture(); f.save(`HOSTED_AGENT_NAME=sample-agent\nA2A_BASE_URL=https://sample-agent.control.example\nA2A_OWNER_TOKEN=${owner}\n`);
+	try {
+		const before = fs.readFileSync(f.config, "utf8");
+		const r = f.run(["init", "--rotate-owner-token"]);
+		assert.notEqual(r.status, 0);
+		assert.match(r.stderr, /hosted config[\s\S]*dashboard \(agent settings, Advanced\)[\s\S]*rotate_owner_token[\s\S]*Nothing was changed/);
+		assert.equal(fs.readFileSync(f.config, "utf8"), before);
+		assert.ok(!(r.stdout + r.stderr).includes(owner));
+	} finally { f.clean(); }
+});
