@@ -374,7 +374,7 @@ export class LocalState {
    try {
     return await inQueueContext(context, async () => {
      try { db.exec("BEGIN IMMEDIATE"); check(); const result = await action(); check(); db.exec("COMMIT"); committed = true; finalResult = result; return result; }
-     catch (error) { try { db.exec("ROLLBACK"); } catch {} if (error instanceof LocalStateError) throw error; fail("state_unavailable"); }
+     catch (error) { try { db.exec("ROLLBACK"); } catch {} if (error instanceof LocalStateError) throw error; if ([5, 6].includes(error?.errcode)) throw stateError(error); fail("state_unavailable"); }
     });
    } finally { release(); }
   };

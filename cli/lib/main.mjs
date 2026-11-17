@@ -54,6 +54,7 @@ Local encrypted CLI draft (disabled by default):
                                 seal for the pinned peer; no plaintext fallback
                                 max 200000 Unicode characters / 307072 encoded content bytes; checked before key access
                                 encrypted sends refuse --push, --wake and --intent
+                                encrypted history keeps state/push events as metadata; push status text is withheld
   send --to ALIAS --recover MESSAGE_ID [--json]
                                 unconfirmed send: re-submit the same encrypted message and ID; stored at most once
   keys outbox --json          list local send records (encrypted messages and public IDs only)

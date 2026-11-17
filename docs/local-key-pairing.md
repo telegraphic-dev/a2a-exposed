@@ -343,3 +343,7 @@ inbox Worker or a peer; each needs its own separately approved setting.
 A refused verification row tells the operator not to resend and to report its
 `taskId` and `contextId` to the inbox owner. Preserve those IDs with the original
 keys and pairing. The approval-page safety-code work remains tracked in [#380](https://github.com/telegraphic-dev/a2a-exposed/issues/380).
+
+History state events have no message text. For pinned peers, owner-side push
+status text is withheld. Local MCP marks these rows `eventOnly: true`; they
+remain unauthenticated task metadata, while inbound plaintext with text is refused.

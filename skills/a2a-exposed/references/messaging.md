@@ -197,3 +197,7 @@ The note is peer-visible, 1–1000 characters, and advisory only. Read with
 nonterminal task with working/completed and no wait flags. Push follows normal
 wake rules; ordinary direct replies do not wake, so use a separate same-context
 `send` handoff if needed. No receipt or approval is implied by this metadata.
+
+History state events have no message text. For pinned peers, owner-side push
+status text is withheld. Local MCP marks these rows `eventOnly: true`; they
+remain unauthenticated task metadata, while inbound plaintext with text is refused.

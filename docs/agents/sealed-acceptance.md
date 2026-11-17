@@ -35,9 +35,11 @@ owner reads and history. Temporary stores and the bridge are removed on exit.
 | CLI, A2A 0.3 and 1.0 | Seal sends; recipient inbox and both histories open locally. Task continuations keep the original context. |
 | Local stdio MCP | `list_peers`, `send`, `inbox` and `history` use the same pins and crypto path across process restarts. Verified message IDs survive projection. |
 | Server privacy | Every exported application table and captured request body excludes synthetic private text. Private key material never appears in captured requests or command output. |
-| Side channels | Every encrypted fixture text is absent from wake webhook bodies (encrypted wakes carry only `[encrypted message]`), other Worker outbound requests, Worker logs, `export` JSON and SQL output, stderr of every command, stdout of commands that do not open content, and every local config file including SQLite. Private key material appears only in its own key file. |
+| Side channels | Every encrypted fixture text is absent from wake webhook bodies (encrypted wakes carry only `[encrypted message]`), other Worker outbound requests, Worker logs, `export` JSON and SQL output, stderr of every command, stdout of commands that do not open content, and every local config file including SQLite. Private key material, including rotated keys, appears only in its own key file. A2A 0.3 and 1.0 push deliveries carry the sealed envelope, never its opened text. |
 | Size boundaries | Exactly 200000 characters and exactly 307072 encoded content bytes send and open intact; one more character or byte refuses with no request. |
 | Local-store faults | Garbage or truncated local SQLite, an unparsable key file and a private key that does not match its public identity each refuse sends and reads with fixed guidance, no stack trace and no request. The damaged bytes stay in place and no replacement key is created. |
+| Transaction faults | Killing a writer, a competing SQLite write lock, a full database and an exception after a partial write leave no partial rows. A competing writer returns `state_busy`; the next write succeeds after the lock is released. |
+| File custody | Linux, macOS and Windows CI reopen the original file key and refuse broadened POSIX permissions or Windows ACLs without replacing it. Native broker tests use child-process doubles and do not invoke OS credential stores. |
 | Concurrency | Parallel sends from one config get distinct message and task IDs, and parallel reads open each one. |
 | Off switch | CLI-off, Worker-off and nonliteral switch values refuse; failure never produces a plaintext send. |
 | Missing local key | CLI and MCP refuse without a plaintext retry or replacement key; restoring the original key restores reads. |
@@ -64,10 +66,9 @@ enabled; this checklist grants no access and changes no deployed configuration.
 
 Signer rotation (#379) and the independent `keys verify` ceremony (#380) are
 covered by the two-CLI fixture. Deferred work remains linked from #173:
-Worker-side key continuity after rotation, and cross-platform custody and encrypted
-push delivery from #384. Abandoning a stuck pending
+Worker-side key continuity after rotation, and native keychain integration from #384. Abandoning a stuck pending
 connect request, native keychain restore and MCP recovery tools are not covered yet.
-The side-channel, size, local-fault and concurrency rows cover one platform and
-the fixture's surfaces. Cross-platform custody (native keychains, Windows ACLs),
-real push delivery and SQLite fault injection inside a running transaction remain
-open in #384.
+The side-channel and push scans cover fixture transports, not an external push receiver.
+Transaction fault injection runs locally; file custody runs on the three CI operating
+systems. Native keychain prompts and real credential-provider integration remain
+open in #384; file ACL and broker-double tests do not establish native keychain support.
