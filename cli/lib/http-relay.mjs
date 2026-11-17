@@ -176,7 +176,7 @@ export async function runHttpConnector({ url, token, profile, localUrl, cardUrl,
 			if (signal?.aborted) stop();
 		});
 		if (signal?.aborted) return; if (permanent) throw new CliError(permanent);
-		if (!helloReceived) { if (++failures >= 3) throw new CliError(`HTTP relay handshake failed three consecutive times; ${statusGuidance}, endpoint and enrollment`); onDiagnostic('HTTP relay handshake failed; retrying with bounded backoff'); }
+		if (!helloReceived) { if (++failures >= 3) throw new CliError(`HTTP relay handshake failed three consecutive times on Node ${process.version}; check endpoint, network reachability and enrollment; run relay ${profile === 'webhook' ? 'http' : 'a2a'} status`); onDiagnostic('HTTP relay handshake failed; retrying with bounded backoff'); }
 		try { await sleep(reconnectDelay(attempt++), undefined, { signal }); } catch { return; }
 	}
 }

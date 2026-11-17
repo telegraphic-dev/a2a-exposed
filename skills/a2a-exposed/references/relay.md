@@ -53,7 +53,8 @@ protocol/policy/revocation failures exit 1 with secret-free stderr guidance.
 Reconnect waits 500ms–30s, never zero. Three consecutive failed upgrades or
 10-second hello timeouts stop with exit 1; a healthy hello resets the budget.
 Each attempt sends one upgrade request, without redirects or automatic HTTP
-authentication retries, including on Node 24.
+authentication retries on Node 22.18+, 24 and 26. Handshake failures report
+the Node version; check endpoint reachability and enrollment with `relay status`.
 Native WebSocket hides handshake HTTP status, so check endpoint, capability and
 enrollment rather than assuming every failure is authentication. Expired/skewed
 frames and temporary concurrency saturation fail that delivery, not the socket.

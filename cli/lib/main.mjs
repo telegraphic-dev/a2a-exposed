@@ -357,6 +357,7 @@ Wake relay (optional Worker feature, no tunnel or service install)
                                 enroll/rotate; writes a NEW mode-600 credential file, never prints the secret
   relay status [--json]          authenticated runtime capability and connection/enrollment status
   relay revoke                  revoke the enrollment shown by status, close its current socket
+  Relay connectors support Node 22.18+, 24 and 26; handshake errors report the Node version.
   relay run --local-url http://127.0.0.1:8644/webhooks/a2a-wake
             (--token-file FILE | --token-env VAR) [--url wss://agent.example.com/relay/connect]
                                 foreground fixed-loopback connector; no JSON/stdout stream, safe diagnostics on stderr
