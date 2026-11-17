@@ -46,6 +46,9 @@ Local encrypted CLI draft (disabled by default):
   keys code --id ID --peer ALIAS_OR_LABEL --json
                                 ALIAS on connecting side; LABEL from keys pairings on approving side
                                 compare safety code through another trusted channel
+  keys verify --id ID --peer ALIAS_OR_LABEL --code "CODE" --json
+                                record independent verification of the exact pinned keys
+                                CODE is the full code the other owner read out; a mismatch changes nothing
   peers list --json           list aliases and whether their keys are pinned
   send --to ALIAS --text TEXT [--json] [--allow-os-consent]
                                 seal for the pinned peer; no plaintext fallback
@@ -56,12 +59,16 @@ Local encrypted CLI draft (disabled by default):
   keys outbox --json          list local send records (encrypted messages and public IDs only)
   keys revoke --peer ALIAS_OR_LABEL --json
                                 hold encrypted use of one local pin; keeps history; server access unchanged
+  keys rotate --id ID --json   show the exact signer-rotation plan and its approval digest; changes nothing
+  keys rotate --id ID --approve DIGEST --json
+                                new signing and receiving keys; the old key opens old history only
+                                its pins are held: re-pair with connect --sealed-key-id NEW_ID and keys verify, then keys revoke --peer OLD
   keys backup --to FILE --json  encrypted backup; passphrase from piped stdin only
   keys restore --from FILE --to NEW_DIR --acknowledge-replay-rollback --json
                                 archive-only copy in a new directory: history reads only
   inbox --json / history CONTEXT --json
                                 open locally; --allow-os-consent permits keychain access
-  If codes differ: do not use the pairing; ask approving owner to token revoke LABEL
+  If codes differ: do not use the pairing; keys revoke --peer, ask approving owner to token revoke LABEL
   (select LABEL with keys pairings --json), and tell the other owner.
   Install matching optional @a2a-exposed/encryption in the config directory first.
   Encryption is off by default. After owner approval, set A2A_SEALED_ENABLED=1
@@ -605,7 +612,7 @@ const deployOpts = {
 };
 const SPEC = {
  mcp: { "allow-os-consent": B },
- keys: { id: S, peer: S, store: S, "card-url": S, "user-code": S, "allow-os-consent": B, json: B, to: S, from: S, "acknowledge-replay-rollback": B },
+ keys: { id: S, approve: S, peer: S, store: S, "card-url": S, "user-code": S, code: S, "allow-os-consent": B, json: B, to: S, from: S, "acknowledge-replay-rollback": B },
 	hosted: { url: S, version: S, "upstream-token-file": S, "upstream-token-env": S, "access-client-id-file": S, "access-client-id-env": S, "access-client-secret-file": S, "access-client-secret-env": S, name: S, json: B, agent: S, hostname: S, origin: S, path: S, preset: S, "control-url": S, "secret-file": S, "secret-env": S, "secret-from": S, "hermes-home": S, route: S, "token-file": S, "no-run": B },
 	init: { ...deployOpts, ...tunnelOpts, tunnel: B, "dry-run": B, json: B }, deploy: deployOpts,
 	wake: { policy: S, stage: S, ...deployOpts, "local-url": S, json: B, url: S, "reference-file": S, "reference-env": S, clear: B, version: S, agent: S, "control-url": S, "key-header": S, "key-file": S, "key-env": S, "key-stdin": B, "hmac-secret-file": S, "hmac-secret-env": S, "access-client-id-file": S, "access-client-id-env": S, "access-client-secret-file": S, "access-client-secret-env": S }, tunnel: { ...tunnelOpts, preset: S, "hermes-route": S, "hmac-secret-stdin": B, json: B },
