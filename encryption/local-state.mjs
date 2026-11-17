@@ -292,7 +292,8 @@ export async function restoreBackup({ source, destination, passphrase, store, ac
    state.db.exec("COMMIT"); validateSchema(state.db);
   } catch (error) { try { state.db.exec("ROLLBACK"); } catch {} throw error; }
   finally { state.close(); }
-  const sqliteFd = fs.openSync(path.join(stage, "encryption/state.sqlite"), "r");
+  // Windows refuses to flush a read-only handle; r+ opens for writing without truncating.
+  const sqliteFd = fs.openSync(path.join(stage, "encryption/state.sqlite"), "r+");
   try { fs.fsyncSync(sqliteFd); } finally { fs.closeSync(sqliteFd); }
   let directorySynced = syncDirectory(path.join(stage, "encryption"));
   // Parent was exclusively reserved above. The canonical encryption path appears

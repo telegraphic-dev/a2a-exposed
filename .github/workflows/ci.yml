@@ -68,6 +68,23 @@ jobs:
         working-directory: encryption
       - run: node --test test/platform-custody.test.mjs test/native-store.test.mjs
         working-directory: encryption
+      # Real OS credential store on a disposable runner (#384). Linux starts a
+      # throwaway Secret Service; macOS and Windows use the runner user's store.
+      - name: Native keychain round trip (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q gnome-keyring dbus
+          dbus-run-session -- bash -c 'printf ci-only-keyring | gnome-keyring-daemon --daemonize --components=secrets --unlock >/dev/null && node --test test/native-keychain.test.mjs'
+        working-directory: encryption
+        env:
+          A2A_NATIVE_KEYCHAIN_TEST: "1"
+      - name: Native keychain round trip
+        if: runner.os != 'Linux'
+        run: node --test test/native-keychain.test.mjs
+        working-directory: encryption
+        env:
+          A2A_NATIVE_KEYCHAIN_TEST: "1"
 
   test:
     runs-on: ubuntu-latest
