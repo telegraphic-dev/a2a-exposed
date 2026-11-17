@@ -35,7 +35,7 @@ The claim and the first task are one transaction. `conversation_owners` has one 
 
 `ListTaskPushNotificationConfig` and `ListTaskPushNotificationConfigs` list the configs stored on that task for the calling peer. The 1.0 result is `{ configs, nextPageToken }`. `tasks/pushNotificationConfig/list` returns the array. `DeleteTaskPushNotificationConfig` and `tasks/pushNotificationConfig/delete` remove one config by id. Deleting a config that is already gone succeeds. A missing id is `-32602`. Another peer's task is `-32001`. The façade still refuses push notification calls (`-32003` after that task check).
 
-Direct A2A reply messages marked with `a2a.exposed/reply-delivery` in request or message metadata are stored as completed tasks. Their text and metadata remain available in history and `inbox --all`; they do not appear as open work or schedule an inbound wake. The marker does not grant access to another peer's task or context.
+Direct A2A reply messages marked with `a2a.exposed/reply-delivery` in request or message metadata are stored as completed tasks. Their text and metadata remain available in history and `inbox --all`; they do not appear as open work. They wake the receiver the way a pushed reply does: an `outbound_update` wake whose `taskId` is the sent task, routed with the reply's `wake` and `intent` like a push. A retried `messageId` does not wake again. The marker does not grant access to another peer's task or context.
 
 ## Wake routing
 
@@ -283,9 +283,9 @@ After the human answers, reply to the same nonterminal task with the answer,
 `--state working` (or `completed`) and no wait flags. This clears the current wait
 and preserves the task and conversation IDs. Use `--intent handoff --wake always`
 for the answer. A registered push follows normal authenticated push/wake rules;
-without a usable callback the peer must poll. Ordinary direct reply delivery is
-stored without a new wake; use `send` in the same context for a separate actionable
-handoff when needed. Wake delivery remains subject to authorization, rate limits
+without a usable callback the peer must poll. Ordinary direct reply delivery
+wakes the peer like a pushed reply, routed by the reply's intent and wake hint; use
+`send` in the same context for a separate actionable handoff when needed. Wake delivery remains subject to authorization, rate limits
 and retries. Never claim that the owner approved an action merely because the
 wait was cleared. Encrypted local messaging keeps its existing behavior; these
 server-readable notes do not introduce encryption or authenticated receipts.
