@@ -39,7 +39,8 @@ owner reads and history. Temporary stores and the bridge are removed on exit.
 | Size boundaries | Exactly 200000 characters and exactly 307072 encoded content bytes send and open intact; one more character or byte refuses with no request. |
 | Local-store faults | Garbage or truncated local SQLite, an unparsable key file and a private key that does not match its public identity each refuse sends and reads with fixed guidance, no stack trace and no request. The damaged bytes stay in place and no replacement key is created. |
 | Transaction faults | Killing a writer, a competing SQLite write lock, a full database and an exception after a partial write leave no partial rows. A competing writer returns `state_busy`; the next write succeeds after the lock is released. |
-| File custody | Linux, macOS and Windows CI reopen the original file key and refuse broadened POSIX permissions or Windows ACLs without replacing it. Native broker tests use child-process doubles and do not invoke OS credential stores. |
+| File custody | Linux, macOS and Windows CI reopen the original file key and refuse broadened POSIX permissions or Windows ACLs without replacing it. Native broker timeout and output tests use child-process doubles. |
+| Native keychain | On the same three CI runners, a `keychain` key is stored in the real OS credential store (macOS Keychain, Linux Secret Service, Windows Credential Manager), never in a local file or the SQLite store. It reopens after restart and rotation, and every read, rotation and backup without consent refuses before the provider is called. A backup restores to a file store that opens the same messages. A deleted provider entry refuses reads as `key_lost` and creates no replacement. The test deletes its entries. |
 | Concurrency | Parallel sends from one config get distinct message and task IDs, and parallel reads open each one. |
 | Off switch | CLI-off, Worker-off and nonliteral switch values refuse; failure never produces a plaintext send. |
 | Missing local key | CLI and MCP refuse without a plaintext retry or replacement key; restoring the original key restores reads. |
@@ -66,9 +67,14 @@ enabled; this checklist grants no access and changes no deployed configuration.
 
 Signer rotation (#379) and the independent `keys verify` ceremony (#380) are
 covered by the two-CLI fixture. Deferred work remains linked from #173:
-Worker-side key continuity after rotation, and native keychain integration from #384. Abandoning a stuck pending
+Worker-side key continuity after rotation, and interactive keychain prompts from #384. Abandoning a stuck pending
 connect request, native keychain restore and MCP recovery tools are not covered yet.
 The side-channel and push scans cover fixture transports, not an external push receiver.
-Transaction fault injection runs locally; file custody runs on the three CI operating
-systems. Native keychain prompts and real credential-provider integration remain
-open in #384; file ACL and broker-double tests do not establish native keychain support.
+Transaction fault injection runs locally; file custody and the native keychain round
+trip run on the three CI operating systems. The keychain test runs unattended on
+disposable runners, where no OS consent prompt appears. Prompt wording, denial and
+timeout on a person's desktop remain open in #384; record them with a human present.
+
+The native keychain test writes to the current user's OS credential store, so it
+skips unless `A2A_NATIVE_KEYCHAIN_TEST=1`. Set that only on a disposable CI runner,
+never on a workstation with real keys.
