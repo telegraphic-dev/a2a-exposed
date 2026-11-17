@@ -10,7 +10,7 @@ A wake with `kind: "pairing_request"` carries `pairing.userCode` (e.g. `WDJB-482
 
 A request with no card URL can still be approved. That agent sends immediately. Replies stay on the task until it announces an address. When the request shows a pairing identity, approval also lets this inbox call that agent back after the same identity proves a card, without a second approval. A wake with `kind: "address_change"` means the callback host changed or an identity was bound. Tell your human. Revoke the token if the change is unexpected.
 
-`npx -y a2a-exposed@latest peer announce --to <alias>` (or `--all` after `peers sync`) publishes this inbox's current https card. It does not move an outbound peer the owner synced. A revoked return token stays revoked; `--to <alias> --reissue` mints a new one only after the human asks. `peer forward --to <card-url>` on the inbox being left answers with a moved pointer for a grace period (default 168 hours) and forwards the caller's bearer only after the new card proves this inbox's identity. Neither command prints a token. Revoking the inbound peer removes the callback this inbox created. The other inbox still accepts its return token until that owner revokes it.
+`npx -y a2a-exposed@latest peer announce --to <alias>` (or `--all` after `peers sync`) publishes this inbox's current https card. `--to` uploads a connected peer first when this inbox lacks it. It does not move an outbound peer the owner synced. A revoked return token stays revoked; `--to <alias> --reissue` mints a new one only after the human asks. `peer forward --to <card-url>` on the inbox being left answers with a moved pointer for a grace period (default 168 hours) and forwards the caller's bearer only after the new card proves this inbox's identity. Neither command prints a token. Revoking the inbound peer removes the callback this inbox created. The other inbox still accepts its return token until that owner revokes it.
 
 If your human hasn't set an approval password yet (the page, `status` and `pair list` say so), run:
 
@@ -37,6 +37,9 @@ For polling, `pair list --json` adds `expiresIn` to each pending request: second
 The existing signed-announcement return-token flow can cover both directions
 with one approval. If it did not create a usable callback, a claimed address may
 be offered with an exact `connect ... --no-wait` command. Verify it with the peer
-owner and get human approval before using it. No claimed card authorizes a
+owner and get human approval before using it. Kind `same-address` (often a
+`NAME-2` label next to outbound alias `NAME`) means an outbound alias already
+points at that claimed address: do not pair again; after your human confirms it
+is the same agent, `send` to that alias with the same context id. No claimed card authorizes a
 callback, and no read reissues a revoked token. A peer without a claimed or
 verified address must announce one before a callback can work.

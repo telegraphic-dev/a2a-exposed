@@ -2,6 +2,7 @@
 // The session token is written to config.env and is never printed.
 import * as C from "./config.mjs";
 import { CLI, die } from "./a2a.mjs";
+import { networkProblem } from "./net.mjs";
 
 export const CLI_CLIENT_ID = "a2a-cli";
 export const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
@@ -47,12 +48,15 @@ export async function deviceLogin({
 } = {}) {
 	const origin = controlOrigin(controlUrl);
 	if (!origin) die(`--control-url must be an https origin with no path (example: --control-url https://control.example)`);
-	const codeResponse = await fetchImpl(`${origin}/api/auth/device/code`, {
-		method: "POST",
-		headers: { "content-type": "application/json", accept: "application/json" },
-		redirect: "error", signal: AbortSignal.timeout(30_000),
-		body: JSON.stringify({ client_id: CLI_CLIENT_ID, ...(scope ? { scope, machine } : {}) }),
-	});
+	let codeResponse;
+	try {
+		codeResponse = await fetchImpl(`${origin}/api/auth/device/code`, {
+			method: "POST",
+			headers: { "content-type": "application/json", accept: "application/json" },
+			redirect: "error", signal: AbortSignal.timeout(30_000),
+			body: JSON.stringify({ client_id: CLI_CLIENT_ID, ...(scope ? { scope, machine } : {}) }),
+		});
+	} catch (error) { die(`could not start sign-in at ${origin}: ${networkProblem(error, origin).message}`); }
 	const started = await readJson(codeResponse);
 	if (!codeResponse.ok || !started.device_code || !started.user_code || !started.verification_uri_complete) {
 		const reason = typeof started.error === "string" ? started.error : `HTTP ${codeResponse.status}`;
