@@ -133,7 +133,9 @@ test("#469: a verified card delivers through the one outbound alias at that addr
 	await w.bob.db.prepare("UPDATE peers SET card_url = ? WHERE label = ?").bind(ALICE_CARD, y.label).run();
 	const taskId = await w.sendToBob(y.access, "question", "ctx-469-verified");
 	const inbox = await w.owner(w.bob.ctx, "GET", "/owner/inbox");
-	assert.deepEqual((inbox.body as any[]).find((x) => x.taskId === taskId).continuation.kind, "send");
+	const guide = (inbox.body as any[]).find((x) => x.taskId === taskId).continuation;
+	assert.equal(guide.kind, "send");
+	assert.match(guide.next, /answer open tasks with reply[\s\S]*ask your human to confirm it is still this agent/);
 	const r = await w.reply(taskId, "done via alias");
 	assert.equal(r.structuredContent.status, "delivered", JSON.stringify(r));
 	assert.equal(r.structuredContent.method, "a2a-message");
@@ -157,6 +159,8 @@ test("#469: the fallback stops when the card no longer proves the label's key", 
 	const r = await w.reply(taskId, "kept");
 	assert.equal(r.structuredContent.status, "stored-only");
 	assert.match(r.structuredContent.detail, /no longer proves this peer's identity, so nothing was sent there/);
+	assert.match(r.structuredContent.next, /Do not send this reply to alice[\s\S]*verify the peer's current address with its owner before any send/);
+	assert.doesNotMatch(r.structuredContent.next, /Continue with send|send there/);
 	assert.equal(w.directPosts, 0);
 });
 

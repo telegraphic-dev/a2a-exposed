@@ -517,12 +517,21 @@ export async function cancel(taskId, o) {
 	if (ownerConfigured()) {
 		try { rec = await owner("GET", `/owner/outbound/${q(tid)}`); } catch { rec = {}; }
 	}
-	const [url, version] = rec.endpoint ? [rec.endpoint, rec.protocol || "0.3"] : pickEndpoint(base, await fetchCard(base), o.proto);
+	// The --to peer's token goes only to that peer: a stored record for another peer, or an endpoint off this
+	// peer's origin, is refused before any request. A record that names no peer is not used.
+	if (rec.endpoint && rec.peer && rec.peer !== alias) die(`task ${tid} was sent to peer ${JSON.stringify(String(rec.peer))}, not ${JSON.stringify(alias)}; pass --to with that peer. Nothing was sent.`);
+	const recorded = rec.endpoint && rec.peer === alias ? rec : null;
+	if (recorded) {
+		let same = false;
+		try { same = new URL(recorded.endpoint).origin === new URL(base).origin; } catch { same = false; }
+		if (!same) die(`the recorded endpoint for task ${tid} is not on ${alias}'s address, so its token is not sent there. Nothing was sent.`);
+	}
+	const [url, version] = recorded ? [recorded.endpoint, recorded.protocol || "0.3"] : pickEndpoint(base, await fetchCard(base), o.proto);
 	const res = await rpc(url, version, tok, "tasks/cancel", "CancelTask", { id: tid }, { alias: C.loadPeers()[alias] ? alias : null, base });
 	out(res);
-	if (rec.endpoint) {
+	if (recorded) {
 		await persistOutbound("PUT", `/owner/outbound/${q(tid)}`, { task: res }, "update outbound task");
-		await logHistory(rec.contextId, { dir: "in", peer: alias, taskId: tid, event: "cancel", state: plainState(res), text: textOf((res.status || {}).message || {}) });
+		await logHistory(recorded.contextId, { dir: "in", peer: alias, taskId: tid, event: "cancel", state: plainState(res), text: textOf((res.status || {}).message || {}) });
 	}
 	if (!o.json) console.error(`# task ${tid}: ${plainState(res)}${plainState(res) === "canceled" ? "" : " (the peer did not cancel it)"}`);
 }

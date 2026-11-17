@@ -2027,10 +2027,12 @@ async function replyFallbackPeer(ctx: TenantContext, label: string): Promise<{ a
 
 /** What the replying agent does next when a reply is stored only: the same continuation the inbox shows, from the
  *  verified or claimed card. A same-address alias is a suggestion for the human; nothing is sent through it. */
-async function storedOnlyNext(ctx: TenantContext, label: string): Promise<string> {
+async function storedOnlyNext(ctx: TenantContext, label: string, proofFailedAlias = ""): Promise<string> {
+	// The stored metadata still points at that alias, but the live card just failed the identity check: never send there.
+	if (proofFailedAlias) return `Do not send this reply to ${proofFailedAlias}: its card no longer proves this peer's verified identity, so that address may not be this peer any more. Ask your human to verify the peer's current address with its owner before any send. Until then the peer was not notified and can fetch the reply from the task.`;
 	const inbound: Json = await ctx.DB.prepare("SELECT card_url, claimed_card_url FROM peers WHERE label = ? AND revoked_at IS NULL").bind(label).first();
 	const guide = await continuationGuide(ctx, label, inbound?.card_url || inbound?.claimed_card_url || undefined);
-	if (guide.kind === "send") return `Continue with send to ${guide.alias} and the same context id if the peer must see this reply now.`;
+	if (guide.kind === "send") return `The peer was not notified. Ask your human before you send this reply to ${guide.alias}.`;
 	return String(guide.next || "");
 }
 
@@ -2041,7 +2043,7 @@ async function continuationGuide(ctx: TenantContext, label: string, rawCard?: st
 	const callback = await replyPeer(ctx, label);
 	if (callback) return { kind: "send", alias: callback.alias, next: "Read history, then continue with send and the same context id. For the CLI, select a local alias with peers list --json." };
 	const fallback = await replyFallbackPeer(ctx, label);
-	if (fallback) return { kind: "send", alias: fallback.alias, next: `Replies to this label go through outbound alias ${fallback.alias}, whose verified card is this peer's. Read history, then continue with send to ${fallback.alias} and the same context id.` };
+	if (fallback) return { kind: "send", alias: fallback.alias, next: `Replies to this label go through outbound alias ${fallback.alias}, whose verified card was this peer's when it was last checked; reply checks it again each time. Read history and answer open tasks with reply. Before a new send to ${fallback.alias}, ask your human to confirm it is still this agent.` };
 	const notNotified = "Until then, a reply to this peer is stored on the task only and does not notify it.";
 	const card = Addr.canonicalCardUrl(rawCard || "");
 	if (card && !peerUrlProblem(card)) {
@@ -2076,8 +2078,8 @@ async function deliverReplyMessage(ctx: TenantContext, ectx: ExecutionContext, t
 	};
 	const exact = await replyPeer(ctx, task._peer);
 	const fallback = exact ? null : await replyFallbackPeer(ctx, task._peer);
-	const storedOnly = async (detail: string): Promise<ReplyDelivery> => ({
-		status: "stored-only", method: "stored", taskId: task.id, state, detail, next: await storedOnlyNext(ctx, task._peer),
+	const storedOnly = async (detail: string, proofFailedAlias = ""): Promise<ReplyDelivery> => ({
+		status: "stored-only", method: "stored", taskId: task.id, state, detail, next: await storedOnlyNext(ctx, task._peer, proofFailedAlias),
 	});
 	if (!exact && !fallback) return storedOnly("Stored on the task. The peer was not notified: no live paired outbound address with a held token was found for this label.");
 	const peer = exact || { ...fallback!, announced: false };
@@ -2086,7 +2088,7 @@ async function deliverReplyMessage(ctx: TenantContext, ectx: ExecutionContext, t
 		const card = await checkedPeerCard(ctx, ectx, peer.url, signal);
 		// The fallback alias is another name for this peer only while its card still proves the label's verified key.
 		if (fallback && !(card && await Addr.cardProves(card, fallback.identityKey, fallback.cardUrl)))
-			return storedOnly(`Stored on the task. The peer was not notified: outbound alias ${fallback.alias} points at this peer's verified address, but its card no longer proves this peer's identity, so nothing was sent there.`);
+			return storedOnly(`Stored on the task. The peer was not notified: outbound alias ${fallback.alias} points at this peer's verified address, but its card no longer proves this peer's identity, so nothing was sent there.`, fallback.alias);
 		let base = peer.url;
 		let cardUsed = card;
 		// One extra card fetch, and only when the card we already fetched names a move. The ordinary path stays one card.
