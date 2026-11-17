@@ -23,10 +23,10 @@ test("native success waits for exit/close and persists PID before private input"
  await nativeCredentialOperation(input,{allowOsConsent:true,spawnImpl:f.spawn,onSpawn:value=>{pid=value;assert.equal(f.child.stdin.readableLength,0);},timeoutMs:30,graceMs:5});assert.equal(pid,f.child.pid);assert.deepEqual(f.child.signals,[]);
 });
 test("timeout escalates ignored termination and waits for confirmed close",async()=>{
- const f=fake('ignore-term');await assert.rejects(nativeCredentialOperation(input,{allowOsConsent:true,spawnImpl:f.spawn,timeoutMs:5,graceMs:5}),{code:'native_outcome_unknown'});assert.deepEqual(f.child.signals,['SIGTERM','SIGKILL']);
+ const f=fake('ignore-term');await assert.rejects(nativeCredentialOperation(input,{allowOsConsent:true,spawnImpl:f.spawn,platform:'darwin',timeoutMs:5,graceMs:5}),{code:'native_outcome_unknown'});assert.deepEqual(f.child.signals,['SIGTERM','SIGKILL']);
 });
 test("unreaped children are reported as unknown with public PID, never successful",async()=>{
- const f=fake('unreaped');await assert.rejects(nativeCredentialOperation(input,{allowOsConsent:true,spawnImpl:f.spawn,timeoutMs:5,graceMs:5}),error=>error.code==='native_process_unreaped'&&error.pid===f.child.pid);assert.deepEqual(f.child.signals,['SIGTERM','SIGKILL']);
+ const f=fake('unreaped');await assert.rejects(nativeCredentialOperation(input,{allowOsConsent:true,spawnImpl:f.spawn,platform:'darwin',timeoutMs:5,graceMs:5}),error=>error.code==='native_process_unreaped'&&error.pid===f.child.pid);assert.deepEqual(f.child.signals,['SIGTERM','SIGKILL']);
 });
 test("malformed/large output, nonzero exit and pipe errors never expose private material",async()=>{
  for(const mode of ['malformed','oversized','pipe','nonzero']){
