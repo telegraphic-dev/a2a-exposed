@@ -85,7 +85,8 @@ project directory. Set `--cli-command` explicitly for a custom handler runtime.
 
 `wake status --json` reads pending busy/debounce/retry deadlines and last HTTP
 attempt/acceptance from the selected inbox without acknowledging or flushing
-wakes. Read it before inbox, which clears matching pending wakes. Due time is
+wakes. Read it before inbox, which clears matching pending wakes (a busy
+catch-up stays until its task is marked working or answered). Due time is
 eligibility, not a delivery promise. Unknown observations stay unknown. A 2xx
 only establishes receiver acceptance; check receiver logs for signature checks,
 handler execution and owner notification. An old acceptance does not validate

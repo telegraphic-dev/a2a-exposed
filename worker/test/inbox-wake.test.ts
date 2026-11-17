@@ -241,3 +241,37 @@ test("hosted owner RPC pages, and a withheld inbox does not clear wakes", async 
 	assert.equal(pending(DB.db, "ctx-secret"), beforeSecret);
 	assert.equal(pending(DB.db, "ctx-plain"), beforePlain);
 });
+
+test("hosted owner RPC and the owner API keep a busy catch-up until the task is handled (#471)", async (t) => {
+	const DB = d1(new URL("../migrations/", import.meta.url));
+	const hash = await sha256("hosted-owner-token");
+	const env = {
+		DB, TENANCY: "host", TENANT_SECRETS_KEY: "platform-key", PUBLIC_URL: BASE, OWNER_TOKEN: "platform-owner",
+	} as WorkerBindings;
+	const ctx = hostedTenantContext(env, {
+		id: "ten_carol", db: DB, publicUrl: BASE, ownerTokenHash: hash, status: "active", config: { AGENT_NAME: "Carol" },
+	});
+	const ectx = { waitUntil() {}, passThroughOnException() {} };
+	const [busyId] = seed(DB.db, 1, { context: "ctx-busy", prefix: "busy" });
+	const [plainId] = seed(DB.db, 1, { context: "ctx-plain", prefix: "plain" });
+	const held = JSON.stringify({ contextId: "ctx-busy", taskId: busyId, taskIds: [busyId], from: "ada", preview: "b", kind: "inbound", busy: 1 });
+	DB.db.prepare("UPDATE wakes SET pending_json = ?, busy_until_ms = ? WHERE context_id = 'ctx-busy'").run(held, Date.now() + 300_000);
+	const rpc = (query: Record<string, string>) => runOwnerRpc(ctx, ectx as any, { accountId: "acct_carol", method: "GET", path: "/owner/inbox", query });
+
+	const listed = await rpc({ all: "1" });
+	assert.equal(listed.status, 200);
+	assert.deepEqual((listed.body as { taskId: string }[]).map((r) => r.taskId).sort(), [busyId, plainId].sort());
+	assert.equal(pending(DB.db, "ctx-busy"), held, "the busy catch-up survives a hosted read");
+	assert.equal(pending(DB.db, "ctx-plain"), null, "an ordinary pending wake still clears on read");
+
+	const s = setup();
+	t.after(s.restore);
+	const [id] = seed(s.DB.db, 1, { context: "ctx-api" });
+	const apiHeld = JSON.stringify({ contextId: "ctx-api", taskId: id, taskIds: [id], from: "ada", preview: "b", kind: "inbound", busy: 1 });
+	s.DB.db.prepare("UPDATE wakes SET pending_json = ? WHERE context_id = 'ctx-api'").run(apiHeld);
+	await s.call("GET", qs({ context: "ctx-api" }));
+	assert.equal(pending(s.DB.db, "ctx-api"), apiHeld, "the owner API read keeps it too");
+	const working = await s.call("POST", `/owner/tasks/${id}/working`, {});
+	assert.equal(working.status, 200, JSON.stringify(working.data));
+	assert.equal(pending(s.DB.db, "ctx-api"), null, "mark working drops the handled task");
+});

@@ -2424,8 +2424,10 @@ async function ackOutboundReplies(ctx: TenantContext, snaps: ReplySnap[]): Promi
 
 /** Drop these task ids from the pending wake for that conversation. A wake for another conversation, or an
  *  outbound update that reuses the task id, stays pending. A wake that still names other tasks stays pending.
- *  This does not end the busy cool-down: a task that arrives after this read still waits for one catch-up. */
-async function ackPendingWakes(ctx: TenantContext, seen: { taskId: string; contextId: string }[], kind = "inbound"): Promise<void> {
+ *  This does not end the busy cool-down: a task that arrives after this read still waits for one catch-up.
+ *  read: an inbox list. It leaves an inbound catch-up held by the busy cool-down: the reader may be the owner
+ *  checking by hand while the woken run is still busy, so only mark working or a reply drops that task (#471). */
+async function ackPendingWakes(ctx: TenantContext, seen: { taskId: string; contextId: string }[], kind = "inbound", read = false): Promise<void> {
 	const byContext = new Map<string, Set<string>>();
 	for (const row of seen) {
 		if (!row.taskId || !row.contextId) continue;
@@ -2441,6 +2443,7 @@ async function ackPendingWakes(ctx: TenantContext, seen: { taskId: string; conte
 			try { payload = JSON.parse(row.pending_json); } catch { continue; }
 			const wakeKind = typeof payload?.kind === "string" && payload.kind ? payload.kind : "inbound";
 			if (wakeKind !== kind) continue;
+			if (read && kind === "inbound" && payload?.busy) continue;
 			if (typeof payload?.contextId === "string" && payload.contextId !== contextId) continue;
 			const ids = wakeTaskIds(payload);
 			if (!ids.some((id) => seenIds.has(id))) continue;
@@ -2576,7 +2579,8 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 				});
 			}
 		}
-		// Clear a pending wake only for tasks in this page. The busy cool-down stays until it expires.
+		// Clear a pending wake only for tasks in this page. The busy cool-down stays until it expires,
+		// and an inbound catch-up it holds stays until mark working or a reply (#471).
 		// Ids the caller did not get stay pending,
 		// including when one wake names tasks on this page and tasks on a later page.
 		// A reply is marked seen only when its stored update still equals the snapshot in this response.
@@ -2593,7 +2597,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 		const res = json(out, 200, headers);
 		if (!head && deferAck) deferredReplies.set(res, replySnaps);
 		if (!head && !deferAck) {
-			await ackPendingWakes(ctx, inboundSeen);
+			await ackPendingWakes(ctx, inboundSeen, "inbound", true);
 			await ackOutboundReplies(ctx, replySnaps);
 		}
 		return res;
@@ -4335,7 +4339,7 @@ export async function runOwnerRpc(ctx: TenantContext, ectx: ExecutionContext, in
 			const contextId = (row as { contextId?: unknown }).contextId;
 			return typeof taskId === "string" && typeof contextId === "string" ? [{ taskId, contextId }] : [];
 		});
-		await ackPendingWakes(ctx, seen);
+		await ackPendingWakes(ctx, seen, "inbound", true);
 		await ackOutboundReplies(ctx, deferredReplies.get(res) || []);
 	}
 	log("owner_rpc", { tenant, accountId, method: matched.route.method, route: matched.route.name, status: res.status });

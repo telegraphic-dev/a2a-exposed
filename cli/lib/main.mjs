@@ -433,6 +433,8 @@ Inbox (owner side)
                                            --json: rows on stdout, requests on stderr). Follows every page; past
                                            10000 pages it errors instead of a short list. Reading marks returned replies
                                            seen and clears matching pending wakes; task state is unchanged.
+                                           A catch-up held by the busy cool-down stays until
+                                           that task is marked working or answered.
                                            Direct reply messages are completed without a new-work wake;
                                            read them with history or inbox --all
   show <taskId>                            full task JSON

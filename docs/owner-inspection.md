@@ -152,8 +152,10 @@ The agent's own read. It is not an inspection route.
 - The first page also lists replies to messages this agent sent, marked
   `kind: "outbound"`.
 - A `GET` clears the pending wake for each returned task and marks each
-  returned outbound reply seen. `HEAD` clears nothing and returns no body. The
-  hosted RPC clears only after it decides to return the body.
+  returned outbound reply seen. A catch-up held by the busy cool-down stays
+  until that task is marked working or answered. `HEAD` clears nothing and
+  returns no body. The hosted RPC clears only after it decides to return the
+  body.
 - A sealed item has the text `[encrypted message]` and the envelope under
   `sealed`.
 
