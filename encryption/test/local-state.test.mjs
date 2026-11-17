@@ -343,11 +343,16 @@ test("a fault while committing a signer rotation leaves the old identity active 
  const pending=state.status().operations.find(op=>op.state==='uncertain');assert.ok(pending,'the interrupted intent stays listed for exact recovery');
  assert.equal(pending.operation.kind,'rotate-signer');assert.equal(pending.operation.previousId,own.id);
  assert.throws(()=>state.signerRotationPlan(own.id),{code:'initialization_pending'});
+ // No trust change can touch the identity while its rotation is unresolved, so the approved pin set cannot drift.
+ await assert.rejects(proposal(state,own.id),{code:'rotation_pending'});
+ assert.equal(state.inspect('remote').current,null);
  // Exact recovery completes the approved rotation: the old key is retired and the new one adopted.
  const recovered=await state.reconcileInitialization({operationId:pending.id,expectedDigest:pending.digest,action:'adopt',approvalDigest:recoveryDigest(state,pending.id,'adopt'),ownerApproved:true});
  assert.equal(recovered.recovered,true);assert.equal(recovered.id,pending.operation.identityId);
  assert.equal(state.row(own.id).live_state,'retired');assert.equal(state.row(recovered.id).live_state,'local-only');
  assert.notEqual(JSON.parse(state.row(recovered.id).bundle).identityKey,JSON.parse(state.row(own.id).bundle).identityKey);
+ await assert.rejects(proposal(state,own.id),{code:'key_retired'});
+ const fresh=await proposal(state,recovered.id);assert.ok(fresh.digest,'the adopted identity accepts new pairings');
 });
 
 test("rotatedPins lists only non-revoked pins on a retired key", async t => {

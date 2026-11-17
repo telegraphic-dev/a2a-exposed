@@ -592,6 +592,16 @@ export class LocalState {
  // created for the same card URL; the old identity is retired: it still opens old history
  // and never signs again. Pins bound to it are held until a new human-approved pairing.
  // Recorded as a "rotate-signer" key operation with its lineage; the store schema stays v6.
+ // A key rotation intent that is not yet resolved for this local identity.
+ pendingRotation(localId) {
+  return !!this.db.prepare("SELECT id FROM key_operations WHERE kind IN ('rotate','rotate-signer') AND state IN ('prepared','writing','secret-written','uncertain') AND json_extract(public_json,'$.previousId')=? LIMIT 1").get(localId);
+ }
+ heldPinsFor(id) {
+  return this.db.prepare("SELECT peer,version,record FROM trust ORDER BY peer").all()
+   .map(pin => ({ peer: pin.peer, version: pin.version, record: parseJSON(pin.record) }))
+   .filter(pin => pin.record.localId === id && pin.record.state !== "revoked")
+   .map(pin => ({ peer: pin.peer, version: pin.version, state: pin.record.state }));
+ }
  signerRotationPlan(id) {
   const row = this.row(id);
   if (this.db.prepare("SELECT value FROM meta WHERE key='restore_paused'").get()?.value === "1") fail("restore_archive_only");
@@ -599,10 +609,7 @@ export class LocalState {
   if (this.db.prepare("SELECT id FROM key_operations WHERE state IN ('prepared','writing','secret-written','uncertain') LIMIT 1").get()) fail("initialization_pending", "Reconcile the exact pending key operation from keys status --json before planning another key change.");
   const bundle = parseJSON(row.bundle);
   const latest = this.db.prepare("SELECT id,digest,state,revision FROM key_operations ORDER BY rowid DESC LIMIT 1").get();
-  const pins = this.db.prepare("SELECT peer,version,record FROM trust ORDER BY peer").all()
-   .map(pin => ({ peer: pin.peer, version: pin.version, record: parseJSON(pin.record) }))
-   .filter(pin => pin.record.localId === id && pin.record.state !== "revoked")
-   .map(pin => ({ peer: pin.peer, version: pin.version, state: pin.record.state }));
+  const pins = this.heldPinsFor(id);
   const plan = { configIdentity: this.configId(), action: "rotate-signing-identity", previousId: id, previousBundleDigest: hash("a2a-exposed sealed bundle v1", bundle), previousIdentityKey: bundle.identityKey, cardUrl: bundle.cardUrl, keyStore: row.store, heldPins: pins, latestOperation: latest ? { ...latest } : null };
   return { ok: true, plan, approval_digest: hash("a2a-exposed local signer rotation approval v1", plan), next: "Ask the human to approve this exact plan. A new signing and receiving identity is created; the old one is retired, still opens old history and never signs again. Listed pins are held until a new human-approved pairing and keys verify. The inbox's published key and its peer records do not change." };
  }
@@ -640,6 +647,8 @@ export class LocalState {
    return await this.locked(async () => {
     const current = this.row(previousId);
     if (current.live_state !== "local-only" || hash("a2a-exposed sealed bundle v1", parseJSON(current.bundle)) !== plan.plan.previousBundleDigest) fail("approval_stale");
+    // The approved plan named the pins it holds; trust changes are blocked while the intent is pending.
+    if (canonicalJSON(this.heldPinsFor(previousId)) !== canonicalJSON(plan.plan.heldPins)) fail("approval_stale");
     this.db.prepare("UPDATE identities SET live_state='retired' WHERE id=?").run(previousId);
     this.db.prepare("INSERT INTO identities VALUES(?,?,?,?,?,?)").run(id, JSON.stringify(identity.bundle), previous.store, namespace, "local-only", now);
     this.db.prepare("UPDATE key_operations SET state='committed',revision=revision+1 WHERE id=?").run(opId);
@@ -829,6 +838,7 @@ export class LocalState {
    if (expectedCurrent !== current.current_digest) fail("approval_stale", "Run peer keys inspect --to ALIAS --json; the full trust record changed.");
    // Revoking only removes trust, so a pin held by keys rotate can still be revoked; nothing else may use a retired key.
    if (local.live_state !== "local-only" && !(operation === "revoke" && local.live_state === "retired")) fail("key_retired");
+   if (this.pendingRotation(localId)) fail("rotation_pending", "A key rotation for this local identity is not resolved. Inspect keys status --json and finish or reconcile it first; no trust was changed.");
    const localBundle = JSON.parse(local.bundle);
    const proposal = { v: 1, configIdentity: this.configId(), localIdentity: localBundle.identityKey, localKeyId: localBundle.keyId, localBundleDigest: hash("a2a-exposed sealed bundle v1", localBundle), localId, peer, peerEndpoint, pairingIdentity, currentRecordDigest: current.current_digest, currentRecordVersion: current.current_version, newBundleDigest: hash("a2a-exposed sealed bundle v1", bundle), newBundle: bundle, newPolicy: policy, operation, verificationDecision: verification, proposalNonce: b64(randomBytes(32)) };
    const digest = hash("a2a-exposed sealed trust proposal v1", proposal);
@@ -848,6 +858,7 @@ export class LocalState {
    const proposal = JSON.parse(row.proposal);
    const proposalLocal = this.row(proposal.localId).live_state;
    if (proposalLocal !== "local-only" && !(proposal.operation === "revoke" && proposalLocal === "retired")) fail("key_retired");
+   if (this.pendingRotation(proposal.localId)) fail("rotation_pending", "A key rotation for this local identity is not resolved. Inspect keys status --json and finish or reconcile it first; no trust was changed.");
    if (hash("a2a-exposed sealed trust proposal v1", proposal) !== digest || hash("a2a-exposed sealed bundle v1", JSON.parse(this.row(proposal.localId).bundle)) !== proposal.localBundleDigest) fail("approval_stale");
    if (proposal.verificationDecision === "independent" && (independentVerified !== true || verifiedProposalDigest !== digest)) fail("independent_verification_required", "Compare the locally computed safety code through another trusted channel; a hosted comparison is not independent verification.");
    const identityChanged = current.current && (current.current.bundle.identityKey !== proposal.newBundle.identityKey || current.current.pairingIdentity !== proposal.pairingIdentity || parseJSON(this.row(current.current.localId).bundle).identityKey !== proposal.localIdentity);
