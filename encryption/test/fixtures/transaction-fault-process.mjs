@@ -16,6 +16,7 @@ if (mode === "raw") {
  const state = new LocalState(dir, { write: true });
  state.locked(async () => {
   state.db.prepare("INSERT INTO meta VALUES('fault_canary_384','uncommitted')").run();
+  setInterval(() => {}, 1000); // An unresolved promise alone does not keep Node alive.
   process.stdout.write("IN_TX\n");
   await new Promise(() => {});
  });

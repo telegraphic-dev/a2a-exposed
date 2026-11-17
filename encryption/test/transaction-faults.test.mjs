@@ -30,7 +30,11 @@ function holdTransaction(t, dir, mode) {
   proc.on("exit", code => reject(new Error(`fault process exited ${code} before its transaction: ${err}`)));
  });
 }
-const killed = proc => new Promise(resolve => { proc.once("exit", resolve); proc.kill("SIGKILL"); });
+const killed = proc => new Promise((resolve, reject) => {
+ if (proc.exitCode !== null || proc.signalCode !== null) { reject(new Error("fault process exited before forced termination")); return; }
+ proc.once("exit", (code, signal) => { if (signal === "SIGKILL") resolve(); else reject(new Error("fault process was not force terminated")); });
+ if (!proc.kill("SIGKILL")) reject(new Error("fault process could not be force terminated"));
+});
 
 test("a process killed inside a write transaction leaves no partial row and no stale lock", { timeout: 30000 }, async t => {
  const dir = fixture(t);
