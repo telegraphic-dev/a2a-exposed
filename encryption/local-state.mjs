@@ -51,6 +51,13 @@ function pageInputs(limit, cursor) {
  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100 || !Number.isSafeInteger(cursor) || cursor < 0) fail("listing_inputs", "Run keys status --json or peer keys inspect --to ALIAS --json, then use --limit 1..100 and the exact returned nonnegative continuation.");
 }
 
+// Windows PowerShell cannot load its security module through a PowerShell 7
+// parent's module path. Use the matching system modules for ACL operations.
+function aclEnvironment() {
+ const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "psmodulepath"));
+ env.PSModulePath = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "Modules");
+ return env;
+}
 function permissions(file, directory = false) {
  const stat = fs.lstatSync(file);
  if (stat.isSymbolicLink() || (directory ? !stat.isDirectory() : !stat.isFile())) fail("key_store_permissions");
@@ -59,7 +66,7 @@ function permissions(file, directory = false) {
  } else {
   // Require a current-user-only ACL. Do not assume chmod protects Windows files.
   const script = "$ErrorActionPreference='Stop';try{$p=[Console]::In.ReadToEnd();$me=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value;$a=Get-Acl -LiteralPath $p;if($null -eq $a){exit 1};$bad=@($a.Access | Where-Object {$_.AccessControlType -eq 'Allow' -and $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -notin @($me,'S-1-5-18')});if($bad.Count -gt 0){exit 1};exit 0}catch{exit 1}";
-  try { execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { input: file, stdio: ["pipe", "ignore", "ignore"], timeout: 5000 }); }
+  try { execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { input: file, env: aclEnvironment(), stdio: ["pipe", "ignore", "ignore"], timeout: 5000 }); }
   catch { fail("key_store_permissions", "Use a current-user-only Windows ACL; then run keys stores --json. No fallback was selected."); }
  }
  return stat;
@@ -68,7 +75,7 @@ function protect(file) {
  if (process.platform !== "win32") fs.chmodSync(file, fs.statSync(file).isDirectory() ? 0o700 : 0o600);
  else {
   const script = "$ErrorActionPreference='Stop';try{$p=[Console]::In.ReadToEnd();$me=[System.Security.Principal.WindowsIdentity]::GetCurrent().User;$a=Get-Acl -LiteralPath $p;if($null -eq $a){exit 1};$a.SetAccessRuleProtection($true,$false);foreach($r in @($a.Access)){$a.RemoveAccessRuleAll($r)};$a.SetOwner($me);$r=New-Object System.Security.AccessControl.FileSystemAccessRule($me,'FullControl','Allow');$a.AddAccessRule($r);Set-Acl -LiteralPath $p -AclObject $a;exit 0}catch{exit 1}";
-  try { execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { input: file, stdio: ["pipe", "ignore", "ignore"], timeout: 5000 }); }
+  try { execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { input: file, env: aclEnvironment(), stdio: ["pipe", "ignore", "ignore"], timeout: 5000 }); }
   catch { fail("key_store_permissions"); }
  }
  permissions(file, fs.statSync(file).isDirectory());
