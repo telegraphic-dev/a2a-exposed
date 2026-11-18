@@ -1,0 +1,53 @@
+.claude-plugin/plugin.json
+  s_65721f176e18bc::t_39c8f891ae4da6 3
+encryption/package-lock.json
+  s_65721f176e18bc::t_e0eea7cedb5ad0 3,9
+skills/a2a-exposed-setup/SKILL.md
+  s_65721f176e18bc::t_39c8f891ae4da6 7
+worker/src/skills-index.ts
+  s_65721f176e18bc::t_39c8f891ae4da6 7,12
+worker/src/version.ts
+  s_65721f176e18bc::t_39c8f891ae4da6 2
+package.json
+  s_65721f176e18bc::t_39c8f891ae4da6 3
+encryption/package.json
+  s_65721f176e18bc::t_39c8f891ae4da6 3
+.cursor-plugin/plugin.json
+  s_65721f176e18bc::t_39c8f891ae4da6 4
+skills/a2a-exposed/SKILL.md
+  s_65721f176e18bc::t_39c8f891ae4da6 9
+plugin.json
+  s_65721f176e18bc::t_39c8f891ae4da6 4
+.grok-plugin/plugin.json
+  s_65721f176e18bc::t_39c8f891ae4da6 3
+.claude-plugin/marketplace.json
+  s_65721f176e18bc::t_39c8f891ae4da6 13
+cli/package.json
+  s_65721f176e18bc::t_39c8f891ae4da6 3
+CHANGELOG.md
+  s_fd7e78976e3874::t_f99a8ba0027fba 5-9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "950628aa6951581005a0f86184b7c1dc658c8ca6",
+  "prompts": {},
+  "sessions": {
+    "s_65721f176e18bc": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1ef5c-220a-7c10-982c-336e6471572f",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    },
+    "s_fd7e78976e3874": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1ef75-a29e-76a0-9621-9c194df896fb",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}
