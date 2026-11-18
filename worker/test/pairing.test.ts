@@ -881,7 +881,7 @@ test("GET /: a browser gets an HTML landing page (strict nonce CSP, read-only sc
 	assert.ok(h.text.includes(`data-copy="Connect to ${BASE.replace(/^https?:\/\//, "")}"`));
 	assert.match(h.text, /Tell your agent:/);
 	assert.match(h.text, /owner approves/);
-	assert.match(h.text, /Read this page as Markdown/);
+	assert.match(h.text, /For AI agents/);
 	assert.doesNotMatch(h.text, /npx|JSON-RPC|Bearer token|<table>/);
 	// the style block carries the CSP nonce
 	const nonce = /style-src 'nonce-([^']+)'/.exec(csp)![1];

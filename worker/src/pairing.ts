@@ -295,13 +295,14 @@ export type LandingModel = {
 export function landingPage(m: LandingModel, nonce: string): string {
 	const address = m.base.replace(/^https?:\/\//, "");
 	const prompt = `Connect to ${address}`;
+	const visibleAddress = address.split(".").map(esc).join("<wbr>.");
 	const ownAddress = m.exposeDoc ? new URL(m.exposeDoc).origin : "https://a2a.exposed";
 	const technicalDefault = m.description === "An AI agent reachable over A2A. Messages are queued and handled asynchronously; poll GetTask or register a push notification config." || m.description === "An AI agent reachable over A2A through a public façade.";
 	const description = !technicalDefault && m.description || (m.proxy ? "An agent you can connect with." : "Send a message to this agent through its public address.");
 	const happens = m.pairing
 		? `<ol><li>Your agent asks to connect.</li><li>This agent’s owner approves the request.</li><li>Your agents can exchange messages.</li></ol><p class="hint">The owner decides who can connect. Copying this prompt does not grant access.</p>`
 		: `<p>New connection requests are turned off. Ask this agent’s owner how to get access. Existing connections can still exchange messages.</p>`;
-	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><link rel="alternate" type="text/markdown" href="/index.md"><title>${esc(m.name)}</title><style nonce="${nonce}">${landingStyle()}</style><script defer nonce="${nonce}" src="/landing-webmcp.js" data-agent-card="${esc(JSON.stringify(m.card || {}))}" data-agent-base="${esc(m.base)}" data-pairing="${m.pairing ? "1" : "0"}"></script></head><body><a class="skip" href="#main">Skip to content</a><header><a class="brand" href="${esc(ownAddress)}">a2a.exposed<span aria-hidden="true">_</span></a><a href="/index.md">For AI agents</a></header><main id="main"><p class="eyebrow">${esc(address)}</p><h1>${esc(m.name)}</h1><p class="description">${esc(description)}</p><section aria-labelledby="connect-heading"><h2 id="connect-heading">Tell your agent:</h2><div class="prompt"><div class="prompt-scroll"><code id="connect-prompt">Connect to <span role="region" tabindex="0" aria-label="Agent address">${esc(address)}</span></code></div><button type="button" id="copy-connect" data-copy="${esc(prompt)}" aria-label="Copy prompt for your agent" hidden><svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4H4v12h4"/></svg><svg class="check-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4 10-10"/></svg></button></div><p class="hint" id="copy-help">Select the prompt, copy it, and paste it into your agent’s chat.</p><p id="copy-status" role="status" aria-live="polite"></p></section><section aria-labelledby="happens-heading"><h2 id="happens-heading">What happens next</h2>${happens}</section><footer><a href="${esc(ownAddress)}">Get your own address</a><a href="/index.md">Are you an AI agent? Read this page as Markdown</a><p>Served by <a href="https://github.com/telegraphic-dev/a2a-exposed">a2a-exposed</a>.</p></footer></main></body></html>`;
+	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><link rel="alternate" type="text/markdown" href="/index.md"><title>${esc(m.name)}</title><style nonce="${nonce}">${landingStyle()}</style><script defer nonce="${nonce}" src="/landing-webmcp.js" data-agent-card="${esc(JSON.stringify(m.card || {}))}" data-agent-base="${esc(m.base)}" data-pairing="${m.pairing ? "1" : "0"}"></script></head><body><a class="skip" href="#main">Skip to content</a><header><a class="brand" href="${esc(ownAddress)}">a2a.exposed<span aria-hidden="true">_</span></a><a href="/index.md">For AI agents</a></header><main id="main"><p class="eyebrow">${esc(address)}</p><h1>${esc(m.name)}</h1><p class="description">${esc(description)}</p><section aria-labelledby="connect-heading"><h2 id="connect-heading">Tell your agent:</h2><div class="prompt"><div class="prompt-scroll"><code id="connect-prompt">Connect to <span>${visibleAddress}</span></code></div><button type="button" id="copy-connect" data-copy="${esc(prompt)}" aria-label="Copy prompt for your agent" hidden><svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4H4v12h4"/></svg><svg class="check-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4 10-10"/></svg></button></div><p class="hint" id="copy-help">Select the prompt, copy it, and paste it into your agent’s chat.</p><p id="copy-status" role="status" aria-live="polite"></p></section><section aria-labelledby="happens-heading"><h2 id="happens-heading">What happens next</h2>${happens}</section><footer><a href="${esc(ownAddress)}">Get your own address</a><p>Served by <a href="https://github.com/telegraphic-dev/a2a-exposed">a2a-exposed</a>.</p></footer></main></body></html>`;
 }
 
 function landingStyle(): string {
@@ -314,6 +315,7 @@ color-scheme:dark;
  --line:#2a3a2d;
  --accent:#4ade80;
  --ink:#0a0f0a;
+ --danger:#f87171;
  --space-1:.25rem;
  --space-2:.5rem;
  --space-3:.75rem;
@@ -338,10 +340,10 @@ h1{font:700 clamp(2rem,7vw,3.5rem)/1.15 var(--mono);overflow-wrap:anywhere;margi
 section{margin-top:var(--space-6)}
 h2{font:600 1.125rem/1.5 var(--mono);margin:0 0 var(--space-3)}
 .prompt{position:relative;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);padding:var(--space-5);min-width:0}
-.prompt code{display:block;font:1.125rem/1.8 var(--mono);white-space:pre;user-select:all}
+.prompt code{display:block;font:1.125rem/1.8 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;user-select:all;padding-right:calc(var(--touch) + var(--space-2))}
 .prompt-scroll{min-width:0;max-width:100%}
-.prompt code span{display:block;max-width:100%;min-height:var(--touch);overflow-x:auto;margin-top:var(--space-5)}
-.prompt code span:focus-visible{outline:2px solid var(--accent);outline-offset:var(--space-1)}
+
+
 .check-icon{display:none}
 button[data-state=copied] .copy-icon{display:none}
 button[data-state=copied] .check-icon{display:inline}
@@ -352,6 +354,7 @@ button svg{width:1.25rem;height:1.25rem;fill:none;stroke:currentColor;stroke-wid
 .hint,footer{color:var(--muted);font-size:.875rem}
 #copy-status:empty{display:none}
 #copy-status{color:var(--accent)}
+#copy-status[data-state=failed],button[data-state=failed]{color:var(--danger)}
 ol{padding-left:var(--space-5)}
 li{padding:var(--space-2) 0}
 footer{margin-top:var(--space-6);padding-top:var(--space-5);border-top:1px solid var(--line)}

@@ -79,8 +79,8 @@ test("copy prompt is local, user-triggered, and works without WebMCP", async () 
   let click: (() => Promise<void>) | undefined;
   const written: string[] = [];
   const button = {hidden:true,dataset:{copy:"Connect to your-agent.agent-to-agent.party"} as Record<string,string>,setAttribute() {},addEventListener(_event: string, fn: () => Promise<void>) { click=fn; }};
-  const status = {textContent:""};
-  vm.runInNewContext(LANDING_WEBMCP_SCRIPT,{document:{getElementById:(id: string)=>id==="copy-connect"?button:status},navigator:{clipboard:{async writeText(text: string) { if(fails) throw new Error("denied");written.push(text); }}},setTimeout() {}});
+  const status = {textContent:"",dataset:{} as Record<string,string>};
+  vm.runInNewContext(LANDING_WEBMCP_SCRIPT,{document:{getElementById:(id: string)=>id==="copy-connect"?button:id==="copy-status"?status:null},navigator:{clipboard:{async writeText(text: string) { if(fails) throw new Error("denied");written.push(text); }}},setTimeout() {}});
   assert.equal(button.hidden,false);
   assert.equal(written.length,0,"copy never runs on page load");
   await click!();

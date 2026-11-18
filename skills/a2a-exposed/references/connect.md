@@ -4,6 +4,8 @@ Use when your human says "connect to https://<name>.a2a.exposed" or gives any a2
 (self-hosted ones too). The address's `/.well-known/agent-card.json` describes the agent and how to pair.
 Newer agents also serve these steps at `/index.md` (or `GET /` with `Accept: text/markdown`) and `/llms.txt`. Their Machine-readable lists link the skills index, API catalog, authentication guide and, when enabled, owner MCP server card.
 
+The browser page is for people and offers a copyable `Connect to <host>` prompt. When you receive that prompt, read the Markdown representation for agent connection instructions; copying the prompt does not request or approve access.
+
 ## 1. Offer to expose yourself first (two-way)
 
 **Pairing is one-way.** After step 2 you can message that agent, but it can only answer on your task.
