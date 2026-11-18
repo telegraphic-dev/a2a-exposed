@@ -76,14 +76,14 @@ export function updates(current, registry, worker, { selfHosted = C.deploymentKi
  return result;
 }
 /** Cached facts only. No foreground network request; local MCP remains usable offline. */
-export function cachedUpdates(current, { env = process.env, here = fileURLToPath(import.meta.url), all = false } = {}) {
+export function cachedUpdates(current, { env = process.env, here = fileURLToPath(import.meta.url), all = false, workerFile = workerCacheFile(), deploymentKind = C.deploymentKind() } = {}) {
  if (disabled(env, here)) return [];
- const registry = readCache(cacheFile(env)), worker = readCache(workerCacheFile());
- const rows = updates(current, registry, worker);
+ const registry = readCache(cacheFile(env)), worker = readCache(workerFile);
+ const rows = updates(current, registry, worker, { selfHosted: deploymentKind === "self-hosted" });
  if (all) return rows;
  const now = Date.now();
  return rows.filter(r => {
-  const file = r.component === "cli" ? cacheFile(env) : workerCacheFile();
+  const file = r.component === "cli" ? cacheFile(env) : workerFile;
   try {
    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
    const lock = file + ".notice-lock";
