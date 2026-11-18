@@ -1,4 +1,5 @@
 import { LANDING_SOCIAL_IMAGE } from "./landing-social-image.ts";
+import { SOCIAL_CARD_PATH, cardLayout, socialCardKey, socialCardPng } from "./social-card.ts";
 import { LANDING_WEBMCP_SCRIPT } from "./landing-webmcp.ts";
 // a2a-exposed Worker: public A2A endpoint (JSON-RPC; A2A 1.0 primary, 0.3 compatible),
 // D1-backed inbox, wake webhooks (presets), and an owner API for the local CLI.
@@ -3779,8 +3780,32 @@ async function landing(req: Request, ctx: TenantContext, url: URL): Promise<Resp
 	const nonce = P.randomB64();
 	const links = D.docsLinks(model.docs);
 	const page = P.landingPage({ name: model.name, description: model.description, card,
-		base: ctx.PUBLIC_URL, versions, skills, pairing: model.pairing, proxy: proxyMode(ctx), connectDoc: links.connect, exposeDoc: links.exposeYourself }, nonce);
+		base: ctx.PUBLIC_URL, versions, skills, pairing: model.pairing, proxy: proxyMode(ctx), connectDoc: links.connect, exposeDoc: links.exposeYourself,
+		socialImage: (await socialCardFor(ctx, model.pairing))?.url }, nonce);
 	return new Response(req.method === "HEAD" ? null : page, { status: 200, headers: { ...P.landingHeaders(nonce), ...discovery } });
+}
+
+/** Hosted agents link a card drawn with their own address; self-host and undrawable addresses keep the shared card.
+ *  The URL hashes everything the image shows, so a changed address, pairing state or design gets a new URL. */
+async function socialCardFor(ctx: TenantContext, pairing: boolean): Promise<{ url: string; address: string } | undefined> {
+	if (ctx.mode !== "host") return undefined;
+	const base = ctx.PUBLIC_URL.replace(/\/$/, "");
+	const address = base.replace(/^https?:\/\//, "");
+	if (!cardLayout(address)) return undefined;
+	return { url: `${base}/og-card-v2-${await socialCardKey(address, pairing)}.png`, address };
+}
+
+/** GET|HEAD /og-card-v2-<key>.png. An old key (the pairing state or design changed) redirects to the current card. */
+async function socialCard(req: Request, ctx: TenantContext, key: string): Promise<Response> {
+	const pairing = pairingOn(ctx);
+	const current = await socialCardFor(ctx, pairing);
+	if (!current) return json({ error: "not found" }, 404);
+	if (!current.url.endsWith(`-${key}.png`)) return new Response(null, { status: 302, headers: { location: current.url, "cache-control": "no-store" } });
+	const png = await socialCardPng(current.address, pairing);
+	if (!png) return json({ error: "not found" }, 404);
+	return new Response(req.method === "HEAD" ? null : png, { headers: {
+		"content-type": "image/png", "content-length": String(png.length), "cache-control": "public, max-age=31536000, immutable", "x-content-type-options": "nosniff",
+	} });
 }
 
 /** Link (alternate, describedby, service-doc) and Content-Signal on every variant of GET / and on /index.md. */
@@ -4973,6 +4998,8 @@ async function handle(req: Request, ctx: TenantContext, ectx: ExecutionContext, 
 		if (req.method === "GET" && path === "/og-card-v1.png") return new Response(Uint8Array.from(atob(LANDING_SOCIAL_IMAGE), c => c.charCodeAt(0)), { headers: {
 			"content-type": "image/png", "cache-control": "public, max-age=31536000, immutable", "x-content-type-options": "nosniff",
 		} });
+		const socialKey = (req.method === "GET" || req.method === "HEAD") && SOCIAL_CARD_PATH.exec(path)?.[1];
+		if (socialKey) return await socialCard(req, ctx, socialKey);
 		if (req.method === "GET" && path === "/landing-webmcp.js") return new Response(LANDING_WEBMCP_SCRIPT, { headers: {
 			"content-type": "text/javascript; charset=utf-8", "cache-control": "no-cache", "x-content-type-options": "nosniff",
 		} });

@@ -23,6 +23,7 @@ import { hostedDailyBackup } from "./backup.ts";
 import { lookupDirectory, parseDirectoryEntry, pinDirectoryRegion, tenantNameFromHost, tenantRegion, TENANT_NAME, type DirectoryEntry } from "./directory.ts";
 import { hostedTenantContext, namespaceForRegion, parseGates, type WorkerBindings, type DataRegion } from "./tenancy.ts";
 import { WAKE_SECRET_KEYS, omitSealedSecrets, openWakeSecrets } from "./wake-secrets.ts";
+import { SOCIAL_CARD_PATH, cachedSocialCard } from "./social-card.ts";
 
 export { clearDirectoryCache, directoryKey, lookupDirectory, parseDirectoryEntry, pinDirectoryRegion, tenantNameFromHost, tenantRegion, TENANT_NAME } from "./directory.ts";
 export type { DirectoryEntry };
@@ -555,7 +556,8 @@ export default {
 		// The spike carried the tenant row on this header. Drop it so a client cannot supply config.
 		const headers = new Headers(req.headers);
 		headers.delete("x-a2a-tenant");
-		return ns.get(ns.idFromName(entry.id)).fetch(new Request(req, { headers }));
+		const forward = () => ns.get(ns.idFromName(entry.id)).fetch(new Request(req, { headers }));
+		return req.method === "GET" && SOCIAL_CARD_PATH.test(new URL(req.url).pathname) ? cachedSocialCard(req, ectx, forward) : forward();
 	},
 	// Self-host cron flushes env.DB. Hosted has no single database; each tenant's alarm runs that flush.
 	// The daily backup cron (only present when BACKUP_BUCKET is bound) exports each active tenant and returns.

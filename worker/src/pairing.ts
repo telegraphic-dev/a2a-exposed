@@ -289,6 +289,7 @@ export type LandingModel = {
 	proxy: boolean; // façade for an existing A2A agent (vs. the webhook inbox)
 	connectDoc?: string; // the connect playbook (https)
 	exposeDoc?: string; // the setup skill: get your own A2A address (https)
+	socialImage?: string; // per-agent card URL (hosted); unset means the shared /og-card-v1.png
 };
 
 /** Public HTML is for people; protocol and connection instructions live in the Markdown representation. */
@@ -300,8 +301,12 @@ export function landingPage(m: LandingModel, nonce: string): string {
 	const technicalDefault = m.description === "An AI agent reachable over A2A. Messages are queued and handled asynchronously; poll GetTask or register a push notification config." || m.description === "An AI agent reachable over A2A through a public façade.";
 	const description = !technicalDefault && m.description || (m.proxy ? "An agent you can connect with." : "Send a message to this agent through its public address.");
 	const socialDescription = `${m.description && !technicalDefault ? m.description + " " : ""}Tell your agent: ${prompt}. ${m.pairing ? "The owner approves every connection." : "New connection requests are turned off."}`;
-	const socialImage = `${m.base}/og-card-v1.png`;
-	const social = `<meta property="og:type" content="website"><meta property="og:url" content="${esc(m.base)}"><meta property="og:title" content="${esc(prompt)}"><meta property="og:description" content="${esc(socialDescription)}"><meta property="og:image" content="${esc(socialImage)}"><meta property="og:image:type" content="image/png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta property="og:image:alt" content="Connect your agent to this one. Tell your agent: Connect to this agent’s address."><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${esc(prompt)}"><meta name="twitter:description" content="${esc(socialDescription)}"><meta name="twitter:image" content="${esc(socialImage)}"><meta name="twitter:image:alt" content="Connect your agent to this one. Tell your agent: Connect to this agent’s address.">`;
+	const socialImage = m.socialImage || `${m.base}/og-card-v1.png`;
+	// The alt text reads what the image shows: the per-agent card has the address and the pairing footer.
+	const socialAlt = m.socialImage
+		? `Connect your agent to this one. Tell your agent: ${prompt}. ${m.pairing ? "The owner approves every connection." : "New connection requests are turned off."}`
+		: "Connect your agent to this one. Tell your agent: Connect to this agent’s address.";
+	const social = `<meta property="og:type" content="website"><meta property="og:url" content="${esc(m.base)}"><meta property="og:title" content="${esc(prompt)}"><meta property="og:description" content="${esc(socialDescription)}"><meta property="og:image" content="${esc(socialImage)}"><meta property="og:image:type" content="image/png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta property="og:image:alt" content="${esc(socialAlt)}"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${esc(prompt)}"><meta name="twitter:description" content="${esc(socialDescription)}"><meta name="twitter:image" content="${esc(socialImage)}"><meta name="twitter:image:alt" content="${esc(socialAlt)}">`;
 	const happens = m.pairing
 		? `<ol><li>Your agent asks to connect.</li><li>This agent’s owner approves the request.</li><li>Your agents can exchange messages.</li></ol><p class="hint">The owner decides who can connect. Copying this prompt does not grant access.</p>`
 		: `<p>New connection requests are turned off. Ask this agent’s owner how to get access. Existing connections can still exchange messages.</p>`;

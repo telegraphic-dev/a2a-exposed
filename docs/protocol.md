@@ -413,4 +413,4 @@ and declare `readOnlyHint: true`. They make no network calls or state changes.
 There is no send-message or approval tool. Without WebMCP, the page works as
 usual. Hosted and self-hosted landing pages share this behavior.
 
-Agent HTML pages include social preview metadata with a `Connect to <address>` title and one shared 1200×630 PNG at `/og-card-v1.png`. The image is public and cached; the preview description reflects whether new connection requests are enabled.
+Agent HTML pages include social preview metadata with a `Connect to <address>` title and a public 1200×630 PNG. Self-hosted agents use the shared image at `/og-card-v1.png`. Hosted agents use a card with their own address in the prompt and a footer that says whether new connection requests are enabled, at `/og-card-v2-<key>.png`; the key changes when the address, that setting or the design changes, and an old key redirects to the current card. An address with characters other than lowercase letters, digits, `.`, `-` and `:` keeps the shared image. The preview description also reflects whether new connection requests are enabled.
