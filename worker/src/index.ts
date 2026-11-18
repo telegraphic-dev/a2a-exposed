@@ -1,3 +1,4 @@
+import { LANDING_SOCIAL_IMAGE } from "./landing-social-image.ts";
 import { LANDING_WEBMCP_SCRIPT } from "./landing-webmcp.ts";
 // a2a-exposed Worker: public A2A endpoint (JSON-RPC; A2A 1.0 primary, 0.3 compatible),
 // D1-backed inbox, wake webhooks (presets), and an owner API for the local CLI.
@@ -4969,6 +4970,9 @@ async function handle(req: Request, ctx: TenantContext, ectx: ExecutionContext, 
 		if (req.method === "GET" && path.startsWith("/.well-known/agent-skills/")) return skillsDoc(ctx, path);
 		if (req.method === "GET" && path === "/.well-known/ai-catalog.json") return await discoveryDoc(ctx, "ard");
 		if (req.method === "GET" && path === "/.well-known/api-catalog") return await discoveryDoc(ctx, "catalog");
+		if (req.method === "GET" && path === "/og-card-v1.png") return new Response(Uint8Array.from(atob(LANDING_SOCIAL_IMAGE), c => c.charCodeAt(0)), { headers: {
+			"content-type": "image/png", "cache-control": "public, max-age=31536000, immutable", "x-content-type-options": "nosniff",
+		} });
 		if (req.method === "GET" && path === "/landing-webmcp.js") return new Response(LANDING_WEBMCP_SCRIPT, { headers: {
 			"content-type": "text/javascript; charset=utf-8", "cache-control": "no-cache", "x-content-type-options": "nosniff",
 		} });
