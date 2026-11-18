@@ -44,9 +44,18 @@ function acceptQ(accept: string): Map<string, number> {
 	return out;
 }
 
+/** User-Agent tokens of the crawlers that fetch a shared link to draw its preview card. Several of them send
+ *  a wildcard Accept or none, so without this they would get JSON and never see the og: and twitter: tags. */
+const LINK_PREVIEW_BOTS = /\b(?:Slackbot|Twitterbot|LinkedInBot|facebookexternalhit|Facebot|Discordbot|TelegramBot|WhatsApp|SkypeUriPreview|redditbot|Pinterestbot|Mastodon|Embedly|Iframely)\b/i;
+
+export function linkPreviewBot(userAgent: string | null): boolean {
+	return !!userAgent && LINK_PREVIEW_BOTS.test(userAgent);
+}
+
 /** Which representation of GET / to serve. Markdown when the client names text/markdown at least as high as both
- *  text/html and application/json (Markdown wins a tie); HTML when it names text/html; otherwise the JSON it always got. */
-export function rootFormat(accept: string | null, formatParam: string | null): "json" | "html" | "markdown" {
+ *  text/html and application/json (Markdown wins a tie); HTML when it names text/html; HTML for a link-preview bot
+ *  that names neither text/html nor application/json (a wildcard Accept or none); otherwise the JSON it always got. */
+export function rootFormat(accept: string | null, formatParam: string | null, userAgent: string | null = null): "json" | "html" | "markdown" {
 	if (formatParam === "json") return "json";
 	const q = acceptQ(accept || "");
 	const md = q.get("text/markdown") ?? 0;
@@ -54,8 +63,12 @@ export function rootFormat(accept: string | null, formatParam: string | null): "
 	const json = q.get("application/json") ?? 0;
 	if (md > 0 && md >= html && md >= json) return "markdown";
 	if (html > 0) return "html";
+	if (!q.has("text/html") && !q.has("application/json") && linkPreviewBot(userAgent)) return "html";
 	return "json";
 }
+
+/** GET / picks its representation from Accept and User-Agent, so every variant says both. */
+export const ROOT_VARY = "accept, user-agent";
 
 /** One line of card text, safe in Markdown: whitespace and control characters collapsed to one line (so nothing
  *  can start a heading, list, or front matter), length capped, and the characters that open links, images, raw

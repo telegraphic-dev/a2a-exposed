@@ -867,7 +867,7 @@ test("GET /: a browser gets an HTML landing page (strict nonce CSP, read-only sc
 	assert.match(csp, /default-src 'none'/);
 	assert.match(csp, /form-action 'none'/);
 	assert.match(csp, /frame-ancestors 'none'/);
-	assert.equal(h.headers.get("vary"), "accept");
+	assert.equal(h.headers.get("vary"), "accept, user-agent");
 	assert.equal(h.headers.get("x-frame-options"), "DENY");
 	assert.ok(!/<img|<iframe/i.test(h.text), "no external media");
 	assert.equal((h.text.match(/<script /g) || []).length, 1);
@@ -907,6 +907,37 @@ test("GET /: a browser gets an HTML landing page (strict nonce CSP, read-only sc
 	assert.equal(head.text, "");
 });
 
+test("GET /: link-preview bots with a wildcard or no Accept get the HTML page and its meta tags; other clients keep JSON", async (t) => {
+	const s = setup(); t.after(s.restore);
+	for (const ua of ["Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)", "Twitterbot/1.0", "facebookexternalhit/1.1", "WhatsApp/2.23.20.0 A"]) {
+		for (const headers of [{ "user-agent": ua }, { "user-agent": ua, accept: "*/*" }]) {
+			const r = await s.call("GET", "/", { headers });
+			assert.equal(r.status, 200, ua);
+			assert.match(r.headers.get("content-type")!, /^text\/html/, ua);
+			assert.equal(r.headers.get("vary"), "accept, user-agent", ua);
+			assert.match(r.text, /<meta property="og:title"/, ua);
+			assert.match(r.text, /<meta name="twitter:card"/, ua);
+		}
+		const j = await s.call("GET", "/", { headers: { "user-agent": ua, accept: "application/json" } });
+		assert.match(j.headers.get("content-type")!, /^application\/json/, `${ua} asked for JSON`);
+		const f = await s.call("GET", "/?format=json", { headers: { "user-agent": ua } });
+		assert.match(f.headers.get("content-type")!, /^application\/json/, `${ua} with ?format=json`);
+		const head = await s.call("HEAD", "/", { headers: { "user-agent": ua } });
+		assert.equal(head.status, 200);
+		assert.match(head.headers.get("content-type")!, /^text\/html/);
+		assert.equal(head.text, "");
+	}
+	for (const headers of [{}, { accept: "*/*" }, { "user-agent": "curl/8.7.1", accept: "*/*" }, { "user-agent": "a2a-exposed/0.8.67" }]) {
+		const r = await s.call("GET", "/", { headers });
+		assert.match(r.headers.get("content-type")!, /^application\/json/, JSON.stringify(headers));
+		assert.equal(r.headers.get("vary"), "accept, user-agent", JSON.stringify(headers));
+		assert.equal(r.data.agentCard, `${BASE}/.well-known/agent-card.json`);
+	}
+	const md = await s.call("GET", "/index.md", { headers: { "user-agent": "Twitterbot/1.0" } });
+	assert.equal(md.headers.get("content-type"), "text/markdown; charset=utf-8", "/index.md has one representation");
+	assert.equal(md.headers.get("vary"), "accept");
+});
+
 test("GET / with pairing off: no /device link, says to ask the operator", async (t) => {
 	const s = setup({ PAIRING_APPROVAL: "off" }); t.after(s.restore);
 	const h = await s.call("GET", "/", { headers: { accept: "text/html" } });
@@ -931,7 +962,7 @@ test("GET / with Accept: text/markdown, /index.md and /llms.txt: the connect pag
 		const r = await s.call("GET", "/", { headers: { accept } });
 		assert.equal(r.status, 200, accept);
 		assert.equal(r.headers.get("content-type"), "text/markdown; charset=utf-8", accept);
-		assert.equal(r.headers.get("vary"), "accept");
+		assert.equal(r.headers.get("vary"), "accept, user-agent");
 		assert.ok(new TextEncoder().encode(r.text).length < 3072);
 		assert.match(r.text.split("\n").find((l) => /^1\. /.test(l))!, /two-way/);
 	}
