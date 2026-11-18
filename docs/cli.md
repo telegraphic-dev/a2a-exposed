@@ -634,6 +634,8 @@ never pairs or falls back to owner credentials, and refuses local encrypted conf
 Stdout is sensitive; let the client consume it directly. See
 [Use with the official A2A CLI](official-a2a-cli.md) for client configuration,
 URI boundaries, noninteractive errors and encryption restrictions.
+A client with only the official CLI cannot pair; it can use a `token issue` token
+instead, as that page describes.
 
 Owner-wait replies accept an explicit reason and public note. See
 [waiting for an owner decision](protocol.md#waiting-for-an-owner-decision)
