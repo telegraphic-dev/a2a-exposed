@@ -116,7 +116,7 @@ export function connectMarkdown(m: ConnectModel): string {
 	const links = docsLinks(m.docs);
 	const desc = m.description ? `> ${mdText(m.description, DESCRIPTION_MAX)}\n` : "";
 	return `---\nagent-card: ${m.base}/.well-known/agent-card.json\n---\n# ${name}\n${desc}\n` +
-		`You were asked to connect to this agent. Playbook: ${links.connect}\n\n` +
+		`Connect to ${m.base.replace(/^https?:\/\//, "")}\n\nYou were asked to connect to this agent. Playbook: ${links.connect}\n\n` +
 		`${steps(m, name, links)}\n\n` +
 		`Machine-readable: ${machineLinks(m).map((l) => `[${l.label}](${l.href})`).join(" · ")}\n`;
 }

@@ -1,7 +1,31 @@
 // Static same-origin script for the public landing page. All data is the already scrubbed card snapshot.
-// No requests, cookies, storage, navigation, approvals, messages or owner operations.
+// Copy is user-triggered and local only. No requests, cookies, storage, navigation, approvals, messages or owner operations.
 export const LANDING_WEBMCP_SCRIPT = String.raw`(() => {
  "use strict";
+ const copy = document.getElementById?.("copy-connect");
+ const status = document.getElementById?.("copy-status");
+ if (copy && status) {
+  const help = document.getElementById?.("copy-help");
+  if (help) help.textContent = "Copy the prompt and paste it into your agent’s chat.";
+  let copiedTimer;
+  copy.hidden = false;
+  copy.addEventListener("click", async () => {
+   if (copiedTimer) clearTimeout(copiedTimer);
+   try {
+    await navigator.clipboard.writeText(copy.dataset.copy);
+    status.dataset.state = "copied";
+    status.textContent = "Copied. Paste the prompt into your agent’s chat.";
+    copy.setAttribute("aria-label", "Prompt copied");
+    copy.dataset.state = "copied";
+    copiedTimer = setTimeout(() => { copy.setAttribute("aria-label", "Copy prompt for your agent"); delete copy.dataset.state; status.textContent = ""; }, 2000);
+   } catch {
+    copy.dataset.state = "failed";
+    status.dataset.state = "failed";
+    copy.setAttribute("aria-label", "Copy prompt for your agent");
+    status.textContent = "Copy failed. Select the prompt and copy it.";
+   }
+  });
+ }
  const context = document.modelContext || globalThis.navigator?.modelContext;
  const script = document.currentScript;
  if (!context || typeof context.registerTool !== "function" || !script) return;

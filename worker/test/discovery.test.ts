@@ -36,6 +36,7 @@ test("docsOrigin: https origins only, else the default", () => {
 
 test("connectMarkdown: front matter, expose-yourself first, pair, talk, machine-readable links, under 3 KB", () => {
 	const md = D.connectMarkdown(model());
+	assert.match(md, /Connect to example-peer.a2a.exposed/);
 	assert.ok(md.startsWith("---\nagent-card: https://example-peer.a2a.exposed/.well-known/agent-card.json\n---\n# example-peer\n> An AI agent"));
 	assert.ok(md.includes("Playbook: https://a2a.exposed/.well-known/agent-skills/a2a-exposed/references/connect.md"));
 	const first = md.split("\n").find((l) => /^1\. /.test(l))!;

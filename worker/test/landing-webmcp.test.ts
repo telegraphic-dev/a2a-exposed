@@ -72,3 +72,31 @@ test("hosted and self-hosted handlers serve the script with correct MIME and HEA
   assert.equal((await call(new Request(BASE + "/landing-webmcp.js", {method:"POST"}))).status, 404);
  }
 });
+
+
+test("copy prompt is local, user-triggered, and works without WebMCP", async () => {
+ for (const fails of [false, true]) {
+  let click: (() => Promise<void>) | undefined;
+  const written: string[] = [];
+  const button = {hidden:true,dataset:{copy:"Connect to your-agent.agent-to-agent.party"} as Record<string,string>,setAttribute() {},addEventListener(_event: string, fn: () => Promise<void>) { click=fn; }};
+  const status = {textContent:"",dataset:{} as Record<string,string>};
+  vm.runInNewContext(LANDING_WEBMCP_SCRIPT,{document:{getElementById:(id: string)=>id==="copy-connect"?button:id==="copy-status"?status:null},navigator:{clipboard:{async writeText(text: string) { if(fails) throw new Error("denied");written.push(text); }}},setTimeout() {}});
+  assert.equal(button.hidden,false);
+  assert.equal(written.length,0,"copy never runs on page load");
+  await click!();
+  if(fails) {assert.match(status.textContent,/Copy failed. Select the prompt and copy it/);assert.deepEqual(written,[]);}
+  else {assert.deepEqual(written,[button.dataset.copy]);assert.equal(button.dataset.state,"copied");assert.match(status.textContent,/Copied/);}
+ }
+});
+
+test("human landing keeps technical instructions in Markdown and supports manual copy", () => {
+ const html=landingPage({...model,base:"https://your-agent.agent-to-agent.party",description:"Helpful <agent>"},"nonce");
+ assert.match(html,/data-copy="Connect to your-agent.agent-to-agent.party"/);
+ assert.match(html,/id="copy-connect"[^>]* hidden/);
+ assert.match(html,/Helpful &lt;agent&gt;/);
+ assert.doesNotMatch(html,/npx|JSON-RPC|Bearer token|<table>/);
+ assert.match(html,/href="\/index.md"/);
+ const off=landingPage({...model,pairing:false},"nonce");
+ assert.match(off,/connection requests are turned off/);
+ assert.doesNotMatch(off,/owner approves the request/);
+});

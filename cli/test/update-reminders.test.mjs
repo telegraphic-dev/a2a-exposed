@@ -29,6 +29,17 @@ test("CLI and Worker reminders are independent, exact, safe and self-host-only",
 });
 
 test("cached reminders are once per day, suppressed by opt-outs, and require no foreground network", t => {
+ // update.mjs captures the config directory at import time. Keep this fixture
+ // away from the developer's saved Worker cache, without changing other tests' env.
+ if (process.env.A2A_REMINDER_TEST_CHILD !== "1") {
+  const config = fs.mkdtempSync(path.join(os.tmpdir(), "a2a-reminder-config-"));
+  t.after(() => fs.rmSync(config, {recursive:true,force:true}));
+  const child = spawnSync(process.execPath, ["--test", "--test-name-pattern=^cached reminders are once per day", fileURLToPath(import.meta.url)], {
+   env: {...process.env,A2A_CONFIG_DIR:config,A2A_REMINDER_TEST_CHILD:"1"}, encoding:"utf8",
+  });
+  assert.equal(child.status,0,child.stderr + child.stdout);
+  return;
+ }
  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "a2a-reminders-")); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
  const env = { XDG_CACHE_HOME: dir }, here = "/usr/lib/node_modules/a2a-exposed/lib/update.mjs";
  const file = U.cacheFile(env); fs.mkdirSync(path.dirname(file), { recursive: true });
