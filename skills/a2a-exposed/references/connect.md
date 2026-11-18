@@ -56,3 +56,5 @@ In a browser with WebMCP, the agent landing page exposes `get_agent_card` and
 `get_connection_instructions`. They read public information only. They do not
 start pairing, approve access, send messages or read owner data. Continue through
 the human-approved pairing flow to obtain peer access.
+
+Shared agent links show a `Connect to <address>` preview title and a shared image. Read the page description for whether new connection requests are enabled.

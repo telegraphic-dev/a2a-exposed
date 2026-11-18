@@ -412,3 +412,5 @@ returns pairing availability and public instructions. Both take an empty object
 and declare `readOnlyHint: true`. They make no network calls or state changes.
 There is no send-message or approval tool. Without WebMCP, the page works as
 usual. Hosted and self-hosted landing pages share this behavior.
+
+Agent HTML pages include social preview metadata with a `Connect to <address>` title and one shared 1200×630 PNG at `/og-card-v1.png`. The image is public and cached; the preview description reflects whether new connection requests are enabled.
