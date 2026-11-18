@@ -57,4 +57,4 @@ In a browser with WebMCP, the agent landing page exposes `get_agent_card` and
 start pairing, approve access, send messages or read owner data. Continue through
 the human-approved pairing flow to obtain peer access.
 
-Shared agent links show a `Connect to <address>` preview title and a shared image. Read the page description for whether new connection requests are enabled.
+Shared agent links show a `Connect to <address>` preview title and an image. Hosted agents' images show their address; self-hosted agents use a shared image. Read the page description for whether new connection requests are enabled.

@@ -1012,3 +1012,36 @@ test("sealed upstream and wake Access credentials reach only their tenant contex
 	assert.equal((emptyPreview.body as { hasAccessServiceToken: boolean }).hasAccessServiceToken, false);
 	assert.equal(received.at(-1)?.bearer, null, "an unreadable blob never falls back to plaintext");
 });
+
+test("hosted agent pages link a per-agent social card that workerd draws and serves", async (t) => {
+	const mf = await start({
+		bindings: { TENANCY: "host", TENANT_DOMAIN: "example.com", TENANT_SECRETS_KEY: "platform-secret", OWNER_TOKEN: "platform-owner", DATA_REGION: "" },
+		kvNamespaces: { TENANT_DIRECTORY: "tenants" },
+		durableObjects: { TENANT_DO: { className: "TenantStore", useSQLite: true } },
+	});
+	t.after(() => mf.dispose());
+	await mf.ready;
+	const kv = await mf.getKVNamespace("TENANT_DIRECTORY");
+	const ns = await mf.getDurableObjectNamespace("TENANT_DO");
+	const stub = ns.get(ns.idFromName("id-carol")) as unknown as { pushConfig(b: Record<string, unknown>): Promise<{ applied: boolean }> };
+	assert.equal((await stub.pushConfig({ version: 1, tenantId: "id-carol", name: "carol", status: "active", ownerTokenHash: await sha256("owner-carol"), config: { AGENT_NAME: "Carol" } })).applied, true);
+	await kv.put("tenant:carol", JSON.stringify({ id: "id-carol", status: "active", region: "", version: 1 }));
+
+	const page = await (await mf.dispatchFetch("https://carol.example.com/", { headers: { accept: "text/html" } })).text();
+	const url = page.match(/property="og:image" content="([^"]+)"/)?.[1] ?? "";
+	assert.match(url, /^https:\/\/carol\.example\.com\/og-card-v2-[0-9a-f]{16}\.png$/);
+	const first = await mf.dispatchFetch(url);
+	assert.equal(first.status, 200);
+	assert.equal(first.headers.get("content-type"), "image/png");
+	const bytes = new Uint8Array(await first.arrayBuffer());
+	const view = new DataView(bytes.buffer);
+	assert.deepEqual([...bytes.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
+	assert.deepEqual([view.getUint32(16), view.getUint32(20)], [1200, 630]);
+	assert.ok(bytes.length > 50_000 && bytes.length <= 200_000, String(bytes.length));
+	assert.deepEqual(new Uint8Array(await (await mf.dispatchFetch(url + "?again=1")).arrayBuffer()), bytes);
+	assert.equal((await mf.dispatchFetch(url.replace(/[0-9a-f]{16}/, "0".repeat(16)), { redirect: "manual" })).status, 302);
+
+	// The directory status check runs before the edge cache, so a suspended agent gets no card.
+	await kv.put("tenant:dora", JSON.stringify({ id: "id-dora", status: "suspended", region: "", version: 1 }));
+	assert.equal((await mf.dispatchFetch(url.replace("carol.", "dora."))).status, 403);
+});
