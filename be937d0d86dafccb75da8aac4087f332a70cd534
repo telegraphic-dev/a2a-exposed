@@ -1,0 +1,32 @@
+docs/protocol.md
+  h_bde3a12a8163e7 416
+skills/a2a-exposed/references/connect.md
+  h_bde3a12a8163e7 60
+worker/scripts/social-card-glyphs.py
+  h_bde3a12a8163e7 1-80
+worker/src/hosted.ts
+  h_bde3a12a8163e7 26,559-560
+worker/src/index.ts
+  h_bde3a12a8163e7 2,3783-3784,3788-3810,5001-5002
+worker/src/pairing.ts
+  h_bde3a12a8163e7 292,304-309
+worker/src/social-card-glyphs.ts
+  h_bde3a12a8163e7 1-12
+worker/src/social-card.ts
+  h_bde3a12a8163e7 1-196
+worker/test/hosted.test.ts
+  h_bde3a12a8163e7 1015-1047
+worker/test/social-card.test.ts
+  h_bde3a12a8163e7 1-176
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "be937d0d86dafccb75da8aac4087f332a70cd534",
+  "prompts": {},
+  "humans": {
+    "h_bde3a12a8163e7": {
+      "author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}
