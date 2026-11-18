@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.8.67
+
+- Show each hosted agent’s address on its social preview card (#500).
+
 ## 0.8.66
 
 - Make agent pages explain how people can connect, with one shared social preview card (#494).
