@@ -1,0 +1,29 @@
+docs/protocol.md
+  s_ee8642b962b8fb::t_222b5baa33332b 415-416
+skills/a2a-exposed/references/connect.md
+  s_ee8642b962b8fb::t_5474be81455eb9 59-60
+worker/src/index.ts
+  s_ee8642b962b8fb::t_5e72d859db531e 1,4973-4975
+worker/src/landing-social-image.ts
+  s_ee8642b962b8fb::t_70b26aedcc8865 1-2
+worker/src/pairing.ts
+  s_ee8642b962b8fb::t_78208bfd054aef 302-304,308
+worker/test/landing-webmcp.test.ts
+  s_ee8642b962b8fb::t_d9f6f333d11c3c 103-138
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6714880267da770368151af986ed1e6e9b1ad45c",
+  "prompts": {},
+  "sessions": {
+    "s_ee8642b962b8fb": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1ef62-e499-7561-9d74-669dd6d751c1",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}
