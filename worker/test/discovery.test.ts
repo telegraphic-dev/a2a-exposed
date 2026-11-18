@@ -24,6 +24,39 @@ test("rootFormat: Markdown when named at least as high as HTML and JSON; browser
 	assert.equal(D.rootFormat("text/html;q=0", null), "json");
 });
 
+// Real User-Agent strings the preview services send (Slack, X, LinkedIn, Meta, Discord, Telegram, WhatsApp, Mastodon).
+const PREVIEW_BOTS = [
+	"Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)",
+	"Twitterbot/1.0",
+	"LinkedInBot/1.0 (compatible; Mozilla/5.0; Apache-HttpClient +http://www.linkedin.com)",
+	"facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
+	"Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)",
+	"TelegramBot (like TwitterBot)",
+	"WhatsApp/2.23.20.0 A",
+	"http.rb/5.1.1 (Mastodon/4.2.1; +https://mastodon.example/)",
+];
+const NOT_BOTS = [null, "", "curl/8.7.1", "node", "a2a-exposed/0.8.67", "python-httpx/0.27.0", "Googlebot/2.1 (+http://www.google.com/bot.html)",
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15", "NotSlackbotX/1.0"];
+
+test("rootFormat: a link-preview bot with a wildcard or missing Accept gets HTML; everyone else keeps JSON", () => {
+	for (const ua of PREVIEW_BOTS) {
+		assert.ok(D.linkPreviewBot(ua), ua);
+		for (const accept of [null, "", "*/*", "*/*;q=0.8", "text/*", "image/png, */*;q=0.5"]) assert.equal(D.rootFormat(accept, null, ua), "html", `${ua} | ${accept}`);
+		assert.equal(D.rootFormat("text/html", null, ua), "html", ua);
+		assert.equal(D.rootFormat("application/json", null, ua), "json", `${ua} asked for JSON`);
+		assert.equal(D.rootFormat("application/json, */*;q=0.1", null, ua), "json", `${ua} named JSON`);
+		assert.equal(D.rootFormat("text/html;q=0, */*", null, ua), "json", `${ua} refused HTML`);
+		assert.equal(D.rootFormat("text/markdown", null, ua), "markdown", `${ua} asked for Markdown`);
+		assert.equal(D.rootFormat("*/*", "json", ua), "json", `${ua} with ?format=json`);
+	}
+	for (const ua of NOT_BOTS) {
+		assert.equal(D.linkPreviewBot(ua), false, String(ua));
+		for (const accept of [null, "*/*"]) assert.equal(D.rootFormat(accept, null, ua), "json", `${ua} | ${accept}`);
+	}
+	assert.equal(D.rootFormat("*/*", null), "json", "no User-Agent argument: JSON as before");
+	assert.equal(D.ROOT_VARY, "accept, user-agent");
+});
+
 test("docsOrigin: https origins only, else the default", () => {
 	assert.equal(D.docsOrigin(undefined), "https://a2a.exposed");
 	assert.equal(D.docsOrigin(""), "https://a2a.exposed");

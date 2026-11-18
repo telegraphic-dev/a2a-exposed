@@ -3763,17 +3763,17 @@ function registrationModel(ctx: TenantContext): { registration?: { origin: strin
 	return target ? { registration: { origin: ctx.gates.agentRegistrationOrigin, target } } : {};
 }
 
-/** A browser (Accept: text/html) gets a small HTML page; an agent that asks for text/markdown the connect steps in
- *  Markdown; anything else (curl, Accept: application/json, ?format=json) the JSON it always got, with links added.
+/** A browser (Accept: text/html) and a link-preview bot get a small HTML page; an agent that asks for text/markdown the
+ *  connect steps in Markdown; anything else (curl, Accept: application/json, ?format=json) the JSON it always got, with links added.
  *  Built from the served (rewritten) card, so it shows exactly what the card shows. */
 async function landing(req: Request, ctx: TenantContext, url: URL): Promise<Response> {
-	const format = D.rootFormat(req.headers.get("accept"), url.searchParams.get("format"));
+	const format = D.rootFormat(req.headers.get("accept"), url.searchParams.get("format"), req.headers.get("user-agent"));
 	const { card, model } = await connectModel(ctx);
 	const cardUrl = ctx.PUBLIC_URL + "/.well-known/agent-card.json";
-	const discovery = rootDiscoveryHeaders(ctx, model);
+	const discovery = { ...rootDiscoveryHeaders(ctx, model), vary: D.ROOT_VARY };
 	if (format === "markdown") return new Response(D.connectMarkdown(model), { status: 200, headers: { ...D.markdownHeaders(), ...discovery } });
 	if (format === "json") return json({ name: card.name, description: card.description, agentCard: cardUrl, a2a: ctx.PUBLIC_URL + "/",
-		pairing: pairingOn(ctx) ? ctx.PUBLIC_URL + "/device" : undefined, ...D.rootJsonLinks(model) }, 200, { vary: "accept", ...discovery });
+		pairing: pairingOn(ctx) ? ctx.PUBLIC_URL + "/device" : undefined, ...D.rootJsonLinks(model) }, 200, discovery);
 	const versions = [...new Set<string>((card.supportedInterfaces || []).map((i: any) => String(i?.protocolVersion || "")).filter(Boolean))];
 	const skills = (Array.isArray(card.skills) ? card.skills : []).filter((k: any) => k && (k.name || k.id))
 		.map((k: any) => ({ name: String(k.name || k.id), description: typeof k.description === "string" ? k.description : undefined }));
