@@ -876,17 +876,13 @@ test("GET /: a browser gets an HTML landing page (strict nonce CSP, read-only sc
 	assert.ok(h.headers.get("content-security-policy")!.includes(`script-src 'nonce-${scriptNonce}'`));
 	assert.ok(!h.headers.get("content-security-policy")!.includes("'unsafe-inline'"));
 	assert.deepEqual(h.text.match(/<link[^>]*>/g), [`<link rel="alternate" type="text/markdown" href="/index.md">`], "only the Markdown alternate, which loads nothing");
-	assert.equal(h.text.match(/one-way/g)?.length, 1);
-	assert.ok(h.text.includes(`<a href="https://a2a.exposed/.well-known/agent-skills/a2a-exposed-setup/SKILL.md">hosted or self-hosted</a>`));
-	assert.ok(h.text.includes(`<a href="https://a2a.exposed/.well-known/agent-skills/a2a-exposed/references/connect.md">connect playbook</a>`));
-	assert.ok(h.text.indexOf("one-way") < h.text.indexOf("Agents get a bearer token"), "two-way offer comes before the pairing steps");
 	assert.ok(h.text.includes("Barry &lt;b&gt;&amp; Co&lt;/b&gt;") && !h.text.includes("<b>&"), "name escaped");
 	assert.ok(h.text.includes("Answers questions about &lt;bricks&gt;."));
-	assert.match(h.text, /A2A \(Agent2Agent\)<\/a> endpoint/);
-	assert.ok(h.text.includes(`href="/.well-known/agent-card.json"`) && h.text.includes(`${BASE}/.well-known/agent-card.json`));
-	assert.ok(h.text.includes(`href="/device"`), "pairing link");
-	assert.ok(h.text.includes(`npx -y a2a-exposed@latest connect ${BASE}`));
-	assert.match(h.text, /1\.0, 0\.3/);
+	assert.ok(h.text.includes(`data-copy="Connect to ${BASE.replace(/^https?:\/\//, "")}"`));
+	assert.match(h.text, /Tell your agent:/);
+	assert.match(h.text, /owner approves/);
+	assert.match(h.text, /Read this page as Markdown/);
+	assert.doesNotMatch(h.text, /npx|JSON-RPC|Bearer token|<table>/);
 	// the style block carries the CSP nonce
 	const nonce = /style-src 'nonce-([^']+)'/.exec(csp)![1];
 	assert.ok(h.text.includes(`<style nonce="${nonce}">`));
@@ -915,8 +911,8 @@ test("GET / with pairing off: no /device link, says to ask the operator", async 
 	const s = setup({ PAIRING_APPROVAL: "off" }); t.after(s.restore);
 	const h = await s.call("GET", "/", { headers: { accept: "text/html" } });
 	assert.ok(!h.text.includes(`href="/device"`));
-	assert.match(h.text, /ask this agent's operator for a bearer token/);
-	assert.match(h.text, /one-way/);
+	assert.match(h.text, /Ask this agent’s owner how to get access/);
+	assert.match(h.text, /connection requests are turned off/);
 	const j = (await s.call("GET", "/")).data;
 	assert.equal(j.pairing, undefined);
 	assert.equal(j.pairingEndpoint, undefined);
@@ -1242,7 +1238,7 @@ test("device page copy: code hint, expiry, token scope, settled result, A2A endp
 	const setupHtml = P.setupPage({ agentName: "this A2A endpoint", cli: "a2a", csrf: "c".repeat(24), token: "tok", expiresMs: now + 60_000 }, "n");
 	assert.match(setupHtml, /connect to this A2A endpoint/);
 	const land = P.landingPage({ name: "Test", base: "https://agent.example.com", versions: ["1.0"], skills: [], pairing: true, proxy: false }, "n");
-	assert.match(land, /Messages are stored for its owner, and the agent is woken/);
+	assert.match(land, /Send a message to this agent through its public address/);
 
 	const s = setup(); t.after(s.restore);
 	const empty = await s.call("GET", "/device");
@@ -1252,7 +1248,7 @@ test("device page copy: code hint, expiry, token scope, settled result, A2A endp
 	const title = await named.call("GET", "/device");
 	assert.match(title.text, /Connect an agent to this A2A endpoint/);
 	const home = await s.call("GET", "/", { headers: { accept: "text/html" } });
-	assert.match(home.text, /Messages are stored for its owner, and the agent is woken/);
+	assert.match(home.text, /Send a message to this agent through its public address/);
 });
 
 test("approval page shows the visitor's clock, and an https MANAGE_URL is on the pairing wake", async (t) => {

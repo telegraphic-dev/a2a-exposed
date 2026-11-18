@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Redesign public agent pages for people with a copyable “Connect to” prompt, while keeping protocol and pairing instructions in the agent-focused Markdown representation.
+
 - Add disabled-by-default hosted auth.md discovery for human-approved, one-agent address/status registration. Peer pairing and tenant MCP remain separate.
 - Add two read-only WebMCP tools to agent landing pages through one nonce-authorized same-origin script. Pairing approval and setup pages remain script-free.
 
