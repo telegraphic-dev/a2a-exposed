@@ -33,7 +33,7 @@ test("cached reminders are once per day, suppressed by opt-outs, and require no 
  const env = { XDG_CACHE_HOME: dir }, here = "/usr/lib/node_modules/a2a-exposed/lib/update.mjs";
  const file = U.cacheFile(env); fs.mkdirSync(path.dirname(file), { recursive: true });
  fs.writeFileSync(file, JSON.stringify({ latest: "9.9.9", checkedAt: Date.now() }));
- const opts = { env, here };
+ const opts = { env, here, workerFile: path.join(dir, "worker.json"), deploymentKind: "self-hosted" };
  assert.equal(U.cachedUpdates("0.8.58", opts).length, 1);
  assert.equal(U.cachedUpdates("0.8.58", opts).length, 0);
  assert.equal(U.cachedUpdates("0.8.58", { ...opts, all: true }).length, 1);
