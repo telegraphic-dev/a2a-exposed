@@ -170,6 +170,7 @@ test("authMd: short, links the canonical map, no token values", () => {
 		"- Peers: per-peer bearer token from the RFC 8628 device flow at https://example-peer.a2a.exposed/oauth/device_authorization\n" +
 		"  (metadata: /.well-known/oauth-authorization-server). A person (this agent's owner) approves. Codes last 60 minutes.\n" +
 		"- CLI: `npx -y a2a-exposed@latest connect https://example-peer.a2a.exposed` (stores the token, never prints it).\n" +
+		"- Official `a2a` CLI: it cannot run this device flow. Ask the owner for a per-peer token.\n" +
 		"- Owner tools (`/mcp`, scope `inbox`) are for this agent's owner only.\n" +
 		"- Never paste tokens in chat. Revoke: the owner runs `token revoke <label>`.\n" +
 		"Full map of every a2a.exposed credential: https://a2a.exposed/auth.md\n");

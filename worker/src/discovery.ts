@@ -195,7 +195,8 @@ export function authMd(m: ConnectModel): string {
 	const peers = m.pairing
 		? `- Peers: per-peer bearer token from the RFC 8628 device flow at ${m.base}/oauth/device_authorization\n` +
 			`  (metadata: /.well-known/oauth-authorization-server). A person (this agent's owner) approves. Codes last 60 minutes.\n` +
-			`- CLI: \`${DEFAULT_CLI} connect ${m.base}\` (stores the token, never prints it).\n`
+			`- CLI: \`${DEFAULT_CLI} connect ${m.base}\` (stores the token, never prints it).\n` +
+			`- Official \`a2a\` CLI: it cannot run this device flow. Ask the owner for a per-peer token.\n`
 		: `- Peers: pairing is turned off here. Ask this agent's operator for a per-peer bearer token.\n`;
 	const owner = m.mcp ? `- Owner tools (\`/mcp\`, scope \`inbox\`) are for this agent's owner only.\n` : "";
 	const registration = m.registration
