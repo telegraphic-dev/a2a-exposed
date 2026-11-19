@@ -24,7 +24,8 @@ test("rootFormat: Markdown when named at least as high as HTML and JSON; browser
 	assert.equal(D.rootFormat("text/html;q=0", null), "json");
 });
 
-// Real User-Agent strings the preview services send (Slack, X, LinkedIn, Meta, Discord, Telegram, WhatsApp, Mastodon).
+// Real User-Agent strings the preview services send (Slack, X, LinkedIn, Meta, Discord, Telegram, WhatsApp, Mastodon,
+// Bluesky, Google Chat).
 const PREVIEW_BOTS = [
 	"Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)",
 	"Twitterbot/1.0",
@@ -34,9 +35,13 @@ const PREVIEW_BOTS = [
 	"TelegramBot (like TwitterBot)",
 	"WhatsApp/2.23.20.0 A",
 	"http.rb/5.1.1 (Mastodon/4.2.1; +https://mastodon.example/)",
+	"Mozilla/5.0 (compatible; Bluesky Cardyb/1.1; +mailto:support@bsky.app)",
+	"Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; Bluesky Cardyb/1.1; +mailto:support@bsky.app) Chrome/W.X.Y.Z Safari/537.36",
+	"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/56.0.2924.87 Safari/537.36 Google-PageRenderer Google (+https://developers.google.com/+/web/snippet/)",
 ];
 const NOT_BOTS = [null, "", "curl/8.7.1", "node", "a2a-exposed/0.8.67", "python-httpx/0.27.0", "Googlebot/2.1 (+http://www.google.com/bot.html)",
-	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15", "NotSlackbotX/1.0"];
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15", "NotSlackbotX/1.0",
+	"NotCardybX/1.0", "Google-PageRendererX/1.0"];
 
 test("rootFormat: a link-preview bot with a wildcard or missing Accept gets HTML; everyone else keeps JSON", () => {
 	for (const ua of PREVIEW_BOTS) {

@@ -45,8 +45,9 @@ function acceptQ(accept: string): Map<string, number> {
 }
 
 /** User-Agent tokens of the crawlers that fetch a shared link to draw its preview card. Several of them send
- *  a wildcard Accept or none, so without this they would get JSON and never see the og: and twitter: tags. */
-const LINK_PREVIEW_BOTS = /\b(?:Slackbot|Twitterbot|LinkedInBot|facebookexternalhit|Facebot|Discordbot|TelegramBot|WhatsApp|SkypeUriPreview|redditbot|Pinterestbot|Mastodon|Embedly|Iframely)\b/i;
+ *  a wildcard Accept or none, so without this they would get JSON and never see the og: and twitter: tags.
+ *  Cardyb is Bluesky's card fetcher; Google-PageRenderer draws Google Chat's link previews. */
+const LINK_PREVIEW_BOTS = /\b(?:Slackbot|Twitterbot|LinkedInBot|facebookexternalhit|Facebot|Discordbot|TelegramBot|WhatsApp|SkypeUriPreview|redditbot|Pinterestbot|Mastodon|Embedly|Iframely|Cardyb|Google-PageRenderer)\b/i;
 
 export function linkPreviewBot(userAgent: string | null): boolean {
 	return !!userAgent && LINK_PREVIEW_BOTS.test(userAgent);
