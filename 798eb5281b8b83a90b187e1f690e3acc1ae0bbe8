@@ -1,0 +1,85 @@
+skills/a2a-exposed-setup/references/pairing.md
+  s_4b0f7c018ce9c9::t_b67c62e4addb05 58-70
+skills/a2a-exposed/references/connect.md
+  s_4b0f7c018ce9c9::t_e50f0b10a3c632 61-73
+encryption/safety-emoji.mjs
+  s_4b0f7c018ce9c9::t_0edbc441485c64 4-269
+  s_4b0f7c018ce9c9::t_f99273eccef063 1-3
+worker/src/index.ts
+  s_4b0f7c018ce9c9::t_0edbc441485c64 2857,3371,3697,4760
+cli/lib/commands.mjs
+  s_4b0f7c018ce9c9::t_a8563c9cc873c6 381,422-424,426
+worker/test/pairing.test.ts
+  s_4b0f7c018ce9c9::t_7aa62d57d90ddb 1257,1260,1262
+docs/cli.md
+  s_4b0f7c018ce9c9::t_b03e1d26b9161a 705-724
+worker/test/owner-peers-sealed.test.ts
+  s_4b0f7c018ce9c9::t_22f0d9f33e5f3c 9,58,64,69
+worker/src/skills-index.ts
+  s_4b0f7c018ce9c9::t_52b838da352817 7,12
+encryption/local-state.mjs
+  s_4b0f7c018ce9c9::t_0edbc441485c64 1,128,131-135,942
+cli/lib/local-mcp.mjs
+  s_4b0f7c018ce9c9::t_5d8b035b8f5efb 8,19,76
+cli/lib/sealed-keys.mjs
+  s_4b0f7c018ce9c9::t_0edbc441485c64 58,106,120,248-250,253-254
+  s_4b0f7c018ce9c9::t_51934374b29f38 255-267
+cli/lib/pair.mjs
+  s_4b0f7c018ce9c9::t_0edbc441485c64 1,185,412,462
+skills/a2a-exposed/SKILL.md
+  s_4b0f7c018ce9c9::t_b292bc23fa0ec5 149
+encryption/test/safety-emoji.test.mjs
+  s_4b0f7c018ce9c9::t_cf9a2255e5fc14 1-20
+worker/test/sealed-pairing.test.ts
+  s_4b0f7c018ce9c9::t_b84186d648aca9 134-137
+  s_4b0f7c018ce9c9::t_4a43cfe8bde04e 156-162
+encryption/package.json
+  s_4b0f7c018ce9c9::t_0edbc441485c64 15-16,34-35
+  s_4b0f7c018ce9c9::t_38c88ab829513c 36
+worker/src/pairing.ts
+  s_4b0f7c018ce9c9::t_0edbc441485c64 207,245
+  s_4b0f7c018ce9c9::t_1d5f075e89606b 247
+docs/protocol.md
+  s_4b0f7c018ce9c9::t_7a56c6cde07bb5 419-438
+skills/a2a-exposed-setup/SKILL.md
+  s_4b0f7c018ce9c9::t_b292bc23fa0ec5 149
+worker/src/sealed-keys.ts
+  s_4b0f7c018ce9c9::t_0edbc441485c64 1,13,19-23,85-89
+encryption/test/safety-emoji-vectors.json
+  s_4b0f7c018ce9c9::t_0dd7750248dc9e 1-161
+docs/cli-mcp-parity.md
+  s_4b0f7c018ce9c9::t_3d90abf1b4bf3d 40,43,69
+worker/src/mcp.ts
+  s_4b0f7c018ce9c9::t_4a43cfe8bde04e 400
+  s_4b0f7c018ce9c9::t_2482f5f7d54356 409
+docs/mcp.md
+  s_4b0f7c018ce9c9::t_6fbdb335ab16bd 262-281
+worker/test/safety-emoji.test.ts
+  s_4b0f7c018ce9c9::t_58e2bcee9606f5 1-5,7-8,10-17
+  s_4b0f7c018ce9c9::t_4a43cfe8bde04e 6,9
+cli/lib/main.mjs
+  s_4b0f7c018ce9c9::t_85e0b7ce6f4792 48-49
+worker/src/safety-emoji.ts
+  s_4b0f7c018ce9c9::t_0edbc441485c64 4-269
+  s_4b0f7c018ce9c9::t_04d5c2223f3362 1-3
+encryption/MATRIX-LICENSE
+  s_4b0f7c018ce9c9::t_993519aa503f0a 1-177
+worker/MATRIX-LICENSE
+  s_4b0f7c018ce9c9::t_cdf598cc012cb5 1-177
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "798eb5281b8b83a90b187e1f690e3acc1ae0bbe8",
+  "prompts": {},
+  "sessions": {
+    "s_4b0f7c018ce9c9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1f048-f695-76a2-b51b-6713a5f93d4b",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": null
+    }
+  }
+}

@@ -1,0 +1,33 @@
+cli/lib/commands.mjs
+  s_4b0f7c018ce9c9::t_fd5ec6423063f3 426
+worker/test/pairing.test.ts
+  s_4b0f7c018ce9c9::t_fd5ec6423063f3 1260-1261,1263
+  s_4b0f7c018ce9c9::t_9adaf45674e3ae 1262
+worker/src/pairing.ts
+  s_4b0f7c018ce9c9::t_fd5ec6423063f3 245
+  s_4b0f7c018ce9c9::t_96edd3ac4e05c4 247
+  s_4b0f7c018ce9c9::t_06fd6746168143 279
+  s_4b0f7c018ce9c9::t_1079158e6d9bde 250,278
+worker/test/sealed-pairing.test.ts
+  s_4b0f7c018ce9c9::t_fd5ec6423063f3 131,134,136
+cli/lib/pair.mjs
+  s_4b0f7c018ce9c9::t_fd5ec6423063f3 185,412,462
+cli/lib/sealed-keys.mjs
+  s_4b0f7c018ce9c9::t_fd5ec6423063f3 250,255
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2a80a6f6aa8c323839f40986e03e03a83f9c158d",
+  "prompts": {},
+  "sessions": {
+    "s_4b0f7c018ce9c9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1f048-f695-76a2-b51b-6713a5f93d4b",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}
