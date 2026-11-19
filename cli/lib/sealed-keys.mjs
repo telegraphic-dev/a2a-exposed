@@ -55,7 +55,7 @@ async function load() {
  try {
   const primitives = await import(pathToFileURL(require.resolve("@a2a-exposed/encryption")).href);
   const state = await import(pathToFileURL(require.resolve("@a2a-exposed/encryption/local-state")).href);
-  if (typeof state.localSafetyCode !== "function") throw Error("matching package required");
+  if (typeof state.localSafetyCode !== "function" || typeof state.localSafetyEmoji !== "function") throw Error("matching package required");
   const carriers = await import(pathToFileURL(require.resolve("@a2a-exposed/encryption/carriers")).href);
   const content = await import(pathToFileURL(require.resolve("@a2a-exposed/encryption/content")).href);
   return { ...primitives, ...state, ...carriers, ...content };
@@ -103,7 +103,7 @@ export async function pinPairing({ id, peer, bundle, localBundle, endpoint }) {
    // owner-side import of that approved request, bound to both exact bundles.
    await store.approve({ peer, digest: proposal.digest, expectedCurrent: old.current_digest, ownerApproved: true });
   }
-  return { peer, local_id: id, key_id: bundle.keyId, verification: "tofu", independently_verified: false, safety_code: store.safetyCode(id, peer).code, traffic_requires_test_flag: true };
+  return { peer, local_id: id, key_id: bundle.keyId, verification: "tofu", independently_verified: false, safety_code: store.safetyCode(id, peer).code, safety_emoji: store.safetyCode(id, peer).safety_emoji, traffic_requires_test_flag: true };
  } finally { store.close(); }
 }
 export async function prepareConnect(id, base, card) {
@@ -117,7 +117,7 @@ export async function prepareConnect(id, base, card) {
  const [endpoint] = pickEndpoint(base, card);
  if (new URL(endpoint).origin !== new URL(other.cardUrl).origin) fail("Peer endpoint differs from the key-card origin.");
  const code = api.localSafetyCode(bundle, other);
- return { id, localBundle: bundle, peerBundle: other, endpoint, safetyPreview: code, params: { sealed_bundle: api.canonicalJSON(bundle), sealed_responder_key_id: other.keyId } };
+ return { id, localBundle: bundle, peerBundle: other, endpoint, safetyPreview: code, safetyEmoji: api.localSafetyEmoji(bundle, other), params: { sealed_bundle: api.canonicalJSON(bundle), sealed_responder_key_id: other.keyId } };
 }
 // The backup passphrase comes only from piped stdin: never a prompt, argument or environment variable.
 export const passphraseGuidance = "Pipe the backup passphrase on stdin, for example from your password manager's command-line tool. It is never read from a terminal prompt, a command argument or an environment variable. Use at least 12 characters. Nothing was written.";
@@ -245,5 +245,23 @@ export async function command(p, o) {
    }
   } finally { store.close(); }
  }
+ if (!o.json && result.safety_emoji) console.log(`Safety emoji: ${formatSafetyEmoji(result.safety_emoji)}
+${emojiGuidance}
+Full safety code (details): ${result.code || result.safety_code}`);
  console.log(o.json ? JSON.stringify(result) : JSON.stringify(result, null, 2));
+}
+
+export function formatSafetyEmoji(items) { return Array.isArray(items) && items.length === 7 ? items.map(x => `${x.emoji} ${x.name}`).join(" · ") : "(unavailable)"; }
+export const emojiGuidance = "Compare every emoji and name in order through another trusted channel; if any differs, stop and deny. This quick 42-bit check is weaker than the full 60-digit code. Without commit-reveal, an attacker repeatedly generating keys could match the short display; compare the full code for high-stakes pairings. It does not independently verify a peer. keys verify still requires the complete numeric code read by the other owner.";
+
+// Read public pin metadata only; never load a private identity or authorize traffic.
+export async function peerSafety(peer, entry) {
+ if (entry?.sealed?.policy !== "required") return {};
+ let store;
+ try {
+  const api = await load(); store = openState(api);
+  const comparison = store.safetyCode(entry.sealed.localId, peer);
+  return { safety_emoji: comparison.safety_emoji, safety_code: comparison.code, verification: comparison.verification, comparison_guidance: emojiGuidance };
+ } catch { return { safety_emoji: null, safety_code: null, comparison_guidance: "Safety comparison unavailable. Inspect keys status --json and keys code for this peer; no trust was changed." }; }
+ finally { store?.close(); }
 }

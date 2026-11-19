@@ -204,7 +204,7 @@ function clockTime(ms: number, timeZone: string): string {
 
 export type PageRequest = { userCode: string; clientName: string; clientId: string; agentCardUrl: string; ip: string; country: string; createdMs: number; expiresMs: number; replacesLabel?: string; tokenLabel?: string; identityFingerprint?: string;
 	/** Set when the request carries public encryption keys (a key pairing). Never holds key material. */
-	sealed?: { safetyCode: string | null } };
+	sealed?: { safetyCode: string | null; safetyEmoji?: { emoji: string; name: string }[] | null } };
 export type PageModel = {
 	agentName: string;
 	mode: Mode;
@@ -242,9 +242,9 @@ export function devicePage(m: PageModel, nonce: string): string {
 		["Expires", expiresText(r.expiresMs, Date.now(), m.timeZone)],
 		...(r.replacesLabel ? [["Replaces", `the active token "${r.replacesLabel}" (the requester proved it holds it); approving issues a new token under the same label and the old one stops working`]] : []),
 		...(r.identityFingerprint ? [["Pairing identity", r.identityFingerprint]] : []),
-		...(r.sealed ? [["Encryption", "Encrypted key pairing (the requester sent public encryption keys)"], ["Safety code", r.sealed.safetyCode || "(unavailable)"]] : []),
+		...(r.sealed ? [["Encryption", "Encrypted key pairing (the requester sent public encryption keys)"], ["Safety emoji", r.sealed.safetyEmoji?.map(x => `${x.emoji} ${x.name}`).join(" · ") || "(unavailable)"]] : []),
 	] : [];
-	const sealedNote = r?.sealed ? `<p class="w">This is an encrypted key pairing. Trust on first use: this page can't verify the keys. Before you approve, compare the safety code with the requester's owner through another trusted channel, such as a call. It must match the safety code their connect command printed. If it differs, deny. Approving doesn't turn on encryption for any other peer.</p>` : "";
+	const sealedNote = r?.sealed ? `<details><summary>Full safety code (details)</summary><p>${esc(r.sealed.safetyCode || "(unavailable)")}</p></details><p>If the comparison is unavailable, do not approve; inspect the selected pairing and keys first. Compare every emoji and name in order through another trusted channel. If any differs, stop and deny. This quick 42-bit check is weaker than the full 60-digit code. Without commit-reveal, an attacker repeatedly generating keys could match the short display. Compare the full code for high-stakes pairings. This is not Matrix protocol verification. Independent verification still requires the full numeric code.</p><p class="w">This is an encrypted key pairing. Trust on first use: this page can't verify the keys. Before you approve, compare the safety code with the requester's owner through another trusted channel, such as a call. It must match the safety code their connect command printed. If it differs, deny. Approving doesn't turn on encryption for any other peer.</p>` : "";
 	const tokenLabel = r?.tokenLabel || "<label>";
 	const revoke = `${m.cli} token revoke ${tokenLabel}`;
 	const details = r ? `<table>${rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join("")}</table>

@@ -12,7 +12,8 @@
     "./assignment": "./assignment.mjs",
     "./ledger": "./ledger.mjs",
     "./tasks": "./tasks.mjs",
-    "./transport": "./transport.mjs"
+    "./transport": "./transport.mjs",
+    "./safety-emoji": "./safety-emoji.mjs"
   },
   "files": [
     "index.mjs",
@@ -30,7 +31,9 @@
     "assignment.mjs",
     "ledger.mjs",
     "tasks.mjs",
-    "transport.mjs"
+    "transport.mjs",
+    "safety-emoji.mjs",
+    "MATRIX-LICENSE"
   ],
   "scripts": {
     "test": "node --test test/*.test.mjs",

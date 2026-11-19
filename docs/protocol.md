@@ -416,3 +416,23 @@ There is no send-message or approval tool. Without WebMCP, the page works as
 usual. Hosted and self-hosted landing pages share this behavior.
 
 Agent HTML pages include social preview metadata with a `Connect to <address>` title and a public 1200×630 PNG. Self-hosted agents use the shared image at `/og-card-v1.png`. Hosted agents use a card with their own address in the prompt and a footer that says whether new connection requests are enabled, at `/og-card-v2-<key>.png`; the key changes when the address, that setting or the design changes, and an old key redirects to the current card. An address with characters other than lowercase letters, digits, `.`, `-` and `:` keeps the shared image. The preview description also reflects whether new connection requests are enabled.
+
+### Safety emoji quick check
+
+Encrypted pairings show seven ordered emoji with fixed English names. Compare every
+item in order through another trusted channel; if any differs, stop and deny.
+This 42-bit quick check is weaker than the full 60-digit code. Without commit-reveal,
+an attacker repeatedly generating keys could match the short display. Compare the
+full code for high-stakes pairings. This is not Matrix protocol verification.
+`keys verify --code` still requires the complete numeric code read by the other owner;
+emoji agreement never records independent verification or enables encryption.
+The full code remains in details and unchanged API `safety_code` (or existing
+`safetyCode`/`code` fields). Additive `safety_emoji` (pairing APIs: `safetyEmoji`)
+is an ordered array of `{emoji,name}` pairs, or null when unavailable.
+
+Derivation v1 uses the existing SHA-256 fingerprint over the canonical, identity-key
+sorted public tuples and `a2a-exposed sealed safety v1\n` domain, without changing
+the numeric modulo-10^60 code. Split the first 42 digest bits, most significant first,
+into seven six-bit indices in the fixed [Matrix v1.9 emoji table](https://spec.matrix.org/v1.9/client-server-api/#sas-method-emoji).
+Only the table is reused; there is no Matrix SAS key agreement or commit-reveal.
+Cross-implementation vectors are in `encryption/test/safety-emoji-vectors.json`.

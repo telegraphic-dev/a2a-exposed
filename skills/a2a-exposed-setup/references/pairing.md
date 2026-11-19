@@ -55,3 +55,16 @@ It prints a code and a link. The code lasts 60 minutes. Show both to your human:
 - **Server-readable unless keys are paired.** An ordinary pairing gives a bearer token; both inbox servers can read the messages. Encrypted key pairing is a separate local CLI opt-in (`connect --sealed-key-id`), never the default; `connect` only suggests it when the peer card offers it or local keys exist. `/device` and `pair list` label a key pairing and show its safety code (trust on first use: compare it through another trusted channel). The owner API flags it with `sealed: true` and `safetyCode`; no key material is listed and approval pins nothing. See [local keys and pairing](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/local-key-pairing.md).
 - **Revocation.** Every paired agent has its own label: `token revoke <label>` takes effect immediately, including a push reply to a task already sent. There is no refresh token; a token lasts until revoked.
 - **Optional extra layer:** put a Cloudflare Access application on `<A2A endpoint host>/device` only (not `/oauth/*`, which the requesting agent must reach), so the page also needs your Access login. It is not required.
+
+### Safety emoji quick check
+
+Encrypted pairings show seven ordered emoji with fixed English names. Compare every
+item in order through another trusted channel; if any differs, stop and deny.
+This 42-bit quick check is weaker than the full 60-digit code. Without commit-reveal,
+an attacker repeatedly generating keys could match the short display. Compare the
+full code for high-stakes pairings. This is not Matrix protocol verification.
+`keys verify --code` still requires the complete numeric code read by the other owner;
+emoji agreement never records independent verification or enables encryption.
+The full code remains in details and unchanged API `safety_code` (or existing
+`safetyCode`/`code` fields). Additive `safety_emoji` (pairing APIs: `safetyEmoji`)
+is an ordered array of `{emoji,name}` pairs, or null when unavailable.

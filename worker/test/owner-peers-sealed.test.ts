@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import worker, { runOwnerRpc } from "../src/index.ts";
 import { sha256 } from "../src/a2a.ts";
-import { requestSafetyCode } from "../src/sealed-keys.ts";
+import { requestSafetyCode, requestSafetyEmoji } from "../src/sealed-keys.ts";
 import { hostedTenantContext } from "../src/tenancy.ts";
 import { d1 } from "./d1.ts";
 
@@ -55,15 +55,18 @@ test("GET /owner/peers lists sealed and the safety code only for active encrypte
 	assert.match(code, /^(\d{5} ){11}\d{5}$/);
 	assert.equal(by.ada.sealed, true);
 	assert.equal(by.ada.safety_code, code, "matches the code the CLI prints");
+ assert.deepEqual(by.ada.safety_emoji, await requestSafetyEmoji({sealed_requester:JSON.stringify(s.requester),sealed_responder:JSON.stringify(s.responder)}));
 	assert.equal(by.ada.safety_code, await requestSafetyCode({ sealed_requester: JSON.stringify(s.requester), sealed_responder: JSON.stringify(s.responder) }), "matches the pairing-request code");
 	assert.equal(by.ada.safety_code, cliSafetyCode(s.responder, s.requester), "argument order does not matter");
 
 	for (const label of ["bob", "cy", "dee"]) {
 		assert.equal("sealed" in by[label], false, `${label} has no sealed field`);
+		assert.equal("safety_emoji" in by[label], false);
 		assert.equal("safety_code" in by[label], false, `${label} has no safety_code field`);
 	}
 	assert.deepEqual(Object.keys(by.bob).sort(), ["card_url", "client_name", "continuation", "created_at", "label", "revoked_at", "source", "user_code"], "a plaintext row keeps its existing shape");
 	assert.equal(by.eve.sealed, true, "a stored key pairing whose bundle does not parse is still marked encrypted");
+	assert.equal(by.eve.safety_emoji, null);
 	assert.equal(by.eve.safety_code, null, "but gets no made-up code");
 
 	for (const k of [s.requester, s.responder, s.revokedRequester]) {

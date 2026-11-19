@@ -1,3 +1,4 @@
+import { safetyEmojiFromHex } from "./safety-emoji.ts";
 // Public-key verification only: deliberately no HPKE or private-key dependency.
 import { b64urlDecode, b64urlEncode, canonicalCardUrl } from "./address.ts";
 export const SEALED_URI = "https://a2a.exposed/ext/sealed/v1";
@@ -9,12 +10,17 @@ export function canonical(value: any): string {
 }
 /** The safety code the local CLI prints for a key pairing (encryption/local-state.mjs localSafetyCode): 12 groups
  *  of 5 digits over the public card URL, identity key and key ID of both bundles. Order of the arguments does not matter. */
-export async function safetyCode(a: any, b: any): Promise<string> {
+async function safetyFingerprint(a: any, b: any): Promise<string> {
  const cmp = (x: Uint8Array, y: Uint8Array) => { for (let i = 0; i < Math.min(x.length, y.length); i++) if (x[i] !== y[i]) return x[i] - y[i]; return x.length - y.length; };
  const tuples = [a, b].map(x => ({ cardUrl: x.cardUrl, identityKey: x.identityKey, keyId: x.keyId }))
   .sort((p, q) => cmp(b64urlDecode(p.identityKey) || new Uint8Array(), b64urlDecode(q.identityKey) || new Uint8Array()) || p.cardUrl.localeCompare(q.cardUrl));
  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode("a2a-exposed sealed safety v1\n" + canonical(tuples))));
  const hex = Array.from(digest, v => v.toString(16).padStart(2, "0")).join("");
+ return hex;
+}
+export async function safetyEmoji(a: any, b: any) { return safetyEmojiFromHex(await safetyFingerprint(a, b)); }
+export async function safetyCode(a: any, b: any): Promise<string> {
+ const hex = await safetyFingerprint(a, b);
  return (BigInt("0x" + hex) % 10n ** 60n).toString().padStart(60, "0").match(/.{5}/g)!.join(" ");
 }
 /** Safety code for a stored pairing request, or null when it is not a key pairing or its stored bundles do not parse. */
@@ -75,4 +81,9 @@ export async function verifyMessage(message: any, requester: any, responder: any
  const { signature, ...body } = e;
  if (!await crypto.subtle.verify("Ed25519", key, bytes(signature, 64) as BufferSource, new TextEncoder().encode("a2a-exposed sealed envelope v1\n" + canonical(body)))) bad();
  return e;
+}
+
+export async function requestSafetyEmoji(r: { sealed_requester?: unknown; sealed_responder?: unknown }) {
+ if (!r.sealed_requester || !r.sealed_responder) return null;
+ try { return await safetyEmoji(JSON.parse(String(r.sealed_requester)), JSON.parse(String(r.sealed_responder))); } catch { return null; }
 }

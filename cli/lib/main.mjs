@@ -45,7 +45,8 @@ Local encrypted CLI draft (disabled by default):
                                 import that exact approval as trust on first use (TOFU)
   keys code --id ID --peer ALIAS_OR_LABEL --json
                                 ALIAS on connecting side; LABEL from keys pairings on approving side
-                                compare safety code through another trusted channel
+                                show ordered safety emoji/name quick check and full code details;
+                                keys verify still requires the full numeric code
   keys verify --id ID --peer ALIAS_OR_LABEL --code "CODE" --json
                                 record independent verification of the exact pinned keys
                                 CODE is the full code the other owner read out; a mismatch changes nothing
