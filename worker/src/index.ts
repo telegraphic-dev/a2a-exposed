@@ -2850,8 +2850,11 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 	}
 	if (seg[0] === "peers") {
 		if (m === "GET") {
-			const rows = await ctx.DB.prepare("SELECT label, created_at, revoked_at, source, user_code, client_name, card_url, claimed_card_url FROM peers ORDER BY created_at").all();
+			const rows = await ctx.DB.prepare("SELECT label, created_at, revoked_at, source, user_code, client_name, card_url, claimed_card_url, sealed_requester, sealed_responder FROM peers ORDER BY created_at").all();
 			return json(await Promise.all((rows.results as Json[]).map(async (r) => ({ label: r.label, created_at: r.created_at, revoked_at: r.revoked_at, source: r.source, user_code: r.user_code ? P.formatUserCode(r.user_code) : null, client_name: r.client_name, card_url: r.card_url || null,
+					// An active encrypted key pairing also lists `sealed: true` and the safety code computed from its stored public
+					// bundles (the bundles themselves are never listed). Independent of A2A_SEALED_ENABLED: it describes the pairing.
+					...(!r.revoked_at && r.source === "pairing" && r.sealed_requester ? { sealed: true, safety_code: await SealedKeys.requestSafetyCode(r) } : {}),
 					continuation: r.revoked_at ? null : await continuationGuide(ctx, r.label, r.card_url || r.claimed_card_url) }))));
 		}
 		if (m === "POST" && !seg[1]) {
