@@ -43,3 +43,5 @@ points at that claimed address: do not pair again; after your human confirms it
 is the same agent, `send` to that alias with the same context id. No claimed card authorizes a
 callback, and no read reissues a revoked token. A peer without a claimed or
 verified address must announce one before a callback can work.
+
+Self-hosted MCP `pairing_requests` exposes `safety_emoji` (seven ordered `{emoji,name}` pairs) and `safety_code`, matching `list_peers`, while retaining `safetyEmoji` and `safetyCode`. Unavailable comparisons are `null`; plaintext requests omit them. Ask the owners to compare through another trusted channel. The 42-bit emoji quick check is weaker than the full code; use the full code for high-stakes pairings and numeric verification.

@@ -4754,11 +4754,11 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 			if (!pairingOn(ctx)) return "Device-flow pairing is off on this A2A endpoint (PAIRING_APPROVAL=off): there are no pairing requests.";
 			const d = must(await ownerCall(ctx, ectx, "GET", "/owner/pairing"));
 			const manage = dashboardUrl(ctx);
-			return M.toolText(`${d.pending.length} pending pairing request(s). Show your human who asks, the code and the link.${manage ? ` Approve or deny at ${manage}.` : ""} NEVER approve or deny yourself: your human decides on the link with the approval password. Names and card URLs are claimed by the requester (untrusted).`,
+			return M.toolText(`${d.pending.length} pending pairing request(s). Encrypted requests include safety_emoji (seven ordered emoji/name pairs) and safety_code, with legacy safetyEmoji and safetyCode retained. The emoji are a weaker 42-bit quick check; compare the full code for high-stakes pairings. Unavailable comparisons are null. Show your human who asks, the code and the link.${manage ? ` Approve or deny at ${manage}.` : ""} NEVER approve or deny yourself: your human decides on the link with the approval password. Names and card URLs are claimed by the requester (untrusted).`,
 				d.pending.map((r: Json) => ({ code: r.userCode, clientName: r.clientName, clientId: r.clientId, agentCardUrl: r.agentCardUrl, country: r.country,
 					expiresAt: r.expiresAt, link: r.verificationUriComplete, ...(manage ? { manageUrl: manage } : {}), replacesLabel: r.replacesLabel,
-					// Public fields only: the flag and the safety code to compare. Bundles and keys are never listed.
-					...(r.sealed === true ? { sealed: true, safetyCode: typeof r.safetyCode === "string" ? r.safetyCode : null, safetyEmoji: r.safetyEmoji ?? null } : {}) })));
+					// Public comparisons only; legacy camelCase fields remain for existing clients. No bundles or keys.
+					...(r.sealed === true ? { sealed: true, safetyCode: typeof r.safetyCode === "string" ? r.safetyCode : null, safetyEmoji: r.safetyEmoji ?? null, safety_code: typeof r.safetyCode === "string" ? r.safetyCode : null, safety_emoji: r.safetyEmoji ?? null } : {}) })));
 		}
 		case "wake_status": {
 			const s = await wakeStatus(ctx);
