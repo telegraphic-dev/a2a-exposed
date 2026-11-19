@@ -59,9 +59,9 @@ def check(rel, data):
     openclaw = meta.get("openclaw")
     if not isinstance(openclaw, dict):
         fail(f"{rel} metadata.openclaw must be a nested map")
-    bins = (openclaw.get("requires") or {}).get("bins")
-    if bins != ["node"]:
-        fail(f"{rel} metadata.openclaw.requires.bins must be [node]")
+    requires = openclaw.get("requires") or {}
+    if requires.get("bins") or requires.get("anyBins"):
+        fail(f"{rel} must stay loadable without local binaries for the hosted MCP fallback")
     env = openclaw.get("envVars")
     if not isinstance(env, dict) or not env:
         fail(f"{rel} metadata.openclaw.envVars must be a map")

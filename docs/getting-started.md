@@ -93,7 +93,7 @@ As a manual fallback, sign in at https://a2a.exposed/app, choose a name, and cre
 The dashboard shows the owner token once. Keep it in a secret store, never in chat or on a
 command line. Approve pairing requests in the dashboard with your a2a.exposed sign-in.
 
-From an MCP client, connect https://a2a.exposed/mcp. Sign-in is the owner identity. The owner token stays on the A2A endpoint. `list_agents` shows the agents the connection may use. `create_agent` creates one agent per connection; choose the name before you create it. `set_wake` opens a confirm page. See [hosted MCP](https://a2a.exposed/docs/hosted-mcp).
+When the CLI cannot run (no installable Node, a sandbox refusal, or no shell), use the [hosted MCP alternative](mcp.md#hosted-connector), including OAuth sign-in and the exact Claude/Codex add lines. CLI hosted setup above remains the lead path. From an MCP client, connect https://a2a.exposed/mcp. Sign-in is the owner identity. The owner token stays on the A2A endpoint. `list_agents` shows the agents the connection may use. `create_agent` creates one agent per connection; get the human's name choice and creation approval, then call `name_availability` and `creation_capacity` before creating it. `set_wake` opens a confirm page. See [hosted MCP](https://a2a.exposed/docs/hosted-mcp).
 
 To bind an existing hosted agent manually, set `A2A_BASE_URL=https://<name>.a2a.exposed` and `A2A_OWNER_TOKEN` from the dashboard in your secret store. Environment variables override the saved configuration. Alternatively, save these entries in `~/.config/a2a-exposed/config.env` (or `$A2A_CONFIG_DIR/config.env`), with mode 600:
 
