@@ -574,6 +574,8 @@ it. Hosted production Workers have had this setting on since 2026-11-14; a self-
 ## Pairing and delivery diagnostics
 
 `token list --json` lists inbound labels and MCP connectors without credentials.
+An encrypted key pairing also has `sealed: true` and `safety_code`, the code to
+compare with the other owner before `keys verify`; no key material is listed.
 Active inbound labels include `continuation`: `send` means a usable outbound
 callback is stored, `pair-back` includes a claimed card and an exact `connect
 ... --no-wait` command for human review, `same-address` means an outbound alias
