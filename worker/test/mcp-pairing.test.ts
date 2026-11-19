@@ -1,4 +1,5 @@
 // #461: Worker MCP request_pairing, pairing_requests safety code, and read-only wake_status.
+import { readFile } from "node:fs/promises";
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import worker from "../src/index.ts";
@@ -167,23 +168,48 @@ test("request_pairing: denial and expiry clear the request; bad addresses are re
 	assert.equal((await s.bob.env.DB.prepare("SELECT COUNT(*) AS n FROM outbound_pairings").first() as any).n, 0);
 });
 
-test("pairing_requests passes through sealed and safetyCode and no key material", async (t) => {
+test("pairing_requests exposes seven named emoji like list_peers, retaining legacy fields and no keys", async (t) => {
 	const s = setup(t);
 	const access = await s.grant();
-	await s.call(s.bob, "POST", "/oauth/device_authorization", { client_name: "Carol", client_id: "carol" });
-	// A key pairing as the owner route lists it: flagged with its safety code. The bundles stay server-side.
-	await s.bob.env.DB.prepare("UPDATE device_requests SET sealed_requester = ?, sealed_responder = ?").bind('{"k":"requester-bundle"}', '{"k":"responder-bundle"}').run();
+	const [vector] = JSON.parse(await readFile(new URL("../../encryption/test/safety-emoji-vectors.json", import.meta.url), "utf8"));
+	for (const id of ["sealed", "unavailable", "plain"]) {
+		await s.call(s.bob, "POST", "/oauth/device_authorization", { client_name: id, client_id: id });
+	}
+	await s.bob.env.DB.prepare("UPDATE device_requests SET sealed_requester = ?, sealed_responder = ? WHERE client_id = 'sealed'")
+		.bind(JSON.stringify(vector.a), JSON.stringify(vector.b)).run();
+	await s.bob.env.DB.prepare("UPDATE device_requests SET sealed_requester = ?, sealed_responder = ? WHERE client_id = 'unavailable'")
+		.bind("invalid-requester-bundle", "invalid-responder-bundle").run();
+	await s.bob.env.DB.prepare("INSERT INTO peers (label, token_hash, created_at, source, sealed_requester, sealed_responder) VALUES ('sealed', 'test-hash', ?, 'pairing', ?, ?)")
+		.bind(new Date().toISOString(), JSON.stringify(vector.a), JSON.stringify(vector.b)).run();
 	const route = await s.owner(s.bob, "GET", "/owner/pairing");
-	const sealedRow = route.data.pending[0];
 	const r = await s.tool(access, "pairing_requests");
 	assert.equal(r.isError, false, r.content[0].text);
-	const rows = JSON.parse(r.content[0].text.slice(r.content[0].text.indexOf("\n") + 1));
-	assert.equal(sealedRow.sealed, true);
-	assert.equal(rows[0].sealed, true);
-	assert.equal(rows[0].safetyCode, sealedRow.safetyCode);
-	assert.equal(/requester-bundle|responder-bundle/.test(r.content[0].text), false, "no key material");
+	const text = r.content[0].text;
+	const rows = JSON.parse(text.slice(text.indexOf("\n") + 1));
+	const by = Object.fromEntries(rows.map((row: any) => [row.clientId, row]));
+	const peers = await s.tool(access, "list_peers");
+	const peer = JSON.parse(peers.content[0].text.slice(peers.content[0].text.indexOf("\n") + 1)).inbound[0];
+	assert.equal(by.sealed.sealed, true);
+	assert.equal(by.sealed.safety_code, vector.code);
+	assert.deepEqual(by.sealed.safety_emoji, vector.emoji);
+	assert.equal(by.sealed.safety_emoji.length, 7);
+	assert.equal(by.sealed.safety_code, peer.safety_code);
+	assert.deepEqual(by.sealed.safety_emoji, peer.safety_emoji);
+	for (const id of ["sealed", "unavailable"]) {
+		const expected = route.data.pending.find((row: any) => row.clientId === id);
+		assert.equal(by[id].safetyCode, expected.safetyCode);
+		assert.deepEqual(by[id].safetyEmoji, expected.safetyEmoji);
+		assert.equal(by[id].safety_code, by[id].safetyCode);
+		assert.deepEqual(by[id].safety_emoji, by[id].safetyEmoji);
+	}
+	assert.equal(by.unavailable.safety_code, null);
+	assert.equal(by.unavailable.safety_emoji, null);
+	for (const field of ["sealed", "safety_code", "safety_emoji", "safetyCode", "safetyEmoji"]) assert.equal(field in by.plain, false, field);
+	for (const secret of ["invalid-requester-bundle", "invalid-responder-bundle", "identityKey", "keyId", vector.a.identityKey, vector.b.identityKey]) assert.equal(text.includes(secret), false, secret);
+	assert.match(text, /seven ordered emoji\/name pairs/);
+	assert.match(text, /weaker 42-bit quick check/);
 	const tools = (await s.call(s.bob, "POST", "/mcp", { jsonrpc: "2.0", id: 1, method: "tools/list" }, { authorization: `Bearer ${access}`, accept: "application/json, text/event-stream" })).data.result.tools;
-	assert.match(tools.find((x: any) => x.name === "pairing_requests").description, /compare that safety code/);
+	assert.match(tools.find((x: any) => x.name === "pairing_requests").description, /safety_emoji/);
 });
 
 test("wake_status is read-only through dispatch: a due wake is not sent or consumed, and no secret is shown", async (t) => {
