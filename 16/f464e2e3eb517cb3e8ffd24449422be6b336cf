@@ -1,0 +1,33 @@
+docs/cli-mcp-parity.md
+  s_16dec094fb8cfa::t_35a54368c577d5 40,70
+docs/mcp.md
+  s_16dec094fb8cfa::t_35a54368c577d5 158
+skills/a2a-exposed/references/pairing.md
+  s_16dec094fb8cfa::t_35a54368c577d5 46-47
+worker/src/mcp.ts
+  s_16dec094fb8cfa::t_35a54368c577d5 409
+worker/src/skills-index.ts
+  s_16dec094fb8cfa::t_bb7ccf7ab2221d 7
+worker/test/mcp-pairing.test.ts
+  s_16dec094fb8cfa::t_fd9befa53ef180 2,171,174-183,187-210,212
+skills/a2a-exposed/SKILL.md
+  s_16dec094fb8cfa::t_35a54368c577d5 49
+worker/src/index.ts
+  s_16dec094fb8cfa::t_35a54368c577d5 4757,4760-4761
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "16f464e2e3eb517cb3e8ffd24449422be6b336cf",
+  "prompts": {},
+  "sessions": {
+    "s_16dec094fb8cfa": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1f44e-f35b-7661-9f8a-00f18f32489a",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}
