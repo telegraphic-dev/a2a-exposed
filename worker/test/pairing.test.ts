@@ -909,7 +909,9 @@ test("GET /: a browser gets an HTML landing page (strict nonce CSP, read-only sc
 
 test("GET /: link-preview bots with a wildcard or no Accept get the HTML page and its meta tags; other clients keep JSON", async (t) => {
 	const s = setup(); t.after(s.restore);
-	for (const ua of ["Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)", "Twitterbot/1.0", "facebookexternalhit/1.1", "WhatsApp/2.23.20.0 A"]) {
+	for (const ua of ["Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)", "Twitterbot/1.0", "facebookexternalhit/1.1", "WhatsApp/2.23.20.0 A",
+		"Mozilla/5.0 (compatible; Bluesky Cardyb/1.1; +mailto:support@bsky.app)",
+		"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/56.0.2924.87 Safari/537.36 Google-PageRenderer Google (+https://developers.google.com/+/web/snippet/)"]) {
 		for (const headers of [{ "user-agent": ua }, { "user-agent": ua, accept: "*/*" }]) {
 			const r = await s.call("GET", "/", { headers });
 			assert.equal(r.status, 200, ua);
