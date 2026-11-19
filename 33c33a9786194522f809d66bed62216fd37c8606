@@ -1,0 +1,20 @@
+docs/cli.md
+  h_bde3a12a8163e7 577-578
+docs/protocol.md
+  h_bde3a12a8163e7 206
+worker/src/index.ts
+  h_bde3a12a8163e7 2853,2855-2857
+worker/test/owner-peers-sealed.test.ts
+  h_bde3a12a8163e7 1-96
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "33c33a9786194522f809d66bed62216fd37c8606",
+  "prompts": {},
+  "humans": {
+    "h_bde3a12a8163e7": {
+      "author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}
