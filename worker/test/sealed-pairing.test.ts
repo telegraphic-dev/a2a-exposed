@@ -128,12 +128,12 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
  for(const secretish of [bundles.alice.identityKey,bundles.alice.encryptionKey,bundles.alice.keyId,bundles.alice.signature,bundles.bob.encryptionKey,"sealed_requester","sealed_responder","encryptionKey"])assert.equal(JSON.stringify(listing).includes(secretish),false,"no key material in the owner listing");
  const page=await (await dispatch("bob",new Request(`https://bob.example.com/device?user_code=${code}`))).text();
  assert.match(page,/Encrypted key pairing/);assert.ok(page.includes(comparison),"device page shows the safety code");
- assert.match(page,/Trust on first use: this page can't verify the keys\..*compare the safety code.*If it differs, deny\./s);
+ assert.match(page,/Compare all seven emoji and their names, in order,.*If any differ, do not approve this pairing\./s);
  assert.equal(page.includes(bundles.alice.encryptionKey),false);
  const listed2=await cli("bob",["pair","list"]);assert.equal(listed2.code,0,listed2.err);
- assert.match(listed2.out,/encrypted key pairing, safety emoji:/);assert.ok(listed2.out.includes(`full safety code (details): ${comparison}`));
+ assert.match(listed2.out,/encrypted key pairing, safety emoji:/);assert.ok(listed2.out.includes(`full safety code: ${comparison}`));
  assert.deepEqual(listed.safetyEmoji,lines[0].safety_emoji);
- assert.match(page,/<details><summary>Full safety code \(details\)<\/summary>/);
+ assert.match(page,/<details><summary>Full safety code<\/summary>/);
  for (const item of listed.safetyEmoji) { assert.ok(page.includes(item.emoji)); assert.ok(page.includes(item.name)); }
  const approval=await owner("bob",`/owner/pairing/${code}/approve`,"POST",{});assert.equal(approval.status,200);assert.match(((await approval.json())as any).continuation.next,/Waiting for the requester.*same connect/);
  const beforeCollection=await cli("bob",["keys","pairings","--json"]);

@@ -1257,9 +1257,10 @@ test("device page copy: code hint, expiry, token scope, settled result, A2A endp
 	assert.doesNotMatch(page, /Encrypted key pairing|Safety emoji|Full safety code|Trust on first use/, "a plain request gets no encryption label");
 	const keyed = P.devicePage({ ...base, request: { ...req, sealed: { safetyCode: "12345 67890 12345 67890 12345 67890 12345 67890 12345 67890 12345 67890" } } }, "n");
 	assert.match(keyed, /<th>Encryption<\/th><td>Encrypted key pairing \(the requester sent public encryption keys\)<\/td>/);
-	assert.match(keyed, /<details><summary>Full safety code \(details\)<\/summary><p>12345 67890 12345 67890 12345 67890 12345 67890 12345 67890 12345 67890<\/p><\/details>/);
-	assert.match(keyed, /Trust on first use: this page can't verify the keys\..*compare the safety code.*If it differs, deny\..*doesn't turn on encryption for any other peer/s);
-	assert.match(P.devicePage({ ...base, request: { ...req, sealed: { safetyCode: null } } }, "n"), /<th>Safety emoji<\/th><td>\(unavailable\)<\/td>/);
+	assert.match(keyed, /<details><summary>Full safety code<\/summary><p>12345 67890 12345 67890 12345 67890 12345 67890 12345 67890 12345 67890<\/p><\/details>/);
+	assert.match(keyed, /Trust on first use: this page can't verify the keys\..*full numeric code.*doesn't turn on encryption for any other peer/s);
+	assert.match(P.devicePage({ ...base, request: { ...req, sealed: { safetyCode: null } } }, "n"), /<th>Safety emoji<\/th><td class="safety-comparison">Safety comparison unavailable\. Do not approve this pairing\.<\/td>/);
+	assert.match(keyed, /Emoji unavailable\. Compare the full safety code below/);
 	const namedToken = P.devicePage({ ...base, request: { ...req, tokenLabel: "barry" } }, "n");
 	assert.match(namedToken, /Revoke the token barry any time with <code>a2a token revoke barry<\/code>/);
 	for (const settled of ["approved", "denied"] as const) {

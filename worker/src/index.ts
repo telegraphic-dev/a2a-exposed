@@ -4747,7 +4747,8 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 			return M.toolText(`Outbound peers (send works with these), pairings you requested that wait for the other owner's approval (the first send to that alias redeems it), and inbound labels (agents holding a token for this A2A endpoint). Names are claimed by the peers. A paired peer with no card URL has no callback yet: replies stay on the task until that peer announces an address.`,
 				{ outbound: outRows.map((r: Json) => ({ alias: r.alias, url: r.url, hasToken: r.has_token })),
 					pendingOutbound: pendingRows.map((r) => ({ alias: r.alias, url: r.url, userCode: r.user_code, expiresAt: new Date(Number(r.expires_ms)).toISOString() })),
-					inbound: inRows.map((r: Json) => ({ label: r.label, source: r.source, clientName: r.client_name, since: r.created_at, cardUrl: r.card_url || null, continuation: r.continuation })) });
+					inbound: inRows.map((r: Json) => ({ label: r.label, source: r.source, clientName: r.client_name, since: r.created_at, cardUrl: r.card_url || null, continuation: r.continuation,
+						...(r.sealed === true ? { sealed: true, safety_code: r.safety_code ?? null, safety_emoji: r.safety_emoji ?? null } : {}) })) });
 		}
 		case "pairing_requests": {
 			if (!pairingOn(ctx)) return "Device-flow pairing is off on this A2A endpoint (PAIRING_APPROVAL=off): there are no pairing requests.";

@@ -1,4 +1,4 @@
-import { formatSafetyEmoji, emojiGuidance } from "./sealed-keys.mjs";
+import { formatSafetyEmoji, comparisonGuidance } from "./sealed-keys.mjs";
 // Device-flow pairing (OAuth 2.0 Device Authorization Grant, RFC 8628).
 //   Owner side (this inbox is the authorization server): pair set-password | set-oidc | list | approve | deny
 //   Client side (connect to another inbox): connect <base-or-card-url>
@@ -182,7 +182,7 @@ export async function list(o) {
 		console.log(`--- ${p.userCode}  ${JSON.stringify(p.clientName || p.clientId || "(no name)")} (claimed, untrusted)  expires ${p.expiresAt}${p.replacesLabel ? `  replaces the active token "${p.replacesLabel}"` : ""}`);
 		console.log(`    card: ${p.agentCardUrl || "-"}  from: ${[p.ip || "?", p.country].filter(Boolean).join(", ")}`);
 		if (p.identityFingerprint) console.log(`    identity: ${p.identityFingerprint}`);
-		if (p.sealed) console.log(`    encrypted key pairing, safety emoji: ${formatSafetyEmoji(p.safetyEmoji)}; full safety code (details): ${p.safetyCode || "(unavailable)"}; ${emojiGuidance} (trust on first use: compare it with the requester's owner through another trusted channel; deny if it differs)`);
+		if (p.sealed) console.log(`    encrypted key pairing, safety emoji: ${formatSafetyEmoji(p.safetyEmoji)}; full safety code: ${p.safetyCode || "(unavailable)"}; ${comparisonGuidance(p.safetyEmoji)} (trust on first use: compare it with the requester's owner through another trusted channel; deny if it differs)`);
 		if (!p.agentCardUrl) console.log("    no callback address yet: replies stay on the task until this agent announces one");
 		console.log(`    link: ${p.verificationUriComplete}`);
 	}
@@ -409,7 +409,7 @@ A different agent at the same URL? Pass another --alias.`);
 		if (works === false && !o.json) console.error(`note: peer "${alias}" rejects the stored token (HTTP 401: revoked or rotated); requesting a new one.`);
 	}
  const mismatchNext = "After the keys are pinned, if every group matches, record it with keys verify --id ID --peer ALIAS --code \"CODE\", using the code the other owner read out. If any group differs, do not use this pairing. Ask the approving inbox owner to revoke it with token revoke LABEL (select LABEL with keys pairings --json), and tell the other owner.";
- if (preparedSealed) emit({ status: "key_comparison", safety_code: preparedSealed.safetyPreview, safety_emoji: preparedSealed.safetyEmoji ?? null, verification: "tofu", independently_verified: false, traffic_requires_test_flag: true, next: mismatchNext }, `Safety emoji: ${formatSafetyEmoji(preparedSealed.safetyEmoji)}\n${emojiGuidance}\nFull safety code (details): ${preparedSealed.safetyPreview}\nTrust on first use; not independently verified. Compare through another trusted channel. ${mismatchNext} Encrypted traffic needs A2A_SEALED_ENABLED=1 in each local CLI/MCP process and on each inbox Worker, with owner approval.`);
+ if (preparedSealed) emit({ status: "key_comparison", safety_code: preparedSealed.safetyPreview, safety_emoji: preparedSealed.safetyEmoji ?? null, verification: "tofu", independently_verified: false, traffic_requires_test_flag: true, next: mismatchNext }, `Safety emoji: ${formatSafetyEmoji(preparedSealed.safetyEmoji)}\n${comparisonGuidance(preparedSealed.safetyEmoji)}\nFull safety code: ${preparedSealed.safetyPreview}\nTrust on first use; not independently verified. Compare through another trusted channel. ${mismatchNext} Encrypted traffic needs A2A_SEALED_ENABLED=1 in each local CLI/MCP process and on each inbox Worker, with owner approval.`);
 	if (st) emit({ status: "checking_authorization", resumed: true, alias, user_code: st.userCode, verification_uri: st.verificationUri, verification_uri_complete: st.verificationUriComplete, expires_in: Math.round((st.expiresAt - Date.now()) / 1000) },
 		`Resuming the pairing request to ${peerName} (code ${st.userCode}, link ${st.verificationUriComplete}).`);
 	else {
@@ -459,7 +459,7 @@ Show this code and link to your human. They confirm the code with the owner of $
    if (api.canonicalJSON(r.data.sealed_peer_bundle) !== api.canonicalJSON(st.sealed.peerBundle)) die("Pairing key readback differs. No peer token or pin was installed; preserve the original request.");
    st.redemption = r.data; saveState(alias, st);
    const pinned = await sealed.pinPairing({ id: st.sealed.id, peer: alias, bundle: st.sealed.peerBundle, localBundle: st.sealed.localBundle, endpoint: st.sealed.endpoint });
-   emit({ status: "keys_pinned", ...pinned, next: mismatchNext }, `Keys pinned for ${alias}. Safety emoji: ${formatSafetyEmoji(pinned.safety_emoji)}\n${emojiGuidance}\nFull safety code (details): ${pinned.safety_code}\nTrust on first use; not independently verified. Compare through another trusted channel. ${mismatchNext} Encrypted traffic needs A2A_SEALED_ENABLED=1 in each local CLI/MCP process and on each inbox Worker, with owner approval.`);
+   emit({ status: "keys_pinned", ...pinned, next: mismatchNext }, `Keys pinned for ${alias}. Safety emoji: ${formatSafetyEmoji(pinned.safety_emoji)}\n${comparisonGuidance(pinned.safety_emoji)}\nFull safety code: ${pinned.safety_code}\nTrust on first use; not independently verified. Compare through another trusted channel. ${mismatchNext} Encrypted traffic needs A2A_SEALED_ENABLED=1 in each local CLI/MCP process and on each inbox Worker, with owner approval.`);
   }
 		if (r.data.token_type && !/^bearer$/i.test(r.data.token_type)) die(`unexpected token_type ${r.data.token_type}`);
 		C.saveConfig({ [tokenEnv]: r.data.access_token });
