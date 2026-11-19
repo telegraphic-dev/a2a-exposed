@@ -1,0 +1,20 @@
+docs/protocol.md
+  h_bde3a12a8163e7 170
+worker/src/discovery.ts
+  h_bde3a12a8163e7 48-50
+worker/test/discovery.test.ts
+  h_bde3a12a8163e7 27-28,38-40,43-44
+worker/test/pairing.test.ts
+  h_bde3a12a8163e7 912-914
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e8c06fa9a86455e0113cffc561a7912e1d10b36c",
+  "prompts": {},
+  "humans": {
+    "h_bde3a12a8163e7": {
+      "author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}
