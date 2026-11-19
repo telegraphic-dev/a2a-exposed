@@ -65,6 +65,40 @@ function setup(t: TestContext) {
 	return { bob, alice, call, owner, grant, tool, peerRequests };
 }
 
+test("list_peers preserves encrypted comparisons from owner API without changing plain rows", async (t) => {
+	const s = setup(t);
+	const access = await s.grant();
+	const bundle = (cardUrl: string, byte: number) => JSON.stringify({ cardUrl,
+		identityKey: Buffer.alloc(32, byte).toString("base64url"), keyId: Buffer.alloc(32, byte + 1).toString("base64url") });
+	const responder = bundle(BOB + "/.well-known/agent-card.json", 3);
+	for (const [label, requester, revoked] of [
+		["sealed", bundle(ALICE + "/.well-known/agent-card.json", 1), null],
+		["unavailable", "not-json", null], ["plain", null, null],
+		["revoked", bundle(ALICE + "/.well-known/agent-card.json", 1), new Date().toISOString()],
+	] as const) {
+		await s.bob.env.DB.prepare("INSERT INTO peers (label, token_hash, created_at, source, revoked_at, sealed_requester, sealed_responder) VALUES (?, ?, ?, 'pairing', ?, ?, ?)")
+			.bind(label, "test-" + label, new Date().toISOString(), revoked, requester, requester ? responder : null).run();
+	}
+	const owner = await s.owner(s.bob, "GET", "/owner/peers");
+	assert.equal(owner.status, 200);
+	const expected = Object.fromEntries(owner.data.map((row: any) => [row.label, row]));
+	const listed = await s.tool(access, "list_peers");
+	assert.equal(listed.isError, false);
+	const text = listed.content[0].text;
+	const data = JSON.parse(text.slice(text.indexOf("\n") + 1));
+	const by = Object.fromEntries(data.inbound.map((row: any) => [row.label, row]));
+	assert.equal(by.revoked, undefined);
+	for (const label of ["sealed", "unavailable"]) {
+		assert.equal(by[label].sealed, true);
+		assert.equal(by[label].safety_code, expected[label].safety_code);
+		assert.deepEqual(by[label].safety_emoji, expected[label].safety_emoji);
+	}
+	assert.equal(by.unavailable.safety_code, null);
+	assert.equal(by.unavailable.safety_emoji, null);
+	assert.deepEqual(Object.keys(by.plain).sort(), ["cardUrl", "clientName", "continuation", "label", "since", "source"]);
+	assert.equal(text.includes("sealed_requester") || text.includes("identityKey"), false);
+});
+
 test("request_pairing: pending until the other owner approves, then the first send redeems and stores the peer", async (t) => {
 	const s = setup(t);
 	const access = await s.grant();
