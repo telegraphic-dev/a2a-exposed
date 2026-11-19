@@ -2854,7 +2854,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			return json(await Promise.all((rows.results as Json[]).map(async (r) => ({ label: r.label, created_at: r.created_at, revoked_at: r.revoked_at, source: r.source, user_code: r.user_code ? P.formatUserCode(r.user_code) : null, client_name: r.client_name, card_url: r.card_url || null,
 					// An active encrypted key pairing also lists `sealed: true` and the safety code computed from its stored public
 					// bundles (the bundles themselves are never listed). Independent of A2A_SEALED_ENABLED: it describes the pairing.
-					...(!r.revoked_at && r.source === "pairing" && r.sealed_requester ? { sealed: true, safety_code: await SealedKeys.requestSafetyCode(r) } : {}),
+					...(!r.revoked_at && r.source === "pairing" && r.sealed_requester ? { sealed: true, safety_code: await SealedKeys.requestSafetyCode(r), safety_emoji: await SealedKeys.requestSafetyEmoji(r) } : {}),
 					continuation: r.revoked_at ? null : await continuationGuide(ctx, r.label, r.card_url || r.claimed_card_url) }))));
 		}
 		if (m === "POST" && !seg[1]) {
@@ -3368,7 +3368,7 @@ async function withTokenLabel(ctx: TenantContext, r: Json): Promise<P.PageReques
 	const base = pageRequest(r);
 	const identityFingerprint = r.identity_key ? await A.fingerprint(String(r.identity_key)) : null;
 	if (identityFingerprint) base.identityFingerprint = identityFingerprint;
-	if (r.sealed_requester) base.sealed = { safetyCode: await SealedKeys.requestSafetyCode(r) };
+	if (r.sealed_requester) base.sealed = { safetyCode: await SealedKeys.requestSafetyCode(r), safetyEmoji: await SealedKeys.requestSafetyEmoji(r) };
 	if (r.replaces_label && r.replaces_hash) {
 		const live = await ctx.DB.prepare("SELECT 1 FROM peers WHERE label = ? AND token_hash = ? AND revoked_at IS NULL").bind(r.replaces_label, r.replaces_hash).first();
 		if (live) return { ...base, tokenLabel: String(r.replaces_label) };
@@ -3694,7 +3694,7 @@ async function ownerPairing(req: Request, ctx: TenantContext, ectx: ExecutionCon
 				replacesLabel: r.replaces_label || null,
 				...(r.identity_key ? { identityFingerprint: await A.fingerprint(String(r.identity_key)) } : {}),
 				// public-only: a key pairing is flagged with its safety code; bundles and keys are never listed here
-				...(r.sealed_requester ? { sealed: true, safetyCode: await SealedKeys.requestSafetyCode(r) } : {}) }))) });
+				...(r.sealed_requester ? { sealed: true, safetyCode: await SealedKeys.requestSafetyCode(r), safetyEmoji: await SealedKeys.requestSafetyEmoji(r) } : {}) }))) });
 	}
 	if (seg[0] === "password-link" && m === "POST" && !seg[1]) {
 		if (mode === "off" && !mcpOn(ctx)) return json({ error: "device-flow pairing is disabled (PAIRING_APPROVAL=off) and so is MCP: there is nothing to approve, so no approval password is needed" }, 409);
@@ -4757,7 +4757,7 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 				d.pending.map((r: Json) => ({ code: r.userCode, clientName: r.clientName, clientId: r.clientId, agentCardUrl: r.agentCardUrl, country: r.country,
 					expiresAt: r.expiresAt, link: r.verificationUriComplete, ...(manage ? { manageUrl: manage } : {}), replacesLabel: r.replacesLabel,
 					// Public fields only: the flag and the safety code to compare. Bundles and keys are never listed.
-					...(r.sealed === true ? { sealed: true, safetyCode: typeof r.safetyCode === "string" ? r.safetyCode : null } : {}) })));
+					...(r.sealed === true ? { sealed: true, safetyCode: typeof r.safetyCode === "string" ? r.safetyCode : null, safetyEmoji: r.safetyEmoji ?? null } : {}) })));
 		}
 		case "wake_status": {
 			const s = await wakeStatus(ctx);

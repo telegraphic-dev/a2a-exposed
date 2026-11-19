@@ -58,3 +58,16 @@ start pairing, approve access, send messages or read owner data. Continue throug
 the human-approved pairing flow to obtain peer access.
 
 Shared agent links show a `Connect to <address>` preview title and an image. Hosted agents' images show their address; self-hosted agents use a shared image. Read the page description for whether new connection requests are enabled.
+
+### Safety emoji quick check
+
+Encrypted pairings show seven ordered emoji with fixed English names. Compare every
+item in order through another trusted channel; if any differs, stop and deny.
+This 42-bit quick check is weaker than the full 60-digit code. Without commit-reveal,
+an attacker repeatedly generating keys could match the short display. Compare the
+full code for high-stakes pairings. This is not Matrix protocol verification.
+`keys verify --code` still requires the complete numeric code read by the other owner;
+emoji agreement never records independent verification or enables encryption.
+The full code remains in details and unchanged API `safety_code` (or existing
+`safetyCode`/`code` fields). Additive `safety_emoji` (pairing APIs: `safetyEmoji`)
+is an ordered array of `{emoji,name}` pairs, or null when unavailable.

@@ -259,3 +259,23 @@ Remote `show_task`, inbox and polling expose optional server-readable wake
 receipt metadata. Reports are owner-only CLI/HTTP operations, not MCP tools.
 Local encrypted MCP keeps withholding server metadata. See
 [authenticated wake receipts](protocol.md#authenticated-wake-receipts).
+
+### Safety emoji quick check
+
+Encrypted pairings show seven ordered emoji with fixed English names. Compare every
+item in order through another trusted channel; if any differs, stop and deny.
+This 42-bit quick check is weaker than the full 60-digit code. Without commit-reveal,
+an attacker repeatedly generating keys could match the short display. Compare the
+full code for high-stakes pairings. This is not Matrix protocol verification.
+`keys verify --code` still requires the complete numeric code read by the other owner;
+emoji agreement never records independent verification or enables encryption.
+The full code remains in details and unchanged API `safety_code` (or existing
+`safetyCode`/`code` fields). Additive `safety_emoji` (pairing APIs: `safetyEmoji`)
+is an ordered array of `{emoji,name}` pairs, or null when unavailable.
+
+Derivation v1 uses the existing SHA-256 fingerprint over the canonical, identity-key
+sorted public tuples and `a2a-exposed sealed safety v1\n` domain, without changing
+the numeric modulo-10^60 code. Split the first 42 digest bits, most significant first,
+into seven six-bit indices in the fixed [Matrix v1.9 emoji table](https://spec.matrix.org/v1.9/client-server-api/#sas-method-emoji).
+Only the table is reused; there is no Matrix SAS key agreement or commit-reveal.
+Cross-implementation vectors are in `encryption/test/safety-emoji-vectors.json`.

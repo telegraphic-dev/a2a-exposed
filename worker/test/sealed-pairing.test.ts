@@ -131,7 +131,10 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
  assert.match(page,/Trust on first use: this page can't verify the keys\..*compare the safety code.*If it differs, deny\./s);
  assert.equal(page.includes(bundles.alice.encryptionKey),false);
  const listed2=await cli("bob",["pair","list"]);assert.equal(listed2.code,0,listed2.err);
- assert.ok(listed2.out.includes(`encrypted key pairing, safety code: ${comparison} (trust on first use`),listed2.out);
+ assert.match(listed2.out,/encrypted key pairing, safety emoji:/);assert.ok(listed2.out.includes(`full safety code (details): ${comparison}`));
+ assert.deepEqual(listed.safetyEmoji,lines[0].safety_emoji);
+ assert.match(page,/<details><summary>Full safety code \(details\)<\/summary>/);
+ for (const item of listed.safetyEmoji) { assert.ok(page.includes(item.emoji)); assert.ok(page.includes(item.name)); }
  const approval=await owner("bob",`/owner/pairing/${code}/approve`,"POST",{});assert.equal(approval.status,200);assert.match(((await approval.json())as any).continuation.next,/Waiting for the requester.*same connect/);
  const beforeCollection=await cli("bob",["keys","pairings","--json"]);
  assert.deepEqual(JSON.parse(beforeCollection.out).pairings,[]);
@@ -150,6 +153,13 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
  const pinned=await cli("bob",["keys","pin","--id",ids.bob,"--peer",p.peer,"--user-code",p.userCode,"--json"]);assert.equal(pinned.code,0,pinned.err);assert.equal(JSON.parse(pinned.out).safety_code,pin.safety_code);assert.match(JSON.parse(pinned.out).next,/If any group differs.*token revoke LABEL.*keys pairings --json/);
  const restart=await cli("bob",["keys","code","--id",ids.bob,"--peer",p.peer,"--json"]);assert.equal(restart.code,0,restart.err);assert.equal(JSON.parse(restart.out).code,pin.safety_code);
  assert.equal(JSON.parse(restart.out).independently_verified,false);assert.match(JSON.parse(restart.out).next,/keys verify .*do not copy it from this output/);
+ assert.deepEqual(JSON.parse(restart.out).safety_emoji,pin.safety_emoji);
+ const peersWithEmoji=JSON.parse((await cli("alice",["peers","list","--json"])).out);
+ assert.deepEqual(peersWithEmoji[0].safety_emoji,pin.safety_emoji);assert.equal(peersWithEmoji[0].safety_code,pin.safety_code);
+ const mcpPeers=(await mcp("alice","list_peers",{})).structuredContent.peers;
+ assert.deepEqual(mcpPeers[0].safety_emoji,pin.safety_emoji);assert.equal(mcpPeers[0].safety_code,pin.safety_code);
+ const emojiAttempt=await cli("bob",["keys","verify","--id",ids.bob,"--peer",p.peer,"--code",pin.safety_emoji.map((x:any)=>x.emoji).join(" "),"--json"]);
+ assert.equal(emojiAttempt.code,1);assert.match(emojiAttempt.err,/complete safety code|12 groups/);
  // #380 independent ceremony: each side records the code the other owner read out. A mismatch changes nothing.
  const wrongCode=pin.safety_code.replace(/^(\d)/,(d:string)=>String((Number(d)+1)%10));
  const pinsBefore=fs.readFileSync(path.join(dirs.bob,"encryption/state.sqlite"));

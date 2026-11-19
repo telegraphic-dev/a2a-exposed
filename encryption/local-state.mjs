@@ -1,3 +1,4 @@
+import { safetyEmojiFromHex } from "./safety-emoji.mjs";
 // Local-only custody/trust foundation. These APIs do not enroll a Worker or send traffic.
 import fs from "node:fs";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -124,9 +125,14 @@ export async function stores() {
  return { ok: true, stores: [{ id: "file", available: true, private_keys: "protected local files", unattended: true }, { id: "keychain", available: native, backend: process.platform === "linux" ? "secret-service (no kernel fallback)" : process.platform === "darwin" ? "macOS Keychain" : "Windows Credential Manager", readiness: "not probed; owner authorization may be required", unattended: false }], next: "Select --store file or keychain explicitly; keychain never silently falls back." };
 }
 
-export function localSafetyCode(local, other) {
+function localSafetyFingerprint(local, other) {
   const tuples = [local, other].map(x => ({ cardUrl: x.cardUrl, identityKey: x.identityKey, keyId: x.keyId })).sort((a, b) => Buffer.compare(Buffer.from(a.identityKey, "base64url"), Buffer.from(b.identityKey, "base64url")) || a.cardUrl.localeCompare(b.cardUrl));
   const bytes = createHash("sha256").update("a2a-exposed sealed safety v1\n" + canonicalJSON(tuples)).digest("hex");
+  return bytes;
+}
+export function localSafetyEmoji(local, other) { return safetyEmojiFromHex(localSafetyFingerprint(local, other)); }
+export function localSafetyCode(local, other) {
+  const bytes = localSafetyFingerprint(local, other);
   const digits = (BigInt("0x" + bytes) % (10n ** 60n)).toString().padStart(60, "0");
   return digits.match(/.{5}/g).join(" ");
 }
@@ -933,7 +939,7 @@ export class LocalState {
   }
   if (local.identityKey === other.identityKey) fail("same_identity");
   const code = localSafetyCode(local, other);
-  return { ok: true, config_identity: this.configId(), local_id: localId, peer, source, ...(proposalDigest ? { proposal_digest: proposalDigest } : {}), code, verification, next: "Compare every group through another trusted channel. This read-only code grants no trust; approve only its exact proposal digest." };
+  return { ok: true, config_identity: this.configId(), local_id: localId, peer, source, ...(proposalDigest ? { proposal_digest: proposalDigest } : {}), code, safety_emoji: localSafetyEmoji(local, other), verification, next: "Compare every group through another trusted channel. This read-only code grants no trust; approve only its exact proposal digest." };
  }
 }
 

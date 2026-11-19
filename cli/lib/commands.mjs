@@ -378,7 +378,7 @@ async function peersRemote(sub, args) {
 	console.error("# the MCP connector's send tool can now reach these peers; re-run after connect / token changes or an owner-token rotation");
 }
 
-export function peers(sub, args, o) {
+export async function peers(sub, args, o) {
 	if (sub === "sync" || sub === "unsync") return peersRemote(sub, args);
 	const all = C.loadPeers();
 	if (sub === "add") {
@@ -419,8 +419,11 @@ export function peers(sub, args, o) {
 		if (drop.length) C.saveConfig(Object.fromEntries(drop.map((k) => [k, null])));
 		return console.log(`removed ${alias}${drop.length ? ` (and ${drop.join(", ")} from ${C.CONFIG_FILE})` : ""}`);
 	}
-	if (o.json) return out(Object.entries(all).map(([alias, v]) => ({ alias, url: v.url, token_env: v.token_env || null, token_set: !!(v.token_env && C.get(v.token_env)), pinned: v.sealed?.policy === "required" })));
+	const { peerSafety, formatSafetyEmoji } = await import("./sealed-keys.mjs");
+ const comparisons = Object.fromEntries(await Promise.all(Object.entries(all).map(async ([alias, v]) => [alias, await peerSafety(alias, v)])));
+ if (o.json) return out(Object.entries(all).map(([alias, v]) => ({ alias, url: v.url, token_env: v.token_env || null, token_set: !!(v.token_env && C.get(v.token_env)), pinned: v.sealed?.policy === "required", ...comparisons[alias] })));
 	for (const [k, v] of Object.entries(all)) {
+		if (v.sealed?.policy === "required") console.log(`Safety emoji: ${formatSafetyEmoji(comparisons[k].safety_emoji)}\n${comparisons[k].comparison_guidance}\nFull safety code (details): ${comparisons[k].safety_code || "(unavailable)"}`);
 		const te = v.token_env || "";
 		warnPeerTokenEnv(te);
 		console.log(`${k}\t${v.url}\ttoken_env=${te || "-"}\t${te && C.get(te) ? "(set)" : "(missing)"}`);
