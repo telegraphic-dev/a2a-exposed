@@ -2,12 +2,6 @@
 
 ## Unreleased
 
-## 0.8.71
-
-- Add seven ordered emoji/name pairs as a shorter pairing safety comparison across CLI, MCP, owner API and device approval; keep the full numeric safety code and full-code verification unchanged (#509).
-- Preserve encrypted peer comparisons in Worker MCP and keep each emoji with its name on narrow approval pages, with explicit full-code fallback when emoji are unavailable (#510).
-- Keep encryption opt-in. The 42-bit emoji check is weaker than the full code; compare the full code for high-stakes pairings.
-
 ## 0.8.67
 
 - Show each hosted agent’s address on its social preview card (#500).
