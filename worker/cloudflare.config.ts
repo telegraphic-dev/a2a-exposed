@@ -88,6 +88,8 @@ const plain: Record<string, string> = {
 	MANAGE_URL: v("MANAGE_URL"),
 	// Optional https URL for a signed pairing event. EVENT_SECRET is uploaded as a secret. Both are required for a post.
 	EVENT_URL: v("EVENT_URL"),
+	MESSAGE_EVENT_URL: v("MESSAGE_EVENT_URL"),
+	MESSAGE_EVENT_INGRESS_ORIGIN: v("MESSAGE_EVENT_INGRESS_ORIGIN"),
 };
 const hosted = v("TENANCY") === "host";
 const relay = v("A2A_WAKE_RELAY") === "1";
@@ -132,7 +134,8 @@ const SECRETS = ["OWNER_TOKEN", "WAKE_WEBHOOK_URL", "WAKE_WEBHOOK_KEY", "WAKE_HM
 	// Declared for `cf dev` only when a deploy asks for them, so a self-host .dev.vars without these still starts.
 	...(v("TENANCY") === "host" ? ["TENANT_SECRETS_KEY"] : []),
 	...(v("TENANCY") === "host" || v("APPROVAL_OIDC_ISSUER") ? ["APPROVAL_OIDC_CLIENT_SECRET"] : []),
-	...(v("EVENT_URL") ? ["EVENT_SECRET"] : [])];
+	...(v("EVENT_URL") ? ["EVENT_SECRET"] : []),
+	...(v("MESSAGE_EVENT_URL") ? ["MESSAGE_EVENT_SECRET"] : [])];
 
 export default defineConfig((ctx) => ({
 	...(v("CLOUDFLARE_ACCOUNT_ID") ? { accountId: v("CLOUDFLARE_ACCOUNT_ID") } : {}),

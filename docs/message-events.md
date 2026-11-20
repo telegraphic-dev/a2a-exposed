@@ -11,6 +11,16 @@ put it in URLs, command arguments, logs or model content. Single-inbox installs
 also require `ENABLE_CRON=1` with the minute cron; hosted inboxes use alarms.
 Missing/invalid settings disable this producer and its identity reads.
 Configuration and subscriptions still require their applicable owner approval.
+For the hosted platform's Cloudflare-fronted ingress, the operator may explicitly
+set deploy-only `MESSAGE_EVENT_INGRESS_ORIGIN` and the existing `CONTROL_SERVICE`
+service binding. Only that exact origin and `/api/message-events` (no query) select
+the capability-bound internal POST. Missing binding, wrong path and redirects fail
+closed; no external fetch is tried. This path uses the same signed body and a
+10s acknowledgement deadline and discards response bodies. Tenant configuration
+cannot supply or override the platform binding/origin. It is selected before
+transport, never as a fallback after a failed pinned request. Other receiver
+origins use the strict public pinned transport described below. No deployment or
+binding is created by installing this software.
 
 ## Event and acknowledgement
 

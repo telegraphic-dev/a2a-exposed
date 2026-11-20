@@ -1,6 +1,7 @@
 import type { TenantContext } from "./tenancy.ts";
 import { sha256 } from "./a2a.ts";
-import { fetchCheckedCallback } from "./wake-target.ts";
+import { withDeadline } from "./deadline.ts";
+import { fetchCheckedCallback, type CallbackResult } from "./wake-target.ts";
 
 /** No content or token hashes leave this boundary. IDs from the peer remain untrusted filter data. */
 export type MessageEvent = {
@@ -80,11 +81,32 @@ export async function flushMessageEvents(ctx: TenantContext): Promise<void> {
 		const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(target.secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
 		const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`${timestamp}.${row.body}`));
 		const signature = "sha256=" + [...new Uint8Array(mac)].map(b => b.toString(16).padStart(2, "0")).join("");
-		const result = await fetchCheckedCallback(target.url, { method: "POST", body: row.body, headers: { "content-type": "application/json", "x-a2a-timestamp": timestamp, "x-a2a-signature": signature } });
+		const init: RequestInit = { method: "POST", body: row.body, headers: { "content-type": "application/json", "x-a2a-timestamp": timestamp, "x-a2a-signature": signature }, redirect: "manual" };
+  const result = await deliverMessageIngress(ctx, target.url, init);
 		if (result.ok && result.status >= 200 && result.status < 300 || row.attempts + 1 >= 8) {
 			await ctx.DB.prepare("DELETE FROM message_event_outbox WHERE event_id=?").bind(row.event_id).run();
 		} else {
 			await ctx.DB.prepare("UPDATE message_event_outbox SET attempts=attempts+1,next_ms=? WHERE event_id=?").bind(Date.now() + Math.min(3600000, 1000 * 2 ** row.attempts), row.event_id).run();
 		}
 	}
+}
+
+/** Explicit capability-bound platform ingress, never a fallback after a failed pinned request.
+ * Only the deploy-level origin and fixed path can select this service. Tenant config cannot supply the binding.
+ */
+export async function deliverMessageIngress(ctx: TenantContext, url: string, init: RequestInit): Promise<CallbackResult> {
+ const u = new URL(url);
+ if (ctx.messageEventIngressOrigin && u.origin === ctx.messageEventIngressOrigin) {
+  const binding = ctx.controlService();
+  if (!binding || u.pathname !== "/api/message-events" || u.search || u.hash || u.username || u.password) return { ok: false, reason: "target" };
+  try {
+   return await withDeadline(10000, async signal => {
+    const response = await binding.fetch(url, { ...init, redirect: "manual", signal });
+    await response.body?.cancel(); signal.throwIfAborted();
+    if (response.status >= 300 && response.status < 400) return { ok: false, reason: "redirect" } as CallbackResult;
+    return { ok: true, status: response.status, body: new Uint8Array() } as CallbackResult;
+   });
+  } catch { return { ok: false, reason: "transport" }; }
+ }
+ return fetchCheckedCallback(url, init);
 }
