@@ -153,7 +153,11 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 		// Read only. Migrations run once a config row exists, so a scan that instantiates an object writes nothing.
 		ctx.blockConcurrencyWhile(async () => {
 			this.#row = readRow(this.#sql);
-			if (this.#row) migrateDo(this.#sql, this.#tx, MIGRATIONS);
+			if (this.#row) {
+				migrateDo(this.#sql, this.#tx, MIGRATIONS);
+				// Repair a crash after config commit but before the registration latch was written.
+				if (this.#row.config.MESSAGE_EVENT_URL) this.#sql.exec("UPDATE message_event_source SET activated=1 WHERE singleton=1");
+			}
 			if (this.#row?.status === "active") await this.#enqueueArm(false);
 		});
 	}
