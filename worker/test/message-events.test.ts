@@ -14,14 +14,14 @@ async function setup(enabled=true) {
  const token="s2a_"+"a".repeat(40);
  await DB.prepare("INSERT INTO peers(label,token_hash,created_at) VALUES(?,?,?)").bind("peer",await sha256(token),new Date().toISOString()).run();
  const env:any={DB,ENABLE_CRON:"1",PUBLIC_URL:BASE,OWNER_TOKEN:"owner-test",...(enabled?{MESSAGE_EVENT_URL:"https://callback.example/events",MESSAGE_EVENT_SECRET:secret}: {})};
- const ctx=resolveTenant(env);
+ const ctx=resolveTenant(env);const background:Promise<unknown>[]=[];
  const owner=(path:string,auth="owner-test")=>worker.fetch(new Request(BASE+"/owner/message-events/"+path,{headers:{authorization:"Bearer "+auth}}) as any,env,ectx);
  const send=async(id="message-one",direct=false)=>{
   // Treat waitUntil as durable scheduling only; delivery is driven separately to simulate a crash.
-  const res=await worker.fetch(new Request(BASE,{method:"POST",headers:{authorization:"Bearer "+token,"content-type":"application/json"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"message/send",params:{message:{kind:"message",role:"user",messageId:id,parts:[{kind:"text",text:"UNTRUSTED SECRET MESSAGE"}]},...(direct?{metadata:{"a2a.exposed/reply-delivery":{taskId:"outbound-task",messageId:"outbound-message",state:"completed"}}}:{})}})}) as any,env, { ...ectx, waitUntil(p:Promise<unknown>){p.catch(()=>{});} });
+  const res=await worker.fetch(new Request(BASE,{method:"POST",headers:{authorization:"Bearer "+token,"content-type":"application/json"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"message/send",params:{message:{kind:"message",role:"user",messageId:id,parts:[{kind:"text",text:"UNTRUSTED SECRET MESSAGE"}]},...(direct?{metadata:{"a2a.exposed/reply-delivery":{taskId:"outbound-task",messageId:"outbound-message",state:"completed"}}}:{})}})}) as any,env, { ...ectx, waitUntil(p:Promise<unknown>){background.push(p);p.catch(()=>{});} });
   return res.json() as Promise<any>;
  };
- return {DB,env,ctx,owner,send,token};
+ return {DB,env,ctx,owner,send,token,background};
 }
 test("identity: owner-only snapshots, permanent tombstones on revoke/rotation/reissue",async()=>{
  const s=await setup();
@@ -56,7 +56,7 @@ test("committed outbox is metadata-only, stable on duplicate, retried with signa
  globalThis.fetch=(async(url:any)=>String(url).startsWith("https://cloudflare-dns.com/")?new Response(JSON.stringify({Status:0,Answer:[{type:1,data:"1.2.3.4"}]})):realFetch(url)) as any;
  wakeNet.deliver=async(_url,init)=>{seen.push(init);return new Response(null,{status:503});};
  try {
-  const first=await s.send();assert.ok(first.result?.id);
+  const first=await s.send();await Promise.allSettled(s.background);assert.ok(first.result?.id);
   const before=await s.DB.prepare("SELECT * FROM message_event_outbox").first<any>();assert.ok(before);
   const body=JSON.parse(before.body);assert.equal(body.type,"message_received");assert.equal(body.classification,"inbound");assert.equal(body.role,"user");assert.equal(before.body.includes("UNTRUSTED"),false);assert.equal(before.body.includes("token"),false);
   await s.send();const rows=await s.DB.prepare("SELECT * FROM message_event_outbox").all<any>();assert.equal(rows.results!.length,1);assert.equal(rows.results![0].event_id,before.event_id);assert.equal(rows.results![0].body,before.body);
@@ -82,7 +82,7 @@ test("direct replies are explicitly classified without claiming task.updated",as
  const s=await setup();const real=wakeNet.deliver;const fetchImpl=globalThis.fetch;const bodies:string[]=[];
  globalThis.fetch=(async()=>new Response(JSON.stringify({Status:0,Answer:[{type:1,data:"1.2.3.4"}]}))) as any;
  wakeNet.deliver=async(_url,init)=>{bodies.push(String(init.body));return new Response(null,{status:503});};
- try{const result=await s.send("reply-one",true);assert.ok(result.result);await flushMessageEvents(s.ctx);assert.ok(bodies.length);const b=JSON.parse(bodies[0]!);assert.equal(b.classification,"direct_reply");assert.equal(b.type,"message_received");}finally{wakeNet.deliver=real;globalThis.fetch=fetchImpl;}
+ try{const result=await s.send("reply-one",true);assert.ok(result.result);await Promise.allSettled(s.background);await flushMessageEvents(s.ctx);assert.ok(bodies.length);const b=JSON.parse(bodies[0]!);assert.equal(b.classification,"direct_reply");assert.equal(b.type,"message_received");}finally{wakeNet.deliver=real;globalThis.fetch=fetchImpl;}
 });
 
 test("platform ingress selects only deploy-pinned service origin/path, never a network fallback",async()=>{
@@ -112,7 +112,7 @@ test("concurrent flushes claim one attempt before HTTP and exhausted budgets nev
  globalThis.fetch=(async()=>Response.json({Status:0,Answer:[{type:1,data:"1.2.3.4"}]})) as any;
  wakeNet.deliver=async()=>new Response(null,{status:503});
  try{
-  await s.send();await new Promise(r=>setTimeout(r,20));
+  await s.send();await Promise.allSettled(s.background);
   await s.DB.prepare("UPDATE message_event_outbox SET next_ms=0,attempts=0").run();
   let calls=0;let release!:()=>void;const held=new Promise<void>(r=>{release=r;});
   wakeNet.deliver=async()=>{calls++;await held;return new Response(null,{status:503});};
