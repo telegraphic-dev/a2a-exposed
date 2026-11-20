@@ -327,7 +327,7 @@ export async function fetchCheckedCallback(url: string, init: RequestInit, deps:
   const payload = bodyBytes(init.body);
   if (payload.byteLength > 65536 || init.method && init.method.toUpperCase() !== "POST") return { ok: false, reason: "target" };
   const headers = new Headers(init.headers);
-  for (const name of headers.keys()) if (!/^(content-type|accept|user-agent|webhook-(id|timestamp|signature)|x-a2a-(timestamp|signature))$/.test(name)) return { ok: false, reason: "target" };
+  for (const name of headers.keys()) if (!/^(content-type|accept|user-agent|x-mcp-subscription-id|webhook-(id|timestamp|signature)|x-a2a-(timestamp|signature))$/.test(name)) return { ok: false, reason: "target" };
   return await withDeadline(CALLBACK_TIMEOUT_MS, async signal => {
    const checked = await checkedWakeAddresses(url, deps.lookup ?? (host => lookupAddresses(host, signal)));
    signal.throwIfAborted();

@@ -40,3 +40,13 @@ test("overall deadline includes response-body stall",async()=>{
  // A transport obeys the propagated signal; the outer deadline also settles when a fixture ignores it.
  assert.equal(canceled,true);
 });
+
+test("MCP verification and event delivery preserve subscription/signing headers and serialized bytes",async()=>{
+ let calls=0;
+ for(const body of ['{"challenge":"one-time-fixture"}','{"eventId":"event-fixture","name":"message.received","data":{}}']){
+  const result=await fetchCheckedCallback("https://callback.example/",{method:"POST",body,headers:{"Content-Type":"application/json","webhook-id":"occurrence-fixture","webhook-timestamp":"1234567890","webhook-signature":"v1,signature-fixture","X-MCP-Subscription-Id":"subscription-fixture"}},{lookup,deliver:async(_url,init)=>{calls++;const h=new Headers(init.headers);assert.equal(h.get("x-mcp-subscription-id"),"subscription-fixture");assert.equal(h.get("webhook-id"),"occurrence-fixture");assert.equal(h.get("webhook-timestamp"),"1234567890");assert.equal(h.get("webhook-signature"),"v1,signature-fixture");assert.equal(init.body,body);assert.equal(init.redirect,"manual");assert.ok(init.signal);return new Response('{"challenge":"one-time-fixture"}');}});
+  assert.equal(result.ok,true);
+ }
+ assert.equal(calls,2);
+ for(const name of ["authorization","cookie","host","x-mcp-subscription-secret"]){const result=await fetchCheckedCallback("https://callback.example/",{headers:{[name]:"fixture"}},{lookup,deliver:async()=>{throw Error("forbidden header reached transport");}});assert.deepEqual(result,{ok:false,reason:"target"});}
+});

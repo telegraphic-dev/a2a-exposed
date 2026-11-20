@@ -108,7 +108,7 @@ IP and verifies TLS for the original hostname. Credentials, fragments, non-443
 ports, private/mixed/reserved DNS answers and unexpected headers are refused.
 Only POST with a string/byte body of at most 65,536 bytes is accepted.
 Only content-type, accept, user-agent, Standard Webhooks signing headers and
-x-a2a signing headers are accepted. Every redirect, even same-origin, is refused.
+x-a2a signing headers and `X-MCP-Subscription-Id` are accepted. Every redirect, even same-origin, is refused.
 There is no native-fetch fallback or internal HTTP retry after an egress failure.
 
 Results are `{ok:true,status,body:Uint8Array}` or `{ok:false,reason}` with a fixed
@@ -120,3 +120,7 @@ Workers socket restrictions, including Cloudflare-address egress restrictions,
 remain fail-closed. Local tests cover SNI/pinning, TLS failure, workerd loading,
 redirect/size refusal and deadlines; successful live ChatGPT callback delivery is
 not established by those fixtures and remains a later qualification gate.
+
+The subscription header is required on both verification and delivery by the
+[OpenAI MCP Events contract](https://developers.openai.com/plugins/build/mcp-events).
+The helper preserves its value along with signing headers and exact body bytes.
