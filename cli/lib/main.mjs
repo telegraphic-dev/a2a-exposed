@@ -197,6 +197,9 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
                                                read EVENT_SECRET from stdin (hidden prompt on a terminal).
                                                Uploaded on this deploy. Not an argument, not printed, and not
                                                saved in config.env. Or export EVENT_SECRET
+                                Message feed   optional MESSAGE_EVENT_URL plus protected MESSAGE_EVENT_SECRET.
+                                               Separate from pairing and owner wakes; self-host requires --cron.
+                                               See docs/message-events.md; configure only with owner approval.
                                 --rotate-owner-token  on init, replace the owner token; other settings come from config.env.
                                                Then update A2A_OWNER_TOKEN wherever this A2A endpoint is called, and run \`peers sync\`
                                 --upstream URL  proxy / expose mode: a public façade for an agent that already
