@@ -5059,6 +5059,7 @@ const NO_FLUSH = new WeakSet<Request>();
 
 /** Inbox for one already-resolved tenant: retired-host redirect, the handler, then an opportunistic wake flush. */
 export async function dispatch(req: Request, ctx: TenantContext, ectx: ExecutionContext): Promise<Response> {
+	if (["GET", "HEAD"].includes(req.method) && new URL(req.url).pathname.startsWith("/owner/message-events/")) NO_FLUSH.add(req);
 	const moved = A.movedResponse(req.url, ctx.PUBLIC_URL, ctx.RETIRED_HOSTNAMES);
 	if (moved) return new Response(moved.body || null, { status: moved.status, headers: moved.headers });
 	const res = noindex(ctx, await handle(req, ctx, ectx));

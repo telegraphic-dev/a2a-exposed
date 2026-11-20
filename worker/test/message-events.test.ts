@@ -95,3 +95,14 @@ test("platform ingress selects only deploy-pinned service origin/path, never a n
  const missing=resolveTenant({...env,CONTROL_SERVICE:undefined});assert.deepEqual(await deliverMessageIngress(missing,"https://platform.example.com/api/message-events",{method:"POST"}),{ok:false,reason:"target"});
  const redirect=resolveTenant({...env,CONTROL_SERVICE:{fetch:async()=>new Response(null,{status:302,headers:{location:"https://other.example.com/"}})}});assert.deepEqual(await deliverMessageIngress(redirect,"https://platform.example.com/api/message-events",{method:"POST"}),{ok:false,reason:"redirect"});
 });
+
+test("source GET/HEAD are read-only and never opportunistically flush owner wakes",async()=>{
+ const s=await setup();const pending=JSON.stringify({contextId:"pending-context",taskId:"pending-task",from:"peer",preview:"fixture"});
+ await s.DB.prepare("INSERT INTO wakes(context_id,peer,last_ms,pending_json) VALUES('pending-context','peer',0,?)").bind(pending).run();
+ const promises:Promise<unknown>[]=[];let sent=0;const original=globalThis.fetch;globalThis.fetch=(async()=>{sent++;return new Response();}) as any;
+ try{
+  const env={...s.env,WAKE_WEBHOOK_URL:"https://hook.example.com/owner-wake",WAKE_PRESET:"generic"};
+  for(const method of ["GET","HEAD"]){const res=await worker.fetch(new Request(BASE+"/owner/message-events/source",{method,headers:{authorization:"Bearer owner-test"}}) as any,env,{...ectx,waitUntil(p:Promise<unknown>){promises.push(p);}});assert.equal(res.status,200);if(method==="HEAD")assert.equal(await res.text(),"");}
+  await Promise.all(promises);assert.equal(sent,0);assert.equal((await s.DB.prepare("SELECT pending_json FROM wakes WHERE context_id='pending-context'").first<any>()).pending_json,pending);
+ }finally{globalThis.fetch=original;}
+});
