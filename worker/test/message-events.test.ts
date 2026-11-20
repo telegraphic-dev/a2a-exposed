@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import worker, { cronFlush } from "../src/index.ts";
 import { sha256 } from "../src/a2a.ts";
 import { messageEventIdentity, flushMessageEvents } from "../src/message-events.ts";
-import { resolveTenant } from "../src/tenancy.ts";
+import { resolveTenant, hostedTenantContext } from "../src/tenancy.ts";
 import { wakeNet } from "../src/wake-target.ts";
 import { d1 } from "./d1.ts";
 const BASE="https://agent.example.com";
@@ -121,5 +121,17 @@ test("concurrent flushes claim one attempt before HTTP and exhausted budgets nev
   assert.equal(calls,1);const claimed=await s.DB.prepare("SELECT attempts,next_ms FROM message_event_outbox").first<any>();assert.equal(claimed.attempts,1);assert.ok(claimed.next_ms>Date.now());
   release();await Promise.all([a,b]);assert.equal(calls,1);
   await s.DB.prepare("UPDATE message_event_outbox SET attempts=8,next_ms=0").run();await flushMessageEvents(s.ctx);assert.equal(calls,1);assert.equal((await s.DB.prepare("SELECT count(*) AS n FROM message_event_outbox").first<any>()).n,0);
+ }finally{wakeNet.deliver=original;globalThis.fetch=fetchImpl;}
+});
+
+test("stale disabled tenant context cannot erase a newer configuration outbox",async()=>{
+ const s=await setup();const original=wakeNet.deliver;const fetchImpl=globalThis.fetch;
+ globalThis.fetch=(async()=>Response.json({Status:0,Answer:[{type:1,data:"1.2.3.4"}]})) as any;wakeNet.deliver=async()=>new Response(null,{status:503});
+ try{
+  await s.send();await Promise.allSettled(s.background);
+  await s.DB.prepare("CREATE TABLE tenant_config(tenant_id TEXT,version INTEGER,status TEXT)").run();await s.DB.prepare("INSERT INTO tenant_config VALUES('tenant-fixture',2,'active')").run();
+  const context=(version:number)=>hostedTenantContext({TENANCY:"host",TENANT_DO:{} as any} as any,{id:"tenant-fixture",db:s.DB,publicUrl:BASE,configVersion:version,config:{},status:"active"});
+  await flushMessageEvents(context(1));assert.equal((await s.DB.prepare("SELECT count(*) AS n FROM message_event_outbox").first<any>()).n,1);
+  await flushMessageEvents(context(2));assert.equal((await s.DB.prepare("SELECT count(*) AS n FROM message_event_outbox").first<any>()).n,0);
  }finally{wakeNet.deliver=original;globalThis.fetch=fetchImpl;}
 });

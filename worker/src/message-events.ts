@@ -59,7 +59,10 @@ export async function messageEventStatement(ctx: TenantContext, input: { peer: s
 export async function flushMessageEvents(ctx: TenantContext): Promise<void> {
 	const target = messageEventTarget(ctx);
 	if (ctx.status !== "active" || !target) {
-		await ctx.DB.prepare("DELETE FROM message_event_outbox").run();
+		if (ctx.mode === "host") {
+   // A stale disabled background context cannot erase events queued by a newer config.
+   try { await ctx.DB.prepare("DELETE FROM message_event_outbox WHERE EXISTS(SELECT 1 FROM tenant_config WHERE tenant_id=? AND version=?)").bind(ctx.id, ctx.configVersion).run(); } catch { /* unreadable authority: retain, never send */ }
+  } else await ctx.DB.prepare("DELETE FROM message_event_outbox").run();
 		return;
 	}
 	const fingerprint = await sha256(`${target.url}\n${target.secret}`);
