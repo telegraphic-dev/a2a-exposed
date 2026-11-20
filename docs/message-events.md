@@ -49,7 +49,9 @@ and durably accepts by `(sourceInstanceId,eventId)` before returning 2xx.
 Acknowledgement means durable ingress, not downstream client delivery.
 
 Delivery is at least once: acknowledgement loss or overlapping flushes may repeat
-an event. There are at most eight scheduled attempts with exponential backoff
+an event. Each attempt is durably claimed before HTTP, with a 15s recovery lease
+so concurrent flushes cannot spend the same attempt. A crash before HTTP can
+consume an attempt without delivery. There are at most eight scheduled attempts with exponential backoff
 starting at one second, capped at one hour; a flush processes at most 16 due rows.
 After the final attempt the row is dropped; there is no historical replay API.
 Changing URL/key, disabling the feed, invalidating the source or revoking/rotating

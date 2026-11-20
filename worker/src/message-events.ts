@@ -70,6 +70,7 @@ export async function flushMessageEvents(ctx: TenantContext): Promise<void> {
   return !!live && live.version === ctx.configVersion && live.status === "active";
  };
 	for (const row of rows.results || []) {
+  if (row.attempts >= 8) { await ctx.DB.prepare("DELETE FROM message_event_outbox WHERE event_id=?").bind(row.event_id).run(); continue; }
   // A background flush must not keep sending using a pre-suspend/rotation config snapshot.
   if (!await current()) return;
 		const source = await messageEventIdentity(ctx, { instance: row.peer_instance });
@@ -77,6 +78,9 @@ export async function flushMessageEvents(ctx: TenantContext): Promise<void> {
 		if (!source || !("active" in source) || !source.active || source.sourceInstanceId !== row.source_instance || row.target_fingerprint !== fingerprint) {
 			await ctx.DB.prepare("DELETE FROM message_event_outbox WHERE event_id=?").bind(row.event_id).run(); continue;
 		}
+  // Claim the attempt before HTTP. A crash cannot erase its budget or leave an immediately due second sender.
+  const claimed = await ctx.DB.prepare("UPDATE message_event_outbox SET attempts=attempts+1,next_ms=? WHERE event_id=? AND attempts=? AND next_ms<=?").bind(Date.now()+15000, row.event_id, row.attempts, Date.now()).run();
+  if ((claimed.meta.changes ?? 0) < 1) continue;
 		const timestamp = String(Math.floor(Date.now() / 1000));
 		const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(target.secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
 		const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`${timestamp}.${row.body}`));
@@ -86,7 +90,7 @@ export async function flushMessageEvents(ctx: TenantContext): Promise<void> {
 		if (result.ok && result.status >= 200 && result.status < 300 || row.attempts + 1 >= 8) {
 			await ctx.DB.prepare("DELETE FROM message_event_outbox WHERE event_id=?").bind(row.event_id).run();
 		} else {
-			await ctx.DB.prepare("UPDATE message_event_outbox SET attempts=attempts+1,next_ms=? WHERE event_id=?").bind(Date.now() + Math.min(3600000, 1000 * 2 ** row.attempts), row.event_id).run();
+			await ctx.DB.prepare("UPDATE message_event_outbox SET next_ms=? WHERE event_id=? AND attempts=?").bind(Date.now() + Math.min(3600000, 1000 * 2 ** row.attempts), row.event_id, row.attempts + 1).run();
 		}
 	}
 }
