@@ -1,4 +1,4 @@
-import { messageEventIdentity, messageEventStatement, flushMessageEvents } from "./message-events.ts";
+import { messageEventTarget, messageEventIdentity, messageEventStatement, flushMessageEvents } from "./message-events.ts";
 import { LANDING_SOCIAL_IMAGE } from "./landing-social-image.ts";
 import { SOCIAL_CARD_PATH, cardLayout, socialCardKey, socialCardPng } from "./social-card.ts";
 import { LANDING_WEBMCP_SCRIPT } from "./landing-webmcp.ts";
@@ -623,6 +623,8 @@ async function minMs(ctx: TenantContext, sql: string, shift: (t: number) => numb
  */
 export async function nextCronAt(ctx: TenantContext, now = Date.now()): Promise<number | null> {
 	const times: number[] = [];
+	// A durable recovery alarm exists even while the outbox is empty, covering a crash immediately after commit.
+	if (messageEventTarget(ctx)) times.push(now + 60000);
 	const events = await minMs(ctx, "SELECT MIN(next_ms) AS t FROM message_event_outbox", t => t);
 	if (events != null) times.push(events);
 	const deb = debounceMs(ctx);

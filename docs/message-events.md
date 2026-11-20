@@ -45,7 +45,9 @@ After the final attempt the row is dropped; there is no historical replay API.
 Changing URL/key, disabling the feed, invalidating the source or revoking/rotating
 the peer discards old pending rows rather than delivering them under new authority.
 Storage errors retain the outbox. A committed row survives a lost waitUntil;
-cron/alarm processing retries it. A receiver must tolerate delayed/out-of-order
+cron/alarm processing retries it. Hosted inboxes retain a one-minute local
+outbox recovery alarm even when empty and ensure it is durable before a message
+can commit; this does not poll A2A or replace owner wakes. A receiver must tolerate delayed/out-of-order
 occurrences; do not use a timestamp high-water mark as a deduplication key.
 
 ## Authoritative owner reads

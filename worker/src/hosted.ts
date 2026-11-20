@@ -1,3 +1,4 @@
+import { messageEventTarget } from "./message-events.ts";
 // Optional entrypoint. Used only when the deploy sets TENANCY=host (see cloudflare.config.ts).
 // With that set and a TENANT_DO binding, `<name>.<TENANT_DOMAIN>` is looked up in the KV directory and forwarded
 // to that name's SQLite Durable Object. The object runs the same inbox as a single deploy (`dispatch` in index.ts)
@@ -521,6 +522,13 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 		}
 		const tenant = await this.#tenant(new URL(req.url).origin);
 		if (!tenant) return notFound();
+  // Guarantee a durable recovery alarm BEFORE any opted-in message can commit.
+  // No remote polling: this alarm only flushes the local transactional outbox.
+  if (req.method === "POST" && ["/", "/a2a", "/a2a/v1"].includes(new URL(req.url).pathname) && messageEventTarget(tenant)) {
+   try {
+    if (await this.ctx.storage.getAlarm() == null) await this.ctx.storage.setAlarm(Date.now() + 60000);
+   } catch { return Response.json({ error: "message event recovery unavailable" }, { status: 503 }); }
+  }
 		// Do not arm from the rows visible here. sendWake runs in waitUntil and, on 429/503, inserts the retry
 		// after this response returns. requeueWake arms in that insert. Arm again when those tasks finish so a
 		// quiet tenant is on Retry-After, not the rate-row timer from an earlier read.
