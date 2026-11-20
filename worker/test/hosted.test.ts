@@ -1044,3 +1044,24 @@ test("hosted agent pages link a per-agent social card that workerd draws and ser
 	await kv.put("tenant:dora", JSON.stringify({ id: "id-dora", status: "suspended", region: "", version: 1 }));
 	assert.equal((await mf.dispatchFetch(url.replace("carol.", "dora."))).status, 403);
 });
+
+test("message feed arms recovery before commit and refuses ingestion when durable scheduling fails", async t => {
+ const script=`${await bundleHosted()}
+export class EventProbe extends TenantStore {
+ async seed(hash) { this.ctx.storage.sql.exec("INSERT INTO peers(label,token_hash,created_at) VALUES('peer',?,'2026-01-01')",hash); }
+ async clearRecovery() { await this.ctx.storage.deleteAlarm(); }
+ async failRecovery() { this.ctx.storage.getAlarm=async()=>null; this.ctx.storage.setAlarm=async()=>{throw new Error("fixture storage failure");}; }
+ async eventCounts() {return { tasks:this.ctx.storage.sql.exec("SELECT count(*) AS n FROM tasks").toArray()[0].n, outbox:this.ctx.storage.sql.exec("SELECT count(*) AS n FROM message_event_outbox").toArray()[0].n };}
+}
+`;
+ const mf=new Miniflare(convertV4MiniflareOptions({name:"event-recovery",modules:true,script,compatibilityDate:"2026-10-06",durableObjects:{TENANT_DO:{className:"EventProbe",useSQLite:true}},bindings:{TENANCY:"host",TENANT_DOMAIN:"example.com",TENANT_SECRETS_KEY:"fixture-platform-key"},outboundService:async()=>Response.json({Status:3})} as never));
+ t.after(()=>mf.dispose());await mf.ready;
+ const ns=await mf.getDurableObjectNamespace("TENANT_DO");const stub:any=ns.get(ns.idFromName("events-fixture"));
+ await stub.pushConfig({version:1,tenantId:"events-fixture",name:"alice",status:"active",ownerTokenHash:await sha256("dummy-owner"),config:{MESSAGE_EVENT_URL:"https://hook.example.net/messages",MESSAGE_EVENT_SECRET:"synthetic-event-feed-secret-1234567890"}});
+ assert.ok(await stub.alarmAt(),"config registration persists local recovery before any message");
+ const token="s2a_"+"a".repeat(40);await stub.seed(await sha256(token));await stub.clearRecovery();
+ const send=(id:string)=>stub.fetch("https://alice.example.com/",{method:"POST",headers:{authorization:"Bearer "+token,"content-type":"application/json"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"message/send",params:{message:{kind:"message",role:"user",messageId:id,parts:[{kind:"text",text:"fixture"}]}}})});
+ assert.equal((await send("first")).status,200);assert.ok(await stub.alarmAt(),"ingress restores missing recovery alarm before committing");
+ const before=await stub.eventCounts();assert.equal(before.tasks,1);
+ await stub.failRecovery();assert.equal((await send("must-not-commit")).status,503);assert.deepEqual(await stub.eventCounts(),before);
+});
