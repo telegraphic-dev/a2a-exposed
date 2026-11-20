@@ -605,6 +605,10 @@ test("TenantStore.restoreBookmark returns ok and the next session is a new objec
 export class Probe extends TenantStore {
   constructor(ctx, env) { super(ctx, env); this.born = Date.now(); }
   async bornAt() { return this.born; }
+  async refusalLive(bookmark) {
+    try { await this.restoreBookmark(bookmark); return "not refused"; }
+    catch (e) { return String(e.message); }
+  }
   async restoreLive(bookmark) {
     this.ctx.storage.onNextSessionRestoreBookmark = async () => "undo-live";
     return await this.restoreBookmark(bookmark);
@@ -627,6 +631,7 @@ export class Probe extends TenantStore {
 		bornAt(): Promise<number>;
 		pushConfig(b: Record<string, unknown>): Promise<{ applied: boolean }>;
 		restoreLive(bookmark: string): Promise<{ ok: boolean; undo: string }>;
+ refusalLive(bookmark: string): Promise<string>;
 	};
 	const hash = await sha256("owner-alice");
 	assert.equal((await stub.pushConfig({
@@ -649,9 +654,9 @@ export class Probe extends TenantStore {
 	assert.notEqual(again, born, "abort after the result starts a new session");
  const current = ns.get(id) as typeof stub;
  assert.equal((await current.pushConfig({version:2,tenantId:"id-alice",name:"alice",status:"active",ownerTokenHash:hash,config:{MESSAGE_EVENT_URL:"https://events.example.com/ingress"}})).applied,true);
- await assert.rejects(()=>current.restoreLive("bm-feed"),/message event source registered/);
+ assert.match(await current.refusalLive("bm-feed"),/message event source registered/);
  assert.equal((await current.pushConfig({version:3,tenantId:"id-alice",name:"alice",status:"active",ownerTokenHash:hash,config:{}})).applied,true);
- await assert.rejects(()=>current.restoreLive("bm-after-disable"),/message event source registered/);
+ assert.match(await current.refusalLive("bm-after-disable"),/message event source registered/);
 
 });
 

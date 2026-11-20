@@ -2901,7 +2901,8 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 				// The other inbox still accepts the return token until that owner revokes it.
 				ctx.DB.prepare("DELETE FROM outbound_peers WHERE alias = ? AND source = 'announce'").bind(label),
 			]);
-			if (changed(revoked) !== 1) {
+			// D1 counts incarnation-trigger writes too; the guarded primary-key update is still at most one peer.
+			if (changed(revoked) < 1) {
 				const ex: Json = await ctx.DB.prepare("SELECT revoked_at FROM peers WHERE label = ?").bind(label).first();
 				return json({ revoked: false, error: ex ? `the token with label ${label} was already revoked (${ex.revoked_at})` : `no active token with label ${label} (see token list)` }, 404);
 			}
@@ -3286,7 +3287,7 @@ async function tokenEndpoint(req: Request, ctx: TenantContext): Promise<Response
 	if (r.replaces_label && r.replaces_hash && r.label === r.replaces_label) {
 		const u = await ctx.DB.prepare("UPDATE peers SET token_hash = ?, created_at = ?, source = 'pairing', user_code = ?, client_name = ?, identity_key = COALESCE(?, identity_key), sealed_requester = ?, sealed_responder = ?, claimed_card_url = ? WHERE label = ? AND token_hash = ? AND revoked_at IS NULL")
 			.bind(await A.sha256(token), A.nowIso(), r.user_code, r.client_name || r.client_id || null, r.identity_key || null, r.sealed_requester || null, r.sealed_responder || null, r.agent_card_url || null, r.replaces_label, r.replaces_hash).run();
-		if (u.meta.changes === 1) {
+		if ((u.meta.changes ?? 0) > 0) {
 			await ctx.DB.prepare("DELETE FROM device_requests WHERE device_hash = ?").bind(hash).run();
 			log("pairing_redeemed", { ip, label: r.replaces_label, userCode: P.formatUserCode(r.user_code), replaced: true });
 			return json({ access_token: token, token_type: "Bearer", peer_label: r.replaces_label, replaced: true, ...(r.sealed_responder ? { sealed_peer_bundle: JSON.parse(r.sealed_responder) } : {}) }, 200, { pragma: "no-cache" });
