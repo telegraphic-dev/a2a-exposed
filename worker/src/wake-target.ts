@@ -6,6 +6,7 @@
 // socket was opened to an IP (cloudflare/workerd#6903), so the peer aborts before HTTP.
 // The handshake runs in-process, with the URL hostname as SNI, over that pinned socket.
 // A socket still cannot open a Cloudflare address, so a *.workers.dev target does not connect.
+import { withDeadline } from "./deadline.ts";
 import { CertificateError, Client, TlsError } from "tunnelfetch";
 import { isPrivateHost } from "./a2a.ts";
 import { isPublicIp } from "./mcp.ts";
@@ -306,4 +307,63 @@ export async function fetchCheckedWake(
 		current = next.href;
 	}
 	return { refused: "too many redirects" };
+}
+
+/** Scrubbed single-attempt callback result. No destination or response is logged. */
+export type CallbackResult = { ok: true; status: number; body: Uint8Array } | { ok: false; reason: "target" | "redirect" | "timeout" | "transport" | "response_limit" };
+export const CALLBACK_TIMEOUT_MS = 10_000;
+export const CALLBACK_RESPONSE_BYTES = 16_384;
+
+/** Strict Events callback transport; DNS, TLS and bounded body share ONE deadline.
+ * Never uses a native-fetch fallback, even when Workers socket egress is refused.
+ */
+export async function fetchCheckedCallback(url: string, init: RequestInit, deps: Pick<WakeDeps, "lookup" | "connect" | "deliver"> = {}): Promise<CallbackResult> {
+ const deadline = Date.now() + CALLBACK_TIMEOUT_MS;
+ let reason: "target" | "redirect" | "timeout" | "transport" | "response_limit" = "transport";
+ try {
+  if (url.length > 2000) return { ok: false, reason: "target" };
+  const parsed = new URL(url);
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.hash || parsed.port && parsed.port !== "443") return { ok: false, reason: "target" };
+  const payload = bodyBytes(init.body);
+  if (payload.byteLength > 65536 || init.method && init.method.toUpperCase() !== "POST") return { ok: false, reason: "target" };
+  const headers = new Headers(init.headers);
+  for (const name of headers.keys()) if (!/^(content-type|accept|user-agent|webhook-(id|timestamp|signature)|x-a2a-(timestamp|signature))$/.test(name)) return { ok: false, reason: "target" };
+  return await withDeadline(CALLBACK_TIMEOUT_MS, async signal => {
+   const checked = await checkedWakeAddresses(url, deps.lookup ?? (host => lookupAddresses(host, signal)));
+   signal.throwIfAborted();
+   if ("refused" in checked) return { ok: false, reason: "target" } as CallbackResult;
+   const target = { ip: checked.ips[0]!, hostname: checked.hostname };
+   const request = { ...init, method: "POST", body: init.body ?? payload, headers, redirect: "manual" as const, signal };
+   let client: Client | undefined;
+   try {
+    let res: Response;
+    if (deps.deliver) res = await deps.deliver(url, request, target);
+    else if (wakeNet.deliver) res = await wakeNet.deliver(url, request, target);
+    else {
+     const connect = deps.connect ?? wakeNet.connect ?? await runtimeConnect();
+     signal.throwIfAborted();
+     client = new Client({ connect: dialChecked(target.ip, connect), forceTunnel: true, maxRedirects: 0, maxBodyBytes: CALLBACK_RESPONSE_BYTES, http2: false, keepAlive: false, timeouts: { totalMs: Math.max(1, deadline - Date.now()) } });
+     res = await client.fetch(url, { ...request, signal });
+    }
+    signal.throwIfAborted();
+    if (res.status >= 300 && res.status < 400) { await res.body?.cancel(); return { ok: false, reason: "redirect" } as CallbackResult; }
+    const chunks: Uint8Array[] = []; let size = 0;
+    const reader = res.body?.getReader();
+    const cancel = () => { void reader?.cancel().catch(() => {}); };
+    signal.addEventListener("abort", cancel, { once: true });
+    try {
+     if (reader) while (true) {
+      const part = await reader.read(); signal.throwIfAborted();
+      if (part.done) break;
+      size += part.value.byteLength;
+      if (size > CALLBACK_RESPONSE_BYTES) { reason = "response_limit"; throw new Error("response limit"); }
+      chunks.push(part.value);
+     }
+    } finally { signal.removeEventListener("abort", cancel); await reader?.cancel().catch(() => {}); }
+    const body = new Uint8Array(size); let offset = 0;
+    for (const chunk of chunks) { body.set(chunk, offset); offset += chunk.byteLength; }
+    return { ok: true, status: res.status, body } as CallbackResult;
+   } finally { await client?.close().catch(() => {}); }
+  }, init.signal ?? undefined);
+ } catch { return { ok: false, reason: Date.now() >= deadline || init.signal?.aborted ? "timeout" : reason }; }
 }

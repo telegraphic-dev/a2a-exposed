@@ -22,12 +22,18 @@
 			"types": "./dist/types/control/src/core/http-relay.d.ts",
 			"import": "./dist/http-relay.js",
 			"default": "./dist/http-relay.js"
+		},
+		"./callbacks": {
+			"types": "./dist/types/control/src/core/callbacks.d.ts",
+			"import": "./dist/callbacks.js",
+			"default": "./dist/callbacks.js"
 		}
 	},
 	"files": [
 		"dist",
 		"control/migrations",
-		"LICENSE"
+		"LICENSE",
+		"TUNNELFETCH-LICENSE"
 	],
 	"engines": {
 		"node": ">=22.18"

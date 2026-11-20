@@ -18,7 +18,7 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
  const envs:Record<string,any>={},dirs:Record<string,string>={},ids:Record<string,string>={},bundles:Record<string,any>={},records:any[]=[];
  // Every in-process Worker side channel is captured for the plaintext-exclusion scans:
  // wake webhooks, A2A push deliveries, any other outbound fetch (card reads) and structured logs.
- const wakes:any[]=[],pushes:any[]=[],workerFetches:any[]=[],logs:string[]=[],cliRuns:any[]=[],privateTexts:string[]=[];
+ const messageEvents:any[]=[],wakes:any[]=[],pushes:any[]=[],workerFetches:any[]=[],logs:string[]=[],cliRuns:any[]=[],privateTexts:string[]=[];
  const originalFetch=globalThis.fetch,originalDeliver=wakeNet.deliver;
  globalThis.fetch=(async(input:any,init:any={})=>{
   const request=new Request(input,init);
@@ -32,10 +32,10 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
  const consoleMethods=["log","info","warn","error"] as const,originalConsole=Object.fromEntries(consoleMethods.map(m=>[m,console[m]]));
  for(const m of consoleMethods)console[m]=(...values:any[])=>{logs.push(values.map(v=>typeof v==="string"?v:JSON.stringify(v)).join(" "));(originalConsole[m] as any)(...values);};
  // Pinned peer deliveries (A2A push) are captured instead of opening a socket.
- wakeNet.deliver=async(url:string,init:RequestInit)=>{const body=typeof init.body==="string"?init.body:"";const entry={url,headers:Object.fromEntries(new Headers(init.headers)),body};pushes.push(entry);workerFetches.push(entry);return new Response("",{status:200});};
+ wakeNet.deliver=async(url:string,init:RequestInit)=>{const body=typeof init.body==="string"?init.body:"";const entry={url,headers:Object.fromEntries(new Headers(init.headers)),body};if(url==="https://events.example.net/messages"){messageEvents.push(entry);workerFetches.push(entry);return new Response("",{status:200});}pushes.push(entry);workerFetches.push(entry);return new Response("",{status:200});};
  t.after(()=>{globalThis.fetch=originalFetch;wakeNet.deliver=originalDeliver;for(const m of consoleMethods)console[m]=originalConsole[m] as any;});
  for(const name of ["alice","bob"]){
-  envs[name]={DB:d1(new URL("../migrations/",import.meta.url)),PUBLIC_URL:`https://${name}.example.com`,OWNER_TOKEN:"dummy-owner",AGENT_NAME:name,A2A_SEALED_ENABLED:"1",WAKE_BUSY_SECONDS:"0",WAKE_DEBOUNCE_SECONDS:"0",WAKE_PRESET:"generic",WAKE_WEBHOOK_URL:"https://hook.example.net/wake",WAKE_WEBHOOK_KEY:"dummy-hook-key",RATE_PER_MIN:"1000"};
+  envs[name]={DB:d1(new URL("../migrations/",import.meta.url)),PUBLIC_URL:`https://${name}.example.com`,OWNER_TOKEN:"dummy-owner",AGENT_NAME:name,A2A_SEALED_ENABLED:"1",WAKE_BUSY_SECONDS:"0",WAKE_DEBOUNCE_SECONDS:"0",WAKE_PRESET:"generic",WAKE_WEBHOOK_URL:"https://hook.example.net/wake",WAKE_WEBHOOK_KEY:"dummy-hook-key",RATE_PER_MIN:"1000",ENABLE_CRON:"1",MESSAGE_EVENT_URL:"https://events.example.net/messages",MESSAGE_EVENT_SECRET:"synthetic-message-feed-key-1234567890"};
   dirs[name]=path.join(tmp,name);fs.mkdirSync(dirs[name],{mode:0o700});fs.mkdirSync(path.join(dirs[name],"node_modules/@a2a-exposed"),{recursive:true});
   fs.symlinkSync(path.join(root,"encryption"),path.join(dirs[name],"node_modules/@a2a-exposed/encryption"));
   fs.writeFileSync(path.join(dirs[name],"config.env"),`A2A_BASE_URL=https://${name}.example.com\nA2A_OWNER_TOKEN=dummy-owner\n`,{mode:0o600});
@@ -180,6 +180,9 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
   const secret="fixture-private-text-"+proto+"-"+crypto.randomUUID();privateTexts.push(secret,"tracking-failure-fixture","refusal fixture","unknown-error fixture");
   const result=await cli("alice",["send","--to","bob","--text",secret,"--json","--proto",proto]);
   assert.equal(result.code,0,result.err);const sent=JSON.parse(result.out);
+  const notice=messageEvents.map(e=>JSON.parse(e.body)).find(e=>e.taskId===sent.taskId);
+  assert.ok(notice,"sealed commit produces metadata-only notice");assert.equal(notice.classification,"inbound");assert.equal(notice.type,"message_received");assert.equal(JSON.stringify(notice).includes(secret),false);assert.equal("parts" in notice,false);assert.equal("sealed" in notice,false);
+
   assert.equal(sent.serverReadable,false);assert.equal(sent.senderHistorySaved,true);
   assert.equal(sent.outboundSaved,true);
   const savedOutbound=await cli("alice",["outbound",sent.taskId,"--to","bob","--json"]);

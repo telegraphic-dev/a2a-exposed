@@ -57,6 +57,7 @@ export const CONFIG_KEYS = [
 	/** Optional https URL of this agent's dashboard page. Omitted from pairing output when unset or not https. */
 	"MANAGE_URL",
 	/** Optional https URL that receives a signed pairing event. Omitted from the post when the secret is absent. */
+	"MESSAGE_EVENT_URL", "MESSAGE_EVENT_SECRET",
 	"EVENT_URL",
 	/** HMAC key for that post. A Worker secret on a self-hosted agent. On a hosted agent the sealed secrets blob supplies it. */
 	"EVENT_SECRET",
@@ -440,6 +441,8 @@ export class TenantContext implements ConfigFields {
 	readonly UPSTREAM_ACCESS_CLIENT_SECRET?: string;
 	readonly MCP?: string;
 	readonly MANAGE_URL?: string;
+	readonly MESSAGE_EVENT_URL?: string;
+	readonly MESSAGE_EVENT_SECRET?: string;
 	readonly EVENT_URL?: string;
 	readonly EVENT_SECRET?: string;
 

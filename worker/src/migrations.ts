@@ -1,3 +1,4 @@
+import m0022 from "../migrations/0022_message_events.sql?raw";
 // Inbox migrations bundled into the Worker. Vite inlines each `?raw` import.
 // A new file in worker/migrations/ must be added here; storage tests check the two lists match.
 import m0001 from "../migrations/0001_init.sql?raw";
@@ -45,4 +46,5 @@ export const MIGRATIONS: Migration[] = [
 	{ name: "0019_claimed_callback.sql", sql: m0019 },
 	{ name: "0020_wake_receipts.sql", sql: m0020 },
 	{ name: "0021_outbound_pairing.sql", sql: m0021 },
+	{ name: "0022_message_events.sql", sql: m0022 },
 ];

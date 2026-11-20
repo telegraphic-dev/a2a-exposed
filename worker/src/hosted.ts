@@ -386,6 +386,7 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 			}); } catch { return { fenceError: "tenant config transaction failed; retry the config push" }; }
 			try {
 				migrateDo(this.#sql, this.#tx, MIGRATIONS);
+				if (storedConfig.MESSAGE_EVENT_URL) this.#sql.exec("UPDATE message_event_source SET activated=1 WHERE singleton=1");
 			} finally {
 				// Remember the row even if a migration throws, so a later request is not stuck on the empty-object 404.
 				this.#row = readRow(this.#sql) ?? next;
@@ -453,6 +454,9 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 	 */
 	async restoreBookmark(bookmark: string): Promise<{ ok: true; undo?: string }> {
 		if (!this.#row) throw new ExportError("restoreBookmark: tenant is not configured");
+		// An old bookmark could resurrect revoked source/peer identities. Refuse registered feeds.
+  const source = this.#sql.exec("SELECT activated FROM message_event_source WHERE singleton=1").toArray()[0];
+  if (source?.activated || this.#row.config.MESSAGE_EVENT_URL) throw new ExportError("restoreBookmark: message event source registered; restore into a new tenant and register a new source instead");
 		const tenantId = this.#row.tenantId;
 		const out = await applyBookmark(this.ctx.storage as BookmarkStorage, bookmark);
 		console.log(JSON.stringify({ ts: new Date().toISOString(), event: "bookmark_restore", tenant: tenantId, undo: out.undo ?? null }));

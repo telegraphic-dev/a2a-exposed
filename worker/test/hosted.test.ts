@@ -1,3 +1,4 @@
+import { sqlStatements } from "./sql-statements.ts";
 // Hosted router and TenantStore, in workerd via Miniflare. Self-host behaviour is the node suite (and the
 // gates-unset case below). Run: npm test
 import { test } from "node:test";
@@ -62,9 +63,7 @@ async function start(opts: Record<string, unknown>) {
 	return mf;
 }
 
-function sqlStatements(sql: string): string[] {
-	return sql.split("\n").map((l) => l.replace(/--.*$/, "")).join("\n").split(";").map((s) => s.trim()).filter(Boolean);
-}
+
 
 async function migrateD1(mf: Miniflare) {
 	const db = await mf.getD1Database("DB");
