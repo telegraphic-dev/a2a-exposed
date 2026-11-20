@@ -1,0 +1,43 @@
+plugin.json
+  s_bbd4961087dd55::t_c44153de3c7250 4
+.claude-plugin/marketplace.json
+  s_bbd4961087dd55::t_c44153de3c7250 13
+cli/package.json
+  s_bbd4961087dd55::t_c44153de3c7250 3
+encryption/package.json
+  s_bbd4961087dd55::t_c44153de3c7250 3
+skills/a2a-exposed/SKILL.md
+  s_bbd4961087dd55::t_c44153de3c7250 9
+skills/a2a-exposed-setup/SKILL.md
+  s_bbd4961087dd55::t_c44153de3c7250 7
+.claude-plugin/plugin.json
+  s_bbd4961087dd55::t_c44153de3c7250 3
+package.json
+  s_bbd4961087dd55::t_c44153de3c7250 3
+worker/src/skills-index.ts
+  s_bbd4961087dd55::t_c44153de3c7250 7,12
+.cursor-plugin/plugin.json
+  s_bbd4961087dd55::t_c44153de3c7250 4
+worker/src/version.ts
+  s_bbd4961087dd55::t_c44153de3c7250 2
+.grok-plugin/plugin.json
+  s_bbd4961087dd55::t_c44153de3c7250 3
+encryption/package-lock.json
+  s_bbd4961087dd55::t_a089e9c6b53130 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1de550216b8cd0357393e4b8594783d6c9938dd6",
+  "prompts": {},
+  "sessions": {
+    "s_bbd4961087dd55": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1f810-788d-7b32-9889-82b4127a6e9f",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}
