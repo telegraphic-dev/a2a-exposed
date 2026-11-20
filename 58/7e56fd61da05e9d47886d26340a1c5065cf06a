@@ -1,0 +1,20 @@
+worker/test/hosted.test.ts
+  s_4b0f7c018ce9c9::t_350bd64b9d1603 1064-1067
+  s_4b0f7c018ce9c9::t_c9f6c1c9b6c376 1069
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "587e56fd61da05e9d47886d26340a1c5065cf06a",
+  "prompts": {},
+  "sessions": {
+    "s_4b0f7c018ce9c9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1f048-f695-76a2-b51b-6713a5f93d4b",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}
