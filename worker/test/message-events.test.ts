@@ -84,3 +84,14 @@ test("direct replies are explicitly classified without claiming task.updated",as
  wakeNet.deliver=async(_url,init)=>{bodies.push(String(init.body));return new Response(null,{status:503});};
  try{const result=await s.send("reply-one",true);assert.ok(result.result);await flushMessageEvents(s.ctx);assert.ok(bodies.length);const b=JSON.parse(bodies[0]!);assert.equal(b.classification,"direct_reply");assert.equal(b.type,"message_received");}finally{wakeNet.deliver=real;globalThis.fetch=fetchImpl;}
 });
+
+test("platform ingress selects only deploy-pinned service origin/path, never a network fallback",async()=>{
+ const {deliverMessageIngress}=await import("../src/message-events.ts");let calls=0;
+ const binding={fetch:async(_url:any,init:any)=>{calls++;assert.equal(init.redirect,"manual");assert.ok(init.signal);return new Response(null,{status:202});}};
+ const env:any={DB:(await setup()).DB,MESSAGE_EVENT_INGRESS_ORIGIN:"https://platform.example.com",CONTROL_SERVICE:binding};
+ const ctx=resolveTenant(env);
+ assert.deepEqual(await deliverMessageIngress(ctx,"https://platform.example.com/api/message-events",{method:"POST",body:"{}"}),{ok:true,status:202,body:new Uint8Array()});assert.equal(calls,1);
+ for(const url of ["https://platform.example.com/admin","https://platform.example.com/api/message-events?other=1"])assert.deepEqual(await deliverMessageIngress(ctx,url,{method:"POST"}),{ok:false,reason:"target"});assert.equal(calls,1);
+ const missing=resolveTenant({...env,CONTROL_SERVICE:undefined});assert.deepEqual(await deliverMessageIngress(missing,"https://platform.example.com/api/message-events",{method:"POST"}),{ok:false,reason:"target"});
+ const redirect=resolveTenant({...env,CONTROL_SERVICE:{fetch:async()=>new Response(null,{status:302,headers:{location:"https://other.example.com/"}})}});assert.deepEqual(await deliverMessageIngress(redirect,"https://platform.example.com/api/message-events",{method:"POST"}),{ok:false,reason:"redirect"});
+});

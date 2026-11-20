@@ -1054,10 +1054,11 @@ export class EventProbe extends TenantStore {
  async eventCounts() {return { tasks:this.ctx.storage.sql.exec("SELECT count(*) AS n FROM tasks").toArray()[0].n, outbox:this.ctx.storage.sql.exec("SELECT count(*) AS n FROM message_event_outbox").toArray()[0].n };}
 }
 `;
- const mf=new Miniflare(convertV4MiniflareOptions({name:"event-recovery",modules:true,script,compatibilityDate:"2026-10-06",durableObjects:{TENANT_DO:{className:"EventProbe",useSQLite:true}},bindings:{TENANCY:"host",TENANT_DOMAIN:"example.com",TENANT_SECRETS_KEY:"fixture-platform-key"},outboundService:async()=>Response.json({Status:3})} as never));
+ const receiver=`const seen=[];export default {async fetch(req){const u=new URL(req.url);if(u.pathname==="/seen")return Response.json(seen);if(u.origin!=="https://platform.example.com"||u.pathname!=="/api/message-events"||req.method!=="POST")return new Response(null,{status:404});const body=await req.text();const ts=req.headers.get("x-a2a-timestamp");const sig=req.headers.get("x-a2a-signature")||"";const key=await crypto.subtle.importKey("raw",new TextEncoder().encode("synthetic-event-feed-secret-1234567890"),{name:"HMAC",hash:"SHA-256"},false,["verify"]);const bytes=Uint8Array.from((sig.slice(7).match(/../g)||[]).map(x=>parseInt(x,16)));if(!sig.startsWith("sha256=")||!await crypto.subtle.verify("HMAC",key,bytes,new TextEncoder().encode(ts+"."+body)))return new Response(null,{status:401});seen.push(JSON.parse(body));return new Response(null,{status:202});}}`;
+ const mf=new Miniflare(convertV4MiniflareOptions({workers:[{name:"event-recovery",modules:true,script,compatibilityDate:"2026-10-06",durableObjects:{TENANT_DO:{className:"EventProbe",useSQLite:true}},bindings:{TENANCY:"host",TENANT_DOMAIN:"example.com",TENANT_SECRETS_KEY:"fixture-platform-key",MESSAGE_EVENT_INGRESS_ORIGIN:"https://platform.example.com"},serviceBindings:{CONTROL_SERVICE:"ingress"},outboundService:async()=>{throw new Error("unexpected external egress");}},{name:"ingress",modules:true,script:receiver,compatibilityDate:"2026-10-06"}]} as never));
  t.after(()=>mf.dispose());await mf.ready;
- const ns=await mf.getDurableObjectNamespace("TENANT_DO");const stub:any=ns.get(ns.idFromName("events-fixture"));
- await stub.pushConfig({version:1,tenantId:"events-fixture",name:"alice",status:"active",ownerTokenHash:await sha256("dummy-owner"),config:{MESSAGE_EVENT_URL:"https://hook.example.net/messages",MESSAGE_EVENT_SECRET:"synthetic-event-feed-secret-1234567890"}});
+ const ns=await mf.getDurableObjectNamespace("TENANT_DO","event-recovery");const stub:any=ns.get(ns.idFromName("events-fixture"));
+ await stub.pushConfig({version:1,tenantId:"events-fixture",name:"alice",status:"active",ownerTokenHash:await sha256("dummy-owner"),config:{MESSAGE_EVENT_URL:"https://platform.example.com/api/message-events",MESSAGE_EVENT_SECRET:"synthetic-event-feed-secret-1234567890"}});
  assert.ok(await stub.alarmAt(),"config registration persists local recovery before any message");
  const token="s2a_"+"a".repeat(40);await stub.seed(await sha256(token));await stub.clearRecovery();
  const send=(id:string)=>stub.fetch("https://alice.example.com/",{method:"POST",headers:{authorization:"Bearer "+token,"content-type":"application/json"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"message/send",params:{message:{kind:"message",role:"user",messageId:id,parts:[{kind:"text",text:"fixture"}]}}})});
@@ -1065,6 +1066,9 @@ export class EventProbe extends TenantStore {
  assert.equal((await send("first")).status,200);
  let recovery=await stub.alarmAt();for(let i=0;recovery==null&&i<20;i++){await new Promise(r=>setTimeout(r,20));recovery=await stub.alarmAt();}
  assert.ok(recovery,"recovery re-arms after any immediately due flush completes");
+ const ingress=await mf.getWorker("ingress");let notices:any[]=[];
+ for(let i=0;i<30;i++){notices=await(await ingress.fetch("https://platform.example.com/seen")).json() as any[];if(notices.length)break;await new Promise(r=>setTimeout(r,20));}
+ assert.equal(notices.length,1,"real workerd service receives authenticated committed event without network egress");assert.equal(notices[0].tenantId,"events-fixture");assert.equal(notices[0].type,"message_received");assert.equal("parts" in notices[0],false);
  const before=await stub.eventCounts();assert.equal(before.tasks,1);
  await stub.failRecovery();assert.equal((await send("must-not-commit")).status,503);const after=await stub.eventCounts();assert.equal(after.tasks,before.tasks);assert.equal(after.outbox,before.outbox);
 });
