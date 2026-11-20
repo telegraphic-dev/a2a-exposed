@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Tell the human to deny encrypted pairing requests when the compared safety codes differ (#467).
+
 ## 0.8.67
 
 - Show each hosted agent’s address on its social preview card (#500).

@@ -183,6 +183,7 @@ test("pairing_requests exposes seven named emoji like list_peers, retaining lega
 		.bind(new Date().toISOString(), JSON.stringify(vector.a), JSON.stringify(vector.b)).run();
 	const route = await s.owner(s.bob, "GET", "/owner/pairing");
 	const r = await s.tool(access, "pairing_requests");
+	assert.match(r.content[0].text, /If the codes differ, your human must deny the request/);
 	assert.equal(r.isError, false, r.content[0].text);
 	const text = r.content[0].text;
 	const rows = JSON.parse(text.slice(text.indexOf("\n") + 1));
@@ -210,6 +211,7 @@ test("pairing_requests exposes seven named emoji like list_peers, retaining lega
 	assert.match(text, /weaker 42-bit quick check/);
 	const tools = (await s.call(s.bob, "POST", "/mcp", { jsonrpc: "2.0", id: 1, method: "tools/list" }, { authorization: `Bearer ${access}`, accept: "application/json, text/event-stream" })).data.result.tools;
 	assert.match(tools.find((x: any) => x.name === "pairing_requests").description, /safety_emoji/);
+	assert.match(tools.find((x: any) => x.name === "pairing_requests").description, /If the codes differ, your human must deny the request/);
 });
 
 test("wake_status is read-only through dispatch: a due wake is not sent or consumed, and no secret is shown", async (t) => {
