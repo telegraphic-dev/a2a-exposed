@@ -384,6 +384,7 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 					JSON.stringify(storedConfig), JSON.stringify(limits), JSON.stringify(approval),
 					next.ownerTokenHash, next.secretsEnc, now,
 				);
+				if (next.status !== "active") this.#sql.exec("DELETE FROM message_event_outbox");
 			}); } catch { return { fenceError: "tenant config transaction failed; retry the config push" }; }
 			try {
 				migrateDo(this.#sql, this.#tx, MIGRATIONS);

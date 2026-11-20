@@ -25,9 +25,12 @@ export function messageEventTarget(ctx: TenantContext): { url: string; secret: s
 export async function messageEventIdentity(ctx: TenantContext, query?: { label?: string; instance?: string }) {
 	if (!messageEventTarget(ctx) || ctx.status !== "active") return null;
 	const peer = query?.label !== undefined ? "p.label=? AND p.active=1" : "p.instance_id=?";
-	const row = query
-		? await ctx.DB.prepare(`SELECT s.instance_id AS sourceInstanceId,p.instance_id AS peerInstanceId,p.label,p.active FROM message_event_source s JOIN message_event_peers p ON ${peer} WHERE s.singleton=1`).bind(query.label ?? query.instance).first<{ sourceInstanceId: string; peerInstanceId: string; label: string; active: number }>()
-		: await ctx.DB.prepare("SELECT instance_id AS sourceInstanceId FROM message_event_source WHERE singleton=1").first<{ sourceInstanceId: string }>();
+	const authority = ctx.mode === "host" ? " AND EXISTS(SELECT 1 FROM tenant_config WHERE tenant_id=? AND version=? AND status='active')" : "";
+ const args = [...(query ? [query.label ?? query.instance] : []), ...(ctx.mode === "host" ? [ctx.id, ctx.configVersion] : [])];
+ const statement = ctx.DB.prepare(query
+  ? `SELECT s.instance_id AS sourceInstanceId,p.instance_id AS peerInstanceId,p.label,p.active FROM message_event_source s JOIN message_event_peers p ON ${peer} WHERE s.singleton=1${authority}`
+  : `SELECT instance_id AS sourceInstanceId FROM message_event_source WHERE singleton=1${authority}`);
+ const row = await (args.length ? statement.bind(...args) : statement).first<{sourceInstanceId:string;peerInstanceId?:string;label?:string;active?:number}>();
 	if (!row) return null;
 	return { version: 1, tenantId: ctx.id || "self", ...row, ...("active" in row ? { active: row.active === 1 } : {}) };
 }
@@ -60,8 +63,16 @@ export async function flushMessageEvents(ctx: TenantContext): Promise<void> {
 	}
 	const fingerprint = await sha256(`${target.url}\n${target.secret}`);
 	const rows = await ctx.DB.prepare(`SELECT o.* FROM message_event_outbox o WHERE next_ms<=? ORDER BY next_ms LIMIT 16`).bind(Date.now()).all<{ event_id: string; body: string; source_instance: string; peer_instance: string; target_fingerprint: string; attempts: number }>();
+ const current = async () => {
+  if (ctx.mode !== "host") return true;
+  const live = await ctx.DB.prepare("SELECT version,status FROM tenant_config WHERE tenant_id=?").bind(ctx.id).first<{version:number;status:string}>();
+  return !!live && live.version === ctx.configVersion && live.status === "active";
+ };
 	for (const row of rows.results || []) {
+  // A background flush must not keep sending using a pre-suspend/rotation config snapshot.
+  if (!await current()) return;
 		const source = await messageEventIdentity(ctx, { instance: row.peer_instance });
+		if (!source && !await current()) return;
 		if (!source || !("active" in source) || !source.active || source.sourceInstanceId !== row.source_instance || row.target_fingerprint !== fingerprint) {
 			await ctx.DB.prepare("DELETE FROM message_event_outbox WHERE event_id=?").bind(row.event_id).run(); continue;
 		}
