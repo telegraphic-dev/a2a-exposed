@@ -98,7 +98,7 @@ test("platform ingress selects only deploy-pinned service origin/path, never a n
 
 test("source GET/HEAD are read-only and never opportunistically flush owner wakes",async()=>{
  const s=await setup();const pending=JSON.stringify({contextId:"pending-context",taskId:"pending-task",from:"peer",preview:"fixture"});
- await s.DB.prepare("INSERT INTO wakes(context_id,peer,last_ms,pending_json) VALUES('pending-context','peer',0,?)").bind(pending).run();
+ await s.DB.prepare("INSERT INTO wakes(context_id,peer,last_sent_ms,pending_json) VALUES('pending-context','peer',0,?)").bind(pending).run();
  const promises:Promise<unknown>[]=[];let sent=0;const original=globalThis.fetch;globalThis.fetch=(async()=>{sent++;return new Response();}) as any;
  try{
   const env={...s.env,WAKE_WEBHOOK_URL:"https://hook.example.com/owner-wake",WAKE_PRESET:"generic"};
