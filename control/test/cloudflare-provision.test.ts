@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { DatabaseSync } from "node:sqlite";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -40,6 +41,27 @@ test("migration statements keep semicolons inside strings and drop line comments
 	const dir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../worker/migrations");
 	assert.deepEqual(names, fs.readdirSync(dir).filter((name) => name.endsWith(".sql")).sort());
 	assert.ok(sqlStatements(INBOX_MIGRATIONS[0]?.sql ?? "").some((statement) => statement.startsWith("CREATE TABLE")));
+});
+
+test("production migration splitting provisions trigger migrations and rotates peer incarnations", () => {
+ const db = new DatabaseSync(":memory:");
+ try {
+  for (const migration of INBOX_MIGRATIONS) {
+   for (const statement of sqlStatements(migration.sql)) db.exec(statement);
+  }
+  db.prepare("INSERT INTO peers (label,token_hash,created_at) VALUES ('bridge-peer','hash-one','2026-01-01')").run();
+  const before = db.prepare("SELECT instance_id FROM message_event_peers WHERE label='bridge-peer' AND active=1").get();
+  assert.ok(before?.instance_id);
+  db.prepare("UPDATE peers SET token_hash='hash-two' WHERE label='bridge-peer'").run();
+  const after = db.prepare("SELECT instance_id FROM message_event_peers WHERE label='bridge-peer' AND active=1").get();
+  assert.ok(after?.instance_id); assert.notEqual(after.instance_id,before.instance_id);
+  assert.equal(db.prepare("SELECT active FROM message_event_peers WHERE instance_id=?").get(before.instance_id)?.active,0);
+ } finally { db.close(); }
+});
+
+test("production splitter retains CASE blocks, quoted names and trigger statements", () => {
+ const statements = sqlStatements("/* ignored ; */ CREATE TRIGGER t AFTER INSERT ON p BEGIN UPDATE q SET x=CASE WHEN 1 THEN 'a;END' ELSE 'b' END; INSERT INTO r VALUES ('it''s;ok'); END; -- ignored\n SELECT 1;");
+ assert.equal(statements.length,2);assert.match(statements[0]!,/INSERT INTO r/);assert.equal(statements[1],"SELECT 1");
 });
 
 test("a hostname matches the longest active zone", () => {
