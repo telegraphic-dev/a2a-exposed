@@ -1069,6 +1069,6 @@ export class EventProbe extends TenantStore {
  const ingress=await mf.getWorker("ingress");let notices:any[]=[];
  for(let i=0;i<30;i++){notices=await(await ingress.fetch("https://platform.example.com/seen")).json() as any[];if(notices.length)break;await new Promise(r=>setTimeout(r,20));}
  assert.equal(notices.length,1,"real workerd service receives authenticated committed event without network egress");assert.equal(notices[0].tenantId,"events-fixture");assert.equal(notices[0].type,"message_received");assert.equal("parts" in notices[0],false);
- const before=await stub.eventCounts();assert.equal(before.tasks,1);
+ let before=await stub.eventCounts();for(let i=0;before.outbox&&i<30;i++){await new Promise(r=>setTimeout(r,20));before=await stub.eventCounts();}assert.equal(before.tasks,1);assert.equal(before.outbox,0);
  await stub.failRecovery();assert.equal((await send("must-not-commit")).status,503);const after=await stub.eventCounts();assert.equal(after.tasks,before.tasks);assert.equal(after.outbox,before.outbox);
 });

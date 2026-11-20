@@ -106,3 +106,20 @@ test("source GET/HEAD are read-only and never opportunistically flush owner wake
   await Promise.all(promises);assert.equal(sent,0);assert.equal((await s.DB.prepare("SELECT pending_json FROM wakes WHERE context_id='pending-context'").first<any>()).pending_json,pending);
  }finally{globalThis.fetch=original;}
 });
+
+test("concurrent flushes claim one attempt before HTTP and exhausted budgets never send",async()=>{
+ const s=await setup();const original=wakeNet.deliver;const fetchImpl=globalThis.fetch;
+ globalThis.fetch=(async()=>Response.json({Status:0,Answer:[{type:1,data:"1.2.3.4"}]})) as any;
+ wakeNet.deliver=async()=>new Response(null,{status:503});
+ try{
+  await s.send();await new Promise(r=>setTimeout(r,20));
+  await s.DB.prepare("UPDATE message_event_outbox SET next_ms=0,attempts=0").run();
+  let calls=0;let release!:()=>void;const held=new Promise<void>(r=>{release=r;});
+  wakeNet.deliver=async()=>{calls++;await held;return new Response(null,{status:503});};
+  const a=flushMessageEvents(s.ctx),b=flushMessageEvents(s.ctx);
+  const deadline=Date.now()+2000;while(!calls&&Date.now()<deadline)await new Promise(r=>setTimeout(r,5));
+  assert.equal(calls,1);const claimed=await s.DB.prepare("SELECT attempts,next_ms FROM message_event_outbox").first<any>();assert.equal(claimed.attempts,1);assert.ok(claimed.next_ms>Date.now());
+  release();await Promise.all([a,b]);assert.equal(calls,1);
+  await s.DB.prepare("UPDATE message_event_outbox SET attempts=8,next_ms=0").run();await flushMessageEvents(s.ctx);assert.equal(calls,1);assert.equal((await s.DB.prepare("SELECT count(*) AS n FROM message_event_outbox").first<any>()).n,0);
+ }finally{wakeNet.deliver=original;globalThis.fetch=fetchImpl;}
+});
