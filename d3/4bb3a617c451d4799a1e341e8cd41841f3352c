@@ -1,0 +1,39 @@
+skills/a2a-exposed/SKILL.md
+  s_16dec094fb8cfa::t_abfec8693ca1e5 48,50
+docs/mcp.md
+  s_16dec094fb8cfa::t_abfec8693ca1e5 100-107
+  s_16dec094fb8cfa::t_89a27bf3ee781d 108
+skills/a2a-exposed-setup/SKILL.md
+  s_16dec094fb8cfa::t_722e9d8cc010e2 85,89
+  s_16dec094fb8cfa::t_89a27bf3ee781d 87-88
+docs/cli-mcp-parity.md
+  s_16dec094fb8cfa::t_abfec8693ca1e5 32
+worker/src/skills-index.ts
+  s_16dec094fb8cfa::t_abfec8693ca1e5 7
+  s_16dec094fb8cfa::t_89a27bf3ee781d 12
+skills/a2a-exposed-setup/references/prerequisites.md
+  s_16dec094fb8cfa::t_abfec8693ca1e5 3-10
+  s_16dec094fb8cfa::t_fed4d4bf5d3b9a 23
+skills/a2a-exposed-setup/references/wake.md
+  s_16dec094fb8cfa::t_abfec8693ca1e5 232,235
+scripts/check-skill-metadata.py
+  s_16dec094fb8cfa::t_abfec8693ca1e5 62-64
+docs/getting-started.md
+  s_16dec094fb8cfa::t_abfec8693ca1e5 96
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d34bb3a617c451d4799a1e341e8cd41841f3352c",
+  "prompts": {},
+  "sessions": {
+    "s_16dec094fb8cfa": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1f44e-f35b-7661-9f8a-00f18f32489a",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}
