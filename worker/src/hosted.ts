@@ -1,3 +1,4 @@
+import { messageEventTarget } from "./message-events.ts";
 // Optional entrypoint. Used only when the deploy sets TENANCY=host (see cloudflare.config.ts).
 // With that set and a TENANT_DO binding, `<name>.<TENANT_DOMAIN>` is looked up in the KV directory and forwarded
 // to that name's SQLite Durable Object. The object runs the same inbox as a single deploy (`dispatch` in index.ts)
@@ -152,7 +153,11 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 		// Read only. Migrations run once a config row exists, so a scan that instantiates an object writes nothing.
 		ctx.blockConcurrencyWhile(async () => {
 			this.#row = readRow(this.#sql);
-			if (this.#row) migrateDo(this.#sql, this.#tx, MIGRATIONS);
+			if (this.#row) {
+				migrateDo(this.#sql, this.#tx, MIGRATIONS);
+				// Repair a crash after config commit but before the registration latch was written.
+				if (this.#row.config.MESSAGE_EVENT_URL) this.#sql.exec("UPDATE message_event_source SET activated=1 WHERE singleton=1");
+			}
 			if (this.#row?.status === "active") await this.#enqueueArm(false);
 		});
 	}
@@ -383,9 +388,11 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 					JSON.stringify(storedConfig), JSON.stringify(limits), JSON.stringify(approval),
 					next.ownerTokenHash, next.secretsEnc, now,
 				);
+				if (next.status !== "active" && this.#sql.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='message_event_outbox'").toArray().length) this.#sql.exec("DELETE FROM message_event_outbox");
 			}); } catch { return { fenceError: "tenant config transaction failed; retry the config push" }; }
 			try {
 				migrateDo(this.#sql, this.#tx, MIGRATIONS);
+				if (storedConfig.MESSAGE_EVENT_URL) this.#sql.exec("UPDATE message_event_source SET activated=1 WHERE singleton=1");
 			} finally {
 				// Remember the row even if a migration throws, so a later request is not stuck on the empty-object 404.
 				this.#row = readRow(this.#sql) ?? next;
@@ -453,6 +460,9 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 	 */
 	async restoreBookmark(bookmark: string): Promise<{ ok: true; undo?: string }> {
 		if (!this.#row) throw new ExportError("restoreBookmark: tenant is not configured");
+		// An old bookmark could resurrect revoked source/peer identities. Refuse registered feeds.
+  const source = this.#sql.exec("SELECT activated FROM message_event_source WHERE singleton=1").toArray()[0];
+  if (source?.activated || this.#row.config.MESSAGE_EVENT_URL) throw new ExportError("restoreBookmark: message event source registered; restore into a new tenant and register a new source instead");
 		const tenantId = this.#row.tenantId;
 		const out = await applyBookmark(this.ctx.storage as BookmarkStorage, bookmark);
 		console.log(JSON.stringify({ ts: new Date().toISOString(), event: "bookmark_restore", tenant: tenantId, undo: out.undo ?? null }));
@@ -517,6 +527,13 @@ export class TenantStore extends DurableObject<WorkerBindings> {
 		}
 		const tenant = await this.#tenant(new URL(req.url).origin);
 		if (!tenant) return notFound();
+  // Guarantee a durable recovery alarm BEFORE any opted-in message can commit.
+  // No remote polling: this alarm only flushes the local transactional outbox.
+  if (req.method === "POST" && ["/", "/a2a", "/a2a/v1"].includes(new URL(req.url).pathname) && messageEventTarget(tenant)) {
+   try {
+    if (await this.ctx.storage.getAlarm() == null) await this.ctx.storage.setAlarm(Date.now() + 60000);
+   } catch { return Response.json({ error: "message event recovery unavailable" }, { status: 503 }); }
+  }
 		// Do not arm from the rows visible here. sendWake runs in waitUntil and, on 429/503, inserts the retry
 		// after this response returns. requeueWake arms in that insert. Arm again when those tasks finish so a
 		// quiet tenant is on Retry-After, not the rate-row timer from an earlier read.

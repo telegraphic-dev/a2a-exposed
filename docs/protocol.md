@@ -436,3 +436,6 @@ the numeric modulo-10^60 code. Split the first 42 digest bits, most significant 
 into seven six-bit indices in the fixed [Matrix v1.9 emoji table](https://spec.matrix.org/v1.9/client-server-api/#sas-method-emoji).
 Only the table is reused; there is no Matrix SAS key agreement or commit-reveal.
 Cross-implementation vectors are in `encryption/test/safety-emoji-vectors.json`.
+
+The optional committed-message feed, owner-only source/peer incarnation reads and
+strict callback helper have a separate [message events contract](message-events.md). They do not enable MCP subscriptions or replace owner wakes.

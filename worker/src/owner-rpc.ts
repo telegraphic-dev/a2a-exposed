@@ -194,6 +194,10 @@ interface RouteDef {
 }
 
 const ROUTES: RouteDef[] = [
+ { method: "GET", name: "GET /owner/message-events/source", take: s => s.length===3 && s[1]==="message-events" && s[2]==="source", search: noQuery, path: () => "/owner/message-events/source" },
+ { method: "GET", name: "GET /owner/message-events/peers", take: s => s.length===3 && s[1]==="message-events" && s[2]==="peers", search: q => Object.keys(q).length===1 && LABEL.test(q.label || "") ? `?label=${encodeURIComponent(q.label!)}` : null, path: () => "/owner/message-events/peers" },
+ { method: "GET", name: "GET /owner/message-events/peers/:instance", take: s => s.length===4 && s[1]==="message-events" && s[2]==="peers" && /^[a-f0-9]{32}$/.test(s[3]!), search: noQuery, path: s => `/owner/message-events/peers/${s[3]}` },
+
 	{ method: "GET", name: "GET /owner/inbox", take: (s) => s.length === 2 && s[1] === "inbox", search: inboxQuery, path: () => "/owner/inbox" },
 	{ method: "GET", name: "GET /owner/summary", take: (s) => s.length === 2 && s[1] === "summary", search: noQuery, path: () => "/owner/summary" },
 	{ method: "GET", name: "GET /owner/tasks", take: (s) => s.length === 2 && s[1] === "tasks", search: tasksQuery, path: () => "/owner/tasks" },

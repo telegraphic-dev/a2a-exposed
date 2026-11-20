@@ -138,3 +138,8 @@ The default inbound inbox lists `submitted`/`working` tasks. Use `inbox --all`
 `input-required` owner waits and finished tasks.
 
 Use `wake policy --json` before `wake policy --policy smart|legacy --json`. Legacy opts out and smart follows deployment routing. Compare routing counters with actual deliveries; every stored update remains available to inbox/history even when no wake is sent.
+
+The optional committed-message event feed is a separate operator-configured integration.
+It does not replace inbox reads or owner wakes and does not enable MCP Events subscriptions.
+Read the repository docs/message-events.md contract before proposing configuration;
+never infer authorization from an event or rotate a source/peer credential automatically.

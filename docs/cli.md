@@ -722,3 +722,13 @@ the numeric modulo-10^60 code. Split the first 42 digest bits, most significant 
 into seven six-bit indices in the fixed [Matrix v1.9 emoji table](https://spec.matrix.org/v1.9/client-server-api/#sas-method-emoji).
 Only the table is reused; there is no Matrix SAS key agreement or commit-reveal.
 Cross-implementation vectors are in `encryption/test/safety-emoji-vectors.json`.
+
+## Optional committed-message feed deployment
+
+An operator-authorized deploy may read `MESSAGE_EVENT_URL` and protected
+`MESSAGE_EVENT_SECRET` from named environment inputs. The secret is uploaded through
+the existing mode-600 temporary secrets file, removed afterward, and never passed
+as an argument or retained in config.env. Self-host requires `--cron`. This feed
+is separate from `--event-url` pairing notices and owner wakes; it does not enable
+MCP subscriptions. See the [message event contract](message-events.md) for source
+registration, lifecycle/restore restrictions and platform service bindings.

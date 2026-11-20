@@ -1,3 +1,4 @@
+import { sqlStatements as split } from "./sql-statements.ts";
 // Test harness Worker (workerd under Miniflare). The Node suite sends storage ops here.
 // STORAGE_BACKEND=d1 hits a real D1 binding. STORAGE_BACKEND=do hits a SQLite Durable Object through storage.ts.
 // This object applies migrations on construct so the existing suite sees a ready inbox. The production TenantStore
@@ -28,9 +29,7 @@ async function run(db: ReturnType<typeof doSqlD1> | D1Database, o: Op) {
 }
 
 /** Split a migration file into statements. This repo's migrations have no triggers and no BEGIN/END blocks. */
-function split(sql: string): string[] {
-	return sql.split("\n").map((l) => l.replace(/--.*$/, "")).join("\n").split(";").map((x) => x.trim()).filter(Boolean);
-}
+
 
 export class Store extends DurableObject {
 	db: ReturnType<typeof doSqlD1>;

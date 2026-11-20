@@ -45,7 +45,11 @@ test("export SQL round-trips application rows and skips hosted config", async ()
 	const fresh = new DatabaseSync(":memory:");
 	for (const name of fs.readdirSync(MIGRATIONS).filter((n) => n.endsWith(".sql")).sort())
 		fresh.exec(fs.readFileSync(new URL(name, MIGRATIONS), "utf8"));
-	fresh.exec(sql);
+	const oldSource = fresh.prepare("SELECT instance_id FROM message_event_source").get() as { instance_id: string };
+ fresh.exec(sql);
+ const restoredSource = fresh.prepare("SELECT instance_id FROM message_event_source").get() as { instance_id: string };
+ assert.notEqual(restoredSource.instance_id, oldSource.instance_id, "SQL restore invalidates old source registration");
+ assert.equal((fresh.prepare("SELECT count(*) AS n FROM message_event_outbox").get() as any).n, 0);
 	const peer = fresh.prepare("SELECT label, token_hash FROM peers").get() as { label: string; token_hash: string };
 	assert.equal(peer.label, "o'brien");
 	assert.equal(peer.token_hash, "hash-1");
@@ -601,6 +605,10 @@ test("TenantStore.restoreBookmark returns ok and the next session is a new objec
 export class Probe extends TenantStore {
   constructor(ctx, env) { super(ctx, env); this.born = Date.now(); }
   async bornAt() { return this.born; }
+  async refusalLive(bookmark) {
+    try { await this.restoreBookmark(bookmark); return "not refused"; }
+    catch (e) { return String(e.message); }
+  }
   async restoreLive(bookmark) {
     this.ctx.storage.onNextSessionRestoreBookmark = async () => "undo-live";
     return await this.restoreBookmark(bookmark);
@@ -623,6 +631,7 @@ export class Probe extends TenantStore {
 		bornAt(): Promise<number>;
 		pushConfig(b: Record<string, unknown>): Promise<{ applied: boolean }>;
 		restoreLive(bookmark: string): Promise<{ ok: boolean; undo: string }>;
+ refusalLive(bookmark: string): Promise<string>;
 	};
 	const hash = await sha256("owner-alice");
 	assert.equal((await stub.pushConfig({
@@ -643,6 +652,12 @@ export class Probe extends TenantStore {
 		}
 	}
 	assert.notEqual(again, born, "abort after the result starts a new session");
+ const current = ns.get(id) as typeof stub;
+ assert.equal((await current.pushConfig({version:2,tenantId:"id-alice",name:"alice",status:"active",ownerTokenHash:hash,config:{MESSAGE_EVENT_URL:"https://events.example.com/ingress"}})).applied,true);
+ assert.match(await current.refusalLive("bm-feed"),/message event source registered/);
+ assert.equal((await current.pushConfig({version:3,tenantId:"id-alice",name:"alice",status:"active",ownerTokenHash:hash,config:{}})).applied,true);
+ assert.match(await current.refusalLive("bm-after-disable"),/message event source registered/);
+
 });
 
 test("hosted daily cron writes the snapshot and leaves the self-host database alone", async (t) => {

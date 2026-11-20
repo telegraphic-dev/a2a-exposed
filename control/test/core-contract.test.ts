@@ -92,6 +92,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, "../..");
 const probe = `
 	const core = await import("@a2a-exposed/control-core");
+ const callbacks = await import("@a2a-exposed/control-core/callbacks");
+ if (callbacks.CALLBACK_TIMEOUT_MS !== 10000 || typeof callbacks.fetchCheckedCallback !== "function") process.exit(11);
 	if (core.RUN_WORKER_FIRST !== true) process.exit(2);
 	if (core.routes.tenants !== "/api/v1/tenants" || core.routes.health !== "/health") process.exit(3);
 	if (typeof core.createTenant !== "function" || typeof core.runInboxStep !== "function") process.exit(4);
@@ -272,6 +274,8 @@ test("the published package loads the entry and hides deep paths", () => {
 	const tarball = path.join(repo, filename);
 	const listed = new Set((info[0]?.files ?? []).map((file) => file.path));
 	assert.equal(listed.has("dist/index.js"), true);
+ assert.equal(listed.has("dist/callbacks.js"), true);
+ assert.equal(listed.has("TUNNELFETCH-LICENSE"), true);
 	assert.equal(listed.has("dist/types/control/src/core/index.d.ts"), true);
 	assert.equal(listed.has("control/migrations/0001_auth.sql"), true);
 	assert.equal(listed.has("control/src/core/index.ts"), false);
@@ -287,6 +291,8 @@ test("the published package loads the entry and hides deep paths", () => {
 		const ran = spawnSync(process.execPath, ["--input-type=module", "--eval", probe], { cwd: dest, encoding: "utf8" });
 		assert.equal(ran.status, 0, `${ran.stderr}\n${ran.stdout}`);
 		const consumer = `
+ import { fetchCheckedCallback, type CallbackResult } from "@a2a-exposed/control-core/callbacks";
+ const callback: Promise<CallbackResult> | null = null; void callback; void fetchCheckedCallback;
 			import { CONTROL_MIGRATIONS, RUN_WORKER_FIRST, createTenant, routes, type ControlEnv, type WakeSaveInput } from "@a2a-exposed/control-core";
 			const health: "/health" = routes.health;
 			const tenantsPath: "/api/v1/tenants" = routes.tenants;

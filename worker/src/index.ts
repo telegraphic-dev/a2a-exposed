@@ -1,3 +1,4 @@
+import { messageEventTarget, messageEventIdentity, messageEventStatement, flushMessageEvents } from "./message-events.ts";
 import { LANDING_SOCIAL_IMAGE } from "./landing-social-image.ts";
 import { SOCIAL_CARD_PATH, cardLayout, socialCardKey, socialCardPng } from "./social-card.ts";
 import { LANDING_WEBMCP_SCRIPT } from "./landing-webmcp.ts";
@@ -596,6 +597,7 @@ async function flushDue(ctx: TenantContext, ectx: ExecutionContext) {
  */
 export async function cronFlush(ctx: TenantContext, ectx: ExecutionContext): Promise<void> {
 	await flushDue(ctx, ectx);
+	await flushMessageEvents(ctx);
 	const now = Date.now();
 	await ctx.DB.batch([
 		ctx.DB.prepare("DELETE FROM wake_receipts WHERE expires_ms <= ?").bind(now - 6 * Receipts.RECEIPT_TTL),
@@ -621,6 +623,10 @@ async function minMs(ctx: TenantContext, sql: string, shift: (t: number) => numb
  */
 export async function nextCronAt(ctx: TenantContext, now = Date.now()): Promise<number | null> {
 	const times: number[] = [];
+	// A durable recovery alarm exists even while the outbox is empty, covering a crash immediately after commit.
+	if (messageEventTarget(ctx)) times.push(now + 60000);
+	const events = await minMs(ctx, "SELECT MIN(next_ms) AS t FROM message_event_outbox", t => t);
+	if (events != null) times.push(events);
 	const deb = debounceMs(ctx);
 	const wake = await minMs(ctx, `SELECT MIN(${WAKE_DUE_SQL}) AS t FROM wakes WHERE pending_json IS NOT NULL`, (t) => t, [deb]);
 	if (wake != null) {
@@ -948,7 +954,7 @@ function pubCfg(taskId: string, cfg: Json, version: string): Json {
 	return version.startsWith("1") ? { taskId, ...c } : { taskId, pushNotificationConfig: c };
 }
 
-type Rpc = (p: Json, label: string, version: string, ctx: TenantContext, ectx: ExecutionContext) => Promise<Json>;
+type Rpc = (p: Json, label: string, version: string, ctx: TenantContext, ectx: ExecutionContext, authHash?: string) => Promise<Json>;
 
 const ROUTING_KEEP_HOURS = 24 * 14;
 
@@ -1066,7 +1072,7 @@ async function routeInbound(ctx: TenantContext, peer: string, contextId: string,
 	return { decision: decideRoute({ mode: (await wakePolicy(ctx)).mode, wake, intent, duplicate, idle, unchanged, hasContent, inputRequired }), fingerprint };
 }
 
-const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
+const rpcSend: Rpc = async (params, label, version, ctx, ectx, authHash) => {
 	const msg = A.normMessage(params.message);
 	if (msg.role !== "user") throw new RpcError(-32602, "message.role must be user");
  const sealedPeer: Json = await ctx.DB.prepare("SELECT sealed_requester,sealed_responder FROM peers WHERE label=? AND revoked_at IS NULL").bind(label).first();
@@ -1128,6 +1134,7 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
 	const preview = sealed ? "[encrypted message]" : A.textOf(msg);
 	const claimToken = A.newId();
 	const history = { dir: "in", peer: label, taskId: task.id, role: "user", text: preview, state: task.status.state, data: { messageId: msg.messageId, ...(A.ownerWaitOf(task) ? { ownerWait: A.ownerWaitOf(task) } : {}), ...(sealed ? { sealed } : {}) } };
+	const eventStmt = await messageEventStatement(ctx, { peer: label, messageId: msg.messageId, taskId: task.id, contextId, receivedAt: ts, claimToken, authHash: authHash || "", directReply: !!directReply });
 	const stored = creating
 		? await ctx.DB.batch([
 			claimContextStmt(ctx, contextId, label, ts),
@@ -1135,12 +1142,14 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
 			saveTaskIfClaimStmt(ctx, task, msg.messageId, claimToken),
 			msgIfClaimStmt(ctx, task, msg, claimToken),
 			histIfClaimStmt(ctx, contextId, history, label, msg.messageId, claimToken),
+			...(eventStmt ? [eventStmt, ctx.DB.prepare("UPDATE message_event_source SET activated=1 WHERE singleton=1")] : []),
 		])
 		: await ctx.DB.batch([
 			claimMessageStmt(ctx, label, msg.messageId, task.id, claimToken, contextId),
 			updateTaskIfClaimStmt(ctx, task, msg.messageId, claimToken),
 			msgIfClaimStmt(ctx, task, msg, claimToken),
 			histIfClaimStmt(ctx, contextId, history, label, msg.messageId, claimToken),
+			...(eventStmt ? [eventStmt, ctx.DB.prepare("UPDATE message_event_source SET activated=1 WHERE singleton=1")] : []),
 		]);
 	const held: Json = await ctx.DB.prepare(
 		"SELECT task_id, claim_token FROM message_claims WHERE peer = ? AND message_id = ?",
@@ -1162,6 +1171,7 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
 			.bind(label, msg.messageId, claimToken).run();
 		throw new RpcError(-32602, UNKNOWN_CONTEXT);
 	}
+	if (eventStmt) ectx.waitUntil(flushMessageEvents(ctx));
 	log("message_received", { peer: label, contextId, taskId: task.id, chars: preview.length, version });
 	// A direct reply is the answer to a task this agent sent. It is stored as a finished task, not new work,
 	// and it wakes the receiver the way a pushed reply does: same routing, the sender's wake and intent hints,
@@ -1343,7 +1353,8 @@ function unauthorized(ctx: TenantContext, hadToken: boolean, rid: Json = null): 
 
 async function handleRpc(req: Request, ctx: TenantContext, ectx: ExecutionContext): Promise<Response> {
 	const ip = req.headers.get("cf-connecting-ip") || "";
-	const label = await peerLabel(ctx, req.headers.get("authorization"));
+	const authenticated = await peerOf(ctx, req.headers.get("authorization"));
+	const label = authenticated?.label;
 	if (!label) {
 		log("auth_failed", { ip });
 		// echo the JSON-RPC id when the (small) body parses; never more than 64 KiB is read for an unauthenticated call
@@ -1386,7 +1397,7 @@ async function handleRpc(req: Request, ctx: TenantContext, ectx: ExecutionContex
 	try {
 		const activated = req.headers.get("A2A-Extensions")?.split(",").map(s => s.trim()).includes(SealedKeys.SEALED_URI);
   if (op === "send" && params.message?.extensions?.includes(SealedKeys.SEALED_URI) && !activated) throw new RpcError(-32602, "Activate the sealed extension before sending");
-  const result = await HANDLERS[op](params, label, version, ctx, ectx);
+  const result = await HANDLERS[op](params, label, version, ctx, ectx, authenticated!.hash);
 		log("rpc_ok", { peer: label, method, ip });
 		return json({ jsonrpc: "2.0", id: rid, result }, 200, activated && ctx.A2A_SEALED_ENABLED === "1" ? { "A2A-Extensions": SealedKeys.SEALED_URI } : {});
 	} catch (e: any) {
@@ -2476,6 +2487,14 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 		return json({ error: "unauthorized" }, 401, { "www-authenticate": 'Bearer realm="owner"' });
 	const m = req.method;
 	const seg = path.split("/").filter(Boolean).slice(1); // after "owner"
+ if (m === "GET" && seg[0] === "message-events") {
+  let data;
+  if (seg.length === 2 && seg[1] === "source" && !url.search) data = await messageEventIdentity(ctx);
+  else if (seg.length === 2 && seg[1] === "peers" && [...url.searchParams.keys()].every(k => k === "label") && url.searchParams.getAll("label").length === 1) data = await messageEventIdentity(ctx, { label: url.searchParams.get("label")! });
+  else if (seg.length === 3 && seg[1] === "peers" && /^[a-f0-9]{32}$/.test(seg[2]!) && !url.search) data = await messageEventIdentity(ctx, { instance: seg[2]! });
+  return data ? json(data) : json({ error: "not found" }, 404);
+ }
+
 	const body = async () => { const raw = await readBody(req, ctx); return raw ? JSON.parse(raw) : {}; };
 
 	if (seg[0] === "relay" && seg[1] === "http" && seg.length === 3 && isHttpRelayProfile(seg[2]) && path === `/owner/relay/http/${seg[2]}` && !url.search) {
@@ -2884,7 +2903,8 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 				// The other inbox still accepts the return token until that owner revokes it.
 				ctx.DB.prepare("DELETE FROM outbound_peers WHERE alias = ? AND source = 'announce'").bind(label),
 			]);
-			if (changed(revoked) !== 1) {
+			// D1 counts incarnation-trigger writes too; the guarded primary-key update is still at most one peer.
+			if (changed(revoked) < 1) {
 				const ex: Json = await ctx.DB.prepare("SELECT revoked_at FROM peers WHERE label = ?").bind(label).first();
 				return json({ revoked: false, error: ex ? `the token with label ${label} was already revoked (${ex.revoked_at})` : `no active token with label ${label} (see token list)` }, 404);
 			}
@@ -3269,7 +3289,7 @@ async function tokenEndpoint(req: Request, ctx: TenantContext): Promise<Response
 	if (r.replaces_label && r.replaces_hash && r.label === r.replaces_label) {
 		const u = await ctx.DB.prepare("UPDATE peers SET token_hash = ?, created_at = ?, source = 'pairing', user_code = ?, client_name = ?, identity_key = COALESCE(?, identity_key), sealed_requester = ?, sealed_responder = ?, claimed_card_url = ? WHERE label = ? AND token_hash = ? AND revoked_at IS NULL")
 			.bind(await A.sha256(token), A.nowIso(), r.user_code, r.client_name || r.client_id || null, r.identity_key || null, r.sealed_requester || null, r.sealed_responder || null, r.agent_card_url || null, r.replaces_label, r.replaces_hash).run();
-		if (u.meta.changes === 1) {
+		if ((u.meta.changes ?? 0) > 0) {
 			await ctx.DB.prepare("DELETE FROM device_requests WHERE device_hash = ?").bind(hash).run();
 			log("pairing_redeemed", { ip, label: r.replaces_label, userCode: P.formatUserCode(r.user_code), replaced: true });
 			return json({ access_token: token, token_type: "Bearer", peer_label: r.replaces_label, replaced: true, ...(r.sealed_responder ? { sealed_peer_bundle: JSON.parse(r.sealed_responder) } : {}) }, 200, { pragma: "no-cache" });
@@ -5039,6 +5059,7 @@ const NO_FLUSH = new WeakSet<Request>();
 
 /** Inbox for one already-resolved tenant: retired-host redirect, the handler, then an opportunistic wake flush. */
 export async function dispatch(req: Request, ctx: TenantContext, ectx: ExecutionContext): Promise<Response> {
+	if (["GET", "HEAD"].includes(req.method) && new URL(req.url).pathname.startsWith("/owner/message-events/")) NO_FLUSH.add(req);
 	const moved = A.movedResponse(req.url, ctx.PUBLIC_URL, ctx.RETIRED_HOSTNAMES);
 	if (moved) return new Response(moved.body || null, { status: moved.status, headers: moved.headers });
 	const res = noindex(ctx, await handle(req, ctx, ectx));

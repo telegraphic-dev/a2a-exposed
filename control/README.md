@@ -140,3 +140,6 @@ and fingerprint remain unchanged and that its signed card validates with only th
 
 Keep both keys until tenant blobs, outbound and reverse tokens, pairing identities and delayed
 config copies are verified without the previous key. Self-hosted owner-token encryption is unchanged.
+
+The optional committed-message feed, owner-only source/peer incarnation reads and
+strict callback helper have a separate [message events contract](../docs/message-events.md). They do not enable MCP subscriptions or replace owner wakes.

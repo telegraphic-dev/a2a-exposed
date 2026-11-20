@@ -129,3 +129,7 @@ This page tracks what an owner or agent can do on each a2a.exposed surface, so t
 Local encrypted history preserves text-free state and push events as unauthenticated
 metadata; stdio MCP returns `eventOnly: true` for these rows and withholds push
 status text. Inbound plaintext with text still fails for a pinned peer.
+
+Committed-message source/incarnation reads are owner API and hosted owner-RPC reads only;
+there is no CLI command or MCP tool for them. The optional callback library is not
+an MCP Events subscription endpoint. See [message events](message-events.md).
