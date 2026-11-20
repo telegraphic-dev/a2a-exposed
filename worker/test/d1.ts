@@ -5,6 +5,7 @@
 // Durable Object behind src/storage.ts. The Worker code stays in this process; only storage is remote. Calls are
 // synchronous via a worker thread and Atomics, so `s.DB.db.prepare(...).get()` keeps working. Unset (the default,
 // and what migrations.test.ts's d1On and the CLI tests use) stays on node:sqlite.
+import { after } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import path from "node:path";
@@ -75,9 +76,74 @@ export function d1On(db: DatabaseSync) {
 }
 
 const POOL = 8;
-let bridge: { port: import("node:worker_threads").MessagePort; flag: Int32Array } | null = null;
+let bridge: { port: import("node:worker_threads").MessagePort; flag: Int32Array; worker: Worker; exited: Promise<number> } | null = null;
 let next = 0;
 export const remoteStats = { calls: 0, ms: 0 };
+
+const pendingTasks = new Set<Promise<unknown>>();
+const taskErrors: unknown[] = [];
+/** Own waitUntil work until the file ends, before closing its shared storage. */
+export function testExecutionContext() {
+	return {
+		waitUntil(task: Promise<unknown>) {
+			pendingTasks.add(task);
+			void task.then(() => pendingTasks.delete(task), error => { pendingTasks.delete(task); taskErrors.push(error); });
+		},
+		passThroughOnException() {},
+	};
+}
+async function drainTasks() {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		await Promise.race([(async () => {
+			while (pendingTasks.size) await Promise.allSettled([...pendingTasks]);
+			if (taskErrors.length) throw new AggregateError(taskErrors, "test waitUntil work failed");
+		})(), new Promise<never>((_, reject) => {
+			timer = setTimeout(() => reject(new Error("test waitUntil work did not settle")), 60_000);
+		})]);
+	} finally { clearTimeout(timer); }
+}
+
+// One owner per file, not per test: later tests may retain storage handles.
+let stopping: Promise<void> | null = null;
+let closed = false;
+export function disposeStorageBridge(): Promise<void> {
+	if (stopping) return stopping;
+	closed = true;
+	const active = bridge;
+	if (!active) return Promise.resolve();
+	active.worker.ref(); active.port.ref();
+	stopping = (async () => {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			active.port.postMessage({ dispose: true });
+			const code = await Promise.race([active.exited, new Promise<never>((_, reject) => {
+				timer = setTimeout(() => reject(new Error("storage bridge teardown timed out")), 10_000);
+			})]);
+			if (code !== 0) throw new Error("storage bridge teardown failed");
+		} finally {
+			clearTimeout(timer);
+			active.port.close();
+			await active.worker.terminate();
+			bridge = null;
+		}
+	})();
+	return stopping;
+}
+async function finishStorage() {
+	try { await drainTasks(); }
+	finally { await disposeStorageBridge(); }
+}
+if (process.env.NODE_TEST_CONTEXT) after(finishStorage);
+// Outside node --test there is no file hook. exit cannot await disposal.
+else process.once("beforeExit", () => { void finishStorage().catch(error => { console.error(error); process.exitCode = 1; }); });
+if (BACKEND !== "node") {
+	for (const [signal, code] of [["SIGINT", 130], ["SIGTERM", 143]] as const) {
+		process.once(signal, () => {
+			void disposeStorageBridge().catch(error => console.error(error)).finally(() => process.exit(code));
+		});
+	}
+}
 
 async function bundleHarness(): Promise<string> {
 	const require = createRequire(new URL("../package.json", import.meta.url));
@@ -113,7 +179,16 @@ async function bundleHarness(): Promise<string> {
 let harnessScript: string | null = null;
 if (BACKEND !== "node") harnessScript = await bundleHarness();
 
+class BridgeFailure extends Error {}
 function bridgeCall(reqPath: string, body: unknown): any {
+	if (closed) throw new Error("storage bridge is closed");
+	try { return bridgeRequest(reqPath, body); }
+	catch (error) {
+		if (error instanceof BridgeFailure) void disposeStorageBridge().catch(e => { console.error(e); process.exitCode = 1; });
+		throw error;
+	}
+}
+function bridgeRequest(reqPath: string, body: unknown): any {
 	if (!bridge) {
 		const script = harnessScript;
 		if (!script) throw new Error("storage harness was not bundled");
@@ -123,21 +198,25 @@ function bridgeCall(reqPath: string, body: unknown): any {
 			workerData: { port: port2, flag: flag.buffer, script, pool: POOL },
 			transferList: [port2],
 		});
-		w.on("message", (m) => { if (m?.error) console.error(m.error); });
-		bridge = { port: port1, flag };
-		if (Atomics.wait(flag, 0, 0, 120_000) === "timed-out") throw new Error("storage bridge did not start");
+		const exited = new Promise<number>(resolve => {
+			w.once("exit", resolve);
+			w.on("message", message => { if (message?.disposed) resolve(message.failed ? 1 : 0); });
+		});
+		w.on("error", error => console.error(error));
+		bridge = { port: port1, flag, worker: w, exited };
+		if (Atomics.wait(flag, 0, 0, 120_000) === "timed-out") throw new BridgeFailure("storage bridge did not start");
 		const ready = receiveMessageOnPort(port1)?.message;
-		if (ready && ready.ready === false) throw new Error(ready.error || "storage bridge did not start");
-		// Listening for `message` refs the worker. Drop that ref once Miniflare is up so the test
-		// process can exit; workerd stays up for later calls and dies with the process.
+		if (!ready?.ready) throw new BridgeFailure(ready?.error || "storage bridge did not start");
+		// Idle standalone consumers may exit; teardown refs both handles again.
 		w.unref();
 		port1.unref();
 	}
 	const t0 = performance.now();
 	Atomics.store(bridge.flag, 0, 0);
 	bridge.port.postMessage({ path: reqPath, body });
-	if (Atomics.wait(bridge.flag, 0, 0, 30_000) === "timed-out") throw new Error("storage bridge timeout");
-	const m = receiveMessageOnPort(bridge.port)!.message;
+	if (Atomics.wait(bridge.flag, 0, 0, 30_000) === "timed-out") throw new BridgeFailure("storage bridge timeout");
+	const m = receiveMessageOnPort(bridge.port)?.message;
+	if (!m || m.fatal) throw new BridgeFailure(m?.error || "storage bridge returned no reply");
 	remoteStats.calls++;
 	remoteStats.ms += performance.now() - t0;
 	if (!m.ok) throw new Error(m.error);

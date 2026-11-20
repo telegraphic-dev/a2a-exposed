@@ -4,11 +4,11 @@ import { sha256 } from "../src/a2a.ts";
 import { clearDirectoryCache } from "../src/directory.ts";
 import { dispatch, runOwnerRpc } from "../src/index.ts";
 import { hostedTenantContext, type DoNamespace, type KvNamespace, type TenantContext, type WorkerBindings } from "../src/tenancy.ts";
-import { d1 } from "./d1.ts";
+import { d1, testExecutionContext } from "./d1.ts";
 import { mockPushTransport } from "./push-transport-mock.ts";
 
 const MIGRATIONS = new URL("../migrations/", import.meta.url);
-const ectx = { waitUntil(_p: Promise<unknown>) {}, passThroughOnException() {} };
+const ectx = testExecutionContext();
 type Delivery = { status: string; method: string; taskId: string; target?: { alias?: string; host?: string }; httpStatus?: number };
 
 async function fixture(t: Parameters<typeof test>[1] extends (t: infer T) => unknown ? T : never) {
