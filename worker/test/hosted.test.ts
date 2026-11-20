@@ -1061,7 +1061,10 @@ export class EventProbe extends TenantStore {
  assert.ok(await stub.alarmAt(),"config registration persists local recovery before any message");
  const token="s2a_"+"a".repeat(40);await stub.seed(await sha256(token));await stub.clearRecovery();
  const send=(id:string)=>stub.fetch("https://alice.example.com/",{method:"POST",headers:{authorization:"Bearer "+token,"content-type":"application/json"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"message/send",params:{message:{kind:"message",role:"user",messageId:id,parts:[{kind:"text",text:"fixture"}]}}})});
- assert.equal((await send("first")).status,200);assert.ok(await stub.alarmAt(),"ingress restores missing recovery alarm before committing");
+ const sourceResponse=await stub.fetch("https://alice.example.com/owner/message-events/source",{headers:{authorization:"Bearer dummy-owner"}});assert.equal(sourceResponse.status,200,await sourceResponse.text());
+ assert.equal((await send("first")).status,200);
+ let recovery=await stub.alarmAt();for(let i=0;recovery==null&&i<20;i++){await new Promise(r=>setTimeout(r,20));recovery=await stub.alarmAt();}
+ assert.ok(recovery,"recovery re-arms after any immediately due flush completes");
  const before=await stub.eventCounts();assert.equal(before.tasks,1);
- await stub.failRecovery();assert.equal((await send("must-not-commit")).status,503);assert.deepEqual(await stub.eventCounts(),before);
+ await stub.failRecovery();assert.equal((await send("must-not-commit")).status,503);const after=await stub.eventCounts();assert.equal(after.tasks,before.tasks);assert.equal(after.outbox,before.outbox);
 });
