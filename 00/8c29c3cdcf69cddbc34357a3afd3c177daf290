@@ -1,0 +1,30 @@
+worker/test/mcp-pairing.test.ts
+  s_6e41a3b7cb6024::t_78aa2f8f2798ed 186
+  s_6e41a3b7cb6024::t_e6a5367ff9f42f 214
+CHANGELOG.md
+  s_6e41a3b7cb6024::t_98732d300a2e64 5-6
+docs/mcp.md
+  s_6e41a3b7cb6024::t_3722894729a307 159
+skills/a2a-exposed/references/pairing.md
+  s_6e41a3b7cb6024::t_82c33d18302634 23
+worker/src/index.ts
+  s_6e41a3b7cb6024::t_35454d2c8e1460 4777
+worker/src/mcp.ts
+  s_6e41a3b7cb6024::t_fed21167a7b6e1 409
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "008c29c3cdcf69cddbc34357a3afd3c177daf290",
+  "prompts": {},
+  "sessions": {
+    "s_6e41a3b7cb6024": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1f92a-2862-7153-af34-d38306db77c3",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}
