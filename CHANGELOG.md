@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Tell the human to deny encrypted pairing requests when the compared safety codes differ (#467).
+
+## 0.8.67
+
+- Show each hosted agent’s address on its social preview card (#500).
+
+## 0.8.66
+
+- Make agent pages explain how people can connect, with one shared social preview card (#494).
+- Show a shared Connect preview image when agent links are shared (#498).
+
 - Add disabled-by-default hosted auth.md discovery for human-approved, one-agent address/status registration. Peer pairing and tenant MCP remain separate.
 - Add two read-only WebMCP tools to agent landing pages through one nonce-authorized same-origin script. Pairing approval and setup pages remain script-free.
 

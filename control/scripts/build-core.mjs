@@ -33,6 +33,12 @@ function ensureControlDeps() {
 }
 
 ensureControlDeps();
+// The optional callbacks subpath bundles the SAME pinned audited transport as the inbox.
+if (!fs.existsSync(path.join(repoRoot, "worker/node_modules/tunnelfetch/package.json"))) {
+ const result = spawnSync("npm", ["ci", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: path.join(repoRoot, "worker"), stdio: "inherit" });
+ if (result.status !== 0) fail("callback transport dependencies are missing");
+}
+fs.copyFileSync(path.join(repoRoot, "worker/node_modules/tunnelfetch/LICENSE"), path.join(repoRoot, "TUNNELFETCH-LICENSE"));
 
 const require = createRequire(path.join(controlRoot, "package.json"));
 const esbuild = require("esbuild");
@@ -56,8 +62,9 @@ const sqlRaw = {
 
 const built = await esbuild.build({
 	absWorkingDir: controlRoot,
-	entryPoints: { index: "src/core/index.ts", "http-relay": "src/core/http-relay.ts" },
-	external: ["cloudflare:workers"],
+	entryPoints: { index: "src/core/index.ts", "http-relay": "src/core/http-relay.ts", callbacks: "src/core/callbacks.ts" },
+	external: ["cloudflare:workers", "cloudflare:sockets"],
+	nodePaths: [path.join(repoRoot, "worker/node_modules")],
 	bundle: true,
 	format: "esm",
 	platform: "neutral",
@@ -71,7 +78,7 @@ const built = await esbuild.build({
 });
 
 const pulled = Object.keys(built.metafile.inputs).filter((file) =>
-	file.includes("node_modules") || file.includes("/views/") || file.includes("/brand/") || file.includes("better-auth")
+	(file.includes("node_modules") && !file.includes("node_modules/tunnelfetch/")) || file.includes("/views/") || file.includes("/brand/") || file.includes("better-auth")
 );
 if (pulled.length > 0) fail(`bundle inputs are outside control-core:\n${pulled.join("\n")}`);
 
@@ -115,13 +122,14 @@ function rewriteTsSpecifiers(text) {
 if (!fs.existsSync(entryDts)) fail("declaration entry was not emitted");
 
 const kept = new Set();
-const pending = [entryDts, path.join(typesRoot, "control/src/core/http-relay.d.ts")];
+const pending = [entryDts, path.join(typesRoot, "control/src/core/http-relay.d.ts"), path.join(typesRoot, "control/src/core/callbacks.d.ts")];
 while (pending.length > 0) {
 	const file = pending.pop();
 	if (!file || kept.has(file)) continue;
 	kept.add(file);
 	const text = fs.readFileSync(file, "utf8");
 	for (const spec of specifiers(text)) {
+		if (spec === "cloudflare:sockets") continue;
 		if (spec === "cloudflare:workers" && file === path.join(typesRoot, "worker/src/http-relay.d.ts")) continue;
 		if (!spec.startsWith(".")) fail(`${path.relative(repoRoot, file)} imports ${spec}`);
 		const resolved = resolveDts(file, spec);

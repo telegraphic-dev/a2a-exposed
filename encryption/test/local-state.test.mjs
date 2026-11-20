@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { LocalState, stores } from "../local-state.mjs";
+import { LocalState, stores, restoreBackup } from "../local-state.mjs";
 import { generateIdentity, seal, open } from "../index.mjs";
 const remote = await generateIdentity("https://remote.example.com/card");
 const pairingIdentity = remote.bundle.identityKey;
@@ -38,6 +38,17 @@ test("fresh local file keys survive restart and never appear in status or SQLite
  const envelope=await seal({identity,recipient:remote.bundle,binding,content:{parts:[{text:"restart-canary"}]}});
  assert.deepEqual(await open({envelope,identity:remote,sender:identity.bundle,recipient:remote.bundle,expected:binding}),{parts:[{text:"restart-canary"}]});
  await assert.rejects(reopened.loadIdentity(result.id,{purpose:"send"}),{code:"traffic_disabled"});
+});
+
+test("a private key that does not match its public identity refuses without replacement", async t => {
+ const {state,dir}=fixture(t),other=fixture(t);const result=await init(state),foreign=await init(other.state);
+ const keyFile=path.join(dir,"encryption",result.id+".key"),value=JSON.parse(fs.readFileSync(keyFile));
+ const foreignSigning=JSON.parse(fs.readFileSync(path.join(other.dir,"encryption",foreign.id+".key"))).signing;
+ const damaged=JSON.stringify({...value,signing:foreignSigning});fs.writeFileSync(keyFile,damaged);
+ const files=fs.readdirSync(path.join(dir,"encryption")).filter(f=>f.endsWith(".key"));
+ await assert.rejects(state.loadIdentity(result.id),error=>error.code==="key_mismatch"&&/does not match this identity's public key.*no key replacement/.test(error.next)&&!error.next.includes(foreignSigning));
+ assert.equal(fs.readFileSync(keyFile,"utf8"),damaged);
+ assert.deepEqual(fs.readdirSync(path.join(dir,"encryption")).filter(f=>f.endsWith(".key")),files);
 });
 
 test("explicit stores and OS consent fail closed; file keys are never overwritten", async t => {
@@ -218,4 +229,142 @@ test("status reports missing file keys without reading or replacing private mate
  assert.equal(fs.existsSync(keyFile), false);
  fs.renameSync(keyFile + ".held", keyFile);
  assert.equal(state.status().identities[0].private_key_status, "present");
+});
+
+test("independent verification ceremony binds the exact pinned keys to the compared code", async t => {
+ const {state}=fixture(t);const own=await init(state),first=await proposal(state,own.id);
+ const pinned=await state.approve({peer:'remote',digest:first.digest,expectedCurrent:'none',ownerApproved:true});
+ assert.equal(pinned.record.state,'tofu-pinned');
+ const code=state.safetyCode(own.id,'remote').code;
+ await assert.rejects(state.verifyIndependent({peer:'remote',localId:own.id,code}),{code:'owner_approval_required'});
+ for(const bad of ['', '1234', code.slice(0,-1), code+'1', code.replace(/^./,'x'), null, 42])await assert.rejects(state.verifyIndependent({peer:'remote',localId:own.id,code:bad,ownerApproved:true}),{code:'safety_code_format'});
+ const wrong=code.replace(/^(\d)/,d=>String((Number(d)+1)%10));
+ await assert.rejects(state.verifyIndependent({peer:'remote',localId:own.id,code:wrong,ownerApproved:true}),{code:'safety_code_mismatch'});
+ await assert.rejects(state.verifyIndependent({peer:'missing',localId:own.id,code,ownerApproved:true}),{code:'key_unknown'});
+ let view=state.inspect('remote');assert.equal(view.current.state,'tofu-pinned');assert.equal(view.current_digest,pinned.digest);assert.equal(view.proposals.length,0);
+ // Spacing differences are accepted; the digits must match exactly.
+ const verified=await state.verifyIndependent({peer:'remote',localId:own.id,code:code.replace(/ /g,'  '),ownerApproved:true});
+ assert.equal(verified.changed,true);assert.equal(verified.record.state,'independently-verified');assert.equal(verified.record.verification,'independent');
+ assert.equal(verified.record.version,2);assert.equal(verified.code,code);assert.equal(verified.peer_key_id,remote.bundle.keyId);
+ assert.equal(JSON.stringify(verified.record.bundle),JSON.stringify(pinned.record.bundle));
+ view=state.inspect('remote');assert.equal(view.live_state,'independently-verified');assert.equal(view.history.length,2);assert.equal(view.proposals.length,0);
+ assert.equal(state.safetyCode(own.id,'remote').verification,'independent');assert.equal(state.safetyCode(own.id,'remote').code,code);
+ const again=await state.verifyIndependent({peer:'remote',localId:own.id,code,ownerApproved:true});
+ assert.equal(again.changed,false);assert.equal(state.inspect('remote').current_version,2);
+});
+
+test("independent verification refuses revoked, pending and foreign pins without a trust change", async t => {
+ const {state}=fixture(t);const own=await init(state),first=await proposal(state,own.id);
+ const pinned=await state.approve({peer:'remote',digest:first.digest,expectedCurrent:'none',ownerApproved:true});
+ const code=state.safetyCode(own.id,'remote').code;
+ const other=await generateIdentity('https://remote.example.com/card');
+ await proposal(state,own.id,pinned.digest,{bundle:other.bundle,pairingIdentity:other.bundle.identityKey,operation:'re-pair',verification:'independent'});
+ await assert.rejects(state.verifyIndependent({peer:'remote',localId:own.id,code,ownerApproved:true}),{code:'proposal_required'});
+ const {state:second}=fixture(t);const own2=await init(second),p2=await proposal(second,own2.id);
+ const pin2=await second.approve({peer:'remote',digest:p2.digest,expectedCurrent:'none',ownerApproved:true});const code2=second.safetyCode(own2.id,'remote').code;
+ const revoke=await proposal(second,own2.id,pin2.digest,{operation:'revoke'});await second.approve({peer:'remote',digest:revoke.digest,expectedCurrent:pin2.digest,ownerApproved:true});
+ await assert.rejects(second.verifyIndependent({peer:'remote',localId:own2.id,code:code2,ownerApproved:true}),{code:'pin_revoked'});
+ assert.equal(second.inspect('remote').current.state,'revoked');
+});
+
+test("a SQLite fault inside the verification transaction rolls back proposal and trust together", async t => {
+ const {state}=fixture(t);const own=await init(state),first=await proposal(state,own.id);
+ const pinned=await state.approve({peer:'remote',digest:first.digest,expectedCurrent:'none',ownerApproved:true});
+ const code=state.safetyCode(own.id,'remote').code;
+ const count=()=>state.db.prepare("SELECT COUNT(*) AS n FROM proposals").get().n;const before=count();
+ // A temporary trigger on this connection fails the trust-history write after the proposal row was inserted.
+ state.db.exec("CREATE TEMP TRIGGER fault_history BEFORE INSERT ON main.trust_history BEGIN SELECT RAISE(ABORT,'injected'); END;");
+ await assert.rejects(state.verifyIndependent({peer:'remote',localId:own.id,code,ownerApproved:true}),{code:'state_unavailable'});
+ assert.equal(count(),before);const view=state.inspect('remote');
+ assert.equal(view.current.state,'tofu-pinned');assert.equal(view.current_digest,pinned.digest);assert.equal(view.history.length,1);assert.equal(view.live_state,'tofu-pinned');
+ state.db.exec("DROP TRIGGER temp.fault_history");
+ state.db.exec("CREATE TEMP TRIGGER fault_trust BEFORE UPDATE ON main.trust BEGIN SELECT RAISE(ABORT,'injected'); END;");
+ await assert.rejects(state.verifyIndependent({peer:'remote',localId:own.id,code,ownerApproved:true}),{code:'state_unavailable'});
+ assert.equal(count(),before);assert.equal(state.inspect('remote').history.length,1);assert.equal(state.inspect('remote').current.state,'tofu-pinned');
+ state.db.exec("DROP TRIGGER temp.fault_trust");
+ const ok=await state.verifyIndependent({peer:'remote',localId:own.id,code,ownerApproved:true});assert.equal(ok.record.state,'independently-verified');
+});
+
+test("signer rotation needs the exact approved plan, retires the old identity and holds its pins", async t => {
+ const {state,dir}=fixture(t);const own=await init(state),first=await proposal(state,own.id);
+ const pinned=await state.approve({peer:'remote',digest:first.digest,expectedCurrent:'none',ownerApproved:true});
+ // A message sealed to the old key before rotation stays readable afterwards.
+ const binding={contextId:'old-context',messageId:'old-message',taskId:null,role:'user',state:null,kind:'message'};
+ const oldBundle=state.row(own.id).bundle;const envelope=await seal({identity:remote,recipient:JSON.parse(oldBundle),binding,content:{parts:[{text:'before-rotation'}]}});
+ const plan=state.signerRotationPlan(own.id);
+ assert.equal(plan.plan.action,'rotate-signing-identity');assert.deepEqual(plan.plan.heldPins,[{peer:'remote',version:1,state:'tofu-pinned'}]);
+ assert.equal(plan.plan.cardUrl,'https://local.example.com/card');
+ await assert.rejects(state.rotateSigner({id:own.id,approvalDigest:plan.approval_digest}),{code:'owner_approval_required'});
+ await assert.rejects(state.rotateSigner({id:own.id,approvalDigest:'x'.repeat(43),ownerApproved:true}),{code:'approval_stale'});
+ assert.equal(state.row(own.id).live_state,'local-only');assert.equal(state.status().identities.length,1);
+ const rotated=await state.rotateSigner({id:own.id,approvalDigest:plan.approval_digest,ownerApproved:true});
+ assert.equal(rotated.previous_id,own.id);assert.deepEqual(rotated.held_pins,['remote']);
+ const fresh=JSON.parse(state.row(rotated.id).bundle),old=JSON.parse(oldBundle);
+ assert.notEqual(fresh.identityKey,old.identityKey);assert.notEqual(fresh.keyId,old.keyId);assert.equal(fresh.cardUrl,old.cardUrl);
+ assert.equal(state.row(own.id).live_state,'retired');assert.equal(state.row(rotated.id).live_state,'local-only');
+ assert.equal(fs.statSync(path.join(dir,'encryption',rotated.id+'.key')).mode&0o777,0o600);
+ // The old key opens old history and never signs or approves again.
+ const archived=await state.loadIdentity(own.id);
+ assert.deepEqual(await open({envelope,identity:archived,sender:remote.bundle,recipient:archived.bundle,expected:binding}),{parts:[{text:'before-rotation'}]});
+ process.env.A2A_SEALED_ENABLED='1';t.after(()=>{delete process.env.A2A_SEALED_ENABLED;});
+ await assert.rejects(state.loadIdentity(own.id,{purpose:'traffic'}),{code:'traffic_disabled'});
+ assert.throws(()=>state.safetyCode(own.id,'remote'),{code:'key_retired'});
+ await assert.rejects(proposal(state,own.id,pinned.digest,{operation:'verify',verification:'independent'}),{code:'key_retired'});
+ assert.throws(()=>state.signerRotationPlan(own.id),{code:'key_retired'});
+ // The pin is unchanged and still bound to the retired key until a new human-approved pairing.
+ const view=state.inspect('remote');assert.equal(view.current.localId,own.id);assert.equal(view.current_digest,pinned.digest);
+ // The fresh identity can be pinned through a new pairing under a new alias.
+ const repair=await state.propose({peer:'remote-2',localId:rotated.id,bundle:remote.bundle,pairingIdentity,expectedCurrent:'none',policy:'required',verification:'tofu'});
+ const repinned=await state.approve({peer:'remote-2',digest:repair.digest,expectedCurrent:'none',ownerApproved:true});
+ assert.equal(repinned.record.localId,rotated.id);
+ const code=state.safetyCode(rotated.id,'remote-2').code;
+ const verified=await state.verifyIndependent({peer:'remote-2',localId:rotated.id,code,ownerApproved:true});assert.equal(verified.record.state,'independently-verified');
+});
+
+test("a rotated store keeps schema v6 and its backup restores both identities", async t => {
+ const {state,dir}=fixture(t);const own=await init(state);
+ const plan=state.signerRotationPlan(own.id);const rotated=await state.rotateSigner({id:own.id,approvalDigest:plan.approval_digest,ownerApproved:true});
+ const passphrase=Buffer.from('synthetic passphrase'),source=path.join(dir,'rotated-backup.json');
+ await state.createBackup({destination:source,passphrase});
+ const archive=path.join(dir,'archive');const restored=await restoreBackup({source,destination:archive,passphrase,store:'file',acknowledgeReplayRollback:true});
+ assert.equal(restored.archive_only,true);
+ const copy=new LocalState(archive);t.after(()=>copy.close());
+ const rows=Object.fromEntries(copy.status().identities.map(row=>[row.id,row.live_state]));
+ // A restore is archive-only for every identity; both the retired and the fresh key are present.
+ assert.deepEqual(rows,{[own.id]:'archive-only',[rotated.id]:'archive-only'});
+});
+
+test("a fault while committing a signer rotation leaves the old identity active and the intent recoverable", async t => {
+ const {state}=fixture(t);const own=await init(state);const plan=state.signerRotationPlan(own.id);
+ state.db.exec("CREATE TEMP TRIGGER fault_identity BEFORE INSERT ON main.identities BEGIN SELECT RAISE(ABORT,'injected'); END;");
+ await assert.rejects(state.rotateSigner({id:own.id,approvalDigest:plan.approval_digest,ownerApproved:true}),{code:'rotation_uncertain'});
+ state.db.exec("DROP TRIGGER temp.fault_identity");
+ assert.equal(state.row(own.id).live_state,'local-only');assert.equal(state.status().identities.length,1);
+ const pending=state.status().operations.find(op=>op.state==='uncertain');assert.ok(pending,'the interrupted intent stays listed for exact recovery');
+ assert.equal(pending.operation.kind,'rotate-signer');assert.equal(pending.operation.previousId,own.id);
+ assert.throws(()=>state.signerRotationPlan(own.id),{code:'initialization_pending'});
+ // No trust change can touch the identity while its rotation is unresolved, so the approved pin set cannot drift.
+ await assert.rejects(proposal(state,own.id),{code:'rotation_pending'});
+ assert.equal(state.inspect('remote').current,null);
+ // Exact recovery completes the approved rotation: the old key is retired and the new one adopted.
+ const recovered=await state.reconcileInitialization({operationId:pending.id,expectedDigest:pending.digest,action:'adopt',approvalDigest:recoveryDigest(state,pending.id,'adopt'),ownerApproved:true});
+ assert.equal(recovered.recovered,true);assert.equal(recovered.id,pending.operation.identityId);
+ assert.equal(state.row(own.id).live_state,'retired');assert.equal(state.row(recovered.id).live_state,'local-only');
+ assert.notEqual(JSON.parse(state.row(recovered.id).bundle).identityKey,JSON.parse(state.row(own.id).bundle).identityKey);
+ await assert.rejects(proposal(state,own.id),{code:'key_retired'});
+ const fresh=await proposal(state,recovered.id);assert.ok(fresh.digest,'the adopted identity accepts new pairings');
+});
+
+test("rotatedPins lists only non-revoked pins on a retired key", async t => {
+ const {state}=fixture(t);const own=await init(state),first=await proposal(state,own.id);
+ const pinned=await state.approve({peer:'remote',digest:first.digest,expectedCurrent:'none',ownerApproved:true});
+ assert.deepEqual(state.rotatedPins(),[]);
+ const plan=state.signerRotationPlan(own.id);await state.rotateSigner({id:own.id,approvalDigest:plan.approval_digest,ownerApproved:true});
+ assert.deepEqual(state.rotatedPins(),[{peer:'remote',local_id:own.id}]);
+ // Revoking the held pin releases it; history stays.
+ // Any other proposal on the retired key is refused.
+ await assert.rejects(state.propose({peer:'remote',localId:own.id,bundle:remote.bundle,pairingIdentity,expectedCurrent:pinned.digest,policy:'required',verification:'independent',operation:'verify'}),{code:'key_retired'});
+ const revoke=await state.propose({peer:'remote',localId:own.id,bundle:remote.bundle,pairingIdentity,expectedCurrent:pinned.digest,policy:'required',verification:'tofu',operation:'revoke'});
+ const revoked=await state.approve({peer:'remote',digest:revoke.digest,expectedCurrent:pinned.digest,ownerApproved:true});
+ assert.equal(revoked.record.state,'revoked');assert.deepEqual(state.rotatedPins(),[]);
 });

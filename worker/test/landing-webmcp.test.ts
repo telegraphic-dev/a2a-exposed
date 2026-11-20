@@ -72,3 +72,67 @@ test("hosted and self-hosted handlers serve the script with correct MIME and HEA
   assert.equal((await call(new Request(BASE + "/landing-webmcp.js", {method:"POST"}))).status, 404);
  }
 });
+
+
+test("copy prompt is local, user-triggered, and works without WebMCP", async () => {
+ for (const fails of [false, true]) {
+  let click: (() => Promise<void>) | undefined;
+  const written: string[] = [];
+  const button = {hidden:true,dataset:{copy:"Connect to your-agent.agent-to-agent.party"} as Record<string,string>,setAttribute() {},addEventListener(_event: string, fn: () => Promise<void>) { click=fn; }};
+  const status = {textContent:"",dataset:{} as Record<string,string>};
+  vm.runInNewContext(LANDING_WEBMCP_SCRIPT,{document:{getElementById:(id: string)=>id==="copy-connect"?button:id==="copy-status"?status:null},navigator:{clipboard:{async writeText(text: string) { if(fails) throw new Error("denied");written.push(text); }}},setTimeout() {}});
+  assert.equal(button.hidden,false);
+  assert.equal(written.length,0,"copy never runs on page load");
+  await click!();
+  if(fails) {assert.match(status.textContent,/Copy failed. Select the prompt and copy it/);assert.deepEqual(written,[]);}
+  else {assert.deepEqual(written,[button.dataset.copy]);assert.equal(button.dataset.state,"copied");assert.match(status.textContent,/Copied/);}
+ }
+});
+
+test("human landing keeps technical instructions in Markdown and supports manual copy", () => {
+ const html=landingPage({...model,base:"https://your-agent.agent-to-agent.party",description:"Helpful <agent>"},"nonce");
+ assert.match(html,/data-copy="Connect to your-agent.agent-to-agent.party"/);
+ assert.match(html,/id="copy-connect"[^>]* hidden/);
+ assert.match(html,/Helpful &lt;agent&gt;/);
+ assert.doesNotMatch(html,/npx|JSON-RPC|Bearer token|<table>/);
+ assert.match(html,/href="\/index.md"/);
+ const off=landingPage({...model,pairing:false},"nonce");
+ assert.match(off,/connection requests are turned off/);
+ assert.doesNotMatch(off,/owner approves the request/);
+});
+
+
+test("social metadata escapes agent text and reports pairing availability without changing approval pages", () => {
+ const html = landingPage({...model, description: 'Helpful "agent" <script>'}, "nonce");
+ assert.match(html, /property="og:title" content="Connect to agent.example"/);
+ assert.match(html, /name="twitter:title" content="Connect to agent.example"/);
+ assert.match(html, /property="og:image" content="https:\/\/agent.example\/og-card-v1.png"/);
+ assert.match(html, /property="og:image:width" content="1200"/);
+ assert.match(html, /property="og:image:height" content="630"/);
+ assert.match(html, /name="twitter:card" content="summary_large_image"/);
+ assert.match(html, /Helpful &quot;agent&quot; &lt;script&gt; Tell your agent:/);
+ assert.match(landingPage({...model, pairing:false}, "nonce"), /New connection requests are turned off./);
+ assert.ok(!pageHeaders("nonce")["content-security-policy"].includes("font-src"));
+});
+
+test("shared social PNG is public on hosted and self-hosted agents, with bounded size and HEAD parity", async () => {
+ const DB = d1(new URL("../migrations/", import.meta.url));
+ const env: WorkerBindings = {DB, PUBLIC_URL:BASE, AGENT_NAME:"Agent"};
+ const execution = {waitUntil() {}, passThroughOnException() {}} as unknown as ExecutionContext;
+ const hosted = hostedTenantContext(env, {id:"social-tenant", publicUrl:BASE, db:DB});
+ for (const call of [(req: Request) => worker.fetch(req, env, execution), (req: Request) => dispatch(req, hosted, execution)]) {
+  const res = await call(new Request(BASE + "/og-card-v1.png"));
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get("content-type"), "image/png");
+  assert.equal(res.headers.get("cache-control"), "public, max-age=31536000, immutable");
+  assert.equal(res.headers.get("x-content-type-options"), "nosniff");
+  const bytes = Buffer.from(await res.arrayBuffer());
+  assert.deepEqual([...bytes.subarray(0,8)], [137,80,78,71,13,10,26,10]);
+  assert.equal(bytes.readUInt32BE(16),1200); assert.equal(bytes.readUInt32BE(20),630);
+  assert.ok(bytes.length <= 200000);
+  const head = await call(new Request(BASE + "/og-card-v1.png", {method:"HEAD"}));
+  assert.equal(head.status,200); assert.equal(await head.text(),"");
+  assert.equal(head.headers.get("content-type"),"image/png");
+  assert.equal((await call(new Request(BASE + "/og-card-v1.png", {method:"POST"}))).status,404);
+ }
+});

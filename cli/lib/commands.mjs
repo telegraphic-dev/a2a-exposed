@@ -40,6 +40,8 @@ function printDelivery(res) {
 	const target = d.target ? `${d.target.alias ? `${d.target.alias} at ` : ""}${d.target.host}` : "task storage";
 	const http = d.httpStatus ? ` (HTTP ${d.httpStatus})` : "";
 	console.error(`reply -> ${d.status} via ${d.method}: ${target}${http}`);
+	// A stored-only reply does not notify the peer. Say so, with the Worker's next step, so it is not read as sent.
+	if (d.status === "stored-only" && typeof d.next === "string" && d.next) console.error(`next: ${d.next}`);
 }
 
 const readStdin = () => fs.readFileSync(0, "utf8");
@@ -168,6 +170,8 @@ export async function wakeStatus(o) {
 }
 
 export async function inbox(o) {
+	// A restored archive-only copy must not acknowledge the live inbox; refuse before any request.
+	await (await import("./sealed-keys.mjs")).refuseArchiveOnly();
 	const rows = await (await import("./sealed-cli.mjs")).openRows(await inboxRows(o), o);
 	// pending pairing requests: polling agents get no pairing wake, so the inbox shows them too (not with --context:
 	// that is one conversation). An older Worker without pairing: nothing to show.
@@ -374,7 +378,7 @@ async function peersRemote(sub, args) {
 	console.error("# the MCP connector's send tool can now reach these peers; re-run after connect / token changes or an owner-token rotation");
 }
 
-export function peers(sub, args, o) {
+export async function peers(sub, args, o) {
 	if (sub === "sync" || sub === "unsync") return peersRemote(sub, args);
 	const all = C.loadPeers();
 	if (sub === "add") {
@@ -415,8 +419,11 @@ export function peers(sub, args, o) {
 		if (drop.length) C.saveConfig(Object.fromEntries(drop.map((k) => [k, null])));
 		return console.log(`removed ${alias}${drop.length ? ` (and ${drop.join(", ")} from ${C.CONFIG_FILE})` : ""}`);
 	}
-	if (o.json) return out(Object.entries(all).map(([alias, v]) => ({ alias, url: v.url, token_env: v.token_env || null, token_set: !!(v.token_env && C.get(v.token_env)), pinned: v.sealed?.policy === "required" })));
+	const { peerSafety, formatSafetyEmoji } = await import("./sealed-keys.mjs");
+ const comparisons = Object.fromEntries(await Promise.all(Object.entries(all).map(async ([alias, v]) => [alias, await peerSafety(alias, v)])));
+ if (o.json) return out(Object.entries(all).map(([alias, v]) => ({ alias, url: v.url, token_env: v.token_env || null, token_set: !!(v.token_env && C.get(v.token_env)), pinned: v.sealed?.policy === "required", ...comparisons[alias] })));
 	for (const [k, v] of Object.entries(all)) {
+		if (v.sealed?.policy === "required") console.log(`Safety emoji: ${formatSafetyEmoji(comparisons[k].safety_emoji)}\n${comparisons[k].comparison_guidance}\nFull safety code: ${comparisons[k].safety_code || "(unavailable)"}`);
 		const te = v.token_env || "";
 		warnPeerTokenEnv(te);
 		console.log(`${k}\t${v.url}\ttoken_env=${te || "-"}\t${te && C.get(te) ? "(set)" : "(missing)"}`);
@@ -438,7 +445,8 @@ async function logHistory(ctx, entry) {
 }
 
 export async function send(o) {
- if (fs.existsSync(C.CONFIG_DIR + "/encryption/state.sqlite") || Object.values(C.loadPeers()).some(p => p.sealed?.policy === "required")) return (await import("./sealed-cli.mjs")).send(o);
+ // --recover never falls through to an ordinary send: the encrypted path refuses it there.
+ if (o.recover !== undefined || fs.existsSync(C.CONFIG_DIR + "/encryption/state.sqlite") || Object.values(C.loadPeers()).some(p => p.sealed?.policy === "required")) return (await import("./sealed-cli.mjs")).send(o);
 	if (!o.to) die("--to required");
 	// The callback authenticates against the token saved through the owner API.
 	if (o.push && !ownerConfigured()) die("--push needs A2A_BASE_URL and A2A_OWNER_TOKEN (your Worker); configure both or omit --push and poll instead");
@@ -476,6 +484,24 @@ export async function send(o) {
 	if (tid && !o.json) console.error(`# task ${tid}: ${plainState(obj)}  (check: ${CLI} poll --to ${alias} ${tid})`);
 }
 
+/**
+ * The sent-task record poll and cancel may use with the --to peer's token (#461, #485). A record for another
+ * peer, or an endpoint off this peer's origin, is refused before any request. A record that names no peer
+ * (or "?") is not used: the peer's own card endpoint is used, and nothing is written back to that record.
+ */
+function recordedFor(rec, alias, base, tid) {
+	// The Worker stores "?" when a sender named no peer; that record names nobody.
+	const peer = rec.peer && rec.peer !== "?" ? rec.peer : "";
+	if (rec.endpoint && peer && peer !== alias) die(`task ${tid} was sent to peer ${JSON.stringify(String(rec.peer))}, not ${JSON.stringify(alias)}; pass --to with that peer. Nothing was sent.`);
+	const recorded = rec.endpoint && peer === alias ? rec : null;
+	if (recorded) {
+		let same = false;
+		try { same = new URL(recorded.endpoint).origin === new URL(base).origin; } catch { same = false; }
+		if (!same) die(`the recorded endpoint for task ${tid} is not on ${alias}'s address, so its token is not sent there. Nothing was sent.`);
+	}
+	return recorded;
+}
+
 export async function poll(taskId, o) {
  if (fs.existsSync(C.CONFIG_DIR + "/encryption/state.sqlite") || Object.values(C.loadPeers()).some(p => p.sealed?.policy === "required")) {
   const result = await (await import("./sealed-cli.mjs")).recovery(taskId, o, { poll: true });
@@ -489,17 +515,39 @@ export async function poll(taskId, o) {
 	if (ownerConfigured()) {
 		try { rec = await owner("GET", `/owner/outbound/${q(tid)}`); } catch { rec = {}; }
 	}
-	const [url, version] = rec.endpoint ? [rec.endpoint, rec.protocol || "0.3"] : pickEndpoint(base, await fetchCard(base), o.proto);
+	const recorded = recordedFor(rec, alias, base, tid);
+	const [url, version] = recorded ? [recorded.endpoint, recorded.protocol || "0.3"] : pickEndpoint(base, await fetchCard(base), o.proto);
 	const res = await rpc(url, version, tok, "tasks/get", "GetTask", { id: tid }, { alias: C.loadPeers()[alias] ? alias : null, base });
 	out(res);
-	if (rec.endpoint) {
+	if (recorded) {
 		await persistOutbound("PUT", `/owner/outbound/${q(tid)}`, { task: res }, "update outbound task");
 		let txt = textOf((res.status || {}).message || {});
 		const arts = (res.artifacts || []).map((x) => textOf(x)).join("\n");
 		if (arts && arts !== txt) txt = (txt ? txt + "\n" : "") + arts;
-		await logHistory(rec.contextId, { dir: "in", peer: alias, taskId: tid, event: "poll", state: plainState(res), text: txt, data: { ...(ownerWaitOf(res) ? { ownerWait: ownerWaitOf(res) } : {}), ...(res?.metadata?.["a2a.exposed/wake-receipt"] ? { wakeReceipt: res.metadata["a2a.exposed/wake-receipt"] } : {}) } });
+		await logHistory(recorded.contextId, { dir: "in", peer: alias, taskId: tid, event: "poll", state: plainState(res), text: txt, data: { ...(ownerWaitOf(res) ? { ownerWait: ownerWaitOf(res) } : {}), ...(res?.metadata?.["a2a.exposed/wake-receipt"] ? { wakeReceipt: res.metadata["a2a.exposed/wake-receipt"] } : {}) } });
 	}
 	if (!o.json) console.error(`# task ${tid}: ${plainState(res)}`);
+}
+
+/** Ask the peer to cancel a task you sent. Same endpoint and history record as poll; the peer can refuse. */
+export async function cancel(taskId, o) {
+	if (!o.to) die("--to required");
+	const [alias, base, tok] = resolvePeer(o.to);
+	if (C.loadPeers()[alias]?.sealed) die("cancel is not available for a peer with pinned encryption keys yet; use poll --to ALIAS to read the task state. Nothing was sent.");
+	const tid = checkId(taskId, "taskId");
+	let rec = {};
+	if (ownerConfigured()) {
+		try { rec = await owner("GET", `/owner/outbound/${q(tid)}`); } catch { rec = {}; }
+	}
+	const recorded = recordedFor(rec, alias, base, tid);
+	const [url, version] = recorded ? [recorded.endpoint, recorded.protocol || "0.3"] : pickEndpoint(base, await fetchCard(base), o.proto);
+	const res = await rpc(url, version, tok, "tasks/cancel", "CancelTask", { id: tid }, { alias: C.loadPeers()[alias] ? alias : null, base });
+	out(res);
+	if (recorded) {
+		await persistOutbound("PUT", `/owner/outbound/${q(tid)}`, { task: res }, "update outbound task");
+		await logHistory(recorded.contextId, { dir: "in", peer: alias, taskId: tid, event: "cancel", state: plainState(res), text: textOf((res.status || {}).message || {}) });
+	}
+	if (!o.json) console.error(`# task ${tid}: ${plainState(res)}${plainState(res) === "canceled" ? "" : " (the peer did not cancel it)"}`);
 }
 
 export async function outbound(id, o = {}) {

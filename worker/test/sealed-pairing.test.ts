@@ -10,13 +10,32 @@ import { fileURLToPath } from "node:url";
 import worker from "../src/index.ts";
 import { d1 } from "./d1.ts";
 import { EXPORT_TABLES } from "../src/export.ts";
-import { verifyPublicBundle } from "../src/sealed-keys.ts";
+import { verifyPublicBundle, SEALED_URI } from "../src/sealed-keys.ts";
+import { wakeNet, DOH_URL } from "../src/wake-target.ts";
 const root=fileURLToPath(new URL("../../",import.meta.url));
 test("two local CLIs pair, seal and locally open messages while both servers store only ciphertext",async t=>{
  const tmp=fs.mkdtempSync(path.join(os.tmpdir(),"sealed-pairing-"));t.after(()=>fs.rmSync(tmp,{recursive:true,force:true}));
  const envs:Record<string,any>={},dirs:Record<string,string>={},ids:Record<string,string>={},bundles:Record<string,any>={},records:any[]=[];
+ // Every in-process Worker side channel is captured for the plaintext-exclusion scans:
+ // wake webhooks, A2A push deliveries, any other outbound fetch (card reads) and structured logs.
+ const messageEvents:any[]=[],wakes:any[]=[],pushes:any[]=[],workerFetches:any[]=[],logs:string[]=[],cliRuns:any[]=[],privateTexts:string[]=[];
+ const originalFetch=globalThis.fetch,originalDeliver=wakeNet.deliver;
+ globalThis.fetch=(async(input:any,init:any={})=>{
+  const request=new Request(input,init);
+  // Push targets pass the public-DNS gate with a fixed public answer; nothing leaves the process.
+  if(new URL(request.url).origin===new URL(DOH_URL).origin)return Response.json({Status:0,Answer:[{type:1,data:"1.2.3.4"}]});
+  const body=["GET","HEAD"].includes(request.method)?"":await request.text();
+  workerFetches.push({url:request.url,headers:Object.fromEntries(request.headers),body});
+  if(new URL(request.url).hostname==="hook.example.net"){wakes.push({url:request.url,body});return new Response("accepted",{status:202});}
+  return originalFetch(new Request(request,{body:body||undefined}));
+ }) as typeof fetch;
+ const consoleMethods=["log","info","warn","error"] as const,originalConsole=Object.fromEntries(consoleMethods.map(m=>[m,console[m]]));
+ for(const m of consoleMethods)console[m]=(...values:any[])=>{logs.push(values.map(v=>typeof v==="string"?v:JSON.stringify(v)).join(" "));(originalConsole[m] as any)(...values);};
+ // Pinned peer deliveries (A2A push) are captured instead of opening a socket.
+ wakeNet.deliver=async(url:string,init:RequestInit)=>{const body=typeof init.body==="string"?init.body:"";const entry={url,headers:Object.fromEntries(new Headers(init.headers)),body};if(url==="https://events.example.net/messages"){messageEvents.push(entry);workerFetches.push(entry);return new Response("",{status:200});}pushes.push(entry);workerFetches.push(entry);return new Response("",{status:200});};
+ t.after(()=>{globalThis.fetch=originalFetch;wakeNet.deliver=originalDeliver;for(const m of consoleMethods)console[m]=originalConsole[m] as any;});
  for(const name of ["alice","bob"]){
-  envs[name]={DB:d1(new URL("../migrations/",import.meta.url)),PUBLIC_URL:`https://${name}.example.com`,OWNER_TOKEN:"dummy-owner",AGENT_NAME:name,A2A_SEALED_ENABLED:"1",WAKE_BUSY_SECONDS:"0",WAKE_DEBOUNCE_SECONDS:"0"};
+  envs[name]={DB:d1(new URL("../migrations/",import.meta.url)),PUBLIC_URL:`https://${name}.example.com`,OWNER_TOKEN:"dummy-owner",AGENT_NAME:name,A2A_SEALED_ENABLED:"1",WAKE_BUSY_SECONDS:"0",WAKE_DEBOUNCE_SECONDS:"0",WAKE_PRESET:"generic",WAKE_WEBHOOK_URL:"https://hook.example.net/wake",WAKE_WEBHOOK_KEY:"dummy-hook-key",RATE_PER_MIN:"1000",ENABLE_CRON:"1",MESSAGE_EVENT_URL:"https://events.example.net/messages",MESSAGE_EVENT_SECRET:"synthetic-message-feed-key-1234567890"};
   dirs[name]=path.join(tmp,name);fs.mkdirSync(dirs[name],{mode:0o700});fs.mkdirSync(path.join(dirs[name],"node_modules/@a2a-exposed"),{recursive:true});
   fs.symlinkSync(path.join(root,"encryption"),path.join(dirs[name],"node_modules/@a2a-exposed/encryption"));
   fs.writeFileSync(path.join(dirs[name],"config.env"),`A2A_BASE_URL=https://${name}.example.com\nA2A_OWNER_TOKEN=dummy-owner\n`,{mode:0o600});
@@ -57,7 +76,7 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
  const mcpOutputs:any[]=[];
  const clean=Object.fromEntries(Object.entries(process.env).filter(([k])=>!/^(A2A_|PEER_|WAKE_|CF_|CLOUDFLARE_|UPSTREAM_|APPROVAL_|EVENT_|HOSTED_)/.test(k)));
  const cli=(name:string,args:string[],enabled:boolean|string=true,input?:string):Promise<any>=>new Promise(resolve=>{
-  const ch=spawn(process.execPath,["--import",hook,path.join(root,"cli/bin/a2a-exposed.mjs"),...args],{env:{...clean,A2A_CONFIG_DIR:dirs[name],A2A_SEALED_ENABLED:typeof enabled==="string"?enabled:enabled?"1":"",DO_NOT_TRACK:"1",A2A_NO_UPDATE_CHECK:"1",...(args[0]==="keys"&&args[1]==="init"?{FIXTURE_OLD_INIT:"1"}:{})},stdio:[input===undefined?"ignore":"pipe","pipe","pipe"]});if(input!==undefined){ch.stdin?.on("error",()=>{});ch.stdin?.end(input);}let out="",err="";ch.stdout.on("data",b=>out+=b);ch.stderr.on("data",b=>err+=b);ch.on("close",code=>resolve({code,out,err}));
+  const ch=spawn(process.execPath,["--import",hook,path.join(root,"cli/bin/a2a-exposed.mjs"),...args],{env:{...clean,A2A_CONFIG_DIR:dirs[name],A2A_SEALED_ENABLED:typeof enabled==="string"?enabled:enabled?"1":"",DO_NOT_TRACK:"1",A2A_NO_UPDATE_CHECK:"1",...(args[0]==="keys"&&args[1]==="init"?{FIXTURE_OLD_INIT:"1"}:{})},stdio:[input===undefined?"ignore":"pipe","pipe","pipe"]});if(input!==undefined){ch.stdin?.on("error",()=>{});ch.stdin?.end(input);}let out="",err="";ch.stdout.setEncoding("utf8");ch.stderr.setEncoding("utf8");ch.stdout.on("data",b=>out+=b);ch.stderr.on("data",b=>err+=b);ch.on("close",code=>{const result={code,out,err};cliRuns.push({args,...result});resolve(result);});
  });
  const mcp=async(name:string,tool:string,args:any,enabled=true)=>{
   const frames=[{jsonrpc:"2.0",id:1,method:"initialize",params:{protocolVersion:"2025-11-25",capabilities:{},clientInfo:{name:"fixture",version:"1"}}},{jsonrpc:"2.0",method:"notifications/initialized"},{jsonrpc:"2.0",id:2,method:"tools/call",params:{name:tool,arguments:args}}];
@@ -109,10 +128,13 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
  for(const secretish of [bundles.alice.identityKey,bundles.alice.encryptionKey,bundles.alice.keyId,bundles.alice.signature,bundles.bob.encryptionKey,"sealed_requester","sealed_responder","encryptionKey"])assert.equal(JSON.stringify(listing).includes(secretish),false,"no key material in the owner listing");
  const page=await (await dispatch("bob",new Request(`https://bob.example.com/device?user_code=${code}`))).text();
  assert.match(page,/Encrypted key pairing/);assert.ok(page.includes(comparison),"device page shows the safety code");
- assert.match(page,/Trust on first use: this page can't verify the keys\..*compare the safety code.*If it differs, deny\./s);
+ assert.match(page,/Compare all seven emoji and their names, in order,.*If any differ, do not approve this pairing\./s);
  assert.equal(page.includes(bundles.alice.encryptionKey),false);
  const listed2=await cli("bob",["pair","list"]);assert.equal(listed2.code,0,listed2.err);
- assert.ok(listed2.out.includes(`encrypted key pairing, safety code: ${comparison} (trust on first use`),listed2.out);
+ assert.match(listed2.out,/encrypted key pairing, safety emoji:/);assert.ok(listed2.out.includes(`full safety code: ${comparison}`));
+ assert.deepEqual(listed.safetyEmoji,lines[0].safety_emoji);
+ assert.match(page,/<details><summary>Full safety code<\/summary>/);
+ for (const item of listed.safetyEmoji) { assert.ok(page.includes(item.emoji)); assert.ok(page.includes(item.name)); }
  const approval=await owner("bob",`/owner/pairing/${code}/approve`,"POST",{});assert.equal(approval.status,200);assert.match(((await approval.json())as any).continuation.next,/Waiting for the requester.*same connect/);
  const beforeCollection=await cli("bob",["keys","pairings","--json"]);
  assert.deepEqual(JSON.parse(beforeCollection.out).pairings,[]);
@@ -130,12 +152,37 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
  assert.deepEqual(p.requester,bundles.alice);assert.deepEqual(p.responder,bundles.bob);
  const pinned=await cli("bob",["keys","pin","--id",ids.bob,"--peer",p.peer,"--user-code",p.userCode,"--json"]);assert.equal(pinned.code,0,pinned.err);assert.equal(JSON.parse(pinned.out).safety_code,pin.safety_code);assert.match(JSON.parse(pinned.out).next,/If any group differs.*token revoke LABEL.*keys pairings --json/);
  const restart=await cli("bob",["keys","code","--id",ids.bob,"--peer",p.peer,"--json"]);assert.equal(restart.code,0,restart.err);assert.equal(JSON.parse(restart.out).code,pin.safety_code);
+ assert.equal(JSON.parse(restart.out).independently_verified,false);assert.match(JSON.parse(restart.out).next,/keys verify .*do not copy it from this output/);
+ assert.deepEqual(JSON.parse(restart.out).safety_emoji,pin.safety_emoji);
+ const peersWithEmoji=JSON.parse((await cli("alice",["peers","list","--json"])).out);
+ assert.deepEqual(peersWithEmoji[0].safety_emoji,pin.safety_emoji);assert.equal(peersWithEmoji[0].safety_code,pin.safety_code);
+ const mcpPeers=(await mcp("alice","list_peers",{})).structuredContent.peers;
+ assert.deepEqual(mcpPeers[0].safety_emoji,pin.safety_emoji);assert.equal(mcpPeers[0].safety_code,pin.safety_code);
+ const emojiAttempt=await cli("bob",["keys","verify","--id",ids.bob,"--peer",p.peer,"--code",pin.safety_emoji.map((x:any)=>x.emoji).join(" "),"--json"]);
+ assert.equal(emojiAttempt.code,1);assert.match(emojiAttempt.err,/complete safety code|12 groups/);
+ // #380 independent ceremony: each side records the code the other owner read out. A mismatch changes nothing.
+ const wrongCode=pin.safety_code.replace(/^(\d)/,(d:string)=>String((Number(d)+1)%10));
+ const pinsBefore=fs.readFileSync(path.join(dirs.bob,"encryption/state.sqlite"));
+ const mismatch=await cli("bob",["keys","verify","--id",ids.bob,"--peer",p.peer,"--code",wrongCode,"--json"]);
+ assert.equal(mismatch.code,1);assert.match(mismatch.err,/Safety code mismatch.*Nothing was changed.*keys revoke --peer.*token revoke LABEL/);
+ assert.deepEqual(fs.readFileSync(path.join(dirs.bob,"encryption/state.sqlite")),pinsBefore);
+ assert.equal(JSON.parse((await cli("bob",["keys","code","--id",ids.bob,"--peer",p.peer,"--json"])).out).verification,"tofu");
+ assert.equal((await cli("bob",["keys","verify","--id",ids.bob,"--peer",p.peer,"--json"])).code,1);
+ const bobVerified=await cli("bob",["keys","verify","--id",ids.bob,"--peer",p.peer,"--code",pin.safety_code,"--json"]);assert.equal(bobVerified.code,0,bobVerified.err);
+ const bv=JSON.parse(bobVerified.out);assert.equal(bv.independently_verified,true);assert.equal(bv.changed,true);assert.equal(bv.peer_key_id,bundles.alice.keyId);assert.equal(bv.local_key_id,bundles.bob.keyId);
+ const aliceVerified=await cli("alice",["keys","verify","--id",ids.alice,"--peer","bob","--code",JSON.parse(restart.out).code,"--json"]);assert.equal(aliceVerified.code,0,aliceVerified.err);
+ assert.equal(JSON.parse(aliceVerified.out).verification,"independent");
+ const verifiedCode=JSON.parse((await cli("alice",["keys","code","--id",ids.alice,"--peer","bob","--json"])).out);assert.equal(verifiedCode.independently_verified,true);assert.equal(verifiedCode.code,pin.safety_code);
+ assert.equal(JSON.parse((await cli("alice",["keys","verify","--id",ids.alice,"--peer","bob","--code",pin.safety_code,"--json"])).out).changed,false);
  const send=await cli("alice",["send","--to","bob","--text","must not leave this process"],false);assert.equal(send.code,1);assert.match(send.err,/disabled/);assert.match(send.err,/No plaintext was sent/);assert.match(send.err,/separate --config-dir/);
  // Both supported wire versions use the same HPKE envelope and local pins.
  for(const proto of ["0.3","1.0"]){
-  const secret="fixture-private-text-"+proto+"-"+crypto.randomUUID();
+  const secret="fixture-private-text-"+proto+"-"+crypto.randomUUID();privateTexts.push(secret,"tracking-failure-fixture","refusal fixture","unknown-error fixture");
   const result=await cli("alice",["send","--to","bob","--text",secret,"--json","--proto",proto]);
   assert.equal(result.code,0,result.err);const sent=JSON.parse(result.out);
+  const notice=messageEvents.map(e=>JSON.parse(e.body)).find(e=>e.taskId===sent.taskId);
+  assert.ok(notice,"sealed commit produces metadata-only notice");assert.equal(notice.classification,"inbound");assert.equal(notice.type,"message_received");assert.equal(JSON.stringify(notice).includes(secret),false);assert.equal("parts" in notice,false);assert.equal("sealed" in notice,false);
+
   assert.equal(sent.serverReadable,false);assert.equal(sent.senderHistorySaved,true);
   assert.equal(sent.outboundSaved,true);
   const savedOutbound=await cli("alice",["outbound",sent.taskId,"--to","bob","--json"]);
@@ -230,18 +277,18 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
    assert.equal(await countTasks(),count,"a pre-storage refusal creates no task");
   }
   for(const unknownReason of ["unknown","unknown_reason"] as const){refuseSend=unknownReason;
-  try{const unknown=await cli("alice",["send","--to","bob","--text","unknown-error fixture","--proto",proto]);assert.equal(unknown.code,1);assert.match(unknown.err,/delivery was not confirmed.*Do not resend/);assert.equal(unknown.err.includes("untrusted-private-error"),false);assert.equal(unknown.err.includes("Nothing was delivered"),false);}
+  try{const unknown=await cli("alice",["send","--to","bob","--text","unknown-error fixture","--proto",proto]);assert.equal(unknown.code,1);assert.match(unknown.err,/delivery was not confirmed.*Do not send a new message.*send --to bob --recover [\w-]+.*at most once/);assert.equal(unknown.err.includes("untrusted-private-error"),false);assert.equal(unknown.err.includes("Nothing was delivered"),false);}
   finally{refuseSend=null;}}
   // Task-only routing must reuse the existing context; responses stay bounded as history grows.
   for(const explicit of [false,true]){
-   const large="large-fixture-"+"x".repeat(198980);
+   const large="large-fixture-"+explicit+"-"+proto+"-"+"x".repeat(198960);privateTexts.push(large);
    const continued=await cli("alice",["send","--to","bob","--task",sent.taskId,...(explicit?["--context",sent.contextId]:[]),"--proto",proto],true,large);
    assert.equal(continued.code,0,continued.err);const follow=JSON.parse(continued.out);assert.equal(follow.contextId,sent.contextId);assert.equal(follow.taskId,sent.taskId);assert.equal(follow.senderHistorySaved,true);
    assert.equal(JSON.stringify(records).includes(large),false);
    const latest=JSON.parse(records.findLast((x:any)=>x.name==="bob"&&x.path==="/"&&JSON.parse(x.body||"{}").params?.message).body);assert.equal(latest.params.configuration.historyLength,1);
   }
   // Real stdio subprocesses share the exact CLI sealing/opening path, across restarts.
-  const mcpSecret="mcp-private-fixture-"+crypto.randomUUID();
+  const mcpSecret="mcp-private-fixture-"+crypto.randomUUID();privateTexts.push(mcpSecret);
   const keyFile=path.join(dirs.alice,"encryption",ids.alice+".key");fs.renameSync(keyFile,keyFile+".held");
   try { const large=await mcp("alice","send",{to:"bob",text:"漢".repeat(120000)});assert.equal(large.isError,true);assert.match(large.content[0].text,/too large after JSON encoding.*307072/); }
   finally { fs.renameSync(keyFile+".held",keyFile); }
@@ -300,11 +347,107 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
   await envs.bob.DB.prepare("UPDATE messages SET message_json=? WHERE seq=?").bind(JSON.stringify(oldCarrier),stored.seq).run();
   const tooOld=await cli("bob",["inbox","--json"]);assert.equal(tooOld.code,1);assert.ok(JSON.parse(tooOld.out).some((x:any)=>x.taskId===sent.taskId&&x.reason==="too_old"));
   await envs.bob.DB.prepare("UPDATE messages SET message_json=? WHERE seq=?").bind(stored.message_json,stored.seq).run();
+  // Encrypted push delivery (#384): the CLI refuses --push and the Worker refuses a push config inside a
+  // sealed send, but an A2A client may register one on its stored sealed task. That push carries ciphertext only.
+  {
+   const pushSecret="push-private-fixture-"+proto+"-"+crypto.randomUUID();privateTexts.push(pushSecret);
+   const pushContext="push-fixture-"+proto,pushMessageId=crypto.randomUUID();
+   const pb={contextId:pushContext,messageId:pushMessageId,taskId:null,role:"user",state:null,kind:"message"};
+   // Same sealing path as the CLI: validated content, then the protocol's message carrier.
+   const {validateContent}=await import("../../encryption/content.mjs"),{makeMessageCarrier}=await import("../../encryption/carriers.mjs");
+   const content=validateContent({kind:"message",authorRole:"user",parts:[{kind:"text",text:pushSecret,mediaType:null,metadata:{}}],metadata:{},extensions:[],referenceTaskIds:[]},pb);
+   const envelope=await api.seal({identity,recipient:bundles.bob,binding:pb,content});
+   const carrier=makeMessageCarrier(envelope,proto);assert.deepEqual(carrier.extensions,[SEALED_URI]);
+   const pushUrl="https://push.example.net/a2a/"+proto,pushToken="dummy-push-token-"+proto;
+   // A push config inside the sealed send is refused before storage; nothing is delivered.
+   const inline=await call({jsonrpc:"2.0",id:"push-inline-"+proto,method:request.method,params:{message:carrier,configuration:{pushNotificationConfig:{url:pushUrl,token:pushToken}}}});
+   assert.equal(inline.error?.data?.reason,"sealed_invalid");
+   const accepted=await call({jsonrpc:"2.0",id:"push-"+proto,method:request.method,params:{message:carrier}});
+   assert.ok(!accepted.error,JSON.stringify(accepted.error));
+   const pushTask=accepted.result.task?.id??accepted.result.id;assert.ok(pushTask,"sealed send returned a task");
+   // Registering push on the stored sealed task is a separate, allowed A2A call.
+   const registered=await call({jsonrpc:"2.0",id:"pushset-"+proto,method:proto==="1.0"?"CreateTaskPushNotificationConfig":"tasks/pushNotificationConfig/set",params:{taskId:pushTask,pushNotificationConfig:{url:pushUrl,token:pushToken}}});
+   assert.ok(!registered.error,JSON.stringify(registered.error));
+   const beforePush=pushes.length;
+   const working=await owner("bob",`/owner/tasks/${pushTask}/working`,"POST",{});assert.equal(working.status,200);
+   const pushed=pushes.slice(beforePush);assert.equal(pushed.length,1,"one push per state change");
+   assert.equal(new URL(pushed[0].url).href,pushUrl);assert.equal(pushed[0].headers["x-a2a-notification-token"],pushToken);
+   assert.ok(pushed[0].body.includes(envelope.recipient.ct),"the push carries the sealed envelope");
+   assert.equal(pushed[0].body.includes(pushSecret),false,"push body excludes plaintext");
+   assert.equal(JSON.stringify((await envs.bob.DB.prepare("SELECT * FROM history WHERE task_id=?").bind(pushTask).all()).results).includes(pushSecret),false,"push history row excludes plaintext");
+   // Marking the task working and the push status are event rows, not messages: history still reads
+   // cleanly. The push row's server-written text is withheld; an inbound row with text still refuses.
+   const pushedRead=await cli("bob",["history",pushContext,"--json"]);assert.equal(pushedRead.code,0,pushedRead.err);
+   const pushedRows=JSON.parse(pushedRead.out);
+   assert.ok(pushedRows.some((r:any)=>r.text===pushSecret&&r.locallyOpened),"the recipient still opens the pushed task locally");
+   assert.ok(pushedRows.some((r:any)=>r.event==="state"&&r.state==="working"&&r.text===null),"the working state row is kept");
+   assert.ok(pushedRows.some((r:any)=>r.event==="push"&&r.text===null&&r.textWithheld===true),"the push status row is kept without server text");
+   assert.equal(pushedRows.some((r:any)=>r.reason==="plaintext_from_pinned_peer"),false);
+   const pushedMcp=await mcp("bob","history",{contextId:pushContext,from:p.peer});assert.ok(!pushedMcp.isError,JSON.stringify(pushedMcp));
+   assert.equal(JSON.stringify(pushedMcp).includes("pinned peer"),false);assert.equal(JSON.stringify(pushedMcp).includes("not encrypted by the sender"),false);
+   const mcpRows=pushedMcp.structuredContent.rows;assert.ok(mcpRows.some((r:any)=>r.text===pushSecret&&r.locallyOpened));
+   assert.ok(mcpRows.some((r:any)=>r.event==="state"&&r.text===null&&r.eventOnly===true&&r.reason===undefined));assert.ok(mcpRows.some((r:any)=>r.event==="push"&&r.text===null&&r.textWithheld===true));
+   assert.equal((await owner("bob","/owner/history","POST",{contextId:pushContext,dir:"in",peer:p.peer,taskId:pushTask,event:"state",text:"forged inbound event text"})).status,200);
+   const forged=await cli("bob",["history",pushContext,"--json"]);assert.equal(forged.code,1);assert.equal(forged.out.includes("forged inbound event text"),false);
+   assert.ok(JSON.parse(forged.out).some((r:any)=>r.reason==="plaintext_from_pinned_peer"));
+  }
   // Mixed rows: a refused plaintext downgrade cannot hide the valid encrypted history.
   assert.equal((await owner("bob","/owner/history","POST",{contextId:sent.contextId,dir:"in",peer:p.peer,taskId:sent.taskId,text:"untrusted plaintext downgrade"})).status,200);
   const mixed=await cli("bob",["history",sent.contextId,"--json"]);assert.equal(mixed.code,1);const mixedRows=JSON.parse(mixed.out);assert.ok(mixedRows.some((x:any)=>x.text===secret&&x.locallyOpened));assert.ok(mixedRows.some((x:any)=>x.reason==="plaintext_from_pinned_peer"&&x.encrypted===false));assert.equal(mixed.out.includes("untrusted plaintext downgrade"),false);
 
  }
+ // Exact size boundaries: the last valid character and encoded-byte sizes send; one more
+ // refuses before key access or any network request.
+ const sdkApi=await import("../../encryption/index.mjs");
+ const bobPosts=()=>records.filter((r:any)=>r.name==="bob"&&r.path==="/").length;
+ const draftOf=(text:string)=>({kind:"message",authorRole:"user",parts:[{kind:"text",text,mediaType:null,metadata:{}}],metadata:{},extensions:[],referenceTaskIds:[]});
+ const maxBytes=sdkApi.MAX_PLAINTEXT-128,overhead=Buffer.byteLength(sdkApi.canonicalJSON(draftOf("")));
+ const byteEdge="漢".repeat(100000)+"b".repeat(maxBytes-overhead-300000),charEdge="c".repeat(200000);
+ assert.equal(Buffer.byteLength(sdkApi.canonicalJSON(draftOf(byteEdge))),maxBytes);
+ for(const [label,text,accepted] of [["chars-at-limit",charEdge,true],["chars-over-limit",charEdge+"c",false],["bytes-at-limit",byteEdge,true],["bytes-over-limit",byteEdge+"b",false]] as const){
+  privateTexts.push(text);
+  const before=bobPosts(),context="size-boundary-"+label;
+  const result=await cli("alice",["send","--to","bob","--context",context,"--json"],true,text);
+  if(accepted){
+   assert.equal(result.code,0,label+": "+result.err);assert.equal(JSON.parse(result.out).senderHistorySaved,true,label);
+   const read=await cli("bob",["history",context,"--json"]);assert.equal(read.code,0,read.err);
+   assert.ok(JSON.parse(read.out).some((r:any)=>r.text===text&&r.locallyOpened),label+" opens intact");
+  }else{
+   assert.equal(result.code,1,label);assert.match(result.err,/Nothing was sent/);
+   assert.match(result.err,label.startsWith("bytes")?/too large after JSON encoding.*307072/:/1–200000 Unicode characters/);
+   assert.equal(bobPosts(),before,label+" made no request");
+  }
+ }
+ // Local-store fault injection: damaged state or key material refuses before any network
+ // request, never regenerates a key, and leaves the damaged bytes in place for inspection.
+ const aliceDir=path.join(dirs.alice,"encryption"),aliceState=path.join(aliceDir,"state.sqlite"),aliceKey=path.join(aliceDir,ids.alice+".key");
+ const keyFiles=()=>fs.readdirSync(aliceDir).filter(f=>f.endsWith(".key")).sort(),keysBefore=keyFiles();
+ const bobSigning=JSON.parse(fs.readFileSync(path.join(dirs.bob,"encryption",ids.bob+".key"),"utf8")).signing;
+ for(const fault of ["state-garbage","state-truncated","key-garbage","key-swapped"]){
+  const target=fault.startsWith("state")?aliceState:aliceKey,original=fs.readFileSync(target);
+  const damaged=fault==="state-garbage"?Buffer.from("not a database "+"z".repeat(4096)):fault==="state-truncated"?original.subarray(0,1024):fault==="key-garbage"?Buffer.from("{not json"):Buffer.from(JSON.stringify({...JSON.parse(String(original)),signing:bobSigning}));
+  fs.writeFileSync(target,damaged);
+  try{
+   const before=bobPosts(),text="corruption-fixture-"+fault;privateTexts.push(text);
+   const sent=await cli("alice",["send","--to","bob","--text",text,"--json"]);
+   assert.equal(sent.code,1,fault+": "+sent.out);assert.equal(bobPosts(),before,fault+" made no request");
+   assert.doesNotMatch(sent.err,/\n\s+at |SQLITE_|sqlite3/i,fault+" shows fixed guidance, not internals: "+sent.err);
+   const read=await cli("alice",["history","size-boundary-chars-at-limit","--json"]);
+   assert.equal(read.code,1,fault+" history refuses");assert.equal(read.out.includes(charEdge),false);assert.equal(read.err.includes(charEdge),false);
+   assert.deepEqual(fs.readFileSync(target),damaged,fault+" left the damaged bytes in place");
+   assert.deepEqual(keyFiles(),keysBefore,fault+" created no replacement key");
+   assert.match(sent.err,fault.startsWith("state")?/could not be read safely.*do not initialize over it/:fault==="key-garbage"?/failed validation.*no key replacement/:/does not match this identity's public key.*no key replacement/,fault);
+   console.log(`Local-store fault evidence (${fault}): `+sent.err.trim());
+  }finally{fs.writeFileSync(target,original);}
+ }
+ const healthy=await cli("alice",["send","--to","bob","--text","post-corruption-fixture","--json"]);assert.equal(healthy.code,0,healthy.err);privateTexts.push("post-corruption-fixture");
+ // Concurrent sends and reads from one config keep distinct original IDs and stay encrypted.
+ const concurrent=["concurrent-fixture-a","concurrent-fixture-b","concurrent-fixture-c"];privateTexts.push(...concurrent);
+ const racing=await Promise.all(concurrent.map((text,i)=>cli("alice",["send","--to","bob","--context","race-"+i,"--text",text,"--json"])));
+ for(const r of racing)assert.equal(r.code,0,r.err);
+ const raced=racing.map(r=>JSON.parse(r.out));assert.equal(new Set(raced.map(r=>r.messageId)).size,concurrent.length);assert.equal(new Set(raced.map(r=>r.taskId)).size,concurrent.length);
+ const reads=await Promise.all(concurrent.map((_,i)=>cli("bob",["history","race-"+i,"--json"])));
+ for(const [i,read] of reads.entries()){assert.equal(read.code,0,read.err);assert.ok(JSON.parse(read.out).some((r:any)=>r.text===concurrent[i]&&r.locallyOpened&&r.messageId===raced[i].messageId));}
  // Reverse pairing remains an explicit, human-approved action using existing keys.
  const reverseArgs=["connect","https://alice.example.com","--alias","alice","--sealed-key-id",ids.bob,"--no-wait","--json"];
  const reversePending=await cli("bob",reverseArgs);assert.equal(reversePending.code,0,reversePending.err);
@@ -323,5 +466,65 @@ test("two local CLIs pair, seal and locally open messages while both servers sto
  assert.equal((await owner("bob","/owner/sealed-key","PUT",replacement.bundle)).status,409);
  assert.equal((await owner("bob",`/owner/peers/${p.peer}`,"DELETE")).status,200);
  assert.equal((await cli("bob",["keys","pin","--id",ids.bob,"--peer",p.peer,"--user-code",p.userCode,"--json"])).code,1);
- envs.bob.A2A_SEALED_ENABLED="";assert.equal((await owner("bob","/owner/sealed-key")).status,404);
+ envs.bob.A2A_SEALED_ENABLED="";assert.equal((await owner("bob","/owner/sealed-key")).status,404);envs.bob.A2A_SEALED_ENABLED="1";
+ // #379 signer rotation, local only: an exact plan, an approved digest, then held pins and readable old history.
+ const rotatePlan=await cli("alice",["keys","rotate","--id",ids.alice,"--json"]);assert.equal(rotatePlan.code,0,rotatePlan.err);
+ const rp=JSON.parse(rotatePlan.out);assert.equal(rp.changed,false);assert.ok(rp.plan.heldPins.some((pin:any)=>pin.peer==="bob"));assert.match(rp.approve,/keys rotate --id .* --approve=/);
+ const staleRotation=await cli("alice",["keys","rotate","--id",ids.alice,"--approve","x".repeat(43),"--json"]);assert.equal(staleRotation.code,1);assert.match(staleRotation.err,/approval_stale/);
+ assert.equal((await cli("alice",["keys","rotate","--id",ids.alice,"--approve","bad digest!","--json"])).code,1);
+ const rotation=await cli("alice",["keys","rotate","--id",ids.alice,`--approve=${rp.approval_digest}`,"--json"]);assert.equal(rotation.code,0,rotation.err);
+ const rot=JSON.parse(rotation.out);assert.equal(rot.previous_id,ids.alice);assert.equal(rot.rotated,true);assert.ok(rot.held_pins.includes("bob"));assert.match(rot.next,/never signs again.*connect URL --sealed-key-id/);
+ privateTexts.push("must-not-be-signed-by-a-retired-key");
+ const beforeHeld=records.filter((r:any)=>r.path==="/").length;
+ const held=await cli("alice",["send","--to","bob","--text","must-not-be-signed-by-a-retired-key"]);assert.equal(held.code,1);assert.match(held.err,/Keys rotated.*never signs again.*keys verify/);
+ assert.equal(records.filter((r:any)=>r.path==="/").length,beforeHeld,"a held pin sends nothing");
+ // The live inbox is refused before any request while a pin still uses the retired key, so no wake is acknowledged.
+ const inboxBefore=records.filter((r:any)=>r.name==="alice"&&String(r.path).startsWith("/owner/inbox")).length;
+ const heldInbox=await cli("alice",["inbox","--json"]);assert.equal(heldInbox.code,1);
+ assert.match(heldInbox.err,/Keys rotated: .*bob.*Nothing was requested from the inbox.*keys revoke --peer.*re-pairing under a new alias alone does not release it/);
+ assert.equal(records.filter((r:any)=>r.name==="alice"&&String(r.path).startsWith("/owner/inbox")).length,inboxBefore,"no inbox request while pins are held");
+ const oldHistory=await cli("alice",["history","reverse-pair-fixture","--json"]);assert.equal(oldHistory.code,0,oldHistory.err);
+ assert.ok(JSON.parse(oldHistory.out).some((r:any)=>r.text==="reverse-pair-private-fixture"&&r.locallyOpened),"the retired key still opens old history");
+ const republish=await cli("alice",["keys","publish","--id",rot.id,"--json"]);assert.equal(republish.code,1);assert.match(republish.err,/HTTP 409.*keeps the public key it published first.*including after keys rotate/);
+ assert.equal((await cli("alice",["keys","rotate","--id",ids.alice,"--json"])).code,1,"a retired key cannot be rotated again");
+ // Revoking each held pin releases the live inbox; the retired key can revoke but never sign.
+ const held2=JSON.parse((await cli("alice",["keys","rotate","--id",rot.id,"--json"])).out);assert.deepEqual(held2.plan.heldPins,[]);
+ for(const peer of (heldInbox.err.match(/Keys rotated: (.*?) still/)?.[1]||"").split(", ").filter(Boolean)){const r=await cli("alice",["keys","revoke","--peer",peer,"--json"]);assert.equal(r.code,0,r.err);assert.equal(JSON.parse(r.out).revoked,true);}
+ const released=await cli("alice",["inbox","--json"]);
+ assert.ok(records.filter((r:any)=>r.name==="alice"&&String(r.path).startsWith("/owner/inbox")).length>inboxBefore,"the inbox is read again once no pin is held");
+ const releasedRows=JSON.parse(released.out);assert.ok(Array.isArray(releasedRows));
+ assert.equal(releasedRows.some((r:any)=>r.reason==="keys_rotated"),false);
+ for(const r of releasedRows.filter((r:any)=>r.encrypted&&!r.locallyOpened))assert.equal(r.reason,"pin_revoked");
+ // Exhaustive plaintext-exclusion scans over every surface this fixture can observe.
+ privateTexts.push("reverse-pair-private-fixture","old fixture content");
+ // Every private key file, including the signer created by keys rotate, is scanned for.
+ const keyFilesOf=(name:string)=>fs.readdirSync(path.join(dirs[name],"encryption")).filter(f=>f.endsWith(".key")).map(f=>path.join(dirs[name],"encryption",f));
+ assert.ok(keyFilesOf("alice").length>=2,"the rotated signer's key file is scanned too");
+ const keySecrets=["alice","bob"].flatMap(name=>keyFilesOf(name).flatMap(file=>{const value=JSON.parse(fs.readFileSync(file,"utf8"));return [value.signing,value.encryption];}));
+ const scan=(surface:string,value:string|Buffer,{texts=true,keys=true}={})=>{
+  const bytes=Buffer.isBuffer(value)?value:Buffer.from(value);
+  if(texts)for(const text of privateTexts)assert.equal(bytes.includes(Buffer.from(text)),false,`${surface} contains encrypted fixture text ${text.slice(0,24)}`);
+  if(keys)for(const secret of keySecrets)assert.equal(bytes.includes(Buffer.from(secret)),false,`${surface} contains private key material`);
+  if(keys===true)return;
+  // A key file may hold only its own material: no other identity's private key.
+  const own=JSON.parse(bytes.toString("utf8"));for(const secret of keySecrets)if(secret!==own.signing&&secret!==own.encryption)assert.equal(bytes.includes(Buffer.from(secret)),false,`${surface} contains another key's material`);
+ };
+ assert.ok(wakes.length>0,"wake webhooks were exercised");
+ assert.ok(wakes.some(w=>w.body.includes("[encrypted message]")),"encrypted wakes carry only the fixed preview");
+ assert.equal(pushes.length,2,"one encrypted push per protocol");
+ console.log(`Side-channel evidence: ${wakes.length} wake webhooks, ${pushes.length} push deliveries, ${workerFetches.length-wakes.length-pushes.length} other Worker outbound requests, ${logs.length} log lines, ${cliRuns.length} command runs, ${privateTexts.length} encrypted fixture texts.`);
+ scan("wake webhook bodies",JSON.stringify(wakes));scan("push delivery bodies and headers",JSON.stringify(pushes));scan("Worker outbound fetches",JSON.stringify(workerFetches));
+ scan("Worker and test logs",logs.join("\n"));scan("fixture request bodies",JSON.stringify(records));
+ for(const run of cliRuns){
+  scan(`stderr of ${run.args[0]}`,run.err);
+  // Commands that never open content must not print it either; reads print only opened rows.
+  if(["send","connect","keys","pair","peers","reply","token","export"].includes(run.args[0]))scan(`stdout of ${run.args.slice(0,2).join(" ")}`,run.out);
+  else scan(`stdout of ${run.args[0]}`,run.out,{texts:false});
+ }
+ for(const name of ["alice","bob"]){
+  for(const args of [["export"],["export","--sql"]]){const exported=await cli(name,args);assert.equal(exported.code,0,exported.err);assert.ok(exported.out.length>100);scan(`${name} ${args.join(" ")}`,exported.out);}
+  const walk=(dir:string):string[]=>fs.readdirSync(dir,{withFileTypes:true}).flatMap(entry=>entry.name==="node_modules"?[]:entry.isDirectory()?walk(path.join(dir,entry.name)):[path.join(dir,entry.name)]);
+  const files=walk(dirs[name]);assert.ok(files.some(f=>f.endsWith("state.sqlite")));
+  for(const file of files)scan(`${name} local file ${path.relative(dirs[name],file)}`,fs.readFileSync(file),{keys:!file.endsWith(".key")});
+ }
 });

@@ -159,7 +159,7 @@ init [--hostname <host> | --workers-dev [--workers-dev-subdomain NAME]]
 | `--no-upstream-token` | The upstream checks no bearer. Saved |
 | `--worker-dir` | Where the Worker project copy lives. Default `<config dir>/worker`. `--dir` is the same flag |
 | `--tunnel` | On `init` only: deploy, then `tunnel create` |
-| `--rotate-owner-token` | On `init`: replace the owner token. Other settings come from `config.env`. Then update `A2A_OWNER_TOKEN` wherever this A2A endpoint is called, and run `peers sync` |
+| `--rotate-owner-token` | On `init`: replace the owner token. Other settings come from `config.env`. Then update `A2A_OWNER_TOKEN` wherever this A2A endpoint is called, and run `peers sync`. Self-hosted only: a hosted config refuses it and points to the dashboard (agent settings, Advanced) or hosted MCP `rotate_owner_token` |
 
 Wake secrets are read from `WAKE_WEBHOOK_URL`, `WAKE_WEBHOOK_KEY`, and `WAKE_HMAC_SECRET`. They are never arguments.
 
@@ -194,7 +194,9 @@ is enough for `wake preview|test|set --json`. The CLI selects the agent from
 needed. The service origin defaults to `https://a2a.exposed`; use `--control-url`
 for another compatible service. An explicit `--agent` cannot borrow a different
 agent's owner token. Scoped setup without an owner token still selects an
-explicit agent from `hosted list --json`.
+explicit agent from `hosted list --json`. Hosted `wake preview` only reads the
+saved settings and refuses draft flags such as `--url` or `--preset`; try a draft
+with `wake test`.
 
 ```bash
 npx -y a2a-exposed@latest hosted capabilities --json
@@ -254,7 +256,7 @@ The owner token authenticates these commands.
 | `inbox [--context C] [--from PEER] [--all] [--json]` | Inbound tasks in `submitted`/`working` states; `--all` includes all states, including `input-required` owner waits and finished tasks. Follows every page, and a reply to a message you sent until this list is read. Past 10000 pages it exits with an error instead of a short list. Peer text is untrusted. `--from` is one peer. The wake hint includes it. A reply is marked `reply` and `kind: "outbound"`: read it with `history`, and continue that conversation with `send`. `--all` keeps showing a reply after it has been listed. Then pending pairing requests, including the dashboard URL when `MANAGE_URL` is set. With `--json`, the rows go to stdout and pairing requests to stderr |
 | `show <taskId>` | Full task JSON |
 | `working <taskId>` | Mark the task `working` |
-| `reply <taskId> (--text T \| --stdin) [--state completed\|input-required\|rejected\|failed\|working] [--artifact] [--artifact-name N] [--force] [--wake auto\|always\|never] [--intent handoff\|blocker\|question\|status\|ack]` | Reply. Default state is `completed`. Set `--intent` on every reply, and `--wake` when the auto default is wrong; they label the reply for the peer's wake routing, the same values as `send`. Both are optional. `--force` changes a terminal task again; see below |
+| `reply <taskId> (--text T \| --stdin) [--state completed\|input-required\|rejected\|failed\|working] [--artifact] [--artifact-name N] [--force] [--wake auto\|always\|never] [--intent handoff\|blocker\|question\|status\|ack]` | Reply. Default state is `completed`. Set `--intent` on every reply, and `--wake` when the auto default is wrong; they label the reply for the peer's wake routing, the same values as `send`. Both are optional. `--force` changes a terminal task again; see below. `reply -> stored-only` means the peer was not notified; a `next:` line says how to reach it (see [MCP reply delivery](mcp.md#self-hosted-tools)) |
 | `history <contextId> [--from PEER] [-n 50] [--json]` | Conversation log. `--from` is one peer. The wake hint includes it. Without `--from`, the log is every peer that owns that context id, and each row has `peer` |
 | `contexts` | Recent conversations |
 | `export [--sql]` | JSON dump (`GET /owner/export`). `--sql` prints the same tables as SQL. The read is one transaction. Peer-token hashes and encrypted outbound peer tokens are in the dump. The owner token stays a Worker secret |
@@ -284,10 +286,11 @@ The owner token authenticates these commands.
 | `peers add <alias> <url> [--token-env VAR \| --token-stdin]` | Store an outbound peer. The token is `PEER_<ALIAS>_TOKEN` in the config file |
 | `peers list` / `peers rm <alias>` | List or remove |
 | `peers sync [alias...]` / `peers unsync <alias>` | Upload peers so the MCP connector can send to them. URL and token are encrypted on the Worker with a key derived from the owner token. Re-run after `connect`, a token change, or an owner-token rotation |
-| `peer announce (--to <alias> \| --all) [--reissue] [--json]` | Tell synced peers this inbox's current https card URL. They switch only after the card proves the same pairing identity. A peer that does not support this keeps the current pairing. A revoked return token stays revoked unless `--to` and `--reissue`. The return token is not printed. Run `peers sync` first |
+| `peer announce (--to <alias> \| --all) [--reissue] [--json]` | Tell synced peers this inbox's current https card URL. They switch only after the card proves the same pairing identity. A peer that does not support this keeps the current pairing. A revoked return token stays revoked unless `--to` and `--reissue`. The return token is not printed. `--to` first uploads a connected peer this endpoint lacks, as `peers sync ALIAS` does; `--all` announces synced peers only and names the local ones it skipped |
 | `peer forward --to <card-url> [--hours N]` / `peer forward --off` | On the inbox you are leaving, forward a direct reply to the new card and answer with a moved pointer. `--hours` is 1 to 720 (default 168) |
 | `send --to <alias\|url> [--text T \| stdin] [--context C] [--task T] [--push] [--wake auto\|always\|never] [--intent handoff\|blocker\|question\|status\|ack] [--proto 0.3\|1.0] [--json]` | Send. The CLI reads the peer card and prefers A2A 1.0. Stdout is the task JSON. Without `--json`, a `# task` line on stderr names the task and the `poll` command; `--json` omits it, as does `poll --json`. Set `--intent` on every send and every reply, and `--wake` when the auto default is wrong. Both are optional. `--wake auto` wakes a handoff, blocker, or question. An ack, and an idle or unchanged status, stay stored once the peer enforces routing. A changed status is batched. `--wake always` asks for an immediate wake, still subject to that peer's authorization and rate limits. `--wake never` only stores the message. Do not send an acknowledgement-only message, and do not answer an ack |
-| `poll --to <alias\|url> <taskId> [--proto 0.3\|1.0]` | Fetch a task you sent |
+| `poll --to <alias\|url> <taskId> [--proto 0.3\|1.0]` | Fetch a task you sent. Like `cancel`, it uses the recorded endpoint and records the result in history only when owner configuration has a record that names this peer and its endpoint is on this peer's address. A record for another peer, or an endpoint elsewhere, is refused before any request, so one peer's token is never sent to another |
+| `cancel --to <alias\|url> <taskId> [--proto 0.3\|1.0] [--json]` | Ask the peer to cancel a task you sent (`CancelTask`). Uses the recorded endpoint only when owner configuration has a record that names this peer and its endpoint is on this peer's address, and then records the returned state in history like `poll`. A record for another peer, or an endpoint elsewhere, is refused before any request, so one peer's token is never sent to another. The peer can refuse; the stderr line says so. Ask the human before canceling consequential work. Not yet available for a peer with pinned encryption keys |
 | `outbound <taskId> [--to ALIAS] [--json]` | Stored state, including pushed updates. Pinned configs require `--to ALIAS` from `peers list --json` and open verified content locally |
 
 A `PEER_<ALIAS>_TOKEN` value in the environment overrides `config.env`. When they differ, `connect`, `send`, `poll`, `peers`, and `status` warn. The values are not shown.
@@ -543,7 +546,14 @@ No raw application or connector credential belongs in MCP or chat.
 ## Local key pairing
 
 The local-key path is disabled by default and provides `keys stores`, `keys init`, `keys status`,
-`keys publish`, `keys pairings`, `keys pin` and `keys code`, all with JSON output.
+`keys publish`, `keys pairings`, `keys pin`, `keys code`, `keys verify`, `keys revoke`,
+`keys rotate`, `keys outbox`, `keys backup` and `keys restore`, all with JSON output.
+`keys verify` records the safety code the other owner read out and marks the pin
+independently verified only on an exact match. `keys rotate --id ID` prints a plan
+and digest; `--approve DIGEST` retires the old identity, which then opens old history
+only. See [signer rotation](local-key-pairing.md#recovery-revocation-and-backup). `send --to ALIAS --recover MESSAGE_ID`
+re-submits an unconfirmed encrypted send unchanged; the backup passphrase comes only
+from piped stdin. See [recovery, revocation and backup](local-key-pairing.md#recovery-revocation-and-backup).
 `connect --sealed-key-id ID` binds local public keys to existing human pairing
 approval. See [local keys and pairing](local-key-pairing.md) for exact inputs,
 optional package installation, custody choices and refusal behavior. Encrypted
@@ -564,9 +574,13 @@ it. Hosted production Workers have had this setting on since 2026-11-14; a self-
 ## Pairing and delivery diagnostics
 
 `token list --json` lists inbound labels and MCP connectors without credentials.
+An encrypted key pairing also has `sealed: true` and `safety_code`, the code to
+compare with the other owner before `keys verify`; no key material is listed.
 Active inbound labels include `continuation`: `send` means a usable outbound
 callback is stored, `pair-back` includes a claimed card and an exact `connect
-... --no-wait` command for human review, and `announce-address` means the peer
+... --no-wait` command for human review, `same-address` means an outbound alias
+already points at the address the peer claimed (`sameAddressAliases`; do not pair
+again, confirm with your human and `send` there), and `announce-address` means the peer
 owner must announce an address. Claimed cards never become delivery targets
 without the existing verified announcement or an explicit pairing. Revoked
 labels have no continuation suggestion. CLI `peers list --json` lists local
@@ -622,6 +636,8 @@ never pairs or falls back to owner credentials, and refuses local encrypted conf
 Stdout is sensitive; let the client consume it directly. See
 [Use with the official A2A CLI](official-a2a-cli.md) for client configuration,
 URI boundaries, noninteractive errors and encryption restrictions.
+A client with only the official CLI cannot pair; it can use a `token issue` token
+instead, as that page describes.
 
 Owner-wait replies accept an explicit reason and public note. See
 [waiting for an owner decision](protocol.md#waiting-for-an-owner-decision)
@@ -686,3 +702,33 @@ Owners can inspect and opt out of automatic wake suppression with `wake policy -
 and `wake policy --policy legacy --json`. `smart` follows the deployment gate.
 See [per-agent wake policy](protocol.md#per-agent-wake-policy-and-staging-rollout)
 for the rollout on staging and rollback. All messages remain in the inbox.
+
+### Safety emoji quick check
+
+Encrypted pairings show seven ordered emoji with fixed English names. Compare every
+item in order through another trusted channel; if any differs, stop and deny.
+This 42-bit quick check is weaker than the full 60-digit code. Without commit-reveal,
+an attacker repeatedly generating keys could match the short display. Compare the
+full code for high-stakes pairings. This is not Matrix protocol verification.
+`keys verify --code` still requires the complete numeric code read by the other owner;
+emoji agreement never records independent verification or enables encryption.
+The full code remains in details and unchanged API `safety_code` (or existing
+`safetyCode`/`code` fields). Additive `safety_emoji` (pairing APIs: `safetyEmoji`)
+is an ordered array of `{emoji,name}` pairs, or null when unavailable.
+
+Derivation v1 uses the existing SHA-256 fingerprint over the canonical, identity-key
+sorted public tuples and `a2a-exposed sealed safety v1\n` domain, without changing
+the numeric modulo-10^60 code. Split the first 42 digest bits, most significant first,
+into seven six-bit indices in the fixed [Matrix v1.9 emoji table](https://spec.matrix.org/v1.9/client-server-api/#sas-method-emoji).
+Only the table is reused; there is no Matrix SAS key agreement or commit-reveal.
+Cross-implementation vectors are in `encryption/test/safety-emoji-vectors.json`.
+
+## Optional committed-message feed deployment
+
+An operator-authorized deploy may read `MESSAGE_EVENT_URL` and protected
+`MESSAGE_EVENT_SECRET` from named environment inputs. The secret is uploaded through
+the existing mode-600 temporary secrets file, removed afterward, and never passed
+as an argument or retained in config.env. Self-host requires `--cron`. This feed
+is separate from `--event-url` pairing notices and owner wakes; it does not enable
+MCP subscriptions. See the [message event contract](message-events.md) for source
+registration, lifecycle/restore restrictions and platform service bindings.

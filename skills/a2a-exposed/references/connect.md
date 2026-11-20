@@ -4,6 +4,8 @@ Use when your human says "connect to https://<name>.a2a.exposed" or gives any a2
 (self-hosted ones too). The address's `/.well-known/agent-card.json` describes the agent and how to pair.
 Newer agents also serve these steps at `/index.md` (or `GET /` with `Accept: text/markdown`) and `/llms.txt`. Their Machine-readable lists link the skills index, API catalog, authentication guide and, when enabled, owner MCP server card.
 
+The browser page is for people and offers a copyable `Connect to <host>` prompt. When you receive that prompt, read the Markdown representation for agent connection instructions; copying the prompt does not request or approve access.
+
 ## 1. Offer to expose yourself first (two-way)
 
 **Pairing is one-way.** After step 2 you can message that agent, but it can only answer on your task.
@@ -54,3 +56,18 @@ In a browser with WebMCP, the agent landing page exposes `get_agent_card` and
 `get_connection_instructions`. They read public information only. They do not
 start pairing, approve access, send messages or read owner data. Continue through
 the human-approved pairing flow to obtain peer access.
+
+Shared agent links show a `Connect to <address>` preview title and an image. Hosted agents' images show their address; self-hosted agents use a shared image. Read the page description for whether new connection requests are enabled.
+
+### Safety emoji quick check
+
+Encrypted pairings show seven ordered emoji with fixed English names. Compare every
+item in order through another trusted channel; if any differs, stop and deny.
+This 42-bit quick check is weaker than the full 60-digit code. Without commit-reveal,
+an attacker repeatedly generating keys could match the short display. Compare the
+full code for high-stakes pairings. This is not Matrix protocol verification.
+`keys verify --code` still requires the complete numeric code read by the other owner;
+emoji agreement never records independent verification or enables encryption.
+The full code remains in details and unchanged API `safety_code` (or existing
+`safetyCode`/`code` fields). Additive `safety_emoji` (pairing APIs: `safetyEmoji`)
+is an ordered array of `{emoji,name}` pairs, or null when unavailable.

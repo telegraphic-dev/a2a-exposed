@@ -51,10 +51,11 @@ function protectedHeaders(file) {
 	} catch { throw new CliError('local headers require a regular owner-only mode-600 JSON file with safe header names/values'); }
 	finally { if (fd !== undefined) fs.closeSync(fd); }
 }
-export async function runHttpConnector({ url, token, profile, localUrl, cardUrl, localHeaders = {}, signal, onReady = () => {}, onDiagnostic = m => console.error(m), handshakeMs = 10000 }) {
+export async function runHttpConnector({ url, token, profile, localUrl, cardUrl, localHeaders = {}, localHandler, signal, onReady = () => {}, onDiagnostic = m => console.error(m), handshakeMs = 10000 }) {
 	if (!['webhook', 'a2a'].includes(profile)) throw new CliError('invalid HTTP relay profile');
-	url = httpRelayEndpoint(url, profile); const local = httpLocalDestination(localUrl);
-	const card = profile === 'a2a' ? httpLocalDestination(cardUrl || new URL('/.well-known/agent-card.json', local).href) : null;
+	if (localHandler && (profile !== 'a2a' || localUrl || cardUrl || Object.keys(localHeaders).length)) throw new CliError('in-process A2A target cannot be combined with HTTP destinations or fixed headers');
+	url = httpRelayEndpoint(url, profile); const local = localHandler ? null : httpLocalDestination(localUrl);
+	const card = profile === 'a2a' && !localHandler ? httpLocalDestination(cardUrl || new URL('/.well-known/agent-card.json', local).href) : null;
 	if (card && card.origin !== local.origin) throw new CliError('card URL must share the fixed RPC loopback origin');
 	if (!/^a2ah_[A-Za-z0-9_-]{43}$/.test(token || '')) throw new CliError('invalid HTTP connector credential; use a fresh protected token file');
 	if (!localHeaders || typeof localHeaders !== 'object' || Array.isArray(localHeaders) || !headersValid(Object.entries(localHeaders))) throw new CliError('invalid fixed local headers');
@@ -108,13 +109,42 @@ export async function runHttpConnector({ url, token, profile, localUrl, cardUrl,
 					const budget = Math.min(m.timeoutMs, m.deadline - Date.now());
 					if (budget <= 0) { remember(m.id); send({ type: 'error', id: m.id, code: 'timeout' }); return; }
 					const headers = Object.fromEntries(m.headers); Object.assign(headers, localHeaders); if (!headersValid(Object.entries(headers))) throw new Error();
-					let request, response, headerTimer, timer;
-					const a = { seq: 0, credit: false, started: false, wake: null, stopped: false, cancel() { if (a.stopped) return; a.stopped = true; clearTimeout(headerTimer); clearTimeout(timer); request?.destroy(); response?.destroy(); a.wake?.(); } };
+					let request, response, headerTimer, timer; const localStop = new AbortController();
+					const a = { seq: 0, credit: false, started: false, wake: null, stopped: false, cancel() { if (a.stopped) return; a.stopped = true; clearTimeout(headerTimer); clearTimeout(timer); localStop.abort(); request?.destroy(); response?.destroy(); a.wake?.(); } };
 					active.set(m.id, a);
 					const done = () => { active.delete(m.id); remember(m.id); a.cancel(); };
 					const error = code => { if (a.stopped) return; send({ type: 'error', id: m.id, code }); done(); };
 					timer = setTimeout(() => error('timeout'), budget);
 					headerTimer = setTimeout(() => error('timeout'), Math.min(httpRelayLimits.headerMs, budget));
+					if (localHandler) {
+						void (async () => {
+							let reader;
+							try {
+								const res = await localHandler({ target: m.target, body, headers: m.headers, signal: localStop.signal });
+								clearTimeout(headerTimer);
+								if (a.stopped) { await res.body?.cancel(); return; }
+								const pairs = [...res.headers.entries()];
+								if (!headersValid(pairs) || res.status < 200 || (res.status >= 300 && res.status < 400)) throw new Error();
+								a.started = true; if (!send({ type: 'start', id: m.id, status: res.status, headers: pairs })) return;
+								reader = res.body?.getReader(); let bytes = 0;
+								const abort = () => { void reader?.cancel().catch(() => {}); };
+								localStop.signal.addEventListener('abort', abort, { once: true });
+								try {
+									while (reader && !a.stopped) {
+										const { done: ended, value } = await reader.read(); if (ended) break;
+										bytes += value.length; if (bytes > httpRelayLimits.responseBytes) throw new Error();
+										for (let offset = 0; offset < value.length; offset += httpRelayLimits.chunkBytes) {
+											if (!a.credit && !a.stopped) await new Promise(r => { a.wake = r; }); a.wake = null;
+											if (a.stopped || finished) return; a.credit = false;
+											if (!send({ type: 'chunk', id: m.id, seq: a.seq++, body: Buffer.from(value.subarray(offset, offset + httpRelayLimits.chunkBytes)).toString('base64') })) return;
+										}
+									}
+									if (!a.stopped) { send({ type: 'end', id: m.id, seq: a.seq }); done(); }
+								} finally { localStop.signal.removeEventListener('abort', abort); }
+							} catch { error('local_failure'); }
+							finally { await reader?.cancel().catch(() => {}); reader?.releaseLock(); }
+						})(); return;
+					}
 					request = http.request(m.target === 'card' ? card : local, { method: m.method, headers, highWaterMark: httpRelayLimits.chunkBytes, agent: false }, res => {
 						response = res; clearTimeout(headerTimer);
 						void (async () => {
@@ -146,7 +176,7 @@ export async function runHttpConnector({ url, token, profile, localUrl, cardUrl,
 			if (signal?.aborted) stop();
 		});
 		if (signal?.aborted) return; if (permanent) throw new CliError(permanent);
-		if (!helloReceived) { if (++failures >= 3) throw new CliError(`HTTP relay handshake failed three consecutive times; ${statusGuidance}, endpoint and enrollment`); onDiagnostic('HTTP relay handshake failed; retrying with bounded backoff'); }
+		if (!helloReceived) { if (++failures >= 3) throw new CliError(`HTTP relay handshake failed three consecutive times on Node ${process.version}; check endpoint, network reachability and enrollment; run relay ${profile === 'webhook' ? 'http' : 'a2a'} status`); onDiagnostic('HTTP relay handshake failed; retrying with bounded backoff'); }
 		try { await sleep(reconnectDelay(attempt++), undefined, { signal }); } catch { return; }
 	}
 }
@@ -154,7 +184,7 @@ export async function runHttpConnector({ url, token, profile, localUrl, cardUrl,
 export async function relayHttp(args, flags = {}) {
 	const [kind, action] = args || [], profile = kind === 'http' ? 'webhook' : kind;
 	if (args?.length !== 2 || !['webhook', 'a2a'].includes(profile) || !['create', 'status', 'revoke', 'run'].includes(action)) throw new CliError('usage: relay http|a2a create|status|revoke|run');
-	const allowed = { create: ['token-file', 'ingress-token-file', 'forward-headers', 'json'], status: ['json'], revoke: ['json'], run: ['url', 'token-file', 'local-url', 'card-url', 'local-headers-file', 'json'] }[action];
+	const allowed = { create: ['token-file', 'ingress-token-file', 'forward-headers', 'json'], status: ['json'], revoke: ['json'], run: ['url', 'token-file', 'local-url', 'card-url', 'local-headers-file', 'json', 'acp', 'acp-cwd', 'acp-peers-file', 'acp-session', 'acp-session-peer', 'acp-mode', 'acp-diagnostics-file'] }[action];
 	for (const key of Object.keys(flags)) if (!allowed.includes(key)) throw new CliError(`unsupported HTTP relay option --${key}`);
 	const path = `/owner/relay/http/${profile}`;
 	if (action === 'create') {
@@ -204,12 +234,17 @@ export async function relayHttp(args, flags = {}) {
 		} finally { for (const fd of fds) fs.closeSync(fd); } return;
 	}
 	if (action === 'run') {
-		if (!flags['token-file'] || !flags['local-url']) throw new CliError('run requires --token-file and --local-url');
+		if (!flags['token-file'] || (!flags['local-url'] && !flags.acp)) throw new CliError('run requires --token-file and --local-url (or --acp for relay a2a)');
+		const acpKeys = ['acp', 'acp-cwd', 'acp-peers-file', 'acp-session', 'acp-session-peer', 'acp-mode', 'acp-diagnostics-file'];
+		if (acpKeys.some(k => flags[k] !== undefined) && (!flags.acp || profile !== 'a2a')) throw new CliError('ACP options require relay a2a run --acp');
+		if (flags.acp && ['local-url', 'card-url', 'local-headers-file'].some(k => flags[k] !== undefined)) throw new CliError('--acp cannot be combined with local HTTP destinations or fixed headers');
 		if (profile !== 'a2a' && flags['card-url']) throw new CliError('--card-url is only supported by relay a2a');
 		const token = protectedToken(flags['token-file']), localHeaders = flags['local-headers-file'] ? protectedHeaders(flags['local-headers-file']) : {};
+		let target;
+		if (flags.acp) { const { acpOptions, createAcpTarget } = await import('./acp-relay.mjs'); target = createAcpTarget(acpOptions(flags)); }
 		const stop = new AbortController(), shutdown = () => stop.abort(); process.once('SIGINT', shutdown); process.once('SIGTERM', shutdown);
-		try { await runHttpConnector({ url: flags.url || baseUrl().replace(/^http/, 'ws') + `/relay/http/${profile}/connect`, token, profile, localUrl: flags['local-url'], cardUrl: flags['card-url'], localHeaders, signal: stop.signal }); }
-		finally { process.removeListener('SIGINT', shutdown); process.removeListener('SIGTERM', shutdown); } return;
+		try { await runHttpConnector({ url: flags.url || baseUrl().replace(/^http/, 'ws') + `/relay/http/${profile}/connect`, token, profile, localUrl: flags['local-url'], cardUrl: flags['card-url'], localHeaders, localHandler: target?.handle, signal: stop.signal }); }
+		finally { await target?.close(); process.removeListener('SIGINT', shutdown); process.removeListener('SIGTERM', shutdown); } return;
 	}
 	const current = await owner('GET', path); if (action === 'status') { console.log(JSON.stringify(current)); return; }
 	const result = await owner('DELETE', path, { generation: current.generation }); const confirmed = await owner('GET', path);

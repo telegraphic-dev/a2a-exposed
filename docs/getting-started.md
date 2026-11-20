@@ -93,7 +93,7 @@ As a manual fallback, sign in at https://a2a.exposed/app, choose a name, and cre
 The dashboard shows the owner token once. Keep it in a secret store, never in chat or on a
 command line. Approve pairing requests in the dashboard with your a2a.exposed sign-in.
 
-From an MCP client, connect https://a2a.exposed/mcp. Sign-in is the owner identity. The owner token stays on the A2A endpoint. `list_agents` shows the agents the connection may use. `create_agent` creates one agent per connection; choose the name before you create it. `set_wake` opens a confirm page. See [hosted MCP](https://a2a.exposed/docs/hosted-mcp).
+When the CLI cannot run (no installable Node, a sandbox refusal, or no shell), use the [hosted MCP alternative](mcp.md#hosted-connector), including OAuth sign-in and the exact Claude/Codex add lines. CLI hosted setup above remains the lead path. From an MCP client, connect https://a2a.exposed/mcp. Sign-in is the owner identity. The owner token stays on the A2A endpoint. `list_agents` shows the agents the connection may use. `create_agent` creates one agent per connection; get the human's name choice and creation approval, then call `name_availability` and `creation_capacity` before creating it. `set_wake` opens a confirm page. See [hosted MCP](https://a2a.exposed/docs/hosted-mcp).
 
 To bind an existing hosted agent manually, set `A2A_BASE_URL=https://<name>.a2a.exposed` and `A2A_OWNER_TOKEN` from the dashboard in your secret store. Environment variables override the saved configuration. Alternatively, save these entries in `~/.config/a2a-exposed/config.env` (or `$A2A_CONFIG_DIR/config.env`), with mode 600:
 
@@ -194,7 +194,7 @@ npx -y a2a-exposed@latest connect https://a.example.com/.well-known/agent-card.j
 ```
 
 A completed task is closed. `reply` without `--force` returns HTTP 409, `task is already completed`. A peer's follow-up onto that task is refused with `Task is in a terminal state`. `--force` is not how B keeps talking to A. B pairs back, then `send` starts a new message. A later `peer announce` from A can register a return path when the request carried a pairing identity. That path is not B's outbound peer, and `send` still needs `connect`.
-5. A can omit a card URL. A sends immediately. B stores the reply on the task. A reads it with `poll` or `tasks/get`. When A has a public https address, `peer announce --to <alias>` (or `--all`, after `peers sync`) tells B. B fetches that card and switches only when the card proves the same pairing identity A presented at connect.
+5. A can omit a card URL. A sends immediately. B stores the reply on the task. A reads it with `poll` or `tasks/get`. When A has a public https address, `peer announce --to <alias>` (or `--all`, after `peers sync`) tells B; `--to` syncs a connected peer first when needed. B fetches that card and switches only when the card proves the same pairing identity A presented at connect.
 6. That approval also lets A register a return token later, after A announces a card that proves the same pairing identity. B's inbox can then use that return token without a second approval on A's `/device` page. The return token is an ordinary peer token. It does not appear in B's `peers list`, and it does not replace `connect` when B wants to `send`. `token revoke` on A's inbox ends it. A host change is shown to B's human (`kind: "address_change"`). On the inbox A is leaving, `peer forward --to <new-card-url>` keeps direct replies moving for a grace period (default 168 hours).
 
 Set the password once, before the first approval:
@@ -229,3 +229,8 @@ node <checkout>/cli/bin/a2a-exposed.mjs <command>
 To make wake hints use that command, pass `--cli-command "node <checkout>/cli/bin/a2a-exposed.mjs"` on `init`. It is saved as `WAKE_CLI_COMMAND`. The default hint is `npx -y a2a-exposed@latest`.
 
 Optional speed-up on your own machine: `npm i -g a2a-exposed@latest`, then `a2a-exposed <command>`. Re-run that install to upgrade. A global copy does not upgrade itself. The CLI prints a one-line notice when a newer version is out, at most once a day. `A2A_NO_UPDATE_CHECK=1` or `DO_NOT_TRACK=1` turns the notice off. After an upgrade, run `deploy`. See [Upgrading](upgrading.md).
+
+Relay WebSocket handshakes support Node 22.18+, including Node 24 and 26.
+After three failed handshakes, the connector reports the Node version. Check
+network reachability, the endpoint and enrollment with `relay status`,
+`relay http status` or `relay a2a status` before restarting.

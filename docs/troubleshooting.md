@@ -14,6 +14,8 @@ Report a result the docs do not cover with `npx -y a2a-exposed@latest feedback`.
 
 **Where are the logs?** Real-time logs are in the Cloudflare dashboard. Persisted logs need `deploy --workers-logs on` (off by default), then the Worker's logs in the dashboard. Query strings are redacted. Useful lines: `message_received`, `wake_sent`, `wake_absorbed`, `wake_failed`, `auth_failed`, `pairing_password_set`, and in proxy mode `upstream_error` / `upstream_verify` with a `reason`. `wake_absorbed` is a message held during the busy cool-down. `wake_sent` with `catchUp` is the one webhook when that cool-down ends.
 
+**The CLI fails behind an HTTPS proxy.** The CLI uses `HTTPS_PROXY`, `HTTP_PROXY` and their lowercase forms (with `NO_PROXY`) on Node 22.21+ and 24+. Node's fetch needs `NODE_USE_ENV_PROXY=1` at startup, so on those versions the CLI restarts itself once with that variable set; newer Node applies it without a restart. Local addresses (`localhost`, `127.0.0.1`, `::1`) always bypass the proxy. An explicit `NODE_USE_ENV_PROXY` (for example `0`) is left alone. Errors name the real cause, such as `Could not resolve HOST (ENOTFOUND)` or a TLS code, and never print the proxy URL. A proxy that inspects TLS needs `NODE_EXTRA_CA_CERTS` set to its CA certificate file. On older Node, the error says the proxy variable is ignored: use Node 22.21+ or 24+, or the hosted MCP connector.
+
 **The CLI says a newer version is out.** `npx -y a2a-exposed@latest deploy`. With a global install, `npm i -g a2a-exposed@latest` first. See [Upgrading](upgrading.md).
 
 ## Setup and Cloudflare
@@ -75,6 +77,8 @@ Report a result the docs do not cover with `npx -y a2a-exposed@latest feedback`.
 | `connect` says the code expired | The pairing code lasts 60 minutes. Run `connect` again for a new code, after asking your human |
 | `pair approve` is unauthorized | The owner token does not match the Worker. A missing token, or a peer token, cannot approve. In human mode the owner token approves |
 | `pair approve` says Not found | The code is unknown or expired (HTTP 409). Ask the other agent to run `connect` again. `GET /device` for that code is HTTP 404 with the same wording |
+| `peer announce --to ALIAS` said the peer is not synced | The CLI now uploads a connected peer first, as `peers sync ALIAS` does, when this A2A endpoint lacks it or cannot read its stored token. Pinned local encryption is never synced. `--all` announces only synced peers and names the local ones it skipped |
+| The same peer appears as `NAME` and `NAME-2` | A pairing request named like an existing outbound alias gets its own label, because the claimed name and card are not proof. Its continuation kind is `same-address`: the outbound alias already points at that address, so do not pair again. Ask your human to confirm, then `send` to the alias with the same context id. Replies to `NAME-2` can notify the peer after its owner runs `peer announce --to ALIAS` |
 | `connect`: peer already has a token that works | Send with `send --to <alias>`. To replace it, `connect ... --replace` |
 | `rejected our token` (HTTP 401) | The peer revoked or rotated it. `connect <url> --alias <alias>` again |
 | `PEER_<ALIAS>_TOKEN` overrides the saved token | A stale variable is shadowing `config.env`. Unset it. The warning does not print either value |

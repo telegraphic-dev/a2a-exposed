@@ -44,9 +44,19 @@ function acceptQ(accept: string): Map<string, number> {
 	return out;
 }
 
+/** User-Agent tokens of the crawlers that fetch a shared link to draw its preview card. Several of them send
+ *  a wildcard Accept or none, so without this they would get JSON and never see the og: and twitter: tags.
+ *  Cardyb is Bluesky's card fetcher; Google-PageRenderer draws Google Chat's link previews. */
+const LINK_PREVIEW_BOTS = /\b(?:Slackbot|Twitterbot|LinkedInBot|facebookexternalhit|Facebot|Discordbot|TelegramBot|WhatsApp|SkypeUriPreview|redditbot|Pinterestbot|Mastodon|Embedly|Iframely|Cardyb|Google-PageRenderer)\b/i;
+
+export function linkPreviewBot(userAgent: string | null): boolean {
+	return !!userAgent && LINK_PREVIEW_BOTS.test(userAgent);
+}
+
 /** Which representation of GET / to serve. Markdown when the client names text/markdown at least as high as both
- *  text/html and application/json (Markdown wins a tie); HTML when it names text/html; otherwise the JSON it always got. */
-export function rootFormat(accept: string | null, formatParam: string | null): "json" | "html" | "markdown" {
+ *  text/html and application/json (Markdown wins a tie); HTML when it names text/html; HTML for a link-preview bot
+ *  that names neither text/html nor application/json (a wildcard Accept or none); otherwise the JSON it always got. */
+export function rootFormat(accept: string | null, formatParam: string | null, userAgent: string | null = null): "json" | "html" | "markdown" {
 	if (formatParam === "json") return "json";
 	const q = acceptQ(accept || "");
 	const md = q.get("text/markdown") ?? 0;
@@ -54,8 +64,12 @@ export function rootFormat(accept: string | null, formatParam: string | null): "
 	const json = q.get("application/json") ?? 0;
 	if (md > 0 && md >= html && md >= json) return "markdown";
 	if (html > 0) return "html";
+	if (!q.has("text/html") && !q.has("application/json") && linkPreviewBot(userAgent)) return "html";
 	return "json";
 }
+
+/** GET / picks its representation from Accept and User-Agent, so every variant says both. */
+export const ROOT_VARY = "accept, user-agent";
 
 /** One line of card text, safe in Markdown: whitespace and control characters collapsed to one line (so nothing
  *  can start a heading, list, or front matter), length capped, and the characters that open links, images, raw
@@ -116,7 +130,7 @@ export function connectMarkdown(m: ConnectModel): string {
 	const links = docsLinks(m.docs);
 	const desc = m.description ? `> ${mdText(m.description, DESCRIPTION_MAX)}\n` : "";
 	return `---\nagent-card: ${m.base}/.well-known/agent-card.json\n---\n# ${name}\n${desc}\n` +
-		`You were asked to connect to this agent. Playbook: ${links.connect}\n\n` +
+		`Connect to ${m.base.replace(/^https?:\/\//, "")}\n\nYou were asked to connect to this agent. Playbook: ${links.connect}\n\n` +
 		`${steps(m, name, links)}\n\n` +
 		`Machine-readable: ${machineLinks(m).map((l) => `[${l.label}](${l.href})`).join(" · ")}\n`;
 }
@@ -195,7 +209,8 @@ export function authMd(m: ConnectModel): string {
 	const peers = m.pairing
 		? `- Peers: per-peer bearer token from the RFC 8628 device flow at ${m.base}/oauth/device_authorization\n` +
 			`  (metadata: /.well-known/oauth-authorization-server). A person (this agent's owner) approves. Codes last 60 minutes.\n` +
-			`- CLI: \`${DEFAULT_CLI} connect ${m.base}\` (stores the token, never prints it).\n`
+			`- CLI: \`${DEFAULT_CLI} connect ${m.base}\` (stores the token, never prints it).\n` +
+			`- Official \`a2a\` CLI: it cannot run this device flow. Ask the owner for a per-peer token.\n`
 		: `- Peers: pairing is turned off here. Ask this agent's operator for a per-peer bearer token.\n`;
 	const owner = m.mcp ? `- Owner tools (\`/mcp\`, scope \`inbox\`) are for this agent's owner only.\n` : "";
 	const registration = m.registration

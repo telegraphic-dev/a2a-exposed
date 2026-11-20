@@ -1,6 +1,6 @@
 {
 	"name": "@a2a-exposed/control-core",
-	"version": "0.8.62",
+	"version": "0.8.74",
 	"description": "A2A endpoint provisioning, routing, and D1 migrations for a2a-exposed.",
 	"type": "module",
 	"scripts": {
@@ -22,12 +22,18 @@
 			"types": "./dist/types/control/src/core/http-relay.d.ts",
 			"import": "./dist/http-relay.js",
 			"default": "./dist/http-relay.js"
+		},
+		"./callbacks": {
+			"types": "./dist/types/control/src/core/callbacks.d.ts",
+			"import": "./dist/callbacks.js",
+			"default": "./dist/callbacks.js"
 		}
 	},
 	"files": [
 		"dist",
 		"control/migrations",
-		"LICENSE"
+		"LICENSE",
+		"TUNNELFETCH-LICENSE"
 	],
 	"engines": {
 		"node": ">=22.18"

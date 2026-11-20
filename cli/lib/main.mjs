@@ -45,15 +45,32 @@ Local encrypted CLI draft (disabled by default):
                                 import that exact approval as trust on first use (TOFU)
   keys code --id ID --peer ALIAS_OR_LABEL --json
                                 ALIAS on connecting side; LABEL from keys pairings on approving side
-                                compare safety code through another trusted channel
+                                show ordered safety emoji/name quick check and full code details;
+                                keys verify still requires the full numeric code
+  keys verify --id ID --peer ALIAS_OR_LABEL --code "CODE" --json
+                                record independent verification of the exact pinned keys
+                                CODE is the full code the other owner read out; a mismatch changes nothing
   peers list --json           list aliases and whether their keys are pinned
   send --to ALIAS --text TEXT [--json] [--allow-os-consent]
                                 seal for the pinned peer; no plaintext fallback
                                 max 200000 Unicode characters / 307072 encoded content bytes; checked before key access
                                 encrypted sends refuse --push, --wake and --intent
+                                encrypted history keeps state/push events as metadata; push status text is withheld
+  send --to ALIAS --recover MESSAGE_ID [--json]
+                                unconfirmed send: re-submit the same encrypted message and ID; stored at most once
+  keys outbox --json          list local send records (encrypted messages and public IDs only)
+  keys revoke --peer ALIAS_OR_LABEL --json
+                                hold encrypted use of one local pin; keeps history; server access unchanged
+  keys rotate --id ID --json   show the exact signer-rotation plan and its approval digest; changes nothing
+  keys rotate --id ID --approve=DIGEST --json
+                                new signing and receiving keys; the old key opens old history only
+                                its pins are held: re-pair with connect --sealed-key-id NEW_ID and keys verify, then keys revoke --peer OLD
+  keys backup --to FILE --json  encrypted backup; passphrase from piped stdin only
+  keys restore --from FILE --to NEW_DIR --acknowledge-replay-rollback --json
+                                archive-only copy in a new directory: history reads only
   inbox --json / history CONTEXT --json
                                 open locally; --allow-os-consent permits keychain access
-  If codes differ: do not use the pairing; ask approving owner to token revoke LABEL
+  If codes differ: do not use the pairing; keys revoke --peer, ask approving owner to token revoke LABEL
   (select LABEL with keys pairings --json), and tell the other owner.
   Install matching optional @a2a-exposed/encryption in the config directory first.
   Encryption is off by default. After owner approval, set A2A_SEALED_ENABLED=1
@@ -180,6 +197,9 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
                                                read EVENT_SECRET from stdin (hidden prompt on a terminal).
                                                Uploaded on this deploy. Not an argument, not printed, and not
                                                saved in config.env. Or export EVENT_SECRET
+                                Message feed   optional MESSAGE_EVENT_URL plus protected MESSAGE_EVENT_SECRET.
+                                               Separate from pairing and owner wakes; self-host requires --cron.
+                                               See docs/message-events.md; configure only with owner approval.
                                 --rotate-owner-token  on init, replace the owner token; other settings come from config.env.
                                                Then update A2A_OWNER_TOKEN wherever this A2A endpoint is called, and run \`peers sync\`
                                 --upstream URL  proxy / expose mode: a public façade for an agent that already
@@ -342,6 +362,7 @@ Wake relay (optional Worker feature, no tunnel or service install)
                                 enroll/rotate; writes a NEW mode-600 credential file, never prints the secret
   relay status [--json]          authenticated runtime capability and connection/enrollment status
   relay revoke                  revoke the enrollment shown by status, close its current socket
+  Relay connectors support Node 22.18+, 24 and 26; handshake errors report the Node version.
   relay run --local-url http://127.0.0.1:8644/webhooks/a2a-wake
             (--token-file FILE | --token-env VAR) [--url wss://agent.example.com/relay/connect]
                                 foreground fixed-loopback connector; no JSON/stdout stream, safe diagnostics on stderr
@@ -388,6 +409,21 @@ HTTP endpoint relays (separate opt-in Worker feature; --http-relay 1 on init/dep
                                 --forward-headers explicitly allows original app bearer/signature headers
                                 local app owns per-peer/task authorization; shared ingress is NOT peer auth
                                 native A2A is separate from Worker inbox/pairing/facade. No push callbacks.
+  relay a2a run --token-file FILE --acp '["/path/to/agent","--acp"]'
+             --acp-cwd /absolute/project --acp-peers-file FILE
+             --acp-mode MODE [--acp-diagnostics-file NEWFILE]
+             [--acp-session ID --acp-session-peer PEER] [--url URL]
+                                ACP v1 stdio target; JSON argv, no shell or local HTTP listener
+                                peers file: mode-600 JSON {"peers":{"name":"<SHA-256 token hash>"}}
+                                forward authorization at enrollment; independent per-peer app tokens
+                                --acp-session loads exactly that existing session for one configured peer
+                                requires agent loadSession; never falls back to session/new
+                                --acp-mode is mandatory: advertised ID, set before every prompt
+                                conflicting mode updates stop binding; peers cannot run slash commands
+                                diagnostics: NEW mode-600 private raw stderr, max 1 MiB total; sensitive
+                                otherwise one process/session per peer/context; 8 bindings, 128 tasks
+                                no client file/terminal tools; permissions canceled, input-required
+                                cwd is not a sandbox; retains native agent permissions; text only
 
 Inbox (owner side)
   inbox [--context C] [--from PEER] [--all] [--json]
@@ -401,6 +437,8 @@ Inbox (owner side)
                                            --json: rows on stdout, requests on stderr). Follows every page; past
                                            10000 pages it errors instead of a short list. Reading marks returned replies
                                            seen and clears matching pending wakes; task state is unchanged.
+                                           A catch-up held by the busy cool-down stays until
+                                           that task is marked working or answered.
                                            Direct reply messages are completed without a new-work wake;
                                            read them with history or inbox --all
   show <taskId>                            full task JSON
@@ -482,7 +520,7 @@ Outbound (agents you call)
                           tell paired peers this inbox's current card URL. They switch only after the card
                           proves the same pairing identity. A peer that does not support this keeps the
                           current pairing. A revoked return token stays revoked unless --to and --reissue.
-                          The return token is not printed
+                          The return token is not printed. --to first syncs a connected peer this inbox lacks
   peer forward --to <card-url> [--hours N] | peer forward --off
                           on the old inbox, forward direct replies and answer with a moved pointer for N hours
                           (default 168, max 720)
@@ -503,6 +541,9 @@ Outbound (agents you call)
                           Storage failures warn on stderr; the peer response still prints and exits 0
                           Self-hosted MCP: poll_outbound fetches current state; cancel_outbound asks the peer
                           to cancel a sent task. Ask the human before canceling consequential work
+  cancel --to <alias|url> <taskId> [--proto 0.3|1.0] [--json]
+                          ask the peer to cancel a task you sent (CancelTask); recorded in history like poll.
+                          The peer can refuse. Ask the human before canceling consequential work
   outbound <taskId> [--to ALIAS] [--json] [--allow-os-consent]
                           stored state of a task you sent
                           Pinned configs require --to ALIAS from peers list --json.
@@ -542,6 +583,7 @@ Presets: grok-bot | claude-code | openclaw-wake | openclaw-agent | hermes | open
          Clients and how to load them:
          https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md#clients
 Config: ${C.CONFIG_FILE}  (override dir with --config-dir DIR or A2A_CONFIG_DIR; env vars override file values)
+Proxy:  HTTPS_PROXY / HTTP_PROXY / NO_PROXY on Node 22.21+ and 24+ (loopback bypasses it); NODE_EXTRA_CA_CERTS for TLS inspection
 Update notice: at most a daily background check of the npm registry; off with A2A_NO_UPDATE_CHECK=1 (or DO_NOT_TRACK=1)`;
 
 const HELP_TUNNEL = `tunnel create|zones|status|rm
@@ -597,7 +639,7 @@ const deployOpts = {
 };
 const SPEC = {
  mcp: { "allow-os-consent": B },
- keys: { id: S, peer: S, store: S, "card-url": S, "user-code": S, "allow-os-consent": B, json: B },
+ keys: { id: S, approve: S, peer: S, store: S, "card-url": S, "user-code": S, code: S, "allow-os-consent": B, json: B, to: S, from: S, "acknowledge-replay-rollback": B },
 	hosted: { url: S, version: S, "upstream-token-file": S, "upstream-token-env": S, "access-client-id-file": S, "access-client-id-env": S, "access-client-secret-file": S, "access-client-secret-env": S, name: S, json: B, agent: S, hostname: S, origin: S, path: S, preset: S, "control-url": S, "secret-file": S, "secret-env": S, "secret-from": S, "hermes-home": S, route: S, "token-file": S, "no-run": B },
 	init: { ...deployOpts, ...tunnelOpts, tunnel: B, "dry-run": B, json: B }, deploy: deployOpts,
 	wake: { policy: S, stage: S, ...deployOpts, "local-url": S, json: B, url: S, "reference-file": S, "reference-env": S, clear: B, version: S, agent: S, "control-url": S, "key-header": S, "key-file": S, "key-env": S, "key-stdin": B, "hmac-secret-file": S, "hmac-secret-env": S, "access-client-id-file": S, "access-client-id-env": S, "access-client-secret-file": S, "access-client-secret-env": S }, tunnel: { ...tunnelOpts, preset: S, "hermes-route": S, "hmac-secret-stdin": B, json: B },
@@ -607,13 +649,14 @@ const SPEC = {
 	token: { rotate: B, json: B },
 	peers: { "token-env": S, "token-stdin": B, json: B },
 	peer: { to: S, all: B, reissue: B, hours: S, off: B, json: B },
-	send: { json: B, "allow-os-consent": B, to: S, text: S, context: S, task: S, push: B, proto: S, wake: S, intent: S },
+	send: { json: B, "allow-os-consent": B, to: S, text: S, context: S, task: S, push: B, proto: S, wake: S, intent: S, recover: S },
 	poll: { to: S, proto: S, json: B, "allow-os-consent": B },
+	cancel: { to: S, proto: S, json: B },
 	outbound: { to: S, json: B, "allow-os-consent": B },
 	status: { json: B, agent: S, "control-url": S },
 	env: { json: B },
 	export: { sql: B },
-	relay: { agent: S, "control-url": S, preset: S, "key-header": S, "key-file": S, "key-env": S, "key-stdin": B, "hmac-secret-file": S, "hmac-secret-env": S, "receipt-file": S, generation: S, "connector-id": S, confirm: B, clear: B, "forward-headers": S, "ingress-token-file": S, "local-headers-file": S, "card-url": S, "token-file": S, "token-env": S, "local-url": S, url: S, json: B, "config-version": S },
+	relay: { acp: S, "acp-cwd": S, "acp-peers-file": S, "acp-session": S, "acp-session-peer": S, "acp-mode": S, "acp-diagnostics-file": S, agent: S, "control-url": S, preset: S, "key-header": S, "key-file": S, "key-env": S, "key-stdin": B, "hmac-secret-file": S, "hmac-secret-env": S, "receipt-file": S, generation: S, "connector-id": S, confirm: B, clear: B, "forward-headers": S, "ingress-token-file": S, "local-headers-file": S, "card-url": S, "token-file": S, "token-env": S, "local-url": S, url: S, json: B, "config-version": S },
 	upstream: { json: B },
 	connect: { "sealed-key-id": S, alias: S, name: S, json: B, "no-wait": B, replace: B, force: B, "card-url": S },
 	// Internal hosted-service integration commands. Keep out of public help until the production flow is available.
@@ -694,6 +737,7 @@ export async function main(argv) {
 		case "init":
 			if (p.length) throw new CliError("init takes no positional arguments; use --worker-name NAME");
 			if (o.json && !o["dry-run"]) throw new CliError("init --json requires --dry-run");
+			if (o["rotate-owner-token"] && C.deploymentKind() === "hosted") throw new CliError("this is a hosted config. init --rotate-owner-token rotates a self-hosted Worker's owner token only. Rotate a hosted agent's owner token in the dashboard (agent settings, Advanced) or with the hosted MCP tool rotate_owner_token, which opens a confirm page. Nothing was changed.");
 			if (o.tunnel) tun.preflight(o); // refuse early (hosted preset, missing --tunnel-path) before anything is deployed
 			await dep.init(o);
 			if (!o.tunnel || o["dry-run"]) return;
@@ -784,6 +828,7 @@ export async function main(argv) {
 		}
 		case "send": return cmd.send(o);
 		case "poll": return cmd.poll(need(p[0], "poll --to <peer> <taskId>"), o);
+		case "cancel": return cmd.cancel(need(p[0], "cancel --to <peer> <taskId>"), o);
 		case "outbound": return cmd.outbound(need(p[0], "outbound <taskId>"), o);
 		case "feedback": {
 			const message = p.join(" ").trim();

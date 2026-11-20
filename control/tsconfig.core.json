@@ -1,7 +1,9 @@
 {
 	"compilerOptions": {
 		"target": "es2024",
-		"lib": ["es2024"],
+		"lib": [
+			"es2024"
+		],
 		"module": "nodenext",
 		"moduleResolution": "nodenext",
 		"types": [],
@@ -16,5 +18,10 @@
 		"outDir": "../dist/types",
 		"rootDir": ".."
 	},
-	"files": ["src/core/index.ts", "src/core/http-relay.ts", "src/sql-raw.d.ts"]
+	"files": [
+		"src/core/index.ts",
+		"src/core/http-relay.ts",
+		"src/sql-raw.d.ts",
+		"src/core/callbacks.ts"
+	]
 }

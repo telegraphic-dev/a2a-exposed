@@ -25,6 +25,18 @@ jobs:
           node-version: 22
       - run: npm run lint && npm run format:check && npm run test:checks
 
+  relay-node:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [22, 24, 26]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+      - run: node --test cli/test/relay-native.test.mjs cli/test/http-relay-native.test.mjs cli/test/relay-upgrade.test.mjs
+
   encryption:
     runs-on: ubuntu-latest
     steps:
@@ -40,6 +52,39 @@ jobs:
         working-directory: encryption
       - run: python3 -m venv /tmp/sealed-schema-venv && /tmp/sealed-schema-venv/bin/pip install jsonschema
       - run: node encryption/test/schema-fixtures.mjs /tmp/sealed-schema-fixtures.json && /tmp/sealed-schema-venv/bin/python encryption/test/check-schemas.py /tmp/sealed-schema-fixtures.json
+
+  encryption-custody:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: encryption
+      - run: node --test test/platform-custody.test.mjs test/native-store.test.mjs
+        working-directory: encryption
+      # Real OS credential store on a disposable runner (#384). Linux starts a
+      # throwaway Secret Service; macOS and Windows use the runner user's store.
+      - name: Native keychain round trip (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q gnome-keyring dbus
+          dbus-run-session -- bash -c 'printf ci-only-keyring | gnome-keyring-daemon --daemonize --components=secrets --unlock >/dev/null && node --test test/native-keychain.test.mjs'
+        working-directory: encryption
+        env:
+          A2A_NATIVE_KEYCHAIN_TEST: "1"
+      - name: Native keychain round trip
+        if: runner.os != 'Linux'
+        run: node --test test/native-keychain.test.mjs
+        working-directory: encryption
+        env:
+          A2A_NATIVE_KEYCHAIN_TEST: "1"
 
   test:
     runs-on: ubuntu-latest

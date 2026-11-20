@@ -119,3 +119,6 @@ Wake receipt reports reuse owner authentication; paired peers can read only
 their own task's report. They authenticate the reporter, not independent proof
 of handler execution or human notification. No new receipt token, signature key,
 or trust relationship is introduced. See [receipt limits](protocol.md#authenticated-wake-receipts).
+
+The optional committed-message feed, owner-only source/peer incarnation reads and
+strict callback helper have a separate [message events contract](message-events.md). They do not enable MCP subscriptions or replace owner wakes.

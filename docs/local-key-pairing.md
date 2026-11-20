@@ -42,7 +42,12 @@ listings. Status reports `private_key_status`: `present` checks only file existe
 and protected permissions, `key_missing` means the original file is absent, and
 `unavailable` means the file check failed. Keychain availability is `not_checked`;
 status never opens a private key or prompts the OS. Restore a missing original key
-from its protected backup or use the original config directory that holds it; do not initialize a replacement. `live_state: local-only`
+from its protected backup or use the original config directory that holds it; do not initialize a replacement.
+A damaged key file, a private key that does not match its public identity, or an
+unreadable `encryption/state.sqlite` refuses sends and reads with fixed recovery
+guidance before any network request. The damaged files stay unchanged for
+inspection; restore the originals from a trusted backup rather than running
+`keys init` over them. See [recovery, revocation and backup](#recovery-revocation-and-backup). `live_state: local-only`
 means an active local identity, including after public-bundle publication; it is
 not a remote publication check. Private keys never appear in these listings.
 
@@ -56,8 +61,7 @@ uncertain result. Use keys pairings --json on the approving inbox to inspect the
 original approval **after the requester has collected the token**. Immediately
 after human approval it can still return `pairings: []`; the requester must resume
 the same connect command before the receiving owner runs `keys pairings` and
-`keys pin`. Do not start a second request to populate the listing. Abandoning a stuck pending request is not supported yet;
-recovery commands are tracked in #382.
+`keys pin`. Do not start a second request to populate the listing. Abandoning a stuck pending request is not supported yet.
 
 The receiving owner imports the approved request into their own local pins:
 
@@ -79,8 +83,17 @@ with `independently_verified: false`. Hosted pairing approval alone does not pro
 that the service relayed authentic keys. Compare the complete code through a
 separate trusted channel. If any group differs, do not use this pairing: ask the
 approving inbox owner to revoke it with `token revoke LABEL` (select the label
-with `keys pairings --json`) and tell the other owner. This change does not provide an independent-verification
-approval ceremony or rotation command.
+with `keys pairings --json`) and tell the other owner.
+
+**Independent verification.** The owners read the complete code to each other
+over a separate trusted channel, such as a call. Each side then records the code
+it heard: `keys verify --id LOCAL_ID --peer ALIAS_OR_LABEL --code "CODE" --json`.
+The CLI recomputes the code from the exact pinned keys and needs every one of the
+60 digits to match; spacing is ignored. Only then does the pin change from TOFU
+to `independently-verified`, bound to those exact keys. A mismatch changes nothing
+and gives the recovery steps above. The proposal, the code check and the approval
+run in one transaction, so a failure leaves the pin unchanged. `keys code` reports
+`independently_verified` for each pin.
 
 ## Local encrypted CLI messages
 
@@ -125,8 +138,9 @@ Once a local key store exists, ordinary plaintext `send` is refused, including
 when the encryption flag is unset or the peer mirror is removed. Missing pins, changed
 capabilities, endpoints or bundles, a disabled Worker, malformed content and bad
 signatures all refuse; no plaintext retry occurs. An uncertain network outcome
-prints the original context and message IDs. Ask the recipient's owner to check
-their local inbox/history for that message ID before considering any new send. A successful delivery with failed sender-history
+prints the original context and message IDs and the exact recovery command; see
+[recovery, revocation and backup](#recovery-revocation-and-backup). Never send a
+new message to replace an unconfirmed one. A successful delivery with failed sender-history
 storage is reported as delivered; do not resend it.
 
 A recipient that explicitly refuses because its encryption is off or this peer
@@ -143,10 +157,93 @@ are refused. Local stdio MCP uses this same send/read path; see [MCP](mcp.md#loc
 A missing encrypted outbound record does not mean delivery failed. Use `poll --to ALIAS TASK_ID --json` (local MCP: `poll_outbound`) or history with the original context; do not resend.
 Use a separate config directory for ordinary server-readable sends.
 
-Follow-ups: signer rotation #379, further approval ceremonies #380,
-quarantine/invalidation #381, uncertain-failure recovery #382, populated-store
-backup/restore #383, broader hardening scans #384. No release or deployment is
-part of the local test workflow.
+## Recovery, revocation and backup
+
+**Send records.** Before the first network byte, `send` saves a local record of
+the signed encrypted message and its public IDs in `sealed-outbox/` in the config
+directory (folder mode 700, files 600). It never holds the message text. If the
+record cannot be saved, nothing is sent. The record ends as `delivered`, `refused`
+(the recipient refused before storing it, so nothing was delivered) or `unknown`.
+
+```sh
+npx -y a2a-exposed@latest keys outbox --json
+npx -y a2a-exposed@latest send --to bob --recover MESSAGE_ID --json
+```
+
+`keys outbox` lists public fields and a next step per record, newest first.
+`send --recover` is explicit and never automatic. It only ever reconciles an
+encrypted record: in a config directory without one, or with encryption off, it
+refuses and never sends a new message in its place. It re-submits the same
+encrypted bytes with the same message ID; it never reseals, picks a new ID or
+takes new text, context, task or protocol. The recipient inbox stores a message
+once per peer and message ID: if the original arrived, it returns that task and
+wakes nobody again; if not, it stores it now. A `delivered` record makes no
+request. Recovery first checks that the pin, local key, endpoint and published
+capability are unchanged and authenticates the stored envelope as this sender's
+own copy. A changed or revoked pairing, or a damaged record, refuses. The record
+is left unchanged for inspection, and the recipient's owner can check history for
+the original IDs. The recipient applies its normal 30-day freshness window. A refusal during recovery leaves the record `unknown`: it does not show whether an earlier attempt was stored, so ask the recipient's owner to check history before sending a new message. Only a refusal of the first attempt marks a record `refused`. MCP
+has no recovery tool yet; run the CLI with the same `--config-dir`.
+
+**Local revocation.** `keys revoke --peer ALIAS_OR_LABEL --json` marks one local
+pin revoked. Encrypted sends, reads and send recovery for that peer stop in this
+config directory, plaintext stays refused, and history and send records are kept.
+It does not change the inbox server: to stop the peer's access there, the inbox
+owner runs `token revoke LABEL`. A revoked pin is never re-enabled in place; using
+the peer again needs a new human-approved pairing under a new alias.
+
+**Signer rotation.** `keys rotate --id LOCAL_ID --json` prints an exact plan, the
+pins it will hold and an `approval_digest`; it changes nothing. After the human
+approves that plan, `keys rotate --id LOCAL_ID --approve=DIGEST --json` creates a
+fresh signing and receiving identity for the same card URL. The old identity is
+retired: it still opens old history (`history CONTEXT --json`) and never signs
+again. Sends and send recovery on its pins refuse with "Keys rotated" and send
+nothing. While any pin still uses the retired key, `inbox` and `poll` refuse before
+contacting the inbox, so no wake or reply is acknowledged for a pin the new key
+cannot serve. `keys revoke --peer` still works on such a pin (revoking only removes
+trust) and releases the inbox. An interrupted rotation is recorded with its
+lineage, so exact recovery from `keys status --json` completes the approved
+rotation instead of abandoning the new key. To talk to a peer again, make a new
+human-approved pairing with the new key under a new alias
+(`connect URL --sealed-key-id NEW_ID --alias NEW_ALIAS`), run `keys verify` with
+the other owner, then revoke the old pin with `keys revoke --peer OLD`. The new
+pairing alone does not release the old pin: live reads stay held until every pin
+on the retired key is revoked. A changed plan, such as a new pin, needs a new
+approval. Rotation is local only: the store schema and backups are unchanged, and
+nothing changes on the inbox. The inbox keeps the public key it published first,
+so `keys publish` cannot replace it and pairings other agents request from this
+inbox still use the old key and are held. Worker-side continuity (a chained
+publish that refuses a mismatch, plus bundle history) is a possible follow-up.
+
+**Backup.** `keys backup --to FILE --json` writes a new encrypted file (scrypt and
+AES-256-GCM) with the keys, pins, trust history and delivery records. It never
+overwrites a file. The passphrase comes only from piped stdin, never a terminal
+prompt, argument or environment variable; a terminal or empty input refuses, and
+it needs at least 12 characters. Keychain keys need `--allow-os-consent`. Send
+records are not included. Unresolved key creation or a known missing key refuses.
+
+**Restore.** `keys restore --from FILE --to NEW_DIR --acknowledge-replay-rollback --json`
+restores into a new directory only and never merges. It uses file storage and
+gives the copy a new config identity. The copy is archive-only: `history CONTEXT --json`
+opens verified history (`historical: true`), while send, inbox, poll and recovery
+stay held. Inbox and poll refuse before contacting the inbox, so a restored copy
+never acknowledges wakes or replies meant for the live identity. With local
+encryption state present, they check the store's archive flag whatever the
+encryption setting, and refuse if it cannot be read; `keys restore` also writes an
+`archive-only.json` marker that needs no package. To read history there, install the matching optional
+`@a2a-exposed/encryption` package in `NEW_DIR` and give it the inbox settings
+(`config.env`). A wrong passphrase creates nothing. A restored copy cannot become a
+live identity; that needs a fresh key and new peer verification, which is not
+implemented.
+
+**Damaged state.** A damaged state database, key file or send record is never
+repaired, moved or replaced. It refuses with fixed guidance and stays in place.
+Restore a backup into a new directory to read history.
+
+Follow-ups: Worker-side key continuity after rotation, cross-platform key custody
+and encrypted push delivery from #384. Not covered yet: abandoning a stuck pending connect request, native
+keychain restore, and MCP recovery tools. No release or deployment is part of
+the local test workflow.
 
 ## Suggested, never the default
 
@@ -160,7 +257,7 @@ local keys, it says so after the pairing code and prints the
 applies, and `next`). The ordinary request continues unchanged: `connect` never
 creates keys, adds the flag or pins anything. To switch, ask the peer owner not
 to approve the ordinary code; in a config directory with local keys, use a new
-alias, since abandoning a pending request is not supported yet (#382).
+alias, since abandoning a pending request is not supported yet.
 
 On the approving inbox, `/device` and `pair list` label a request that carries
 public bundles as an **encrypted key pairing** and show its safety code: the
@@ -246,3 +343,7 @@ inbox Worker or a peer; each needs its own separately approved setting.
 A refused verification row tells the operator not to resend and to report its
 `taskId` and `contextId` to the inbox owner. Preserve those IDs with the original
 keys and pairing. The approval-page safety-code work remains tracked in [#380](https://github.com/telegraphic-dev/a2a-exposed/issues/380).
+
+History state events have no message text. For pinned peers, owner-side push
+status text is withheld. Local MCP marks these rows `eventOnly: true`; they
+remain unauthenticated task metadata, while inbound plaintext with text is refused.

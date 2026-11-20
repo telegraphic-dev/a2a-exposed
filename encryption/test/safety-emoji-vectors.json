@@ -1,0 +1,161 @@
+[
+  {
+    "a": {
+      "cardUrl": "https://alice.example.com/.well-known/agent-card.json",
+      "identityKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "keyId": "alice-0"
+    },
+    "b": {
+      "cardUrl": "https://bob.example.com/.well-known/agent-card.json",
+      "identityKey": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+      "keyId": "bob-0"
+    },
+    "fingerprint": "6d562f532b21deeb63bd130bfea6223e7dc26ebf585c6f5ae71355ce1014ef7c",
+    "code": "08719 37843 92833 78881 84911 35021 89101 66736 72025 70990 45339 74908",
+    "indices": [
+      27,
+      21,
+      24,
+      47,
+      20,
+      50,
+      44
+    ],
+    "emoji": [
+      {
+        "emoji": "🍕",
+        "name": "Pizza"
+      },
+      {
+        "emoji": "☁️",
+        "name": "Cloud"
+      },
+      {
+        "emoji": "🍎",
+        "name": "Apple"
+      },
+      {
+        "emoji": "🔑",
+        "name": "Key"
+      },
+      {
+        "emoji": "🌙",
+        "name": "Moon"
+      },
+      {
+        "emoji": "🏁",
+        "name": "Flag"
+      },
+      {
+        "emoji": "📎",
+        "name": "Paperclip"
+      }
+    ]
+  },
+  {
+    "a": {
+      "cardUrl": "https://alice.example.com/.well-known/agent-card.json",
+      "identityKey": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+      "keyId": "alice-1"
+    },
+    "b": {
+      "cardUrl": "https://bob.example.com/.well-known/agent-card.json",
+      "identityKey": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+      "keyId": "bob-1"
+    },
+    "fingerprint": "cada356a87d5450e0dc8b418908b88ccb011f312705585aa6bc87be83dd387ed",
+    "code": "31298 42267 30707 90975 74230 92749 56635 27428 50151 15711 17653 05325",
+    "indices": [
+      50,
+      45,
+      40,
+      53,
+      26,
+      40,
+      31
+    ],
+    "emoji": [
+      {
+        "emoji": "🏁",
+        "name": "Flag"
+      },
+      {
+        "emoji": "✂️",
+        "name": "Scissors"
+      },
+      {
+        "emoji": "🎁",
+        "name": "Gift"
+      },
+      {
+        "emoji": "✈️",
+        "name": "Aeroplane"
+      },
+      {
+        "emoji": "🌽",
+        "name": "Corn"
+      },
+      {
+        "emoji": "🎁",
+        "name": "Gift"
+      },
+      {
+        "emoji": "🤖",
+        "name": "Robot"
+      }
+    ]
+  },
+  {
+    "a": {
+      "cardUrl": "https://alice.example.com/.well-known/agent-card.json",
+      "identityKey": "ERERERERERERERERERERERERERERERERERERERERERE",
+      "keyId": "alice-17"
+    },
+    "b": {
+      "cardUrl": "https://bob.example.com/.well-known/agent-card.json",
+      "identityKey": "EhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhI",
+      "keyId": "bob-17"
+    },
+    "fingerprint": "aa8cb8ab8840be46a427ae94086d434c7adc48b8f5c3c7c13484f4d4e9751cc9",
+    "code": "87759 45782 12977 63609 83498 72875 50263 07104 88523 44211 47320 39369",
+    "indices": [
+      42,
+      40,
+      50,
+      56,
+      42,
+      56,
+      33
+    ],
+    "emoji": [
+      {
+        "emoji": "📕",
+        "name": "Book"
+      },
+      {
+        "emoji": "🎁",
+        "name": "Gift"
+      },
+      {
+        "emoji": "🏁",
+        "name": "Flag"
+      },
+      {
+        "emoji": "⚽",
+        "name": "Ball"
+      },
+      {
+        "emoji": "📕",
+        "name": "Book"
+      },
+      {
+        "emoji": "⚽",
+        "name": "Ball"
+      },
+      {
+        "emoji": "👓",
+        "name": "Glasses"
+      }
+    ]
+  }
+]

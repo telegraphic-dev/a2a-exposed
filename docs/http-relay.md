@@ -143,6 +143,141 @@ required by the receiver. Hop-by-hop headers, `Connection` nominations, Host,
 Content-Length, relay/control credentials, forwarding identity and cookies are
 not a way to extend the allowlist. Header values must be valid HTTP ByteStrings.
 
+### Local ACP agent and session targeting
+
+An ACP v1 stdio agent can be the native A2A relay target without an HTTP
+listener. Install and authenticate your chosen adapter locally using its own
+instructions first. The relay does not install an adapter, change models or log
+in for you; provider compatibility depends on the adapter's ACP implementation.
+
+The owner chooses the executable argv and absolute working directory. `--acp`
+takes a JSON argv array, **not a shell command**. Never place credentials in this
+array. Client-side filesystem and terminal capabilities are disabled. This does
+not sandbox the agent's own tools: retain its native permission/sandbox settings;
+`--acp-cwd` is a working directory, not a filesystem boundary.
+
+Native relay ingress is not Worker pairing. Create independent random application
+bearer tokens (32–256 base64url characters, at least 32 random bytes) and store
+only their lowercase SHA-256 hashes in a new owner-only mode-600 JSON file:
+
+```json
+{
+  "peers": {
+    "reviewer": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+}
+```
+
+Replace that example hash with the actual hash of the peer's independently
+stored token. The packaged [peer-file schema](../cli/lib/acp-peers.schema.json)
+describes the format; hashes must also be unique. Deliver each token only through
+an owner-approved protected channel. The file is loaded once per connector
+invocation; restart after editing it. Do not copy Worker pairing tokens or owner
+credentials into it. Every request, including discovery, needs both the relay
+ingress header and this independent `Authorization: Bearer …` application token.
+
+After owner-approved HTTP relay enrollment (self-hosted feature flag as above):
+
+```sh
+a2a-exposed relay a2a create \
+  --token-file ./acp-connector.token --ingress-token-file ./acp-ingress.token \
+  --forward-headers content-type,accept,authorization,a2a-version
+a2a-exposed relay a2a run --token-file ./acp-connector.token \
+  --acp '["/absolute/path/to/agent","--acp"]' \
+  --acp-cwd /absolute/project --acp-peers-file ./acp-peers.json --acp-mode OWNER_CHOSEN_MODE \
+  --acp-session existing-session-id --acp-session-peer reviewer
+```
+
+`--acp-session` addresses **exactly one existing session**, authorized for exactly
+one named configured peer. The agent must advertise `loadSession: true`; the
+relay calls `session/load` with the ID unchanged. Unsupported loading, a missing
+session or an adapter error fails the task; it never falls back to `session/new`.
+History replay during loading is discarded, not forwarded to callers. Other
+configured peers cannot use this fixed-session target. The first accepted A2A
+context binds it; omitting `contextId` subsequently continues that context, while
+a different context is refused. Stop other clients using that native session
+before attaching: ACP loading is not guaranteed to join or coordinate an already
+running editor session. Session discovery/selection happens locally using the
+agent's own session tools, not through an arbitrary peer-supplied session ID.
+
+**`--acp-mode MODE` is mandatory**, including for existing sessions. Inspect the
+adapter's advertised `availableModes` locally and choose its exact ID with the
+owner; there is no universal safe mode name and no provider-name/default-mode
+guessing. After either `session/new` or exact `session/load`, the relay validates
+the advertised mode state and must successfully call ACP v1 `session/set_mode`
+before any prompt. A successful setter response (`{}` in ACP v1) acknowledges the
+selection; a contradictory notification is a failure, not a fallback. The relay
+reapplies the owner-selected mode before every subsequent prompt and prints a
+sanitized active-mode confirmation locally. Missing mode information, unavailable
+modes, setter rejection or uncertain responses stop the binding without a prompt.
+Conflicting `current_mode_update` or mode `config_option_update` notifications,
+including idle/delayed updates, stop that binding; they never authorize a weaker
+mode. Native slash-command prompts are refused. Peer content cannot select modes.
+This does not change native approval/sandbox defaults globally, nor prove that an
+adapter implements its mode safely: validate real-agent behavior before exposure.
+An adapter may act before announcing a mode change; the relay is not a sandbox.
+This target requires the ACP v1 [session modes](https://agentclientprotocol.com/protocol/v1/session-modes)
+contract; config-options-only adapters are refused rather than guessed. It also
+monitors advertised mode selectors in full-state
+[config option updates](https://agentclientprotocol.com/protocol/v1/session-config-options).
+
+Startup/initialize, session creation, exact loading, mode discovery, mode setting,
+mode drift, prompt failure and stopped-binding reuse have distinct fixed local
+console/task diagnostics. Raw adapter errors never appear in those diagnostics.
+For private troubleshooting only, add `--acp-diagnostics-file NEWFILE` to `run`.
+It exclusively creates a new owner-only mode-600 regular file (no symlinks or
+overwrite) before starting agents and captures at most **1 MiB total raw stderr**
+across all bindings. After the cap, remaining stderr is drained and discarded.
+The file closes after process teardown, including connector failure; creation
+failure aborts startup, while write/close failure reports a fixed diagnostic and
+stops the target. Partial files are retained for local inspection. Use a private
+directory; raw stderr can contain credentials, prompts and other sensitive data.
+Never paste it into chat, peers, GitHub or public logs. No raw verbose-console
+option is provided. The adapter inherits your environment, including `CLAUDECODE`;
+launch from an appropriate shell if nested Claude execution is refused. The relay
+does not silently strip or change the user's environment.
+
+Omit both session options to create one ACP process/session for each authenticated
+peer and A2A context. Reuse the returned `contextId` to continue it. The same
+context string from a different peer is a separate session. Neither peer metadata
+nor `taskId` can select another native session. This mode supports text-only
+Send/Get/Cancel and streaming Send in A2A 0.3 and 1.0. It does not implement task
+subscriptions, listing or push callbacks. Nonstreaming Send returns a task
+immediately; poll Get for completion. Streaming sends public assistant text only,
+not reasoning, tool arguments or historical messages.
+
+Assistant `agent_message_chunk` text is concatenated exactly within a message.
+When consecutive chunks carry different actual ACP `messageId` values, a newline
+separates messages in both polled and streamed artifacts. ID-less chunks remain
+an unmodified text stream: the relay cannot infer where one message ends. Claude
+ACP 0.107.3 stamps message IDs on ordinary assistant chunks (some notices omit
+them); older Codex ACP emits ID-less text chunks. Such output can remain ambiguous
+across distinct native messages; inserting a newline for every chunk would corrupt
+split words. Artifact finalization is independent of the final text chunk.
+
+A permission request is answered `cancelled`, and the task becomes `input-required`
+with `a2a.exposed/owner-wait` metadata. No remote approval channel is provided.
+The owner resolves permissions locally; a new task in the same context can ask
+the agent to continue after local resolution. This is not a suspended permission
+handle, and a peer's reply can never authorize a tool. Do not expose an adapter
+that bypasses native permissions for untrusted peer work.
+
+Bindings and tasks are in memory for this connector invocation, not durable
+Worker inbox data. There are at most eight bindings and 128 tasks, retained until
+shutdown; reaching either cap refuses new work rather than evicting a session
+silently. Each ACP request has a 45-second deadline, frames are at most 256 KiB,
+assistant output at most 512 KiB, and each SSE response is bounded to 900,000 bytes
+and 1,024 updates. Existing relay limits still apply. Cancel or stream disconnect
+cancels the turn and reaps its process group. Shutdown reaps every owned child.
+An interrupted/failed session binding is not automatically restarted or replayed;
+restart explicitly and supply its existing ID if supported. Active work is not
+replayed on WebSocket reconnect. Idle sessions remain resident within the cap.
+
+Do not combine ACP options with `--local-url`, `--card-url` or fixed local
+headers. Hosted wake-relay availability does **not** enable this target: the
+hosted service must separately enable its compatible HTTP relay; staging and
+production rollout are separate from this CLI feature.
+
 ### Native A2A service
 
 ```sh

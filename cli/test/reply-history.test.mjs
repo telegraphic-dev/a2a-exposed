@@ -195,3 +195,14 @@ test("saving the current wake policy is a read-only no-op", t => {
  const calls=fs.readFileSync(log,"utf8").trim().split("\n").map(x=>JSON.parse(x));
  assert.deepEqual(calls.map(r=>r.method),["GET"]);
 });
+
+test("a stored-only reply prints the Worker's not-notified next step (#469)", (t) => {
+	const cli = fixture(t);
+	const next = "No usable outbound callback is stored under this label. Until then, a reply to this peer is stored on the task only and does not notify it.";
+	const stored = cli(["reply", "task-1", "--text", "done"], { task: { status: { state: "completed" } }, delivery: { status: "stored-only", method: "stored", next } });
+	assert.equal(stored.status, 0, stored.stderr);
+	assert.match(stored.stderr, /reply -> stored-only via stored: task storage/);
+	assert.ok(stored.stderr.includes(`next: ${next}`));
+	const delivered = cli(["reply", "task-1", "--text", "done"], { task: { status: { state: "completed" } }, delivery: { status: "delivered", method: "a2a-message", target: { alias: "x", host: "x.example.com" }, next: "ignored" } });
+	assert.equal(delivered.stderr.includes("next:"), false, "only a stored-only reply prints next");
+});

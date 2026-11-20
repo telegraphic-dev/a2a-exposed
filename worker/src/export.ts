@@ -17,7 +17,7 @@ export const EXPORT_TABLES = [
 	"rate", "wake_budget", "device_requests", "pairing_rate", "settings",
 	"facade_owners", "oauth_clients", "oauth_codes", "mcp_grants",
 	"outbound_peers", "oauth_client_metadata", "oidc_txns", "conversation_owners", "reply_deliveries",
-	"wake_routing", "wake_dedup", "message_claims", "wake_receipts",
+	"wake_routing", "wake_dedup", "message_claims", "wake_receipts", "outbound_pairings",
 ] as const;
 
 export type ExportTable = (typeof EXPORT_TABLES)[number];
@@ -94,7 +94,7 @@ export async function exportRows(db: SqlDb, now = new Date()): Promise<ExportFil
 }
 
 /** Live-credential tables. A dashboard SQL copy skips them so the script does not delete rows it does not return. */
-export const REDACTED_SQL_SKIP = ["oauth_codes", "oidc_txns"] as const;
+export const REDACTED_SQL_SKIP = ["oauth_codes", "oidc_txns", "outbound_pairings"] as const;
 
 const OMIT_COLUMNS: Record<string, readonly string[]> = {
 	tasks: ["push_configs_json"],
@@ -124,7 +124,7 @@ function placeholder(table: string, row: Record<string, unknown>, index: number)
  * A copy of `file` safe to show on the dashboard.
  * Nullable credential columns are removed, including `device_requests.replaces_hash` (the hash of the token a re-pair would replace) and `device_requests.ip` and `device_requests.country` (the requester's address).
  * `peers.token_hash` and `device_requests.device_hash` are NOT NULL, so they become `redacted:…` (not the hash, and not a token that authenticates).
- * `oauth_codes` and `oidc_txns` are emptied. The approval-password row and the password-setup row (its value is the hash of the live setup token) are removed.
+ * `oauth_codes`, `oidc_txns` and `outbound_pairings` (a sealed pending device code) are emptied. The approval-password row and the password-setup row (its value is the hash of the live setup token) are removed.
  * Token-shaped text, including a hosted owner token (`a2aot_`), is scrubbed. The input is not changed: the CLI dump stays complete.
  */
 export function redactExport(file: ExportFile): ExportFile {
@@ -166,6 +166,8 @@ export function toSql(file: ExportFile, options?: { skip?: readonly string[] }):
 		`-- a2a-exposed-export ${file.version}`,
 		`-- exported_at ${file.exportedAt}`,
 	];
+ // A restore is a new event source. Never export/replay source identity or queued notices.
+ lines.push("DELETE FROM message_event_outbox;", "DELETE FROM message_event_peers;", "UPDATE message_event_source SET instance_id=lower(hex(randomblob(16))),activated=0 WHERE singleton=1;");
 	for (const name of EXPORT_TABLES) {
 		if (skip.has(name)) continue;
 		lines.push(`DELETE FROM ${quoteIdent(name)};`);

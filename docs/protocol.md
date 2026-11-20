@@ -35,7 +35,7 @@ The claim and the first task are one transaction. `conversation_owners` has one 
 
 `ListTaskPushNotificationConfig` and `ListTaskPushNotificationConfigs` list the configs stored on that task for the calling peer. The 1.0 result is `{ configs, nextPageToken }`. `tasks/pushNotificationConfig/list` returns the array. `DeleteTaskPushNotificationConfig` and `tasks/pushNotificationConfig/delete` remove one config by id. Deleting a config that is already gone succeeds. A missing id is `-32602`. Another peer's task is `-32001`. The façade still refuses push notification calls (`-32003` after that task check).
 
-Direct A2A reply messages marked with `a2a.exposed/reply-delivery` in request or message metadata are stored as completed tasks. Their text and metadata remain available in history and `inbox --all`; they do not appear as open work or schedule an inbound wake. The marker does not grant access to another peer's task or context.
+Direct A2A reply messages marked with `a2a.exposed/reply-delivery` in request or message metadata are stored as completed tasks. Their text and metadata remain available in history and `inbox --all`; they do not appear as open work. They wake the receiver the way a pushed reply does: an `outbound_update` wake whose `taskId` is the sent task, routed with the reply's `wake` and `intent` like a push. A retried `messageId` does not wake again. The marker does not grant access to another peer's task or context.
 
 ## Wake routing
 
@@ -136,7 +136,7 @@ A paired peer calls `PeerAddressUpdate` (A2A 1.0) or `peer/addressUpdate` (A2A 0
 
 The inbox fetches that card. The card's `capabilities.extensions` entry `https://a2a.exposed/ext/peer-identity/v1` carries the same public key, the same card URL, and a signature over `a2a-exposed-peer-identity-v1`, the card URL, and the public key. Both signatures have to verify, and the public key has to match the key stored for this pairing. A pairing that has no key yet binds the key from the first announcement that passes those checks. A later announcement with a different key is refused.
 
-The return token is how one approval covers both directions. The agent that started `connect` mints an ordinary peer token on its own inbox and presents it with the announcement. The approver stores it on an outbound row this announcement created (`source` `announce`). It does not replace an outbound peer the owner synced, and it does not change an address while keeping the previous token. A pairing label is not given a name that is already an outbound alias. The approver can call back without a second device-flow approval. Either side revokes its own token. Revoking the return token keeps it revoked. `peer announce --to <alias> --reissue` mints a new one. Revoking the inbound peer deletes that announce-created outbound row here. The other inbox still accepts the return token until its owner revokes it. A change of host wakes the approver with `kind: "address_change"`. A first identity bind does not move an outbound address that already exists.
+The return token is how one approval covers both directions. The agent that started `connect` mints an ordinary peer token on its own inbox and presents it with the announcement. The approver stores it on an outbound row this announcement created (`source` `announce`). It does not replace an outbound peer the owner synced, and it does not change an address while keeping the previous token. A pairing label is not given a name that is already an outbound alias: it gets `NAME-2`, and its continuation (`same-address`) names the alias that already points at the claimed address instead of suggesting another pairing. The approver can call back without a second device-flow approval. Either side revokes its own token. Revoking the return token keeps it revoked. `peer announce --to <alias> --reissue` mints a new one. Revoking the inbound peer deletes that announce-created outbound row here. The other inbox still accepts the return token until its owner revokes it. A change of host wakes the approver with `kind: "address_change"`. A first identity bind does not move an outbound address that already exists.
 
 A peer that does not implement the method returns `-32601`. The caller leaves that pairing as it is.
 
@@ -165,7 +165,9 @@ When `EVENT_URL` is an https URL and `EVENT_SECRET` is set, the A2A endpoint POS
 
 ## Landing page
 
-`GET /` with `Accept: text/html` returns a small HTML page: agent name, description, skills, a note that this is an A2A endpoint, links to the agent card and `/device`, and a line that pairing is one-way with links to get your own A2A address and to the connect playbook. No scripts, no external assets, a strict content security policy. The head names `/index.md` as the Markdown alternate.
+`GET /` with `Accept: text/html` returns a page for people: the agent name and description, a copyable `Connect to <agent-address>` prompt, a short explanation of owner-approved connection requests, and links to get an address and read the agent-focused Markdown. The prompt uses the configured public address, so hosted, staging and self-hosted addresses retain their actual hostname and port. With JavaScript unavailable it remains selectable text. Copy runs only after a button press, reports success or a manual-copy fallback, and does not request access. Technical connection instructions stay in Markdown and the agent card. No external assets load; the existing nonce-authorized landing script and strict content security policy remain. Approval pages stay script-free. The head names `/index.md` as the Markdown alternate.
+
+Link-preview crawlers (Slack, X, LinkedIn, Facebook, Discord, Telegram, WhatsApp, Skype, Reddit, Pinterest, Mastodon, Embedly, Iframely, Bluesky, Google Chat) get the same page when their `Accept` is a wildcard or missing, so a shared agent link shows its preview card. They are recognized by `User-Agent`; one that asks for `application/json` or uses `?format=json` still gets JSON. Every variant of `GET /` sends `Vary: Accept, User-Agent`.
 
 `GET /` with `Accept: text/markdown` (named at least as high as `text/html` and `application/json`), and `GET /index.md`, return `text/markdown; charset=utf-8` with `Vary: Accept`: a short page for an agent that was told to connect to this URL. Front matter names the agent card. Step 1 offers the visitor its own A2A address first (pairing is one-way), step 2 pairs (CLI `connect` or the RFC 8628 device flow; with pairing off, ask the operator for a token), step 3 talks over JSON-RPC. It ends with links to the agent card, the legacy card, and OAuth metadata when it is served. `GET /llms.txt` is the same content in llms.txt form (`text/plain; charset=utf-8`), with absolute links and the full project docs as optional. Name and description come from the served card, on one line with Markdown and HTML syntax escaped.
 
@@ -194,20 +196,21 @@ Authenticated with the owner token. A missing or invalid owner credential return
 | | |
 | --- | --- |
 | A2A endpoint | `GET /owner/inbox`, `GET /owner/tasks/<id>`, `GET /owner/history/<contextId>`, `POST /owner/tasks/<id>/working`, `POST /owner/tasks/<id>/reply` |
-| Summary | `GET /owner/summary` (counts only: tasks in each state, pending pairing requests; no message text; does not clear a pending wake) |
+| Summary | `GET /owner/summary` (counts only: tasks in each state and group, per peer, outbound tasks and unseen replies, pending pairing requests; no message text; does not clear a pending wake) |
+| Inspection | `GET /owner/tasks`, `GET /owner/outbound`, and `GET /owner/history/<contextId>` with `limit`, `cursor` or `order`: read-only paged lists that clear no wake and mark no reply seen |
 | Log | `GET /owner/log` (recent history, newest first; opening this log leaves a pending wake in place until a `GET /owner/inbox` response includes that task) |
 | Export | `GET /owner/export` and `GET /owner/export?format=sql` |
 | Feedback discovery | `GET /owner/feedback` |
 | Façade | `GET /owner/facade`, `POST /owner/facade/verify` |
 | Pairing | `GET /owner/pairing`, password set, `POST /owner/pairing/<code>/approve` and `deny`. In human mode the owner token approves or denies and the decision is recorded as the owner. The peer collects its token from `POST /oauth/token`. A missing token or a peer token is refused |
-| Peers | `GET /owner/peers`, `GET /owner/outbound-peers`. The hosted owner RPC also accepts `PUT /owner/outbound-peers/<alias>` with `{ url, token }`. The token is sealed before it is stored and is not logged or returned. Omitting `token` stores a peer that takes none. The owner HTTP API accepts the same PUT with the owner token (`peers sync`) |
+| Peers | `GET /owner/peers`, `GET /owner/outbound-peers`. An active encrypted key pairing in `GET /owner/peers` also has `sealed: true` and `safety_code`, computed from the stored public keys whether or not encryption is turned on; no key material is listed, and `safety_code` is `null` when the stored keys cannot be read. The hosted owner RPC also accepts `PUT /owner/outbound-peers/<alias>` with `{ url, token }`. The token is sealed before it is stored and is not logged or returned. Omitting `token` stores a peer that takes none. The owner HTTP API accepts the same PUT with the owner token (`peers sync`) |
 | Addresses | `GET /owner/address` (peers with no callback, pending announcements, the grace forward). `GET /owner/identity` returns the public key and fingerprint only. `PUT /owner/identity` installs the signing key on the owner HTTP API; the private key is sealed and is not returned. `POST /owner/peers/announce` and `POST /owner/mcp/announce_address` take `{ to }` or `{ all: true }`. Only `POST /owner/peers/announce` also takes `reissue: true` with `to`; `POST /owner/mcp/announce_address` refuses `reissue` with `400` and `code: "reissue_owner_only"`. `PUT /owner/address-forward` takes `{ cardUrl, hours }`. `DELETE /owner/address-forward` clears it |
 | MCP revoke | `DELETE /owner/mcp/<label>` |
 | Hosted MCP tools | `POST /owner/mcp/send`, `POST /owner/mcp/reply`, `POST /owner/mcp/mark_working`, `POST /owner/mcp/poll_outbound`, `POST /owner/mcp/cancel_outbound`. The hosted control plane calls these after it has checked that the account owns the agent, the same check as the other hosted owner calls. Send takes `to` and `text`, plus optional `contextId`, `taskId`, `wake` (`auto`, `always`, or `never`), and `intent` (`handoff`, `blocker`, `question`, `status`, or `ack`). Reply takes `taskId` and `text`, plus optional `state` (`completed`, `input-required`, `working`, `failed`, or `rejected`), `wake`, and `intent` (the same values as send). Those labels are stored on the reply message and travel with the push or the direct A2A delivery. Mark working, poll outbound and cancel outbound take `taskId`. Poll and cancel use only the saved outbound record and peer token: they accept no endpoint, peer override or secret. They call `GetTask`/`tasks/get` and `CancelTask`/`tasks/cancel` respectively, save the returned task and append history. Text is at most 100000 characters. The response is `{ text, isError }`; reply also returns `structuredContent` matching its MCP `outputSchema`. A tool failure is HTTP 200 with `isError: true`. The peer token stays on the A2A endpoint. The owner HTTP API accepts the same paths with the owner token. `send` registers a push to this A2A endpoint's `POST /push` only when the peer card advertises `capabilities.pushNotifications`, and stores only the hash on the outbound task before the send. Otherwise the push config is omitted and the reply is read with `poll_outbound`. The peer's reply is written into that conversation's history and listed on the first inbox page (`kind: "outbound"`) until the inbox is read. A `message` or `artifactUpdate` push supplies that text. Marking the reply seen matches the update snapshot that response returned, so a newer push stays unseen. A follow-up passes the same `contextId`. A call from one tenant to another tenant on this deployment's domain is an internal Durable Object fetch. A peer on any other host stays a public fetch. Self-hosted `send` from the CLI still registers a push only with `--push` |
 
 `GET /owner/inbox` returns one page of tasks, oldest first. The body stays a JSON array. The page is at most 200 tasks, which is also the default. `limit` is 1–200. `from` limits the page to one peer. When another page exists, the `x-a2a-next-cursor` response header is the value to send as `cursor`. The first page also includes a reply to a message this agent sent (`kind: "outbound"`) until that list is read. `all=1` keeps showing it. A reply is marked seen only when the stored update is still the snapshot in that response, so a newer push stays unseen. A pending wake is cleared only for tasks in that response, and only for the inbound wake of that conversation. A task the response does not include keeps its pending wake. An outbound update that reuses the task id keeps its pending wake unless that reply's snapshot was the one returned. `POST /owner/tasks/<id>/working` and `reply` clear the inbound wake for that task and that conversation. Those clears do not end the busy cool-down that follows a sent wake. A task that arrives while that window is open waits for one catch-up when the window ends. `taskId` in the webhook is the newest hint. `HEAD` does not clear a pending wake. An `inbox` tool wrapping this route advertises `readOnlyHint: false`: the returned page acknowledges reply snapshots and matching wakes while preserving task state.
 
-What these reads return, how they page, and the proposed read-only inspection routes are in the [owner inspection contract](owner-inspection.md).
+What these reads return, how they page, and the read-only inspection routes are in [owner message inspection](owner-inspection.md).
 
 `/owner/*` requires the owner token. `export` with that token prints the A2A endpoint. `export --sql` prints the same tables as SQL.
 
@@ -282,9 +285,9 @@ After the human answers, reply to the same nonterminal task with the answer,
 `--state working` (or `completed`) and no wait flags. This clears the current wait
 and preserves the task and conversation IDs. Use `--intent handoff --wake always`
 for the answer. A registered push follows normal authenticated push/wake rules;
-without a usable callback the peer must poll. Ordinary direct reply delivery is
-stored without a new wake; use `send` in the same context for a separate actionable
-handoff when needed. Wake delivery remains subject to authorization, rate limits
+without a usable callback the peer must poll. Ordinary direct reply delivery
+wakes the peer like a pushed reply, routed by the reply's intent and wake hint; use
+`send` in the same context for a separate actionable handoff when needed. Wake delivery remains subject to authorization, rate limits
 and retries. Never claim that the owner approved an action merely because the
 wait was cleared. Encrypted local messaging keeps its existing behavior; these
 server-readable notes do not introduce encryption or authenticated receipts.
@@ -411,3 +414,28 @@ returns pairing availability and public instructions. Both take an empty object
 and declare `readOnlyHint: true`. They make no network calls or state changes.
 There is no send-message or approval tool. Without WebMCP, the page works as
 usual. Hosted and self-hosted landing pages share this behavior.
+
+Agent HTML pages include social preview metadata with a `Connect to <address>` title and a public 1200×630 PNG. Self-hosted agents use the shared image at `/og-card-v1.png`. Hosted agents use a card with their own address in the prompt and a footer that says whether new connection requests are enabled, at `/og-card-v2-<key>.png`; the key changes when the address, that setting or the design changes, and an old key redirects to the current card. An address with characters other than lowercase letters, digits, `.`, `-` and `:` keeps the shared image. The preview description also reflects whether new connection requests are enabled.
+
+### Safety emoji quick check
+
+Encrypted pairings show seven ordered emoji with fixed English names. Compare every
+item in order through another trusted channel; if any differs, stop and deny.
+This 42-bit quick check is weaker than the full 60-digit code. Without commit-reveal,
+an attacker repeatedly generating keys could match the short display. Compare the
+full code for high-stakes pairings. This is not Matrix protocol verification.
+`keys verify --code` still requires the complete numeric code read by the other owner;
+emoji agreement never records independent verification or enables encryption.
+The full code remains in details and unchanged API `safety_code` (or existing
+`safetyCode`/`code` fields). Additive `safety_emoji` (pairing APIs: `safetyEmoji`)
+is an ordered array of `{emoji,name}` pairs, or null when unavailable.
+
+Derivation v1 uses the existing SHA-256 fingerprint over the canonical, identity-key
+sorted public tuples and `a2a-exposed sealed safety v1\n` domain, without changing
+the numeric modulo-10^60 code. Split the first 42 digest bits, most significant first,
+into seven six-bit indices in the fixed [Matrix v1.9 emoji table](https://spec.matrix.org/v1.9/client-server-api/#sas-method-emoji).
+Only the table is reused; there is no Matrix SAS key agreement or commit-reveal.
+Cross-implementation vectors are in `encryption/test/safety-emoji-vectors.json`.
+
+The optional committed-message feed, owner-only source/peer incarnation reads and
+strict callback helper have a separate [message events contract](message-events.md). They do not enable MCP subscriptions or replace owner wakes.

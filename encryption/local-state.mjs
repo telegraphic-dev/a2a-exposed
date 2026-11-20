@@ -1,3 +1,4 @@
+import { safetyEmojiFromHex } from "./safety-emoji.mjs";
 // Local-only custody/trust foundation. These APIs do not enroll a Worker or send traffic.
 import fs from "node:fs";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -51,6 +52,13 @@ function pageInputs(limit, cursor) {
  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100 || !Number.isSafeInteger(cursor) || cursor < 0) fail("listing_inputs", "Run keys status --json or peer keys inspect --to ALIAS --json, then use --limit 1..100 and the exact returned nonnegative continuation.");
 }
 
+// Windows PowerShell cannot load its security module through a PowerShell 7
+// parent's module path. Use the matching system modules for ACL operations.
+function aclEnvironment() {
+ const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "psmodulepath"));
+ env.PSModulePath = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "Modules");
+ return env;
+}
 function permissions(file, directory = false) {
  const stat = fs.lstatSync(file);
  if (stat.isSymbolicLink() || (directory ? !stat.isDirectory() : !stat.isFile())) fail("key_store_permissions");
@@ -59,7 +67,7 @@ function permissions(file, directory = false) {
  } else {
   // Require a current-user-only ACL. Do not assume chmod protects Windows files.
   const script = "$ErrorActionPreference='Stop';try{$p=[Console]::In.ReadToEnd();$me=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value;$a=Get-Acl -LiteralPath $p;if($null -eq $a){exit 1};$bad=@($a.Access | Where-Object {$_.AccessControlType -eq 'Allow' -and $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -notin @($me,'S-1-5-18')});if($bad.Count -gt 0){exit 1};exit 0}catch{exit 1}";
-  try { execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { input: file, stdio: ["pipe", "ignore", "ignore"], timeout: 5000 }); }
+  try { execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { input: file, env: aclEnvironment(), stdio: ["pipe", "ignore", "ignore"], timeout: 5000 }); }
   catch { fail("key_store_permissions", "Use a current-user-only Windows ACL; then run keys stores --json. No fallback was selected."); }
  }
  return stat;
@@ -68,7 +76,7 @@ function protect(file) {
  if (process.platform !== "win32") fs.chmodSync(file, fs.statSync(file).isDirectory() ? 0o700 : 0o600);
  else {
   const script = "$ErrorActionPreference='Stop';try{$p=[Console]::In.ReadToEnd();$me=[System.Security.Principal.WindowsIdentity]::GetCurrent().User;$a=Get-Acl -LiteralPath $p;if($null -eq $a){exit 1};$a.SetAccessRuleProtection($true,$false);foreach($r in @($a.Access)){$a.RemoveAccessRuleAll($r)};$a.SetOwner($me);$r=New-Object System.Security.AccessControl.FileSystemAccessRule($me,'FullControl','Allow');$a.AddAccessRule($r);Set-Acl -LiteralPath $p -AclObject $a;exit 0}catch{exit 1}";
-  try { execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { input: file, stdio: ["pipe", "ignore", "ignore"], timeout: 5000 }); }
+  try { execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { input: file, env: aclEnvironment(), stdio: ["pipe", "ignore", "ignore"], timeout: 5000 }); }
   catch { fail("key_store_permissions"); }
  }
  permissions(file, fs.statSync(file).isDirectory());
@@ -117,9 +125,14 @@ export async function stores() {
  return { ok: true, stores: [{ id: "file", available: true, private_keys: "protected local files", unattended: true }, { id: "keychain", available: native, backend: process.platform === "linux" ? "secret-service (no kernel fallback)" : process.platform === "darwin" ? "macOS Keychain" : "Windows Credential Manager", readiness: "not probed; owner authorization may be required", unattended: false }], next: "Select --store file or keychain explicitly; keychain never silently falls back." };
 }
 
-export function localSafetyCode(local, other) {
+function localSafetyFingerprint(local, other) {
   const tuples = [local, other].map(x => ({ cardUrl: x.cardUrl, identityKey: x.identityKey, keyId: x.keyId })).sort((a, b) => Buffer.compare(Buffer.from(a.identityKey, "base64url"), Buffer.from(b.identityKey, "base64url")) || a.cardUrl.localeCompare(b.cardUrl));
   const bytes = createHash("sha256").update("a2a-exposed sealed safety v1\n" + canonicalJSON(tuples)).digest("hex");
+  return bytes;
+}
+export function localSafetyEmoji(local, other) { return safetyEmojiFromHex(localSafetyFingerprint(local, other)); }
+export function localSafetyCode(local, other) {
+  const bytes = localSafetyFingerprint(local, other);
   const digits = (BigInt("0x" + bytes) % (10n ** 60n)).toString().padStart(60, "0");
   return digits.match(/.{5}/g).join(" ");
 }
@@ -207,8 +220,8 @@ async function validateSnapshot(snapshot, { checkCredentials = true } = {}) {
   const bundles = new Map(), operations = new Map();
   for (const row of rows.key_operations) {
    const op = parseJSON(row.public_json);
-   const opFields = ["v", "kind", "id", "identityId", "bundle", "store", "namespace", "account", "fileRef", "created_ms", ...(op.kind === "rotate" ? ["previousId", "previousBundleDigest"] : [])];
-   if (!exact(op, opFields) || op.v !== 1 || !["initialize", "rotate"].includes(op.kind) || op.id !== row.id || row.kind !== op.kind || !UUID.test(op.id) || !UUID.test(op.identityId) || !UUID.test(op.namespace) || !["file", "keychain"].includes(op.store) || op.account !== op.identityId + "/" + op.bundle?.keyId || op.fileRef !== op.identityId + ".key" || !Number.isSafeInteger(op.created_ms) || op.created_ms < 0 || !Number.isSafeInteger(row.revision) || row.revision < 0 || !["committed", "orphan-retained", "observed-absent"].includes(row.state) || hash("a2a-exposed local key operation v1", op) !== row.digest || operations.has(op.identityId)) invalid();
+   const opFields = ["v", "kind", "id", "identityId", "bundle", "store", "namespace", "account", "fileRef", "created_ms", ...(["rotate", "rotate-signer"].includes(op.kind) ? ["previousId", "previousBundleDigest"] : [])];
+   if (!exact(op, opFields) || op.v !== 1 || !["initialize", "rotate", "rotate-signer"].includes(op.kind) || op.id !== row.id || row.kind !== op.kind || !UUID.test(op.id) || !UUID.test(op.identityId) || !UUID.test(op.namespace) || !["file", "keychain"].includes(op.store) || op.account !== op.identityId + "/" + op.bundle?.keyId || op.fileRef !== op.identityId + ".key" || !Number.isSafeInteger(op.created_ms) || op.created_ms < 0 || !Number.isSafeInteger(row.revision) || row.revision < 0 || !["committed", "orphan-retained", "observed-absent"].includes(row.state) || hash("a2a-exposed local key operation v1", op) !== row.digest || operations.has(op.identityId)) invalid();
    await verifyBundle(op.bundle, { cardUrl: op.bundle.cardUrl, identityKey: op.bundle.identityKey });
    bundles.set(op.identityId, op.bundle); operations.set(op.identityId, row);
   }
@@ -217,6 +230,11 @@ async function validateSnapshot(snapshot, { checkCredentials = true } = {}) {
    if (op.kind === "rotate") {
     const prior = bundles.get(op.previousId);
     if (!prior || prior.identityKey !== op.bundle.identityKey || prior.cardUrl !== op.bundle.cardUrl || prior.keyId === op.bundle.keyId || hash("a2a-exposed sealed bundle v1", prior) !== op.previousBundleDigest) invalid();
+   }
+   // A signer rotation replaces the signing identity for the same card URL.
+   if (op.kind === "rotate-signer") {
+    const prior = bundles.get(op.previousId);
+    if (!prior || prior.identityKey === op.bundle.identityKey || prior.cardUrl !== op.bundle.cardUrl || prior.keyId === op.bundle.keyId || hash("a2a-exposed sealed bundle v1", prior) !== op.previousBundleDigest) invalid();
    }
   }
   for (const [id, row] of operations) if (row.state === "committed" && !rows.identities.some(identity => identity.id === id)) invalid();
@@ -280,7 +298,8 @@ export async function restoreBackup({ source, destination, passphrase, store, ac
    state.db.exec("COMMIT"); validateSchema(state.db);
   } catch (error) { try { state.db.exec("ROLLBACK"); } catch {} throw error; }
   finally { state.close(); }
-  const sqliteFd = fs.openSync(path.join(stage, "encryption/state.sqlite"), "r");
+  // Windows refuses to flush a read-only handle; r+ opens for writing without truncating.
+  const sqliteFd = fs.openSync(path.join(stage, "encryption/state.sqlite"), "r+");
   try { fs.fsyncSync(sqliteFd); } finally { fs.closeSync(sqliteFd); }
   let directorySynced = syncDirectory(path.join(stage, "encryption"));
   // Parent was exclusively reserved above. The canonical encryption path appears
@@ -369,7 +388,7 @@ export class LocalState {
    try {
     return await inQueueContext(context, async () => {
      try { db.exec("BEGIN IMMEDIATE"); check(); const result = await action(); check(); db.exec("COMMIT"); committed = true; finalResult = result; return result; }
-     catch (error) { try { db.exec("ROLLBACK"); } catch {} if (error instanceof LocalStateError) throw error; fail("state_unavailable"); }
+     catch (error) { try { db.exec("ROLLBACK"); } catch {} if (error instanceof LocalStateError) throw error; if ([5, 6].includes(error?.errcode)) throw stateError(error); fail("state_unavailable"); }
     });
    } finally { release(); }
   };
@@ -583,6 +602,79 @@ export class LocalState {
   } finally { inflight.delete(opId); }
  }
 
+ // Signer-authority rotation (#379), local only. A fresh signing and receiving identity is
+ // created for the same card URL; the old identity is retired: it still opens old history
+ // and never signs again. Pins bound to it are held until a new human-approved pairing.
+ // Recorded as a "rotate-signer" key operation with its lineage; the store schema stays v6.
+ // A key rotation intent that is not yet resolved for this local identity.
+ pendingRotation(localId) {
+  return !!this.db.prepare("SELECT id FROM key_operations WHERE kind IN ('rotate','rotate-signer') AND state IN ('prepared','writing','secret-written','uncertain') AND json_extract(public_json,'$.previousId')=? LIMIT 1").get(localId);
+ }
+ heldPinsFor(id) {
+  return this.db.prepare("SELECT peer,version,record FROM trust ORDER BY peer").all()
+   .map(pin => ({ peer: pin.peer, version: pin.version, record: parseJSON(pin.record) }))
+   .filter(pin => pin.record.localId === id && pin.record.state !== "revoked")
+   .map(pin => ({ peer: pin.peer, version: pin.version, state: pin.record.state }));
+ }
+ signerRotationPlan(id) {
+  const row = this.row(id);
+  if (this.db.prepare("SELECT value FROM meta WHERE key='restore_paused'").get()?.value === "1") fail("restore_archive_only");
+  if (row.live_state !== "local-only") fail("key_retired", "Select the current local identity from keys status --json; retired keys remain for archives only.");
+  if (this.db.prepare("SELECT id FROM key_operations WHERE state IN ('prepared','writing','secret-written','uncertain') LIMIT 1").get()) fail("initialization_pending", "Reconcile the exact pending key operation from keys status --json before planning another key change.");
+  const bundle = parseJSON(row.bundle);
+  const latest = this.db.prepare("SELECT id,digest,state,revision FROM key_operations ORDER BY rowid DESC LIMIT 1").get();
+  const pins = this.heldPinsFor(id);
+  const plan = { configIdentity: this.configId(), action: "rotate-signing-identity", previousId: id, previousBundleDigest: hash("a2a-exposed sealed bundle v1", bundle), previousIdentityKey: bundle.identityKey, cardUrl: bundle.cardUrl, keyStore: row.store, heldPins: pins, latestOperation: latest ? { ...latest } : null };
+  return { ok: true, plan, approval_digest: hash("a2a-exposed local signer rotation approval v1", plan), next: "Ask the human to approve this exact plan. A new signing and receiving identity is created; the old one is retired, still opens old history and never signs again. Listed pins are held until a new human-approved pairing and keys verify. The inbox's published key and its peer records do not change." };
+ }
+ // Read-only: peers whose current, non-revoked pin still uses a key retired by keys rotate.
+ rotatedPins() {
+  const retired = new Set(this.db.prepare("SELECT id FROM identities WHERE live_state='retired'").all().map(row => row.id));
+  if (!retired.size) return [];
+  return this.db.prepare("SELECT peer,record FROM trust ORDER BY peer").all()
+   .map(row => ({ peer: row.peer, record: parseJSON(row.record) }))
+   .filter(pin => pin.record.state !== "revoked" && retired.has(pin.record.localId))
+   .map(pin => ({ peer: pin.peer, local_id: pin.record.localId }));
+ }
+ async rotateSigner({ id: previousId, approvalDigest, ownerApproved = false, allowOsConsent = false, now = Date.now() }) {
+  if (ownerApproved !== true) fail("owner_approval_required", "List the exact signer rotation plan and obtain human approval; no key change was made.");
+  if (!Number.isSafeInteger(now) || now < 0) fail("clock_invalid");
+  const plan = this.signerRotationPlan(previousId);
+  if (plan.approval_digest !== approvalDigest) fail("approval_stale", "The plan changed. Run keys rotate --id ID --json again and approve the new digest; no key change was made.");
+  const previous = this.row(previousId);
+  if (previous.store === "keychain" && allowOsConsent !== true) fail("key_store_consent");
+  const identity = await generateIdentity(plan.plan.cardUrl, now);
+  const value = await serialize(identity), id = randomUUID(), namespace = randomUUID(), opId = randomUUID();
+  // The intent carries its lineage so an interrupted rotation can be completed by exact recovery.
+  const operation = { v: 1, kind: "rotate-signer", id: opId, identityId: id, bundle: identity.bundle, store: previous.store, namespace, account: id + "/" + identity.bundle.keyId, fileRef: id + ".key", created_ms: now, previousId, previousBundleDigest: plan.plan.previousBundleDigest };
+  const digest = hash("a2a-exposed local key operation v1", operation);
+  await this.locked(async () => {
+   if (this.signerRotationPlan(previousId).approval_digest !== approvalDigest) fail("approval_stale");
+   this.db.prepare("INSERT INTO key_operations(id,kind,public_json,digest,state,created_ms,owner_pid) VALUES(?,?,?,?,?,?,?)").run(opId, "rotate-signer", JSON.stringify(operation), digest, "prepared", now, process.pid);
+  });
+  inflight.add(opId);
+  try {
+   this.db.prepare("UPDATE key_operations SET state='writing',revision=revision+1 WHERE id=?").run(opId);
+   if (previous.store === "file") privateWrite(path.join(this.root, operation.fileRef), value + "\n");
+   else await this.keyring({ op: "set", namespace, account: operation.account, value }, allowOsConsent, pid => this.db.prepare("UPDATE key_operations SET broker_pid=?,revision=revision+1 WHERE id=?").run(pid, opId));
+   this.db.prepare("UPDATE key_operations SET state='secret-written',revision=revision+1 WHERE id=?").run(opId);
+   return await this.locked(async () => {
+    const current = this.row(previousId);
+    if (current.live_state !== "local-only" || hash("a2a-exposed sealed bundle v1", parseJSON(current.bundle)) !== plan.plan.previousBundleDigest) fail("approval_stale");
+    // The approved plan named the pins it holds; trust changes are blocked while the intent is pending.
+    if (canonicalJSON(this.heldPinsFor(previousId)) !== canonicalJSON(plan.plan.heldPins)) fail("approval_stale");
+    this.db.prepare("UPDATE identities SET live_state='retired' WHERE id=?").run(previousId);
+    this.db.prepare("INSERT INTO identities VALUES(?,?,?,?,?,?)").run(id, JSON.stringify(identity.bundle), previous.store, namespace, "local-only", now);
+    this.db.prepare("UPDATE key_operations SET state='committed',revision=revision+1 WHERE id=?").run(opId);
+    return { ok: true, id, previous_id: previousId, bundle: identity.bundle, key_store: previous.store, old_key_retained: true, held_pins: plan.plan.heldPins.map(pin => pin.peer), operation_id: opId, next: "The new identity is local only. The old identity is retired: it opens old history and never signs again. Each held pin needs a new human-approved pairing with the new key, then keys verify." };
+   });
+  } catch {
+   try { this.db.prepare("UPDATE key_operations SET state='uncertain',revision=revision+1 WHERE id=? AND state<>'committed'").run(opId); } catch {}
+   const failure = new LocalStateError("rotation_uncertain", "The new private key may have been written. Inspect keys status --json and reconcile its exact intent; do not repeat rotation or delete old keys. The old identity is unchanged unless keys status shows it retired.");
+   failure.details = { operation_id: opId, operation_digest: digest }; throw failure;
+  } finally { inflight.delete(opId); }
+ }
+
  async createBackup({ destination, passphrase, allowOsConsent = false }) {
   this.ready();
   if (typeof destination !== "string" || !path.isAbsolute(destination)) fail("backup_destination", "Choose a new absolute backup file path; existing files are never overwritten.");
@@ -665,7 +757,7 @@ export class LocalState {
  async reconcileInitialization({ operationId, expectedDigest, action, approvalDigest, ownerApproved = false, allowOsConsent = false }) {
   if (ownerApproved !== true || !["adopt", "abandon-if-absent"].includes(action)) fail("owner_approval_required", "List recovery intents with keys status --json, then select an exact operation/digest and explicit recovery action approved by the human.");
   this.ready();
-  const row = this.db.prepare("SELECT * FROM key_operations WHERE id=? AND kind IN ('initialize','rotate')").get(operationId);
+  const row = this.db.prepare("SELECT * FROM key_operations WHERE id=? AND kind IN ('initialize','rotate','rotate-signer')").get(operationId);
   if (!row || row.digest !== expectedDigest || row.state === "committed" || !Number.isSafeInteger(row.revision) || recoveryApproval(this.configId(), row, action) !== approvalDigest) fail("approval_stale", "Run keys status --json; the recovery intent or its state changed.");
   if (inflight.has(operationId)) fail("operation_in_progress", "The original initialization is still running; inspect keys status --json after it exits.");
   if (["prepared", "writing", "secret-written"].includes(row.state) && row.owner_pid !== process.pid) {
@@ -680,6 +772,10 @@ export class LocalState {
   if (op.kind === "rotate") {
    const prior = parseJSON(this.row(op.previousId).bundle);
    if (hash("a2a-exposed sealed bundle v1", prior) !== op.previousBundleDigest || prior.identityKey !== op.bundle.identityKey || prior.cardUrl !== op.bundle.cardUrl || prior.keyId === op.bundle.keyId) fail("state_corrupt");
+  }
+  if (op.kind === "rotate-signer") {
+   const prior = parseJSON(this.row(op.previousId).bundle);
+   if (hash("a2a-exposed sealed bundle v1", prior) !== op.previousBundleDigest || prior.identityKey === op.bundle.identityKey || prior.cardUrl !== op.bundle.cardUrl || prior.keyId === op.bundle.keyId) fail("state_corrupt");
   }
   // All provider reads and key checks occur outside the write transaction. The final
   // mutation must compare the approved state/revision again, including no-op-looking results.
@@ -706,9 +802,10 @@ export class LocalState {
   const identity = await deserialize(value, op.bundle);
   await seal({ identity, recipient: op.bundle, binding: { contextId: randomUUID(), messageId: randomUUID(), taskId: null, role: "user", state: null, kind: "message" }, content: { purpose: "recover-local-key-check" } });
   return this.locked(async () => {
-   const prior = op.kind === "rotate" ? this.row(op.previousId) : null;
+   const rotating = op.kind === "rotate" || op.kind === "rotate-signer";
+   const prior = rotating ? this.row(op.previousId) : null;
    const canRotate = prior && prior.live_state === "local-only" && hash("a2a-exposed sealed bundle v1", parseJSON(prior.bundle)) === op.previousBundleDigest;
-   if ((op.kind === "rotate" && !canRotate) || (op.kind !== "rotate" && this.db.prepare("SELECT id FROM identities LIMIT 1").get())) {
+   if ((rotating && !canRotate) || (!rotating && this.db.prepare("SELECT id FROM identities LIMIT 1").get())) {
     transition("orphan-retained");
     return { ok: true, operation_id: operationId, retained_orphan: true, next: "Another identity is active. This older credential remains tracked for archive/recovery; no active identity or trust was replaced." };
    }
@@ -722,7 +819,10 @@ export class LocalState {
   const row = this.row(id);
   if (purpose !== "archive" && !(purpose === "traffic" && process.env.A2A_SEALED_ENABLED === "1" && row.live_state === "local-only" && this.status().archive_only === false)) fail("traffic_disabled", "Encrypted traffic requires the approved local test flag and an active, unrestored identity.");
   const identity = await deserialize(await this.privateGet(row, allowOsConsent), JSON.parse(row.bundle));
-  await seal({ identity, recipient: identity.bundle, binding: { contextId: randomUUID(), messageId: randomUUID(), taskId: null, role: "user", state: null, kind: "message" }, content: { purpose: "local-key-pair-check" } });
+  // Bundle validity keeps its own error; only a failed self-seal after it means a key mismatch.
+  await verifyBundle(identity.bundle, { cardUrl: identity.bundle.cardUrl, identityKey: identity.bundle.identityKey });
+  try { await seal({ identity, recipient: identity.bundle, binding: { contextId: randomUUID(), messageId: randomUUID(), taskId: null, role: "user", state: null, kind: "message" }, content: { purpose: "local-key-pair-check" } }); }
+  catch { fail("key_mismatch", "The private key does not match this identity's public key. Preserve it and restore the original key from a trusted backup; no key replacement or trust change was made."); }
   return identity;
  }
  inspect(peer, { limit = 20, proposalCursor = 0, historyVersion = 0 } = {}) {
@@ -733,7 +833,7 @@ export class LocalState {
   const proposals = proposalRows.slice(0, limit).map(x => ({ digest: x.digest, proposal: JSON.parse(x.proposal), state: x.state }));
   const pending = this.db.prepare("SELECT digest FROM proposals WHERE peer=? AND state='pending' LIMIT 1").get(peer);
   const currentKey = current && this.row(current.localId);
-  const keyPending = currentKey && (currentKey.live_state !== "local-only" || this.db.prepare("SELECT id FROM key_operations WHERE kind='rotate' AND state IN ('prepared','writing','secret-written','uncertain') AND json_extract(public_json,'$.previousId')=? LIMIT 1").get(current.localId));
+  const keyPending = currentKey && (currentKey.live_state !== "local-only" || this.db.prepare("SELECT id FROM key_operations WHERE kind IN ('rotate','rotate-signer') AND state IN ('prepared','writing','secret-written','uncertain') AND json_extract(public_json,'$.previousId')=? LIMIT 1").get(current.localId));
   const historyRows = this.db.prepare("SELECT version,record,digest,approved_ms FROM trust_history WHERE peer=? AND version>? ORDER BY version LIMIT ?").all(peer, historyVersion, limit + 1);
   const history = historyRows.slice(0, limit).map(x => ({ version: x.version, record: JSON.parse(x.record), digest: x.digest, approved_ms: x.approved_ms }));
   return { ok: true, config_identity: this.configId(), peer, current, history, next_proposal_cursor: proposalRows.length > limit ? proposalRows[limit - 1].cursor : null, next_history_version: historyRows.length > limit ? historyRows[limit - 1].version : null, live_state: this.db.prepare("SELECT value FROM meta WHERE key='restore_paused'").get()?.value === "1" ? "archive-only" : (pending || keyPending) ? "change-pending" : current?.state || "unpinned", pairing: "not-checked", policies: [...POLICIES], verification_choices: ["tofu", "independent"], current_digest: row ? hash("a2a-exposed sealed trust record v1", current) : "none", current_version: row?.version || 0, proposals };
@@ -743,24 +843,36 @@ export class LocalState {
   try { if(typeof peerEndpoint!=="string")fail("proposal_endpoint");const endpoint = new URL(peerEndpoint);if(endpoint.href!==peerEndpoint||endpoint.protocol!=="https:"||endpoint.username||endpoint.password||endpoint.hash||endpoint.search||endpoint.origin!==new URL(bundle.cardUrl).origin)fail("proposal_endpoint", "Supply the exact canonical HTTPS JSON-RPC endpoint on the approved key-card origin."); } catch { fail("proposal_endpoint", "Supply the exact canonical HTTPS JSON-RPC endpoint on the approved key-card origin."); }
   if (typeof peer !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(peer) || !KEY.test(pairingIdentity || "") || !POLICIES.includes(policy) || !["tofu", "independent"].includes(verification) || !["enroll", "rotate", "re-pair", "policy", "verify", "revoke"].includes(operation)) fail("proposal_inputs", "Run peer keys inspect --to ALIAS --json, then supply explicit policy, verification, pairing identity and expected current digest.");
   await verifyBundle(bundle, { cardUrl: bundle.cardUrl, identityKey: bundle.identityKey, now });
-  return this.locked(async () => {
+  return this.locked(async () => this._proposeTx({ peer, localId, bundle, peerEndpoint, pairingIdentity, expectedCurrent, policy, verification, operation }));
+ }
+ // Runs inside an open locked() transaction only.
+ _proposeTx({ peer, localId, bundle, peerEndpoint, pairingIdentity, expectedCurrent, policy, verification, operation }) {
+  {
    const local = this.row(localId), current = this.inspect(peer);
    if (expectedCurrent !== current.current_digest) fail("approval_stale", "Run peer keys inspect --to ALIAS --json; the full trust record changed.");
-   if (local.live_state !== "local-only") fail("key_retired");
+   // Revoking only removes trust, so a pin held by keys rotate can still be revoked; nothing else may use a retired key.
+   if (local.live_state !== "local-only" && !(operation === "revoke" && local.live_state === "retired")) fail("key_retired");
+   if (this.pendingRotation(localId)) fail("rotation_pending", "A key rotation for this local identity is not resolved. Inspect keys status --json and finish or reconcile it first; no trust was changed.");
    const localBundle = JSON.parse(local.bundle);
    const proposal = { v: 1, configIdentity: this.configId(), localIdentity: localBundle.identityKey, localKeyId: localBundle.keyId, localBundleDigest: hash("a2a-exposed sealed bundle v1", localBundle), localId, peer, peerEndpoint, pairingIdentity, currentRecordDigest: current.current_digest, currentRecordVersion: current.current_version, newBundleDigest: hash("a2a-exposed sealed bundle v1", bundle), newBundle: bundle, newPolicy: policy, operation, verificationDecision: verification, proposalNonce: b64(randomBytes(32)) };
    const digest = hash("a2a-exposed sealed trust proposal v1", proposal);
    this.db.prepare("INSERT INTO proposals VALUES(?,?,?,?,?,?)").run(digest, peer, current.current_digest, current.current_version, JSON.stringify(proposal), "pending");
    return { ok: true, peer, digest, proposal, next: "The proposal grants no trust. Ask the human to approve this exact digest after any required independent verification." };
-  });
+  }
  }
  async approve({ peer, digest, expectedCurrent, ownerApproved = false, independentVerified = false, verifiedProposalDigest, rePairVerified = false }) {
   if (ownerApproved !== true) fail("owner_approval_required", "The human must approve the exact proposal digest; peer messages and hosted mirrors do not authorize it.");
-  return this.locked(async () => {
+  return this.locked(async () => this._approveTx({ peer, digest, expectedCurrent, independentVerified, verifiedProposalDigest, rePairVerified }));
+ }
+ // Runs inside an open locked() transaction only, after the caller checked owner approval.
+ _approveTx({ peer, digest, expectedCurrent, independentVerified = false, verifiedProposalDigest, rePairVerified = false }) {
+  {
    const row = this.db.prepare("SELECT * FROM proposals WHERE digest=? AND peer=? AND state='pending'").get(digest, peer), current = this.inspect(peer);
    if (!row || expectedCurrent !== current.current_digest || row.expected_digest !== current.current_digest || row.expected_version !== current.current_version) fail("approval_stale", "Run peer keys inspect --to ALIAS --json and approve the current exact proposal.");
    const proposal = JSON.parse(row.proposal);
-   if (this.row(proposal.localId).live_state !== "local-only") fail("key_retired");
+   const proposalLocal = this.row(proposal.localId).live_state;
+   if (proposalLocal !== "local-only" && !(proposal.operation === "revoke" && proposalLocal === "retired")) fail("key_retired");
+   if (this.pendingRotation(proposal.localId)) fail("rotation_pending", "A key rotation for this local identity is not resolved. Inspect keys status --json and finish or reconcile it first; no trust was changed.");
    if (hash("a2a-exposed sealed trust proposal v1", proposal) !== digest || hash("a2a-exposed sealed bundle v1", JSON.parse(this.row(proposal.localId).bundle)) !== proposal.localBundleDigest) fail("approval_stale");
    if (proposal.verificationDecision === "independent" && (independentVerified !== true || verifiedProposalDigest !== digest)) fail("independent_verification_required", "Compare the locally computed safety code through another trusted channel; a hosted comparison is not independent verification.");
    const identityChanged = current.current && (current.current.bundle.identityKey !== proposal.newBundle.identityKey || current.current.pairingIdentity !== proposal.pairingIdentity || parseJSON(this.row(current.current.localId).bundle).identityKey !== proposal.localIdentity);
@@ -774,6 +886,37 @@ export class LocalState {
    this.db.prepare("UPDATE proposals SET state='superseded' WHERE peer=? AND state='pending' AND digest<>?").run(peer, digest);
    this.db.prepare("UPDATE proposals SET state='approved' WHERE digest=?").run(digest);
    return { ok: true, peer, record, digest: hash("a2a-exposed sealed trust record v1", record), next: "Local trust only; no server pairing or access was changed." };
+  }
+ }
+ // Independent-verification ceremony for an existing local pin. The human supplies the
+ // complete code the other owner read out through a separate trusted channel. Proposal,
+ // exact-code binding and approval run in one transaction: a fault anywhere leaves no
+ // pending proposal and no trust change.
+ async verifyIndependent({ peer, localId, code, ownerApproved = false, now = Date.now() }) {
+  if (ownerApproved !== true) fail("owner_approval_required", "The human must supply the safety code they compared; peer messages and hosted pages do not verify keys.");
+  const digits = typeof code === "string" && code.length <= 200 ? code.replace(/\s+/g, "") : "";
+  if (!/^\d{60}$/.test(digits)) fail("safety_code_format", "Supply the complete safety code, 12 groups of 5 digits, as the other owner read it to you through another trusted channel. Nothing was changed.");
+  this.ready();
+  const before = this.inspect(peer), record = before.current;
+  if (before.live_state === "archive-only") fail("restore_archive_only");
+  if (!record) fail("key_unknown", "No local pin exists for this peer. Select ALIAS from peers list --json or LABEL from keys pairings --json. Nothing was changed.");
+  if (record.state === "revoked") fail("pin_revoked", "This local pin was revoked and is never re-enabled in place. Nothing was changed.");
+  if (before.live_state === "change-pending") fail("proposal_required", "A key change is pending for this peer. Run keys status --json; nothing was changed.");
+  const localRow = this.row(localId);
+  if (localRow.live_state !== "local-only") fail("key_retired");
+  const localBundle = parseJSON(localRow.bundle);
+  if (record.localId !== localId || record.localBundleDigest !== hash("a2a-exposed sealed bundle v1", localBundle)) fail("key_unknown", "This pin belongs to another local key. Select --id from keys status --json. Nothing was changed.");
+  await verifyBundle(record.bundle, { cardUrl: record.bundle.cardUrl, identityKey: record.bundle.identityKey, now });
+  const expected = localSafetyCode(localBundle, record.bundle);
+  if (expected.replace(/ /g, "") !== digits) fail("safety_code_mismatch", "The safety code differs from the code computed from the pinned keys. Do not use this pairing. Nothing was changed.");
+  const result = { ok: true, peer, local_id: localId, peer_key_id: record.bundle.keyId, local_key_id: localBundle.keyId, code: expected };
+  if (record.state === "independently-verified") return { ...result, changed: false, record, digest: before.current_digest };
+  return this.locked(async () => {
+   const proposal = this._proposeTx({ peer, localId, bundle: record.bundle, peerEndpoint: record.peerEndpoint, pairingIdentity: record.pairingIdentity, expectedCurrent: before.current_digest, policy: record.policy, verification: "independent", operation: "verify" });
+   // Exact-key binding: the approved proposal must carry the same bundles the code was computed from.
+   if (localSafetyCode(localBundle, proposal.proposal.newBundle) !== expected || proposal.proposal.localBundleDigest !== record.localBundleDigest) fail("approval_stale");
+   const approved = this._approveTx({ peer, digest: proposal.digest, expectedCurrent: before.current_digest, independentVerified: true, verifiedProposalDigest: proposal.digest });
+   return { ...result, changed: true, record: approved.record, digest: approved.digest, proposal_digest: proposal.digest };
   });
  }
  async reject({ peer, digest }) { return this.locked(async () => { const result = this.db.prepare("UPDATE proposals SET state='rejected' WHERE peer=? AND digest=? AND state='pending'").run(peer, digest); if (!result.changes) fail("approval_stale"); return { ok: true, peer, digest, rejected: true }; }); }
@@ -796,12 +939,12 @@ export class LocalState {
   }
   if (local.identityKey === other.identityKey) fail("same_identity");
   const code = localSafetyCode(local, other);
-  return { ok: true, config_identity: this.configId(), local_id: localId, peer, source, ...(proposalDigest ? { proposal_digest: proposalDigest } : {}), code, verification, next: "Compare every group through another trusted channel. This read-only code grants no trust; approve only its exact proposal digest." };
+  return { ok: true, config_identity: this.configId(), local_id: localId, peer, source, ...(proposalDigest ? { proposal_digest: proposalDigest } : {}), code, safety_emoji: localSafetyEmoji(local, other), verification, next: "Compare every group through another trusted channel. This read-only code grants no trust; approve only its exact proposal digest." };
  }
 }
 
 // Public surface returns fixed recovery errors. Private provider/SQLite/JSON strings never escape.
-for (const name of ["status", "rotationPlan", "rotateLocal", "createBackup", "initialize", "reconcileInitialization", "loadIdentity", "inspect", "propose", "approve", "reject", "safetyCode"]) {
+for (const name of ["status", "rotationPlan", "rotateLocal", "signerRotationPlan", "rotateSigner", "rotatedPins", "createBackup", "initialize", "reconcileInitialization", "loadIdentity", "inspect", "propose", "approve", "verifyIndependent", "reject", "safetyCode"]) {
  const action = LocalState.prototype[name];
  LocalState.prototype[name] = action.constructor.name === "AsyncFunction"
   ? async function (...args) { try { return await action.apply(this, args); } catch (error) { throw stateError(error); } }

@@ -474,7 +474,10 @@ test("proxy mode: the landing page shows the rewritten card (upstream name and s
 	const h = await s.call("GET", "/", { headers: { accept: "text/html" } });
 	assert.equal(h.status, 200);
 	assert.match(h.text, /<title>Jean<\/title>/);
-	assert.match(h.text, /<b>Chat<\/b>/);
+	assert.match(h.text, /<h1>Jean<\/h1>/);
+	assert.doesNotMatch(h.text, /<b>Chat<\/b>/);
+	const publicCard = await s.call("GET", "/.well-known/agent-card.json");
+	assert.equal(publicCard.data.skills[0].name, "Chat");
 	for (const leak of ["ts.net", "tail1234", "localhost", "agent-upstream", "192.168.", "100.101."]) assert.ok(!h.text.includes(leak), leak);
 	assert.ok(!h.text.includes("inbox"), "a façade isn't an inbox");
 	const j = await s.call("GET", "/");

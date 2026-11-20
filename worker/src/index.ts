@@ -1,3 +1,6 @@
+import { messageEventTarget, messageEventIdentity, messageEventStatement, flushMessageEvents } from "./message-events.ts";
+import { LANDING_SOCIAL_IMAGE } from "./landing-social-image.ts";
+import { SOCIAL_CARD_PATH, cardLayout, socialCardKey, socialCardPng } from "./social-card.ts";
 import { LANDING_WEBMCP_SCRIPT } from "./landing-webmcp.ts";
 // a2a-exposed Worker: public A2A endpoint (JSON-RPC; A2A 1.0 primary, 0.3 compatible),
 // D1-backed inbox, wake webhooks (presets), and an owner API for the local CLI.
@@ -20,6 +23,7 @@ import { withDeadline } from "./deadline.ts";
 import * as Addr from "./address.ts";
 import * as P from "./pairing.ts";
 import * as SealedKeys from "./sealed-keys.ts";
+import * as Inspect from "./owner-inspect.ts";
 import * as D from "./discovery.ts";
 import { SKILLS } from "./skills-index.ts";
 import * as M from "./mcp.ts";
@@ -593,6 +597,7 @@ async function flushDue(ctx: TenantContext, ectx: ExecutionContext) {
  */
 export async function cronFlush(ctx: TenantContext, ectx: ExecutionContext): Promise<void> {
 	await flushDue(ctx, ectx);
+	await flushMessageEvents(ctx);
 	const now = Date.now();
 	await ctx.DB.batch([
 		ctx.DB.prepare("DELETE FROM wake_receipts WHERE expires_ms <= ?").bind(now - 6 * Receipts.RECEIPT_TTL),
@@ -618,6 +623,10 @@ async function minMs(ctx: TenantContext, sql: string, shift: (t: number) => numb
  */
 export async function nextCronAt(ctx: TenantContext, now = Date.now()): Promise<number | null> {
 	const times: number[] = [];
+	// A durable recovery alarm exists even while the outbox is empty, covering a crash immediately after commit.
+	if (messageEventTarget(ctx)) times.push(now + 60000);
+	const events = await minMs(ctx, "SELECT MIN(next_ms) AS t FROM message_event_outbox", t => t);
+	if (events != null) times.push(events);
 	const deb = debounceMs(ctx);
 	const wake = await minMs(ctx, `SELECT MIN(${WAKE_DUE_SQL}) AS t FROM wakes WHERE pending_json IS NOT NULL`, (t) => t, [deb]);
 	if (wake != null) {
@@ -945,7 +954,7 @@ function pubCfg(taskId: string, cfg: Json, version: string): Json {
 	return version.startsWith("1") ? { taskId, ...c } : { taskId, pushNotificationConfig: c };
 }
 
-type Rpc = (p: Json, label: string, version: string, ctx: TenantContext, ectx: ExecutionContext) => Promise<Json>;
+type Rpc = (p: Json, label: string, version: string, ctx: TenantContext, ectx: ExecutionContext, authHash?: string) => Promise<Json>;
 
 const ROUTING_KEEP_HOURS = 24 * 14;
 
@@ -1063,7 +1072,7 @@ async function routeInbound(ctx: TenantContext, peer: string, contextId: string,
 	return { decision: decideRoute({ mode: (await wakePolicy(ctx)).mode, wake, intent, duplicate, idle, unchanged, hasContent, inputRequired }), fingerprint };
 }
 
-const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
+const rpcSend: Rpc = async (params, label, version, ctx, ectx, authHash) => {
 	const msg = A.normMessage(params.message);
 	if (msg.role !== "user") throw new RpcError(-32602, "message.role must be user");
  const sealedPeer: Json = await ctx.DB.prepare("SELECT sealed_requester,sealed_responder FROM peers WHERE label=? AND revoked_at IS NULL").bind(label).first();
@@ -1125,6 +1134,7 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
 	const preview = sealed ? "[encrypted message]" : A.textOf(msg);
 	const claimToken = A.newId();
 	const history = { dir: "in", peer: label, taskId: task.id, role: "user", text: preview, state: task.status.state, data: { messageId: msg.messageId, ...(A.ownerWaitOf(task) ? { ownerWait: A.ownerWaitOf(task) } : {}), ...(sealed ? { sealed } : {}) } };
+	const eventStmt = await messageEventStatement(ctx, { peer: label, messageId: msg.messageId, taskId: task.id, contextId, receivedAt: ts, claimToken, authHash: authHash || "", directReply: !!directReply });
 	const stored = creating
 		? await ctx.DB.batch([
 			claimContextStmt(ctx, contextId, label, ts),
@@ -1132,12 +1142,14 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
 			saveTaskIfClaimStmt(ctx, task, msg.messageId, claimToken),
 			msgIfClaimStmt(ctx, task, msg, claimToken),
 			histIfClaimStmt(ctx, contextId, history, label, msg.messageId, claimToken),
+			...(eventStmt ? [eventStmt, ctx.DB.prepare("UPDATE message_event_source SET activated=1 WHERE singleton=1")] : []),
 		])
 		: await ctx.DB.batch([
 			claimMessageStmt(ctx, label, msg.messageId, task.id, claimToken, contextId),
 			updateTaskIfClaimStmt(ctx, task, msg.messageId, claimToken),
 			msgIfClaimStmt(ctx, task, msg, claimToken),
 			histIfClaimStmt(ctx, contextId, history, label, msg.messageId, claimToken),
+			...(eventStmt ? [eventStmt, ctx.DB.prepare("UPDATE message_event_source SET activated=1 WHERE singleton=1")] : []),
 		]);
 	const held: Json = await ctx.DB.prepare(
 		"SELECT task_id, claim_token FROM message_claims WHERE peer = ? AND message_id = ?",
@@ -1159,9 +1171,28 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx) => {
 			.bind(label, msg.messageId, claimToken).run();
 		throw new RpcError(-32602, UNKNOWN_CONTEXT);
 	}
+	if (eventStmt) ectx.waitUntil(flushMessageEvents(ctx));
 	log("message_received", { peer: label, contextId, taskId: task.id, chars: preview.length, version });
-	// Direct replies are stored for history, not scheduled as new work.
-	if (!directReply) {
+	// A direct reply is the answer to a task this agent sent. It is stored as a finished task, not new work,
+	// and it wakes the receiver the way a pushed reply does: same routing, the sender's wake and intent hints,
+	// kind outbound_update, and the sent task's id (#485). A retried message id returned above without a wake.
+	if (directReply) {
+		const meta = params.metadata?.[DIRECT_REPLY_META] || msg.metadata?.[DIRECT_REPLY_META] || {};
+		const state = typeof meta.state === "string" && /^[a-z-]{1,32}$/.test(meta.state) ? meta.state : "completed";
+		const sentTask = typeof meta.taskId === "string" && A.ID_RE.test(meta.taskId) ? meta.taskId : task.id;
+		const hasContent = pushCarriesFile(msg);
+		const replyDecision = decidePush({
+			mode: (await wakePolicy(ctx)).mode,
+			hasContent,
+			wake: routed.fields.wake,
+			intent: routed.fields.intent,
+			duplicate: false,
+			idle: routed.fields.intent === "status" ? !statusText(preview) : isIdleWorkingPush(state, preview, hasContent),
+			unchanged: false,
+		}, outboundClass(state, preview, hasContent, routed.fields.intent));
+		await recordRoute(ctx, replyDecision, "outbound_update");
+		if (replyDecision.deliver) await wake(ctx, ectx, contextId, sentTask, label, `[update on outbound task: ${state}] ${preview}`, "outbound_update", wakeOpts(replyDecision));
+	} else {
 		const routedNow = await routeInbound(ctx, label, contextId, routed.fields.wake, routed.fields.intent, preview, false, pushCarriesFile(msg), inputRequired);
 		// Suppressed repeats do not move the window anchored to the last non-suppressed status.
 		if (routedNow.fingerprint && routedNow.decision.decision !== "status_unchanged") {
@@ -1322,7 +1353,8 @@ function unauthorized(ctx: TenantContext, hadToken: boolean, rid: Json = null): 
 
 async function handleRpc(req: Request, ctx: TenantContext, ectx: ExecutionContext): Promise<Response> {
 	const ip = req.headers.get("cf-connecting-ip") || "";
-	const label = await peerLabel(ctx, req.headers.get("authorization"));
+	const authenticated = await peerOf(ctx, req.headers.get("authorization"));
+	const label = authenticated?.label;
 	if (!label) {
 		log("auth_failed", { ip });
 		// echo the JSON-RPC id when the (small) body parses; never more than 64 KiB is read for an unauthenticated call
@@ -1365,7 +1397,7 @@ async function handleRpc(req: Request, ctx: TenantContext, ectx: ExecutionContex
 	try {
 		const activated = req.headers.get("A2A-Extensions")?.split(",").map(s => s.trim()).includes(SealedKeys.SEALED_URI);
   if (op === "send" && params.message?.extensions?.includes(SealedKeys.SEALED_URI) && !activated) throw new RpcError(-32602, "Activate the sealed extension before sending");
-  const result = await HANDLERS[op](params, label, version, ctx, ectx);
+  const result = await HANDLERS[op](params, label, version, ctx, ectx, authenticated!.hash);
 		log("rpc_ok", { peer: label, method, ip });
 		return json({ jsonrpc: "2.0", id: rid, result }, 200, activated && ctx.A2A_SEALED_ENABLED === "1" ? { "A2A-Extensions": SealedKeys.SEALED_URI } : {});
 	} catch (e: any) {
@@ -1563,6 +1595,8 @@ type ReplyDelivery = {
 	target?: { alias?: string; host: string };
 	httpStatus?: number;
 	detail: string;
+	/** Stored-only: the peer was not notified, and this says how it can be reached. */
+	next?: string;
 	push?: Json[];
 };
 
@@ -1995,17 +2029,68 @@ async function replyPeer(ctx: TenantContext, label: string): Promise<{ alias: st
 	return token ? { alias: row.alias, url: row.url, token, identityKey: Addr.cleanPublicKey(row.identity_key), announced: row.source === "announce" } : null;
 }
 
+/** Live outbound aliases with a held token whose address is on `origin`, other than `label`, sorted. */
+async function outboundAliasesAt(ctx: TenantContext, origin: string, label: string): Promise<{ alias: string; url: string; token_enc: string }[]> {
+	if (!origin) return [];
+	const rows = await ctx.DB.prepare(
+		`SELECT o.alias, o.url, o.token_enc FROM outbound_peers o
+		 LEFT JOIN peers p ON p.label = o.alias
+		 WHERE o.token_enc IS NOT NULL AND o.alias <> ? AND p.revoked_at IS NULL ORDER BY o.alias`,
+	).bind(label).all();
+	return (rows.results as Json[]).filter((r) => Addr.originOf(String(r.url || "")) === origin) as { alias: string; url: string; token_enc: string }[];
+}
+
+/** Reply fallback when the inbound label has no outbound row of its own (#469). Only a verified address counts:
+ *  `card_url` is written after a signed address announcement whose card proved `identity_key`. A device-flow
+ *  claimed card or a bare same-host match is never enough. Exactly one live outbound alias with a held token must
+ *  point at that card's origin; delivery then checks again that the fetched card proves the same key. */
+async function replyFallbackPeer(ctx: TenantContext, label: string): Promise<{ alias: string; url: string; token: string; identityKey: string; cardUrl: string } | null> {
+	const inbound: Json = await ctx.DB.prepare("SELECT card_url, identity_key, sealed_requester FROM peers WHERE label = ? AND revoked_at IS NULL").bind(label).first();
+	if (!inbound || inbound.sealed_requester) return null;
+	const cardUrl = Addr.canonicalCardUrl(inbound.card_url || "");
+	const identityKey = Addr.cleanPublicKey(inbound.identity_key);
+	if (!cardUrl || !identityKey) return null;
+	const matches = await outboundAliasesAt(ctx, Addr.originOf(cardUrl), label);
+	if (matches.length !== 1) return null;
+	const token = await openPeerSecret(ctx, matches[0].alias, matches[0].token_enc);
+	return token ? { alias: matches[0].alias, url: matches[0].url, token, identityKey, cardUrl } : null;
+}
+
+/** What the replying agent does next when a reply is stored only: the same continuation the inbox shows, from the
+ *  verified or claimed card. A same-address alias is a suggestion for the human; nothing is sent through it. */
+async function storedOnlyNext(ctx: TenantContext, label: string, proofFailedAlias = ""): Promise<string> {
+	// The stored metadata still points at that alias, but the live card just failed the identity check: never send there.
+	if (proofFailedAlias) return `Do not send this reply to ${proofFailedAlias}: its card no longer proves this peer's verified identity, so that address may not be this peer any more. Ask your human to verify the peer's current address with its owner before any send. Until then the peer was not notified and can fetch the reply from the task.`;
+	const inbound: Json = await ctx.DB.prepare("SELECT card_url, claimed_card_url FROM peers WHERE label = ? AND revoked_at IS NULL").bind(label).first();
+	const guide = await continuationGuide(ctx, label, inbound?.card_url || inbound?.claimed_card_url || undefined);
+	if (guide.kind === "send") return `The peer was not notified. Ask your human before you send this reply to ${guide.alias}.`;
+	return String(guide.next || "");
+}
+
 /** Reads never pair or revive a revoked return token. A claimed card is only a human-reviewable suggestion. */
 async function continuationGuide(ctx: TenantContext, label: string, rawCard?: string): Promise<Json> {
 	const encrypted: Json = await ctx.DB.prepare("SELECT sealed_requester FROM peers WHERE label=? AND revoked_at IS NULL").bind(label).first();
  if (encrypted?.sealed_requester) return { kind: "local-encrypted", next: "This peer uses local encryption. Read local history, then select an existing pinned alias with peers list --json in the original config directory and continue with send and the same context id. If no pinned outbound alias exists, select the existing local ID with keys status --json, verify the peer URL with its owner, and ask your human before running connect <peer URL> --sealed-key-id <id> --alias ALIAS --no-wait. This reverse pairing needs owner approval; do not pair automatically or create replacement keys. Server callback availability does not describe local credentials." };
 	const callback = await replyPeer(ctx, label);
 	if (callback) return { kind: "send", alias: callback.alias, next: "Read history, then continue with send and the same context id. For the CLI, select a local alias with peers list --json." };
+	const fallback = await replyFallbackPeer(ctx, label);
+	if (fallback) return { kind: "send", alias: fallback.alias, next: `Replies to this label go through outbound alias ${fallback.alias}, whose verified card was this peer's when it was last checked; reply checks it again each time. Read history and answer open tasks with reply. Before a new send to ${fallback.alias}, ask your human to confirm it is still this agent.` };
+	const notNotified = "Until then, a reply to this peer is stored on the task only and does not notify it.";
 	const card = Addr.canonicalCardUrl(rawCard || "");
-	if (card && !peerUrlProblem(card)) return { kind: "pair-back", claimedCardUrl: card,
-		command: `${cliCommand(ctx)} connect ${("'" + card.replaceAll("'", "'\"'\"'") + "'")} --alias ${label.slice(0, 32)} --no-wait`,
-		next: "No usable outbound callback is stored. Verify this claimed address with the peer owner and ask your human before pairing back." };
-	return { kind: "announce-address", next: "No callback address is stored for this peer. Ask the peer owner to run peer announce --to ALIAS on their side, using their outbound alias for this inbox (they can select it with peers list --json). Until then, your replies stay stored on the task and the peer can fetch them." };
+	if (card && !peerUrlProblem(card)) {
+		const same = await outboundAliasesAt(ctx, Addr.originOf(card), label);
+		// #472: a separate pairing (often NAME-2 next to outbound alias NAME) is not a missing pairing. The claimed card is
+		// not proof, so nothing is linked or sent; the peer's own signed announcement links it.
+		if (same.length) {
+			const aliases = same.slice(0, 5).map((r) => r.alias), named = aliases.join(", ");
+			return { kind: "same-address", claimedCardUrl: card, sameAddressAliases: aliases,
+				next: `${aliases.length > 1 ? `Outbound aliases ${named} already point` : `Outbound alias ${named} already points`} at the address this peer gave, so do not pair again. This label ${label} is a separate pairing whose address is only claimed, so a reply here is stored on the task only and does not notify the peer. If your human confirms it is the same agent, continue with send to ${aliases.length > 1 ? "the alias your human confirms" : aliases[0]} and the same context id. Replies to ${label} can notify the peer after its owner runs peer announce --to ALIAS on their side, using their outbound alias for this inbox.` };
+		}
+		return { kind: "pair-back", claimedCardUrl: card,
+			command: `${cliCommand(ctx)} connect ${("'" + card.replaceAll("'", "'\"'\"'") + "'")} --alias ${label.slice(0, 32)} --no-wait`,
+			next: `No usable outbound callback is stored. ${notNotified} Verify this claimed address with the peer owner and ask your human before pairing back.` };
+	}
+	return { kind: "announce-address", next: "No callback address is stored for this peer. Ask the peer owner to run peer announce --to ALIAS on their side, using their outbound alias for this inbox (they can select it with peers list --json). Until then, your replies stay stored on the task and do not notify the peer; it sees them only when it fetches the task." };
 }
 
 async function deliverReplyMessage(ctx: TenantContext, ectx: ExecutionContext, task: Json, message: Json, state: string, text: string, signal: AbortSignal): Promise<ReplyDelivery> {
@@ -2027,14 +2112,19 @@ async function deliverReplyMessage(ctx: TenantContext, ectx: ExecutionContext, t
 		status: "stored-only", method: "stored", taskId: task.id, state,
 		detail: "Stored on the task; a directly delivered reply is not delivered again.",
 	};
-	const peer = await replyPeer(ctx, task._peer);
-	if (!peer) return {
-		status: "stored-only", method: "stored", taskId: task.id, state,
-		detail: "Stored on the task for the peer to fetch; no live paired outbound address with a held token was found.",
-	};
+	const exact = await replyPeer(ctx, task._peer);
+	const fallback = exact ? null : await replyFallbackPeer(ctx, task._peer);
+	const storedOnly = async (detail: string, proofFailedAlias = ""): Promise<ReplyDelivery> => ({
+		status: "stored-only", method: "stored", taskId: task.id, state, detail, next: await storedOnlyNext(ctx, task._peer, proofFailedAlias),
+	});
+	if (!exact && !fallback) return storedOnly("Stored on the task. The peer was not notified: no live paired outbound address with a held token was found for this label.");
+	const peer = exact || { ...fallback!, announced: false };
 	let target = safeTarget(peer.alias, peer.url);
 	try {
 		const card = await checkedPeerCard(ctx, ectx, peer.url, signal);
+		// The fallback alias is another name for this peer only while its card still proves the label's verified key.
+		if (fallback && !(card && await Addr.cardProves(card, fallback.identityKey, fallback.cardUrl)))
+			return storedOnly(`Stored on the task. The peer was not notified: outbound alias ${fallback.alias} points at this peer's verified address, but its card no longer proves this peer's identity, so nothing was sent there.`, fallback.alias);
 		let base = peer.url;
 		let cardUsed = card;
 		// One extra card fetch, and only when the card we already fetched names a move. The ordinary path stays one card.
@@ -2102,7 +2192,9 @@ async function deliverReplyMessage(ctx: TenantContext, ectx: ExecutionContext, t
 		};
 		return {
 			status: "delivered", method: "a2a-message", taskId: task.id, state, ...(target ? { target } : {}), httpStatus,
-			detail: "Delivered as an A2A message in the same context, referencing the original task.",
+			detail: fallback
+				? `Delivered as an A2A message in the same context, referencing the original task, through outbound alias ${peer.alias}: this label has no callback of its own and that alias's verified card is this peer's.`
+				: "Delivered as an A2A message in the same context, referencing the original task.",
 		};
 	} catch (e: any) {
 		return {
@@ -2345,8 +2437,10 @@ async function ackOutboundReplies(ctx: TenantContext, snaps: ReplySnap[]): Promi
 
 /** Drop these task ids from the pending wake for that conversation. A wake for another conversation, or an
  *  outbound update that reuses the task id, stays pending. A wake that still names other tasks stays pending.
- *  This does not end the busy cool-down: a task that arrives after this read still waits for one catch-up. */
-async function ackPendingWakes(ctx: TenantContext, seen: { taskId: string; contextId: string }[], kind = "inbound"): Promise<void> {
+ *  This does not end the busy cool-down: a task that arrives after this read still waits for one catch-up.
+ *  read: an inbox list. It leaves an inbound catch-up held by the busy cool-down: the reader may be the owner
+ *  checking by hand while the woken run is still busy, so only mark working or a reply drops that task (#471). */
+async function ackPendingWakes(ctx: TenantContext, seen: { taskId: string; contextId: string }[], kind = "inbound", read = false): Promise<void> {
 	const byContext = new Map<string, Set<string>>();
 	for (const row of seen) {
 		if (!row.taskId || !row.contextId) continue;
@@ -2362,6 +2456,7 @@ async function ackPendingWakes(ctx: TenantContext, seen: { taskId: string; conte
 			try { payload = JSON.parse(row.pending_json); } catch { continue; }
 			const wakeKind = typeof payload?.kind === "string" && payload.kind ? payload.kind : "inbound";
 			if (wakeKind !== kind) continue;
+			if (read && kind === "inbound" && payload?.busy) continue;
 			if (typeof payload?.contextId === "string" && payload.contextId !== contextId) continue;
 			const ids = wakeTaskIds(payload);
 			if (!ids.some((id) => seenIds.has(id))) continue;
@@ -2392,6 +2487,14 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 		return json({ error: "unauthorized" }, 401, { "www-authenticate": 'Bearer realm="owner"' });
 	const m = req.method;
 	const seg = path.split("/").filter(Boolean).slice(1); // after "owner"
+ if (m === "GET" && seg[0] === "message-events") {
+  let data;
+  if (seg.length === 2 && seg[1] === "source" && !url.search) data = await messageEventIdentity(ctx);
+  else if (seg.length === 2 && seg[1] === "peers" && [...url.searchParams.keys()].every(k => k === "label") && url.searchParams.getAll("label").length === 1) data = await messageEventIdentity(ctx, { label: url.searchParams.get("label")! });
+  else if (seg.length === 3 && seg[1] === "peers" && /^[a-f0-9]{32}$/.test(seg[2]!) && !url.search) data = await messageEventIdentity(ctx, { instance: seg[2]! });
+  return data ? json(data) : json({ error: "not found" }, 404);
+ }
+
 	const body = async () => { const raw = await readBody(req, ctx); return raw ? JSON.parse(raw) : {}; };
 
 	if (seg[0] === "relay" && seg[1] === "http" && seg.length === 3 && isHttpRelayProfile(seg[2]) && path === `/owner/relay/http/${seg[2]}` && !url.search) {
@@ -2432,19 +2535,14 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 	}
 	if (seg[0] === "summary" && !seg[1] && m === "GET") {
 		// Counts only. Unlike GET /owner/inbox this does not return message text or clear a pending wake.
-		const known = ["submitted", "working", "input-required", "completed", "failed", "rejected", "canceled"];
-		const tasks: Record<string, number> = {};
-		for (const state of known) tasks[state] = 0;
-		const rows = await ctx.DB.prepare("SELECT state, COUNT(*) AS n FROM tasks GROUP BY state").all();
-		for (const r of rows.results as Json[]) {
-			if (typeof r.state !== "string" || !known.includes(r.state)) continue;
-			const n = Number(r.n);
-			if (Number.isSafeInteger(n) && n >= 0) tasks[r.state] = n;
-		}
+		const counts = await Inspect.summary(ctx.DB);
 		const pending: Json = await ctx.DB.prepare("SELECT COUNT(*) AS n FROM device_requests WHERE status = 'pending' AND expires_ms > ?").bind(Date.now()).first();
 		const pairing = Number(pending?.n ?? 0);
-		return json({ tasks, pairingPending: Number.isSafeInteger(pairing) && pairing >= 0 ? pairing : 0 });
+		return json({ tasks: counts.tasks, pairingPending: Number.isSafeInteger(pairing) && pairing >= 0 ? pairing : 0, groups: counts.groups, peers: counts.peers, outbound: counts.outbound });
 	}
+	// Read-only inspection lists. Unlike GET /owner/inbox they clear no wake and mark no reply seen.
+	if (seg[0] === "tasks" && !seg[1] && m === "GET") return json(await Inspect.listTasks(ctx.DB, url.searchParams, A.nowIso()));
+	if (seg[0] === "outbound" && !seg[1] && m === "GET") return json(await Inspect.listOutbound(ctx.DB, url.searchParams, A.nowIso(), pushUpdateView));
 	if (seg[0] === "feedback" && !seg[1] && m === "GET") {
 		const endpoint = Fb.feedbackEndpoint(ctx);
 		const facts = { version: Fb.WORKER_VERSION, connection: Fb.connectionOf(ctx) };
@@ -2502,7 +2600,8 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 				});
 			}
 		}
-		// Clear a pending wake only for tasks in this page. The busy cool-down stays until it expires.
+		// Clear a pending wake only for tasks in this page. The busy cool-down stays until it expires,
+		// and an inbound catch-up it holds stays until mark working or a reply (#471).
 		// Ids the caller did not get stay pending,
 		// including when one wake names tasks on this page and tasks on a later page.
 		// A reply is marked seen only when its stored update still equals the snapshot in this response.
@@ -2519,7 +2618,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 		const res = json(out, 200, headers);
 		if (!head && deferAck) deferredReplies.set(res, replySnaps);
 		if (!head && !deferAck) {
-			await ackPendingWakes(ctx, inboundSeen);
+			await ackPendingWakes(ctx, inboundSeen, "inbound", true);
 			await ackOutboundReplies(ctx, replySnaps);
 		}
 		return res;
@@ -2623,9 +2722,17 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 		}
 	}
 	if (seg[0] === "history" && seg[1] && m === "GET") {
-		const n = Math.min(Number(url.searchParams.get("n") || "50"), 1000);
+		const contextId = seg[1];
 		const fromFilter = url.searchParams.get("from");
 		if (fromFilter !== null && !PEER_FILTER.test(fromFilter)) return json({ error: "from is invalid" }, 400);
+		// n: the newest n rows as an array (existing callers). limit, cursor or order: a keyset page { items, nextCursor }.
+		const paged = Inspect.historyPaged(url.searchParams);
+		const page = paged ? await Inspect.historyPage(url.searchParams, contextId, fromFilter) : null;
+		const n = Math.min(Number(url.searchParams.get("n") || "50"), 1000);
+		const take = page ? page.limit + 1 : n;
+		const seqCond = page?.after != null ? (page.newest ? " AND seq < ?" : " AND seq > ?") : "";
+		const innerOrder = page && !page.newest ? "ASC" : "DESC";
+		const outerOrder = page?.newest ? "DESC" : "";
 		// Without `from`, rows for every peer that owns this context id (a task or an outbound task), plus local notes.
 		// With `from`, one peer's rows only, so another peer's conversation is not in this read.
 		const rows = await ctx.DB.prepare(`SELECT h.*,
@@ -2644,7 +2751,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 						OR task_id IN (SELECT task_id FROM outbound WHERE context_id = ? AND peer = ?)
 					)
 				)
-			) ORDER BY seq DESC LIMIT ?
+			)${seqCond} ORDER BY seq ${innerOrder} LIMIT ?
 		) ORDER BY seq` : `SELECT * FROM (
 			SELECT * FROM history WHERE context_id = ? AND (
 				peer IS NULL OR peer = ''
@@ -2654,13 +2761,17 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 					NOT EXISTS (SELECT 1 FROM tasks WHERE context_id = ?)
 					AND NOT EXISTS (SELECT 1 FROM outbound WHERE context_id = ?)
 				)
-			) ORDER BY seq DESC LIMIT ?
-		) ORDER BY seq`} ) h ORDER BY h.seq`).bind(...(fromFilter
-			? [seg[1], fromFilter, seg[1], fromFilter, seg[1], fromFilter, n]
-			: [seg[1], seg[1], seg[1], seg[1], seg[1], n])).all();
-		return json((rows.results as Json[]).map((r) => ({ ...r, data: r.data_json ? JSON.parse(r.data_json) : undefined, data_json: undefined,
+			)${seqCond} ORDER BY seq ${innerOrder} LIMIT ?
+		) ORDER BY seq`} ) h ORDER BY h.seq ${outerOrder}`).bind(...(fromFilter
+			? [contextId, fromFilter, contextId, fromFilter, contextId, fromFilter, ...(seqCond ? [page!.after] : []), take]
+			: [contextId, contextId, contextId, contextId, contextId, ...(seqCond ? [page!.after] : []), take])).all();
+		const view = (rows.results as Json[]).map((r) => ({ ...r, data: r.data_json ? JSON.parse(r.data_json) : undefined, data_json: undefined,
 			currentState: r.current_status_json ? ((status) => { const ownerWait = A.ownerWaitOf({ status }); return { state: status.state, timestamp: status.timestamp, ...(ownerWait ? { ownerWait } : {}) }; })(JSON.parse(r.current_status_json))
-				: r.current_history_json ? JSON.parse(r.current_history_json) : undefined, current_status_json: undefined, current_history_json: undefined })));
+				: r.current_history_json ? JSON.parse(r.current_history_json) : undefined, current_status_json: undefined, current_history_json: undefined }));
+		if (!page) return json(view);
+		const items = view.slice(0, page.limit).map(Inspect.pagedHistoryRow);
+		const nextCursor = view.length > page.limit ? Inspect.historyCursor(page.binding, items[items.length - 1]?.seq) : null;
+		return json({ items, nextCursor });
 	}
 	if (seg[0] === "history" && !seg[1] && m === "POST") {
 		const b = await body();
@@ -2758,8 +2869,11 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 	}
 	if (seg[0] === "peers") {
 		if (m === "GET") {
-			const rows = await ctx.DB.prepare("SELECT label, created_at, revoked_at, source, user_code, client_name, card_url, claimed_card_url FROM peers ORDER BY created_at").all();
+			const rows = await ctx.DB.prepare("SELECT label, created_at, revoked_at, source, user_code, client_name, card_url, claimed_card_url, sealed_requester, sealed_responder FROM peers ORDER BY created_at").all();
 			return json(await Promise.all((rows.results as Json[]).map(async (r) => ({ label: r.label, created_at: r.created_at, revoked_at: r.revoked_at, source: r.source, user_code: r.user_code ? P.formatUserCode(r.user_code) : null, client_name: r.client_name, card_url: r.card_url || null,
+					// An active encrypted key pairing also lists `sealed: true` and the safety code computed from its stored public
+					// bundles (the bundles themselves are never listed). Independent of A2A_SEALED_ENABLED: it describes the pairing.
+					...(!r.revoked_at && r.source === "pairing" && r.sealed_requester ? { sealed: true, safety_code: await SealedKeys.requestSafetyCode(r), safety_emoji: await SealedKeys.requestSafetyEmoji(r) } : {}),
 					continuation: r.revoked_at ? null : await continuationGuide(ctx, r.label, r.card_url || r.claimed_card_url) }))));
 		}
 		if (m === "POST" && !seg[1]) {
@@ -2789,7 +2903,8 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 				// The other inbox still accepts the return token until that owner revokes it.
 				ctx.DB.prepare("DELETE FROM outbound_peers WHERE alias = ? AND source = 'announce'").bind(label),
 			]);
-			if (changed(revoked) !== 1) {
+			// D1 counts incarnation-trigger writes too; the guarded primary-key update is still at most one peer.
+			if (changed(revoked) < 1) {
 				const ex: Json = await ctx.DB.prepare("SELECT revoked_at FROM peers WHERE label = ?").bind(label).first();
 				return json({ revoked: false, error: ex ? `the token with label ${label} was already revoked (${ex.revoked_at})` : `no active token with label ${label} (see token list)` }, 404);
 			}
@@ -3174,7 +3289,7 @@ async function tokenEndpoint(req: Request, ctx: TenantContext): Promise<Response
 	if (r.replaces_label && r.replaces_hash && r.label === r.replaces_label) {
 		const u = await ctx.DB.prepare("UPDATE peers SET token_hash = ?, created_at = ?, source = 'pairing', user_code = ?, client_name = ?, identity_key = COALESCE(?, identity_key), sealed_requester = ?, sealed_responder = ?, claimed_card_url = ? WHERE label = ? AND token_hash = ? AND revoked_at IS NULL")
 			.bind(await A.sha256(token), A.nowIso(), r.user_code, r.client_name || r.client_id || null, r.identity_key || null, r.sealed_requester || null, r.sealed_responder || null, r.agent_card_url || null, r.replaces_label, r.replaces_hash).run();
-		if (u.meta.changes === 1) {
+		if ((u.meta.changes ?? 0) > 0) {
 			await ctx.DB.prepare("DELETE FROM device_requests WHERE device_hash = ?").bind(hash).run();
 			log("pairing_redeemed", { ip, label: r.replaces_label, userCode: P.formatUserCode(r.user_code), replaced: true });
 			return json({ access_token: token, token_type: "Bearer", peer_label: r.replaces_label, replaced: true, ...(r.sealed_responder ? { sealed_peer_bundle: JSON.parse(r.sealed_responder) } : {}) }, 200, { pragma: "no-cache" });
@@ -3273,7 +3388,7 @@ async function withTokenLabel(ctx: TenantContext, r: Json): Promise<P.PageReques
 	const base = pageRequest(r);
 	const identityFingerprint = r.identity_key ? await A.fingerprint(String(r.identity_key)) : null;
 	if (identityFingerprint) base.identityFingerprint = identityFingerprint;
-	if (r.sealed_requester) base.sealed = { safetyCode: await SealedKeys.requestSafetyCode(r) };
+	if (r.sealed_requester) base.sealed = { safetyCode: await SealedKeys.requestSafetyCode(r), safetyEmoji: await SealedKeys.requestSafetyEmoji(r) };
 	if (r.replaces_label && r.replaces_hash) {
 		const live = await ctx.DB.prepare("SELECT 1 FROM peers WHERE label = ? AND token_hash = ? AND revoked_at IS NULL").bind(r.replaces_label, r.replaces_hash).first();
 		if (live) return { ...base, tokenLabel: String(r.replaces_label) };
@@ -3599,7 +3714,7 @@ async function ownerPairing(req: Request, ctx: TenantContext, ectx: ExecutionCon
 				replacesLabel: r.replaces_label || null,
 				...(r.identity_key ? { identityFingerprint: await A.fingerprint(String(r.identity_key)) } : {}),
 				// public-only: a key pairing is flagged with its safety code; bundles and keys are never listed here
-				...(r.sealed_requester ? { sealed: true, safetyCode: await SealedKeys.requestSafetyCode(r) } : {}) }))) });
+				...(r.sealed_requester ? { sealed: true, safetyCode: await SealedKeys.requestSafetyCode(r), safetyEmoji: await SealedKeys.requestSafetyEmoji(r) } : {}) }))) });
 	}
 	if (seg[0] === "password-link" && m === "POST" && !seg[1]) {
 		if (mode === "off" && !mcpOn(ctx)) return json({ error: "device-flow pairing is disabled (PAIRING_APPROVAL=off) and so is MCP: there is nothing to approve, so no approval password is needed" }, 409);
@@ -3671,25 +3786,49 @@ function registrationModel(ctx: TenantContext): { registration?: { origin: strin
 	return target ? { registration: { origin: ctx.gates.agentRegistrationOrigin, target } } : {};
 }
 
-/** A browser (Accept: text/html) gets a small HTML page; an agent that asks for text/markdown the connect steps in
- *  Markdown; anything else (curl, Accept: application/json, ?format=json) the JSON it always got, with links added.
+/** A browser (Accept: text/html) and a link-preview bot get a small HTML page; an agent that asks for text/markdown the
+ *  connect steps in Markdown; anything else (curl, Accept: application/json, ?format=json) the JSON it always got, with links added.
  *  Built from the served (rewritten) card, so it shows exactly what the card shows. */
 async function landing(req: Request, ctx: TenantContext, url: URL): Promise<Response> {
-	const format = D.rootFormat(req.headers.get("accept"), url.searchParams.get("format"));
+	const format = D.rootFormat(req.headers.get("accept"), url.searchParams.get("format"), req.headers.get("user-agent"));
 	const { card, model } = await connectModel(ctx);
 	const cardUrl = ctx.PUBLIC_URL + "/.well-known/agent-card.json";
-	const discovery = rootDiscoveryHeaders(ctx, model);
+	const discovery = { ...rootDiscoveryHeaders(ctx, model), vary: D.ROOT_VARY };
 	if (format === "markdown") return new Response(D.connectMarkdown(model), { status: 200, headers: { ...D.markdownHeaders(), ...discovery } });
 	if (format === "json") return json({ name: card.name, description: card.description, agentCard: cardUrl, a2a: ctx.PUBLIC_URL + "/",
-		pairing: pairingOn(ctx) ? ctx.PUBLIC_URL + "/device" : undefined, ...D.rootJsonLinks(model) }, 200, { vary: "accept", ...discovery });
+		pairing: pairingOn(ctx) ? ctx.PUBLIC_URL + "/device" : undefined, ...D.rootJsonLinks(model) }, 200, discovery);
 	const versions = [...new Set<string>((card.supportedInterfaces || []).map((i: any) => String(i?.protocolVersion || "")).filter(Boolean))];
 	const skills = (Array.isArray(card.skills) ? card.skills : []).filter((k: any) => k && (k.name || k.id))
 		.map((k: any) => ({ name: String(k.name || k.id), description: typeof k.description === "string" ? k.description : undefined }));
 	const nonce = P.randomB64();
 	const links = D.docsLinks(model.docs);
 	const page = P.landingPage({ name: model.name, description: model.description, card,
-		base: ctx.PUBLIC_URL, versions, skills, pairing: model.pairing, proxy: proxyMode(ctx), connectDoc: links.connect, exposeDoc: links.exposeYourself }, nonce);
+		base: ctx.PUBLIC_URL, versions, skills, pairing: model.pairing, proxy: proxyMode(ctx), connectDoc: links.connect, exposeDoc: links.exposeYourself,
+		socialImage: (await socialCardFor(ctx, model.pairing))?.url }, nonce);
 	return new Response(req.method === "HEAD" ? null : page, { status: 200, headers: { ...P.landingHeaders(nonce), ...discovery } });
+}
+
+/** Hosted agents link a card drawn with their own address; self-host and undrawable addresses keep the shared card.
+ *  The URL hashes everything the image shows, so a changed address, pairing state or design gets a new URL. */
+async function socialCardFor(ctx: TenantContext, pairing: boolean): Promise<{ url: string; address: string } | undefined> {
+	if (ctx.mode !== "host") return undefined;
+	const base = ctx.PUBLIC_URL.replace(/\/$/, "");
+	const address = base.replace(/^https?:\/\//, "");
+	if (!cardLayout(address)) return undefined;
+	return { url: `${base}/og-card-v2-${await socialCardKey(address, pairing)}.png`, address };
+}
+
+/** GET|HEAD /og-card-v2-<key>.png. An old key (the pairing state or design changed) redirects to the current card. */
+async function socialCard(req: Request, ctx: TenantContext, key: string): Promise<Response> {
+	const pairing = pairingOn(ctx);
+	const current = await socialCardFor(ctx, pairing);
+	if (!current) return json({ error: "not found" }, 404);
+	if (!current.url.endsWith(`-${key}.png`)) return new Response(null, { status: 302, headers: { location: current.url, "cache-control": "no-store" } });
+	const png = await socialCardPng(current.address, pairing);
+	if (!png) return json({ error: "not found" }, 404);
+	return new Response(req.method === "HEAD" ? null : png, { headers: {
+		"content-type": "image/png", "content-length": String(png.length), "cache-control": "public, max-age=31536000, immutable", "x-content-type-options": "nosniff",
+	} });
 }
 
 /** Link (alternate, describedby, service-doc) and Content-Signal on every variant of GET / and on /index.md. */
@@ -4249,7 +4388,7 @@ export async function runOwnerRpc(ctx: TenantContext, ectx: ExecutionContext, in
 			const contextId = (row as { contextId?: unknown }).contextId;
 			return typeof taskId === "string" && typeof contextId === "string" ? [{ taskId, contextId }] : [];
 		});
-		await ackPendingWakes(ctx, seen);
+		await ackPendingWakes(ctx, seen, "inbound", true);
 		await ackOutboundReplies(ctx, deferredReplies.get(res) || []);
 	}
 	log("owner_rpc", { tenant, accountId, method: matched.route.method, route: matched.route.name, status: res.status });
@@ -4283,10 +4422,130 @@ const argStr = (a: Json, k: string, required = true): string => {
 	return v;
 };
 
+// ------------------------------------------------------------------ MCP request_pairing (#461): this inbox as a device-flow client
+const OUTBOUND_PAIRING_AAD = (alias: string) => `outbound-pairing:${alias}`;
+const SEALED_EXT = "https://a2a.exposed/ext/sealed/v1";
+
+/** An https URL on `origin`, or "". A device or token address on another origin is ignored. */
+function sameOriginHref(origin: string, value: unknown): string {
+	if (typeof value !== "string" || !value || value.length > 2000) return "";
+	try {
+		const u = new URL(value);
+		return u.protocol === "https:" && !u.username && !u.password && !u.hash && u.origin === origin ? u.href : "";
+	} catch { return ""; }
+}
+
+/** Device and token endpoints from the peer card when they stay on that origin; otherwise the usual paths. */
+function pairingEndpoints(origin: string, card: Json): { device: string; token: string } {
+	const scheme = card?.securitySchemes?.pairing;
+	const flow = (scheme?.oauth2SecurityScheme ?? scheme)?.flows?.deviceCode;
+	return {
+		device: sameOriginHref(origin, flow?.deviceAuthorizationUrl) || `${origin}/oauth/device_authorization`,
+		token: sameOriginHref(origin, flow?.tokenUrl) || `${origin}/oauth/token`,
+	};
+}
+
+async function peerJson(r: Response, max = 16000): Promise<Json> {
+	const text = (await r.text()).slice(0, max + 1);
+	if (text.length > max) return null;
+	try { const v = JSON.parse(text); return v && typeof v === "object" && !Array.isArray(v) ? v : null; } catch { return null; }
+}
+
+function postPeerForm(ctx: TenantContext, ectx: ExecutionContext, origin: string, url: string, params: Record<string, string>): Promise<Response> {
+	return checkedPeerFetch(ctx, ectx, origin, url, {
+		method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
+		body: new URLSearchParams(params).toString(), signal: AbortSignal.timeout(8000),
+	});
+}
+
+async function requestPairing(ctx: TenantContext, ectx: ExecutionContext, rawUrl: string): Promise<ToolRun> {
+	const why = peerUrlProblem(rawUrl);
+	if (why) throw new ToolError(`url: ${why}. Pass the other agent's public https address.`);
+	const origin = new URL(rawUrl).origin;
+	if (origin === Addr.originOf(ctx.PUBLIC_URL)) throw new ToolError("An agent cannot pair with itself.");
+	const alias = new URL(origin).hostname.toLowerCase();
+	if (!/^[A-Za-z0-9_.-]{1,64}$/.test(alias)) throw new ToolError("That address is too long to use as a peer name.");
+	const key = await ctx.peerKey();
+	if (!key) throw new ToolError(ctx.mode === "host" ? "this agent has no secret key to keep a pairing code with" : "the Worker has no OWNER_TOKEN to keep a pairing code with");
+	const card = await checkedPeerCard(ctx, ectx, origin, AbortSignal.timeout(8000));
+	const ep = pairingEndpoints(origin, card);
+	const ident = await ensureIdentity(ctx);
+	const ownCard = Addr.cardUrlFor(ctx.PUBLIC_URL);
+	const params: Record<string, string> = { client_name: String(ctx.AGENT_NAME || new URL(ctx.PUBLIC_URL).hostname).slice(0, 64), client_id: new URL(ctx.PUBLIC_URL).hostname };
+	if (ownCard && !peerUrlProblem(ownCard)) params.agent_card_url = ownCard;
+	if (ident) params.agent_identity = ident.publicKey;
+	let r: Response;
+	try { r = await postPeerForm(ctx, ectx, origin, ep.device, params); }
+	catch (e: any) { if (e instanceof ToolError) throw e; throw new ToolError("The other agent couldn't be reached. Nothing was stored."); }
+	if (r.status >= 300 && r.status < 400) throw new ToolError("The other agent did not accept the request (redirect refused). Nothing was stored.");
+	const d = await peerJson(r);
+	const userCode = typeof d?.user_code === "string" && /^[A-Za-z0-9-]{1,32}$/.test(d.user_code) ? d.user_code : "";
+	const deviceCode = typeof d?.device_code === "string" && d.device_code.length <= 512 && !/\s/.test(d.device_code) ? d.device_code : "";
+	if (r.status !== 200 || !userCode || !deviceCode) {
+		const code = typeof d?.error === "string" && /^[a-z0-9_]{1,40}$/.test(d.error) ? d.error : `HTTP ${r.status}`;
+		throw new ToolError(r.status === 404 ? "That agent has device-flow pairing turned off. Nothing was stored." : `The other agent did not accept the request (${code}). Nothing was stored.`);
+	}
+	const interval = Math.min(60, Math.max(1, Math.floor(Number(d.interval) || 5)));
+	const ttl = Math.min(3600, Math.max(60, Math.floor(Number(d.expires_in) || 3600)));
+	const now = Date.now();
+	await ctx.DB.prepare(
+		`INSERT INTO outbound_pairings (alias, url, token_url, device_enc, user_code, interval_s, poll_after_ms, expires_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(alias) DO UPDATE SET url = excluded.url, token_url = excluded.token_url, device_enc = excluded.device_enc, user_code = excluded.user_code,
+		 interval_s = excluded.interval_s, poll_after_ms = excluded.poll_after_ms, expires_ms = excluded.expires_ms, created_at = excluded.created_at`,
+	).bind(alias, origin, ep.token, await M.sealPeerTokenWithKey(key, OUTBOUND_PAIRING_AAD(alias), deviceCode), userCode, interval, now, now + ttl * 1000, A.nowIso()).run();
+	log("outbound_pairing_requested", { alias, userCode });
+	const page = sameOriginHref(origin, d.verification_uri) || `${origin}/device`;
+	const complete = sameOriginHref(origin, d.verification_uri_complete) || `${page}?user_code=${encodeURIComponent(userCode)}`;
+	const offersSealed = Array.isArray(card?.capabilities?.extensions) && card.capabilities.extensions.some((x: Json) => x?.uri === SEALED_EXT);
+	const data = { userCode, verificationUri: page, verificationUriComplete: complete, sendTo: alias, expiresAt: new Date(now + ttl * 1000).toISOString(), serverReadable: true, peerOffersEncryption: offersSealed };
+	const enc = offersSealed
+		? " This pairing is not end-to-end encrypted. The other agent also offers encrypted pairing, which needs the local CLI (connect --sealed-key-id); to use it, ask its owner not to approve this code."
+		: " This pairing is not end-to-end encrypted: the inbox servers can read its messages.";
+	return { text: M.toolText(`Pairing requested. Ask the other agent's owner to approve code ${userCode} at the link below; you never approve it yourself. After they approve, send to ${alias}: that first send redeems the code and stores the outbound peer. The code expires at ${data.expiresAt}.${enc} The pairing secret stays on this A2A endpoint. ${UNTRUSTED}`, data), structuredContent: data };
+}
+
+/** Redeems a pending request_pairing code before the first send to that alias. Throws a ToolError until approved. */
+async function redeemOutboundPairing(ctx: TenantContext, ectx: ExecutionContext, alias: string): Promise<void> {
+	const p: Json = await ctx.DB.prepare("SELECT * FROM outbound_pairings WHERE alias = ?").bind(alias).first();
+	if (!p) return;
+	const drop = () => ctx.DB.prepare("DELETE FROM outbound_pairings WHERE alias = ?").bind(alias).run();
+	const now = Date.now();
+	if (Number(p.expires_ms) <= now) { await drop(); throw new ToolError(`The pairing code ${p.user_code} expired before it was approved. Call request_pairing again. Nothing was sent.`); }
+	const waiting = `The other agent's owner has not approved ${p.user_code} yet. Nothing was sent; try again later.`;
+	if (Number(p.poll_after_ms) > now) throw new ToolError(waiting);
+	const deviceCode = await openPeerSecret(ctx, OUTBOUND_PAIRING_AAD(alias), p.device_enc);
+	if (!deviceCode) { await drop(); throw new ToolError("That pairing code can't be read any more. Call request_pairing again. Nothing was sent."); }
+	let r: Response;
+	try { r = await postPeerForm(ctx, ectx, p.url, p.token_url, { grant_type: P.DEVICE_GRANT, device_code: deviceCode }); }
+	catch (e: any) { if (e instanceof ToolError) throw e; throw new ToolError("The other agent couldn't be reached. Nothing was sent."); }
+	const d = await peerJson(r);
+	const error = typeof d?.error === "string" ? d.error : "";
+	if (error === "authorization_pending" || error === "slow_down") {
+		const interval = error === "slow_down" ? Math.min(60, Number(p.interval_s) + 5) : Number(p.interval_s);
+		await ctx.DB.prepare("UPDATE outbound_pairings SET interval_s = ?, poll_after_ms = ? WHERE alias = ?").bind(interval, now + interval * 1000, alias).run();
+		throw new ToolError(waiting);
+	}
+	if (error === "access_denied") { await drop(); throw new ToolError("The other agent's owner denied the pairing. Nothing was sent."); }
+	if (error === "expired_token" || error === "invalid_grant") { await drop(); throw new ToolError(`The pairing code ${p.user_code} expired. Call request_pairing again. Nothing was sent.`); }
+	const token = typeof d?.access_token === "string" ? d.access_token : "";
+	const type = typeof d?.token_type === "string" ? d.token_type : "Bearer";
+	if (r.status !== 200 || !token || token.length > 4096 || /\s/.test(token) || !/^bearer$/i.test(type))
+		throw new ToolError("The other agent did not accept the pairing redemption. Nothing was sent.");
+	const key = await ctx.peerKey();
+	if (!key) throw new ToolError("this A2A endpoint cannot store the peer token. Nothing was sent.");
+	const stamp = A.nowIso();
+	await ctx.DB.batch([
+		ctx.DB.prepare("INSERT INTO outbound_peers (alias, url, token_enc, created_at, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(alias) DO UPDATE SET url = excluded.url, token_enc = excluded.token_enc, source = NULL, updated_at = excluded.updated_at")
+			.bind(alias, p.url, await M.sealPeerTokenWithKey(key, alias, token), stamp, stamp),
+		ctx.DB.prepare("DELETE FROM outbound_pairings WHERE alias = ?").bind(alias),
+	]);
+	log("outbound_pairing_redeemed", { alias });
+}
+
 /** A synced outbound peer with its decrypted token (null token: the peer takes none, or it can't be decrypted). */
 async function outboundPeer(ctx: TenantContext, alias: string): Promise<{ alias: string; url: string; token: string | null }> {
 	const r: Json = await ctx.DB.prepare("SELECT * FROM outbound_peers WHERE alias = ?").bind(alias).first();
-	if (!r) throw new ToolError(`no peer "${alias}" synced to this A2A endpoint. On the machine with the CLI: ${cliCommand(ctx)} peers sync ${alias}`);
+	if (!r) throw new ToolError(`no peer "${alias}" synced to this A2A endpoint. Call request_pairing with the other agent's https address, or on the machine with the CLI: ${cliCommand(ctx)} peers sync ${alias}`);
 	let token: string | null = null;
 	if (r.token_enc) {
 		token = await openPeerSecret(ctx, alias, r.token_enc);
@@ -4410,10 +4669,15 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 				: d.status === "delivery-failed"
 					? `Task \`${d.taskId}\` is now ${d.state}. Reply stored; delivery to ${where} failed${http}, so the stored reply was not lost.`
 					: `Task \`${d.taskId}\` is now ${d.state}. Reply stored for the peer to fetch.`;
-			return { text: `${line}\n\n${d.detail}`, structuredContent: d };
+			return { text: `${line}\n\n${d.detail}${d.next ? `\n\nNext: ${d.next}` : ""}`, structuredContent: d };
 		}
+		case "request_pairing":
+			return await requestPairing(ctx, ectx, argStr(a, "url"));
 		case "send": {
-			const peer = await outboundPeer(ctx, argStr(a, "to"));
+			const to = argStr(a, "to");
+			if (!/^[A-Za-z0-9_.-]{1,64}$/.test(to)) throw new ToolError("to is invalid");
+			await redeemOutboundPairing(ctx, ectx, to);
+			const peer = await outboundPeer(ctx, to);
 			const text = argStr(a, "text");
 			const card = await fetchPeerCard(ctx, ectx, peer.url);
 			const [endpoint, version] = M.pickEndpoint(peer.url, card);
@@ -4499,17 +4763,27 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 		case "list_peers": {
 			const outRows = must(await ownerCall(ctx, ectx, "GET", "/owner/outbound-peers"));
 			const inRows = must(await ownerCall(ctx, ectx, "GET", "/owner/peers")).filter((r: Json) => !r.revoked_at);
-			return M.toolText(`Outbound peers (send works with these) and inbound labels (agents holding a token for this A2A endpoint). Names are claimed by the peers. A paired peer with no card URL has no callback yet: replies stay on the task until that peer announces an address.`,
+			const pendingRows = (await ctx.DB.prepare("SELECT alias, url, user_code, expires_ms FROM outbound_pairings WHERE expires_ms > ? ORDER BY alias").bind(Date.now()).all()).results as Json[];
+			return M.toolText(`Outbound peers (send works with these), pairings you requested that wait for the other owner's approval (the first send to that alias redeems it), and inbound labels (agents holding a token for this A2A endpoint). Names are claimed by the peers. A paired peer with no card URL has no callback yet: replies stay on the task until that peer announces an address.`,
 				{ outbound: outRows.map((r: Json) => ({ alias: r.alias, url: r.url, hasToken: r.has_token })),
-					inbound: inRows.map((r: Json) => ({ label: r.label, source: r.source, clientName: r.client_name, since: r.created_at, cardUrl: r.card_url || null, continuation: r.continuation })) });
+					pendingOutbound: pendingRows.map((r) => ({ alias: r.alias, url: r.url, userCode: r.user_code, expiresAt: new Date(Number(r.expires_ms)).toISOString() })),
+					inbound: inRows.map((r: Json) => ({ label: r.label, source: r.source, clientName: r.client_name, since: r.created_at, cardUrl: r.card_url || null, continuation: r.continuation,
+						...(r.sealed === true ? { sealed: true, safety_code: r.safety_code ?? null, safety_emoji: r.safety_emoji ?? null } : {}) })) });
 		}
 		case "pairing_requests": {
 			if (!pairingOn(ctx)) return "Device-flow pairing is off on this A2A endpoint (PAIRING_APPROVAL=off): there are no pairing requests.";
 			const d = must(await ownerCall(ctx, ectx, "GET", "/owner/pairing"));
 			const manage = dashboardUrl(ctx);
-			return M.toolText(`${d.pending.length} pending pairing request(s). Show your human who asks, the code and the link.${manage ? ` Approve or deny at ${manage}.` : ""} NEVER approve or deny yourself: your human decides on the link with the approval password. Names and card URLs are claimed by the requester (untrusted).`,
+			return M.toolText(`${d.pending.length} pending pairing request(s). Encrypted requests include safety_emoji (seven ordered emoji/name pairs) and safety_code, with legacy safetyEmoji and safetyCode retained. The emoji are a weaker 42-bit quick check; compare the full code for high-stakes pairings. For an encrypted request, ask your human to compare its safety code with the requester's owner through another trusted channel before approving. If the codes differ, your human must deny the request. Unavailable comparisons are null. Show your human who asks, the code and the link.${manage ? ` Approve or deny at ${manage}.` : ""} NEVER approve or deny yourself: your human decides on the link with the approval password. Names and card URLs are claimed by the requester (untrusted).`,
 				d.pending.map((r: Json) => ({ code: r.userCode, clientName: r.clientName, clientId: r.clientId, agentCardUrl: r.agentCardUrl, country: r.country,
-					expiresAt: r.expiresAt, link: r.verificationUriComplete, ...(manage ? { manageUrl: manage } : {}), replacesLabel: r.replacesLabel })));
+					expiresAt: r.expiresAt, link: r.verificationUriComplete, ...(manage ? { manageUrl: manage } : {}), replacesLabel: r.replacesLabel,
+					// Public comparisons only; legacy camelCase fields remain for existing clients. No bundles or keys.
+					...(r.sealed === true ? { sealed: true, safetyCode: typeof r.safetyCode === "string" ? r.safetyCode : null, safetyEmoji: r.safetyEmoji ?? null, safety_code: typeof r.safetyCode === "string" ? r.safetyCode : null, safety_emoji: r.safetyEmoji ?? null } : {}) })));
+		}
+		case "wake_status": {
+			const s = await wakeStatus(ctx);
+			const head = `Wake ${s.configured ? `configured (${s.transport})` : "not configured: messages wait in inbox for polling"}; ${s.pendingCount} pending or retrying. Read-only: nothing was sent or flushed. Peer labels below are claimed names (untrusted).`;
+			return { text: M.toolText(head, s), structuredContent: s };
 		}
 		case "send_feedback": {
 			// The owner authorized this client on the consent page. A peer token and the owner token never arrive here.
@@ -4608,6 +4882,8 @@ async function handleMcp(req: Request, ctx: TenantContext, ectx: ExecutionContex
 	if (Array.isArray(msg)) return rpcError(null, M.ERR.INVALID_REQUEST, "JSON-RPC batches are not supported", 400);
 	if (!msg || typeof msg !== "object" || msg.jsonrpc !== "2.0") return rpcError(null, M.ERR.INVALID_REQUEST, "invalid JSON-RPC request", 400);
 	const params = msg.params && typeof msg.params === "object" && !Array.isArray(msg.params) ? msg.params : {};
+	// A read-only diagnostic call must not trigger dispatch's opportunistic wake flush (#461).
+	if (msg.method === "tools/call" && params.name === "wake_status") NO_FLUSH.add(req);
 	const meta = params._meta && typeof params._meta === "object" ? params._meta : {};
 	const bodyVersion = typeof meta[M.META.version] === "string" ? meta[M.META.version] : null;
 	const pv = req.headers.get("mcp-protocol-version");
@@ -4743,6 +5019,11 @@ async function handle(req: Request, ctx: TenantContext, ectx: ExecutionContext, 
 		if (req.method === "GET" && path.startsWith("/.well-known/agent-skills/")) return skillsDoc(ctx, path);
 		if (req.method === "GET" && path === "/.well-known/ai-catalog.json") return await discoveryDoc(ctx, "ard");
 		if (req.method === "GET" && path === "/.well-known/api-catalog") return await discoveryDoc(ctx, "catalog");
+		if (req.method === "GET" && path === "/og-card-v1.png") return new Response(Uint8Array.from(atob(LANDING_SOCIAL_IMAGE), c => c.charCodeAt(0)), { headers: {
+			"content-type": "image/png", "cache-control": "public, max-age=31536000, immutable", "x-content-type-options": "nosniff",
+		} });
+		const socialKey = (req.method === "GET" || req.method === "HEAD") && SOCIAL_CARD_PATH.exec(path)?.[1];
+		if (socialKey) return await socialCard(req, ctx, socialKey);
 		if (req.method === "GET" && path === "/landing-webmcp.js") return new Response(LANDING_WEBMCP_SCRIPT, { headers: {
 			"content-type": "text/javascript; charset=utf-8", "cache-control": "no-cache", "x-content-type-options": "nosniff",
 		} });
@@ -4773,13 +5054,17 @@ function noindex(ctx: TenantContext, res: Response): Response {
 	return out;
 }
 
+/** Requests whose handler is a read-only diagnostic (MCP wake_status). dispatch skips its opportunistic flush for them. */
+const NO_FLUSH = new WeakSet<Request>();
+
 /** Inbox for one already-resolved tenant: retired-host redirect, the handler, then an opportunistic wake flush. */
 export async function dispatch(req: Request, ctx: TenantContext, ectx: ExecutionContext): Promise<Response> {
+	if (["GET", "HEAD"].includes(req.method) && new URL(req.url).pathname.startsWith("/owner/message-events/")) NO_FLUSH.add(req);
 	const moved = A.movedResponse(req.url, ctx.PUBLIC_URL, ctx.RETIRED_HOSTNAMES);
 	if (moved) return new Response(moved.body || null, { status: moved.status, headers: moved.headers });
 	const res = noindex(ctx, await handle(req, ctx, ectx));
 	// A diagnostic probe must not flush/consume pending inbox wakes as a side effect.
-	if (!((req.method === "POST" && /^\/owner\/wake\/test(?:\/|$)/.test(new URL(req.url).pathname)) || (["GET", "HEAD"].includes(req.method) && new URL(req.url).pathname === "/owner/upgrade-status") || (["GET", "HEAD", "POST"].includes(req.method) && /^\/owner\/wake\/(?:status|receipts)(?:\/|$)/.test(new URL(req.url).pathname))))
+	if (!NO_FLUSH.has(req) && !((req.method === "POST" && /^\/owner\/wake\/test(?:\/|$)/.test(new URL(req.url).pathname)) || (["GET", "HEAD"].includes(req.method) && new URL(req.url).pathname === "/owner/upgrade-status") || (["GET", "HEAD", "POST"].includes(req.method) && /^\/owner\/wake\/(?:status|receipts)(?:\/|$)/.test(new URL(req.url).pathname))))
 		ectx.waitUntil(flushDue(ctx, ectx).catch((e) => log("flush_failed", { error: String(e).slice(0, 200) })));
 	return res;
 }

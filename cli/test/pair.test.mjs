@@ -508,6 +508,9 @@ test("deploy uploads APPROVAL_OIDC_CLIENT_SECRET from the environment", () => {
 		process.env.EVENT_SECRET = "event-secret";
 		assert.equal(deploySecretsFromEnv().EVENT_SECRET, "event-secret");
 		delete process.env.EVENT_SECRET;
+  process.env.MESSAGE_EVENT_SECRET = "synthetic-protected-message-event-secret";
+  assert.equal(deploySecretsFromEnv().MESSAGE_EVENT_SECRET, "synthetic-protected-message-event-secret");
+  delete process.env.MESSAGE_EVENT_SECRET;
 	} finally {
 		if (prev === undefined) delete process.env.APPROVAL_OIDC_CLIENT_SECRET;
 		else process.env.APPROVAL_OIDC_CLIENT_SECRET = prev;

@@ -86,7 +86,7 @@ for (const status of [401, 503]) test(`actual CLI bounds repeated handshake HTTP
 	let output = ''; child.stdout.on('data', b => output += b); child.stderr.on('data', b => output += b);
 	const [code, signal] = await once(child, 'close');
 	assert.equal(signal, null); assert.equal(code, 1); assert.equal(p.times.length, 3); noHotLoop(p.times);
-	assert.match(output, /handshake failed three consecutive times; check endpoint, relay capability and credential enrollment/);
+	assert.match(output, /handshake failed three consecutive times on Node v[0-9.]+; check endpoint, network reachability and credential enrollment/);
 	assert.doesNotMatch(output, /a2ar_|TEST_RELAY_TOKEN|Refused/);
 });
 

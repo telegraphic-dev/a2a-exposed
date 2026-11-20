@@ -12,7 +12,7 @@ const BIN = fileURLToPath(new URL("../bin/a2a-exposed.mjs", import.meta.url));
 const task = { id: "peer-task", contextId: "peer-context", status: { state: "submitted" } };
 const message = { kind: "message", messageId: "peer-message", contextId: "peer-context", role: "agent", parts: [{ kind: "text", text: "delivered reply" }] };
 
-async function setup(t, { result = task, owner = "none", fail = "", peerFailure = false } = {}) {
+async function setup(t, { result = task, owner = "none", fail = "", peerFailure = false, recPeer = "", recEndpoint = "" } = {}) {
 	const requests = [];
 	const srv = http.createServer(async (req, res) => {
 		let raw = "";
@@ -25,7 +25,7 @@ async function setup(t, { result = task, owner = "none", fail = "", peerFailure 
 			if (fail === req.url) return reply(503, { error: "storage unavailable" });
 			if (fail === "network" || fail === `${req.method}-network`) return req.socket.destroy();
 			if (fail === req.method || fail === "all") return reply(503, { error: "storage unavailable" });
-			if (req.method === "GET") return reply(200, { endpoint: `${url}/rpc`, protocol: "0.3", contextId: "peer-context" });
+			if (req.method === "GET") return reply(200, { endpoint: recEndpoint || `${url}/rpc`, protocol: "0.3", contextId: "peer-context", ...(recPeer ? { peer: recPeer } : {}) });
 			return reply(200, { ok: true });
 		}
 		if (req.url.startsWith("/.well-known/")) return reply(200, { url: `${url}/rpc`, protocolVersion: "0.3" });
@@ -150,7 +150,7 @@ for (const fail of ["all", "network"]) {
 
 for (const fail of ["PUT", "PUT-network", "POST"]) {
 	test(`poll preserves fetched task when owner persistence fails (${fail})`, async (t) => {
-		const s = await setup(t, { owner: "full", fail });
+		const s = await setup(t, { owner: "full", fail, recPeer: "paired" });
 		const r = await s.cli(["poll", "--to", "paired", task.id]);
 		assert.equal(r.status, 0, r.stderr);
 		assert.deepEqual(JSON.parse(r.stdout), task);
@@ -160,7 +160,7 @@ for (const fail of ["PUT", "PUT-network", "POST"]) {
 }
 
 test("configured send and poll still persist history and outbound state", async (t) => {
-	const s = await setup(t, { owner: "full" });
+	const s = await setup(t, { owner: "full", recPeer: "paired" });
 	for (const args of [["send", "--to", "paired", "--text", "hello"], ["poll", "--to", "paired", task.id]]) {
 		const r = await s.cli(args);
 		assert.equal(r.status, 0, r.stderr);
@@ -194,4 +194,82 @@ test("send --json and poll --json print only the task JSON, with no # task trail
 		assert.deepEqual(JSON.parse(r.stdout), task);
 		assert.equal(r.stderr, "", `${args[0]} --json keeps stderr free of human lines`);
 	}
+});
+
+test("cancel asks the peer to cancel a sent task and records it in history like poll (#461)", async (t) => {
+	const s = await setup(t, { owner: "full", recPeer: "paired", result: { ...task, status: { state: "canceled" } } });
+	const r = await s.cli(["cancel", "--to", "paired", task.id]);
+	assert.equal(r.status, 0, r.stderr);
+	assert.equal(JSON.parse(r.stdout).status.state, "canceled");
+	const rpc = s.requests.find((x) => x.path === "/rpc");
+	assert.equal(rpc.body.method, "tasks/cancel");
+	assert.deepEqual(rpc.body.params, { id: task.id });
+	assert.equal(rpc.auth, "Bearer paired-test-token");
+	assert.ok(s.requests.some((x) => x.method === "PUT" && x.path === `/owner/outbound/${task.id}`));
+	const hist = s.requests.find((x) => x.method === "POST" && x.path === "/owner/history");
+	assert.equal(hist.body.event, "cancel");
+	assert.equal(hist.body.state, "canceled");
+	assert.match(r.stderr, /# task peer-task: canceled/);
+});
+
+test("cancel reports a refusal and --json prints only the task (#461)", async (t) => {
+	const s = await setup(t, { result: { ...task, status: { state: "working" } } });
+	const r = await s.cli(["cancel", "--to", "paired", task.id]);
+	assert.equal(r.status, 0, r.stderr);
+	assert.match(r.stderr, /the peer did not cancel it/);
+	const j = await s.cli(["cancel", "--to", "paired", "--json", task.id]);
+	assert.equal(j.stderr.includes("# task"), false);
+	assert.equal(JSON.parse(j.stdout).id, task.id);
+	const none = await s.cli(["cancel", task.id]);
+	assert.notEqual(none.status, 0);
+	assert.match(none.stderr, /--to required/);
+});
+
+test("poll never sends one peer's token to another peer's recorded endpoint (#485)", async (t) => {
+	const other = await setup(t, { owner: "full", recPeer: "someone-else" });
+	const r = await other.cli(["poll", "--to", "paired", task.id]);
+	assert.notEqual(r.status, 0);
+	assert.match(r.stderr, /was sent to peer "someone-else", not "paired"[\s\S]*Nothing was sent/);
+	assert.equal(other.requests.some((x) => x.path === "/rpc" || x.path.startsWith("/.well-known/")), false, "no peer request");
+	assert.equal(other.requests.some((x) => x.method === "PUT" || (x.method === "POST" && x.path === "/owner/history")), false, "another peer's record is not changed");
+
+	const offOrigin = await setup(t, { owner: "full", recPeer: "paired", recEndpoint: "https://elsewhere.example.net/rpc" });
+	const o = await offOrigin.cli(["poll", "--to", "paired", task.id]);
+	assert.notEqual(o.status, 0);
+	assert.match(o.stderr, /not on paired's address[\s\S]*Nothing was sent/);
+	assert.equal(offOrigin.requests.some((x) => x.path === "/rpc"), false);
+
+	// A record that names no peer is not used: the token goes only to the --to peer's own card endpoint.
+	for (const recPeer of ["", "?"]) {
+		const legacy = await setup(t, { owner: "full", recPeer });
+		const l = await legacy.cli(["poll", "--to", "paired", task.id]);
+		assert.equal(l.status, 0, l.stderr);
+		assert.ok(legacy.requests.some((x) => x.path.startsWith("/.well-known/")), "the peer's own card was read");
+	}
+	const unnamed = await setup(t, { owner: "full" });
+	const u = await unnamed.cli(["poll", "--to", "paired", task.id]);
+	assert.equal(u.status, 0, u.stderr);
+	assert.ok(unnamed.requests.some((x) => x.path.startsWith("/.well-known/")), "the peer's own card was read");
+	assert.equal(unnamed.requests.some((x) => x.method === "POST" && x.path === "/owner/history"), false);
+});
+
+test("cancel never sends one peer's token to another peer's recorded endpoint (#461)", async (t) => {
+	const other = await setup(t, { owner: "full", recPeer: "someone-else" });
+	const r = await other.cli(["cancel", "--to", "paired", task.id]);
+	assert.notEqual(r.status, 0);
+	assert.match(r.stderr, /was sent to peer "someone-else", not "paired"[\s\S]*Nothing was sent/);
+	assert.equal(other.requests.some((x) => x.path === "/rpc" || x.path.startsWith("/.well-known/")), false, "no peer request");
+
+	const offOrigin = await setup(t, { owner: "full", recPeer: "paired", recEndpoint: "https://elsewhere.example.net/rpc" });
+	const o = await offOrigin.cli(["cancel", "--to", "paired", task.id]);
+	assert.notEqual(o.status, 0);
+	assert.match(o.stderr, /not on paired's address[\s\S]*Nothing was sent/);
+	assert.equal(offOrigin.requests.some((x) => x.path === "/rpc"), false);
+
+	// A record that names no peer is not used: the token goes only to the --to peer's own card endpoint.
+	const unnamed = await setup(t, { owner: "full", result: { ...task, status: { state: "canceled" } } });
+	const u = await unnamed.cli(["cancel", "--to", "paired", task.id]);
+	assert.equal(u.status, 0, u.stderr);
+	assert.ok(unnamed.requests.some((x) => x.path.startsWith("/.well-known/")), "the peer's own card was read");
+	assert.equal(unnamed.requests.some((x) => x.method === "POST" && x.path === "/owner/history"), false);
 });

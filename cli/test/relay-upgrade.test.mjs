@@ -36,6 +36,8 @@ for (const profile of ['wake', 'webhook', 'a2a']) for (const status of [401, 302
 		const [code, signal] = await once(child, 'close');
 		assert.equal(signal, null, output); assert.equal(code, 1, output);
 		assert.match(output, /handshake failed three consecutive times/);
+		assert.ok(output.includes(process.version));
+		assert.doesNotMatch(output, /Worker\/connector v2 compatibility/);
 		assert.doesNotMatch(output, /a2ar_|a2ah_|fixture|Refused|must-not-follow/);
 		assert.equal(times.length, 3, 'three application attempts must produce exactly three wire upgrades');
 		assert.equal(new Set(keys).size, 3, 'each application attempt uses a fresh handshake key');

@@ -67,7 +67,8 @@ status/proposal/history listings have explicit bounded continuation inputs.
 The isolated backup byte-format primitive uses bounded scrypt and authenticated
 AES-GCM. The local store snapshot API described below uses it; it never enables restored
 live keys. Cross-process tests cover racing initialization and process death after a
-mock credential write; native lifecycle tests use simulated child processes only.
+mock credential write; native broker lifecycle tests use simulated child processes.
+A separate CI-only test stores keys in each runner's real OS credential store.
 
 Recovery approval is action-specific. Each operation listing includes a monotonic
 revision and `recovery_choices` with the approval digest for adopt or
@@ -110,7 +111,7 @@ blocks key initialization, recovery actions and trust writes; identity rows and
 inspection show archive-only, and live-use loads remain refused. No automatic
 resend or delivery happens. A future separate fresh receiving identity and peer
 re-verification flow is required before live enrollment; it is not implemented.
-This is a local API checkpoint, with no working backup/restore CLI command yet.
+The CLI exposes this as `keys backup` and `keys restore`, with the passphrase from piped stdin only.
 
 ## Local receiving-key rotation
 
