@@ -365,7 +365,7 @@ test("scope: the MCP token is not an owner or peer token, and peer/owner tokens 
 	assert.equal((await s.call("GET", "/mcp", { headers: { authorization: `Bearer ${a.access_token}` } })).status, 405);
 	// tools can't administer tokens or pairings
 	const names = (await s.mcp(a.access_token, "tools/list")).data.result.tools.map((x: any) => x.name);
-	assert.deepEqual(names, ["inbox", "show_task", "history", "mark_working", "reply", "send", "poll_outbound", "cancel_outbound", "request_pairing", "list_peers", "announce_address", "pairing_requests", "wake_status", "send_feedback"]);
+	assert.deepEqual(names, ["inbox", "wait_task", "show_task", "history", "mark_working", "reply", "send", "poll_outbound", "cancel_outbound", "request_pairing", "list_peers", "announce_address", "pairing_requests", "wake_status", "send_feedback"]);
 	assert.ok(!names.some((n: string) => /approve|deny|token|revoke|issue|password/.test(n)));
 	const unknown = await s.mcp(a.access_token, "tools/call", { name: "approve_pairing", arguments: { code: "X" } });
 	assert.equal(unknown.data.error.code, -32602);
@@ -605,7 +605,7 @@ test("2026-07-28: server/discover, tools/list caching hints, tools/call; resultT
 	assert.equal(d.status, 200, d.text);
 	assert.equal(d.data.result.resultType, "complete");
 	assert.deepEqual(d.data.result.supportedVersions, ["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26"]);
-	assert.deepEqual(d.data.result.capabilities, { tools: {} });
+	assert.deepEqual(d.data.result.capabilities, { tools: {}, extensions: { "io.modelcontextprotocol/tasks": {} } });
 	assert.match(d.data.result.instructions, /untrusted/);
 	assert.equal(d.data.result.cacheScope, "private");
 	assert.ok(d.data.result.ttlMs >= 0);
@@ -956,4 +956,65 @@ test("ARD route matches the MCP card gate, supports HEAD, and safely encodes nam
 		assert.equal(head.headers.get("access-control-allow-origin"), "*");
 		s.restore();
 	}
+});
+
+
+test("durable Tasks: grant isolation, negotiation, terminal snapshots, update and cancellation", async (t) => {
+ const s = setup();
+ t.after(s.restore);
+ const a = await s.connect("observer-a");
+ const b = await s.connect("observer-b");
+ const { task } = await s.inbound("task-peer", "observe me");
+ const caps = { "io.modelcontextprotocol/clientCapabilities": { extensions: { "io.modelcontextprotocol/tasks": {} } } };
+ const create = () => s.modern(a.access_token, "tools/call", { name: "wait_task", arguments: { taskId: task.id } }, {}, caps);
+ const call = (token: string, method: string, id: string, extra: any = {}, withCaps = true) => s.modern(token, method, { taskId: id, ...extra }, { "mcp-name": id }, withCaps ? caps : {});
+ const fallback = await s.modern(a.access_token, "tools/call", { name: "wait_task", arguments: { taskId: task.id } });
+ assert.equal(fallback.data.result.resultType, "complete");
+ const created = (await create()).data.result;
+ assert.equal(created.resultType, "task");
+ assert.equal(created.status, "working");
+ const id = created.taskId;
+ assert.equal((await call(a.access_token, "tasks/get", id)).data.result.status, "working");
+ assert.equal((await call(b.access_token, "tasks/get", id)).data.error.code, -32602);
+ assert.equal((await call(a.access_token, "tasks/get", id, {}, false)).data.error.code, -32021);
+ assert.equal((await s.modern(a.access_token, "subscriptions/listen", { notifications: { taskIds: [id] } })).data.error.code, -32021);
+ assert.equal((await call(a.access_token, "tasks/update", id, { inputResponses: { unknown: { action: "accept" } } })).data.result.resultType, "complete");
+ assert.equal((await call(a.access_token, "tasks/update", id, { inputResponses: false })).data.error.code, -32602);
+ assert.equal((await s.modern(a.access_token, "tasks/get", { taskId: id }, { "mcp-name": "wrong" }, caps)).data.error.code, -32020);
+ const other = (await create()).data.result.taskId;
+ await call(a.access_token, "tasks/cancel", other);
+ assert.equal((await call(a.access_token, "tasks/get", other)).data.result.status, "cancelled");
+ assert.equal((await s.tool(a.access_token, "show_task", { taskId: task.id })).isError, false);
+ await s.tool(a.access_token, "reply", { taskId: task.id, text: "finished", state: "completed" });
+ const final = (await call(a.access_token, "tasks/get", id)).data.result;
+ assert.equal(final.status, "completed");
+ assert.ok(final.result.content[0].text.includes("finished"));
+ await call(a.access_token, "tasks/cancel", id);
+ assert.deepEqual((await call(a.access_token, "tasks/get", id)).data.result, final);
+ assert.equal((await call(a.access_token, "tasks/get", other)).data.result.status, "cancelled");
+ const pending = await s.inbound("task-peer", "pending deletion");
+ const working = (await s.modern(a.access_token, "tools/call", { name: "wait_task", arguments: { taskId: pending.task.id } }, {}, caps)).data.result.taskId;
+ await s.owner("POST", "/owner/purge", { contexts: [task.contextId, pending.task.contextId] });
+ assert.equal((await call(a.access_token, "tasks/get", id)).data.error.code, -32602);
+ assert.equal((await call(a.access_token, "tasks/get", working)).data.error.code, -32602);
+ assert.equal((await s.DB.prepare("SELECT COUNT(*) AS n FROM mcp_tasks").first() as any).n, 0);
+});
+
+
+test("durable Tasks: atomic grant cap, expiry and revocation", async (t) => {
+ const s = setup(); t.after(s.restore);
+ const a = await s.connect("bounded");
+ const { task } = await s.inbound("limit-peer", "wait");
+ const caps = { "io.modelcontextprotocol/clientCapabilities": { extensions: { "io.modelcontextprotocol/tasks": {} } } };
+ const create = () => s.modern(a.access_token, "tools/call", { name: "wait_task", arguments: { taskId: task.id } }, {}, caps);
+ const first = (await create()).data.result;
+ await s.DB.batch(Array.from({length: 98}, (_, i) => s.DB.prepare("INSERT INTO mcp_tasks SELECT ?, grant_label, source_id, created_at, expires_ms, snapshot_json FROM mcp_tasks WHERE id = ?").bind(`filler-${i}`, first.taskId)));
+ const results = await Promise.all([create(), create()]);
+ assert.equal(results.filter(r => r.data.result?.resultType === "task").length, 1);
+ assert.equal(results.filter(r => r.data.error?.code === -32602).length, 1);
+ const get = () => s.modern(a.access_token, "tasks/get", { taskId: first.taskId }, {"mcp-name": first.taskId}, caps);
+ await s.DB.prepare("UPDATE mcp_tasks SET expires_ms = 0 WHERE id = ?").bind(first.taskId).run();
+ assert.equal((await get()).data.error.code, -32602);
+ await s.DB.prepare("UPDATE mcp_grants SET revoked_at = ? WHERE label = ?").bind(new Date().toISOString(), "mcp-bounded").run();
+ assert.equal((await get()).status, 401);
 });

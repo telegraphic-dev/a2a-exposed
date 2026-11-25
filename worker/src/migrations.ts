@@ -1,3 +1,4 @@
+import m0024 from "../migrations/0024_mcp_tasks.sql?raw";
 import m0023 from "../migrations/0023_peer_wake_batch.sql?raw";
 import m0022 from "../migrations/0022_message_events.sql?raw";
 // Inbox migrations bundled into the Worker. Vite inlines each `?raw` import.
@@ -49,4 +50,5 @@ export const MIGRATIONS: Migration[] = [
 	{ name: "0021_outbound_pairing.sql", sql: m0021 },
 	{ name: "0022_message_events.sql", sql: m0022 },
  { name: "0023_peer_wake_batch.sql", sql: m0023 },
+	{ name: "0024_mcp_tasks.sql", sql: m0024 },
 ];

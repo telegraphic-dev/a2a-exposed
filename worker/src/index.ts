@@ -1,3 +1,4 @@
+import * as McpTasks from "./mcp-tasks.ts";
 import * as PeerWake from "./peer-wake-policy.ts";
 import { messageEventTarget, messageEventIdentity, messageEventStatement, flushMessageEvents } from "./message-events.ts";
 import { LANDING_SOCIAL_IMAGE } from "./landing-social-image.ts";
@@ -3164,6 +3165,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 				ctx.DB.prepare("DELETE FROM wake_dedup WHERE ref = ? OR ref IN (SELECT id FROM tasks WHERE context_id = ?)").bind(c, c),
 				ctx.DB.prepare("DELETE FROM wake_receipts WHERE context_id = ?").bind(c),
     ctx.DB.prepare("DELETE FROM peer_wake_batch WHERE context_id = ?").bind(c),
+				ctx.DB.prepare("DELETE FROM mcp_tasks WHERE source_id IN (SELECT id FROM tasks WHERE context_id = ?)").bind(c),
 				ctx.DB.prepare("DELETE FROM messages WHERE context_id = ?").bind(c),
 				ctx.DB.prepare("DELETE FROM tasks WHERE context_id = ?").bind(c),
 				ctx.DB.prepare("DELETE FROM history WHERE context_id = ?").bind(c),
@@ -4738,6 +4740,7 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 			const head = `${tasks.length} task(s)${a.all ? "" : " waiting"}${pairing ? `; ${pairing} pending pairing request(s): see pairing_requests (never approve them yourself)${manage ? `. Approve or deny at ${manage}` : ""}` : ""}.${more} ${UNTRUSTED}`;
 			return M.toolText(head, tasks);
 		}
+		case "wait_task":
 		case "show_task":
 			return M.toolText(`Task. ${UNTRUSTED}`, must(await ownerCall(ctx, ectx, "GET", `/owner/tasks/${enc(A.checkId(argStr(a, "taskId"), "taskId"))}`)));
 		case "history": {
@@ -4993,7 +4996,7 @@ async function handleMcp(req: Request, ctx: TenantContext, ectx: ExecutionContex
 	if (!msg || typeof msg !== "object" || msg.jsonrpc !== "2.0") return rpcError(null, M.ERR.INVALID_REQUEST, "invalid JSON-RPC request", 400);
 	const params = msg.params && typeof msg.params === "object" && !Array.isArray(msg.params) ? msg.params : {};
 	// A read-only diagnostic call must not trigger dispatch's opportunistic wake flush (#461).
-	if (msg.method === "tools/call" && params.name === "wake_status") NO_FLUSH.add(req);
+	if ((msg.method === "tools/call" && ["wake_status", "wait_task"].includes(params.name)) || ["tasks/get", "tasks/update", "tasks/cancel"].includes(msg.method)) NO_FLUSH.add(req);
 	const meta = params._meta && typeof params._meta === "object" ? params._meta : {};
 	const bodyVersion = typeof meta[M.META.version] === "string" ? meta[M.META.version] : null;
 	const pv = req.headers.get("mcp-protocol-version");
@@ -5018,9 +5021,19 @@ async function handleMcp(req: Request, ctx: TenantContext, ectx: ExecutionContex
 		if (!caps || typeof caps !== "object" || Array.isArray(caps))
 			return rpcError(id, M.ERR.INVALID_PARAMS, `params._meta["${M.META.capabilities}"] (an object) is required`, 400);
 		const done = (result: Json) => rpcResult(id, { ...result, resultType: "complete", _meta: { ...(result._meta || {}), [M.META.serverInfo]: serverInfo(ctx) } });
+		if (["tasks/get", "tasks/update", "tasks/cancel"].includes(msg.method) || (msg.method === "tools/call" && params.name === "wait_task" && McpTasks.negotiated(caps)) || (msg.method === "subscriptions/listen" && Array.isArray(params.notifications?.taskIds) && params.notifications.taskIds.length > 0 && !McpTasks.negotiated(caps))) {
+            if (!McpTasks.negotiated(caps)) return json({ jsonrpc: "2.0", id, error: { code: M.ERR.MISSING_CLIENT_CAPABILITY, message: "Declare extensions.io.modelcontextprotocol/tasks on every task request", data: { requiredCapabilities: { extensions: { [McpTasks.EXTENSION]: {} } } } } });
+            try {
+                const result = msg.method === "tools/call" ? await McpTasks.create(ctx.DB, grant.label, params.arguments?.taskId) : await McpTasks.request(ctx.DB, grant.label, msg);
+                return rpcResult(id, { ...result, _meta: { [M.META.serverInfo]: serverInfo(ctx) } });
+            } catch (e) {
+                if (e instanceof McpTasks.TaskError) return rpcError(id, M.ERR.INVALID_PARAMS, e.message);
+                throw e;
+            }
+        }
 		switch (msg.method) {
 			case "server/discover":
-				return done({ supportedVersions: M.PROTOCOL_VERSIONS, capabilities: { tools: {} }, instructions: mcpInstructions, ttlMs: M.LIST_TTL_MS, cacheScope: "private" });
+				return done({ supportedVersions: M.PROTOCOL_VERSIONS, capabilities: { tools: {}, extensions: { [McpTasks.EXTENSION]: {} } }, instructions: mcpInstructions, ttlMs: M.LIST_TTL_MS, cacheScope: "private" });
 			case "tools/list":
 				return done({ tools: mcpTools(ctx), ttlMs: M.LIST_TTL_MS, cacheScope: "private" });
 			case "tools/call": {

@@ -41,7 +41,7 @@ export function headerProblem(h: Headers, msg: { method: string; params?: any },
 	const mm = h.get("mcp-method");
 	if (mm === null) return "the Mcp-Method header is required";
 	if (mm !== msg.method) return `Mcp-Method header value '${mm}' does not match body method '${msg.method}'`;
-	const named = msg.method === "tools/call" ? msg.params?.name : msg.method === "resources/read" ? msg.params?.uri : msg.method === "prompts/get" ? msg.params?.name : undefined;
+	const named = ["tasks/get", "tasks/update", "tasks/cancel"].includes(msg.method) ? msg.params?.taskId : msg.method === "tools/call" ? msg.params?.name : msg.method === "resources/read" ? msg.params?.uri : msg.method === "prompts/get" ? msg.params?.name : undefined;
 	if (named !== undefined) {
 		const raw = h.get("mcp-name");
 		if (raw === null) return "the Mcp-Name header is required for " + msg.method;
@@ -351,6 +351,9 @@ export const TOOLS: { name: string; title: string; description: string; inputSch
 			cursor: str("Cursor from the previous inbox page, when more tasks are waiting"),
 			limit: { type: "integer", minimum: 1, maximum: INBOX_MAX, description: `Tasks in this page (default ${INBOX_PAGE}, at most ${INBOX_MAX})` },
 		}, additionalProperties: false } },
+	{ name: "wait_task", title: "Wait for inbound task", annotations: ro,
+        description: `Observe an inbound task from inbox without acknowledging it or sending messages. On 2026-07-28 with the Tasks extension declared on this request, returns a durable handle: poll tasks/get until completed, or tasks/cancel to stop observing. Cancellation never recalls A2A delivery. Without the extension returns the current task immediately. Handles expire after 24 hours and belong to this OAuth grant. ${RULES}`,
+        inputSchema: { type: "object", properties: { taskId: str("Inbound task id from inbox") }, required: ["taskId"], additionalProperties: false } },
 	{ name: "show_task", title: "Show task", annotations: ro,
 		description: `One inbound task with its full message history and artifacts. ${RULES}`,
 		inputSchema: { type: "object", properties: { taskId: str("Task id from the A2A endpoint") }, required: ["taskId"], additionalProperties: false } },

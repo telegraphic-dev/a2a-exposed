@@ -1,3 +1,4 @@
+import m0024 from "../../../worker/migrations/0024_mcp_tasks.sql?raw";
 import m0023 from "../../../worker/migrations/0023_peer_wake_batch.sql?raw";
 import m0022 from "../../../worker/migrations/0022_message_events.sql?raw";
 // The self-host inbox schema. Keep this list equal to worker/src/migrations.ts.
@@ -52,4 +53,5 @@ export const INBOX_MIGRATIONS: InboxMigration[] = [
 	{ name: "0021_outbound_pairing.sql", sql: m0021 },
 	{ name: "0022_message_events.sql", sql: m0022 },
  { name: "0023_peer_wake_batch.sql", sql: m0023 },
+	{ name: "0024_mcp_tasks.sql", sql: m0024 },
 ];

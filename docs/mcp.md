@@ -303,3 +303,28 @@ Cross-implementation vectors are in `encryption/test/safety-emoji-vectors.json`.
 
 The optional committed-message feed, owner-only source/peer incarnation reads and
 strict callback helper have a separate [message events contract](message-events.md). They do not enable MCP subscriptions or replace owner wakes.
+
+
+### Durable inbound observation
+
+Use `inbox` to select an inbound task, then call `wait_task` with its `taskId`.
+On protocol 2026-07-28, declare `extensions: { "io.modelcontextprotocol/tasks": {} }`
+in the per-request client capabilities to receive a durable MCP task handle.
+Poll `tasks/get` with that handle; set `Mcp-Name` to the handle on all Tasks
+requests. Declare the extension on every request, including polling.
+A completed observation contains the inbound task's terminal status and artifacts.
+An A2A failure is a completed observation whose result reports that failure.
+
+Handles survive request restarts, belong to the issuing OAuth grant, and expire
+24 hours after creation. Revoking the grant removes access. At most 100 unexpired
+handles per grant are retained. Without the extension, `wait_task` returns the
+current task immediately, as does `show_task`.
+
+`tasks/update` accepts schema-valid `inputResponses`; this read-only observer
+issues no input requests, so unknown response keys are ignored. It does not
+resume browser confirmations. `tasks/cancel` stops observation only: it cannot
+recall A2A delivery, cancel the inbound task, or undo a peer's action. Terminal
+observation results remain stable until expiry. Notifications are not offered;
+respect the returned polling interval. Hosted support requires a released OSS
+version and a separately reviewed site pin; source tests do not establish client
+interoperability.
