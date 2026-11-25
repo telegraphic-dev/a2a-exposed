@@ -596,6 +596,14 @@ test("TenantStore.owner runs an allowlisted owner call and does not return a pee
 	assert.equal(JSON.stringify(listed.body).includes("a2aow_"), false);
 	assert.equal(await saw('"route":"GET /owner/peers"'), true);
 
+ const wakePolicies = await stub.owner({ accountId: "acct_carol", method: "GET", path: "/owner/wake/peers" });
+ assert.equal(wakePolicies.status, 200);
+ const policyRows = wakePolicies.body as { defaults: Record<string,string>; peers: {peerId:string}[] };
+ assert.equal(policyRows.peers.length, 1);
+ const policyBody = { peerId: policyRows.peers[0].peerId, policy: {...policyRows.defaults, update: "batch"} };
+ assert.equal((await stub.owner({accountId:"acct_carol",method:"PUT",path:"/owner/wake/peers",body:policyBody})).status,200);
+ const policyReadBack = await stub.owner({accountId:"acct_carol",method:"GET",path:"/owner/wake/peers"});
+ assert.equal((policyReadBack.body as {peers:{policy:{update:string}}[]}).peers[0].policy.update,"batch");
 	const minted = await stub.owner({ accountId: "acct_carol", method: "POST", path: "/owner/peers", body: { label: "bob" } });
 	assert.equal(minted.status, 404);
 	assert.equal(JSON.stringify(minted.body).includes("a2aow_"), false);

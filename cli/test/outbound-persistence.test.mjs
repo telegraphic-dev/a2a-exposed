@@ -181,7 +181,8 @@ test("peer failures remain fatal and do not persist a send", async (t) => {
 	assert.equal(r.status, 1);
 	assert.equal(r.stdout, "");
 	assert.match(r.stderr, /rejected our token/);
-	assert.equal(s.requests.filter((r) => r.path.startsWith("/owner/")).length, 0);
+	assert.equal(s.requests.filter((r) => r.path.startsWith("/owner/") && r.method !== "GET").length, 0);
+ assert.deepEqual(s.requests.filter(r=>r.path.startsWith("/owner/")).map(r=>r.path),["/owner/outbound-peers"],"only the original pairing snapshot may be read before a failed send");
 });
 
 test("send --json and poll --json print only the task JSON, with no # task trailer", async (t) => {

@@ -327,11 +327,13 @@ test("a reply follows a moved card only when the new card proves the stored iden
 	})).data.token as string;
 	assert.equal((await owner(bob.ctx, "acct-bob", "PUT", "/owner/outbound-peers/mover", { url: "https://carol.example.com", token: callback })).status, 200);
 	await bob.db.prepare("UPDATE outbound_peers SET source = 'announce' WHERE alias = 'mover'").run();
+ const wakeIdentity = (await bob.db.prepare("SELECT wake_policy_id FROM outbound_peers WHERE alias='mover'").first() as {wake_policy_id:string}).wake_policy_id;
 	const taskId = await send(bob.ctx, inbound, "where", "ctx-move");
 	const reply = await owner(bob.ctx, "acct-bob", "POST", "/owner/mcp/reply", { taskId, text: "followed", state: "completed" });
 	assert.equal(reply.body.structuredContent.status, "delivered", JSON.stringify(reply.body));
 	assert.equal(reply.body.structuredContent.target.host, "alice.example.com");
 	assert.equal((await bob.db.prepare("SELECT url FROM outbound_peers WHERE alias = 'mover'").first() as { url: string }).url, "https://alice.example.com");
+ assert.equal((await bob.db.prepare("SELECT wake_policy_id FROM outbound_peers WHERE alias='mover'").first() as {wake_policy_id:string}).wake_policy_id,wakeIdentity,"authenticated address move preserves owner policy identity");
 	assert.equal(JSON.stringify(reply.body).includes(callback), false);
 });
 

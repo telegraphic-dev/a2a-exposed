@@ -276,3 +276,16 @@ test("a merged text wake names every task id, bounded", () => {
 	assert.match(head, /tasks t-0, .*, t-19 and 5 more\)\.$/);
 	assert.equal(head.includes("t-20"), false);
 });
+
+test("all standard wake renderers carry actionable batch references without internal generations", async () => {
+ const batch = {...ev, batched:[{peer:'peer-b',context_id:'ctx-b',task_id:'task-b',kind:'outbound_update',generation:'private-generation'}]};
+ for(const preset of PRESETS) {
+  const req=await renderWake({preset,url:preset==='mausbot'?'https://hook.example/hooks/wh_test':'https://hook.example/wake',key:'dummy-key',hmacSecret:'dummy-signing'},batch);
+  assert.ok(req,preset);
+  const body=JSON.parse(req.body);
+  const text=JSON.stringify(body);
+  assert.match(text,/ctx-b/,preset);assert.match(text,/peer-b/,preset);assert.doesNotMatch(text,/private-generation/,preset);
+  if(['claude-code','openclaw-wake','openclaw-agent'].includes(preset)) assert.match(text,/history ctx-b --from peer-b/,preset);
+  else {const data=body.data||body;assert.equal(data.batched[0].kind,'outbound_update');assert.match(data.hint,/ inbox$/);}
+ }
+});

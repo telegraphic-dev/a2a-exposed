@@ -102,6 +102,35 @@ async function inboxRows(o) {
 	});
 }
 
+export async function peerWakePolicies(p, o) {
+ const usage = "List choices: wake peers --json. Set: wake peers --peer-id ID --policy-file FILE [--json]";
+ if (p.length !== 1 || Object.keys(o).some(k => !["peer-id", "policy-file", "json"].includes(k))) die(usage);
+ if (!!o["peer-id"] !== !!o["policy-file"]) die(`Both --peer-id and --policy-file are required for a change. ${usage}`);
+ let policy;
+ if (o["policy-file"]) {
+  try { policy = JSON.parse(fs.readFileSync(o["policy-file"], "utf8")); } catch { die(`Cannot read a JSON policy object from --policy-file. ${usage}`); }
+  const events = ["inbound", "update", "completed", "attention", "empty", "ack"];
+  if (!policy || typeof policy !== "object" || Array.isArray(policy) || Object.keys(policy).length !== events.length || !events.every(k => ["wake", "skip", "batch"].includes(policy[k]))) die(`Policy needs all six event classes with wake, skip, or batch. ${usage}`);
+ }
+ let listed = await ownerTry("GET", "/owner/wake/peers"+(policy ? `?peerId=${q(o["peer-id"])}` : ""));
+ if (listed.status !== 200 || !Array.isArray(listed.data?.peers)) die(`Peer wake policies unavailable (HTTP ${listed.status}). Check status --json and the Worker version. ${usage}`);
+ if (!policy) {
+  const data={...listed.data,peers:[...listed.data.peers]}; const seen=new Set();
+  while(listed.data.nextCursor) {
+   const cursor=listed.data.nextCursor;
+   if(typeof cursor!=="string" || seen.has(cursor) || seen.size>=1000) die("Peer wake pagination did not finish; retry wake peers --json.");
+   seen.add(cursor);listed=await ownerTry("GET",`/owner/wake/peers?cursor=${q(cursor)}`);
+   if(listed.status!==200 || !Array.isArray(listed.data?.peers)) die("Peer wake pagination failed; retry wake peers --json. No policy changed.");
+   data.peers.push(...listed.data.peers);
+  }
+  data.nextCursor=null;return out(data);
+ }
+ if (!listed.data.peers.some(p => p.peerId === o["peer-id"])) die(`Pairing ID is unknown or changed. ${usage}`);
+ const changed = await ownerTry("PUT", "/owner/wake/peers", { peerId: o["peer-id"], policy });
+ if (changed.status !== 200) die(`Policy was not confirmed (HTTP ${changed.status}); read wake peers --json before retrying.`);
+ out(changed.data);
+}
+
 export async function wakePolicy(p, o) {
  const usage = "wake policy [--json]; wake policy --policy smart|legacy [--json]. List choices with wake policy --json";
  if (p.length !== 1) die(`Unexpected wake policy argument ${JSON.stringify(p[1])}. ${usage}`);
@@ -119,15 +148,9 @@ export async function wakePolicy(p, o) {
  const unchanged = o.policy !== undefined && before.data.policy === o.policy;
  const r = o.policy === undefined || unchanged ? before : checked(await ownerTry("PUT", "/owner/wake/policy", { policy: o.policy }));
  if (o.json) return out(r.data);
- const descriptions = {
-  shadow: "Automatic filtering is off; messages still wake your agent",
-  "staging-enforce": "Without files, artifacts or data, acks, empty status updates, identical status updates within the batching window, and progress updates without content are stored without waking your agent",
-  enforce: "Without files, artifacts or data, acks and empty or unchanged status updates are stored without waking your agent; changed status updates are batched",
- };
- const description = r.data.policy === "legacy" ? "Automatic filtering is off; messages still wake your agent" : descriptions[r.data.mode] || "This Worker uses an unrecognized wake mode; check its version with the owner";
- console.log(`${o.policy === undefined ? "" : unchanged ? `No change: policy was already ${o.policy}. ` : "Saved. "}Wake policy: ${r.data.policy}. ${description} (routing: ${r.data.mode}).`);
- console.log("All messages stay in your inbox. Choices: smart (use this deployment's wake rules) or legacy (turn off automatic filtering).");
- console.log("Explicit wake always still requests a wake. Messages sent with wake never and duplicates do not wake your agent; existing batching and limits still apply.");
+ console.log(`${o.policy === undefined ? "" : unchanged ? `No change: policy was already ${o.policy}. ` : "Saved. "}Wake policy: ${r.data.policy}. Global routing preference: ${r.data.mode}.`);
+ console.log("Per-pairing owner rules apply independently when supported; inspect wake peers --json. All messages stay in your inbox/history.");
+ console.log("Choices: smart (deployment global preference) or legacy (global shadow preference). Sender wake never and duplicates remain quiet; sender always cannot override owner skip/batch rules.");
  if (o.policy !== undefined && !unchanged) console.log(`Undo: wake policy --policy ${before.data.policy}`);
 }
 
@@ -467,6 +490,13 @@ export async function send(o) {
 		pushToken = randomToken(24);
 		conf[v1 ? "taskPushNotificationConfig" : "pushNotificationConfig"] = { url: baseUrl() + "/push", token: pushToken };
 	}
+ let peerId = null;
+ if (ownerConfigured()) {
+  try {
+   const rows = (await ownerTry("GET", "/owner/outbound-peers")).data;
+   if (Array.isArray(rows)) peerId = rows.find(row => row.alias === alias && String(row.url).replace(/\/$/, "") === base.replace(/\/$/, ""))?.peerId || null;
+  } catch { /* Optional history cannot prevent a send. Legacy rows use defaults only. */ }
+ }
 	const res = await rpc(url, version, tok, "message/send", "SendMessage", { message: msg, configuration: conf }, { alias: C.loadPeers()[alias] ? alias : null, base });
 	// printed and stored exactly as the peer returned it (1.0: TASK_STATE_* / ROLE_*; 0.3: lowercase)
 	const obj = res && typeof res === "object" && ("task" in res || "message" in res) ? res.task || res.message : res;
@@ -476,7 +506,7 @@ export async function send(o) {
 	out(obj);
 	await logHistory(ctx, { dir: "out", peer: alias, taskId: tid, role: "user", state: isTask ? plainState(obj) : null, text, data: { messageId: msg.messageId, endpoint: url, protocol: version } });
 	if (tid) {
-		const saved = await persistOutbound("POST", "/owner/outbound", { taskId: tid, contextId: ctx, peer: alias, endpoint: url, protocol: version, pushToken, task: obj }, "save outbound task");
+		const saved = await persistOutbound("POST", "/owner/outbound", { taskId: tid, contextId: ctx, peer: alias, peerId, endpoint: url, protocol: version, pushToken, task: obj }, "save outbound task");
 		if (o.push && !saved) console.error(`warning: push updates cannot authenticate because the outbound task token could not be saved; use ${CLI} poll --to ${alias} ${tid} instead; the message was delivered, do not resend`);
 	}
 	else if (obj && obj.parts) await logHistory(ctx, { dir: "in", peer: alias, role: "agent", event: "direct_message", text: textOf(obj) });
