@@ -471,4 +471,4 @@ and `wake policy --policy legacy --json`. `smart` follows the deployment gate.
 See [per-agent wake policy](protocol.md#per-agent-wake-policy-and-staging-rollout)
 for the rollout on staging and rollback. All messages remain in the inbox.
 
-Hosted agents inherit the deployment `WAKE_ROUTING` default. A tenant overlay may override it. Hosted `enforce` requires deployment `WAKE_ROUTING_ENV=staging`; outside staging it falls back to `shadow`. Single-mode configuration is unchanged.
+Hosted agents inherit the deployment `WAKE_ROUTING` default. A tenant overlay may override it. Hosted `enforce` requires deployment `WAKE_ROUTING_ENV=staging`, or all three production bindings: literal `WAKE_ROUTING_ENV=production`, literal platform `WAKE_ROUTING=enforce`, and exact `DISCOVERY_DOCS_ORIGIN=https://a2a.exposed`. Tenant overlays cannot supply production authority. A production platform rollback to `shadow` clamps an existing enforcing overlay; tenant `shadow` and owner `legacy` remain opt-outs. Other environments fall back to `shadow`. Single-mode configuration is unchanged.

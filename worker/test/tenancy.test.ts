@@ -377,3 +377,30 @@ test("hosted wake policy reports enforced staging and shadow production", async 
   }
  }
 });
+
+
+test("production routing authority is exact and cannot come from tenant config", () => {
+ for (const environment of [undefined, "production", "preview", " production"]) {
+  for (const origin of [undefined, "https://a2a.exposed", "https://agent-to-agent.party", "https://a2a.exposed/", " https://a2a.exposed"]) {
+   for (const mode of ["shadow", "enforce", "staging-enforce"]) {
+    const ctx = hostedTenantContext(selfEnv({ WAKE_ROUTING_ENV: environment, WAKE_ROUTING: "enforce", DISCOVERY_DOCS_ORIGIN: origin }), {
+     id: "ten_production", db: dummy, publicUrl: BASE,
+     config: { WAKE_ROUTING: mode, DISCOVERY_DOCS_ORIGIN: "https://a2a.exposed" },
+    });
+    const allowed = environment === "production" && origin === "https://a2a.exposed";
+    assert.equal(ctx.WAKE_ROUTING, mode === "enforce" && !allowed ? "shadow" : mode);
+    assert.equal(ctx.stagingWakeRouting, false);
+   }
+  }
+ }
+});
+
+
+test("production platform shadow overrides an existing enforcing overlay", () => {
+ for (const platform of [undefined, "shadow", "enforce", "ENFORCE", " enforce"]) {
+  for (const tenant of ["shadow", "enforce"]) {
+   const ctx=hostedTenantContext(selfEnv({ WAKE_ROUTING_ENV:"production", WAKE_ROUTING:platform, DISCOVERY_DOCS_ORIGIN:"https://a2a.exposed" }), { id:"ten_rollback", db:dummy, publicUrl:BASE, config:{WAKE_ROUTING:tenant} });
+   assert.equal(ctx.WAKE_ROUTING, platform === "enforce" ? tenant : "shadow");
+  }
+ }
+});
