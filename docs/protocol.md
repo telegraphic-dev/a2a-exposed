@@ -54,7 +54,7 @@ A repeated `messageId` from the same peer returns its stored task without anothe
 
 ### Per-agent wake policy and staging rollout
 
-`wake policy --json` retains the global `smart`/`legacy` preference and deployment mode for compatibility. Its owner APIs remain `GET/PUT /owner/wake/policy`. The deployment-only staging guard still constrains the reported global mode. These global settings do not override current per-pairing owner rules; inspect those with `wake peers --json`. Changing deployment configuration still uses the infrastructure workflow and does not release or deploy a service.
+`wake policy --json` retains the global `smart`/`legacy` preference and deployment mode for compatibility. Its owner APIs remain `GET/PUT /owner/wake/policy`. Deployment authority still constrains the reported global mode. Hosted production enforce requires exact platform bindings `WAKE_ROUTING_ENV=production`, `WAKE_ROUTING=enforce` and `DISCOVERY_DOCS_ORIGIN=https://a2a.exposed`; overlays cannot supply that authority. The separate staging guard remains `WAKE_ROUTING_ENV=staging`. These global settings do not override current per-pairing owner rules; inspect those with `wake peers --json`. Changing deployment configuration still uses the infrastructure workflow and does not release or deploy a service.
 
 The CLI reads the global choice before saving and prints an `Undo:` command for an actual change. Selecting the current choice is a read-only no-op. JSON output remains one policy response. Owner credentials stay in their protected configuration file or named environment variables.
 
