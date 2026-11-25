@@ -1045,6 +1045,8 @@ async function peerWakePlan(ctx: TenantContext, peer: string, inbound: boolean, 
 }
 function peerBatchStmt(ctx: TenantContext, plan: PeerWakePlan, peer: string, contextId: string, taskId: string, inbound: boolean, claim?: { messageId: string; token: string }) {
  if (plan.action !== "batch" || !plan.peerId) return null;
+ if (!claim) return ctx.DB.prepare("INSERT INTO peer_wake_batch(peer_id,peer,context_id,task_id,kind,generation) SELECT ?,?,context_id,?,?,? FROM outbound WHERE task_id=? AND wake_policy_peer_id=? ON CONFLICT(peer_id,context_id,task_id) DO UPDATE SET generation=excluded.generation,kind=excluded.kind")
+  .bind(plan.peerId,peer,taskId,"outbound_update",crypto.randomUUID(),taskId,plan.peerId);
  const gate = claim ? " WHERE EXISTS(SELECT 1 FROM message_claims WHERE peer=? AND message_id=? AND claim_token=?)" : "";
  return ctx.DB.prepare(`INSERT INTO peer_wake_batch(peer_id,peer,context_id,task_id,kind,generation) SELECT ?,?,?,?,?,?${gate} ON CONFLICT(peer_id,context_id,task_id) DO UPDATE SET generation=excluded.generation,kind=excluded.kind`)
   .bind(plan.peerId, peer, contextId, taskId, inbound ? "inbound" : "outbound_update", crypto.randomUUID(), ...(claim ? [peer,claim.messageId,claim.token] : []));
@@ -1192,7 +1194,10 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx, authHash) => {
  const directMeta = directReply ? params.metadata?.[DIRECT_REPLY_META] || msg.metadata?.[DIRECT_REPLY_META] || {} : {};
  const routeState = directReply ? typeof directMeta.state === "string" && /^[a-z-]{1,32}$/.test(directMeta.state) ? directMeta.state : "completed" : inputRequired ? "input-required" : null;
  const routeTask = directReply && typeof directMeta.taskId === "string" && A.ID_RE.test(directMeta.taskId) ? directMeta.taskId : task.id;
- const plan = await peerWakePlan(ctx,label,!directReply,routeState,preview,pushCarriesFile(msg),routed.fields.wake,routed.fields.intent,false);
+ const routedNow = !directReply ? await routeInbound(ctx,label,contextId,routed.fields.wake,routed.fields.intent,preview,false,pushCarriesFile(msg),inputRequired) : null;
+ // Preserve applicable status deduplication without reapplying unrelated legacy routing rules.
+ const statusDuplicate = routedNow?.decision.decision === "status_unchanged" && routedNow.decision.action === "suppress";
+ const plan = await peerWakePlan(ctx,label,!directReply,routeState,preview,pushCarriesFile(msg),routed.fields.wake,routed.fields.intent,statusDuplicate);
  const batchStmt = peerBatchStmt(ctx,plan,label,contextId,routeTask,!directReply,{messageId:msg.messageId,token:claimToken});
 	const stored = creating
 		? await ctx.DB.batch([
@@ -1237,14 +1242,13 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx, authHash) => {
 	// A direct reply is the answer to a task this agent sent. It is stored as a finished task, not new work,
 	// and it wakes the receiver the way a pushed reply does: same routing, the sender's wake and intent hints,
 	// kind outbound_update, and the sent task's id (#485). A retried message id returned above without a wake.
- if (!directReply) {
-  const routedNow = await routeInbound(ctx,label,contextId,routed.fields.wake,routed.fields.intent,preview,false,pushCarriesFile(msg),inputRequired);
+ if (routedNow) {
   if (routedNow.fingerprint && routedNow.decision.decision !== "status_unchanged") {
    await saveDedup(ctx,"status",label,contextId,routedNow.fingerprint);
    await saveDedup(ctx,"status_at",label,contextId,String(Date.now()));
   }
  }
- await peerWake(ctx,ectx,contextId,routeTask,label,directReply ? `[update on outbound task: ${routeState}] ${preview}` : preview,!directReply,routed.fields.wake,routed.fields.intent,false,plan);
+ await peerWake(ctx,ectx,contextId,routeTask,label,directReply ? `[update on outbound task: ${routeState}] ${preview}` : preview,!directReply,routed.fields.wake,routed.fields.intent,statusDuplicate,plan);
 
 	const pt = A.publicTask(task, version, conf.historyLength);
 	return version.startsWith("1") ? { task: pt } : pt;
@@ -2333,7 +2337,7 @@ async function handlePush(req: Request, ctx: TenantContext, ectx: ExecutionConte
  const batchStmt = peerBatchStmt(ctx,plan,rec.peer,rec.context_id,taskId,false);
  await ctx.DB.batch([
   ctx.DB.prepare("UPDATE outbound SET updates_json = ?, task_json = COALESCE(?, task_json), updates_seen = 0 WHERE task_id = ?").bind(JSON.stringify(updates.slice(-20)), t && t.id ? JSON.stringify(inner) : null, taskId),
-  histStmt(ctx,rec.context_id,{dir:"in",peer:rec.peer,taskId,event:"push",state,text,...(view.ownerWait ? {data:{ownerWait:view.ownerWait}} : {})}),
+  ctx.DB.prepare("INSERT INTO history(context_id,ts,dir,peer,task_id,state,event,text,data_json) SELECT context_id,?,'in',peer,task_id,?,'push',?,? FROM outbound WHERE task_id=?").bind(A.nowIso(),state,text,view.ownerWait ? JSON.stringify({ownerWait:view.ownerWait}) : null,taskId),
   ...(batchStmt ? [batchStmt] : []),
  ]);
  log("push_received",{peer:rec.peer,taskId,state});
@@ -2422,35 +2426,49 @@ async function outboundForPush(ctx: TenantContext, taskId: string, givenHash: st
 	return same(now);
 }
 
-/** Move a pending push row onto the peer's task id without dropping an update that already arrived. */
+/** Rebind queued references and history with task adoption. A fresh generation invalidates old carriers. */
+function adoptedBatchStmts(ctx: TenantContext, old: Json, fromTask: string, taskId: string, contextId: string) {
+ if (!old || old.context_id === contextId && fromTask === taskId) return [];
+ const gate = "EXISTS(SELECT 1 FROM outbound WHERE task_id=? AND context_id=?)";
+ const out = [ctx.DB.prepare(`UPDATE history SET context_id=? WHERE context_id=? AND task_id=? AND peer=? AND ${gate}`).bind(contextId,old.context_id,fromTask,old.peer,taskId,contextId)];
+ if (old.wake_policy_peer_id) out.push(
+  ctx.DB.prepare(`INSERT INTO peer_wake_batch(peer_id,peer,context_id,task_id,kind,generation) SELECT peer_id,peer,?,?,kind,? FROM peer_wake_batch WHERE peer_id=? AND context_id=? AND task_id=? AND ${gate} ON CONFLICT(peer_id,context_id,task_id) DO UPDATE SET generation=excluded.generation,kind=excluded.kind`).bind(contextId,taskId,crypto.randomUUID(),old.wake_policy_peer_id,old.context_id,fromTask,taskId,contextId),
+  ctx.DB.prepare(`DELETE FROM peer_wake_batch WHERE peer_id=? AND context_id=? AND task_id=? AND ${gate}`).bind(old.wake_policy_peer_id,old.context_id,fromTask,taskId,contextId),
+ );
+ return out;
+}
+
+/** Move a pending push row onto the peer's task id without dropping updates or their queued references. */
 async function adoptOutboundTask(ctx: TenantContext, pendingId: string, taskId: string, contextId: string, peer: string, endpoint: string, protocol: string, task: Json): Promise<boolean> {
-	const taskJson = task ? JSON.stringify(task) : null;
-	const fill = "context_id = ?, peer = ?, endpoint = ?, protocol = ?, task_json = COALESCE(?, task_json)";
-	try {
-		const moved = await ctx.DB.prepare(`UPDATE outbound SET task_id = ?, ${fill} WHERE task_id = ?`)
-			.bind(taskId, contextId, peer, endpoint, protocol, taskJson, pendingId).run();
-		if (changed(moved) === 1) return true;
-	} catch { /* the real task id is already stored */ }
-	const pending: Json = await ctx.DB.prepare("SELECT push_token_hash, updates_json, updates_seen, wake_policy_peer_id FROM outbound WHERE task_id = ?").bind(pendingId).first();
-	const existing: Json = await ctx.DB.prepare("SELECT updates_json, updates_seen FROM outbound WHERE task_id = ?").bind(taskId).first();
-	if (!existing) return false;
-	// The callback already claimed this task id. Fill in the send metadata and leave the update it stored.
-	if (!pending) {
-		await ctx.DB.prepare(`UPDATE outbound SET ${fill} WHERE task_id = ?`)
-			.bind(contextId, peer, endpoint, protocol, taskJson, taskId).run();
-		return true;
-	}
-	let updates = existing.updates_json;
-	let seen = existing.updates_seen;
-	if (pending.updates_json && pending.updates_json !== "[]" && (!updates || updates === "[]")) {
-		updates = pending.updates_json;
-		seen = pending.updates_seen;
-	}
-	await ctx.DB.prepare(
-		`UPDATE outbound SET ${fill}, push_token_hash = COALESCE(?, push_token_hash), updates_json = ?, updates_seen = ?, wake_policy_peer_id = COALESCE(wake_policy_peer_id, ?) WHERE task_id = ?`,
-	).bind(contextId, peer, endpoint, protocol, taskJson, pending.push_token_hash ?? null, updates ?? "[]", seen ?? 0, pending.wake_policy_peer_id ?? null, taskId).run();
-	await ctx.DB.prepare("DELETE FROM outbound WHERE task_id = ?").bind(pendingId).run();
-	return true;
+ const taskJson = task ? JSON.stringify(task) : null;
+ const fill = "context_id = ?, peer = ?, endpoint = ?, protocol = ?, task_json = COALESCE(?, task_json)";
+ const before: Json = await ctx.DB.prepare("SELECT * FROM outbound WHERE task_id=?").bind(pendingId).first();
+ try {
+  const [moved] = await ctx.DB.batch([
+   ctx.DB.prepare(`UPDATE outbound SET task_id = ?, ${fill} WHERE task_id = ?`).bind(taskId,contextId,peer,endpoint,protocol,taskJson,pendingId),
+   ...adoptedBatchStmts(ctx,before,pendingId,taskId,contextId),
+  ]);
+  if (changed(moved) === 1) return true;
+ } catch { /* the real task id is already stored */ }
+ const pending: Json = await ctx.DB.prepare("SELECT * FROM outbound WHERE task_id=?").bind(pendingId).first();
+ const existing: Json = await ctx.DB.prepare("SELECT * FROM outbound WHERE task_id=?").bind(taskId).first();
+ if (!existing) return false;
+ if (!pending) {
+  await ctx.DB.batch([
+   ctx.DB.prepare(`UPDATE outbound SET ${fill} WHERE task_id = ?`).bind(contextId,peer,endpoint,protocol,taskJson,taskId),
+   ...adoptedBatchStmts(ctx,existing,taskId,taskId,contextId),
+  ]);
+  return true;
+ }
+ let updates = existing.updates_json, seen = existing.updates_seen;
+ if (pending.updates_json && pending.updates_json !== "[]" && (!updates || updates === "[]")) { updates = pending.updates_json; seen = pending.updates_seen; }
+ await ctx.DB.batch([
+  ctx.DB.prepare(`UPDATE outbound SET ${fill}, push_token_hash = COALESCE(?, push_token_hash), updates_json = ?, updates_seen = ?, wake_policy_peer_id = COALESCE(wake_policy_peer_id, ?) WHERE task_id = ?`).bind(contextId,peer,endpoint,protocol,taskJson,pending.push_token_hash ?? null,updates ?? "[]",seen ?? 0,pending.wake_policy_peer_id ?? null,taskId),
+  ...adoptedBatchStmts(ctx,pending,pendingId,taskId,contextId),
+  ...adoptedBatchStmts(ctx,existing,taskId,taskId,contextId),
+  ctx.DB.prepare("DELETE FROM outbound WHERE task_id=?").bind(pendingId),
+ ]);
+ return true;
 }
 
 type ReplySnap = { taskId: string; contextId: string; updatesJson: string };
@@ -4789,8 +4807,7 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 			const isTask = obj && typeof obj === "object" && "status" in obj;
 			const sentContext = (obj && obj.contextId) || callerContext || pendingContext;
 			const tid = isTask && obj.id ? String(obj.id) : null;
-			if (!callerContext && sentContext !== pendingContext)
-				await ctx.DB.prepare("UPDATE history SET context_id = ? WHERE context_id = ?").bind(sentContext, pendingContext).run();
+   // Adoption moves this task's history and queued references together with its canonical context.
 			let adopted = false;
 			if (pendingId && tid) adopted = await adoptOutboundTask(ctx, pendingId, tid, sentContext, peer.alias, endpoint, version, obj);
 			else if (pendingId) await ctx.DB.prepare("DELETE FROM outbound WHERE task_id = ? AND updates_json = '[]'").bind(pendingId).run();
@@ -4798,7 +4815,7 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 				data: { messageId: msg.messageId, endpoint, protocol: version, via: "mcp" } });
 			let pushSaved = !pushToken || adopted;
 			if (tid) {
-				const saved = await ownerCall(ctx, ectx, "POST", "/owner/outbound", { taskId: tid, contextId: sentContext, peer: peer.alias, endpoint, protocol: version, ...(pushToken ? { pushToken } : {}), task: obj });
+				const saved = await ownerCall(ctx, ectx, "POST", "/owner/outbound", { taskId: tid, contextId: sentContext, peer: peer.alias, peerId: `outbound:${peer.wake_policy_id}`, endpoint, protocol: version, ...(pushToken ? { pushToken } : {}), task: obj });
 				pushSaved = pushSaved || saved.status < 300;
 			} else if (obj && obj.parts) await ownerCall(ctx, ectx, "POST", "/owner/history", { contextId: sentContext, dir: "in", peer: peer.alias, role: "agent", event: "direct_message", text: A.textOf(obj) });
 			const warn = pushToken && tid && !pushSaved ? " The reply cannot be authenticated until the outbound task is saved; use poll_outbound." : "";

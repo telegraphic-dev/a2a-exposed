@@ -495,3 +495,52 @@ test("MausBot retry preserves an empty first snapshot instead of changing bytes 
   assert.equal(JSON.parse(captured.at(-1).body).batched[0].peer,'ada');
  } finally {Date.now=realNow;h.restore();}
 });
+
+test("applicable normalized-status duplicates override wake/batch while sender always and input-required keep precedence", async () => {
+ for(const inbound of ['wake','batch']) {
+  const env=envFor({WAKE_ROUTING:'enforce'});const h=harness(env);
+  try {
+   const token=((await h.call('POST','/owner/peers',{label:'ada'})).data as any).token;
+   await h.call('PUT','/owner/wake/peers',{peerId:await peerId(h,'ada'),policy:{...defaults,inbound}});
+   const send=(text:string,wake?:string,taskId?:string)=>h.call('POST','/',message(text,{contextId:'ctx-normalized',...(taskId?{taskId}:{}),message:{'a2a.exposed/intent':'status',...(wake?{'a2a.exposed/wake':wake}:{})}}),`Bearer ${token}`);
+   const first=await send('still building');const before=h.sent.length;
+   const marker=await env.DB.prepare('SELECT generation FROM peer_wake_batch').first() as any;
+   await send('  still   building \n');assert.equal(h.sent.length,before);assert.equal(routes(h.logs).at(-1).action,'suppress');
+   assert.deepEqual(await env.DB.prepare('SELECT generation FROM peer_wake_batch').first(),marker,'a duplicate cannot create/refresh a batch');
+   const history=(await h.call('GET','/owner/history/ctx-normalized?from=ada')).data as any[];assert.equal(history.filter(r=>r.dir==='in').length,2);
+   await send('still building','always');assert.equal(routes(h.logs).at(-1).action,inbound==='wake'?'wake':'batch');
+   await h.call('POST',`/owner/tasks/${taskIdOf(first.data)}/reply`,{text:'Please answer',state:'input-required'});
+   await send('still building',undefined,taskIdOf(first.data));assert.equal(routes(h.logs).at(-1).action,'wake');
+  } finally {h.restore();}
+ }
+});
+
+test("a batched early callback adopts the returned context before notification or purge", async () => {
+ for(const finish of ['wake','purge']) {
+  const env=envFor();const h=harness(env);
+  try {
+   await h.call('PUT','/owner/outbound-peers/ada',{url:'https://ada.example.net/'});
+   const id=await peerId(h,'ada','outbound');await h.call('PUT','/owner/wake/peers',{peerId:id,policy:{...defaults,completed:'batch'}});
+   const fallback=globalThis.fetch;let initial:any;
+   globalThis.fetch=(async(input:any,init:any)=>{
+    const url=new URL(typeof input==='string'?input:input.url||String(input));
+    if(url.hostname!=='ada.example.net') return fallback(input,init);
+    if(init?.method!=='POST') return Response.json({name:'Peer',url:'https://ada.example.net/',supportedInterfaces:[{url:'https://ada.example.net/',protocolBinding:'JSONRPC',protocolVersion:'0.3'}],capabilities:{pushNotifications:true}});
+    const request=JSON.parse(init.body);const token=request.params.configuration.pushNotificationConfig.token;
+    const callback=await h.call('POST','/push',{task:{id:'task-early-batch',contextId:'ctx-returned-batch',status:{state:'completed',message:{parts:[{kind:'text',text:'early completion'}]}}}},`Bearer ${token}`);
+    assert.equal(callback.status,200);initial=await env.DB.prepare('SELECT * FROM peer_wake_batch').first();assert.ok(initial);assert.notEqual(initial.context_id,'ctx-returned-batch');
+    return Response.json({jsonrpc:'2.0',id:request.id,result:{id:'task-early-batch',contextId:'ctx-returned-batch',status:{state:'completed'}}});
+   }) as typeof fetch;
+   const sent=await h.call('POST','/owner/mcp/send',{to:'ada',text:'hello'});assert.equal((sent.data as any).isError,false,JSON.stringify(sent.data));
+   const adopted=await env.DB.prepare('SELECT * FROM peer_wake_batch').first() as any;
+   assert.equal(adopted.context_id,'ctx-returned-batch');assert.equal(adopted.task_id,'task-early-batch');assert.equal(adopted.peer_id,id);assert.notEqual(adopted.generation,initial.generation);
+   const history=(await h.call('GET','/owner/history/ctx-returned-batch?from=ada')).data as any[];assert.ok(history.some(r=>r.event==='push'&&r.text==='early completion'));
+   if(finish==='purge') {
+    await h.call('POST','/owner/purge',{contexts:['ctx-returned-batch']});assert.equal((await env.DB.prepare('SELECT COUNT(*) AS n FROM peer_wake_batch').first() as any).n,0);
+   }else{
+    const bob=((await h.call('POST','/owner/peers',{label:'bob'})).data as any).token;await h.call('POST','/',message('carrier'),`Bearer ${bob}`);
+    const wake=h.sent.at(-1) as any;assert.equal(wake.batched[0].contextId,'ctx-returned-batch');assert.match(wake.batchInstructions,/history ctx-returned-batch --from ada/);
+   }
+  } finally {h.restore();}
+ }
+});
