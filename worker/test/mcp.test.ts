@@ -977,6 +977,7 @@ test("durable Tasks: grant isolation, negotiation, terminal snapshots, update an
  assert.equal((await call(a.access_token, "tasks/get", id)).data.result.status, "working");
  assert.equal((await call(b.access_token, "tasks/get", id)).data.error.code, -32602);
  assert.equal((await call(a.access_token, "tasks/get", id, {}, false)).data.error.code, -32021);
+ assert.equal((await s.modern(a.access_token, "subscriptions/listen", { notifications: { taskIds: [id] } })).data.error.code, -32021);
  assert.equal((await call(a.access_token, "tasks/update", id, { inputResponses: { unknown: { action: "accept" } } })).data.result.resultType, "complete");
  assert.equal((await call(a.access_token, "tasks/update", id, { inputResponses: false })).data.error.code, -32602);
  assert.equal((await s.modern(a.access_token, "tasks/get", { taskId: id }, { "mcp-name": "wrong" }, caps)).data.error.code, -32020);

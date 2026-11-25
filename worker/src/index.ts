@@ -5021,7 +5021,7 @@ async function handleMcp(req: Request, ctx: TenantContext, ectx: ExecutionContex
 		if (!caps || typeof caps !== "object" || Array.isArray(caps))
 			return rpcError(id, M.ERR.INVALID_PARAMS, `params._meta["${M.META.capabilities}"] (an object) is required`, 400);
 		const done = (result: Json) => rpcResult(id, { ...result, resultType: "complete", _meta: { ...(result._meta || {}), [M.META.serverInfo]: serverInfo(ctx) } });
-		if (["tasks/get", "tasks/update", "tasks/cancel"].includes(msg.method) || (msg.method === "tools/call" && params.name === "wait_task" && McpTasks.negotiated(caps))) {
+		if (["tasks/get", "tasks/update", "tasks/cancel"].includes(msg.method) || (msg.method === "tools/call" && params.name === "wait_task" && McpTasks.negotiated(caps)) || (msg.method === "subscriptions/listen" && Array.isArray(params.notifications?.taskIds) && params.notifications.taskIds.length > 0 && !McpTasks.negotiated(caps))) {
             if (!McpTasks.negotiated(caps)) return json({ jsonrpc: "2.0", id, error: { code: M.ERR.MISSING_CLIENT_CAPABILITY, message: "Declare extensions.io.modelcontextprotocol/tasks on every task request", data: { requiredCapabilities: { extensions: { [McpTasks.EXTENSION]: {} } } } } });
             try {
                 const result = msg.method === "tools/call" ? await McpTasks.create(ctx.DB, grant.label, params.arguments?.taskId) : await McpTasks.request(ctx.DB, grant.label, msg);
