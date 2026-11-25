@@ -26,6 +26,7 @@
 		"ws": "^8.21.0"
 	},
 	"dependencies": {
+		"@modelcontextprotocol/ext-tasks": "0.2.3",
 		"tunnelfetch": "1.13.0"
 	}
 }

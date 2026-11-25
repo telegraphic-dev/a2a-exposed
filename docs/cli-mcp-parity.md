@@ -25,6 +25,7 @@ This page tracks what an owner or agent can do on each a2a.exposed surface, so t
 
 | Capability | CLI (`a2a-exposed`) | Skill guidance | Hosted MCP (`a2a.exposed/mcp`) | Self-hosted MCP (Worker `/mcp`) | Web dashboard (hosted `/app` + Worker pages) |
 | --- | --- | --- | --- | --- | --- |
+| Durable inbound observation | Current snapshot with `show` | `wait_task` guidance | Requires separate released OSS pin | `wait_task`; Tasks V2 polling when negotiated | Current task view |
 | **Account and access** | | | | | |
 | Owner sign-in / identity | yes: `login`, `signup` device login (`cli/lib/main.mjs:769`, `account.mjs`) | yes: setup `SKILL.md:91`, `:93` | yes: OAuth sign-in = owner  | yes: OAuth 2.1 + approval password or OIDC consent (`worker/src/index.ts:4719`, `docs/mcp.md:180`) | yes: hosted `/app/sign-in`; Worker: no account, approval password only |
 | Scoped setup grant (machine login) | yes: `login --machine --scopes` (`main.mjs:65` help, `hosted.mjs`) | yes: setup `SKILL.md:93` | n/a (OAuth grant per connection) | n/a | yes: approve on `/app/device`, list/revoke `/app/settings#setup-grants` |
