@@ -1,0 +1,19 @@
+docs/agents/mcp-skills-packaging.md
+  s_4fb7fa938ede12::t_10e28ceae4603c 48-49
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c5ea3dbdde90f07a4c04948443459d46a500ed3d",
+  "prompts": {},
+  "sessions": {
+    "s_4fb7fa938ede12": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a214ae-b49f-7033-ba9f-f23729044907",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}
