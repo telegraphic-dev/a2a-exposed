@@ -45,6 +45,16 @@ const esbuild = require("esbuild");
 
 fs.rmSync(dist, { recursive: true, force: true });
 fs.mkdirSync(dist, { recursive: true });
+// Preserve notices for official wire codecs bundled into the published library.
+const licenses = path.join(dist, "licenses");
+fs.mkdirSync(licenses, { recursive: true });
+for (const [pkg, name] of [["@modelcontextprotocol/ext-tasks", "ext-tasks"], ["zod", "zod"]]) {
+ const directory = path.join(repoRoot, "worker/node_modules", pkg);
+ for (const file of fs.readdirSync(directory).filter(file => /^(LICENSE|NOTICE)/i.test(file))) {
+  fs.copyFileSync(path.join(directory, file), path.join(licenses, `${name}-${file}`));
+ }
+}
+
 
 const sqlRaw = {
 	name: "sql-raw",
