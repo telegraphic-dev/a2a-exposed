@@ -1,0 +1,27 @@
+cli/lib/main.mjs
+  s_1cb3b75004b611::t_23666fa5611acb 248-250,536-539
+docs/cli.md
+  s_1cb3b75004b611::t_d508063162e333 291
+docs/mcp.md
+  s_1cb3b75004b611::t_55170398c5cca4 187
+skills/a2a-exposed/references/messaging.md
+  s_1cb3b75004b611::t_192c50b4b65c00 57
+worker/src/mcp.ts
+  s_1cb3b75004b611::t_4901c344f59864 369,384,387
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b51318b6d19847695d7eadea2daa7428b9d8b37f",
+  "prompts": {},
+  "sessions": {
+    "s_1cb3b75004b611": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a213e8-504d-7ee0-b8a1-a9c8bd8d4431",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}
