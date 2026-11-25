@@ -94,8 +94,8 @@ account for those conservative wakes in shadow analysis.
 
 All updates are stored before routing; skipping a wake never acknowledges an
 inbox item. Compare the shadow counters with a replay before enabling staging,
-then verify bounded wakes, preserved messages and must-wake controls. Keep
-production in shadow. Roll back with `WAKE_ROUTING=shadow` or an owner policy of
+then verify bounded wakes, preserved messages and must-wake controls. Enable hosted production only with the exact deployment authority described in
+[receiving messages](receiving-messages.md); `staging-enforce` remains staging-only. Roll back with `WAKE_ROUTING=shadow` or an owner policy of
 `legacy`; deployment changes use the infrastructure workflow. This setting does
 not release, deploy or enable the hosted service by itself.
 

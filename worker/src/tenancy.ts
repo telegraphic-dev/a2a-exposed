@@ -601,7 +601,9 @@ export function hostedTenantContext(env: WorkerBindings, overlay: HostedOverlay)
 		if (typeof v === "string") config[k] = v;
 	}
 	// Hosted enforcement is deployment-gated, including tenant overrides.
-	if (env.WAKE_ROUTING_ENV !== "staging" && config.WAKE_ROUTING?.trim().toLowerCase() === "enforce") config.WAKE_ROUTING = "shadow";
+	// Production authority comes only from deployment bindings, never the overlay.
+	const productionRouting = env.WAKE_ROUTING_ENV === "production" && env.WAKE_ROUTING === "enforce" && env.DISCOVERY_DOCS_ORIGIN === "https://a2a.exposed";
+	if (env.WAKE_ROUTING_ENV !== "staging" && !productionRouting && config.WAKE_ROUTING?.trim().toLowerCase() === "enforce") config.WAKE_ROUTING = "shadow";
 	const hash = (overlay.ownerTokenHash || "").trim().toLowerCase();
 	// Hosted approval is the pushed tenant object only. Worker APPROVAL_OIDC_* does not approve a tenant.
 	const approval = approvalFromRecord(overlay.approval);
