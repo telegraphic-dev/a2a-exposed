@@ -1,0 +1,95 @@
+worker/src/index.ts
+  s_4fb7fa938ede12::t_85a61359e873ab 32-33,4977-4978,4980-4981,5008,5031,5044,5062,5188,5193-5194
+worker/package.json
+  s_4fb7fa938ede12::t_85a61359e873ab 10,12,21,27-28,32-33
+worker/src/mcp-portable-skills-catalog.json
+  s_4fb7fa938ede12::t_ee50230087ff9f 1-134
+worker/test/mcp.test.ts
+  s_4fb7fa938ede12::t_85a61359e873ab 608,662,684,1021-1095
+worker/src/skills-index.ts
+  s_4fb7fa938ede12::t_85a61359e873ab 7
+docs/cli-mcp-parity.md
+  s_4fb7fa938ede12::t_85a61359e873ab 29
+cli/lib/main.mjs
+  s_4fb7fa938ede12::t_df0d8e23c72a49 186
+cli/scripts/sync-worker.mjs
+  s_4fb7fa938ede12::t_4d173b6acf5c73 15-17
+docs/agents/mcp-skills-packaging.md
+  s_4fb7fa938ede12::t_19f309e047c179 1-68
+docs/mcp.md
+  s_4fb7fa938ede12::t_22405ae4c73300 5-29
+package.json
+  s_4fb7fa938ede12::t_84acdbd0f40ee8 10
+scripts/set-release-version.mjs
+  s_4fb7fa938ede12::t_066848bb943976 1-11
+skills/a2a-exposed/SKILL.md
+  s_4fb7fa938ede12::t_22b824534e145b 46
+worker/cloudflare.config.ts
+  s_4fb7fa938ede12::t_f16a9791ee7e6a 5-7
+worker/package-lock.json
+  s_4fb7fa938ede12::t_7bbc871286ec6c 10,12,18,24-25,2460-2490,2508-2520,3956-3970,4033-4055,4089-4095,4100,4520-4529,4557-4566,4693-4715,4906-4921,4965-4980
+worker/scripts/check-portable-catalog.mjs
+  s_4fb7fa938ede12::t_179461618cfd94 1-31
+worker/scripts/mcp-portable-skills-catalog.mjs
+  s_4fb7fa938ede12::t_201a94100c8433 1-83
+worker/scripts/mcp-skills-catalog.mjs
+  s_4fb7fa938ede12::t_196bf86bb67aef 1-97
+worker/src/mcp-skills.ts
+  s_4fb7fa938ede12::t_94f1370d961765 1-57
+worker/test/alarms.test.ts
+  s_4fb7fa938ede12::t_fe7acf0eb4a5ad 95
+worker/test/canonical-skills-fixture.ts
+  s_4fb7fa938ede12::t_f0be8dd2a0d58e 1-35
+worker/test/d1.ts
+  s_4fb7fa938ede12::t_f4f17f02b91c29 156
+worker/test/export.test.ts
+  s_4fb7fa938ede12::t_b29e9ffc8dfe79 536
+worker/test/hosted.test.ts
+  s_4fb7fa938ede12::t_fcbc7fa019c8bf 28
+worker/test/http-relay-bom.test.ts
+  s_4fb7fa938ede12::t_530c3bd5fe10f3 23,144
+worker/test/http-relay-compatibility.test.ts
+  s_4fb7fa938ede12::t_c56f7f65e0ac6a 17
+worker/test/http-relay-config.test.ts
+  s_4fb7fa938ede12::t_598d4613e7313f 8-10
+worker/test/http-relay-hosted-live.test.ts
+  s_4fb7fa938ede12::t_1c662af4428b77 22
+worker/test/http-relay-integration.test.ts
+  s_4fb7fa938ede12::t_71cdfaaa076ec9 31
+worker/test/http-relay-reconnect.test.ts
+  s_4fb7fa938ede12::t_e21ac67d755549 23
+worker/test/http-relay-rpc-errors.test.ts
+  s_4fb7fa938ede12::t_a8dbe91eb8a607 15
+worker/test/http-relay-sdk.test.ts
+  s_4fb7fa938ede12::t_9f80306c8c3491 16
+worker/test/http-relay-security.test.ts
+  s_4fb7fa938ede12::t_7ac6cd38c3a03d 89
+worker/test/http-relay-transport.test.ts
+  s_4fb7fa938ede12::t_81d95c5af2e76c 20
+worker/test/mcp-portable-skills.test.ts
+  s_4fb7fa938ede12::t_7877d06e68b4f4 1-105
+worker/test/mcp-skills-package.test.ts
+  s_4fb7fa938ede12::t_1fd7205da38cee 1-47
+worker/test/mcp-skills.test.ts
+  s_4fb7fa938ede12::t_cf382ccea8b7d6 1-158
+worker/test/outbound-reply.test.ts
+  s_4fb7fa938ede12::t_93fd1405f75f5d 367
+worker/test/relay.test.ts
+  s_4fb7fa938ede12::t_8dbffe09406295 50
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f69bae54aa919a2b3d23f85084906a4ec2ab970c",
+  "prompts": {},
+  "sessions": {
+    "s_4fb7fa938ede12": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a214ae-b49f-7033-ba9f-f23729044907",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}
