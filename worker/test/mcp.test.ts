@@ -605,7 +605,7 @@ test("2026-07-28: server/discover, tools/list caching hints, tools/call; resultT
 	assert.equal(d.status, 200, d.text);
 	assert.equal(d.data.result.resultType, "complete");
 	assert.deepEqual(d.data.result.supportedVersions, ["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26"]);
-	assert.deepEqual(d.data.result.capabilities, { tools: {}, extensions: { "io.modelcontextprotocol/tasks": {} } });
+	assert.deepEqual(d.data.result.capabilities, { tools: {}, resources: {}, extensions: { "io.modelcontextprotocol/skills": {}, "io.modelcontextprotocol/tasks": {} } });
 	assert.match(d.data.result.instructions, /untrusted/);
 	assert.equal(d.data.result.cacheScope, "private");
 	assert.ok(d.data.result.ttlMs >= 0);
@@ -659,7 +659,7 @@ test("2026-07-28: Mcp-Method / Mcp-Name / MCP-Protocol-Version must be present a
 	assert.equal(bare.data.error.code, -32020);
 });
 
-test("2026-07-28: version negotiation (-32022 with supported versions), required clientCapabilities, removed methods 404", async (t) => {
+test("2026-07-28: version negotiation (-32022 with supported versions), required clientCapabilities, unsupported methods 404", async (t) => {
 	const s = setup(); t.after(s.restore);
 	const a = await s.connect();
 	const v = await s.modern(a.access_token, "tools/list", {}, { "mcp-protocol-version": "1900-01-01" }, { "io.modelcontextprotocol/protocolVersion": "1900-01-01" });
@@ -681,7 +681,7 @@ test("2026-07-28: version negotiation (-32022 with supported versions), required
 	const nocaps = await s.modern(a.access_token, "tools/list", {}, {}, { "io.modelcontextprotocol/clientCapabilities": undefined });
 	assert.equal(nocaps.status, 400);
 	assert.equal(nocaps.data.error.code, -32602);
-	for (const m of ["initialize", "ping", "logging/setLevel", "resources/list"]) {
+	for (const m of ["initialize", "ping", "logging/setLevel"]) {
 		const r = await s.modern(a.access_token, m);
 		assert.equal(r.status, 404, m);
 		assert.equal(r.data.error.code, -32601, m);
@@ -1017,4 +1017,79 @@ test("durable Tasks: atomic grant cap, expiry and revocation", async (t) => {
  assert.equal((await get()).data.error.code, -32602);
  await s.DB.prepare("UPDATE mcp_grants SET revoked_at = ? WHERE label = ?").bind(new Date().toISOString(), "mcp-bounded").run();
  assert.equal((await get()).status, 401);
+});
+
+test("portable skills share native OAuth, origin, modern-header and revocation gates", async (t) => {
+	const s = setup(); t.after(s.restore);
+	const a = await s.connect();
+	const listed = await s.modern(a.access_token, "skills/list");
+	assert.equal(listed.status, 200, listed.text);
+	assert.equal(listed.data.result.skills.length, 2);
+	assert.equal(listed.data.result.resultType, "complete");
+	const skill = listed.data.result.skills.find((entry: any) => entry.frontmatter.name === "a2a-exposed");
+	assert.equal(skill.uri, "skill://portable/a2a-exposed/SKILL.md");
+	assert.deepEqual((await s.modern(a.access_token, "skills/get", { uri: skill.uri })).data.result.skill, skill);
+	const read = await s.modern(a.access_token, "resources/read", { uri: skill.uri }, { "mcp-name": skill.uri });
+	assert.equal(read.status, 200, read.text);
+	assert.equal(typeof read.data.result.contents[0].text, "string");
+	assert.equal(read.data.result.contents[0].blob, undefined);
+	assert.ok(read.data.result._meta["io.modelcontextprotocol/serverInfo"]);
+	assert.equal((await s.modern(a.access_token, "resources/read", { uri: skill.uri })).data.error.code, -32020);
+	assert.equal((await s.modern(a.access_token, "skills/list", {}, { origin: "https://other.example" })).status, 403);
+	assert.equal((await s.modern("dummy-invalid", "skills/list")).status, 401);
+	const legacy = await s.mcp(a.access_token, "initialize", { protocolVersion: "2025-11-25", clientInfo: { name: "legacy", version: "1" }, capabilities: {} });
+	assert.equal(legacy.data.result.capabilities.resources, undefined);
+	assert.equal((await s.mcp(a.access_token, "skills/list")).data.error.code, -32601);
+	assert.equal((await s.modern(a.access_token, "resources/read", { uri: "skill://a2a-exposed/SKILL.md" }, { "mcp-name": "skill://a2a-exposed/SKILL.md" })).data.result, undefined);
+	assert.equal((await s.owner("DELETE", "/owner/mcp/mcp-claude")).data.revoked, true);
+	assert.equal((await s.modern(a.access_token, "skills/list")).status, 401);
+	assert.equal(s.peerCalls.length, 0, "skill reads never send A2A messages");
+});
+
+test("portable skill reads honor the existing MCP grant rate limit", async (t) => {
+	const s = setup(); t.after(s.restore);
+	const a = await s.connect();
+	// Pin the minute: real storage calls can otherwise cross the rate-window boundary.
+	t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+	let last;
+	for (let i = 0; i < 61; i++) last = await s.modern(a.access_token, "skills/list");
+	assert.equal(last.status, 429);
+	assert.equal(last.headers.get("retry-after"), "60");
+});
+
+
+test("modern Skills discovery/loading/reads and refusals leave a due wake pending", async (t) => {
+	const s = setup(); t.after(s.restore);
+	const a = await s.connect();
+	delete s.env.WAKE_WEBHOOK_URL;
+	delete s.env.WAKE_WEBHOOK_KEY;
+	await s.DB.prepare("INSERT INTO wakes (context_id,peer,pending_since_ms,last_sent_ms,pending_json) VALUES ('skills-due','carol',1,0,?)")
+		.bind(JSON.stringify({ contextId: "skills-due", taskId: "task-1", taskIds: ["task-1"], from: "carol", preview: "dummy", kind: "inbound" })).run();
+	const wake = () => s.DB.prepare("SELECT pending_since_ms,last_sent_ms,pending_json FROM wakes WHERE context_id='skills-due'").first();
+	const before = await wake();
+	for (const method of ["GET", "HEAD", "DELETE", "OPTIONS"]) {
+		assert.equal((await s.call(method, "/mcp")).status, 405);
+		assert.deepEqual(await wake(), before, method + " refusal must not consume the due wake");
+	}
+	const operating = "skill://portable/a2a-exposed/SKILL.md";
+	const setupUri = "skill://portable/a2a-exposed-setup/SKILL.md";
+	for (const [method, params] of [
+		["server/discover", {}], ["skills/list", {}], ["resources/list", {}], ["resources/templates/list", {}],
+		["skills/get", { uri: operating }], ["resources/read", { uri: operating }],
+		["resources/read", { uri: "skill://portable/a2a-exposed/references/messaging.md" }],
+		["skills/get", { uri: setupUri }], ["resources/read", { uri: setupUri }],
+	] as const) {
+		const r = await s.modern(a.access_token, method, params, "uri" in params ? { "mcp-name": params.uri } : {});
+		assert.equal(r.status, 200, r.text);
+		assert.deepEqual(await wake(), before, method + " must not consume or send the due wake");
+	}
+	assert.equal((await s.modern("a2amcp_invalid", "skills/list")).status, 401);
+	assert.deepEqual(await wake(), before);
+	assert.equal((await s.modern(a.access_token, "skills/list", {}, { origin: "https://other.example" })).status, 403);
+	assert.deepEqual(await wake(), before);
+	assert.equal((await s.modern(a.access_token, "resources/read", { uri: operating })).status, 400);
+	assert.deepEqual(await wake(), before);
+	await s.modern(a.access_token, "tools/list");
+	assert.equal((await wake()).pending_json, null, "control: an ordinary MCP request flushes the due wake");
+	assert.equal(s.peerCalls.length, 0);
 });

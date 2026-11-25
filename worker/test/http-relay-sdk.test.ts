@@ -13,7 +13,7 @@ const execute = promisify(execFile);
 
 for (const legacy of [false, true]) test(`official A2A SDK 1.3 / protocol ${legacy ? "0.3" : "1.0"} through actual Worker and native CLI`, { timeout: 45000 }, async t => {
 	const root = resolve(process.env.HTTP_RELAY_WORKER_ROOT || ".");
-	const built = await build({ absWorkingDir: root, entryPoints: ["src/relay-entry.ts"], bundle: true, write: false, format: "esm", platform: "neutral", external: ["cloudflare:*"], plugins: [{ name: "sql", setup(b) {
+	const built = await build({ absWorkingDir: root, entryPoints: ["src/relay-entry.ts"], bundle: true, write: false, format: "esm", platform: "neutral", conditions: ["workerd", "worker", "browser"], external: ["cloudflare:*"], plugins: [{ name: "sql", setup(b) {
 		b.onResolve({ filter: /\.sql\?raw$/ }, a => ({ path: new URL(a.path.replace("?raw", ""), `file://${a.resolveDir}/`).pathname, namespace: "sql" }));
 		b.onLoad({ filter: /.*/, namespace: "sql" }, a => ({ contents: `export default ${JSON.stringify(readFileSync(a.path, "utf8"))}`, loader: "js" }));
 	} }] });

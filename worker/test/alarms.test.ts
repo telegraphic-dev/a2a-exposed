@@ -92,7 +92,7 @@ function bundleHosted(): Promise<string> {
 		bundle: true,
 		format: "esm",
 		write: false,
-		platform: "neutral",
+		platform: "neutral", conditions: ["workerd", "worker", "browser"],
 		external: ["cloudflare:*"],
 		target: "es2022",
 		logLevel: "silent",

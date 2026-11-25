@@ -12,7 +12,7 @@ async function until(check: () => unknown) { const end = Date.now() + 5000; whil
 const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 async function runtime() {
 	const root = resolve(process.env.HTTP_RELAY_WORKER_ROOT || ".");
-	const built = await build({ absWorkingDir: root, entryPoints: ["src/relay-entry.ts"], bundle: true, write: false, format: "esm", platform: "neutral", external: ["cloudflare:*"], plugins: [{ name: "sql", setup(b) {
+	const built = await build({ absWorkingDir: root, entryPoints: ["src/relay-entry.ts"], bundle: true, write: false, format: "esm", platform: "neutral", conditions: ["workerd", "worker", "browser"], external: ["cloudflare:*"], plugins: [{ name: "sql", setup(b) {
 		b.onResolve({ filter: /\.sql\?raw$/ }, a => ({ path: new URL(a.path.replace("?raw", ""), `file://${a.resolveDir}/`).pathname, namespace: "sql" }));
 		b.onLoad({ filter: /.*/, namespace: "sql" }, a => ({ contents: `export default ${JSON.stringify(readFileSync(a.path, "utf8"))}`, loader: "js" }));
 	} }] });

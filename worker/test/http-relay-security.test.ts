@@ -86,7 +86,7 @@ const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 const connector = "a2ah_" + "c".repeat(43), ingress = "a2ai_" + "i".repeat(43);
 async function relayRuntime() {
 	// Real HttpRelay DO in workerd; no production owner/tenant-routing substitution claimed.
-	const built = await build({ stdin: { contents: "export { HttpRelay } from './src/http-relay.ts'; export default { fetch() { return new Response(null, {status:404}); } };", resolveDir: process.cwd(), loader: "ts" }, bundle: true, write: false, format: "esm", platform: "neutral", external: ["cloudflare:*"] });
+	const built = await build({ stdin: { contents: "export { HttpRelay } from './src/http-relay.ts'; export default { fetch() { return new Response(null, {status:404}); } };", resolveDir: process.cwd(), loader: "ts" }, bundle: true, write: false, format: "esm", platform: "neutral", conditions: ["workerd", "worker", "browser"], external: ["cloudflare:*"] });
 	return new Miniflare(convertV4MiniflareOptions({ name: "http-relay-security", modules: true, script: built.outputFiles[0].text, compatibilityDate: "2026-10-06", durableObjects: { HTTP_RELAY: { className: "HttpRelay", useSQLite: true } } }));
 }
 

@@ -14,7 +14,7 @@ const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 // or a pretend server that merely emits a desired rejection/hello frame.
 for (const oldClient of [true, false]) test(`${oldClient ? "wake-v1 native connector -> HTTP-v2 Worker" : "HTTP-v2 native connector -> wake-v1 Worker"} refuses incompatible wire protocol without local dispatch`, { timeout: 20000 }, async t => {
 	const className = oldClient ? "HttpRelay" : "WakeRelay";
-	const built = await build({ stdin: { contents: `export { ${className} } from './src/${oldClient ? "http-relay" : "relay"}.ts'; export default { fetch(req,env) { const u=new URL(req.url); if(u.pathname.endsWith('/connect'))u.pathname='/connect'; return env.RELAY.get(env.RELAY.idFromName('compatibility')).fetch(new Request(u,req)); } };`, resolveDir: process.cwd(), loader: "ts" }, bundle: true, write: false, format: "esm", platform: "neutral", external: ["cloudflare:*"] });
+	const built = await build({ stdin: { contents: `export { ${className} } from './src/${oldClient ? "http-relay" : "relay"}.ts'; export default { fetch(req,env) { const u=new URL(req.url); if(u.pathname.endsWith('/connect'))u.pathname='/connect'; return env.RELAY.get(env.RELAY.idFromName('compatibility')).fetch(new Request(u,req)); } };`, resolveDir: process.cwd(), loader: "ts" }, bundle: true, write: false, format: "esm", platform: "neutral", conditions: ["workerd", "worker", "browser"], external: ["cloudflare:*"] });
 	const mf = new Miniflare(convertV4MiniflareOptions({ name: "http-compatibility", modules: true, script: built.outputFiles[0].text, compatibilityDate: "2026-10-06", durableObjects: { RELAY: { className, useSQLite: true } } }));
 	const url = await mf.ready;
 	let posts = 0, ready = 0; const diagnostics: string[] = [];

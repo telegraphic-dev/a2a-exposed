@@ -20,7 +20,7 @@ for (const legacy of [false, true]) test(`delayed initial BOM survives keepalive
 	let diagnostics = "", phase = "startup";
 	const wait = <T>(name: string, work: Promise<T>, ms = 8000) => { phase = name; return relayPhase(name, work, ms, () => `completed=${completed}, aborted=${aborted}, connectorExit=${child?.exitCode}, connectorSignal=${child?.signalCode}, stderr=${diagnostics.slice(-2000)}`); };
 	const root = resolve(process.env.HTTP_RELAY_WORKER_ROOT || ".");
-	const built = await build({ absWorkingDir: root, entryPoints: ["src/relay-entry.ts"], bundle: true, write: false, format: "esm", platform: "neutral", external: ["cloudflare:*"], plugins: [{ name: "sql", setup(b) {
+	const built = await build({ absWorkingDir: root, entryPoints: ["src/relay-entry.ts"], bundle: true, write: false, format: "esm", platform: "neutral", conditions: ["workerd", "worker", "browser"], external: ["cloudflare:*"], plugins: [{ name: "sql", setup(b) {
 		b.onResolve({ filter: /\.sql\?raw$/ }, a => ({ path: new URL(a.path.replace("?raw", ""), `file://${a.resolveDir}/`).pathname, namespace: "sql" }));
 		b.onLoad({ filter: /.*/, namespace: "sql" }, a => ({ contents: `export default ${JSON.stringify(readFileSync(a.path, "utf8"))}`, loader: "js" }));
 	} }] });
@@ -141,7 +141,7 @@ test("SDK fixture abort survives garbage collection of normalized Requests", { t
 
 // Deterministic connector frames cover every BOM split and exact application bytes.
 test("SSE prefix normalization strips only one initial BOM, preserving interior bytes and bounded framing", { timeout: 30000 }, async () => {
-	const built = await build({ stdin: { contents: `import { HttpRelay } from './src/http-relay.ts'; export { HttpRelay }; export default { fetch(req,env) { return env.HTTP_RELAY.get(env.HTTP_RELAY.idFromName('test')).fetch(req); } };`, resolveDir: process.cwd(), loader: "ts" }, bundle: true, write: false, format: "esm", platform: "neutral", external: ["cloudflare:*"] });
+	const built = await build({ stdin: { contents: `import { HttpRelay } from './src/http-relay.ts'; export { HttpRelay }; export default { fetch(req,env) { return env.HTTP_RELAY.get(env.HTTP_RELAY.idFromName('test')).fetch(req); } };`, resolveDir: process.cwd(), loader: "ts" }, bundle: true, write: false, format: "esm", platform: "neutral", conditions: ["workerd", "worker", "browser"], external: ["cloudflare:*"] });
 	const mf = new Miniflare(convertV4MiniflareOptions({ name: "bom-framing", modules: true, script: built.outputFiles[0].text, compatibilityDate: "2026-10-06", durableObjects: { HTTP_RELAY: { className: "HttpRelay", useSQLite: true } } }));
 	const url = await mf.ready, token = "a2ah_" + "a".repeat(43), ingress = "a2ai_" + "b".repeat(43);
 	const hash = (s: string) => createHash("sha256").update(s).digest("hex");
