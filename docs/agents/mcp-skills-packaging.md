@@ -45,8 +45,8 @@ rejects untracked or ignored files under the skills tree. Review source changes
 before generating release artifacts. File-count and aggregate byte budgets apply
 before storing source bytes; per-skill limits apply to complete manifests.
 
-The official SDK strict catalog loader validates the portable files. The runtime
-prototype uses the official `SkillsExtension`, with exact published resource
+The official SDK strict catalog loader validates the portable files. The native runtime
+uses the official `SkillsExtension`, with exact published resource
 membership and lossless UTF-8 Markdown text responses. Binary content stays a
 blob. It does not fetch resource URLs or open files at request time.
 
