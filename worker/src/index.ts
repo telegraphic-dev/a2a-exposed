@@ -4820,17 +4820,6 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 			await ownerCall(ctx, ectx, "POST", "/owner/history", { contextId: rec.contextId, dir: "in", peer: peer.alias, taskId: tid, event: cancel ? "cancel" : "poll", state: M.plainState(res), text: txt, data: { ...(A.ownerWaitOf(res) ? { ownerWait: A.ownerWaitOf(res) } : {}), ...(res?.metadata?.[Receipts.RECEIPT_META] ? { wakeReceipt: res.metadata[Receipts.RECEIPT_META] } : {}) } });
 			return M.toolText(`Task ${tid} at ${peer.alias}: ${M.plainState(res)}. ${UNTRUSTED}`, res);
 		}
-  case "get_peer_wake_policies": {
-   const cursor = argStr(a,"cursor",false), peerId=argStr(a,"peerId",false);
-   if (cursor && peerId || (cursor || peerId) && !/^(inbound|outbound):[a-f0-9]{32}$/.test(cursor || peerId)) throw new ToolError("Use cursor or peerId from get_peer_wake_policies, not both");
-   const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : peerId ? `?peerId=${encodeURIComponent(peerId)}` : "";
-   const data = must(await ownerCall(ctx, ectx, "GET", "/owner/wake/peers"+query));
-   return { text: M.toolText("Owner peer wake policies", data), structuredContent: data };
-  }
-  case "set_peer_wake_policy": {
-   const data = must(await ownerCall(ctx, ectx, "PUT", "/owner/wake/peers", { peerId: a.peerId, policy: a.policy }));
-   return { text: M.toolText("Peer wake policy saved", data), structuredContent: data };
-  }
 		case "list_peers": {
 			const outRows = must(await ownerCall(ctx, ectx, "GET", "/owner/outbound-peers"));
 			const inRows = must(await ownerCall(ctx, ectx, "GET", "/owner/peers")).filter((r: Json) => !r.revoked_at);
@@ -4954,7 +4943,7 @@ async function handleMcp(req: Request, ctx: TenantContext, ectx: ExecutionContex
 	if (!msg || typeof msg !== "object" || msg.jsonrpc !== "2.0") return rpcError(null, M.ERR.INVALID_REQUEST, "invalid JSON-RPC request", 400);
 	const params = msg.params && typeof msg.params === "object" && !Array.isArray(msg.params) ? msg.params : {};
 	// A read-only diagnostic call must not trigger dispatch's opportunistic wake flush (#461).
-	if (msg.method === "tools/call" && ["wake_status", "get_peer_wake_policies"].includes(params.name)) NO_FLUSH.add(req);
+	if (msg.method === "tools/call" && params.name === "wake_status") NO_FLUSH.add(req);
 	const meta = params._meta && typeof params._meta === "object" ? params._meta : {};
 	const bodyVersion = typeof meta[M.META.version] === "string" ? meta[M.META.version] : null;
 	const pv = req.headers.get("mcp-protocol-version");

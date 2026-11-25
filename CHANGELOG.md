@@ -2,8 +2,6 @@
 
 ## Unreleased
 
-- Add owner per-pairing wake policies with event-class wake, skip and next-wake batching, owner APIs/MCP tools and noninteractive CLI controls.
-
 - Tell the human to deny encrypted pairing requests when the compared safety codes differ (#467).
 
 ## 0.8.67

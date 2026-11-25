@@ -470,7 +470,7 @@ for authentication, message binding, expiry and privacy limits.
 
 ### Per-pairing wake policies
 
-`wake peers --json` lists direction-qualified pairing IDs, current policies, all six event classes and the allowed actions. Set one complete JSON policy with `wake peers --peer-id ID --policy-file FILE --json`. The owner HTTP equivalents are `GET /owner/wake/peers` and `PUT /owner/wake/peers` with `{ "peerId": "ID", "policy": { ... } }`. Owner MCP provides `get_peer_wake_policies` and `set_peer_wake_policy`. Only the owner can change these rules; a peer cannot choose the receiving owner's policy.
+`wake peers --json` lists direction-qualified pairing IDs, current policies, all six event classes and the allowed actions. Set one complete JSON policy with `wake peers --peer-id ID --policy-file FILE --json`. The owner HTTP equivalents are `GET /owner/wake/peers` and `PUT /owner/wake/peers` with `{ "peerId": "ID", "policy": { ... } }`. The hosted MCP integration provides `get_peer_wake_policies` and `set_peer_wake_policy`. Only the owner can change these rules; a peer cannot choose the receiving owner's policy.
 
 | Event | Meaning | Default |
 | --- | --- | --- |

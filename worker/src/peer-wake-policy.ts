@@ -22,13 +22,3 @@ export function peerWakeEvent(inbound: boolean, state: string | null, text: stri
 export function peerWakeAction(policy: PeerWakePolicy, event: PeerWakeEvent, wake: string | null, duplicate: boolean): PeerWakeAction {
  return duplicate || wake === "never" ? "skip" : policy[event];
 }
-
-export const PEER_WAKE_POLICY_SCHEMA = { type: "object", properties: Object.fromEntries(PEER_WAKE_EVENTS.map(event => [event, { type: "string", enum: [...PEER_WAKE_ACTIONS] }])), required: [...PEER_WAKE_EVENTS], additionalProperties: false };
-export const PEER_WAKE_SAVED_SCHEMA = { type: "object", properties: { peerId: { type: "string" }, policy: PEER_WAKE_POLICY_SCHEMA, configured: { type: "boolean" } }, required: ["peerId", "policy", "configured"], additionalProperties: false };
-export const PEER_WAKE_LIST_SCHEMA = { type: "object", properties: {
- events: { type: "array", items: { type: "string", enum: [...PEER_WAKE_EVENTS] } },
- actions: { type: "array", items: { type: "string", enum: [...PEER_WAKE_ACTIONS] } },
- nextCursor: { type: ["string", "null"] },
- defaults: PEER_WAKE_POLICY_SCHEMA,
- peers: { type: "array", items: { type: "object", properties: { peerId: { type: "string" }, peer: { type: "string" }, direction: { type: "string", enum: ["inbound", "outbound"] }, policy: PEER_WAKE_POLICY_SCHEMA, configured: { type: "boolean" } }, required: ["peerId", "peer", "direction", "policy", "configured"], additionalProperties: false } }
- }, required: ["events", "actions", "defaults", "peers"], additionalProperties: false };
