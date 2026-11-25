@@ -110,3 +110,6 @@ export type { ControlMigration } from "./migrations.ts";
 export { redact, sanitized } from "./redact.ts";
 // Pure metadata is safe in Node; the Worker class is exported by the /http-relay subpath.
 export { HTTP_RELAY_PROTOCOL_VERSION, HTTP_RELAY_CAPABILITIES } from "./http-relay-metadata.ts";
+
+export { createMcpObservation, mcpObservationRequest, mcpTasksNegotiated, MCP_TASKS_EXTENSION, McpObservationError } from "../../../worker/src/task-observation.ts";
+export type { McpObservationSource, McpObservationReader } from "../../../worker/src/task-observation.ts";

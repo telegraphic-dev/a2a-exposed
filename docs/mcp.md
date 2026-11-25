@@ -328,3 +328,5 @@ observation results remain stable until expiry. Notifications are not offered;
 respect the returned polling interval. Hosted support requires a released OSS
 version and a separately reviewed site pin; source tests do not establish client
 interoperability.
+
+Use `list_outbound` to choose an existing sent task, then `wait_outbound` with its id. With the per-request Tasks V2 extension, retain the durable handle and poll `tasks/get`; without it, read the current snapshot. The wait only fetches GetTask and never repeats send. Cached results still require the original active pairing and grant. Cancellation stops the observation only.

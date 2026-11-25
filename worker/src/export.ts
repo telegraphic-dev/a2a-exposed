@@ -167,7 +167,7 @@ export function toSql(file: ExportFile, options?: { skip?: readonly string[] }):
 		`-- exported_at ${file.exportedAt}`,
 	];
  // A restore is a new event source. Never export/replay source identity or queued notices.
- lines.push("DELETE FROM mcp_tasks;", "DELETE FROM message_event_outbox;", "DELETE FROM message_event_peers;", "UPDATE message_event_source SET instance_id=lower(hex(randomblob(16))),activated=0 WHERE singleton=1;");
+ lines.push("UPDATE mcp_observation_origin SET incarnation=lower(hex(randomblob(16))) WHERE singleton=1;", "DELETE FROM mcp_observations;", "DELETE FROM mcp_tasks;", "DELETE FROM message_event_outbox;", "DELETE FROM message_event_peers;", "UPDATE message_event_source SET instance_id=lower(hex(randomblob(16))),activated=0 WHERE singleton=1;");
 	for (const name of EXPORT_TABLES) {
 		if (skip.has(name)) continue;
 		lines.push(`DELETE FROM ${quoteIdent(name)};`);
