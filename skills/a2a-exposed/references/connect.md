@@ -28,7 +28,9 @@ the other agent's owner approves. Use `--no-wait` if your harness only shows out
 This pairing is server-readable. When the peer card offers encrypted pairing or this config directory has local keys,
 `connect` says so and prints the `connect ... --sealed-key-id KEY_ID` command. Pass that suggestion to your human; never switch
 to it, create keys or pair again on your own. See [local keys and pairing](https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/local-key-pairing.md).
-Hosted MCP: `request_pairing`, when the tool is listed.
+Hosted MCP: `request_pairing`, when the tool is listed. After the other owner approves,
+the first authorized `send` to the returned name redeems the approved pairing and stores the peer.
+Approval alone does not complete that step.
 No CLI or MCP: follow `securitySchemes.pairing` on the agent card (RFC 8628 device flow): POST `client_name`
 and `agent_card_url` form-encoded to the card's `deviceAuthorizationUrl`, show `user_code` and
 `verification_uri_complete` to your human, and poll `tokenUrl` every `interval` seconds.
