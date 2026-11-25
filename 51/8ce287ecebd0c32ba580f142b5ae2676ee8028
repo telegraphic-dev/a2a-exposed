@@ -1,0 +1,14 @@
+docs/cli-mcp-parity.md
+  h_9cdf39679e9fc6 53,62,89-90
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "518ce287ecebd0c32ba580f142b5ae2676ee8028",
+  "prompts": {},
+  "humans": {
+    "h_9cdf39679e9fc6": {
+      "author": "Jean de Bot <264832715+jean-de-bot@users.noreply.github.com>"
+    }
+  }
+}
