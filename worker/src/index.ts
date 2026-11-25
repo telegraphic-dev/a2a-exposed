@@ -4725,8 +4725,10 @@ async function observedOutbound(ctx: TenantContext, ectx: ExecutionContext, task
   task = await peerRpc(ctx,ectx,peer,rec.endpoint,rec.protocol || "0.3","tasks/get","GetTask",{id:taskId});
   const inner = task?.task || task;
   if (!inner || inner.id !== taskId) throw new ToolError("Peer returned a different task; the delivered message was not resent.");
+  if (ownerResponseLeaks(task) || peer.token && JSON.stringify(task).includes(peer.token)) throw new ToolError("Peer task contains protected data and cannot be returned by this observation.");
   await ctx.DB.prepare("UPDATE outbound SET task_json=? WHERE task_id=?").bind(JSON.stringify(task),taskId).run();
  }
+ if (ownerResponseLeaks(task) || peer.token && JSON.stringify(task).includes(peer.token)) throw new ToolError("Peer task contains protected data and cannot be returned by this observation.");
  return {identity,contextId:rec.context_id,taskId,peer:rec.peer,state:M.plainState(task?.task || task),task};
 }
 function outboundObservationReader(ctx: TenantContext, ectx: ExecutionContext): Observations.McpObservationReader {
