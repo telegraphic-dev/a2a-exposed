@@ -1,0 +1,27 @@
+CHANGELOG.md
+  s_7fe29bf69bcc1a::t_e25c214d4f256d 5-6
+docs/protocol.md
+  s_7fe29bf69bcc1a::t_e25c214d4f256d 97-98
+docs/receiving-messages.md
+  s_7fe29bf69bcc1a::t_e25c214d4f256d 474
+worker/src/tenancy.ts
+  s_7fe29bf69bcc1a::t_369a81cf808cfc 604-606
+worker/test/tenancy.test.ts
+  s_7fe29bf69bcc1a::t_11a19464a5e4b5 380-406
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c5ad0d26b4ec8b3f666f030798d9ef05666384af",
+  "prompts": {},
+  "sessions": {
+    "s_7fe29bf69bcc1a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a21298-06e6-7a52-a847-1b490448023d",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}
