@@ -732,3 +732,5 @@ as an argument or retained in config.env. Self-host requires `--cron`. This feed
 is separate from `--event-url` pairing notices and owner wakes; it does not enable
 MCP subscriptions. See the [message event contract](message-events.md) for source
 registration, lifecycle/restore restrictions and platform service bindings.
+
+`wake peers --json` lists pairing IDs and event/action choices. `wake peers --peer-id ID --policy-file FILE --json` replaces one complete policy from a JSON file. Both write options are required; there are no prompts. See [per-pairing policies](receiving-messages.md#per-pairing-wake-policies).

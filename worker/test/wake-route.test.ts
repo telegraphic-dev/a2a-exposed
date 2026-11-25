@@ -131,206 +131,6 @@ function routes(logs: string[]) {
 	return logs.map((line) => { try { return JSON.parse(line); } catch { return null; } }).filter((row) => row?.event === "wake_route");
 }
 
-test("legacy, never, always, auto, dedup, and shadow metrics", async (t) => {
-	const phrase = "phrase-not-for-logs";
-	const shadow = envFor();
-	const h = harness(shadow);
-	t.after(h.restore);
-	const token = ((await h.call("POST", "/owner/peers", { label: "ada" })).data as { token: string }).token;
-	const peer = `Bearer ${token}`;
-	const wakes = () => h.sent.length;
-
-	const legacy = await h.call("POST", "/", message(`${phrase} legacy`, { contextId: "ctx-legacy" }), peer);
-	assert.equal(taskIdOf(legacy.data).length > 0, true);
-	assert.equal(wakes(), 1);
-	assert.equal(routes(h.logs).at(-1).decision, "legacy");
-	assert.equal(routes(h.logs).at(-1).action, "wake");
-
-	const beforeNever = wakes();
-	const quiet = await h.call("POST", "/", message(`${phrase} never`, { contextId: "ctx-never", message: { "a2a.exposed/wake": "never" } }), peer);
-	const neverId = taskIdOf(quiet.data);
-	assert.equal(wakes(), beforeNever);
-	const inbox = await h.call("GET", "/owner/inbox?context=ctx-never&from=ada");
-	assert.equal((inbox.data as { taskId: string; text: string }[])[0].taskId, neverId);
-	assert.match((inbox.data as { text: string }[])[0].text, /never/);
-	const got = await h.call("POST", "/", { jsonrpc: "2.0", id: 2, method: "tasks/get", params: { id: neverId } }, peer);
-	assert.equal((got.data as { result?: { id?: string } }).result?.id, neverId);
-
-	const beforeAlways = wakes();
-	await h.call("POST", "/", message("need you now", { contextId: "ctx-always", message: { "a2a.exposed/wake": "always", "a2a.exposed/intent": "ack" } }), peer);
-	assert.equal(wakes(), beforeAlways + 1);
-	assert.equal(routes(h.logs).at(-1).decision, "always");
-
-	const beforeShadowAck = wakes();
-	await h.call("POST", "/", message(`${phrase} ack`, { contextId: "ctx-shadow-ack", message: { "a2a.exposed/wake": "auto", "a2a.exposed/intent": "ack" } }), peer);
-	assert.equal(wakes(), beforeShadowAck + 1, "shadow still wakes an ack");
-	assert.equal(routes(h.logs).at(-1).action, "shadow");
-	assert.equal(routes(h.logs).at(-1).proposed, "suppress");
-
-	for (const intent of ["handoff", "blocker", "question"]) {
-		const before = wakes();
-		await h.call("POST", "/", message(intent, { contextId: `ctx-${intent}`, params: { "a2a.exposed/wake": "auto", "a2a.exposed/intent": intent } }), peer);
-		assert.equal(wakes(), before + 1, intent);
-		assert.equal(routes(h.logs).at(-1).decision, intent);
-	}
-
-	const retryId = "msg-retry-1";
-	const first = await h.call("POST", "/", message("original", { contextId: "ctx-retry", message: { "a2a.exposed/wake": "always" } }, retryId), peer);
-	const firstTask = taskIdOf(first.data);
-	const beforeRetry = wakes();
-	const second = await h.call("POST", "/", message("original again", { contextId: "ctx-retry", message: { "a2a.exposed/wake": "always" } }, retryId), peer);
-	assert.equal(taskIdOf(second.data), firstTask);
-	assert.equal(wakes(), beforeRetry);
-	assert.equal(routes(h.logs).at(-1).decision, "duplicate");
-	const stored = shadow.DB.db.prepare("SELECT COUNT(*) AS n FROM messages WHERE message_id = ?").get(retryId) as { n: number };
-	assert.equal(stored.n, 1);
-
-	const bad = await h.call("POST", "/", message("nope", { message: { "a2a.exposed/wake": "later" } }), peer);
-	assert.equal((bad.data as { error?: { code?: number } }).error?.code, -32602);
-	const clash = await h.call("POST", "/", message("nope", {
-		message: { "a2a.exposed/wake": "auto" }, params: { "a2a.exposed/wake": "never" },
-	}), peer);
-	assert.equal((clash.data as { error?: { code?: number } }).error?.code, -32602);
-
-	const report = await h.call("GET", "/owner/wake/routing");
-	const body = report.data as { mode: string; shadow: number; counts: { decision: string; action: string }[] };
-	assert.equal(body.mode, "shadow");
-	assert.ok(body.shadow >= 1);
-	assert.equal(body.delivered, h.sent.length);
-	assert.ok(body.decided > body.delivered, "suppressed decisions are not deliveries");
-	assert.equal(body.counts.some((row: { decision: string }) => row.decision === "invocation"), false);
-	assert.ok(body.counts.some((row) => row.decision === "ack" && row.action === "shadow"));
-	assert.equal((await h.call("GET", "/owner/wake/routing", undefined, peer)).status, 401);
-	for (const row of routes(h.logs)) {
-		assert.equal("preview" in row, false);
-		assert.equal(JSON.stringify(row).includes(phrase), false);
-		assert.equal(JSON.stringify(row).includes("hook.example"), false);
-	}
-});
-
-test("enforce suppresses acks and idle or unchanged status, and still wakes actionable and legacy sends", async (t) => {
-	const env = envFor({ WAKE_ROUTING: "enforce" });
-	const h = harness(env);
-	t.after(h.restore);
-	const token = ((await h.call("POST", "/owner/peers", { label: "ada" })).data as { token: string }).token;
-	const peer = `Bearer ${token}`;
-
-	await h.call("POST", "/", message("legacy still wakes", { contextId: "ctx-leg" }), peer);
-	assert.equal(h.sent.length, 1);
-
-	await h.call("POST", "/", message("got it", { contextId: "ctx-ack", message: { "a2a.exposed/wake": "auto", "a2a.exposed/intent": "ack" } }), peer);
-	await h.call("POST", "/", message("got it too", { contextId: "ctx-ack", message: { "a2a.exposed/intent": "ack" } }), peer);
-	assert.equal(h.sent.length, 1, "an ack loop does not wake");
-	const acks = await h.call("GET", "/owner/inbox?context=ctx-ack&from=ada&all=1");
-	assert.equal((acks.data as unknown[]).length, 2);
-
-	await h.call("POST", "/", message("   ", { contextId: "ctx-idle", message: { "a2a.exposed/wake": "auto", "a2a.exposed/intent": "status" } }), peer);
-	assert.equal(h.sent.length, 1, "an idle status does not wake");
-	const idle = await h.call("GET", "/owner/history/ctx-idle?from=ada");
-	assert.equal((idle.data as { text?: string }[]).some((row) => row.text !== undefined), true);
-
-	await h.call("POST", "/", message("building", { contextId: "ctx-same", message: { "a2a.exposed/wake": "auto", "a2a.exposed/intent": "status" } }), peer);
-	const afterFirstStatus = h.sent.length;
-	await h.call("POST", "/", message("  building  ", { contextId: "ctx-same", message: { "a2a.exposed/wake": "auto", "a2a.exposed/intent": "status" } }), peer);
-	assert.equal(h.sent.length, afterFirstStatus, "an unchanged status does not wake");
-	const fp = await sha256("building");
-	const row = env.DB.db.prepare("SELECT fingerprint FROM wake_dedup WHERE kind = 'status' AND peer = 'ada' AND ref = 'ctx-same'").get() as { fingerprint: string };
-	assert.equal(row.fingerprint, fp);
-
-	const beforeQuestion = h.sent.length;
-	await h.call("POST", "/", message("what changed?", { contextId: "ctx-q", message: { "a2a.exposed/wake": "auto", "a2a.exposed/intent": "question" } }), peer);
-	assert.equal(h.sent.length, beforeQuestion + 1);
-
-	const report = await h.call("GET", "/owner/wake/routing");
-	assert.equal((report.data as { mode: string }).mode, "enforce");
-	assert.ok((report.data as { suppressed: number }).suppressed >= 3);
-});
-
-test("enforce batches changed status into one wake", async (t) => {
-	const realNow = Date.now;
-	let offset = 0;
-	Date.now = () => realNow() + offset;
-	const env = envFor({ WAKE_ROUTING: "enforce", WAKE_DEBOUNCE_SECONDS: "30", WAKE_BUSY_SECONDS: "0", ENABLE_CRON: "1" });
-	const h = harness(env);
-	t.after(() => { Date.now = realNow; h.restore(); });
-	try {
-		const token = ((await h.call("POST", "/owner/peers", { label: "ada" })).data as { token: string }).token;
-		const peer = `Bearer ${token}`;
-		const ids: string[] = [];
-		for (const text of ["one", "two", "three"]) {
-			const res = await h.call("POST", "/", message(text, { contextId: "ctx-batch", message: { "a2a.exposed/wake": "auto", "a2a.exposed/intent": "status" } }), peer);
-			ids.push(taskIdOf(res.data));
-		}
-		assert.equal(h.sent.length, 0, "changed status waits for the debounce");
-		const pending = await h.call("GET", "/owner/wake/routing");
-		assert.equal((pending.data as { delivered: number }).delivered, 0);
-		assert.ok((pending.data as { counts: { action: string }[] }).counts.some((row) => row.action === "batch"));
-		offset += 31_000;
-		await h.call("GET", "/health");
-		assert.equal(h.sent.length, 1);
-		assert.deepEqual(h.sent[0].taskIds, ids);
-		const flushed = await h.call("GET", "/owner/wake/routing");
-		assert.equal((flushed.data as { delivered: number }).delivered, 1);
-	} finally {
-		Date.now = realNow;
-	}
-});
-
-test("shadow savings count each avoidable delivery once and test wakes stay out of delivered", async (t) => {
-	const realNow = Date.now;
-	let offset = 0;
-	Date.now = () => realNow() + offset;
-	const env = envFor({ WAKE_DEBOUNCE_SECONDS: "10", WAKE_BUSY_SECONDS: "180", ENABLE_CRON: "1" });
-	const h = harness(env);
-	t.after(() => { Date.now = realNow; h.restore(); });
-	type Report = { delivered: number; testDelivered: number; shadow: number; shadowAvoidable: number; counts: { decision: string }[] };
-	const report = async () => (await h.call("GET", "/owner/wake/routing")).data as Report;
-	try {
-		const token = ((await h.call("POST", "/owner/peers", { label: "ada" })).data as { token: string }).token;
-		const peer = `Bearer ${token}`;
-		const status = (text: string, contextId: string) => h.call("POST", "/", message(text, { contextId, message: { "a2a.exposed/wake": "auto", "a2a.exposed/intent": "status" } }), peer);
-		const ack = (contextId: string) => h.call("POST", "/", message("thanks", { contextId, message: { "a2a.exposed/wake": "auto", "a2a.exposed/intent": "ack" } }), peer);
-
-		assert.equal((await h.call("POST", "/owner/wake/test", {})).data && h.sent.length, 1);
-		let r = await report();
-		assert.deepEqual([r.delivered, r.testDelivered, r.shadowAvoidable], [0, 1, 0], "a test wake is not a delivery");
-
-		// A changed and an unchanged status inside the busy window merge into one catch-up.
-		// Enforce would still send that catch-up for the changed status, so neither decision is a saved delivery.
-		// Follow-ups are spaced past the 10 s debounce, as in the staging run, so the busy hold applies.
-		await h.call("POST", "/", message("start", { contextId: "ctx-merge" }), peer);
-		offset += 16_000;
-		await status("building", "ctx-merge");
-		offset += 16_000;
-		await status("building", "ctx-merge");
-		assert.equal(h.sent.length, 2);
-		offset += 181_000;
-		await h.call("GET", "/health");
-		assert.equal(h.sent.length, 3, "one catch-up for both statuses");
-		r = await report();
-		assert.equal(r.shadow, 2, "both statuses are shadow decisions");
-		assert.deepEqual([r.delivered, r.shadowAvoidable], [2, 0]);
-
-		// Acks enforce would suppress: the first wakes now, the second is held and merged. Each send is one saving.
-		await ack("ctx-acks");
-		offset += 16_000;
-		await ack("ctx-acks");
-		offset += 16_000;
-		await ack("ctx-acks");
-		assert.equal(h.sent.length, 4);
-		offset += 181_000;
-		await h.call("GET", "/health");
-		assert.equal(h.sent.length, 5);
-		r = await report();
-		assert.equal(r.shadow, 5);
-		assert.deepEqual([r.delivered, r.testDelivered, r.shadowAvoidable], [4, 1, 2]);
-		assert.equal(r.counts.some((row) => row.decision === "invocation"), false);
-		assert.equal(h.sent.some((body) => "shadowOnly" in body), false, "the counter flag is never sent");
-	} finally {
-		Date.now = realNow;
-	}
-});
-
 test("always is still subject to the peer rate limit", async (t) => {
 	const env = envFor({ RATE_PER_MIN: "1" });
 	const h = harness(env);
@@ -366,161 +166,6 @@ test("a repeated push does not wake twice", async (t) => {
 	assert.equal(h.sent.length, 2);
 	const stored = env.DB.db.prepare("SELECT updates_json FROM outbound WHERE task_id = 'task-push'").get() as { updates_json: string };
 	assert.equal(JSON.parse(stored.updates_json).length, 3);
-});
-
-test("an empty working push is an idle status: shadow still wakes, enforce does not", async (t) => {
-	const token = "push-token-idle";
-	const empty = { task: { id: "task-idle", contextId: "ctx-idle-push", status: { state: "working" } } };
-	const emptyV1 = { task: { id: "task-idle", contextId: "ctx-idle-push", status: { state: "TASK_STATE_WORKING" } } };
-	const withText = { task: { id: "task-idle", contextId: "ctx-idle-push", status: { state: "working", message: { parts: [{ kind: "text", text: "still going" }] } } } };
-	const completed = { task: { id: "task-idle", contextId: "ctx-idle-push", status: { state: "completed" } } };
-
-	const shadow = envFor();
-	const hs = harness(shadow);
-	t.after(hs.restore);
-	await shadow.DB.prepare(
-		`INSERT INTO outbound (task_id, context_id, peer, endpoint, protocol, push_token_hash, sent_at, updates_json, updates_seen)
-		 VALUES ('task-idle', 'ctx-idle-push', 'ada', 'https://ada.example.net/', '0.3', ?, '2026-01-01T00:00:00.000Z', '[]', 0)`,
-	).bind(await sha256(token)).run();
-	const auth = `Bearer ${token}`;
-	assert.equal((await hs.call("POST", "/push", empty, auth)).status, 200);
-	assert.equal(hs.sent.length, 1, "shadow still wakes an empty working push");
-	assert.equal(routes(hs.logs).at(-1).decision, "outbound_status_only");
-	assert.equal(routes(hs.logs).at(-1).action, "shadow");
-	const shadowReport = await hs.call("GET", "/owner/wake/routing");
-	assert.equal((shadowReport.data as { mode?: string }).mode, "shadow");
-	assert.ok(((shadowReport.data as { counts?: { decision: string; action: string; count: number }[] }).counts || [])
-		.some((row) => row.decision === "outbound_status_only" && row.action === "shadow" && row.count >= 1));
-
-	const env = envFor({ WAKE_ROUTING: "enforce" });
-	const h = harness(env);
-	t.after(h.restore);
-	await env.DB.prepare(
-		`INSERT INTO outbound (task_id, context_id, peer, endpoint, protocol, push_token_hash, sent_at, updates_json, updates_seen)
-		 VALUES ('task-idle', 'ctx-idle-push', 'ada', 'https://ada.example.net/', '0.3', ?, '2026-01-01T00:00:00.000Z', '[]', 0)`,
-	).bind(await sha256(token)).run();
-	assert.equal((await h.call("POST", "/push", empty, auth)).status, 200);
-	assert.equal(h.sent.length, 0, "enforce does not wake an empty working push");
-	assert.equal(routes(h.logs).at(-1).decision, "outbound_status_only");
-	assert.equal(routes(h.logs).at(-1).action, "suppress");
-	assert.equal((await h.call("POST", "/push", emptyV1, auth)).status, 200);
-	assert.equal(h.sent.length, 0, "the v1 working spelling is also idle");
-	assert.equal((await h.call("POST", "/push", withText, auth)).status, 200);
-	assert.equal(h.sent.length, 1, "a working push with text still wakes");
-	assert.equal(routes(h.logs).at(-1).decision, "legacy");
-	const withFile = { task: { id: "task-idle", contextId: "ctx-idle-push", status: { state: "working", message: { parts: [{ kind: "file", file: { name: "note.txt", bytes: "aaa" } }] } } } };
-	assert.equal((await h.call("POST", "/push", withFile, auth)).status, 200);
-	assert.equal(h.sent.length, 2, "a working push with a file still wakes");
-	assert.equal((await h.call("POST", "/push", completed, auth)).status, 200);
-	assert.equal(h.sent.length, 3, "an empty completed push still wakes");
-	const stored = env.DB.db.prepare("SELECT updates_json FROM outbound WHERE task_id = 'task-idle'").get() as { updates_json: string };
-	assert.equal(JSON.parse(stored.updates_json).length, 5);
-	const report = await h.call("GET", "/owner/wake/routing");
-	assert.equal((report.data as { mode?: string }).mode, "enforce");
-	assert.ok(((report.data as { counts?: { decision: string; action: string; count: number }[] }).counts || [])
-		.some((row) => row.decision === "outbound_status_only" && row.action === "suppress" && row.count >= 1));
-});
-
-test("a labelled push follows the sender's wake and intent fields", async (t) => {
-	const env = envFor({ WAKE_ROUTING: "enforce" });
-	const h = harness(env);
-	t.after(h.restore);
-	const token = "push-token-label";
-	await env.DB.prepare(
-		`INSERT INTO outbound (task_id, context_id, peer, endpoint, protocol, push_token_hash, sent_at, updates_json, updates_seen)
-		 VALUES ('task-label', 'ctx-label', 'ada', 'https://ada.example.net/', '0.3', ?, '2026-01-01T00:00:00.000Z', '[]', 0)`,
-	).bind(await sha256(token)).run();
-	const auth = `Bearer ${token}`;
-	const ack = {
-		task: {
-			id: "task-label", contextId: "ctx-label",
-			status: { state: "working", message: { parts: [{ kind: "text", text: "ok" }], metadata: { "a2a.exposed/intent": "ack" } } },
-		},
-	};
-	assert.equal((await h.call("POST", "/push", ack, auth)).status, 200);
-	assert.equal(h.sent.length, 0, "an ack-labelled push does not wake in enforce");
-	assert.equal(routes(h.logs).at(-1).decision, "ack");
-	assert.equal(routes(h.logs).at(-1).action, "suppress");
-	const always = {
-		task: {
-			id: "task-label", contextId: "ctx-label",
-			status: { state: "working", message: { metadata: { "a2a.exposed/wake": "always" } } },
-		},
-	};
-	assert.equal((await h.call("POST", "/push", always, auth)).status, 200);
-	assert.equal(h.sent.length, 1, "always still wakes an empty working push");
-	assert.equal(routes(h.logs).at(-1).decision, "always");
-	const invalid = {
-		task: {
-			id: "task-label", contextId: "ctx-label",
-			status: { state: "working", message: { metadata: { "a2a.exposed/intent": "ping" } } },
-		},
-	};
-	assert.equal((await h.call("POST", "/push", invalid, auth)).status, 200, "invalid metadata does not reject the push");
-	assert.equal(h.sent.length, 1, "invalid labels fall back to the empty-working rule");
-	assert.equal(routes(h.logs).at(-1).decision, "outbound_status_only");
-	const taskNever = {
-		task: {
-			id: "task-label", contextId: "ctx-label",
-			metadata: { "a2a.exposed/wake": "never" },
-			status: { state: "working", message: { parts: [{ kind: "text", text: "still going" }] } },
-		},
-	};
-	assert.equal((await h.call("POST", "/push", taskNever, auth)).status, 200);
-	assert.equal(h.sent.length, 1, "task-level never is kept when the status message has no metadata");
-	assert.equal(routes(h.logs).at(-1).decision, "never");
-	const messageWins = {
-		task: {
-			id: "task-label", contextId: "ctx-label",
-			metadata: { "a2a.exposed/intent": "ack" },
-			status: { state: "completed", message: { metadata: { "a2a.exposed/wake": "always" } } },
-		},
-	};
-	assert.equal((await h.call("POST", "/push", messageWins, auth)).status, 200);
-	assert.equal(h.sent.length, 2, "message wake is combined with task intent and always still wakes");
-	assert.equal(routes(h.logs).at(-1).decision, "always");
-	const conflict = {
-		task: {
-			id: "task-label", contextId: "ctx-label",
-			metadata: { "a2a.exposed/wake": "never" },
-			status: { state: "completed", message: { metadata: { "a2a.exposed/wake": "always" } } },
-		},
-	};
-	assert.equal((await h.call("POST", "/push", conflict, auth)).status, 200, "conflicting metadata does not reject the push");
-	assert.equal(h.sent.length, 3, "conflicting labels fall back to unlabelled rules");
-	assert.equal(routes(h.logs).at(-1).decision, "legacy");
-});
-
-test("enforce batches a labelled status push instead of waking immediately", async (t) => {
-	const realNow = Date.now;
-	let offset = 0;
-	Date.now = () => realNow() + offset;
-	const env = envFor({ WAKE_ROUTING: "enforce", WAKE_DEBOUNCE_SECONDS: "30", WAKE_BUSY_SECONDS: "0", ENABLE_CRON: "1" });
-	const h = harness(env);
-	t.after(() => { Date.now = realNow; h.restore(); });
-	try {
-		const token = "push-token-batch";
-		await env.DB.prepare(
-			`INSERT INTO outbound (task_id, context_id, peer, endpoint, protocol, push_token_hash, sent_at, updates_json, updates_seen)
-			 VALUES ('task-batch', 'ctx-batch-push', 'ada', 'https://ada.example.net/', '0.3', ?, '2026-01-01T00:00:00.000Z', '[]', 0)`,
-		).bind(await sha256(token)).run();
-		const auth = `Bearer ${token}`;
-		const status = (text: string) => ({
-			task: {
-				id: "task-batch", contextId: "ctx-batch-push",
-				status: { state: "working", message: { parts: [{ kind: "text", text }], metadata: { "a2a.exposed/intent": "status" } } },
-			},
-		});
-		assert.equal((await h.call("POST", "/push", status("one"), auth)).status, 200);
-		assert.equal((await h.call("POST", "/push", status("two"), auth)).status, 200);
-		assert.equal(h.sent.length, 0, "changed status waits for the debounce");
-		assert.ok(routes(h.logs).some((row) => row.decision === "status" && row.action === "batch"));
-		offset += 31_000;
-		await h.call("GET", "/health");
-		assert.equal(h.sent.length, 1);
-	} finally {
-		Date.now = realNow;
-	}
 });
 
 test("concurrent retries of one message id store one task and wake once", async (t) => {
@@ -595,81 +240,6 @@ test("purge drops message claims and status fingerprints", async (t) => {
 });
 
 // Sanitized #408 replay; no live traffic or credentials.
-test("staging replay suppresses flips and acks, preserves inbox, and wakes owner decisions", async (t) => {
- const env = envFor({ WAKE_ROUTING: "staging-enforce", WAKE_ROUTING_ENV: "staging" });
- const h = harness(env); t.after(h.restore);
- const token = "replay-push-token";
- await env.DB.prepare(`INSERT INTO outbound (task_id,context_id,peer,endpoint,protocol,push_token_hash,sent_at,updates_json,updates_seen) VALUES ('replay-task','replay-ctx','ada','https://ada.example.net/','0.3',?,'2026-01-01T00:00:00.000Z','[]',0)`).bind(await sha256(token)).run();
- const peerToken = ((await h.call("POST", "/owner/peers", { label: "ada" })).data as { token: string }).token;
- const push = (state: string, n: number, intent?: string) => h.call("POST", "/push", { task: { id: "replay-task", status: { state, timestamp: String(n), ...(intent ? {message:{metadata:{"a2a.exposed/intent":intent}}} : {}) } } }, `Bearer ${token}`);
- for (let n = 0; n < 6; n++) {
-  assert.equal((await push(n % 2 ? "TASK_STATE_WORKING" : "submitted", n)).status, 200);
-  assert.equal((await h.call("POST", "/", message("ack", { contextId: "replay-inbound", message: { "a2a.exposed/intent": "ack" } }), `Bearer ${peerToken}`)).status, 200);
- }
- assert.equal(h.sent.length, 0);
- const updates = await env.DB.prepare("SELECT updates_json, updates_seen FROM outbound WHERE task_id='replay-task'").first() as { updates_json: string; updates_seen: number };
- assert.equal(JSON.parse(updates.updates_json).length, 6); assert.equal(updates.updates_seen, 0);
- const messages = await env.DB.prepare("SELECT COUNT(*) AS n FROM messages").first() as { n: number }; assert.equal(messages.n, 6);
- for (const state of ["input-required", "TASK_STATE_INPUT_REQUIRED", "completed"]) await push(state, 10, "status");
- assert.equal(h.sent.length, 3);
- assert.ok(routes(h.logs).some(r => r.decision === "outbound_input_required" && r.action === "wake"));
- assert.ok(routes(h.logs).some(r => r.decision === "outbound_completed_status" && r.action === "wake"));
- const opted = await h.call("PUT", "/owner/wake/policy", { policy: "legacy" }); assert.equal((opted.data as {mode:string}).mode,"shadow");
- await push("working", 20); assert.equal(h.sent.length,4);
- const seen = (await h.call("GET", "/owner/wake/policy")).data as { policy:string;choices:string[] };
- assert.equal(seen.policy,"legacy"); assert.deepEqual(seen.choices,["smart","legacy"]);
- assert.equal((await h.call("PUT", "/owner/wake/policy", {policy:"bad"})).status,400);
- assert.equal((await h.call("PUT", "/owner/wake/policy", {policy:"smart"}, `Bearer ${peerToken}`)).status,401);
-});
-
-test("staging mode requires exact deployment gate", async () => {
- for (const stage of ["", "production", "STAGING", " staging"]) {
-  const h=harness(envFor({WAKE_ROUTING:"staging-enforce",WAKE_ROUTING_ENV:stage}));
-  try { assert.equal(((await h.call("GET","/owner/wake/policy")).data as {mode:string}).mode,"shadow"); } finally {h.restore();}
- }
-});
-
-test("staging bounds identical-status suppression to debounce and preserves actionable controls", async (t) => {
- const real=Date.now; let offset=0; Date.now=()=>real()+offset;
- const env=envFor({WAKE_ROUTING:"staging-enforce",WAKE_ROUTING_ENV:"staging",WAKE_DEBOUNCE_SECONDS:"30",WAKE_BUSY_SECONDS:"0",ENABLE_CRON:"1"});
- const h=harness(env);t.after(()=>{Date.now=real;h.restore();});
- const token=((await h.call("POST","/owner/peers",{label:"ada"})).data as {token:string}).token;
- const send=(text:string,intent?:string,wake?:string)=>h.call("POST","/",message(text,{contextId:"repeat-ctx",message:{...(intent?{"a2a.exposed/intent":intent}:{}),...(wake?{"a2a.exposed/wake":wake}:{})}}),`Bearer ${token}`);
- await send("building","status"); await send("building","status"); assert.equal(routes(h.logs).at(-1).action,"suppress");
- offset+=31000; await send("building","status"); assert.notEqual(routes(h.logs).at(-1).action,"suppress");
- for (const [intent,wake] of [["question",undefined],["ack","always"],[undefined,undefined]]) {
-  offset+=31000; await send("action",intent,wake);assert.equal(routes(h.logs).at(-1).action,"wake");
- }
-});
-
-
-test("shadow replay measures all twelve avoidable wakes without suppressing or clearing messages", async (t) => {
- const env=envFor(); const h=harness(env);t.after(h.restore);
- const token="shadow-replay";
- await env.DB.prepare(`INSERT INTO outbound (task_id,context_id,peer,endpoint,protocol,push_token_hash,sent_at,updates_json,updates_seen) VALUES ('shadow-task','shadow-ctx','ada','https://ada.example.net/','0.3',?,'2026-01-01T00:00:00.000Z','[]',0)`).bind(await sha256(token)).run();
- const peer=((await h.call("POST","/owner/peers",{label:"ada"})).data as {token:string}).token;
- for(let n=0;n<6;n++) {
-  await h.call("POST","/push",{task:{id:"shadow-task",status:{state:"working",timestamp:String(n)}}},`Bearer ${token}`);
-  await h.call("POST","/",message("ack",{contextId:"shadow-in",message:{"a2a.exposed/intent":"ack"}}),`Bearer ${peer}`);
- }
- const r=(await h.call("GET","/owner/wake/routing")).data as {delivered:number;shadowAvoidable:number;shadow:number;suppressed:number};
- assert.deepEqual([h.sent.length,r.delivered,r.shadowAvoidable,r.shadow,r.suppressed],[12,12,12,12,0]);
-});
-
-
-test("staging does not skip status or ack updates carrying files or structured data", async (t) => {
- const env=envFor({WAKE_ROUTING:"staging-enforce",WAKE_ROUTING_ENV:"staging"});const h=harness(env);t.after(h.restore);
- const token=((await h.call("POST","/owner/peers",{label:"ada"})).data as {token:string}).token;
- for (const intent of ["ack","status"]) {
-  const body=message("",{contextId:"attachments",message:{"a2a.exposed/intent":intent}});
-  body.params.message.parts.push({kind:"data",data:{result:"synthetic"}} as never);
-  await h.call("POST","/",body,`Bearer ${token}`);
-  assert.equal(routes(h.logs).at(-1).action,"wake");
- }
- assert.equal(h.sent.length,2);
-});
-
-
 test("an answer on an input-required inbound task wakes even when labelled ack or status", async (t) => {
  const env=envFor({WAKE_ROUTING:"staging-enforce",WAKE_ROUTING_ENV:"staging"});const h=harness(env);t.after(h.restore);
  const token=((await h.call("POST","/owner/peers",{label:"ada"})).data as {token:string}).token;
@@ -683,7 +253,7 @@ test("an answer on an input-required inbound task wakes even when labelled ack o
   const answer=message(intent==="status"?"":"yes",{taskId:id,message:{"a2a.exposed/intent":intent}},`answer-${intent}`);
   assert.equal((await h.call("POST","/",answer,peer)).status,200);
   assert.equal(h.sent.length,before+1,`the ${intent}-labelled answer must wake`);
-  assert.equal(routes(h.logs).at(-1).decision,"input_required");
+  assert.equal(routes(h.logs).at(-1).decision,"peer_attention");
   await h.call("POST","/",answer,peer);
   assert.equal(h.sent.length,before+1,"a retry must not wake twice");
   await h.call("POST",`/owner/tasks/${id}/reply`,{text:"Please answer again",state:"input-required"});
@@ -693,16 +263,235 @@ test("an answer on an input-required inbound task wakes even when labelled ack o
  }
 });
 
-test("steady identical statuses cannot slide the staging suppression window forever", async (t) => {
- const real=Date.now;let offset=0;Date.now=()=>real()+offset;
- const env=envFor({WAKE_ROUTING:"staging-enforce",WAKE_ROUTING_ENV:"staging",WAKE_DEBOUNCE_SECONDS:"30",WAKE_BUSY_SECONDS:"0",ENABLE_CRON:"1"});
- const h=harness(env);t.after(()=>{Date.now=real;h.restore();});
- const token=((await h.call("POST","/owner/peers",{label:"ada"})).data as {token:string}).token;
- for(let n=0;n<6;n++) {
-  offset=n*20000;
-  await h.call("POST","/",message("building",{contextId:"fixed-window",message:{"a2a.exposed/intent":"status"}}),`Bearer ${token}`);
+async function peerId(h: ReturnType<typeof harness>, peer: string, direction = "inbound") {
+ const listed = (await h.call("GET", "/owner/wake/peers")).data as any;
+ return listed.peers.find((r:any) => r.peer === peer && r.direction === direction).peerId;
+}
+const defaults = { inbound: "wake", update: "wake", completed: "wake", attention: "wake", empty: "skip", ack: "skip" };
+
+test("peer defaults apply in shadow/enforce and after global legacy opt-out", async (t) => {
+ for (const mode of ["shadow", "enforce", "staging-enforce"]) {
+  const env = envFor({ WAKE_ROUTING: mode }); const h = harness(env);
+  try {
+   const token = ((await h.call("POST", "/owner/peers", { label: "ada" })).data as {token:string}).token;
+   const auth = `Bearer ${token}`;
+   await h.call("PUT", "/owner/wake/policy", { policy: "legacy" });
+   await h.call("POST", "/", message("ack", {message:{"a2a.exposed/intent":"ack","a2a.exposed/wake":"always"}}), auth);
+   assert.equal(h.sent.length, 0, `${mode}: sender always does not override ack policy`);
+   for (const text of ["", "status", "status"]) await h.call("POST", "/", message(text, {message:{"a2a.exposed/intent":"status"}}), auth);
+   assert.equal(h.sent.length, 3, `${mode}: inbound messages wake by default`);
+   await h.call("POST", "/", message("question", {message:{"a2a.exposed/wake":"never"}}), auth);
+   assert.equal(h.sent.length, 3);
+   const report = (await h.call("GET", "/owner/wake/routing")).data as any;
+   assert.equal(report.suppressed, 2); assert.equal(report.shadow, 0); assert.equal(report.delivered, 3);
+   assert.equal(JSON.stringify(routes(h.logs)).includes('question'), false);
+  } finally { h.restore(); }
  }
- assert.equal(h.sent.length,3,"wake at 0, 40 and 80 seconds with a 30-second window");
- const inbox=await h.call("GET","/owner/inbox?context=fixed-window&from=ada&all=1");
- assert.equal((inbox.data as unknown[]).length,6,"every repeated message remains available");
+});
+
+test("owner lists choices and updates one existing pairing; peer credentials cannot administer", async () => {
+ const h = harness(envFor());
+ try {
+  const token = ((await h.call("POST", "/owner/peers", {label:"ada"})).data as any).token;
+  await h.call("POST", "/owner/peers", {label:"bob"});
+  const listed = (await h.call("GET", "/owner/wake/peers")).data as any;
+  assert.deepEqual(listed.actions, ["wake","skip","batch"]); assert.equal(listed.peers.length,2);
+  const policy = {...defaults, inbound:"skip", ack:"wake"};
+  assert.equal((await h.call("PUT", "/owner/wake/peers", {peerId:await peerId(h,"ada"),policy})).status,200);
+  const again = (await h.call("GET", "/owner/wake/peers")).data as any;
+  assert.deepEqual(again.peers.find((p:any)=>p.peer==='ada').policy,policy);
+  assert.deepEqual(again.peers.find((p:any)=>p.peer==='bob').policy,defaults);
+  for (const body of [{peerId:"inbound:"+"0".repeat(32),policy}, {peerId:await peerId(h,"ada"),policy:{}}, {peerId:await peerId(h,"ada"),policy:{...policy,extra:"wake"}}, {peerId:await peerId(h,"ada"),policy,extra:true}]) assert.ok([400,409].includes((await h.call("PUT","/owner/wake/peers",body)).status));
+  assert.equal((await h.call("GET","/owner/wake/peers",undefined,`Bearer ${token}`)).status,401);
+  assert.equal((await h.call("PUT","/owner/wake/peers",{peerId:await peerId(h,"ada"),policy},`Bearer ${token}`)).status,401);
+  await h.call("POST","/",message("skip me"),`Bearer ${token}`); assert.equal(h.sent.length,0);
+  await h.call("POST","/",message("ack",{message:{"a2a.exposed/intent":"ack"}}),`Bearer ${token}`); assert.equal(h.sent.length,1);
+ } finally {h.restore();}
+});
+
+test("batch waits across cron requests, joins next wake, and survives failed delivery", async () => {
+ const env = envFor({ ENABLE_CRON:"1" }); const h = harness(env);
+ try {
+  const token=((await h.call("POST","/owner/peers",{label:"ada"})).data as any).token;
+  await h.call("PUT","/owner/wake/peers",{peerId:await peerId(h,"ada"),policy:{...defaults,inbound:"batch"}});
+  const first=await h.call("POST","/",message("queued",{contextId:"ctx-held"}),`Bearer ${token}`);
+  assert.equal(h.sent.length,0); await h.call("GET","/health"); assert.equal(h.sent.length,0);
+  assert.equal(Number((await env.DB.prepare("SELECT COUNT(*) AS n FROM peer_wake_batch").first() as any).n),1);
+  await h.call("PUT","/owner/wake/peers",{peerId:await peerId(h,"ada"),policy:defaults});
+  const realFetch=globalThis.fetch; globalThis.fetch=(async()=>new Response("failed",{status:500})) as typeof fetch;
+  await h.call("POST","/",message("trigger",{contextId:"ctx-failed"}),`Bearer ${token}`);
+  globalThis.fetch=realFetch;
+  assert.equal(Number((await env.DB.prepare("SELECT COUNT(*) AS n FROM peer_wake_batch").first() as any).n),1,"failed send retains marker");
+  await h.call("POST","/",message("next",{contextId:"ctx-next"}),`Bearer ${token}`);
+  const wake=h.sent.at(-1) as any;
+  assert.equal(wake.hint.endsWith(' inbox'),true); assert.deepEqual(wake.batched,[{peer:"ada",contextId:"ctx-held",taskId:taskIdOf(first.data),kind:"inbound"}]);
+  assert.equal(Number((await env.DB.prepare("SELECT COUNT(*) AS n FROM peer_wake_batch").first() as any).n),0);
+  const inbox=(await h.call("GET","/owner/inbox")).data as any[]; assert.ok(inbox.some(row=>row.taskId===taskIdOf(first.data)));
+ } finally {h.restore();}
+});
+
+test("push defaults skip empty working/submitted and ack but wake terminal states and content", async () => {
+ const env=envFor();const h=harness(env);
+ try {
+  const token='policy-push-token';await env.DB.prepare(`INSERT INTO outbound(task_id,context_id,peer,endpoint,protocol,push_token_hash,sent_at,updates_json,updates_seen) VALUES('task-policy','ctx-policy','ada','https://ada.example.net/','0.3',?,'2026-01-01','[]',0)`).bind(await sha256(token)).run();
+  const push=(state:string,text?:string,intent?:string,wake?:string)=>h.call('POST','/push',{task:{id:'task-policy',status:{state,message:{parts:text?[{kind:'text',text}]:[],metadata:{...(intent?{'a2a.exposed/intent':intent}:{}),...(wake?{'a2a.exposed/wake':wake}:{})}}}}},`Bearer ${token}`);
+  for(const state of ['working','submitted','TASK_STATE_WORKING','TASK_STATE_SUBMITTED']) await push(state);
+  await push('working','ok','ack','always');assert.equal(h.sent.length,0);
+  for(const state of ['completed','input-required','failed','TASK_STATE_COMPLETED','TASK_STATE_INPUT_REQUIRED','TASK_STATE_FAILED']) await push(state,undefined,'ack');
+  assert.equal(h.sent.length,6);
+  await push('working','progress');assert.equal(h.sent.length,7);
+  await push('unknown');assert.equal(h.sent.length,8,'unknown updates wake');
+  await push('completed','silent',undefined,'never');assert.equal(h.sent.length,8);
+ } finally {h.restore();}
+});
+
+test("pairing IDs survive sync/rotation, distinguish directions, and reject stale revoked IDs", async () => {
+ const env=envFor();const h=harness(env);
+ try {
+  await h.call('POST','/owner/peers',{label:'ada'});
+  await h.call('PUT','/owner/outbound-peers/ada',{url:'https://ada.example.net/',token:'dummy-one'});
+  const inbound=await peerId(h,'ada');const outbound=await peerId(h,'ada','outbound');assert.notEqual(inbound,outbound);
+  assert.equal((await h.call('PUT','/owner/wake/peers',{peerId:outbound,policy:{...defaults,update:'batch'}})).status,200);
+  await h.call('PUT','/owner/outbound-peers/ada',{url:'https://ada.example.net/',token:'dummy-two'});
+  assert.equal(await peerId(h,'ada','outbound'),outbound);
+  assert.equal(((await h.call('GET','/owner/wake/peers')).data as any).peers.find((r:any)=>r.peerId===outbound).policy.update,'batch');
+  await env.DB.prepare("UPDATE peers SET token_hash=? WHERE label='ada'").bind(await sha256('rotated')).run();
+  assert.equal(await peerId(h,'ada'),inbound);
+  await h.call('DELETE','/owner/peers/ada');
+  assert.equal((await h.call('PUT','/owner/wake/peers',{peerId:inbound,policy:defaults})).status,409);
+  await h.call('POST','/owner/peers',{label:'ada'});assert.notEqual(await peerId(h,'ada'),inbound);
+ } finally {h.restore();}
+});
+
+test("late accepted batch snapshot cannot delete a marker reinserted after earlier acceptance", async () => {
+ const env=envFor();const h=harness(env);
+ try {
+  const token=((await h.call('POST','/owner/peers',{label:'ada'})).data as any).token;
+  const id=await peerId(h,'ada');await h.call('PUT','/owner/wake/peers',{peerId:id,policy:{...defaults,inbound:'batch'}});
+  await h.call('POST','/',message('held',{contextId:'ctx-race-batch'}),`Bearer ${token}`);
+  const old=await env.DB.prepare('SELECT * FROM peer_wake_batch').first() as any;
+  await env.DB.prepare('DELETE FROM peer_wake_batch').run();
+  await env.DB.prepare('INSERT INTO peer_wake_batch(peer_id,peer,context_id,task_id,kind,generation) VALUES(?,?,?,?,?,?)').bind(old.peer_id,old.peer,old.context_id,old.task_id,old.kind,crypto.randomUUID()).run();
+  const deleted=await env.DB.prepare('DELETE FROM peer_wake_batch WHERE peer_id=? AND context_id=? AND task_id=? AND generation=?').bind(old.peer_id,old.context_id,old.task_id,old.generation).run();
+  assert.equal(deleted.meta.changes,0);
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) AS n FROM peer_wake_batch').first() as any).n,1);
+ } finally {h.restore();}
+});
+
+test("batch markers are retained without a configured hook or when a custom template omits them", async () => {
+ for(const config of [{WAKE_WEBHOOK_URL:""},{WAKE_BODY_TEMPLATE:'{"notification":"custom"}'}]) {
+  const env=envFor(config);const h=harness(env);
+  try {
+   const token=((await h.call('POST','/owner/peers',{label:'ada'})).data as any).token;
+   const id=await peerId(h,'ada');await h.call('PUT','/owner/wake/peers',{peerId:id,policy:{...defaults,inbound:'batch'}});
+   await h.call('POST','/',message('held'),`Bearer ${token}`);
+   await h.call('PUT','/owner/wake/peers',{peerId:id,policy:defaults});
+   await h.call('POST','/',message('trigger'),`Bearer ${token}`);
+   assert.equal((await env.DB.prepare('SELECT COUNT(*) AS n FROM peer_wake_batch').first() as any).n,1);
+  } finally {h.restore();}
+ }
+});
+
+test("message and batch marker roll back together when marker persistence fails", async () => {
+ const env=envFor();const h=harness(env);
+ try {
+  const token=((await h.call('POST','/owner/peers',{label:'ada'})).data as any).token;
+  const id=await peerId(h,'ada');await h.call('PUT','/owner/wake/peers',{peerId:id,policy:{...defaults,inbound:'batch'}});
+  const batch=env.DB.batch.bind(env.DB);let armed=true;
+  env.DB.batch=async statements=>{
+   const at=statements.findIndex((s:any)=>s.__sql?.includes('INSERT INTO peer_wake_batch'));
+   if(armed&&at>=0){armed=false;const failed=[...statements];failed[at]=env.DB.prepare('SELECT * FROM intentional_missing_batch_table');return batch(failed);}
+   return batch(statements);
+  };
+  const body=message('must recover',{contextId:'ctx-atomic'},'msg-atomic');
+  await h.call('POST','/',body,`Bearer ${token}`);
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) AS n FROM tasks').first() as any).n,0);
+  const retry=await h.call('POST','/',body,`Bearer ${token}`);assert.ok(taskIdOf(retry.data));
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) AS n FROM peer_wake_batch').first() as any).n,1);assert.equal(h.sent.length,0);
+ }finally{h.restore();}
+});
+
+test("callbacks retain the original pairing and batch atomically with updates", async () => {
+ const env=envFor();const h=harness(env);
+ try {
+  await h.call('PUT','/owner/outbound-peers/ada',{url:'https://ada.example.net/',token:'dummy-peer'});
+  const id=await peerId(h,'ada','outbound');await h.call('PUT','/owner/wake/peers',{peerId:id,policy:{...defaults,update:'batch'}});
+  const pushToken='atomic-push';await env.DB.prepare(`INSERT INTO outbound(task_id,context_id,peer,endpoint,protocol,push_token_hash,sent_at,updates_json,updates_seen,wake_policy_peer_id) VALUES('task-atomic','ctx-atomic-push','ada','https://ada.example.net/','0.3',?,'2026-01-01','[]',0,?)`).bind(await sha256(pushToken),id).run();
+  const batch=env.DB.batch.bind(env.DB);let armed=true;
+  env.DB.batch=async statements=>{
+   const at=statements.findIndex((s:any)=>s.__sql?.includes('INSERT INTO peer_wake_batch'));
+   if(armed&&at>=0){armed=false;const failed=[...statements];failed[at]=env.DB.prepare('SELECT * FROM intentional_missing_batch_table');return batch(failed);}
+   return batch(statements);
+  };
+  const body={task:{id:'task-atomic',status:{state:'working',message:{parts:[{kind:'text',text:'progress'}]}}}};
+  await h.call('POST','/push',body,`Bearer ${pushToken}`);
+  assert.equal((await env.DB.prepare("SELECT updates_json FROM outbound WHERE task_id='task-atomic'").first() as any).updates_json,'[]');
+  assert.equal((await h.call('POST','/push',body,`Bearer ${pushToken}`)).status,200);
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) AS n FROM peer_wake_batch').first() as any).n,1);assert.equal(h.sent.length,0);
+  await h.call('DELETE','/owner/outbound-peers/ada');await h.call('PUT','/owner/outbound-peers/ada',{url:'https://other.example.net/',token:'other-dummy'});
+  const changed={task:{id:'task-atomic',status:{state:'working',message:{parts:[{kind:'text',text:'different'}]}}}};
+  assert.equal((await h.call('POST','/push',changed,`Bearer ${pushToken}`)).status,200);assert.equal(h.sent.length,0,'old callback cannot borrow replacement defaults');
+ }finally{h.restore();}
+});
+
+test("a retried MausBot carrier removes revoked batch references and changes delivery identity", async () => {
+ const realNow=Date.now;let offset=0;Date.now=()=>realNow()+offset;
+ const env=envFor({WAKE_PRESET:'mausbot',WAKE_WEBHOOK_URL:'https://hook.example/hooks/wh_test',ENABLE_CRON:'1'});const h=harness(env);
+ try {
+  const ada=((await h.call('POST','/owner/peers',{label:'ada'})).data as any).token;
+  const bob=((await h.call('POST','/owner/peers',{label:'bob'})).data as any).token;
+  const id=await peerId(h,'ada');await h.call('PUT','/owner/wake/peers',{peerId:id,policy:{...defaults,inbound:'batch'}});
+  await h.call('POST','/',message('held',{contextId:'ctx-revoked'}),`Bearer ${ada}`);
+  const captured:any[]=[];let fail=true;
+  globalThis.fetch=(async(_url:any,init:any)=>{captured.push({headers:new Headers(init.headers),body:JSON.parse(init.body)});return new Response('fixture',{status:fail?503:200});}) as typeof fetch;
+  await h.call('POST','/',message('carrier',{contextId:'ctx-carrier'}),`Bearer ${bob}`);
+  assert.equal(captured[0].body.batched[0].peer,'ada');
+  await h.call('DELETE','/owner/peers/ada');fail=false;offset+=61000;await h.call('GET','/health');
+  assert.ok(captured.length>=2);assert.equal(captured.at(-1).body.batched,undefined);
+  assert.notEqual(captured[0].headers.get('idempotency-key'),captured.at(-1).headers.get('idempotency-key'));
+ } finally {Date.now=realNow;h.restore();}
+});
+
+test("pairing policy selectors cannot cross inbox databases", async () => {
+ const h1=harness(envFor());let h2:ReturnType<typeof harness>|undefined;
+ try {
+  await h1.call('POST','/owner/peers',{label:'ada'});const foreign=await peerId(h1,'ada');
+  h2=harness(envFor());await h2.call('POST','/owner/peers',{label:'ada'});
+  assert.equal((await h2.call('PUT','/owner/wake/peers',{peerId:foreign,policy:{...defaults,inbound:'skip'}})).status,409);
+  const listed=(await h2.call('GET','/owner/wake/peers')).data as any;
+  assert.equal(listed.peers.some((row:any)=>row.peerId===foreign),false);assert.deepEqual(listed.peers[0].policy,defaults);
+ } finally {h2?.restore();h1.restore();}
+});
+
+test("pairing discovery pages with one bounded joined query and supports exact selectors", async () => {
+ const env=envFor();const h=harness(env);
+ try {
+  const stamp='2026-01-01';
+  for(let i=0;i<105;i++) await env.DB.prepare('INSERT INTO peers(label,token_hash,created_at,wake_policy_id) VALUES(?,?,?,?)').bind(`peer-${i}`,await sha256(String(i)),stamp,i.toString(16).padStart(32,'0')).run();
+  const first=(await h.call('GET','/owner/wake/peers')).data as any;assert.equal(first.peers.length,100);assert.ok(first.nextCursor);
+  const second=(await h.call('GET',`/owner/wake/peers?cursor=${first.nextCursor}`)).data as any;assert.equal(second.peers.length,5);assert.equal(second.nextCursor,null);
+  assert.equal(new Set([...first.peers,...second.peers].map(r=>r.peerId)).size,105);
+  const selected=(await h.call('GET',`/owner/wake/peers?peerId=${second.peers[0].peerId}`)).data as any;assert.equal(selected.peers.length,1);
+  assert.equal((await h.call('GET','/owner/wake/peers?cursor=invalid')).status,400);
+ } finally {h.restore();}
+});
+
+test("MausBot retry preserves an empty first snapshot instead of changing bytes under its delivery key", async () => {
+ const realNow=Date.now;let offset=0;Date.now=()=>realNow()+offset;
+ const env=envFor({WAKE_PRESET:'mausbot',WAKE_WEBHOOK_URL:'https://hook.example/hooks/wh_test',ENABLE_CRON:'1'});const h=harness(env);
+ try {
+  const ada=((await h.call('POST','/owner/peers',{label:'ada'})).data as any).token;
+  const bob=((await h.call('POST','/owner/peers',{label:'bob'})).data as any).token;
+  const captured:any[]=[];let fail=true;
+  globalThis.fetch=(async(_url:any,init:any)=>{captured.push({key:new Headers(init.headers).get('idempotency-key'),body:init.body});return new Response('fixture',{status:fail?503:200});}) as typeof fetch;
+  await h.call('POST','/',message('first carrier',{contextId:'ctx-empty-carrier'}),`Bearer ${bob}`);
+  assert.equal(JSON.parse(captured[0].body).batched,undefined);
+  const id=await peerId(h,'ada');await h.call('PUT','/owner/wake/peers',{peerId:id,policy:{...defaults,inbound:'batch'}});
+  await h.call('POST','/',message('later queued',{contextId:'ctx-later-queued'}),`Bearer ${ada}`);
+  fail=false;offset+=61000;await h.call('GET','/health');assert.ok(captured.length>=2);
+  assert.deepEqual(captured[1],captured[0]);
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) AS n FROM peer_wake_batch').first() as any).n,1);
+  await h.call('POST','/',message('next carrier',{contextId:'ctx-next-carrier'}),`Bearer ${bob}`);
+  assert.equal(JSON.parse(captured.at(-1).body).batched[0].peer,'ada');
+ } finally {Date.now=realNow;h.restore();}
 });

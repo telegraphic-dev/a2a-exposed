@@ -1,3 +1,4 @@
+import * as PeerWake from "./peer-wake-policy.ts";
 import { messageEventTarget, messageEventIdentity, messageEventStatement, flushMessageEvents } from "./message-events.ts";
 import { LANDING_SOCIAL_IMAGE } from "./landing-social-image.ts";
 import { SOCIAL_CARD_PATH, cardLayout, socialCardKey, socialCardPng } from "./social-card.ts";
@@ -17,7 +18,7 @@ import * as F from "./facade.ts";
 import { routeHttpRelay, httpRelayFetch, httpRelayEnrollment, isHttpRelayProfile } from "./http-relay-routing.ts";
 import { relayFetch, relayTestOutcome, type RelayTestError } from "./relay-routing.ts";
 import { renderWake, relayWakeTestInput, mausbotConfigProblem, presetAuthProblem, redact, cloudflareErrorHint, wakeUrlIsTunnelHost, defaultBusySeconds, defaultDebounceSeconds, defaultMaxPerHour, type WakeConfig, type WakeEvent } from "./wake.ts";
-import { decideRoute, decidePush, outboundClass, isIdleWorkingPush, readRouteFields, routingMode, statusText, type RouteDecision } from "./wake-route.ts";
+import { decideRoute, readRouteFields, routingMode, statusText, type RouteDecision } from "./wake-route.ts";
 import { fetchCheckedPeer, fetchCheckedWake } from "./wake-target.ts";
 import { withDeadline } from "./deadline.ts";
 import * as Addr from "./address.ts";
@@ -290,6 +291,19 @@ async function noteWakeWrite(ectx: object): Promise<void> {
 }
 
 async function sendWake(ctx: TenantContext, ectx: ExecutionContext, payload: Json): Promise<{ status: number | null; info: string; error?: RelayTestError }> {
+ // Revalidate snapshots on every attempt: revoke/purge and competing acceptance invalidate references.
+ if (messageWake(String(payload.kind))) {
+  const rows = await ctx.DB.prepare("SELECT peer_id,peer,context_id,task_id,kind,generation FROM peer_wake_batch WHERE peer_id IN (SELECT 'inbound:' || wake_policy_id FROM peers WHERE revoked_at IS NULL UNION SELECT 'outbound:' || wake_policy_id FROM outbound_peers) ORDER BY rowid LIMIT 100").all();
+  const live = rows.results || [];
+  const before = JSON.stringify(payload.batched || []);
+  const config = await A.sha256(JSON.stringify({wake:wakeConfig(ctx),publicUrl:ctx.PUBLIC_URL}));
+  const next = wakeConfig(ctx).bodyTemplate ? [] : Array.isArray(payload.batched)
+   ? payload.batched.filter((old: Json) => live.some((row: Json) => row.peer_id === old.peer_id && row.context_id === old.context_id && row.task_id === old.task_id && row.generation === old.generation)) : live;
+  if (payload.batched && (before !== JSON.stringify(next) || payload.batchConfig !== config)) payload.deliveryId = crypto.randomUUID();
+  payload.batched = next;
+  payload.batchConfig = config;
+ }
+
 	let receipt: Receipts.ReceiptRef | undefined;
 	if (wakeHooked(ctx) && preset(ctx) !== "mausbot") {
 		// MausBot retries retain identical payload bytes under one idempotency key.
@@ -299,6 +313,9 @@ async function sendWake(ctx: TenantContext, ectx: ExecutionContext, payload: Jso
 	if (receipt) {
 		try { await ctx.DB.prepare("UPDATE wake_receipts SET http_status=? WHERE delivery_id=?").bind(result.status, receipt.id).run(); } catch { log("wake_receipt_unavailable", {}); }
 	}
+ if (result.status !== null && result.status >= 200 && result.status < 300 && !wakeConfig(ctx).bodyTemplate && payload.batched?.length) {
+  await ctx.DB.batch(payload.batched.map((row: Json) => ctx.DB.prepare("DELETE FROM peer_wake_batch WHERE peer_id=? AND context_id=? AND task_id=? AND generation=?").bind(row.peer_id, row.context_id, row.task_id, row.generation)));
+ }
 	if (!wakeHooked(ctx)) return result;
 	const value = JSON.stringify({ at: new Date(Date.now()).toISOString(), httpStatus: result.status, transport: ctx.WAKE_TRANSPORT === "relay" ? "relay" : "webhook" });
 	try {
@@ -327,7 +344,7 @@ async function attemptWake(ctx: TenantContext, ectx: ExecutionContext, payload: 
 	const delivered = { ...payload };
 	delete delivered.busy;
 	// shadowOnly is a routing counter flag, never part of the request.
-	const { shadowOnly: _counterFlag, ...event } = delivered;
+	const { shadowOnly: _counterFlag, batchConfig: _batchConfig, ...event } = delivered;
 	const ev: WakeEvent = { ...event, publicUrl: ctx.PUBLIC_URL, ...(receipt ? { receipt } : {}) };
 	let req;
 	try { req = await renderWake(wakeConfig(ctx), ev, receipt ? { requestId: receipt.id } : {}); } catch (e) {
@@ -604,6 +621,8 @@ export async function cronFlush(ctx: TenantContext, ectx: ExecutionContext): Pro
 		ctx.DB.prepare("DELETE FROM rate WHERE minute < ?").bind(Math.floor(now / 60000) - 5),
 		ctx.DB.prepare("DELETE FROM wake_budget WHERE hour < ?").bind(Math.floor(now / 3600000) - 24),
 		ctx.DB.prepare("DELETE FROM wake_routing WHERE hour < ?").bind(Math.floor(now / 3600000) - 24 * 14),
+  ctx.DB.prepare("DELETE FROM peer_wake_batch WHERE peer_id NOT IN (SELECT 'inbound:' || wake_policy_id FROM peers WHERE revoked_at IS NULL UNION SELECT 'outbound:' || wake_policy_id FROM outbound_peers)"),
+  ctx.DB.prepare("DELETE FROM settings WHERE key GLOB 'peer_wake_policy:*' AND substr(key,18) NOT IN (SELECT 'inbound:' || wake_policy_id FROM peers WHERE revoked_at IS NULL UNION SELECT 'outbound:' || wake_policy_id FROM outbound_peers)"),
 		...pairingCleanup(ctx, now),
 		ctx.DB.prepare("DELETE FROM oauth_codes WHERE expires_ms < ?").bind(now),
 	]);
@@ -958,9 +977,6 @@ type Rpc = (p: Json, label: string, version: string, ctx: TenantContext, ectx: E
 
 const ROUTING_KEEP_HOURS = 24 * 14;
 
-function wakeOpts(decision: RouteDecision): { defer?: boolean; shadowSuppress?: boolean } {
-	return { ...(decision.batch ? { defer: true } : {}), ...(decision.action === "shadow" && decision.proposed === "suppress" ? { shadowSuppress: true } : {}) };
-}
 
 async function recordRoute(ctx: TenantContext, decision: RouteDecision, kind: "inbound" | "outbound_update"): Promise<void> {
 	log("wake_route", {
@@ -1001,6 +1017,44 @@ async function wakePolicy(ctx: TenantContext): Promise<Json> {
  const configured = ctx.WAKE_ROUTING === "staging-enforce" ? "staging-enforce" : routingMode(ctx.WAKE_ROUTING);
  const mode = policy === "legacy" || (configured === "staging-enforce" && !ctx.stagingWakeRouting) ? "shadow" : configured;
  return { policy, mode, configured, stagingAllowed: ctx.stagingWakeRouting, choices: ["smart", "legacy"] };
+}
+
+async function peerWakePolicyKey(ctx: TenantContext, peer: string, direction = "inbound"): Promise<string | null> {
+ const row: Json = direction === "inbound"
+  ? await ctx.DB.prepare("SELECT wake_policy_id FROM peers WHERE label=? AND revoked_at IS NULL").bind(peer).first()
+  : await ctx.DB.prepare("SELECT wake_policy_id FROM outbound_peers WHERE alias=?").bind(peer).first();
+ return row?.wake_policy_id ? `${direction}:${row.wake_policy_id}` : null;
+}
+async function peerWakePolicy(ctx: TenantContext, peerId: string | null): Promise<{ policy: PeerWake.PeerWakePolicy; configured: boolean }> {
+ const row: Json = peerId ? await ctx.DB.prepare("SELECT value FROM settings WHERE key=?").bind(`peer_wake_policy:${peerId}`).first() : null;
+ if (!row) return { policy: { ...PeerWake.DEFAULT_PEER_WAKE_POLICY }, configured: false };
+ const policy = JSON.parse(row.value);
+ if (!PeerWake.validPeerWakePolicy(policy)) throw new Error("Invalid stored peer wake policy");
+ return { policy, configured: true };
+}
+
+type PeerWakePlan = { peerId: string | null; event: PeerWake.PeerWakeEvent; action: PeerWake.PeerWakeAction };
+async function peerWakePlan(ctx: TenantContext, peer: string, inbound: boolean, state: string | null, text: string, hasContent: boolean, senderWake: string | null, intent: string | null, duplicate: boolean, direction = "inbound", boundPeerId?: string | null): Promise<PeerWakePlan> {
+ const liveId = await peerWakePolicyKey(ctx, peer, direction);
+ const peerId = boundPeerId === undefined ? liveId : boundPeerId;
+ const event = PeerWake.peerWakeEvent(inbound, state, text, hasContent, intent);
+ // Old callbacks remain readable but cannot borrow a replacement pairing's policy.
+ const stale = peerId !== null && peerId !== liveId;
+ const action = stale ? "skip" : PeerWake.peerWakeAction((await peerWakePolicy(ctx, peerId)).policy, event, senderWake, duplicate);
+ return { peerId, event, action };
+}
+function peerBatchStmt(ctx: TenantContext, plan: PeerWakePlan, peer: string, contextId: string, taskId: string, inbound: boolean, claim?: { messageId: string; token: string }) {
+ if (plan.action !== "batch" || !plan.peerId) return null;
+ const gate = claim ? " WHERE EXISTS(SELECT 1 FROM message_claims WHERE peer=? AND message_id=? AND claim_token=?)" : "";
+ return ctx.DB.prepare(`INSERT INTO peer_wake_batch(peer_id,peer,context_id,task_id,kind,generation) SELECT ?,?,?,?,?,?${gate} ON CONFLICT(peer_id,context_id,task_id) DO UPDATE SET generation=excluded.generation,kind=excluded.kind`)
+  .bind(plan.peerId, peer, contextId, taskId, inbound ? "inbound" : "outbound_update", crypto.randomUUID(), ...(claim ? [peer,claim.messageId,claim.token] : []));
+}
+async function peerWake(ctx: TenantContext, ectx: ExecutionContext, contextId: string, taskId: string, peer: string, preview: string, inbound: boolean, senderWake: string | null, intent: string | null, duplicate: boolean, plan: PeerWakePlan) {
+ const {event,action}=plan;
+ const actual = action === "skip" ? "suppress" : action;
+ await recordRoute(ctx, { mode: (await wakePolicy(ctx)).mode, wake: (senderWake || "absent") as RouteDecision["wake"], intent: (intent || "absent") as RouteDecision["intent"], deliver: action === "wake", batch: action === "batch", decision: duplicate ? "duplicate" : senderWake === "never" ? "never" : `peer_${event}`, proposed: actual, action: actual }, inbound ? "inbound" : "outbound_update");
+ if (action !== "wake") return;
+ await wake(ctx, ectx, contextId, taskId, peer, preview, inbound ? "inbound" : "outbound_update");
 }
 
 async function routingReport(ctx: TenantContext): Promise<Json> {
@@ -1135,6 +1189,11 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx, authHash) => {
 	const claimToken = A.newId();
 	const history = { dir: "in", peer: label, taskId: task.id, role: "user", text: preview, state: task.status.state, data: { messageId: msg.messageId, ...(A.ownerWaitOf(task) ? { ownerWait: A.ownerWaitOf(task) } : {}), ...(sealed ? { sealed } : {}) } };
 	const eventStmt = await messageEventStatement(ctx, { peer: label, messageId: msg.messageId, taskId: task.id, contextId, receivedAt: ts, claimToken, authHash: authHash || "", directReply: !!directReply });
+ const directMeta = directReply ? params.metadata?.[DIRECT_REPLY_META] || msg.metadata?.[DIRECT_REPLY_META] || {} : {};
+ const routeState = directReply ? typeof directMeta.state === "string" && /^[a-z-]{1,32}$/.test(directMeta.state) ? directMeta.state : "completed" : inputRequired ? "input-required" : null;
+ const routeTask = directReply && typeof directMeta.taskId === "string" && A.ID_RE.test(directMeta.taskId) ? directMeta.taskId : task.id;
+ const plan = await peerWakePlan(ctx,label,!directReply,routeState,preview,pushCarriesFile(msg),routed.fields.wake,routed.fields.intent,false);
+ const batchStmt = peerBatchStmt(ctx,plan,label,contextId,routeTask,!directReply,{messageId:msg.messageId,token:claimToken});
 	const stored = creating
 		? await ctx.DB.batch([
 			claimContextStmt(ctx, contextId, label, ts),
@@ -1143,6 +1202,7 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx, authHash) => {
 			msgIfClaimStmt(ctx, task, msg, claimToken),
 			histIfClaimStmt(ctx, contextId, history, label, msg.messageId, claimToken),
 			...(eventStmt ? [eventStmt, ctx.DB.prepare("UPDATE message_event_source SET activated=1 WHERE singleton=1")] : []),
+   ...(batchStmt ? [batchStmt] : []),
 		])
 		: await ctx.DB.batch([
 			claimMessageStmt(ctx, label, msg.messageId, task.id, claimToken, contextId),
@@ -1150,6 +1210,7 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx, authHash) => {
 			msgIfClaimStmt(ctx, task, msg, claimToken),
 			histIfClaimStmt(ctx, contextId, history, label, msg.messageId, claimToken),
 			...(eventStmt ? [eventStmt, ctx.DB.prepare("UPDATE message_event_source SET activated=1 WHERE singleton=1")] : []),
+   ...(batchStmt ? [batchStmt] : []),
 		]);
 	const held: Json = await ctx.DB.prepare(
 		"SELECT task_id, claim_token FROM message_claims WHERE peer = ? AND message_id = ?",
@@ -1176,32 +1237,15 @@ const rpcSend: Rpc = async (params, label, version, ctx, ectx, authHash) => {
 	// A direct reply is the answer to a task this agent sent. It is stored as a finished task, not new work,
 	// and it wakes the receiver the way a pushed reply does: same routing, the sender's wake and intent hints,
 	// kind outbound_update, and the sent task's id (#485). A retried message id returned above without a wake.
-	if (directReply) {
-		const meta = params.metadata?.[DIRECT_REPLY_META] || msg.metadata?.[DIRECT_REPLY_META] || {};
-		const state = typeof meta.state === "string" && /^[a-z-]{1,32}$/.test(meta.state) ? meta.state : "completed";
-		const sentTask = typeof meta.taskId === "string" && A.ID_RE.test(meta.taskId) ? meta.taskId : task.id;
-		const hasContent = pushCarriesFile(msg);
-		const replyDecision = decidePush({
-			mode: (await wakePolicy(ctx)).mode,
-			hasContent,
-			wake: routed.fields.wake,
-			intent: routed.fields.intent,
-			duplicate: false,
-			idle: routed.fields.intent === "status" ? !statusText(preview) : isIdleWorkingPush(state, preview, hasContent),
-			unchanged: false,
-		}, outboundClass(state, preview, hasContent, routed.fields.intent));
-		await recordRoute(ctx, replyDecision, "outbound_update");
-		if (replyDecision.deliver) await wake(ctx, ectx, contextId, sentTask, label, `[update on outbound task: ${state}] ${preview}`, "outbound_update", wakeOpts(replyDecision));
-	} else {
-		const routedNow = await routeInbound(ctx, label, contextId, routed.fields.wake, routed.fields.intent, preview, false, pushCarriesFile(msg), inputRequired);
-		// Suppressed repeats do not move the window anchored to the last non-suppressed status.
-		if (routedNow.fingerprint && routedNow.decision.decision !== "status_unchanged") {
-   await saveDedup(ctx, "status", label, contextId, routedNow.fingerprint);
-   await saveDedup(ctx, "status_at", label, contextId, String(Date.now()));
+ if (!directReply) {
+  const routedNow = await routeInbound(ctx,label,contextId,routed.fields.wake,routed.fields.intent,preview,false,pushCarriesFile(msg),inputRequired);
+  if (routedNow.fingerprint && routedNow.decision.decision !== "status_unchanged") {
+   await saveDedup(ctx,"status",label,contextId,routedNow.fingerprint);
+   await saveDedup(ctx,"status_at",label,contextId,String(Date.now()));
   }
-		await recordRoute(ctx, routedNow.decision, "inbound");
-		if (routedNow.decision.deliver) await wake(ctx, ectx, contextId, task.id, label, preview, "inbound", wakeOpts(routedNow.decision));
-	}
+ }
+ await peerWake(ctx,ectx,contextId,routeTask,label,directReply ? `[update on outbound task: ${routeState}] ${preview}` : preview,!directReply,routed.fields.wake,routed.fields.intent,false,plan);
+
 	const pt = A.publicTask(task, version, conf.historyLength);
 	return version.startsWith("1") ? { task: pt } : pt;
 };
@@ -1807,8 +1851,8 @@ async function rememberPeerAddress(ctx: TenantContext, label: string, cardUrl: s
 		if (!key) throw new RpcError(-32603, "this inbox cannot store a return token");
 		const enc = await M.sealPeerTokenWithKey(key, label, opts.token);
 		await ctx.DB.prepare(
-			`INSERT INTO outbound_peers (alias, url, token_enc, source, created_at, updated_at) VALUES (?, ?, ?, 'announce', ?, ?)
-			 ON CONFLICT(alias) DO UPDATE SET url = excluded.url, token_enc = excluded.token_enc, source = 'announce', updated_at = excluded.updated_at
+			`INSERT INTO outbound_peers (alias, url, token_enc, source, created_at, updated_at, wake_policy_id) VALUES (?, ?, ?, 'announce', ?, ?, lower(hex(randomblob(16))))
+			 ON CONFLICT(alias) DO UPDATE SET wake_policy_id = CASE WHEN outbound_peers.wake_policy_id = '' THEN excluded.wake_policy_id ELSE outbound_peers.wake_policy_id END, url = excluded.url, token_enc = excluded.token_enc, source = 'announce', updated_at = excluded.updated_at
 			 WHERE outbound_peers.source = 'announce'`,
 		).bind(label, origin, enc, now, now).run();
 	}
@@ -1910,7 +1954,7 @@ async function storeReverse(ctx: TenantContext, label: string, token: string, cl
 		return;
 	}
 	await ctx.DB.prepare(
-		`INSERT INTO peers (label, token_hash, created_at, source, client_name, token_enc) VALUES (?, ?, ?, 'reverse', ?, ?)
+		`INSERT INTO peers (label, token_hash, created_at, source, client_name, token_enc, wake_policy_id) VALUES (?, ?, ?, 'reverse', ?, ?, lower(hex(randomblob(16))))
 		 ON CONFLICT(label) DO UPDATE SET token_hash = excluded.token_hash, source = 'reverse', token_enc = excluded.token_enc,
 		 client_name = COALESCE(peers.client_name, excluded.client_name)
 		 WHERE peers.revoked_at IS NULL AND peers.source = 'reverse'`,
@@ -2279,31 +2323,22 @@ async function handlePush(req: Request, ctx: TenantContext, ectx: ExecutionConte
 	updates.push({ receivedAt: A.nowIso(), payload: body });
 	const state = view.state;
 	const text = view.text;
-	await ctx.DB.batch([
-		ctx.DB.prepare("UPDATE outbound SET updates_json = ?, task_json = COALESCE(?, task_json), updates_seen = 0 WHERE task_id = ?")
-			.bind(JSON.stringify(updates.slice(-20)), t && t.id ? JSON.stringify(inner) : null, taskId),
-		histStmt(ctx, rec.context_id, { dir: "in", peer: rec.peer, taskId, event: "push", state, text, ...(view.ownerWait ? { data: { ownerWait: view.ownerWait } } : {}) }),
-	]);
-	log("push_received", { peer: rec.peer, taskId, state });
-	// Identical payloads only. File bytes and URIs are part of the body, so a new file under the same name still wakes.
-	const priorPayload = updates.length > 1 ? updates[updates.length - 2]?.payload : undefined;
-	const samePayload = priorPayload !== undefined && await A.sha256(JSON.stringify(priorPayload)) === await A.sha256(JSON.stringify(body));
-	const sources = pushRouteSources(body);
-	const labelled = readRouteFields(sources.messageMeta, sources.taskMeta);
-	const fields = labelled.ok ? labelled.fields : { wake: null, intent: null };
-	const idleWorking = isIdleWorkingPush(view.state, view.text, pushCarriesFile(body));
-	const category = outboundClass(view.state, view.text, pushCarriesFile(body), fields.intent);
- const pushDecision = decidePush({
-  mode: (await wakePolicy(ctx)).mode,
-  hasContent: pushCarriesFile(body),
-		wake: fields.wake,
-		intent: fields.intent,
-		duplicate: samePayload,
-		idle: fields.intent === "status" ? !statusText(view.text) : idleWorking,
-		unchanged: false,
-	}, category);
-	await recordRoute(ctx, pushDecision, "outbound_update");
-	if (pushDecision.deliver) await wake(ctx, ectx, rec.context_id, taskId, rec.peer, `[update on outbound task: ${state}] ${text}`, "outbound_update", wakeOpts(pushDecision));
+ // Choose once and commit the marker with the authenticated update/history.
+ const priorPayload = updates.length > 1 ? updates[updates.length - 2]?.payload : undefined;
+ const samePayload = priorPayload !== undefined && await A.sha256(JSON.stringify(priorPayload)) === await A.sha256(JSON.stringify(body));
+ const sources = pushRouteSources(body);
+ const labelled = readRouteFields(sources.messageMeta, sources.taskMeta);
+ const fields = labelled.ok ? labelled.fields : { wake: (sources.messageMeta as Json)?.["a2a.exposed/wake"] === "never" || (sources.taskMeta as Json)?.["a2a.exposed/wake"] === "never" ? "never" : null, intent: null };
+ const plan = await peerWakePlan(ctx,rec.peer,false,view.state,view.text,pushCarriesFile(body),fields.wake,fields.intent,samePayload,"outbound",rec.wake_policy_peer_id || null);
+ const batchStmt = peerBatchStmt(ctx,plan,rec.peer,rec.context_id,taskId,false);
+ await ctx.DB.batch([
+  ctx.DB.prepare("UPDATE outbound SET updates_json = ?, task_json = COALESCE(?, task_json), updates_seen = 0 WHERE task_id = ?").bind(JSON.stringify(updates.slice(-20)), t && t.id ? JSON.stringify(inner) : null, taskId),
+  histStmt(ctx,rec.context_id,{dir:"in",peer:rec.peer,taskId,event:"push",state,text,...(view.ownerWait ? {data:{ownerWait:view.ownerWait}} : {})}),
+  ...(batchStmt ? [batchStmt] : []),
+ ]);
+ log("push_received",{peer:rec.peer,taskId,state});
+ await peerWake(ctx,ectx,rec.context_id,taskId,rec.peer,`[update on outbound task: ${state}] ${text}`,false,fields.wake,fields.intent,samePayload,plan);
+
 	return json({ ok: true });
 }
 
@@ -2396,7 +2431,7 @@ async function adoptOutboundTask(ctx: TenantContext, pendingId: string, taskId: 
 			.bind(taskId, contextId, peer, endpoint, protocol, taskJson, pendingId).run();
 		if (changed(moved) === 1) return true;
 	} catch { /* the real task id is already stored */ }
-	const pending: Json = await ctx.DB.prepare("SELECT push_token_hash, updates_json, updates_seen FROM outbound WHERE task_id = ?").bind(pendingId).first();
+	const pending: Json = await ctx.DB.prepare("SELECT push_token_hash, updates_json, updates_seen, wake_policy_peer_id FROM outbound WHERE task_id = ?").bind(pendingId).first();
 	const existing: Json = await ctx.DB.prepare("SELECT updates_json, updates_seen FROM outbound WHERE task_id = ?").bind(taskId).first();
 	if (!existing) return false;
 	// The callback already claimed this task id. Fill in the send metadata and leave the update it stored.
@@ -2412,8 +2447,8 @@ async function adoptOutboundTask(ctx: TenantContext, pendingId: string, taskId: 
 		seen = pending.updates_seen;
 	}
 	await ctx.DB.prepare(
-		`UPDATE outbound SET ${fill}, push_token_hash = COALESCE(?, push_token_hash), updates_json = ?, updates_seen = ? WHERE task_id = ?`,
-	).bind(contextId, peer, endpoint, protocol, taskJson, pending.push_token_hash ?? null, updates ?? "[]", seen ?? 0, taskId).run();
+		`UPDATE outbound SET ${fill}, push_token_hash = COALESCE(?, push_token_hash), updates_json = ?, updates_seen = ?, wake_policy_peer_id = COALESCE(wake_policy_peer_id, ?) WHERE task_id = ?`,
+	).bind(contextId, peer, endpoint, protocol, taskJson, pending.push_token_hash ?? null, updates ?? "[]", seen ?? 0, pending.wake_policy_peer_id ?? null, taskId).run();
 	await ctx.DB.prepare("DELETE FROM outbound WHERE task_id = ?").bind(pendingId).run();
 	return true;
 }
@@ -2511,6 +2546,30 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			return httpRelayFetch(ctx, profile, "/disable", { method: "POST", body: JSON.stringify({ generation: input.generation }) });
 		}
 	}
+ if (seg[0] === "wake" && seg[1] === "peers" && seg.length === 2) {
+  const selector = /^(inbound|outbound):[a-f0-9]{32}$/;
+  const cursor = url.searchParams.get("cursor") || "", filter = url.searchParams.get("peerId") || "";
+  if ([...url.searchParams.keys()].some(key => !["cursor","peerId"].includes(key) || url.searchParams.getAll(key).length !== 1) || cursor && !selector.test(cursor) || filter && !selector.test(filter) || cursor && filter || m !== "GET" && url.search) throw new HttpError(400,"Use GET /owner/wake/peers with either cursor or peerId from the listing");
+  if (m === "GET") {
+   const rows = await ctx.DB.prepare("WITH available AS (SELECT 'inbound:' || wake_policy_id AS peerId,label AS peer,'inbound' AS direction FROM peers WHERE revoked_at IS NULL AND wake_policy_id != '' UNION ALL SELECT 'outbound:' || wake_policy_id AS peerId,alias AS peer,'outbound' AS direction FROM outbound_peers WHERE wake_policy_id != '') SELECT p.peerId,p.peer,p.direction,s.value AS policyJson FROM available p LEFT JOIN settings s ON s.key='peer_wake_policy:' || p.peerId WHERE (?='' OR p.peerId=?) AND p.peerId > ? ORDER BY p.peerId LIMIT 101").bind(filter,filter,cursor).all();
+   const all = rows.results || [];
+   const peers = all.slice(0,100).map((r: Json) => {
+    const policy = r.policyJson ? JSON.parse(r.policyJson) : { ...PeerWake.DEFAULT_PEER_WAKE_POLICY };
+    if (!PeerWake.validPeerWakePolicy(policy)) throw new Error("Invalid stored peer wake policy");
+    return {peerId:r.peerId,peer:r.peer,direction:r.direction,policy,configured:r.policyJson !== null};
+   });
+   return json({ events: PeerWake.PEER_WAKE_EVENTS, actions: PeerWake.PEER_WAKE_ACTIONS, defaults: PeerWake.DEFAULT_PEER_WAKE_POLICY, peers, nextCursor: all.length > 100 ? peers.at(-1)?.peerId : null });
+  }
+
+  if (m === "PUT") {
+   const b = await body();
+   if (!b || Object.keys(b).sort().join(",") !== "peerId,policy" || typeof b.peerId !== "string" || !/^(inbound|outbound):[a-f0-9]{32}$/.test(b.peerId) || !PeerWake.validPeerWakePolicy(b.policy)) throw new HttpError(400, "peerId and a complete policy are required; list GET /owner/wake/peers first");
+   const r = await ctx.DB.prepare("INSERT INTO settings(key,value) SELECT ?,? WHERE EXISTS(SELECT 1 FROM peers WHERE 'inbound:' || wake_policy_id=? AND revoked_at IS NULL UNION ALL SELECT 1 FROM outbound_peers WHERE 'outbound:' || wake_policy_id=?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(`peer_wake_policy:${b.peerId}`, JSON.stringify(b.policy), b.peerId, b.peerId).run();
+   if (!changed(r)) throw new HttpError(409, "Peer pairing changed or no longer exists; list GET /owner/wake/peers again");
+   return json({ peerId: b.peerId, policy: b.policy, configured: true });
+  }
+ }
+
 	if (seg[0] === "wake" && seg[1] === "policy" && seg.length === 2 && !url.search) {
   if (m === "GET") return json(await wakePolicy(ctx));
   if (m === "PUT") {
@@ -2783,10 +2842,10 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 		const b = await body();
 		A.checkId(b.taskId, "taskId"); A.checkId(b.contextId, "contextId");
 		await ctx.DB.prepare(
-			`INSERT INTO outbound (task_id, context_id, peer, endpoint, protocol, push_token_hash, sent_at, task_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			`INSERT INTO outbound (task_id, context_id, peer, endpoint, protocol, push_token_hash, sent_at, task_json, wake_policy_peer_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(task_id) DO UPDATE SET task_json = excluded.task_json, push_token_hash = COALESCE(excluded.push_token_hash, outbound.push_token_hash)`,
 		).bind(b.taskId, b.contextId, String(b.peer || "?"), b.endpoint || null, b.protocol || null,
-			b.pushToken ? await A.sha256(b.pushToken) : null, A.nowIso(), b.task ? JSON.stringify(b.task) : null).run();
+			b.pushToken ? await A.sha256(b.pushToken) : null, A.nowIso(), b.task ? JSON.stringify(b.task) : null, typeof b.peerId === "string" && /^outbound:[a-f0-9]{32}$/.test(b.peerId) ? b.peerId : null).run();
 		return json({ ok: true });
 	}
 	if (seg[0] === "outbound" && seg[1]) {
@@ -2884,7 +2943,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			if (!ex && b.mustExist) return json({ error: `no token with label ${b.label} (see token list; \`token issue ${b.label}\` creates one)` }, 404);
 			const token = A.randomToken();
 			await ctx.DB.prepare(
-				"INSERT INTO peers (label, token_hash, created_at) VALUES (?, ?, ?) ON CONFLICT(label) DO UPDATE SET token_hash = excluded.token_hash, created_at = excluded.created_at, revoked_at = NULL, token_enc = NULL",
+				"INSERT INTO peers (label, token_hash, created_at, wake_policy_id) VALUES (?, ?, ?, lower(hex(randomblob(16)))) ON CONFLICT(label) DO UPDATE SET token_hash = excluded.token_hash, created_at = excluded.created_at, revoked_at = NULL, token_enc = NULL",
 			).bind(b.label, await A.sha256(token), A.nowIso()).run();
 			return json({ label: b.label, token, card: ctx.PUBLIC_URL + "/.well-known/agent-card.json" });
 		}
@@ -2898,7 +2957,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 					`UPDATE outbound SET push_token_hash = NULL
 					 WHERE peer = ? AND EXISTS (SELECT 1 FROM peers WHERE label = ? AND revoked_at IS NULL)`,
 				).bind(label, label),
-				ctx.DB.prepare("UPDATE peers SET revoked_at = ?, token_enc = NULL WHERE label = ? AND revoked_at IS NULL").bind(now, label),
+				ctx.DB.prepare("UPDATE peers SET revoked_at = ?, token_enc = NULL, wake_policy_id = lower(hex(randomblob(16))) WHERE label = ? AND revoked_at IS NULL").bind(now, label),
 				// Drop only the callback this announcement created. An owner-synced alias of the same name stays.
 				// The other inbox still accepts the return token until that owner revokes it.
 				ctx.DB.prepare("DELETE FROM outbound_peers WHERE alias = ? AND source = 'announce'").bind(label),
@@ -2939,7 +2998,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 	}
 	if (seg[0] === "outbound-peers") {
 		if (!seg[1] && m === "GET") {
-			const rows = await ctx.DB.prepare("SELECT alias, url, token_enc IS NOT NULL AS has_token, created_at, updated_at FROM outbound_peers ORDER BY alias").all();
+			const rows = await ctx.DB.prepare("SELECT alias, url, 'outbound:' || wake_policy_id AS peerId, token_enc IS NOT NULL AS has_token, created_at, updated_at FROM outbound_peers ORDER BY alias").all();
 			return json((rows.results as Json[]).map((r) => ({ ...r, has_token: !!r.has_token })));
 		}
 		const alias = decodeURIComponent(seg[1] || "");
@@ -2953,7 +3012,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			if (b.token && !peerKey) return json({ error: ctx.mode === "host" ? "this agent has no secret key to encrypt peer tokens with" : "the Worker has no OWNER_TOKEN to encrypt peer tokens with" }, 409);
 			const enc = b.token ? await M.sealPeerTokenWithKey(peerKey!, alias, b.token) : null;
 			const now = A.nowIso();
-			await ctx.DB.prepare("INSERT INTO outbound_peers (alias, url, token_enc, created_at, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(alias) DO UPDATE SET url = excluded.url, token_enc = excluded.token_enc, source = NULL, updated_at = excluded.updated_at")
+			await ctx.DB.prepare("INSERT INTO outbound_peers (alias, url, token_enc, created_at, updated_at, wake_policy_id) VALUES (?, ?, ?, ?, ?, lower(hex(randomblob(16)))) ON CONFLICT(alias) DO UPDATE SET wake_policy_id = CASE WHEN outbound_peers.url != excluded.url OR outbound_peers.wake_policy_id = '' THEN excluded.wake_policy_id ELSE outbound_peers.wake_policy_id END, url = excluded.url, token_enc = excluded.token_enc, source = NULL, updated_at = excluded.updated_at")
 				.bind(alias, String(b.url).replace(/\/$/, ""), enc, now, now).run();
 			log("outbound_peer_synced", { alias, hasToken: !!enc });
 			return json({ ok: true, alias, hasToken: !!enc });
@@ -3063,6 +3122,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 				ctx.DB.prepare("DELETE FROM message_claims WHERE task_id IN (SELECT id FROM tasks WHERE context_id = ?)").bind(c),
 				ctx.DB.prepare("DELETE FROM wake_dedup WHERE ref = ? OR ref IN (SELECT id FROM tasks WHERE context_id = ?)").bind(c, c),
 				ctx.DB.prepare("DELETE FROM wake_receipts WHERE context_id = ?").bind(c),
+    ctx.DB.prepare("DELETE FROM peer_wake_batch WHERE context_id = ?").bind(c),
 				ctx.DB.prepare("DELETE FROM messages WHERE context_id = ?").bind(c),
 				ctx.DB.prepare("DELETE FROM tasks WHERE context_id = ?").bind(c),
 				ctx.DB.prepare("DELETE FROM history WHERE context_id = ?").bind(c),
@@ -3300,7 +3360,7 @@ async function tokenEndpoint(req: Request, ctx: TenantContext): Promise<Response
 		: r.label ? await freeLabel(ctx, P.labelBase(r.client_name || "", r.client_id || "")) : P.labelBase(r.client_name || "", r.client_id || "");
 	for (let i = 0; i < 5; i++) {
 		try {
-			await ctx.DB.prepare("INSERT INTO peers (label, token_hash, created_at, source, user_code, client_name, identity_key, sealed_requester, sealed_responder, claimed_card_url) VALUES (?, ?, ?, 'pairing', ?, ?, ?, ?, ?, ?)")
+			await ctx.DB.prepare("INSERT INTO peers (label, token_hash, created_at, source, user_code, client_name, identity_key, sealed_requester, sealed_responder, claimed_card_url, wake_policy_id) VALUES (?, ?, ?, 'pairing', ?, ?, ?, ?, ?, ?, lower(hex(randomblob(16))))")
 				.bind(label, await A.sha256(token), A.nowIso(), r.user_code, r.client_name || r.client_id || null, r.identity_key || null, r.sealed_requester || null, r.sealed_responder || null, r.agent_card_url || null).run();
 			break;
 		} catch (e) {
@@ -4535,7 +4595,7 @@ async function redeemOutboundPairing(ctx: TenantContext, ectx: ExecutionContext,
 	if (!key) throw new ToolError("this A2A endpoint cannot store the peer token. Nothing was sent.");
 	const stamp = A.nowIso();
 	await ctx.DB.batch([
-		ctx.DB.prepare("INSERT INTO outbound_peers (alias, url, token_enc, created_at, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(alias) DO UPDATE SET url = excluded.url, token_enc = excluded.token_enc, source = NULL, updated_at = excluded.updated_at")
+		ctx.DB.prepare("INSERT INTO outbound_peers (alias, url, token_enc, created_at, updated_at, wake_policy_id) VALUES (?, ?, ?, ?, ?, lower(hex(randomblob(16)))) ON CONFLICT(alias) DO UPDATE SET wake_policy_id = CASE WHEN outbound_peers.url != excluded.url OR outbound_peers.wake_policy_id = '' THEN excluded.wake_policy_id ELSE outbound_peers.wake_policy_id END, url = excluded.url, token_enc = excluded.token_enc, source = NULL, updated_at = excluded.updated_at")
 			.bind(alias, p.url, await M.sealPeerTokenWithKey(key, alias, token), stamp, stamp),
 		ctx.DB.prepare("DELETE FROM outbound_pairings WHERE alias = ?").bind(alias),
 	]);
@@ -4543,7 +4603,7 @@ async function redeemOutboundPairing(ctx: TenantContext, ectx: ExecutionContext,
 }
 
 /** A synced outbound peer with its decrypted token (null token: the peer takes none, or it can't be decrypted). */
-async function outboundPeer(ctx: TenantContext, alias: string): Promise<{ alias: string; url: string; token: string | null }> {
+async function outboundPeer(ctx: TenantContext, alias: string): Promise<{ alias: string; url: string; token: string | null; wake_policy_id: string }> {
 	const r: Json = await ctx.DB.prepare("SELECT * FROM outbound_peers WHERE alias = ?").bind(alias).first();
 	if (!r) throw new ToolError(`no peer "${alias}" synced to this A2A endpoint. Call request_pairing with the other agent's https address, or on the machine with the CLI: ${cliCommand(ctx)} peers sync ${alias}`);
 	let token: string | null = null;
@@ -4551,7 +4611,7 @@ async function outboundPeer(ctx: TenantContext, alias: string): Promise<{ alias:
 		token = await openPeerSecret(ctx, alias, r.token_enc);
 		if (!token) throw new ToolError(`the stored token for "${alias}" can't be read (the owner token was rotated since it was synced): run ${cliCommand(ctx)} peers sync ${alias} again`);
 	}
-	return { alias, url: r.url, token };
+	return { alias, url: r.url, token, wake_policy_id: r.wake_policy_id };
 }
 
 /** JSON-RPC to a peer. A tenant on this deployment is fetched internally by doFetch (a public fetch of that host returns 522). */
@@ -4711,9 +4771,9 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 				else configuration.pushNotificationConfig = pushCfg;
 				try {
 					await ctx.DB.prepare(
-						`INSERT INTO outbound (task_id, context_id, peer, endpoint, protocol, push_token_hash, sent_at, updates_json, updates_seen)
-						 VALUES (?, ?, ?, ?, ?, ?, ?, '[]', 0)`,
-					).bind(pendingId, pendingContext, peer.alias, endpoint, version, await A.sha256(pushToken), A.nowIso()).run();
+						`INSERT INTO outbound (task_id, context_id, peer, endpoint, protocol, push_token_hash, sent_at, updates_json, updates_seen, wake_policy_peer_id)
+						 VALUES (?, ?, ?, ?, ?, ?, ?, '[]', 0, ?)`,
+					).bind(pendingId, pendingContext, peer.alias, endpoint, version, await A.sha256(pushToken), A.nowIso(), `outbound:${peer.wake_policy_id}`).run();
 				} catch {
 					throw new ToolError("the outbound task could not be saved, so the reply cannot be authenticated. Nothing was sent.");
 				}
@@ -4760,6 +4820,17 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 			await ownerCall(ctx, ectx, "POST", "/owner/history", { contextId: rec.contextId, dir: "in", peer: peer.alias, taskId: tid, event: cancel ? "cancel" : "poll", state: M.plainState(res), text: txt, data: { ...(A.ownerWaitOf(res) ? { ownerWait: A.ownerWaitOf(res) } : {}), ...(res?.metadata?.[Receipts.RECEIPT_META] ? { wakeReceipt: res.metadata[Receipts.RECEIPT_META] } : {}) } });
 			return M.toolText(`Task ${tid} at ${peer.alias}: ${M.plainState(res)}. ${UNTRUSTED}`, res);
 		}
+  case "get_peer_wake_policies": {
+   const cursor = argStr(a,"cursor",false), peerId=argStr(a,"peerId",false);
+   if (cursor && peerId || (cursor || peerId) && !/^(inbound|outbound):[a-f0-9]{32}$/.test(cursor || peerId)) throw new ToolError("Use cursor or peerId from get_peer_wake_policies, not both");
+   const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : peerId ? `?peerId=${encodeURIComponent(peerId)}` : "";
+   const data = must(await ownerCall(ctx, ectx, "GET", "/owner/wake/peers"+query));
+   return { text: M.toolText("Owner peer wake policies", data), structuredContent: data };
+  }
+  case "set_peer_wake_policy": {
+   const data = must(await ownerCall(ctx, ectx, "PUT", "/owner/wake/peers", { peerId: a.peerId, policy: a.policy }));
+   return { text: M.toolText("Peer wake policy saved", data), structuredContent: data };
+  }
 		case "list_peers": {
 			const outRows = must(await ownerCall(ctx, ectx, "GET", "/owner/outbound-peers"));
 			const inRows = must(await ownerCall(ctx, ectx, "GET", "/owner/peers")).filter((r: Json) => !r.revoked_at);
@@ -4883,7 +4954,7 @@ async function handleMcp(req: Request, ctx: TenantContext, ectx: ExecutionContex
 	if (!msg || typeof msg !== "object" || msg.jsonrpc !== "2.0") return rpcError(null, M.ERR.INVALID_REQUEST, "invalid JSON-RPC request", 400);
 	const params = msg.params && typeof msg.params === "object" && !Array.isArray(msg.params) ? msg.params : {};
 	// A read-only diagnostic call must not trigger dispatch's opportunistic wake flush (#461).
-	if (msg.method === "tools/call" && params.name === "wake_status") NO_FLUSH.add(req);
+	if (msg.method === "tools/call" && ["wake_status", "get_peer_wake_policies"].includes(params.name)) NO_FLUSH.add(req);
 	const meta = params._meta && typeof params._meta === "object" ? params._meta : {};
 	const bodyVersion = typeof meta[M.META.version] === "string" ? meta[M.META.version] : null;
 	const pv = req.headers.get("mcp-protocol-version");
@@ -5064,7 +5135,7 @@ export async function dispatch(req: Request, ctx: TenantContext, ectx: Execution
 	if (moved) return new Response(moved.body || null, { status: moved.status, headers: moved.headers });
 	const res = noindex(ctx, await handle(req, ctx, ectx));
 	// A diagnostic probe must not flush/consume pending inbox wakes as a side effect.
-	if (!NO_FLUSH.has(req) && !((req.method === "POST" && /^\/owner\/wake\/test(?:\/|$)/.test(new URL(req.url).pathname)) || (["GET", "HEAD"].includes(req.method) && new URL(req.url).pathname === "/owner/upgrade-status") || (["GET", "HEAD", "POST"].includes(req.method) && /^\/owner\/wake\/(?:status|receipts)(?:\/|$)/.test(new URL(req.url).pathname))))
+	if (!NO_FLUSH.has(req) && !((req.method === "POST" && /^\/owner\/wake\/test(?:\/|$)/.test(new URL(req.url).pathname)) || (["GET", "HEAD"].includes(req.method) && new URL(req.url).pathname === "/owner/upgrade-status") || (["GET", "HEAD", "POST"].includes(req.method) && /^\/owner\/wake\/(?:status|receipts|peers)(?:\/|$)/.test(new URL(req.url).pathname))))
 		ectx.waitUntil(flushDue(ctx, ectx).catch((e) => log("flush_failed", { error: String(e).slice(0, 200) })));
 	return res;
 }

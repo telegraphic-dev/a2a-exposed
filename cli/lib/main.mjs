@@ -252,7 +252,10 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
   Update reminders: cached at most daily; A2A_NO_UPDATE_CHECK=1 opts out; never auto-update/deploy.
   status --json labels deployed/CLI schema counts; known pending CLI migrations fail status.
   Deployment guidance requires owner approval; local MCP includes cached update hints.
-  wake policy [--json]         read policy, effective mode and choices before changing it
+  wake peers [--json]          list pairing IDs, event classes, actions and saved policies
+  wake peers --peer-id ID --policy-file FILE [--json]
+                              replace a pairing policy with a complete JSON object
+  wake policy [--json]         read global rollout policy and choices; per-pairing rules remain independent
   wake policy --policy smart|legacy [--json]
                                 legacy opts out; smart follows the deployment routing gate
   wake receipts [ID] [--json]  list latest 50 rows; ID shows all task bindings (up to 200)
@@ -642,7 +645,7 @@ const SPEC = {
  keys: { id: S, approve: S, peer: S, store: S, "card-url": S, "user-code": S, code: S, "allow-os-consent": B, json: B, to: S, from: S, "acknowledge-replay-rollback": B },
 	hosted: { url: S, version: S, "upstream-token-file": S, "upstream-token-env": S, "access-client-id-file": S, "access-client-id-env": S, "access-client-secret-file": S, "access-client-secret-env": S, name: S, json: B, agent: S, hostname: S, origin: S, path: S, preset: S, "control-url": S, "secret-file": S, "secret-env": S, "secret-from": S, "hermes-home": S, route: S, "token-file": S, "no-run": B },
 	init: { ...deployOpts, ...tunnelOpts, tunnel: B, "dry-run": B, json: B }, deploy: deployOpts,
-	wake: { policy: S, stage: S, ...deployOpts, "local-url": S, json: B, url: S, "reference-file": S, "reference-env": S, clear: B, version: S, agent: S, "control-url": S, "key-header": S, "key-file": S, "key-env": S, "key-stdin": B, "hmac-secret-file": S, "hmac-secret-env": S, "access-client-id-file": S, "access-client-id-env": S, "access-client-secret-file": S, "access-client-secret-env": S }, tunnel: { ...tunnelOpts, preset: S, "hermes-route": S, "hmac-secret-stdin": B, json: B },
+	wake: { "peer-id": S, "policy-file": S, policy: S, stage: S, ...deployOpts, "local-url": S, json: B, url: S, "reference-file": S, "reference-env": S, clear: B, version: S, agent: S, "control-url": S, "key-header": S, "key-file": S, "key-env": S, "key-stdin": B, "hmac-secret-file": S, "hmac-secret-env": S, "access-client-id-file": S, "access-client-id-env": S, "access-client-secret-file": S, "access-client-secret-env": S }, tunnel: { ...tunnelOpts, preset: S, "hermes-route": S, "hmac-secret-stdin": B, json: B },
 	inbox: { context: S, from: S, all: B, json: B, "allow-os-consent": B },
 	reply: { "wait-reason": S, "wait-note": S, text: S, stdin: B, state: { type: "string", default: "completed" }, artifact: B, "artifact-name": { type: "string", default: "response" }, force: B, wake: S, intent: S },
 	history: { "allow-os-consent": B, from: S, n: { type: "string", short: "n", default: "50" }, json: B },
@@ -767,6 +770,7 @@ export async function main(argv) {
 			return relay(p[0], o);
 		case "wake": {
    if (p[0] === "policy") return cmd.wakePolicy(p, o);
+   if (p[0] === "peers") return cmd.peerWakePolicies(p, o);
 			if (p[0] === "receipts" || p[0] === "receipt") return cmd.wakeReceipt(p, o);
 			if (p[0] === "status") {
 				if (p.length !== 1 || Object.keys(o).some(key => key !== "json")) throw new CliError("usage: wake status [--json] (select the owner config with --config-dir; hosted setup: wake preview --agent NAME --json)");

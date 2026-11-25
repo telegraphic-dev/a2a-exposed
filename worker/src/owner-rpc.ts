@@ -1,3 +1,4 @@
+import { validPeerWakePolicy } from "./peer-wake-policy.ts";
 // Hosted owner RPC allowlist. The caller has checked that the account owns the tenant.
 // This list is the only paths that call may run, and it is stricter than
 // the owner HTTP API: routes that mint a peer token or return a setup secret are not here.
@@ -233,6 +234,7 @@ const ROUTES: RouteDef[] = [
 	{ method: "GET", name: "GET /owner/wake/receipts", take: (s) => (s.length === 3 || s.length === 4 && /^[a-f0-9-]{36}$/.test(s[3]!)) && s[1] === "wake" && s[2] === "receipts", search: noQuery, path: (s) => `/owner/wake/receipts${s[3] ? `/${s[3]}` : ""}` },
 	{ method: "GET", name: "GET /owner/wake/status", take: (s) => s.length === 3 && s[1] === "wake" && s[2] === "status", search: noQuery, path: () => "/owner/wake/status" },
 	...(["GET", "PUT"] as const).map(method => ({ method, name: `${method} /owner/wake/policy`, take: (s: string[]) => s.length === 3 && s[1] === "wake" && s[2] === "policy", search: noQuery, path: () => "/owner/wake/policy" })),
+ ...(["GET", "PUT"] as const).map(method => ({ method, name: `${method} /owner/wake/peers`, take: (s: string[]) => s.length === 3 && s[1] === "wake" && s[2] === "peers", search: method === "PUT" ? noQuery : (q: Record<string,string>) => Object.keys(q).length === 0 ? "" : Object.keys(q).length === 1 && ["cursor","peerId"].includes(Object.keys(q)[0]!) && /^(inbound|outbound):[a-f0-9]{32}$/.test(Object.values(q)[0]!) ? `?${Object.keys(q)[0]}=${encodeURIComponent(Object.values(q)[0]!)}` : null, path: () => "/owner/wake/peers" })),
 	{ method: "GET", name: "GET /owner/wake/routing", take: (s) => s.length === 3 && s[1] === "wake" && s[2] === "routing", search: noQuery, path: () => "/owner/wake/routing" },
 	...(["GET", "POST", "DELETE"] as const).map(method => ({ method, name: `${method} /owner/wake/relay`, take: (s: string[]) => s.length === 3 && s[1] === "wake" && s[2] === "relay", search: noQuery, path: () => "/owner/wake/relay" })),
 	{ method: "GET", name: "GET /owner/wake/preview", take: (s) => s.length === 3 && s[1] === "wake" && s[2] === "preview", search: noQuery, path: () => "/owner/wake/preview" },
@@ -363,6 +365,11 @@ export function ownerRpcBody(routeName: string, body: unknown): { ok: true; valu
 		return Object.keys(b).join(",") === "generation" && Number.isSafeInteger(b.generation) && Number(b.generation) >= 0 ? { ok: true, value: { generation: b.generation } } : { ok: false, error: "generation is invalid" };
 	}
 	if (routeName === "POST /owner/relay/http/:profile") return httpRelayEnrollment(body) ? { ok: true, value: { ...body } } : { ok: false, error: "invalid_http_relay_enrollment" };
+ if (routeName === "PUT /owner/wake/peers") {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return { ok: false, error: "peerId and policy required; list GET /owner/wake/peers" };
+  const b = body as Record<string, unknown>;
+  return Object.keys(b).sort().join(",") === "peerId,policy" && typeof b.peerId === "string" && validPeerWakePolicy(b.policy) ? { ok: true, value: b } : { ok: false, error: "peerId and complete policy required; list GET /owner/wake/peers" };
+ }
  if (routeName === "PUT /owner/wake/policy") {
   if (!body || typeof body !== "object" || Array.isArray(body)) return { ok: false, error: "policy must be smart or legacy" };
   const b = body as Record<string, unknown>;

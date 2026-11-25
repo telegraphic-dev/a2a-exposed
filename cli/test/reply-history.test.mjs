@@ -168,7 +168,7 @@ test("wake policy lists choices, sets explicit policy, and rejects invalid input
 test("wake policy explains each effective mode and restores the actual prior choice", t => {
  const cli=fixture(t);
  const base={policy:"smart",mode:"shadow",choices:["smart","legacy"]};
- for (const [policy,mode,meaning] of [["smart","shadow",/Automatic filtering is off/],["smart","staging-enforce",/stored without waking your agent/],["smart","enforce",/changed status updates are batched/],["legacy","shadow",/Automatic filtering is off/]]) {
+ for (const [policy,mode,meaning] of [["smart","shadow",/Per-pairing owner rules apply independently/g],["smart","staging-enforce",/Global routing preference: staging-enforce/],["smart","enforce",/Global routing preference: enforce/],["legacy","shadow",/Per-pairing owner rules apply independently/g]]) {
   const r=cli(["wake","policy"],{...base,policy,mode});assert.equal(r.status,0,r.stderr);
   assert.match(r.stdout,meaning);assert.match(r.stdout,/All messages stay in your inbox/);assert.match(r.stdout,/wake never and duplicates/);
  }
