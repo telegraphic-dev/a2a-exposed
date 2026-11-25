@@ -551,7 +551,7 @@ test("a batched early callback adopts the returned context before notification o
 });
 
 test("failed or invalid send responses recover saved callback references without resending", async () => {
- for(const response of ['canonical-callback','missing-context','invalid-response','message-response']) {
+ for(const response of ['canonical-callback','missing-context','invalid-response','missing-task-context','message-response']) {
   const env=envFor();const h=harness(env);
   try {
    await h.call('PUT','/owner/outbound-peers/ada',{url:'https://ada.example.net/'});
@@ -562,10 +562,12 @@ test("failed or invalid send responses recover saved callback references without
     const url=new URL(typeof input==='string'?input:input.url||String(input));
     if(url.hostname!=='ada.example.net') return fallback(input,init);
     if(init?.method!=='POST') return Response.json({name:'Peer',url:'https://ada.example.net/',supportedInterfaces:[{url:'https://ada.example.net/',protocolBinding:'JSONRPC',protocolVersion:'0.3'}],capabilities:{pushNotifications:true}});
-    peerPosts++;const request=JSON.parse(init.body);const token=request.params.configuration.pushNotificationConfig.token;
+    const request=JSON.parse(init.body);if(request.method==='tasks/get') return Response.json({jsonrpc:'2.0',id:request.id,result:{id:'task-failed-response',contextId:'ctx-polled-response',status:{state:'completed',message:{parts:[{kind:'text',text:'polled completion'}]}}}});
+    peerPosts++;const token=request.params.configuration.pushNotificationConfig.token;
     const callback=await h.call('POST','/push',{task:{id:'task-failed-response',...(response==='missing-context'?{}:{contextId:'ctx-confirmed-response'}),status:{state:'completed',message:{parts:[{kind:'text',text:'saved completion'}]}}}},`Bearer ${token}`);
     assert.equal(callback.status,200);provisional=(await env.DB.prepare('SELECT context_id FROM peer_wake_batch').first() as any).context_id;
     await h.call('POST','/',message('early carrier',{contextId:'ctx-early-failure'}),`Bearer ${bob}`);assert.equal((h.sent.at(-1) as any).batched,undefined);
+    if(response==='missing-task-context') return Response.json({jsonrpc:'2.0',id:request.id,result:{id:'task-failed-response',status:{state:'completed'}}});
     if(response==='message-response') return Response.json({jsonrpc:'2.0',id:request.id,result:{kind:'message',messageId:'inline-reply',contextId:'ctx-confirmed-response',role:'agent',parts:[{kind:'text',text:'inline answer'}]}});
     return response==='invalid-response'?Response.json({jsonrpc:'2.0',id:request.id,result:{id:'task-failed-response',contextId:'invalid;context',status:{state:'completed'}}}):Response.json({jsonrpc:'2.0',id:request.id,error:{code:-32000,message:'fixture response failed'}},{status:503});
    }) as typeof fetch;
@@ -580,9 +582,10 @@ test("failed or invalid send responses recover saved callback references without
    if(response==='missing-context') {
     assert.equal(wake.batched,undefined,'recovery placeholders remain fenced until a canonical context is confirmed');
     assert.equal((await env.DB.prepare('SELECT COUNT(*) AS n FROM peer_wake_batch').first() as any).n,1);
-    await h.call('PUT','/owner/outbound/task-failed-response',{task:{id:'task-failed-response',contextId:'ctx-polled-response',status:{state:'completed'}}});
+    const polled=await h.call('POST','/owner/mcp/poll_outbound',{taskId:'task-failed-response'});assert.equal((polled.data as any).isError,false);
     const confirmed=(await h.call('GET','/owner/outbound/task-failed-response')).data as any;assert.equal(confirmed.contextId,'ctx-polled-response');assert.equal(confirmed.contextPending,undefined);
-    const polledHistory=(await h.call('GET','/owner/history/ctx-polled-response?from=ada')).data as any[];assert.ok(polledHistory.some(r=>r.text==='saved completion'));
+    const polledHistory=(await h.call('GET','/owner/history/ctx-polled-response?from=ada')).data as any[];assert.ok(polledHistory.some(r=>r.text==='saved completion'));assert.ok(polledHistory.some(r=>r.text==='polled completion' && r.event==='poll'));
+    const oldHistory=(await h.call('GET',`/owner/history/${provisional}?from=ada`)).data as any[];assert.equal(oldHistory.length,0);
     await h.call('POST','/',message('confirmed carrier',{contextId:'ctx-confirmed-carrier'}),`Bearer ${bob}`);
     assert.equal((h.sent.at(-1) as any).batched[0].contextId,'ctx-polled-response');
    }

@@ -2899,7 +2899,8 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
    if (rec?.wake_context_pending && task?.id === id && typeof task.contextId === "string" && A.ID_RE.test(task.contextId)) {
     await adoptOutboundTask(ctx,id,id,task.contextId,rec.peer,rec.endpoint,rec.protocol,b.task);
    } else await ctx.DB.prepare("UPDATE outbound SET task_json = ? WHERE task_id = ?").bind(JSON.stringify(b.task ?? null), id).run();
-			return json({ ok: true });
+			const persisted: Json = await ctx.DB.prepare("SELECT context_id FROM outbound WHERE task_id=?").bind(id).first();
+   return json({ ok: true, contextId: persisted?.context_id });
 		}
 	}
 	if (seg[0] === "sealed-key" && !seg[1] && ctx.A2A_SEALED_ENABLED === "1") {
@@ -4830,9 +4831,9 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 			}
 			const obj = res && typeof res === "object" && ("task" in res || "message" in res) ? res.task || res.message : res;
 			const isTask = obj && typeof obj === "object" && "status" in obj;
-			const sentContext = (obj && obj.contextId) || callerContext || pendingContext;
+			const sentContext = isTask ? obj.contextId : (obj && obj.contextId) || callerContext || pendingContext;
 			const tid = isTask && obj.id ? String(obj.id) : null;
-   if (!A.ID_RE.test(String(sentContext)) || isTask && !tid || tid && !A.ID_RE.test(tid)) {
+   if (typeof sentContext !== "string" || !A.ID_RE.test(sentContext) || isTask && !tid || tid && !A.ID_RE.test(tid)) {
     if (pendingId && pushToken) await recoverSendContext(ctx,pendingId,pushToken);
     throw new ToolError("The peer returned invalid task/context identifiers. Read inbox/history and poll the recorded task before retrying; do not resend a delivered message.");
    }
@@ -4862,11 +4863,11 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 			const peer = await outboundPeer(ctx, rec.peer);
 			if (!rec.endpoint) throw new ToolError("this task has no recorded endpoint");
 			const res = await peerRpc(ctx, ectx, peer, rec.endpoint, rec.protocol || "0.3", cancel ? "tasks/cancel" : "tasks/get", cancel ? "CancelTask" : "GetTask", { id: tid });
-			await ownerCall(ctx, ectx, "PUT", `/owner/outbound/${enc(tid)}`, { task: res });
+			const saved = must(await ownerCall(ctx, ectx, "PUT", `/owner/outbound/${enc(tid)}`, { task: res }));
 			let txt = A.textOf((res?.status || {}).message || {});
 			const arts = (res?.artifacts || []).map((x: Json) => A.textOf(x)).join("\n");
 			if (arts && arts !== txt) txt = (txt ? txt + "\n" : "") + arts;
-			await ownerCall(ctx, ectx, "POST", "/owner/history", { contextId: rec.contextId, dir: "in", peer: peer.alias, taskId: tid, event: cancel ? "cancel" : "poll", state: M.plainState(res), text: txt, data: { ...(A.ownerWaitOf(res) ? { ownerWait: A.ownerWaitOf(res) } : {}), ...(res?.metadata?.[Receipts.RECEIPT_META] ? { wakeReceipt: res.metadata[Receipts.RECEIPT_META] } : {}) } });
+			await ownerCall(ctx, ectx, "POST", "/owner/history", { contextId: saved.contextId || rec.contextId, dir: "in", peer: peer.alias, taskId: tid, event: cancel ? "cancel" : "poll", state: M.plainState(res), text: txt, data: { ...(A.ownerWaitOf(res) ? { ownerWait: A.ownerWaitOf(res) } : {}), ...(res?.metadata?.[Receipts.RECEIPT_META] ? { wakeReceipt: res.metadata[Receipts.RECEIPT_META] } : {}) } });
 			return M.toolText(`Task ${tid} at ${peer.alias}: ${M.plainState(res)}. ${UNTRUSTED}`, res);
 		}
 		case "list_peers": {
