@@ -135,3 +135,5 @@ status text. Inbound plaintext with text still fails for a pinned peer.
 Committed-message source/incarnation reads are owner API and hosted owner-RPC reads only;
 there is no CLI command or MCP tool for them. The optional callback library is not
 an MCP Events subscription endpoint. See [message events](message-events.md).
+
+Outbound reply waiting: CLI `poll`, skill `list_outbound` then `wait_outbound`, self-hosted MCP Tasks V2; hosted integration requires the separately reviewed released library pin.

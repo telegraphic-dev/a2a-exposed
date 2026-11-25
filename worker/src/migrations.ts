@@ -1,3 +1,4 @@
+import m0025 from "../migrations/0025_mcp_observations.sql?raw";
 import m0024 from "../migrations/0024_mcp_tasks.sql?raw";
 import m0023 from "../migrations/0023_peer_wake_batch.sql?raw";
 import m0022 from "../migrations/0022_message_events.sql?raw";
@@ -51,4 +52,5 @@ export const MIGRATIONS: Migration[] = [
 	{ name: "0022_message_events.sql", sql: m0022 },
  { name: "0023_peer_wake_batch.sql", sql: m0023 },
 	{ name: "0024_mcp_tasks.sql", sql: m0024 },
+	{ name: "0025_mcp_observations.sql", sql: m0025 },
 ];

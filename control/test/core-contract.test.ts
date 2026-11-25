@@ -103,6 +103,7 @@ const probe = `
 	if (!Array.isArray(core.INBOX_MIGRATIONS) || !core.INBOX_MIGRATIONS[0]?.sql.includes("CREATE TABLE")) process.exit(8);
 	if (core.HTTP_RELAY_PROTOCOL_VERSION !== 2 || JSON.stringify(core.HTTP_RELAY_CAPABILITIES) !== JSON.stringify(["http-response-v1", "response-stream-v1"])) process.exit(9);
 	if ("HttpRelay" in core || !Object.isFrozen(core.HTTP_RELAY_CAPABILITIES)) process.exit(10);
+ if (typeof core.createMcpObservation !== "function" || typeof core.mcpObservationRequest !== "function" || typeof core.mcpTasksNegotiated !== "function") process.exit(11);
 `;
 
 const health: "/health" = routes.health;
@@ -144,7 +145,8 @@ test("the entry re-exports tenants, provisioning, routing, env, and migrations",
 			|| spec === "./migrations.ts"
 			|| spec === "./routes.ts"
 			|| spec === "./http-relay-metadata.ts"
-			|| spec === "./redact.ts";
+			|| spec === "./redact.ts"
+			|| spec === "../../../worker/src/task-observation.ts";
 		assert.equal(allowed, true, spec);
 	}
 	assert.equal(workerFirst, true);

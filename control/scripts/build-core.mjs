@@ -78,7 +78,7 @@ const built = await esbuild.build({
 });
 
 const pulled = Object.keys(built.metafile.inputs).filter((file) =>
-	(file.includes("node_modules") && !file.includes("node_modules/tunnelfetch/")) || file.includes("/views/") || file.includes("/brand/") || file.includes("better-auth")
+	(file.includes("node_modules") && !file.includes("node_modules/tunnelfetch/") && !file.includes("node_modules/@modelcontextprotocol/ext-tasks/") && !file.includes("node_modules/zod/")) || file.includes("/views/") || file.includes("/brand/") || file.includes("better-auth")
 );
 if (pulled.length > 0) fail(`bundle inputs are outside control-core:\n${pulled.join("\n")}`);
 

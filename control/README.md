@@ -143,3 +143,8 @@ config copies are verified without the previous key. Self-hosted owner-token enc
 
 The optional committed-message feed, owner-only source/peer incarnation reads and
 strict callback helper have a separate [message events contract](../docs/message-events.md). They do not enable MCP subscriptions or replace owner wakes.
+
+
+### Durable MCP observation store
+
+`createMcpObservation` and `mcpObservationRequest` implement the Tasks V2 read/wait store with official wire codecs. The caller supplies SQL storage, an account/grant scope, an owner quota key, an immutable source binding and a reader. `authorize` must check current ownership, grant, source and pairing on every call, including cached terminal results and cancellation; `read` fetches a current snapshot without sending. Apply the observation schema in the application migration before use. `McpObservationReader` describes these callbacks. This store issues no input requests and never executes an A2A send or cancellation.
