@@ -245,10 +245,9 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
                                                300 for claude-code, 180 for the others
                                 --max-per-hour  hourly cap; 0 or unset is unlimited, except Claude Code,
                                                which defaults to 25 when this is unset
-                                --wake-routing shadow (default) or enforce. shadow counts the wakes auto
-                                               would skip and still wakes. enforce stores an ack and an idle
-                                               or unchanged status without a wake, and batches a changed status.
-                                               Set shadow again to roll enforce back
+                                --wake-routing shadow (default) or enforce: global compatibility preference.
+                                               Per-pairing owner policies apply independently.
+                                               Inspect choices with wake peers --json
   Update reminders: cached at most daily; A2A_NO_UPDATE_CHECK=1 opts out; never auto-update/deploy.
   status --json labels deployed/CLI schema counts; known pending CLI migrations fail status.
   Deployment guidance requires owner approval; local MCP includes cached update hints.
@@ -534,10 +533,10 @@ Outbound (agents you call)
                           [--proto 0.3|1.0] [--json]
                           --json prints only the task JSON; send and poll omit the # task line
                           Set intent on every send and every reply, and wake when the auto default
-                          is wrong. auto wakes a handoff, blocker, or question. An ack, and an idle
-                          or unchanged status, stay stored. A changed status is batched. always
-                          asks for an immediate wake, still subject to the peer's authorization
-                          and rate limits. never only stores the message. Do not send an
+                          is wrong. auto follows the receiving owner's per-pairing policy.
+                          always requests a wake subject to that policy, authorization and limits.
+                          Owner skip/batch rules still apply. never only stores the message.
+                          Do not send an
                           acknowledgement-only message, and do not answer an ack with an ack.
   poll --to <alias|url> <taskId> [--proto 0.3|1.0] [--json] [--allow-os-consent]
                           send/poll need only peer config; owner history/task storage is optional.
