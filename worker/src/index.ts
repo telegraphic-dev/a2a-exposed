@@ -1,3 +1,4 @@
+import * as Observations from "./task-observation.ts";
 import * as McpTasks from "./mcp-tasks.ts";
 import * as PeerWake from "./peer-wake-policy.ts";
 import { messageEventTarget, messageEventIdentity, messageEventStatement, flushMessageEvents } from "./message-events.ts";
@@ -3016,7 +3017,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 		}
 	}
 	if (seg[0] === "pairing") return await ownerPairing(req, ctx, ectx, m, seg.slice(1), body, trusted);
-	if (seg[0] === "mcp" && seg[1] && !seg[2] && m === "POST" && (seg[1] === "send" || seg[1] === "reply" || seg[1] === "mark_working" || seg[1] === "announce_address" || seg[1] === "poll_outbound" || seg[1] === "cancel_outbound")) {
+	if (seg[0] === "mcp" && seg[1] && !seg[2] && m === "POST" && (seg[1] === "observe_outbound" || seg[1] === "list_outbound" || seg[1] === "send" || seg[1] === "reply" || seg[1] === "mark_working" || seg[1] === "announce_address" || seg[1] === "poll_outbound" || seg[1] === "cancel_outbound")) {
 		const checked = ownerRpcBody(`POST /owner/mcp/${seg[1]}`, await body());
 		if (!checked.ok) return json({ error: checked.error, ...(checked.code ? { code: checked.code } : {}) }, 400);
 		try {
@@ -3167,6 +3168,7 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 				ctx.DB.prepare("DELETE FROM wake_dedup WHERE ref = ? OR ref IN (SELECT id FROM tasks WHERE context_id = ?)").bind(c, c),
 				ctx.DB.prepare("DELETE FROM wake_receipts WHERE context_id = ?").bind(c),
     ctx.DB.prepare("DELETE FROM peer_wake_batch WHERE context_id = ?").bind(c),
+				ctx.DB.prepare("DELETE FROM mcp_observations WHERE context_id = ?").bind(c),
 				ctx.DB.prepare("DELETE FROM mcp_tasks WHERE source_id IN (SELECT id FROM tasks WHERE context_id = ?)").bind(c),
 				ctx.DB.prepare("DELETE FROM messages WHERE context_id = ?").bind(c),
 				ctx.DB.prepare("DELETE FROM tasks WHERE context_id = ?").bind(c),
@@ -4707,12 +4709,82 @@ function newPushToken(): string {
 	return btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
+/** Check decoded values and keys: serialization can escape arbitrary accepted credentials. */
+function echoesCredential(value: unknown, credential: string | null): boolean {
+ if (!credential) return false;
+ const pending: unknown[] = [value];
+ while (pending.length) {
+  const item=pending.pop();
+  if (typeof item === "string" && item.includes(credential)) return true;
+  if (Array.isArray(item)) pending.push(...item);
+  else if (item && typeof item === "object") {
+   for (const [key,child] of Object.entries(item)) {
+    if (key.includes(credential)) return true;
+    pending.push(child);
+   }
+  }
+ }
+ return false;
+}
+
+/** Read an existing delivery only; bind the wait to the peer pairing incarnation and task context. */
+async function observedOutbound(ctx: TenantContext, ectx: ExecutionContext, taskId: string, expected = "", refresh = false): Promise<Json> {
+ const rec:Json = await ctx.DB.prepare("SELECT * FROM outbound WHERE task_id=?").bind(taskId).first();
+ if (!rec || !rec.endpoint || rec.wake_context_pending) throw new ToolError("No observable outbound task; call list_outbound, or poll_outbound to recover its context. Never resend a delivered message.");
+ const peer = await outboundPeer(ctx,rec.peer);
+ if (!rec.wake_policy_peer_id || rec.wake_policy_peer_id !== `outbound:${peer.wake_policy_id}`) throw new ToolError("The task pairing changed; create a new observation only after checking list_outbound.");
+ const origin:Json=await ctx.DB.prepare("SELECT incarnation FROM mcp_observation_origin WHERE singleton=1").first();
+ if (!rec.observation_id || !origin?.incarnation) throw new ToolError("The delivery cannot be bound to this source. Choose another task with list_outbound.");
+ const identity = await A.sha256(JSON.stringify([origin.incarnation,rec.observation_id,taskId,rec.context_id,rec.peer,rec.endpoint,peer.wake_policy_id,peer.url,await A.sha256(peer.token || "")]));
+ if (expected && expected !== identity) throw new ToolError("The observed task authorization changed.");
+ let task = rec.task_json ? JSON.parse(rec.task_json) : null;
+ if (refresh) {
+  const card=await fetchPeerCard(ctx,ectx,peer.url);
+  const [currentEndpoint,currentProtocol]=M.pickEndpoint(peer.url,card);
+  if (!card || currentEndpoint !== rec.endpoint || currentProtocol !== rec.protocol) throw new ToolError("The recorded task endpoint no longer matches the current paired card. The wait did not contact the old endpoint.");
+  try { task = await peerRpc(ctx,ectx,peer,rec.endpoint,rec.protocol || "0.3","tasks/get","GetTask",{id:taskId}); }
+  catch { throw new ToolError("Peer task could not be read. Check list_peers; never resend a delivered message to retry a wait."); }
+  const inner = task?.task || task;
+  if (!inner || inner.id !== taskId) throw new ToolError("Peer returned a different task; the delivered message was not resent.");
+  if (ownerResponseLeaks(task) || echoesCredential(task,peer.token)) throw new ToolError("Peer task contains protected data and cannot be returned by this observation.");
+  await ctx.DB.prepare("UPDATE outbound SET task_json=? WHERE task_id=?").bind(JSON.stringify(task),taskId).run();
+ }
+ if (ownerResponseLeaks(task) || echoesCredential(task,peer.token)) throw new ToolError("Peer task contains protected data and cannot be returned by this observation.");
+ return {identity,contextId:rec.context_id,taskId,peer:rec.peer,state:M.plainState(task?.task || task),task};
+}
+function outboundObservationReader(ctx: TenantContext, ectx: ExecutionContext): Observations.McpObservationReader {
+ return {
+  async authorize(source) { await observedOutbound(ctx,ectx,source.taskId,source.identity); },
+  async read(source) { const value=await observedOutbound(ctx,ectx,source.taskId,source.identity,true); return {state:value.state,data:value.task}; },
+ };
+}
+async function createOutboundObservation(ctx: TenantContext, ectx: ExecutionContext, grant: Json, id: unknown) {
+ let tid:string;
+ try { tid=A.checkId(typeof id === "string" ? id : "","taskId"); } catch { throw new Observations.McpObservationError("Choose a valid taskId from list_outbound."); }
+ const value=await observedOutbound(ctx,ectx,tid);
+ return Observations.createMcpObservation(ctx.DB,grant.label,ctx.id || "self",value.contextId,{taskId:tid,identity:value.identity},outboundObservationReader(ctx,ectx),ctx.id || "self");
+}
+
 type ToolRun = string | { text: string; structuredContent: Json };
 
 async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string, a: Json, grant?: Json): Promise<ToolRun> {
 	const enc = encodeURIComponent;
 	switch (name) {
-		case "inbox": {
+        case "list_outbound": {
+            const rows=await ctx.DB.prepare("SELECT task_id AS taskId,context_id AS contextId,peer FROM outbound ORDER BY sent_at DESC LIMIT 100").all();
+            return {text:M.toolText("Existing outbound tasks; peer labels are untrusted.",rows.results || []),structuredContent:{tasks:rows.results || []}};
+        }
+        case "observe_outbound": {
+            const mode=argStr(a,"mode",false) || "authorize";
+            if (mode !== "authorize" && mode !== "refresh") throw new ToolError("mode must be authorize or refresh");
+            const value=await observedOutbound(ctx,ectx,A.checkId(argStr(a,"taskId"),"taskId"),argStr(a,"identity",false),mode === "refresh");
+            return {text:"Existing outbound task. " + UNTRUSTED,structuredContent:value};
+        }
+        case "wait_outbound": {
+            const value=await observedOutbound(ctx,ectx,A.checkId(argStr(a,"taskId"),"taskId"),"",true);
+            return M.toolText("Current outbound task. " + UNTRUSTED,value.task);
+        }
+        case "inbox": {
 			const qs = new URLSearchParams();
 			if (a.contextId !== undefined) qs.set("context", A.checkId(argStr(a, "contextId"), "contextId"));
 			if (a.from !== undefined) {
@@ -5002,7 +5074,7 @@ async function handleMcp(req: Request, ctx: TenantContext, ectx: ExecutionContex
 	if (!msg || typeof msg !== "object" || msg.jsonrpc !== "2.0") return rpcError(null, M.ERR.INVALID_REQUEST, "invalid JSON-RPC request", 400);
 	const params = msg.params && typeof msg.params === "object" && !Array.isArray(msg.params) ? msg.params : {};
 	// A read-only diagnostic call must not trigger dispatch's opportunistic wake flush (#461).
-	if ((msg.method === "tools/call" && ["wake_status", "wait_task"].includes(params.name)) || ["tasks/get", "tasks/update", "tasks/cancel"].includes(msg.method)) NO_FLUSH.add(req);
+	if ((msg.method === "tools/call" && ["wake_status", "wait_task", "wait_outbound", "list_outbound"].includes(params.name)) || ["tasks/get", "tasks/update", "tasks/cancel"].includes(msg.method)) NO_FLUSH.add(req);
 	const meta = params._meta && typeof params._meta === "object" ? params._meta : {};
 	const bodyVersion = typeof meta[M.META.version] === "string" ? meta[M.META.version] : null;
 	if (bodyVersion && M.isModern(bodyVersion) && skillsReadMethod(msg.method)) NO_FLUSH.add(req);
@@ -5029,13 +5101,19 @@ async function handleMcp(req: Request, ctx: TenantContext, ectx: ExecutionContex
 			return rpcError(id, M.ERR.INVALID_PARAMS, `params._meta["${M.META.capabilities}"] (an object) is required`, 400);
 		const done = (result: Json) => rpcResult(id, { ...result, resultType: "complete", _meta: { ...(result._meta || {}), [M.META.serverInfo]: serverInfo(ctx) } });
 		if (SKILLS_METHODS.includes(msg.method)) return servePortableSkills(portableSkills as SkillCatalog, req, msg, serverInfo(ctx));
-		if (["tasks/get", "tasks/update", "tasks/cancel"].includes(msg.method) || (msg.method === "tools/call" && params.name === "wait_task" && McpTasks.negotiated(caps)) || (msg.method === "subscriptions/listen" && Array.isArray(params.notifications?.taskIds) && params.notifications.taskIds.length > 0 && !McpTasks.negotiated(caps))) {
+		if (["tasks/get", "tasks/update", "tasks/cancel"].includes(msg.method) || (msg.method === "tools/call" && ["wait_task", "wait_outbound"].includes(params.name) && McpTasks.negotiated(caps)) || (msg.method === "subscriptions/listen" && Array.isArray(params.notifications?.taskIds) && params.notifications.taskIds.length > 0 && !McpTasks.negotiated(caps))) {
             if (!McpTasks.negotiated(caps)) return json({ jsonrpc: "2.0", id, error: { code: M.ERR.MISSING_CLIENT_CAPABILITY, message: "Declare extensions.io.modelcontextprotocol/tasks on every task request", data: { requiredCapabilities: { extensions: { [McpTasks.EXTENSION]: {} } } } } });
             try {
-                const result = msg.method === "tools/call" ? await McpTasks.create(ctx.DB, grant.label, params.arguments?.taskId) : await McpTasks.request(ctx.DB, grant.label, msg);
+                let result;
+                if (msg.method === "tools/call") result = params.name === "wait_outbound" ? await createOutboundObservation(ctx,ectx,grant,params.arguments?.taskId) : await McpTasks.create(ctx.DB, grant.label, params.arguments?.taskId);
+                else {
+                    if (typeof params.taskId !== "string") throw new Observations.McpObservationError("taskId must be a retained observation handle.");
+                    const outbound=await ctx.DB.prepare("SELECT 1 AS found FROM mcp_observations WHERE id=? AND scope=?").bind(params.taskId,grant.label).first();
+                    result=outbound ? await Observations.mcpObservationRequest(ctx.DB,grant.label,msg,outboundObservationReader(ctx,ectx)) : await McpTasks.request(ctx.DB,grant.label,msg);
+                }
                 return rpcResult(id, { ...result, _meta: { [M.META.serverInfo]: serverInfo(ctx) } });
             } catch (e) {
-                if (e instanceof McpTasks.TaskError) return rpcError(id, M.ERR.INVALID_PARAMS, e.message);
+                if (e instanceof McpTasks.TaskError || e instanceof Observations.McpObservationError || e instanceof ToolError) return rpcError(id, M.ERR.INVALID_PARAMS, e.message);
                 throw e;
             }
         }

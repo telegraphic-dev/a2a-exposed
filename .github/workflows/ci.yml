@@ -208,6 +208,10 @@ jobs:
         working-directory: control
         run: npm ci --no-audit --no-fund
 
+      - name: Control - inbox runtime dependencies
+        working-directory: worker
+        run: npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+
       # Node tests, plus Vitest inside Miniflare with the Cloudflare API mocked.
       - name: Control - tests
         working-directory: control

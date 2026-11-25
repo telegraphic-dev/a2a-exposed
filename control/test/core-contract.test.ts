@@ -92,6 +92,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, "../..");
 const probe = `
 	const core = await import("@a2a-exposed/control-core");
+ if (typeof core.portableMcpSkills?.serve !== "function" || !core.portableMcpSkills.methods.includes("skills/list")) throw new Error("portable Skills export missing");
  const callbacks = await import("@a2a-exposed/control-core/callbacks");
  if (callbacks.CALLBACK_TIMEOUT_MS !== 10000 || typeof callbacks.fetchCheckedCallback !== "function") process.exit(11);
 	if (core.RUN_WORKER_FIRST !== true) process.exit(2);
@@ -103,6 +104,7 @@ const probe = `
 	if (!Array.isArray(core.INBOX_MIGRATIONS) || !core.INBOX_MIGRATIONS[0]?.sql.includes("CREATE TABLE")) process.exit(8);
 	if (core.HTTP_RELAY_PROTOCOL_VERSION !== 2 || JSON.stringify(core.HTTP_RELAY_CAPABILITIES) !== JSON.stringify(["http-response-v1", "response-stream-v1"])) process.exit(9);
 	if ("HttpRelay" in core || !Object.isFrozen(core.HTTP_RELAY_CAPABILITIES)) process.exit(10);
+ if (typeof core.createMcpObservation !== "function" || typeof core.mcpObservationRequest !== "function" || typeof core.mcpTasksNegotiated !== "function") process.exit(11);
 `;
 
 const health: "/health" = routes.health;
@@ -144,7 +146,9 @@ test("the entry re-exports tenants, provisioning, routing, env, and migrations",
 			|| spec === "./migrations.ts"
 			|| spec === "./routes.ts"
 			|| spec === "./http-relay-metadata.ts"
-			|| spec === "./redact.ts";
+			|| spec === "./mcp-skills.ts"
+			|| spec === "./redact.ts"
+			|| spec === "../../../worker/src/task-observation.ts";
 		assert.equal(allowed, true, spec);
 	}
 	assert.equal(workerFirst, true);
@@ -276,6 +280,7 @@ test("the published package loads the entry and hides deep paths", () => {
 	assert.equal(listed.has("dist/index.js"), true);
  assert.equal(listed.has("dist/callbacks.js"), true);
  assert.equal(listed.has("TUNNELFETCH-LICENSE"), true);
+ for (const name of ["ext-tasks", "zod", "mcp-core", "mcp-server"]) assert.equal(listed.has(`dist/licenses/${name}-LICENSE`), true);
 	assert.equal(listed.has("dist/types/control/src/core/index.d.ts"), true);
 	assert.equal(listed.has("control/migrations/0001_auth.sql"), true);
 	assert.equal(listed.has("control/src/core/index.ts"), false);

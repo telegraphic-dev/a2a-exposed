@@ -220,6 +220,8 @@ const ROUTES: RouteDef[] = [
 	{ method: "DELETE", name: "DELETE /owner/mcp/:label", take: (s) => s.length === 3 && s[1] === "mcp" && MCP_LABEL.test(s[2]!), search: noQuery, path: (s) => `/owner/mcp/${s[2]}` },
 	{ method: "POST", name: "POST /owner/mcp/send", take: (s) => s.length === 3 && s[1] === "mcp" && s[2] === "send", search: noQuery, path: () => "/owner/mcp/send" },
 	{ method: "POST", name: "POST /owner/mcp/reply", take: (s) => s.length === 3 && s[1] === "mcp" && s[2] === "reply", search: noQuery, path: () => "/owner/mcp/reply" },
+	{ method: "POST", name: "POST /owner/mcp/observe_outbound", take: (s) => s.length === 3 && s[1] === "mcp" && s[2] === "observe_outbound", search: noQuery, path: () => "/owner/mcp/observe_outbound" },
+	{ method: "POST", name: "POST /owner/mcp/list_outbound", take: (s) => s.length === 3 && s[1] === "mcp" && s[2] === "list_outbound", search: noQuery, path: () => "/owner/mcp/list_outbound" },
 	{ method: "POST", name: "POST /owner/mcp/poll_outbound", take: (s) => s.length === 3 && s[1] === "mcp" && s[2] === "poll_outbound", search: noQuery, path: () => "/owner/mcp/poll_outbound" },
 	{ method: "POST", name: "POST /owner/mcp/cancel_outbound", take: (s) => s.length === 3 && s[1] === "mcp" && s[2] === "cancel_outbound", search: noQuery, path: () => "/owner/mcp/cancel_outbound" },
 	{ method: "POST", name: "POST /owner/mcp/mark_working", take: (s) => s.length === 3 && s[1] === "mcp" && s[2] === "mark_working", search: noQuery, path: () => "/owner/mcp/mark_working" },
@@ -263,6 +265,8 @@ const TEXT_MAX = 100_000;
 const REPLY_STATES = new Set(["completed", "input-required", "working", "failed", "rejected"]);
 
 const MCP_ARGS: Record<string, { required: readonly string[]; optional: readonly string[] }> = {
+	"POST /owner/mcp/observe_outbound": { required: ["taskId"], optional: ["identity", "mode"] },
+	"POST /owner/mcp/list_outbound": { required: [], optional: [] },
 	"POST /owner/mcp/send": { required: ["to", "text"], optional: ["contextId", "taskId", "wake", "intent"] },
 	"POST /owner/mcp/reply": { required: ["taskId", "text"], optional: ["state", "wake", "intent", "waitReason", "waitNote"] },
 	"POST /owner/mcp/poll_outbound": { required: ["taskId"], optional: [] },
@@ -271,6 +275,8 @@ const MCP_ARGS: Record<string, { required: readonly string[]; optional: readonly
 };
 
 function mcpArgOk(key: string, value: string): string | null {
+ if (key === "identity") return /^[a-f0-9]{64}$/.test(value) ? null : "identity is invalid";
+ if (key === "mode") return value === "authorize" || value === "refresh" ? null : "mode is invalid";
 	if (key === "to") return ALIAS.test(value) ? null : "to is invalid";
 	if (key === "text") {
 		if (!value.trim()) return "text is required";
