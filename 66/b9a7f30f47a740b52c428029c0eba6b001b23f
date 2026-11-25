@@ -1,0 +1,19 @@
+docs/mcp.md
+  s_76abb447952761::t_42941cb32a87b8 125,132-149,199-200
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "66b9a7f30f47a740b52c428029c0eba6b001b23f",
+  "prompts": {},
+  "sessions": {
+    "s_76abb447952761": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a2129e-889e-7643-bd23-d7e65c5956f1",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "Jean de Bot <264832715+jean-de-bot@users.noreply.github.com>"
+    }
+  }
+}
