@@ -2,8 +2,6 @@
 
 ## Unreleased
 
-- Allow hosted production wake enforcement only with explicit canonical deployment authority; platform shadow overrides tenant enforcement.
-
 - Tell the human to deny encrypted pairing requests when the compared safety codes differ (#467).
 
 ## 0.8.67
