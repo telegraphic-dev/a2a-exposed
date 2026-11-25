@@ -4707,6 +4707,24 @@ function newPushToken(): string {
 	return btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
+/** Check decoded values and keys: serialization can escape arbitrary accepted credentials. */
+function echoesCredential(value: unknown, credential: string | null): boolean {
+ if (!credential) return false;
+ const pending: unknown[] = [value];
+ while (pending.length) {
+  const item=pending.pop();
+  if (typeof item === "string" && item.includes(credential)) return true;
+  if (Array.isArray(item)) pending.push(...item);
+  else if (item && typeof item === "object") {
+   for (const [key,child] of Object.entries(item)) {
+    if (key.includes(credential)) return true;
+    pending.push(child);
+   }
+  }
+ }
+ return false;
+}
+
 /** Read an existing delivery only; bind the wait to the peer pairing incarnation and task context. */
 async function observedOutbound(ctx: TenantContext, ectx: ExecutionContext, taskId: string, expected = "", refresh = false): Promise<Json> {
  const rec:Json = await ctx.DB.prepare("SELECT * FROM outbound WHERE task_id=?").bind(taskId).first();
@@ -4722,13 +4740,14 @@ async function observedOutbound(ctx: TenantContext, ectx: ExecutionContext, task
   const card=await fetchPeerCard(ctx,ectx,peer.url);
   const [currentEndpoint,currentProtocol]=M.pickEndpoint(peer.url,card);
   if (!card || currentEndpoint !== rec.endpoint || currentProtocol !== rec.protocol) throw new ToolError("The recorded task endpoint no longer matches the current paired card. The wait did not contact the old endpoint.");
-  task = await peerRpc(ctx,ectx,peer,rec.endpoint,rec.protocol || "0.3","tasks/get","GetTask",{id:taskId});
+  try { task = await peerRpc(ctx,ectx,peer,rec.endpoint,rec.protocol || "0.3","tasks/get","GetTask",{id:taskId}); }
+  catch { throw new ToolError("Peer task could not be read. Check list_peers; never resend a delivered message to retry a wait."); }
   const inner = task?.task || task;
   if (!inner || inner.id !== taskId) throw new ToolError("Peer returned a different task; the delivered message was not resent.");
-  if (ownerResponseLeaks(task) || peer.token && JSON.stringify(task).includes(peer.token)) throw new ToolError("Peer task contains protected data and cannot be returned by this observation.");
+  if (ownerResponseLeaks(task) || echoesCredential(task,peer.token)) throw new ToolError("Peer task contains protected data and cannot be returned by this observation.");
   await ctx.DB.prepare("UPDATE outbound SET task_json=? WHERE task_id=?").bind(JSON.stringify(task),taskId).run();
  }
- if (ownerResponseLeaks(task) || peer.token && JSON.stringify(task).includes(peer.token)) throw new ToolError("Peer task contains protected data and cannot be returned by this observation.");
+ if (ownerResponseLeaks(task) || echoesCredential(task,peer.token)) throw new ToolError("Peer task contains protected data and cannot be returned by this observation.");
  return {identity,contextId:rec.context_id,taskId,peer:rec.peer,state:M.plainState(task?.task || task),task};
 }
 function outboundObservationReader(ctx: TenantContext, ectx: ExecutionContext): Observations.McpObservationReader {
