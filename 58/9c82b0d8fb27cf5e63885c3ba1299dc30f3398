@@ -1,0 +1,31 @@
+docs/cli-mcp-parity.md
+  s_1cb3b75004b611::t_0c28c9678c5b4d 63,91
+docs/receiving-messages.md
+  s_1cb3b75004b611::t_1e5bb06351019c 473
+skills/a2a-exposed/SKILL.md
+  s_1cb3b75004b611::t_a82ff55fd76535 121
+skills/a2a-exposed/references/troubleshooting.md
+  s_1cb3b75004b611::t_cb294aaee429c1 147
+worker/src/index.ts
+  s_1cb3b75004b611::t_c5a007d5a9eb25 4946
+worker/src/skills-index.ts
+  s_1cb3b75004b611::t_0acf806ecd17ea 7
+worker/test/mcp.test.ts
+  s_1cb3b75004b611::t_9be445be067d0a 368
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "589c82b0d8fb27cf5e63885c3ba1299dc30f3398",
+  "prompts": {},
+  "sessions": {
+    "s_1cb3b75004b611": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a213e8-504d-7ee0-b8a1-a9c8bd8d4431",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}
