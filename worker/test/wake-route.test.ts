@@ -551,7 +551,7 @@ test("a batched early callback adopts the returned context before notification o
 });
 
 test("failed or invalid send responses recover saved callback references without resending", async () => {
- for(const response of ['canonical-callback','missing-context','invalid-response']) {
+ for(const response of ['canonical-callback','missing-context','invalid-response','message-response']) {
   const env=envFor();const h=harness(env);
   try {
    await h.call('PUT','/owner/outbound-peers/ada',{url:'https://ada.example.net/'});
@@ -566,9 +566,10 @@ test("failed or invalid send responses recover saved callback references without
     const callback=await h.call('POST','/push',{task:{id:'task-failed-response',...(response==='missing-context'?{}:{contextId:'ctx-confirmed-response'}),status:{state:'completed',message:{parts:[{kind:'text',text:'saved completion'}]}}}},`Bearer ${token}`);
     assert.equal(callback.status,200);provisional=(await env.DB.prepare('SELECT context_id FROM peer_wake_batch').first() as any).context_id;
     await h.call('POST','/',message('early carrier',{contextId:'ctx-early-failure'}),`Bearer ${bob}`);assert.equal((h.sent.at(-1) as any).batched,undefined);
+    if(response==='message-response') return Response.json({jsonrpc:'2.0',id:request.id,result:{kind:'message',messageId:'inline-reply',contextId:'ctx-confirmed-response',role:'agent',parts:[{kind:'text',text:'inline answer'}]}});
     return response==='invalid-response'?Response.json({jsonrpc:'2.0',id:request.id,result:{id:'task-failed-response',contextId:'invalid;context',status:{state:'completed'}}}):Response.json({jsonrpc:'2.0',id:request.id,error:{code:-32000,message:'fixture response failed'}},{status:503});
    }) as typeof fetch;
-   const result=await h.call('POST','/owner/mcp/send',{to:'ada',text:'once'});assert.equal((result.data as any).isError,true);assert.match((result.data as any).text,/do not resend/i);assert.equal(peerPosts,1);
+   const result=await h.call('POST','/owner/mcp/send',{to:'ada',text:'once'});assert.equal((result.data as any).isError,response!=='message-response');if(response!=='message-response') assert.match((result.data as any).text,/do not resend/i);assert.equal(peerPosts,1);
    const stored=(await h.call('GET','/owner/outbound/task-failed-response')).data as any;
    const expected=response==='missing-context'?provisional:'ctx-confirmed-response';assert.equal(stored.contextId,expected);
    if(response==='missing-context') {assert.equal(stored.contextPending,true);assert.equal(stored.contextRecovery,true);}

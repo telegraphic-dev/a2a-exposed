@@ -4832,14 +4832,17 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 			const isTask = obj && typeof obj === "object" && "status" in obj;
 			const sentContext = (obj && obj.contextId) || callerContext || pendingContext;
 			const tid = isTask && obj.id ? String(obj.id) : null;
-   if (!A.ID_RE.test(String(sentContext)) || tid && !A.ID_RE.test(tid)) {
+   if (!A.ID_RE.test(String(sentContext)) || isTask && !tid || tid && !A.ID_RE.test(tid)) {
     if (pendingId && pushToken) await recoverSendContext(ctx,pendingId,pushToken);
     throw new ToolError("The peer returned invalid task/context identifiers. Read inbox/history and poll the recorded task before retrying; do not resend a delivered message.");
    }
    // Adoption moves this task's history and queued references together with its canonical context.
 			let adopted = false;
 			if (pendingId && tid) adopted = await adoptOutboundTask(ctx, pendingId, tid, sentContext, peer.alias, endpoint, version, obj);
-			else if (pendingId) await ctx.DB.prepare("DELETE FROM outbound WHERE task_id = ? AND updates_json = '[]'").bind(pendingId).run();
+   else if (pendingId) {
+    if (pushToken) await recoverSendContext(ctx,pendingId,pushToken);
+    await ctx.DB.prepare("DELETE FROM outbound WHERE task_id = ? AND updates_json = '[]'").bind(pendingId).run();
+   }
 			await ownerCall(ctx, ectx, "POST", "/owner/history", { contextId: sentContext, dir: "out", peer: peer.alias, taskId: tid, role: "user", text,
 				data: { messageId: msg.messageId, endpoint, protocol: version, via: "mcp" } });
 			let pushSaved = !pushToken || adopted;
