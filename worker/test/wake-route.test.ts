@@ -521,6 +521,7 @@ test("a batched early callback adopts the returned context before notification o
   try {
    await h.call('PUT','/owner/outbound-peers/ada',{url:'https://ada.example.net/'});
    const id=await peerId(h,'ada','outbound');await h.call('PUT','/owner/wake/peers',{peerId:id,policy:{...defaults,completed:'batch'}});
+   const bobToken=((await h.call('POST','/owner/peers',{label:'bob'})).data as any).token;
    const fallback=globalThis.fetch;let initial:any;
    globalThis.fetch=(async(input:any,init:any)=>{
     const url=new URL(typeof input==='string'?input:input.url||String(input));
@@ -529,6 +530,10 @@ test("a batched early callback adopts the returned context before notification o
     const request=JSON.parse(init.body);const token=request.params.configuration.pushNotificationConfig.token;
     const callback=await h.call('POST','/push',{task:{id:'task-early-batch',contextId:'ctx-returned-batch',status:{state:'completed',message:{parts:[{kind:'text',text:'early completion'}]}}}},`Bearer ${token}`);
     assert.equal(callback.status,200);initial=await env.DB.prepare('SELECT * FROM peer_wake_batch').first();assert.ok(initial);assert.notEqual(initial.context_id,'ctx-returned-batch');
+    assert.equal((await env.DB.prepare("SELECT wake_context_pending FROM outbound WHERE task_id='task-early-batch'").first() as any).wake_context_pending,1);
+    await h.call('POST','/',message('before response',{contextId:'ctx-before-response'}),`Bearer ${bobToken}`);
+    assert.equal((h.sent.at(-1) as any).batched,undefined,'a carrier cannot consume provisional references');
+    assert.equal((await env.DB.prepare('SELECT COUNT(*) AS n FROM peer_wake_batch').first() as any).n,1);
     return Response.json({jsonrpc:'2.0',id:request.id,result:{id:'task-early-batch',contextId:'ctx-returned-batch',status:{state:'completed'}}});
    }) as typeof fetch;
    const sent=await h.call('POST','/owner/mcp/send',{to:'ada',text:'hello'});assert.equal((sent.data as any).isError,false,JSON.stringify(sent.data));
@@ -538,9 +543,48 @@ test("a batched early callback adopts the returned context before notification o
    if(finish==='purge') {
     await h.call('POST','/owner/purge',{contexts:['ctx-returned-batch']});assert.equal((await env.DB.prepare('SELECT COUNT(*) AS n FROM peer_wake_batch').first() as any).n,0);
    }else{
-    const bob=((await h.call('POST','/owner/peers',{label:'bob'})).data as any).token;await h.call('POST','/',message('carrier'),`Bearer ${bob}`);
+    await h.call('POST','/',message('carrier'),`Bearer ${bobToken}`);
     const wake=h.sent.at(-1) as any;assert.equal(wake.batched[0].contextId,'ctx-returned-batch');assert.match(wake.batchInstructions,/history ctx-returned-batch --from ada/);
    }
   } finally {h.restore();}
+ }
+});
+
+test("failed or invalid send responses recover saved callback references without resending", async () => {
+ for(const response of ['canonical-callback','missing-context','invalid-response']) {
+  const env=envFor();const h=harness(env);
+  try {
+   await h.call('PUT','/owner/outbound-peers/ada',{url:'https://ada.example.net/'});
+   const id=await peerId(h,'ada','outbound');await h.call('PUT','/owner/wake/peers',{peerId:id,policy:{...defaults,completed:'batch'}});
+   const bob=((await h.call('POST','/owner/peers',{label:'bob'})).data as any).token;
+   const fallback=globalThis.fetch;let provisional='';let peerPosts=0;
+   globalThis.fetch=(async(input:any,init:any)=>{
+    const url=new URL(typeof input==='string'?input:input.url||String(input));
+    if(url.hostname!=='ada.example.net') return fallback(input,init);
+    if(init?.method!=='POST') return Response.json({name:'Peer',url:'https://ada.example.net/',supportedInterfaces:[{url:'https://ada.example.net/',protocolBinding:'JSONRPC',protocolVersion:'0.3'}],capabilities:{pushNotifications:true}});
+    peerPosts++;const request=JSON.parse(init.body);const token=request.params.configuration.pushNotificationConfig.token;
+    const callback=await h.call('POST','/push',{task:{id:'task-failed-response',...(response==='missing-context'?{}:{contextId:'ctx-confirmed-response'}),status:{state:'completed',message:{parts:[{kind:'text',text:'saved completion'}]}}}},`Bearer ${token}`);
+    assert.equal(callback.status,200);provisional=(await env.DB.prepare('SELECT context_id FROM peer_wake_batch').first() as any).context_id;
+    await h.call('POST','/',message('early carrier',{contextId:'ctx-early-failure'}),`Bearer ${bob}`);assert.equal((h.sent.at(-1) as any).batched,undefined);
+    return response==='invalid-response'?Response.json({jsonrpc:'2.0',id:request.id,result:{id:'task-failed-response',contextId:'invalid;context',status:{state:'completed'}}}):Response.json({jsonrpc:'2.0',id:request.id,error:{code:-32000,message:'fixture response failed'}},{status:503});
+   }) as typeof fetch;
+   const result=await h.call('POST','/owner/mcp/send',{to:'ada',text:'once'});assert.equal((result.data as any).isError,true);assert.match((result.data as any).text,/do not resend/i);assert.equal(peerPosts,1);
+   const stored=(await h.call('GET','/owner/outbound/task-failed-response')).data as any;
+   const expected=response==='missing-context'?provisional:'ctx-confirmed-response';assert.equal(stored.contextId,expected);
+   if(response==='missing-context') {assert.equal(stored.contextPending,true);assert.equal(stored.contextRecovery,true);}
+   const history=(await h.call('GET',`/owner/history/${expected}?from=ada`)).data as any[];assert.ok(history.some(r=>r.text==='saved completion'));
+   await h.call('POST','/',message('later carrier',{contextId:'ctx-late-failure'}),`Bearer ${bob}`);
+   const wake=h.sent.at(-1) as any;assert.doesNotMatch(JSON.stringify(wake),/invalid;context/);
+   if(response!=='missing-context') assert.equal(wake.batched[0].contextId,expected);
+   if(response==='missing-context') {
+    assert.equal(wake.batched,undefined,'recovery placeholders remain fenced until a canonical context is confirmed');
+    assert.equal((await env.DB.prepare('SELECT COUNT(*) AS n FROM peer_wake_batch').first() as any).n,1);
+    await h.call('PUT','/owner/outbound/task-failed-response',{task:{id:'task-failed-response',contextId:'ctx-polled-response',status:{state:'completed'}}});
+    const confirmed=(await h.call('GET','/owner/outbound/task-failed-response')).data as any;assert.equal(confirmed.contextId,'ctx-polled-response');assert.equal(confirmed.contextPending,undefined);
+    const polledHistory=(await h.call('GET','/owner/history/ctx-polled-response?from=ada')).data as any[];assert.ok(polledHistory.some(r=>r.text==='saved completion'));
+    await h.call('POST','/',message('confirmed carrier',{contextId:'ctx-confirmed-carrier'}),`Bearer ${bob}`);
+    assert.equal((h.sent.at(-1) as any).batched[0].contextId,'ctx-polled-response');
+   }
+  }finally{h.restore();}
  }
 });

@@ -9,3 +9,5 @@ CREATE TABLE peer_wake_batch (
  PRIMARY KEY(peer_id, context_id, task_id)
 );
 ALTER TABLE outbound ADD COLUMN wake_policy_peer_id TEXT;
+-- 0: canonical; 1: send response in flight; 2: failed response retains local history while references await canonical recovery.
+ALTER TABLE outbound ADD COLUMN wake_context_pending INTEGER NOT NULL DEFAULT 0;

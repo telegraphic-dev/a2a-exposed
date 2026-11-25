@@ -293,7 +293,7 @@ async function noteWakeWrite(ectx: object): Promise<void> {
 async function sendWake(ctx: TenantContext, ectx: ExecutionContext, payload: Json): Promise<{ status: number | null; info: string; error?: RelayTestError }> {
  // Revalidate snapshots on every attempt: revoke/purge and competing acceptance invalidate references.
  if (messageWake(String(payload.kind))) {
-  const rows = await ctx.DB.prepare("SELECT peer_id,peer,context_id,task_id,kind,generation FROM peer_wake_batch WHERE peer_id IN (SELECT 'inbound:' || wake_policy_id FROM peers WHERE revoked_at IS NULL UNION SELECT 'outbound:' || wake_policy_id FROM outbound_peers) ORDER BY rowid LIMIT 100").all();
+  const rows = await ctx.DB.prepare("SELECT peer_id,peer,context_id,task_id,kind,generation FROM peer_wake_batch WHERE peer_id IN (SELECT 'inbound:' || wake_policy_id FROM peers WHERE revoked_at IS NULL UNION SELECT 'outbound:' || wake_policy_id FROM outbound_peers) AND NOT EXISTS(SELECT 1 FROM outbound o WHERE o.task_id=peer_wake_batch.task_id AND o.wake_policy_peer_id=peer_wake_batch.peer_id AND o.wake_context_pending!=0) ORDER BY rowid LIMIT 100").all();
   const live = rows.results || [];
   const before = JSON.stringify(payload.batched || []);
   const config = await A.sha256(JSON.stringify({wake:wakeConfig(ctx),publicUrl:ctx.PUBLIC_URL}));
@@ -2440,8 +2440,9 @@ function adoptedBatchStmts(ctx: TenantContext, old: Json, fromTask: string, task
 
 /** Move a pending push row onto the peer's task id without dropping updates or their queued references. */
 async function adoptOutboundTask(ctx: TenantContext, pendingId: string, taskId: string, contextId: string, peer: string, endpoint: string, protocol: string, task: Json): Promise<boolean> {
+ A.checkId(taskId,"taskId"); A.checkId(contextId,"contextId");
  const taskJson = task ? JSON.stringify(task) : null;
- const fill = "context_id = ?, peer = ?, endpoint = ?, protocol = ?, task_json = COALESCE(?, task_json)";
+ const fill = "context_id = ?, peer = ?, endpoint = ?, protocol = ?, task_json = COALESCE(?, task_json), wake_context_pending = 0";
  const before: Json = await ctx.DB.prepare("SELECT * FROM outbound WHERE task_id=?").bind(pendingId).first();
  try {
   const [moved] = await ctx.DB.batch([
@@ -2469,6 +2470,23 @@ async function adoptOutboundTask(ctx: TenantContext, pendingId: string, taskId: 
   ctx.DB.prepare("DELETE FROM outbound WHERE task_id=?").bind(pendingId),
  ]);
  return true;
+}
+
+/** A failed send response cannot strand an authenticated callback or expose a moving placeholder. */
+async function recoverSendContext(ctx: TenantContext, pendingId: string, pushToken: string): Promise<{ taskId: string; contextId: string; local: boolean } | null> {
+ const row: Json = await ctx.DB.prepare("SELECT * FROM outbound WHERE push_token_hash=? AND wake_context_pending=1 AND updates_json != '[]' LIMIT 1").bind(await A.sha256(pushToken)).first();
+ if (!row) return null;
+ let task: Json = null;
+ try { task = row.task_json ? JSON.parse(row.task_json) : null; } catch { /* retain local history on an invalid snapshot */ }
+ let latest: Json = null;
+ try { const updates = JSON.parse(row.updates_json); latest = updates.at(-1)?.payload; } catch { /* preserve the stable local history */ }
+ const candidate = [latest?.task || latest,task?.task || task].find(value => value && (value.id || value.taskId) === row.task_id && typeof value.contextId === "string" && A.ID_RE.test(value.contextId));
+ const canonical = candidate?.contextId || null;
+ if (canonical && await adoptOutboundTask(ctx,pendingId,row.task_id,canonical,row.peer,row.endpoint,row.protocol,task || candidate)) return {taskId:row.task_id,contextId:canonical,local:false};
+ // Keep local history readable for recovery, but hold references until an owner poll
+ // confirms the remote context. A recovery placeholder must never be acknowledged as final.
+ await ctx.DB.prepare("UPDATE outbound SET wake_context_pending=2 WHERE task_id=? AND wake_context_pending=1").bind(row.task_id).run();
+ return {taskId:row.task_id,contextId:row.context_id,local:true};
 }
 
 type ReplySnap = { taskId: string; contextId: string; updatesJson: string };
@@ -2872,11 +2890,15 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 			const r: Json = await ctx.DB.prepare("SELECT * FROM outbound WHERE task_id = ?").bind(id).first();
 			if (!r) return json({ error: "not found" }, 404);
 			return json({ taskId: r.task_id, contextId: r.context_id, peer: r.peer, endpoint: r.endpoint, protocol: r.protocol, sentAt: r.sent_at,
-				task: r.task_json ? JSON.parse(r.task_json) : null, updates: JSON.parse(r.updates_json) });
+				task: r.task_json ? JSON.parse(r.task_json) : null, updates: JSON.parse(r.updates_json), ...(r.wake_context_pending ? { contextPending: true, contextRecovery: r.wake_context_pending === 2, next: "Read inbox/history and poll this recorded task to confirm its remote context; do not resend." } : {}) });
 		}
 		if (m === "PUT") {
 			const b = await body();
-			await ctx.DB.prepare("UPDATE outbound SET task_json = ? WHERE task_id = ?").bind(JSON.stringify(b.task ?? null), id).run();
+   const rec: Json = await ctx.DB.prepare("SELECT * FROM outbound WHERE task_id=?").bind(id).first();
+   const task = b.task?.task || b.task;
+   if (rec?.wake_context_pending && task?.id === id && typeof task.contextId === "string" && A.ID_RE.test(task.contextId)) {
+    await adoptOutboundTask(ctx,id,id,task.contextId,rec.peer,rec.endpoint,rec.protocol,b.task);
+   } else await ctx.DB.prepare("UPDATE outbound SET task_json = ? WHERE task_id = ?").bind(JSON.stringify(b.task ?? null), id).run();
 			return json({ ok: true });
 		}
 	}
@@ -4789,8 +4811,8 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 				else configuration.pushNotificationConfig = pushCfg;
 				try {
 					await ctx.DB.prepare(
-						`INSERT INTO outbound (task_id, context_id, peer, endpoint, protocol, push_token_hash, sent_at, updates_json, updates_seen, wake_policy_peer_id)
-						 VALUES (?, ?, ?, ?, ?, ?, ?, '[]', 0, ?)`,
+						`INSERT INTO outbound (task_id, context_id, peer, endpoint, protocol, push_token_hash, sent_at, updates_json, updates_seen, wake_policy_peer_id, wake_context_pending)
+						 VALUES (?, ?, ?, ?, ?, ?, ?, '[]', 0, ?, 1)`,
 					).bind(pendingId, pendingContext, peer.alias, endpoint, version, await A.sha256(pushToken), A.nowIso(), `outbound:${peer.wake_policy_id}`).run();
 				} catch {
 					throw new ToolError("the outbound task could not be saved, so the reply cannot be authenticated. Nothing was sent.");
@@ -4800,6 +4822,9 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 			try {
 				res = await peerRpc(ctx, ectx, peer, endpoint, version, "message/send", "SendMessage", { message: msg, configuration });
 			} catch (e) {
+    let recovered = null;
+    if (pendingId && pushToken) recovered = await recoverSendContext(ctx,pendingId,pushToken);
+    if (recovered) throw new ToolError(`The send response was not confirmed, but an authenticated callback saved task ${recovered.taskId} in inbox/history context ${recovered.contextId}. Do not resend. Read inbox/history and poll the recorded task to confirm its remote context${recovered.local ? "; local recovery context is retained" : ""}.`);
 				if (pendingId) await ctx.DB.prepare("DELETE FROM outbound WHERE task_id = ? AND updates_json = '[]'").bind(pendingId).run();
 				throw e;
 			}
@@ -4807,6 +4832,10 @@ async function runTool(ctx: TenantContext, ectx: ExecutionContext, name: string,
 			const isTask = obj && typeof obj === "object" && "status" in obj;
 			const sentContext = (obj && obj.contextId) || callerContext || pendingContext;
 			const tid = isTask && obj.id ? String(obj.id) : null;
+   if (!A.ID_RE.test(String(sentContext)) || tid && !A.ID_RE.test(tid)) {
+    if (pendingId && pushToken) await recoverSendContext(ctx,pendingId,pushToken);
+    throw new ToolError("The peer returned invalid task/context identifiers. Read inbox/history and poll the recorded task before retrying; do not resend a delivered message.");
+   }
    // Adoption moves this task's history and queued references together with its canonical context.
 			let adopted = false;
 			if (pendingId && tid) adopted = await adoptOutboundTask(ctx, pendingId, tid, sentContext, peer.alias, endpoint, version, obj);
