@@ -1,0 +1,22 @@
+worker/src/index.ts
+  s_5331ec3b84b582::t_c7b6570da1f8c9 4728,4731
+worker/test/mcp.test.ts
+  s_5331ec3b84b582::t_c7b6570da1f8c9 30,89,159,1088-1099
+  s_5331ec3b84b582::t_55d93c8985f429 1100
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bbdeac970c27c80e4c688254a99b51b59a299e85",
+  "prompts": {},
+  "sessions": {
+    "s_5331ec3b84b582": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a214b2-b583-7ed0-819b-658ce667642a",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}
