@@ -1,0 +1,23 @@
+docs/message-events.md
+  s_4b0f7c018ce9c9::t_734ee2b2a598b8 48-50
+worker/src/hosted.ts
+  s_4b0f7c018ce9c9::t_29de488462e846 1,525-531
+worker/src/index.ts
+  s_4b0f7c018ce9c9::t_8f76b0ba16054c 1,626-627
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a9d8a6fb748aaefc66a24d7e79f585724c6c8385",
+  "prompts": {},
+  "sessions": {
+    "s_4b0f7c018ce9c9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1f048-f695-76a2-b51b-6713a5f93d4b",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}

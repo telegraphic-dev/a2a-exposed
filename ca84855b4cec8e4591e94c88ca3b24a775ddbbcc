@@ -1,0 +1,27 @@
+cli/lib/deploy.mjs
+  s_4b0f7c018ce9c9::t_d0bcb410d3de65 48,61
+docs/message-events.md
+  s_4b0f7c018ce9c9::t_d9e2d63efa198f 14-23
+worker/cloudflare.config.ts
+  s_4b0f7c018ce9c9::t_8ad0058bc84569 91-92,137-138
+worker/src/message-events.ts
+  s_4b0f7c018ce9c9::t_2a5fc65a8859c6 3-4,84-85,93-112
+worker/src/tenancy.ts
+  s_4b0f7c018ce9c9::t_923a4a30f2f0fa 147-148,395,471,481-482,587,614
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ca84855b4cec8e4591e94c88ca3b24a775ddbbcc",
+  "prompts": {},
+  "sessions": {
+    "s_4b0f7c018ce9c9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1f048-f695-76a2-b51b-6713a5f93d4b",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}

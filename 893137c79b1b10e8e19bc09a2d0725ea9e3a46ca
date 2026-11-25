@@ -1,0 +1,23 @@
+control/test/cloudflare-provision.test.ts
+  s_4b0f7c018ce9c9::t_fad3ca4d43345b 48-49,51,54,57,59-66
+  s_4b0f7c018ce9c9::t_c8605be3415551 2,46-47,50,52-53,55-56,58
+control/src/provision/statements.ts
+  s_4b0f7c018ce9c9::t_fad3ca4d43345b 1
+  s_4b0f7c018ce9c9::t_ae930acc576489 4-10,13-17,20-32,35-43,46-52,54-55
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "893137c79b1b10e8e19bc09a2d0725ea9e3a46ca",
+  "prompts": {},
+  "sessions": {
+    "s_4b0f7c018ce9c9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1f048-f695-76a2-b51b-6713a5f93d4b",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}

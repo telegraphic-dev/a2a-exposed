@@ -1,0 +1,98 @@
+worker/test/hosted.test.ts
+  s_4b0f7c018ce9c9::t_59de668390be31 1,66
+docs/mcp.md
+  s_4b0f7c018ce9c9::t_08af2eba8239f1 283-285
+worker/test/callback-target.test.ts
+  s_4b0f7c018ce9c9::t_8355ab96f2d60e 1-40,42
+  s_4b0f7c018ce9c9::t_325b5e5e5bed97 41
+control/src/tenants/wake-secrets.ts
+  s_4b0f7c018ce9c9::t_c05073f50ccb83 15
+control/README.md
+  s_4b0f7c018ce9c9::t_08af2eba8239f1 143-145
+worker/test/harness-worker.ts
+  s_4b0f7c018ce9c9::t_67fa071d87d52f 1,32
+docs/message-events.md
+  s_4b0f7c018ce9c9::t_08af2eba8239f1 1-96,98-110
+  s_4b0f7c018ce9c9::t_1b58101b1efc77 97
+worker/src/tenancy.ts
+  s_4b0f7c018ce9c9::t_c05073f50ccb83 60,444-445
+worker/src/wake-secrets.ts
+  s_4b0f7c018ce9c9::t_c05073f50ccb83 15
+control/src/core/callbacks.ts
+  s_4b0f7c018ce9c9::t_c90288b2e8edaa 1-2
+worker/src/owner-rpc.ts
+  s_4b0f7c018ce9c9::t_c90288b2e8edaa 197-200
+worker/test/sealed-pairing.test.ts
+  s_4b0f7c018ce9c9::t_b927886a242245 21,35,38,183-185
+worker/test/message-events.test.ts
+  s_4b0f7c018ce9c9::t_b927886a242245 19,21,72-85
+  s_4b0f7c018ce9c9::t_cf19c15903d09b 1-15,17-18,20,22-71,86
+  s_4b0f7c018ce9c9::t_84f80bd35dcda9 16
+control/scripts/build-core.mjs
+  s_4b0f7c018ce9c9::t_c90288b2e8edaa 65-67,81,125,132
+  s_4b0f7c018ce9c9::t_6a82f791901b63 36-41
+control/test/workers/callbacks.test.ts
+  s_4b0f7c018ce9c9::t_8355ab96f2d60e 1-9
+worker/src/index.ts
+  s_4b0f7c018ce9c9::t_1b3fa0fb63e6d9 1,600,626-627,1143,1150,1172,2488-2495
+  s_4b0f7c018ce9c9::t_c90288b2e8edaa 955,1073,1135,1354-1355,1398
+package.json
+  s_4b0f7c018ce9c9::t_c90288b2e8edaa 25-29
+  s_4b0f7c018ce9c9::t_354d4fe7334138 35-36
+worker/src/hosted.ts
+  s_4b0f7c018ce9c9::t_c90288b2e8edaa 389,457-459
+worker/src/wake-target.ts
+  s_4b0f7c018ce9c9::t_1b58101b1efc77 324,327-328,336
+  s_4b0f7c018ce9c9::t_1b3fa0fb63e6d9 9,311-323,325-326,329-335,337-351,354-361,363-368
+  s_4b0f7c018ce9c9::t_bc359a53102bfd 352-353,362,369
+worker/src/message-events.ts
+  s_4b0f7c018ce9c9::t_dee58c6441d455 1-9,11-13,15-16,18-35,37-43,45-46,50,52-79
+  s_4b0f7c018ce9c9::t_cf19c15903d09b 10
+  s_4b0f7c018ce9c9::t_1b58101b1efc77 17,48
+  s_4b0f7c018ce9c9::t_c90288b2e8edaa 36,44,47,49,51
+  s_4b0f7c018ce9c9::t_8defee3eb93a53 14
+worker/test/sql-statements.test.ts
+  s_4b0f7c018ce9c9::t_59de668390be31 1-7
+worker/test/sql-statements.ts
+  s_4b0f7c018ce9c9::t_59de668390be31 1-23
+control/tsconfig.core.json
+  s_4b0f7c018ce9c9::t_c90288b2e8edaa 4-6,21-26
+docs/protocol.md
+  s_4b0f7c018ce9c9::t_08af2eba8239f1 439-441
+worker/test/migrations.test.ts
+  s_4b0f7c018ce9c9::t_cf19c15903d09b 75,82-83,115
+control/src/provision/inbox-migrations.ts
+  s_4b0f7c018ce9c9::t_0a5ca2997598c2 1,52
+worker/migrations/0022_message_events.sql
+  s_4b0f7c018ce9c9::t_c05073f50ccb83 2-3
+  s_4b0f7c018ce9c9::t_1b58101b1efc77 12,17-19
+  s_4b0f7c018ce9c9::t_0a5ca2997598c2 1,4-11,13-16,20-22
+worker/src/migrations.ts
+  s_4b0f7c018ce9c9::t_0a5ca2997598c2 1,49
+skills/a2a-exposed/references/troubleshooting.md
+  s_4b0f7c018ce9c9::t_08af2eba8239f1 141-145
+docs/cli-mcp-parity.md
+  s_4b0f7c018ce9c9::t_08af2eba8239f1 132-135
+docs/security.md
+  s_4b0f7c018ce9c9::t_08af2eba8239f1 122-124
+TUNNELFETCH-LICENSE
+  s_4b0f7c018ce9c9::t_7325bbc51fa69d 1-28
+worker/src/export.ts
+  s_4b0f7c018ce9c9::t_89e86bfa8ce1df 169-170
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fabb072b62560f8be7a7788a654338eb15568dbe",
+  "prompts": {},
+  "sessions": {
+    "s_4b0f7c018ce9c9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1f048-f695-76a2-b51b-6713a5f93d4b",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}
