@@ -1,0 +1,59 @@
+worker/src/export.ts
+  s_5331ec3b84b582::t_2ba69f05ac66c3 170
+worker/src/mcp.ts
+  s_5331ec3b84b582::t_48e9762dceed55 44,354,356
+  s_5331ec3b84b582::t_2ba69f05ac66c3 355
+docs/cli-mcp-parity.md
+  s_5331ec3b84b582::t_2ba69f05ac66c3 28
+worker/src/skills-index.ts
+  s_5331ec3b84b582::t_4539a94f32fc78 7
+worker/src/index.ts
+  s_5331ec3b84b582::t_eb08fc235846d8 4999
+  s_5331ec3b84b582::t_2ba69f05ac66c3 3168,5025
+  s_5331ec3b84b582::t_48e9762dceed55 1,4743,5024,5026-5033,5036
+worker/migrations/0024_mcp_tasks.sql
+  s_5331ec3b84b582::t_48e9762dceed55 1-10
+worker/test/migrations.test.ts
+  s_5331ec3b84b582::t_4539a94f32fc78 75,82-83,115
+docs/mcp.md
+  s_5331ec3b84b582::t_e90f4b59b0959d 306-330
+worker/src/mcp-tasks.ts
+  s_5331ec3b84b582::t_4539a94f32fc78 26,48
+  s_5331ec3b84b582::t_48e9762dceed55 1-2,4,6-18,20-25,27-29,32-36,38-40,42-47,49-54
+  s_5331ec3b84b582::t_8206814960fc5d 3,5
+  s_5331ec3b84b582::t_2ba69f05ac66c3 19,30-31,37
+  s_5331ec3b84b582::t_866f59994a068f 41
+worker/test/mcp.test.ts
+  s_5331ec3b84b582::t_6b46a980757b28 368,608,960-961,963,965-993
+  s_5331ec3b84b582::t_e90f4b59b0959d 962,964
+  s_5331ec3b84b582::t_4539a94f32fc78 994-1019
+worker/src/migrations.ts
+  s_5331ec3b84b582::t_48e9762dceed55 1
+  s_5331ec3b84b582::t_8206814960fc5d 53
+worker/src/version.ts
+  s_5331ec3b84b582::t_55930b0003d564 4
+skills/a2a-exposed/SKILL.md
+  s_5331ec3b84b582::t_e90f4b59b0959d 68
+worker/package.json
+  s_5331ec3b84b582::t_944bdd41076123 29
+control/src/provision/inbox-migrations.ts
+  s_5331ec3b84b582::t_8f546178815764 1,56
+worker/package-lock.json
+  s_5331ec3b84b582::t_ac0cff7b779a88 10,2456-2472
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e093c5ae1641633c72dd76b56fff43aac1724356",
+  "prompts": {},
+  "sessions": {
+    "s_5331ec3b84b582": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a214b2-b583-7ed0-819b-658ce667642a",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}

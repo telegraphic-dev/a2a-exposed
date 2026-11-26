@@ -1,0 +1,21 @@
+worker/test/wake-route.test.ts
+  s_1cb3b75004b611::t_4890acd0c39509 554,569,572
+worker/src/index.ts
+  s_1cb3b75004b611::t_4890acd0c39509 4835,4842-4845
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ad7430568f9b08ea1a56039a85e8235a7d411575",
+  "prompts": {},
+  "sessions": {
+    "s_1cb3b75004b611": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a213e8-504d-7ee0-b8a1-a9c8bd8d4431",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}

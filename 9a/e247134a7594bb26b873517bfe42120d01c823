@@ -1,0 +1,23 @@
+.github/workflows/ci.yml
+  s_5331ec3b84b582::t_f35c3a7f39e12f 211-214
+worker/src/index.ts
+  s_5331ec3b84b582::t_786b05774c3e85 4710-4727,4743-4744,4747,4750
+worker/test/mcp.test.ts
+  s_5331ec3b84b582::t_4ca9a3ee98282b 31,87,160,1102-1117
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9ae247134a7594bb26b873517bfe42120d01c823",
+  "prompts": {},
+  "sessions": {
+    "s_5331ec3b84b582": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a214b2-b583-7ed0-819b-658ce667642a",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}
