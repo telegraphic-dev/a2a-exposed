@@ -1,3 +1,4 @@
+import { peerRevokeSnapshot, conditionalPeerRevoke } from "./peer-revoke.ts";
 import * as Observations from "./task-observation.ts";
 import * as McpTasks from "./mcp-tasks.ts";
 import * as PeerWake from "./peer-wake-policy.ts";
@@ -2971,13 +2972,21 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
 	}
 	if (seg[0] === "peers") {
 		if (m === "GET") {
-			const rows = await ctx.DB.prepare("SELECT label, created_at, revoked_at, source, user_code, client_name, card_url, claimed_card_url, sealed_requester, sealed_responder FROM peers ORDER BY created_at").all();
-			return json(await Promise.all((rows.results as Json[]).map(async (r) => ({ label: r.label, created_at: r.created_at, revoked_at: r.revoked_at, source: r.source, user_code: r.user_code ? P.formatUserCode(r.user_code) : null, client_name: r.client_name, card_url: r.card_url || null,
+			const rows = await ctx.DB.prepare("SELECT p.label, p.created_at, p.revoked_at, p.source, p.user_code, p.client_name, p.card_url, p.claimed_card_url, p.sealed_requester, p.sealed_responder, e.instance_id AS revoke_peer_instance, s.instance_id AS revoke_source_instance FROM peers p LEFT JOIN message_event_peers e ON e.label=p.label AND e.active=1 CROSS JOIN message_event_source s WHERE s.singleton=1 ORDER BY p.created_at").all();
+			return json(await Promise.all((rows.results as Json[]).map(async (r) => ({ label: r.label, revokeIncarnation: await peerRevokeSnapshot(r.revoke_peer_instance,r.revoke_source_instance), created_at: r.created_at, revoked_at: r.revoked_at, source: r.source, user_code: r.user_code ? P.formatUserCode(r.user_code) : null, client_name: r.client_name, card_url: r.card_url || null,
 					// An active encrypted key pairing also lists `sealed: true` and the safety code computed from its stored public
 					// bundles (the bundles themselves are never listed). Independent of A2A_SEALED_ENABLED: it describes the pairing.
 					...(!r.revoked_at && r.source === "pairing" && r.sealed_requester ? { sealed: true, safety_code: await SealedKeys.requestSafetyCode(r), safety_emoji: await SealedKeys.requestSafetyEmoji(r) } : {}),
 					continuation: r.revoked_at ? null : await continuationGuide(ctx, r.label, r.card_url || r.claimed_card_url) }))));
 		}
+        if (m === "POST" && seg[1] && seg[2] === "revoke" && !seg[3]) {
+            const checked=ownerRpcBody("POST /owner/peers/:label/revoke",await body());
+            if(!checked.ok)return json({error:checked.error},400);
+            const label=decodeURIComponent(seg[1]);
+            if(!/^[A-Za-z0-9_-]{1,32}$/.test(label))return json({error:"label is invalid; read GET /owner/peers"},400);
+            const result=await conditionalPeerRevoke(ctx.DB,label,String(checked.value?.expectedIncarnation));
+            return json(result.body,result.status);
+        }
 		if (m === "POST" && !seg[1]) {
 			const b = await body();
 			if (typeof b.label !== "string" || !/^[A-Za-z0-9_-]{1,32}$/.test(b.label)) return json({ error: "label must be [A-Za-z0-9_-]{1,32}" }, 400);
