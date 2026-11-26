@@ -1,0 +1,25 @@
+docs/cli-mcp-parity.md
+  s_5331ec3b84b582::t_a98af4253c96c2 45
+docs/conditional-peer-revoke.md
+  s_5331ec3b84b582::t_0f9a6ba8ae4dd9 9,14-15
+worker/src/peer-revoke.ts
+  s_5331ec3b84b582::t_199e8579214f0f 1,23-24,31-36,38-50,55-64
+worker/test/conditional-peer-revoke.test.ts
+  s_5331ec3b84b582::t_82ad49215dd9c6 4,10,78-137
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "94c060dd3fbf5f6ff9f346896306b5c869e2e82e",
+  "prompts": {},
+  "sessions": {
+    "s_5331ec3b84b582": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a214b2-b583-7ed0-819b-658ce667642a",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}
