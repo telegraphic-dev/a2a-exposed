@@ -64,7 +64,7 @@ test("GET /owner/peers lists sealed and the safety code only for active encrypte
 		assert.equal("safety_emoji" in by[label], false);
 		assert.equal("safety_code" in by[label], false, `${label} has no safety_code field`);
 	}
-	assert.deepEqual(Object.keys(by.bob).sort(), ["card_url", "client_name", "continuation", "created_at", "label", "revoked_at", "source", "user_code"], "a plaintext row keeps its existing shape");
+	assert.deepEqual(Object.keys(by.bob).sort(), ["card_url", "client_name", "continuation", "created_at", "label", "revokeIncarnation", "revoked_at", "source", "user_code"], "a plaintext row adds only the opaque revoke incarnation");
 	assert.equal(by.eve.sealed, true, "a stored key pairing whose bundle does not parse is still marked encrypted");
 	assert.equal(by.eve.safety_emoji, null);
 	assert.equal(by.eve.safety_code, null, "but gets no made-up code");

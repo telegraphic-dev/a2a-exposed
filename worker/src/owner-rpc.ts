@@ -212,6 +212,7 @@ const ROUTES: RouteDef[] = [
 	{ method: "PUT", name: "PUT /owner/address-forward", take: (s) => s.length === 2 && s[1] === "address-forward", search: noQuery, path: () => "/owner/address-forward" },
 	{ method: "DELETE", name: "DELETE /owner/address-forward", take: (s) => s.length === 2 && s[1] === "address-forward", search: noQuery, path: () => "/owner/address-forward" },
 	{ method: "GET", name: "GET /owner/peers", take: (s) => s.length === 2 && s[1] === "peers", search: noQuery, path: () => "/owner/peers" },
+ { method: "POST", name: "POST /owner/peers/:label/revoke", take: s => s.length===4 && s[1]==="peers" && LABEL.test(s[2]!) && s[3]==="revoke", search:noQuery,path:s=>`/owner/peers/${s[2]}/revoke` },
 	{ method: "DELETE", name: "DELETE /owner/peers/:label", take: (s) => s.length === 3 && s[1] === "peers" && LABEL.test(s[2]!), search: noQuery, path: (s) => `/owner/peers/${s[2]}` },
 	{ method: "GET", name: "GET /owner/pairing", take: (s) => s.length === 2 && s[1] === "pairing", search: noQuery, path: () => "/owner/pairing" },
 	{ method: "POST", name: "POST /owner/pairing/:code/approve", take: (s) => s.length === 4 && s[1] === "pairing" && USER_CODE.test(s[2]!) && s[3] === "approve", search: noQuery, path: (s) => `/owner/pairing/${s[2]}/approve` },
@@ -365,6 +366,12 @@ function forwardBody(body: unknown): { ok: true; value: Record<string, string> }
  * Every other route accepts only an absent body.
  */
 export function ownerRpcBody(routeName: string, body: unknown): { ok: true; value?: Record<string, unknown> } | { ok: false; error: string; code?: string } {
+ if(routeName === "POST /owner/peers/:label/revoke") {
+  if(!body || typeof body!=="object" || Array.isArray(body))return {ok:false,error:"expectedIncarnation required; read GET /owner/peers"};
+  const b=body as Record<string,unknown>;
+  return Object.keys(b).join(",")==="expectedIncarnation" && typeof b.expectedIncarnation==="string" && /^prv1_[a-f0-9]{64}$/.test(b.expectedIncarnation) ? {ok:true,value:{expectedIncarnation:b.expectedIncarnation}} : {ok:false,error:"valid expectedIncarnation required; read GET /owner/peers"};
+ }
+
 	if (routeName === "DELETE /owner/relay/http/:profile") {
 		if (!body || typeof body !== "object" || Array.isArray(body)) return { ok: false, error: "generation is invalid" };
 		const b = body as Record<string, unknown>;
