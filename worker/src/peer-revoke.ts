@@ -58,8 +58,8 @@ export async function conditionalPeerRevoke(db: Db, label: string, expected: str
 
 /** Refuse a stale snapshot after restore or task replacement. No callback credentials leave the captured row. */
 export async function revokeTaskSnapshotCurrent(db:Db,task:RevokedTaskSnapshot):Promise<boolean>{
- const source=await db.prepare("SELECT instance_id FROM message_event_source WHERE singleton=1").first<{instance_id:string}>();
- if(!source || await sha256(source.instance_id)!==task.sourceCommitment)return false;
- return !!await db.prepare("SELECT 1 FROM tasks WHERE id=? AND context_id=? AND peer=? AND state='rejected' AND status_json=? AND push_configs_json=?")
-  .bind(task.id,task.context_id,task.peer,task.status_json,task.push_configs_json).first();
+ const snapshot=await db.prepare(`SELECT s.instance_id AS source FROM tasks t CROSS JOIN message_event_source s
+  WHERE s.singleton=1 AND t.id=? AND t.context_id=? AND t.peer=? AND t.state='rejected' AND t.status_json=? AND t.push_configs_json=?`)
+  .bind(task.id,task.context_id,task.peer,task.status_json,task.push_configs_json).first<{source:string}>();
+ return !!snapshot && await sha256(snapshot.source)===task.sourceCommitment;
 }
