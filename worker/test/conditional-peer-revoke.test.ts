@@ -120,12 +120,15 @@ test("owner route pushes captured rejections once, never replacement task rows o
    DB.db.prepare("UPDATE peers SET token_hash='replacement',revoked_at=NULL WHERE label='alpha'").run();
    DB.db.prepare("UPDATE tasks SET state='working',status_json='{\"state\":\"working\"}',push_configs_json='[{\"url\":\"https://hooks.example.net/new\"}]' WHERE id='submitted'").run();
    DB.db.prepare("INSERT INTO tasks(id,context_id,peer,state,protocol,created_at,updated_at,status_json) VALUES('new','context-new','alpha','submitted','0.3','2026-01-01','2026-01-01','{\"state\":\"submitted\"}')").run();
+   DB.db.prepare("INSERT INTO wakes(context_id,peer,pending_json,pending_since_ms,last_sent_ms,busy_until_ms) VALUES('context-submitted','alpha','{\"contextId\":\"context-submitted\",\"taskId\":\"submitted\",\"busy\":1}',777,888,9999999999999)").run();
   }return result;}};
  const response=await worker.fetch(new Request("https://agent.example.com/owner/peers/alpha/revoke",{method:"POST",headers:{authorization:"Bearer fixture-owner","content-type":"application/json"},body:JSON.stringify({expectedIncarnation:version})}),{DB:racing,OWNER_TOKEN:"fixture-owner",PUBLIC_URL:"https://agent.example.com"} as any,{waitUntil(job:Promise<unknown>){jobs.push(job);},passThroughOnException(){}} as any);
  assert.equal(response.status,200);const receipt=await response.text();await Promise.all(jobs);
  assert.deepEqual(sent.map(x=>x.body.id).sort(),["waiting","working"]);assert.ok(sent.every(x=>x.body.status.state==="rejected" && x.url.includes("/old-")));
  assert.equal((DB.db.prepare("SELECT state FROM tasks WHERE id='submitted'").get() as any).state,"working");assert.equal((DB.db.prepare("SELECT state FROM tasks WHERE id='new'").get() as any).state,"submitted");
  assert.equal(receipt.includes("callback"),false);assert.equal(receipt.includes("push_configs"),false);
+ assert.deepEqual({...DB.db.prepare("SELECT pending_json,pending_since_ms,last_sent_ms,busy_until_ms FROM wakes WHERE context_id='context-submitted' AND peer='alpha'").get()},
+  {pending_json:'{"contextId":"context-submitted","taskId":"submitted","busy":1}',pending_since_ms:777,last_sent_ms:888,busy_until_ms:9999999999999});
  const again=await conditionalPeerRevoke(DB as any,"alpha",version);assert.equal(again.status,412);assert.equal(sent.length,2);
 });
 
@@ -134,4 +137,38 @@ test("restored source cannot deliver captured task callbacks",async()=>{
  const result=await conditionalPeerRevoke(DB as any,"alpha",version);assert.equal(await revokeTaskSnapshotCurrent(DB as any,result.tasks![0]),true);
  DB.db.prepare("UPDATE message_event_source SET instance_id=lower(hex(randomblob(16)))").run();
  assert.equal(await revokeTaskSnapshotCurrent(DB as any,result.tasks![0]),false);
+});
+
+function seedRevokeWakes(DB:ReturnType<typeof d1>){
+ DB.db.prepare("UPDATE tasks SET context_id='shared' WHERE id IN ('submitted','working')").run();
+ const add=(context:string,peer:string,payload:unknown)=>DB.db.prepare("INSERT INTO wakes(context_id,peer,pending_json,pending_since_ms,last_sent_ms,busy_until_ms) VALUES(?,?,?,123,456,9999999999999)").run(context,peer,typeof payload==="string"?payload:JSON.stringify(payload));
+ add("shared","alpha",{contextId:"shared",taskIds:["submitted","unrelated-id","working"],taskId:"working",kind:"inbound",busy:1,extra:{keep:true}});
+ add("context-waiting","alpha",{contextId:"context-waiting",taskId:"waiting",busy:1});
+ add("shared","",{contextId:"shared",taskIds:[null,"",7],taskId:"submitted"});
+ add("shared","beta",{contextId:"shared",taskId:"submitted",kind:"inbound",extra:"other peer"});
+ add("context-waiting","",{contextId:"context-waiting",taskId:"waiting",kind:"outbound_update"});
+ add("context-done","alpha",{contextId:"context-done",taskId:"done"});
+ add("wrong-context","alpha",{contextId:"shared",taskId:"submitted"});
+ add("broken","alpha","{broken");
+ return()=>DB.db.prepare("SELECT * FROM wakes ORDER BY context_id,peer").all() as any[];
+}
+test("conditional revoke acknowledges only captured pending wake IDs and preserves unrelated data/cooldowns",async()=>{
+ const {DB}=setup();seedOpenTasks(DB);const wakes=seedRevokeWakes(DB);const before=wakes();const version=(await peerRevokeIncarnation(DB as any,"alpha"))!;
+ assert.equal((await conditionalPeerRevoke(DB as any,"alpha",version)).status,200);
+ const rows=wakes();for(const row of rows){const old=before.find(x=>x.context_id===row.context_id && x.peer===row.peer);assert.equal(row.busy_until_ms,old.busy_until_ms);assert.equal(row.last_sent_ms,old.last_sent_ms);
+  if(row.context_id==="shared" && row.peer==="alpha"){assert.equal(row.pending_since_ms,old.pending_since_ms);assert.deepEqual(JSON.parse(row.pending_json),{...JSON.parse(old.pending_json),taskIds:["unrelated-id"],taskId:"unrelated-id"});}
+  else if((row.context_id==="context-waiting" && row.peer==="alpha") || (row.context_id==="shared" && row.peer==="")){assert.equal(row.pending_json,null);assert.equal(row.pending_since_ms,null);}
+  else assert.deepEqual(row,old);
+ }
+ DB.db.prepare("UPDATE peers SET token_hash='new-wake-authority',revoked_at=NULL WHERE label='alpha'").run();
+ DB.db.prepare("UPDATE wakes SET pending_json='{\"contextId\":\"shared\",\"taskId\":\"new-task\",\"taskIds\":[\"new-task\",\"unrelated-id\"]}',pending_since_ms=777 WHERE context_id='shared' AND peer='alpha'").run();
+ const replacement=wakes();assert.equal((await conditionalPeerRevoke(DB as any,"alpha",version)).status,412);assert.deepEqual(wakes(),replacement);
+});
+test("wake acknowledgements roll back with revoke and a source race acknowledges nothing",async()=>{
+ const {DB}=setup();seedOpenTasks(DB);const wakes=seedRevokeWakes(DB);const before=wakes();const version=(await peerRevokeIncarnation(DB as any,"alpha"))!;
+ DB.db.prepare("CREATE TRIGGER refuse_wake_revoke BEFORE UPDATE OF revoked_at ON peers BEGIN SELECT RAISE(ABORT,'fixture-refusal'); END;").run();
+ await assert.rejects(conditionalPeerRevoke(DB as any,"alpha",version));assert.deepEqual(wakes(),before);
+ DB.db.prepare("DROP TRIGGER refuse_wake_revoke").run();const batch=DB.batch.bind(DB);
+ const raced={...DB,batch:async(stmts:any[])=>{DB.db.prepare("UPDATE message_event_source SET instance_id=lower(hex(randomblob(16)))").run();return batch(stmts);}};
+ assert.equal((await conditionalPeerRevoke(raced as any,"alpha",version)).status,412);assert.deepEqual(wakes(),before);
 });

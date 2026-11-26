@@ -48,11 +48,41 @@ export async function conditionalPeerRevoke(db: Db, label: string, expected: str
   db.prepare(`INSERT INTO history(context_id,ts,dir,peer,task_id,role,state,text)
    SELECT context_id,?,'out',peer,id,'agent','rejected','This peer was revoked.' FROM tasks WHERE ${captured}`)
    .bind(timestamp,...capturedBinds),
+  // Acknowledge only this operation's captured task ids, before the peer trigger changes authority.
+  // Preserve unrelated rows byte-for-byte; mixed payloads keep their other ids/fields and deadlines.
+  db.prepare(`WITH raw AS (
+   SELECT w.*,CASE WHEN json_valid(w.pending_json) THEN w.pending_json ELSE '{}' END AS payload
+   FROM wakes w WHERE w.peer IN (?1,'') AND EXISTS (
+    SELECT 1 FROM message_event_peers e JOIN peers p ON p.label=e.label CROSS JOIN message_event_source s
+    WHERE e.label=?1 AND e.instance_id=?4 AND e.active=1 AND p.revoked_at IS NULL AND s.singleton=1 AND s.instance_id=?5)
+  ), candidates AS (
+   SELECT *,CASE WHEN json_type(payload,'$.taskIds')='array' AND EXISTS (
+    SELECT 1 FROM json_each(payload,'$.taskIds') WHERE type='text' AND value!='') THEN json_extract(payload,'$.taskIds')
+    WHEN json_type(payload,'$.taskId')='text' AND json_extract(payload,'$.taskId')!='' THEN json_array(json_extract(payload,'$.taskId'))
+    ELSE '[]' END AS ids
+   FROM raw WHERE (CASE WHEN json_type(payload,'$.kind')='text' AND json_extract(payload,'$.kind')!=''
+    THEN json_extract(payload,'$.kind') ELSE 'inbound' END)='inbound'
+    AND (json_type(payload,'$.contextId') IS NOT 'text' OR json_extract(payload,'$.contextId')=context_id)
+  ), affected AS (
+   SELECT * FROM candidates c WHERE EXISTS (
+    SELECT 1 FROM json_each(c.ids) j JOIN tasks t ON t.id=j.value AND t.context_id=c.context_id
+    WHERE j.type='text' AND t.peer=?1 AND t.state='rejected' AND substr(json_extract(t.status_json,'$.message.messageId'),1,?2)=?3)
+  ), filtered AS (
+   SELECT a.*,(SELECT json_group_array(value) FROM (
+    SELECT j.value FROM json_each(a.ids) j WHERE j.type='text' AND j.value!='' AND NOT EXISTS (
+     SELECT 1 FROM tasks t WHERE t.id=j.value AND t.context_id=a.context_id AND t.peer=?1 AND t.state='rejected'
+      AND substr(json_extract(t.status_json,'$.message.messageId'),1,?2)=?3)
+    GROUP BY j.value ORDER BY MIN(CAST(j.key AS INTEGER)))) AS kept FROM affected a
+  ) UPDATE wakes AS w SET
+   pending_json=CASE WHEN json_array_length(f.kept)=0 THEN NULL ELSE json_set(f.payload,'$.taskIds',json(f.kept),'$.taskId',json_extract(f.kept,'$[#-1]')) END,
+   pending_since_ms=CASE WHEN json_array_length(f.kept)=0 THEN NULL ELSE w.pending_since_ms END
+   FROM filtered f WHERE w.context_id=f.context_id AND w.peer=f.peer AND w.pending_json=f.pending_json`)
+   .bind(label,messagePrefix.length,messagePrefix,value.peer,value.source),
   db.prepare(`DELETE FROM outbound_peers WHERE alias=? AND source='announce' AND ${guard}`).bind(label,...binds),
   db.prepare(`UPDATE outbound SET push_token_hash=NULL WHERE peer=? AND ${guard}`).bind(label,...binds),
   db.prepare(`UPDATE peers SET revoked_at=?,token_enc=NULL,wake_policy_id=lower(hex(randomblob(16))) WHERE label=? AND revoked_at IS NULL AND ${guard}`).bind(nowIso(),label,...binds),
  ]);
- const last=result[5] as {meta?:{changes?:number}};
+ const last=result.at(-1) as {meta?:{changes?:number}};
  return Number(last?.meta?.changes || 0)>0 ? {status:200,body:{revoked:true,label,incarnation:expected},tasks:await Promise.all(((result[0].results || []) as RevokedTaskSnapshot[]).map(async task=>({...task,sourceCommitment:await sha256(value.source)})))} : refused;
 }
 
