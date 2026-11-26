@@ -1,4 +1,4 @@
-import { peerRevokeSnapshot, conditionalPeerRevoke } from "./peer-revoke.ts";
+import { peerRevokeSnapshot, conditionalPeerRevoke, revokeTaskSnapshotCurrent } from "./peer-revoke.ts";
 import * as Observations from "./task-observation.ts";
 import * as McpTasks from "./mcp-tasks.ts";
 import * as PeerWake from "./peer-wake-policy.ts";
@@ -2985,6 +2985,22 @@ async function handleOwner(req: Request, ctx: TenantContext, ectx: ExecutionCont
             const label=decodeURIComponent(seg[1]);
             if(!/^[A-Za-z0-9_-]{1,32}$/.test(label))return json({error:"label is invalid; read GET /owner/peers"},400);
             const result=await conditionalPeerRevoke(ctx.DB,label,String(checked.value?.expectedIncarnation));
+            // Only immutable snapshots returned by the successful authoritative batch may be notified.
+            // Never reload tasks by id or scan the reusable peer label after the CAS.
+            if(result.status===200){
+                const snapshots=result.tasks || [];
+                // Keep the revoke response independent of callback availability; each snapshot is attempted once.
+                ectx.waitUntil((async()=>{
+                    for(const task of snapshots){
+                        try{
+                            if(!await revokeTaskSnapshotCurrent(ctx.DB,task))continue;
+                            await notifyPeer(ctx,ectx,{id:task.id,contextId:task.context_id,status:JSON.parse(task.status_json),
+                                artifacts:JSON.parse(task.artifacts_json),metadata:task.metadata_json ? JSON.parse(task.metadata_json) : undefined,
+                                _peer:task.peer,_protocol:task.protocol,_push:JSON.parse(task.push_configs_json)});
+                        }catch{log("revoked_task_push_failed",{});}
+                    }
+                })());
+            }
             return json(result.body,result.status);
         }
 		if (m === "POST" && !seg[1]) {
