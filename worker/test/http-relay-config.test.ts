@@ -5,7 +5,9 @@ import { runInNewContext } from "node:vm";
 import { build } from "esbuild";
 
 test("deployment configuration composes hosted and relay bindings with explicit encryption opt-in", async () => {
-	const built = await build({ entryPoints: ["cloudflare.config.ts"], bundle: true, write: false, format: "cjs", platform: "neutral", plugins: [{ name: "config-contract", setup(b) {
+	const built = await build({ entryPoints: ["cloudflare.config.ts"], bundle: true, write: false, format: "cjs", platform: "neutral", conditions: ["workerd", "worker", "browser"], plugins: [{ name: "config-contract", setup(b) {
+		b.onResolve({ filter: /^\.\/scripts\/check-portable-catalog\.mjs$/ }, () => ({ path: "catalog-check", namespace: "catalog-fixture" }));
+		b.onLoad({ filter: /.*/, namespace: "catalog-fixture" }, () => ({ contents: "export const checkPortableCatalog = () => true;", loader: "js" }));
 		b.onResolve({ filter: /^cf\/config$/ }, () => ({ path: "config", namespace: "fixture" }));
 		b.onResolve({ filter: /^\.\/src\/(index|relay-entry|hosted)\.ts$/ }, a => ({ path: a.path, namespace: "fixture" }));
 		b.onLoad({ filter: /.*/, namespace: "fixture" }, a => ({ contents: a.path === "config" ? `export const defineConfig = f => f; export const bindings = new Proxy({}, { get: (_, name) => value => ({binding: name, value}) }); export const exports = {durableObject: value => ({export: 'durableObject',value})}; export const triggers = {scheduled: value => value};` : `export const selected = ${JSON.stringify(a.path)};`, loader: "js" }));

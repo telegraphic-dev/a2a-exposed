@@ -183,6 +183,7 @@ https://github.com/telegraphic-dev/a2a-exposed/blob/main/docs/getting-started.md
                                                the Workers maximum; lower only if /device hits error 1102)
                                 --workers-logs on|off  persisted Cloudflare Workers Logs (query strings redacted)
                                 --mcp on|off   remote MCP server at <url>/mcp for Claude and other MCP clients
+                                               MCP 2026-07-28 clients can discover portable skills; approve each separately.
                                                (default on; each client needs your approval password once).
                                                Plugin manifests leave MCP unset: the URL differs per deploy.
                                                When GET /owner/mcp reports enabled and the agent card is reachable,

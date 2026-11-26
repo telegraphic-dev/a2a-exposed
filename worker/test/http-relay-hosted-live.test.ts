@@ -19,7 +19,7 @@ async function until(check: () => unknown, ms = 8000) {
 async function runtime() {
 	// Only substituted boundary: loopback origin -> public tenant Host. All public
 	// routing, TenantStore dispatch and HttpRelay response/cancellation are real.
-	const built = await build({ stdin: { contents: `import hosted from './src/hosted.ts'; export { TenantStore, HttpRelay } from './src/hosted.ts'; export default { fetch(req,env,ctx) { const u=new URL(req.url); u.hostname=(req.headers.get('x-fixture-tenant')||'first')+'.agents.example.com'; u.port=''; u.protocol='https:'; return hosted.fetch(new Request(u,req),env,ctx); } };`, resolveDir: process.cwd(), loader: "ts" }, bundle: true, write: false, format: "esm", platform: "neutral", external: ["cloudflare:*"], plugins: [{ name: "sql", setup(b) {
+	const built = await build({ stdin: { contents: `import hosted from './src/hosted.ts'; export { TenantStore, HttpRelay } from './src/hosted.ts'; export default { fetch(req,env,ctx) { const u=new URL(req.url); u.hostname=(req.headers.get('x-fixture-tenant')||'first')+'.agents.example.com'; u.port=''; u.protocol='https:'; return hosted.fetch(new Request(u,req),env,ctx); } };`, resolveDir: process.cwd(), loader: "ts" }, bundle: true, write: false, format: "esm", platform: "neutral", conditions: ["workerd", "worker", "browser"], external: ["cloudflare:*"], plugins: [{ name: "sql", setup(b) {
 		b.onResolve({ filter: /\.sql\?raw$/ }, a => ({ path: new URL(a.path.replace("?raw", ""), `file://${a.resolveDir}/`).pathname, namespace: "sql" }));
 		b.onLoad({ filter: /.*/, namespace: "sql" }, a => ({ contents: `export default ${JSON.stringify(readFileSync(a.path, "utf8"))}`, loader: "js" }));
 	} }] });

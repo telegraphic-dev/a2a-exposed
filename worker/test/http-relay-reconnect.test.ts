@@ -20,7 +20,7 @@ async function until(check: () => unknown, ms = 8000) {
 }
 async function runtime(persistence: string) {
 	// Direct DO harness: production framing/auth/storage, not owner/public routing.
-	const built = await build({ stdin: { contents: `export { HttpRelay } from './src/http-relay.ts'; export default { fetch(req,env) { const u=new URL(req.url); u.pathname=u.pathname.endsWith('/connect')?'/connect':u.pathname; return env.HTTP_RELAY.get(env.HTTP_RELAY.idFromName('restart-fixture')).fetch(new Request(u,req)); } };`, resolveDir: process.cwd(), loader: "ts" }, bundle: true, write: false, format: "esm", platform: "neutral", external: ["cloudflare:*"] });
+	const built = await build({ stdin: { contents: `export { HttpRelay } from './src/http-relay.ts'; export default { fetch(req,env) { const u=new URL(req.url); u.pathname=u.pathname.endsWith('/connect')?'/connect':u.pathname; return env.HTTP_RELAY.get(env.HTTP_RELAY.idFromName('restart-fixture')).fetch(new Request(u,req)); } };`, resolveDir: process.cwd(), loader: "ts" }, bundle: true, write: false, format: "esm", platform: "neutral", conditions: ["workerd", "worker", "browser"], external: ["cloudflare:*"] });
 	const mf = new Miniflare(convertV4MiniflareOptions({ name: "http-reconnect", resourcePersistencePath: persistence, isolatedResourcePersistencePath: persistence, modules: true, script: built.outputFiles[0].text, compatibilityDate: "2026-10-06", compatibilityFlags: ["enable_request_signal"], durableObjects: { HTTP_RELAY: { className: "HttpRelay", useSQLite: true } } }));
 	const url = await mf.ready;
 	const call = (path: string, body?: unknown) => fetch(new URL(path, url), { method: body === undefined ? "GET" : "POST", body: body === undefined ? undefined : JSON.stringify(body) });

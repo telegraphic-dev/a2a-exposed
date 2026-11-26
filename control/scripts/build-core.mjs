@@ -1,6 +1,7 @@
 // Compile `@a2a-exposed/control-core` for npm. `prepack` runs this.
 // Output is dist/index.js plus the declaration files the entry's types reach.
 import { spawnSync } from "node:child_process";
+import { checkPortableCatalog } from "../../worker/scripts/check-portable-catalog.mjs";
 import { createRequire } from "node:module";
 import fs from "node:fs";
 import path from "node:path";
@@ -32,6 +33,7 @@ function ensureControlDeps() {
 	}
 }
 
+checkPortableCatalog();
 ensureControlDeps();
 // The optional callbacks subpath bundles the SAME pinned audited transport as the inbox.
 if (!fs.existsSync(path.join(repoRoot, "worker/node_modules/tunnelfetch/package.json"))) {
@@ -48,7 +50,7 @@ fs.mkdirSync(dist, { recursive: true });
 // Preserve notices for official wire codecs bundled into the published library.
 const licenses = path.join(dist, "licenses");
 fs.mkdirSync(licenses, { recursive: true });
-for (const [pkg, name] of [["@modelcontextprotocol/ext-tasks", "ext-tasks"], ["zod", "zod"]]) {
+for (const [pkg, name] of [["@modelcontextprotocol/ext-tasks", "ext-tasks"], ["zod", "zod"], ["@modelcontextprotocol/core", "mcp-core"], ["@modelcontextprotocol/server", "mcp-server"]]) {
  const directory = path.join(repoRoot, "worker/node_modules", pkg);
  for (const file of fs.readdirSync(directory).filter(file => /^(LICENSE|NOTICE)/i.test(file))) {
   fs.copyFileSync(path.join(directory, file), path.join(licenses, `${name}-${file}`));
@@ -79,6 +81,7 @@ const built = await esbuild.build({
 	format: "esm",
 	platform: "neutral",
 	target: "es2024",
+	conditions: ["workerd", "worker", "browser"],
 	outdir: dist,
 	plugins: [sqlRaw],
 	legalComments: "none",
@@ -88,7 +91,7 @@ const built = await esbuild.build({
 });
 
 const pulled = Object.keys(built.metafile.inputs).filter((file) =>
-	(file.includes("node_modules") && !file.includes("node_modules/tunnelfetch/") && !file.includes("node_modules/@modelcontextprotocol/ext-tasks/") && !file.includes("node_modules/zod/")) || file.includes("/views/") || file.includes("/brand/") || file.includes("better-auth")
+	(file.includes("node_modules") && !["tunnelfetch", "@modelcontextprotocol/ext-tasks", "@modelcontextprotocol/core", "@modelcontextprotocol/server", "zod"].some((name) => file.includes(`node_modules/${name}/`))) || file.includes("/views/") || file.includes("/brand/") || file.includes("better-auth")
 );
 if (pulled.length > 0) fail(`bundle inputs are outside control-core:\n${pulled.join("\n")}`);
 

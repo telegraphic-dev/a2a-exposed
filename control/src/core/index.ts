@@ -113,3 +113,5 @@ export { HTTP_RELAY_PROTOCOL_VERSION, HTTP_RELAY_CAPABILITIES } from "./http-rel
 
 export { createMcpObservation, mcpObservationRequest, mcpTasksNegotiated, MCP_TASKS_EXTENSION, McpObservationError } from "../../../worker/src/task-observation.ts";
 export type { McpObservationSource, McpObservationReader } from "../../../worker/src/task-observation.ts";
+
+export { portableMcpSkills } from "./mcp-skills.ts";

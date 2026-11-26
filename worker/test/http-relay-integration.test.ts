@@ -28,7 +28,7 @@ export class TenantStore extends Base {
  async checkedPush(body) { try { return { value: await this.pushConfig(body) }; } catch { return { error: 'fence failed' }; } }
  async checkedDelete() { try { return { value: await this.deleteStorage() }; } catch { return { error: 'fence failed' }; } }
  async failConfigWrite(on) { this.ctx.storage.sql.exec(on ? "CREATE TRIGGER fail_http_config BEFORE UPDATE ON tenant_config BEGIN SELECT RAISE(ABORT, 'injected'); END" : "DROP TRIGGER fail_http_config"); }
-}`, resolveDir: process.cwd(), loader: "ts" as const } } : { entryPoints: ["src/relay-entry.ts"] }), bundle: true, write: false, format: "esm", platform: "neutral", external: ["cloudflare:*"], plugins: [{ name: "sql", setup(b) {
+}`, resolveDir: process.cwd(), loader: "ts" as const } } : { entryPoints: ["src/relay-entry.ts"] }), bundle: true, write: false, format: "esm", platform: "neutral", conditions: ["workerd", "worker", "browser"], external: ["cloudflare:*"], plugins: [{ name: "sql", setup(b) {
 		b.onResolve({ filter: /\.sql\?raw$/ }, a => ({ path: new URL(a.path.replace("?raw", ""), `file://${a.resolveDir}/`).pathname, namespace: "sql" }));
 		b.onLoad({ filter: /.*/, namespace: "sql" }, a => ({ contents: `export default ${JSON.stringify(readFileSync(a.path, "utf8"))}`, loader: "js" }));
 	} }] });

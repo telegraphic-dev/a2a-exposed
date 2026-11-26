@@ -12,6 +12,9 @@ if (!fs.existsSync(path.join(src, "cloudflare.config.ts"))) {
 	console.error("sync-worker: ../worker not found");
 	process.exit(1);
 }
+// Check source drift before packaging; consumers need only the embedded edition.
+const portable = spawnSync(process.execPath, [path.join(src, "scripts/mcp-portable-skills-catalog.mjs"), "--check"], { stdio: "inherit" });
+if (portable.status !== 0) process.exit(portable.status || 1);
 const skip = new Set(["node_modules", ".cloudflare", ".wrangler", "deploy.env", "package-lock.json"]);
 fs.rmSync(dst, { recursive: true, force: true });
 fs.cpSync(src, dst, { recursive: true, filter: (p) => !skip.has(path.basename(p)) && !/^\.(dev\.vars|env)/.test(path.basename(p)) });

@@ -31,6 +31,8 @@ import * as Inspect from "./owner-inspect.ts";
 import * as D from "./discovery.ts";
 import { SKILLS } from "./skills-index.ts";
 import * as M from "./mcp.ts";
+import portableSkills from "./mcp-portable-skills-catalog.json" with { type: "json" };
+import { servePortableSkills, SKILLS_CAPABILITIES, SKILLS_METHODS, type SkillCatalog } from "./mcp-skills.ts";
 import { lookupDirectory, pinDirectoryRegion, tenantNameFromHost, tenantRegion } from "./directory.ts";
 import { accountIdOf, DASHBOARD_ACTOR_HEADER, matchOwnerRpc, ownerResponseLeaks, ownerRpcBody, REISSUE_OWNER_ONLY, REISSUE_OWNER_ONLY_MESSAGE, scrubOwnerClaims, type OwnerRpcRequest, type OwnerRpcResult } from "./owner-rpc.ts";
 import { pairingAgent, pairingEventTarget, postPairingEvent } from "./pairing-events.ts";
@@ -5069,7 +5071,11 @@ async function callTool(ctx: TenantContext, ectx: ExecutionContext, grant: Json,
  *  io.modelcontextprotocol/protocolVersion is served per 2026-07-28 (no initialize, server/discover, resultType, required
  *  Mcp-Method / Mcp-Name headers); anything else follows the initialize-based 2025 revisions. No sessions in either era
  *  (Mcp-Session-Id is never minted and is ignored), no GET stream, no SSE resumability. */
+const skillsReadMethod = (method: unknown) => typeof method === "string" && (method === "server/discover" || SKILLS_METHODS.includes(method));
+
 async function handleMcp(req: Request, ctx: TenantContext, ectx: ExecutionContext, url: URL): Promise<Response> {
+	// Recognized modern read requests must not flush wakes, including auth/origin refusals.
+	if (M.isModern(req.headers.get("mcp-protocol-version") || "") && skillsReadMethod(req.headers.get("mcp-method"))) NO_FLUSH.add(req);
 	const u = oauthUrls(ctx);
 	// DNS-rebinding / cross-site guard (spec: servers MUST validate Origin). Browsers send it; MCP clients usually don't.
 	const origin = req.headers.get("origin");
@@ -5096,6 +5102,7 @@ async function handleMcp(req: Request, ctx: TenantContext, ectx: ExecutionContex
 	if ((msg.method === "tools/call" && ["wake_status", "wait_task", "wait_outbound", "list_outbound"].includes(params.name)) || ["tasks/get", "tasks/update", "tasks/cancel"].includes(msg.method)) NO_FLUSH.add(req);
 	const meta = params._meta && typeof params._meta === "object" ? params._meta : {};
 	const bodyVersion = typeof meta[M.META.version] === "string" ? meta[M.META.version] : null;
+	if (bodyVersion && M.isModern(bodyVersion) && skillsReadMethod(msg.method)) NO_FLUSH.add(req);
 	const pv = req.headers.get("mcp-protocol-version");
 	const isRequest = typeof msg.method === "string" && msg.id !== undefined && msg.id !== null;
 	if (!isRequest) {
@@ -5118,6 +5125,7 @@ async function handleMcp(req: Request, ctx: TenantContext, ectx: ExecutionContex
 		if (!caps || typeof caps !== "object" || Array.isArray(caps))
 			return rpcError(id, M.ERR.INVALID_PARAMS, `params._meta["${M.META.capabilities}"] (an object) is required`, 400);
 		const done = (result: Json) => rpcResult(id, { ...result, resultType: "complete", _meta: { ...(result._meta || {}), [M.META.serverInfo]: serverInfo(ctx) } });
+		if (SKILLS_METHODS.includes(msg.method)) return servePortableSkills(portableSkills as SkillCatalog, req, msg, serverInfo(ctx));
 		if (["tasks/get", "tasks/update", "tasks/cancel"].includes(msg.method) || (msg.method === "tools/call" && ["wait_task", "wait_outbound"].includes(params.name) && McpTasks.negotiated(caps)) || (msg.method === "subscriptions/listen" && Array.isArray(params.notifications?.taskIds) && params.notifications.taskIds.length > 0 && !McpTasks.negotiated(caps))) {
             if (!McpTasks.negotiated(caps)) return json({ jsonrpc: "2.0", id, error: { code: M.ERR.MISSING_CLIENT_CAPABILITY, message: "Declare extensions.io.modelcontextprotocol/tasks on every task request", data: { requiredCapabilities: { extensions: { [McpTasks.EXTENSION]: {} } } } } });
             try {
@@ -5136,7 +5144,7 @@ async function handleMcp(req: Request, ctx: TenantContext, ectx: ExecutionContex
         }
 		switch (msg.method) {
 			case "server/discover":
-				return done({ supportedVersions: M.PROTOCOL_VERSIONS, capabilities: { tools: {}, extensions: { [McpTasks.EXTENSION]: {} } }, instructions: mcpInstructions, ttlMs: M.LIST_TTL_MS, cacheScope: "private" });
+				return done({ supportedVersions: M.PROTOCOL_VERSIONS, capabilities: { tools: {}, ...SKILLS_CAPABILITIES, extensions: { ...SKILLS_CAPABILITIES.extensions, [McpTasks.EXTENSION]: {} } }, instructions: mcpInstructions, ttlMs: M.LIST_TTL_MS, cacheScope: "private" });
 			case "tools/list":
 				return done({ tools: mcpTools(ctx), ttlMs: M.LIST_TTL_MS, cacheScope: "private" });
 			case "tools/call": {
@@ -5154,7 +5162,7 @@ async function handleMcp(req: Request, ctx: TenantContext, ectx: ExecutionContex
 					{ status: 200, headers: { "content-type": "text/event-stream", "cache-control": "no-store", "x-accel-buffering": "no" } });
 			}
 		}
-		// initialize, ping, logging/setLevel, resources/*, prompts/*: not part of this revision for this server
+		// initialize, ping, logging/setLevel and prompts/* are not served in this revision.
 		return rpcError(id, M.ERR.METHOD_NOT_FOUND, `method not found: ${msg.method}`, 404);
 	}
 
@@ -5280,11 +5288,13 @@ function noindex(ctx: TenantContext, res: Response): Response {
 	return out;
 }
 
-/** Requests whose handler is a read-only diagnostic (MCP wake_status). dispatch skips its opportunistic flush for them. */
+/** Read-only MCP diagnostics/Skills discovery/resources and owner probes skip opportunistic wake flush. */
 const NO_FLUSH = new WeakSet<Request>();
 
 /** Inbox for one already-resolved tenant: retired-host redirect, the handler, then an opportunistic wake flush. */
 export async function dispatch(req: Request, ctx: TenantContext, ectx: ExecutionContext): Promise<Response> {
+	// Mark the original request before HEAD is cloned into a GET by handle().
+	if (req.method !== "POST" && new URL(req.url).pathname === "/mcp") NO_FLUSH.add(req);
 	if (["GET", "HEAD"].includes(req.method) && new URL(req.url).pathname.startsWith("/owner/message-events/")) NO_FLUSH.add(req);
 	const moved = A.movedResponse(req.url, ctx.PUBLIC_URL, ctx.RETIRED_HOSTNAMES);
 	if (moved) return new Response(moved.body || null, { status: moved.status, headers: moved.headers });

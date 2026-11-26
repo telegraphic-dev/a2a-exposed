@@ -2,6 +2,9 @@
 // variables at deploy time (set by `npx -y a2a-exposed@latest init|deploy`, or export them yourself;
 // see deploy.env.example). Nothing account- or owner-specific is committed here.
 import { bindings, defineConfig, exports, triggers } from "cf/config";
+// @ts-ignore: build-only dependency-free ESM verifier, also packaged with the CLI template.
+import { checkPortableCatalog } from "./scripts/check-portable-catalog.mjs";
+checkPortableCatalog();
 import * as selfHost from "./src/index.ts" with { type: "cf-worker" };
 import * as relayEntry from "./src/relay-entry.ts" with { type: "cf-worker" };
 import * as hostedEntry from "./src/hosted.ts" with { type: "cf-worker" };

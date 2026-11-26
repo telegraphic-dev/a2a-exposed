@@ -2,6 +2,31 @@
 
 The Worker is a remote [MCP](https://modelcontextprotocol.io) server at `https://<your Worker URL>/mcp` (Streamable HTTP). An MCP client uses the A2A endpoint with no CLI, Node, or owner token in the client.
 
+## Portable skills on the native connector
+
+A native Worker connector using MCP 2026-07-28 advertises the Skills extension
+and resources in `server/discover`. Discover both skills with `skills/list`,
+retrieve their entries with `skills/get`, and read their files lazily with
+`resources/read`. These requests use the same OAuth grant, origin checks and
+rate limit as tools. Revoking the grant also revokes skill access.
+
+The operating and setup skills have distinct identifiers:
+
+- `skill://portable/a2a-exposed/SKILL.md`
+- `skill://portable/a2a-exposed-setup/SKILL.md`
+
+Approve each skill separately in the host. The operating skill links to setup;
+that link does not grant approval. Hosts verify each file's SHA-256 digest and
+byte length against the complete manifest. Markdown is returned as UTF-8 text,
+with its exact file bytes preserved.
+
+This MCP edition retains the shared instructions and supporting files. Its
+frontmatter uses portable string metadata; Hermes/OpenClaw metadata stays in
+the original filesystem and plugin editions. See the
+[packaging contract](agents/mcp-skills-packaging.md). Older native MCP clients
+keep their existing tool interface. Local stdio and the hosted account connector
+advertise only their separately implemented capabilities.
+
 ## Local stdio send/read
 
 `a2a-exposed mcp` runs on the agent's computer, reads newline-delimited JSON-RPC
