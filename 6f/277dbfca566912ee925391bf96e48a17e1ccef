@@ -1,0 +1,40 @@
+.claude-plugin/marketplace.json
+  h_b11fcd80d58c26 13
+.claude-plugin/plugin.json
+  h_b11fcd80d58c26 3
+.cursor-plugin/plugin.json
+  h_b11fcd80d58c26 4
+.grok-plugin/plugin.json
+  h_b11fcd80d58c26 3
+cli/package.json
+  h_b11fcd80d58c26 3
+encryption/package-lock.json
+  h_b11fcd80d58c26 3,9
+encryption/package.json
+  h_b11fcd80d58c26 3
+package.json
+  h_b11fcd80d58c26 3
+plugin.json
+  h_b11fcd80d58c26 4
+skills/a2a-exposed-setup/SKILL.md
+  h_b11fcd80d58c26 7
+skills/a2a-exposed/SKILL.md
+  h_b11fcd80d58c26 9
+worker/src/mcp-portable-skills-catalog.json
+  h_b11fcd80d58c26 11,19,72,80,117,126
+worker/src/skills-index.ts
+  h_b11fcd80d58c26 7,12
+worker/src/version.ts
+  h_b11fcd80d58c26 2
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6f277dbfca566912ee925391bf96e48a17e1ccef",
+  "prompts": {},
+  "humans": {
+    "h_b11fcd80d58c26": {
+      "author": "Jean de Bot <jean.de.bot.bunny@gmail.com>"
+    }
+  }
+}
