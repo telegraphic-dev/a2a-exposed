@@ -1,0 +1,26 @@
+docs/mcp.md
+  h_9cdf39679e9fc6 342-345
+worker/src/mcp-tasks.ts
+  h_9cdf39679e9fc6 4,19,53
+worker/src/task-observation.ts
+  h_9cdf39679e9fc6 4,19,51
+worker/src/task-result.ts
+  h_9cdf39679e9fc6 1-26
+worker/test/mcp.test.ts
+  h_9cdf39679e9fc6 10,161-168,1141-1223
+worker/test/task-observation.test.ts
+  h_9cdf39679e9fc6 19-29
+worker/test/tasks-client.ts
+  h_9cdf39679e9fc6 1-74
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8d7bf8938f04cd29bd6f872ebcc1d5ea80fe0780",
+  "prompts": {},
+  "humans": {
+    "h_9cdf39679e9fc6": {
+      "author": "Jean de Bot <264832715+jean-de-bot@users.noreply.github.com>"
+    }
+  }
+}
