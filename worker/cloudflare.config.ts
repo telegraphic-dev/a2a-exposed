@@ -80,6 +80,8 @@ const plain: Record<string, string> = {
 	QUOTAS: v("QUOTAS"),
 	USAGE_SINK: v("USAGE_SINK"),
 	WAKE_TARGET_POLICY: v("WAKE_TARGET_POLICY"),
+	// Exactly 1: a pinned socket that the Workers socket policy refuses for a checked Cloudflare address is retried once with the platform fetch.
+	EGRESS_CLOUDFLARE_EDGE: e.EGRESS_CLOUDFLARE_EDGE === "1" ? "1" : "",
 	SIGNUP_URL: v("SIGNUP_URL"),
 	BRANDING: v("BRANDING"),
 	FEEDBACK_URL: v("FEEDBACK_URL"),

@@ -217,7 +217,11 @@ client and preset you exercised, and clean up approved test resources.
 - Preserve request limits (1 MiB bodies, 60 requests/minute per peer) and pairing,
   registration, and metadata-fetch abuse limits. Public metadata fetches require
   HTTPS, checked public DNS, pinned addresses with hostname TLS verification,
-  no redirects/credentials, and bounded time/body size. Public-HTTPS wake policy
+  no redirects/credentials, and bounded time/body size. The only exception is the
+  opt-in `EGRESS_CLOUDFLARE_EDGE=1` retry: after the Workers socket policy refuses
+  the pinned socket for a checked Cloudflare address of a named host, and a fresh
+  `cache: "no-store"` lookup is again all public Cloudflare addresses, the same request may be sent once
+  with platform fetch under the same limits (see docs/security.md). Public-HTTPS wake policy
   rejects private/special-purpose targets and follows redirects only on the same
   origin after rechecking. Push targets require public HTTPS. Keep SSRF defenses.
 - Upstream credentials go only to the configured upstream origin; upstream cards

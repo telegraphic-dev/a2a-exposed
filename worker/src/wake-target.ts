@@ -6,10 +6,13 @@
 // socket was opened to an IP (cloudflare/workerd#6903), so the peer aborts before HTTP.
 // The handshake runs in-process, with the URL hostname as SNI, over that pinned socket.
 // A socket still cannot open a Cloudflare address, so a *.workers.dev target does not connect.
+// With EGRESS_CLOUDFLARE_EDGE=1, a named host whose pinned socket the Workers socket policy refused
+// for a checked Cloudflare address is retried once with the platform fetch (see `edgeRetryAllowed`).
+// That fetch resolves the name again; see docs/security.md.
 import { withDeadline } from "./deadline.ts";
-import { CertificateError, Client, TlsError } from "tunnelfetch";
+import { CertificateError, Client, LimitError, TlsError } from "tunnelfetch";
 import { isPrivateHost } from "./a2a.ts";
-import { isPublicIp } from "./mcp.ts";
+import { isCloudflareIp, isPublicIp } from "./mcp.ts";
 
 /** DNS-over-HTTPS resolver. Same endpoint the client-metadata fetch uses. */
 export const DOH_URL = "https://cloudflare-dns.com/dns-query";
@@ -20,7 +23,7 @@ const MAX_REDIRECTS = 3;
 const REQUEST_TIMEOUT_MS = 15_000;
 
 /** Host to addresses. `null` means the lookup failed and the caller must fail closed. */
-export type AddressLookup = (host: string) => Promise<string[] | null>;
+export type AddressLookup = (host: string, signal?: AbortSignal) => Promise<string[] | null>;
 
 type WakeSocket = {
 	readable: ReadableStream<Uint8Array>;
@@ -35,12 +38,121 @@ export type WakeConnect = (address: { hostname: string; port: number }, options?
 /** One checked hop. `ip` is the address the socket must use. `hostname` is the TLS name. */
 export type CheckedDeliver = (url: string, init: RequestInit, target: { ip: string; hostname: string }) => Promise<Response>;
 
-export const wakeNet: { connect: null | WakeConnect; deliver: null | CheckedDeliver } = { connect: null, deliver: null };
+/** Platform fetch for the socket-policy retry. Redirects stay manual. */
+export type EdgeFetch = (url: string, init: RequestInit) => Promise<Response>;
+
+export const wakeNet: { connect: null | WakeConnect; deliver: null | CheckedDeliver; edge: null | EdgeFetch } = { connect: null, deliver: null, edge: null };
+
+/** The runtime fetch, used only after `edgeRetryAllowed`. Tests replace it with `wakeNet.edge`. */
+export const edgeFetch: EdgeFetch = (url, init) => (wakeNet.edge ?? fetch)(url, { ...init, redirect: "manual" });
+
+/** Marks a response that came from the socket-policy retry, so callers can log the transport. */
+export type EgressTransport = "fetch_fallback";
+
+/** The Workers socket error for a disallowed address (Cloudflare IPs, localhost, private networks). */
+const SOCKET_POLICY_REFUSAL = /proxy request failed, cannot connect to the specified address/i;
+
+export function isSocketPolicyRefusal(e: unknown): boolean {
+	return e instanceof Error && SOCKET_POLICY_REFUSAL.test(e.message);
+}
+
+/** One pinned socket: the checked IP it dialled, and whether the socket policy refused it. */
+export type SocketAttempt = { ip: string; refused: boolean; settled?: Promise<void> };
+
+/** Record a socket (or the error `connect` threw) on `attempt`. */
+export function noteSocket(attempt: SocketAttempt, socket: { opened?: Promise<unknown> } | undefined, thrown?: unknown): void {
+	if (thrown !== undefined && isSocketPolicyRefusal(thrown)) attempt.refused = true;
+	const opened = socket?.opened;
+	if (opened) attempt.settled = opened.then(() => {}, (e) => { if (isSocketPolicyRefusal(e)) attempt.refused = true; });
+}
+
+/** `connect`, recording each attempt. */
+function watchConnect(connect: WakeConnect, attempts: SocketAttempt[]): WakeConnect {
+	return (address, options) => {
+		const attempt: SocketAttempt = { ip: address.hostname, refused: false };
+		attempts.push(attempt);
+		try {
+			const socket = connect(address, options);
+			noteSocket(attempt, socket);
+			return socket;
+		} catch (e) {
+			noteSocket(attempt, undefined, e);
+			throw e;
+		}
+	};
+}
+
+/**
+ * True only when the single pinned socket for a named host was refused by the Workers socket policy, its
+ * checked address is in Cloudflare's published ranges, and a fresh lookup is again all public Cloudflare
+ * addresses. Anything else (another socket error, an IP literal, a mixed or private answer) keeps the failure.
+ */
+export async function edgeRetryAllowed(hostname: string, attempts: SocketAttempt[], thrown: unknown, lookup: AddressLookup, signal?: AbortSignal): Promise<boolean> {
+	if (isIpLiteral(hostname) || attempts.length !== 1) return false;
+	const attempt = attempts[0]!;
+	if (attempt.settled) await Promise.race([attempt.settled, new Promise((r) => setTimeout(r, 0))]);
+	if (!(attempt.refused || isSocketPolicyRefusal(thrown)) || !isCloudflareIp(attempt.ip)) return false;
+	let ips: string[] | null;
+	try { ips = await lookup(hostname, signal); } catch { return false; }
+	return !!ips?.length && ips.every((ip) => isPublicIp(ip) && isCloudflareIp(ip));
+}
+
+function remainingSignal(deadline: number, outer?: AbortSignal | null): AbortSignal {
+	const t = AbortSignal.timeout(Math.max(1, deadline - Date.now()));
+	return outer ? AbortSignal.any([outer, t]) : t;
+}
+
+function deadlineError(): Error {
+	return new DOMException("The operation timed out.", "TimeoutError");
+}
+
+/**
+ * The socket-policy retry inside the request's one deadline. The fresh lookup and the fetch share a signal bound to
+ * what is left of it; neither starts once the deadline has passed. Not eligible: the original socket error is rethrown.
+ */
+async function edgeRetry(url: string, init: RequestInit, hostname: string, attempts: SocketAttempt[], thrown: unknown, deadline: number,
+	edge: EdgeFetch, lookup?: AddressLookup, outer?: AbortSignal | null): Promise<Response> {
+	if (Date.now() >= deadline || outer?.aborted) throw outer?.aborted ? thrown : deadlineError();
+	const signal = remainingSignal(deadline, outer);
+	const fresh: AddressLookup = lookup ?? ((host, s) => lookupAddresses(host, s, true));
+	const allowed = await edgeRetryAllowed(hostname, attempts, thrown, fresh, signal);
+	if (signal.aborted || Date.now() >= deadline) throw outer?.aborted ? thrown : deadlineError();
+	if (!allowed) throw thrown;
+	return await edge(url, { ...init, signal });
+}
+
+/** Read at most `max` body bytes; a longer body throws. The returned response is detached from the network. */
+async function cappedResponse(res: Response, max: number): Promise<Response> {
+	const headers = new Headers(res.headers);
+	if (!res.body) return new Response(null, { status: res.status, headers });
+	const reader = res.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let total = 0;
+	try {
+		for (;;) {
+			const next = await reader.read();
+			if (next.done) break;
+			total += next.value.byteLength;
+			if (total > max) throw new Error("response limit");
+			chunks.push(next.value);
+		}
+	} finally {
+		await reader.cancel().catch(() => {});
+	}
+	const body = new Uint8Array(total);
+	let offset = 0;
+	for (const chunk of chunks) { body.set(chunk, offset); offset += chunk.byteLength; }
+	return new Response(res.status === 204 || res.status === 304 ? null : body, { status: res.status, headers });
+}
 
 export type WakeDeps = {
 	lookup?: AddressLookup;
 	connect?: WakeConnect;
 	deliver?: CheckedDeliver;
+	/** Test seam: the per-request deadline in milliseconds (default 15 s). */
+	timeoutMs?: number;
+	/** Set only when the edge egress gate is on. Used for a host served only from Cloudflare addresses. */
+	edge?: EdgeFetch;
 	/** Deliver a URL on this host in-process. Used for a wake aimed at this inbox. */
 	localHost?: string;
 	local?: (url: string, init: RequestInit) => Promise<Response>;
@@ -61,7 +173,7 @@ export function isIpLiteral(host: string): boolean {
  * A and AAAA for `host`, CNAMEs followed by the resolver. `null` on any DNS or transport failure.
  * An empty list is a real answer with no address (NXDOMAIN or no A/AAAA).
  */
-export async function lookupAddresses(host: string, signal?: AbortSignal): Promise<string[] | null> {
+export async function lookupAddresses(host: string, signal?: AbortSignal, fresh = false): Promise<string[] | null> {
 	const ips: string[] = [];
 	for (const type of ["A", "AAAA"]) {
 		let body: { Status?: number; Answer?: { type?: number; data?: string }[] };
@@ -70,6 +182,7 @@ export async function lookupAddresses(host: string, signal?: AbortSignal): Promi
 				headers: { accept: "application/dns-json" },
 				redirect: "manual",
 				signal,
+				...(fresh ? { cache: "no-store" as const } : {}),
 			});
 			if (!res.ok) return null;
 			body = await res.json();
@@ -228,29 +341,75 @@ async function deliverPinnedPeer(url: string, init: RequestInit, target: { ip: s
 	}
 }
 
+/** Thrown when a client metadata body is over its limit. */
+export class MetadataTooLarge extends Error {}
+
+/**
+ * Client metadata GET over a socket to the checked IP, with SNI and certificate verification for the URL host
+ * (the same in-process TLS as wake delivery; the runtime's startTls drops SNI on an IP socket, workerd#6903).
+ * No redirects, no credentials, body capped at `max`. Each dial is recorded on `attempts`.
+ */
+export async function getPinnedMetadata(url: string, target: { ip: string; hostname: string }, max: number, timeoutMs: number, signal: AbortSignal,
+	attempts: SocketAttempt[], connect?: WakeConnect): Promise<Response> {
+	const client = new Client({
+		connect: dialChecked(target.ip, watchConnect(connect ?? wakeNet.connect ?? await runtimeConnect(), attempts)),
+		forceTunnel: true,
+		maxRedirects: 0,
+		maxBodyBytes: max,
+		http2: false,
+		keepAlive: false,
+		timeouts: { totalMs: timeoutMs },
+	});
+	try {
+		const res = await client.fetch(url, {
+			method: "GET",
+			headers: { accept: "application/json", "accept-encoding": "identity", "user-agent": "a2a-exposed (client metadata)" },
+			redirect: "manual",
+			signal,
+		});
+		return await peerResponseForCaller(res);
+	} catch (e) {
+		if (e instanceof LimitError) throw new MetadataTooLarge();
+		if (e instanceof TlsError || e instanceof CertificateError) throw new Error("TLS Handshake Failed.");
+		throw e;
+	} finally {
+		await client.close().catch(() => {});
+	}
+}
+
 /** One authenticated peer request with DNS resolution pinned to the connected socket. Redirects are refused:
  *  a bearer token and a reply must never be replayed at a card-selected second destination. */
 export async function fetchCheckedPeer(
 	url: string,
 	init: RequestInit,
-	deps: Pick<WakeDeps, "lookup" | "connect" | "deliver"> = {},
-): Promise<{ response: Response } | { refused: string }> {
+	deps: Pick<WakeDeps, "lookup" | "connect" | "deliver" | "edge" | "timeoutMs"> = {},
+): Promise<{ response: Response; transport?: EgressTransport } | { refused: string }> {
 	init.signal?.throwIfAborted();
 	const checked = await checkedWakeAddresses(url, deps.lookup ?? ((host) => lookupAddresses(host, init.signal ?? undefined)));
 	init.signal?.throwIfAborted();
 	if ("refused" in checked) return checked;
 	const target = { ip: checked.ips[0]!, hostname: checked.hostname };
 	const nextInit: RequestInit = { ...init, redirect: "manual" };
-	const response = deps.deliver
-		? await deps.deliver(url, nextInit, target)
-		: wakeNet.deliver
-			? await wakeNet.deliver(url, nextInit, target)
-			: await deliverPinnedPeer(url, nextInit, target, deps.connect ?? wakeNet.connect ?? await runtimeConnect());
+	let transport: EgressTransport | undefined;
+	let response: Response;
+	if (deps.deliver) response = await deps.deliver(url, nextInit, target);
+	else if (wakeNet.deliver) response = await wakeNet.deliver(url, nextInit, target);
+	else {
+		const attempts: SocketAttempt[] = [];
+		const deadline = Date.now() + (deps.timeoutMs ?? REQUEST_TIMEOUT_MS);
+		try {
+			response = await deliverPinnedPeer(url, nextInit, target, watchConnect(deps.connect ?? wakeNet.connect ?? await runtimeConnect(), attempts));
+		} catch (e) {
+			if (!deps.edge) throw e;
+			response = await cappedResponse(await edgeRetry(url, nextInit, checked.hostname, attempts, e, deadline, deps.edge, deps.lookup, init.signal), 1 << 20);
+			transport = "fetch_fallback";
+		}
+	}
 	if (response.status >= 300 && response.status < 400) {
 		await response.body?.cancel().catch(() => {});
 		return { refused: "redirects are not allowed" };
 	}
-	return { response };
+	return { response, ...(transport ? { transport } : {}) };
 }
 
 function bodyBytes(body: BodyInit | null | undefined): Uint8Array {
@@ -271,8 +430,9 @@ export async function fetchCheckedWake(
 	url: string,
 	init: RequestInit,
 	deps: WakeDeps = {},
-): Promise<{ response: Response } | { refused: string }> {
+): Promise<{ response: Response; transport?: EgressTransport } | { refused: string }> {
 	const lookup = deps.lookup ?? lookupAddresses;
+	let transport: EgressTransport | undefined;
 	let current = url;
 	let method = (init.method || "GET").toUpperCase();
 	let body = bodyBytes(method === "GET" || method === "HEAD" ? undefined : init.body);
@@ -290,9 +450,19 @@ export async function fetchCheckedWake(
 		if (deps.local && deps.localHost && new URL(current).host === deps.localHost) res = await deps.local(current, nextInit);
 		else if (deps.deliver) res = await deps.deliver(current, nextInit, target);
 		else if (wakeNet.deliver) res = await wakeNet.deliver(current, nextInit, target);
-		else res = await deliverPinned(current, nextInit, target, deps.connect ?? wakeNet.connect ?? await runtimeConnect());
+		else {
+			const attempts: SocketAttempt[] = [];
+			const deadline = Date.now() + (deps.timeoutMs ?? REQUEST_TIMEOUT_MS);
+			try {
+				res = await deliverPinned(current, nextInit, target, watchConnect(deps.connect ?? wakeNet.connect ?? await runtimeConnect(), attempts));
+			} catch (e) {
+				if (!deps.edge) throw e;
+				res = await responseForCaller(await edgeRetry(current, nextInit, checked.hostname, attempts, e, deadline, deps.edge, deps.lookup));
+				transport = "fetch_fallback";
+			}
+		}
 		const location = res.headers.get("location");
-		if (res.status < 300 || res.status >= 400 || !location) return { response: res };
+		if (res.status < 300 || res.status >= 400 || !location) return { response: res, ...(transport ? { transport } : {}) };
 		await res.body?.cancel().catch(() => {});
 		if (hop === MAX_REDIRECTS) return { refused: "too many redirects" };
 		let next: URL;

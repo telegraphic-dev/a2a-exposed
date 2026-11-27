@@ -151,6 +151,30 @@ export function isPublicIp(ip: string): boolean {
 	return !V6_UNREACHABLE.some((b) => v6Prefix(bytes, b));
 }
 
+/** Cloudflare's published ranges (https://www.cloudflare.com/ips-v4 and /ips-v6, read 2026-11-27).
+ *  Workers sockets refuse these addresses, so a host served only from them needs the edge path. */
+export const CLOUDFLARE_V4 = ["173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22", "141.101.64.0/18", "108.162.192.0/18",
+	"190.93.240.0/20", "188.114.96.0/20", "197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13", "104.24.0.0/14",
+	"172.64.0.0/13", "131.0.72.0/22"];
+export const CLOUDFLARE_V6 = ["2400:cb00::/32", "2606:4700::/32", "2803:f800::/32", "2405:b500::/32", "2405:8100::/32", "2a06:98c0::/29", "2c0f:f248::/32"];
+
+function v4InBlock(ip: string, block: string): boolean {
+	const [net, bitsRaw] = block.split("/");
+	const toInt = (s: string) => s.split(".").reduce((n, o) => (n << 8) + Number(o), 0) >>> 0;
+	const bits = Number(bitsRaw);
+	const mask = bits === 0 ? 0 : (~0 << (32 - bits)) >>> 0;
+	return ((toInt(ip) & mask) >>> 0) === ((toInt(net!) & mask) >>> 0);
+}
+
+/** True for a public address inside one of Cloudflare's published ranges. Anything else, or not an IP: false. */
+export function isCloudflareIp(ip: string): boolean {
+	const h = ip.toLowerCase().replace(/^\[|\]$/g, "");
+	if (!isPublicIp(h)) return false;
+	if (/^(\d{1,3}\.){3}\d{1,3}$/.test(h)) return CLOUDFLARE_V4.some((b) => v4InBlock(h, b));
+	const bytes = ipv6Bytes(h);
+	return !!bytes && CLOUDFLARE_V6.some((b) => v6Prefix(bytes, b));
+}
+
 export const ACCESS_TTL_S = 3600;
 export const REFRESH_TTL_S = 30 * 86400;
 export const CODE_TTL_S = 120;
@@ -446,10 +470,8 @@ export function toolText(header: string, data: unknown): string {
 	return `${header}\n${JSON.stringify(data, null, 2)}`;
 }
 
-/** Outbound TCP for the pinned CIMD fetch. null = the runtime's `cloudflare:sockets` connect(); tests put a fake here. */
-export type PinnedSocket = { readable: ReadableStream<Uint8Array>; writable: WritableStream<Uint8Array>; close(): Promise<void> };
-export const net: { connect: null | ((addr: { hostname: string; port: number }, opts: { secureTransport: "starttls" }) =>
-	{ startTls(o: { expectedServerHostname: string }): PinnedSocket }) } = { connect: null };
+/** Test seam for the pinned CIMD fetch: answers one checked request instead of the socket client. null in production. */
+export const net: { deliver: null | ((url: string, init: RequestInit, target: { ip: string; hostname: string }) => Promise<Response>) } = { deliver: null };
 
 /** Parse a raw HTTP/1.x response (Connection: close): status, lower-case headers, body (de-chunked). A string on error. */
 export function parseHttpResponse(raw: Uint8Array): { status: number; headers: Record<string, string>; body: Uint8Array } | string {
