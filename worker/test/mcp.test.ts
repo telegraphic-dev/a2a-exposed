@@ -7,6 +7,7 @@ import { WORKER_VERSION } from "../src/feedback.ts";
 import * as P from "../src/pairing.ts";
 import * as M from "../src/mcp.ts";
 import { d1 } from "./d1.ts";
+import { wakeNet } from "../src/wake-target.ts";
 import { officialTasksClient } from "./tasks-client.ts";
 
 const BASE = "https://agent.example.com";
@@ -1279,4 +1280,42 @@ for(const token of [String.raw`opaque"quoted\credential`,"opaque-unicode-é-cred
  const cached=await s.owner("POST","/owner/mcp/observe_outbound",{taskId:"pt-alpha",mode:"authorize"});
  assert.equal(cached.data.isError,true);assert.equal(cached.text.includes("opaque"),false);assert.equal(s.peerCalls.length,before);
  assert.equal(s.peerCalls.filter(c=>c.body.method === "SendMessage").length,1);
+});
+
+test("Client ID Metadata Documents on Cloudflare-only hosts use the edge fetch only when EGRESS_CLOUDFLARE_EDGE=1", async (t) => {
+	const edgeCalls: { url: string; redirect: string; headers: Record<string, string> }[] = [];
+	wakeNet.edge = async (input: any, init: any = {}) => {
+		const u = new URL(String(input));
+		edgeCalls.push({ url: u.href, redirect: init.redirect, headers: Object.fromEntries(new Headers(init.headers)) });
+		if (u.pathname === "/moved.json") return new Response(null, { status: 302, headers: { location: "https://evil.example.net/" } });
+		return Response.json(cimdDoc(), { headers: { "cache-control": "max-age=600" } });
+	};
+	t.after(() => { wakeNet.edge = null; });
+	const q = (id: string) => new URLSearchParams({ response_type: "code", client_id: id, redirect_uri: CLAUDE_CB, state: "s1", code_challenge: "x".repeat(43), code_challenge_method: "S256" });
+
+	const on = setup({ EGRESS_CLOUDFLARE_EDGE: "1" }); t.after(on.restore);
+	on.dns["client.example.org"] = { A: ["104.21.0.10"], AAAA: ["2606:4700:3030::1"] };
+	const page = await on.call("GET", `/oauth/authorize?${q(CIMD_ID)}`);
+	assert.equal(page.status, 200, page.text);
+	assert.match(page.text, /CIMD Client/);
+	assert.equal(on.cimdFetches.length, 0, "the socket is not used for a Cloudflare-only host");
+	assert.deepEqual(edgeCalls.map((c) => [c.url, c.redirect]), [[CIMD_ID, "manual"]]);
+	assert.ok(!Object.keys(edgeCalls[0]!.headers).some((h) => /authorization|cookie/.test(h)), "no credentials sent");
+	const moved = await on.call("GET", `/oauth/authorize?${q("https://client.example.org/moved.json")}`);
+	assert.equal(moved.status, 400);
+	assert.match(moved.text, /redirects are not followed/);
+
+	edgeCalls.length = 0;
+	on.dns["client.example.org"] = { A: ["104.21.0.10", "93.184.216.34"] };
+	on.cimd["/mixed.json"] = { body: cimdDoc({ client_id: "https://client.example.org/mixed.json" }) };
+	assert.equal((await on.call("GET", `/oauth/authorize?${q("https://client.example.org/mixed.json")}`)).status, 200);
+	assert.equal(edgeCalls.length, 0, "a mixed answer keeps the pinned socket");
+	assert.equal(on.cimdFetches.at(-1)!.ip, "104.21.0.10");
+
+	const off = setup(); t.after(off.restore);
+	off.dns["client.example.org"] = { A: ["104.21.0.10"] };
+	off.cimd["/oauth/metadata.json"] = { body: cimdDoc() };
+	assert.equal((await off.call("GET", `/oauth/authorize?${q(CIMD_ID)}`)).status, 200);
+	assert.equal(edgeCalls.length, 0, "gate off keeps the pinned socket");
+	assert.equal(off.cimdFetches.length, 1);
 });

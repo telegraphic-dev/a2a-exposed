@@ -442,7 +442,7 @@ transport error text is not an HTTP status. A refused paired endpoint is identif
 
 External paired delivery resolves every address before connecting, pins the checked public address to the TLS socket,
 keeps the endpoint on the paired origin, and refuses redirects. Cloudflare cannot open raw TCP sockets to another
-Cloudflare address, so a paired external Cloudflare-hosted peer can report `delivery-failed`; same-deployment hosted
+Cloudflare address, so a paired external Cloudflare-hosted peer can report `delivery-failed` unless the operator sets `EGRESS_CLOUDFLARE_EDGE=1` ([security](security.md)); same-deployment hosted
 peers use an internal Durable Object call and are not affected. The peer can still fetch the stored task answer.
 
 Long text: `printf '%s' "$TEXT" | npx -y a2a-exposed@latest reply <taskId> --stdin`. Terminal states (`completed`, `rejected`, `failed`, `canceled`) stay unless you pass `--force`.

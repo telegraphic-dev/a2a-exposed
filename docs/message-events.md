@@ -111,7 +111,7 @@ ports, private/mixed/reserved DNS answers and unexpected headers are refused.
 Only POST with a string/byte body of at most 65,536 bytes is accepted.
 Only content-type, accept, user-agent, Standard Webhooks signing headers and
 x-a2a signing headers and `X-MCP-Subscription-Id` are accepted. Every redirect, even same-origin, is refused.
-There is no native-fetch fallback or internal HTTP retry after an egress failure.
+There is no native-fetch fallback or internal HTTP retry after an egress failure. `EGRESS_CLOUDFLARE_EDGE` does not apply to callbacks.
 
 Results are `{ok:true,status,body:Uint8Array}` or `{ok:false,reason}` with a fixed
 category (`target`, `redirect`, `timeout`, `transport`, `response_limit`). Do not

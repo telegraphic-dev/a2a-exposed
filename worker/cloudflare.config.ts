@@ -80,6 +80,8 @@ const plain: Record<string, string> = {
 	QUOTAS: v("QUOTAS"),
 	USAGE_SINK: v("USAGE_SINK"),
 	WAKE_TARGET_POLICY: v("WAKE_TARGET_POLICY"),
+	// Exactly 1: a checked wake, peer, or client-metadata host served only from Cloudflare addresses uses the platform fetch.
+	EGRESS_CLOUDFLARE_EDGE: e.EGRESS_CLOUDFLARE_EDGE === "1" ? "1" : "",
 	SIGNUP_URL: v("SIGNUP_URL"),
 	BRANDING: v("BRANDING"),
 	FEEDBACK_URL: v("FEEDBACK_URL"),

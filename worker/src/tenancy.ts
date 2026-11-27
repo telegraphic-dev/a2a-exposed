@@ -126,6 +126,8 @@ export interface WorkerBindings extends ConfigFields {
 	USAGE_SINK?: string;
 	/** "public-https" refuses non-https, private, and metadata wake targets. Anything else is unset. */
 	WAKE_TARGET_POLICY?: string;
+	/** Exactly "1": a checked host served only from Cloudflare addresses uses the platform fetch (docs/security.md). */
+	EGRESS_CLOUDFLARE_EDGE?: string;
 	/** https URL. Parsed and unused by this Worker. */
 	SIGNUP_URL?: string;
 	/** https origin, no path. Posts go there when this deploy sets the URL. */
@@ -195,6 +197,8 @@ export interface FeatureGates {
 	quotas: boolean;
 	usageSink: "" | "d1";
 	wakeTargetPolicy: "" | "public-https";
+	/** Checked wake, peer, and client-metadata requests may reach a host served only from Cloudflare addresses. */
+	cloudflareEdgeEgress: boolean;
 	signupUrl: string;
 	branding: "" | "hosted";
 	/** https origin that accepts POST /api/feedback, or "". Ignored unless mode is host. */
@@ -340,6 +344,7 @@ export function parseGates(env: WorkerBindings): ParsedGates {
 			quotas: env.QUOTAS === "on",
 			usageSink: env.USAGE_SINK === "d1" ? "d1" : "",
 			wakeTargetPolicy: env.WAKE_TARGET_POLICY === "public-https" ? "public-https" : "",
+			cloudflareEdgeEgress: env.EGRESS_CLOUDFLARE_EDGE === "1",
 			signupUrl: httpsUrl(env.SIGNUP_URL),
 			branding: env.BRANDING === "hosted" ? "hosted" : "",
 			feedbackUrl: httpsOriginOnly(env.FEEDBACK_URL),

@@ -6,10 +6,12 @@
 // socket was opened to an IP (cloudflare/workerd#6903), so the peer aborts before HTTP.
 // The handshake runs in-process, with the URL hostname as SNI, over that pinned socket.
 // A socket still cannot open a Cloudflare address, so a *.workers.dev target does not connect.
+// With the edge egress gate on, a host whose every checked address is Cloudflare's uses the
+// platform fetch instead (see `viaEdge`). That fetch resolves the name again; see docs/security.md.
 import { withDeadline } from "./deadline.ts";
 import { CertificateError, Client, TlsError } from "tunnelfetch";
 import { isPrivateHost } from "./a2a.ts";
-import { isPublicIp } from "./mcp.ts";
+import { isCloudflareIp, isPublicIp } from "./mcp.ts";
 
 /** DNS-over-HTTPS resolver. Same endpoint the client-metadata fetch uses. */
 export const DOH_URL = "https://cloudflare-dns.com/dns-query";
@@ -35,12 +37,55 @@ export type WakeConnect = (address: { hostname: string; port: number }, options?
 /** One checked hop. `ip` is the address the socket must use. `hostname` is the TLS name. */
 export type CheckedDeliver = (url: string, init: RequestInit, target: { ip: string; hostname: string }) => Promise<Response>;
 
-export const wakeNet: { connect: null | WakeConnect; deliver: null | CheckedDeliver } = { connect: null, deliver: null };
+/** Platform fetch for a host served only from Cloudflare addresses. Redirects stay manual. */
+export type EdgeFetch = (url: string, init: RequestInit) => Promise<Response>;
+
+export const wakeNet: { connect: null | WakeConnect; deliver: null | CheckedDeliver; edge: null | EdgeFetch } = { connect: null, deliver: null, edge: null };
+
+/** The runtime fetch, used only through `viaEdge`. Tests replace it with `wakeNet.edge`. */
+export const edgeFetch: EdgeFetch = (url, init) => (wakeNet.edge ?? fetch)(url, { ...init, redirect: "manual" });
+
+/** A named host whose every checked address is in Cloudflare's published ranges.
+ *  An address literal never qualifies: the platform refuses direct Cloudflare IP access. */
+export function viaEdge(checked: { hostname: string; ips: string[] }): boolean {
+	return !isIpLiteral(checked.hostname) && checked.ips.length > 0 && checked.ips.every((ip) => isCloudflareIp(ip));
+}
+
+function timeoutSignal(ms: number, outer?: AbortSignal | null): AbortSignal {
+	const t = AbortSignal.timeout(ms);
+	return outer ? AbortSignal.any([outer, t]) : t;
+}
+
+/** Read at most `max` body bytes; a longer body throws. The returned response is detached from the network. */
+async function cappedResponse(res: Response, max: number): Promise<Response> {
+	const headers = new Headers(res.headers);
+	if (!res.body) return new Response(null, { status: res.status, headers });
+	const reader = res.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let total = 0;
+	try {
+		for (;;) {
+			const next = await reader.read();
+			if (next.done) break;
+			total += next.value.byteLength;
+			if (total > max) throw new Error("response limit");
+			chunks.push(next.value);
+		}
+	} finally {
+		await reader.cancel().catch(() => {});
+	}
+	const body = new Uint8Array(total);
+	let offset = 0;
+	for (const chunk of chunks) { body.set(chunk, offset); offset += chunk.byteLength; }
+	return new Response(res.status === 204 || res.status === 304 ? null : body, { status: res.status, headers });
+}
 
 export type WakeDeps = {
 	lookup?: AddressLookup;
 	connect?: WakeConnect;
 	deliver?: CheckedDeliver;
+	/** Set only when the edge egress gate is on. Used for a host served only from Cloudflare addresses. */
+	edge?: EdgeFetch;
 	/** Deliver a URL on this host in-process. Used for a wake aimed at this inbox. */
 	localHost?: string;
 	local?: (url: string, init: RequestInit) => Promise<Response>;
@@ -233,7 +278,7 @@ async function deliverPinnedPeer(url: string, init: RequestInit, target: { ip: s
 export async function fetchCheckedPeer(
 	url: string,
 	init: RequestInit,
-	deps: Pick<WakeDeps, "lookup" | "connect" | "deliver"> = {},
+	deps: Pick<WakeDeps, "lookup" | "connect" | "deliver" | "edge"> = {},
 ): Promise<{ response: Response } | { refused: string }> {
 	init.signal?.throwIfAborted();
 	const checked = await checkedWakeAddresses(url, deps.lookup ?? ((host) => lookupAddresses(host, init.signal ?? undefined)));
@@ -241,7 +286,9 @@ export async function fetchCheckedPeer(
 	if ("refused" in checked) return checked;
 	const target = { ip: checked.ips[0]!, hostname: checked.hostname };
 	const nextInit: RequestInit = { ...init, redirect: "manual" };
-	const response = deps.deliver
+	const response = deps.edge && viaEdge(checked)
+		? await cappedResponse(await deps.edge(url, { ...nextInit, signal: timeoutSignal(REQUEST_TIMEOUT_MS, init.signal) }), 1 << 20)
+		: deps.deliver
 		? await deps.deliver(url, nextInit, target)
 		: wakeNet.deliver
 			? await wakeNet.deliver(url, nextInit, target)
@@ -288,6 +335,7 @@ export async function fetchCheckedWake(
 		const target = { ip: checked.ips[0]!, hostname: checked.hostname };
 		let res: Response;
 		if (deps.local && deps.localHost && new URL(current).host === deps.localHost) res = await deps.local(current, nextInit);
+		else if (deps.edge && viaEdge(checked)) res = await responseForCaller(await deps.edge(current, { ...nextInit, signal: timeoutSignal(REQUEST_TIMEOUT_MS) }));
 		else if (deps.deliver) res = await deps.deliver(current, nextInit, target);
 		else if (wakeNet.deliver) res = await wakeNet.deliver(current, nextInit, target);
 		else res = await deliverPinned(current, nextInit, target, deps.connect ?? wakeNet.connect ?? await runtimeConnect());
