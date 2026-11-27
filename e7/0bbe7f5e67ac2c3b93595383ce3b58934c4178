@@ -1,0 +1,14 @@
+worker/test/cloudflare-edge-egress.test.ts
+  h_b11fcd80d58c26 162-166
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e70bbe7f5e67ac2c3b93595383ce3b58934c4178",
+  "prompts": {},
+  "humans": {
+    "h_b11fcd80d58c26": {
+      "author": "Jean de Bot <jean.de.bot.bunny@gmail.com>"
+    }
+  }
+}
