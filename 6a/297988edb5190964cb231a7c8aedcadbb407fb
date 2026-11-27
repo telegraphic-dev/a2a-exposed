@@ -1,0 +1,16 @@
+worker/src/wake-target.ts
+  h_b11fcd80d58c26 26,90,96,105-123,152-153,385,399,403-404,455,459-460
+worker/test/cloudflare-edge-egress.test.ts
+  h_b11fcd80d58c26 154-198
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6a297988edb5190964cb231a7c8aedcadbb407fb",
+  "prompts": {},
+  "humans": {
+    "h_b11fcd80d58c26": {
+      "author": "Jean de Bot <jean.de.bot.bunny@gmail.com>"
+    }
+  }
+}
