@@ -65,12 +65,16 @@ export function cimdUrlProblem(id: string): string {
 	return "";
 }
 
+/** Most redirect URIs a Client ID Metadata Document may list (same as the hosted apex OAuth). Real clients list one per
+ *  host and environment: MCPJam's document has 18. The 5 KB document limit (CIMD.maxBytes) still applies. */
+export const MAX_REDIRECT_URIS = 32;
+
 /** Validate a fetched CIMD document for `id`. Returns the client or why it's refused. */
 export function cimdDocument(id: string, doc: any): { client_name: string; redirect_uris: string[] } | string {
 	if (!doc || typeof doc !== "object" || Array.isArray(doc)) return "the metadata document is not a JSON object";
 	if (doc.client_id !== id) return "the document's client_id doesn't match its URL";
 	const uris = doc.redirect_uris;
-	if (!Array.isArray(uris) || !uris.length || uris.length > 10 || uris.some((x: unknown) => typeof x !== "string")) return "redirect_uris must be 1-10 URLs";
+	if (!Array.isArray(uris) || !uris.length || uris.length > MAX_REDIRECT_URIS || uris.some((x: unknown) => typeof x !== "string")) return `redirect_uris must be 1-${MAX_REDIRECT_URIS} URLs`;
 	for (const x of uris) { const why = redirectUriProblem(x); if (why) return `redirect_uris: ${x}: ${why}`; }
 	const am = doc.token_endpoint_auth_method;
 	if (am !== undefined && am !== "none") return `token_endpoint_auth_method ${am} is not supported (public clients with PKCE only)`;

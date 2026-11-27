@@ -1327,3 +1327,34 @@ test("Client ID Metadata Documents: a socket policy refusal of a Cloudflare addr
 	assert.match(refused.text, /could not be fetched\./);
 	assert.equal(edgeCalls.length, 0, "gate off never retries");
 });
+
+/** Shaped like MCPJam's published document: one https callback per web origin plus loopback ports. */
+function manyRedirects(n: number): string[] {
+	const out = [CLAUDE_CB];
+	for (let i = 1; out.length < n; i++) out.push(i % 2 ? `https://app${i}.client.example.org/oauth/callback` : `http://127.0.0.1:${6270 + i}/oauth/callback/debug`);
+	return out;
+}
+
+test("Client ID Metadata Documents: up to 32 redirect URIs; an 18-URI document (MCPJam-shaped) fits the 5 KB limit", async (t) => {
+	assert.equal(M.MAX_REDIRECT_URIS, 32);
+	const doc = (n: number) => cimdDoc({ redirect_uris: manyRedirects(n) });
+	for (const n of [1, 18, 32]) {
+		const v = M.cimdDocument(CIMD_ID, doc(n));
+		assert.ok(typeof v !== "string", `${n}: ${v}`);
+		assert.equal(v.redirect_uris.length, n);
+	}
+	assert.equal(M.cimdDocument(CIMD_ID, doc(33)), "redirect_uris must be 1-32 URLs");
+	assert.equal(M.cimdDocument(CIMD_ID, cimdDoc({ redirect_uris: [] })), "redirect_uris must be 1-32 URLs");
+	assert.ok(JSON.stringify(doc(32)).length < M.CIMD.maxBytes, "32 realistic redirect URIs fit the document limit");
+
+	const s = setup(); t.after(s.restore);
+	s.cimd["/oauth/metadata.json"] = { body: doc(18) };
+	const r = await authorizeWith(s, CIMD_ID);
+	assert.equal(r.page.status, 200, r.page.text);
+	assert.match(r.page.text, /CIMD Client/);
+	const id33 = "https://client.example.org/oauth/m33.json";
+	s.cimd["/oauth/m33.json"] = { body: cimdDoc({ client_id: id33, redirect_uris: manyRedirects(33) }) };
+	const refused = await s.call("GET", `/oauth/authorize?${new URLSearchParams({ response_type: "code", client_id: id33, redirect_uri: CLAUDE_CB, state: "s1", code_challenge: "x".repeat(43), code_challenge_method: "S256" })}`);
+	assert.equal(refused.status, 400);
+	assert.match(refused.text, /redirect_uris must be 1-32 URLs/);
+});
