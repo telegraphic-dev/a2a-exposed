@@ -23,7 +23,7 @@ const MAX_REDIRECTS = 3;
 const REQUEST_TIMEOUT_MS = 15_000;
 
 /** Host to addresses. `null` means the lookup failed and the caller must fail closed. */
-export type AddressLookup = (host: string) => Promise<string[] | null>;
+export type AddressLookup = (host: string, signal?: AbortSignal) => Promise<string[] | null>;
 
 type WakeSocket = {
 	readable: ReadableStream<Uint8Array>;
@@ -87,19 +87,38 @@ function watchConnect(connect: WakeConnect, attempts: SocketAttempt[]): WakeConn
  * checked address is in Cloudflare's published ranges, and a fresh lookup is again all public Cloudflare
  * addresses. Anything else (another socket error, an IP literal, a mixed or private answer) keeps the failure.
  */
-export async function edgeRetryAllowed(hostname: string, attempts: SocketAttempt[], thrown: unknown, lookup: AddressLookup): Promise<boolean> {
+export async function edgeRetryAllowed(hostname: string, attempts: SocketAttempt[], thrown: unknown, lookup: AddressLookup, signal?: AbortSignal): Promise<boolean> {
 	if (isIpLiteral(hostname) || attempts.length !== 1) return false;
 	const attempt = attempts[0]!;
 	if (attempt.settled) await Promise.race([attempt.settled, new Promise((r) => setTimeout(r, 0))]);
 	if (!(attempt.refused || isSocketPolicyRefusal(thrown)) || !isCloudflareIp(attempt.ip)) return false;
 	let ips: string[] | null;
-	try { ips = await lookup(hostname); } catch { return false; }
+	try { ips = await lookup(hostname, signal); } catch { return false; }
 	return !!ips?.length && ips.every((ip) => isPublicIp(ip) && isCloudflareIp(ip));
 }
 
 function remainingSignal(deadline: number, outer?: AbortSignal | null): AbortSignal {
 	const t = AbortSignal.timeout(Math.max(1, deadline - Date.now()));
 	return outer ? AbortSignal.any([outer, t]) : t;
+}
+
+function deadlineError(): Error {
+	return new DOMException("The operation timed out.", "TimeoutError");
+}
+
+/**
+ * The socket-policy retry inside the request's one deadline. The fresh lookup and the fetch share a signal bound to
+ * what is left of it; neither starts once the deadline has passed. Not eligible: the original socket error is rethrown.
+ */
+async function edgeRetry(url: string, init: RequestInit, hostname: string, attempts: SocketAttempt[], thrown: unknown, deadline: number,
+	edge: EdgeFetch, lookup?: AddressLookup, outer?: AbortSignal | null): Promise<Response> {
+	if (Date.now() >= deadline || outer?.aborted) throw outer?.aborted ? thrown : deadlineError();
+	const signal = remainingSignal(deadline, outer);
+	const fresh: AddressLookup = lookup ?? ((host, s) => lookupAddresses(host, s, true));
+	const allowed = await edgeRetryAllowed(hostname, attempts, thrown, fresh, signal);
+	if (signal.aborted || Date.now() >= deadline) throw outer?.aborted ? thrown : deadlineError();
+	if (!allowed) throw thrown;
+	return await edge(url, { ...init, signal });
 }
 
 /** Read at most `max` body bytes; a longer body throws. The returned response is detached from the network. */
@@ -130,6 +149,8 @@ export type WakeDeps = {
 	lookup?: AddressLookup;
 	connect?: WakeConnect;
 	deliver?: CheckedDeliver;
+	/** Test seam: the per-request deadline in milliseconds (default 15 s). */
+	timeoutMs?: number;
 	/** Set only when the edge egress gate is on. Used for a host served only from Cloudflare addresses. */
 	edge?: EdgeFetch;
 	/** Deliver a URL on this host in-process. Used for a wake aimed at this inbox. */
@@ -361,7 +382,7 @@ export async function getPinnedMetadata(url: string, target: { ip: string; hostn
 export async function fetchCheckedPeer(
 	url: string,
 	init: RequestInit,
-	deps: Pick<WakeDeps, "lookup" | "connect" | "deliver" | "edge"> = {},
+	deps: Pick<WakeDeps, "lookup" | "connect" | "deliver" | "edge" | "timeoutMs"> = {},
 ): Promise<{ response: Response; transport?: EgressTransport } | { refused: string }> {
 	init.signal?.throwIfAborted();
 	const checked = await checkedWakeAddresses(url, deps.lookup ?? ((host) => lookupAddresses(host, init.signal ?? undefined)));
@@ -375,13 +396,12 @@ export async function fetchCheckedPeer(
 	else if (wakeNet.deliver) response = await wakeNet.deliver(url, nextInit, target);
 	else {
 		const attempts: SocketAttempt[] = [];
-		const deadline = Date.now() + REQUEST_TIMEOUT_MS;
+		const deadline = Date.now() + (deps.timeoutMs ?? REQUEST_TIMEOUT_MS);
 		try {
 			response = await deliverPinnedPeer(url, nextInit, target, watchConnect(deps.connect ?? wakeNet.connect ?? await runtimeConnect(), attempts));
 		} catch (e) {
-			const fresh: AddressLookup = deps.lookup ?? ((host) => lookupAddresses(host, init.signal ?? undefined, true));
-			if (!deps.edge || init.signal?.aborted || !(await edgeRetryAllowed(checked.hostname, attempts, e, fresh))) throw e;
-			response = await cappedResponse(await deps.edge(url, { ...nextInit, signal: remainingSignal(deadline, init.signal) }), 1 << 20);
+			if (!deps.edge) throw e;
+			response = await cappedResponse(await edgeRetry(url, nextInit, checked.hostname, attempts, e, deadline, deps.edge, deps.lookup, init.signal), 1 << 20);
 			transport = "fetch_fallback";
 		}
 	}
@@ -432,13 +452,12 @@ export async function fetchCheckedWake(
 		else if (wakeNet.deliver) res = await wakeNet.deliver(current, nextInit, target);
 		else {
 			const attempts: SocketAttempt[] = [];
-			const deadline = Date.now() + REQUEST_TIMEOUT_MS;
+			const deadline = Date.now() + (deps.timeoutMs ?? REQUEST_TIMEOUT_MS);
 			try {
 				res = await deliverPinned(current, nextInit, target, watchConnect(deps.connect ?? wakeNet.connect ?? await runtimeConnect(), attempts));
 			} catch (e) {
-				const fresh: AddressLookup = deps.lookup ?? ((host) => lookupAddresses(host, undefined, true));
-				if (!deps.edge || !(await edgeRetryAllowed(checked.hostname, attempts, e, fresh))) throw e;
-				res = await responseForCaller(await deps.edge(current, { ...nextInit, signal: remainingSignal(deadline) }));
+				if (!deps.edge) throw e;
+				res = await responseForCaller(await edgeRetry(current, nextInit, checked.hostname, attempts, e, deadline, deps.edge, deps.lookup));
 				transport = "fetch_fallback";
 			}
 		}

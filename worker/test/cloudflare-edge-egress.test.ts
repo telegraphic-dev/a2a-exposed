@@ -151,3 +151,48 @@ test("the retry lookup bypasses the DNS-over-HTTPS cache", async (t) => {
 	assert.deepEqual(await lookupAddresses("worker.example", undefined, true), ["104.21.0.10"]);
 	assert.deepEqual(seen, [undefined, undefined, "no-store", "no-store"]);
 });
+
+test("the fresh lookup gets a signal bound to the remaining deadline, and a stalled lookup does not start the retry", async () => {
+	const rec = edgeRecorder(() => new Response(null, { status: 202 }));
+	const signals: (AbortSignal | undefined)[] = [];
+	let n = 0;
+	const stalled: AddressLookup = (host, signal) => {
+		if (n++ === 0) return Promise.resolve(["104.21.0.10"]);
+		signals.push(signal);
+		return new Promise((resolve, reject) => { signal?.addEventListener("abort", () => reject(signal.reason), { once: true }); });
+	};
+	const started = Date.now();
+	await assert.rejects(fetchCheckedWake("https://worker.example/wake", { method: "POST", body: "{}" }, { lookup: stalled, connect: refusingConnect().connect, edge: rec.edge, timeoutMs: 40 }), (e: any) => e?.name === "TimeoutError");
+	assert.ok(Date.now() - started < 2000, "the deadline ended the stalled lookup");
+	assert.equal(signals.length, 1);
+	assert.ok(signals[0] instanceof AbortSignal && signals[0].aborted, "the lookup signal was aborted by the deadline");
+	assert.equal(rec.calls.length, 0, "the retry fetch never started");
+});
+
+test("a deadline that passes during the fresh lookup does not start the retry (wake and peer)", async () => {
+	for (const run of [
+		(deps: any) => fetchCheckedWake("https://worker.example/wake", { method: "POST", body: "{}" }, deps),
+		(deps: any) => fetchCheckedPeer("https://worker.example/a2a", { method: "POST", body: "{}" }, deps),
+	]) {
+		const rec = edgeRecorder(() => new Response(null, { status: 202 }));
+		let n = 0;
+		// Ignores its signal and answers after the deadline.
+		const slow: AddressLookup = async () => { if (n++ > 0) await new Promise((r) => setTimeout(r, 60)); return ["104.21.0.10"]; };
+		await assert.rejects(run({ lookup: slow, connect: refusingConnect().connect, edge: rec.edge, timeoutMs: 20 }), (e: any) => e?.name === "TimeoutError");
+		assert.equal(rec.calls.length, 0);
+	}
+});
+
+test("peer: the fresh lookup signal follows the caller's signal as well as the deadline", async () => {
+	const rec = edgeRecorder(() => new Response("{}", { status: 200 }));
+	const signals: (AbortSignal | undefined)[] = [];
+	let n = 0;
+	const lookup: AddressLookup = async (host, signal) => { if (n++ > 0) signals.push(signal); return ["104.21.0.10"]; };
+	const caller = new AbortController();
+	const r = await fetchCheckedPeer("https://worker.example/a2a", { method: "POST", body: "{}", signal: caller.signal }, { lookup, connect: refusingConnect().connect, edge: rec.edge });
+	assert.ok("response" in r);
+	assert.ok(signals[0] instanceof AbortSignal && !signals[0].aborted);
+	caller.abort();
+	assert.ok(signals[0]!.aborted, "aborting the caller aborts the lookup signal");
+	assert.equal(rec.calls[0]!.signal, true);
+});
