@@ -159,7 +159,11 @@ test("the fresh lookup gets a signal bound to the remaining deadline, and a stal
 	const stalled: AddressLookup = (host, signal) => {
 		if (n++ === 0) return Promise.resolve(["104.21.0.10"]);
 		signals.push(signal);
-		return new Promise((resolve, reject) => { signal?.addEventListener("abort", () => reject(signal.reason), { once: true }); });
+		// A ref'd timer stands in for the pending DoH request; AbortSignal.timeout alone does not keep the loop alive.
+		return new Promise((resolve, reject) => {
+			const pending = setTimeout(() => resolve(["104.21.0.10"]), 5000);
+			signal?.addEventListener("abort", () => { clearTimeout(pending); reject(signal.reason); }, { once: true });
+		});
 	};
 	const started = Date.now();
 	await assert.rejects(fetchCheckedWake("https://worker.example/wake", { method: "POST", body: "{}" }, { lookup: stalled, connect: refusingConnect().connect, edge: rec.edge, timeoutMs: 40 }), (e: any) => e?.name === "TimeoutError");
