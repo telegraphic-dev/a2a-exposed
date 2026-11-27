@@ -1,0 +1,18 @@
+docs/mcp.md
+  h_b11fcd80d58c26 244
+worker/src/mcp.ts
+  h_b11fcd80d58c26 68-71,77
+worker/test/mcp.test.ts
+  h_b11fcd80d58c26 1330-1360
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2f92cb1dbf09bcb79d23a542d93e05c83f42dbd0",
+  "prompts": {},
+  "humans": {
+    "h_b11fcd80d58c26": {
+      "author": "Jean de Bot <jean.de.bot.bunny@gmail.com>"
+    }
+  }
+}
