@@ -339,6 +339,10 @@ Poll `tasks/get` with that handle; set `Mcp-Name` to the handle on all Tasks
 requests. Declare the extension on every request, including polling.
 A completed observation contains the inbound task's terminal status and artifacts.
 An A2A failure is a completed observation whose result reports that failure.
+The task's `result` is a complete Tasks V2 tool result (`resultType: "complete"`,
+one untrusted text block, `isError: false`), so official Tasks clients decode it
+with their default result codec. Handles completed by earlier versions are read
+the same way.
 
 Handles survive request restarts, belong to the issuing OAuth grant, and expire
 24 hours after creation. Revoking the grant removes access. At most 100 unexpired
