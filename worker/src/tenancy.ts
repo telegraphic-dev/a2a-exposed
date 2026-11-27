@@ -126,7 +126,7 @@ export interface WorkerBindings extends ConfigFields {
 	USAGE_SINK?: string;
 	/** "public-https" refuses non-https, private, and metadata wake targets. Anything else is unset. */
 	WAKE_TARGET_POLICY?: string;
-	/** Exactly "1": a checked host served only from Cloudflare addresses uses the platform fetch (docs/security.md). */
+	/** Exactly "1": a socket-policy refusal of a checked Cloudflare address is retried once with the platform fetch (docs/security.md). */
 	EGRESS_CLOUDFLARE_EDGE?: string;
 	/** https URL. Parsed and unused by this Worker. */
 	SIGNUP_URL?: string;
@@ -197,7 +197,7 @@ export interface FeatureGates {
 	quotas: boolean;
 	usageSink: "" | "d1";
 	wakeTargetPolicy: "" | "public-https";
-	/** Checked wake, peer, and client-metadata requests may reach a host served only from Cloudflare addresses. */
+	/** Checked wake, peer, and client-metadata requests retry a socket-policy refusal of a Cloudflare address with fetch. */
 	cloudflareEdgeEgress: boolean;
 	signupUrl: string;
 	branding: "" | "hosted";

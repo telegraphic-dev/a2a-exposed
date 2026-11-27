@@ -38,36 +38,19 @@ function setup(over: Record<string, string> = {}) {
 	// DNS-over-HTTPS answers by host (default: one public A record); status 2 = SERVFAIL, 3 = NXDOMAIN
 	const dns: Record<string, { A?: string[]; AAAA?: string[]; status?: number }> = {};
 	const dnsQueries: string[] = [];
-	// The pinned CIMD fetch: a fake TCP+TLS socket that answers HTTP/1.1 from `cimd` (chunked when asked, "ABORT" = reset mid-body)
-	M.net.connect = (addr, _opts) => ({ startTls: ({ expectedServerHostname: sni }) => {
-		let req = "";
-		let respond!: (b: Uint8Array | null) => void;
-		const ready = new Promise<Uint8Array | null>((r) => { respond = r; });
-		const writable = new WritableStream<Uint8Array>({ write(chunk) {
-			req += new TextDecoder().decode(chunk);
-			if (!req.includes("\r\n\r\n")) return;
-			const path = req.split(" ")[1].split("?")[0];
-			cimdFetches.push({ url: `https://${sni}${req.split(" ")[1]}`, ip: addr.hostname, port: addr.port, sni, request: req });
-			const d = cimd[path];
-			if (d?.body === "ABORT") return respond(null);
-			const status = d ? d.status ?? 200 : 404;
-			const body = new TextEncoder().encode(!d ? "not found" : typeof d.body === "string" ? d.body : JSON.stringify(d.body));
-			const hs = { "content-type": "application/json", ...(d?.headers || {}) };
-			const head = `HTTP/1.1 ${status} X\r\n${Object.entries(hs).map(([k, v]) => `${k}: ${v}\r\n`).join("")}`;
-			const enc = new TextEncoder();
-			if ((d as any)?.chunked) {
-				const half = Math.floor(body.length / 2);
-				const ch = (b: Uint8Array) => [...enc.encode(`${b.length.toString(16)}\r\n`), ...b, 13, 10];
-				respond(new Uint8Array([...enc.encode(`${head}transfer-encoding: chunked\r\n\r\n`), ...ch(body.subarray(0, half)), ...ch(body.subarray(half)), ...enc.encode("0\r\n\r\n")]));
-			} else respond(new Uint8Array([...enc.encode(`${head}content-length: ${body.length}\r\nconnection: close\r\n\r\n`), ...body]));
-		} });
-		const readable = new ReadableStream<Uint8Array>({ async start(c) {
-			const b = await ready;
-			if (b === null) { c.enqueue(new TextEncoder().encode("HTTP/1.1 200 OK\r\ncontent-length: 500\r\n\r\n{\"client_id\":")); c.error(new Error("connection reset")); return; }
-			c.enqueue(b.subarray(0, 7)); c.enqueue(b.subarray(7)); c.close();
-		} });
-		return { readable, writable, close: async () => {} };
-	} });
+	// The pinned CIMD fetch: answers each checked request from `cimd` ("ABORT" = reset mid-body). The socket client itself
+	// (SNI, pinning, limits) is covered in cloudflare-edge-egress.test.ts and wake-target.test.ts.
+	M.net.deliver = async (url, init, target) => {
+		const u = new URL(url);
+		const headers = new Headers(init.headers);
+		const request = `GET ${u.pathname}${u.search} HTTP/1.1\r\nHost: ${u.host}\r\n${[...headers].map(([k, v]) => `${k}: ${v}\r\n`).join("")}\r\n`;
+		cimdFetches.push({ url, ip: target.ip, port: Number(u.port || 443), sni: target.hostname, request });
+		const d = cimd[u.pathname];
+		if (d?.body === "ABORT") return new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode("{\"client_id\":")); c.error(new Error("connection reset")); } }), { status: 200 });
+		const status = d ? d.status ?? 200 : 404;
+		const body = !d ? "not found" : typeof d.body === "string" ? d.body : JSON.stringify(d.body);
+		return new Response(status === 204 || status === 304 ? null : body, { status, headers: { "content-type": "application/json", ...(d?.headers || {}) } });
+	};
 	const origFetch = globalThis.fetch;
 	globalThis.fetch = (async (input: any, init: any = {}) => {
 		const u = new URL(String(input));
@@ -166,7 +149,7 @@ function setup(over: Record<string, string> = {}) {
 		await Promise.allSettled(pending);
 		return res as unknown as Response;
 	};
-	return { fetchWorker, setPeerToken: (token: string) => {peerTokenOverride=token;}, setPeerText: (text: string) => {peerTaskText=text;}, setPeerState: (state: string) => { peerTaskState=state; }, env, DB, peerCalls, cimd, cimdFetches, dns, dnsQueries, modern, call, owner, register, consent, connect, mcp, tool, inbound, restore: () => { globalThis.fetch = origFetch; M.net.connect = null; } };
+	return { fetchWorker, setPeerToken: (token: string) => {peerTokenOverride=token;}, setPeerText: (text: string) => {peerTaskText=text;}, setPeerState: (state: string) => { peerTaskState=state; }, env, DB, peerCalls, cimd, cimdFetches, dns, dnsQueries, modern, call, owner, register, consent, connect, mcp, tool, inbound, restore: () => { globalThis.fetch = origFetch; M.net.deliver = null; } };
 }
 
 test("discovery: 401 with resource metadata, RFC 9728 + RFC 8414 metadata for the connector", async (t) => {
@@ -1282,40 +1265,65 @@ for(const token of [String.raw`opaque"quoted\credential`,"opaque-unicode-é-cred
  assert.equal(s.peerCalls.filter(c=>c.body.method === "SendMessage").length,1);
 });
 
-test("Client ID Metadata Documents on Cloudflare-only hosts use the edge fetch only when EGRESS_CLOUDFLARE_EDGE=1", async (t) => {
+test("Client ID Metadata Documents: a socket policy refusal of a Cloudflare address is retried with fetch only when EGRESS_CLOUDFLARE_EDGE=1", async (t) => {
 	const edgeCalls: { url: string; redirect: string; headers: Record<string, string> }[] = [];
+	let cancelled = 0;
 	wakeNet.edge = async (input: any, init: any = {}) => {
 		const u = new URL(String(input));
 		edgeCalls.push({ url: u.href, redirect: init.redirect, headers: Object.fromEntries(new Headers(init.headers)) });
-		if (u.pathname === "/moved.json") return new Response(null, { status: 302, headers: { location: "https://evil.example.net/" } });
+		if (u.pathname === "/moved.json") return new Response(new ReadableStream({ pull(c) { c.enqueue(new Uint8Array(8)); }, cancel() { cancelled++; } }), { status: 302, headers: { location: "https://evil.example.net/" } });
 		return Response.json(cimdDoc(), { headers: { "cache-control": "max-age=600" } });
 	};
-	t.after(() => { wakeNet.edge = null; });
+	// The real pinned client: Workers refuses a socket to a Cloudflare address; any other dial fails generically.
+	const dials: string[] = [];
+	wakeNet.connect = (addr) => {
+		dials.push(addr.hostname);
+		throw new Error(M.isCloudflareIp(addr.hostname) ? "proxy request failed, cannot connect to the specified address" : "connect ECONNREFUSED");
+	};
+	t.after(() => { wakeNet.edge = null; wakeNet.connect = null; });
 	const q = (id: string) => new URLSearchParams({ response_type: "code", client_id: id, redirect_uri: CLAUDE_CB, state: "s1", code_challenge: "x".repeat(43), code_challenge_method: "S256" });
+	const caches: string[] = [];
+	const watchDoh = () => {
+		const inner = globalThis.fetch;
+		globalThis.fetch = (async (input: any, init: any = {}) => {
+			if (new URL(String(input)).host === "cloudflare-dns.com") caches.push(init.cache ?? "default");
+			return inner(input, init);
+		}) as any;
+	};
 
 	const on = setup({ EGRESS_CLOUDFLARE_EDGE: "1" }); t.after(on.restore);
+	M.net.deliver = null;
+	watchDoh();
 	on.dns["client.example.org"] = { A: ["104.21.0.10"], AAAA: ["2606:4700:3030::1"] };
 	const page = await on.call("GET", `/oauth/authorize?${q(CIMD_ID)}`);
 	assert.equal(page.status, 200, page.text);
 	assert.match(page.text, /CIMD Client/);
-	assert.equal(on.cimdFetches.length, 0, "the socket is not used for a Cloudflare-only host");
+	assert.deepEqual(dials, ["104.21.0.10"], "the pinned socket goes first, to the checked address");
+	assert.deepEqual(caches, ["default", "default", "no-store", "no-store"], "A/AAAA checked, then looked up again without cache before the retry");
 	assert.deepEqual(edgeCalls.map((c) => [c.url, c.redirect]), [[CIMD_ID, "manual"]]);
 	assert.ok(!Object.keys(edgeCalls[0]!.headers).some((h) => /authorization|cookie/.test(h)), "no credentials sent");
+
 	const moved = await on.call("GET", `/oauth/authorize?${q("https://client.example.org/moved.json")}`);
 	assert.equal(moved.status, 400);
 	assert.match(moved.text, /redirects are not followed/);
+	assert.equal(cancelled, 1, "a non-200 body is cancelled");
 
 	edgeCalls.length = 0;
+	on.dns["client.example.org"] = { A: ["93.184.216.34"] };
+	const generic = await on.call("GET", `/oauth/authorize?${q("https://client.example.org/plain.json")}`);
+	assert.equal(generic.status, 400);
+	assert.match(generic.text, /could not be fetched\./);
+	assert.equal(edgeCalls.length, 0, "a generic socket error on a non-Cloudflare address is not retried");
+
 	on.dns["client.example.org"] = { A: ["104.21.0.10", "93.184.216.34"] };
-	on.cimd["/mixed.json"] = { body: cimdDoc({ client_id: "https://client.example.org/mixed.json" }) };
-	assert.equal((await on.call("GET", `/oauth/authorize?${q("https://client.example.org/mixed.json")}`)).status, 200);
-	assert.equal(edgeCalls.length, 0, "a mixed answer keeps the pinned socket");
-	assert.equal(on.cimdFetches.at(-1)!.ip, "104.21.0.10");
+	assert.match((await on.call("GET", `/oauth/authorize?${q("https://client.example.org/mixed.json")}`)).text, /could not be fetched\./);
+	assert.equal(edgeCalls.length, 0, "a mixed answer is not retried");
 
 	const off = setup(); t.after(off.restore);
+	M.net.deliver = null;
 	off.dns["client.example.org"] = { A: ["104.21.0.10"] };
-	off.cimd["/oauth/metadata.json"] = { body: cimdDoc() };
-	assert.equal((await off.call("GET", `/oauth/authorize?${q(CIMD_ID)}`)).status, 200);
-	assert.equal(edgeCalls.length, 0, "gate off keeps the pinned socket");
-	assert.equal(off.cimdFetches.length, 1);
+	const refused = await off.call("GET", `/oauth/authorize?${q(CIMD_ID)}`);
+	assert.equal(refused.status, 400);
+	assert.match(refused.text, /could not be fetched\./);
+	assert.equal(edgeCalls.length, 0, "gate off never retries");
 });

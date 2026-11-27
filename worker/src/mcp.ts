@@ -470,10 +470,8 @@ export function toolText(header: string, data: unknown): string {
 	return `${header}\n${JSON.stringify(data, null, 2)}`;
 }
 
-/** Outbound TCP for the pinned CIMD fetch. null = the runtime's `cloudflare:sockets` connect(); tests put a fake here. */
-export type PinnedSocket = { readable: ReadableStream<Uint8Array>; writable: WritableStream<Uint8Array>; close(): Promise<void> };
-export const net: { connect: null | ((addr: { hostname: string; port: number }, opts: { secureTransport: "starttls" }) =>
-	{ startTls(o: { expectedServerHostname: string }): PinnedSocket }) } = { connect: null };
+/** Test seam for the pinned CIMD fetch: answers one checked request instead of the socket client. null in production. */
+export const net: { deliver: null | ((url: string, init: RequestInit, target: { ip: string; hostname: string }) => Promise<Response>) } = { deliver: null };
 
 /** Parse a raw HTTP/1.x response (Connection: close): status, lower-case headers, body (de-chunked). A string on error. */
 export function parseHttpResponse(raw: Uint8Array): { status: number; headers: Record<string, string>; body: Uint8Array } | string {

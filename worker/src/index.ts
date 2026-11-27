@@ -22,7 +22,7 @@ import { routeHttpRelay, httpRelayFetch, httpRelayEnrollment, isHttpRelayProfile
 import { relayFetch, relayTestOutcome, type RelayTestError } from "./relay-routing.ts";
 import { renderWake, relayWakeTestInput, mausbotConfigProblem, presetAuthProblem, redact, cloudflareErrorHint, wakeUrlIsTunnelHost, defaultBusySeconds, defaultDebounceSeconds, defaultMaxPerHour, type WakeConfig, type WakeEvent } from "./wake.ts";
 import { decideRoute, readRouteFields, routingMode, statusText, type RouteDecision } from "./wake-route.ts";
-import { edgeFetch, fetchCheckedPeer, fetchCheckedWake } from "./wake-target.ts";
+import { edgeFetch, edgeRetryAllowed, fetchCheckedPeer, fetchCheckedWake, getPinnedMetadata, lookupAddresses, MetadataTooLarge, type SocketAttempt } from "./wake-target.ts";
 import { withDeadline } from "./deadline.ts";
 import * as Addr from "./address.ts";
 import * as P from "./pairing.ts";
@@ -388,6 +388,7 @@ async function attemptWake(ctx: TenantContext, ectx: ExecutionContext, payload: 
 				await clearBusy(ctx, payload);
 				return { status: null, info: `refused: ${checked.refused}` };
 			}
+			if (checked.transport) log("wake_transport", { preset: preset(ctx), contextId: ev.contextId, transport: checked.transport, reason: "socket_policy_refusal" });
 			r = checked.response;
 		} else {
 			r = await doFetch(ctx, ectx, req.url, { method: "POST", headers: req.headers, body: req.body });
@@ -1676,6 +1677,7 @@ async function checkedPeerFetch(ctx: TenantContext, ectx: ExecutionContext, base
 	}
 	const checked = await fetchCheckedPeer(target.href, { ...init, redirect: "manual" }, ctx.gates.cloudflareEdgeEgress ? { edge: edgeFetch } : {});
 	if ("refused" in checked) throw new ToolError(`peer endpoint refused: ${checked.refused}`);
+	if (checked.transport) log("peer_transport", { host: target.host, transport: checked.transport, reason: "socket_policy_refusal" });
 	return checked.response;
 }
 
@@ -4108,9 +4110,9 @@ function cimdTtlS(cc: string | null): number {
 /** DNS-rebinding guard, step 1: resolve the host over DNS-over-HTTPS (A and AAAA, CNAMEs followed by the resolver) and
  *  refuse unless it has addresses and every one is public. Fails closed on any DNS error. The checked address is then the
  *  one connected to (pinnedGet), so a later DNS answer can't redirect the request. */
-async function resolvePublic(host: string, signal: AbortSignal): Promise<{ ip?: string; ips?: string[]; literal?: boolean; problem?: string }> {
+async function resolvePublic(host: string, signal: AbortSignal): Promise<{ ip?: string; problem?: string }> {
 	const h = host.replace(/^\[|\]$/g, "");
-	if (/^[\d.]+$/.test(h) || h.includes(":")) return M.isPublicIp(h) ? { ip: h, ips: [h], literal: true } : { problem: "resolves to a private or reserved address" };
+	if (/^[\d.]+$/.test(h) || h.includes(":")) return M.isPublicIp(h) ? { ip: h } : { problem: "resolves to a private or reserved address" };
 	const ips: string[] = [];
 	for (const type of ["A", "AAAA"]) {
 		let r: Json;
@@ -4123,56 +4125,31 @@ async function resolvePublic(host: string, signal: AbortSignal): Promise<{ ip?: 
 		for (const a of Array.isArray(r.Answer) ? r.Answer : []) if (a?.type === 1 || a?.type === 28) ips.push(String(a.data));
 	}
 	if (!ips.length) return { problem: "the host has no address" };
-	return ips.every((ip) => M.isPublicIp(ip)) ? { ip: ips[0], ips } : { problem: "resolves to a private or reserved address" };
+	return ips.every((ip) => M.isPublicIp(ip)) ? { ip: ips[0] } : { problem: "resolves to a private or reserved address" };
 }
 
 class TooLarge extends Error {}
 
-/** Client metadata from a host served only from Cloudflare addresses, which a socket cannot open. Same request as
+/** The socket-policy retry for client metadata (EGRESS_CLOUDFLARE_EDGE=1, see edgeRetryAllowed). Same request as
  *  pinnedGet: GET, no credentials, no redirects, the caller's deadline; the caller applies the status and size checks. */
 async function edgeGet(url: string, signal: AbortSignal): Promise<Response> {
 	return await edgeFetch(url, { method: "GET", headers: { accept: "application/json", "user-agent": "a2a-exposed (client metadata)" }, signal });
 }
 
 /** DNS-rebinding guard, step 2: GET an https URL over a TCP connection to the already-checked IP (TLS with SNI and
- *  certificate verification for the URL's host), HTTP/1.1, Connection: close, no redirects, no credentials. Reads at most
- *  `max` body bytes (+ 16 KB of headers); throws TooLarge beyond that and Error on anything else (incl. the timeout). */
-async function pinnedGet(ip: string, url: string, max: number, signal: AbortSignal): Promise<Response> {
-	const u = new URL(url);
-	const connect = M.net.connect ?? ((await import("cloudflare:sockets")).connect as unknown as NonNullable<typeof M.net.connect>);
-	const sock = connect({ hostname: ip, port: Number(u.port || 443) }, { secureTransport: "starttls" }).startTls({ expectedServerHostname: u.hostname });
-	const aborted = new Promise<never>((_, rej) => {
-		if (signal.aborted) rej(new Error("timeout"));
-		signal.addEventListener("abort", () => rej(new Error("timeout")), { once: true });
-	});
-	aborted.catch(() => {});
-	try {
-		const w = sock.writable.getWriter();
-		await Promise.race([w.write(new TextEncoder().encode(`GET ${u.pathname}${u.search} HTTP/1.1\r\nHost: ${u.host}\r\nAccept: application/json\r\n` +
-			`Accept-Encoding: identity\r\nUser-Agent: a2a-exposed (client metadata)\r\nConnection: close\r\n\r\n`)), aborted]);
-		w.releaseLock();
-		const r = sock.readable.getReader();
-		const chunks: Uint8Array[] = [];
-		let n = 0;
-		for (;;) {
-			const { done, value } = await Promise.race([r.read(), aborted]);
-			if (done) break;
-			n += value.byteLength;
-			if (n > max + 16384) throw new TooLarge();
-			chunks.push(value);
-		}
-		const raw = new Uint8Array(n);
-		let o = 0;
-		for (const c of chunks) { raw.set(c, o); o += c.byteLength; }
-		const p = M.parseHttpResponse(raw);
-		if (typeof p === "string") throw new Error(p);
-		if (p.body.byteLength > max) throw new TooLarge();
-		if (p.status < 200 || p.status > 599) throw new Error(`HTTP ${p.status}`);
-		const h = new Headers();
-		for (const [k, v] of Object.entries(p.headers)) if (!/^(content-length|transfer-encoding|connection)$/.test(k)) h.set(k, v);
-		return new Response(p.status === 204 || p.status === 304 ? null : p.body, { status: p.status, headers: h });
+ *  certificate verification for the URL's host), HTTP/1.1, no redirects, no credentials, at most `max` body bytes. Throws
+ *  TooLarge beyond that and Error on anything else (incl. the timeout). The dial is recorded on `attempt`. */
+async function pinnedGet(ip: string, url: string, max: number, signal: AbortSignal, attempt: SocketAttempt): Promise<Response> {
+	const target = { ip, hostname: new URL(url).hostname };
+	if (M.net.deliver) return await M.net.deliver(url, { method: "GET", headers: { accept: "application/json", "user-agent": "a2a-exposed (client metadata)" }, redirect: "manual", signal }, target);
+	const attempts: SocketAttempt[] = [];
+	try { return await getPinnedMetadata(url, target, max, M.CIMD.timeoutMs, signal, attempts); }
+	catch (e) {
+		if (e instanceof MetadataTooLarge) throw new TooLarge();
+		throw e;
 	} finally {
-		sock.close().catch(() => {});
+		if (attempts.length === 1) Object.assign(attempt, attempts[0]);
+		else if (attempts.length > 1) attempt.ip = "";
 	}
 }
 
@@ -4203,14 +4180,26 @@ async function resolveClient(ctx: TenantContext, id: string, ip?: string, head =
 	const dns = await resolvePublic(new URL(id).hostname, signal);
 	if (!dns.ip) { log("mcp_cimd_failed", { host: new URL(id).host, reason: `dns: ${dns.problem}` }); return { error: `The client's metadata URL is not acceptable: ${dns.problem}.` }; }
 	let res: Response;
-	const edge = ctx.gates.cloudflareEdgeEgress && !dns.literal && !!dns.ips?.length && dns.ips.every((a) => M.isCloudflareIp(a));
-	try { res = edge ? await edgeGet(id, signal) : await pinnedGet(dns.ip, id, M.CIMD.maxBytes, signal); }
+	const attempt: SocketAttempt = { ip: dns.ip, refused: false };
+	try { res = await pinnedGet(dns.ip, id, M.CIMD.maxBytes, signal, attempt); }
 	catch (e) {
 		if (e instanceof TooLarge) return { error: `The client's metadata document is larger than ${M.CIMD.maxBytes} bytes.` };
-		log("mcp_cimd_failed", { host: new URL(id).host, reason: "unreachable", ...(edge ? { path: "edge" } : {}) });
-		return { error: "The client's metadata document could not be fetched." };
+		const host = new URL(id).hostname;
+		const retry = ctx.gates.cloudflareEdgeEgress && !signal.aborted &&
+			await edgeRetryAllowed(host, [attempt], e, (h) => lookupAddresses(h, signal, true));
+		if (!retry) {
+			log("mcp_cimd_failed", { host: new URL(id).host, reason: "unreachable" });
+			return { error: "The client's metadata document could not be fetched." };
+		}
+		try { res = await edgeGet(id, signal); }
+		catch {
+			log("mcp_cimd_failed", { host: new URL(id).host, reason: "unreachable", transport: "fetch_fallback" });
+			return { error: "The client's metadata document could not be fetched." };
+		}
+		log("mcp_cimd_transport", { host: new URL(id).host, transport: "fetch_fallback", reason: "socket_policy_refusal" });
 	}
 	if (res.status !== 200) {
+		await res.body?.cancel().catch(() => {});
 		log("mcp_cimd_failed", { host: new URL(id).host, reason: `HTTP ${res.status}` });
 		return { error: `The client's metadata document could not be fetched${res.status >= 300 && res.status < 400 ? " (redirects are not followed)" : ""}.` };
 	}
