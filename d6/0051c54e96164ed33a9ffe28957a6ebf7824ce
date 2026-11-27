@@ -1,0 +1,38 @@
+docs/mcp.md
+  h_b11fcd80d58c26 244
+docs/message-events.md
+  h_b11fcd80d58c26 114
+docs/receiving-messages.md
+  h_b11fcd80d58c26 445
+docs/security.md
+  h_b11fcd80d58c26 84-85
+docs/troubleshooting.md
+  h_b11fcd80d58c26 57-58
+worker/cloudflare.config.ts
+  h_b11fcd80d58c26 83-84
+worker/deploy.env.example
+  h_b11fcd80d58c26 48-51
+worker/src/index.ts
+  h_b11fcd80d58c26 25,384,1677,4111,4113,4126,4131-4136,4206-4207,4210
+worker/src/mcp.ts
+  h_b11fcd80d58c26 154-177
+worker/src/tenancy.ts
+  h_b11fcd80d58c26 129-130,200-201,347
+worker/src/wake-target.ts
+  h_b11fcd80d58c26 9-10,14,40-81,87-88,281,289-291,338
+worker/test/cloudflare-edge-egress.test.ts
+  h_b11fcd80d58c26 1-95
+worker/test/mcp.test.ts
+  h_b11fcd80d58c26 10,1284-1321
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d60051c54e96164ed33a9ffe28957a6ebf7824ce",
+  "prompts": {},
+  "humans": {
+    "h_b11fcd80d58c26": {
+      "author": "Jean de Bot <jean.de.bot.bunny@gmail.com>"
+    }
+  }
+}
