@@ -1,0 +1,29 @@
+worker/src/index.ts
+  s_1cb3b75004b611::t_2633d1a3eb4b88 2443,2445,2475-2480,2488-2491,2893,2897-2901,4814-4815,4825-4827,4835-4838
+  s_1cb3b75004b611::t_b73c907f4afef7 296,2486-2487
+  s_1cb3b75004b611::t_5785c8cd47657a 2481-2485
+worker/migrations/0023_peer_wake_batch.sql
+  s_1cb3b75004b611::t_b73c907f4afef7 12
+  s_1cb3b75004b611::t_2633d1a3eb4b88 13
+worker/test/wake-route.test.ts
+  s_1cb3b75004b611::t_b73c907f4afef7 536,577-586
+  s_1cb3b75004b611::t_e09ebae2d680d6 524,533-535,546,552-576,587-590
+docs/receiving-messages.md
+  s_1cb3b75004b611::t_fa0bfc35cdbd0d 495-496
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "09a32a61c6f4e170c28e93a0911b83ffd1ded36a",
+  "prompts": {},
+  "sessions": {
+    "s_1cb3b75004b611": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a213e8-504d-7ee0-b8a1-a9c8bd8d4431",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}

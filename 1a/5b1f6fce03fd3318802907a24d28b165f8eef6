@@ -1,0 +1,21 @@
+worker/src/index.ts
+  s_1cb3b75004b611::t_e717cef99fd9a7 2902-2903,4834,4836,4866,4870
+worker/test/wake-route.test.ts
+  s_1cb3b75004b611::t_6a1db64a3ae27f 554,565-566,570,585,587-588
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1a5b1f6fce03fd3318802907a24d28b165f8eef6",
+  "prompts": {},
+  "sessions": {
+    "s_1cb3b75004b611": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a213e8-504d-7ee0-b8a1-a9c8bd8d4431",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}

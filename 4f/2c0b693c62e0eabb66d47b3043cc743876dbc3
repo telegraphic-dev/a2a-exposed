@@ -1,0 +1,19 @@
+worker/src/peer-revoke.ts
+  s_5331ec3b84b582::t_04d6fc1040540f 61-64
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4f2c0b693c62e0eabb66d47b3043cc743876dbc3",
+  "prompts": {},
+  "sessions": {
+    "s_5331ec3b84b582": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a214b2-b583-7ed0-819b-658ce667642a",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}

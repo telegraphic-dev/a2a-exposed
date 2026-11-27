@@ -1,0 +1,27 @@
+worker/src/index.ts
+  s_1cb3b75004b611::t_55e6b5a60de44d 4818
+  s_1cb3b75004b611::t_f9b227503f4f1c 1048-1049,1197-1200,1245,1251,2340,2429-2441,2443-2471
+  s_1cb3b75004b611::t_3f8bc58d32a620 4810
+worker/test/wake-route.test.ts
+  s_1cb3b75004b611::t_55e6b5a60de44d 498-546
+docs/protocol.md
+  s_1cb3b75004b611::t_2472886a4fb720 51
+docs/receiving-messages.md
+  s_1cb3b75004b611::t_7f5ad1fe43d351 493-494
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "947bc4ffafe48bb914c65aab3137f3456db80d68",
+  "prompts": {},
+  "sessions": {
+    "s_1cb3b75004b611": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a213e8-504d-7ee0-b8a1-a9c8bd8d4431",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}

@@ -1,0 +1,19 @@
+docs/protocol.md
+  s_7fe29bf69bcc1a::t_4d707eedbd9858 98
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6e0753fa43ce0495f79363a3f78ea52afcb2b375",
+  "prompts": {},
+  "sessions": {
+    "s_7fe29bf69bcc1a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a21298-06e6-7a52-a847-1b490448023d",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}

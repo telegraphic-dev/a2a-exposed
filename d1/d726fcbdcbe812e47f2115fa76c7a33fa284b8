@@ -1,0 +1,45 @@
+.claude-plugin/marketplace.json
+  s_e7eccd2ab748de::t_75eecd4f57f109 13
+.claude-plugin/plugin.json
+  s_e7eccd2ab748de::t_0cd5fc1ee5a0dc 3
+.cursor-plugin/plugin.json
+  s_e7eccd2ab748de::t_a94b29af21ad81 4
+.grok-plugin/plugin.json
+  s_e7eccd2ab748de::t_f9c1908c45a876 3
+cli/package.json
+  s_e7eccd2ab748de::t_74701e2507c8c0 3
+encryption/package-lock.json
+  s_e7eccd2ab748de::t_e82ff5cb234b13 3,9
+encryption/package.json
+  s_e7eccd2ab748de::t_2d06dbd6217848 3
+package.json
+  s_e7eccd2ab748de::t_ddcddaf7418a68 3
+plugin.json
+  s_e7eccd2ab748de::t_5c698f86313cec 4
+skills/a2a-exposed-setup/SKILL.md
+  s_e7eccd2ab748de::t_4b63f3d0819459 7
+skills/a2a-exposed/SKILL.md
+  s_e7eccd2ab748de::t_d44222de92dc75 9
+worker/src/mcp-portable-skills-catalog.json
+  s_e7eccd2ab748de::t_7195109fcf741b 11,19,72,80,117,126
+worker/src/skills-index.ts
+  s_e7eccd2ab748de::t_aa72b390670298 7,12
+worker/src/version.ts
+  s_e7eccd2ab748de::t_2538b0a3fd4a5d 2
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d1d726fcbdcbe812e47f2115fa76c7a33fa284b8",
+  "prompts": {},
+  "sessions": {
+    "s_e7eccd2ab748de": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a21823-3f1d-7d31-abe6-9e1d266bfaff",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}

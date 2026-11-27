@@ -1,0 +1,32 @@
+worker/src/owner-rpc.ts
+  s_5331ec3b84b582::t_72a9da1a4d5b39 215,369-374
+worker/src/index.ts
+  s_5331ec3b84b582::t_72a9da1a4d5b39 2982-2989
+  s_5331ec3b84b582::t_5246665e020b89 1,2975-2976
+worker/test/owner-peers-sealed.test.ts
+  s_5331ec3b84b582::t_925469a26ed079 67
+worker/src/peer-revoke.ts
+  s_5331ec3b84b582::t_72a9da1a4d5b39 1-37
+worker/test/conditional-peer-revoke.test.ts
+  s_5331ec3b84b582::t_925469a26ed079 1-2,4,9-45,47-57,76
+  s_5331ec3b84b582::t_f6d8b7cfeb819a 3,5-8,58-61,63-75
+  s_5331ec3b84b582::t_65ad68fc926b43 46,62
+docs/conditional-peer-revoke.md
+  s_5331ec3b84b582::t_a46d8604fdfc95 1-13
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6c1e60468f35c441b426ff6ad31d41b2473c996b",
+  "prompts": {},
+  "sessions": {
+    "s_5331ec3b84b582": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a214b2-b583-7ed0-819b-658ce667642a",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}

@@ -1,0 +1,63 @@
+control/scripts/build-core.mjs
+  s_5331ec3b84b582::t_51a7509e8512c4 81
+worker/src/index.ts
+  s_5331ec3b84b582::t_7582225458adf5 4715,4722-4724
+  s_5331ec3b84b582::t_70eb47b0d9c9c0 4716-4718,4742
+  s_5331ec3b84b582::t_62c370fc27378e 1,3018,3169,4710-4714,4719-4721,4725-4741,4743-4744,4750-4764,5050,5075,5078-5084,5087
+control/test/core-contract.test.ts
+  s_5331ec3b84b582::t_2fda15b655989c 106,148-149
+docs/cli-mcp-parity.md
+  s_5331ec3b84b582::t_51a7509e8512c4 138-139
+skills/a2a-exposed/SKILL.md
+  s_5331ec3b84b582::t_70eb47b0d9c9c0 68
+worker/migrations/0025_mcp_observations.sql
+  s_5331ec3b84b582::t_70eb47b0d9c9c0 4-20
+  s_5331ec3b84b582::t_57cade84f605fe 1-3
+docs/mcp.md
+  s_5331ec3b84b582::t_51a7509e8512c4 331-332
+worker/src/skills-index.ts
+  s_5331ec3b84b582::t_70eb47b0d9c9c0 7
+worker/test/mcp.test.ts
+  s_5331ec3b84b582::t_51a7509e8512c4 29,88,158,369,1022-1053,1059,1075
+  s_5331ec3b84b582::t_8c824e3c5a453d 1054-1058,1060-1074,1076-1086
+worker/src/export.ts
+  s_5331ec3b84b582::t_70eb47b0d9c9c0 170
+worker/src/task-observation.ts
+  s_5331ec3b84b582::t_3ff27e6d36341c 30
+  s_5331ec3b84b582::t_70eb47b0d9c9c0 20-26
+  s_5331ec3b84b582::t_d594a5ef4bce03 1-19,27-29,31-51
+control/README.md
+  s_5331ec3b84b582::t_4456417d8ccc43 146-150
+control/src/core/index.ts
+  s_5331ec3b84b582::t_59cac4349682f8 113-115
+control/src/provision/inbox-migrations.ts
+  s_5331ec3b84b582::t_da97d01c30777b 1,58
+worker/src/mcp.ts
+  s_5331ec3b84b582::t_c1e0c70895ca72 354-359
+worker/src/migrations.ts
+  s_5331ec3b84b582::t_f4f411742c9e92 1,55
+worker/src/owner-rpc.ts
+  s_5331ec3b84b582::t_3d4fa11b4f9c41 223-224,268-269,278-279
+worker/src/version.ts
+  s_5331ec3b84b582::t_b0073ae22b7a50 4
+worker/test/migrations.test.ts
+  s_5331ec3b84b582::t_523f7654e3defa 75,82-83,115
+worker/test/task-observation.test.ts
+  s_5331ec3b84b582::t_34e430539c1b08 1-18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6d506c447bcd4dbc1d9da849bc404bc98336a534",
+  "prompts": {},
+  "sessions": {
+    "s_5331ec3b84b582": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a214b2-b583-7ed0-819b-658ce667642a",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}
