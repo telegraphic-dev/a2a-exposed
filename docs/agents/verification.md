@@ -2,8 +2,10 @@
 
 Read [AGENTS.md](../../AGENTS.md) first for credential isolation and safety rules.
 Run commands from the repository root unless a subshell changes directory.
-Use Node 22.18+ and Python 3. This is the complete local checklist before pushing;
-a focused test is useful during editing but does not replace it.
+Use the latest Node 22 patch and Python 3. The locked Cloudflare CLI supports
+Node 22.23+, 24.22+, and 26.12+ within those release series. This is the complete
+local checklist before pushing. A focused test is useful during editing but does
+not replace it.
 
 ## Install and hygiene
 
