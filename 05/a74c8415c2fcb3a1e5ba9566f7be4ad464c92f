@@ -1,0 +1,25 @@
+cli/test/cf-cache.test.mjs
+  s_e7bdcca4f4eb68::t_52bc492c0de859 1-2,47,60,86-88,91-96
+docs/agents/verification.md
+  s_e7bdcca4f4eb68::t_f17f77baa558ec 5-8
+worker/package-lock.json
+  s_e7bdcca4f4eb68::t_3f0525add0848b 17,19,80-82,86,90-92,100-102,106-107,628-630,636-637,704-706,752-754,758-760,762,1288-1290,1296-1297,1364-1366,1396-1398,1413-1415,1430-1432,1447-1449,1464-1466,3317-3319,3323-3325,3327,3334,3855-3857,3863-3864,3869-3877,3930-3933,3935,3937,4966-4968,4979-4983
+worker/package.json
+  s_e7bdcca4f4eb68::t_4d0e31f23ae6e7 20,22
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "05a74c8415c2fcb3a1e5ba9566f7be4ad464c92f",
+  "prompts": {},
+  "sessions": {
+    "s_e7bdcca4f4eb68": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a221c6-a391-7ed1-93af-fa5c80b154e2",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": null
+    }
+  }
+}
