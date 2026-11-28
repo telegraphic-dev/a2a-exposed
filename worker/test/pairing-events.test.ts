@@ -188,7 +188,15 @@ test("a hosted tenant posts with the control plane's EVENT_URL and EVENT_SECRET"
 		if (value) config[name] = value;
 		else delete config[name];
 	}
-	const ctx = hostedTenantContext({ DB, TENANCY: "host", EVENT_URL: "https://platform.example/other", EVENT_SECRET: "platform" } as WorkerBindings, {
+	let bindingCalls = 0;
+	const ctx = hostedTenantContext({
+		DB,
+		TENANCY: "host",
+		FEEDBACK_URL: "https://example.com",
+		CONTROL_SERVICE: { async fetch() { bindingCalls++; return new Response(null, { status: 204 }); } },
+		EVENT_URL: "https://platform.example/other",
+		EVENT_SECRET: "platform",
+	} as WorkerBindings, {
 		id: "ten_north", db: DB, publicUrl: "https://northwind.example.com",
 		config,
 	});
@@ -212,6 +220,7 @@ test("a hosted tenant posts with the control plane's EVENT_URL and EVENT_SECRET"
 	await Promise.all(pending);
 	globalThis.fetch = previous;
 	assert.equal(res.status, 200);
+	assert.equal(bindingCalls, 0, "other paths must stay on the configured webhook");
 	assert.equal(posts.length, 1);
 	const event = JSON.parse(posts[0].body);
 	assert.equal(event.agent, "northwind.example.com");
@@ -226,6 +235,49 @@ test("a hosted tenant posts with the control plane's EVENT_URL and EVENT_SECRET"
 	});
 	assert.equal(plain.EVENT_URL, undefined);
 	assert.equal(plain.EVENT_SECRET, undefined);
+});
+
+test("hosted pairing sends the signed event through the platform binding and retries there", async (t) => {
+	const DB = d1(new URL("../migrations/", import.meta.url));
+	const platform = "https://example.com";
+	const target = platform + "/api/pairing-events";
+	const posts: Request[] = [];
+	const outside: string[] = [];
+	t.mock.method(globalThis, "fetch", async (url: RequestInfo | URL) => {
+		outside.push(String(url));
+		return new Response(null, { status: 503 });
+	});
+	const ctx = hostedTenantContext({
+		DB,
+		TENANCY: "host",
+		FEEDBACK_URL: platform,
+		CONTROL_SERVICE: {
+			async fetch(url, init) {
+				posts.push(new Request(url, init));
+				return new Response(null, { status: posts.length === 1 ? 503 : 204 });
+			},
+		},
+	}, {
+		id: "ten_north", db: DB, publicUrl: BASE, config: { EVENT_URL: target, EVENT_SECRET: SECRET },
+	});
+	const pending: Promise<unknown>[] = [];
+	const res = await dispatch(new Request(BASE + "/oauth/device_authorization", {
+		method: "POST",
+		headers: { "content-type": "application/x-www-form-urlencoded" },
+		body: new URLSearchParams({ client_name: "Test client", client_id: "test-client" }),
+	}), ctx, { waitUntil: (promise) => pending.push(promise), passThroughOnException() {} });
+	assert.equal(res.status, 200);
+	await Promise.all(pending);
+	assert.equal(posts.length, 2);
+	assert.deepEqual(outside, []);
+	for (const post of posts) {
+		assert.equal(post.url, target);
+		assert.equal(post.method, "POST");
+		assert.equal(post.redirect, "manual");
+		const body = await post.text();
+		assert.equal(JSON.parse(body).pending, 1);
+		assert.equal(await verifyEventSignature(body, post.headers, SECRET), true);
+	}
 });
 
 test("approve posts pairing_decided with the remaining open count", async () => {
