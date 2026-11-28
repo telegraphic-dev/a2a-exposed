@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
-const out = path.join(root, ".cloudflare");
+const out = path.join(root, ".cloudflare", "output", "v1");
 
 function walk(dir, acc = []) {
 	if (!fs.existsSync(dir)) return acc;
@@ -27,7 +27,7 @@ function expectedPaths() {
 
 const files = walk(out);
 if (!files.length) {
-	console.error("check-build: no .cloudflare output. Run npm run build first.");
+	console.error("check-build: no v1 build output. Run npm run build first.");
 	process.exit(1);
 }
 
@@ -43,7 +43,7 @@ for (const file of files) {
 	}
 }
 if (!configs.length) {
-	console.error("check-build: no JSON config with runWorkerFirst under .cloudflare");
+	console.error("check-build: no JSON config with runWorkerFirst in the v1 build output");
 	process.exit(1);
 }
 
