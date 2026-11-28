@@ -16,7 +16,7 @@
 		"node": ">=22.18"
 	},
 	"dependencies": {
-		"hono": "4.13.13"
+		"hono": "4.13.23"
 	},
 	"devDependencies": {
 		"@cloudflare/vite-plugin": "beta",
