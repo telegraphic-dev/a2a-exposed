@@ -1,0 +1,24 @@
+worker/test/pairing-events.test.ts
+  s_e7bdcca4f4eb68::t_59ed5ffa5ad462 191-199,223,240-280
+  s_e7bdcca4f4eb68::t_5105295e4022e0 281-282
+docs/protocol.md
+  s_e7bdcca4f4eb68::t_2f90c649a21893 108-109
+worker/src/index.ts
+  s_e7bdcca4f4eb68::t_caf62db575d918 3502-3505,3511-3512
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9069b86b198a7faf07c2b47314c651f7d8008bc6",
+  "prompts": {},
+  "sessions": {
+    "s_e7bdcca4f4eb68": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a221c6-a391-7ed1-93af-fa5c80b154e2",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}
