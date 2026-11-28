@@ -1,0 +1,21 @@
+control/package-lock.json
+  s_e7bdcca4f4eb68::t_ee316681f1f9f7 21,1924-1926,2298-2300,2305,2307,2337-2339,3145-3147,3554-3556,3798-3800,3805,3809,3813,3831-3832,3834-3836
+control/package.json
+  s_e7bdcca4f4eb68::t_40357ed3b483cf 30
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f965ee8f61499a05385c300a58a4c5d8a5b491ec",
+  "prompts": {},
+  "sessions": {
+    "s_e7bdcca4f4eb68": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a221c6-a391-7ed1-93af-fa5c80b154e2",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}
