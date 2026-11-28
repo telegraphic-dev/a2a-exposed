@@ -1,0 +1,21 @@
+control/package.json
+  s_0a319c48ec2891::t_5d08472fe060cc 19
+control/package-lock.json
+  s_0a319c48ec2891::t_b4f893f65f09e7 10,13,2772-2774
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d825449767409f712f401cdd79fdde5e7edf5622",
+  "prompts": {},
+  "sessions": {
+    "s_0a319c48ec2891": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a22104-c5e8-76a1-b6bc-c564f6c4b8a4",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}
