@@ -1,0 +1,19 @@
+worker/src/skills-index.ts
+  s_e7bdcca4f4eb68::t_8754379af821cd 7,12
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4a921bf4f807e009a705def42268bd19f91a956b",
+  "prompts": {},
+  "sessions": {
+    "s_e7bdcca4f4eb68": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a221c6-a391-7ed1-93af-fa5c80b154e2",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}
