@@ -1,0 +1,23 @@
+control/package-lock.json
+  s_e7bdcca4f4eb68::t_1fa7fb949b192d 13,16,28-30,34,38-40,44,48-50,54-55,75-77,81-83,85,109,126,143,160,177,2252-2254,2258-2260,2262,2269,2862-2864,2870-2871,2876-2884,3391-3393,3602-3604,3615-3619,3744-3746
+control/package.json
+  s_e7bdcca4f4eb68::t_6a893751ba9432 22,25
+control/scripts/check-build.mjs
+  s_e7bdcca4f4eb68::t_bf7b3ba98519e8 7,30,46
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6288f387b6525e93d2d88fa9db7017c090ad347a",
+  "prompts": {},
+  "sessions": {
+    "s_e7bdcca4f4eb68": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a221c6-a391-7ed1-93af-fa5c80b154e2",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}
