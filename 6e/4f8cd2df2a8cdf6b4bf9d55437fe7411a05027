@@ -1,0 +1,19 @@
+cli/test/cf-cache.test.mjs
+  s_e7bdcca4f4eb68::t_52bc492c0de859 1-2,47,60,86-88,91-96
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6e4f8cd2df2a8cdf6b4bf9d55437fe7411a05027",
+  "prompts": {},
+  "sessions": {
+    "s_e7bdcca4f4eb68": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a221c6-a391-7ed1-93af-fa5c80b154e2",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}
