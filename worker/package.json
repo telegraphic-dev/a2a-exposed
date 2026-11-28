@@ -31,6 +31,6 @@
 		"@modelcontextprotocol/ext-tasks": "0.2.3",
 		"@modelcontextprotocol/core": "2.4.0",
 		"@modelcontextprotocol/server": "2.4.0",
-		"tunnelfetch": "1.13.0"
+		"tunnelfetch": "1.13.1"
 	}
 }
