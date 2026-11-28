@@ -1,0 +1,21 @@
+worker/package.json
+  s_e7bdcca4f4eb68::t_24331c7bdf0d86 27
+worker/package-lock.json
+  s_e7bdcca4f4eb68::t_412f409a50207f 24,713-734,1376-1397,3976-3997,4567-4588,5032-5034
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0331d4f12c80e95ae2d63e8e909cac37be4aed11",
+  "prompts": {},
+  "sessions": {
+    "s_e7bdcca4f4eb68": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a221c6-a391-7ed1-93af-fa5c80b154e2",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}
