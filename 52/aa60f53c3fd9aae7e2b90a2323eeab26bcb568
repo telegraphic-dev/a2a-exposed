@@ -1,0 +1,16 @@
+control/package-lock.json
+  h_bde3a12a8163e7 18,1477-1479,1484-1486,3180-3182,3187-3188
+control/package.json
+  h_bde3a12a8163e7 27
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "52aa60f53c3fd9aae7e2b90a2323eeab26bcb568",
+  "prompts": {},
+  "humans": {
+    "h_bde3a12a8163e7": {
+      "author": "musketyr <vladimir@orany.cz>"
+    }
+  }
+}
