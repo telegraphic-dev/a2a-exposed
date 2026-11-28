@@ -1,5 +1,5 @@
-// `cf` outside a Node project tries to mkdir `<ancestor>/node_modules/.cache/cloudflare`.
-// A writable `.cloudflare/cache` in the current directory, or a local `node_modules`, is the working invocation.
+// `cf` account commands must work from the fallback directory used after
+// the local Worker checkout was removed, as well as from the checkout itself.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -44,6 +44,7 @@ function runCf(cwd, args, extra = {}) {
 				PATH: process.env.PATH,
 				HOME: extra.HOME,
 				CI: "1",
+				DO_NOT_TRACK: "1",
 				CLOUDFLARE_API_TOKEN: "test-token-not-a-secret",
 				CLOUDFLARE_API_BASE_URL: extra.CLOUDFLARE_API_BASE_URL,
 			},
@@ -56,7 +57,7 @@ function runCf(cwd, args, extra = {}) {
 	});
 }
 
-test("cf delete commands need a writable cache: the worker project, or .cloudflare/cache", async (t) => {
+test("cf account commands work in a checkout and with a read-only ancestor node_modules", async (t) => {
 	assert.ok(CF, `cf binary missing (expected worker/node_modules/.bin/cf after npm ci in worker/)`);
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "a2a-cf-cache-"));
 	const blocked = path.join(root, "node_modules");
@@ -82,15 +83,15 @@ test("cf delete commands need a writable cache: the worker project, or .cloudfla
 	const env = { HOME: home, CLOUDFLARE_API_BASE_URL: base };
 
 	const bare = await runCf(outside, ["d1", "list"], env);
-	assert.equal(bare.status, 1, bare.stderr);
-	assert.match(bare.stderr, /EACCES:[\s\S]*node_modules\/\.cache\/cloudflare/);
+	assert.equal(bare.status, 0, bare.stderr);
+	assert.ok(api.hits.some((hit) => /^GET .*\/d1\/database\b/.test(hit)));
+	assert.ok(!fs.existsSync(path.join(blocked, ".cache")));
 
 	fs.mkdirSync(path.join(outside, ".cloudflare", "cache"), { recursive: true });
-	const cached = await runCf(outside, ["d1", "list"], env);
-	assert.equal(cached.status, 0, cached.stderr);
-	assert.ok(fs.existsSync(path.join(outside, ".cloudflare", "cache", "cloudflare-account.json")));
-
-	const fromProject = await runCf(project, ["workers", "delete", "some-worker", "--force"], env);
-	assert.equal(fromProject.status, 0, fromProject.stderr);
-	assert.ok(fs.existsSync(path.join(project, "node_modules", ".cache", "cloudflare", "cloudflare-account.json")));
+	for (const cwd of [outside, project]) {
+		api.hits.length = 0;
+		const result = await runCf(cwd, ["workers", "delete", "some-worker", "--force"], env);
+		assert.equal(result.status, 0, result.stderr);
+		assert.ok(api.hits.includes("DELETE /client/v4/accounts/acct1/workers/workers/some-worker"), api.hits.join("\n"));
+	}
 });
