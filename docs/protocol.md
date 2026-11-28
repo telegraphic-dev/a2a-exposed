@@ -105,6 +105,8 @@ A peer that does not implement the method returns `-32601`. The caller leaves th
 
 When `EVENT_URL` is an https URL and `EVENT_SECRET` is set, the A2A endpoint POSTs a JSON event to that URL after a pairing request is created and after it is approved or denied. The post runs after the HTTP response. Each attempt waits 3 seconds, and one retry follows a timeout or a failed post. The post stays on `EVENT_URL`.
 
+When a hosted inbox has a control service binding, it uses that binding for the platform's exact `/api/pairing-events` URL. Both attempts carry the same signed payload.
+
 | Field | Meaning |
 | --- | --- |
 | `type` | `pairing_requested` or `pairing_decided` |

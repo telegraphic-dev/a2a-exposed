@@ -3499,12 +3499,17 @@ function publishPairingEvent(ctx: TenantContext, ectx: ExecutionContext, event: 
 }): void {
 	const target = pairingEventTarget(ctx.EVENT_URL, ctx.EVENT_SECRET);
 	if (!target) return;
+	// Hosted notifications target the dashboard Worker on the platform's own zone.
+	// Only the deployment-owned origin and exact pairing endpoint may use its binding.
+	const control = ctx.mode === "host" && target.url === `${ctx.gates.feedbackUrl}/api/pairing-events`
+		? ctx.controlService() : undefined;
 	const agent = pairingAgent(ctx.PUBLIC_URL, ctx.id);
 	try {
 		ectx.waitUntil((async () => {
 			try {
 				const row: Json = await ctx.DB.prepare("SELECT COUNT(*) AS n FROM device_requests WHERE status = 'pending' AND expires_ms > ?").bind(Date.now()).first();
-				await postPairingEvent(target, { ...event, agent, pending: Number(row?.n ?? 0) });
+				await postPairingEvent(target, { ...event, agent, pending: Number(row?.n ?? 0) },
+					control ? { fetchImpl: control.fetch.bind(control) } : undefined);
 			} catch (error) {
 				log("pairing_event_failed", { type: event.type, error: String(error).slice(0, 200) });
 			}
